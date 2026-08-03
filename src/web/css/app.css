@@ -1,0 +1,239 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d1117; color: #e6edf3;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  overflow: hidden; user-select: none;
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────────── */
+#toolbar {
+  position: fixed; top: 0; left: 0; right: 0; height: 46px;
+  background: #161b22; border-bottom: 1px solid #30363d;
+  display: flex; align-items: center; padding: 0 14px; gap: 10px; z-index: 100;
+}
+.app-icon  { font-size: 18px; }
+.app-title { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; }
+#mod-path  {
+  flex: 1; font-size: 11px; color: #8b949e;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 4px 8px; background: #0d1117; border-radius: 6px;
+  border: 1px solid #30363d; min-width: 0;
+}
+#open-btn {
+  background: #238636; color: #fff; border: 1px solid rgba(240,246,252,.15);
+  border-radius: 6px; padding: 5px 14px; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+#open-btn:hover:not(:disabled) { background: #2ea043; }
+#open-btn:disabled { opacity: .45; cursor: default; }
+.pending-indicator {
+  display: none; font-size: 11px; color: #e3b341; background: #2b2111;
+  border: 1px solid #4d3a14; border-radius: 6px; padding: 4px 8px; white-space: nowrap;
+}
+.pending-indicator.show { display: inline-block; }
+#export-btn {
+  background: #9e6a03; color: #fff; border: 1px solid rgba(240,246,252,.15);
+  border-radius: 6px; padding: 5px 14px; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+#export-btn:hover:not(:disabled) { background: #bb8009; }
+#export-btn:disabled { opacity: .35; cursor: default; background: #21262d; color: #8b949e; }
+
+/* ── canvas ──────────────────────────────────────────────────────────────── */
+#canvas-container { position: fixed; top: 46px; left: 0; right: 0; bottom: 0; }
+
+/* ── left dock (meshes panel + toolbox) ──────────────────────────────────── */
+#left-dock {
+  position: fixed; top: 58px; left: 12px; z-index: 10;
+  display: flex; align-items: flex-start; gap: 10px;
+}
+
+/* ── shared floating panel chrome ────────────────────────────────────────── */
+#sidebar, #toggle-panel, #tool-panel {
+  display: none; background: rgba(13,17,23,.88); border: 1px solid #30363d;
+  border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(8px);
+}
+#sidebar, #toggle-panel {
+  max-height: calc(100vh - 76px); overflow-y: auto; min-width: 155px; max-width: 210px;
+}
+#toggle-panel { position: fixed; top: 58px; right: 12px; z-index: 10; }
+#sidebar h3, #toggle-panel h3, #tool-panel h3 {
+  font-size: 10px; color: #8b949e; text-transform: uppercase;
+  letter-spacing: .1em;
+}
+#sidebar h3 { margin-bottom: 8px; }
+
+/* ── toolbox (wireframe / grid) ───────────────────────────────────────────── */
+#tool-panel { display: flex; flex-direction: column; gap: 6px; }
+#tool-panel h3 { margin-bottom: 2px; }
+.tool-btn {
+  padding: 5px 10px; background: #21262d; border: 1px solid #30363d;
+  color: #e6edf3; border-radius: 4px; cursor: pointer; white-space: nowrap;
+  font-size: 12px; text-align: left;
+}
+#wire-btn.active { background: #1f6feb; }
+#grid-btn { background: #1f6feb; }
+#grid-btn.off { background: #21262d; }
+.panel-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.icon-btn {
+  background: #21262d; border: 1px solid #30363d; color: #e6edf3; border-radius: 4px;
+  width: 20px; height: 20px; font-size: 13px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; padding: 0;
+}
+.icon-btn:hover { background: #1f6feb; }
+
+/* Collapse chevron, shared by both panels. */
+.group-toggle {
+  width: 14px; height: 14px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #8b949e; font-size: 9px; transition: transform .15s ease; user-select: none;
+}
+.group-toggle.collapsed { transform: rotate(-90deg); }
+.group-name { flex: 1; user-select: none; }
+
+/* ── meshes panel (left) ─────────────────────────────────────────────────── */
+#mesh-list { display: flex; flex-direction: column; gap: 3px; }
+.mesh-src-hdr {
+  display: flex; align-items: center; gap: 7px; font-size: 12px;
+  color: #cdd9e5; font-weight: 600; margin-top: 6px; cursor: pointer;
+}
+.mesh-src-items { display: flex; flex-direction: column; gap: 3px; overflow: hidden; }
+.mesh-src-items.collapsed { display: none; }
+.group-hdr {
+  display: flex; align-items: center; gap: 7px; font-size: 12px;
+  color: #cdd9e5; font-weight: 600; margin-top: 6px; cursor: pointer;
+}
+.group-hdr input { width: 14px; height: 14px; cursor: pointer; accent-color: #58a6ff; flex-shrink: 0; }
+.group-items { display: flex; flex-direction: column; gap: 3px; overflow: hidden; }
+.group-items.collapsed { display: none; }
+.draw-item {
+  display: flex; align-items: center; gap: 6px; font-size: 11px;
+  color: #8b949e; padding-left: 20px; cursor: pointer;
+}
+.draw-item input { width: 12px; height: 12px; cursor: pointer; accent-color: #3fb950; flex-shrink: 0; }
+
+/* ── toggle panel (right) ────────────────────────────────────────────────── */
+#toggle-list { display: flex; flex-direction: column; gap: 10px; }
+.toggle-src-hdr {
+  display: flex; align-items: center; gap: 7px; font-size: 12px; color: #cdd9e5;
+  font-weight: 600; margin-top: 6px; cursor: pointer;
+}
+.toggle-src-items { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.toggle-src-items.collapsed { display: none; }
+.toggle-item { display: flex; flex-direction: column; gap: 5px; }
+.toggle-hdr  { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.toggle-hdr-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.toggle-name { font-size: 12px; color: #cdd9e5; font-weight: 600; }
+.toggle-key  {
+  font-size: 10px; color: #8b949e; background: #21262d; border: 1px solid #30363d;
+  border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+}
+.toggle-unwired-badge {
+  font-size: 11px; color: #e3b341; background: #2b2111; border: 1px solid #4d3a14;
+  border-radius: 4px; padding: 0 5px; line-height: 15px; cursor: help; flex-shrink: 0;
+}
+.toggle-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.toggle-icon-btn {
+  background: transparent; border: none; color: #8b949e; cursor: pointer;
+  font-size: 12px; width: 18px; height: 18px; border-radius: 3px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.toggle-icon-btn:hover { background: #21262d; color: #e6edf3; }
+.toggle-empty { font-size: 11px; color: #8b949e; font-style: italic; }
+.toggle-row { display: flex; align-items: center; gap: 8px; }
+.toggle-cycle-btn {
+  background: #21262d; border: 1px solid #30363d; color: #e6edf3; border-radius: 4px;
+  width: 24px; height: 22px; font-size: 13px; cursor: pointer; flex-shrink: 0;
+}
+.toggle-cycle-btn:hover { background: #1f6feb; }
+.toggle-value { font-size: 12px; color: #58a6ff; font-weight: 600; flex: 1; min-width: 0; overflow-wrap: break-word; }
+
+/* Recording session: the row being recorded gets an accent outline, and the
+ * cycle button + value describe "Position N of M" instead of the live value. */
+.toggle-row.recording {
+  outline: 1px solid #58a6ff; border-radius: 4px; padding: 3px 4px; margin: -3px -4px;
+}
+.toggle-record-row { display: flex; gap: 6px; }
+.toggle-record-save, .toggle-record-cancel {
+  flex: 1; border-radius: 4px; padding: 4px 0; font-size: 12px; cursor: pointer;
+}
+.toggle-record-save {
+  background: #238636; color: #fff; border: 1px solid rgba(240,246,252,.15);
+}
+.toggle-record-save:hover:not(:disabled) { background: #2ea043; }
+.toggle-record-save:disabled { opacity: .45; cursor: default; }
+.toggle-record-cancel {
+  background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+}
+.toggle-record-cancel:hover { background: #30363d; }
+
+.icon-btn:disabled, .toggle-icon-btn:disabled, .toggle-cycle-btn:disabled {
+  opacity: .35; cursor: default; background: #21262d;
+}
+
+/* ── loading overlay ─────────────────────────────────────────────────────── */
+#loading {
+  display: none; position: fixed; inset: 46px 0 0; z-index: 200;
+  background: rgba(13,17,23,.8); backdrop-filter: blur(4px);
+  flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+}
+#loading.show { display: flex; }
+.spinner {
+  width: 36px; height: 36px; border: 3px solid #30363d; border-top-color: #58a6ff;
+  border-radius: 50%; animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#status-text { font-size: 13px; color: #8b949e; }
+
+/* ── hint & info ─────────────────────────────────────────────────────────── */
+#hint {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  text-align: center; color: #30363d; pointer-events: none;
+}
+#hint .big { font-size: 48px; }
+#hint .msg { font-size: 14px; margin-top: 10px; }
+
+#info { position: fixed; bottom: 10px; left: 12px; font-size: 11px; color: #30363d; z-index: 10; }
+
+/* ── toggle add/edit modal ───────────────────────────────────────────────── */
+.modal-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 300;
+  background: rgba(1,4,9,.6); align-items: center; justify-content: center;
+}
+.modal-backdrop.show { display: flex; }
+.modal {
+  background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+  padding: 18px 20px; width: 320px; max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 40px); overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,.5);
+}
+.modal h4 { font-size: 14px; color: #e6edf3; margin-bottom: 12px; }
+.modal-error {
+  display: none; font-size: 11px; color: #f85149; background: rgba(248,81,73,.1);
+  border: 1px solid rgba(248,81,73,.4); border-radius: 6px; padding: 6px 8px; margin-bottom: 10px;
+  white-space: pre-wrap;
+}
+.modal-field {
+  display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 11px; color: #8b949e;
+}
+.modal-field input, .modal-field select {
+  background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+  border-radius: 6px; padding: 6px 8px; font-size: 12px; font-family: inherit;
+}
+.modal-field input:disabled, .modal-field select:disabled { opacity: .6; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.modal-actions button {
+  border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; border: 1px solid #30363d;
+}
+#tm-cancel { background: #21262d; color: #e6edf3; }
+#tm-cancel:hover { background: #30363d; }
+#tm-save { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
+#tm-save:hover:not(:disabled) { background: #2ea043; }
+#tm-save:disabled { opacity: .6; cursor: default; }
+
+/* ── build-time feature flags (app/features.py) ──────────────────────────── */
+/* Only hides the button; the frontend/backend behind it is unaffected -- see
+ * app/features.py's docstring. Classes are baked server-side into <body> (see
+ * app/server.py), so a hidden feature never flashes visible on load. Always
+ * absent when running from source (python viewer_app.py shows everything). */
+body.feature-export-off #export-btn { display: none; }
+body.feature-modify-toggle-off #toggle-add-btn { display: none; }
+body.feature-modify-toggle-off .toggle-actions { display: none; }

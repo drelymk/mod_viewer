@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>3DMigoto Mod Viewer</title>
+<link rel="stylesheet" href="css/app.css"/>
+</head>
+<!-- __BODY_CLASS__ is rewritten at serve time to a feature-flag-off class per
+     app/features.py (e.g. "feature-export-off"), empty when every feature is
+     shown -- see app/server.py and the matching CSS rules in app.css. -->
+<body class="__BODY_CLASS__">
+
+<div id="toolbar">
+  <span class="app-icon">🎮</span>
+  <span class="app-title">3DMigoto Mod Viewer</span>
+  <span id="mod-path">No mod loaded</span>
+  <span id="pending-indicator" class="pending-indicator">● Unsaved changes</span>
+  <button id="open-btn">📂 Open Mod</button>
+  <button id="export-btn" disabled>💾 Export</button>
+</div>
+
+<div id="canvas-container"></div>
+
+<div id="left-dock">
+  <div id="sidebar">
+    <h3>Meshes</h3>
+    <div id="mesh-list"></div>
+  </div>
+
+  <div id="tool-panel">
+    <h3>Tools</h3>
+    <button id="wire-btn" class="tool-btn" title="Toggle wireframe rendering">⬡ Wireframe</button>
+    <button id="grid-btn" class="tool-btn" title="Toggle grid visibility">⊞ Grid</button>
+  </div>
+</div>
+
+<div id="toggle-panel">
+  <div class="panel-hdr">
+    <h3>Toggle</h3>
+    <button id="toggle-add-btn" class="icon-btn" title="Add toggle">＋</button>
+  </div>
+  <div id="toggle-list"></div>
+</div>
+
+<div id="toggle-modal-backdrop" class="modal-backdrop">
+  <div class="modal">
+    <h4 id="tm-title">Add Toggle</h4>
+    <div id="tm-error" class="modal-error"></div>
+    <form id="tm-form">
+      <label class="modal-field" id="tm-ini-field">
+        <span>Ini file</span>
+        <select id="tm-ini"></select>
+      </label>
+      <label class="modal-field">
+        <span>Name</span>
+        <input id="tm-name" type="text" autocomplete="off"/>
+      </label>
+      <label class="modal-field">
+        <span>Key</span>
+        <input id="tm-key" type="text" autocomplete="off" placeholder="e.g. 1 or ctrl 1"/>
+      </label>
+      <label class="modal-field">
+        <span>Back key (optional)</span>
+        <input id="tm-back" type="text" autocomplete="off"/>
+      </label>
+      <div id="tm-var-single">
+        <label class="modal-field">
+          <span>Variable name</span>
+          <input id="tm-var" type="text" autocomplete="off" placeholder="e.g. swapvar"/>
+        </label>
+        <label class="modal-field">
+          <span>Values (comma-separated)</span>
+          <input id="tm-values" type="text" autocomplete="off" placeholder="0,1,2"/>
+        </label>
+        <label class="modal-field">
+          <span>Default value (optional)</span>
+          <input id="tm-default" type="text" autocomplete="off"/>
+        </label>
+      </div>
+      <div id="tm-vars-multi"></div>
+      <div class="modal-actions">
+        <button type="button" id="tm-cancel">Cancel</button>
+        <button type="submit" id="tm-save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div id="status-text">Loading…</div>
+</div>
+
+<div id="hint">
+  <div class="big">📦</div>
+  <div class="msg">Click <strong>Open Mod</strong> and select a mod folder</div>
+</div>
+
+<div id="info">Drag to rotate &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Right-drag to pan</div>
+
+<!-- Rewritten at serve time to point at either the vendored Three.js copy or
+     the CDN (see app/server.py). -->
+<script type="importmap">
+{
+  "imports": {
+    "three":          "__THREE_URL__",
+    "three/addons/":  "__ADDONS_URL__"
+  }
+}
+</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
