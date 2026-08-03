@@ -6,6 +6,8 @@
 // editing can only change an *existing* var's value list, never add or
 // remove one (see toggle_editor.add_toggle / edit_toggle).
 
+import { confirmDialog } from './dialogs.js';
+
 const $ = (id) => document.getElementById(id);
 
 let currentMode = null;    // 'add' | 'edit'
@@ -163,7 +165,7 @@ async function handleSubmit(evt) {
     // resolving that mesh's visibility is squarely the user's call.
     if (result.error && currentMode === 'edit' &&
         result.error.startsWith('removing these values would orphan existing gates')) {
-      const proceed = confirm(
+      const proceed = await confirmDialog(
         `${result.error}\n\nApply anyway? Meshes only shown for a removed value will no longer be reachable through this toggle.`);
       if (proceed) result = await submitEdit(true);
     }

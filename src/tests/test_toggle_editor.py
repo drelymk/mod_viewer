@@ -321,6 +321,17 @@ def test_add_rejects_reserved_detection_var_names():
           "doc unchanged after the rejected reserved-name adds")
 
 
+def test_add_condition_builds_present_right_after_constants():
+    d = doc(BASIC)
+    te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
+
+    names = [s.name for s in d.sections]
+    check(names.index("Present") == names.index("Constants") + 1,
+          f"freshly-built [Present] lands right after [Constants], not at EOF ({names})")
+    check(names.index("KeyExtra") == names.index("Present") + 1,
+          f"the new Key section lands right after [Present] ({names})")
+
+
 def test_add_condition_appends_into_existing_present_section():
     d = doc(BASIC + "\n[Present]\nrun = CommandListUnrelated\n")
     te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
@@ -577,6 +588,15 @@ endif
     check(gate.text == "if 0", f"negated gate rewritten to the literal 0 ({gate.text})")
 
 
+def test_delete_reports_always_true_gate():
+    d = doc(BASIC)
+    report = te.delete_toggle(d, "KeySwap")
+    check(len(report["always_true_gates"]) == 3,
+          f"every plain-comparison gate is flagged as permanently true ({report})")
+    gate = next(l for l in d.lines if l.kind == IF)
+    check(gate.text == "if 1", f"gate rewritten to the literal 1, not restructured away ({gate.text})")
+
+
 def test_delete_reports_unsafe_gate():
     """A stray extra endif makes the section's nesting ambiguous; delete_toggle
     must not guess, and must report it instead of guessing."""
@@ -778,6 +798,7 @@ if __name__ == "__main__":
                test_add_condition_marks_first_and_second_override_only,
                test_add_condition_idempotent_across_two_calls,
                test_add_rejects_reserved_detection_var_names,
+               test_add_condition_builds_present_right_after_constants,
                test_add_condition_appends_into_existing_present_section,
                test_edit_rename, test_edit_rename_collision,
                test_edit_rebind_key_last_wins,
@@ -791,6 +812,7 @@ if __name__ == "__main__":
                test_delete_multi_var_section_shared_var_untouched,
                test_delete_namespaced_var_untouched,
                test_delete_reports_always_false_gate,
+               test_delete_reports_always_true_gate,
                test_delete_reports_unsafe_gate,
                test_delete_nonexistent_section_raises,
                test_real_mods_delete_toggle):

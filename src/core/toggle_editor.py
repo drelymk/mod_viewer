@@ -161,7 +161,8 @@ def add_toggle(doc, name, key_combo, var, values, default=None, back_combo=None)
 
     _ensure_var_declared(doc, var, values[0] if default is None else str(default))
 
-    if detection_var is None:
+    just_built_active = detection_var is None
+    if just_built_active:
         # Neither $object_detected nor $active exists yet -- build $active's
         # plumbing from scratch (see module docstring).
         detection_var = _ACTIVE_VAR
@@ -176,8 +177,9 @@ def add_toggle(doc, name, key_combo, var, values, default=None, back_combo=None)
     body += ["type = cycle", f"${var} = {','.join(values)}"]
 
     # Constants always exists by now (_ensure_var_declared creates it if
-    # missing), so the new section lands right after it, not at EOF.
-    at = doc.section("Constants").end
+    # missing), so the new section lands right after it -- and after the new
+    # [Present] section too, when this call just built it right there.
+    at = doc.section("Present").end if just_built_active else doc.section("Constants").end
     if at > 0 and doc.lines[at - 1].kind != BLANK:
         body = [""] + body
     if at < len(doc.lines):
@@ -231,8 +233,8 @@ def _ensure_var_declared(doc, var, default_value, persist=True):
 
 
 def _ensure_present_reset(doc, var):
-    """Add `post $var = 0` to `[Present]` (creating the section, appended at
-    the end of the document, if it doesn't exist yet).
+    """Add `post $var = 0` to `[Present]` (creating the section right after
+    [Constants], if it doesn't exist yet).
 
     `post` defers the assignment until after the rest of this frame's
     Present command list has run, so anything reading `$var` earlier in the
@@ -241,10 +243,13 @@ def _ensure_present_reset(doc, var):
     sets it back to 1 first."""
     sec = doc.section("Present")
     if sec is None:
-        at = len(doc.lines)
+        const = doc.section("Constants")
+        at = const.end if const is not None else len(doc.lines)
         body = ["[Present]", f"post ${var} = 0"]
         if at > 0 and doc.lines[at - 1].kind != BLANK:
             body = [""] + body
+        if at < len(doc.lines):
+            body = body + [""]   # separate from whatever section follows
         doc.insert_lines(at, body)
         return
     _append_after_last_content_line(doc, sec, f"post ${var} = 0")
@@ -439,6 +444,10 @@ def _strip_vars_from_gates(doc, dead_vars):
                       literal `0` -- these branches are now permanently
                       unreachable (see ic.eliminate() for why this can
                       legitimately happen, e.g. `if !$v`), worth a UI warning.
+        always_true   [(section, line_no_1based), ...] rewritten to the
+                      literal `1` -- these branches (and whatever they draw)
+                      are now permanently shown instead of only for one cycle
+                      value, equally worth flagging to the user.
         unsafe        [(section, line_no_1based), ...] left untouched because
                       their section's nesting was ambiguous.
     """
@@ -458,6 +467,7 @@ def _strip_vars_from_gates(doc, dead_vars):
 
     changed = 0
     always_false = []
+    always_true = []
     for no in targets:
         target = doc.lines[no]   # re-fetch: _reindex() replaces Line objects on every splice
         keyword, expr = _split_condition_line(target)
@@ -480,8 +490,12 @@ def _strip_vars_from_gates(doc, dead_vars):
         if new_expr == "0":
             always_false.append((target.section.name if target.section else None,
                                  target.no + 1))
+        elif new_expr == "1":
+            always_true.append((target.section.name if target.section else None,
+                                target.no + 1))
 
-    return {"rewritten": changed, "always_false": always_false, "unsafe": unsafe}
+    return {"rewritten": changed, "always_false": always_false,
+            "always_true": always_true, "unsafe": unsafe}
 
 
 def delete_toggle(doc, section_name):
@@ -495,11 +509,16 @@ def delete_toggle(doc, section_name):
 
     Returns {"section": name, "vars_removed": [...], "gates_rewritten": N,
     "always_false_gates": [(section, line_no_1based), ...],
+    "always_true_gates": [(section, line_no_1based), ...],
     "unsafe_gates": [(section, line_no_1based), ...]}.
 
     `always_false_gates` lists branches that became permanently unreachable
     (e.g. a `!$v` gate) -- the mesh(es) they used to draw are now hidden for
     good, the one outcome of a delete worth surfacing to the user.
+
+    `always_true_gates` lists branches that became permanently reachable
+    (e.g. a plain `$v` gate) -- the mesh(es) they draw are now always shown
+    instead of only for one cycle value, equally worth surfacing.
 
     `unsafe_gates` lists leftover references to a removed var that couldn't
     be rewritten because their section's if/elif/endif nesting is ambiguous;
@@ -518,7 +537,7 @@ def delete_toggle(doc, section_name):
     vars_removed = [v for v in my_vars
                     if not _var_declared_elsewhere(doc, v, exclude_section=section_name)]
     gate_report = _strip_vars_from_gates(doc, vars_removed) if vars_removed else \
-        {"rewritten": 0, "always_false": [], "unsafe": []}
+        {"rewritten": 0, "always_false": [], "always_true": [], "unsafe": []}
 
     for var in vars_removed:
         line = _constant_line(doc, var)
@@ -528,4 +547,5 @@ def delete_toggle(doc, section_name):
     return {"section": section_name, "vars_removed": vars_removed,
             "gates_rewritten": gate_report["rewritten"],
             "always_false_gates": gate_report["always_false"],
+            "always_true_gates": gate_report["always_true"],
             "unsafe_gates": gate_report["unsafe"]}

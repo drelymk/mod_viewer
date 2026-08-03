@@ -11,6 +11,7 @@ import {
   activeMeshes, conditionsSatisfied, getToggleValue, setToggleValue,
   applyMeshVisibility, syncCheckboxes, refreshAll,
 } from './visibility.js';
+import { alertDialog } from './dialogs.js';
 
 let active = null;    // non-null while a session is in progress
 let starting = false; // true from the first click until active is set (or the attempt is abandoned)
@@ -70,12 +71,12 @@ export async function startRecordSession(info, ctx, ui) {
   try {
     const posInfo = await window.pywebview.api.get_record_positions(ctx.modPath, info.ini, info.section);
     if (posInfo.error) {
-      alert('Could not start recording:\n\n' + posInfo.error);
+      await alertDialog('Could not start recording:\n\n' + posInfo.error);
       return;
     }
     const vars = writableVars(info, posInfo.vars || []);
     if (!vars.length || !posInfo.positions) {
-      alert('This toggle has no variable this app can record automatically.');
+      await alertDialog('This toggle has no variable this app can record automatically.');
       return;
     }
 
@@ -189,12 +190,12 @@ async function save() {
   try {
     const result = await window.pywebview.api.record_toggle(ctx.modPath, info.ini, info.section, positionLines);
     if (result.error) {
-      alert('Could not save recording:\n\n' + result.error);
+      await alertDialog('Could not save recording:\n\n' + result.error);
       return;
     }
     const summary = summarizeSkips(result.result || {});
     exitRecordingUI();
-    if (summary) alert('Recorded, but review these lines by hand:\n\n' + summary);
+    if (summary) await alertDialog('Recorded, but review these lines by hand:\n\n' + summary);
     if (ctx.onChange) await ctx.onChange();
   } finally {
     ui.saveBtn.disabled = false;

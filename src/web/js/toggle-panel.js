@@ -9,6 +9,7 @@
 import { refreshAll, setToggleValue, getToggleValue } from './visibility.js';
 import { openToggleModal } from './toggle-modal.js';
 import { startRecordSession } from './record-session.js';
+import { alertDialog, confirmDialog } from './dialogs.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -38,24 +39,25 @@ function setOthersEnabled(enabled, exceptItem) {
 function summarizeReport(report) {
   const lines = [
     ...(report.always_false_gates || []).map((l) => `always-false gate at line ${l}`),
+    ...(report.always_true_gates || []).map((l) => `always-true gate at line ${l}`),
     ...(report.unsafe_gates || []).map((l) => `unresolved gate at line ${l}`),
   ];
   return lines.join('\n');
 }
 
 async function handleDelete(info, ctx) {
-  const ok = confirm(
+  const ok = await confirmDialog(
     `Delete toggle "${info.name}"?\n\nThis only stages the change — nothing is written to the ` +
     `ini file until you click Export.`);
   if (!ok) return;
 
   const result = await window.pywebview.api.delete_toggle(ctx.modPath, info.ini, info.section);
   if (result.error) {
-    alert('Could not delete toggle:\n\n' + result.error);
+    await alertDialog('Could not delete toggle:\n\n' + result.error);
     return;
   }
   const summary = summarizeReport(result.result || {});
-  if (summary) alert('Toggle deleted, but review these lines by hand:\n\n' + summary);
+  if (summary) await alertDialog('Toggle deleted, but review these lines by hand:\n\n' + summary);
   if (ctx.onChange) await ctx.onChange();
 }
 

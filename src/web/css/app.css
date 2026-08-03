@@ -229,6 +229,24 @@ body {
 #tm-save:hover:not(:disabled) { background: #2ea043; }
 #tm-save:disabled { opacity: .6; cursor: default; }
 
+/* ── confirm/alert dialogs (dialogs.js) ──────────────────────────────────── */
+.dialog-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 400;
+  background: rgba(1,4,9,.6); align-items: center; justify-content: center;
+}
+.dialog-backdrop.show { display: flex; }
+.dialog-box {
+  background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+  padding: 18px 20px; width: 340px; max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 40px); overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,.5);
+}
+.dialog-message { font-size: 12px; color: #e6edf3; white-space: pre-wrap; line-height: 1.5; }
+#dialog-cancel { background: #21262d; color: #e6edf3; }
+#dialog-cancel:hover { background: #30363d; }
+#dialog-ok { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
+#dialog-ok:hover { background: #2ea043; }
+
 /* ── build-time feature flags (app/features.py) ──────────────────────────── */
 /* Only hides the button; the frontend/backend behind it is unaffected -- see
  * app/features.py's docstring. Classes are baked server-side into <body> (see

@@ -5,6 +5,7 @@ import { setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, toggleWireframe } from './visibility.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
+import { alertDialog, confirmDialog } from './dialogs.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -81,7 +82,7 @@ async function loadModAt(path) {
   const data = await window.pywebview.api.load_mod(path);
   if (data && data.error) {
     showLoading(false);
-    alert('Could not load mod:\n\n' + data.error);
+    await alertDialog('Could not load mod:\n\n' + data.error);
     return;
   }
   displayMeshPayload(data);
@@ -105,7 +106,7 @@ async function openMod() {
     // no confirmation.
     if (currentModPath && !samePath(currentModPath, path) &&
         await window.pywebview.api.has_pending_changes(currentModPath)) {
-      const proceed = confirm(
+      const proceed = await confirmDialog(
         'This mod has unsaved changes that haven\'t been exported.\n\n' +
         'Opening a different mod folder will discard them. Continue?');
       if (!proceed) return;
@@ -115,7 +116,7 @@ async function openMod() {
     await loadModAt(path);
   } catch (e) {
     showLoading(false);
-    alert('Unexpected error:\n\n' + e);
+    await alertDialog('Unexpected error:\n\n' + e);
   } finally {
     btn.disabled = false;
   }
@@ -131,7 +132,7 @@ export async function reloadCurrentMod() {
     await loadModAt(currentModPath);
   } catch (e) {
     showLoading(false);
-    alert('Unexpected error while reloading:\n\n' + e);
+    await alertDialog('Unexpected error while reloading:\n\n' + e);
   }
 }
 
@@ -147,10 +148,10 @@ async function exportChanges() {
       // for this case (refreshPendingState/hasUnwiredToggle), so reaching
       // here at all means the panel was momentarily stale; nothing was
       // written either way.
-      alert('Export was blocked:\n\n' + result.error);
+      await alertDialog('Export was blocked:\n\n' + result.error);
     } else if (result.failed && result.failed.length) {
       const detail = result.failed.map((f) => `${f.ini}: ${f.error}`).join('\n');
-      alert(
+      await alertDialog(
         `${result.saved.length} ini file(s) exported, but ${result.failed.length} failed ` +
         `and are still pending:\n\n${detail}`);
     }
@@ -161,7 +162,7 @@ async function exportChanges() {
     // re-enables for a retry).
     await reloadCurrentMod();
   } catch (e) {
-    alert('Unexpected error while exporting:\n\n' + e);
+    await alertDialog('Unexpected error while exporting:\n\n' + e);
     await refreshPendingState();
   }
 }
