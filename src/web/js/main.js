@@ -2,7 +2,7 @@
 
 import { fitTo, toggleGrid } from './scene.js';
 import { setTextures } from './mesh-factory.js';
-import { activeMeshes, reset, toggleWireframe } from './visibility.js';
+import { activeMeshes, reset, toggleWireframe, toggleSmoothShading } from './visibility.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
@@ -171,6 +171,7 @@ $('open-btn').addEventListener('click', openMod);
 $('export-btn').addEventListener('click', exportChanges);
 $('wire-btn').addEventListener('click', toggleWireframe);
 $('grid-btn').addEventListener('click', toggleGrid);
+$('shading-btn').addEventListener('click', toggleSmoothShading);
 
 // Exposed for automated smoke tests and for poking at the app from the
 // devtools console; the UI itself always goes through the listeners above.

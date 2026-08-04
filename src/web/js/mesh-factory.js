@@ -36,10 +36,11 @@ export function buildMesh(name, data) {
   if (data.uv) geo.setAttribute('uv', new THREE.BufferAttribute(decodeF32(data.uv), 2));
   geo.setIndex(new THREE.BufferAttribute(decodeU32(data.idx), 1));
 
-  // flatShading uses per-face normals (no vertex-normal averaging), which
-  // eliminates spike artifacts on thin hair geometry whose strands have
-  // sharply diverging orientations.
-  const common = { side: THREE.DoubleSide, roughness: 1.0, metalness: 0.0, flatShading: true };
+  // We only have vertex positions, no authored normals, so smooth shading
+  // needs computeVertexNormals() to average one normal per shared vertex
+  geo.computeVertexNormals();
+
+  const common = { side: THREE.DoubleSide, roughness: 1.0, metalness: 0.0 };
   const mat = data.tex_key
     ? new THREE.MeshStandardMaterial({ ...common, map: getTexture(data.tex_key) })
     : new THREE.MeshStandardMaterial({ ...common, color: fallbackColor(name) });

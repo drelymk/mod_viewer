@@ -72,6 +72,8 @@ body {
 #wire-btn.active { background: #1f6feb; }
 #grid-btn { background: #1f6feb; }
 #grid-btn.off { background: #21262d; }
+#shading-btn { background: #1f6feb; }
+#shading-btn.off { background: #21262d; }
 .panel-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .icon-btn {
   background: #21262d; border: 1px solid #30363d; color: #e6edf3; border-radius: 4px;

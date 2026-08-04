@@ -226,6 +226,12 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
             raw = read_indices(ib_data, draw["start"], draw["count"])
             if not raw:
                 continue
+            # DirectX resolves each index as index_buffer_value + BaseVertexLocation
+            # against the vertex buffer -- shared/merged buffers rely on this offset
+            # to pick out this draw's own vertex range.
+            base = draw.get("base") or 0
+            if base:
+                raw = [v + base for v in raw]
 
             # Compact: only export vertices actually referenced
             used  = sorted(set(raw))

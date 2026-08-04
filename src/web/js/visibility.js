@@ -17,6 +17,7 @@ let toggleState = {};
 let groupsUI = [];
 
 let wireframe = false;
+let smoothShading = true;
 
 export function reset() {
   activeMeshes.forEach(m => {
@@ -34,6 +35,7 @@ export function addMesh(mesh, conditions, sources) {
   mesh.userData.conditions = conditions || [];
   mesh.userData.sources = sources || [];
   mesh.material.wireframe = wireframe;
+  mesh.material.flatShading = !smoothShading;
   scene.add(mesh);
   activeMeshes.push(mesh);
 }
@@ -110,5 +112,14 @@ export function toggleWireframe() {
   activeMeshes.forEach(m => {
     const mats = Array.isArray(m.material) ? m.material : [m.material];
     mats.forEach(mt => { mt.wireframe = wireframe; });
+  });
+}
+
+export function toggleSmoothShading() {
+  smoothShading = !smoothShading;
+  document.getElementById('shading-btn').classList.toggle('off', !smoothShading);
+  activeMeshes.forEach(m => {
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    mats.forEach(mt => { mt.flatShading = !smoothShading; mt.needsUpdate = true; });
   });
 }
