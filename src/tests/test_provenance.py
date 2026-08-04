@@ -713,6 +713,60 @@ def test_handling_skip_with_no_drawindexed_draws_nothing():
               "a section with no handling=skip still gets the implicit whole-ib draw")
 
 
+# ── a draw section's `ib=` can name a component that's a per-part suffix
+#    (e.g. "...Head"/"...Body") of the shared Position/Blend/Texcoord
+#    component -- and the shared component's own name can itself end in an
+#    uppercase abbreviation (e.g. Genshin's "CN" outfit-variant suffix), which
+#    broke the CamelCase-word-strip fallback's assumption that a lowercase
+#    letter always precedes the final word.
+
+COMPONENT_ABBREV_SUFFIX_INI = """[TextureOverrideXCNPosition]
+vb0 = ResourceXCNPosition
+
+[TextureOverrideXCNBlend]
+vb1 = ResourceXCNBlend
+
+[TextureOverrideXCNTexcoord]
+vb1 = ResourceXCNTexcoord
+
+[TextureOverrideXCNHead]
+ib = ResourceXCNHeadIB
+drawindexed = 100, 0, 0
+
+[ResourceXCNPosition]
+filename = pos.buf
+stride = 40
+
+[ResourceXCNBlend]
+filename = blend.buf
+stride = 32
+
+[ResourceXCNTexcoord]
+filename = tc.buf
+stride = 12
+
+[ResourceXCNHeadIB]
+filename = head.ib
+format = DXGI_FORMAT_R32_UINT
+"""
+
+
+def test_component_name_ending_in_uppercase_abbreviation():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", COMPONENT_ABBREV_SUFFIX_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        names = {g["display_name"]: g for g in groups}
+        check("XCNHead" in names,
+              f"the Head draw resolves its buffers via the shared XCN component "
+              f"(got groups: {sorted(names)})")
+        if "XCNHead" in names:
+            g = names["XCNHead"]
+            check(g["position_file"] == "pos.buf" and g["texcoord_file"] == "tc.buf",
+                  f"resolved to the shared component's own buffers "
+                  f"(got {g['position_file']}, {g['texcoord_file']})")
+
+
 RUN_CHAIN_INI = """[Constants]
 global persist $naked = 0
 global persist $flag = 0
@@ -912,6 +966,7 @@ if __name__ == "__main__":
                test_cross_ib_vb_reassignment_ini_parser,
                test_cross_ib_vb_reassignment_mesh_builder,
                test_handling_skip_with_no_drawindexed_draws_nothing,
+               test_component_name_ending_in_uppercase_abbreviation,
                test_run_inlines_nested_commandlist_draws,
                test_toggle_driven_diffuse_swap_ini_parser,
                test_toggle_driven_diffuse_swap_mesh_builder,

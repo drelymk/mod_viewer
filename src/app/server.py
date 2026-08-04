@@ -26,6 +26,8 @@ THREE_VERSION = "0.165.0"
 CDN_THREE = f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.module.js"
 CDN_ADDONS = f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/"
 
+REPO_URL = "https://github.com/drelymk/mod_viewer"
+
 _VENDOR_PREFIX = "/vendor/"
 
 
@@ -120,6 +122,8 @@ def start():
         "__THREE_URL__": three_url,
         "__ADDONS_URL__": addons_url,
         "__BODY_CLASS__": " ".join(body_classes),
+        "__APP_VERSION__": paths.APP_VERSION,
+        "__REPO_URL__": REPO_URL,
     }
 
     httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)

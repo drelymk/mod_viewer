@@ -680,8 +680,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             c2 = re.sub(r"[A-Za-z]+$", "", comp)
             if c2 and c2 != comp: buf = comp_bufs.get(c2)
         if not buf:
-            # Strip last CamelCase word
-            c2 = re.sub(r"(?<=[a-z])[A-Z][a-z]*$", "", comp)
+            # Strip last CamelCase word.
+            c2 = re.sub(r"(?<=.)[A-Z][a-z]+$", "", comp)
             if c2 and c2 != comp: buf = comp_bufs.get(c2)
         return buf
 

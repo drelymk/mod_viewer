@@ -31,6 +31,9 @@ import tempfile
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from app.paths import APP_VERSION
+
 ASSETS = os.path.join(HERE, "assets")
 WEB = os.path.join(HERE, "web")
 FEATURES_FILE = os.path.join(HERE, "features.ini")
@@ -42,7 +45,6 @@ FEATURES_FILE = os.path.join(HERE, "features.ini")
 # sitting next to a distributed build.
 BAKED_FEATURES_MODULE = os.path.join(HERE, "app", "_baked_features.py")
 APP_NAME = "3DMigotoModViewer"
-APP_VERSION = "1.0.0"
 APP_PUBLISHER = "3DMigoto Mod Viewer"
 APP_DESCRIPTION = "3DMigoto Mod Viewer - preview mod meshes in 3D"
 ENTRY = "viewer_app.py"

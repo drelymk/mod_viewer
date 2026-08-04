@@ -27,8 +27,8 @@ There are two ways to control what you see:
 Both stay in sync: cycling a toggle updates the mesh checkboxes to match, while
 a manual click always wins for that mesh.
 
-Camera: drag to orbit, scroll to zoom, right-drag to pan. **Wireframe** and
-**Grid** toggles are in the toolbar.
+Camera: drag to orbit, scroll to zoom, right-drag to pan. **Wireframe**,
+**Grid** and **Shading** toggles are in the toolbar.
 
 ## Adding and editing toggles
 

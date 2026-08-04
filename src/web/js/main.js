@@ -77,7 +77,7 @@ function displayMeshPayload(payload) {
 async function loadModAt(path) {
   currentModPath = path;
   $('mod-path').textContent = path;
-  showLoading(true, 'Parsing mod…');
+  showLoading(true, 'Loading Model…');
 
   const data = await window.pywebview.api.load_mod(path);
   if (data && data.error) {
