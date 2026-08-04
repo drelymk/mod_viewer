@@ -19,6 +19,14 @@ function getTexture(key) {
   return loaders[key];
 }
 
+/** Swap a mesh's diffuse map to another registry entry (a texture-swap toggle). */
+export function setMeshTexture(mesh, texKey) {
+  const map = getTexture(texKey);
+  if (map === mesh.material.map) return;
+  mesh.material.map = map;
+  mesh.material.needsUpdate = true;
+}
+
 /** Colour for meshes with no texture, guessed from the component name. */
 function fallbackColor(name) {
   const n = name.toLowerCase();

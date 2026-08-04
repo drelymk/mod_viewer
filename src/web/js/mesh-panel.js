@@ -145,7 +145,7 @@ export function buildMeshPanel(payload) {
       const itemCbs = [], itemObjs = [];
       for (const name of names) {
         const mesh = buildMesh(name, payload[name]);
-        addMesh(mesh, payload[name].conditions, payload[name].sources);
+        addMesh(mesh, payload[name].conditions, payload[name].sources, payload[name].texture_variants);
         itemObjs.push(mesh);
         itemsWrap.appendChild(buildDrawRow(name, groupName, payload[name], mesh, itemCbs, masterCb));
       }

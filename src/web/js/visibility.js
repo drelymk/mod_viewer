@@ -6,6 +6,7 @@
 // bugs; changing either one will reintroduce them.
 
 import { scene } from './scene.js';
+import { setMeshTexture } from './mesh-factory.js';
 
 /** Every mesh currently in the scene. */
 export const activeMeshes = [];
@@ -30,14 +31,16 @@ export function reset() {
   toggleState = {};
 }
 
-export function addMesh(mesh, conditions, sources) {
+export function addMesh(mesh, conditions, sources, textureVariants) {
   mesh.userData.manualVisible = true;
   mesh.userData.conditions = conditions || [];
   mesh.userData.sources = sources || [];
+  mesh.userData.textureVariants = textureVariants || [];
   mesh.material.wireframe = wireframe;
   mesh.material.flatShading = !smoothShading;
   scene.add(mesh);
   activeMeshes.push(mesh);
+  applyTextureVariant(mesh);
 }
 
 export function registerGroup(group) {
@@ -52,19 +55,31 @@ export function getToggleValue(variable) {
   return toggleState[variable];
 }
 
+// True if an OR'd list of AND-groups ([[{var,value,negate}, ...], ...]) is
+// satisfied by the current Toggle panel state.
+function dnfSatisfied(condGroups) {
+  if (!condGroups || condGroups.length === 0) return true;
+  return condGroups.some(group => group.every(c => {
+    const cur = toggleState[c.var];
+    if (cur === undefined) return true;
+    return c.negate ? (cur !== c.value) : (cur === c.value);
+  }));
+}
+
 // True if this mesh's gating conditions (an OR'd list of AND-groups:
 // [[{var,value,negate}, ...], ...]) are satisfied by the current Toggle panel
 // state. Meshes with no conditions are never gated. Exported for record mode,
 // which needs to answer this same question against a hypothetical toggle
 // value (a recording position) rather than only the live one.
 export function conditionsSatisfied(mesh) {
-  const condGroups = mesh.userData.conditions || [];
-  if (condGroups.length === 0) return true;
-  return condGroups.some(group => group.every(c => {
-    const cur = toggleState[c.var];
-    if (cur === undefined) return true;
-    return c.negate ? (cur !== c.value) : (cur === c.value);
-  }));
+  return dnfSatisfied(mesh.userData.conditions);
+}
+
+// A toggle can reassign a mesh's diffuse texture.
+export function applyTextureVariant(mesh) {
+  const variants = mesh.userData.textureVariants || [];
+  const variant = variants.find(v => dnfSatisfied(v.conditions));
+  if (variant) setMeshTexture(mesh, variant.tex_key);
 }
 
 // The MESHES checkbox is the sole, direct source of truth for a mesh's
@@ -102,6 +117,7 @@ export function refreshAll() {
       mesh.userData.manualVisible = conditionsSatisfied(mesh);
     }
     applyMeshVisibility(mesh);
+    applyTextureVariant(mesh);
   });
   syncCheckboxes();
 }

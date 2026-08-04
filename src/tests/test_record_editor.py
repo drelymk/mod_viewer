@@ -792,7 +792,7 @@ def test_real_mods_record_toggle():
             before_draws = {
                 (sec_name, count, start, base): conds
                 for sec_name, info in draw_info.items()
-                for (count, start, base, conds, src) in info["draws"]
+                for (count, start, base, conds, src, _ib, _dv, _vb) in info["draws"]
             }
 
             # A file can legitimately repeat a `[Key...]` header (3DMigoto
@@ -867,7 +867,7 @@ def test_real_mods_record_toggle():
                         if var not in writable_cvars:
                             bindings[var] = defaults.get(var, values[0])
                     for info in draw_info.values():
-                        for (count, start, base, conds, src) in info["draws"]:
+                        for (count, start, base, conds, src, _ib, _dv, _vb) in info["draws"]:
                             if src is not None and _dnf_visible(conds, bindings):
                                 position_lines[p].append(src["line_no"])
 
@@ -904,7 +904,7 @@ def test_real_mods_record_toggle():
                 after_draws = {
                     (sec_name, count, start, base): conds
                     for sec_name, info in after_draw_info.items()
-                    for (count, start, base, conds, src) in info["draws"]
+                    for (count, start, base, conds, src, _ib, _dv, _vb) in info["draws"]
                 }
 
                 if sorted(before_draws) != sorted(after_draws):

@@ -6,7 +6,7 @@ out to all of them. The dedup merge in build_mesh_payload is the dangerous
 part: it collapses several draws into one, and used to keep only the first.
 """
 
-import os, sys, random, tempfile
+import os, sys, random, tempfile, struct, base64
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -465,10 +465,456 @@ def test_toggle_panel_provenance():
     check(bad == 0, f"every toggle resolves to a real section in a real file (bad={bad})")
 
 
+# ── mid-section `ib =` reassignment must not be lost
+
+IB_REASSIGN_INI = """[TextureOverrideBodyBlend]
+ib = ResourceBodyHeadIB
+vb0 = ResourcePos
+vb1 = ResourceTc
+drawindexed = 100, 0, 0
+ib = ResourceBodyDressIB
+drawindexed = 100, 0, 0
+
+[ResourceBodyHeadIB]
+filename = head.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyDressIB]
+filename = dress.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePos]
+filename = pos.buf
+stride = 40
+
+[ResourceTc]
+filename = tc.buf
+stride = 20
+"""
+
+
+def test_mid_section_ib_reassignment_ini_parser():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", IB_REASSIGN_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        draws = groups[0]["draws"]
+        check(len(draws) == 2, f"both drawindexed lines kept (got {len(draws)})")
+        check(groups[0]["ib_file"] == "head.ib",
+              f"group's default ib is the section's first-seen one (got {groups[0]['ib_file']})")
+        check(draws[0].get("ib_file") is None,
+              "first draw has no override -- reads the group's default ib (head.ib)")
+        check(draws[1].get("ib_file") == "dress.ib",
+              f"second draw carries the reassigned ib (got {draws[1].get('ib_file')})")
+
+
+def test_mid_section_ib_reassignment_mesh_builder():
+    """End-to-end: build_mesh_payload must read each draw's indices from its
+    own reassigned ib file, and must not merge two draws that happen to share
+    (start, count) but actually come from different index buffers."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", IB_REASSIGN_INI)
+        open(os.path.join(tmp, "head.ib"), "wb").write(struct.pack("<3I", 10, 11, 12))
+        open(os.path.join(tmp, "dress.ib"), "wb").write(struct.pack("<3I", 20, 21, 22))
+        # 32 unique, identifiable vertices: vertex i sits at position (i, i, i)
+        with open(os.path.join(tmp, "pos.buf"), "wb") as f:
+            for i in range(32):
+                f.write(struct.pack("<3f", float(i), float(i), float(i)) + b"\0" * 28)
+        open(os.path.join(tmp, "tc.buf"), "wb").write(b"\0" * 20 * 32)
+
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        # both draws are (start=0, count=100) in the ini above -- shrink to the
+        # 3 real indices we actually wrote so read_indices has something to read
+        for d in groups[0]["draws"]:
+            d["count"] = 3
+        payload = build_mesh_payload(groups, tmp)
+
+        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
+        check(len(meshes) == 2, f"both draws survive as distinct meshes, not merged "
+                                 f"(got {len(meshes)})")
+
+        def _verts(entry):
+            pos = struct.unpack(f"<{len(base64.b64decode(entry['pos'])) // 4}f",
+                                 base64.b64decode(entry["pos"]))
+            return sorted(round(pos[i]) for i in range(0, len(pos), 3))
+
+        vert_sets = sorted(_verts(e) for e in meshes.values())
+        check(vert_sets == [[10, 11, 12], [20, 21, 22]],
+              f"each mesh's own vertices come from its own reassigned ib (got {vert_sets})")
+
+
+# ── a mid-section `ib =` reassignment paired with `vb0/vb1 =` (a "cross IB/VB"
+#    swap some GIMI mods use to draw a wholly different mesh's buffers for a
+#    handful of draws) must resolve the NEW mesh's own position/texcoord too,
+#    not just its own ib -- otherwise the new ib's indices get read against
+#    the old mesh's (unrelated, often shorter) position buffer, producing
+#    garbage vertices. The literal `vb0=`/`vb1=` values paired with the
+#    reassignment are deliberately NOT the source of truth here (real mods
+#    sometimes set them to a `= copy vb0` runtime GPU snapshot with no
+#    filename at all) -- the fix re-derives the buffers from the reassigned
+#    `ib`'s own component, same as a normal group's defaults are resolved.
+
+CROSS_IB_VB_INI = """[TextureOverrideSBSBlend]
+vb0 = ResourceSBSPosition
+vb1 = ResourceSBSTexcoord
+
+[TextureOverrideXBSBlend]
+vb0 = ResourceXBSPosition
+vb1 = ResourceXBSTexcoord
+
+[TextureOverrideSBSA]
+ib = ResourceSBSAIB
+drawindexed = 3, 0, 0
+ib = ResourceXBSAIB
+vb0 = ResourceXBSCrossIBVB
+vb1 = ResourceXBSTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceXBSCrossIBVB]
+
+[ResourceSBSAIB]
+filename = sbsA.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceXBSAIB]
+filename = xbsA.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceSBSPosition]
+filename = sbsPos.buf
+stride = 40
+
+[ResourceSBSTexcoord]
+filename = sbsTc.buf
+stride = 20
+
+[ResourceXBSPosition]
+filename = xbsPos.buf
+stride = 40
+
+[ResourceXBSTexcoord]
+filename = xbsTc.buf
+stride = 20
+"""
+
+
+def test_cross_ib_vb_reassignment_ini_parser():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", CROSS_IB_VB_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        draws = groups[0]["draws"]
+        check(len(draws) == 2, f"both drawindexed lines kept (got {len(draws)})")
+        check("position_file" not in draws[0] and "texcoord_file" not in draws[0],
+              "first draw has no override -- reads the group's default SBS buffers")
+        check(draws[1].get("position_file") == "xbsPos.buf" and
+              draws[1].get("texcoord_file") == "xbsTc.buf",
+              f"second draw carries its own reassigned vertex buffers "
+              f"(got {draws[1].get('position_file')}, {draws[1].get('texcoord_file')})")
+
+
+def test_cross_ib_vb_reassignment_mesh_builder():
+    """End-to-end: the second draw's indices must decode against its own
+    reassigned XBS position buffer, not the group's default (shorter) SBS one
+    -- reading against the wrong buffer either raises IndexError or silently
+    collapses out-of-range vertices to the origin, which is exactly the
+    "triangles fly everywhere" corruption this guards against."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", CROSS_IB_VB_INI)
+        open(os.path.join(tmp, "sbsA.ib"), "wb").write(struct.pack("<3I", 0, 1, 2))
+        open(os.path.join(tmp, "xbsA.ib"), "wb").write(struct.pack("<3I", 5, 6, 7))
+        # SBS has only 4 vertices; XBS has 8, at a different scale, so decoding
+        # against the wrong one is either out-of-range or visibly wrong.
+        with open(os.path.join(tmp, "sbsPos.buf"), "wb") as f:
+            for i in range(4):
+                f.write(struct.pack("<3f", float(i), float(i), float(i)) + b"\0" * 28)
+        with open(os.path.join(tmp, "xbsPos.buf"), "wb") as f:
+            for i in range(8):
+                v = float(i * 10)
+                f.write(struct.pack("<3f", v, v, v) + b"\0" * 28)
+        open(os.path.join(tmp, "sbsTc.buf"), "wb").write(b"\0" * 20 * 4)
+        open(os.path.join(tmp, "xbsTc.buf"), "wb").write(b"\0" * 20 * 8)
+
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        payload = build_mesh_payload(groups, tmp)
+
+        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
+        check(len(meshes) == 2, f"both draws survive as distinct meshes (got {len(meshes)})")
+
+        def _verts(entry):
+            pos = struct.unpack(f"<{len(base64.b64decode(entry['pos'])) // 4}f",
+                                 base64.b64decode(entry["pos"]))
+            return sorted(round(pos[i]) for i in range(0, len(pos), 3))
+
+        vert_sets = sorted(_verts(e) for e in meshes.values())
+        check(vert_sets == [[0, 1, 2], [50, 60, 70]],
+              f"the reassigned draw decodes against its own XBS position buffer, "
+              f"not a collapsed/garbage read of the SBS one (got {vert_sets})")
+
+
+# ── `handling = skip` with no `drawindexed` line at all means "suppress the
+#    original draw and replace it with nothing", NOT "draw the whole ib".
+#    Only a section that omits `handling = skip` gets the implicit
+#    whole-buffer-draw fallback (it lets the game's own, unmodified draw call
+#    proceed against the new ib).
+
+HANDLING_SKIP_INI = """[TextureOverrideBodyBlend]
+vb0 = ResourcePos
+vb1 = ResourceTc
+
+[TextureOverrideBodyA]
+ib = ResourceBodyAIB
+drawindexed = 100, 0, 0
+
+[TextureOverrideBodyB]
+handling = skip
+ib = ResourceBodyBIB
+
+[TextureOverrideBodyC]
+ib = ResourceBodyCIB
+
+[ResourceBodyAIB]
+filename = bodyA.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyBIB]
+filename = bodyB.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyCIB]
+filename = bodyC.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePos]
+filename = pos.buf
+stride = 40
+
+[ResourceTc]
+filename = tc.buf
+stride = 20
+"""
+
+
+def test_handling_skip_with_no_drawindexed_draws_nothing():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", HANDLING_SKIP_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        names = {g["display_name"] for g in groups}
+        check("BodyA" in names, "the section with an explicit drawindexed still draws")
+        check("BodyB" not in names,
+              f"a handling=skip section with NO drawindexed draws nothing at all "
+              f"(got groups: {sorted(names)})")
+        check("BodyC" in names,
+              "a section with no handling=skip still gets the implicit whole-ib draw")
+
+
+RUN_CHAIN_INI = """[Constants]
+global persist $naked = 0
+global persist $flag = 0
+
+[KeyNaked]
+key = n
+type = cycle
+$naked = 0,1
+
+[KeyFlag]
+key = f
+type = cycle
+$flag = 0,1
+
+[TextureOverrideBodyBlend]
+ib = ResourceBodyIB
+vb0 = ResourcePos
+vb1 = ResourceTc
+if $naked == 0
+drawindexed = 100, 0, 0
+run = CustomShaderOuter
+endif
+
+[CustomShaderOuter]
+run = CommandListTransparent
+
+[CommandListTransparent]
+if $flag == 0
+drawindexed = 50, 200, 0
+endif
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePos]
+filename = pos.buf
+stride = 40
+
+[ResourceTc]
+filename = tc.buf
+stride = 20
+"""
+
+
+def _visible(conds, bindings):
+    if conds == []:
+        return True
+    return any(all((bindings.get(c["var"]) == c["value"]) != c["negate"] for c in group)
+               for group in conds)
+
+
+def test_run_inlines_nested_commandlist_draws():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", RUN_CHAIN_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        draws = groups[0]["draws"]
+        check(len(draws) == 2,
+              f"the run=-chained drawindexed is inlined alongside the direct one "
+              f"(got {len(draws)})")
+        by_count = {d["count"]: d for d in draws}
+        check(100 in by_count and 50 in by_count,
+              f"both the direct and run=-chained draws are present (got {sorted(by_count)})")
+
+        chained = by_count[50]
+        check(_visible(chained["conditions"], {"naked": "0", "flag": "0"}),
+              "chained draw visible when both naked==0 and flag==0")
+        check(not _visible(chained["conditions"], {"naked": "1", "flag": "0"}),
+              "chained draw hidden when the caller's own gate (naked==0) fails")
+        check(not _visible(chained["conditions"], {"naked": "0", "flag": "1"}),
+              "chained draw hidden when the callee's own gate (flag==0) fails")
+
+
+# ── a toggle can reassign the diffuse texture instead of (or as well as)
+#    gating a draw -- e.g. HousekeeperColumbina.ini's `$seven2` swap
+
+DIFFUSE_SWAP_INI = """[Constants]
+global persist $seven2 = 0
+
+[KeySeven2]
+key = k
+type = cycle
+$seven2 = 0,1
+
+[TextureOverrideColumbinaBodyBlend]
+ib = ResourceColumbinaBodyIB
+vb0 = ResourcePos
+vb1 = ResourceTc
+Resource\\GIMI\\Diffuse = ref ResourceDiffuseA
+drawindexed = 10, 0, 0
+if $seven2 == 1
+Resource\\GIMI\\Diffuse = ref ResourceDiffuseB
+else
+Resource\\GIMI\\Diffuse = ref ResourceDiffuseC
+endif
+drawindexed = 20, 100, 0
+
+[ResourceColumbinaBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePos]
+filename = pos.buf
+stride = 40
+
+[ResourceTc]
+filename = tc.buf
+stride = 20
+
+[ResourceDiffuseA]
+filename = diffuseA.dds
+
+[ResourceDiffuseB]
+filename = diffuseB.dds
+
+[ResourceDiffuseC]
+filename = diffuseC.dds
+"""
+
+
+def test_toggle_driven_diffuse_swap_ini_parser():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", DIFFUSE_SWAP_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        group = groups[0]
+        check(group["diffuse_file"] == "diffuseA.dds",
+              f"group default diffuse is the first-seen, unconditional one "
+              f"(got {group['diffuse_file']})")
+        draws = {d["count"]: d for d in group["draws"]}
+
+        check("texture_variants" not in draws[10],
+              "the earlier unconditional diffuse assignment doesn't leak a "
+              "spurious single-entry texture_variants onto the first draw")
+
+        variants = draws[20].get("texture_variants")
+        check(bool(variants) and len(variants) == 2,
+              f"exactly 2 variants for the later, toggle-gated draw (got {variants})")
+        by_file = {v["file"]: v["conditions"] for v in variants}
+        check(set(by_file) == {"diffuseB.dds", "diffuseC.dds"},
+              f"both branches' files are present (got {sorted(by_file)})")
+        check(_visible(by_file["diffuseB.dds"], {"seven2": "1"}) and
+              not _visible(by_file["diffuseB.dds"], {"seven2": "0"}),
+              "diffuseB's condition matches only seven2==1")
+        check(_visible(by_file["diffuseC.dds"], {"seven2": "0"}) and
+              not _visible(by_file["diffuseC.dds"], {"seven2": "1"}),
+              "diffuseC's condition (the else branch) matches only seven2==0")
+
+
+def test_toggle_driven_diffuse_swap_mesh_builder():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", DIFFUSE_SWAP_INI)
+        open(os.path.join(tmp, "body.ib"), "wb").write(
+            struct.pack("<3I", 0, 1, 2) + struct.pack("<3I", 3, 4, 5))
+        with open(os.path.join(tmp, "pos.buf"), "wb") as f:
+            for i in range(8):
+                f.write(struct.pack("<3f", float(i), float(i), float(i)) + b"\0" * 28)
+        open(os.path.join(tmp, "tc.buf"), "wb").write(b"\0" * 20 * 8)
+        for name in ("diffuseA.dds", "diffuseB.dds", "diffuseC.dds"):
+            open(os.path.join(tmp, name), "wb").write(b"DDS " + name.encode())
+
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        for d in groups[0]["draws"]:
+            d["start"], d["count"] = (0, 3) if d["count"] == 10 else (3, 3)
+        payload = build_mesh_payload(groups, tmp)
+
+        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
+        by_draw = {tuple(e["drawindexed"]): e for e in meshes.values()}
+        first  = by_draw[(3, 0, 0)]
+        second = by_draw[(3, 3, 0)]
+
+        check("texture_variants" not in first,
+              "first draw's payload entry carries no texture_variants (single diffuse)")
+
+        variants = second.get("texture_variants")
+        check(bool(variants) and len(variants) == 2,
+              f"second draw's payload entry carries both resolved variants (got {variants})")
+        keys = {v["tex_key"] for v in variants}
+        check(keys == {"diffuseB.dds", "diffuseC.dds"},
+              f"each variant's tex_key names its own resolved diffuse file (got {keys})")
+        check(second["tex_key"] == "diffuseA.dds",
+              f"the draw's default tex_key is unchanged -- an older consumer that "
+              f"ignores texture_variants still renders the group's default diffuse "
+              f"(got {second['tex_key']})")
+
+
 if __name__ == "__main__":
     for fn in (test_srcline_is_a_str, test_line_numbers, test_draw_sources,
                test_toggle_key_provenance, test_merge_keeps_every_source,
                test_merge_across_files, test_cross_ini_component_collision_recovered,
+               test_mid_section_ib_reassignment_ini_parser,
+               test_mid_section_ib_reassignment_mesh_builder,
+               test_cross_ib_vb_reassignment_ini_parser,
+               test_cross_ib_vb_reassignment_mesh_builder,
+               test_handling_skip_with_no_drawindexed_draws_nothing,
+               test_run_inlines_nested_commandlist_draws,
+               test_toggle_driven_diffuse_swap_ini_parser,
+               test_toggle_driven_diffuse_swap_mesh_builder,
                test_resource_path_traversal_blocked,
                test_real_mods, test_toggle_panel_provenance):
         fn()

@@ -412,6 +412,9 @@ def _build_bool_alias_map(sections):
     return alias_map
 
 
+_RUN_SKIP_PREFIXES = ("TextureOverride", "ShaderOverride", "Resource", "Present", "Key", "Constants")
+
+
 def _scan_sections_for_draws(sections, var_prefix=None):
     """Pass 1 of build_draw_groups: walk every TextureOverride/CommandList
     section and record its buffer refs plus each drawindexed line's gating
@@ -423,27 +426,38 @@ def _scan_sections_for_draws(sections, var_prefix=None):
     resolve to real files -- irrelevant to gating, but would otherwise
     discard real conditions from the sample for no good reason.
 
+    `run = X` lines are followed inline (recursively, with cycle protection)
+    whenever X names another section in this same file that isn't itself a
+    hash-matched TextureOverride/ShaderOverride/Resource/Present/Key/Constants
+    section.
+
+    Each draw also remembers the `ib` most recently assigned *before* it
+    within this same flattened scan (None if none yet -- see build_draw_groups) mid-section to read a completely different
+    mesh's buffers for a handful of draws inside what's otherwise another
+    mesh's TextureOverride section), and the set of `Resource\\...\\Diffuse
+    = ref X` alternatives active for it.
+
     Returns {section_name: {vb0, vb1, vb2, ib, draws, diffuse, src}} — the
     same per-section shape build_draw_groups uses internally as `sec_info`.
+    `draws` entries are (count, start, base, conds, source, ib, diffuse_variants,
+    vb_snapshot) tuples, where vb_snapshot is the (vb0, vb1, vb2) most recently
+    assigned before that line -- kept for provenance only; build_draw_groups
+    re-derives the actual position/texcoord buffers for a reassigned `ib`
+    from its component instead of trusting these literal values.
     """
     # Vars driven by a cycle-type [Key...] section — only these are worth tracking
     # as per-draw show/hide gates (internal state vars like $mod_enabled are ignored).
     toggle_vars = extract_toggle_var_names(sections)
     alias_map = _build_bool_alias_map(sections)
+    seq_counter = [0]  # unique id per `if` block
 
-    # scan BOTH TextureOverride AND CommandList sections —
-    # WWMI stores vb0/vb2/ib in a CommandList, not in per-component Blend sections.
-    sec_info: dict = {}
-    for name, lines in sections.items():
-        if not (name.startswith("TextureOverride") or name.startswith("CommandList")):
-            continue
-        info: dict = dict(vb0=None, vb1=None, vb2=None, ib=None, draws=[],
-                          diffuse=None, src=None)
-        # Tracks the stack of active gate branches. Each frame is
+    def _scan(lines, info, cond_stack, visiting):
+        # cond_stack tracks the stack of active gate branches. Each frame is
         # {"cur": <DNF active for the current branch>,
         #  "seen": <DNF of "some earlier branch at this level already matched">}
-        # so `else if` / `else` correctly exclude every preceding branch.
-        cond_stack: list = []
+        # so `else if` / `else` correctly exclude every preceding branch. It's
+        # threaded through run= recursion unchanged, so a called section's own
+        # if/elif nests correctly under whichever branch called it.
         for raw in lines:
             line = raw.split(";")[0].strip()
             if not line: continue
@@ -461,7 +475,8 @@ def _scan_sections_for_draws(sections, var_prefix=None):
                 continue
             if low.startswith("if "):
                 branch = _parse_condition_dnf(line[3:].strip(), alias_map)
-                cond_stack.append({"cur": branch, "seen": branch})
+                seq_counter[0] += 1
+                cond_stack.append({"cur": branch, "seen": branch, "seq": seq_counter[0]})
                 continue
             if low == "else":
                 if cond_stack:
@@ -472,13 +487,23 @@ def _scan_sections_for_draws(sections, var_prefix=None):
                 if cond_stack: cond_stack.pop()
                 continue
             m = re.match(r"vb0\s*=\s*(\S+)", line, re.I)
-            if m and not info["vb0"]:    info["vb0"] = m.group(1)
+            if m:
+                if not info["vb0"]: info["vb0"] = m.group(1)
+                info["_cur_vb0"] = m.group(1)
             m = re.match(r"vb1\s*=\s*(\S+)", line, re.I)
-            if m and not info["vb1"]:    info["vb1"] = m.group(1)
+            if m:
+                if not info["vb1"]: info["vb1"] = m.group(1)
+                info["_cur_vb1"] = m.group(1)
             m = re.match(r"vb2\s*=\s*(\S+)", line, re.I)
-            if m and not info["vb2"]:    info["vb2"] = m.group(1)
+            if m:
+                if not info["vb2"]: info["vb2"] = m.group(1)
+                info["_cur_vb2"] = m.group(1)
             m = re.match(r"ib\s*=\s*(\S+)", line, re.I)
-            if m and not info["ib"]:     info["ib"]  = m.group(1)
+            if m:
+                if not info["ib"]: info["ib"] = m.group(1)
+                info["_cur_ib"] = m.group(1)
+            if re.match(r"handling\s*=\s*skip\b", line, re.I):
+                info["handling_skip"] = True
             m = re.match(r"drawindexed\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", line, re.I)
             if m:
                 combined = DNF_TRUE
@@ -486,16 +511,56 @@ def _scan_sections_for_draws(sections, var_prefix=None):
                     combined = _dnf_and(combined, frame["cur"])
                 conds = _normalize_dnf(combined, toggle_vars, var_prefix)
                 info["draws"].append((int(m.group(1)), int(m.group(2)),
-                                      int(m.group(3)), conds, line_source(raw)))
-            m = re.match(r"Resource\\[^\\]+\\Diffuse\s*=\s*ref\s+(\S+)", line, re.I)
-            if m and not info["diffuse"]: info["diffuse"] = m.group(1)
-            # Direct ps-t slot: "ps-t1 = ResourceXxxDiffuse" (no GIMI/ZZMI framework)
-            if not info["diffuse"]:
-                m = re.match(r"ps-t\d+\s*=\s*(\S+)", line, re.I)
-                if m and re.search(r"Diffuse", m.group(1), re.I):
-                    info["diffuse"] = m.group(1)
+                                      int(m.group(3)), conds, line_source(raw),
+                                      info.get("_cur_ib"),
+                                      list(info.get("_cur_diffuse_variants") or []),
+                                      (info.get("_cur_vb0"), info.get("_cur_vb1"),
+                                       info.get("_cur_vb2"))))
+            m_diff = re.match(r"Resource\\[^\\]+\\Diffuse\s*=\s*ref\s+(\S+)", line, re.I)
+            if not m_diff:
+                # Direct ps-t slot: "ps-t1 = ResourceXxxDiffuse"
+                m2 = re.match(r"ps-t\d+\s*=\s*(\S+)", line, re.I)
+                if m2 and re.search(r"Diffuse", m2.group(1), re.I):
+                    m_diff = m2
+            if m_diff:
+                res = m_diff.group(1)
+                if not info["diffuse"]: info["diffuse"] = res
+                combined = DNF_TRUE
+                for frame in cond_stack:
+                    combined = _dnf_and(combined, frame["cur"])
+                cond = _normalize_dnf(combined, toggle_vars, var_prefix)
+                chain_key = cond_stack[-1]["seq"] if cond_stack else None
+                if chain_key != info.get("_diffuse_chain_key"):
+                    info["_cur_diffuse_variants"] = []
+                    info["_diffuse_chain_key"] = chain_key
+                info["_cur_diffuse_variants"].append({"res": res, "cond": cond})
+            m = re.match(r"run\s*=\s*(\S+)", line, re.I)
+            if m:
+                target = m.group(1)
+                if (target in sections and target not in visiting
+                        and not any(target.startswith(p) for p in _RUN_SKIP_PREFIXES)):
+                    visiting.add(target)
+                    _scan(sections[target], info, cond_stack, visiting)
+                    visiting.discard(target)
+
+    # scan BOTH TextureOverride AND CommandList sections.
+    sec_info: dict = {}
+    for name, lines in sections.items():
+        if not (name.startswith("TextureOverride") or name.startswith("CommandList")):
+            continue
+        info: dict = dict(vb0=None, vb1=None, vb2=None, ib=None, draws=[],
+                          diffuse=None, src=None, handling_skip=False,
+                          _cur_diffuse_variants=[], _diffuse_chain_key=None)
+        _scan(lines, info, [], {name})
+        info.pop("_cur_ib", None)
+        info.pop("_cur_vb0", None)
+        info.pop("_cur_vb1", None)
+        info.pop("_cur_vb2", None)
+        info.pop("_cur_diffuse_variants", None)
+        info.pop("_diffuse_chain_key", None)
         sec_info[name] = info
     return sec_info
+
 
 
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None):
@@ -575,15 +640,51 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 break
 
     # pass 3: collect draw sections.
-    # Include sections with local ib even if they have no drawindexed calls —
-    # those are drawn by reading the full IB (count=None).
+    # A section with `ib=` but no drawindexed lines normally lets the game's
+    # original (whole-buffer) draw call proceed unmodified, just against the
+    # new ib -- so it's kept as an implicit full-buffer draw. But `handling =
+    # skip` means the opposite: the original draw call itself is suppressed,
+    # so with no drawindexed lines to replace it, nothing is drawn at all.
     draw_secs = [(n, i) for n, i in sec_info.items()
                  if n.startswith("TextureOverride")
                  and (i["ib"] or global_ib)
-                 and (i["draws"] or i["ib"])]
+                 and (i["draws"] or (i["ib"] and not i["handling_skip"]))]
     if not draw_secs: return []
 
     # pass 4: build group dicts
+    ib_file_cache: dict = {}
+
+    def _resolve_ib_file(ib_name):
+        if ib_name not in ib_file_cache:
+            ib_file_cache[ib_name] = _res_get(resources, ib_name).get("filename")
+        return ib_file_cache[ib_name]
+
+    diffuse_file_cache: dict = {}
+
+    def _resolve_diffuse_file(res_name):
+        if res_name not in diffuse_file_cache:
+            diffuse_file_cache[res_name] = _res_get(resources, res_name).get("filename")
+        return diffuse_file_cache[res_name]
+
+    vertex_res_cache: dict = {}
+
+    def _resolve_vertex_res(res_name):
+        if res_name not in vertex_res_cache:
+            ri = _res_get(resources, res_name)
+            vertex_res_cache[res_name] = (ri.get("filename"), ri.get("stride"))
+        return vertex_res_cache[res_name]
+
+    def _lookup_comp_buf(comp):
+        buf = comp_bufs.get(comp)
+        if not buf:
+            c2 = re.sub(r"[A-Za-z]+$", "", comp)
+            if c2 and c2 != comp: buf = comp_bufs.get(c2)
+        if not buf:
+            # Strip last CamelCase word
+            c2 = re.sub(r"(?<=[a-z])[A-Z][a-z]*$", "", comp)
+            if c2 and c2 != comp: buf = comp_bufs.get(c2)
+        return buf
+
     groups: list = []
     for sec_name, info in draw_secs:
         display_name = sec_name[len("TextureOverride"):] or sec_name
@@ -593,14 +694,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
         ib_res = info["ib"] or global_ib
         comp   = _ib_res_to_component(ib_res)
-        buf    = comp_bufs.get(comp)
-        if not buf:
-            c2 = re.sub(r"[A-Za-z]+$", "", comp)
-            if c2 and c2 != comp: buf = comp_bufs.get(c2)
-        if not buf:
-            # Strip last CamelCase word (GIMI: "ColumbinaHead" → "Columbina", "AinoHairHead" → "AinoHair")
-            c2 = re.sub(r"(?<=[a-z])[A-Z][a-z]*$", "", comp)
-            if c2 and c2 != comp: buf = comp_bufs.get(c2)
+        buf    = _lookup_comp_buf(comp)
         if not buf:
             h = _extract_hash(sec_name) or _extract_hash(ib_res)
             if h and h in hash_pos and h in hash_tc:
@@ -623,7 +717,35 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         pos_stride = pos_ri.get("stride", POSITION_STRIDE)
         uv_off     = DEFAULT_UV_OFFSET
 
-        draws_list = list(info["draws"]) or [(None, 0, 0, [], info["src"])]
+        draws_list = list(info["draws"]) or [(None, 0, 0, [], info["src"], None, [], (None, None, None))]
+        draws = []
+        for i, (c, s, b, cd, src, draw_ib, diff_variants, _vb_ov) in enumerate(draws_list, 1):
+            d = dict(label=f"{label}-{i}", count=c, start=s, base=b,
+                     conditions=cd, sources=[src] if src else [])
+            # A mid-section `ib = ...` reassignment.
+            if draw_ib and draw_ib != ib_res:
+                resolved = _resolve_ib_file(draw_ib)
+                if resolved:
+                    d["ib_file"] = resolved
+                draw_buf = _lookup_comp_buf(_ib_res_to_component(draw_ib))
+                if draw_buf and draw_buf != buf:
+                    pfile, pstride = _resolve_vertex_res(draw_buf["position"])
+                    tfile, tstride = _resolve_vertex_res(draw_buf["texcoord"])
+                    if pfile and tfile:
+                        d["position_file"] = pfile
+                        d["texcoord_file"] = tfile
+                        d["position_stride"] = pstride or POSITION_STRIDE
+                        d["texcoord_stride"] = tstride or 20
+            # A toggle that swaps the diffuse texture rather than gating a draw.
+            if len(diff_variants) > 1:
+                variants = []
+                for v in diff_variants:
+                    file = _resolve_diffuse_file(v["res"])
+                    if file:
+                        variants.append({"conditions": v["cond"], "file": file})
+                if len(variants) > 1:
+                    d["texture_variants"] = variants
+            draws.append(d)
         groups.append(dict(
             name=label,
             display_name=display_name,
@@ -632,9 +754,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             position_stride=pos_stride,
             texcoord_stride=tc_stride, texcoord_uv_off=uv_off,
             ib_file=ib_file, diffuse_file=diff_ri.get("filename"),
-            draws=[dict(label=f"{label}-{i}", count=c, start=s, base=b,
-                        conditions=cd, sources=[src] if src else [])
-                   for i, (c, s, b, cd, src) in enumerate(draws_list, 1)],
+            draws=draws,
         ))
 
     return groups
