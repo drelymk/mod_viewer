@@ -3,21 +3,22 @@
 Deliberately free of any GUI imports so it can be exercised from tests and
 scripts without pywebview or a display.
 
-The payload is a flat dict keyed by mesh name, plus two reserved keys:
+The payload is a flat dict keyed by mesh name, plus three reserved keys:
     __textures__   {texture key: data URI}
     __toggles__    the Toggle panel model (see build_toggle_panel)
+    __menu__       the Menu panel model  (see build_menu_panel)
 """
 
 import os
 import traceback
 
 from core.ini_condition import is_namespaced
-from core.ini_parser import (build_draw_groups, extract_resources,
-                        extract_toggle_keys, extract_variable_defaults,
-                        find_inis, merge_sections)
+from core.ini_parser import (build_draw_groups, extract_menu_toggles,
+                        extract_resources, extract_toggle_keys,
+                        extract_variable_defaults, find_inis, merge_sections)
 from core.mesh_builder import build_mesh_payload
 
-RESERVED_KEYS = ("__textures__", "__toggles__")
+RESERVED_KEYS = ("__textures__", "__toggles__", "__menu__")
 
 
 def _ini_scope(ini_path, folder_path, multi):
@@ -42,13 +43,14 @@ def _ini_scope(ini_path, folder_path, multi):
 
 def _parse_inis(ini_paths, folder_path, overrides=None):
     """Parse each ini independently, so one mod's resource definitions never
-    overwrite another's. Returns (draw groups, toggle keys, variable defaults).
+    overwrite another's. Returns (draw groups, toggle keys, menu slots,
+    variable defaults).
 
     `overrides`, if given, is {ini_path: text} — see merge_sections; used to
     preview pending, not-yet-exported edits instead of stale on-disk content.
     """
     groups = []
-    toggle_keys, toggle_defaults = {}, {}
+    toggle_keys, menu_slots, toggle_defaults = {}, {}, {}
     multi = len(ini_paths) > 1
 
     # Shared across every ini (not reset per file): two sibling inis reusing
@@ -65,10 +67,12 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
                                         seen=seen_labels))
         toggle_keys.update(extract_toggle_keys(secs, var_prefix=var_prefix,
                                                source=source))
+        menu_slots.update(extract_menu_toggles(secs, var_prefix=var_prefix,
+                                               source=source))
         for var, val in extract_variable_defaults(secs, var_prefix=var_prefix).items():
             toggle_defaults.setdefault(var, val)
 
-    return groups, toggle_keys, toggle_defaults
+    return groups, toggle_keys, menu_slots, toggle_defaults
 
 
 def _gating_vars(payload):
@@ -136,6 +140,35 @@ def build_toggle_panel(toggle_keys, toggle_defaults, gating_vars, mod_dir=None,
     return panel
 
 
+def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
+    """Model for the Menu panel: the slots of a mod's in-game clickable menu
+    (see core/ini_menu.py), ordered as they appear in the menu.
+
+    Read-only, and deliberately unfiltered — unlike the Toggle panel, a slot
+    that gates no mesh is still shown, since the menu is the mod's own
+    documentation of what it can change and hiding entries would misrepresent
+    it. `effects` are the mutual-exclusion assignments a real click also
+    applies, replayed by the UI so cycling here behaves like the game does.
+    """
+    panel = {}
+    for key in sorted(menu_slots, key=lambda k: (menu_slots[k]["source"] or "",
+                                                 menu_slots[k]["slot"])):
+        info = menu_slots[key]
+        panel[key] = {
+            "name": info["name"],
+            "slot": info["slot"],
+            "source": info["source"],
+            "ini": (os.path.relpath(info["ini_path"], mod_dir)
+                    if info.get("ini_path") and mod_dir else info.get("ini_path")),
+            "section": info["section"],
+            "var": info["var"],
+            "values": info["values"],
+            "default": toggle_defaults.get(info["var"], info["values"][0]),
+            "effects": info["effects"],
+        }
+    return panel
+
+
 def _gating_vars_from_groups(groups):
     """Same notion as _gating_vars, computed directly from build_draw_groups'
     draws instead of the (buffer-file-dependent) mesh payload — matches
@@ -176,7 +209,7 @@ def unwired_pending_sections(folder_path, overrides, pending_new_sections):
         ini_path = by_name.get(ini_name)
         if ini_path is None:
             continue
-        groups, toggle_keys, _ = _parse_inis([ini_path], folder_path, overrides)
+        groups, toggle_keys, _menu, _ = _parse_inis([ini_path], folder_path, overrides)
         gating = _gating_vars_from_groups(groups)
         still_unwired = [
             section for section in sections
@@ -208,7 +241,8 @@ def load_mod(folder_path, overrides=None, pending_new_sections=None):
         return {"error": "No active .ini files found in this folder."}
 
     try:
-        groups, toggle_keys, toggle_defaults = _parse_inis(ini_paths, folder_path, overrides)
+        groups, toggle_keys, menu_slots, toggle_defaults = _parse_inis(
+            ini_paths, folder_path, overrides)
         if not groups:
             return {"error": f"No mesh geometry found across {len(ini_paths)} ini file(s)."}
 
@@ -219,6 +253,7 @@ def load_mod(folder_path, overrides=None, pending_new_sections=None):
         payload["__toggles__"] = build_toggle_panel(
             toggle_keys, toggle_defaults, _gating_vars(payload), folder_path,
             pending_new_sections)
+        payload["__menu__"] = build_menu_panel(menu_slots, toggle_defaults, folder_path)
         return payload
     except Exception:
         return {"error": traceback.format_exc()}

@@ -23,24 +23,44 @@
 
 <div id="left-dock">
   <div id="sidebar">
-    <h3>Meshes</h3>
+    <div class="panel-hdr">
+      <span class="group-toggle">▼</span>
+      <h3>Meshes</h3>
+    </div>
     <div id="mesh-list"></div>
   </div>
 
   <div id="tool-panel">
-    <h3>Tools</h3>
-    <button id="wire-btn" class="tool-btn" title="Toggle wireframe rendering">⬡ Wireframe</button>
-    <button id="grid-btn" class="tool-btn" title="Toggle grid visibility">⊞ Grid</button>
-    <button id="shading-btn" class="tool-btn" title="Toggle smooth/flat shading">◐ Shading</button>
+    <div class="panel-hdr">
+      <span class="group-toggle">▼</span>
+      <h3>Tools</h3>
+    </div>
+    <div id="tool-buttons">
+      <button id="wire-btn" class="tool-btn" title="Wireframe rendering">⬡</button>
+      <button id="grid-btn" class="tool-btn" title="Grid visibility">⊞</button>
+      <button id="shading-btn" class="tool-btn" title="Smooth/flat shading">◐</button>
+      <button id="texture-btn" class="tool-btn" title="Textures visibility">▩</button>
+    </div>
   </div>
 </div>
 
-<div id="toggle-panel">
-  <div class="panel-hdr">
-    <h3>Toggle</h3>
-    <button id="toggle-add-btn" class="icon-btn" title="Add toggle">＋</button>
+<div id="right-dock">
+  <div id="toggle-panel">
+    <div class="panel-hdr">
+      <span class="group-toggle">▼</span>
+      <h3>Key Toggle</h3>
+      <button id="toggle-add-btn" class="icon-btn" title="Add toggle">＋</button>
+    </div>
+    <div id="toggle-list"></div>
   </div>
-  <div id="toggle-list"></div>
+
+  <div id="menu-panel">
+    <div class="panel-hdr">
+      <span class="group-toggle">▼</span>
+      <h3>Menu Toggle</h3>
+    </div>
+    <div id="menu-list"></div>
+  </div>
 </div>
 
 <div id="toggle-modal-backdrop" class="modal-backdrop">

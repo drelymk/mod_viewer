@@ -19,22 +19,28 @@ def _res_get(resources, name):
     return {}
 
 
-def _safe_join(mod_dir, rel):
-    """Resolve a Resource section's `filename = ...` under mod_dir, refusing
-    to leave it via an absolute path or a `..` escape.
+_MAX_ESCAPE_DEPTH = 3   # levels above mod_dir a `filename = ..\...` may reach
 
-    That filename comes straight from the mod's own ini text (see
-    ini_parser.extract_resources), so a crafted mod could otherwise point it
-    anywhere on disk -- e.g. `filename = ..\\..\\..\\Users\\me\\Pictures\\x.png`
-    or a bare absolute path -- and have its contents read and, for a texture,
-    re-encoded into the payload sent to the UI. Returns None if `rel` escapes.
-    """
+
+def _safe_join(mod_dir, rel):
+    # Resolve a Resource section's `filename = ...` relative to mod_dir.
+
     if not rel: return None
+    if os.path.isabs(rel) or os.path.splitdrive(rel)[0]:
+        return None
     root = os.path.abspath(mod_dir)
     target = os.path.abspath(os.path.join(root, rel))
-    if target != root and not target.startswith(root + os.sep):
-        return None
+    if not _within(target, root):
+        ceiling = root
+        for _ in range(_MAX_ESCAPE_DEPTH):
+            ceiling = os.path.dirname(ceiling)   # stops at the drive root
+        if not _within(target, ceiling):
+            return None
     return target
+
+
+def _within(target, root):
+    return target == root or target.startswith(root + os.sep)
 
 
 # ── Binary readers ─────────────────────────────────────────────────────────────
@@ -237,7 +243,9 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
             if not dds_path or not os.path.exists(dds_path):
                 return None
             if dds_path not in tex_cache:
-                key = os.path.basename(dds_path)
+                # Keyed by path, not basename: variant mods routinely keep
+                # same-named diffuses in per-variant folders (Texture\00..\04).
+                key = os.path.relpath(dds_path, mod_dir).replace(os.sep, "/")
                 if key not in tex_uris:
                     tex_uris[key] = _encode_texture(dds_path) or ""
                 tex_cache[dds_path] = key

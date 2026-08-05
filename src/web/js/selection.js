@@ -26,11 +26,12 @@ function setRowSelected(mesh, on) {
   if (on) expandAncestorsAndScrollTo(row);
 }
 
-/** Un-collapse every ancestor group/source section so a row hidden inside a
- * collapsed one becomes visible, then scroll it into view. */
+/** Un-collapse every collapsed group/source section a row is hiding inside,
+ * so far as the row's own MESHES panel -- but never force the panel itself
+ * back open if the user had it collapsed. */
 function expandAncestorsAndScrollTo(row) {
   let el = row.parentElement;
-  while (el) {
+  while (el && !el.id) {
     if (el.classList && el.classList.contains('collapsed')) {
       el.classList.remove('collapsed');
       el.previousElementSibling?.querySelector?.('.group-toggle')?.classList.remove('collapsed');

@@ -60,35 +60,51 @@ body {
   display: flex; align-items: flex-start; gap: 10px;
 }
 
+/* ── right dock (toggle panel + menu panel) ──────────────────────────────── */
+#right-dock {
+  position: fixed; top: 58px; right: 12px; z-index: 10;
+  max-height: calc(100vh - 104px);
+  display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+}
+
 /* ── shared floating panel chrome ────────────────────────────────────────── */
-#sidebar, #toggle-panel, #tool-panel {
+#sidebar, #toggle-panel, #tool-panel, #menu-panel {
   display: none; background: rgba(13,17,23,.88); border: 1px solid #30363d;
   border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(8px);
 }
-#sidebar, #toggle-panel {
+#sidebar {
   max-height: calc(100vh - 104px); overflow-y: auto; min-width: 155px; max-width: 210px;
 }
-#toggle-panel { position: fixed; top: 58px; right: 12px; z-index: 10; }
-#sidebar h3, #toggle-panel h3, #tool-panel h3 {
-  font-size: 10px; color: #8b949e; text-transform: uppercase;
-  letter-spacing: .1em;
+/* min-height:0 lets a tall panel scroll instead of pushing the other one off
+ * the bottom of the dock. */
+#toggle-panel, #menu-panel {
+  overflow-y: auto; min-width: 155px; max-width: 210px; min-height: 0;
 }
-#sidebar h3 { margin-bottom: 8px; }
+#sidebar h3, #toggle-panel h3, #tool-panel h3, #menu-panel h3 {
+  font-size: 10px; color: #8b949e; text-transform: uppercase;
+  letter-spacing: .1em; margin: 0; flex: 1;
+}
 
 /* ── toolbox (wireframe / grid) ───────────────────────────────────────────── */
 #tool-panel { display: flex; flex-direction: column; gap: 6px; }
-#tool-panel h3 { margin-bottom: 2px; }
+#tool-buttons { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+#tool-buttons.collapsed { display: none; }
 .tool-btn {
-  padding: 5px 10px; background: #21262d; border: 1px solid #30363d;
-  color: #e6edf3; border-radius: 4px; cursor: pointer; white-space: nowrap;
-  font-size: 12px; text-align: left;
+  width: 40px; height: 40px; padding: 0;
+  background: #21262d; border: 1px solid #30363d;
+  color: #e6edf3; border-radius: 6px; cursor: pointer;
+  font-size: 20px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
 }
 #wire-btn.active { background: #1f6feb; }
 #grid-btn { background: #1f6feb; }
 #grid-btn.off { background: #21262d; }
 #shading-btn { background: #1f6feb; }
 #shading-btn.off { background: #21262d; }
-.panel-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+#texture-btn { background: #1f6feb; }
+#texture-btn.off { background: #21262d; }
+.panel-hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; cursor: pointer; }
+#mesh-list.collapsed, #toggle-list.collapsed, #menu-list.collapsed { display: none; }
 .icon-btn {
   background: #21262d; border: 1px solid #30363d; color: #e6edf3; border-radius: 4px;
   width: 20px; height: 20px; font-size: 13px; line-height: 1; cursor: pointer;
@@ -185,6 +201,15 @@ body {
 .icon-btn:disabled, .toggle-icon-btn:disabled, .toggle-cycle-btn:disabled {
   opacity: .35; cursor: default; background: #21262d;
 }
+
+/* ── menu panel (right, under Toggle) ────────────────────────────────────── */
+#menu-list { display: flex; flex-direction: column; gap: 8px; }
+.menu-item { display: flex; align-items: center; gap: 8px; }
+.menu-name {
+  font-size: 12px; color: #cdd9e5; font-weight: 600;
+  flex: 1; min-width: 0; overflow-wrap: break-word;
+}
+.menu-value { font-size: 12px; color: #58a6ff; font-weight: 600; flex-shrink: 0; }
 
 /* ── loading overlay ─────────────────────────────────────────────────────── */
 #loading {

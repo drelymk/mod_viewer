@@ -6,7 +6,7 @@
 // bugs; changing either one will reintroduce them.
 
 import { scene } from './scene.js';
-import { setMeshTexture } from './mesh-factory.js';
+import { setMeshTexture, refreshMeshTexture, setTexturesEnabled } from './mesh-factory.js';
 
 /** Every mesh currently in the scene. */
 export const activeMeshes = [];
@@ -19,6 +19,7 @@ let groupsUI = [];
 
 let wireframe = false;
 let smoothShading = true;
+let textures = true;
 
 export function reset() {
   activeMeshes.forEach(m => {
@@ -138,4 +139,11 @@ export function toggleSmoothShading() {
     const mats = Array.isArray(m.material) ? m.material : [m.material];
     mats.forEach(mt => { mt.flatShading = !smoothShading; mt.needsUpdate = true; });
   });
+}
+
+export function toggleTextures() {
+  textures = !textures;
+  document.getElementById('texture-btn').classList.toggle('off', !textures);
+  setTexturesEnabled(textures);
+  activeMeshes.forEach(refreshMeshTexture);
 }

@@ -2,10 +2,11 @@
 
 import { fitTo, toggleGrid } from './scene.js';
 import { setTextures } from './mesh-factory.js';
-import { activeMeshes, reset, toggleWireframe, toggleSmoothShading } from './visibility.js';
+import { activeMeshes, reset, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
+import { buildMenuPanel } from './menu-panel.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 
 const $ = (id) => document.getElementById(id);
@@ -61,6 +62,8 @@ function clearScene() {
   $('mesh-list').innerHTML = '';
   $('toggle-list').innerHTML = '';
   $('toggle-panel').style.display = 'none';
+  $('menu-list').innerHTML = '';
+  $('menu-panel').style.display = 'none';
 }
 
 function displayMeshPayload(payload) {
@@ -71,6 +74,7 @@ function displayMeshPayload(payload) {
   setTextures(payload.__textures__);
   buildMeshPanel(payload);
   buildTogglePanel(payload.__toggles__, { modPath: currentModPath, onChange: reloadCurrentMod });
+  buildMenuPanel(payload.__menu__);
   fitTo(activeMeshes);
 
   showLoading(false);
@@ -174,7 +178,24 @@ $('export-btn').addEventListener('click', exportChanges);
 $('wire-btn').addEventListener('click', toggleWireframe);
 $('grid-btn').addEventListener('click', toggleGrid);
 $('shading-btn').addEventListener('click', toggleSmoothShading);
+$('texture-btn').addEventListener('click', toggleTextures);
 initSelection();
+
+// Collapses a panel's body when its header is clicked.
+function initPanelCollapse(panel, contentId) {
+  const hdr = panel.querySelector('.panel-hdr');
+  const chevron = hdr.querySelector('.group-toggle');
+  const content = $(contentId);
+  hdr.addEventListener('click', (e) => {
+    if (e.target.closest('.icon-btn')) return;
+    chevron.classList.toggle('collapsed');
+    content.classList.toggle('collapsed');
+  });
+}
+initPanelCollapse($('sidebar'), 'mesh-list');
+initPanelCollapse($('tool-panel'), 'tool-buttons');
+initPanelCollapse($('toggle-panel'), 'toggle-list');
+initPanelCollapse($('menu-panel'), 'menu-list');
 
 // Exposed for automated smoke tests and for poking at the app from the
 // devtools console; the UI itself always goes through the listeners above.

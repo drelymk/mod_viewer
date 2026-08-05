@@ -7,6 +7,7 @@ import { decodeF32, decodeU32 } from './decode.js';
 // meshes sharing a texture share one GPU upload.
 let registry = {};
 const loaders = {};
+let texturesEnabled = true;
 
 export function setTextures(textures) {
   registry = textures || {};
@@ -19,22 +20,35 @@ function getTexture(key) {
   return loaders[key];
 }
 
-/** Swap a mesh's diffuse map to another registry entry (a texture-swap toggle). */
-export function setMeshTexture(mesh, texKey) {
-  const map = getTexture(texKey);
+/** Bind whatever diffuse map the mesh currently wants, honouring the global
+ * textures on/off switch. Falls back to the name-guessed flat colour, which is
+ * also what an untextured mesh has always shown. */
+export function refreshMeshTexture(mesh) {
+  const map = texturesEnabled ? getTexture(mesh.userData.texKey) : null;
   if (map === mesh.material.map) return;
   mesh.material.map = map;
+  mesh.material.color.setHex(map ? 0xffffff : mesh.userData.fallbackColor);
   mesh.material.needsUpdate = true;
+}
+
+export function setTexturesEnabled(on) {
+  texturesEnabled = on;
+}
+
+/** Swap a mesh's diffuse map to another registry entry (a texture-swap toggle). */
+export function setMeshTexture(mesh, texKey) {
+  mesh.userData.texKey = texKey;
+  refreshMeshTexture(mesh);
 }
 
 /** Colour for meshes with no texture, guessed from the component name. */
 function fallbackColor(name) {
   const n = name.toLowerCase();
-  if (n.includes('wing'))                          return 0xc8a2c8;
-  if (n.includes('hair'))                          return 0xa0d8ef;
-  if (n.includes('body') || n.includes('top'))     return 0xf5cba7;
-  if (n.includes('leg')  || n.includes('bottom'))  return 0xf7dc6f;
-  if (n.includes('belt') || n.includes('bag'))     return 0xadd8e6;
+  // if (n.includes('wing'))                          return 0xc8a2c8;
+  // if (n.includes('hair'))                          return 0xa0d8ef;
+  // if (n.includes('body') || n.includes('top'))     return 0xf5cba7;
+  // if (n.includes('leg')  || n.includes('bottom'))  return 0xf7dc6f;
+  // if (n.includes('belt') || n.includes('bag'))     return 0xadd8e6;
   return 0xcccccc;
 }
 
@@ -48,12 +62,14 @@ export function buildMesh(name, data) {
   // needs computeVertexNormals() to average one normal per shared vertex
   geo.computeVertexNormals();
 
-  const common = { side: THREE.DoubleSide, roughness: 1.0, metalness: 0.0 };
-  const mat = data.tex_key
-    ? new THREE.MeshStandardMaterial({ ...common, map: getTexture(data.tex_key) })
-    : new THREE.MeshStandardMaterial({ ...common, color: fallbackColor(name) });
+  const fallback = fallbackColor(name);
+  const mat = new THREE.MeshStandardMaterial({
+    side: THREE.DoubleSide, roughness: 1.0, metalness: 0.0, color: fallback });
 
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.userData.texKey = data.tex_key || null;
+  mesh.userData.fallbackColor = fallback;
+  refreshMeshTexture(mesh);
   mesh.castShadow = mesh.receiveShadow = true;
   return mesh;
 }

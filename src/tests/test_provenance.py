@@ -398,20 +398,11 @@ def _anchors_section(all_lines, n, section):
     return False
 
 
-# ── a malicious mod ini must not read files outside its own folder ──────────
+# ── a mod ini may reach a sibling assets folder, but not roam the disk ───────
 
-def test_resource_path_traversal_blocked():
-    """A crafted `filename = ...` in a [Resource...] section pointing outside
-    mod_dir (via ".." or an absolute path) must not be read, even though the
-    mod folder itself is untrusted, downloaded content.
-    """
-    with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as tmp:
-        secret = os.path.join(outside, "secret.buf")
-        with open(secret, "wb") as f:
-            f.write(b"\1" * 4096)
-
-        rel_escape = os.path.relpath(secret, tmp).replace(os.sep, "/")
-        ini_text = f"""[Constants]
+def _traversal_mod(tmp, pos_filename):
+    """A minimal one-draw mod whose vb0 filename is `pos_filename`."""
+    ini_text = f"""[Constants]
 global persist $swapvar = 0
 
 [TextureOverrideBodyBlend]
@@ -425,23 +416,61 @@ filename = body.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
-filename = {rel_escape}
+filename = {pos_filename}
 stride = 40
 
 [ResourceTc]
 filename = tc.buf
 stride = 20
 """
-        path = write(tmp, "mod.ini", ini_text)
-        for buf in ("body.ib", "tc.buf"):
-            open(os.path.join(tmp, buf), "wb").write(b"\0" * 4096)
+    path = write(tmp, "mod.ini", ini_text)
+    for buf in ("body.ib", "tc.buf"):
+        open(os.path.join(tmp, buf), "wb").write(b"\0" * 4096)
+    secs = merge_sections([path])
+    groups = build_draw_groups(secs, extract_resources(secs))
+    payload = build_mesh_payload(groups, tmp)
+    return {k: v for k, v in payload.items() if k != "__textures__"}
 
-        secs = merge_sections([path])
-        groups = build_draw_groups(secs, extract_resources(secs))
-        payload = build_mesh_payload(groups, tmp)
 
-        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
-        check(not meshes, f"escaping resource path is refused, not read (got {list(meshes)})")
+def test_resource_path_may_reach_a_sibling_folder():
+    """`filename = ..\\resources\\x.buf` is how mods share assets between the
+    ini's folder and its neighbours -- it has to resolve."""
+    with tempfile.TemporaryDirectory() as tmp:
+        mod = os.path.join(tmp, "mod")
+        shared = os.path.join(tmp, "shared")
+        os.makedirs(mod); os.makedirs(shared)
+        open(os.path.join(shared, "pos.buf"), "wb").write(b"\1" * 4096)
+
+        meshes = _traversal_mod(mod, "../shared/pos.buf")
+        check(len(meshes) == 1,
+              f"a resource one folder above the ini is read (got {list(meshes)})")
+
+
+def test_absolute_resource_path_blocked():
+    """The mod folder is untrusted, downloaded content: a crafted `filename`
+    naming an absolute path must not be read."""
+    with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as tmp:
+        secret = os.path.join(outside, "secret.buf")
+        with open(secret, "wb") as f:
+            f.write(b"\1" * 4096)
+
+        meshes = _traversal_mod(tmp, secret.replace(os.sep, "/"))
+        check(not meshes, f"absolute resource path is refused (got {list(meshes)})")
+
+
+def test_deep_resource_path_traversal_blocked():
+    """`..` is allowed, but only a few levels up -- not far enough to walk out
+    of the mod library and into the user's own files."""
+    with tempfile.TemporaryDirectory() as tmp:
+        secret = os.path.join(tmp, "secret.buf")
+        with open(secret, "wb") as f:
+            f.write(b"\1" * 4096)
+        mod = os.path.join(tmp, "a", "b", "c", "d", "e")
+        os.makedirs(mod)
+
+        meshes = _traversal_mod(mod, "../../../../../secret.buf")
+        check(not meshes,
+              f"a resource far above the mod folder is refused (got {list(meshes)})")
 
 
 def test_toggle_panel_provenance():
@@ -1059,7 +1088,9 @@ if __name__ == "__main__":
                test_toggle_driven_diffuse_swap_mesh_builder,
                test_diffuse_assignment_without_ref_keyword,
                test_r16_index_buffer,
-               test_resource_path_traversal_blocked,
+               test_resource_path_may_reach_a_sibling_folder,
+               test_absolute_resource_path_blocked,
+               test_deep_resource_path_traversal_blocked,
                test_real_mods, test_toggle_panel_provenance):
         fn()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
