@@ -125,6 +125,7 @@ body {
   color: #8b949e; padding-left: 20px; cursor: pointer;
 }
 .draw-item input { width: 12px; height: 12px; cursor: pointer; accent-color: #3fb950; flex-shrink: 0; }
+.draw-item.selected { background: rgba(88,166,255,.15); outline: 1px solid #58a6ff; border-radius: 4px; }
 
 /* ── toggle panel (right) ────────────────────────────────────────────────── */
 #toggle-list { display: flex; flex-direction: column; gap: 10px; }

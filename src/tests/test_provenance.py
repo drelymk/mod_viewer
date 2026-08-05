@@ -957,6 +957,93 @@ def test_toggle_driven_diffuse_swap_mesh_builder():
               f"(got {second['tex_key']})")
 
 
+# ── XXMI-generated mods assign the diffuse without the "ref" keyword
+#    (e.g. "Resource\GIMI\Diffuse = ResourceXDiffuse"), unlike the
+#    "= ref X" form other tools emit -- both must resolve the same way.
+
+DIFFUSE_NO_REF_INI = """[TextureOverrideXPosition]
+vb0 = ResourceXPosition
+
+[TextureOverrideXBlend]
+vb1 = ResourceXBlend
+
+[TextureOverrideXTexcoord]
+vb1 = ResourceXTexcoord
+
+[TextureOverrideXA]
+ib = ResourceXAIB
+Resource\\GIMI\\Diffuse = ResourceXDiffuse
+run = CommandList\\GIMI\\SetTextures
+drawindexed = 100, 0, 0
+
+[ResourceXPosition]
+filename = pos.buf
+stride = 40
+
+[ResourceXBlend]
+filename = blend.buf
+stride = 32
+
+[ResourceXTexcoord]
+filename = tc.buf
+stride = 20
+
+[ResourceXAIB]
+filename = a.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceXDiffuse]
+filename = diffuseX.dds
+"""
+
+
+def test_diffuse_assignment_without_ref_keyword():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", DIFFUSE_NO_REF_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        names = {g["display_name"]: g for g in groups}
+        check("XA" in names, f"the draw section builds a group (got {sorted(names)})")
+        if "XA" in names:
+            check(names["XA"]["diffuse_file"] == "diffuseX.dds",
+                  f"the no-\"ref\" diffuse assignment still resolves "
+                  f"(got {names['XA']['diffuse_file']})")
+
+
+# ── index buffers come in both DXGI_FORMAT_R32_UINT and _R16_UINT; reading a
+#    16-bit one as 32-bit yields garbage indices and no usable mesh.
+
+IB_R16_INI = DIFFUSE_NO_REF_INI.replace("DXGI_FORMAT_R32_UINT", "DXGI_FORMAT_R16_UINT")
+
+
+def test_r16_index_buffer():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", IB_R16_INI)
+        open(os.path.join(tmp, "a.ib"), "wb").write(struct.pack("<3H", 5, 6, 7))
+        with open(os.path.join(tmp, "pos.buf"), "wb") as f:
+            for i in range(8):
+                f.write(struct.pack("<3f", float(i), float(i), float(i)) + b"\0" * 28)
+        open(os.path.join(tmp, "tc.buf"), "wb").write(b"\0" * 20 * 8)
+
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        check(groups and groups[0]["index_size"] == 2,
+              f"an R16_UINT ib reports 2 bytes per index "
+              f"(got {groups[0]['index_size'] if groups else None})")
+        for d in groups[0]["draws"]:
+            d["count"] = 3
+        payload = build_mesh_payload(groups, tmp)
+
+        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
+        check(len(meshes) == 1, f"the draw builds a mesh (got {len(meshes)})")
+        entry = next(iter(meshes.values()))
+        pos = struct.unpack(f"<{len(base64.b64decode(entry['pos'])) // 4}f",
+                            base64.b64decode(entry["pos"]))
+        verts = sorted(round(pos[i]) for i in range(0, len(pos), 3))
+        check(verts == [5, 6, 7],
+              f"16-bit indices are decoded as 16-bit, not 32-bit (got {verts})")
+
+
 if __name__ == "__main__":
     for fn in (test_srcline_is_a_str, test_line_numbers, test_draw_sources,
                test_toggle_key_provenance, test_merge_keeps_every_source,
@@ -970,6 +1057,8 @@ if __name__ == "__main__":
                test_run_inlines_nested_commandlist_draws,
                test_toggle_driven_diffuse_swap_ini_parser,
                test_toggle_driven_diffuse_swap_mesh_builder,
+               test_diffuse_assignment_without_ref_keyword,
+               test_r16_index_buffer,
                test_resource_path_traversal_blocked,
                test_real_mods, test_toggle_panel_provenance):
         fn()

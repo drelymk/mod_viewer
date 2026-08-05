@@ -207,6 +207,11 @@ def _ib_res_to_component(ib_res):
     return re.sub(r"[A-Z]$", "", s)
 
 
+def _ib_index_size(fmt):
+    """Bytes per index -- 3DMigoto index buffers are R16_UINT or R32_UINT."""
+    return 2 if "R16" in (fmt or "").upper() else 4
+
+
 def _extract_hash(name):
     """Return the first 8-hex-char hash found in a resource/section name, or None."""
     m = re.search(r'_([0-9a-f]{8})_', name, re.I)   # prefer underscore-delimited
@@ -435,7 +440,7 @@ def _scan_sections_for_draws(sections, var_prefix=None):
     within this same flattened scan (None if none yet -- see build_draw_groups) mid-section to read a completely different
     mesh's buffers for a handful of draws inside what's otherwise another
     mesh's TextureOverride section), and the set of `Resource\\...\\Diffuse
-    = ref X` alternatives active for it.
+    = [ref] X` alternatives active for it.
 
     Returns {section_name: {vb0, vb1, vb2, ib, draws, diffuse, src}} — the
     same per-section shape build_draw_groups uses internally as `sec_info`.
@@ -516,7 +521,8 @@ def _scan_sections_for_draws(sections, var_prefix=None):
                                       list(info.get("_cur_diffuse_variants") or []),
                                       (info.get("_cur_vb0"), info.get("_cur_vb1"),
                                        info.get("_cur_vb2"))))
-            m_diff = re.match(r"Resource\\[^\\]+\\Diffuse\s*=\s*ref\s+(\S+)", line, re.I)
+            # "ref" is optional -- XXMI-generated mods omit it (e.g. "Resource\GIMI\Diffuse = X").
+            m_diff = re.match(r"Resource\\[^\\]+\\Diffuse\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if not m_diff:
                 # Direct ps-t slot: "ps-t1 = ResourceXxxDiffuse"
                 m2 = re.match(r"ps-t\d+\s*=\s*(\S+)", line, re.I)
@@ -727,6 +733,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 resolved = _resolve_ib_file(draw_ib)
                 if resolved:
                     d["ib_file"] = resolved
+                    d["index_size"] = _ib_index_size(_res_get(resources, draw_ib).get("format"))
                 draw_buf = _lookup_comp_buf(_ib_res_to_component(draw_ib))
                 if draw_buf and draw_buf != buf:
                     pfile, pstride = _resolve_vertex_res(draw_buf["position"])
@@ -754,6 +761,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             position_stride=pos_stride,
             texcoord_stride=tc_stride, texcoord_uv_off=uv_off,
             ib_file=ib_file, diffuse_file=diff_ri.get("filename"),
+            index_size=_ib_index_size(ib_ri.get("format")),
             draws=draws,
         ))
 

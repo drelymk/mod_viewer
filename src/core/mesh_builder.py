@@ -80,12 +80,14 @@ def read_texcoords(buf_path, stride, uv_off=DEFAULT_UV_OFFSET, uv_fmt='<ee'):
     return uvs
 
 
-def read_indices(ib_data, start_index=0, count=None):
-    total = len(ib_data) // INDEX_SIZE
+def read_indices(ib_data, start_index=0, count=None, index_size=INDEX_SIZE):
+    total = len(ib_data) // index_size
     if count is None: count = total - start_index
     end = min(start_index + count, total)
     if end <= start_index: return []
-    return list(struct.unpack_from(f"<{end - start_index}I", ib_data, start_index * INDEX_SIZE))
+    fmt = "H" if index_size == 2 else "I"
+    return list(struct.unpack_from(f"<{end - start_index}{fmt}", ib_data,
+                                   start_index * index_size))
 
 
 # ── Encoding helpers ───────────────────────────────────────────────────────────
@@ -162,6 +164,7 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
         ib_path   = _safe_join(mod_dir, grp["ib_file"])
         tc_stride = grp["texcoord_stride"]
         pos_stride = grp.get("position_stride", POSITION_STRIDE)
+        index_size = grp.get("index_size", INDEX_SIZE)
         diff_dds  = _safe_join(mod_dir, grp["diffuse_file"]) if grp["diffuse_file"] else None
         component = grp.get("display_name") or grp.get("name")
         source    = grp.get("source")
@@ -251,7 +254,8 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                     continue
                 if draw_ib_path not in ib_cache:
                     ib_cache[draw_ib_path] = open(draw_ib_path, "rb").read()
-            raw = read_indices(ib_cache[draw_ib_path], draw["start"], draw["count"])
+            raw = read_indices(ib_cache[draw_ib_path], draw["start"], draw["count"],
+                               draw.get("index_size", index_size))
             if not raw:
                 continue
             # DirectX resolves each index as index_buffer_value + BaseVertexLocation

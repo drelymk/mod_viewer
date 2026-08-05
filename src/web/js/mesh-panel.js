@@ -4,6 +4,7 @@
 
 import { buildMesh } from './mesh-factory.js';
 import { activeMeshes, addMesh, applyMeshVisibility, registerGroup } from './visibility.js';
+import { selectMesh } from './selection.js';
 import { RESERVED_KEYS } from './payload.js';
 
 /** Bucket mesh names by their ini "source" tag (see app/mod_loader.py's
@@ -100,7 +101,7 @@ function buildGroupHeader(groupName, itemsWrap) {
  * the old bare "#N" numbering for the rare draw with no such line at all
  * (whole index buffer read unconditionally; see mesh_builder.build_mesh_payload). */
 function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
-  const row = document.createElement('label');
+  const row = document.createElement('div');
   row.className = 'draw-item';
 
   const cb = document.createElement('input');
@@ -120,6 +121,13 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     ? entry.drawindexed.join(', ')
     : '#' + name.slice(groupName.length + 1);
   row.append(cb, document.createTextNode(label));
+
+  mesh.userData.row = row;
+  row.addEventListener('click', (e) => {
+    if (e.target === cb) return; // the checkbox only ever toggles visibility
+    selectMesh(mesh);
+  });
+
   return row;
 }
 
