@@ -1,5 +1,6 @@
 # Internal dev notes, not for the public repo
 .copilot/
+.claude/
 
 # Build output
 build/

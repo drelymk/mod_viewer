@@ -19,7 +19,7 @@ def _res_get(resources, name):
     return {}
 
 
-_MAX_ESCAPE_DEPTH = 3   # levels above mod_dir a `filename = ..\...` may reach
+_MAX_ESCAPE_DEPTH = 1   # levels above mod_dir a `filename = ..\...` may reach
 
 
 def _safe_join(mod_dir, rel):
@@ -53,35 +53,104 @@ def read_positions(buf_path, stride=POSITION_STRIDE):
     return positions
 
 
-def _detect_uv_best(tc_path, stride, n=30):
+_MIN_AXIS_SPREAD = 1e-4   # below this an axis is constant, i.e. not a real UV set
+_MIN_IN_RANGE    = 0.95   # fraction of sampled UVs that must land in [0, 2]
+
+
+def _detect_uv_best(tc_path, stride, n=4096):
     """Try (offset 0 or 4) x (float16 or float32) and return the (uv_off, fmt)
-    with the largest UV spread where all values are within [0, 2]."""
+    with the largest UV spread where all values are within [0, 2].
+
+    Candidates are sampled EVENLY ACROSS THE WHOLE BUFFER, not from the first
+    n vertices: consecutive vertices are spatially adjacent, so a head-only
+    window sees a tiny patch of the UV map where every candidate's spread is
+    near zero and noise decides the winner. Measured on a real stride-24 ZZMI
+    mod (Remielle/Elysian Abyss): over the first 30 vertices the wrong '<ff'
+    scored 0.0562 against the correct '<ee''s 0.0501 and won, mapping the whole
+    127,886-vertex mesh through UVs whose U axis spans 0.000..0.006 — a
+    one-pixel vertical stripe of the texture smeared over every triangle. Its
+    stride-24 sibling in the same mod won correctly by only 0.0206 vs 0.0131,
+    i.e. a coin flip rather than a real margin.
+
+    A candidate whose U or V axis is CONSTANT is preferred against last. A
+    misread float32 pair reliably decodes as (~0, plausible-looking) because
+    the low half of a float16 pair lands in the mantissa of the wider read, so
+    it can post a competitive total spread on the V axis alone while U carries
+    no information at all. No real UV set is one-dimensional.
+
+    A few out-of-range values are TOLERATED rather than disqualifying the whole
+    candidate. Real UV sets contain occasional outliers (one real 55,474-vertex
+    stride-20 buffer has 6), and rejecting on the first one handed the decision
+    to a degenerate float32 read that happened to have none -- dV exactly
+    0.0000 across the entire mesh. Spread is measured over the in-range samples
+    only, so outliers can't inflate it either.
+
+    The returned offset ALWAYS fits within `stride`. Some buffers reaching here
+    aren't texcoord buffers at all (an ini pointing a stride-4 Blend.buf or a
+    Unity `.assets` file at vb1/vb2 -- ~50 in the local corpus), and no
+    candidate is credible for those; returning the bare (4, '<ee') default
+    would make read_texcoords straddle the vertex boundary and yield one fewer
+    UV than there are positions. A fitting offset keeps that pathological case
+    merely useless (flat zero UVs) instead of misaligned.
+    """
+    size = os.path.getsize(tc_path)
+    total = size // stride if stride else 0
+    if not total:
+        return (DEFAULT_UV_OFFSET, '<ee')
+    step = max(1, total // n)   # stride the sample across the entire buffer
     with open(tc_path, 'rb') as f:
-        data = f.read(stride * n)
-    best_score, best = -1.0, (DEFAULT_UV_OFFSET, '<ee')
+        data = f.read()
+    # Rank every in-range candidate; prefer two live axes over a bigger total.
+    scored = []
     for uv_off in (0, 4):
         for fmt in ('<ee', '<ff'):
-            fmtsize = 4 if fmt == '<ee' else 8
+            fmtsize = struct.calcsize(fmt)
             if uv_off + fmtsize > stride:
                 continue
-            us, vs = [], []
-            for off in range(0, len(data) - uv_off - fmtsize + 1, stride):
-                u, v = struct.unpack_from(fmt, data, off + uv_off)
-                if u < -0.01 or u > 2.0 or v < -0.01 or v > 2.0:
+            us, vs, sampled = [], [], 0
+            for i in range(0, total, step):
+                off = i * stride + uv_off
+                if off + fmtsize > size:
                     break
-                us.append(u); vs.append(v)
-            else:  # all values valid
-                if us:
-                    spread = (max(us) - min(us)) + (max(vs) - min(vs))
-                    if spread > best_score:
-                        best_score, best = spread, (uv_off, fmt)
-    return best
+                u, v = struct.unpack_from(fmt, data, off)
+                sampled += 1
+                # NaN fails every comparison, so test for validity positively:
+                # a misread buffer routinely decodes to NaN/inf, which would
+                # otherwise slip through a `u < lo or u > hi` style check.
+                if -0.01 <= u <= 2.0 and -0.01 <= v <= 2.0:
+                    us.append(u); vs.append(v)
+            if not sampled or not us:
+                continue
+            in_range = len(us) / sampled
+            if in_range < _MIN_IN_RANGE:
+                continue
+            du, dv = max(us) - min(us), max(vs) - min(vs)
+            both_live = du >= _MIN_AXIS_SPREAD and dv >= _MIN_AXIS_SPREAD
+            scored.append((both_live, round(in_range, 3), round(du + dv, 3),
+                           uv_off, fmt))
+    if scored:
+        # Rank: both axes live, then cleanliness, then total spread. Cleanliness
+        # must outrank spread -- a misread float32 can post a huge spread (up to
+        # the full 0..2 window) while being 12% garbage, and swept across the
+        # corpus spread-first regressed 27 buffers where clean-first regressed
+        # none.
+        scored.sort(reverse=True)
+        return (scored[0][3], scored[0][4])
+    # Nothing decoded in range: fall back to the first offset that at least fits.
+    for uv_off in (DEFAULT_UV_OFFSET, 0):
+        if uv_off + 4 <= stride:
+            return (uv_off, '<ee')
+    return (0, '<ee')
 
 
 def read_texcoords(buf_path, stride, uv_off=DEFAULT_UV_OFFSET, uv_fmt='<ee'):
+    """Read one UV pair per vertex. The bound accounts for uv_fmt's real width
+    (float32 pairs are 8 bytes, not 4), so a buffer whose last vertex is
+    truncated is dropped instead of raising out of struct.unpack_from."""
     uvs = []
+    fmtsize = struct.calcsize(uv_fmt)
     with open(buf_path, "rb") as f: data = f.read()
-    for off in range(0, len(data) - uv_off - 3, stride):
+    for off in range(0, len(data) - uv_off - fmtsize + 1, stride):
         uvs.append(struct.unpack_from(uv_fmt, data, off + uv_off))
     return uvs
 
