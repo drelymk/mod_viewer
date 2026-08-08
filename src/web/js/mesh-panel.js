@@ -109,7 +109,9 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   cb.checked = true;
   cb.addEventListener('change', () => {
     mesh.userData.manualVisible = cb.checked;
+    mesh.userData.manuallyToggled = true;
     applyMeshVisibility(mesh);
+    updateStateIndicator(mesh, state);
     const any = itemCbs.some(c => c.checked);
     const all = itemCbs.every(c => c.checked);
     masterCb.indeterminate = any && !all;
@@ -120,7 +122,27 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   const label = entry.drawindexed
     ? entry.drawindexed.join(', ')
     : '#' + name.slice(groupName.length + 1);
-  row.append(cb, document.createTextNode(label));
+  const state = document.createElement('span');
+  state.className = 'mesh-state';
+  mesh.userData.stateIndicator = state;
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'mesh-label';
+  labelSpan.textContent = mesh.userData.displayName || label;
+  row.append(state, cb, labelSpan);
+  const updateStateIndicator = (m, indicator) => {
+    indicator.textContent = m.userData.manuallyToggled ? (m.visible ? '✅' : '🟨') : (m.visible ? '✅' : '🟥');
+    indicator.title = m.userData.manuallyToggled ? 'Manually toggled in the viewer' : (m.visible ? 'Visible by default' : 'Hidden by the mod default state');
+  };
+  updateStateIndicator(mesh, state);
+  labelSpan.title = 'Double-click to rename this mesh in the viewer';
+  labelSpan.addEventListener('dblclick', (e) => {
+    e.stopPropagation();
+    const next = window.prompt('Mesh name:', labelSpan.textContent);
+    if (next && next.trim()) {
+      mesh.userData.displayName = next.trim();
+      labelSpan.textContent = mesh.userData.displayName;
+    }
+  });
 
   mesh.userData.row = row;
   row.addEventListener('click', (e) => {

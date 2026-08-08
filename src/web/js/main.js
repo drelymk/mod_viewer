@@ -1,8 +1,8 @@
 // Entry point: wires the toolbar and orchestrates loading a mod.
 
-import { fitTo, toggleGrid } from './scene.js';
+import { fitTo, frameView, toggleGrid } from './scene.js';
 import { setTextures } from './mesh-factory.js';
-import { activeMeshes, reset, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
+import { activeMeshes, reset, resetToDefaultState, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
@@ -179,6 +179,12 @@ $('wire-btn').addEventListener('click', toggleWireframe);
 $('grid-btn').addEventListener('click', toggleGrid);
 $('shading-btn').addEventListener('click', toggleSmoothShading);
 $('texture-btn').addEventListener('click', toggleTextures);
+$('frame-btn').addEventListener('click', () => frameView('perspective', activeMeshes));
+for (const view of ['front', 'back', 'left', 'right', 'top', 'bottom']) {
+  $(`${view}-view-btn`).addEventListener('click', () => frameView(view, activeMeshes));
+}
+$('reset-view-btn').addEventListener('click', () => frameView('perspective', activeMeshes));
+$('reset-state-btn').addEventListener('click', resetToDefaultState);
 initSelection();
 
 // Collapses a panel's body when its header is clicked.
