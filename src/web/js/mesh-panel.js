@@ -3,9 +3,11 @@
 // per component, one checkbox per draw call within it.
 
 import { buildMesh } from './mesh-factory.js';
-import { activeMeshes, addMesh, applyMeshVisibility, registerGroup } from './visibility.js';
+import { activeMeshes, addMesh, applyMeshVisibility, registerGroup,
+         setManualTexOverride } from './visibility.js';
 import { selectMesh } from './selection.js';
 import { RESERVED_KEYS } from './payload.js';
+import { openTextureModal } from './texture-modal.js';
 
 /** Bucket mesh names by their ini "source" tag (see app/mod_loader.py's
  * _ini_scope). Single-ini mods carry no tag at all — everything lands in the
@@ -69,7 +71,7 @@ function buildSourceSection(source, container) {
   return itemsWrap;
 }
 
-function buildGroupHeader(groupName, itemsWrap) {
+function buildGroupHeader(groupName, itemsWrap, texturePool, modPath, onPoolChange) {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
 
@@ -87,20 +89,93 @@ function buildGroupHeader(groupName, itemsWrap) {
 
   hdr.append(chevron, masterCb, nameSpan);
 
+  // Always shown, even for a component with no diffuse loaded at all --
+  // that's the only way to attach one via "Add". updateTexButtonState gives
+  // it the plain (non-.active) look automatically whenever nothing's
+  // actually applied, which already reads as "disabled" without a separate
+  // CSS state.
+  const texBtn = document.createElement('button');
+  texBtn.className = 'group-tex-btn';
+  texBtn.textContent = '🖼';
+  texBtn.title = 'Manage textures for this component';
+  texBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openTextureModal(groupName, texturePool, modPath, onPoolChange);
+  });
+  hdr.appendChild(texBtn);
+
   // Expand/collapse the item list without touching mesh visibility.
   hdr.addEventListener('click', (e) => {
-    if (e.target === masterCb) return;
+    if (e.target === masterCb || e.target === texBtn) return;
     chevron.classList.toggle('collapsed');
     itemsWrap.classList.toggle('collapsed');
   });
 
-  return { hdr, masterCb };
+  return { hdr, masterCb, texBtn };
+}
+
+/** Collapsed-by-default child list of every diffuse this mesh's component
+ * ever references (the shared `pool` array -- core/mesh_builder.py's
+ * `texture_options`, or the fresh empty array a component with none loaded
+ * yet falls back to in buildMeshPanel), plus synthetic "(Automatic)" and
+ * "(None)" entries -- a radio-style single-select that drives
+ * mesh.userData.manualTexOverride (see visibility.js).
+ *
+ * Returns `{wrap, render}`: `wrap` is the list element (append once);
+ * `render()` rebuilds its rows from `pool`'s CURRENT contents and must be
+ * re-invoked after the "manage textures" popup adds/removes an entry (see
+ * buildMeshPanel's refreshers array), since `pool` starts empty for a
+ * component with nothing loaded yet and is mutated in place afterward --
+ * a one-time snapshot at build time would never see what gets added later. */
+function buildTextureList(pool, mesh, onActiveChanged) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tex-list collapsed';
+
+  function render() {
+    wrap.innerHTML = '';
+    const rows = [];
+    function selectRow(row) {
+      rows.forEach(r => r.classList.toggle('selected', r === row));
+    }
+    function addRow(label, value) {
+      const row = document.createElement('div');
+      row.className = 'tex-item';
+      row.textContent = label;
+      row.addEventListener('click', () => {
+        setManualTexOverride(mesh, value);
+        selectRow(row);
+        if (onActiveChanged) onActiveChanged();
+      });
+      wrap.appendChild(row);
+      rows.push(row);
+      return row;
+    }
+
+    const current = mesh.userData.manualTexOverride;
+    const autoRow = addRow('(Automatic)', undefined);
+    const noneRow = addRow('(None)', null);
+    let matched = current === undefined ? autoRow : (current === null ? noneRow : null);
+    for (const opt of pool) {
+      const row = addRow(opt.label, opt.tex_key);
+      if (current === opt.tex_key) matched = row;
+    }
+    // A removed option that was the active manual pick has nothing to
+    // highlight -- leave every row unselected rather than falsely claiming
+    // Automatic, since the mesh's actual texKey is untouched by removal.
+    if (matched) selectRow(matched);
+  }
+
+  render();
+  return { wrap, render };
 }
 
 /** "count, start, base" from the ini's own drawindexed line — falls back to
  * the old bare "#N" numbering for the rare draw with no such line at all
- * (whole index buffer read unconditionally; see mesh_builder.build_mesh_payload). */
-function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
+ * (whole index buffer read unconditionally; see mesh_builder.build_mesh_payload).
+ * Returns `{wrap, renderTexList}` -- the caller collects `renderTexList`
+ * alongside every other mesh in the component so the "manage textures"
+ * popup can refresh them all after an add/remove (see buildMeshPanel). */
+function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb, onActiveChanged) {
   const row = document.createElement('div');
   row.className = 'draw-item';
 
@@ -117,22 +192,46 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   });
   itemCbs.push(cb);
 
+  const { wrap: texList, render: renderTexList } = buildTextureList(pool, mesh, onActiveChanged);
+
+  const chevron = document.createElement('span');
+  chevron.className = 'group-toggle collapsed';
+  chevron.textContent = '▼';
+
   const label = entry.drawindexed
     ? entry.drawindexed.join(', ')
     : '#' + name.slice(groupName.length + 1);
-  row.append(cb, document.createTextNode(label));
+  row.append(cb, chevron, document.createTextNode(label));
 
   mesh.userData.row = row;
   row.addEventListener('click', (e) => {
     if (e.target === cb) return; // the checkbox only ever toggles visibility
+    if (e.target === chevron) {
+      chevron.classList.toggle('collapsed');
+      texList.classList.toggle('collapsed');
+      return;
+    }
     selectMesh(mesh);
   });
 
-  return row;
+  const wrap = document.createElement('div');
+  wrap.className = 'draw-item-wrap';
+  wrap.append(row, texList);
+  return { wrap, renderTexList };
 }
 
-/** Build the panel and add every mesh in the payload to the scene. */
-export function buildMeshPanel(payload) {
+/** Reflects whether any mesh in the component currently has a texture
+ * actually applied (post toggle/manual resolution) onto its header button --
+ * same on/off visual language as #texture-btn/#wire-btn in app.css. */
+function updateTexButtonState(texBtn, itemObjs) {
+  if (!texBtn) return;
+  texBtn.classList.toggle('active', itemObjs.some(m => !!m.material.map));
+}
+
+/** Build the panel and add every mesh in the payload to the scene. `modPath`
+ * is threaded through to the per-component texture popup, which needs it to
+ * open the native file picker rooted at the mod folder. */
+export function buildMeshPanel(payload, modPath) {
   const list = document.getElementById('mesh-list');
   list.innerHTML = '';
 
@@ -147,16 +246,42 @@ export function buildMeshPanel(payload) {
       const itemsWrap = document.createElement('div');
       itemsWrap.className = 'group-items';
 
-      const { hdr, masterCb } = buildGroupHeader(groupName, itemsWrap);
+      // Every mesh in a component shares the SAME texture_options array
+      // object (see mesh_builder.build_mesh_payload) -- read it once so
+      // add/remove via the popup is reflected across every mesh's own list.
+      // A component with fewer than 2 diffuses in the ini carries no such
+      // array at all (build_mesh_payload only attaches one past that
+      // threshold) -- fall back to a fresh empty array so the "manage
+      // textures" popup still has something to push an added texture into;
+      // it's captured by this closure, so reopening the popup for the same
+      // component within the session sees what was added.
+      const texturePool = names.map(n => payload[n].texture_options).find(Boolean) || [];
+
+      const itemCbs = [], itemObjs = [], texListRenderers = [];
+      const onActiveChanged = () => updateTexButtonState(texBtn, itemObjs);
+      // Re-renders every mesh's own texture list in this component after the
+      // "manage textures" popup adds/removes an entry from the shared pool
+      // -- a plain add/remove on `texturePool` doesn't itself touch the
+      // already-built DOM rows.
+      const onPoolChange = () => {
+        texListRenderers.forEach(r => r());
+        onActiveChanged();
+      };
+
+      const { hdr, masterCb, texBtn } = buildGroupHeader(
+        groupName, itemsWrap, texturePool, modPath, onPoolChange);
       container.append(hdr, itemsWrap);
 
-      const itemCbs = [], itemObjs = [];
       for (const name of names) {
         const mesh = buildMesh(name, payload[name]);
         addMesh(mesh, payload[name].conditions, payload[name].sources, payload[name].texture_variants);
         itemObjs.push(mesh);
-        itemsWrap.appendChild(buildDrawRow(name, groupName, payload[name], mesh, itemCbs, masterCb));
+        const { wrap, renderTexList } = buildDrawRow(
+          name, groupName, payload[name], mesh, texturePool, itemCbs, masterCb, onActiveChanged);
+        texListRenderers.push(renderTexList);
+        itemsWrap.appendChild(wrap);
       }
+      updateTexButtonState(texBtn, itemObjs);
 
       masterCb.addEventListener('change', () => {
         masterCb.indeterminate = false;
@@ -168,7 +293,7 @@ export function buildMeshPanel(payload) {
         });
       });
 
-      registerGroup({ masterCb, itemCbs, itemObjs });
+      registerGroup({ masterCb, itemCbs, itemObjs, onTexChanged: onActiveChanged });
     }
   }
 

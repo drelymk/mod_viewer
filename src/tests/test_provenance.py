@@ -384,6 +384,92 @@ def test_real_mods():
     check(multi > 0, f"at least one mesh has several sources (got {multi})")
 
 
+def _find_inis(limit):
+    """A larger, ini-level sample (not mod_loader.load_mod, which needs real
+    buffer files present) -- build_draw_groups only needs resources to
+    declare a `filename =`, not for that file to exist, so this can sweep
+    far more of the corpus per run than test_real_mods' mesh-payload check."""
+    inis = []
+    for root in MOD_ROOTS:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not d.upper().startswith("DISABLED")]
+            for f in filenames:
+                if f.lower().endswith(".ini") and not f.upper().startswith("DISABLED"):
+                    inis.append(os.path.join(dirpath, f))
+    random.Random(17).shuffle(inis)
+    return inis[:limit]
+
+
+def test_diffuse_resolution_corpus_sweep():
+    """The execution-order diffuse fix (per-draw `texture_default_file` /
+    `diffuse_pool_files`, replacing one static tex_key per component) must
+    not crash or misbehave across the real corpus, and must actually change
+    resolution for the multi-diffuse sections it exists to fix -- while
+    leaving every single-diffuse section's resolution exactly as before
+    (the old model's `grp["diffuse_file"]` == every draw's own
+    `texture_default_file` whenever the pool has at most one entry).
+    """
+    inis = _find_inis(400)
+    if not inis:
+        print("SKIP  no local mod libraries found")
+        return
+
+    sections = draws = multi_diffuse_sections = differing_draws = 0
+    unresolved_pool_entries = crashes = 0
+    single_diffuse_mismatches = 0
+
+    for ini_path in inis:
+        try:
+            secs = merge_sections([ini_path])
+            groups = build_draw_groups(secs, extract_resources(secs))
+        except Exception as e:
+            crashes += 1
+            check(False, f"{ini_path}: build_draw_groups crashed: {e}")
+            continue
+
+        for grp in groups:
+            sections += 1
+            pool = grp.get("diffuse_pool_files") or []
+            for entry in pool:
+                if not entry.get("file"):
+                    unresolved_pool_entries += 1
+            defaults = set()
+            for d in grp["draws"]:
+                draws += 1
+                defaults.add(d.get("texture_default_file"))
+            if len(pool) >= 2:
+                multi_diffuse_sections += 1
+                if len(defaults) > 1:
+                    differing_draws += 1
+            elif grp.get("diffuse_file"):
+                # At most one diffuse ever RESOLVES (grp["diffuse_file"] is
+                # None for a dangling first-seen reference with no matching
+                # [Resource...] section -- the old model rendered untextured
+                # in that case, so a later, real reference resolving instead
+                # is a fix, not a regression, and is intentionally exempted
+                # here). Every draw's own default must equal the old static
+                # value.
+                old_static = grp["diffuse_file"]
+                if defaults - {None, old_static}:
+                    single_diffuse_mismatches += 1
+
+    print(f"      {len(inis)} inis, {sections} sections, {draws} draws, "
+          f"{multi_diffuse_sections} multi-diffuse sections "
+          f"({differing_draws} with draws that actually resolve differently), "
+          f"{unresolved_pool_entries} unresolved pool entries")
+    check(sections > 0, "the corpus sample produced draw groups")
+    check(crashes == 0, f"build_draw_groups never raises on real inis (got {crashes})")
+    check(unresolved_pool_entries == 0,
+          f"every diffuse_pool_files entry resolves to a filename "
+          f"(got {unresolved_pool_entries} unresolved)")
+    check(single_diffuse_mismatches == 0,
+          f"a section referencing at most one diffuse resolves identically "
+          f"to the old static-per-component model (got "
+          f"{single_diffuse_mismatches} mismatches)")
+
+
 def _anchors_section(all_lines, n, section):
     """True if line n is the first significant line of `section`."""
     header = f"[{(section or '').lower()}]"
@@ -980,10 +1066,154 @@ def test_toggle_driven_diffuse_swap_mesh_builder():
         keys = {v["tex_key"] for v in variants}
         check(keys == {"diffuseB.dds", "diffuseC.dds"},
               f"each variant's tex_key names its own resolved diffuse file (got {keys})")
-        check(second["tex_key"] == "diffuseA.dds",
-              f"the draw's default tex_key is unchanged -- an older consumer that "
-              f"ignores texture_variants still renders the group's default diffuse "
+        check(second["tex_key"] == "diffuseB.dds",
+              f"the draw's own default tex_key is the first/`if`-branch "
+              f"alternative at this point in execution order (seven2==1 -> "
+              f"diffuseB), not the group's earlier unconditional diffuseA "
               f"(got {second['tex_key']})")
+
+
+# ── A single section reassigns the diffuse several times in execution order
+#    (real pattern: Remielle_OG Variant&Seraphic Sin_NSFW.ini's
+#    TextureOverrideRemielleV5BodyA) -- draws before the first assignment get
+#    none, draws between the first and second assignment get the first, draws
+#    after the second (unconditional) reassignment get that one, and draws
+#    after a THIRD (also unconditional) reassignment back to the first file
+#    get that again. A static one-diffuse-per-component model can only ever
+#    get 3 of these 4 regions right.
+
+MULTI_REASSIGN_INI = """[KeySuitCL]
+key = l
+type = cycle
+$SuitCL = 0,1
+
+[TextureOverrideMultiPosition]
+vb0 = ResourceMultiPosition
+
+[TextureOverrideMultiBlend]
+vb1 = ResourceMultiBlend
+
+[TextureOverrideMultiTexcoord]
+vb1 = ResourceMultiTexcoord
+
+[TextureOverrideMultiA]
+ib = ResourceMultiIB
+drawindexed = 10, 0, 0
+if $SuitCL == 0
+Resource\\ZZMI\\Diffuse = ref ResourceDiffuseA
+elif $SuitCL == 1
+Resource\\ZZMI\\Diffuse = ref ResourceDiffuseA2
+endif
+drawindexed = 20, 10, 0
+Resource\\ZZMI\\Diffuse = ref ResourceDiffuseB
+drawindexed = 30, 30, 0
+Resource\\ZZMI\\Diffuse = ref ResourceDiffuseA
+drawindexed = 40, 60, 0
+
+[ResourceMultiIB]
+filename = multi.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceMultiPosition]
+filename = pos.buf
+stride = 40
+
+[ResourceMultiBlend]
+filename = blend.buf
+stride = 32
+
+[ResourceMultiTexcoord]
+filename = tc.buf
+stride = 20
+
+[ResourceDiffuseA]
+filename = diffuseA.dds
+
+[ResourceDiffuseA2]
+filename = diffuseA2.dds
+
+[ResourceDiffuseB]
+filename = diffuseB.dds
+"""
+
+
+def test_multi_reassignment_diffuse_resolution():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", MULTI_REASSIGN_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        group = groups[0]
+        by_start = {d["start"]: d for d in group["draws"]}
+
+        check(by_start[0].get("texture_default_file") is None,
+              f"draw before any diffuse assignment gets none "
+              f"(got {by_start[0].get('texture_default_file')})")
+        check(by_start[10].get("texture_default_file") == "diffuseA.dds",
+              f"draw after the if/elif chain's first branch gets diffuseA "
+              f"(got {by_start[10].get('texture_default_file')})")
+        variants = by_start[10].get("texture_variants")
+        check(bool(variants) and len(variants) == 2,
+              f"that same draw also carries both toggle alternatives "
+              f"(got {variants})")
+        check(by_start[30].get("texture_default_file") == "diffuseB.dds",
+              f"draw after the unconditional reassignment to B gets B, not "
+              f"the earlier if/elif chain's A "
+              f"(got {by_start[30].get('texture_default_file')})")
+        check("texture_variants" not in by_start[30],
+              "the unconditional B reassignment carries no toggle variants")
+        check(by_start[60].get("texture_default_file") == "diffuseA.dds",
+              f"draw after reassigning back to A gets A again, not stuck on "
+              f"B from the earlier unconditional reassignment "
+              f"(got {by_start[60].get('texture_default_file')})")
+
+        pool = [p["res"] for p in group["diffuse_pool_files"]]
+        check(pool == ["ResourceDiffuseA", "ResourceDiffuseA2", "ResourceDiffuseB"],
+              f"the group's texture pool lists every distinct diffuse "
+              f"referenced anywhere in the section, in first-seen order "
+              f"(got {pool})")
+
+
+def test_multi_reassignment_mesh_builder():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", MULTI_REASSIGN_INI)
+        open(os.path.join(tmp, "multi.ib"), "wb").write(
+            struct.pack("<12I", *range(12)))
+        with open(os.path.join(tmp, "pos.buf"), "wb") as f:
+            for i in range(12):
+                f.write(struct.pack("<3f", float(i), float(i), float(i)) + b"\0" * 28)
+        open(os.path.join(tmp, "tc.buf"), "wb").write(b"\0" * 20 * 12)
+        for name in ("diffuseA.dds", "diffuseA2.dds", "diffuseB.dds"):
+            open(os.path.join(tmp, name), "wb").write(b"DDS " + name.encode())
+
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        # Remap onto small, non-overlapping windows of the 12-index buffer --
+        # the ini's own start/count values (0/10/30/60) are execution-order
+        # markers only, not real offsets into this tiny fixture buffer.
+        orig_starts = [d["start"] for d in groups[0]["draws"]]
+        for i, d in enumerate(groups[0]["draws"]):
+            d["start"], d["count"] = i * 3, 3
+        payload = build_mesh_payload(groups, tmp)
+        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
+        by_orig_start = dict(zip(orig_starts,
+            sorted(meshes.values(), key=lambda e: e["drawindexed"][1])))
+
+        check(by_orig_start[0]["tex_key"] is None,
+              f"first draw's resolved tex_key is None (got {by_orig_start[0]['tex_key']})")
+        check(by_orig_start[10]["tex_key"] == "diffuseA.dds",
+              f"second draw resolves diffuseA (got {by_orig_start[10]['tex_key']})")
+        check(by_orig_start[30]["tex_key"] == "diffuseB.dds",
+              f"third draw resolves diffuseB, not the earlier diffuseA "
+              f"(got {by_orig_start[30]['tex_key']})")
+        check(by_orig_start[60]["tex_key"] == "diffuseA.dds",
+              f"fourth draw resolves back to diffuseA "
+              f"(got {by_orig_start[60]['tex_key']})")
+
+        options = by_orig_start[0].get("texture_options")
+        check(bool(options) and len(options) == 3,
+              f"every draw in the component carries the full 3-entry "
+              f"texture pool for the manual picker (got {options})")
 
 
 # ── XXMI-generated mods assign the diffuse without the "ref" keyword
@@ -1086,6 +1316,9 @@ if __name__ == "__main__":
                test_run_inlines_nested_commandlist_draws,
                test_toggle_driven_diffuse_swap_ini_parser,
                test_toggle_driven_diffuse_swap_mesh_builder,
+               test_multi_reassignment_diffuse_resolution,
+               test_multi_reassignment_mesh_builder,
+               test_diffuse_resolution_corpus_sweep,
                test_diffuse_assignment_without_ref_keyword,
                test_r16_index_buffer,
                test_resource_path_may_reach_a_sibling_folder,

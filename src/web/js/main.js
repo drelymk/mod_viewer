@@ -72,7 +72,7 @@ function displayMeshPayload(payload) {
 
   lastToggles = payload.__toggles__ || {};
   setTextures(payload.__textures__);
-  buildMeshPanel(payload);
+  buildMeshPanel(payload, currentModPath);
   buildTogglePanel(payload.__toggles__, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(payload.__menu__);
   fitTo(activeMeshes);
@@ -199,4 +199,4 @@ initPanelCollapse($('menu-panel'), 'menu-list');
 
 // Exposed for automated smoke tests and for poking at the app from the
 // devtools console; the UI itself always goes through the listeners above.
-window.modViewer = { displayMeshPayload, openMod, reloadCurrentMod, exportChanges };
+window.modViewer = { displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes };
