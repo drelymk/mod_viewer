@@ -240,8 +240,7 @@ stride = 20
 
 
 def test_cross_ini_component_collision_recovered():
-    """Two sibling inis (both sitting directly in the mod folder, like a real
-    "AllInOne" bundle) each define their own [TextureOverrideComponent0] for
+    """Two sibling inis each define their own [TextureOverrideComponent0] for
     an unrelated draw. Before the fix, build_draw_groups' `seen` dict was
     reset per ini call, so both produced the identical label "Component0" and
     the second ini's mesh silently overwrote the first's in the final flat
@@ -406,10 +405,11 @@ def test_diffuse_resolution_corpus_sweep():
     """The execution-order diffuse fix (per-draw `texture_default_file` /
     `diffuse_pool_files`, replacing one static tex_key per component) must
     not crash or misbehave across the real corpus, and must actually change
-    resolution for the multi-diffuse sections it exists to fix -- while
-    leaving every single-diffuse section's resolution exactly as before
-    (the old model's `grp["diffuse_file"]` == every draw's own
-    `texture_default_file` whenever the pool has at most one entry).
+    resolution for the multi-diffuse sections it exists to fix. For a section
+    referencing at most one diffuse, that diffuse must still apply to AT
+    LEAST ONE draw (a draw legitimately preceding the assignment in file
+    order gets None instead, which is fine) -- if it resolves but zero draws
+    ever get it, that's the whole point of resolving lost.
     """
     inis = _find_inis(400)
     if not inis:
@@ -444,15 +444,22 @@ def test_diffuse_resolution_corpus_sweep():
                 if len(defaults) > 1:
                     differing_draws += 1
             elif grp.get("diffuse_file"):
-                # At most one diffuse ever RESOLVES (grp["diffuse_file"] is
-                # None for a dangling first-seen reference with no matching
-                # [Resource...] section -- the old model rendered untextured
-                # in that case, so a later, real reference resolving instead
-                # is a fix, not a regression, and is intentionally exempted
-                # here). Every draw's own default must equal the old static
-                # value.
+                # At most one diffuse ever resolves. A draw legitimately
+                # precedes the (single) assignment in file order and gets
+                # None for it -- real corpus examples: Caesar/Promeia/Aria
+                # sections with several drawindexed lines before their
+                # Resource\...\Diffuse line. So not every draw need equal
+                # the old static value -- but AT LEAST ONE must, or the
+                # diffuse never actually applies to anything despite
+                # resolving. Real regression this catches: a section with NO
+                # drawindexed line at all (implicit whole-buffer draw) whose
+                # synthetic placeholder used to hardcode an empty variant
+                # list, resolving to None even though e.g. a bare `ps-t0 =`
+                # names a real diffuse (Beidou.ini's
+                # TextureOverrideBeidouBody) -- there `defaults` is just
+                # {None} because there's only the one placeholder draw.
                 old_static = grp["diffuse_file"]
-                if defaults - {None, old_static}:
+                if old_static not in defaults:
                     single_diffuse_mismatches += 1
 
     print(f"      {len(inis)} inis, {sections} sections, {draws} draws, "
@@ -1074,8 +1081,7 @@ def test_toggle_driven_diffuse_swap_mesh_builder():
 
 
 # ── A single section reassigns the diffuse several times in execution order
-#    (real pattern: Remielle_OG Variant&Seraphic Sin_NSFW.ini's
-#    TextureOverrideRemielleV5BodyA) -- draws before the first assignment get
+#    -- draws before the first assignment get
 #    none, draws between the first and second assignment get the first, draws
 #    after the second (unconditional) reassignment get that one, and draws
 #    after a THIRD (also unconditional) reassignment back to the first file
@@ -1216,6 +1222,63 @@ def test_multi_reassignment_mesh_builder():
               f"texture pool for the manual picker (got {options})")
 
 
+# ── A section with NO drawindexed line at all (the implicit whole-buffer
+#    draw -- see HANDLING_SKIP_INI above) still assigns a diffuse via a bare `ps-t0 =` slot.
+#    build_draw_groups' synthetic placeholder draw must carry that forward,
+#    not silently drop it -- it used to hardcode an empty diff_variants list
+#    for this placeholder, leaving the whole component untextured even
+#    though the section plainly names a diffuse.
+
+IMPLICIT_DRAW_DIFFUSE_INI = """[TextureOverrideImplicitPosition]
+vb0 = ResourceImplicitPosition
+
+[TextureOverrideImplicitBlend]
+vb1 = ResourceImplicitBlend
+
+[TextureOverrideImplicitTexcoord]
+vb1 = ResourceImplicitTexcoord
+
+[TextureOverrideImplicitA]
+ib = ResourceImplicitIB
+ps-t0 = ResourceImplicitDiffuse
+
+[ResourceImplicitIB]
+filename = implicit.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceImplicitPosition]
+filename = pos.buf
+stride = 40
+
+[ResourceImplicitBlend]
+filename = blend.buf
+stride = 32
+
+[ResourceImplicitTexcoord]
+filename = tc.buf
+stride = 20
+
+[ResourceImplicitDiffuse]
+filename = implicit.dds
+"""
+
+
+def test_implicit_whole_buffer_draw_keeps_its_diffuse():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", IMPLICIT_DRAW_DIFFUSE_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        group = groups[0]
+        check(len(group["draws"]) == 1, "exactly the one synthetic placeholder draw")
+        draw = group["draws"][0]
+        check(draw.get("count") is None,
+              "the placeholder draw has no count -- it's the implicit whole-buffer read")
+        check(draw.get("texture_default_file") == "implicit.dds",
+              f"the placeholder draw still resolves the section's own "
+              f"ps-t0 diffuse, not None (got {draw.get('texture_default_file')})")
+
+
 # ── XXMI-generated mods assign the diffuse without the "ref" keyword
 #    (e.g. "Resource\GIMI\Diffuse = ResourceXDiffuse"), unlike the
 #    "= ref X" form other tools emit -- both must resolve the same way.
@@ -1318,6 +1381,7 @@ if __name__ == "__main__":
                test_toggle_driven_diffuse_swap_mesh_builder,
                test_multi_reassignment_diffuse_resolution,
                test_multi_reassignment_mesh_builder,
+               test_implicit_whole_buffer_draw_keeps_its_diffuse,
                test_diffuse_resolution_corpus_sweep,
                test_diffuse_assignment_without_ref_keyword,
                test_r16_index_buffer,

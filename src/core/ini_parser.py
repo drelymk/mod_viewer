@@ -226,6 +226,14 @@ def _scan_sections_for_draws(sections, var_prefix=None):
         info.pop("_cur_vb0", None)
         info.pop("_cur_vb1", None)
         info.pop("_cur_vb2", None)
+        # Whatever diffuse was active at the end of the scan -- needed for a
+        # section with NO drawindexed line at all (the game's original,
+        # whole-buffer draw proceeds unmodified against this section's own
+        # `ib =`; see build_draw_groups' synthetic placeholder draw below).
+        # That implicit draw still runs with whichever Resource\...\Diffuse
+        # (or bare ps-t0/ps-t1) assignment the section made, same as any real
+        # drawindexed line would've seen at this point in execution order.
+        info["diffuse_variants_at_end"] = list(info.get("_cur_diffuse_variants") or [])
         info.pop("_cur_diffuse_variants", None)
         info.pop("_diffuse_chain_key", None)
         info.pop("_diffuse_last_cond", None)
@@ -388,7 +396,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         pos_stride = pos_ri.get("stride", POSITION_STRIDE)
         uv_off     = DEFAULT_UV_OFFSET
 
-        draws_list = list(info["draws"]) or [(None, 0, 0, [], info["src"], None, [], (None, None, None))]
+        draws_list = list(info["draws"]) or [
+            (None, 0, 0, [], info["src"], None,
+             info.get("diffuse_variants_at_end") or [], (None, None, None))]
         draws = []
         for i, (c, s, b, cd, src, draw_ib, diff_variants, _vb_ov) in enumerate(draws_list, 1):
             d = dict(label=f"{label}-{i}", count=c, start=s, base=b,
