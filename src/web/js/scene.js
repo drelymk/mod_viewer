@@ -28,7 +28,7 @@ export const camera = new THREE.PerspectiveCamera(
 camera.position.set(0, 1, 3);
 
 export const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.9, 0);
+controls.target.set(0, 0, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
@@ -47,6 +47,24 @@ new ResizeObserver(() => {
 export function toggleGrid() {
   grid.visible = !grid.visible;
   document.getElementById('grid-btn').classList.toggle('off', !grid.visible);
+}
+
+export function frameView(direction = 'perspective', meshes = []) {
+  const box = new THREE.Box3();
+  meshes.forEach(m => box.expandByObject(m));
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(size.length() * 0.5, 0.001);
+  const distance = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 1.15;
+  const directions = { front:[0,.08,1], back:[0,.08,-1], left:[-1,.08,0], right:[1,.08,0], top:[0,1,0], bottom:[0,-1,0], perspective:[.3,.5,1] };
+  const offset = new THREE.Vector3(...(directions[direction] || directions.perspective)).normalize();
+  controls.target.copy(center);
+  camera.position.copy(center).addScaledVector(offset, distance);
+  camera.near = radius * 0.001;
+  camera.far = Math.max(radius * 100, 100);
+  camera.updateProjectionMatrix();
+  controls.update();
 }
 
 /** Frame the camera and size the grid to the given meshes. */
@@ -71,8 +89,5 @@ export function fitTo(meshes) {
   camera.far  = size * 50;
   camera.updateProjectionMatrix();
 
-  controls.target.copy(center);
-  camera.position.copy(center).addScaledVector(
-    new THREE.Vector3(0.3, 0.5, 1).normalize(), size * 1.5);
-  controls.update();
+  frameView('perspective', meshes);
 }

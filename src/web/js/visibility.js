@@ -34,6 +34,8 @@ export function reset() {
 
 export function addMesh(mesh, conditions, sources, textureVariants) {
   mesh.userData.manualVisible = true;
+  mesh.userData.loadedVisible = true;
+  mesh.userData.manuallyToggled = false;
   mesh.userData.conditions = conditions || [];
   mesh.userData.sources = sources || [];
   mesh.userData.textureVariants = textureVariants || [];
@@ -93,17 +95,35 @@ export function applyMeshVisibility(mesh) {
   mesh.visible = mesh.userData.manualVisible !== false;
 }
 
+export function resetToDefaultState() {
+  activeMeshes.forEach(mesh => {
+    mesh.userData.manuallyToggled = false;
+    mesh.userData.manualVisible = mesh.userData.loadedVisible !== false;
+  });
+  refreshAll();
+}
+
 // Reflect each mesh's actual visibility back onto its MESHES checkbox, so
 // cycling a Toggle value visibly checks/unchecks the affected items and
 // updates each group's master checkbox.
 export function syncCheckboxes() {
   groupsUI.forEach(({ masterCb, itemCbs, itemObjs }) => {
-    itemObjs.forEach((mesh, i) => { itemCbs[i].checked = mesh.visible; });
+    itemObjs.forEach((mesh, i) => {
+      itemCbs[i].checked = mesh.visible;
+      updateStateIndicator(mesh);
+    });
     const any = itemCbs.some(c => c.checked);
     const all = itemCbs.every(c => c.checked);
     masterCb.checked = all;
     masterCb.indeterminate = any && !all;
   });
+}
+
+function updateStateIndicator(mesh) {
+  const indicator = mesh.userData.stateIndicator;
+  if (!indicator) return;
+  indicator.textContent = mesh.userData.manuallyToggled ? (mesh.visible ? '✅' : '🟨') : (mesh.visible ? '✅' : '🟥');
+  indicator.title = mesh.userData.manuallyToggled ? 'Manually toggled in the viewer' : (mesh.visible ? 'Visible by default' : 'Hidden by the mod default state');
 }
 
 // Re-baseline manualVisible to match the current Toggle panel state, then sync
@@ -118,6 +138,10 @@ export function refreshAll() {
       mesh.userData.manualVisible = conditionsSatisfied(mesh);
     }
     applyMeshVisibility(mesh);
+    if (!mesh.userData.defaultCaptured) {
+      mesh.userData.loadedVisible = mesh.visible;
+      mesh.userData.defaultCaptured = true;
+    }
     applyTextureVariant(mesh);
   });
   syncCheckboxes();
