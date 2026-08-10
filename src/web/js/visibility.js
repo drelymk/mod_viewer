@@ -120,10 +120,7 @@ export function syncCheckboxes() {
 }
 
 function updateStateIndicator(mesh) {
-  const indicator = mesh.userData.stateIndicator;
-  if (!indicator) return;
-  indicator.textContent = mesh.userData.manuallyToggled ? (mesh.visible ? '✅' : '🟨') : (mesh.visible ? '✅' : '🟥');
-  indicator.title = mesh.userData.manuallyToggled ? 'Manually toggled in the viewer' : (mesh.visible ? 'Visible by default' : 'Hidden by the mod default state');
+  mesh.userData.updateStateIndicator?.(mesh);
 }
 
 // Re-baseline manualVisible to match the current Toggle panel state, then sync

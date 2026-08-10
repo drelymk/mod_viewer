@@ -71,6 +71,8 @@ ASSET_FILES = {
         f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.module.js",
     os.path.join("addons", "controls", "OrbitControls.js"):
         f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/OrbitControls.js",
+    os.path.join("addons", "controls", "ArcballControls.js"):
+        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/ArcballControls.js",
 }
 
 

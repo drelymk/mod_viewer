@@ -43,11 +43,7 @@
       <button id="frame-btn" class="tool-btn" title="Frame model">⌖</button>
       <button id="reset-view-btn" class="tool-btn" title="Reset view">↺</button>
       <button id="reset-state-btn" class="tool-btn" title="Return meshes to default state">⌂</button>
-      <div class="view-gizmo" title="View orientation">
-        <button id="front-view-btn">F</button><button id="back-view-btn">B</button>
-        <button id="left-view-btn">L</button><button id="right-view-btn">R</button>
-        <button id="top-view-btn">T</button><button id="bottom-view-btn">D</button>
-      </div>
+      <button id="trackball-btn" class="tool-btn" title="Toggle trackball gizmo">◉</button>
     </div>
   </div>
 </div>
@@ -138,6 +134,9 @@
 <div id="info">Drag to rotate &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Right-drag to pan</div>
 
 <div id="footer">
+  <div id="tool-panel-footer">
+    <div id="tool-buttons-footer"></div>
+  </div>
   <span id="app-version">v__APP_VERSION__</span>
   <a id="github-link" href="__REPO_URL__" title="GitHub Repository" target="_blank" rel="noopener noreferrer">
     <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">

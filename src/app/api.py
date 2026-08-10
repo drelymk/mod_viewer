@@ -7,7 +7,7 @@ belongs in mod_loader instead.
 
 import webview
 
-from . import edit_session, mod_loader, toggle_api
+from . import edit_session, mesh_metadata, mod_loader, toggle_api
 
 
 class ModViewerAPI:
@@ -27,8 +27,14 @@ class ModViewerAPI:
         # Preview any pending, not-yet-exported edits over the real files.
         overrides = edit_session.overrides_for(folder_path)
         pending_new_sections = edit_session.new_sections_for(folder_path)
-        return mod_loader.load_mod(folder_path, overrides=overrides,
-                                    pending_new_sections=pending_new_sections)
+        result = mod_loader.load_mod(folder_path, overrides=overrides,
+                                     pending_new_sections=pending_new_sections)
+        if isinstance(result, dict) and not result.get("error"):
+            result["__mesh_names__"] = mesh_metadata.load(folder_path)
+        return result
+
+    def save_mesh_names(self, folder_path, names):
+        return mesh_metadata.save(folder_path, names)
 
     # -- toggle authoring -----------------------------------------------------
     #

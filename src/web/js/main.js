@@ -1,6 +1,6 @@
 // Entry point: wires the toolbar and orchestrates loading a mod.
 
-import { fitTo, frameView, toggleGrid } from './scene.js';
+import { fitTo, frameView, toggleGrid, toggleTrackballGizmo } from './scene.js';
 import { setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, resetToDefaultState, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
@@ -72,7 +72,7 @@ function displayMeshPayload(payload) {
 
   lastToggles = payload.__toggles__ || {};
   setTextures(payload.__textures__);
-  buildMeshPanel(payload);
+  buildMeshPanel(payload, payload.__mesh_names__ || {}, currentModPath);
   buildTogglePanel(payload.__toggles__, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(payload.__menu__);
   fitTo(activeMeshes);
@@ -179,11 +179,9 @@ $('wire-btn').addEventListener('click', toggleWireframe);
 $('grid-btn').addEventListener('click', toggleGrid);
 $('shading-btn').addEventListener('click', toggleSmoothShading);
 $('texture-btn').addEventListener('click', toggleTextures);
-$('frame-btn').addEventListener('click', () => frameView('perspective', activeMeshes));
-for (const view of ['front', 'back', 'left', 'right', 'top', 'bottom']) {
-  $(`${view}-view-btn`).addEventListener('click', () => frameView(view, activeMeshes));
-}
-$('reset-view-btn').addEventListener('click', () => frameView('perspective', activeMeshes));
+$('frame-btn').addEventListener('click', () => frameView(activeMeshes));
+$('reset-view-btn').addEventListener('click', () => frameView(activeMeshes));
+$('trackball-btn').addEventListener('click', toggleTrackballGizmo);
 $('reset-state-btn').addEventListener('click', resetToDefaultState);
 initSelection();
 

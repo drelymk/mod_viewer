@@ -104,14 +104,17 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   const row = document.createElement('div');
   row.className = 'draw-item';
 
-  const cb = document.createElement('input');
-  cb.type = 'checkbox';
+  const cb = document.createElement('button');
+  cb.type = 'button';
+  cb.className = 'mesh-state-btn';
   cb.checked = true;
-  cb.addEventListener('change', () => {
+  cb.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cb.checked = !mesh.visible;
     mesh.userData.manualVisible = cb.checked;
     mesh.userData.manuallyToggled = true;
     applyMeshVisibility(mesh);
-    updateStateIndicator(mesh, state);
+    updateStateIndicator(mesh);
     const any = itemCbs.some(c => c.checked);
     const all = itemCbs.every(c => c.checked);
     masterCb.indeterminate = any && !all;
@@ -122,18 +125,16 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   const label = entry.drawindexed
     ? entry.drawindexed.join(', ')
     : '#' + name.slice(groupName.length + 1);
-  const state = document.createElement('span');
-  state.className = 'mesh-state';
-  mesh.userData.stateIndicator = state;
   const labelSpan = document.createElement('span');
   labelSpan.className = 'mesh-label';
   labelSpan.textContent = mesh.userData.displayName || label;
-  row.append(state, cb, labelSpan);
-  const updateStateIndicator = (m, indicator) => {
-    indicator.textContent = m.userData.manuallyToggled ? (m.visible ? '✅' : '🟨') : (m.visible ? '✅' : '🟥');
-    indicator.title = m.userData.manuallyToggled ? 'Manually toggled in the viewer' : (m.visible ? 'Visible by default' : 'Hidden by the mod default state');
+  row.append(cb, labelSpan);
+  const updateStateIndicator = (m) => {
+    cb.textContent = m.userData.manuallyToggled ? (m.visible ? '✅' : '🟨') : (m.visible ? '✅' : '🟥');
+    cb.title = m.userData.manuallyToggled ? 'Manually toggled in the viewer' : (m.visible ? 'Visible by default' : 'Hidden by the mod default state');
   };
-  updateStateIndicator(mesh, state);
+  mesh.userData.updateStateIndicator = updateStateIndicator;
+  updateStateIndicator(mesh);
   labelSpan.title = 'Double-click to rename this mesh in the viewer';
   labelSpan.addEventListener('dblclick', (e) => {
     e.stopPropagation();
@@ -141,12 +142,16 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     if (next && next.trim()) {
       mesh.userData.displayName = next.trim();
       labelSpan.textContent = mesh.userData.displayName;
+      mesh.userData.meshNames[name] = mesh.userData.displayName;
+      if (mesh.userData.modPath) {
+        window.pywebview.api.save_mesh_names(mesh.userData.modPath, mesh.userData.meshNames);
+      }
     }
   });
 
   mesh.userData.row = row;
   row.addEventListener('click', (e) => {
-    if (e.target === cb) return; // the checkbox only ever toggles visibility
+    if (e.target === cb) return; // the state button only ever toggles visibility
     selectMesh(mesh);
   });
 
@@ -154,7 +159,7 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
 }
 
 /** Build the panel and add every mesh in the payload to the scene. */
-export function buildMeshPanel(payload) {
+export function buildMeshPanel(payload, meshNames = {}, modPath = null) {
   const list = document.getElementById('mesh-list');
   list.innerHTML = '';
 
@@ -175,6 +180,9 @@ export function buildMeshPanel(payload) {
       const itemCbs = [], itemObjs = [];
       for (const name of names) {
         const mesh = buildMesh(name, payload[name]);
+        mesh.userData.displayName = meshNames[name] || null;
+        mesh.userData.meshNames = meshNames;
+        mesh.userData.modPath = modPath;
         addMesh(mesh, payload[name].conditions, payload[name].sources, payload[name].texture_variants);
         itemObjs.push(mesh);
         itemsWrap.appendChild(buildDrawRow(name, groupName, payload[name], mesh, itemCbs, masterCb));
@@ -186,7 +194,9 @@ export function buildMeshPanel(payload) {
         itemCbs.forEach((c, i) => {
           c.checked = v;
           itemObjs[i].userData.manualVisible = v;
+          itemObjs[i].userData.manuallyToggled = true;
           applyMeshVisibility(itemObjs[i]);
+          itemObjs[i].userData.updateStateIndicator?.(itemObjs[i]);
         });
       });
 
