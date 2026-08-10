@@ -14,6 +14,14 @@ export function setTextures(textures) {
   for (const key of Object.keys(loaders)) delete loaders[key];
 }
 
+/** Merge one texture into the shared registry without touching the rest --
+ * used when the user adds a texture via the per-component picker (see
+ * web/js/mesh-panel.js). View-only/session-scoped: never reaches the ini. */
+export function addTexture(key, uri) {
+  registry[key] = uri;
+  delete loaders[key];
+}
+
 function getTexture(key) {
   if (!key || !registry[key]) return null;
   if (!loaders[key]) loaders[key] = new THREE.TextureLoader().load(registry[key]);
@@ -68,6 +76,11 @@ export function buildMesh(name, data) {
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData.texKey = data.tex_key || null;
+  // The draw's own resolved default (core/mesh_builder.py's per-draw
+  // tex_key) -- what "(Automatic)" falls back to once no toggle-driven
+  // texture_variants condition matches (see visibility.js's
+  // applyTextureVariant). Immutable; setMeshTexture only ever touches texKey.
+  mesh.userData.defaultTexKey = data.tex_key || null;
   mesh.userData.fallbackColor = fallback;
   refreshMeshTexture(mesh);
   mesh.castShadow = mesh.receiveShadow = true;

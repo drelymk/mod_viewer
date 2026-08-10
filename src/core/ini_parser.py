@@ -94,7 +94,8 @@ def _scan_sections_for_draws(sections, var_prefix=None):
     """
     toggle_vars = gating_var_names(sections)
     alias_map = build_bool_alias_map(sections)
-    seq_counter = [0]  # unique id per `if` block
+    seq_counter = [0]   # unique id per `if` block
+    bare_counter = [0]  # unique id per diffuse line reached with an empty cond_stack
 
     def _scan(lines, info, cond_stack, visiting):
         # cond_stack tracks the stack of active gate branches. Each frame is
@@ -171,15 +172,38 @@ def _scan_sections_for_draws(sections, var_prefix=None):
             if m_diff:
                 res = m_diff.group(1)
                 if not info["diffuse"]: info["diffuse"] = res
+                if res not in info["diffuse_pool"]: info["diffuse_pool"].append(res)
                 combined = DNF_TRUE
                 for frame in cond_stack:
                     combined = dnf_and(combined, frame["cur"])
                 cond = normalize_dnf(combined, toggle_vars, var_prefix)
-                chain_key = cond_stack[-1]["seq"] if cond_stack else None
+                if cond_stack:
+                    chain_key = cond_stack[-1]["seq"]
+                else:
+                    # No enclosing if at all: every such line is a fresh,
+                    # unconditional reassignment of "the current diffuse" in
+                    # execution order, never a continuation of some earlier
+                    # bare line -- each needs its own always-distinct key, or
+                    # two unrelated top-level reassignments would wrongly
+                    # accumulate into one multi-entry variant list instead of
+                    # the second replacing the first.
+                    bare_counter[0] += 1
+                    chain_key = ("bare", bare_counter[0])
                 if chain_key != info.get("_diffuse_chain_key"):
                     info["_cur_diffuse_variants"] = []
                     info["_diffuse_chain_key"] = chain_key
+                elif info.get("_diffuse_last_cond") == cond and info["_cur_diffuse_variants"]:
+                    # A second diffuse line in the SAME if/elif branch as the
+                    # immediately preceding one (no elif/else advanced the
+                    # branch in between) -- its own condition is therefore
+                    # identical to that prior line's, so this is a plain
+                    # in-branch reassignment, not a new toggle alternative.
+                    # Replace rather than accumulate, or the branch would
+                    # wrongly end up offering two alternatives that are both
+                    # active under the exact same condition.
+                    info["_cur_diffuse_variants"].pop()
                 info["_cur_diffuse_variants"].append({"res": res, "cond": cond})
+                info["_diffuse_last_cond"] = cond
             m = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if m:
                 target = m.group(1)
@@ -195,15 +219,24 @@ def _scan_sections_for_draws(sections, var_prefix=None):
         if not (name.startswith("TextureOverride") or name.startswith("CommandList")):
             continue
         info: dict = dict(vb0=None, vb1=None, vb2=None, ib=None, draws=[],
-                          diffuse=None, src=None, handling_skip=False,
+                          diffuse=None, diffuse_pool=[], src=None, handling_skip=False,
                           _cur_diffuse_variants=[], _diffuse_chain_key=None)
         _scan(lines, info, [], {name})
         info.pop("_cur_ib", None)
         info.pop("_cur_vb0", None)
         info.pop("_cur_vb1", None)
         info.pop("_cur_vb2", None)
+        # Whatever diffuse was active at the end of the scan -- needed for a
+        # section with NO drawindexed line at all (the game's original,
+        # whole-buffer draw proceeds unmodified against this section's own
+        # `ib =`; see build_draw_groups' synthetic placeholder draw below).
+        # That implicit draw still runs with whichever Resource\...\Diffuse
+        # (or bare ps-t0/ps-t1) assignment the section made, same as any real
+        # drawindexed line would've seen at this point in execution order.
+        info["diffuse_variants_at_end"] = list(info.get("_cur_diffuse_variants") or [])
         info.pop("_cur_diffuse_variants", None)
         info.pop("_diffuse_chain_key", None)
+        info.pop("_diffuse_last_cond", None)
         sec_info[name] = info
     return sec_info
 
@@ -363,7 +396,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         pos_stride = pos_ri.get("stride", POSITION_STRIDE)
         uv_off     = DEFAULT_UV_OFFSET
 
-        draws_list = list(info["draws"]) or [(None, 0, 0, [], info["src"], None, [], (None, None, None))]
+        draws_list = list(info["draws"]) or [
+            (None, 0, 0, [], info["src"], None,
+             info.get("diffuse_variants_at_end") or [], (None, None, None))]
         draws = []
         for i, (c, s, b, cd, src, draw_ib, diff_variants, _vb_ov) in enumerate(draws_list, 1):
             d = dict(label=f"{label}-{i}", count=c, start=s, base=b,
@@ -383,16 +418,29 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                         d["texcoord_file"] = tfile
                         d["position_stride"] = pstride or POSITION_STRIDE
                         d["texcoord_stride"] = tstride or 20
+            # Whichever Resource\...\Diffuse line most recently ran before
+            # this draw, in execution order -- the draw's own default
+            # texture (see core.mesh_builder.build_mesh_payload). The first
+            # entry is the resolution at this point when no toggle var is
+            # bound (matches the `if` branch of an elif chain); a toggle
+            # press picks a different entry via texture_variants below.
+            variants = []
+            for v in diff_variants:
+                file = _resolve_diffuse_file(v["res"])
+                if file:
+                    variants.append({"conditions": v["cond"], "file": file})
+            if variants:
+                d["texture_default_file"] = variants[0]["file"]
             # A toggle that swaps the diffuse texture rather than gating a draw.
-            if len(diff_variants) > 1:
-                variants = []
-                for v in diff_variants:
-                    file = _resolve_diffuse_file(v["res"])
-                    if file:
-                        variants.append({"conditions": v["cond"], "file": file})
-                if len(variants) > 1:
-                    d["texture_variants"] = variants
+            if len(variants) > 1:
+                d["texture_variants"] = variants
             draws.append(d)
+        pool_files, seen_pool_files = [], set()
+        for res in info["diffuse_pool"]:
+            file = _resolve_diffuse_file(res)
+            if file and file not in seen_pool_files:
+                seen_pool_files.add(file)
+                pool_files.append({"res": res, "file": file})
         groups.append(dict(
             name=label,
             display_name=display_name,
@@ -401,6 +449,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             position_stride=pos_stride,
             texcoord_stride=tc_stride, texcoord_uv_off=uv_off,
             ib_file=ib_file, diffuse_file=diff_ri.get("filename"),
+            diffuse_pool_files=pool_files,
             index_size=_ib_index_size(ib_ri.get("format")),
             draws=draws,
         ))

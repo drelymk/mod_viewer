@@ -193,6 +193,30 @@ def _encode_texture(dds_path, max_size=2048):
         return None
 
 
+def encode_texture_file(mod_dir, abs_path):
+    """Encode an arbitrary texture file the user picked via a native file
+    dialog (app/api.py's pick_texture_file) into the same {tex_key, uri}
+    shape build_mesh_payload's own textures use, so it can be merged
+    straight into the frontend's shared registry (mesh-factory.js's
+    addTexture). `abs_path` must resolve inside `mod_dir` -- reuses
+    _safe_join's sandboxing by re-deriving a mod-relative path and rejecting
+    anything that doesn't stay within it, the same constraint `filename =`
+    resolution is already held to.
+    """
+    try:
+        rel = os.path.relpath(abs_path, mod_dir)
+    except ValueError:
+        return {"error": "Selected file is not inside the mod folder."}
+    if _safe_join(mod_dir, rel) != os.path.abspath(abs_path):
+        return {"error": "Selected file is not inside the mod folder."}
+    if not os.path.isfile(abs_path):
+        return {"error": "Selected file does not exist."}
+    uri = _encode_texture(abs_path)
+    if not uri:
+        return {"error": "Could not read this file as an image."}
+    return {"tex_key": rel.replace(os.sep, "/"), "uri": uri}
+
+
 # ── In-memory mesh payload builder ────────────────────────────────────────────
 
 def _rel_source(src, mod_dir):
@@ -213,19 +237,31 @@ def _rel_source(src, mod_dir):
 def build_mesh_payload(groups, mod_dir, max_draws=0):
     """
     Returns {draw_label: {pos, uv, idx, tex_key, drawindexed?, source?,
-    component?, texture_variants?}, '__textures__': {key: uri}}. Textures are
-    stored once in a shared registry keyed by filename. `drawindexed` is the
-    ini's [count, start, base] triple (missing for the rare unconditional
-    whole-buffer draw); `source` is the per-ini tag from build_draw_groups,
-    present only in multi-ini mods. `component` is the group's clean,
-    never-disambiguated display name (see build_draw_groups) — the UI groups
-    and labels draw rows by this instead of parsing the draw_label key, so a
-    rare cross-ini name collision (label gets a "_2" suffix for uniqueness)
-    never leaks an ugly suffix into the display. `texture_variants`, present
-    only when a toggle conditionally reassigns the diffuse, is a list of
-    {conditions, tex_key} alternatives (same DNF shape as `conditions`) for
-    the UI to pick between as toggle state changes; `tex_key` itself always
-    stays the static default so an older consumer still renders correctly.
+    component?, texture_variants?, texture_options?}, '__textures__': {key:
+    uri}}. Textures are stored once in a shared registry keyed by filename.
+    `drawindexed` is the ini's [count, start, base] triple (missing for the
+    rare unconditional whole-buffer draw); `source` is the per-ini tag from
+    build_draw_groups, present only in multi-ini mods. `component` is the
+    group's clean, never-disambiguated display name (see build_draw_groups)
+    — the UI groups and labels draw rows by this instead of parsing the
+    draw_label key, so a rare cross-ini name collision (label gets a "_2"
+    suffix for uniqueness) never leaks an ugly suffix into the display.
+
+    `tex_key` is this draw's own resolved default: whichever
+    Resource\\...\\Diffuse line most recently ran before it in the ini's
+    execution order (build_draw_groups' `texture_default_file`), NOT one
+    static value per component -- a section can reassign the diffuse several
+    times (see ini_parser._scan_sections_for_draws), so two draws in the same
+    TextureOverride section routinely resolve to different textures.
+    `texture_variants`, present only when a toggle conditionally reassigns
+    the diffuse at this exact point, is a list of {conditions, tex_key}
+    alternatives (same DNF shape as `conditions`) for the UI to pick between
+    as toggle state changes. `texture_options`, present only when the
+    component's section references 2+ distinct diffuses anywhere (regardless
+    of position/condition), is the full deduplicated pool as
+    {tex_key, label} for a manual per-mesh override picker -- same list
+    object shared by every draw in the component, so it also serves as the
+    component-level "manage textures" pool.
     """
     result:    dict = {}
     tex_uris:  dict = {}  # basename → data URI  (encoded once)
@@ -240,7 +276,6 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
         tc_stride = grp["texcoord_stride"]
         pos_stride = grp.get("position_stride", POSITION_STRIDE)
         index_size = grp.get("index_size", INDEX_SIZE)
-        diff_dds  = _safe_join(mod_dir, grp["diffuse_file"]) if grp["diffuse_file"] else None
         component = grp.get("display_name") or grp.get("name")
         source    = grp.get("source")
 
@@ -320,7 +355,18 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                 tex_cache[dds_path] = key
             return tex_cache[dds_path]
 
-        tex_key = _tex_key(diff_dds)
+        # Every diffuse this component's ini ever references, resolved once
+        # and shared by every draw in the group -- the UI's per-mesh texture
+        # picker list (core/ini_parser.py's build_draw_groups). Uses the same
+        # _tex_key cache/registry as the draws' own textures so an option
+        # that's also someone's active default doesn't get encoded twice.
+        texture_options = []
+        for pool_entry in grp.get("diffuse_pool_files") or []:
+            key = _tex_key(_safe_join(mod_dir, pool_entry["file"]))
+            if key:
+                res_name = pool_entry["res"]
+                label = res_name[8:] if res_name.startswith("Resource") else res_name
+                texture_options.append({"tex_key": key, "label": label})
 
         for draw in unique:
             lbl = draw["label"]
@@ -369,7 +415,8 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
 
             idx_arr = [remap[v] for v in raw]
 
-            entry: dict = {"pos": _b64f(pos_arr), "idx": _b64u(idx_arr), "tex_key": tex_key}
+            default_key = _tex_key(_safe_join(mod_dir, draw.get("texture_default_file")))
+            entry: dict = {"pos": _b64f(pos_arr), "idx": _b64u(idx_arr), "tex_key": default_key}
             if uv_arr:
                 entry["uv"] = _b64f(uv_arr)
             if draw.get("conditions"):
@@ -385,6 +432,8 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                         variants.append({"conditions": v["conditions"], "tex_key": key})
                 if len(variants) > 1:
                     entry["texture_variants"] = variants
+            if len(texture_options) > 1:
+                entry["texture_options"] = texture_options
             # The literal `drawindexed = count, start, base` values, so the UI can
             # show a meaningful per-draw label instead of a bare "#1"/"#2" index.
             # Absent for the rare section with no drawindexed line at all (the

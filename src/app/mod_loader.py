@@ -76,9 +76,13 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
 
 
 def _gating_vars(payload):
-    """Variables that actually decide some mesh's visibility.
+    """Variables that actually decide some mesh's visibility OR its texture.
 
-    `conditions` is a list of OR'd AND-groups: [[{var,value,negate}, ...], ...]
+    `conditions`/`texture_variants[].conditions` are each a list of OR'd
+    AND-groups: [[{var,value,negate}, ...], ...]. A var that only ever swaps
+    a diffuse (e.g. Key$SuitCL) never appears in `conditions`, but must still
+    count as "wired" here or build_toggle_panel drops it from the Toggle
+    panel entirely even though it visibly does something.
     """
     found = set()
     for entry in payload.values():
@@ -87,6 +91,10 @@ def _gating_vars(payload):
         for group in entry.get("conditions", []):
             for cond in group:
                 found.add(cond["var"])
+        for variant in entry.get("texture_variants", []):
+            for group in variant.get("conditions", []):
+                for cond in group:
+                    found.add(cond["var"])
     return found
 
 
@@ -182,6 +190,10 @@ def _gating_vars_from_groups(groups):
             for cond_group in draw.get("conditions", []):
                 for cond in cond_group:
                     found.add(cond["var"])
+            for variant in draw.get("texture_variants", []):
+                for cond_group in variant.get("conditions", []):
+                    for cond in cond_group:
+                        found.add(cond["var"])
     return found
 
 

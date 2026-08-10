@@ -1,8 +1,8 @@
 // Entry point: wires the toolbar and orchestrates loading a mod.
 
-import { fitTo, frameView, toggleGrid, toggleTrackballGizmo } from './scene.js';
+import { fitTo, toggleGrid } from './scene.js';
 import { setTextures } from './mesh-factory.js';
-import { activeMeshes, reset, resetToDefaultState, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
+import { activeMeshes, reset, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
@@ -72,7 +72,7 @@ function displayMeshPayload(payload) {
 
   lastToggles = payload.__toggles__ || {};
   setTextures(payload.__textures__);
-  buildMeshPanel(payload, payload.__mesh_names__ || {}, currentModPath);
+  buildMeshPanel(payload, currentModPath, payload.__mesh_names__ || {});
   buildTogglePanel(payload.__toggles__, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(payload.__menu__);
   fitTo(activeMeshes);
@@ -179,10 +179,6 @@ $('wire-btn').addEventListener('click', toggleWireframe);
 $('grid-btn').addEventListener('click', toggleGrid);
 $('shading-btn').addEventListener('click', toggleSmoothShading);
 $('texture-btn').addEventListener('click', toggleTextures);
-$('frame-btn').addEventListener('click', () => frameView(activeMeshes));
-$('reset-view-btn').addEventListener('click', () => frameView(activeMeshes));
-$('trackball-btn').addEventListener('click', toggleTrackballGizmo);
-$('reset-state-btn').addEventListener('click', resetToDefaultState);
 initSelection();
 
 // Collapses a panel's body when its header is clicked.
@@ -203,4 +199,4 @@ initPanelCollapse($('menu-panel'), 'menu-list');
 
 // Exposed for automated smoke tests and for poking at the app from the
 // devtools console; the UI itself always goes through the listeners above.
-window.modViewer = { displayMeshPayload, openMod, reloadCurrentMod, exportChanges };
+window.modViewer = { displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes };

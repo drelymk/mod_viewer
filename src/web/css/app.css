@@ -134,16 +134,56 @@ body {
 .group-hdr {
   display: flex; align-items: center; gap: 7px; font-size: 12px;
   color: #cdd9e5; font-weight: 600; margin-top: 6px; cursor: pointer;
+  position: relative;
 }
 .group-hdr input { width: 14px; height: 14px; cursor: pointer; accent-color: #58a6ff; flex-shrink: 0; }
+/* Room for .group-tex-btn, absolutely positioned in the top-right corner --
+ * keeps the button pinned there regardless of name length, rather than
+ * being pushed out of the flex row by a long component name. */
+.group-hdr .group-name { padding-right: 22px; }
+.group-tex-btn {
+  position: absolute; top: 0; right: 0;
+  background: #21262d; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 4px; width: 18px; height: 18px; font-size: 11px; padding: 0;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.group-tex-btn:hover { background: #30363d; color: #e6edf3; }
+.group-tex-btn.active { background: #1f6feb; color: #fff; border-color: rgba(240,246,252,.15); }
 .group-items { display: flex; flex-direction: column; gap: 3px; overflow: hidden; }
 .group-items.collapsed { display: none; }
+.draw-item-wrap { display: flex; flex-direction: column; }
 .draw-item {
   display: flex; align-items: center; gap: 6px; font-size: 11px;
   color: #8b949e; padding-left: 20px; cursor: pointer;
 }
 .draw-item input { width: 12px; height: 12px; cursor: pointer; accent-color: #3fb950; flex-shrink: 0; }
+.mesh-state-btn { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; font-size: 13px; line-height: 18px; cursor: pointer; flex-shrink: 0; }
 .draw-item.selected { background: rgba(88,166,255,.15); outline: 1px solid #58a6ff; border-radius: 4px; }
+
+/* Per-mesh texture picker: one level deeper than .draw-item's own indent. */
+.tex-list { display: flex; flex-direction: column; gap: 2px; padding-left: 38px; margin: 2px 0 4px; }
+.tex-list.collapsed { display: none; }
+.tex-item {
+  font-size: 10px; color: #8b949e; cursor: pointer; padding: 2px 6px;
+  border-radius: 4px;
+}
+.tex-item:hover { background: #21262d; color: #e6edf3; }
+.tex-item.selected { background: rgba(88,166,255,.15); color: #58a6ff; outline: 1px solid #58a6ff; }
+
+/* Per-component "manage textures" popup (texture-modal.js) -- reuses the
+ * toggle modal's .modal-backdrop/.modal chrome. */
+.texm-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; max-height: 240px; overflow-y: auto; }
+.texm-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 12px; color: #cdd9e5; padding: 4px 6px; background: #0d1117;
+  border: 1px solid #30363d; border-radius: 6px;
+}
+.texm-empty { font-size: 11px; color: #8b949e; font-style: italic; padding: 4px 6px; }
+#texm-add { background: #21262d; color: #e6edf3; }
+#texm-add:hover { background: #30363d; }
+#texm-close { background: #21262d; color: #e6edf3; }
+#texm-close:hover { background: #30363d; }
 
 /* ── toggle panel (right) ────────────────────────────────────────────────── */
 #toggle-list { display: flex; flex-direction: column; gap: 10px; }

@@ -39,10 +39,25 @@ export function addMesh(mesh, conditions, sources, textureVariants) {
   mesh.userData.conditions = conditions || [];
   mesh.userData.sources = sources || [];
   mesh.userData.textureVariants = textureVariants || [];
+  // Tri-state: undefined = follow automatic/toggle-driven resolution below,
+  // null = user explicitly picked "(None)", a string = a manually picked
+  // tex_key. Set by the per-mesh texture list (mesh-panel.js) and takes
+  // priority over textureVariants until the user clears it back to
+  // "(Automatic)" -- see applyTextureVariant.
+  mesh.userData.manualTexOverride = undefined;
   mesh.material.wireframe = wireframe;
   mesh.material.flatShading = !smoothShading;
   scene.add(mesh);
   activeMeshes.push(mesh);
+  applyTextureVariant(mesh);
+}
+
+/** Manually pin (or clear, with `value === undefined`) a mesh's texture,
+ * overriding whatever the ini's own toggle-driven resolution would pick.
+ * Takes effect immediately and stays sticky across Toggle panel presses
+ * until cleared -- see applyTextureVariant/refreshAll. */
+export function setManualTexOverride(mesh, value) {
+  mesh.userData.manualTexOverride = value;
   applyTextureVariant(mesh);
 }
 
@@ -78,11 +93,22 @@ export function conditionsSatisfied(mesh) {
   return dnfSatisfied(mesh.userData.conditions);
 }
 
-// A toggle can reassign a mesh's diffuse texture.
+// A toggle can reassign a mesh's diffuse texture -- unless the user has
+// manually pinned one via the per-mesh texture list, which wins until
+// explicitly cleared back to "(Automatic)" (setManualTexOverride). Falls
+// back to the draw's own resolved default (mesh.userData.defaultTexKey)
+// when no variant's condition currently matches -- a draw whose toggle only
+// swaps texture under a specific value (or that has no texture_variants at
+// all) must still revert cleanly instead of keeping whatever texKey a
+// previous manual pick left behind.
 export function applyTextureVariant(mesh) {
+  if (mesh.userData.manualTexOverride !== undefined) {
+    setMeshTexture(mesh, mesh.userData.manualTexOverride);
+    return;
+  }
   const variants = mesh.userData.textureVariants || [];
   const variant = variants.find(v => dnfSatisfied(v.conditions));
-  if (variant) setMeshTexture(mesh, variant.tex_key);
+  setMeshTexture(mesh, variant ? variant.tex_key : mesh.userData.defaultTexKey);
 }
 
 // The MESHES checkbox is the sole, direct source of truth for a mesh's
@@ -95,32 +121,18 @@ export function applyMeshVisibility(mesh) {
   mesh.visible = mesh.userData.manualVisible !== false;
 }
 
-export function resetToDefaultState() {
-  activeMeshes.forEach(mesh => {
-    mesh.userData.manuallyToggled = false;
-    mesh.userData.manualVisible = mesh.userData.loadedVisible !== false;
-  });
-  refreshAll();
-}
-
 // Reflect each mesh's actual visibility back onto its MESHES checkbox, so
 // cycling a Toggle value visibly checks/unchecks the affected items and
 // updates each group's master checkbox.
 export function syncCheckboxes() {
-  groupsUI.forEach(({ masterCb, itemCbs, itemObjs }) => {
-    itemObjs.forEach((mesh, i) => {
-      itemCbs[i].checked = mesh.visible;
-      updateStateIndicator(mesh);
-    });
+  groupsUI.forEach(({ masterCb, itemCbs, itemObjs, onTexChanged }) => {
+    itemObjs.forEach((mesh, i) => { itemCbs[i].checked = mesh.visible; mesh.userData.updateStateIndicator?.(mesh); });
     const any = itemCbs.some(c => c.checked);
     const all = itemCbs.every(c => c.checked);
     masterCb.checked = all;
     masterCb.indeterminate = any && !all;
+    if (onTexChanged) onTexChanged();
   });
-}
-
-function updateStateIndicator(mesh) {
-  mesh.userData.updateStateIndicator?.(mesh);
 }
 
 // Re-baseline manualVisible to match the current Toggle panel state, then sync
