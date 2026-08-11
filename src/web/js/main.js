@@ -72,7 +72,7 @@ function displayMeshPayload(payload) {
 
   lastToggles = payload.__toggles__ || {};
   setTextures(payload.__textures__);
-  buildMeshPanel(payload, currentModPath);
+  buildMeshPanel(payload, currentModPath, payload.__mesh_names__ || {});
   buildTogglePanel(payload.__toggles__, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(payload.__menu__);
   fitTo(activeMeshes);

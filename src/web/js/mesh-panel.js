@@ -179,11 +179,15 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb, onA
   const row = document.createElement('div');
   row.className = 'draw-item';
 
-  const cb = document.createElement('input');
-  cb.type = 'checkbox';
+  const cb = document.createElement('button');
+  cb.type = 'button';
+  cb.className = 'mesh-state-btn';
   cb.checked = true;
-  cb.addEventListener('change', () => {
+  cb.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cb.checked = !mesh.visible;
     mesh.userData.manualVisible = cb.checked;
+    mesh.userData.manuallyToggled = true;
     applyMeshVisibility(mesh);
     const any = itemCbs.some(c => c.checked);
     const all = itemCbs.every(c => c.checked);
@@ -201,11 +205,29 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb, onA
   const label = entry.drawindexed
     ? entry.drawindexed.join(', ')
     : '#' + name.slice(groupName.length + 1);
-  row.append(cb, chevron, document.createTextNode(label));
+  const labelSpan = document.createElement('span');
+  labelSpan.textContent = mesh.userData.displayName || label;
+  row.append(cb, chevron, labelSpan);
+  const updateStateIndicator = (m) => {
+    cb.textContent = m.userData.manuallyToggled ? (m.visible ? '✅' : '🟨') : (m.visible ? '✅' : '🟥');
+    cb.title = m.userData.manuallyToggled ? 'Manually toggled in the viewer' : (m.visible ? 'Visible by default' : 'Hidden by the mod default state');
+  };
+  mesh.userData.updateStateIndicator = updateStateIndicator;
+  updateStateIndicator(mesh);
+  labelSpan.addEventListener('dblclick', (e) => {
+    e.stopPropagation();
+    const next = window.prompt('Mesh name:', labelSpan.textContent);
+    if (next && next.trim()) {
+      mesh.userData.displayName = next.trim();
+      labelSpan.textContent = next.trim();
+      mesh.userData.meshNames[name] = next.trim();
+      if (mesh.userData.modPath) window.pywebview.api.save_mesh_names(mesh.userData.modPath, mesh.userData.meshNames);
+    }
+  });
 
   mesh.userData.row = row;
   row.addEventListener('click', (e) => {
-    if (e.target === cb) return; // the checkbox only ever toggles visibility
+    if (e.target === cb) return; // the state button only ever toggles visibility
     if (e.target === chevron) {
       chevron.classList.toggle('collapsed');
       texList.classList.toggle('collapsed');
@@ -231,7 +253,7 @@ function updateTexButtonState(texBtn, itemObjs) {
 /** Build the panel and add every mesh in the payload to the scene. `modPath`
  * is threaded through to the per-component texture popup, which needs it to
  * open the native file picker rooted at the mod folder. */
-export function buildMeshPanel(payload, modPath) {
+export function buildMeshPanel(payload, modPath, meshNames = {}) {
   const list = document.getElementById('mesh-list');
   list.innerHTML = '';
 
@@ -274,6 +296,9 @@ export function buildMeshPanel(payload, modPath) {
 
       for (const name of names) {
         const mesh = buildMesh(name, payload[name]);
+        mesh.userData.displayName = meshNames[name] || null;
+        mesh.userData.meshNames = meshNames;
+        mesh.userData.modPath = modPath;
         addMesh(mesh, payload[name].conditions, payload[name].sources, payload[name].texture_variants);
         itemObjs.push(mesh);
         const { wrap, renderTexList } = buildDrawRow(
@@ -289,7 +314,9 @@ export function buildMeshPanel(payload, modPath) {
         itemCbs.forEach((c, i) => {
           c.checked = v;
           itemObjs[i].userData.manualVisible = v;
+          itemObjs[i].userData.manuallyToggled = true;
           applyMeshVisibility(itemObjs[i]);
+          itemObjs[i].userData.updateStateIndicator?.(itemObjs[i]);
         });
       });
 

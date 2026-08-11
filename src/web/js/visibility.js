@@ -34,6 +34,8 @@ export function reset() {
 
 export function addMesh(mesh, conditions, sources, textureVariants) {
   mesh.userData.manualVisible = true;
+  mesh.userData.loadedVisible = true;
+  mesh.userData.manuallyToggled = false;
   mesh.userData.conditions = conditions || [];
   mesh.userData.sources = sources || [];
   mesh.userData.textureVariants = textureVariants || [];
@@ -124,7 +126,7 @@ export function applyMeshVisibility(mesh) {
 // updates each group's master checkbox.
 export function syncCheckboxes() {
   groupsUI.forEach(({ masterCb, itemCbs, itemObjs, onTexChanged }) => {
-    itemObjs.forEach((mesh, i) => { itemCbs[i].checked = mesh.visible; });
+    itemObjs.forEach((mesh, i) => { itemCbs[i].checked = mesh.visible; mesh.userData.updateStateIndicator?.(mesh); });
     const any = itemCbs.some(c => c.checked);
     const all = itemCbs.every(c => c.checked);
     masterCb.checked = all;
@@ -145,6 +147,10 @@ export function refreshAll() {
       mesh.userData.manualVisible = conditionsSatisfied(mesh);
     }
     applyMeshVisibility(mesh);
+    if (!mesh.userData.defaultCaptured) {
+      mesh.userData.loadedVisible = mesh.visible;
+      mesh.userData.defaultCaptured = true;
+    }
     applyTextureVariant(mesh);
   });
   syncCheckboxes();
