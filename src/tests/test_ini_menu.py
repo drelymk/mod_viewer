@@ -445,6 +445,46 @@ def test_menu_panel_lists_slots_that_gate_nothing():
           f"$socks is listed even though it gates no mesh (got {names})")
 
 
+def test_commandlist_section_name_is_case_insensitive():
+    text = MENU_INI.replace("[CommandListClickedSlot]", "[commandlistClickedSlot]")
+    slots = _by_slot(extract_menu_toggles(sections(text)))
+    check(sorted(slots) == [1, 2, 3],
+          f"lowercase CommandList section is discovered (got {sorted(slots)})")
+
+
+def test_nested_paged_slot_chains_are_all_discovered():
+    """A navigation chain can own slots 10/11 while the actual toggles sit in
+    deeper page-specific chains which reuse slots 1/2 on every page."""
+    text = r"""
+[CommandListClickedSlot]
+if $clickedSlot == 10
+    $page = 0
+elif $clickedSlot == 11
+    $page = 1
+elif $mode == 0
+    if $page == 0
+        if $clickedSlot == 1
+            $top = 1 - $top
+        elif $clickedSlot == 2
+            $hair = 1 - $hair
+        endif
+    elif $page == 1
+        if $clickedSlot == 1
+            $shoes = 1 - $shoes
+        elif $clickedSlot == 2
+            $socks = 1 - $socks
+        endif
+    endif
+endif
+"""
+    menu = extract_menu_toggles(sections(text))
+    check(sorted(info["var"] for info in menu.values()) ==
+          ["hair", "shoes", "socks", "top"],
+          f"nested page chains and reused slots survive (got {menu})")
+    check(len(menu) == 4 and len(set(menu)) == 4,
+          f"duplicate slot numbers get unique entry keys (got {list(menu)})")
+
+
 if __name__ == "__main__":
     for fn in (test_binary_flip_idiom,
                test_increment_wrap_idiom,
@@ -461,7 +501,9 @@ if __name__ == "__main__":
                test_menu_variables_gate_draws,
                test_variable_case_is_ignored_end_to_end,
                test_menu_panel_model,
-               test_menu_panel_lists_slots_that_gate_nothing):
+               test_menu_panel_lists_slots_that_gate_nothing,
+               test_commandlist_section_name_is_case_insensitive,
+               test_nested_paged_slot_chains_are_all_discovered):
         fn()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
     sys.exit(1 if FAILS else 0)

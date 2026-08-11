@@ -1,8 +1,8 @@
 // Entry point: wires the toolbar and orchestrates loading a mod.
 
-import { fitTo, toggleGrid } from './scene.js';
+import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn, toggleGrid, toggleTrackballGizmo } from './scene.js';
 import { setTextures } from './mesh-factory.js';
-import { activeMeshes, reset, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
+import { activeMeshes, reset, resetMeshState, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
@@ -60,6 +60,7 @@ function clearScene() {
   reset();
   lastToggles = {};
   $('mesh-list').innerHTML = '';
+  $('camera-panel').style.display = 'none';
   $('toggle-list').innerHTML = '';
   $('toggle-panel').style.display = 'none';
   $('menu-list').innerHTML = '';
@@ -179,6 +180,11 @@ $('wire-btn').addEventListener('click', toggleWireframe);
 $('grid-btn').addEventListener('click', toggleGrid);
 $('shading-btn').addEventListener('click', toggleSmoothShading);
 $('texture-btn').addEventListener('click', toggleTextures);
+$('reset-state-btn').addEventListener('click', resetMeshState);
+$('trackball-btn').addEventListener('click', toggleTrackballGizmo);
+$('camera-reset-view-btn').addEventListener('click', () => resetView(activeMeshes));
+$('camera-flip-btn').addEventListener('click', () => rotateModelQuarterTurn(activeMeshes));
+$('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
 initSelection();
 
 // Collapses a panel's body when its header is clicked.
@@ -193,6 +199,7 @@ function initPanelCollapse(panel, contentId) {
   });
 }
 initPanelCollapse($('sidebar'), 'mesh-list');
+initPanelCollapse($('camera-panel'), 'camera-buttons');
 initPanelCollapse($('tool-panel'), 'tool-buttons');
 initPanelCollapse($('toggle-panel'), 'toggle-list');
 initPanelCollapse($('menu-panel'), 'menu-list');

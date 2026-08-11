@@ -77,7 +77,7 @@ export function buildMesh(name, data) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData.texKey = data.tex_key || null;
   // The draw's own resolved default (core/mesh_builder.py's per-draw
-  // tex_key) -- what "(Automatic)" falls back to once no toggle-driven
+  // tex_key) -- what an unselected mesh falls back to once no toggle-driven
   // texture_variants condition matches (see visibility.js's
   // applyTextureVariant). Immutable; setMeshTexture only ever touches texKey.
   mesh.userData.defaultTexKey = data.tex_key || null;

@@ -38,11 +38,50 @@ body {
 #export-btn:disabled { opacity: .35; cursor: default; background: #21262d; color: #8b949e; }
 
 /* ── canvas ──────────────────────────────────────────────────────────────── */
-#canvas-container { position: fixed; top: 46px; left: 0; right: 0; bottom: 52px; }
+#canvas-container { position: fixed; top: 46px; left: 0; right: 0; bottom: 28px; }
+
+/* Blender-style viewport navigation compass. It sits just left of the right
+ * dock, rotates with the camera, and remains a DOM overlay so it stays crisp
+ * at every WebView scale factor. */
+#view-gizmo {
+  position: absolute; top: 12px; right: 232px; width: 104px; height: 104px;
+  z-index: 9; border-radius: 50%; cursor: grab; touch-action: none;
+  filter: drop-shadow(0 4px 10px rgba(0,0,0,.34));
+  transition: opacity .16s ease, transform .16s ease;
+}
+#view-gizmo.hidden { opacity: 0; transform: scale(.9); pointer-events: none; }
+#view-gizmo.dragging { cursor: grabbing; }
+#view-gizmo svg { width: 100%; height: 100%; overflow: visible; }
+.gizmo-backdrop {
+  fill: rgba(13,17,23,.58); stroke: rgba(139,148,158,.24); stroke-width: 1;
+}
+.gizmo-axis { --axis-color: #8b949e; cursor: pointer; outline: none; }
+.gizmo-axis line {
+  stroke: var(--axis-color); stroke-width: 2; stroke-linecap: round;
+  transition: stroke-width .1s, opacity .1s;
+}
+.gizmo-axis circle {
+  fill: #161b22; stroke: var(--axis-color); stroke-width: 2;
+  transition: fill .1s, stroke-width .1s;
+}
+.gizmo-axis.positive circle { fill: var(--axis-color); }
+.gizmo-axis text {
+  fill: #fff; font: 700 10px/1 'Segoe UI', sans-serif;
+  text-anchor: middle; dominant-baseline: central; pointer-events: none;
+}
+.gizmo-axis:hover line, .gizmo-axis:focus-visible line { stroke-width: 3; }
+.gizmo-axis:hover circle, .gizmo-axis:focus-visible circle {
+  fill: #fff; stroke-width: 3;
+}
+.gizmo-axis:hover text, .gizmo-axis:focus-visible text { fill: #0d1117; }
+.gizmo-axis.axis-x { --axis-color: #e05252; }
+.gizmo-axis.axis-y { --axis-color: #54b85a; }
+.gizmo-axis.axis-z { --axis-color: #4b8fe8; }
+.gizmo-origin { fill: #c9d1d9; pointer-events: none; }
 
 /* ── footer ──────────────────────────────────────────────────────────────── */
 #footer {
-  position: fixed; bottom: 0; left: 0; right: 0; height: 52px;
+  position: fixed; bottom: 0; left: 0; right: 0; height: 28px;
   background: #161b22; border-top: 1px solid #30363d;
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 14px; z-index: 100;
@@ -68,27 +107,48 @@ body {
 }
 
 /* ── shared floating panel chrome ────────────────────────────────────────── */
-#sidebar, #toggle-panel, #tool-panel, #menu-panel {
+#sidebar, #camera-panel, #toggle-panel, #tool-panel, #menu-panel {
   display: none; background: rgba(13,17,23,.88); border: 1px solid #30363d;
   border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(8px);
 }
 #sidebar {
   max-height: calc(100vh - 104px); overflow-y: auto; min-width: 155px; max-width: 210px;
 }
+#camera-panel { min-width: 166px; padding: 9px 10px; }
+#camera-buttons { display: grid; grid-template-columns: repeat(3, 44px); gap: 6px; }
+#camera-panel .panel-hdr { margin-bottom: 7px; }
+.camera-btn {
+  width: 44px; height: 46px; padding: 5px 3px 4px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  color: #c9d1d9; background: #161b22; border: 1px solid #30363d;
+  border-radius: 6px; cursor: pointer; font-family: inherit;
+  transition: background .12s, border-color .12s, color .12s, transform .12s;
+}
+.camera-btn:hover {
+  color: #fff; background: #1f6feb; border-color: #388bfd; transform: translateY(-1px);
+}
+.camera-btn:active { transform: translateY(0); }
+.camera-btn svg {
+  width: 19px; height: 19px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.camera-btn span { font-size: 9px; line-height: 1; color: inherit; }
+#tool-buttons > #flip-btn, #tool-buttons > #reset-view-btn { display: none; }
 /* min-height:0 lets a tall panel scroll instead of pushing the other one off
  * the bottom of the dock. */
 #toggle-panel, #menu-panel {
   overflow-y: auto; min-width: 155px; max-width: 210px; min-height: 0;
 }
-#sidebar h3, #toggle-panel h3, #tool-panel h3, #menu-panel h3 {
+#sidebar h3, #camera-panel h3, #toggle-panel h3, #tool-panel h3, #menu-panel h3 {
   font-size: 10px; color: #8b949e; text-transform: uppercase;
   letter-spacing: .1em; margin: 0; flex: 1;
 }
 
 /* ── toolbox (wireframe / grid) ───────────────────────────────────────────── */
-#tool-panel { position: fixed; left: 50%; bottom: 6px; transform: translateX(-50%); z-index: 200; display: flex !important; align-items: center; gap: 8px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 4px 8px; }
+#tool-panel { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); z-index: 200; display: flex !important; align-items: center; gap: 8px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 4px 8px; }
 #tool-buttons { display: flex; align-items: center; gap: 6px; }
 #tool-buttons.collapsed { display: none; }
+#camera-buttons.collapsed { display: none; }
 .tool-btn {
   width: 40px; height: 40px; padding: 0;
   background: #21262d; border: 1px solid #30363d;
@@ -105,6 +165,14 @@ body {
 #shading-btn.off { background: #21262d; }
 #texture-btn { background: #1f6feb; }
 #texture-btn.off { background: #21262d; }
+#trackball-btn { background: #1f6feb; }
+#trackball-btn.off { background: #21262d; }
+.nav-gizmo-icon { width: 24px; height: 24px; overflow: visible; }
+.nav-gizmo-icon path { fill: none; stroke-width: 1.7; stroke-linecap: round; }
+.nav-gizmo-icon circle { stroke: none; }
+.nav-gizmo-icon .nav-x { stroke: #f06a6a; fill: #f06a6a; }
+.nav-gizmo-icon .nav-y { stroke: #67c96b; fill: #67c96b; }
+.nav-gizmo-icon .nav-z { stroke: #64a5f5; fill: #64a5f5; }
 .panel-hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; cursor: pointer; }
 #mesh-list.collapsed, #toggle-list.collapsed, #menu-list.collapsed { display: none; }
 .icon-btn {

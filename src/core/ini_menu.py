@@ -30,60 +30,74 @@ _MIN_SLOTS = 2
 def _split_slot_branches(lines):
     """[(slot_var, slot_value, body)] for an `if $X == N / elif ...` chain.
 
-    The chain is matched at whatever nesting level it happens to sit at.
-    Body lines keep their nested if/endif so _parse_branch can read the guards
-    inside.
+    Every chain is matched, including chains nested inside a branch of another
+    slot/navigation chain. Body lines keep their nested if/endif so
+    _parse_branch can read the guards inside.
     """
-    branches, cur, depth, chain_depth = [], None, 0, None
+    cleaned = [raw.split(";")[0].strip() for raw in lines]
 
-    def flush():
-        nonlocal cur
-        if cur:
-            branches.append(tuple(cur))
-        cur = None
+    def scan(block):
+        found, i = [], 0
+        while i < len(block):
+            line = block[i]
+            if not line.lower().startswith("if "):
+                i += 1
+                continue
 
-    for raw in lines:
-        line = raw.split(";")[0].strip()
-        if not line:
-            continue
-        low = line.lower()
+            depth, j = 1, i + 1
+            parts = [(line[3:].strip(), i + 1, None)]
+            end = None
+            while j < len(block):
+                cur = block[j]
+                low = cur.lower()
+                if low.startswith("if "):
+                    depth += 1
+                elif low == "endif":
+                    depth -= 1
+                    if depth == 0:
+                        cond, start, _ = parts[-1]
+                        parts[-1] = (cond, start, j)
+                        end = j
+                        break
+                elif depth == 1:
+                    m_elif = _ELSE_RE.match(cur)
+                    if m_elif or low == "else":
+                        cond, start, _ = parts[-1]
+                        parts[-1] = (cond, start, j)
+                        parts.append((m_elif.group(1).strip() if m_elif else None,
+                                      j + 1, None))
+                j += 1
 
-        if low == "endif":
-            depth = max(0, depth - 1)
-            if chain_depth is not None and depth == chain_depth:
-                flush()
-                chain_depth = None
-            elif cur is not None:
-                cur[2].append(line)
-            continue
+            if end is None:
+                # Tolerate malformed nesting the same way the broader reader
+                # does: keep looking inside instead of claiming a partial chain.
+                i += 1
+                continue
 
-        if low.startswith("if "):
-            m = _SLOT_RE.fullmatch(line[3:].strip())
-            if m and chain_depth is None:
-                flush()
-                chain_depth = depth
-                cur = [m.group(1), m.group(2), []]
-            elif cur is not None:
-                cur[2].append(line)
-            depth += 1
-            continue
+            # Page/mode menus commonly put another clicked-slot chain inside
+            # an outer navigation chain. Search each branch recursively first;
+            # if it contains a real multi-slot chain, the outer integer chain
+            # is navigation/page dispatch rather than a clickable menu itself.
+            nested = []
+            for _cond, start, stop in parts:
+                nested.extend(scan(block[start:stop]))
 
-        at_chain = chain_depth is not None and depth == chain_depth + 1
-        m_elif = re.match(r'(?:else\s+if|elif)\s+(.*)$', line, re.I)
-        if m_elif and at_chain:
-            flush()
-            m = _SLOT_RE.fullmatch(m_elif.group(1).strip())
-            cur = [m.group(1), m.group(2), []] if m else None
-            continue
-        if low == "else" and at_chain:
-            flush()
-            continue
+            first = _SLOT_RE.fullmatch(parts[0][0] or "")
+            slot_parts = []
+            if first:
+                slot_var = first.group(1)
+                for cond, start, stop in parts:
+                    match = _SLOT_RE.fullmatch(cond or "")
+                    if match and match.group(1).lower() == slot_var.lower():
+                        body = [text for text in block[start:stop] if text]
+                        slot_parts.append((match.group(1), match.group(2), body))
+            if len(slot_parts) >= _MIN_SLOTS and not nested:
+                found.extend(slot_parts)
+            found.extend(nested)
+            i = end + 1
+        return found
 
-        if cur is not None:
-            cur[2].append(line)
-
-    flush()
-    return branches
+    return scan(cleaned)
 
 
 def _cycle_values(lo, hi):
@@ -197,7 +211,10 @@ def extract_menu_toggles(sections, var_prefix=None, source=None):
         return canon.get(name.lower(), name)
 
     for name, lines in sections.items():
-        if not name.startswith("CommandList"):
+        # 3DMigoto section names are case-insensitive. Preserve the original
+        # spelling in the payload, but never skip a lowercase/mixed-case
+        # CommandList section during discovery.
+        if not name.lower().startswith("commandlist"):
             continue
         parsed = []
         for _slot_var, slot_value, body in _split_slot_branches(lines):
@@ -210,7 +227,12 @@ def extract_menu_toggles(sections, var_prefix=None, source=None):
         src = first_source(lines) or {}
         for slot_value, (var, values, effects) in parsed:
             var = declared(var)
-            key = _prefixed(f"{name}#{slot_value}", var_prefix)
+            base_key = _prefixed(f"{name}#{slot_value}", var_prefix)
+            key = base_key
+            suffix = 2
+            while key in menu:
+                key = f"{base_key}_{suffix}"
+                suffix += 1
             menu[key] = {
                 "name": var,
                 "slot": int(slot_value),

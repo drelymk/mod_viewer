@@ -256,9 +256,9 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
     `texture_variants`, present only when a toggle conditionally reassigns
     the diffuse at this exact point, is a list of {conditions, tex_key}
     alternatives (same DNF shape as `conditions`) for the UI to pick between
-    as toggle state changes. `texture_options`, present only when the
-    component's section references 2+ distinct diffuses anywhere (regardless
-    of position/condition), is the full deduplicated pool as
+    as toggle state changes. `texture_options`, present when the component's
+    section references one or more distinct, resolved diffuses anywhere
+    (regardless of position/condition), is the full deduplicated pool as
     {tex_key, label} for a manual per-mesh override picker -- same list
     object shared by every draw in the component, so it also serves as the
     component-level "manage textures" pool.
@@ -432,7 +432,11 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                         variants.append({"conditions": v["conditions"], "tex_key": key})
                 if len(variants) > 1:
                     entry["texture_variants"] = variants
-            if len(texture_options) > 1:
+            # Keep even a single resolved texture in the UI pool. A component
+            # with one diffuse still has a useful texture to display/manage;
+            # only components with no resolved textures need the frontend's
+            # empty fallback pool.
+            if texture_options:
                 entry["texture_options"] = texture_options
             # The literal `drawindexed = count, start, base` values, so the UI can
             # show a meaningful per-draw label instead of a bare "#1"/"#2" index.

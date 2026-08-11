@@ -383,6 +383,16 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         if not buf: continue
 
         pos_ri  = _res_get(resources, buf["position"])
+        if not pos_ri.get("filename"):
+            # A bare shape-keyed container (e.g. `[ResourceXPosition]` with no
+            # filename of its own, only child sections like `.B`/`.Pre` for the
+            # rest pose and per-morph deltas a compute shader blends at
+            # runtime -- this viewer doesn't run those shaders, so it just
+            # needs *a* file-backed pose). `.B` is 3DMigoto's own convention
+            # for the base/rest buffer (see this ini's `[Present]` `copy_desc
+            # ...Position.B`); falling back to it is exactly what real mods
+            # already treat as "the" position when nothing else is bound.
+            pos_ri = _res_get(resources, buf["position"] + ".B")
         tc_ri   = _res_get(resources, buf["texcoord"])
         ib_ri   = _res_get(resources, ib_res)
         diff_ri = _res_get(resources, info["diffuse"]) if info["diffuse"] else {}

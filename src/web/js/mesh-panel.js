@@ -2,7 +2,7 @@
 // source ini (mirroring the Toggle panel); within each, one collapsible group
 // per component, one checkbox per draw call within it.
 
-import { buildMesh } from './mesh-factory.js';
+import { buildMesh, setMeshTexture } from './mesh-factory.js';
 import { activeMeshes, addMesh, applyMeshVisibility, registerGroup,
          setManualTexOverride } from './visibility.js';
 import { selectMesh } from './selection.js';
@@ -117,17 +117,38 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath, onPoolChan
 /** Collapsed-by-default child list of every diffuse this mesh's component
  * ever references (the shared `pool` array -- core/mesh_builder.py's
  * `texture_options`, or the fresh empty array a component with none loaded
- * yet falls back to in buildMeshPanel), plus synthetic "(Automatic)" and
- * "(None)" entries -- a radio-style single-select that drives
- * mesh.userData.manualTexOverride (see visibility.js).
+ * yet falls back to in buildMeshPanel) -- a radio-style single-select that
+ * drives mesh.userData.manualTexOverride (see visibility.js).
  *
  * Returns `{wrap, render}`: `wrap` is the list element (append once);
  * `render()` rebuilds its rows from `pool`'s CURRENT contents and must be
  * re-invoked after the "manage textures" popup adds/removes an entry (see
  * buildMeshPanel's refreshers array), since `pool` starts empty for a
  * component with nothing loaded yet and is mutated in place afterward --
- * a one-time snapshot at build time would never see what gets added later. */
-function buildTextureList(pool, mesh, onActiveChanged) {
+ * a one-time snapshot at build time would never see what gets added later.
+ *
+ * Clicking a row selects it (mesh.userData.manualTexOverride = that
+ * tex_key, sticky until de-selected); clicking the already-selected row
+ * de-selects it (clears back to undefined, mesh reverts to its ini
+ * default). `groupMeshes` is the ordered list for this component; texture
+ * inheritance is recomputed from top to bottom after every selection. */
+function recomputeTextureRuns(groupMeshes) {
+  let activeKey = null;
+  for (const item of groupMeshes) {
+    if (item.userData.manualTexOverride !== undefined) {
+      activeKey = item.userData.manualTexOverride;
+    } else if (item.userData.automaticTextureBoundary
+               && !item.userData.textureHighlightDisabled) {
+      // Follow the texture currently resolved by toggle/menu state, not the
+      // immutable load-time default. This boundary then applies downward only
+      // until the next highlighted boundary in this component.
+      activeKey = item.userData.resolvedTexKey;
+    }
+    setMeshTexture(item, activeKey);
+  }
+}
+
+function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
   const wrap = document.createElement('div');
   wrap.className = 'tex-list collapsed';
 
@@ -142,8 +163,22 @@ function buildTextureList(pool, mesh, onActiveChanged) {
       row.className = 'tex-item';
       row.textContent = label;
       row.addEventListener('click', () => {
-        setManualTexOverride(mesh, value);
-        selectRow(row);
+        const current = mesh.userData.manualTexOverride;
+        const autoHighlighted = current === undefined
+          && mesh.userData.automaticTextureBoundary
+          && mesh.userData.resolvedTexKey === value
+          && !mesh.userData.textureHighlightDisabled;
+        // Click the already-selected row -> de-select (revert to ini default).
+        const newVal = (current === value || autoHighlighted) ? undefined : value;
+        if (newVal === undefined && (current === value || autoHighlighted)) {
+          mesh.userData.textureHighlightDisabled = true;
+          setManualTexOverride(mesh, newVal);
+        } else {
+          mesh.userData.textureHighlightDisabled = false;
+          setManualTexOverride(mesh, newVal);
+        }
+        recomputeTextureRuns(groupMeshes);
+        selectRow(newVal === undefined ? null : row);
         if (onActiveChanged) onActiveChanged();
       });
       wrap.appendChild(row);
@@ -151,17 +186,25 @@ function buildTextureList(pool, mesh, onActiveChanged) {
       return row;
     }
 
+    // With no manual override, highlight only the first mesh using each
+    // resolved texture. Toggle/menu changes update that boundary's selected
+    // row to its newly resolved texture; followers remain unselected.
     const current = mesh.userData.manualTexOverride;
-    const autoRow = addRow('(Automatic)', undefined);
-    const noneRow = addRow('(None)', null);
-    let matched = current === undefined ? autoRow : (current === null ? noneRow : null);
+    const autoKey = mesh.userData.automaticTextureBoundary
+      ? mesh.userData.resolvedTexKey
+      : undefined;
+    const isAutomaticBoundary = current === undefined && !!autoKey;
+    const selectedKey = current === undefined && !mesh.userData.textureHighlightDisabled
+      ? (isAutomaticBoundary ? autoKey : undefined)
+      : current;
+    let matched = null;
     for (const opt of pool) {
       const row = addRow(opt.label, opt.tex_key);
-      if (current === opt.tex_key) matched = row;
+      if (selectedKey === opt.tex_key) matched = row;
     }
     // A removed option that was the active manual pick has nothing to
     // highlight -- leave every row unselected rather than falsely claiming
-    // Automatic, since the mesh's actual texKey is untouched by removal.
+    // it reverted to automatic, since the mesh's actual texKey is untouched.
     if (matched) selectRow(matched);
   }
 
@@ -175,7 +218,8 @@ function buildTextureList(pool, mesh, onActiveChanged) {
  * Returns `{wrap, renderTexList}` -- the caller collects `renderTexList`
  * alongside every other mesh in the component so the "manage textures"
  * popup can refresh them all after an add/remove (see buildMeshPanel). */
-function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb, onActiveChanged) {
+function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
+                      groupMeshes, onActiveChanged) {
   const row = document.createElement('div');
   row.className = 'draw-item';
 
@@ -189,6 +233,7 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb, onA
     mesh.userData.manualVisible = cb.checked;
     mesh.userData.manuallyToggled = true;
     applyMeshVisibility(mesh);
+    updateStateIndicator(mesh);
     const any = itemCbs.some(c => c.checked);
     const all = itemCbs.every(c => c.checked);
     masterCb.indeterminate = any && !all;
@@ -196,7 +241,9 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb, onA
   });
   itemCbs.push(cb);
 
-  const { wrap: texList, render: renderTexList } = buildTextureList(pool, mesh, onActiveChanged);
+  const { wrap: texList, render: renderTexList } = buildTextureList(
+    pool, mesh, groupMeshes, onActiveChanged);
+  mesh.userData.updateTextureList = renderTexList;
 
   const chevron = document.createElement('span');
   chevron.className = 'group-toggle collapsed';
@@ -209,8 +256,15 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb, onA
   labelSpan.textContent = mesh.userData.displayName || label;
   row.append(cb, chevron, labelSpan);
   const updateStateIndicator = (m) => {
+    cb.checked = m.visible;
     cb.textContent = m.userData.manuallyToggled ? (m.visible ? '✅' : '🟨') : (m.visible ? '✅' : '🟥');
-    cb.title = m.userData.manuallyToggled ? 'Manually toggled in the viewer' : (m.visible ? 'Visible by default' : 'Hidden by the mod default state');
+    if (m.userData.manuallyToggled) {
+      cb.title = 'Manually toggled in the viewer';
+    } else if (m.visible === (m.userData.loadedVisible !== false)) {
+      cb.title = m.visible ? 'Visible by default' : 'Hidden by the mod default state';
+    } else {
+      cb.title = m.visible ? 'Visible under the current mod state' : 'Hidden under the current mod state';
+    }
   };
   mesh.userData.updateStateIndicator = updateStateIndicator;
   updateStateIndicator(mesh);
@@ -271,15 +325,15 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
       // Every mesh in a component shares the SAME texture_options array
       // object (see mesh_builder.build_mesh_payload) -- read it once so
       // add/remove via the popup is reflected across every mesh's own list.
-      // A component with fewer than 2 diffuses in the ini carries no such
-      // array at all (build_mesh_payload only attaches one past that
-      // threshold) -- fall back to a fresh empty array so the "manage
-      // textures" popup still has something to push an added texture into;
-      // it's captured by this closure, so reopening the popup for the same
-      // component within the session sees what was added.
+      // A component with no resolved diffuses carries no such array -- fall
+      // back to a fresh empty array so the "manage textures" popup still has
+      // something to push an added texture into; it's captured by this
+      // closure, so reopening the popup for the same component within the
+      // session sees what was added.
       const texturePool = names.map(n => payload[n].texture_options).find(Boolean) || [];
 
       const itemCbs = [], itemObjs = [], texListRenderers = [];
+      const highlightedDefaults = new Set();
       const onActiveChanged = () => updateTexButtonState(texBtn, itemObjs);
       // Re-renders every mesh's own texture list in this component after the
       // "manage textures" popup adds/removes an entry from the shared pool
@@ -301,11 +355,21 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
         mesh.userData.modPath = modPath;
         addMesh(mesh, payload[name].conditions, payload[name].sources, payload[name].texture_variants);
         itemObjs.push(mesh);
+        // The first mesh for each resolved texture becomes an automatic
+        // boundary. The ordered pass below propagates each boundary only
+        // downward, stopping at the next one in this component.
+        const defaultKey = mesh.userData.defaultTexKey;
+        if (defaultKey && !highlightedDefaults.has(defaultKey)) {
+          highlightedDefaults.add(defaultKey);
+          mesh.userData.automaticTextureBoundary = true;
+        }
         const { wrap, renderTexList } = buildDrawRow(
-          name, groupName, payload[name], mesh, texturePool, itemCbs, masterCb, onActiveChanged);
+          name, groupName, payload[name], mesh, texturePool, itemCbs, masterCb,
+          itemObjs, onActiveChanged);
         texListRenderers.push(renderTexList);
         itemsWrap.appendChild(wrap);
       }
+      recomputeTextureRuns(itemObjs);
       updateTexButtonState(texBtn, itemObjs);
 
       masterCb.addEventListener('change', () => {
@@ -320,10 +384,14 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
         });
       });
 
-      registerGroup({ masterCb, itemCbs, itemObjs, onTexChanged: onActiveChanged });
+      registerGroup({
+        masterCb, itemCbs, itemObjs, onTexChanged: onActiveChanged,
+        applyTextureRuns: () => recomputeTextureRuns(itemObjs),
+      });
     }
   }
 
   document.getElementById('sidebar').style.display = 'block';
+  document.getElementById('camera-panel').style.display = 'block';
   return activeMeshes;
 }
