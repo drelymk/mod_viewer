@@ -354,6 +354,7 @@ export function frameView(meshes = []) {
 /** Restore the camera framing captured for the current model. */
 export function resetView() {
   if (!homeView) return;
+  viewSnap = null;
   // Restore the orientation captured after automatic upright correction.
   if (homeView.meshes) {
     homeView.meshes.forEach(({ mesh, quaternion, position }) => {
@@ -361,13 +362,14 @@ export function resetView() {
       mesh.position.copy(position);
     });
   }
-  camera.position.copy(homeView.position);
-  controls.target.copy(homeView.target);
-  camera.near = homeView.near;
-  camera.far = homeView.far;
+  // ArcballControls owns internal camera/gizmo matrices in addition to the
+  // public camera and target. Copying only those public values lets the next
+  // controls.update() reapply the stale orbit state. reset() restores the
+  // fitted state captured by saveState() below, keeping both layers aligned.
+  controls.reset();
   clipNear = camera.near;
   clipFar = camera.far;
-  camera.updateProjectionMatrix();
+  updateCameraViewport();
   controls.update();
 }
 
@@ -423,4 +425,9 @@ export function fitTo(meshes) {
       position: mesh.position.clone(),
     })),
   };
+  // The controller's constructor saved the generic startup camera. Replace
+  // that baseline with this model's fitted view so Reset returns here.
+  camera.updateMatrix();
+  controls.update();
+  controls.saveState();
 }

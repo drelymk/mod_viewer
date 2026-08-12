@@ -70,25 +70,14 @@ def hydrate_textures(folder_path, payload):
             continue
         highlighted[name] = {"tex_key": key, "label": label, "manual": manual}
 
-    discovered = {}
-    seen_defaults = set()
+    restored = {}
     for name, entry in payload.items():
         if name.startswith("__") or not isinstance(entry, dict) or entry.get("error"):
             continue
         mesh_key = _mesh_key(name, entry)
         state = highlighted.get(mesh_key)
-        if state is None and not saved:
-            key = entry.get("tex_key")
-            marker = ((entry.get("source"), entry.get("component")), key)
-            if key and marker not in seen_defaults:
-                seen_defaults.add(marker)
-                options = entry.get("texture_options") or []
-                match = next((opt for opt in options if opt.get("tex_key") == key), None)
-                label = (match.get("label") if match else
-                         os.path.splitext(os.path.basename(key))[0])
-                state = {"tex_key": key, "label": label, "manual": False}
         if state:
-            discovered[mesh_key] = state
+            restored[mesh_key] = state
             if state["manual"]:
                 entry["saved_texture_override"] = state["tex_key"]
 
@@ -102,8 +91,8 @@ def hydrate_textures(folder_path, payload):
         pool = pools.setdefault(group, [])
         candidates = list(entry.get("texture_options") or [])
         mesh_key = _mesh_key(name, entry)
-        if mesh_key in discovered:
-            state = discovered[mesh_key]
+        if mesh_key in restored:
+            state = restored[mesh_key]
             candidates.append({"tex_key": state["tex_key"], "label": state["label"]})
         for opt in candidates:
             if (isinstance(opt, dict) and isinstance(opt.get("tex_key"), str)
@@ -118,13 +107,12 @@ def hydrate_textures(folder_path, payload):
             entry["texture_options"] = options
         else:
             entry.pop("texture_options", None)
-        for key in [opt["tex_key"] for opt in options]:
+        state = restored.get(_mesh_key(name, entry))
+        for key in ([state["tex_key"]] if state else []):
             if key in payload["__textures__"]:
                 continue
             encoded = encode_texture_file(folder_path, os.path.join(folder_path, key))
             if encoded and not encoded.get("error"):
                 payload["__textures__"][encoded["tex_key"]] = encoded["uri"]
 
-    if discovered or "textures" in data:
-        save_textures(folder_path, discovered)
-    return discovered
+    return restored

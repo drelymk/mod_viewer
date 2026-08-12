@@ -22,6 +22,10 @@ export function addTexture(key, uri) {
   delete loaders[key];
 }
 
+export function hasTexture(key) {
+  return !!(key && registry[key]);
+}
+
 function getTexture(key) {
   if (!key || !registry[key]) return null;
   if (!loaders[key]) loaders[key] = new THREE.TextureLoader().load(registry[key]);

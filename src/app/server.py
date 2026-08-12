@@ -15,10 +15,12 @@ point at either the vendored copy or the CDN.
 """
 
 import functools
+import base64
 import http.server
 import os
 import socketserver
 import threading
+import uuid
 
 from . import features, paths
 
@@ -29,6 +31,39 @@ CDN_ADDONS = f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/"
 REPO_URL = "https://github.com/drelymk/mod_viewer"
 
 _VENDOR_PREFIX = "/vendor/"
+_GEOMETRY_PREFIX = "/geometry/"
+_geometry_lock = threading.RLock()
+_geometry_blobs = {}
+
+
+def publish_geometry(blob):
+    """Publish one load's packed geometry and discard every older load."""
+    token = uuid.uuid4().hex
+    with _geometry_lock:
+        _geometry_blobs.clear()
+        _geometry_blobs[token] = bytes(blob)
+    return f"{_GEOMETRY_PREFIX}{token}"
+
+
+def publish_payload_geometry(payload):
+    """Replace mesh base64 fields with offsets into one published blob."""
+    blob = bytearray()
+    for name, entry in payload.items():
+        if name.startswith("__") or not isinstance(entry, dict) or entry.get("error"):
+            continue
+        for field in ("pos", "uv", "idx"):
+            encoded = entry.get(field)
+            if not isinstance(encoded, str):
+                continue
+            raw = base64.b64decode(encoded)
+            offset = len(blob)
+            blob.extend(raw)
+            entry[field] = {"offset": offset, "length": len(raw)}
+    if blob:
+        payload["__geometry__"] = {
+            "url": publish_geometry(blob),
+            "length": len(blob),
+        }
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):
@@ -38,8 +73,11 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     template_vars: dict = {}
 
     def do_GET(self):
-        if self._request_path() in ("/", "/index.html"):
+        path = self._request_path()
+        if path in ("/", "/index.html"):
             return self._send_index()
+        if path.startswith(_GEOMETRY_PREFIX):
+            return self._send_geometry(path[len(_GEOMETRY_PREFIX):])
         return super().do_GET()
 
     def translate_path(self, path):
@@ -91,6 +129,19 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_geometry(self, token):
+        with _geometry_lock:
+            blob = _geometry_blobs.pop(token, None)
+        if blob is None:
+            self.send_error(404, "Geometry load expired")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(blob)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(blob)
 
 
 def start():

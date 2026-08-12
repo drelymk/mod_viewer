@@ -2,7 +2,7 @@
 // source ini (mirroring the Toggle panel); within each, one collapsible group
 // per component, one checkbox per draw call within it.
 
-import { buildMesh, setMeshTexture } from './mesh-factory.js';
+import { addTexture, buildMesh, hasTexture, setMeshTexture } from './mesh-factory.js';
 import { activeMeshes, addMesh, applyMeshVisibility, registerGroup,
          setManualTexOverride } from './visibility.js';
 import { selectMesh } from './selection.js';
@@ -148,6 +148,19 @@ function recomputeTextureRuns(groupMeshes) {
   }
 }
 
+async function ensureTextureLoaded(mesh, texKey) {
+  if (!texKey || hasTexture(texKey)) return true;
+  const api = window.pywebview?.api;
+  // Browser-only fixtures may exercise selection without the native bridge;
+  // keep the state logic testable even though no image can be fetched there.
+  if (!api?.load_texture_file) return true;
+  const result = await api.load_texture_file(
+    mesh.userData.modPath, texKey);
+  if (!result || result.error) return false;
+  addTexture(result.tex_key, result.uri);
+  return true;
+}
+
 function metadataKey(name, entry) {
   const component = entry.component || name.replace(/-\d+$/, '');
   const draw = entry.drawindexed ? entry.drawindexed.join(',') : 'whole';
@@ -195,7 +208,7 @@ function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
       const row = document.createElement('div');
       row.className = 'tex-item';
       row.textContent = label;
-      row.addEventListener('click', () => {
+      row.addEventListener('click', async () => {
         const current = mesh.userData.manualTexOverride;
         const autoHighlighted = current === undefined
           && mesh.userData.automaticTextureBoundary
@@ -203,6 +216,10 @@ function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
           && !mesh.userData.textureHighlightDisabled;
         // Click the already-selected row -> de-select (revert to ini default).
         const newVal = (current === value || autoHighlighted) ? undefined : value;
+        // Preserve synchronous selection for textures already in the startup
+        // registry; only yield to the bridge for a genuinely lazy option.
+        if (newVal !== undefined && !hasTexture(newVal)
+            && !await ensureTextureLoaded(mesh, newVal)) return;
         if (newVal === undefined && (current === value || autoHighlighted)) {
           mesh.userData.textureHighlightDisabled = true;
           setManualTexOverride(mesh, newVal);
@@ -322,7 +339,7 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
       if (apply && !next) return;
       finished = true;
       labelSpan.textContent = apply ? next : original;
-      if (!apply) return;
+      if (!apply || next === original) return;
       mesh.userData.displayName = next;
       mesh.userData.meshNames[mesh.userData.metadataKey] = next;
       if (mesh.userData.modPath) {

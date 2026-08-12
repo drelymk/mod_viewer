@@ -8,6 +8,7 @@ import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
 import { buildMenuPanel } from './menu-panel.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
+import { setGeometryBlob } from './decode.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -67,9 +68,20 @@ function clearScene() {
   $('menu-panel').style.display = 'none';
 }
 
-function displayMeshPayload(payload) {
+async function displayMeshPayload(payload) {
   clearScene();
   $('hint').style.display = 'none';
+
+  const geometry = payload.__geometry__;
+  if (geometry) {
+    const response = await fetch(geometry.url, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Geometry download failed (${response.status}).`);
+    const blob = await response.arrayBuffer();
+    if (blob.byteLength !== geometry.length) throw new Error('Geometry download was incomplete.');
+    setGeometryBlob(blob);
+  } else {
+    setGeometryBlob(null);
+  }
 
   lastToggles = payload.__toggles__ || {};
   setTextures(payload.__textures__);
@@ -92,7 +104,13 @@ async function loadModAt(path) {
     await alertDialog('Could not load mod:\n\n' + data.error);
     return;
   }
-  displayMeshPayload(data);
+  try {
+    await displayMeshPayload(data);
+  } catch (error) {
+    showLoading(false);
+    await alertDialog('Could not load mod geometry:\n\n' + error.message);
+    return;
+  }
   await refreshPendingState();
 
   // Lead with the folder name; the full path is long and rarely the useful part.

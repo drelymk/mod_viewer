@@ -18,7 +18,8 @@ from core.ini_parser import (build_draw_groups, extract_menu_toggles,
                         extract_variable_defaults, find_inis, merge_sections)
 from core.mesh_builder import build_mesh_payload
 
-RESERVED_KEYS = ("__textures__", "__toggles__", "__menu__", "__mesh_names__")
+RESERVED_KEYS = ("__textures__", "__toggles__", "__menu__", "__mesh_names__",
+                 "__geometry__")
 
 
 def _ini_scope(ini_path, folder_path, multi):

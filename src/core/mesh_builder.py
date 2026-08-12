@@ -1,12 +1,49 @@
 """3DMigoto binary buffer readers and in-memory mesh payload builder."""
 
-import re, struct, os, base64, io
+import re, struct, os, base64, io, threading
+from collections import OrderedDict
 
 # ── Buffer constants ───────────────────────────────────────────────────────────
 POSITION_STRIDE   = 40
 POSITION_OFFSET   = 0
 DEFAULT_UV_OFFSET = 4
 INDEX_SIZE        = 4
+
+# Encoded PNG data URIs are expensive to regenerate during authoring reloads.
+# Keep only the current mod's entries, bounded by encoded string size. A noisy
+# 2048x2048 RGB image can occupy ~16 MiB after base64, so 256 MiB retains about
+# sixteen worst-case textures (and many more typical game textures).
+_TEXTURE_CACHE_LIMIT = 256 * 1024 * 1024
+_texture_cache = OrderedDict()
+_texture_cache_bytes = 0
+_texture_cache_mod = None
+_texture_cache_lock = threading.RLock()
+
+
+def _begin_texture_cache(mod_dir):
+    global _texture_cache_mod, _texture_cache_bytes
+    root = os.path.normcase(os.path.abspath(mod_dir))
+    with _texture_cache_lock:
+        if root != _texture_cache_mod:
+            _texture_cache.clear()
+            _texture_cache_bytes = 0
+            _texture_cache_mod = root
+
+
+def _cache_texture(key, uri):
+    global _texture_cache_bytes
+    size = len(uri.encode("ascii"))
+    if size > _TEXTURE_CACHE_LIMIT:
+        return
+    with _texture_cache_lock:
+        previous = _texture_cache.pop(key, None)
+        if previous is not None:
+            _texture_cache_bytes -= previous[1]
+        _texture_cache[key] = (uri, size)
+        _texture_cache_bytes += size
+        while _texture_cache_bytes > _TEXTURE_CACHE_LIMIT:
+            _old_key, (_old_uri, old_size) = _texture_cache.popitem(last=False)
+            _texture_cache_bytes -= old_size
 
 
 def _res_get(resources, name):
@@ -57,7 +94,7 @@ _MIN_AXIS_SPREAD = 1e-4   # below this an axis is constant, i.e. not a real UV s
 _MIN_IN_RANGE    = 0.95   # fraction of sampled UVs that must land in [0, 2]
 
 
-def _detect_uv_best(tc_path, stride, n=4096):
+def _detect_uv_best(tc_path, stride, n=4096, data=None):
     """Try (offset 0 or 4) x (float16 or float32) and return the (uv_off, fmt)
     with the largest UV spread where all values are within [0, 2].
 
@@ -93,13 +130,14 @@ def _detect_uv_best(tc_path, stride, n=4096):
     UV than there are positions. A fitting offset keeps that pathological case
     merely useless (flat zero UVs) instead of misaligned.
     """
-    size = os.path.getsize(tc_path)
+    if data is None:
+        with open(tc_path, 'rb') as f:
+            data = f.read()
+    size = len(data)
     total = size // stride if stride else 0
     if not total:
         return (DEFAULT_UV_OFFSET, '<ee')
     step = max(1, total // n)   # stride the sample across the entire buffer
-    with open(tc_path, 'rb') as f:
-        data = f.read()
     # Rank every in-range candidate; prefer two live axes over a bigger total.
     scored = []
     for uv_off in (0, 4):
@@ -143,13 +181,16 @@ def _detect_uv_best(tc_path, stride, n=4096):
     return (0, '<ee')
 
 
-def read_texcoords(buf_path, stride, uv_off=DEFAULT_UV_OFFSET, uv_fmt='<ee'):
+def read_texcoords(buf_path, stride, uv_off=DEFAULT_UV_OFFSET, uv_fmt='<ee',
+                   data=None):
     """Read one UV pair per vertex. The bound accounts for uv_fmt's real width
     (float32 pairs are 8 bytes, not 4), so a buffer whose last vertex is
     truncated is dropped instead of raising out of struct.unpack_from."""
     uvs = []
     fmtsize = struct.calcsize(uv_fmt)
-    with open(buf_path, "rb") as f: data = f.read()
+    if data is None:
+        with open(buf_path, "rb") as f:
+            data = f.read()
     for off in range(0, len(data) - uv_off - fmtsize + 1, stride):
         uvs.append(struct.unpack_from(uv_fmt, data, off + uv_off))
     return uvs
@@ -178,6 +219,14 @@ def _b64u(arr):
 def _encode_texture(dds_path, max_size=2048):
     """DDS → PNG in-memory → base64 data URI.  Returns None on failure."""
     try:
+        stat = os.stat(dds_path)
+        cache_key = (os.path.normcase(os.path.abspath(dds_path)), stat.st_size,
+                     stat.st_mtime_ns, max_size)
+        with _texture_cache_lock:
+            cached = _texture_cache.pop(cache_key, None)
+            if cached is not None:
+                _texture_cache[cache_key] = cached
+                return cached[0]
         from PIL import Image
         img = Image.open(dds_path)
         # Convert to RGB before thumbnail: LANCZOS on RGBA with alpha=0 premultiplies
@@ -187,7 +236,9 @@ def _encode_texture(dds_path, max_size=2048):
             img.thumbnail((max_size, max_size), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        _cache_texture(cache_key, uri)
+        return uri
     except Exception as e:
         print(f"  texture skipped: {e}")
         return None
@@ -203,6 +254,7 @@ def encode_texture_file(mod_dir, abs_path):
     anything that doesn't stay within it, the same constraint `filename =`
     resolution is already held to.
     """
+    _begin_texture_cache(mod_dir)
     try:
         rel = os.path.relpath(abs_path, mod_dir)
     except ValueError:
@@ -263,11 +315,14 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
     object shared by every draw in the component, so it also serves as the
     component-level "manage textures" pool.
     """
+    _begin_texture_cache(mod_dir)
     result:    dict = {}
     tex_uris:  dict = {}  # basename → data URI  (encoded once)
     tex_cache: dict = {}  # full path → basename  (dedup lookup)
     ib_cache:  dict = {}  # absolute ib path → raw bytes
     buf_cache: dict = {}  # (pos_path, pos_stride, tc_path, tc_stride) → (positions, uvs)
+
+    raw_buf_cache = {}
 
     for grp in groups:
         pos_path  = _safe_join(mod_dir, grp["position_file"])
@@ -285,13 +340,21 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
         def _load_buf(pos_path, pos_stride, tc_path, tc_stride):
             key = (pos_path, pos_stride, tc_path, tc_stride)
             if key not in buf_cache:
-                positions = read_positions(pos_path, stride=pos_stride)
-                uv_off, uv_fmt = _detect_uv_best(tc_path, tc_stride)
-                uvs = read_texcoords(tc_path, tc_stride, uv_off, uv_fmt)
-                buf_cache[key] = (positions, uvs)
+                if pos_path not in raw_buf_cache:
+                    with open(pos_path, "rb") as fh:
+                        raw_buf_cache[pos_path] = fh.read()
+                if tc_path not in raw_buf_cache:
+                    with open(tc_path, "rb") as fh:
+                        raw_buf_cache[tc_path] = fh.read()
+                pos_data = raw_buf_cache[pos_path]
+                tc_data = raw_buf_cache[tc_path]
+                uv_off, uv_fmt = _detect_uv_best(
+                    tc_path, tc_stride, data=tc_data)
+                buf_cache[key] = (pos_data, pos_stride, tc_data, tc_stride,
+                                  uv_off, uv_fmt)
             return buf_cache[key]
 
-        positions, uvs = _load_buf(pos_path, pos_stride, tc_path, tc_stride)
+        buffers = _load_buf(pos_path, pos_stride, tc_path, tc_stride)
         if ib_path not in ib_cache:
             ib_cache[ib_path] = open(ib_path, "rb").read()
 
@@ -342,7 +405,9 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
         if max_draws:
             unique = unique[:max_draws]
 
-        # Encode texture once; store URI in shared registry, key per draw
+        # Resolve texture keys cheaply. Pool-only options are encoded lazily
+        # when selected in the UI; defaults and toggle variants are still
+        # encoded now so synchronous visibility refreshes remain instant.
         def _tex_key(dds_path):
             if not dds_path or not os.path.exists(dds_path):
                 return None
@@ -350,10 +415,14 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                 # Keyed by path, not basename: variant mods routinely keep
                 # same-named diffuses in per-variant folders (Texture\00..\04).
                 key = os.path.relpath(dds_path, mod_dir).replace(os.sep, "/")
-                if key not in tex_uris:
-                    tex_uris[key] = _encode_texture(dds_path) or ""
                 tex_cache[dds_path] = key
             return tex_cache[dds_path]
+
+        def _ensure_texture(dds_path):
+            key = _tex_key(dds_path)
+            if key and key not in tex_uris:
+                tex_uris[key] = _encode_texture(dds_path) or ""
+            return key
 
         # Every diffuse this component's ini ever references, resolved once
         # and shared by every draw in the group -- the UI's per-mesh texture
@@ -393,32 +462,50 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
             remap = {old: new for new, old in enumerate(used)}
 
             # A mid-section `vb0/vb1/vb2 = ...` reassignment (paired with `ib`).
-            draw_positions, draw_uvs = positions, uvs
+            draw_buffers = buffers
             if draw.get("position_file") and draw.get("texcoord_file"):
                 draw_pos_path = _safe_join(mod_dir, draw["position_file"])
                 draw_tc_path  = _safe_join(mod_dir, draw["texcoord_file"])
                 if not (draw_pos_path and draw_tc_path
                         and os.path.exists(draw_pos_path) and os.path.exists(draw_tc_path)):
                     continue
-                draw_positions, draw_uvs = _load_buf(
+                draw_buffers = _load_buf(
                     draw_pos_path, draw.get("position_stride", pos_stride),
                     draw_tc_path, draw.get("texcoord_stride", tc_stride))
 
-            pos_arr, uv_arr = [], []
-            for vi in used:
-                x, y, z = draw_positions[vi] if vi < len(draw_positions) else (0., 0., 0.)
-                pos_arr += [x, y, z]
-                if draw_uvs:
-                    u, v = draw_uvs[vi] if vi < len(draw_uvs) else (0., 0.)
-                    uv_arr += [u, 1.0 - v]   # flip V for Three.js
+            pos_data, draw_pos_stride, tc_data, draw_tc_stride, uv_off, uv_fmt = draw_buffers
+            uv_size = struct.calcsize(uv_fmt)
+            pos_bytes = bytearray(len(used) * 12)
+            uv_bytes = bytearray(len(used) * 8) if tc_data else None
+            for out_i, vi in enumerate(used):
+                pos_off = vi * draw_pos_stride + POSITION_OFFSET
+                if pos_off + 12 <= len(pos_data):
+                    x, y, z = struct.unpack_from("<fff", pos_data, pos_off)
+                else:
+                    x, y, z = 0., 0., 0.
+                struct.pack_into("<fff", pos_bytes, out_i * 12, x, y, z)
+                if tc_data:
+                    tc_off = vi * draw_tc_stride + uv_off
+                    if tc_off + uv_size <= len(tc_data):
+                        u, v = struct.unpack_from(uv_fmt, tc_data, tc_off)
+                    else:
+                        u, v = 0., 0.
+                    struct.pack_into("<ff", uv_bytes, out_i * 8,
+                                     u, 1.0 - v)  # flip V for Three.js
 
+            idx_bytes = bytearray(len(raw) * 4)
+            for out_i, value in enumerate(raw):
+                struct.pack_into("<I", idx_bytes, out_i * 4, remap[value])
 
-            idx_arr = [remap[v] for v in raw]
-
-            default_key = _tex_key(_safe_join(mod_dir, draw.get("texture_default_file")))
-            entry: dict = {"pos": _b64f(pos_arr), "idx": _b64u(idx_arr), "tex_key": default_key}
-            if uv_arr:
-                entry["uv"] = _b64f(uv_arr)
+            default_key = _ensure_texture(
+                _safe_join(mod_dir, draw.get("texture_default_file")))
+            entry: dict = {
+                "pos": base64.b64encode(pos_bytes).decode(),
+                "idx": base64.b64encode(idx_bytes).decode(),
+                "tex_key": default_key,
+            }
+            if uv_bytes:
+                entry["uv"] = base64.b64encode(uv_bytes).decode()
             if draw.get("conditions"):
                 entry["conditions"] = draw["conditions"]
             if draw.get("sources"):
@@ -427,7 +514,7 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
             if draw.get("texture_variants"):
                 variants = []
                 for v in draw["texture_variants"]:
-                    key = _tex_key(_safe_join(mod_dir, v["file"]))
+                    key = _ensure_texture(_safe_join(mod_dir, v["file"]))
                     if key:
                         variants.append({"conditions": v["conditions"], "tex_key": key})
                 if len(variants) > 1:

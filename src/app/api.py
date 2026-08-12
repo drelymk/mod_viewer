@@ -5,11 +5,13 @@ deliberately small: anything that doesn't need a window or a native dialog
 belongs in mod_loader instead.
 """
 
+import os
+
 import webview
 
 from core.mesh_builder import encode_texture_file
 
-from . import edit_session, metadata, mod_loader, toggle_api
+from . import edit_session, metadata, mod_loader, server, toggle_api
 
 
 class ModViewerAPI:
@@ -38,6 +40,11 @@ class ModViewerAPI:
             return None
         return encode_texture_file(folder_path, result[0])
 
+    def load_texture_file(self, folder_path, tex_key):
+        """Encode a known mod-relative picker texture on first use."""
+        return encode_texture_file(folder_path,
+                                   os.path.join(folder_path, tex_key))
+
     def load_mod(self, folder_path):
         # Preview any pending, not-yet-exported edits over the real files.
         overrides = edit_session.overrides_for(folder_path)
@@ -48,6 +55,7 @@ class ModViewerAPI:
             saved_metadata = metadata.load(folder_path)
             result["__mesh_names__"] = saved_metadata.get("mesh_names", {})
             metadata.hydrate_textures(folder_path, result)
+            server.publish_payload_geometry(result)
         return result
 
     def save_mesh_names(self, folder_path, names):
