@@ -86,10 +86,13 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 14px; z-index: 100;
 }
-#app-version { font-size: 11px; color: #8b949e; }
+#app-version {
+  font-size: 11px; line-height: 1; color: #8b949e;
+  transform: translateY(-1px);
+}
 #github-link {
   display: flex; align-items: center; color: #8b949e;
-  border-radius: 4px; padding: 3px;
+  border-radius: 4px; padding: 3px; transform: translateY(-1px);
 }
 #github-link:hover { color: #e6edf3; background: #21262d; }
 
@@ -228,6 +231,13 @@ body {
 .draw-item input { width: 12px; height: 12px; cursor: pointer; accent-color: #3fb950; flex-shrink: 0; }
 .mesh-state-btn { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; font-size: 13px; line-height: 18px; cursor: pointer; flex-shrink: 0; }
 .draw-item.selected { background: rgba(88,166,255,.15); outline: 1px solid #58a6ff; border-radius: 4px; }
+.mesh-name { min-width: 0; flex: 1; }
+.draw-item .mesh-name-input {
+  width: 100%; min-width: 0; box-sizing: border-box; padding: 2px 4px;
+  height: auto; cursor: text; flex-shrink: 1;
+  color: #e6edf3; background: #0d1117; border: 1px solid #58a6ff;
+  border-radius: 3px; font: inherit; outline: none;
+}
 
 /* Per-mesh texture picker: one level deeper than .draw-item's own indent. */
 .tex-list { display: flex; flex-direction: column; gap: 2px; padding-left: 38px; margin: 2px 0 4px; }

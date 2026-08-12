@@ -1,7 +1,7 @@
 // Per-component "manage textures" popup: lists a component's shared texture
-// pool (view-only, session-scoped -- see core/mesh_builder.py's
+// pool (viewer-only -- see core/mesh_builder.py's
 // texture_options), lets the user add an existing file from the mod folder
-// or remove an option. Never touches the ini or Export.
+// or remove an option. Changes persist in .mod_viewer.json, never in the ini.
 
 import { addTexture } from './mesh-factory.js';
 

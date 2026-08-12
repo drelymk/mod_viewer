@@ -148,6 +148,39 @@ function recomputeTextureRuns(groupMeshes) {
   }
 }
 
+function metadataKey(name, entry) {
+  const component = entry.component || name.replace(/-\d+$/, '');
+  const draw = entry.drawindexed ? entry.drawindexed.join(',') : 'whole';
+  return `${component}::${draw}`;
+}
+
+function saveTextureState(modPath) {
+  if (!modPath || !window.pywebview?.api?.save_mesh_textures) return;
+  const state = {};
+  for (const mesh of activeMeshes) {
+    let texKey;
+    let manual = false;
+    if (mesh.userData.manualTexOverride !== undefined) {
+      texKey = mesh.userData.manualTexOverride;
+      manual = true;
+    } else if (mesh.userData.automaticTextureBoundary
+               && !mesh.userData.textureHighlightDisabled) {
+      texKey = mesh.userData.resolvedTexKey;
+    }
+    if (!texKey) continue;
+    const option = (mesh.userData.texturePool || []).find(o => o.tex_key === texKey);
+    // Removing an option also removes its persisted highlight, even though
+    // the already-rendered mesh may keep that texture until the next refresh.
+    if (!option) continue;
+    state[mesh.userData.metadataKey] = {
+      tex_key: texKey,
+      label: option.label,
+      manual,
+    };
+  }
+  window.pywebview.api.save_mesh_textures(modPath, state);
+}
+
 function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
   const wrap = document.createElement('div');
   wrap.className = 'tex-list collapsed';
@@ -180,6 +213,7 @@ function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
         recomputeTextureRuns(groupMeshes);
         selectRow(newVal === undefined ? null : row);
         if (onActiveChanged) onActiveChanged();
+        saveTextureState(mesh.userData.modPath);
       });
       wrap.appendChild(row);
       rows.push(row);
@@ -253,6 +287,7 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
     ? entry.drawindexed.join(', ')
     : '#' + name.slice(groupName.length + 1);
   const labelSpan = document.createElement('span');
+  labelSpan.className = 'mesh-name';
   labelSpan.textContent = mesh.userData.displayName || label;
   row.append(cb, chevron, labelSpan);
   const updateStateIndicator = (m) => {
@@ -270,13 +305,46 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
   updateStateIndicator(mesh);
   labelSpan.addEventListener('dblclick', (e) => {
     e.stopPropagation();
-    const next = window.prompt('Mesh name:', labelSpan.textContent);
-    if (next && next.trim()) {
-      mesh.userData.displayName = next.trim();
-      labelSpan.textContent = next.trim();
-      mesh.userData.meshNames[name] = next.trim();
-      if (mesh.userData.modPath) window.pywebview.api.save_mesh_names(mesh.userData.modPath, mesh.userData.meshNames);
-    }
+    if (labelSpan.querySelector('input')) return;
+
+    const original = labelSpan.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'mesh-name-input';
+    input.value = original;
+    labelSpan.textContent = '';
+    labelSpan.append(input);
+
+    let finished = false;
+    const finish = (apply) => {
+      if (finished) return;
+      const next = input.value.trim();
+      if (apply && !next) return;
+      finished = true;
+      labelSpan.textContent = apply ? next : original;
+      if (!apply) return;
+      mesh.userData.displayName = next;
+      mesh.userData.meshNames[mesh.userData.metadataKey] = next;
+      if (mesh.userData.modPath) {
+        window.pywebview.api.save_mesh_names(mesh.userData.modPath, mesh.userData.meshNames);
+      }
+    };
+
+    input.addEventListener('click', event => event.stopPropagation());
+    input.addEventListener('dblclick', event => event.stopPropagation());
+    input.addEventListener('keydown', (event) => {
+      event.stopPropagation();
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        finish(true);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener('blur', () => finish(false));
+    input.focus();
+    input.select();
   });
 
   mesh.userData.row = row;
@@ -342,6 +410,7 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
       const onPoolChange = () => {
         texListRenderers.forEach(r => r());
         onActiveChanged();
+        saveTextureState(modPath);
       };
 
       const { hdr, masterCb, texBtn } = buildGroupHeader(
@@ -350,10 +419,17 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
 
       for (const name of names) {
         const mesh = buildMesh(name, payload[name]);
-        mesh.userData.displayName = meshNames[name] || null;
+        mesh.userData.metadataKey = metadataKey(name, payload[name]);
+        mesh.userData.texturePool = texturePool;
+        mesh.userData.displayName = meshNames[mesh.userData.metadataKey] || null;
         mesh.userData.meshNames = meshNames;
         mesh.userData.modPath = modPath;
         addMesh(mesh, payload[name].conditions, payload[name].sources, payload[name].texture_variants);
+        // addMesh establishes the automatic defaults; restore persisted
+        // viewer choices only after that initialization has completed.
+        if (Object.hasOwn(payload[name], 'saved_texture_override')) {
+          mesh.userData.manualTexOverride = payload[name].saved_texture_override;
+        }
         itemObjs.push(mesh);
         // The first mesh for each resolved texture becomes an automatic
         // boundary. The ordered pass below propagates each boundary only

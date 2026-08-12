@@ -9,7 +9,7 @@ import webview
 
 from core.mesh_builder import encode_texture_file
 
-from . import edit_session, mesh_metadata, mod_loader, toggle_api
+from . import edit_session, metadata, mod_loader, toggle_api
 
 
 class ModViewerAPI:
@@ -27,8 +27,7 @@ class ModViewerAPI:
 
     def pick_texture_file(self, folder_path):
         """Open a native file-picker rooted at the mod folder for the
-        per-mesh/per-component texture picker (view-only, session-scoped --
-        see web/js/mesh-panel.js). Returns {"tex_key", "uri"} / {"error"} on
+        per-mesh/per-component texture picker. Returns {"tex_key", "uri"} / {"error"} on
         a real pick, None if the dialog was cancelled -- same shape as
         select_folder's own cancel case.
         """
@@ -46,11 +45,16 @@ class ModViewerAPI:
         result = mod_loader.load_mod(folder_path, overrides=overrides,
                                      pending_new_sections=pending_new_sections)
         if isinstance(result, dict) and not result.get("error"):
-            result["__mesh_names__"] = mesh_metadata.load(folder_path)
+            saved_metadata = metadata.load(folder_path)
+            result["__mesh_names__"] = saved_metadata.get("mesh_names", {})
+            metadata.hydrate_textures(folder_path, result)
         return result
 
     def save_mesh_names(self, folder_path, names):
-        return mesh_metadata.save(folder_path, names)
+        return metadata.save_mesh_names(folder_path, names)
+
+    def save_mesh_textures(self, folder_path, textures):
+        return metadata.save_textures(folder_path, textures)
 
     # -- toggle authoring -----------------------------------------------------
     #
