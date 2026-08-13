@@ -1,6 +1,7 @@
 """3DMigoto binary buffer readers and in-memory mesh payload builder."""
 
 import re, struct, os, base64, io, threading
+import warnings
 from collections import OrderedDict
 
 # ── Buffer constants ───────────────────────────────────────────────────────────
@@ -14,6 +15,10 @@ INDEX_SIZE        = 4
 # 2048x2048 RGB image can occupy ~16 MiB after base64, so 256 MiB retains about
 # sixteen worst-case textures (and many more typical game textures).
 _TEXTURE_CACHE_LIMIT = 256 * 1024 * 1024
+_MAX_BUFFER_FILE_BYTES = 512 * 1024 * 1024
+_MAX_TOTAL_BUFFER_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_DRAWS = 10_000
+_MAX_IMAGE_PIXELS = 100_000_000
 _texture_cache = OrderedDict()
 _texture_cache_bytes = 0
 _texture_cache_mod = None
@@ -228,7 +233,11 @@ def _encode_texture(dds_path, max_size=2048):
                 _texture_cache[cache_key] = cached
                 return cached[0]
         from PIL import Image
-        img = Image.open(dds_path)
+        Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            img = Image.open(dds_path)
+            img.load()
         # Convert to RGB before thumbnail: LANCZOS on RGBA with alpha=0 premultiplies
         # by zero, turning all pixels black. Dropping alpha first preserves colors.
         img = img.convert('RGB')
@@ -323,6 +332,23 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
     buf_cache: dict = {}  # (pos_path, pos_stride, tc_path, tc_stride) → (positions, uvs)
 
     raw_buf_cache = {}
+    total_buffer_bytes = 0
+
+    def _read_buffer(path):
+        nonlocal total_buffer_bytes
+        size = os.path.getsize(path)
+        if size > _MAX_BUFFER_FILE_BYTES:
+            raise ValueError(f"Buffer file is too large ({size / 1048576:.1f} MiB).")
+        if total_buffer_bytes + size > _MAX_TOTAL_BUFFER_BYTES:
+            raise ValueError("Mod buffer data exceeds the 2 GiB safety limit.")
+        with open(path, "rb") as fh:
+            data = fh.read()
+        total_buffer_bytes += len(data)
+        return data
+
+    draw_total = sum(len(group.get("draws", [])) for group in groups)
+    if draw_total > _MAX_DRAWS:
+        raise ValueError(f"Mod has too many draws ({draw_total:,}; limit {_MAX_DRAWS:,}).")
 
     for grp in groups:
         pos_path  = _safe_join(mod_dir, grp["position_file"])
@@ -341,11 +367,9 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
             key = (pos_path, pos_stride, tc_path, tc_stride)
             if key not in buf_cache:
                 if pos_path not in raw_buf_cache:
-                    with open(pos_path, "rb") as fh:
-                        raw_buf_cache[pos_path] = fh.read()
+                    raw_buf_cache[pos_path] = _read_buffer(pos_path)
                 if tc_path not in raw_buf_cache:
-                    with open(tc_path, "rb") as fh:
-                        raw_buf_cache[tc_path] = fh.read()
+                    raw_buf_cache[tc_path] = _read_buffer(tc_path)
                 pos_data = raw_buf_cache[pos_path]
                 tc_data = raw_buf_cache[tc_path]
                 uv_off, uv_fmt = _detect_uv_best(
@@ -356,7 +380,7 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
 
         buffers = _load_buf(pos_path, pos_stride, tc_path, tc_stride)
         if ib_path not in ib_cache:
-            ib_cache[ib_path] = open(ib_path, "rb").read()
+            ib_cache[ib_path] = _read_buffer(ib_path)
 
         # Deduplicate draws by (ib file, position/texcoord override, start, count).
         # The SAME mesh region is
@@ -445,7 +469,7 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                 if not draw_ib_path or not os.path.exists(draw_ib_path):
                     continue
                 if draw_ib_path not in ib_cache:
-                    ib_cache[draw_ib_path] = open(draw_ib_path, "rb").read()
+                    ib_cache[draw_ib_path] = _read_buffer(draw_ib_path)
             raw = read_indices(ib_cache[draw_ib_path], draw["start"], draw["count"],
                                draw.get("index_size", index_size))
             if not raw:

@@ -54,6 +54,8 @@ let clipFar = camera.far;
 let uprightApplied = false;
 let modelQuarterTurns = 0;
 let modelPivot = null;
+const INITIAL_CAMERA_DIRECTION = new THREE.Vector3(0, 0, 1);
+const INITIAL_CAMERA_UP = new THREE.Vector3(0, 1, 0);
 
 export function resetModelOrientation() {
   uprightApplied = false;
@@ -325,12 +327,13 @@ viewGizmo.addEventListener('wheel', event => {
   camera.position.copy(controls.target).addScaledVector(offset.normalize(), distance);
 }, { passive: false });
 
-export function frameView(meshes = []) {
+export function frameView(meshes = [], direction = null, targetYOffset = 0) {
   const box = new THREE.Box3();
   meshes.forEach(m => box.expandByObject(m));
   if (box.isEmpty()) return;
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
+  center.y += targetYOffset;
   const radius = Math.max(size.length() * 0.5, 0.001);
   const viewport = updateCameraViewport();
   // The vertical FOV normally limits a bounding sphere. If side panels leave
@@ -339,7 +342,9 @@ export function frameView(meshes = []) {
   const narrowScale = Math.max(1, viewport.fullHeight / viewport.width);
   const distance = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))
     * 1.15 * narrowScale;
-  const offset = camera.position.clone().sub(controls.target).normalize();
+  const offset = direction
+    ? direction.clone().normalize()
+    : camera.position.clone().sub(controls.target).normalize();
   if (offset.lengthSq() < 0.01) offset.set(.3, .5, 1).normalize();
   controls.target.copy(center);
   camera.position.copy(center).addScaledVector(offset, distance);
@@ -362,15 +367,19 @@ export function resetView() {
       mesh.position.copy(position);
     });
   }
-  // ArcballControls owns internal camera/gizmo matrices in addition to the
-  // public camera and target. Copying only those public values lets the next
-  // controls.update() reapply the stale orbit state. reset() restores the
-  // fitted state captured by saveState() below, keeping both layers aligned.
-  controls.reset();
-  clipNear = camera.near;
-  clipFar = camera.far;
-  updateCameraViewport();
+  // Recompute framing from the restored model bounds. Arcball's saved matrix
+  // can become stale after model turns, zoom animation, or viewport changes;
+  // using it directly can place some models (notably Beidou) outside view.
+  const box = new THREE.Box3();
+  homeView.meshes.forEach(({ mesh }) => box.expandByObject(mesh));
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  camera.up.copy(INITIAL_CAMERA_UP);
+  frameView(homeView.meshes.map(({ mesh }) => mesh),
+            INITIAL_CAMERA_DIRECTION, size.y * 0.08);
+  camera.updateMatrix();
   controls.update();
+  controls.saveState();
 }
 
 /** Frame the camera and size the grid to the given meshes. */
@@ -400,9 +409,10 @@ export function fitTo(meshes) {
   const size   = bSize.length();
 
   // Median dimension filters wing/tail outliers (ZZMI) while still covering
-  // large WWMI models.  max(4, median * 2.5) / 4
+  // large WWMI models. GridHelper is 4 units wide before scaling, so this
+  // produces a footprint of max(6, median * 4).
   const dims = [bSize.x, bSize.y, bSize.z].sort((a, b) => a - b);
-  grid.scale.setScalar(Math.max(1, dims[1] * 0.625));
+  grid.scale.setScalar(Math.max(1.5, dims[1]));
   grid.position.set(center.x, box.min.y, center.z);
 
   // Clipping planes have to track model scale or big models z-fight and small
@@ -413,7 +423,13 @@ export function fitTo(meshes) {
   clipFar = camera.far;
   camera.updateProjectionMatrix();
 
-  frameView(meshes);
+  // A new model always establishes its home view from the application's
+  // startup camera, never from the orbit/zoom left behind by the previous
+  // model. Otherwise Reset merely returns to that inherited, already-moved
+  // orientation.
+  viewSnap = null;
+  camera.up.copy(INITIAL_CAMERA_UP);
+  frameView(meshes, INITIAL_CAMERA_DIRECTION, bSize.y * 0.08);
   homeView = {
     position: camera.position.clone(),
     target: controls.target.clone(),

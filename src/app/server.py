@@ -25,19 +25,19 @@ import uuid
 from . import features, paths
 
 THREE_VERSION = "0.165.0"
-CDN_THREE = f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.module.js"
-CDN_ADDONS = f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/"
-
 REPO_URL = "https://github.com/drelymk/mod_viewer"
 
 _VENDOR_PREFIX = "/vendor/"
 _GEOMETRY_PREFIX = "/geometry/"
+_MAX_GEOMETRY_BYTES = 512 * 1024 * 1024
 _geometry_lock = threading.RLock()
 _geometry_blobs = {}
 
 
 def publish_geometry(blob):
     """Publish one load's packed geometry and discard every older load."""
+    if len(blob) > _MAX_GEOMETRY_BYTES:
+        raise ValueError("Generated geometry exceeds the 512 MiB safety limit.")
     token = uuid.uuid4().hex
     with _geometry_lock:
         _geometry_blobs.clear()
@@ -71,6 +71,17 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
     vendor_root = ""
     template_vars: dict = {}
+
+    def end_headers(self):
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                         "style-src 'self' 'unsafe-inline'; "
+                         "img-src 'self' data: blob:; connect-src 'self'; "
+                         "object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+        super().end_headers()
 
     def do_GET(self):
         path = self._request_path()
@@ -149,10 +160,10 @@ def start():
 
     Binds to 127.0.0.1 so the port is never reachable from off the machine.
     """
-    three_url, addons_url = CDN_THREE, CDN_ADDONS
-    if paths.has_vendored_three():
-        three_url = f"{_VENDOR_PREFIX}three.module.js"
-        addons_url = f"{_VENDOR_PREFIX}addons/"
+    if not paths.has_vendored_three():
+        raise RuntimeError("Vendored Three.js assets are required; run src/build.py to fetch them.")
+    three_url = f"{_VENDOR_PREFIX}three.module.js"
+    addons_url = f"{_VENDOR_PREFIX}addons/"
 
     # Feature flags only ever hide a button (app/features.py) -- baked into
     # a <body> class server-side so there's no flash of a button appearing

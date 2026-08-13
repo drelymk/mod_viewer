@@ -269,4 +269,5 @@ def load_mod(folder_path, overrides=None, pending_new_sections=None):
         payload["__menu__"] = build_menu_panel(menu_slots, toggle_defaults, folder_path)
         return payload
     except Exception:
-        return {"error": traceback.format_exc()}
+        traceback.print_exc()
+        return {"error": "Unexpected backend error. See the application log for details."}

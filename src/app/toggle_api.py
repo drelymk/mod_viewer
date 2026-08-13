@@ -23,6 +23,11 @@ from . import edit_session
 from . import mod_loader
 
 
+def _unexpected_error():
+    traceback.print_exc()
+    return {"error": "Unexpected backend error. See the application log for details."}
+
+
 def _ini_path(mod_dir, ini_rel):
     """Resolve a payload's relative ini name back to an absolute path,
     constrained to actually be one of this mod folder's own ini files (never
@@ -72,7 +77,7 @@ def get_toggle_details(mod_dir, ini_rel, section_name):
     except te.ToggleEditError as e:
         return {"error": str(e)}
     except Exception:
-        return {"error": traceback.format_exc()}
+        return _unexpected_error()
 
 
 def _run(mod_dir, ini_rel, fn, on_commit=None):
@@ -100,7 +105,7 @@ def _run(mod_dir, ini_rel, fn, on_commit=None):
     except te.ToggleEditError as e:
         return {"error": str(e)}
     except Exception:
-        return {"error": traceback.format_exc()}
+        return _unexpected_error()
 
 
 def add_toggle(mod_dir, ini_rel, name, key_combo, var, values, options=None):
@@ -191,7 +196,7 @@ def get_record_positions(mod_dir, ini_rel, section_name):
     except te.ToggleEditError as e:
         return {"error": str(e)}
     except Exception:
-        return {"error": traceback.format_exc()}
+        return _unexpected_error()
 
 
 def record_toggle(mod_dir, ini_rel, section_name, position_lines):
@@ -228,4 +233,4 @@ def record_toggle(mod_dir, ini_rel, section_name, position_lines):
     except te.ToggleEditError as e:
         return {"error": str(e)}
     except Exception:
-        return {"error": traceback.format_exc()}
+        return _unexpected_error()
