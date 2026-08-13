@@ -9,7 +9,7 @@ at runtime goes through here so that difference is stated exactly once.
 import os
 import sys
 
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.5.3"
 
 
 def app_root():
