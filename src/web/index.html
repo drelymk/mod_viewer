@@ -3,7 +3,6 @@
 <head>
 <meta charset="utf-8"/>
 <title>3DMigoto Mod Viewer</title>
-<link rel="stylesheet" href="lib/prism-live/prism-live.css"/>
 <link rel="stylesheet" href="css/app.css"/>
 </head>
 <!-- __BODY_CLASS__ is rewritten at serve time to a feature-flag-off class per
@@ -200,7 +199,7 @@
       <button type="button" id="ini-editor-close-x" class="icon-btn" aria-label="Close INI editor">×</button>
     </div>
     <div id="ini-editor-error" class="modal-error"></div>
-    <textarea id="ini-editor-text" class="ini-editor-text language-ini" spellcheck="false" wrap="off" aria-label="INI file contents"></textarea>
+    <div id="ini-editor-text" class="ini-editor-text" role="textbox" aria-multiline="true" aria-label="INI file contents"></div>
     <div class="modal-actions">
       <button type="button" id="ini-editor-close">Close</button>
       <button type="button" id="ini-editor-apply">Save</button>
@@ -255,8 +254,10 @@
   }
 }
 </script>
-<script src="lib/prism/prism-core.min.js" data-manual></script>
-<script src="lib/prism/prism-ini.min.js"></script>
+<script src="lib/ace/ace.js"></script>
+<script src="lib/ace/mode-ini.js"></script>
+<script src="lib/ace/theme-tomorrow_night.js"></script>
+<script src="lib/ace/ext-searchbox.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

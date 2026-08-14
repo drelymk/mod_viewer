@@ -109,7 +109,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     def guess_type(self, path):
         # ES modules must be served with a JS MIME type or the browser refuses
         # to execute them.
-        if path.endswith((".js", ".mjs")):
+        if path.endswith(".js"):
             return "text/javascript"
         return super().guess_type(path)
 

@@ -515,38 +515,39 @@ body {
 .ini-editor-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .ini-editor-title-row h4 { margin-bottom: 4px; }
 .ini-editor-status { color: #8b949e; font-size: 11px; }
-.ini-editor-shell {
+.ini-editor-text {
   flex: 1 1 0; min-height: 0; width: 100%; margin-top: 12px;
   overflow: hidden; background: #0d1117; border: 1px solid #30363d;
   border-radius: 6px; box-sizing: border-box;
 }
-.ini-editor-shell:focus-within { border-color: #58a6ff; }
-.ini-editor-shell textarea.ini-editor-text,
-.ini-editor-shell pre.ini-editor-text {
-  width: 100%; height: 100%; margin: 0; padding: 10px 12px;
-  color: #d6deeb; background: transparent; border: 0; border-radius: 0;
-  outline: none; box-sizing: border-box; white-space: pre;
-  overflow-wrap: normal; word-break: normal; word-spacing: normal;
-  font: 12px/18px Consolas, "Courier New", monospace; tab-size: 4;
-  text-align: left; text-shadow: none;
+#ini-editor-text.ace_focus { border-color: #58a6ff; }
+#ini-editor-text.ace_editor { background: #0d1117; color: #d6deeb; }
+#ini-editor-text .ace_gutter {
+  background: #161b22; color: #7d8590; border-right: 1px solid #30363d;
 }
-.ini-editor-shell textarea.ini-editor-text {
-  overflow: auto; color: transparent; caret-color: #f0f6fc;
-  --selection-background: rgba(38, 79, 120, .85);
-  --selection-color: rgba(255, 255, 255, .92);
+#ini-editor-text .ace_gutter-active-line { background: #21262d; }
+#ini-editor-text .ace_marker-layer .ace_active-line { background: rgba(110, 118, 129, .10); }
+#ini-editor-text .ace_marker-layer .ace_selection { background: rgba(38, 79, 120, .85); }
+#ini-editor-text .ace_cursor { color: #f0f6fc; }
+#ini-editor-text .ace_comment { color: #6a9955; font-style: italic; }
+#ini-editor-text .ace_constant.ace_section { color: #4ec9b0; font-weight: 700; }
+#ini-editor-text .ace_keyword.ace_other.ace_definition { color: #9cdcfe; }
+#ini-editor-text .ace_string { color: #ce9178; }
+#ini-editor-text .ace_punctuation { color: #d4d4d4; }
+#ini-editor-text .ace_search {
+  background: #161b22; color: #c9d1d9; border-color: #30363d;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, .45);
 }
-.ini-editor-shell pre.ini-editor-text { overflow: hidden; }
-.ini-editor-shell.prism-live-pending pre.ini-editor-text { visibility: hidden; }
-.ini-editor-shell.prism-live-pending textarea.ini-editor-text {
-  color: #d6deeb; -webkit-text-fill-color: #d6deeb;
+#ini-editor-text .ace_search_field {
+  background: #0d1117; color: #e6edf3; border-color: #30363d;
 }
-.ini-editor-shell .token.comment { color: #6a9955; font-style: italic; }
-.ini-editor-shell .token.section,
-.ini-editor-shell .token.selector { color: #4ec9b0; font-weight: 700; }
-.ini-editor-shell .token.attr-name { color: #9cdcfe; }
-.ini-editor-shell .token.attr-value,
-.ini-editor-shell .token.inner-value { color: #ce9178; }
-.ini-editor-shell .token.punctuation { color: #d4d4d4; }
+#ini-editor-text .ace_searchbtn {
+  background: #21262d; color: #c9d1d9; border-color: #30363d;
+}
+#ini-editor-text .ace_searchbtn:hover { background: #30363d; }
+#ini-editor-text .ace_button { color: #c9d1d9; border-color: #484f58; }
+#ini-editor-text .ace_button:hover { background: #30363d; }
+#ini-editor-text .ace_button.checked { background: #1f6feb; border-color: #58a6ff; }
 #ini-editor-close { background: #21262d; color: #e6edf3; }
 #ini-editor-apply { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
 #ini-editor-apply:disabled { opacity: .55; cursor: default; }

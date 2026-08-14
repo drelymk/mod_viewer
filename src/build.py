@@ -264,12 +264,9 @@ def verify_web():
     us — a typo'd path would only surface as a blank window at runtime."""
     required = [
         "index.html", "css/app.css", "js/main.js",
-        "lib/prism/prism-core.min.js", "lib/prism/prism-ini.min.js",
-        "lib/prism/LICENSE", "lib/prism-live/prism-live.css",
-        "lib/prism-live/prism-live.mjs", "lib/prism-live/util.js",
-        "lib/prism-live/defaults.js", "lib/prism-live/dom.js",
-        "lib/prism-live/editing.js", "lib/prism-live/env.js",
-        "lib/prism-live/LICENSE",
+        "lib/ace/ace.js", "lib/ace/mode-ini.js",
+        "lib/ace/theme-tomorrow_night.js", "lib/ace/ext-searchbox.js",
+        "lib/ace/LICENSE",
     ]
     missing = [rel for rel in required
                if not os.path.isfile(os.path.join(WEB, *rel.split("/")))]

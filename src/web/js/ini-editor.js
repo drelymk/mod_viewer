@@ -2,7 +2,6 @@
 // deliberately separate boundary that writes physical files.
 
 import { alertDialog, confirmDialog } from './dialogs.js';
-import PrismLive from '../lib/prism-live/prism-live.mjs';
 
 const $ = (id) => document.getElementById(id);
 let modPath = null;
@@ -10,8 +9,28 @@ let currentIni = null;
 let loadedText = '';
 let onApplied = null;
 const textEditor = $('ini-editor-text');
-const prismEditor = PrismLive.create(textEditor);
-prismEditor.wrapper.classList.add('ini-editor-shell');
+window.ace.config.set('basePath', 'lib/ace');
+const iniEditor = window.ace.edit(textEditor, {
+  mode: 'ace/mode/ini',
+  theme: 'ace/theme/tomorrow_night',
+  fontFamily: 'Consolas, "Courier New", monospace',
+  fontSize: 12,
+  showPrintMargin: false,
+  showGutter: true,
+  showFoldWidgets: true,
+  highlightActiveLine: true,
+  highlightGutterLine: true,
+  highlightSelectedWord: true,
+  displayIndentGuides: false,
+  useSoftTabs: true,
+  tabSize: 4,
+  wrap: false,
+  scrollPastEnd: 0.1,
+  enableKeyboardAccessibility: true,
+});
+iniEditor.session.setUseWorker(false);
+iniEditor.renderer.setScrollMargin(8, 8);
+iniEditor.textInput.getElement().setAttribute('aria-label', 'INI file contents');
 
 export function setIniEditorContext(path, changeCallback) {
   modPath = path;
@@ -30,16 +49,12 @@ function hideFileMenu() {
 }
 
 function jumpToLine(line) {
-  const editor = textEditor;
-  const lines = editor.value.split('\n');
-  const target = Math.max(1, Math.min(Number(line) || 1, lines.length));
-  let start = 0;
-  for (let i = 1; i < target; i += 1) start += lines[i - 1].length + 1;
-  editor.focus();
-  editor.setSelectionRange(start, start + lines[target - 1].length);
-  const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 18;
-  editor.scrollTop = Math.max(0, (target - 1) * lineHeight - editor.clientHeight / 3);
-  prismEditor.syncScroll();
+  const target = Math.max(1, Math.min(Number(line) || 1, iniEditor.session.getLength()));
+  const row = target - 1;
+  const Range = window.ace.require('ace/range').Range;
+  iniEditor.focus();
+  iniEditor.selection.setRange(new Range(row, 0, row, iniEditor.session.getLine(row).length));
+  iniEditor.scrollToLine(row, true, true, () => {});
 }
 
 export async function openIniEditor(iniName, line = 1) {
@@ -56,12 +71,12 @@ export async function openIniEditor(iniName, line = 1) {
   $('ini-editor-status').textContent = result.dirty
     ? 'Modified in memory — Export has not written it to disk.'
     : 'Changes stay in memory until Export.';
-  textEditor.value = result.text;
-  prismEditor.update(true);
+  iniEditor.setValue(result.text, -1);
+  iniEditor.clearSelection();
   showError();
   $('ini-editor-backdrop').classList.add('show');
   requestAnimationFrame(() => {
-    prismEditor.syncStyles();
+    iniEditor.resize(true);
     jumpToLine(line);
   });
 }
@@ -92,7 +107,7 @@ async function chooseIni() {
 }
 
 async function closeEditor() {
-  if (textEditor.value !== loadedText) {
+  if (iniEditor.getValue() !== loadedText) {
     const close = await confirmDialog('Discard the unapplied changes in this editor?');
     if (!close) return;
   }
@@ -106,7 +121,7 @@ async function applyEditor() {
   button.disabled = true;
   showError();
   try {
-    const text = textEditor.value;
+    const text = iniEditor.getValue();
     const result = await window.pywebview.api.update_ini_text(modPath, currentIni, text);
     if (result.error) {
       showError(result.error);
@@ -130,6 +145,28 @@ $('ini-view-btn').addEventListener('click', chooseIni);
 $('ini-editor-close').addEventListener('click', closeEditor);
 $('ini-editor-close-x').addEventListener('click', closeEditor);
 $('ini-editor-apply').addEventListener('click', applyEditor);
+iniEditor.commands.addCommand({
+  name: 'saveIniEditor',
+  bindKey: { win: 'Ctrl-S', mac: 'Command-S' },
+  exec: applyEditor,
+});
+iniEditor.commands.addCommand({
+  name: 'closeIniEditor',
+  bindKey: { win: 'Esc', mac: 'Esc' },
+  exec: closeEditor,
+});
+// Ace's search field first returns focus to the editor on Escape and only
+// hides itself on a later press. Close it in one press, while preventing that
+// same key event from also reaching the modal-level Escape handler.
+document.addEventListener('keydown', (event) => {
+  const search = textEditor.querySelector('.ace_search');
+  if (event.key === 'Escape' && search && getComputedStyle(search).display !== 'none') {
+    event.preventDefault();
+    event.stopPropagation();
+    iniEditor.searchBox.hide();
+    iniEditor.focus();
+  }
+}, true);
 $('ini-editor-backdrop').addEventListener('click', (event) => {
   if (event.target.id === 'ini-editor-backdrop') closeEditor();
 });
@@ -137,12 +174,13 @@ document.addEventListener('click', (event) => {
   if (!event.target.closest('.ini-view-wrap')) hideFileMenu();
 });
 document.addEventListener('keydown', (event) => {
+  const inAce = event.target instanceof Element && event.target.closest('#ini-editor-text');
   if (event.key === 'Escape') {
     if ($('ini-file-menu').classList.contains('show')) hideFileMenu();
-    else if ($('ini-editor-backdrop').classList.contains('show')) closeEditor();
+    else if (!inAce && $('ini-editor-backdrop').classList.contains('show')) closeEditor();
   }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' &&
-      $('ini-editor-backdrop').classList.contains('show')) {
+      !inAce && $('ini-editor-backdrop').classList.contains('show')) {
     event.preventDefault();
     applyEditor();
   }
