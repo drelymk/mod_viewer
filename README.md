@@ -30,6 +30,21 @@ a manual click always wins for that mesh.
 Camera: drag to orbit, scroll to zoom, right-drag to pan. **Wireframe**,
 **Grid** and **Shading** toggles are in the toolbar.
 
+## INI diagnostics
+
+The **Diagnostics** button checks the active INIs without modifying them. It reports
+malformed `if`/`elif`/`else` nesting, missing or unsafe files used by resource
+sections, malformed condition statements and section headers, unused resource
+sections, and asset files that no active INI
+declares. Findings include the INI, section, line number, and source excerpt
+where available. The report remains available when broken resources prevent
+the model itself from loading. Double-click a finding to open its INI and jump
+to the reported line.
+
+“Unused” is intentionally conservative: disabled-INI assets and textures saved
+only in `.mod_viewer.json` are classified separately and are not suggested as
+unused.
+
 ## Adding and editing toggles
 
 The Toggle panel isn't just for viewing — it can author new key bindings too:
@@ -57,6 +72,11 @@ While recording, opening a different mod and the rest of the Toggle panel are
 locked so nothing else changes underneath the session.
 
 ## Exporting changes
+
+Every active INI has an in-memory working version. **View INI** opens the file
+(or a file list for multi-INI mods); **Apply to memory** updates that working
+version and refreshes the model without touching disk. Toggle add/edit/delete
+and Record mode modify the same working versions.
 
 Every add, edit, delete, and recording is staged in memory only — the real
 `.ini` files aren't touched until you click **💾 Export**. Export writes a
