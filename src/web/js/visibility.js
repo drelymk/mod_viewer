@@ -13,6 +13,7 @@ export const activeMeshes = [];
 
 /** {variable: currentValueString} — the Toggle panel's state. */
 let toggleState = {};
+let stateRules = [];
 
 /** [{masterCb, itemCbs, itemObjs}] — registered by the meshes panel. */
 let groupsUI = [];
@@ -30,6 +31,7 @@ export function reset() {
   activeMeshes.length = 0;
   groupsUI = [];
   toggleState = {};
+  stateRules = [];
   resetModelOrientation();
 }
 
@@ -112,13 +114,24 @@ export function conditionsSatisfied(mesh) {
 // (or that has no texture_variants at all) must still revert cleanly.
 export function applyTextureVariant(mesh) {
   const variants = mesh.userData.textureVariants || [];
-  const variant = variants.find(v => dnfSatisfied(v.conditions));
+  // Diffuse assignments execute in source order; later matching writes
+  // override earlier ones (including nested, independent condition chains).
+  const variant = variants.findLast
+    ? variants.findLast(v => dnfSatisfied(v.conditions))
+    : [...variants].reverse().find(v => dnfSatisfied(v.conditions));
   mesh.userData.resolvedTexKey = variant
     ? variant.tex_key
     : mesh.userData.defaultTexKey;
   setMeshTexture(mesh, mesh.userData.manualTexOverride !== undefined
     ? mesh.userData.manualTexOverride
     : mesh.userData.resolvedTexKey);
+}
+
+export function setStateRules(rules, defaults) {
+  stateRules = rules || [];
+  for (const [variable, value] of Object.entries(defaults || {})) {
+    if (toggleState[variable] === undefined) toggleState[variable] = value;
+  }
 }
 
 // The MESHES checkbox is the sole, direct source of truth for a mesh's
@@ -129,6 +142,41 @@ export function applyTextureVariant(mesh) {
 // checking its box.
 export function applyMeshVisibility(mesh) {
   mesh.visible = mesh.userData.manualVisible !== false;
+}
+
+function applyShapeTargets(mesh) {
+  const targets = mesh.userData.shapeTargets || [];
+  if (!targets.length) return;
+  const attr = mesh.geometry.attributes.position;
+  const base = mesh.userData.basePositions;
+  attr.array.set(base);
+  const midpointTargets = targets.filter(target => target.mode === 'midpoint_pair');
+  for (const target of targets) {
+    const weight = Number(toggleState[target.var] ?? 0);
+    if (!Number.isFinite(weight)) continue;
+    if (target.mode === 'midpoint_pair') {
+      const endpoint = weight <= 0.5 ? target.lowPositions : target.positions;
+      // Match the shader's deliberate endpoint extrapolation. Each of the two
+      // independently-shaped results is averaged below, so it uses a 0..2
+      // delta factor to retain the authored full range after that division.
+      // This remains monotonic as long as the high branch moves base->bigger.
+      const factor = weight <= 0.5 ? 2 - weight * 4 : weight * 4 - 2;
+      const divisor = midpointTargets.length || 1;
+      for (let i = 0; i < attr.array.length; i++) {
+        const shaped = base[i] + (endpoint[i] - base[i]) * factor;
+        attr.array[i] += (shaped - base[i]) / divisor;
+      }
+      continue;
+    }
+    if (weight === 0) continue;
+    for (let i = 0; i < attr.array.length; i++) {
+      attr.array[i] += (target.positions[i] - base[i]) * weight;
+    }
+  }
+  attr.needsUpdate = true;
+  mesh.geometry.computeVertexNormals();
+  mesh.geometry.computeBoundingBox();
+  mesh.geometry.computeBoundingSphere();
 }
 
 // Reflect each mesh's actual visibility back onto its MESHES checkbox, so
@@ -157,6 +205,11 @@ export function syncCheckboxes() {
 // show/hide state the user gave it, undisturbed by clicking toggles elsewhere
 // in the panel.
 export function refreshAll() {
+  // [Present] derives literal draw flags from menu variables every frame in
+  // many WWMI mods. Replay those safe rules in source order first.
+  for (const rule of stateRules) {
+    if (dnfSatisfied(rule.conditions)) toggleState[rule.var] = rule.value;
+  }
   activeMeshes.forEach(mesh => {
     if ((mesh.userData.conditions || []).length > 0) {
       mesh.userData.manualVisible = conditionsSatisfied(mesh);
@@ -167,6 +220,7 @@ export function refreshAll() {
       mesh.userData.defaultCaptured = true;
     }
     applyTextureVariant(mesh);
+    applyShapeTargets(mesh);
   });
   syncCheckboxes();
 }

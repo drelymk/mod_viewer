@@ -79,6 +79,13 @@ export function buildMesh(name, data) {
     side: THREE.DoubleSide, roughness: 1.0, metalness: 0.0, color: fallback });
 
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.userData.basePositions = new Float32Array(geo.attributes.position.array);
+  mesh.userData.shapeTargets = (data.shape_targets || []).map(target => ({
+    var: target.var,
+    mode: target.mode,
+    positions: new Float32Array(decodeF32(target.pos)),
+    lowPositions: target.low_pos ? new Float32Array(decodeF32(target.low_pos)) : null,
+  }));
   mesh.userData.texKey = data.tex_key || null;
   // The draw's own resolved default (core/mesh_builder.py's per-draw
   // tex_key) -- what an unselected mesh falls back to once no toggle-driven

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <title>3DMigoto Mod Viewer</title>
+<link rel="stylesheet" href="lib/prism-live/prism-live.css"/>
 <link rel="stylesheet" href="css/app.css"/>
 </head>
 <!-- __BODY_CLASS__ is rewritten at serve time to a feature-flag-off class per
@@ -16,6 +17,13 @@
   <span id="mod-path">No mod loaded</span>
   <span id="pending-indicator" class="pending-indicator">● Unsaved changes</span>
   <button id="open-btn">📂 Open Mod</button>
+  <div class="ini-view-wrap">
+    <button id="ini-view-btn" disabled>📄 View INI</button>
+    <div id="ini-file-menu" class="ini-file-menu" role="menu"></div>
+  </div>
+  <button id="health-btn" class="healthy" disabled>
+    Diagnostics <span id="health-count" class="health-count">0</span>
+  </button>
   <button id="export-btn" disabled>💾 Export</button>
 </div>
 
@@ -159,6 +167,47 @@
   </div>
 </div>
 
+<div id="health-modal-backdrop" class="modal-backdrop">
+  <div class="modal health-modal" role="dialog" aria-modal="true" aria-labelledby="health-title">
+    <div class="health-title-row">
+      <div>
+        <h4 id="health-title">INI Diagnostics</h4>
+        <div id="health-summary" class="health-summary"></div>
+      </div>
+      <button type="button" id="health-close-x" class="icon-btn" aria-label="Close diagnostics">×</button>
+    </div>
+    <div id="health-filters" class="health-filters">
+      <button type="button" data-health-filter="all" class="active">All</button>
+      <button type="button" data-health-filter="error">Errors</button>
+      <button type="button" data-health-filter="conditions">Conditions</button>
+      <button type="button" data-health-filter="resources">Resources</button>
+      <button type="button" data-health-filter="files">Files</button>
+    </div>
+    <div id="health-list" class="health-list"></div>
+    <div class="modal-actions">
+      <button type="button" id="health-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="ini-editor-backdrop" class="modal-backdrop">
+  <div class="modal ini-editor-modal" role="dialog" aria-modal="true" aria-labelledby="ini-editor-title">
+    <div class="ini-editor-title-row">
+      <div>
+        <h4 id="ini-editor-title">INI Editor</h4>
+        <div id="ini-editor-status" class="ini-editor-status">Changes stay in memory until Export.</div>
+      </div>
+      <button type="button" id="ini-editor-close-x" class="icon-btn" aria-label="Close INI editor">×</button>
+    </div>
+    <div id="ini-editor-error" class="modal-error"></div>
+    <textarea id="ini-editor-text" class="ini-editor-text language-ini" spellcheck="false" wrap="off" aria-label="INI file contents"></textarea>
+    <div class="modal-actions">
+      <button type="button" id="ini-editor-close">Close</button>
+      <button type="button" id="ini-editor-apply">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="dialog-backdrop" class="dialog-backdrop">
   <div class="dialog-box">
     <div id="dialog-message" class="dialog-message"></div>
@@ -206,6 +255,8 @@
   }
 }
 </script>
+<script src="lib/prism/prism-core.min.js" data-manual></script>
+<script src="lib/prism/prism-ini.min.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

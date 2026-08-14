@@ -17,6 +17,7 @@ from .ini_sections import (SrcLine, extract_resources, find_inis, first_source,
 from .ini_dnf import (DNF_FALSE, DNF_TRUE, build_bool_alias_map, dnf_and,
                       dnf_not, dnf_or, normalize_dnf, parse_condition_dnf)
 from .ini_menu import extract_menu_toggles, extract_menu_var_names
+from .ini_state import extract_state_rules
 from .ini_toggles import (extract_toggle_keys, extract_toggle_var_names,
                           extract_variable_defaults)
 
@@ -55,11 +56,13 @@ _RUN_SKIP_PREFIXES = ("TextureOverride", "ShaderOverride", "Resource", "Present"
 
 def gating_var_names(sections, var_prefix=None):
     """Variables worth tracking as per-draw show/hide gates: those a cycle-type
-    [Key...] section drives, plus those an in-game clickable menu mutates.
-    Internal state vars like $mod_enabled are deliberately left out — a
-    condition on one of those is treated as always satisfied."""
+    [Key...] section drives, those an in-game clickable menu mutates, plus
+    literal state variables safely derived in [Present]. Other internal state
+    vars like $mod_enabled remain deliberately untracked."""
     return (extract_toggle_var_names(sections, var_prefix=var_prefix)
-            | extract_menu_var_names(sections, var_prefix=var_prefix))
+            | extract_menu_var_names(sections, var_prefix=var_prefix)
+            | {rule["var"] for rule in extract_state_rules(
+                sections, var_prefix=var_prefix)})
 
 
 def _scan_sections_for_draws(sections, var_prefix=None):
@@ -160,6 +163,7 @@ def _scan_sections_for_draws(sections, var_prefix=None):
                                       int(m.group(3)), conds, line_source(raw),
                                       info.get("_cur_ib"),
                                       list(info.get("_cur_diffuse_variants") or []),
+                                      list(info.get("_diffuse_history") or []),
                                       (info.get("_cur_vb0"), info.get("_cur_vb1"),
                                        info.get("_cur_vb2"))))
             # "ref" is optional -- XXMI-generated mods omit it (e.g. "Resource\GIMI\Diffuse = X").
@@ -204,6 +208,10 @@ def _scan_sections_for_draws(sections, var_prefix=None):
                     info["_cur_diffuse_variants"].pop()
                 info["_cur_diffuse_variants"].append({"res": res, "cond": cond})
                 info["_diffuse_last_cond"] = cond
+                # Keep the complete execution-ordered assignment stream too.
+                # Independent/nested condition chains can successively
+                # override a diffuse; the last matching assignment wins.
+                info["_diffuse_history"].append({"res": res, "cond": cond})
             m = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if m:
                 target = m.group(1)
@@ -220,7 +228,8 @@ def _scan_sections_for_draws(sections, var_prefix=None):
             continue
         info: dict = dict(vb0=None, vb1=None, vb2=None, ib=None, draws=[],
                           diffuse=None, diffuse_pool=[], src=None, handling_skip=False,
-                          _cur_diffuse_variants=[], _diffuse_chain_key=None)
+                          _cur_diffuse_variants=[], _diffuse_chain_key=None,
+                          _diffuse_history=[])
         _scan(lines, info, [], {name})
         info.pop("_cur_ib", None)
         info.pop("_cur_vb0", None)
@@ -234,9 +243,11 @@ def _scan_sections_for_draws(sections, var_prefix=None):
         # (or bare ps-t0/ps-t1) assignment the section made, same as any real
         # drawindexed line would've seen at this point in execution order.
         info["diffuse_variants_at_end"] = list(info.get("_cur_diffuse_variants") or [])
+        info["diffuse_history_at_end"] = list(info.get("_diffuse_history") or [])
         info.pop("_cur_diffuse_variants", None)
         info.pop("_diffuse_chain_key", None)
         info.pop("_diffuse_last_cond", None)
+        info.pop("_diffuse_history", None)
         sec_info[name] = info
     return sec_info
 
@@ -260,6 +271,67 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     if seen is None:
         seen = {}
     sec_info = _scan_sections_for_draws(sections, var_prefix)
+
+    # Some ZZMI shape-key mods bind an empty, writable Resource as vb0 and
+    # populate it in [Present]/CommandList code from a file-backed rest pose:
+    #
+    #   ResourceBodyPosition = copy ResourceBodyPositionBase
+    #
+    # `extract_resources` intentionally contains only file-backed resources,
+    # so remember these explicit copy edges here and follow them whenever a
+    # vertex resource has no filename of its own.  This is provenance from the
+    # INI, not a fuzzy component-name match, and therefore also works for a
+    # component reached by a mid-section `ib =` reassignment.
+    resource_copy_sources = {}
+    copy_re = re.compile(
+        r'^\s*(Resource\S+)\s*=\s*copy(?:\s+ref)?\s+(Resource\S+)\s*$', re.I)
+    for lines in sections.values():
+        for raw in lines:
+            line = raw.split(";", 1)[0].strip()
+            match = copy_re.match(line)
+            if not match:
+                continue
+            dest, copy_source = match.groups()
+            if dest.lower() == copy_source.lower():
+                continue
+            sources = resource_copy_sources.setdefault(dest.lower(), [])
+            if all(existing.lower() != copy_source.lower() for existing in sources):
+                sources.append(copy_source)
+
+    vertex_info_cache = {}
+
+    def _resolve_vertex_info(res_name, visiting=None):
+        """Resolve a runtime vertex resource to a file-backed source."""
+        if not res_name:
+            return {}
+        cache_key = res_name.lower()
+        if cache_key in vertex_info_cache:
+            return vertex_info_cache[cache_key]
+
+        ri = _res_get(resources, res_name)
+        if ri.get("filename"):
+            vertex_info_cache[cache_key] = ri
+            return ri
+
+        visiting = set(visiting or ())
+        if cache_key in visiting:
+            return {}
+        visiting.add(cache_key)
+
+        candidates = list(resource_copy_sources.get(cache_key, ()))
+        # Existing 3DMigoto shape-key convention: a bare Position resource can
+        # use a `.B` child as its rest pose without an explicit Resource copy.
+        # Do not keep manufacturing `.B.B...` names when neither exists.
+        if not cache_key.endswith(".b"):
+            candidates.append(res_name + ".B")
+        for candidate in candidates:
+            resolved = _resolve_vertex_info(candidate, visiting)
+            if resolved.get("filename"):
+                vertex_info_cache[cache_key] = resolved
+                return resolved
+
+        vertex_info_cache[cache_key] = {}
+        return {}
 
     comp_pos, comp_tc = {}, {}
     # Index by underscore-delimited hex hash for mods that use _<hash>_ in section names
@@ -345,13 +417,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             diffuse_file_cache[res_name] = _res_get(resources, res_name).get("filename")
         return diffuse_file_cache[res_name]
 
-    vertex_res_cache: dict = {}
-
     def _resolve_vertex_res(res_name):
-        if res_name not in vertex_res_cache:
-            ri = _res_get(resources, res_name)
-            vertex_res_cache[res_name] = (ri.get("filename"), ri.get("stride"))
-        return vertex_res_cache[res_name]
+        ri = _resolve_vertex_info(res_name)
+        return ri.get("filename"), ri.get("stride")
 
     def _lookup_comp_buf(comp):
         buf = comp_bufs.get(comp)
@@ -382,17 +450,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             buf = {"position": global_pos, "texcoord": global_tc}  # WWMI fallback
         if not buf: continue
 
-        pos_ri  = _res_get(resources, buf["position"])
-        if not pos_ri.get("filename"):
-            # A bare shape-keyed container (e.g. `[ResourceXPosition]` with no
-            # filename of its own, only child sections like `.B`/`.Pre` for the
-            # rest pose and per-morph deltas a compute shader blends at
-            # runtime -- this viewer doesn't run those shaders, so it just
-            # needs *a* file-backed pose). `.B` is 3DMigoto's own convention
-            # for the base/rest buffer (see this ini's `[Present]` `copy_desc
-            # ...Position.B`); falling back to it is exactly what real mods
-            # already treat as "the" position when nothing else is bound.
-            pos_ri = _res_get(resources, buf["position"] + ".B")
+        pos_ri  = _resolve_vertex_info(buf["position"])
         tc_ri   = _res_get(resources, buf["texcoord"])
         ib_ri   = _res_get(resources, ib_res)
         diff_ri = _res_get(resources, info["diffuse"]) if info["diffuse"] else {}
@@ -408,9 +466,11 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
         draws_list = list(info["draws"]) or [
             (None, 0, 0, [], info["src"], None,
-             info.get("diffuse_variants_at_end") or [], (None, None, None))]
+             info.get("diffuse_variants_at_end") or [],
+             info.get("diffuse_history_at_end") or [], (None, None, None))]
         draws = []
-        for i, (c, s, b, cd, src, draw_ib, diff_variants, _vb_ov) in enumerate(draws_list, 1):
+        for i, (c, s, b, cd, src, draw_ib, diff_variants,
+                diff_history, _vb_ov) in enumerate(draws_list, 1):
             d = dict(label=f"{label}-{i}", count=c, start=s, base=b,
                      conditions=cd, sources=[src] if src else [])
             # A mid-section `ib = ...` reassignment.
@@ -444,6 +504,24 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             # A toggle that swaps the diffuse texture rather than gating a draw.
             if len(variants) > 1:
                 d["texture_variants"] = variants
+            history = []
+            for v in diff_history:
+                file = _resolve_diffuse_file(v["res"])
+                if file:
+                    history.append({"conditions": v["cond"], "file": file})
+            legacy_vars = {c["var"] for v in variants
+                           for group in v["conditions"] for c in group}
+            history_vars = {c["var"] for v in history
+                            for group in v["conditions"] for c in group}
+            # `_cur_diffuse_variants` only retains the latest assignment chain.
+            # If history is longer, an earlier unconditional write, partial
+            # chain, or same-branch reassignment was replaced. Preserve the
+            # complete stream even when every chain uses the same variable;
+            # the browser applies the last matching write in source order.
+            if (len(history) > 1 and
+                    (history_vars - legacy_vars or
+                     len(history) > len(variants))):
+                d["texture_assignments"] = history
             draws.append(d)
         pool_files, seen_pool_files = [], set()
         for res in info["diffuse_pool"]:

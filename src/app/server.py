@@ -59,6 +59,15 @@ def publish_payload_geometry(payload):
             offset = len(blob)
             blob.extend(raw)
             entry[field] = {"offset": offset, "length": len(raw)}
+        for target in entry.get("shape_targets") or []:
+            for field in ("pos", "low_pos"):
+                encoded = target.get(field)
+                if not isinstance(encoded, str):
+                    continue
+                raw = base64.b64decode(encoded)
+                offset = len(blob)
+                blob.extend(raw)
+                target[field] = {"offset": offset, "length": len(raw)}
     if blob:
         payload["__geometry__"] = {
             "url": publish_geometry(blob),
@@ -100,7 +109,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     def guess_type(self, path):
         # ES modules must be served with a JS MIME type or the browser refuses
         # to execute them.
-        if path.endswith(".js"):
+        if path.endswith((".js", ".mjs")):
             return "text/javascript"
         return super().guess_type(path)
 

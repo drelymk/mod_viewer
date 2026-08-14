@@ -778,11 +778,86 @@ def test_cross_ib_vb_reassignment_mesh_builder():
               f"not a collapsed/garbage read of the SBS one (got {vert_sets})")
 
 
+# ── A ZZMI shape-key output can be an empty writable Resource whose file-backed
+#    rest pose is identified only by `ResourceX = copy ResourceXBase`.
+
+RUNTIME_POSITION_COPY_INI = """[TextureOverrideBodyBlend]
+vb0 = ResourceBodyPosition
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideLegsBlend]
+vb0 = ResourceLegsPosition
+
+[TextureOverrideLegsTexcoord]
+vb1 = ResourceLegsTexcoord
+
+[TextureOverrideLegsA]
+ib = ResourceLegsAIB
+drawindexed = 3, 0, 0
+ib = ResourceBodyAIB
+vb0 = ResourceBodyRuntimeSnapshot
+vb1 = ResourceBodyTexcoord
+drawindexed = 3, 0, 0
+
+[Present]
+ResourceBodyPosition = copy ResourceBodyPositionBase
+ResourceLegsPosition = copy ResourceLegsPositionBase
+
+[ResourceBodyPosition]
+[ResourceLegsPosition]
+[ResourceBodyRuntimeSnapshot]
+
+[ResourceBodyPositionBase]
+filename = bodyBase.buf
+stride = 40
+
+[ResourceLegsPositionBase]
+filename = legsBase.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = bodyTc.buf
+stride = 20
+
+[ResourceLegsTexcoord]
+filename = legsTc.buf
+stride = 20
+
+[ResourceBodyAIB]
+filename = bodyA.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceLegsAIB]
+filename = legsA.ib
+format = DXGI_FORMAT_R32_UINT
+"""
+
+
+def test_runtime_position_copy_resolution():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", RUNTIME_POSITION_COPY_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+
+        check(len(groups) == 1, f"runtime position resources no longer drop the "
+                                f"draw group (got {len(groups)})")
+        if not groups:
+            return
+        group = groups[0]
+        check(group["position_file"] == "legsBase.buf",
+              f"group position follows the explicit Legs -> LegsBase copy "
+              f"(got {group['position_file']})")
+        check(group["draws"][1].get("position_file") == "bodyBase.buf",
+              f"reassigned Body draw follows the explicit Body -> BodyBase copy "
+              f"(got {group['draws'][1].get('position_file')})")
+
+
 # ── `handling = skip` with no `drawindexed` line at all means "suppress the
 #    original draw and replace it with nothing", NOT "draw the whole ib".
 #    Only a section that omits `handling = skip` gets the implicit
-#    whole-buffer-draw fallback (it lets the game's own, unmodified draw call
-#    proceed against the new ib).
+#    whole-buffer-draw fallback.
 
 HANDLING_SKIP_INI = """[TextureOverrideBodyBlend]
 vb0 = ResourcePos
@@ -1068,11 +1143,13 @@ def test_toggle_driven_diffuse_swap_mesh_builder():
               "first draw's payload entry carries no texture_variants (single diffuse)")
 
         variants = second.get("texture_variants")
-        check(bool(variants) and len(variants) == 2,
-              f"second draw's payload entry carries both resolved variants (got {variants})")
+        check(bool(variants) and len(variants) == 3 and
+              variants[0]["conditions"] == [],
+              f"second draw carries the unconditional write and both resolved "
+              f"conditional writes in source order (got {variants})")
         keys = {v["tex_key"] for v in variants}
-        check(keys == {"diffuseB.dds", "diffuseC.dds"},
-              f"each variant's tex_key names its own resolved diffuse file (got {keys})")
+        check(keys == {"diffuseA.dds", "diffuseB.dds", "diffuseC.dds"},
+              f"each assignment's tex_key names its own resolved diffuse file (got {keys})")
         check(second["tex_key"] == "diffuseB.dds",
               f"the draw's own default tex_key is the first/`if`-branch "
               f"alternative at this point in execution order (seven2==1 -> "
@@ -1087,6 +1164,68 @@ def test_toggle_driven_diffuse_swap_mesh_builder():
 #    after a THIRD (also unconditional) reassignment back to the first file
 #    get that again. A static one-diffuse-per-component model can only ever
 #    get 3 of these 4 regions right.
+
+SAME_VAR_PARTIAL_DIFFUSE_INI = """[Constants]
+global persist $color = 0
+
+[KeyColor]
+key = c
+type = cycle
+$color = 0,1,2
+
+[TextureOverrideBodyPosition]
+vb0 = ResourceBodyPosition
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideBody]
+ib = ResourceBodyIB
+Resource\\GIMI\\Diffuse = ref ResourceDiffuseA
+if $color == 1
+Resource\\GIMI\\Diffuse = ref ResourceDiffuseB
+endif
+if $color == 2
+Resource\\GIMI\\Diffuse = ref ResourceDiffuseC
+endif
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+[ResourceBodyPosition]
+filename = pos.buf
+stride = 40
+[ResourceBodyTexcoord]
+filename = tc.buf
+stride = 20
+[ResourceDiffuseA]
+filename = diffuseA.dds
+[ResourceDiffuseB]
+filename = diffuseB.dds
+[ResourceDiffuseC]
+filename = diffuseC.dds
+"""
+
+
+def test_same_variable_partial_diffuse_chains_keep_assignment_history():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", SAME_VAR_PARTIAL_DIFFUSE_INI)
+        secs = merge_sections([path])
+        draw = build_draw_groups(secs, extract_resources(secs))[0]["draws"][0]
+        assignments = draw.get("texture_assignments") or []
+        check([item["file"] for item in assignments] ==
+              ["diffuseA.dds", "diffuseB.dds", "diffuseC.dds"],
+              f"independent same-variable writes retain source order (got {assignments})")
+
+        def selected(value):
+            state = {"color": value}
+            return next((item["file"] for item in reversed(assignments)
+                         if _visible(item["conditions"], state)), None)
+
+        check([selected(value) for value in ("0", "1", "2")] ==
+              ["diffuseA.dds", "diffuseB.dds", "diffuseC.dds"],
+              "last-matching assignment selects the authored texture for every color")
+
 
 MULTI_REASSIGN_INI = """[KeySuitCL]
 key = l
@@ -1374,11 +1513,13 @@ if __name__ == "__main__":
                test_mid_section_ib_reassignment_mesh_builder,
                test_cross_ib_vb_reassignment_ini_parser,
                test_cross_ib_vb_reassignment_mesh_builder,
+               test_runtime_position_copy_resolution,
                test_handling_skip_with_no_drawindexed_draws_nothing,
                test_component_name_ending_in_uppercase_abbreviation,
                test_run_inlines_nested_commandlist_draws,
                test_toggle_driven_diffuse_swap_ini_parser,
                test_toggle_driven_diffuse_swap_mesh_builder,
+               test_same_variable_partial_diffuse_chains_keep_assignment_history,
                test_multi_reassignment_diffuse_resolution,
                test_multi_reassignment_mesh_builder,
                test_implicit_whole_buffer_draw_keeps_its_diffuse,

@@ -2,13 +2,15 @@
 
 import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn, toggleGrid, toggleTrackballGizmo } from './scene.js';
 import { setTextures } from './mesh-factory.js';
-import { activeMeshes, reset, resetMeshState, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
+import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
 import { buildMenuPanel } from './menu-panel.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { setGeometryBlob } from './decode.js';
+import { setHealthReport } from './health-report.js';
+import { setIniEditorContext } from './ini-editor.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -84,6 +86,7 @@ async function displayMeshPayload(payload) {
   }
 
   lastToggles = payload.__toggles__ || {};
+  setStateRules(payload.__state_rules__ || [], payload.__state_defaults__ || {});
   setTextures(payload.__textures__);
   buildMeshPanel(payload, currentModPath, payload.__mesh_names__ || {});
   buildTogglePanel(payload.__toggles__, { modPath: currentModPath, onChange: reloadCurrentMod });
@@ -95,12 +98,16 @@ async function displayMeshPayload(payload) {
 
 async function loadModAt(path) {
   currentModPath = path;
+  $('ini-view-btn').disabled = true;
   $('mod-path').textContent = path;
   showLoading(true, 'Loading Model…');
+  setHealthReport(null);
 
   const data = await window.pywebview.api.load_mod(path);
+  setHealthReport(data?.__health__);
   if (data && data.error) {
     showLoading(false);
+    setIniEditorContext(path, reloadCurrentMod);
     await alertDialog('Could not load mod:\n\n' + data.error);
     return;
   }
@@ -108,9 +115,11 @@ async function loadModAt(path) {
     await displayMeshPayload(data);
   } catch (error) {
     showLoading(false);
+    setIniEditorContext(path, reloadCurrentMod);
     await alertDialog('Could not load mod geometry:\n\n' + error.message);
     return;
   }
+  setIniEditorContext(path, reloadCurrentMod);
   await refreshPendingState();
 
   // Lead with the folder name; the full path is long and rarely the useful part.

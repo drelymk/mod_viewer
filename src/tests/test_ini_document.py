@@ -212,6 +212,8 @@ def test_structure_errors():
     unclosed = IniDocument.from_string("[A]\r\nif $x == 1\r\ndrawindexed = 1,0,0\r\n")
     check("unclosed if reported",
           [p["problem"] for p in unclosed.structure_errors()], ["1 unclosed if"])
+    check("unclosed if points to its opening line",
+          unclosed.structure_errors()[0]["line"], 1)
 
     extra = IniDocument.from_string("[A]\r\nif $x == 1\r\nendif\r\nendif\r\n")
     check("extra endif reported",
@@ -224,6 +226,44 @@ def test_structure_errors():
     check("errors are per-section", mixed.is_safe_to_rewrite("Good"), True)
     check("bad section still flagged", mixed.is_safe_to_rewrite("Bad"), False)
 
+    branch_order = IniDocument.from_string(
+        "[A]\r\nif $x == 1\r\nelse\r\nelse\r\nelif $x == 2\r\nendif\r\n")
+    check("duplicate else and elif-after-else reported",
+          [p["problem"] for p in branch_order.structure_errors()],
+          ["duplicate else", "elif after else"])
+    check("invalid branch order is unsafe to rewrite",
+          branch_order.is_safe_to_rewrite("A"), False)
+
+
+def test_syntax_errors():
+    doc = IniDocument.from_string(
+        "[Good]\r\n"
+        "if\r\n"
+        "elif\r\n"
+        "else if\r\n"
+        "elseif $x == 1\r\n"
+        "if($x == 1)\r\n"
+        "else if($x == 2)\r\n"
+        "else unexpected\r\n"
+        "endif unexpected\r\n"
+        "if ($x == 1\r\n"
+        "elif $x == 2)\r\n"
+        "[]\r\n"
+        "[Missing\r\n"
+        "[Trailing] garbage\r\n")
+    errors = doc.syntax_errors()
+    commented_header = IniDocument.from_string("[Good] ; allowed header comment\r\n")
+    check("valid header comment is accepted",
+          commented_header.syntax_errors(), [])
+    check("malformed conditional forms reported",
+          sum(p["code"] == "malformed_condition_syntax" for p in errors), 8)
+    check("unbalanced condition parentheses reported",
+          sum(p["code"] == "unbalanced_condition_parentheses" for p in errors), 2)
+    check("malformed section headers reported",
+          sum(p["code"] == "malformed_section_header" for p in errors), 3)
+    check("condition syntax makes section unsafe",
+          doc.is_safe_to_rewrite("Good"), False)
+
 
 def main():
     test_roundtrip_string()
@@ -233,6 +273,7 @@ def main():
     test_inline_comment_stripping()
     test_edits()
     test_structure_errors()
+    test_syntax_errors()
     test_save_atomic_and_backup()
     test_roundtrip_corpus()
     print(f"\n{'ALL PASS' if not failures else str(len(failures)) + ' FAILURE(S)'}")

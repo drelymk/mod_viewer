@@ -20,7 +20,7 @@ import os, sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.mod_loader import build_toggle_panel
+from app.mod_loader import _attach_shape_sliders, build_toggle_panel
 
 FAILS = []
 
@@ -145,6 +145,32 @@ def test_wired_and_unwired_can_coexist_across_sections():
     check("KeyMenu" not in panel, "the unrelated non-gating, non-pending key stays hidden")
 
 
+def test_shape_sliders_follow_mid_section_position_reassignments():
+    """One override may begin with Legs and switch to Body buffers later.
+    Both morph descriptions must reach the group; mesh_builder filters them
+    against each draw's effective position buffer."""
+    groups = [{
+        "position_file": r"Meshes\LegsPosition.buf",
+        "draws": [
+            {"label": "Part-1"},
+            {"label": "Part-2", "position_file": r"Meshes\BodyPosition.buf"},
+        ],
+    }]
+    sliders = [
+        {"var": "currFlat", "base_file": r"Meshes\LegsPosition.buf",
+         "target_file": r"Meshes\LegsPositionFlat.buf"},
+        {"var": "currFlat", "base_file": r"Meshes\BodyPosition.buf",
+         "target_file": r"Meshes\BodyPositionFlat.buf"},
+        {"var": "other", "base_file": r"Meshes\HairPosition.buf",
+         "target_file": r"Meshes\HairPositionFlat.buf"},
+    ]
+    _attach_shape_sliders(groups, sliders)
+    attached = groups[0].get("shape_sliders", [])
+    check([item["target_file"] for item in attached] ==
+          [r"Meshes\LegsPositionFlat.buf", r"Meshes\BodyPositionFlat.buf"],
+          f"group receives its base and reassigned-draw morphs only (got {attached})")
+
+
 if __name__ == "__main__":
     for fn in (test_wired_toggle_shows_only_its_gating_vars,
                test_unwired_pending_toggle_shown_with_writable_vars,
@@ -153,7 +179,8 @@ if __name__ == "__main__":
                test_unwired_toggle_excludes_namespaced_vars,
                test_fully_namespaced_ungated_pending_section_is_still_hidden,
                test_default_prefers_declared_default_over_first_cycle_value,
-               test_wired_and_unwired_can_coexist_across_sections):
+               test_wired_and_unwired_can_coexist_across_sections,
+               test_shape_sliders_follow_mid_section_position_reassignments):
         fn()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
     sys.exit(1 if FAILS else 0)

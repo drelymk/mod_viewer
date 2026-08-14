@@ -1,9 +1,9 @@
-"""In-memory "pending edits" for the currently open mod.
+"""Authoritative in-memory INI versions for the currently open mod.
 
-Toggle authoring (add/edit/delete) and Record mode stage their changes here
-instead of writing straight to disk — nothing touches a real ini file until
-the user clicks Export. mod_loader.load_mod layers `overrides_for()`'s
-in-memory text over the real files so the UI can preview pending edits.
+Every active INI is loaded here once. The text editor, toggle authoring and
+Record mode all read and mutate these same documents. Nothing touches a real
+INI until the user clicks Export; mod_loader.load_mod always layers the
+in-memory versions over disk, including versions that are currently clean.
 
 The app has exactly one window and one mod open at a time, so a single
 module-level slot is enough: opening a different mod folder just doesn't
@@ -41,11 +41,13 @@ from core.ini_document import IniDocument
 
 
 class _Session:
-    __slots__ = ("mod_dir", "docs", "new_sections")
+    __slots__ = ("mod_dir", "docs", "baselines", "dirty", "new_sections")
 
     def __init__(self, mod_dir):
         self.mod_dir = mod_dir
-        self.docs = {}          # ini basename -> IniDocument; only entries with pending edits
+        self.docs = {}          # ini basename -> authoritative in-memory IniDocument
+        self.baselines = {}     # ini basename -> text last loaded/exported
+        self.dirty = set()      # ini basenames whose text differs from baseline
         self.new_sections = {}  # ini basename -> {section name, ...} added via add_toggle
                                  # this session and not yet exported -- see mark_added
 
@@ -64,8 +66,27 @@ def _get_or_create(mod_dir):
     return _session
 
 
+def load_documents(mod_dir, ini_paths):
+    """Load every active INI into the authoritative in-memory session.
+
+    Re-loading the same mod never re-reads disk: text edits and toggle edits
+    must continue operating on the exact same documents until Export,
+    Discard, a mod switch, or application restart. A new mod replaces the old
+    session; the frontend confirms before allowing that switch when dirty.
+    """
+    sess = _get_or_create(mod_dir)
+    for path in ini_paths:
+        key = os.path.basename(path)
+        if key in sess.docs:
+            continue
+        doc = IniDocument.load(path)
+        sess.docs[key] = doc
+        sess.baselines[key] = doc.to_string()
+    return sess
+
+
 def begin(mod_dir, ini_path):
-    """Get `ini_path`'s pending doc for mutation, loading it into the
+    """Get `ini_path`'s authoritative doc for mutation, loading it into the
     session on first touch (a session for a different mod folder is
     replaced — the frontend confirms with the user before that happens).
 
@@ -74,42 +95,98 @@ def begin(mod_dir, ini_path):
     """
     sess = _get_or_create(mod_dir)
     key = os.path.basename(ini_path)
-    was_pending = key in sess.docs
-    doc = sess.docs.get(key) or IniDocument.load(ini_path)
-    snapshot = doc.to_string() if was_pending else None
+    if key not in sess.docs:
+        load_documents(mod_dir, [ini_path])
+    was_pending = key in sess.dirty
+    doc = sess.docs[key]
+    snapshot = doc.to_string()
     return sess, key, doc, was_pending, snapshot
 
 
 def commit(sess, key, doc):
     """Record a successful mutation as this ini's new pending state."""
     sess.docs[key] = doc
+    if doc.to_string() == sess.baselines[key]:
+        sess.dirty.discard(key)
+        sess.new_sections.pop(key, None)
+    else:
+        sess.dirty.add(key)
 
 
 def rollback(sess, key, was_pending, snapshot, ini_path):
-    """Undo a failed mutation: restore the ini's previous pending text, or
-    drop it if this action would have been its first pending edit.
-    """
+    """Undo a failed mutation and restore its previous dirty state."""
+    sess.docs[key] = IniDocument.from_string(snapshot, path=ini_path)
     if was_pending:
-        sess.docs[key] = IniDocument.from_string(snapshot, path=ini_path)
+        sess.dirty.add(key)
     else:
-        sess.docs.pop(key, None)
+        sess.dirty.discard(key)
 
 
 def peek(mod_dir, ini_path):
-    """The pending doc for `ini_path` if one exists, else load fresh from
-    disk. For read-only queries that must see an already-staged edit
-    without themselves staging anything new.
-    """
-    if _same_mod(mod_dir):
-        doc = _session.docs.get(os.path.basename(ini_path))
-        if doc is not None:
-            return doc
-    return IniDocument.load(ini_path)
+    """Return the authoritative document for a read-only query."""
+    if not _same_mod(mod_dir) or os.path.basename(ini_path) not in _session.docs:
+        load_documents(mod_dir, [ini_path])
+    return _session.docs[os.path.basename(ini_path)]
 
 
 def has_pending(mod_dir):
     """True if mod_dir has at least one staged, not-yet-exported edit."""
-    return _same_mod(mod_dir) and bool(_session.docs)
+    return _same_mod(mod_dir) and bool(_session.dirty)
+
+
+def list_documents(mod_dir):
+    """Active INI basenames in stable load order."""
+    if not _same_mod(mod_dir):
+        return []
+    return list(_session.docs)
+
+
+def dirty_documents(mod_dir):
+    """Copy of the dirty basename set for UI/API status."""
+    return set(_session.dirty) if _same_mod(mod_dir) else set()
+
+
+def document(mod_dir, ini_name):
+    """Return a loaded document by basename, rejecting browser-made paths."""
+    if not _same_mod(mod_dir):
+        raise KeyError("no INI session is loaded for this mod")
+    key = os.path.basename(ini_name or "")
+    if key != ini_name or key not in _session.docs:
+        raise KeyError(f"{ini_name!r} is not an active INI in this mod")
+    return key, _session.docs[key]
+
+
+def editable_text(doc):
+    """Browser-editor text: no BOM and normalized LF line endings."""
+    text = doc.to_string()
+    if doc.has_bom:
+        text = text[1:]
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def update_text(mod_dir, ini_name, text):
+    """Replace one loaded document from editor text and update dirty state.
+
+    Existing per-line terminators are reused positionally by IniDocument, so
+    opening and applying an unchanged CRLF/mixed-EOL file is a true no-op.
+    """
+    key, doc = document(mod_dir, ini_name)
+    normalized = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    if normalized == editable_text(doc):
+        return False
+    snapshot = doc.to_string()
+    was_pending = key in _session.dirty
+    try:
+        doc.replace_lines(0, len(doc.lines), normalized.splitlines())
+        commit(_session, key, doc)
+        tracked = _session.new_sections.get(key)
+        if tracked:
+            present = {sec.name for sec in doc.sections}
+            tracked.intersection_update(present)
+    except BaseException:
+        rollback(_session, key, was_pending, snapshot, doc.path)
+        raise
+    return True
 
 
 def mark_added(mod_dir, ini_path, section_name):
@@ -153,10 +230,7 @@ def new_sections_for(mod_dir):
 
 
 def overrides_for(mod_dir):
-    """{ini_path: text} for every pending-edited ini in mod_dir's session —
-    what mod_loader.load_mod layers over the real files to preview pending
-    edits without touching disk.
-    """
+    """Every loaded {ini_path: text}, used instead of disk while open."""
     if not _same_mod(mod_dir):
         return {}
     return {doc.path: doc.to_string() for doc in _session.docs.values()}
@@ -177,15 +251,18 @@ def export(mod_dir):
     Returns {"saved": [ini basename, ...], "failed": [{"ini": ..., "error":
     ...}, ...]}.
     """
-    if not _same_mod(mod_dir) or not _session.docs:
+    if not _same_mod(mod_dir) or not _session.dirty:
         return {"saved": [], "failed": []}
 
     saved, failed = [], []
-    for key, doc in list(_session.docs.items()):
+    for key in [name for name in _session.docs if name in _session.dirty]:
+        doc = _session.docs[key]
         try:
             doc.save()
             saved.append(key)
-            del _session.docs[key]
+            _session.baselines[key] = doc.to_string()
+            _session.dirty.discard(key)
+            _session.new_sections.pop(key, None)
         except Exception as e:
             failed.append({"ini": key, "error": str(e)})
     return {"saved": saved, "failed": failed}

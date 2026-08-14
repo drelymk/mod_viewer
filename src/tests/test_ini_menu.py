@@ -6,16 +6,20 @@ without menu discovery every condition on them is treated as untracked (=
 always satisfied) and the viewer shows every variant at once.
 """
 
-import os, sys, tempfile
+import base64, io, os, sys, tempfile
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.ini_menu import extract_menu_toggles, extract_menu_var_names
+from core.ini_menu import (attach_menu_images, extract_menu_toggles,
+                           extract_menu_var_names)
+from core.ini_shapes import extract_shape_sliders
+from core.ini_state import extract_state_rules
 from core.ini_parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, find_inis, gating_var_names,
                              merge_sections, parse_sections)
 from app.mod_loader import build_menu_panel
+from PIL import Image
 
 FAILS = []
 
@@ -485,6 +489,422 @@ endif
           f"duplicate slot numbers get unique entry keys (got {list(menu)})")
 
 
+def test_compute_shape_slider_is_discovered_and_modelled():
+    text = r"""
+[Constants]
+global persist $currFlat = 0.5
+
+[CustomShaderComputeShapes]
+x88 = $currFlat
+cs-t50 = copy ResourceBodyPosition.Base
+cs-t51 = copy ResourceBodyPosition.Flat
+
+[ResourceBodyPosition.Base]
+type = Buffer
+stride = 40
+filename = BodyPosition.buf
+
+[ResourceBodyPosition.Flat]
+type = Buffer
+stride = 40
+filename = BodyPositionFlat.buf
+"""
+    secs = sections(text)
+    sliders = extract_shape_sliders(secs, extract_resources(secs))
+    check(len(sliders) == 1, f"one conservative two-buffer shape slider is found (got {sliders})")
+    slider = sliders[0]
+    check((slider["var"], slider["base_file"], slider["target_file"]) ==
+          ("currFlat", "BodyPosition.buf", "BodyPositionFlat.buf"),
+          f"slider links its variable and buffers (got {slider})")
+
+    panel = build_menu_panel({"shape": slider}, {"currFlat": "0.5"})
+    entry = panel["shape"]
+    check(entry["kind"] == "shape_slider" and entry["default"] == "0.5",
+          f"menu model preserves slider kind and float default (got {entry})")
+
+
+def test_compute_shape_resource_names_are_case_insensitive():
+    text = r"""
+[Constants]
+global persist $currFlat = 0
+[CustomShaderComputeShapes]
+x87 = $currFlat
+cs-t50 = copy resourcebodyposition.base
+cs-t51 = copy RESOURCEBODYPOSITION.FLAT
+[ResourceBodyPosition.Base]
+stride = 40
+filename = BodyPosition.buf
+[ResourceBodyPosition.Flat]
+stride = 40
+filename = BodyPositionFlat.buf
+"""
+    secs = sections(text)
+    sliders = extract_shape_sliders(secs, extract_resources(secs))
+    check(len(sliders) == 1 and
+          sliders[0].get("target_file") == "BodyPositionFlat.buf",
+          f"mixed-case resource references still resolve shape buffers (got {sliders})")
+
+
+def test_parenthesized_increment_modulo_menu_cycle_is_discovered():
+    text = r"""
+[CommandListClickedSlot]
+if $clickedSlot == 1
+  $headdress = ($headdress + 1) % 4
+elif $clickedSlot == 2
+  $cloth = ($cloth + 1) % 3
+endif
+"""
+    menu = _by_slot(extract_menu_toggles(sections(text)))
+    check(menu[1]["values"] == ["0", "1", "2", "3"] and
+          menu[2]["values"] == ["0", "1", "2"],
+          f"parenthesized increment/modulo cycles retain their full ranges (got {menu})")
+
+
+def test_repeated_full_buffer_shape_blocks_are_discovered():
+    text = r"""
+[CustomShaderComputeShapes]
+x88 = $BoobsSize
+cs-t50 = copy ResourceBodyPosition.1
+cs-t51 = copy ResourceBodyPosition.2
+ResourceBodyPosition = ref cs-u5
+Dispatch = 3, 1, 1
+x88 = $NippleLength
+cs-t50 = copy ResourceBodyPosition.1
+cs-t51 = copy ResourceBodyPosition.3
+ResourceBodyPosition = ref cs-u5
+Dispatch = 3, 1, 1
+[ResourceBodyPosition.1]
+stride = 40
+filename = BodyPosition.buf
+[ResourceBodyPosition.2]
+stride = 40
+filename = BodyPosition.boobs.buf
+[ResourceBodyPosition.3]
+stride = 40
+filename = BodyPosition.nipple.buf
+"""
+    sliders = extract_shape_sliders(sections(text), extract_resources(sections(text)))
+    by_var = {slider["var"]: slider for slider in sliders}
+    check(sorted(by_var) == ["BoobsSize", "NippleLength"] and
+          by_var["BoobsSize"]["base_file"] == "BodyPosition.buf" and
+          by_var["NippleLength"]["target_file"] == "BodyPosition.nipple.buf",
+          f"repeated t50/t51 morph blocks share their authored base (got {sliders})")
+
+
+def test_wwmi_sparse_shape_slider_is_discovered():
+    text = r"""
+[Constants]
+global persist $BoobsSize = 0
+global $shapekey_vertex_offset_batch1 = 43085
+
+[CommandListDrawSlider.Boobs]
+x87 = $BoobsSize * x87
+
+[CommandListSetBoobsSize]
+$\WWMIv1\shapekey_id = 161
+$\WWMIv1\shapekey_value = $BoobsSize
+
+[CommandListSetupShapeKeysBatch]
+cs-t33 = ResourceShapeKeyOffsetBuffer
+[CommandListLoadShapeKeysBatch]
+cs-t0 = ResourceShapeKeyVertexIdBuffer
+cs-t1 = ResourceShapeKeyVertexOffsetBuffer
+[CommandListApplyShapeKeys]
+cs-t6 = ResourcePositionBuffer
+
+[ResourcePositionBuffer]
+stride = 12
+filename = Meshes/Position.buf
+[ResourceShapeKeyOffsetBuffer]
+filename = Meshes/ShapeKeyOffset.buf
+[ResourceShapeKeyVertexIdBuffer]
+filename = Meshes/ShapeKeyVertexId.buf
+[ResourceShapeKeyVertexOffsetBuffer]
+filename = Meshes/ShapeKeyVertexOffset.buf
+"""
+    secs = sections(text)
+    sliders = extract_shape_sliders(secs, extract_resources(secs))
+    check(len(sliders) == 1, f"one WWMI sparse slider is found (got {sliders})")
+    slider = sliders[0]
+    check(slider.get("shape_id") == 161 and slider.get("buffer_shape_id") == 162 and
+          slider.get("sparse_entry_offset") == 43085 and
+          slider.get("vertex_offset_file") == "Meshes/ShapeKeyVertexOffset.buf",
+          f"WWMI slider aligns its key ID, batch records, and sparse buffers (got {slider})")
+
+
+def test_modulo_cycle_and_present_derived_rules():
+    text = r"""
+[Constants]
+global persist $outfit = 0
+global $piece = 0
+[CommandListClickedSlot]
+if $clickedSlot == 1
+    $outfit = $outfit + 1
+    $outfit = $outfit % 4
+elif $clickedSlot == 2
+    $other = 1 - $other
+endif
+[Present]
+if $outfit == 0
+    $piece = 0
+elif $outfit == 1
+    $piece = 1
+endif
+"""
+    secs = sections(text)
+    slots = _by_slot(extract_menu_toggles(secs))
+    check(slots[1]["values"] == ["0", "1", "2", "3"],
+          f"modulo cycle exposes every value (got {slots[1]['values']})")
+    rules = extract_state_rules(secs)
+    piece_rules = [rule for rule in rules if rule["var"] == "piece"]
+    check(len(piece_rules) == 2 and piece_rules[1]["value"] == "1",
+          f"Present-derived literal draw flags are modelled (got {piece_rules})")
+    check("piece" in gating_var_names(secs),
+          "a Present-derived flag remains available to gate draw meshes")
+    check(all(not any(a["var"] == b["var"] and a["value"] == b["value"] and
+                          a["negate"] != b["negate"]
+                          for i, a in enumerate(group) for b in group[i + 1:])
+              for rule in rules for group in rule["conditions"]),
+          "impossible elif alternatives are removed from state rules")
+
+
+def test_zzmi_midpoint_pair_sliders_are_discovered():
+    text = r"""
+[Constants]
+global persist $Bottom = 0
+global persist $Breast = 0
+[CommandListDrawSlider.Bottom]
+x87 = 202 / $ww * $Bottom
+[CommandListDrawSlider.Breast]
+x87 = 202 / $ww * $Breast
+[CommandListKeys]
+cs-t50 = copy ResourceBodyBase
+cs-t51 = copy ResourceBodyBigBottom
+cs-t52 = copy ResourceBodySmallBottom
+cs-t53 = copy ResourceBodyBigBreast
+cs-t54 = copy ResourceBodySmallBreast
+x88 = $Bottom
+x89 = $Breast
+[ResourceBodyBase]
+stride = 40
+filename = Body.buf
+[ResourceBodyBigBottom]
+stride = 40
+filename = BodyBigBottom.buf
+[ResourceBodySmallBottom]
+stride = 40
+filename = BodySmallBottom.buf
+[ResourceBodyBigBreast]
+stride = 40
+filename = BodyBigBreast.buf
+[ResourceBodySmallBreast]
+stride = 40
+filename = BodySmallBreast.buf
+"""
+    secs = sections(text)
+    sliders = extract_shape_sliders(secs, extract_resources(secs))
+    by_var = {slider["var"]: slider for slider in sliders}
+    check(sorted(by_var) == ["Bottom", "Breast"],
+          f"both multi-target sliders are found (got {sorted(by_var)})")
+    check(by_var["Bottom"].get("mode") == "midpoint_pair" and
+          by_var["Bottom"].get("low_file") == "BodySmallBottom.buf" and
+          by_var["Bottom"].get("target_file") == "BodyBigBottom.buf",
+          f"bottom slider links its smaller and bigger buffers (got {by_var['Bottom']})")
+
+
+def test_zzmi_midpoint_bindings_do_not_cross_commandlists():
+    """x88/x89 are generic ini registers also used by unrelated UI shaders.
+    A scalar from another CommandList must never claim a five-buffer shape set."""
+    text = r"""
+[Constants]
+global persist $ActualBottom = 0
+global persist $UIAnim = 0
+[CommandListDrawSlider.Bottom]
+x87 = 202 / $ww * $ActualBottom
+[CommandListShapeBuffers]
+cs-t50 = copy ResourceBodyBase
+cs-t51 = copy ResourceBodyBigBottom
+cs-t52 = copy ResourceBodySmallBottom
+cs-t53 = copy ResourceBodyBigBreast
+cs-t54 = copy ResourceBodySmallBreast
+[CommandListUnrelatedUI]
+x88 = $UIAnim
+x89 = $UIAnim
+[ResourceBodyBase]
+stride = 40
+filename = Body.buf
+[ResourceBodyBigBottom]
+stride = 40
+filename = BodyBigBottom.buf
+[ResourceBodySmallBottom]
+stride = 40
+filename = BodySmallBottom.buf
+[ResourceBodyBigBreast]
+stride = 40
+filename = BodyBigBreast.buf
+[ResourceBodySmallBreast]
+stride = 40
+filename = BodySmallBreast.buf
+"""
+    secs = sections(text)
+    sliders = extract_shape_sliders(secs, extract_resources(secs))
+    check(sliders == [],
+          f"unrelated register writes do not create shape sliders (got {sliders})")
+
+
+def test_recognized_menu_slots_get_authored_images():
+    text = r"""
+[CommandListClickedSlot]
+if $clickedSlot == 1
+  $top = 1 - $top
+elif $clickedSlot == 2
+  $hair = 1 - $hair
+endif
+[CommandListSlotItemImage]
+if $slot == 1
+  ps-t100 = resourcemenuitem.top
+elif $slot == 2
+  ps-t100 = RESOURCEMENUITEM.HAIR
+endif
+[ResourceMenuItem.Top]
+filename = ui/top.png
+[ResourceMenuItem.Hair]
+filename = ui/hair.png
+"""
+    secs = sections(text)
+    menu = extract_menu_toggles(secs)
+    attach_menu_images(menu, secs, extract_resources(secs))
+    by_slot = _by_slot(menu)
+    check(by_slot[1].get("image_file") == "ui/top.png" and
+          by_slot[2].get("image_file") == "ui/hair.png",
+          f"recognized slots retain their authored item images (got {by_slot})")
+
+
+def test_generated_button_grid_gets_shared_authored_images():
+    """Responsive grids dispatch icons by an arbitrary button counter; the
+    same authored image is often deliberately used for every toggle."""
+    text = r"""
+[CommandListSetButtonCondition]
+if $Button_number == 2
+  $Hair = 1 - $Hair
+else if $Button_number == 3
+  $Eyes = $Eyes + 1
+  if $Eyes > 2
+    $Eyes = 0
+  endif
+endif
+[CommandListSetButtonIcon]
+if $Button_number == 1
+  ps-t100 = resourceitembody
+else if $Button_number == 2
+  ps-t100 = resourceitembutton
+else if $Button_number == 3
+  ps-t100 = RESOURCEITEMBUTTON
+endif
+[ResourceItemBody]
+filename = res/item_body.png
+[ResourceItemButton]
+filename = res/item_button.png
+"""
+    secs = sections(text)
+    menu = extract_menu_toggles(secs)
+    attach_menu_images(menu, secs, extract_resources(secs))
+    by_slot = _by_slot(menu)
+    check(by_slot[2].get("image_file") == "res/item_button.png" and
+          by_slot[3].get("image_file") == "res/item_button.png",
+          f"counter-dispatched shared icons activate image layout (got {by_slot})")
+
+
+def test_arrow_pair_menu_is_discovered_with_numbered_icons():
+    """MCM-style menus can give each item separate left/right hit regions
+    instead of routing every click through one integer slot dispatcher."""
+    text = r"""
+[Constants]
+global persist $Top = 1
+global persist $Hair = 1
+
+[CommandListIcon2]
+ps-t100 = resourceicon2
+
+[CommandListButton2Left]
+$Top = $Top - 1
+if $Top < 0
+  $Top = 4
+endif
+
+[CommandListButton2Right]
+$Top = $Top + 1
+if $Top > 4
+  $Top = 0
+endif
+
+[CommandListIcon8]
+ps-t100 = RESOURCEICON8
+
+[CommandListButton8Left]
+$Hair = $Hair - 1
+if $Hair < 1
+  $Hair = 5
+endif
+
+[CommandListButton8Right]
+$Hair = $Hair + 1
+if $Hair > 5
+  $Hair = 1
+endif
+
+[ResourceIcon2]
+filename = ui/top.dds
+
+[ResourceIcon8]
+filename = ui/hair.dds
+"""
+    secs = sections(text)
+    menu = extract_menu_toggles(secs)
+    attach_menu_images(menu, secs, extract_resources(secs))
+    by_slot = _by_slot(menu)
+    check(sorted(by_slot) == [2, 8],
+          f"both numbered arrow-pair items are found (got {sorted(by_slot)})")
+    check(by_slot[2]["var"] == "Top" and
+          by_slot[2]["values"] == ["0", "1", "2", "3", "4"],
+          f"Top range comes from its decrement/increment wraps (got {by_slot[2]})")
+    check(by_slot[8]["values"] == ["1", "2", "3", "4", "5"],
+          f"non-zero Hair range is preserved (got {by_slot[8]['values']})")
+    check(by_slot[2].get("image_file") == "ui/top.dds" and
+          by_slot[8].get("image_file") == "ui/hair.dds",
+          f"IconN artwork maps to ButtonN (got {by_slot})")
+
+
+def test_menu_panel_preserves_authored_transparency():
+    with tempfile.TemporaryDirectory() as tmp:
+        icon = Image.new("RGBA", (52, 52), (200, 100, 50, 0))
+        icon.putpixel((20, 20), (10, 20, 30, 255))
+        icon.save(os.path.join(tmp, "icon.png"))
+        menu = {"one": {"name": "top", "slot": 1, "var": "top",
+                        "values": ["0", "1"], "effects": [], "source": None,
+                        "ini_path": None, "section": "CommandListMenu",
+                        "image_file": "icon.png"}}
+        panel = build_menu_panel(menu, {}, mod_dir=tmp)
+        raw = base64.b64decode(panel["one"]["image"].split(",", 1)[1])
+        decoded = Image.open(io.BytesIO(raw))
+        check(decoded.mode == "RGBA" and decoded.getpixel((0, 0))[3] == 0 and
+              decoded.getpixel((20, 20))[3] == 255,
+              f"menu PNG keeps transparent and opaque pixels (got {decoded.mode})")
+
+
+def test_fully_transparent_menu_placeholder_uses_fallback():
+    with tempfile.TemporaryDirectory() as tmp:
+        Image.new("RGBA", (52, 52), (0, 0, 0, 0)).save(
+            os.path.join(tmp, "blank.png"))
+        menu = {"one": {"name": "hat", "slot": 1, "var": "hat",
+                        "values": ["0", "1"], "effects": [], "source": None,
+                        "ini_path": None, "section": "CommandListMenu",
+                        "image_file": "blank.png"}}
+        entry = build_menu_panel(menu, {}, mod_dir=tmp)["one"]
+        check(entry.get("image") is None and entry.get("image_slot") is True,
+              f"empty artwork retains grid membership but no blank image (got {entry})")
+
+
 if __name__ == "__main__":
     for fn in (test_binary_flip_idiom,
                test_increment_wrap_idiom,
@@ -503,7 +923,20 @@ if __name__ == "__main__":
                test_menu_panel_model,
                test_menu_panel_lists_slots_that_gate_nothing,
                test_commandlist_section_name_is_case_insensitive,
-               test_nested_paged_slot_chains_are_all_discovered):
+               test_nested_paged_slot_chains_are_all_discovered,
+               test_compute_shape_slider_is_discovered_and_modelled,
+               test_compute_shape_resource_names_are_case_insensitive,
+               test_parenthesized_increment_modulo_menu_cycle_is_discovered,
+               test_repeated_full_buffer_shape_blocks_are_discovered,
+               test_wwmi_sparse_shape_slider_is_discovered,
+               test_modulo_cycle_and_present_derived_rules,
+               test_zzmi_midpoint_pair_sliders_are_discovered,
+               test_zzmi_midpoint_bindings_do_not_cross_commandlists,
+               test_recognized_menu_slots_get_authored_images,
+               test_generated_button_grid_gets_shared_authored_images,
+               test_arrow_pair_menu_is_discovered_with_numbered_icons,
+               test_menu_panel_preserves_authored_transparency,
+               test_fully_transparent_menu_placeholder_uses_fallback):
         fn()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
     sys.exit(1 if FAILS else 0)

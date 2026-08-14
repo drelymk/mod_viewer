@@ -10,8 +10,9 @@ import os
 import webview
 
 from core.mesh_builder import encode_texture_file
+from core.ini_sections import find_inis
 
-from . import edit_session, metadata, mod_loader, server, toggle_api
+from . import edit_session, ini_api, metadata, mod_loader, server, toggle_api
 
 
 class ModViewerAPI:
@@ -60,7 +61,10 @@ class ModViewerAPI:
 
     def load_mod(self, folder_path):
         folder_path = self._folder(folder_path)
-        # Preview any pending, not-yet-exported edits over the real files.
+        # Every active INI is loaded once into the authoritative in-memory
+        # session. Reloads, text edits and toggle edits all read these docs;
+        # only Export copies dirty versions back to physical files.
+        edit_session.load_documents(folder_path, find_inis(folder_path))
         overrides = edit_session.overrides_for(folder_path)
         pending_new_sections = edit_session.new_sections_for(folder_path)
         result = mod_loader.load_mod(folder_path, overrides=overrides,
@@ -77,6 +81,17 @@ class ModViewerAPI:
 
     def save_mesh_textures(self, folder_path, textures):
         return metadata.save_textures(self._folder(folder_path), textures)
+
+    # -- in-memory INI viewer/editor ----------------------------------------
+
+    def list_ini_files(self, folder_path):
+        return ini_api.list_inis(self._folder(folder_path))
+
+    def get_ini_text(self, folder_path, ini_name):
+        return ini_api.get_text(self._folder(folder_path), ini_name)
+
+    def update_ini_text(self, folder_path, ini_name, text):
+        return ini_api.update_text(self._folder(folder_path), ini_name, text)
 
     # -- toggle authoring -----------------------------------------------------
     #

@@ -17,9 +17,36 @@ from core.ini_parser import (build_draw_groups, extract_menu_toggles,
                         extract_resources, extract_toggle_keys,
                         extract_variable_defaults, find_inis, merge_sections)
 from core.mesh_builder import build_mesh_payload
+from core.mesh_builder import _encode_texture, _safe_join
+from core.ini_menu import attach_menu_images
+from core.ini_shapes import extract_shape_sliders
+from core.ini_state import extract_state_rules
+from core.ini_health import analyze_mod
 
 RESERVED_KEYS = ("__textures__", "__toggles__", "__menu__", "__mesh_names__",
-                 "__geometry__")
+                 "__geometry__", "__state_rules__", "__state_defaults__",
+                 "__health__")
+
+
+def _attach_shape_sliders(groups, shape_sliders):
+    """Attach morphs to groups that use their base buffer on any draw.
+
+    Some generated mods switch `ib`/`vb0` halfway through one override, so a
+    group can contain draws backed by several position buffers. mesh_builder
+    performs the final per-draw filter; it needs every matching morph here.
+    """
+    def path_key(path):
+        return os.path.normcase(os.path.normpath(path)) if path else None
+
+    for group in groups:
+        position_files = {path_key(group.get("position_file"))}
+        position_files.update(path_key(draw.get("position_file"))
+                              for draw in group.get("draws", []))
+        position_files.discard(None)
+        matches = [slider for slider in shape_sliders
+                   if path_key(slider.get("base_file")) in position_files]
+        if matches:
+            group["shape_sliders"] = matches
 
 
 def _ini_scope(ini_path, folder_path, multi):
@@ -51,7 +78,7 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
     preview pending, not-yet-exported edits instead of stale on-disk content.
     """
     groups = []
-    toggle_keys, menu_slots, toggle_defaults = {}, {}, {}
+    toggle_keys, menu_slots, toggle_defaults, state_rules = {}, {}, {}, []
     multi = len(ini_paths) > 1
 
     # Shared across every ini (not reset per file): two sibling inis reusing
@@ -63,17 +90,32 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
         secs = merge_sections([ini_path], overrides=overrides)
         var_prefix, source = _ini_scope(ini_path, folder_path, multi)
 
-        groups.extend(build_draw_groups(secs, extract_resources(secs),
-                                        var_prefix=var_prefix, source=source,
-                                        seen=seen_labels))
+        resources = extract_resources(secs)
+        ini_groups = build_draw_groups(secs, resources, var_prefix=var_prefix,
+                                       source=source, seen=seen_labels)
+        shape_sliders = extract_shape_sliders(
+            secs, resources, var_prefix=var_prefix, source=source)
+        state_rules.extend(extract_state_rules(secs, var_prefix=var_prefix))
+        _attach_shape_sliders(ini_groups, shape_sliders)
+        groups.extend(ini_groups)
         toggle_keys.update(extract_toggle_keys(secs, var_prefix=var_prefix,
-                                               source=source))
+                                                source=source))
         menu_slots.update(extract_menu_toggles(secs, var_prefix=var_prefix,
-                                               source=source))
+                                                source=source))
+        seen_slider_vars = set()
+        for index, slider in enumerate(shape_sliders, 1):
+            if slider["var"].lower() in seen_slider_vars:
+                continue
+            seen_slider_vars.add(slider["var"].lower())
+            key = f"{var_prefix or ''}{slider['section']}#shape{index}"
+            menu_slots[key] = slider
+        own_menu = {key: value for key, value in menu_slots.items()
+                    if value.get("source") == source}
+        attach_menu_images(own_menu, secs, resources)
         for var, val in extract_variable_defaults(secs, var_prefix=var_prefix).items():
             toggle_defaults.setdefault(var, val)
 
-    return groups, toggle_keys, menu_slots, toggle_defaults
+    return groups, toggle_keys, menu_slots, toggle_defaults, state_rules
 
 
 def _gating_vars(payload):
@@ -160,9 +202,31 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
     applies, replayed by the UI so cycling here behaves like the game does.
     """
     panel = {}
-    for key in sorted(menu_slots, key=lambda k: (menu_slots[k]["source"] or "",
-                                                 menu_slots[k]["slot"])):
+    for key in sorted(menu_slots, key=lambda k: (
+            menu_slots[k]["source"] or "",
+            1 if menu_slots[k].get("kind") == "shape_slider" else 0,
+            menu_slots[k].get("slot", 0))):
         info = menu_slots[key]
+        if info.get("kind") == "shape_slider":
+            panel[key] = {
+                "kind": "shape_slider",
+                "name": info["name"],
+                "source": info["source"],
+                "ini": (os.path.relpath(info["ini_path"], mod_dir)
+                        if info.get("ini_path") and mod_dir else info.get("ini_path")),
+                "section": info["section"],
+                "var": info["var"],
+                "min": info["min"],
+                "max": info["max"],
+                "step": info["step"],
+                "default": toggle_defaults.get(info["var"], "0"),
+            }
+            image_path = _safe_join(mod_dir, info.get("image_file"))
+            if image_path and os.path.isfile(image_path):
+                panel[key]["image_slot"] = True
+                panel[key]["image"] = _encode_texture(
+                    image_path, max_size=256, preserve_alpha=True)
+            continue
         panel[key] = {
             "name": info["name"],
             "slot": info["slot"],
@@ -175,6 +239,11 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
             "default": toggle_defaults.get(info["var"], info["values"][0]),
             "effects": info["effects"],
         }
+        image_path = _safe_join(mod_dir, info.get("image_file"))
+        if image_path and os.path.isfile(image_path):
+            panel[key]["image_slot"] = True
+            panel[key]["image"] = _encode_texture(
+                image_path, max_size=256, preserve_alpha=True)
     return panel
 
 
@@ -222,7 +291,8 @@ def unwired_pending_sections(folder_path, overrides, pending_new_sections):
         ini_path = by_name.get(ini_name)
         if ini_path is None:
             continue
-        groups, toggle_keys, _menu, _ = _parse_inis([ini_path], folder_path, overrides)
+        groups, toggle_keys, _menu, _, _rules = _parse_inis(
+            [ini_path], folder_path, overrides)
         gating = _gating_vars_from_groups(groups)
         still_unwired = [
             section for section in sections
@@ -250,24 +320,48 @@ def load_mod(folder_path, overrides=None, pending_new_sections=None):
     rejection.
     """
     ini_paths = find_inis(folder_path)
+    try:
+        health = analyze_mod(folder_path, ini_paths=ini_paths, overrides=overrides)
+    except Exception:
+        # Diagnostics must never turn an otherwise loadable mod into a load
+        # failure. Keep the failure visible in the report for debugging.
+        traceback.print_exc()
+        health = {
+            "summary": {"errors": 0, "warnings": 1, "issues": 1,
+                        "unused_files": 0, "unused_resources": 0},
+            "files": {"unreferenced": 0, "inactive_only": 0,
+                      "viewer_only": 0, "referenced": 0},
+            "issues": [{
+                "code": "health_check_failed", "severity": "warning",
+                "category": "ini",
+                "message": "The INI diagnostics could not be completed.",
+            }],
+        }
     if not ini_paths:
-        return {"error": "No active .ini files found in this folder."}
+        return {"error": "No active .ini files found in this folder.",
+                "__health__": health}
 
     try:
-        groups, toggle_keys, menu_slots, toggle_defaults = _parse_inis(
+        groups, toggle_keys, menu_slots, toggle_defaults, state_rules = _parse_inis(
             ini_paths, folder_path, overrides)
         if not groups:
-            return {"error": f"No mesh geometry found across {len(ini_paths)} ini file(s)."}
+            return {"error": f"No mesh geometry found across {len(ini_paths)} ini file(s).",
+                    "__health__": health}
 
         payload = build_mesh_payload(groups, folder_path)
         if not payload:
-            return {"error": "No mesh data could be extracted (buffer files missing?)."}
+            return {"error": "No mesh data could be extracted (buffer files missing?).",
+                    "__health__": health}
 
         payload["__toggles__"] = build_toggle_panel(
             toggle_keys, toggle_defaults, _gating_vars(payload), folder_path,
             pending_new_sections)
         payload["__menu__"] = build_menu_panel(menu_slots, toggle_defaults, folder_path)
+        payload["__state_rules__"] = state_rules
+        payload["__state_defaults__"] = toggle_defaults
+        payload["__health__"] = health
         return payload
     except Exception:
         traceback.print_exc()
-        return {"error": "Unexpected backend error. See the application log for details."}
+        return {"error": "Unexpected backend error. See the application log for details.",
+                "__health__": health}

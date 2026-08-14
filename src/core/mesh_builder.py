@@ -64,7 +64,7 @@ def _res_get(resources, name):
 _MAX_ESCAPE_DEPTH = 1   # levels above mod_dir a `filename = ..\...` may reach
 
 
-def _safe_join(mod_dir, rel):
+def safe_resource_path(mod_dir, rel):
     # Resolve a Resource section's `filename = ...` relative to mod_dir.
 
     if not rel: return None
@@ -79,6 +79,12 @@ def _safe_join(mod_dir, rel):
         if not _within(target, ceiling):
             return None
     return target
+
+
+# Backward-compatible private name for existing callers.  INI diagnostics use
+# the public spelling so resource loading and health checks cannot drift into
+# different path-safety rules.
+_safe_join = safe_resource_path
 
 
 def _within(target, root):
@@ -221,12 +227,12 @@ def _b64u(arr):
     """Pack int list as little-endian Uint32 and base64-encode."""
     return base64.b64encode(struct.pack(f"<{len(arr)}I", *arr)).decode()
 
-def _encode_texture(dds_path, max_size=2048):
+def _encode_texture(dds_path, max_size=2048, preserve_alpha=False):
     """DDS → PNG in-memory → base64 data URI.  Returns None on failure."""
     try:
         stat = os.stat(dds_path)
         cache_key = (os.path.normcase(os.path.abspath(dds_path)), stat.st_size,
-                     stat.st_mtime_ns, max_size)
+                     stat.st_mtime_ns, max_size, preserve_alpha)
         with _texture_cache_lock:
             cached = _texture_cache.pop(cache_key, None)
             if cached is not None:
@@ -238,9 +244,16 @@ def _encode_texture(dds_path, max_size=2048):
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             img = Image.open(dds_path)
             img.load()
-        # Convert to RGB before thumbnail: LANCZOS on RGBA with alpha=0 premultiplies
-        # by zero, turning all pixels black. Dropping alpha first preserves colors.
-        img = img.convert('RGB')
+        # Material textures historically drop alpha because some DDS decoders
+        # expose unusable colour in fully-transparent pixels. Menu artwork is
+        # different: its authored transparency is part of the icon and must
+        # survive conversion to PNG.
+        img = img.convert('RGBA' if preserve_alpha else 'RGB')
+        if preserve_alpha and img.getchannel('A').getextrema()[1] == 0:
+            # Some menu packs deliberately point several slots at an empty
+            # placeholder DDS. Sending it to the browser produces a blank or
+            # black-looking tile; let the menu UI use its cycle glyph instead.
+            return None
         if max(img.size) > max_size:
             img.thumbnail((max_size, max_size), Image.LANCZOS)
         buf = io.BytesIO()
@@ -332,6 +345,7 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
     buf_cache: dict = {}  # (pos_path, pos_stride, tc_path, tc_stride) → (positions, uvs)
 
     raw_buf_cache = {}
+    sparse_shape_cache = {}
     total_buffer_bytes = 0
 
     def _read_buffer(path):
@@ -487,6 +501,7 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
 
             # A mid-section `vb0/vb1/vb2 = ...` reassignment (paired with `ib`).
             draw_buffers = buffers
+            effective_pos_path = pos_path
             if draw.get("position_file") and draw.get("texcoord_file"):
                 draw_pos_path = _safe_join(mod_dir, draw["position_file"])
                 draw_tc_path  = _safe_join(mod_dir, draw["texcoord_file"])
@@ -496,10 +511,68 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                 draw_buffers = _load_buf(
                     draw_pos_path, draw.get("position_stride", pos_stride),
                     draw_tc_path, draw.get("texcoord_stride", tc_stride))
+                effective_pos_path = draw_pos_path
 
             pos_data, draw_pos_stride, tc_data, draw_tc_stride, uv_off, uv_fmt = draw_buffers
             uv_size = struct.calcsize(uv_fmt)
             pos_bytes = bytearray(len(used) * 12)
+            shape_buffers = []
+            for shape in grp.get("shape_sliders") or []:
+                shape_base_path = _safe_join(mod_dir, shape["base_file"])
+                if os.path.normcase(os.path.normpath(shape_base_path or "")) != \
+                        os.path.normcase(os.path.normpath(effective_pos_path)):
+                    continue
+                if shape.get("shape_id") is not None:
+                    paths = tuple(_safe_join(mod_dir, shape[k]) for k in
+                                  ("offset_file", "vertex_id_file", "vertex_offset_file"))
+                    if not all(path and os.path.exists(path) for path in paths):
+                        continue
+                    # WWMI aligns each 127-key batch to a 128-entry container;
+                    # user-facing IDs omit that padding slot (SkapeKeySetter.hlsl).
+                    key_id = shape.get(
+                        "buffer_shape_id",
+                        shape["shape_id"] + shape["shape_id"] // 127)
+                    cache_key = paths + (key_id,)
+                    if cache_key not in sparse_shape_cache:
+                        for path in paths:
+                            if path not in raw_buf_cache:
+                                raw_buf_cache[path] = _read_buffer(path)
+                        offsets, vertex_ids, deltas = (raw_buf_cache[path] for path in paths)
+                        if (key_id + 2) * 4 > len(offsets):
+                            continue
+                        begin, end = struct.unpack_from("<II", offsets, key_id * 4)
+                        entry_offset = shape.get("sparse_entry_offset", 0)
+                        begin += entry_offset
+                        end += entry_offset
+                        limit = min(end, len(vertex_ids) // 4, len(deltas) // 12)
+                        sparse = {}
+                        for i in range(begin, limit):
+                            vertex_id = struct.unpack_from("<I", vertex_ids, i * 4)[0]
+                            delta = struct.unpack_from("<eee", deltas, i * 12)
+                            prior = sparse.get(vertex_id, (0., 0., 0.))
+                            sparse[vertex_id] = tuple(prior[j] + delta[j] for j in range(3))
+                        sparse_shape_cache[cache_key] = sparse
+                    shape_buffers.append((shape, sparse_shape_cache[cache_key],
+                                          bytearray(len(used) * 12), True))
+                else:
+                    target_path = _safe_join(mod_dir, shape["target_file"])
+                    if not target_path or not os.path.exists(target_path):
+                        continue
+                    if target_path not in raw_buf_cache:
+                        raw_buf_cache[target_path] = _read_buffer(target_path)
+                    low_data = None
+                    low_bytes = None
+                    if shape.get("low_file"):
+                        low_path = _safe_join(mod_dir, shape["low_file"])
+                        if not low_path or not os.path.exists(low_path):
+                            continue
+                        if low_path not in raw_buf_cache:
+                            raw_buf_cache[low_path] = _read_buffer(low_path)
+                        low_data = raw_buf_cache[low_path]
+                        low_bytes = bytearray(len(used) * 12)
+                    shape_buffers.append((shape, raw_buf_cache[target_path],
+                                          bytearray(len(used) * 12), False,
+                                          low_data, low_bytes))
             uv_bytes = bytearray(len(used) * 8) if tc_data else None
             for out_i, vi in enumerate(used):
                 pos_off = vi * draw_pos_stride + POSITION_OFFSET
@@ -508,6 +581,26 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                 else:
                     x, y, z = 0., 0., 0.
                 struct.pack_into("<fff", pos_bytes, out_i * 12, x, y, z)
+                for item in shape_buffers:
+                    shape, target_data, target_bytes, sparse = item[:4]
+                    if sparse:
+                        dx, dy, dz = target_data.get(vi, (0., 0., 0.))
+                        tx, ty, tz = x + dx, y + dy, z + dz
+                    else:
+                        target_off = vi * shape["stride"] + POSITION_OFFSET
+                        if target_off + 12 <= len(target_data):
+                            tx, ty, tz = struct.unpack_from("<fff", target_data, target_off)
+                        else:
+                            tx, ty, tz = x, y, z
+                    struct.pack_into("<fff", target_bytes, out_i * 12, tx, ty, tz)
+                    if len(item) > 4 and item[4] is not None:
+                        low_data, low_bytes = item[4], item[5]
+                        low_off = vi * shape["stride"] + POSITION_OFFSET
+                        if low_off + 12 <= len(low_data):
+                            lx, ly, lz = struct.unpack_from("<fff", low_data, low_off)
+                        else:
+                            lx, ly, lz = x, y, z
+                        struct.pack_into("<fff", low_bytes, out_i * 12, lx, ly, lz)
                 if tc_data:
                     tc_off = vi * draw_tc_stride + uv_off
                     if tc_off + uv_size <= len(tc_data):
@@ -530,14 +623,27 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
             }
             if uv_bytes:
                 entry["uv"] = base64.b64encode(uv_bytes).decode()
+            if shape_buffers:
+                entry["shape_targets"] = []
+                for item in shape_buffers:
+                    shape, _target_data, target_bytes, _sparse = item[:4]
+                    target = {"var": shape["var"],
+                              "pos": base64.b64encode(target_bytes).decode()}
+                    if shape.get("mode"):
+                        target["mode"] = shape["mode"]
+                    if len(item) > 5 and item[5] is not None:
+                        target["low_pos"] = base64.b64encode(item[5]).decode()
+                    entry["shape_targets"].append(target)
             if draw.get("conditions"):
                 entry["conditions"] = draw["conditions"]
             if draw.get("sources"):
                 entry["sources"] = [_rel_source(s, mod_dir) for s in draw["sources"]]
             # A toggle can swap the diffuse texture.
-            if draw.get("texture_variants"):
+            texture_rules = (draw.get("texture_assignments")
+                             or draw.get("texture_variants"))
+            if texture_rules:
                 variants = []
-                for v in draw["texture_variants"]:
+                for v in texture_rules:
                     key = _ensure_texture(_safe_join(mod_dir, v["file"]))
                     if key:
                         variants.append({"conditions": v["conditions"], "tex_key": key})

@@ -238,7 +238,7 @@ class IniDocument:
         return None
 
     def structure_errors(self):
-        """Report sections whose if/elif/else/endif nesting doesn't balance.
+        """Report ambiguous if/elif/else/endif nesting and branch order.
 
         Roughly 5% of real mod files contain at least one such section: a
         stray `endif` that closes an already-closed block, an `else if` with
@@ -252,29 +252,138 @@ class IniDocument:
         """
         problems = []
         for sec in self.sections:
-            depth = 0
+            open_ifs = []  # [{line: opening Line, saw_else: bool}, ...]
             for line in sec.lines:
                 if line.kind == IF:
-                    depth += 1
+                    open_ifs.append({"line": line, "saw_else": False})
                 elif line.kind == ENDIF:
-                    depth -= 1
-                    if depth < 0:
+                    if open_ifs:
+                        open_ifs.pop()
+                    else:
                         problems.append({"section": sec.name, "line": line.no,
                                          "problem": "endif without a matching if"})
-                        depth = 0
-                elif line.kind in (ELIF, ELSE) and depth == 0:
-                    problems.append({"section": sec.name, "line": line.no,
-                                     "problem": f"{line.kind} without an open if"})
-            if depth > 0:
-                problems.append({"section": sec.name, "line": sec.end - 1,
-                                 "problem": f"{depth} unclosed if"})
+                elif line.kind in (ELIF, ELSE):
+                    if not open_ifs:
+                        problems.append({"section": sec.name, "line": line.no,
+                                         "problem": f"{line.kind} without an open if"})
+                    elif line.kind == ELIF and open_ifs[-1]["saw_else"]:
+                        problems.append({"section": sec.name, "line": line.no,
+                                         "problem": "elif after else"})
+                    elif line.kind == ELSE:
+                        if open_ifs[-1]["saw_else"]:
+                            problems.append({"section": sec.name, "line": line.no,
+                                             "problem": "duplicate else"})
+                        else:
+                            open_ifs[-1]["saw_else"] = True
+            if open_ifs:
+                # Point at the first opening line that never closes, rather
+                # than the section boundary. The latter made a blank line or
+                # the next header look responsible for the error.
+                problems.append({"section": sec.name, "line": open_ifs[0]["line"].no,
+                                 "problem": f"{len(open_ifs)} unclosed if"})
+        return problems
+
+    def syntax_errors(self):
+        """Report high-confidence lexical errors in headers and conditions.
+
+        This intentionally does not validate arbitrary assignments or section
+        types: 3DMigoto extensions evolve, and unfamiliar syntax is not proof
+        of an error. Returns [{code, section, line, problem}].
+        """
+        problems = []
+
+        def add(code, line, problem, section=True):
+            problems.append({
+                "code": code,
+                "section": (line.section.name
+                            if section and line.section is not None else None),
+                "line": line.no,
+                "problem": problem,
+            })
+
+        for line in self.lines:
+            text = line.text
+            if not text:
+                continue
+
+            # A header ends at its first `]`; anything except whitespace or a
+            # stripped comment after that is not part of the section name.
+            if text.startswith("["):
+                close = text.find("]")
+                if close < 0:
+                    add("malformed_section_header", line,
+                        "section header is missing a closing ]", section=False)
+                elif not text[1:close].strip():
+                    add("malformed_section_header", line,
+                        "section header has an empty name", section=False)
+                elif text[close + 1:].strip():
+                    add("malformed_section_header", line,
+                        "unexpected content after section header", section=False)
+                continue
+
+            lowered = text.lower()
+            if re.match(r"^elseif\b", lowered):
+                add("malformed_condition_syntax", line,
+                    "use 'elif' or 'else if', not 'elseif'")
+                continue
+            if re.match(r"^(?:if|elif)\s*$", lowered):
+                add("malformed_condition_syntax", line,
+                    "condition is missing an expression")
+                continue
+            if re.match(r"^else\s+if\s*$", lowered):
+                add("malformed_condition_syntax", line,
+                    "else if is missing an expression")
+                continue
+            if re.match(r"^(?:if|elif)(?=[$!(])", lowered):
+                add("malformed_condition_syntax", line,
+                    "condition keyword must be followed by a space")
+                continue
+            if re.match(r"^else\s+if(?=[$!(])", lowered):
+                add("malformed_condition_syntax", line,
+                    "else if must be followed by a space")
+                continue
+            if re.match(r"^else\s+if\b", lowered):
+                condition = re.sub(r"^else\s+if\s+", "", text,
+                                   count=1, flags=re.I)
+            elif re.match(r"^(?:if|elif)\s+", lowered):
+                condition = re.sub(r"^(?:if|elif)\s+", "", text,
+                                   count=1, flags=re.I)
+            else:
+                condition = None
+
+            if condition is not None:
+                depth = 0
+                unmatched_close = False
+                for char in condition:
+                    if char == "(":
+                        depth += 1
+                    elif char == ")":
+                        if depth == 0:
+                            unmatched_close = True
+                            break
+                        depth -= 1
+                if unmatched_close:
+                    add("unbalanced_condition_parentheses", line,
+                        "condition has a closing ) without a matching (")
+                elif depth:
+                    add("unbalanced_condition_parentheses", line,
+                        f"condition has {depth} unclosed (")
+                continue
+
+            if re.match(r"^else\s+.+", lowered):
+                add("malformed_condition_syntax", line,
+                    "else must not have trailing content")
+            elif re.match(r"^endif\s+.+", lowered):
+                add("malformed_condition_syntax", line,
+                    "endif must not have trailing content")
+
         return problems
 
     def is_safe_to_rewrite(self, section_name):
         """True if this section's gate structure is unambiguous."""
         lowered = section_name.lower()
-        return not any(p["section"].lower() == lowered
-                       for p in self.structure_errors())
+        return not any(p.get("section") and p["section"].lower() == lowered
+                       for p in self.structure_errors() + self.syntax_errors())
 
     # -- editing ---------------------------------------------------------
 

@@ -16,6 +16,21 @@ function displayName(variable) {
   return variable.split('::').pop();
 }
 
+/** Resolve a key section's shared cycle position from all variables it drives.
+ * A single variable may repeat a value at several positions (for example
+ * Dress=1,0,0), so looking up only the first variable with indexOf() can get
+ * permanently stuck on the first duplicate.  Prefer the position we last
+ * applied when the complete tuple itself is duplicated. */
+function findCyclePosition(vars, positions, preferred = -1) {
+  const matches = (position) => vars.every(v =>
+    v.values[position % v.values.length] === getToggleValue(v.var));
+  if (preferred >= 0 && preferred < positions && matches(preferred)) return preferred;
+  for (let position = 0; position < positions; position++) {
+    if (matches(position)) return position;
+  }
+  return -1;
+}
+
 // Rebuilt on every buildTogglePanel() call; the static "＋ Add" button in the
 // panel header is wired once below and reads the latest ctx at click time.
 let currentCtx = { modPath: null, onChange: null };
@@ -63,6 +78,9 @@ async function handleDelete(info, ctx) {
 
 function buildToggleItem(info, ctx) {
   for (const v of info.vars) setToggleValue(v.var, v.default);
+
+  const positions = Math.max(...info.vars.map(v => v.values.length));
+  let cyclePosition = findCyclePosition(info.vars, positions);
 
   const item = document.createElement('div');
   item.className = 'toggle-item';
@@ -141,12 +159,12 @@ function buildToggleItem(info, ctx) {
   // swap this button's behaviour to "advance position" and restore it again
   // afterwards without both handlers firing at once.
   btn.onclick = () => {
-    const lead = info.vars[0];
-    const idx = lead.values.indexOf(getToggleValue(lead.var));
-    const next = (idx + 1) % lead.values.length;
+    cyclePosition = findCyclePosition(info.vars, positions, cyclePosition);
+    const next = (cyclePosition + 1) % positions;
     for (const v of info.vars) {
       setToggleValue(v.var, v.values[next % v.values.length]);
     }
+    cyclePosition = next;
     valSpan.textContent = describe();
     refreshAll();
   };

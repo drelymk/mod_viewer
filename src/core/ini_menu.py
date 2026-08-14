@@ -15,6 +15,10 @@ _SLOT_RE = re.compile(r'\$(\w+)\s*={2,3}\s*(\d+)$')
 _ASSIGN_RE  = re.compile(r'^\$(\w+)\s*=\s*(.+)$')
 _FLIP_RE    = re.compile(r'^1\s*-\s*\$(\w+)$')       # $v = 1 - $v
 _INCR_RE    = re.compile(r'^\$(\w+)\s*\+\s*1$')      # $v = $v + 1
+_INCR_MOD_RE = re.compile(                              # $v = ($v + 1) % N
+    r'^\(\s*\$(\w+)\s*\+\s*1\s*\)\s*%\s*(\d+)$')
+_STEP_RE    = re.compile(r'^\$(\w+)\s*([+-])\s*1$')  # $v = $v +/- 1
+_MOD_RE     = re.compile(r'^\$(\w+)\s*%\s*(\d+)$')   # $v = $v % N
 _GUARD_RE   = re.compile(r'^\$(\w+)\s*(==|!=|>=|<=|>|<)\s*(-?\d+)$')
 _LITERAL_RE = re.compile(r'^-?\d+(?:\.\d+)?$')
 _ELSE_RE    = re.compile(r'(?:else\s+if|elif)\s+(.*)$', re.I)
@@ -161,11 +165,23 @@ def _parse_branch(body):
         if flip and flip.group(1) == lhs:
             var, values = lhs, ["0", "1"]
             continue
+        incr_mod = _INCR_MOD_RE.fullmatch(rhs)
+        if incr_mod and incr_mod.group(1) == lhs:
+            count = int(incr_mod.group(2))
+            if count > 0:
+                var, values = lhs, _cycle_values(0, count - 1)
+            continue
         incr = _INCR_RE.fullmatch(rhs)
         if incr and incr.group(1) == lhs:
             var, values = lhs, ["0", "1"]   # replaced below once the wrap is seen
             if guard and guard["var"] == lhs and guard["op"] in ("<", "<="):
                 wrap = (guard, len(stack))
+            continue
+        mod = _MOD_RE.fullmatch(rhs)
+        if mod and mod.group(1) == lhs and lhs == var:
+            count = int(mod.group(2))
+            if count > 0:
+                values = _cycle_values(0, count - 1)
             continue
 
         if not _LITERAL_RE.fullmatch(rhs):
@@ -195,6 +211,69 @@ def _parse_branch(body):
 
 def _prefixed(name, var_prefix):
     return f"{var_prefix}{name}" if var_prefix else name
+
+
+def _parse_arrow_button(lines):
+    """Return (var, values) for one ButtonNLeft/Right command list.
+
+    Some image menus implement every item as two independent hit regions
+    instead of dispatching a clicked-slot number.  One side decrements and
+    wraps at the low end, while the other increments and wraps at the high
+    end.  Either side fully describes the finite value range::
+
+        $Hair = $Hair - 1
+        if $Hair < 1
+            $Hair = 5
+        endif
+    """
+    cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
+    variable = direction = None
+    for line in cleaned:
+        match = _ASSIGN_RE.fullmatch(line)
+        if not match:
+            continue
+        lhs, rhs = match.group(1), match.group(2).strip()
+        step = _STEP_RE.fullmatch(rhs)
+        if step and step.group(1).lower() == lhs.lower():
+            variable, direction = lhs, step.group(2)
+            break
+    if variable is None:
+        return None
+
+    guard = reset = None
+    for index, line in enumerate(cleaned):
+        if not line.lower().startswith("if "):
+            continue
+        candidate = _guard(line[3:])
+        if not candidate or candidate["var"].lower() != variable.lower():
+            continue
+        valid_ops = ("<", "<=") if direction == "-" else (">", ">=")
+        if candidate["op"] not in valid_ops:
+            continue
+        for later in cleaned[index + 1:]:
+            if later.lower() == "endif":
+                break
+            assignment = _ASSIGN_RE.fullmatch(later)
+            if (assignment and assignment.group(1).lower() == variable.lower()
+                    and _LITERAL_RE.fullmatch(assignment.group(2).strip())):
+                guard, reset = candidate, assignment.group(2).strip()
+                break
+        if guard:
+            break
+    if not guard or reset is None:
+        return None
+
+    boundary = int(guard["value"])
+    reset_value = int(float(reset))
+    if direction == "-":
+        lo = boundary + (1 if guard["op"] == "<=" else 0)
+        hi = reset_value
+    else:
+        lo = reset_value
+        hi = boundary - (1 if guard["op"] == ">=" else 0)
+    if hi < lo:
+        return None
+    return variable, _cycle_values(lo, hi)
 
 
 def extract_menu_toggles(sections, var_prefix=None, source=None):
@@ -252,6 +331,56 @@ def extract_menu_toggles(sections, var_prefix=None, source=None):
                 "ini_path": src.get("ini_path"),
                 "section": name,
             }
+
+    # Arrow-pair image menus have no clicked-slot dispatch chain.  Their
+    # numeric ButtonNLeft/ButtonNRight sections each mutate one variable and
+    # wrap it at the authored bounds.  Require at least two distinct numbered
+    # items before treating this naming/behaviour combination as a menu; a
+    # lone step button elsewhere in a mod should remain ordinary bookkeeping.
+    arrow_items = {}
+    button_re = re.compile(r'^CommandListButton(\d+)(Left|Right)$', re.I)
+    for name, lines in sections.items():
+        match = button_re.fullmatch(name)
+        if not match:
+            continue
+        parsed = _parse_arrow_button(lines)
+        if not parsed:
+            continue
+        slot = int(match.group(1))
+        variable, values = parsed
+        arrow_items.setdefault(slot, []).append(
+            (variable, values, name, first_source(lines) or {}))
+
+    if len(arrow_items) >= _MIN_SLOTS:
+        for slot, candidates in sorted(arrow_items.items()):
+            # Both directions normally agree. Prefer the first range and only
+            # merge candidates that drive the same case-insensitive variable.
+            variable, values, section, src = candidates[0]
+            same_var = [item for item in candidates
+                        if item[0].lower() == variable.lower()]
+            if len(same_var) > 1:
+                ranges = {tuple(item[1]) for item in same_var}
+                if len(ranges) == 1:
+                    values = same_var[0][1]
+            variable = declared(variable)
+            button_section = re.sub(r"(?:Left|Right)$", "", section,
+                                    flags=re.I)
+            base_key = _prefixed(f"{button_section}#{slot}", var_prefix)
+            key = base_key
+            suffix = 2
+            while key in menu:
+                key = f"{base_key}_{suffix}"
+                suffix += 1
+            menu[key] = {
+                "name": variable,
+                "slot": slot,
+                "var": _prefixed(variable, var_prefix),
+                "values": values,
+                "effects": [],
+                "source": source,
+                "ini_path": src.get("ini_path"),
+                "section": section,
+            }
     return menu
 
 
@@ -263,3 +392,101 @@ def extract_menu_var_names(sections, var_prefix=None):
         found.add(info["var"])
         found.update(e["var"] for e in info["effects"])
     return found
+
+
+def attach_menu_images(menu, sections, resources):
+    """Attach authored menu-item filenames to recognized slots/sliders."""
+    slot_images = {}
+    resources_by_name = {name.lower(): info for name, info in resources.items()}
+
+    def resource(name):
+        return resources_by_name.get(name.lower(), {}) if name else {}
+
+    # Arrow-pair menus render item N in its own CommandListIconN section.
+    for name, lines in sections.items():
+        match = re.fullmatch(r"CommandListIcon(\d+)", name, re.I)
+        if not match:
+            continue
+        slot = int(match.group(1))
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            icon = re.match(r"ps-t100\s*=\s*(\S+)", line, re.I)
+            if not icon:
+                continue
+            info = resource(icon.group(1))
+            if info.get("filename"):
+                slot_images.setdefault(slot, info["filename"])
+                break
+
+    for name, lines in sections.items():
+        if "slotitemimage" not in name.lower():
+            continue
+        current_slot = None
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            match = re.match(r"(?:if|elif|else\s+if)\s+\$slot\s*==\s*(\d+)", line, re.I)
+            if match:
+                current_slot = int(match.group(1))
+                continue
+            match = re.match(r"ps-t100\s*=\s*(\S+)", line, re.I)
+            if match and current_slot is not None:
+                info = resource(match.group(1))
+                if info.get("filename") and current_slot not in slot_images:
+                    slot_images[current_slot] = info["filename"]
+
+    # Responsive/MCMI grids draw their buttons by incrementing a counter and
+    # dispatching the icon in a separate CommandList.  Unlike the older
+    # `$slot` convention, the counter name is author-defined (commonly
+    # `$Button_number`) and many slots may intentionally share one frame/icon.
+    # Only accept integer-dispatch CommandLists that actually bind ps-t100;
+    # this keeps ordinary state chains out of image recognition.
+    for name, lines in sections.items():
+        if not name.lower().startswith("commandlist"):
+            continue
+        current_slot = None
+        saw_icon = False
+        candidates = {}
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            match = re.match(
+                r"(?:if|elif|else\s+if)\s+\$\w+\s*==\s*(\d+)", line, re.I)
+            if match:
+                current_slot = int(match.group(1))
+                continue
+            match = re.match(r"ps-t100\s*=\s*(\S+)", line, re.I)
+            if match and current_slot is not None:
+                info = resource(match.group(1))
+                if info.get("filename"):
+                    candidates.setdefault(current_slot, info["filename"])
+                    saw_icon = True
+        if saw_icon and len(candidates) >= _MIN_SLOTS:
+            for slot, filename in candidates.items():
+                slot_images.setdefault(slot, filename)
+
+    def compact(text):
+        return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    image_resources = [(compact(name.replace("Resource", "")), info["filename"])
+                       for name, info in resources.items()
+                       if info.get("filename") and
+                       ("menuitem" in name.lower() or "resourceitem" in name.lower())]
+    aliases = {
+        "currflat": ("menuflat", "itemflat", "flat"),
+        "boobssize": ("itemboobs", "boobs"),
+        "nipplesize": ("itemnipple", "nipple"),
+        "shortclo": ("itemshort", "short"),
+        "pussy": ("itempussy", "pussy"),
+    }
+    for info in menu.values():
+        if info.get("slot") in slot_images:
+            info["image_file"] = slot_images[info["slot"]]
+            continue
+        if info.get("kind") != "shape_slider":
+            continue
+        var = compact(info["name"])
+        needles = list(aliases.get(var, ()))
+        needles += [var, var.replace("swapvarslider", ""), var.replace("size", "")]
+        for resource_name, filename in image_resources:
+            if any(needle and needle in resource_name for needle in needles):
+                info["image_file"] = filename
+                break

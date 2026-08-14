@@ -36,6 +36,43 @@ body {
 }
 #export-btn:hover:not(:disabled) { background: #bb8009; }
 #export-btn:disabled { opacity: .35; cursor: default; background: #21262d; color: #8b949e; }
+#health-btn {
+  display: flex; align-items: center; gap: 6px; color: #e6edf3;
+  background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+  padding: 5px 9px; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+#health-btn:disabled { opacity: .4; cursor: default; }
+#health-btn.healthy:not(:disabled) { border-color: #238636; }
+#health-btn.warning { border-color: #9e6a03; background: #2b2111; }
+#health-btn.error { border-color: #da3633; background: #321b1b; }
+.ini-view-wrap { position: relative; display: flex; align-items: center; }
+#ini-view-btn {
+  background: #1f6feb; color: #fff; border: 1px solid rgba(240,246,252,.15);
+  border-radius: 6px; padding: 5px 14px; font-size: 13px; cursor: pointer;
+  white-space: nowrap;
+}
+#ini-view-btn:hover:not(:disabled) { background: #388bfd; }
+#ini-view-btn:disabled {
+  opacity: .35; cursor: default; background: #21262d; color: #8b949e;
+}
+.ini-file-menu {
+  display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 250;
+  min-width: 190px; max-width: min(360px, 70vw); max-height: 300px; overflow-y: auto;
+  padding: 5px; background: #161b22; border: 1px solid #30363d; border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+.ini-file-menu.show { display: flex; flex-direction: column; gap: 2px; }
+.ini-file-menu button {
+  border: 0; border-radius: 4px; padding: 6px 8px; text-align: left;
+  color: #c9d1d9; background: transparent; cursor: pointer; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.ini-file-menu button:hover { color: #fff; background: #1f6feb; }
+.health-count {
+  min-width: 18px; height: 18px; padding: 0 5px; display: inline-flex;
+  align-items: center; justify-content: center; border-radius: 9px;
+  background: rgba(240,246,252,.12); font-size: 10px; font-weight: 700;
+}
 
 /* ── canvas ──────────────────────────────────────────────────────────────── */
 #canvas-container { position: fixed; top: 46px; left: 0; right: 0; bottom: 28px; }
@@ -44,7 +81,7 @@ body {
  * dock, rotates with the camera, and remains a DOM overlay so it stays crisp
  * at every WebView scale factor. */
 #view-gizmo {
-  position: absolute; top: 12px; right: 232px; width: 104px; height: 104px;
+  position: absolute; top: 12px; right: 338px; width: 104px; height: 104px;
   z-index: 9; border-radius: 50%; cursor: grab; touch-action: none;
   filter: drop-shadow(0 4px 10px rgba(0,0,0,.34));
   transition: opacity .16s ease, transform .16s ease;
@@ -115,7 +152,8 @@ body {
   border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(8px);
 }
 #sidebar {
-  max-height: calc(100vh - 104px); overflow-y: auto; min-width: 155px; max-width: 210px;
+  box-sizing: border-box; width: 288px; max-width: min(288px, calc(50vw - 36px));
+  max-height: calc(100vh - 104px); overflow-y: auto;
 }
 #camera-panel { min-width: 166px; padding: 9px 10px; }
 #camera-buttons { display: grid; grid-template-columns: repeat(3, 44px); gap: 6px; }
@@ -140,7 +178,8 @@ body {
 /* min-height:0 lets a tall panel scroll instead of pushing the other one off
  * the bottom of the dock. */
 #toggle-panel, #menu-panel {
-  overflow-y: auto; min-width: 155px; max-width: 210px; min-height: 0;
+  box-sizing: border-box; width: 316px; max-width: min(316px, calc(50vw - 24px));
+  overflow-y: auto; min-height: 0;
 }
 #sidebar h3, #camera-panel h3, #toggle-panel h3, #tool-panel h3, #menu-panel h3 {
   font-size: 10px; color: #8b949e; text-transform: uppercase;
@@ -324,6 +363,40 @@ body {
 
 /* ── menu panel (right, under Toggle) ────────────────────────────────────── */
 #menu-list { display: flex; flex-direction: column; gap: 8px; }
+#menu-list.image-layout {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+#menu-list.image-layout.collapsed { display: none; }
+#menu-list.image-layout .menu-item {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 5px;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  background: #161b22;
+}
+#menu-list.image-layout .menu-name {
+  flex-basis: 100%;
+  text-align: center;
+  font-size: 10px;
+}
+.menu-image-btn { width: 52px; height: 52px; padding: 0; overflow: hidden; }
+.menu-image-btn img, .menu-slider-image {
+  width: 100%; height: 100%; object-fit: contain; pointer-events: none;
+}
+#menu-list.image-layout .menu-slider-item { grid-column: 1 / -1; }
+#menu-list.image-layout > .toggle-src-hdr,
+#menu-list.image-layout > .toggle-src-items { grid-column: 1 / -1; }
+#menu-list.image-layout > .toggle-src-items {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+#menu-list.image-layout > .toggle-src-items.collapsed { display: none; }
+.menu-slider-image { width: 48px; height: 48px; flex: 0 0 48px; }
 .menu-item { display: flex; align-items: center; gap: 8px; }
 .menu-name {
   font-size: 12px; color: #cdd9e5; font-weight: 600;
@@ -391,6 +464,93 @@ body {
 #tm-save:hover:not(:disabled) { background: #2ea043; }
 #tm-save:disabled { opacity: .6; cursor: default; }
 
+/* Read-only INI health report. */
+.health-modal {
+  width: 720px; height: min(760px, calc(100vh - 40px));
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.health-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.health-title-row h4 { margin-bottom: 4px; }
+.health-summary { color: #8b949e; font-size: 11px; line-height: 1.4; }
+.health-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 10px; }
+.health-filters button {
+  color: #c9d1d9; background: #21262d; border: 1px solid #30363d;
+  border-radius: 12px; padding: 3px 10px; font-size: 11px; cursor: pointer;
+}
+.health-filters button.active { color: #fff; background: #1f6feb; border-color: #388bfd; }
+.health-list {
+  flex: 1 1 0; min-height: 0;
+  overflow-y: auto; padding-right: 4px;
+}
+.health-group-title {
+  margin: 10px 0 5px; color: #cdd9e5; font-size: 11px; font-weight: 700;
+  border-bottom: 1px solid #30363d; padding-bottom: 4px;
+}
+.health-item {
+  display: flex; gap: 9px; padding: 7px 8px; margin-bottom: 4px;
+  border-radius: 6px; background: #0d1117;
+}
+.health-item.error { border-left: 3px solid #f85149; }
+.health-item.warning { border-left: 3px solid #d29922; }
+.health-item.navigable { cursor: pointer; }
+.health-item.navigable:hover { background: #161b22; outline: 1px solid #30363d; }
+.health-severity { width: 14px; color: #d29922; font-weight: 800; flex-shrink: 0; }
+.health-item.error .health-severity { color: #f85149; }
+.health-item-body { min-width: 0; flex: 1; }
+.health-message { color: #e6edf3; font-size: 12px; line-height: 1.4; }
+.health-location { color: #8b949e; font-size: 10px; margin-top: 2px; }
+.health-detail { color: #a5b4c3; font-size: 10px; margin-top: 3px; overflow-wrap: anywhere; }
+.health-source {
+  display: block; margin-top: 5px; padding: 4px 6px; overflow: hidden;
+  color: #c9d1d9; background: #161b22; border-radius: 4px;
+  font-size: 10px; white-space: nowrap; text-overflow: ellipsis;
+}
+.health-empty { color: #8b949e; font-size: 12px; text-align: center; padding: 36px 10px; }
+
+/* Lossless session-backed INI editor. */
+.ini-editor-modal {
+  width: calc(100vw - 40px); height: calc(100vh - 40px); max-width: none;
+  display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box;
+}
+.ini-editor-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.ini-editor-title-row h4 { margin-bottom: 4px; }
+.ini-editor-status { color: #8b949e; font-size: 11px; }
+.ini-editor-shell {
+  flex: 1 1 0; min-height: 0; width: 100%; margin-top: 12px;
+  overflow: hidden; background: #0d1117; border: 1px solid #30363d;
+  border-radius: 6px; box-sizing: border-box;
+}
+.ini-editor-shell:focus-within { border-color: #58a6ff; }
+.ini-editor-shell textarea.ini-editor-text,
+.ini-editor-shell pre.ini-editor-text {
+  width: 100%; height: 100%; margin: 0; padding: 10px 12px;
+  color: #d6deeb; background: transparent; border: 0; border-radius: 0;
+  outline: none; box-sizing: border-box; white-space: pre;
+  overflow-wrap: normal; word-break: normal; word-spacing: normal;
+  font: 12px/18px Consolas, "Courier New", monospace; tab-size: 4;
+  text-align: left; text-shadow: none;
+}
+.ini-editor-shell textarea.ini-editor-text {
+  overflow: auto; color: transparent; caret-color: #f0f6fc;
+  --selection-background: rgba(38, 79, 120, .85);
+  --selection-color: rgba(255, 255, 255, .92);
+}
+.ini-editor-shell pre.ini-editor-text { overflow: hidden; }
+.ini-editor-shell.prism-live-pending pre.ini-editor-text { visibility: hidden; }
+.ini-editor-shell.prism-live-pending textarea.ini-editor-text {
+  color: #d6deeb; -webkit-text-fill-color: #d6deeb;
+}
+.ini-editor-shell .token.comment { color: #6a9955; font-style: italic; }
+.ini-editor-shell .token.section,
+.ini-editor-shell .token.selector { color: #4ec9b0; font-weight: 700; }
+.ini-editor-shell .token.attr-name { color: #9cdcfe; }
+.ini-editor-shell .token.attr-value,
+.ini-editor-shell .token.inner-value { color: #ce9178; }
+.ini-editor-shell .token.punctuation { color: #d4d4d4; }
+#ini-editor-close { background: #21262d; color: #e6edf3; }
+#ini-editor-apply { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
+#ini-editor-apply:disabled { opacity: .55; cursor: default; }
+
 /* ── confirm/alert dialogs (dialogs.js) ──────────────────────────────────── */
 .dialog-backdrop {
   display: none; position: fixed; inset: 0; z-index: 400;
@@ -417,3 +577,22 @@ body {
 body.feature-export-off #export-btn { display: none; }
 body.feature-modify-toggle-off #toggle-add-btn { display: none; }
 body.feature-modify-toggle-off .toggle-actions { display: none; }
+.menu-slider-item {
+  gap: 7px;
+}
+
+.menu-slider-item .menu-name { flex: 0 1 90px; }
+.menu-slider {
+  flex: 1;
+  min-width: 80px;
+}
+
+@media (max-width: 900px) {
+  #sidebar { width: 230px; max-width: calc(50vw - 28px); }
+  #toggle-panel, #menu-panel { width: 250px; max-width: calc(50vw - 20px); }
+  #menu-list.image-layout { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #menu-list.image-layout > .toggle-src-items {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  #view-gizmo { right: 272px; }
+}
