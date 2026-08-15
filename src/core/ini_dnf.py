@@ -16,7 +16,7 @@ import re
 
 _CLAUSE_RE = re.compile(r'\$(\w+)\s*(==|!=)\s*(-?[\w.]+)')
 _ASSIGN_BOOL_RE = re.compile(r'^\$(\w+)\s*=\s*(.+)$')
-_STRUCT_RE = re.compile(r'(\(|\)|&&|\|\|)')
+_STRUCT_RE = re.compile(r'(\(|\)|&&|\|\||!(?!=))')
 
 DNF_TRUE:  list = [[]]
 DNF_FALSE: list = []
@@ -101,8 +101,14 @@ def _atom_to_dnf(atom, alias_map):
     else:
         m = re.fullmatch(r'\$(\w+)', atom)
         if m:
-            # alias_map values are already DNF.
-            dnf = alias_map.get(m.group(1)) or DNF_TRUE
+            # Alias-map values are already DNF. A non-alias bare variable is
+            # an ordinary 3DMigoto truthiness test (`if $hat` means non-zero),
+            # not an untracked runtime expression. normalize_dnf() will still
+            # discard it later when the variable is not a viewer control.
+            name = m.group(1)
+            dnf = alias_map.get(name)
+            if dnf is None:
+                dnf = [[{"var": name, "value": "0", "negate": True}]]
         else:
             dnf = DNF_TRUE
     return dnf_not(dnf) if negate_atom else dnf
@@ -137,6 +143,9 @@ def parse_condition_dnf(content, alias_map):
         if pos >= len(tokens):
             return DNF_TRUE
         tok = tokens[pos]
+        if tok == "!":
+            pos += 1
+            return dnf_not(parse_atom())
         if tok == "(":
             pos += 1
             node = parse_or()

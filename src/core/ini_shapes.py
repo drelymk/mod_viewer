@@ -13,6 +13,10 @@ from .ini_sections import canonical_var_names, first_source
 _VALUE_RE = re.compile(r"^x\d+\s*=\s*\$(\w+)\s*$", re.I)
 _BUFFER_RE = re.compile(r"^cs-t\d+\s*=\s*copy\s+(\S+)\s*$", re.I)
 _SHAPE_BUFFER_RE = re.compile(r"^cs-t(50|51)\s*=\s*copy\s+(\S+)\s*$", re.I)
+_SHAPE_X_RE = re.compile(r"^x88\s*=\s*(.+?)\s*$", re.I)
+_NEGATED_VALUE_RE = re.compile(r"^\$(\w+)\s*\*\s*-1$", re.I)
+_REMAP_RE = re.compile(
+    r"^\$(\w+)\s*=\s*\(?\s*\$(\w+)\s*\*\s*2\s*-\s*1\s*\)?$", re.I)
 _SLIDER_RE = re.compile(r"^x87\s*=\s*\$(\w+)\s*\*\s*x87\s*$", re.I)
 _SLIDER_ANY_RE = re.compile(r"^x87\s*=.*\$(\w+)\s*$", re.I)
 _SHAPE_ID_RE = re.compile(r"^\$\\WWMIv1\\shapekey_id\s*=\s*(\d+)\s*$", re.I)
@@ -27,6 +31,25 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None):
     """Return slider descriptions for conservative two-buffer shape shaders."""
     canon = canonical_var_names(sections)
     found = []
+
+    # When a mod has authored slider drawing sections, they are a strong
+    # signal for which x88 variables are user controls. This prevents an
+    # internal remapping variable from becoming a duplicate UI slider.
+    authored_slider_vars = set()
+    remapped_vars = {}
+    for section, lines in sections.items():
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            if section.lower().startswith("commandlistdrawslider"):
+                match = _SLIDER_RE.fullmatch(line)
+                if match:
+                    authored_slider_vars.add(
+                        canon.get(match.group(1).lower(), match.group(1)).lower())
+            match = _REMAP_RE.fullmatch(line)
+            if match:
+                alias = canon.get(match.group(1).lower(), match.group(1))
+                original = canon.get(match.group(2).lower(), match.group(2))
+                remapped_vars[alias.lower()] = original
 
     def resource(name):
         """3DMigoto resource identifiers are case-insensitive."""
@@ -92,35 +115,68 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None):
         if not section.lower().startswith("customshader"):
             continue
         candidates = []
-        variable = base_name = target_name = None
+        remapped_targets = {}
+        variable = base_name = None
+        remap_side = None
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
-            match = _VALUE_RE.fullmatch(line)
-            if match:
-                variable = canon.get(match.group(1).lower(), match.group(1))
-                base_name = target_name = None
+            x_value = _SHAPE_X_RE.fullmatch(line)
+            if x_value:
+                value = x_value.group(1).strip()
+                match = re.fullmatch(r"\$(\w+)", value)
+                negative = _NEGATED_VALUE_RE.fullmatch(value)
+                if match or negative:
+                    token = (match or negative).group(1)
+                    variable = canon.get(token.lower(), token)
+                    remap_side = "low" if negative else "high"
+                else:
+                    # A literal or arbitrary expression owns subsequent t51
+                    # writes until another scalar binding appears. Do not let
+                    # the preceding slider accidentally claim that target.
+                    variable = None
+                    remap_side = None
                 continue
             match = _SHAPE_BUFFER_RE.fullmatch(line)
-            if not match or variable is None:
+            if not match:
                 continue
             if match.group(1) == "50":
                 base_name = match.group(2)
-                target_name = None
             else:
                 target_name = match.group(2)
-                if base_name:
+                if not base_name or variable is None:
+                    continue
+                original = remapped_vars.get(variable.lower())
+                if original:
+                    pair = remapped_targets.setdefault(
+                        variable.lower(), {"var": original, "base": base_name})
+                    if pair["base"].lower() == base_name.lower():
+                        pair[remap_side] = target_name
+                else:
                     candidates.append((variable, base_name, target_name))
 
         base_keys = {name.lower() for _var, name, _target in candidates}
-        if len(candidates) < 2 or len(base_keys) != 1:
+        complete_remaps = [pair for pair in remapped_targets.values()
+                           if pair.get("low") and pair.get("high")]
+        base_keys.update(pair["base"].lower() for pair in complete_remaps)
+        if len(candidates) + len(complete_remaps) < 2 or len(base_keys) != 1:
             continue
         src = first_source(lines) or {}
         existing_pairs = {(item.get("var", "").lower(),
                            item.get("base_file"), item.get("target_file"))
                           for item in found}
         for variable, base_name, target_name in candidates:
+            if authored_slider_vars and variable.lower() not in authored_slider_vars:
+                continue
             base = resource(base_name)
             target = resource(target_name)
+            # A writable ResourceX commonly has a file-backed ResourceX.B
+            # rest pose. When both exist, geometry is drawn from ResourceX;
+            # attach the morph to that runtime buffer while retaining the
+            # shader's conservative shared-base relationship.
+            if base_name.lower().endswith(".b"):
+                runtime_base = resource(base_name[:-2])
+                if runtime_base.get("filename"):
+                    base = runtime_base
             base_stride = base.get("stride", 40)
             target_stride = target.get("stride", base_stride)
             pair = (f"{var_prefix or ''}{variable}".lower(),
@@ -142,6 +198,34 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None):
                 "section": section,
             })
             existing_pairs.add(pair)
+
+        for item in complete_remaps:
+            variable = item["var"]
+            if authored_slider_vars and variable.lower() not in authored_slider_vars:
+                continue
+            base = resource(item["base"])
+            if item["base"].lower().endswith(".b"):
+                runtime_base = resource(item["base"][:-2])
+                if runtime_base.get("filename"):
+                    base = runtime_base
+            low = resource(item["low"])
+            high = resource(item["high"])
+            strides = {base.get("stride", 40), low.get("stride", 40),
+                       high.get("stride", 40)}
+            if (not base.get("filename") or not low.get("filename")
+                    or not high.get("filename") or len(strides) != 1
+                    or next(iter(strides)) < 12):
+                continue
+            found.append({
+                "kind": "shape_slider", "mode": "midpoint_pair",
+                "name": variable, "var": f"{var_prefix or ''}{variable}",
+                "min": 0.0, "max": 1.0, "step": 0.01,
+                "base_file": base["filename"],
+                "low_file": low["filename"],
+                "target_file": high["filename"],
+                "stride": next(iter(strides)), "source": source,
+                "ini_path": src.get("ini_path"), "section": section,
+            })
 
     # WWMI shape keys are sparse rather than full target buffers.  The menu
     # still advertises them with the same `$value * x87` slider idiom, while
