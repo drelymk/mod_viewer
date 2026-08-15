@@ -281,7 +281,14 @@ def encode_texture_file(mod_dir, abs_path):
         rel = os.path.relpath(abs_path, mod_dir)
     except ValueError:
         return {"error": "Selected file is not inside the mod folder."}
-    if _safe_join(mod_dir, rel) != os.path.abspath(abs_path):
+    resolved = _safe_join(mod_dir, rel)
+    selected = os.path.abspath(abs_path)
+    # Native Windows dialogs may return a path whose drive/folder spelling
+    # differs only by case from the folder picker's spelling. Windows resolves
+    # those to the same file, so compare them using the platform's path rules.
+    if (not resolved
+            or os.path.normcase(os.path.normpath(resolved))
+            != os.path.normcase(os.path.normpath(selected))):
         return {"error": "Selected file is not inside the mod folder."}
     if not os.path.isfile(abs_path):
         return {"error": "Selected file does not exist."}

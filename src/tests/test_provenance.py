@@ -15,7 +15,7 @@ from _corpus import corpus_roots
 from core import ini_parser
 from core.ini_parser import parse_sections, merge_sections, build_draw_groups, \
     extract_resources, extract_toggle_keys, line_source, SrcLine
-from core.mesh_builder import build_mesh_payload
+from core.mesh_builder import build_mesh_payload, encode_texture_file
 from app import mod_loader
 
 FAILS = []
@@ -564,6 +564,25 @@ def test_deep_resource_path_traversal_blocked():
         meshes = _traversal_mod(mod, "../../../../../secret.buf")
         check(not meshes,
               f"a resource far above the mod folder is refused (got {list(meshes)})")
+
+
+def test_root_texture_picker_accepts_windows_case_variation():
+    """The two native dialogs may spell the same Windows folder differently."""
+    if os.name != "nt":
+        return
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory(prefix="TexturePickerCase") as tmp:
+        path = os.path.join(tmp, "RootDiffuse.png")
+        Image.new("RGB", (1, 1), (255, 0, 0)).save(path)
+
+        # Root-level files produce a bare tex_key; the differently-cased path
+        # must still pass containment validation on case-insensitive Windows.
+        result = encode_texture_file(tmp.swapcase(), path)
+        check(not result.get("error"),
+              f"root-level picked texture accepts equivalent path casing ({result})")
+        check(result.get("tex_key") == "RootDiffuse.png",
+              f"root-level picked texture keeps a bare mod-relative key ({result})")
 
 
 def test_toggle_panel_provenance():
@@ -1529,6 +1548,7 @@ if __name__ == "__main__":
                test_resource_path_may_reach_a_sibling_folder,
                test_absolute_resource_path_blocked,
                test_deep_resource_path_traversal_blocked,
+               test_root_texture_picker_accepts_windows_case_variation,
                test_real_mods, test_toggle_panel_provenance):
         fn()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))

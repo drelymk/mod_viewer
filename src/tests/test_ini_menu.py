@@ -389,6 +389,28 @@ def test_menu_variables_gate_draws():
           f"so its condition survives normalization (got {conds})")
 
 
+def test_menu_truthiness_expressions_gate_draws():
+    text = MENU_MOD_INI.replace(
+        "global persist $top = 0",
+        "global persist $toy = 1\n"
+        "global persist $suit = 0\n"
+        "global persist $panties = 0").replace(
+        "if $clickedSlot == 1\n\t$top = 1 - $top\n"
+        "elif $clickedSlot == 2\n\t$socks = 1 - $socks",
+        "if $clickedSlot == 1\n\t$toy = 1 - $toy\n"
+        "elif $clickedSlot == 2\n\t$suit = 1 - $suit\n"
+        "elif $clickedSlot == 3\n\t$panties = 1 - $panties").replace(
+        "if $top == 1", "if $toy && !($suit || $panties)")
+    secs = sections(text)
+    groups = build_draw_groups(secs, extract_resources(secs))
+    conds = groups[0]["draws"][0]["conditions"]
+    check(conds == [[
+        {"var": "toy", "value": "0", "negate": True},
+        {"var": "suit", "value": "0", "negate": False},
+        {"var": "panties", "value": "0", "negate": False},
+    ]], f"bare, negated and grouped menu guards survive as truthiness DNF (got {conds})")
+
+
 # One variable, four spellings -- which 3DMigoto doesn't care about at all.
 MIXED_CASE_INI = MENU_MOD_INI.replace(
     "global persist $top = 0", "global persist $Top = 0").replace(
@@ -589,6 +611,70 @@ filename = BodyPosition.nipple.buf
           by_var["BoobsSize"]["base_file"] == "BodyPosition.buf" and
           by_var["NippleLength"]["target_file"] == "BodyPosition.nipple.buf",
           f"repeated t50/t51 morph blocks share their authored base (got {sliders})")
+
+
+def test_inherited_shape_base_and_remapped_midpoint_are_discovered():
+    text = r"""
+[Constants]
+global persist $BoobsSize = 0
+global persist $ButtSize = 0
+global persist $DickSize = 0
+global $remappedDickSize = 0
+global persist $AnimSpeed = 0.2
+
+[CommandListDrawSlider.Boobs]
+x87 = $BoobsSize * x87
+[CommandListDrawSlider.Butt]
+x87 = $ButtSize * x87
+[CommandListDrawSlider.Dick]
+x87 = $DickSize * x87
+[CommandListDrawSlider.Anim]
+x87 = $AnimSpeed * x87
+
+[CustomShaderComputeShapes]
+x88 = $BoobsSize
+cs-t50 = copy ResourcePosition.B
+cs-t51 = copy ResourcePosition.BOOBS
+x88 = $ButtSize
+cs-t51 = copy ResourcePosition.BUTT
+$remappedDickSize = $DickSize * 2 - 1
+x88 = $remappedDickSize * -1
+cs-t51 = copy ResourcePosition.PPNE
+x88 = $remappedDickSize
+cs-t51 = copy ResourcePosition.PPE
+
+[ResourcePosition]
+stride = 40
+filename = Position.buf
+[ResourcePosition.B]
+stride = 40
+filename = Position.B.buf
+[ResourcePosition.BOOBS]
+stride = 40
+filename = Position.BOOBS.buf
+[ResourcePosition.BUTT]
+stride = 40
+filename = Position.BUTT.buf
+[ResourcePosition.PPNE]
+stride = 40
+filename = Position.PPNE.buf
+[ResourcePosition.PPE]
+stride = 40
+filename = Position.PPE.buf
+"""
+    secs = sections(text)
+    sliders = extract_shape_sliders(secs, extract_resources(secs))
+    by_var = {slider["var"]: slider for slider in sliders}
+    check(by_var["BoobsSize"].get("base_file") == "Position.buf" and
+          by_var["ButtSize"].get("target_file") == "Position.BUTT.buf",
+          f"later t51 blocks inherit the shared t50 base and attach to the runtime buffer ({by_var})")
+    check(by_var["DickSize"].get("mode") == "midpoint_pair" and
+          by_var["DickSize"].get("low_file") == "Position.PPNE.buf" and
+          by_var["DickSize"].get("target_file") == "Position.PPE.buf",
+          f"a -1..1 remapped slider becomes a midpoint pair ({by_var['DickSize']})")
+    check("remappedDickSize" not in by_var and
+          not by_var["AnimSpeed"].get("target_file"),
+          f"internal remaps stay hidden and animation-only sliders stay controls ({by_var})")
 
 
 def test_wwmi_sparse_shape_slider_is_discovered():
@@ -919,6 +1005,7 @@ if __name__ == "__main__":
                test_var_prefix_namespaces_every_variable,
                test_menu_var_names_covers_effects_too,
                test_menu_variables_gate_draws,
+               test_menu_truthiness_expressions_gate_draws,
                test_variable_case_is_ignored_end_to_end,
                test_menu_panel_model,
                test_menu_panel_lists_slots_that_gate_nothing,
@@ -928,6 +1015,7 @@ if __name__ == "__main__":
                test_compute_shape_resource_names_are_case_insensitive,
                test_parenthesized_increment_modulo_menu_cycle_is_discovered,
                test_repeated_full_buffer_shape_blocks_are_discovered,
+               test_inherited_shape_base_and_remapped_midpoint_are_discovered,
                test_wwmi_sparse_shape_slider_is_discovered,
                test_modulo_cycle_and_present_derived_rules,
                test_zzmi_midpoint_pair_sliders_are_discovered,
