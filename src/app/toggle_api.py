@@ -32,8 +32,9 @@ def _ini_path(mod_dir, ini_rel):
     """Resolve a payload's relative ini name back to an absolute path,
     constrained to actually be one of this mod folder's own ini files (never
     an arbitrary path the JS side might pass in)."""
-    candidates = {os.path.basename(p): p for p in find_inis(mod_dir)}
-    name = os.path.basename(ini_rel) if ini_rel else None
+    candidates = {os.path.relpath(p, mod_dir).replace(os.sep, "/"): p
+                  for p in find_inis(mod_dir)}
+    name = str(ini_rel or "").replace("\\", "/")
     path = candidates.get(name)
     if path is None:
         raise te.ToggleEditError(f"{ini_rel!r} is not an ini file in this mod folder")
@@ -56,7 +57,8 @@ def list_source_inis(mod_dir):
     offered when adding a new toggle to a multi-ini ("AllInOne") mod. Lists
     every ini regardless of whether it has any toggles yet, unlike deriving
     the list from an already-loaded payload."""
-    return [{"value": os.path.basename(p), "label": os.path.basename(p)}
+    return [{"value": os.path.relpath(p, mod_dir).replace(os.sep, "/"),
+             "label": os.path.relpath(p, mod_dir).replace(os.sep, "/")}
             for p in find_inis(mod_dir)]
 
 

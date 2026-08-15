@@ -66,6 +66,11 @@ def _get_or_create(mod_dir):
     return _session
 
 
+def _key(mod_dir, path):
+    """Stable, browser-safe identity for an INI, including nested folders."""
+    return os.path.relpath(os.path.abspath(path), os.path.abspath(mod_dir)).replace(os.sep, "/")
+
+
 def load_documents(mod_dir, ini_paths):
     """Load every active INI into the authoritative in-memory session.
 
@@ -76,7 +81,7 @@ def load_documents(mod_dir, ini_paths):
     """
     sess = _get_or_create(mod_dir)
     for path in ini_paths:
-        key = os.path.basename(path)
+        key = _key(mod_dir, path)
         if key in sess.docs:
             continue
         doc = IniDocument.load(path)
@@ -94,7 +99,7 @@ def begin(mod_dir, ini_path):
     to `commit()` on success or `rollback()` on failure.
     """
     sess = _get_or_create(mod_dir)
-    key = os.path.basename(ini_path)
+    key = _key(mod_dir, ini_path)
     if key not in sess.docs:
         load_documents(mod_dir, [ini_path])
     was_pending = key in sess.dirty
@@ -124,9 +129,10 @@ def rollback(sess, key, was_pending, snapshot, ini_path):
 
 def peek(mod_dir, ini_path):
     """Return the authoritative document for a read-only query."""
-    if not _same_mod(mod_dir) or os.path.basename(ini_path) not in _session.docs:
+    key = _key(mod_dir, ini_path)
+    if not _same_mod(mod_dir) or key not in _session.docs:
         load_documents(mod_dir, [ini_path])
-    return _session.docs[os.path.basename(ini_path)]
+    return _session.docs[key]
 
 
 def has_pending(mod_dir):
@@ -150,8 +156,9 @@ def document(mod_dir, ini_name):
     """Return a loaded document by basename, rejecting browser-made paths."""
     if not _same_mod(mod_dir):
         raise KeyError("no INI session is loaded for this mod")
-    key = os.path.basename(ini_name or "")
-    if key != ini_name or key not in _session.docs:
+    key = str(ini_name or "").replace("\\", "/")
+    if (not key or os.path.isabs(key) or key.startswith("../")
+            or "/../" in f"/{key}/" or key not in _session.docs):
         raise KeyError(f"{ini_name!r} is not an active INI in this mod")
     return key, _session.docs[key]
 
@@ -196,7 +203,7 @@ def mark_added(mod_dir, ini_path, section_name):
     mod_loader.build_toggle_panel / unwired_pending_sections).
     """
     sess = _get_or_create(mod_dir)
-    sess.new_sections.setdefault(os.path.basename(ini_path), set()).add(section_name)
+    sess.new_sections.setdefault(_key(mod_dir, ini_path), set()).add(section_name)
 
 
 def rename_added(mod_dir, ini_path, old_name, new_name):
@@ -204,7 +211,7 @@ def rename_added(mod_dir, ini_path, old_name, new_name):
     from edit_toggle (which returns the possibly-changed section name)."""
     if old_name == new_name or not _same_mod(mod_dir):
         return
-    names = _session.new_sections.get(os.path.basename(ini_path))
+    names = _session.new_sections.get(_key(mod_dir, ini_path))
     if names and old_name in names:
         names.discard(old_name)
         names.add(new_name)
@@ -214,7 +221,7 @@ def mark_removed(mod_dir, ini_path, section_name):
     """Stop tracking a section removed via delete_toggle."""
     if not _same_mod(mod_dir):
         return
-    names = _session.new_sections.get(os.path.basename(ini_path))
+    names = _session.new_sections.get(_key(mod_dir, ini_path))
     if names:
         names.discard(section_name)
 

@@ -86,6 +86,10 @@ export function getToggleValue(variable) {
   return toggleState[variable];
 }
 
+export function getToggleState() {
+  return { ...toggleState };
+}
+
 // True if an OR'd list of AND-groups ([[{var,value,negate}, ...], ...]) is
 // satisfied by the current Toggle panel state.
 function dnfSatisfied(condGroups) {

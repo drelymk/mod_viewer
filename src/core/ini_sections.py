@@ -10,6 +10,9 @@ import re
 _DECL_RE = re.compile(r'^global\s+(?:persist\s+)?\$(\w+)\b', re.I)
 _VAR_RE  = re.compile(r'\$(\w+)')
 
+_MAX_INI_FILES = 10
+_MAX_INI_DEPTH = 2
+
 
 def canonical_var_names(sections):
     """{lowercased variable name: the one spelling everything should use}.
@@ -35,14 +38,62 @@ def canonical_var_names(sections):
     return declared
 
 
+def _active_ini_names(folder):
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    return [name for name in sorted(names)
+            if not name.upper().startswith("DISABLED")
+            and name.lower().endswith(".ini")
+            and os.path.isfile(os.path.join(folder, name))]
+
+
+def _ini_has_geometry(path):
+    """Whether one INI describes at least one resolvable draw group.
+
+    Buffer files do not have to exist yet; this is the same structural
+    geometry test the loader performs before it tries to read those files.
+    The import is intentionally local because ini_parser re-exports this
+    discovery function.
+    """
+    try:
+        from .ini_parser import build_draw_groups
+        sections = parse_sections(path)
+        return bool(build_draw_groups(sections, extract_resources(sections)))
+    except Exception:
+        return False
+
+
 def find_inis(mod_dir):
-    """Return all non-DISABLED .ini files in mod_dir."""
-    return [
-        os.path.join(mod_dir, fname)
-        for fname in sorted(os.listdir(mod_dir))
-        if not fname.upper().startswith("DISABLED")
-        and fname.lower().endswith(".ini")
-    ]
+    """Return at most ten active INIs, optionally including nested files.
+
+    A selected folder is a mod root only when one of its direct INIs has
+    geometry. In that case active INIs are discovered up to two directories
+    below it. Without that root anchor, retain the flat behavior so selecting
+    a library/category folder cannot accidentally combine several mods.
+    """
+    direct = [os.path.join(mod_dir, name) for name in _active_ini_names(mod_dir)]
+    root_geometry = next((path for path in direct if _ini_has_geometry(path)), None)
+    if root_geometry is None:
+        return direct[:_MAX_INI_FILES]
+
+    found = list(direct[:_MAX_INI_FILES])
+    if root_geometry not in found:
+        found[-1] = root_geometry
+    if len(found) >= _MAX_INI_FILES:
+        return found
+    for base, dirs, _files in os.walk(mod_dir):
+        rel = os.path.relpath(base, mod_dir)
+        depth = 0 if rel == os.curdir else len(rel.split(os.sep))
+        dirs[:] = sorted(dirs) if depth < _MAX_INI_DEPTH else []
+        if depth == 0:
+            continue
+        for name in _active_ini_names(base):
+            found.append(os.path.join(base, name))
+            if len(found) >= _MAX_INI_FILES:
+                return found
+    return found[:_MAX_INI_FILES]
 
 
 def merge_sections(ini_paths, overrides=None):

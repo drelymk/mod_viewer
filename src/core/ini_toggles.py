@@ -34,7 +34,7 @@ def extract_toggle_keys(sections, var_prefix=None, source=None):
     canon = canonical_var_names(sections)
     for name, lines in sections.items():
         if not name.startswith("Key"): continue
-        key_combo, ktype, cvars = None, None, {}
+        key_combo, back_combo, ktype, cvars = None, None, None, {}
         src = None
         for line in lines:
             if src is None:
@@ -44,6 +44,7 @@ def extract_toggle_keys(sections, var_prefix=None, source=None):
             k, v = k.strip(), v.strip()
             kl = k.lower()
             if   kl == "key":  key_combo = v
+            elif kl == "back": back_combo = v
             elif kl == "type": ktype = v.lower()
             elif k.startswith("$"):
                 var = k[1:].strip()
@@ -56,6 +57,7 @@ def extract_toggle_keys(sections, var_prefix=None, source=None):
             keys[f"{var_prefix}{name}" if var_prefix else name] = {
                 "name": label,
                 "key": key_combo or "",
+                "back": back_combo or "",
                 "key_display": _format_key_combo(key_combo) if key_combo else "",
                 "vars": cvars,
                 "source": source,

@@ -85,8 +85,36 @@ def exercise_session():
         edit_session.discard(folder)
 
 
+def exercise_nested_duplicate_names():
+    with tempfile.TemporaryDirectory() as folder:
+        first = os.path.join(folder, "one", "mod.ini")
+        second = os.path.join(folder, "two", "mod.ini")
+        os.makedirs(os.path.dirname(first))
+        os.makedirs(os.path.dirname(second))
+        with open(first, "w", encoding="utf-8") as stream:
+            stream.write(INI.replace("key = 1", "key = 3"))
+        with open(second, "w", encoding="utf-8") as stream:
+            stream.write(INI.replace("key = 1", "key = 4"))
+
+        edit_session.discard(folder)
+        edit_session.load_documents(folder, [first, second])
+        listed = [item["value"] for item in ini_api.list_inis(folder)]
+        check(listed == ["one/mod.ini", "two/mod.ini"],
+              "nested duplicate basenames keep distinct relative identities")
+        changed = ini_api.update_text(
+            folder, "two/mod.ini", INI.replace("key = 1", "key = 8"))
+        check(changed.get("ok") and "key = 3" in ini_api.get_text(
+            folder, "one/mod.ini").get("text", ""),
+              "editing one nested duplicate does not target the other")
+        exported = edit_session.export(folder)
+        check(exported == {"saved": ["two/mod.ini"], "failed": []},
+              "nested export reports and saves the relative INI identity")
+        edit_session.discard(folder)
+
+
 if __name__ == "__main__":
     exercise_session()
+    exercise_nested_duplicate_names()
     if FAILS:
         print(f"\n{len(FAILS)} FAILURE(S)")
         raise SystemExit(1)

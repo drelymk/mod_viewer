@@ -15,12 +15,13 @@ the app has no business loading or touching it at all (see
 .copilot/context.md's Key decisions for the full rationale).
 """
 
-import os, sys
+import os, struct, sys, tempfile
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.mod_loader import _attach_shape_sliders, build_toggle_panel
+from app.mod_loader import (_attach_shape_sliders, build_toggle_panel,
+                            load_mod, RESERVED_KEYS)
 
 FAILS = []
 
@@ -171,6 +172,51 @@ def test_shape_sliders_follow_mid_section_position_reassignments():
           f"group receives its base and reassigned-draw morphs only (got {attached})")
 
 
+def test_nested_ini_resources_are_relative_to_their_ini():
+    ini = """[TextureOverride{0}Position]
+vb0 = Resource{0}Position
+[TextureOverride{0}Texcoord]
+vb1 = Resource{0}Texcoord
+[TextureOverride{0}]
+ib = Resource{0}IB
+drawindexed = 3,0,0
+[Resource{0}Position]
+filename = p.buf
+stride = 12
+[Resource{0}Texcoord]
+filename = t.buf
+stride = 8
+[Resource{0}IB]
+filename = i.buf
+format = R32_UINT
+"""
+    with tempfile.TemporaryDirectory() as root:
+        for relative, name in (("", "Root"), ("nested", "Nested")):
+            folder = os.path.join(root, relative)
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, f"{name.lower()}.ini"), "w",
+                      encoding="utf-8") as stream:
+                stream.write(ini.format(name))
+            with open(os.path.join(folder, "i.buf"), "wb") as stream:
+                stream.write(struct.pack("<3I", 0, 1, 2))
+            with open(os.path.join(folder, "p.buf"), "wb") as stream:
+                stream.write(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
+            with open(os.path.join(folder, "t.buf"), "wb") as stream:
+                stream.write(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
+
+        payload = load_mod(root)
+        meshes = [value for key, value in payload.items()
+                  if key not in RESERVED_KEYS]
+        check(not payload.get("error") and len(meshes) == 2,
+              "root and nested geometry both load from same-named local buffers")
+        check({mesh.get("source") for mesh in meshes} == {"root", "nested"},
+              "nested geometry keeps a distinct root-relative source label")
+        source_inis = {src.get("ini") for mesh in meshes
+                       for src in mesh.get("sources", [])}
+        check("nested/nested.ini" in source_inis,
+              "nested mesh provenance uses a root-relative INI path")
+
+
 if __name__ == "__main__":
     for fn in (test_wired_toggle_shows_only_its_gating_vars,
                test_unwired_pending_toggle_shown_with_writable_vars,
@@ -180,7 +226,8 @@ if __name__ == "__main__":
                test_fully_namespaced_ungated_pending_section_is_still_hidden,
                test_default_prefers_declared_default_over_first_cycle_value,
                test_wired_and_unwired_can_coexist_across_sections,
-               test_shape_sliders_follow_mid_section_position_reassignments):
+               test_shape_sliders_follow_mid_section_position_reassignments,
+               test_nested_ini_resources_are_relative_to_their_ini):
         fn()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
     sys.exit(1 if FAILS else 0)

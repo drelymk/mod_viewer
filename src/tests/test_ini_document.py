@@ -166,6 +166,53 @@ def test_save_atomic_and_backup():
     check("find_inis ignores backups", find_inis(d), [path])
 
 
+def test_find_inis_bounded_recursion():
+    from core.ini_parser import find_inis
+
+    geometry = (
+        "[TextureOverrideBodyPosition]\n"
+        "vb0 = ResourceBodyPosition\n"
+        "[TextureOverrideBodyTexcoord]\n"
+        "vb1 = ResourceBodyTexcoord\n"
+        "[TextureOverrideBody]\n"
+        "ib = ResourceBodyIB\n"
+        "drawindexed = 3,0,0\n"
+        "[ResourceBodyPosition]\nfilename = p.buf\nstride = 12\n"
+        "[ResourceBodyTexcoord]\nfilename = t.buf\nstride = 8\n"
+        "[ResourceBodyIB]\nfilename = i.buf\nformat = R32_UINT\n"
+    )
+
+    d = tempfile.mkdtemp()
+    root_ini = os.path.join(d, "root.ini")
+    with open(root_ini, "w", encoding="utf-8") as fh:
+        fh.write(geometry)
+    for index in range(12):
+        folder = os.path.join(d, "nested", f"part{index:02d}")
+        os.makedirs(folder)
+        with open(os.path.join(folder, f"part{index:02d}.ini"), "w", encoding="utf-8") as fh:
+            fh.write("[Constants]\nglobal $x = 0\n")
+    too_deep = os.path.join(d, "nested", "part00", "deeper")
+    os.makedirs(too_deep)
+    with open(os.path.join(too_deep, "ignored.ini"), "w", encoding="utf-8") as fh:
+        fh.write(geometry)
+
+    found = find_inis(d)
+    check("recursive find_inis is capped at ten", len(found), 10)
+    check("recursive find_inis retains the root anchor", found[0], root_ini)
+    check("recursive find_inis stops below depth two",
+          any(os.path.basename(path) == "ignored.ini" for path in found), False)
+
+    library = tempfile.mkdtemp()
+    direct = os.path.join(library, "notes.ini")
+    with open(direct, "w", encoding="utf-8") as fh:
+        fh.write("[Constants]\nglobal $x = 0\n")
+    nested = os.path.join(library, "some_mod")
+    os.makedirs(nested)
+    with open(os.path.join(nested, "mod.ini"), "w", encoding="utf-8") as fh:
+        fh.write(geometry)
+    check("geometry-free root does not recurse", find_inis(library), [direct])
+
+
 def test_roundtrip_corpus():
     """The real guarantee: every mod ini on disk survives byte-for-byte."""
     files = []
@@ -275,6 +322,7 @@ def main():
     test_structure_errors()
     test_syntax_errors()
     test_save_atomic_and_backup()
+    test_find_inis_bounded_recursion()
     test_roundtrip_corpus()
     print(f"\n{'ALL PASS' if not failures else str(len(failures)) + ' FAILURE(S)'}")
     return 1 if failures else 0

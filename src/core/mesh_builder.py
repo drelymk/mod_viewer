@@ -302,7 +302,7 @@ def _rel_source(src, mod_dir):
     path = src.get("ini_path")
     if path:
         try:
-            path = os.path.relpath(path, mod_dir)
+            path = os.path.relpath(path, mod_dir).replace(os.sep, "/")
         except ValueError:
             path = os.path.basename(path)
     return {"ini": path, "line": src.get("line_no"), "section": src.get("section")}

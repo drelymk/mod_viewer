@@ -7,6 +7,7 @@ import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
 import { buildMenuPanel } from './menu-panel.js';
+import { buildPresentPanel } from './present-panel.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { setGeometryBlob } from './decode.js';
 import { setHealthReport } from './health-report.js';
@@ -66,6 +67,8 @@ function clearScene() {
   $('camera-panel').style.display = 'none';
   $('toggle-list').innerHTML = '';
   $('toggle-panel').style.display = 'none';
+  $('present-list').innerHTML = '';
+  $('present-panel').style.display = 'none';
   $('menu-list').innerHTML = '';
   $('menu-panel').style.display = 'none';
 }
@@ -91,6 +94,7 @@ async function displayMeshPayload(payload) {
   buildMeshPanel(payload, currentModPath, payload.__mesh_names__ || {});
   buildTogglePanel(payload.__toggles__, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(payload.__menu__);
+  buildPresentPanel(payload.__present__, { modPath: currentModPath, onChange: reloadCurrentMod });
   fitTo(activeMeshes);
 
   showLoading(false);
@@ -228,6 +232,7 @@ function initPanelCollapse(panel, contentId) {
 initPanelCollapse($('sidebar'), 'mesh-list');
 initPanelCollapse($('camera-panel'), 'camera-buttons');
 initPanelCollapse($('tool-panel'), 'tool-buttons');
+initPanelCollapse($('present-panel'), 'present-list');
 initPanelCollapse($('toggle-panel'), 'toggle-list');
 initPanelCollapse($('menu-panel'), 'menu-list');
 

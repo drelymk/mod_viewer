@@ -65,7 +65,7 @@ function buildMenuItem(info) {
       if (guardHolds(e.when)) setToggleValue(e.var, e.value);
     }
     refreshAll();
-    refreshValues();
+    refreshMenuValues();
   });
 
   item.append(btn, nameSpan, valSpan);
@@ -107,7 +107,7 @@ function buildShapeSlider(info) {
 // Cycling one slot can change another slot's variable via a mutual-exclusion
 // rule, so every displayed value is re-read after any click.
 let syncers = [];
-function refreshValues() {
+export function refreshMenuValues() {
   syncers.forEach((fn) => fn());
 }
 

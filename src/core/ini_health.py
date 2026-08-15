@@ -83,7 +83,12 @@ def _tokens(lines):
         yield line, [match.group(0) for match in _RESOURCE_TOKEN_RE.finditer(line.text)]
 
 
-def _analyze_document(doc, ini_rel, mod_dir, issues, declared_files):
+def _rebased_filename(filename, ini_path, mod_dir):
+    rel_dir = os.path.relpath(os.path.dirname(ini_path), mod_dir)
+    return filename if rel_dir == os.curdir else os.path.join(rel_dir, filename)
+
+
+def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files):
     for problem in doc.structure_errors():
         issues.append(_issue(
             "malformed_condition_nesting", "error", "conditions",
@@ -163,7 +168,8 @@ def _analyze_document(doc, ini_rel, mod_dir, issues, declared_files):
 
         owned = []
         for filename, line in resource["filenames"]:
-            resolved = safe_resource_path(mod_dir, filename)
+            resolved = safe_resource_path(
+                mod_dir, _rebased_filename(filename, ini_path, mod_dir))
             if resolved is None:
                 if key in reachable:
                     issues.append(_issue(
@@ -194,7 +200,7 @@ def _analyze_document(doc, ini_rel, mod_dir, issues, declared_files):
             ))
 
 
-def _filename_paths(doc, mod_dir):
+def _filename_paths(doc, mod_dir, ini_path=None):
     result = set()
     for sec in doc.sections:
         for line in sec.lines:
@@ -203,7 +209,9 @@ def _filename_paths(doc, mod_dir):
             lhs, rhs = (part.strip() for part in line.text.split("=", 1))
             if lhs.lower() != "filename":
                 continue
-            resolved = safe_resource_path(mod_dir, rhs)
+            relative = (_rebased_filename(rhs, ini_path, mod_dir)
+                        if ini_path else rhs)
+            resolved = safe_resource_path(mod_dir, relative)
             if resolved is not None:
                 result.add(_path_key(resolved))
     return result
@@ -260,8 +268,8 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None):
                 f"Could not read this INI as UTF-8: {exc}", ini=ini_rel,
             ))
             continue
-        declared_files.update(_filename_paths(doc, mod_dir))
-        _analyze_document(doc, ini_rel, mod_dir, issues, declared_files)
+        declared_files.update(_filename_paths(doc, mod_dir, path))
+        _analyze_document(doc, ini_rel, path, mod_dir, issues, declared_files)
 
     inactive_files = set()
     for name in sorted(os.listdir(mod_dir)):

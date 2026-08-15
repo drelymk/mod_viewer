@@ -34,6 +34,11 @@ function findCyclePosition(vars, positions, preferred = -1) {
 // Rebuilt on every buildTogglePanel() call; the static "＋ Add" button in the
 // panel header is wired once below and reads the latest ctx at click time.
 let currentCtx = { modPath: null, onChange: null };
+let valueSyncers = [];
+
+export function refreshToggleValues() {
+  valueSyncers.forEach((sync) => sync());
+}
 
 document.getElementById('toggle-add-btn').addEventListener('click', () => {
   if (!currentCtx.modPath) return;
@@ -168,6 +173,10 @@ function buildToggleItem(info, ctx) {
     valSpan.textContent = describe();
     refreshAll();
   };
+  valueSyncers.push(() => {
+    cyclePosition = findCyclePosition(info.vars, positions, cyclePosition);
+    valSpan.textContent = describe();
+  });
 
   row.append(btn, valSpan);
   item.appendChild(row);
@@ -243,6 +252,7 @@ export function buildTogglePanel(toggles, ctx = {}) {
   const list = document.getElementById('toggle-list');
   const panel = document.getElementById('toggle-panel');
   list.innerHTML = '';
+  valueSyncers = [];
 
   if (!currentCtx.modPath) {
     panel.style.display = 'none';
