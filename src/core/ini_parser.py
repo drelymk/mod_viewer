@@ -249,9 +249,24 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             m_aux = re.match(
                 r"Resource\\[^\\]+\\(NormalMap|LightMap|MaterialMap)\s*=\s*"
                 r"(?:ref\s+)?(\S+)", line, re.I)
-            if m_aux:
-                channel = _AUX_MAP_CHANNELS[m_aux.group(1).lower()]
-                res = m_aux.group(2)
+            aux_assignment = m_aux.groups() if m_aux else None
+            if aux_assignment is None:
+                # Some shader-oriented INIs bind auxiliary maps directly to a
+                # ps-t slot. Infer the role from the authored resource name;
+                # unlike diffuse, the slot number alone is not stable across
+                # mod families.
+                m_direct_aux = re.match(
+                    r"ps-t\d+\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
+                if m_direct_aux:
+                    m_role = re.search(
+                        r"(NormalMap|LightMap|MaterialMap)",
+                        m_direct_aux.group(1), re.I)
+                    if m_role:
+                        aux_assignment = (m_role.group(1),
+                                           m_direct_aux.group(1))
+            if aux_assignment:
+                channel = _AUX_MAP_CHANNELS[aux_assignment[0].lower()]
+                res = aux_assignment[1]
                 state = info["_aux_maps"].setdefault(channel, {
                     "variants": [], "history": [], "chain_key": None,
                     "last_cond": None,

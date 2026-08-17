@@ -9,7 +9,6 @@ const container = document.getElementById('canvas-container');
 export const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(container.clientWidth, container.clientHeight);
-renderer.shadowMap.enabled = true;
 container.appendChild(renderer.domElement);
 
 export const scene = new THREE.Scene();

@@ -6,26 +6,29 @@ out to all of them. The dedup merge in build_mesh_payload is the dangerous
 part: it collapses several draws into one, and used to keep only the first.
 """
 
-import os, sys, random, tempfile, struct, base64
+import os, tempfile, struct
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _corpus import corpus_roots
+from _corpus import sample_inis, sample_mods
 from core import ini_parser
 from core.ini_parser import parse_sections, merge_sections, build_draw_groups, \
     extract_resources, extract_toggle_keys, line_source, SrcLine
-from core.mesh_builder import build_mesh_payload, encode_texture_file, \
-    _extract_light_mask, _reconstruct_normal_z
+from core.mesh_builder import (GeometryBlob, build_mesh_result,
+                               encode_texture_file, split_texture_key,
+                               _deduplicate_draws, _extract_light_mask,
+                               _reconstruct_normal_z)
 from app import mod_loader
 
-FAILS = []
+
+def geometry_values(blob, reference):
+    start = reference["offset"]
+    end = start + reference["length"]
+    raw = blob.data[start:end]
+    return struct.unpack(f"<{len(raw) // 4}f", raw)
 
 
-def check(cond, msg):
-    print(("PASS  " if cond else "FAIL  ") + msg)
-    if not cond:
-        FAILS.append(msg)
+def texture_file(key):
+    return split_texture_key(key)[1] if key else key
 
 
 def write(tmp, name, text):
@@ -35,18 +38,24 @@ def write(tmp, name, text):
     return p
 
 
+def build_mesh_fixture(groups, mod_dir):
+    """Build production-style offset references for a mesh regression."""
+    geometry = GeometryBlob()
+    result = build_mesh_result(groups, mod_dir, geometry=geometry)
+    return result.meshes, geometry
+
+
 # ── SrcLine behaves exactly like str ─────────────────────────────────────────
 
 def test_srcline_is_a_str():
     s = SrcLine("drawindexed = 1, 2, 3", "C:\\a.ini", 42, "TextureOverrideBody")
-    check(s == "drawindexed = 1, 2, 3", "SrcLine compares equal to its text")
-    check(s.split("=")[0].strip() == "drawindexed", "SrcLine supports str methods")
-    check(isinstance(s, str), "SrcLine is a str")
-    check({s: 1}["drawindexed = 1, 2, 3"] == 1, "SrcLine hashes as its text")
-    check(line_source(s) == {"ini_path": "C:\\a.ini", "line_no": 42,
-                             "section": "TextureOverrideBody"},
-          "line_source returns file/line/section")
-    check(line_source("plain string") is None, "line_source of a plain str is None")
+    assert (s == "drawindexed = 1, 2, 3"), ("SrcLine compares equal to its text")
+    assert (s.split("=")[0].strip() == "drawindexed"), ("SrcLine supports str methods")
+    assert (isinstance(s, str)), ("SrcLine is a str")
+    assert ({s: 1}["drawindexed = 1, 2, 3"] == 1), ("SrcLine hashes as its text")
+    assert (line_source(s) == {"ini_path": "C:\\a.ini", "line_no": 42,
+                             "section": "TextureOverrideBody"}), ("line_source returns file/line/section")
+    assert (line_source("plain string") is None), ("line_source of a plain str is None")
 
 
 # ── parse_sections records the real line numbers ─────────────────────────────
@@ -103,18 +112,12 @@ def test_line_numbers():
         lines = secs["TextureOverrideBodyBlend"]
         by_no = {l.line_no: str(l) for l in lines}
         # 1-based numbering against the literal above
-        check(by_no.get(12) == "ib = ResourceBodyIB",
-              "ib line reports its own line number")
-        check(by_no.get(16) == "drawindexed = 100, 0, 0",
-              "first drawindexed reports line 16")
-        check(by_no.get(18) == "drawindexed = 200, 100, 0",
-              "second drawindexed reports line 18")
-        check(by_no.get(20) == "drawindexed = 300, 300, 0",
-              "unconditional drawindexed reports line 20")
-        check(all(l.ini_path == path for l in lines),
-              "every line carries the ini path")
-        check(all(l.section == "TextureOverrideBodyBlend" for l in lines),
-              "every line carries its section name")
+        assert (by_no.get(12) == "ib = ResourceBodyIB"), ("ib line reports its own line number")
+        assert (by_no.get(16) == "drawindexed = 100, 0, 0"), ("first drawindexed reports line 16")
+        assert (by_no.get(18) == "drawindexed = 200, 100, 0"), ("second drawindexed reports line 18")
+        assert (by_no.get(20) == "drawindexed = 300, 300, 0"), ("unconditional drawindexed reports line 20")
+        assert (all(l.ini_path == path for l in lines)), ("every line carries the ini path")
+        assert (all(l.section == "TextureOverrideBodyBlend" for l in lines)), ("every line carries its section name")
 
 
 def test_draw_sources():
@@ -122,17 +125,14 @@ def test_draw_sources():
         path = _fixture(tmp, "mod.ini", INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        check(len(groups) == 1, "one draw group built")
+        assert (len(groups) == 1), ("one draw group built")
         draws = groups[0]["draws"]
-        check(len(draws) == 3, f"three draws (got {len(draws)})")
+        assert (len(draws) == 3), (f"three draws (got {len(draws)})")
         got = [(d["sources"][0]["line_no"], d["count"]) for d in draws]
-        check(got == [(16, 100), (18, 200), (20, 300)],
-              f"each draw maps to its own line: {got}")
-        check(all(d["sources"][0]["ini_path"] == path for d in draws),
-              "draw sources carry the ini path")
-        check(all(d["sources"][0]["section"] == "TextureOverrideBodyBlend"
-                  for d in draws),
-              "draw sources carry the section name")
+        assert (got == [(16, 100), (18, 200), (20, 300)]), (f"each draw maps to its own line: {got}")
+        assert (all(d["sources"][0]["ini_path"] == path for d in draws)), ("draw sources carry the ini path")
+        assert (all(d["sources"][0]["section"] == "TextureOverrideBodyBlend"
+                  for d in draws)), ("draw sources carry the section name")
 
 
 def test_toggle_key_provenance():
@@ -141,9 +141,9 @@ def test_toggle_key_provenance():
         secs = merge_sections([path])
         keys = extract_toggle_keys(secs)
         info = keys.get("KeySwap")
-        check(info is not None, "KeySwap extracted")
-        check(info and info["ini_path"] == path, "toggle key knows its ini file")
-        check(info and info["section"] == "KeySwap", "toggle key knows its section")
+        assert (info is not None), ("KeySwap extracted")
+        assert (info and info["ini_path"] == path), ("toggle key knows its ini file")
+        assert (info and info["section"] == "KeySwap"), ("toggle key knows its section")
 
 
 # ── the dedup merge must not lose contributing lines ─────────────────────────
@@ -189,16 +189,15 @@ def test_merge_keeps_every_source():
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
         draws = groups[0]["draws"]
-        check(len(draws) == 3, f"parser sees three drawindexed lines (got {len(draws)})")
+        assert (len(draws) == 3), (f"parser sees three drawindexed lines (got {len(draws)})")
 
         # Run the merge in isolation (no buffer files needed).
-        merged = _merge(draws)
-        check(len(merged) == 1, f"dedup collapses them to one mesh (got {len(merged)})")
+        merged = _deduplicate_draws({"draws": draws})
+        assert (len(merged) == 1), (f"dedup collapses them to one mesh (got {len(merged)})")
         lines = sorted(s["line_no"] for s in merged[0]["sources"])
-        check(lines == [14, 16, 18],
-              f"all three contributing lines survive the merge: {lines}")
+        assert (lines == [14, 16, 18]), (f"all three contributing lines survive the merge: {lines}")
         alts = merged[0]["conditions"]
-        check(len(alts) == 3, f"and all three conditions are OR'd (got {len(alts)})")
+        assert (len(alts) == 3), (f"and all three conditions are OR'd (got {len(alts)})")
 
 
 def test_merge_across_files():
@@ -208,11 +207,24 @@ def test_merge_across_files():
         b = _fixture(tmp, "b.ini", INI)
         secs = merge_sections([a, b])
         groups = build_draw_groups(secs, extract_resources(secs))
-        merged = _merge(groups[0]["draws"])
+        merged = _deduplicate_draws({"draws": groups[0]["draws"]})
         first = next(m for m in merged if m["count"] == 100)
         files = sorted({os.path.basename(s["ini_path"]) for s in first["sources"]})
-        check(files == ["a.ini", "b.ini"],
-              f"merged mesh names both source files: {files}")
+        assert (files == ["a.ini", "b.ini"]), (f"merged mesh names both source files: {files}")
+
+
+def test_deduplicate_preserves_buffer_identity():
+    """Equal index ranges using different buffers are distinct meshes."""
+    draws = [
+        {"start": 0, "count": 100, "ib_file": "body.ib",
+         "position_file": "body.pos", "texcoord_file": "body.tc",
+         "conditions": [], "sources": []},
+        {"start": 0, "count": 100, "ib_file": "head.ib",
+         "position_file": "head.pos", "texcoord_file": "head.tc",
+         "conditions": [], "sources": []},
+    ]
+    merged = _deduplicate_draws({"draws": draws})
+    assert (len(merged) == 2), (f"different buffer bindings do not collapse by range alone (got {len(merged)})")
 
 
 # ── cross-ini label collision (real bug: BellyDancer_mod + HairPin_mod both
@@ -252,79 +264,24 @@ def test_cross_ini_component_collision_recovered():
         _fixture(tmp, "BellyDancer_mod.ini", COMPONENT0_INI)
         _fixture(tmp, "HairPin_mod.ini", COMPONENT0_INI)
         payload = mod_loader.load_mod(tmp)
-        check("error" not in payload, f"loads cleanly (got {payload.get('error')})")
+        assert ("error" not in payload), (f"loads cleanly (got {payload.get('error')})")
 
         mesh_entries = payload.get("meshes", {})
-        check(len(mesh_entries) == 2,
-              f"both inis' Component0 survive as distinct entries (got {list(mesh_entries)})")
+        assert (len(mesh_entries) == 2), (f"both inis' Component0 survive as distinct entries (got {list(mesh_entries)})")
 
         sources = sorted(e.get("source") for e in mesh_entries.values())
-        check(sources == ["BellyDancer_mod", "HairPin_mod"],
-              f"each entry keeps its own ini as source (got {sources})")
+        assert (sources == ["BellyDancer_mod", "HairPin_mod"]), (f"each entry keeps its own ini as source (got {sources})")
 
         components = {e.get("component") for e in mesh_entries.values()}
-        check(components == {"Component0"},
-              f"both display as the same clean name -- no '_2' suffix leaks into the UI "
+        assert (components == {"Component0"}), (f"both display as the same clean name -- no '_2' suffix leaks into the UI "
               f"(got {components}); the per-source header is what actually disambiguates them")
 
 
 
-def _merge(draws):
-    """Mirror of build_mesh_payload's dedup, minus the buffer IO.
-
-    Kept in lockstep by test_merge_matches_payload below, which runs the real
-    thing on a real mod.
-    """
-    from core.mesh_builder import build_mesh_payload  # noqa: F401  (import check)
-    merged, order = {}, []
-    for draw in draws:
-        key = (draw["start"], draw["count"])
-        if key not in merged:
-            merged[key] = {"draw": dict(draw), "alts": [], "sources": []}
-            order.append(key)
-        e = merged[key]
-        for src in draw.get("sources") or []:
-            if src not in e["sources"]:
-                e["sources"].append(src)
-        cg = draw.get("conditions") or []
-        if not cg:
-            if [] not in e["alts"]:
-                e["alts"].append([])
-        else:
-            for g in cg:
-                if g not in e["alts"]:
-                    e["alts"].append(g)
-    out = []
-    for key in order:
-        e = merged[key]
-        d = e["draw"]
-        d["conditions"] = [] if any(not a for a in e["alts"]) else e["alts"]
-        d["sources"] = e["sources"]
-        out.append(d)
-    return out
-
-
 # ── end-to-end against real mods ─────────────────────────────────────────────
 
-MOD_ROOTS = corpus_roots()
-
-
-def _find_mods(limit):
-    mods = []
-    for root in MOD_ROOTS:
-        if not os.path.isdir(root):
-            continue
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if not d.upper().startswith("DISABLED")]
-            if any(f.lower().endswith(".ini") and not f.upper().startswith("DISABLED")
-                   for f in filenames):
-                mods.append(dirpath)
-    random.Random(11).shuffle(mods)
-    return mods[:limit]
-
-
-def test_real_mods():
-    mods = _find_mods(15)
+def _corpus_case_real_mods():
+    mods = sample_mods(15, seed=11)
     if not mods:
         print("SKIP  no local mod libraries found")
         return
@@ -341,7 +298,7 @@ def test_real_mods():
             if "No mesh geometry" in payload["error"]:
                 skipped += 1
             else:
-                check(False, f"{os.path.basename(mod)} failed to load: "
+                assert (False), (f"{os.path.basename(mod)} failed to load: "
                              f"{payload['error'].strip().splitlines()[-1][:100]}")
             continue
         for name, entry in payload.get("meshes", {}).items():
@@ -375,33 +332,14 @@ def test_real_mods():
 
     print(f"      {len(mods)} mods ({skipped} geometry-free), {total_meshes} meshes, "
           f"{multi} multi-source, {missing} without provenance")
-    check(total_meshes > 0, "real mods produced meshes")
-    check(missing == 0, f"every mesh has provenance (missing={missing})")
-    check(bad_file == 0, f"every recorded ini path resolves (bad={bad_file})")
-    check(bad_line == 0,
-          f"every recorded line is a drawindexed or a section anchor (bad={bad_line})")
-    check(multi > 0, f"at least one mesh has several sources (got {multi})")
+    assert (total_meshes > 0), ("real mods produced meshes")
+    assert (missing == 0), (f"every mesh has provenance (missing={missing})")
+    assert (bad_file == 0), (f"every recorded ini path resolves (bad={bad_file})")
+    assert (bad_line == 0), (f"every recorded line is a drawindexed or a section anchor (bad={bad_line})")
+    assert (multi > 0), (f"at least one mesh has several sources (got {multi})")
 
 
-def _find_inis(limit):
-    """A larger, ini-level sample (not mod_loader.load_mod, which needs real
-    buffer files present) -- build_draw_groups only needs resources to
-    declare a `filename =`, not for that file to exist, so this can sweep
-    far more of the corpus per run than test_real_mods' mesh-payload check."""
-    inis = []
-    for root in MOD_ROOTS:
-        if not os.path.isdir(root):
-            continue
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if not d.upper().startswith("DISABLED")]
-            for f in filenames:
-                if f.lower().endswith(".ini") and not f.upper().startswith("DISABLED"):
-                    inis.append(os.path.join(dirpath, f))
-    random.Random(17).shuffle(inis)
-    return inis[:limit]
-
-
-def test_diffuse_resolution_corpus_sweep():
+def _corpus_case_diffuse_resolution_corpus_sweep():
     """The execution-order diffuse fix (per-draw `texture_default_file` /
     `diffuse_pool_files`, replacing one static tex_key per component) must
     not crash or misbehave across the real corpus, and must actually change
@@ -411,7 +349,7 @@ def test_diffuse_resolution_corpus_sweep():
     order gets None instead, which is fine) -- if it resolves but zero draws
     ever get it, that's the whole point of resolving lost.
     """
-    inis = _find_inis(400)
+    inis = sample_inis(400, seed=17)
     if not inis:
         print("SKIP  no local mod libraries found")
         return
@@ -426,7 +364,7 @@ def test_diffuse_resolution_corpus_sweep():
             groups = build_draw_groups(secs, extract_resources(secs))
         except Exception as e:
             crashes += 1
-            check(False, f"{ini_path}: build_draw_groups crashed: {e}")
+            assert (False), (f"{ini_path}: build_draw_groups crashed: {e}")
             continue
 
         for grp in groups:
@@ -466,13 +404,11 @@ def test_diffuse_resolution_corpus_sweep():
           f"{multi_diffuse_sections} multi-diffuse sections "
           f"({differing_draws} with draws that actually resolve differently), "
           f"{unresolved_pool_entries} unresolved pool entries")
-    check(sections > 0, "the corpus sample produced draw groups")
-    check(crashes == 0, f"build_draw_groups never raises on real inis (got {crashes})")
-    check(unresolved_pool_entries == 0,
-          f"every diffuse_pool_files entry resolves to a filename "
+    assert (sections > 0), ("the corpus sample produced draw groups")
+    assert (crashes == 0), (f"build_draw_groups never raises on real inis (got {crashes})")
+    assert (unresolved_pool_entries == 0), (f"every diffuse_pool_files entry resolves to a filename "
           f"(got {unresolved_pool_entries} unresolved)")
-    check(single_diffuse_mismatches == 0,
-          f"a section referencing at most one diffuse resolves identically "
+    assert (single_diffuse_mismatches == 0), (f"a section referencing at most one diffuse resolves identically "
           f"to the old static-per-component model (got "
           f"{single_diffuse_mismatches} mismatches)")
 
@@ -521,11 +457,11 @@ stride = 20
         open(os.path.join(tmp, buf), "wb").write(b"\0" * 4096)
     secs = merge_sections([path])
     groups = build_draw_groups(secs, extract_resources(secs))
-    payload = build_mesh_payload(groups, tmp)
-    return {k: v for k, v in payload.items() if k != "__textures__"}
+    meshes, _geometry = build_mesh_fixture(groups, tmp)
+    return meshes
 
 
-def test_resource_path_may_reach_a_sibling_folder():
+def _resource_case_resource_path_may_reach_a_sibling_folder():
     """`filename = ..\\resources\\x.buf` is how mods share assets between the
     ini's folder and its neighbours -- it has to resolve."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -535,11 +471,10 @@ def test_resource_path_may_reach_a_sibling_folder():
         open(os.path.join(shared, "pos.buf"), "wb").write(b"\1" * 4096)
 
         meshes = _traversal_mod(mod, "../shared/pos.buf")
-        check(len(meshes) == 1,
-              f"a resource one folder above the ini is read (got {list(meshes)})")
+        assert (len(meshes) == 1), (f"a resource one folder above the ini is read (got {list(meshes)})")
 
 
-def test_absolute_resource_path_blocked():
+def _resource_case_absolute_resource_path_blocked():
     """The mod folder is untrusted, downloaded content: a crafted `filename`
     naming an absolute path must not be read."""
     with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as tmp:
@@ -548,10 +483,10 @@ def test_absolute_resource_path_blocked():
             f.write(b"\1" * 4096)
 
         meshes = _traversal_mod(tmp, secret.replace(os.sep, "/"))
-        check(not meshes, f"absolute resource path is refused (got {list(meshes)})")
+        assert (not meshes), (f"absolute resource path is refused (got {list(meshes)})")
 
 
-def test_deep_resource_path_traversal_blocked():
+def _resource_case_deep_resource_path_traversal_blocked():
     """`..` is allowed, but only a few levels up -- not far enough to walk out
     of the mod library and into the user's own files."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -562,11 +497,10 @@ def test_deep_resource_path_traversal_blocked():
         os.makedirs(mod)
 
         meshes = _traversal_mod(mod, "../../../../../secret.buf")
-        check(not meshes,
-              f"a resource far above the mod folder is refused (got {list(meshes)})")
+        assert (not meshes), (f"a resource far above the mod folder is refused (got {list(meshes)})")
 
 
-def test_root_texture_picker_accepts_windows_case_variation():
+def _resource_case_root_texture_picker_accepts_windows_case_variation():
     """The two native dialogs may spell the same Windows folder differently."""
     if os.name != "nt":
         return
@@ -576,17 +510,16 @@ def test_root_texture_picker_accepts_windows_case_variation():
         path = os.path.join(tmp, "RootDiffuse.png")
         Image.new("RGB", (1, 1), (255, 0, 0)).save(path)
 
-        # Root-level files produce a bare tex_key; the differently-cased path
+        # Root-level files retain a role-aware key; the differently-cased path
         # must still pass containment validation on case-insensitive Windows.
         result = encode_texture_file(tmp.swapcase(), path)
-        check(not result.get("error"),
-              f"root-level picked texture accepts equivalent path casing ({result})")
-        check(result.get("tex_key") == "RootDiffuse.png",
-              f"root-level picked texture keeps a bare mod-relative key ({result})")
+        assert (not result.get("error")), (f"root-level picked texture accepts equivalent path casing ({result})")
+        assert (result.get("tex_key") == "diffuse::RootDiffuse.png"
+              and result.get("file") == "RootDiffuse.png"), (f"root-level picked texture keeps role and source path ({result})")
 
 
-def test_toggle_panel_provenance():
-    mods = _find_mods(15)
+def _resource_case_toggle_panel_provenance():
+    mods = sample_mods(15, seed=11)
     if not mods:
         return
     checked = bad = 0
@@ -602,8 +535,8 @@ def test_toggle_panel_provenance():
             if info.get("section") not in secs:
                 bad += 1
     print(f"      {checked} toggle sections checked")
-    check(checked > 0, "real mods produced toggle sections")
-    check(bad == 0, f"every toggle resolves to a real section in a real file (bad={bad})")
+    assert (checked > 0), ("real mods produced toggle sections")
+    assert (bad == 0), (f"every toggle resolves to a real section in a real file (bad={bad})")
 
 
 # ── mid-section `ib =` reassignment must not be lost
@@ -634,24 +567,21 @@ stride = 20
 """
 
 
-def test_mid_section_ib_reassignment_ini_parser():
+def _mesh_case_mid_section_ib_reassignment_ini_parser():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", IB_REASSIGN_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
         draws = groups[0]["draws"]
-        check(len(draws) == 2, f"both drawindexed lines kept (got {len(draws)})")
-        check(groups[0]["ib_file"] == "head.ib",
-              f"group's default ib is the section's first-seen one (got {groups[0]['ib_file']})")
-        check(draws[0].get("ib_file") is None,
-              "first draw has no override -- reads the group's default ib (head.ib)")
-        check(draws[1].get("ib_file") == "dress.ib",
-              f"second draw carries the reassigned ib (got {draws[1].get('ib_file')})")
+        assert (len(draws) == 2), (f"both drawindexed lines kept (got {len(draws)})")
+        assert (groups[0]["ib_file"] == "head.ib"), (f"group's default ib is the section's first-seen one (got {groups[0]['ib_file']})")
+        assert (draws[0].get("ib_file") is None), ("first draw has no override -- reads the group's default ib (head.ib)")
+        assert (draws[1].get("ib_file") == "dress.ib"), (f"second draw carries the reassigned ib (got {draws[1].get('ib_file')})")
 
 
-def test_mid_section_ib_reassignment_mesh_builder():
-    """End-to-end: build_mesh_payload must read each draw's indices from its
+def _mesh_case_mid_section_ib_reassignment_mesh_builder():
+    """End-to-end: build_mesh_result must read each draw's indices from its
     own reassigned ib file, and must not merge two draws that happen to share
     (start, count) but actually come from different index buffers."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -670,20 +600,16 @@ def test_mid_section_ib_reassignment_mesh_builder():
         # 3 real indices we actually wrote so read_indices has something to read
         for d in groups[0]["draws"]:
             d["count"] = 3
-        payload = build_mesh_payload(groups, tmp)
-
-        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
-        check(len(meshes) == 2, f"both draws survive as distinct meshes, not merged "
+        meshes, geometry = build_mesh_fixture(groups, tmp)
+        assert (len(meshes) == 2), (f"both draws survive as distinct meshes, not merged "
                                  f"(got {len(meshes)})")
 
         def _verts(entry):
-            pos = struct.unpack(f"<{len(base64.b64decode(entry['pos'])) // 4}f",
-                                 base64.b64decode(entry["pos"]))
+            pos = geometry_values(geometry, entry["pos"])
             return sorted(round(pos[i]) for i in range(0, len(pos), 3))
 
         vert_sets = sorted(_verts(e) for e in meshes.values())
-        check(vert_sets == [[10, 11, 12], [20, 21, 22]],
-              f"each mesh's own vertices come from its own reassigned ib (got {vert_sets})")
+        assert (vert_sets == [[10, 11, 12], [20, 21, 22]]), (f"each mesh's own vertices come from its own reassigned ib (got {vert_sets})")
 
 
 # ── a mid-section `ib =` reassignment paired with `vb0/vb1 =` (a "cross IB/VB"
@@ -741,23 +667,21 @@ stride = 20
 """
 
 
-def test_cross_ib_vb_reassignment_ini_parser():
+def _mesh_case_cross_ib_vb_reassignment_ini_parser():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", CROSS_IB_VB_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
         draws = groups[0]["draws"]
-        check(len(draws) == 2, f"both drawindexed lines kept (got {len(draws)})")
-        check("position_file" not in draws[0] and "texcoord_file" not in draws[0],
-              "first draw has no override -- reads the group's default SBS buffers")
-        check(draws[1].get("position_file") == "xbsPos.buf" and
-              draws[1].get("texcoord_file") == "xbsTc.buf",
-              f"second draw carries its own reassigned vertex buffers "
+        assert (len(draws) == 2), (f"both drawindexed lines kept (got {len(draws)})")
+        assert ("position_file" not in draws[0] and "texcoord_file" not in draws[0]), ("first draw has no override -- reads the group's default SBS buffers")
+        assert (draws[1].get("position_file") == "xbsPos.buf" and
+              draws[1].get("texcoord_file") == "xbsTc.buf"), (f"second draw carries its own reassigned vertex buffers "
               f"(got {draws[1].get('position_file')}, {draws[1].get('texcoord_file')})")
 
 
-def test_cross_ib_vb_reassignment_mesh_builder():
+def _mesh_case_cross_ib_vb_reassignment_mesh_builder():
     """End-to-end: the second draw's indices must decode against its own
     reassigned XBS position buffer, not the group's default (shorter) SBS one
     -- reading against the wrong buffer either raises IndexError or silently
@@ -781,19 +705,15 @@ def test_cross_ib_vb_reassignment_mesh_builder():
 
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        payload = build_mesh_payload(groups, tmp)
-
-        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
-        check(len(meshes) == 2, f"both draws survive as distinct meshes (got {len(meshes)})")
+        meshes, geometry = build_mesh_fixture(groups, tmp)
+        assert (len(meshes) == 2), (f"both draws survive as distinct meshes (got {len(meshes)})")
 
         def _verts(entry):
-            pos = struct.unpack(f"<{len(base64.b64decode(entry['pos'])) // 4}f",
-                                 base64.b64decode(entry["pos"]))
+            pos = geometry_values(geometry, entry["pos"])
             return sorted(round(pos[i]) for i in range(0, len(pos), 3))
 
         vert_sets = sorted(_verts(e) for e in meshes.values())
-        check(vert_sets == [[0, 1, 2], [50, 60, 70]],
-              f"the reassigned draw decodes against its own XBS position buffer, "
+        assert (vert_sets == [[0, 1, 2], [50, 60, 70]]), (f"the reassigned draw decodes against its own XBS position buffer, "
               f"not a collapsed/garbage read of the SBS one (got {vert_sets})")
 
 
@@ -854,22 +774,20 @@ format = DXGI_FORMAT_R32_UINT
 """
 
 
-def test_runtime_position_copy_resolution():
+def _resource_case_runtime_position_copy_resolution():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", RUNTIME_POSITION_COPY_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
 
-        check(len(groups) == 1, f"runtime position resources no longer drop the "
+        assert (len(groups) == 1), (f"runtime position resources no longer drop the "
                                 f"draw group (got {len(groups)})")
         if not groups:
             return
         group = groups[0]
-        check(group["position_file"] == "legsBase.buf",
-              f"group position follows the explicit Legs -> LegsBase copy "
+        assert (group["position_file"] == "legsBase.buf"), (f"group position follows the explicit Legs -> LegsBase copy "
               f"(got {group['position_file']})")
-        check(group["draws"][1].get("position_file") == "bodyBase.buf",
-              f"reassigned Body draw follows the explicit Body -> BodyBase copy "
+        assert (group["draws"][1].get("position_file") == "bodyBase.buf"), (f"reassigned Body draw follows the explicit Body -> BodyBase copy "
               f"(got {group['draws'][1].get('position_file')})")
 
 
@@ -916,22 +834,19 @@ format = DXGI_FORMAT_R32_UINT
 """
 
 
-def test_ll_skeleton_compute_output_uses_rest_position():
+def _resource_case_ll_skeleton_compute_output_uses_rest_position():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", LL_SKELETON_OUTPUT_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
 
-        check(len(groups) == 1,
-              f"LL compute-skinned body is retained (got {len(groups)})")
+        assert (len(groups) == 1), (f"LL compute-skinned body is retained (got {len(groups)})")
         if not groups:
             return
         group = groups[0]
-        check(group["position_file"] == "bodyPosition.buf",
-              f"runtime LL output resolves to its cs-t1 rest position "
+        assert (group["position_file"] == "bodyPosition.buf"), (f"runtime LL output resolves to its cs-t1 rest position "
               f"(got {group['position_file']})")
-        check(group["texcoord_file"] == "bodyTexcoord.buf",
-              f"runtime LL output keeps the sibling texcoord binding "
+        assert (group["texcoord_file"] == "bodyTexcoord.buf"), (f"runtime LL output keeps the sibling texcoord binding "
               f"(got {group['texcoord_file']})")
 
 
@@ -984,46 +899,74 @@ filename = material.dds
 """
 
 
-def test_authored_auxiliary_material_maps():
+def _material_case_authored_auxiliary_material_maps():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", AUXILIARY_MAPS_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
 
-        check(len(groups) == 1, f"auxiliary-map fixture builds (got {len(groups)})")
+        assert (len(groups) == 1), (f"auxiliary-map fixture builds (got {len(groups)})")
         if not groups:
             return
         draw = groups[0]["draws"][0]
         normals = draw.get("normal_map_variants") or []
-        check([v["file"] for v in normals] == ["normal-a.dds", "normal-b.dds"],
-              f"conditional normal maps retain both authored branches (got {normals})")
-        check(draw.get("light_map_default_file") == "light.dds",
-              f"unconditional light map becomes the draw default "
+        assert ([v["file"] for v in normals] == ["normal-a.dds", "normal-b.dds"]), (f"conditional normal maps retain both authored branches (got {normals})")
+        assert (draw.get("light_map_default_file") == "light.dds"), (f"unconditional light map becomes the draw default "
               f"(got {draw.get('light_map_default_file')})")
         materials = draw.get("material_map_variants") or []
-        check(len(materials) == 1 and materials[0]["file"] == "material.dds"
-              and materials[0]["conditions"],
-              f"a conditional-only material map retains a no-map fallback "
+        assert (len(materials) == 1 and materials[0]["file"] == "material.dds"
+              and materials[0]["conditions"]), (f"a conditional-only material map retains a no-map fallback "
               f"(got {materials})")
 
 
-def test_two_channel_normal_reconstructs_z():
+def _material_case_direct_ps_t_auxiliary_material_maps():
+    direct = AUXILIARY_MAPS_INI
+    for old, new in (
+            ("ResourceNormalA", "ResourceBodyNormalMapA"),
+            ("ResourceNormalB", "ResourceBodyNormalMapB"),
+            ("ResourceLight", "ResourceBodyLightMap"),
+            ("ResourceMaterial", "ResourceBodyMaterialMap")):
+        direct = direct.replace(old, new)
+    direct = direct.replace(
+        r"Resource\ZZMI\NormalMap = ref ", "ps-t1 = ")
+    direct = direct.replace(
+        r"Resource\ZZMI\LightMap = ref ", "ps-t2 = ")
+    direct = direct.replace(
+        r"Resource\ZZMI\MaterialMap = ref ", "ps-t3 = ")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", direct)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+
+        assert (len(groups) == 1), (f"direct ps-t auxiliary fixture builds (got {len(groups)})")
+        if not groups:
+            return
+        draw = groups[0]["draws"][0]
+        normals = draw.get("normal_map_variants") or []
+        assert ([v["file"] for v in normals] ==
+              ["normal-a.dds", "normal-b.dds"]), (f"direct ps-t normal maps retain both branches (got {normals})")
+        assert (draw.get("light_map_default_file") == "light.dds"), (f"direct ps-t light map becomes the draw default "
+              f"(got {draw.get('light_map_default_file')})")
+        materials = draw.get("material_map_variants") or []
+        assert (len(materials) == 1 and materials[0]["file"] == "material.dds"
+              and materials[0]["conditions"]), (f"direct ps-t material map retains its condition (got {materials})")
+
+
+def _material_case_two_channel_normal_reconstructs_z():
     from PIL import Image
     source = Image.new("RGB", (2, 1))
     source.putdata([(128, 128, 0), (255, 128, 0)])
     rebuilt = _reconstruct_normal_z(source)
     pixels = [rebuilt.getpixel((x, 0)) for x in range(2)]
-    check(pixels[0][2] == 255,
-          f"a flat XY normal reconstructs a forward-facing Z (got {pixels[0]})")
-    check(127 <= pixels[1][2] <= 129,
-          f"a full-strength X normal reconstructs a near-zero Z (got {pixels[1]})")
+    assert (pixels[0][2] == 255), (f"a flat XY normal reconstructs a forward-facing Z (got {pixels[0]})")
+    assert (127 <= pixels[1][2] <= 129), (f"a full-strength X normal reconstructs a near-zero Z (got {pixels[1]})")
 
 
-def test_packed_light_map_uses_blue_mask_without_colour_cast():
+def _material_case_packed_light_map_uses_blue_mask_without_colour_cast():
     from PIL import Image
     source = Image.new("RGB", (1, 1), (210, 12, 94))
-    check(_extract_light_mask(source).getpixel((0, 0)) == (94, 94, 94),
-          "packed LightMap blue is exposed as a neutral scalar mask")
+    assert (_extract_light_mask(source).getpixel((0, 0)) == (94, 94, 94)), ("packed LightMap blue is exposed as a neutral scalar mask")
 
 
 # ── `handling = skip` with no `drawindexed` line at all means "suppress the
@@ -1068,18 +1011,16 @@ stride = 20
 """
 
 
-def test_handling_skip_with_no_drawindexed_draws_nothing():
+def _mesh_case_handling_skip_with_no_drawindexed_draws_nothing():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", HANDLING_SKIP_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
         names = {g["display_name"] for g in groups}
-        check("BodyA" in names, "the section with an explicit drawindexed still draws")
-        check("BodyB" not in names,
-              f"a handling=skip section with NO drawindexed draws nothing at all "
+        assert ("BodyA" in names), ("the section with an explicit drawindexed still draws")
+        assert ("BodyB" not in names), (f"a handling=skip section with NO drawindexed draws nothing at all "
               f"(got groups: {sorted(names)})")
-        check("BodyC" in names,
-              "a section with no handling=skip still gets the implicit whole-ib draw")
+        assert ("BodyC" in names), ("a section with no handling=skip still gets the implicit whole-ib draw")
 
 
 # ── a draw section's `ib=` can name a component that's a per-part suffix
@@ -1120,19 +1061,17 @@ format = DXGI_FORMAT_R32_UINT
 """
 
 
-def test_component_name_ending_in_uppercase_abbreviation():
+def _mesh_case_component_name_ending_in_uppercase_abbreviation():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", COMPONENT_ABBREV_SUFFIX_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
         names = {g["display_name"]: g for g in groups}
-        check("XCNHead" in names,
-              f"the Head draw resolves its buffers via the shared XCN component "
+        assert ("XCNHead" in names), (f"the Head draw resolves its buffers via the shared XCN component "
               f"(got groups: {sorted(names)})")
         if "XCNHead" in names:
             g = names["XCNHead"]
-            check(g["position_file"] == "pos.buf" and g["texcoord_file"] == "tc.buf",
-                  f"resolved to the shared component's own buffers "
+            assert (g["position_file"] == "pos.buf" and g["texcoord_file"] == "tc.buf"), (f"resolved to the shared component's own buffers "
                   f"(got {g['position_file']}, {g['texcoord_file']})")
 
 
@@ -1188,27 +1127,22 @@ def _visible(conds, bindings):
                for group in conds)
 
 
-def test_run_inlines_nested_commandlist_draws():
+def _resource_case_run_inlines_nested_commandlist_draws():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", RUN_CHAIN_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
         draws = groups[0]["draws"]
-        check(len(draws) == 2,
-              f"the run=-chained drawindexed is inlined alongside the direct one "
+        assert (len(draws) == 2), (f"the run=-chained drawindexed is inlined alongside the direct one "
               f"(got {len(draws)})")
         by_count = {d["count"]: d for d in draws}
-        check(100 in by_count and 50 in by_count,
-              f"both the direct and run=-chained draws are present (got {sorted(by_count)})")
+        assert (100 in by_count and 50 in by_count), (f"both the direct and run=-chained draws are present (got {sorted(by_count)})")
 
         chained = by_count[50]
-        check(_visible(chained["conditions"], {"naked": "0", "flag": "0"}),
-              "chained draw visible when both naked==0 and flag==0")
-        check(not _visible(chained["conditions"], {"naked": "1", "flag": "0"}),
-              "chained draw hidden when the caller's own gate (naked==0) fails")
-        check(not _visible(chained["conditions"], {"naked": "0", "flag": "1"}),
-              "chained draw hidden when the callee's own gate (flag==0) fails")
+        assert (_visible(chained["conditions"], {"naked": "0", "flag": "0"})), ("chained draw visible when both naked==0 and flag==0")
+        assert (not _visible(chained["conditions"], {"naked": "1", "flag": "0"})), ("chained draw hidden when the caller's own gate (naked==0) fails")
+        assert (not _visible(chained["conditions"], {"naked": "0", "flag": "1"})), ("chained draw hidden when the callee's own gate (flag==0) fails")
 
 
 # ── a toggle can reassign the diffuse texture instead of (or as well as)
@@ -1258,37 +1192,31 @@ filename = diffuseC.dds
 """
 
 
-def test_toggle_driven_diffuse_swap_ini_parser():
+def _material_case_toggle_driven_diffuse_swap_ini_parser():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", DIFFUSE_SWAP_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
         group = groups[0]
-        check(group["diffuse_file"] == "diffuseA.dds",
-              f"group default diffuse is the first-seen, unconditional one "
+        assert (group["diffuse_file"] == "diffuseA.dds"), (f"group default diffuse is the first-seen, unconditional one "
               f"(got {group['diffuse_file']})")
         draws = {d["count"]: d for d in group["draws"]}
 
-        check("texture_variants" not in draws[10],
-              "the earlier unconditional diffuse assignment doesn't leak a "
+        assert ("texture_variants" not in draws[10]), ("the earlier unconditional diffuse assignment doesn't leak a "
               "spurious single-entry texture_variants onto the first draw")
 
         variants = draws[20].get("texture_variants")
-        check(bool(variants) and len(variants) == 2,
-              f"exactly 2 variants for the later, toggle-gated draw (got {variants})")
+        assert (bool(variants) and len(variants) == 2), (f"exactly 2 variants for the later, toggle-gated draw (got {variants})")
         by_file = {v["file"]: v["conditions"] for v in variants}
-        check(set(by_file) == {"diffuseB.dds", "diffuseC.dds"},
-              f"both branches' files are present (got {sorted(by_file)})")
-        check(_visible(by_file["diffuseB.dds"], {"seven2": "1"}) and
-              not _visible(by_file["diffuseB.dds"], {"seven2": "0"}),
-              "diffuseB's condition matches only seven2==1")
-        check(_visible(by_file["diffuseC.dds"], {"seven2": "0"}) and
-              not _visible(by_file["diffuseC.dds"], {"seven2": "1"}),
-              "diffuseC's condition (the else branch) matches only seven2==0")
+        assert (set(by_file) == {"diffuseB.dds", "diffuseC.dds"}), (f"both branches' files are present (got {sorted(by_file)})")
+        assert (_visible(by_file["diffuseB.dds"], {"seven2": "1"}) and
+              not _visible(by_file["diffuseB.dds"], {"seven2": "0"})), ("diffuseB's condition matches only seven2==1")
+        assert (_visible(by_file["diffuseC.dds"], {"seven2": "0"}) and
+              not _visible(by_file["diffuseC.dds"], {"seven2": "1"})), ("diffuseC's condition (the else branch) matches only seven2==0")
 
 
-def test_toggle_driven_diffuse_swap_mesh_builder():
+def _material_case_toggle_driven_diffuse_swap_mesh_builder():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", DIFFUSE_SWAP_INI)
         open(os.path.join(tmp, "body.ib"), "wb").write(
@@ -1304,26 +1232,20 @@ def test_toggle_driven_diffuse_swap_mesh_builder():
         groups = build_draw_groups(secs, extract_resources(secs))
         for d in groups[0]["draws"]:
             d["start"], d["count"] = (0, 3) if d["count"] == 10 else (3, 3)
-        payload = build_mesh_payload(groups, tmp)
-
-        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
+        meshes, _geometry = build_mesh_fixture(groups, tmp)
         by_draw = {tuple(e["drawindexed"]): e for e in meshes.values()}
         first  = by_draw[(3, 0, 0)]
         second = by_draw[(3, 3, 0)]
 
-        check("texture_variants" not in first,
-              "first draw's payload entry carries no texture_variants (single diffuse)")
+        assert ("texture_variants" not in first), ("first draw's payload entry carries no texture_variants (single diffuse)")
 
         variants = second.get("texture_variants")
-        check(bool(variants) and len(variants) == 3 and
-              variants[0]["conditions"] == [],
-              f"second draw carries the unconditional write and both resolved "
+        assert (bool(variants) and len(variants) == 3 and
+              variants[0]["conditions"] == []), (f"second draw carries the unconditional write and both resolved "
               f"conditional writes in source order (got {variants})")
-        keys = {v["tex_key"] for v in variants}
-        check(keys == {"diffuseA.dds", "diffuseB.dds", "diffuseC.dds"},
-              f"each assignment's tex_key names its own resolved diffuse file (got {keys})")
-        check(second["tex_key"] == "diffuseB.dds",
-              f"the draw's own default tex_key is the first/`if`-branch "
+        keys = {texture_file(v["tex_key"]) for v in variants}
+        assert (keys == {"diffuseA.dds", "diffuseB.dds", "diffuseC.dds"}), (f"each assignment's tex_key names its own resolved diffuse file (got {keys})")
+        assert (texture_file(second["tex_key"]) == "diffuseB.dds"), (f"the draw's own default tex_key is the first/`if`-branch "
               f"alternative at this point in execution order (seven2==1 -> "
               f"diffuseB), not the group's earlier unconditional diffuseA "
               f"(got {second['tex_key']})")
@@ -1379,24 +1301,22 @@ filename = diffuseC.dds
 """
 
 
-def test_same_variable_partial_diffuse_chains_keep_assignment_history():
+def _material_case_same_variable_partial_diffuse_chains_keep_assignment_history():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", SAME_VAR_PARTIAL_DIFFUSE_INI)
         secs = merge_sections([path])
         draw = build_draw_groups(secs, extract_resources(secs))[0]["draws"][0]
         assignments = draw.get("texture_assignments") or []
-        check([item["file"] for item in assignments] ==
-              ["diffuseA.dds", "diffuseB.dds", "diffuseC.dds"],
-              f"independent same-variable writes retain source order (got {assignments})")
+        assert ([item["file"] for item in assignments] ==
+              ["diffuseA.dds", "diffuseB.dds", "diffuseC.dds"]), (f"independent same-variable writes retain source order (got {assignments})")
 
         def selected(value):
             state = {"color": value}
             return next((item["file"] for item in reversed(assignments)
                          if _visible(item["conditions"], state)), None)
 
-        check([selected(value) for value in ("0", "1", "2")] ==
-              ["diffuseA.dds", "diffuseB.dds", "diffuseC.dds"],
-              "last-matching assignment selects the authored texture for every color")
+        assert ([selected(value) for value in ("0", "1", "2")] ==
+              ["diffuseA.dds", "diffuseB.dds", "diffuseC.dds"]), ("last-matching assignment selects the authored texture for every color")
 
 
 MULTI_REASSIGN_INI = """[KeySuitCL]
@@ -1454,44 +1374,37 @@ filename = diffuseB.dds
 """
 
 
-def test_multi_reassignment_diffuse_resolution():
+def _material_case_multi_reassignment_diffuse_resolution():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", MULTI_REASSIGN_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
         group = groups[0]
         by_start = {d["start"]: d for d in group["draws"]}
 
-        check(by_start[0].get("texture_default_file") is None,
-              f"draw before any diffuse assignment gets none "
+        assert (by_start[0].get("texture_default_file") is None), (f"draw before any diffuse assignment gets none "
               f"(got {by_start[0].get('texture_default_file')})")
-        check(by_start[10].get("texture_default_file") == "diffuseA.dds",
-              f"draw after the if/elif chain's first branch gets diffuseA "
+        assert (by_start[10].get("texture_default_file") == "diffuseA.dds"), (f"draw after the if/elif chain's first branch gets diffuseA "
               f"(got {by_start[10].get('texture_default_file')})")
         variants = by_start[10].get("texture_variants")
-        check(bool(variants) and len(variants) == 2,
-              f"that same draw also carries both toggle alternatives "
+        assert (bool(variants) and len(variants) == 2), (f"that same draw also carries both toggle alternatives "
               f"(got {variants})")
-        check(by_start[30].get("texture_default_file") == "diffuseB.dds",
-              f"draw after the unconditional reassignment to B gets B, not "
+        assert (by_start[30].get("texture_default_file") == "diffuseB.dds"), (f"draw after the unconditional reassignment to B gets B, not "
               f"the earlier if/elif chain's A "
               f"(got {by_start[30].get('texture_default_file')})")
-        check("texture_variants" not in by_start[30],
-              "the unconditional B reassignment carries no toggle variants")
-        check(by_start[60].get("texture_default_file") == "diffuseA.dds",
-              f"draw after reassigning back to A gets A again, not stuck on "
+        assert ("texture_variants" not in by_start[30]), ("the unconditional B reassignment carries no toggle variants")
+        assert (by_start[60].get("texture_default_file") == "diffuseA.dds"), (f"draw after reassigning back to A gets A again, not stuck on "
               f"B from the earlier unconditional reassignment "
               f"(got {by_start[60].get('texture_default_file')})")
 
         pool = [p["res"] for p in group["diffuse_pool_files"]]
-        check(pool == ["ResourceDiffuseA", "ResourceDiffuseA2", "ResourceDiffuseB"],
-              f"the group's texture pool lists every distinct diffuse "
+        assert (pool == ["ResourceDiffuseA", "ResourceDiffuseA2", "ResourceDiffuseB"]), (f"the group's texture pool lists every distinct diffuse "
               f"referenced anywhere in the section, in first-seen order "
               f"(got {pool})")
 
 
-def test_multi_reassignment_mesh_builder():
+def _material_case_multi_reassignment_mesh_builder():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", MULTI_REASSIGN_INI)
         open(os.path.join(tmp, "multi.ib"), "wb").write(
@@ -1511,25 +1424,19 @@ def test_multi_reassignment_mesh_builder():
         orig_starts = [d["start"] for d in groups[0]["draws"]]
         for i, d in enumerate(groups[0]["draws"]):
             d["start"], d["count"] = i * 3, 3
-        payload = build_mesh_payload(groups, tmp)
-        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
+        meshes, _geometry = build_mesh_fixture(groups, tmp)
         by_orig_start = dict(zip(orig_starts,
             sorted(meshes.values(), key=lambda e: e["drawindexed"][1])))
 
-        check(by_orig_start[0]["tex_key"] is None,
-              f"first draw's resolved tex_key is None (got {by_orig_start[0]['tex_key']})")
-        check(by_orig_start[10]["tex_key"] == "diffuseA.dds",
-              f"second draw resolves diffuseA (got {by_orig_start[10]['tex_key']})")
-        check(by_orig_start[30]["tex_key"] == "diffuseB.dds",
-              f"third draw resolves diffuseB, not the earlier diffuseA "
+        assert (by_orig_start[0]["tex_key"] is None), (f"first draw's resolved tex_key is None (got {by_orig_start[0]['tex_key']})")
+        assert (texture_file(by_orig_start[10]["tex_key"]) == "diffuseA.dds"), (f"second draw resolves diffuseA (got {by_orig_start[10]['tex_key']})")
+        assert (texture_file(by_orig_start[30]["tex_key"]) == "diffuseB.dds"), (f"third draw resolves diffuseB, not the earlier diffuseA "
               f"(got {by_orig_start[30]['tex_key']})")
-        check(by_orig_start[60]["tex_key"] == "diffuseA.dds",
-              f"fourth draw resolves back to diffuseA "
+        assert (texture_file(by_orig_start[60]["tex_key"]) == "diffuseA.dds"), (f"fourth draw resolves back to diffuseA "
               f"(got {by_orig_start[60]['tex_key']})")
 
         options = by_orig_start[0].get("texture_options")
-        check(bool(options) and len(options) == 3,
-              f"every draw in the component carries the full 3-entry "
+        assert (bool(options) and len(options) == 3), (f"every draw in the component carries the full 3-entry "
               f"texture pool for the manual picker (got {options})")
 
 
@@ -1574,19 +1481,17 @@ filename = implicit.dds
 """
 
 
-def test_implicit_whole_buffer_draw_keeps_its_diffuse():
+def _mesh_case_implicit_whole_buffer_draw_keeps_its_diffuse():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", IMPLICIT_DRAW_DIFFUSE_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        check(len(groups) == 1, f"one draw group built (got {len(groups)})")
+        assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
         group = groups[0]
-        check(len(group["draws"]) == 1, "exactly the one synthetic placeholder draw")
+        assert (len(group["draws"]) == 1), ("exactly the one synthetic placeholder draw")
         draw = group["draws"][0]
-        check(draw.get("count") is None,
-              "the placeholder draw has no count -- it's the implicit whole-buffer read")
-        check(draw.get("texture_default_file") == "implicit.dds",
-              f"the placeholder draw still resolves the section's own "
+        assert (draw.get("count") is None), ("the placeholder draw has no count -- it's the implicit whole-buffer read")
+        assert (draw.get("texture_default_file") == "implicit.dds"), (f"the placeholder draw still resolves the section's own "
               f"ps-t0 diffuse, not None (got {draw.get('texture_default_file')})")
 
 
@@ -1630,16 +1535,15 @@ filename = diffuseX.dds
 """
 
 
-def test_diffuse_assignment_without_ref_keyword():
+def _material_case_diffuse_assignment_without_ref_keyword():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", DIFFUSE_NO_REF_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
         names = {g["display_name"]: g for g in groups}
-        check("XA" in names, f"the draw section builds a group (got {sorted(names)})")
+        assert ("XA" in names), (f"the draw section builds a group (got {sorted(names)})")
         if "XA" in names:
-            check(names["XA"]["diffuse_file"] == "diffuseX.dds",
-                  f"the no-\"ref\" diffuse assignment still resolves "
+            assert (names["XA"]["diffuse_file"] == "diffuseX.dds"), (f"the no-\"ref\" diffuse assignment still resolves "
                   f"(got {names['XA']['diffuse_file']})")
 
 
@@ -1649,7 +1553,7 @@ def test_diffuse_assignment_without_ref_keyword():
 IB_R16_INI = DIFFUSE_NO_REF_INI.replace("DXGI_FORMAT_R32_UINT", "DXGI_FORMAT_R16_UINT")
 
 
-def test_r16_index_buffer():
+def _mesh_case_r16_index_buffer():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", IB_R16_INI)
         open(os.path.join(tmp, "a.ib"), "wb").write(struct.pack("<3H", 5, 6, 7))
@@ -1660,53 +1564,13 @@ def test_r16_index_buffer():
 
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        check(groups and groups[0]["index_size"] == 2,
-              f"an R16_UINT ib reports 2 bytes per index "
+        assert (groups and groups[0]["index_size"] == 2), (f"an R16_UINT ib reports 2 bytes per index "
               f"(got {groups[0]['index_size'] if groups else None})")
         for d in groups[0]["draws"]:
             d["count"] = 3
-        payload = build_mesh_payload(groups, tmp)
-
-        meshes = {k: v for k, v in payload.items() if k != "__textures__"}
-        check(len(meshes) == 1, f"the draw builds a mesh (got {len(meshes)})")
+        meshes, geometry = build_mesh_fixture(groups, tmp)
+        assert (len(meshes) == 1), (f"the draw builds a mesh (got {len(meshes)})")
         entry = next(iter(meshes.values()))
-        pos = struct.unpack(f"<{len(base64.b64decode(entry['pos'])) // 4}f",
-                            base64.b64decode(entry["pos"]))
+        pos = geometry_values(geometry, entry["pos"])
         verts = sorted(round(pos[i]) for i in range(0, len(pos), 3))
-        check(verts == [5, 6, 7],
-              f"16-bit indices are decoded as 16-bit, not 32-bit (got {verts})")
-
-
-if __name__ == "__main__":
-    for fn in (test_srcline_is_a_str, test_line_numbers, test_draw_sources,
-               test_toggle_key_provenance, test_merge_keeps_every_source,
-               test_merge_across_files, test_cross_ini_component_collision_recovered,
-               test_mid_section_ib_reassignment_ini_parser,
-               test_mid_section_ib_reassignment_mesh_builder,
-               test_cross_ib_vb_reassignment_ini_parser,
-               test_cross_ib_vb_reassignment_mesh_builder,
-               test_runtime_position_copy_resolution,
-               test_ll_skeleton_compute_output_uses_rest_position,
-               test_authored_auxiliary_material_maps,
-               test_two_channel_normal_reconstructs_z,
-               test_packed_light_map_uses_blue_mask_without_colour_cast,
-               test_handling_skip_with_no_drawindexed_draws_nothing,
-               test_component_name_ending_in_uppercase_abbreviation,
-               test_run_inlines_nested_commandlist_draws,
-               test_toggle_driven_diffuse_swap_ini_parser,
-               test_toggle_driven_diffuse_swap_mesh_builder,
-               test_same_variable_partial_diffuse_chains_keep_assignment_history,
-               test_multi_reassignment_diffuse_resolution,
-               test_multi_reassignment_mesh_builder,
-               test_implicit_whole_buffer_draw_keeps_its_diffuse,
-               test_diffuse_resolution_corpus_sweep,
-               test_diffuse_assignment_without_ref_keyword,
-               test_r16_index_buffer,
-               test_resource_path_may_reach_a_sibling_folder,
-               test_absolute_resource_path_blocked,
-               test_deep_resource_path_traversal_blocked,
-               test_root_texture_picker_accepts_windows_case_variation,
-               test_real_mods, test_toggle_panel_provenance):
-        fn()
-    print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
-    sys.exit(1 if FAILS else 0)
+        assert (verts == [5, 6, 7]), (f"16-bit indices are decoded as 16-bit, not 32-bit (got {verts})")

@@ -4,7 +4,8 @@ import os
 import threading
 from copy import deepcopy
 
-from core.mesh_builder import encode_texture_file
+from core.mesh_builder import (encode_texture_key, normalize_texture_key,
+                               split_texture_key)
 
 METADATA_NAME = ".mod_viewer.json"
 PRESENT_NAMES_KEY = "__all__"
@@ -193,16 +194,19 @@ def hydrate_textures(folder_path, payload, data=None):
     for name, state in saved.items():
         if not isinstance(state, dict):
             continue
-        key, label, manual = (state.get("tex_key"), state.get("label"),
-                              state.get("manual"))
+        key, label, manual = (normalize_texture_key(
+                                  state.get("tex_key"), "diffuse"),
+                              state.get("label"), state.get("manual"))
         if (not isinstance(key, str) or not key
                 or not isinstance(label, str) or not label
                 or not isinstance(manual, bool)):
             continue
-        item = {"tex_key": key, "label": label, "manual": manual}
+        _role, relative_path = split_texture_key(key)
+        item = {"tex_key": key, "file": relative_path,
+                "label": label, "manual": manual}
         for field in ("normal_map", "light_map", "material_map"):
-            value = state.get(field)
-            if isinstance(value, str) and value:
+            value = normalize_texture_key(state.get(field), field)
+            if value:
                 item[field] = value
             manual = state.get(f"{field}_manual")
             if isinstance(manual, bool) and manual:
@@ -266,8 +270,7 @@ def hydrate_textures(folder_path, payload, data=None):
                 continue
             if key in textures:
                 continue
-            encoded = encode_texture_file(folder_path, os.path.join(folder_path, key),
-                                          texture_role=role)
+            encoded = encode_texture_key(folder_path, key, role)
             if encoded and not encoded.get("error"):
                 textures[encoded["tex_key"]] = encoded["uri"]
 

@@ -41,20 +41,12 @@ declaration, so record_toggle's position count must come from
 get_record_positions rather than the panel's own lead-variable cycle length.
 """
 
-import glob, os, sys, tempfile
+import glob, os
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from app import toggle_api
-
-FAILS = []
+import pytest
 
 
-def check(cond, msg):
-    print(("PASS  " if cond else "FAIL  ") + msg)
-    if not cond:
-        FAILS.append(msg)
+from app import edit_session, toggle_api
 
 
 # A section with one writable var (2 values) and one namespaced var declared
@@ -126,46 +118,51 @@ def _fixture(tmp, name, text):
     return path
 
 
-def test_get_record_positions_uses_writable_vars_only():
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        _fixture(tmp, ini_rel, FIXTURE)
-        result = toggle_api.get_record_positions(tmp, ini_rel, "KeyUpper")
-        check(result.get("ok") is True, "get_record_positions succeeds on a real toggle")
-        check(result.get("positions") == 2,
-              f"position count comes from the 2-value writable var, not the "
-              f"4-value namespaced one (got {result.get('positions')})")
-        check(result.get("vars") == ["Upper"],
-              f"only the writable variable is reported (got {result.get('vars')})")
+@pytest.fixture
+def toggle_mod(api_root):
+    root = api_root
+    ini_path = _fixture(root, "mod.ini", FIXTURE)
+    yield root, ini_path
 
 
-def test_get_record_positions_rejects_unknown_section():
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        _fixture(tmp, ini_rel, FIXTURE)
-        result = toggle_api.get_record_positions(tmp, ini_rel, "KeyNope")
-        check("error" in result, "unknown section name is a clean {\"error\": ...}")
+@pytest.fixture
+def wirable_mod(api_root):
+    root = api_root
+    ini_path = _fixture(root, "mod.ini", WIRABLE_FIXTURE)
+    yield root, ini_path
 
 
-def test_get_record_positions_rejects_bad_ini_rel():
-    with tempfile.TemporaryDirectory() as tmp:
-        _fixture(tmp, "mod.ini", FIXTURE)
-        result = toggle_api.get_record_positions(tmp, "not_a_real_file.ini", "KeyUpper")
-        check("error" in result, "an ini_rel outside this mod folder is a clean {\"error\": ...}")
+def test_get_record_positions_uses_writable_vars_only(toggle_mod):
+    tmp, _ini_path = toggle_mod
+    ini_rel = "mod.ini"
+    result = toggle_api.get_record_positions(tmp, ini_rel, "KeyUpper")
+    assert (result.get("ok") is True), ("get_record_positions succeeds on a real toggle")
+    assert (result.get("positions") == 2), (f"position count comes from the 2-value writable var, not the "
+          f"4-value namespaced one (got {result.get('positions')})")
+    assert (result.get("vars") == ["Upper"]), (f"only the writable variable is reported (got {result.get('vars')})")
 
 
-def test_record_toggle_rejects_incomplete_positions():
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        _fixture(tmp, ini_rel, FIXTURE)
-        result = toggle_api.record_toggle(tmp, ini_rel, "KeyUpper", {0: [8]})
-        check("error" in result and "positions" in result["error"],
-              f"missing a position is a clean {{\"error\": ...}}, not a raised "
-              f"exception (got {result})")
+def test_get_record_positions_rejects_unknown_section(toggle_mod):
+    tmp, _ini_path = toggle_mod
+    result = toggle_api.get_record_positions(tmp, "mod.ini", "KeyNope")
+    assert ("error" in result), ("unknown section name is a clean {\"error\": ...}")
 
-        # And the file on disk must be completely untouched by a rejected call.
-        with open(os.path.join(tmp, ini_rel), encoding="utf-8") as fh:
-            check(fh.read() == FIXTURE, "a rejected record_toggle call leaves the ini untouched")
+
+def test_get_record_positions_rejects_bad_ini_rel(toggle_mod):
+    tmp, _ini_path = toggle_mod
+    result = toggle_api.get_record_positions(tmp, "not_a_real_file.ini", "KeyUpper")
+    assert ("error" in result), ("an ini_rel outside this mod folder is a clean {\"error\": ...}")
+
+
+def test_record_toggle_rejects_incomplete_positions(toggle_mod):
+    tmp, ini_path = toggle_mod
+    result = toggle_api.record_toggle(tmp, "mod.ini", "KeyUpper", {0: [8]})
+    assert ("error" in result and "positions" in result["error"]), (f"missing a position is a clean {{\"error\": ...}}, not a raised "
+          f"exception (got {result})")
+
+    # And the file on disk must be completely untouched by a rejected call.
+    with open(ini_path, encoding="utf-8") as fh:
+        assert (fh.read() == FIXTURE), ("a rejected record_toggle call leaves the ini untouched")
 
 
 def _swap_positions(tmp, ini_rel):
@@ -179,166 +176,132 @@ def _swap_positions(tmp, ini_rel):
     return ini_path, result
 
 
-def test_record_toggle_stages_without_writing_to_disk():
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        _fixture(tmp, ini_rel, FIXTURE)
-        ini_path, result = _swap_positions(tmp, ini_rel)
+def test_record_toggle_stages_without_writing_to_disk(toggle_mod):
+    tmp, ini_path = toggle_mod
+    ini_rel = "mod.ini"
+    ini_path, result = _swap_positions(tmp, ini_rel)
 
-        check(result.get("ok") is True, f"a valid recording session succeeds (got {result})")
-        check(result.get("pending") is True, "the result flags this as a staged, not-yet-exported change")
-        report = result.get("result") or {}
-        check(report.get("chains_rewritten", 0) >= 1,
-              f"the swapped visibility actually rewrites a chain (got {report})")
+    assert (result.get("ok") is True), (f"a valid recording session succeeds (got {result})")
+    assert (result.get("pending") is True), ("the result flags this as a staged, not-yet-exported change")
+    report = result.get("result") or {}
+    assert (report.get("chains_rewritten", 0) >= 1), (f"the swapped visibility actually rewrites a chain (got {report})")
 
-        with open(ini_path, encoding="utf-8") as fh:
-            check(fh.read() == FIXTURE,
-                  "the real ini file is untouched -- the rewrite only exists in the pending session")
-        check(not glob.glob(ini_path + "_*.BAK"), "no backup is written until Export")
-        check(toggle_api.has_pending_changes(tmp) is True,
-              "the mod now has a pending, not-yet-exported change")
+    with open(ini_path, encoding="utf-8") as fh:
+        assert (fh.read() == FIXTURE), ("the real ini file is untouched -- the rewrite only exists in the pending session")
+    assert (not glob.glob(ini_path + "_*.BAK")), ("no backup is written until Export")
+    assert (toggle_api.has_pending_changes(tmp) is True), ("the mod now has a pending, not-yet-exported change")
 
-        from app import edit_session
-        pending_text = edit_session.peek(tmp, ini_path).to_string()
-        branch = pending_text.split("$Upper == 0", 1)[1].split("endif", 1)[0]
-        check("200,0,0" in branch,
-              "the pending in-memory doc already shows the swapped gating, previewable before Export")
+    pending_text = edit_session.peek(tmp, ini_path).to_string()
+    branch = pending_text.split("$Upper == 0", 1)[1].split("endif", 1)[0]
+    assert ("200,0,0" in branch), ("the pending in-memory doc already shows the swapped gating, previewable before Export")
 
 
-def test_export_changes_writes_backup_and_rewritten_gates():
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        _fixture(tmp, ini_rel, FIXTURE)
-        ini_path, _ = _swap_positions(tmp, ini_rel)
+def test_export_changes_writes_backup_and_rewritten_gates(toggle_mod):
+    tmp, ini_path = toggle_mod
+    ini_rel = "mod.ini"
+    _swap_positions(tmp, ini_rel)
 
-        export_result = toggle_api.export_changes(tmp)
-        check(export_result.get("saved") == [ini_rel] and not export_result.get("failed"),
-              f"export saves the one pending ini cleanly (got {export_result})")
+    export_result = toggle_api.export_changes(tmp)
+    assert (export_result.get("saved") == [ini_rel] and not export_result.get("failed")), (f"export saves the one pending ini cleanly (got {export_result})")
 
-        backups = glob.glob(ini_path + "_*.BAK")
-        check(len(backups) == 1, f"export writes exactly one timestamped backup (got {backups})")
-        if backups:
-            with open(backups[0], encoding="utf-8") as fh:
-                check(fh.read() == FIXTURE, "the backup holds the original, pre-rewrite content")
+    backups = glob.glob(ini_path + "_*.BAK")
+    assert (len(backups) == 1), (f"export writes exactly one timestamped backup (got {backups})")
+    if backups:
+        with open(backups[0], encoding="utf-8") as fh:
+            assert (fh.read() == FIXTURE), ("the backup holds the original, pre-rewrite content")
 
-        with open(ini_path, encoding="utf-8") as fh:
-            after = fh.read()
-        branch = after.split("$Upper == 0", 1)[1].split("endif", 1)[0]
-        check("200,0,0" in branch,
-              "position 0's branch now gates the line that used to be position 1's, on disk after export")
-        check(toggle_api.has_pending_changes(tmp) is False,
-              "export clears the pending state once written")
+    with open(ini_path, encoding="utf-8") as fh:
+        after = fh.read()
+    branch = after.split("$Upper == 0", 1)[1].split("endif", 1)[0]
+    assert ("200,0,0" in branch), ("position 0's branch now gates the line that used to be position 1's, on disk after export")
+    assert (toggle_api.has_pending_changes(tmp) is False), ("export clears the pending state once written")
 
 
-def test_export_batches_multiple_edits_into_one_backup():
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        ini_path = _fixture(tmp, ini_rel, FIXTURE)
+def test_export_batches_multiple_edits_into_one_backup(toggle_mod):
+    tmp, ini_path = toggle_mod
+    ini_rel = "mod.ini"
 
-        edit1 = toggle_api.edit_toggle(tmp, ini_rel, "KeyUpper", {"key_combo": "8"})
-        check(edit1.get("ok") is True, f"staging the first edit succeeds (got {edit1})")
-        edit2 = toggle_api.edit_toggle(tmp, ini_rel, "KeyUpper",
-                                       {"var_values": {"Upper": ["0", "1", "2"]}})
-        check(edit2.get("ok") is True,
-              f"staging a second, unrelated edit to the same ini succeeds (got {edit2})")
-        check(not glob.glob(ini_path + "_*.BAK"), "nothing is backed up yet -- both edits are still pending")
+    edit1 = toggle_api.edit_toggle(tmp, ini_rel, "KeyUpper", {"key_combo": "8"})
+    assert (edit1.get("ok") is True), (f"staging the first edit succeeds (got {edit1})")
+    edit2 = toggle_api.edit_toggle(tmp, ini_rel, "KeyUpper",
+                                   {"var_values": {"Upper": ["0", "1", "2"]}})
+    assert (edit2.get("ok") is True), (f"staging a second, unrelated edit to the same ini succeeds (got {edit2})")
+    assert (not glob.glob(ini_path + "_*.BAK")), ("nothing is backed up yet -- both edits are still pending")
 
-        export_result = toggle_api.export_changes(tmp)
-        check(export_result.get("saved") == [ini_rel],
-              f"export writes the one ini that had pending edits (got {export_result})")
+    export_result = toggle_api.export_changes(tmp)
+    assert (export_result.get("saved") == [ini_rel]), (f"export writes the one ini that had pending edits (got {export_result})")
 
-        backups = glob.glob(ini_path + "_*.BAK")
-        check(len(backups) == 1,
-              f"two staged edits to the same ini produce exactly one backup, not one per edit (got {backups})")
-        if backups:
-            with open(backups[0], encoding="utf-8") as fh:
-                check(fh.read() == FIXTURE,
-                      "the single backup holds the pre-edit original, not an intermediate state")
+    backups = glob.glob(ini_path + "_*.BAK")
+    assert (len(backups) == 1), (f"two staged edits to the same ini produce exactly one backup, not one per edit (got {backups})")
+    if backups:
+        with open(backups[0], encoding="utf-8") as fh:
+            assert (fh.read() == FIXTURE), ("the single backup holds the pre-edit original, not an intermediate state")
 
-        with open(ini_path, encoding="utf-8") as fh:
-            after = fh.read()
-        check("key = 8" in after and "$Upper = 0,1,2" in after,
-              "both staged edits (rebind, then growing the cycle) land in the one export")
+    with open(ini_path, encoding="utf-8") as fh:
+        after = fh.read()
+    assert ("key = 8" in after and "$Upper = 0,1,2" in after), ("both staged edits (rebind, then growing the cycle) land in the one export")
 
 
-def test_export_blocked_while_added_toggle_is_unwired():
+def test_export_blocked_while_added_toggle_is_unwired(wirable_mod):
     """The core of this feature: Export must refuse to write anything while
     a toggle added via add_toggle this session doesn't gate any mesh yet."""
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        ini_path = _fixture(tmp, ini_rel, WIRABLE_FIXTURE)
+    tmp, ini_path = wirable_mod
+    ini_rel = "mod.ini"
+    add_result = toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
+    assert (add_result.get("ok") is True), (f"staging a new toggle succeeds (got {add_result})")
 
-        add_result = toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
-        check(add_result.get("ok") is True, f"staging a new toggle succeeds (got {add_result})")
+    export_result = toggle_api.export_changes(tmp)
+    assert ("error" in export_result), (f"export is refused while the new toggle is unwired (got {export_result})")
+    assert (export_result.get("unwired") == {"mod.ini": ["KeyExtra"]}), (f"the still-unwired section is named in the response (got {export_result.get('unwired')})")
+    assert (not glob.glob(ini_path + "_*.BAK")), ("nothing is written to disk when export is refused")
+    assert (toggle_api.has_pending_changes(tmp) is True), ("the pending add survives a refused export")
 
-        export_result = toggle_api.export_changes(tmp)
-        check("error" in export_result,
-              f"export is refused while the new toggle is unwired (got {export_result})")
-        check(export_result.get("unwired") == {"mod.ini": ["KeyExtra"]},
-              f"the still-unwired section is named in the response (got {export_result.get('unwired')})")
-        check(not glob.glob(ini_path + "_*.BAK"), "nothing is written to disk when export is refused")
-        check(toggle_api.has_pending_changes(tmp) is True, "the pending add survives a refused export")
-
-        with open(ini_path, encoding="utf-8") as fh:
-            check(fh.read() == WIRABLE_FIXTURE, "the real ini file is untouched by the refused export")
+    with open(ini_path, encoding="utf-8") as fh:
+        assert (fh.read() == WIRABLE_FIXTURE), ("the real ini file is untouched by the refused export")
 
 
-def test_export_succeeds_once_added_toggle_is_recorded():
+def test_export_succeeds_once_added_toggle_is_recorded(wirable_mod):
     """Once the freshly-added toggle actually gates something (Record mode),
     it's no longer "unwired" and Export proceeds normally."""
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        ini_path = _fixture(tmp, ini_rel, WIRABLE_FIXTURE)
-        toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
+    tmp, ini_path = wirable_mod
+    ini_rel = "mod.ini"
+    toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
 
-        blocked = toggle_api.export_changes(tmp)
-        check("unwired" in blocked, f"export is still refused before recording (got {blocked})")
+    blocked = toggle_api.export_changes(tmp)
+    assert ("unwired" in blocked), (f"export is still refused before recording (got {blocked})")
 
-        # add_toggle already inserted [KeyExtra] into the pending doc, shifting
-        # line numbers -- so the target draw line's number must come from the
-        # CURRENT pending text, not the original static fixture.
-        from app import edit_session
-        pending_text = edit_session.peek(tmp, ini_path).to_string()
-        line_100 = next(i for i, l in enumerate(pending_text.splitlines(), 1) if "100,0,0" in l)
+    pending_text = edit_session.peek(tmp, ini_path).to_string()
+    line_100 = next(i for i, l in enumerate(pending_text.splitlines(), 1) if "100,0,0" in l)
+    record_result = toggle_api.record_toggle(tmp, ini_rel, "KeyExtra", {0: [line_100], 1: []})
+    assert (record_result.get("ok") is True), (f"recording the new toggle succeeds (got {record_result})")
 
-        # $Extra's own ancestor chain (none yet) never references $Upper, so this
-        # is the bare-wrap path: a brand-new private `if $Extra == 0 ... endif`
-        # nested around the position-0 draw line, same as
-        # test_record_editor.test_bare_line_wrapped_when_partially_visible.
-        record_result = toggle_api.record_toggle(tmp, ini_rel, "KeyExtra", {0: [line_100], 1: []})
-        check(record_result.get("ok") is True, f"recording the new toggle succeeds (got {record_result})")
+    export_result = toggle_api.export_changes(tmp)
+    assert (export_result.get("saved") == [ini_rel] and not export_result.get("failed")), (f"export succeeds once the new toggle is wired (got {export_result})")
+    assert (toggle_api.has_pending_changes(tmp) is False), ("export cleared the pending state")
 
-        export_result = toggle_api.export_changes(tmp)
-        check(export_result.get("saved") == [ini_rel] and not export_result.get("failed"),
-              f"export succeeds once the new toggle is wired (got {export_result})")
-        check(toggle_api.has_pending_changes(tmp) is False, "export cleared the pending state")
-
-        with open(ini_path, encoding="utf-8") as fh:
-            check("$Extra == 0" in fh.read(), "the new toggle's gate actually landed on disk")
+    with open(ini_path, encoding="utf-8") as fh:
+        assert ("$Extra == 0" in fh.read()), ("the new toggle's gate actually landed on disk")
 
 
-def test_export_succeeds_once_added_toggle_is_deleted():
+def test_export_succeeds_once_added_toggle_is_deleted(wirable_mod):
     """Deleting the not-yet-wired toggle also unblocks Export -- there's
     nothing left to wire."""
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        ini_path = _fixture(tmp, ini_rel, WIRABLE_FIXTURE)
-        toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
+    tmp, ini_path = wirable_mod
+    ini_rel = "mod.ini"
+    toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
 
-        delete_result = toggle_api.delete_toggle(tmp, ini_rel, "KeyExtra")
-        check(delete_result.get("ok") is True, f"deleting the unwired toggle succeeds (got {delete_result})")
+    delete_result = toggle_api.delete_toggle(tmp, ini_rel, "KeyExtra")
+    assert (delete_result.get("ok") is True), (f"deleting the unwired toggle succeeds (got {delete_result})")
 
-        export_result = toggle_api.export_changes(tmp)
-        check("unwired" not in export_result,
-              f"export is no longer blocked once the unwired toggle is deleted (got {export_result})")
-        check(export_result.get("saved") == [ini_rel] and not export_result.get("failed"),
-              f"export proceeds normally (got {export_result})")
+    export_result = toggle_api.export_changes(tmp)
+    assert ("unwired" not in export_result), (f"export is no longer blocked once the unwired toggle is deleted (got {export_result})")
+    assert (export_result.get("saved") == [ini_rel] and not export_result.get("failed")), (f"export proceeds normally (got {export_result})")
 
-        with open(ini_path, encoding="utf-8") as fh:
-            check("KeyExtra" not in fh.read(), "the deleted toggle never reached disk")
+    with open(ini_path, encoding="utf-8") as fh:
+        assert ("KeyExtra" not in fh.read()), ("the deleted toggle never reached disk")
 
 
-def test_record_toggle_rolls_back_pending_on_verify_mismatch():
+def test_record_toggle_rolls_back_pending_on_verify_mismatch(toggle_mod):
     """If verify_recording ever reports a mismatch -- the self-check this
     whole feature exists for -- record_toggle must discard the just-staged
     pending edit and return a clean {"error": ...}, never silently leave a
@@ -355,111 +318,76 @@ def test_record_toggle_rolls_back_pending_on_verify_mismatch():
     # the replacement must accept it too or the call below raises TypeError.
     record_editor.verify_recording = lambda path, report, text=None: forced
     try:
-        with tempfile.TemporaryDirectory() as tmp:
-            ini_rel = "mod.ini"
-            _fixture(tmp, ini_rel, FIXTURE)
-            ini_path, result = _swap_positions(tmp, ini_rel)
+        tmp, ini_path = toggle_mod
+        ini_rel = "mod.ini"
+        ini_path, result = _swap_positions(tmp, ini_rel)
 
-            check("error" in result and "discarded" in result["error"],
-                  f"a forced verify mismatch is a clean {{\"error\": ...}} explaining the pending "
-                  f"change was discarded, not a silent {{\"ok\": True}} (got {result})")
-            check(result.get("mismatches") == forced,
-                  f"the mismatch detail is surfaced too (got {result.get('mismatches')})")
-            with open(ini_path, encoding="utf-8") as fh:
-                check(fh.read() == FIXTURE,
-                      "the real ini file was never touched -- nothing reaches disk until Export")
-            check(not glob.glob(ini_path + "_*.BAK"), "no backup exists -- there was nothing to export")
-            check(toggle_api.has_pending_changes(tmp) is False,
-                  "the rejected recording leaves nothing pending behind")
+        assert ("error" in result and "discarded" in result["error"]), (f"a forced verify mismatch is a clean {{\"error\": ...}} explaining the pending "
+              f"change was discarded, not a silent {{\"ok\": True}} (got {result})")
+        assert (result.get("mismatches") == forced), (f"the mismatch detail is surfaced too (got {result.get('mismatches')})")
+        with open(ini_path, encoding="utf-8") as fh:
+            assert (fh.read() == FIXTURE), ("the real ini file was never touched -- nothing reaches disk until Export")
+        assert (not glob.glob(ini_path + "_*.BAK")), ("no backup exists -- there was nothing to export")
+        assert (toggle_api.has_pending_changes(tmp) is False), ("the rejected recording leaves nothing pending behind")
     finally:
         record_editor.verify_recording = real_verify
 
 
-def test_discard_changes_drops_pending_without_writing():
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        _fixture(tmp, ini_rel, FIXTURE)
-        ini_path, _ = _swap_positions(tmp, ini_rel)
-        check(toggle_api.has_pending_changes(tmp) is True, "a change is pending before discard")
+def test_discard_changes_drops_pending_without_writing(toggle_mod):
+    tmp, ini_path = toggle_mod
+    ini_rel = "mod.ini"
+    _swap_positions(tmp, ini_rel)
+    assert (toggle_api.has_pending_changes(tmp) is True), ("a change is pending before discard")
 
-        from app import edit_session
-        pending_branch = (edit_session.peek(tmp, ini_path).to_string()
-                           .split("$Upper == 0", 1)[1].split("endif", 1)[0])
-        check("200,0,0" in pending_branch, "the staged swap is visible via peek before discard")
+    pending_branch = (edit_session.peek(tmp, ini_path).to_string()
+                       .split("$Upper == 0", 1)[1].split("endif", 1)[0])
+    assert ("200,0,0" in pending_branch), ("the staged swap is visible via peek before discard")
 
-        discard_result = toggle_api.discard_changes(tmp)
-        check(discard_result == {"ok": True}, f"discard_changes reports ok (got {discard_result})")
-        check(toggle_api.has_pending_changes(tmp) is False, "nothing is pending after discard")
+    discard_result = toggle_api.discard_changes(tmp)
+    assert (discard_result == {"ok": True}), (f"discard_changes reports ok (got {discard_result})")
+    assert (toggle_api.has_pending_changes(tmp) is False), ("nothing is pending after discard")
 
-        with open(ini_path, encoding="utf-8") as fh:
-            check(fh.read() == FIXTURE, "the real ini file was never touched")
-        check(not glob.glob(ini_path + "_*.BAK"), "no backup exists -- there was never an export")
+    with open(ini_path, encoding="utf-8") as fh:
+        assert (fh.read() == FIXTURE), ("the real ini file was never touched")
+    assert (not glob.glob(ini_path + "_*.BAK")), ("no backup exists -- there was never an export")
 
-        reverted_branch = (edit_session.peek(tmp, ini_path).to_string()
-                           .split("$Upper == 0", 1)[1].split("endif", 1)[0])
-        check("100,0,0" in reverted_branch and "200,0,0" not in reverted_branch,
-              "a read right after discard reflects disk again (original gating), not the discarded edit")
+    reverted_branch = (edit_session.peek(tmp, ini_path).to_string()
+                       .split("$Upper == 0", 1)[1].split("endif", 1)[0])
+    assert ("100,0,0" in reverted_branch and "200,0,0" not in reverted_branch), ("a read right after discard reflects disk again (original gating), not the discarded edit")
 
 
-def test_rejected_edit_does_not_corrupt_an_already_pending_doc():
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        _fixture(tmp, ini_rel, FIXTURE)
+def test_rejected_edit_does_not_corrupt_an_already_pending_doc(toggle_mod):
+    tmp, ini_path = toggle_mod
+    ini_rel = "mod.ini"
 
-        add_result = toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
-        check(add_result.get("ok") is True, f"the first staged edit succeeds (got {add_result})")
+    add_result = toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
+    assert (add_result.get("ok") is True), (f"the first staged edit succeeds (got {add_result})")
 
-        bad_result = toggle_api.edit_toggle(tmp, ini_rel, "KeyDoesNotExist", {"key_combo": "7"})
-        check("error" in bad_result, f"editing an unknown section is a clean {{\"error\": ...}} (got {bad_result})")
+    bad_result = toggle_api.edit_toggle(tmp, ini_rel, "KeyDoesNotExist", {"key_combo": "7"})
+    assert ("error" in bad_result), (f"editing an unknown section is a clean {{\"error\": ...}} (got {bad_result})")
 
-        check(toggle_api.has_pending_changes(tmp) is True,
-              "the earlier, already-committed staged edit survives a later rejected one on the same ini")
-        details = toggle_api.get_toggle_details(tmp, ini_rel, "KeyExtra")
-        check(details.get("ok") is True and details.get("key") == "9",
-              f"the pending add is intact, not rolled back past its own commit (got {details})")
+    assert (toggle_api.has_pending_changes(tmp) is True), ("the earlier, already-committed staged edit survives a later rejected one on the same ini")
+    details = toggle_api.get_toggle_details(tmp, ini_rel, "KeyExtra")
+    assert (details.get("ok") is True and details.get("key") == "9"), (f"the pending add is intact, not rolled back past its own commit (got {details})")
 
-        with open(os.path.join(tmp, ini_rel), encoding="utf-8") as fh:
-            check(fh.read() == FIXTURE, "still nothing has reached disk -- both edits are only pending")
+    with open(ini_path, encoding="utf-8") as fh:
+        assert (fh.read() == FIXTURE), ("still nothing has reached disk -- both edits are only pending")
 
 
-def test_get_toggle_details_and_record_positions_reflect_pending_edit():
-    with tempfile.TemporaryDirectory() as tmp:
-        ini_rel = "mod.ini"
-        ini_path = _fixture(tmp, ini_rel, FIXTURE)
+def test_get_toggle_details_and_record_positions_reflect_pending_edit(toggle_mod):
+    tmp, ini_path = toggle_mod
+    ini_rel = "mod.ini"
 
-        edit_result = toggle_api.edit_toggle(tmp, ini_rel, "KeyUpper",
-                                             {"var_values": {"Upper": ["0", "1", "2"]}})
-        check(edit_result.get("ok") is True, f"growing the cycle's values succeeds (got {edit_result})")
+    edit_result = toggle_api.edit_toggle(tmp, ini_rel, "KeyUpper",
+                                         {"var_values": {"Upper": ["0", "1", "2"]}})
+    assert (edit_result.get("ok") is True), (f"growing the cycle's values succeeds (got {edit_result})")
 
-        details = toggle_api.get_toggle_details(tmp, ini_rel, "KeyUpper")
-        check(details.get("vars", {}).get("Upper") == ["0", "1", "2"],
-              f"get_toggle_details sees the pending edit's 3 values, not disk's original 2 "
-              f"(got {details.get('vars')})")
+    details = toggle_api.get_toggle_details(tmp, ini_rel, "KeyUpper")
+    assert (details.get("vars", {}).get("Upper") == ["0", "1", "2"]), (f"get_toggle_details sees the pending edit's 3 values, not disk's original 2 "
+          f"(got {details.get('vars')})")
 
-        positions = toggle_api.get_record_positions(tmp, ini_rel, "KeyUpper")
-        check(positions.get("positions") == 3,
-              f"get_record_positions is pending-aware too (got {positions.get('positions')})")
+    positions = toggle_api.get_record_positions(tmp, ini_rel, "KeyUpper")
+    assert (positions.get("positions") == 3), (f"get_record_positions is pending-aware too (got {positions.get('positions')})")
 
-        with open(ini_path, encoding="utf-8") as fh:
-            check("$Upper = 0,1\n" in fh.read(),
-                  "meanwhile the real ini file on disk is completely unaffected")
-
-
-if __name__ == "__main__":
-    for fn in (test_get_record_positions_uses_writable_vars_only,
-               test_get_record_positions_rejects_unknown_section,
-               test_get_record_positions_rejects_bad_ini_rel,
-               test_record_toggle_rejects_incomplete_positions,
-               test_record_toggle_stages_without_writing_to_disk,
-               test_export_changes_writes_backup_and_rewritten_gates,
-               test_export_batches_multiple_edits_into_one_backup,
-               test_export_blocked_while_added_toggle_is_unwired,
-               test_export_succeeds_once_added_toggle_is_recorded,
-               test_export_succeeds_once_added_toggle_is_deleted,
-               test_record_toggle_rolls_back_pending_on_verify_mismatch,
-               test_discard_changes_drops_pending_without_writing,
-               test_rejected_edit_does_not_corrupt_an_already_pending_doc,
-               test_get_toggle_details_and_record_positions_reflect_pending_edit):
-        fn()
-    print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
-    sys.exit(1 if FAILS else 0)
+    with open(ini_path, encoding="utf-8") as fh:
+        assert ("$Upper = 0,1\n" in fh.read()), ("meanwhile the real ini file on disk is completely unaffected")

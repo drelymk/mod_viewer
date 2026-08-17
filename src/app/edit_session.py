@@ -203,6 +203,12 @@ def cache_diagnostics(mod_dir, report):
     return deepcopy(report)
 
 
+def invalidate_diagnostics(mod_dir):
+    """Invalidate diagnostics derived from viewer metadata without editing INIs."""
+    if _same_mod(mod_dir):
+        _session.diagnostics_cache = None
+
+
 def dirty_documents(mod_dir):
     """Copy of the dirty basename set for UI/API status."""
     return set(_session.dirty) if _same_mod(mod_dir) else set()

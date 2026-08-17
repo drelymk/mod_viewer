@@ -18,6 +18,12 @@ const mapColumns = [
   ['material_map', 'MaterialMap'],
 ];
 
+function textureFile(key) {
+  const value = String(key || '');
+  const separator = value.indexOf('::');
+  return separator === -1 ? value : value.slice(separator + 2);
+}
+
 function showError(message) {
   const err = document.createElement('div');
   err.className = 'texm-empty';
@@ -60,16 +66,17 @@ function render() {
     const label = document.createElement('span');
     label.className = 'texm-diffuse';
     label.textContent = opt.label;
-    label.title = opt.tex_key;
+    label.title = opt.file || opt.tex_key;
     row.appendChild(label);
     for (const [field, title] of mapColumns) {
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'texm-map-cell';
-      cell.title = opt[field] ? `Replace ${title}: ${opt[field]}` : `Add ${title}`;
+      const file = textureFile(opt[field]);
+      cell.title = opt[field] ? `Replace ${title}: ${file}` : `Add ${title}`;
       const name = document.createElement('span');
-      name.textContent = opt[field]
-        ? opt[field].split('/').pop().replace(/\.[^.]+$/, '')
+      name.textContent = file
+        ? file.split('/').pop().replace(/\.[^.]+$/, '')
         : `+ ${title}`;
       cell.appendChild(name);
       cell.addEventListener('click', () => pickInto(opt, field));
@@ -127,8 +134,9 @@ export function openTextureModal(componentName, pool, modPath, onPoolChange) {
       return showError(result.error);
     }
     addTexture(result.tex_key, result.uri);
-    const label = result.tex_key.split('/').pop().replace(/\.[^.]+$/, '');
-    currentPool.push({ tex_key: result.tex_key, label });
+    const file = result.file || result.tex_key;
+    const label = file.split('/').pop().replace(/\.[^.]+$/, '');
+    currentPool.push({ tex_key: result.tex_key, file, label });
     render();
     if (onChange) onChange();
   };

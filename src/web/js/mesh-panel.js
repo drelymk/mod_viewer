@@ -8,6 +8,7 @@ import { activeMeshes, addMesh, applyMeshVisibility, registerGroup,
          setManualTexOverride } from './visibility.js';
 import { selectMesh } from './selection.js';
 import { openTextureModal } from './texture-modal.js';
+import { setHealthReport } from './health-report.js';
 
 /** Bucket mesh names by their ini "source" tag (see app/mod_loader.py's
  * _ini_scope). Single-ini mods carry no tag at all — everything lands in the
@@ -228,7 +229,14 @@ function saveTextureState(modPath) {
       material_map_manual: !!option.material_map_manual,
     };
   }
-  window.pywebview.api.save_mesh_textures(modPath, state);
+  const request = window.pywebview.api.save_mesh_textures(modPath, state);
+  if (request && typeof request.then === 'function') {
+    request.then(result => {
+      if (!result?.error) setHealthReport(null);
+    }, () => {});
+  } else {
+    setHealthReport(null);
+  }
 }
 
 function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {

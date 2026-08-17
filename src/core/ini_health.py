@@ -10,7 +10,7 @@ import os
 import re
 
 from .ini_document import IniDocument
-from .mesh_builder import safe_resource_path
+from .mesh_builder import safe_resource_path, split_texture_key
 
 
 _RESOURCE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_.])Resource[A-Za-z0-9_.\\-]*(?![A-Za-z0-9_.])", re.I)
@@ -226,10 +226,14 @@ def _viewer_texture_paths(mod_dir):
             data = json.load(fh)
         textures = data.get("textures", {}) if isinstance(data, dict) else {}
         for state in textures.values() if isinstance(textures, dict) else ():
-            key = state.get("tex_key") if isinstance(state, dict) else None
-            resolved = safe_resource_path(mod_dir, key)
-            if resolved is not None:
-                result.add(_path_key(resolved))
+            if not isinstance(state, dict):
+                continue
+            for field in ("tex_key", "normal_map", "light_map", "material_map"):
+                key = state.get(field)
+                _role, relative_path = split_texture_key(key)
+                resolved = safe_resource_path(mod_dir, relative_path)
+                if resolved is not None:
+                    result.add(_path_key(resolved))
     except (OSError, ValueError, TypeError):
         pass
     return result

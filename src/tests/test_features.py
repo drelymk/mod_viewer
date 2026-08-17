@@ -28,19 +28,11 @@ way test_toggle_api.py monkeypatches record_editor.verify_recording.
 
 import os, sys, tempfile, types
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import pytest
+
 
 import build
 from app import features, paths
-
-FAILS = []
-
-
-def check(cond, msg):
-    print(("PASS  " if cond else "FAIL  ") + msg)
-    if not cond:
-        FAILS.append(msg)
 
 
 def _fixture(tmp, text, name="features.ini"):
@@ -52,68 +44,56 @@ def _fixture(tmp, text, name="features.ini"):
 
 # ── build.py: resolve_features() / write_baked_features() ───────────────────
 
-def test_resolve_features_normal_file():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _fixture(tmp, "[features]\nExport = 1\nModify_Toggle = 1\n")
-        result = build.resolve_features(path)
-    check(result == {"export": True, "modify_toggle": True},
-          f"both flags on reads through cleanly (got {result})")
+_FLAG_CASES = [(True, True), (False, True), (True, False), (False, False)]
 
 
-def test_resolve_features_export_disabled():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _fixture(tmp, "[features]\nExport = 0\nModify_Toggle = 1\n")
-        result = build.resolve_features(path)
-    check(result == {"export": False, "modify_toggle": True},
-          f"Export = 0 resolves only the export flag to False (got {result})")
+def _run_feature_case(export, modify_toggle, tmp):
+    path = _fixture(
+        tmp,
+        "[features]\n"
+        f"Export = {int(export)}\n"
+        f"Modify_Toggle = {int(modify_toggle)}\n",
+    )
+    result = build.resolve_features(path)
+    assert result == {"export": export, "modify_toggle": modify_toggle}, f"feature flags resolve independently (got {result})"
 
 
-def test_resolve_features_modify_toggle_disabled():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _fixture(tmp, "[features]\nExport = 1\nModify_Toggle = 0\n")
-        result = build.resolve_features(path)
-    check(result == {"export": True, "modify_toggle": False},
-          f"Modify_Toggle = 0 resolves only that flag to False (got {result})")
+@pytest.mark.parametrize("export, modify_toggle", _FLAG_CASES)
+def test_resolve_features_flag_matrix(export, modify_toggle, tmp_path):
+    """Every pair of authored feature flags maps to the same booleans."""
+    _run_feature_case(export, modify_toggle, str(tmp_path))
 
 
-def test_resolve_features_both_disabled():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _fixture(tmp, "[features]\nExport = 0\nModify_Toggle = 0\n")
-        result = build.resolve_features(path)
-    check(result == {"export": False, "modify_toggle": False},
-          f"both flags off at once (got {result})")
+_INVALID_FEATURE_CASES = [
+    ("missing file", None),
+    ("missing section", "[wrong_section]\nExport = 0\n"),
+    ("malformed value", "[features]\nExport = not_a_boolean\nModify_Toggle = 1\n"),
+]
 
 
-def test_resolve_features_missing_file_defaults_to_shown():
-    with tempfile.TemporaryDirectory() as tmp:
-        missing = os.path.join(tmp, "does_not_exist.ini")
-        result = build.resolve_features(missing)
-    check(result == {"export": True, "modify_toggle": True},
-          f"a missing features.ini resolves to fully enabled (got {result})")
+def _run_invalid_feature_case(content, tmp):
+    if content is None:
+        path = os.path.join(tmp, "does_not_exist.ini")
+    else:
+        path = _fixture(tmp, content)
+    result = build.resolve_features(path)
+    assert result == {"export": True, "modify_toggle": True}, f"invalid feature configuration defaults to enabled (got {result})"
 
 
-def test_resolve_features_missing_section_defaults_to_shown():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _fixture(tmp, "[wrong_section]\nExport = 0\n")
-        result = build.resolve_features(path)
-    check(result == {"export": True, "modify_toggle": True},
-          f"a file with no [features] section resolves to fully enabled (got {result})")
-
-
-def test_resolve_features_malformed_value_defaults_to_shown():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _fixture(tmp, "[features]\nExport = not_a_boolean\nModify_Toggle = 1\n")
-        result = build.resolve_features(path)
-    check(result == {"export": True, "modify_toggle": True},
-          f"an unparseable value falls back to enabled rather than raising (got {result})")
+@pytest.mark.parametrize(
+    "_case_name, content",
+    _INVALID_FEATURE_CASES,
+    ids=[case[0] for case in _INVALID_FEATURE_CASES],
+)
+def test_invalid_feature_config_defaults_enabled(_case_name, content, tmp_path):
+    _run_invalid_feature_case(content, str(tmp_path))
 
 
 def test_repo_features_ini_resolves_to_all_enabled():
     """Guards the actual checked-in features.ini: a fresh clone/build must
     show every feature unless someone deliberately edits the file."""
     result = build.resolve_features(build.FEATURES_FILE)
-    check(result == {"export": True, "modify_toggle": True},
-          f"the repo's shipped features.ini resolves to fully enabled (got {result})")
+    assert result == {"export": True, "modify_toggle": True}, f"the repo's shipped features.ini resolves to fully enabled (got {result})"
 
 
 def test_write_baked_features_round_trips_through_import():
@@ -123,18 +103,18 @@ def test_write_baked_features_round_trips_through_import():
         ns = {}
         with open(path, encoding="utf-8") as fh:
             exec(compile(fh.read(), path, "exec"), ns)
-        check(ns.get("EXPORT") is False and ns.get("MODIFY_TOGGLE") is True,
-              f"the generated module's constants match the flags passed in "
-              f"(got EXPORT={ns.get('EXPORT')!r}, MODIFY_TOGGLE={ns.get('MODIFY_TOGGLE')!r})")
+        assert ns.get("EXPORT") is False and ns.get("MODIFY_TOGGLE") is True, (
+            f"the generated module's constants match the flags passed in "
+            f"(got EXPORT={ns.get('EXPORT')!r}, MODIFY_TOGGLE={ns.get('MODIFY_TOGGLE')!r})")
         build.clean_baked_features(path=path)
-        check(not os.path.isfile(path), "clean_baked_features removes the generated module")
+    assert not os.path.isfile(path), "clean_baked_features removes the generated module"
 
 
 def test_clean_baked_features_is_a_noop_when_nothing_to_remove():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "never_written.py")
         build.clean_baked_features(path=path)  # must not raise
-    check(True, "clean_baked_features tolerates a path with nothing to clean")
+    assert True, "clean_baked_features tolerates a path with nothing to clean"
 
 
 # ── app/features.py: get_features() ──────────────────────────────────────────
@@ -195,30 +175,27 @@ class _baked_module:
 def test_not_frozen_always_shows_everything_even_with_a_baked_module_present():
     with _baked_module(export=False, modify_toggle=False), _frozen(False):
         result = features.get_features()
-    check(result == {"export": True, "modify_toggle": True},
-          f"running from source shows every feature even though a baked module "
-          f"on sys.modules disables both (got {result})")
+    assert result == {"export": True, "modify_toggle": True}, (
+        f"running from source shows every feature even though a baked module "
+        f"on sys.modules disables both (got {result})")
 
 
 def test_frozen_reads_baked_export_disabled():
     with _baked_module(export=False, modify_toggle=True), _frozen(True):
         result = features.get_features()
-    check(result == {"export": False, "modify_toggle": True},
-          f"EXPORT=False in the baked module hides only the export flag (got {result})")
+    assert result == {"export": False, "modify_toggle": True}, f"EXPORT=False in the baked module hides only the export flag (got {result})"
 
 
 def test_frozen_reads_baked_modify_toggle_disabled():
     with _baked_module(export=True, modify_toggle=False), _frozen(True):
         result = features.get_features()
-    check(result == {"export": True, "modify_toggle": False},
-          f"MODIFY_TOGGLE=False in the baked module hides only that flag (got {result})")
+    assert result == {"export": True, "modify_toggle": False}, f"MODIFY_TOGGLE=False in the baked module hides only that flag (got {result})"
 
 
 def test_frozen_both_baked_disabled():
     with _baked_module(export=False, modify_toggle=False), _frozen(True):
         result = features.get_features()
-    check(result == {"export": False, "modify_toggle": False},
-          f"both flags off at once (got {result})")
+    assert result == {"export": False, "modify_toggle": False}, f"both flags off at once (got {result})"
 
 
 def test_frozen_missing_baked_module_defaults_to_shown():
@@ -228,35 +205,12 @@ def test_frozen_missing_baked_module_defaults_to_shown():
     hide something nobody chose to hide."""
     with _baked_module(present=False), _frozen(True):
         result = features.get_features()
-    check(result == {"export": True, "modify_toggle": True},
-          f"a missing baked module never hides anything (got {result})")
+    assert result == {"export": True, "modify_toggle": True}, f"a missing baked module never hides anything (got {result})"
 
 
 def test_frozen_baked_module_missing_attribute_defaults_to_shown():
     with _baked_module(export=False, modify_toggle=None), _frozen(True):
         result = features.get_features()
-    check(result == {"export": False, "modify_toggle": True},
-          f"a baked module missing MODIFY_TOGGLE falls back to True for just "
-          f"that flag (got {result})")
-
-
-if __name__ == "__main__":
-    for fn in (test_resolve_features_normal_file,
-               test_resolve_features_export_disabled,
-               test_resolve_features_modify_toggle_disabled,
-               test_resolve_features_both_disabled,
-               test_resolve_features_missing_file_defaults_to_shown,
-               test_resolve_features_missing_section_defaults_to_shown,
-               test_resolve_features_malformed_value_defaults_to_shown,
-               test_repo_features_ini_resolves_to_all_enabled,
-               test_write_baked_features_round_trips_through_import,
-               test_clean_baked_features_is_a_noop_when_nothing_to_remove,
-               test_not_frozen_always_shows_everything_even_with_a_baked_module_present,
-               test_frozen_reads_baked_export_disabled,
-               test_frozen_reads_baked_modify_toggle_disabled,
-               test_frozen_both_baked_disabled,
-               test_frozen_missing_baked_module_defaults_to_shown,
-               test_frozen_baked_module_missing_attribute_defaults_to_shown):
-        fn()
-    print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
-    sys.exit(1 if FAILS else 0)
+    assert result == {"export": False, "modify_toggle": True}, (
+        f"a baked module missing MODIFY_TOGGLE falls back to True for just "
+        f"that flag (got {result})")

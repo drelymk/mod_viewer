@@ -20,10 +20,38 @@ _MAX_BUFFER_FILE_BYTES = 512 * 1024 * 1024
 _MAX_TOTAL_BUFFER_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_DRAWS = 10_000
 _MAX_IMAGE_PIXELS = 100_000_000
+TEXTURE_ROLES = ("diffuse", "normal_map", "light_map", "material_map")
 _texture_cache = OrderedDict()
 _texture_cache_bytes = 0
 _texture_cache_mod = None
 _texture_cache_lock = threading.RLock()
+
+
+def normalize_texture_role(role=None):
+    """Return the canonical registry role used for one texture instance."""
+    return role if role in TEXTURE_ROLES else "diffuse"
+
+
+def texture_key(relative_path, role=None):
+    """Identify a rendered texture by source path *and* usage role."""
+    role = normalize_texture_role(role)
+    relative_path = str(relative_path or "").replace("\\", "/")
+    return f"{role}::{relative_path}"
+
+
+def split_texture_key(key, default_role=None):
+    """Return ``(role, relative_path)`` for new or legacy texture keys."""
+    value = str(key or "")
+    prefix, separator, relative_path = value.partition("::")
+    if separator and prefix in TEXTURE_ROLES and relative_path:
+        return prefix, relative_path
+    return normalize_texture_role(default_role), value.replace("\\", "/")
+
+
+def normalize_texture_key(key, default_role=None):
+    """Canonicalize a new or legacy key without touching its source path."""
+    role, relative_path = split_texture_key(key, default_role)
+    return texture_key(relative_path, role) if relative_path else None
 
 
 def _begin_texture_cache(mod_dir):
@@ -303,6 +331,7 @@ def _encode_texture(dds_path, max_size=2048, preserve_alpha=False,
                     texture_role=None):
     """DDS → PNG in-memory → base64 data URI.  Returns None on failure."""
     try:
+        texture_role = normalize_texture_role(texture_role)
         stat = os.stat(dds_path)
         cache_key = (os.path.normcase(os.path.abspath(dds_path)), stat.st_size,
                      stat.st_mtime_ns, max_size, preserve_alpha, texture_role)
@@ -344,15 +373,17 @@ def _encode_texture(dds_path, max_size=2048, preserve_alpha=False,
 
 
 def encode_texture_file(mod_dir, abs_path, texture_role=None):
-    """Encode an arbitrary texture file the user picked via a native file
-    dialog (app/api.py's pick_texture_file) into the same {tex_key, uri}
-    shape build_mesh_payload's own textures use, so it can be merged
-    straight into the frontend's shared registry (mesh-factory.js's
-    addTexture). `abs_path` must resolve inside `mod_dir` -- reuses
+    """Encode a picked file into ``{tex_key, file, role, uri}``.
+
+    The result uses the same role-aware registry shape as the mesh payload, so
+    it can be merged straight into the frontend's shared registry
+    (mesh-factory.js's addTexture). ``abs_path`` must resolve inside
+    ``mod_dir`` -- reuses
     _safe_join's sandboxing by re-deriving a mod-relative path and rejecting
     anything that doesn't stay within it, the same constraint `filename =`
     resolution is already held to.
     """
+    texture_role = normalize_texture_role(texture_role)
     _begin_texture_cache(mod_dir)
     try:
         rel = os.path.relpath(abs_path, mod_dir)
@@ -372,7 +403,18 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None):
     uri = _encode_texture(abs_path, texture_role=texture_role)
     if not uri:
         return {"error": "Could not read this file as an image."}
-    return {"tex_key": rel.replace(os.sep, "/"), "uri": uri}
+    relative_path = rel.replace(os.sep, "/")
+    return {"tex_key": texture_key(relative_path, texture_role),
+            "file": relative_path, "role": texture_role, "uri": uri}
+
+
+def encode_texture_key(mod_dir, key, texture_role=None):
+    """Encode a role-aware registry key, accepting legacy path-only keys."""
+    role, relative_path = split_texture_key(key, texture_role)
+    resolved = _safe_join(mod_dir, relative_path)
+    if not resolved:
+        return {"error": "Selected file is not inside the mod folder."}
+    return encode_texture_file(mod_dir, resolved, role)
 
 
 # ── In-memory mesh payload builder ────────────────────────────────────────────
@@ -534,15 +576,15 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None):
     as toggle state changes. `texture_options`, present when the component's
     section references one or more distinct, resolved diffuses anywhere
     (regardless of position/condition), is the full deduplicated pool as
-    {tex_key, label} for a manual per-mesh override picker -- same list
+    {tex_key, file, label} for a manual per-mesh override picker -- same list
     object shared by every draw in the component, so it also serves as the
     component-level "manage textures" pool.
     """
     _begin_texture_cache(mod_dir)
 
     result:    dict = {}
-    tex_uris:  dict = {}  # basename → data URI  (encoded once)
-    tex_cache: dict = {}  # full path → basename  (dedup lookup)
+    tex_uris:  dict = {}  # role-aware key -> data URI  (encoded once)
+    tex_cache: dict = {}  # (full path, role) -> role-aware key
     ib_cache:  dict = {}  # absolute ib path → raw bytes
     buf_cache: dict = {}  # (pos_path, pos_stride, tc_path, tc_stride) → (positions, uvs)
 
@@ -605,18 +647,22 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None):
         # Resolve texture keys cheaply. Pool-only options are encoded lazily
         # when selected in the UI; defaults and toggle variants are still
         # encoded now so synchronous visibility refreshes remain instant.
-        def _tex_key(dds_path):
+        def _tex_key(dds_path, texture_role=None):
             if not dds_path or not os.path.exists(dds_path):
                 return None
-            if dds_path not in tex_cache:
+            texture_role = normalize_texture_role(texture_role)
+            cache_key = (dds_path, texture_role)
+            if cache_key not in tex_cache:
                 # Keyed by path, not basename: variant mods routinely keep
                 # same-named diffuses in per-variant folders (Texture\00..\04).
-                key = os.path.relpath(dds_path, mod_dir).replace(os.sep, "/")
-                tex_cache[dds_path] = key
-            return tex_cache[dds_path]
+                relative_path = os.path.relpath(dds_path, mod_dir).replace(
+                    os.sep, "/")
+                tex_cache[cache_key] = texture_key(relative_path, texture_role)
+            return tex_cache[cache_key]
 
         def _ensure_texture(dds_path, texture_role=None):
-            key = _tex_key(dds_path)
+            texture_role = normalize_texture_role(texture_role)
+            key = _tex_key(dds_path, texture_role)
             if key and key not in tex_uris:
                 tex_uris[key] = _encode_texture(
                     dds_path, texture_role=texture_role) or ""
@@ -633,7 +679,9 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None):
             if key:
                 res_name = pool_entry["res"]
                 label = res_name[8:] if res_name.startswith("Resource") else res_name
-                texture_options.append({"tex_key": key, "label": label})
+                texture_options.append({"tex_key": key,
+                                        "file": pool_entry["file"],
+                                        "label": label})
 
         for draw in unique:
             lbl = draw["label"]

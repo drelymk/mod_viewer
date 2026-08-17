@@ -9,7 +9,8 @@ import os
 
 import webview
 
-from core.mesh_builder import GeometryBlob, encode_texture_file
+from core.mesh_builder import (GeometryBlob, encode_texture_file,
+                               encode_texture_key)
 from core.mod_discovery import discover_ini_paths
 from core.ini_health import analyze_mod
 
@@ -60,8 +61,7 @@ class ModViewerAPI:
     def load_texture_file(self, folder_path, tex_key):
         """Encode a known mod-relative picker texture on first use."""
         folder_path = self._folder(folder_path)
-        return encode_texture_file(folder_path,
-                                   os.path.join(folder_path, tex_key))
+        return encode_texture_key(folder_path, tex_key)
 
     def load_mod(self, folder_path):
         folder_path = self._folder(folder_path)
@@ -127,7 +127,10 @@ class ModViewerAPI:
         return metadata.save_mesh_names(self._folder(folder_path), names)
 
     def save_mesh_textures(self, folder_path, textures):
-        return metadata.save_textures(self._folder(folder_path), textures)
+        folder_path = self._folder(folder_path)
+        result = metadata.save_textures(folder_path, textures)
+        edit_session.invalidate_diagnostics(folder_path)
+        return result
 
     # -- in-memory INI viewer/editor ----------------------------------------
 

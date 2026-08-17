@@ -20,17 +20,35 @@ export function setTextures(textures) {
  * web/js/mesh-panel.js). View-only/session-scoped: never reaches the ini. */
 export function addTexture(key, uri) {
   registry[key] = uri;
-  delete loaders[key];
+  for (const cacheKey of Object.keys(loaders)) {
+    if (cacheKey.endsWith(`|${key}`)) delete loaders[cacheKey];
+  }
 }
 
-export function hasTexture(key) {
-  return !!(key && registry[key]);
+function registryKey(key, role = 'diffuse') {
+  if (!key) return null;
+  if (registry[key]) return key;
+  const prefix = `${role}::`;
+  return (!key.includes('::') && registry[prefix + key]) ? prefix + key : key;
 }
 
-function getTexture(key) {
-  if (!key || !registry[key]) return null;
-  if (!loaders[key]) loaders[key] = new THREE.TextureLoader().load(registry[key]);
-  return loaders[key];
+export function hasTexture(key, role = 'diffuse') {
+  const resolved = registryKey(key, role);
+  return !!(resolved && registry[resolved]);
+}
+
+function getTexture(key, role = 'diffuse') {
+  const resolved = registryKey(key, role);
+  if (!resolved || !registry[resolved]) return null;
+  const cacheKey = `${role}|${resolved}`;
+  if (!loaders[cacheKey]) {
+    const texture = new THREE.TextureLoader().load(registry[resolved]);
+    texture.colorSpace = role === 'diffuse'
+      ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    texture.needsUpdate = true;
+    loaders[cacheKey] = texture;
+  }
+  return loaders[cacheKey];
 }
 
 /** Bind whatever diffuse map the mesh currently wants, honouring the global
@@ -39,10 +57,13 @@ function getTexture(key) {
 export function refreshMeshTexture(mesh) {
   const showDiffuse = textureMode !== 'none';
   const showMaterialMaps = textureMode === 'all';
-  const map = showDiffuse ? getTexture(mesh.userData.texKey) : null;
-  const normalMap = showMaterialMaps ? getTexture(mesh.userData.normalMapKey) : null;
-  const lightMap = showMaterialMaps ? getTexture(mesh.userData.lightMapKey) : null;
-  const materialMap = showMaterialMaps ? getTexture(mesh.userData.materialMapKey) : null;
+  const map = showDiffuse ? getTexture(mesh.userData.texKey, 'diffuse') : null;
+  const normalMap = showMaterialMaps
+    ? getTexture(mesh.userData.normalMapKey, 'normal_map') : null;
+  const lightMap = showMaterialMaps
+    ? getTexture(mesh.userData.lightMapKey, 'light_map') : null;
+  const materialMap = showMaterialMaps
+    ? getTexture(mesh.userData.materialMapKey, 'material_map') : null;
   if (map === mesh.material.map
       && normalMap === mesh.material.normalMap
       && lightMap === mesh.material.aoMap
