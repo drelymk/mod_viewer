@@ -220,13 +220,15 @@ function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
         // registry; only yield to the bridge for a genuinely lazy option.
         if (newVal !== undefined && !hasTexture(newVal)
             && !await ensureTextureLoaded(mesh, newVal)) return;
-        if (newVal === undefined && (current === value || autoHighlighted)) {
+        if (newVal === undefined && autoHighlighted) {
+          // Clicking an automatic boundary disables that boundary. Clearing a
+          // manual pin is different: it must restore automatic propagation so
+          // INI texture toggles can take control again.
           mesh.userData.textureHighlightDisabled = true;
-          setManualTexOverride(mesh, newVal);
         } else {
           mesh.userData.textureHighlightDisabled = false;
-          setManualTexOverride(mesh, newVal);
         }
+        setManualTexOverride(mesh, newVal);
         recomputeTextureRuns(groupMeshes);
         selectRow(newVal === undefined ? null : row);
         if (onActiveChanged) onActiveChanged();

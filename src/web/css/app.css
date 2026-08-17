@@ -153,7 +153,7 @@ body {
 }
 #sidebar {
   box-sizing: border-box; width: 288px; max-width: min(288px, calc(50vw - 36px));
-  max-height: calc(100vh - 104px); overflow-y: auto;
+  max-height: calc(100vh - 104px); overflow-x: hidden; overflow-y: auto;
 }
 #camera-panel { min-width: 166px; padding: 9px 10px; }
 #camera-buttons { display: grid; grid-template-columns: repeat(3, 44px); gap: 6px; }
@@ -179,7 +179,16 @@ body {
  * the bottom of the dock. */
 #present-panel, #toggle-panel, #menu-panel {
   box-sizing: border-box; width: 316px; max-width: min(316px, calc(50vw - 24px));
-  overflow-y: auto; min-height: 0;
+  overflow-x: hidden; overflow-y: auto; min-height: 0;
+}
+/* PRESENT contains one fixed logical cycle, so keep its natural minimum
+ * content height and give the remaining dock space to the growing panels. */
+#present-panel { flex-shrink: 0; overflow-y: hidden; }
+/* A tall sibling can otherwise flex-shrink a collapsed panel below the height
+ * of its own header, leaving a vertical scrollbar beside an empty body. */
+#toggle-panel:has(> #toggle-list.collapsed),
+#menu-panel:has(> #menu-list.collapsed) {
+  flex-shrink: 0; overflow-y: hidden;
 }
 #sidebar h3, #camera-panel h3, #present-panel h3, #toggle-panel h3, #tool-panel h3, #menu-panel h3 {
   font-size: 10px; color: #8b949e; text-transform: uppercase;
