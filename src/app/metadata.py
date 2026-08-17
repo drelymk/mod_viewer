@@ -197,6 +197,9 @@ def hydrate_textures(folder_path, payload):
             value = state.get(field)
             if isinstance(value, str) and value:
                 item[field] = value
+            manual = state.get(f"{field}_manual")
+            if isinstance(manual, bool) and manual:
+                item[f"{field}_manual"] = True
         highlighted[name] = item
 
     restored = {}
@@ -235,6 +238,8 @@ def hydrate_textures(folder_path, payload):
                 for field in ("normal_map", "light_map", "material_map"):
                     if opt.get(field):
                         old[field] = opt[field]
+                    if opt.get(f"{field}_manual"):
+                        old[f"{field}_manual"] = True
 
     for name, entry in payload.items():
         if name.startswith("__") or not isinstance(entry, dict) or entry.get("error"):

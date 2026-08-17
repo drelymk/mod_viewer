@@ -152,6 +152,24 @@ function recomputeTextureRuns(groupMeshes) {
       // immutable load-time default. This boundary then applies downward only
       // until the next highlighted boundary in this component.
       activeKey = item.userData.resolvedTexKey;
+      const diffuseKeys = new Set([
+        activeKey,
+        item.userData.defaultTexKey,
+        ...(item.userData.textureVariants || []).map(variant => variant.tex_key),
+      ].filter(Boolean));
+      for (const option of (item.userData.texturePool || [])) {
+        if (!diffuseKeys.has(option.tex_key)) continue;
+        const resolvedMaps = {
+          normal_map: item.userData.resolvedNormalMapKey,
+          light_map: item.userData.resolvedLightMapKey,
+          material_map: item.userData.resolvedMaterialMapKey,
+        };
+        for (const [field, key] of Object.entries(resolvedMaps)) {
+          if (option[`${field}_manual`]) continue;
+          if (key) option[field] = key;
+          else delete option[field];
+        }
+      }
       activeMaps = null;
     }
     setMeshTexture(item, activeKey);
@@ -207,6 +225,9 @@ function saveTextureState(modPath) {
       normal_map: option.normal_map || null,
       light_map: option.light_map || null,
       material_map: option.material_map || null,
+      normal_map_manual: !!option.normal_map_manual,
+      light_map_manual: !!option.light_map_manual,
+      material_map_manual: !!option.material_map_manual,
     };
   }
   window.pywebview.api.save_mesh_textures(modPath, state);

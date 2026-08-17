@@ -14,7 +14,11 @@ container.appendChild(renderer.domElement);
 
 export const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d1117);
-scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+// Ambient light alone cannot reveal normal-map detail because it has no
+// direction. Keep a soft neutral base plus a low hemisphere fill so surfaces
+// remain readable when the movable key light is in its Gray/off stage.
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35));
 
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
 dirLight.position.set(5, 10, 7);

@@ -16,7 +16,7 @@ from core import ini_parser
 from core.ini_parser import parse_sections, merge_sections, build_draw_groups, \
     extract_resources, extract_toggle_keys, line_source, SrcLine
 from core.mesh_builder import build_mesh_payload, encode_texture_file, \
-    _reconstruct_normal_z
+    _extract_light_mask, _reconstruct_normal_z
 from app import mod_loader
 
 FAILS = []
@@ -1020,6 +1020,13 @@ def test_two_channel_normal_reconstructs_z():
           f"a full-strength X normal reconstructs a near-zero Z (got {pixels[1]})")
 
 
+def test_packed_light_map_uses_blue_mask_without_colour_cast():
+    from PIL import Image
+    source = Image.new("RGB", (1, 1), (210, 12, 94))
+    check(_extract_light_mask(source).getpixel((0, 0)) == (94, 94, 94),
+          "packed LightMap blue is exposed as a neutral scalar mask")
+
+
 # ── `handling = skip` with no `drawindexed` line at all means "suppress the
 #    original draw and replace it with nothing", NOT "draw the whole ib".
 #    Only a section that omits `handling = skip` gets the implicit
@@ -1683,6 +1690,7 @@ if __name__ == "__main__":
                test_ll_skeleton_compute_output_uses_rest_position,
                test_authored_auxiliary_material_maps,
                test_two_channel_normal_reconstructs_z,
+               test_packed_light_map_uses_blue_mask_without_colour_cast,
                test_handling_skip_with_no_drawindexed_draws_nothing,
                test_component_name_ending_in_uppercase_abbreviation,
                test_run_inlines_nested_commandlist_draws,

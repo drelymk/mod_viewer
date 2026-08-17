@@ -246,6 +246,18 @@ def _reconstruct_normal_z(img):
     return Image.frombytes("RGB", img.size, bytes(result))
 
 
+def _extract_light_mask(img):
+    """Convert the packed game LightMap's blue mask to neutral grayscale.
+
+    Feeding packed RGB directly into standard lighting causes a red cast, and
+    reading only red misses variants such as LucySummer's Oiled/Base pair,
+    whose authored difference lives almost entirely in blue.
+    """
+    blue = img.convert("RGB").getchannel("B")
+    from PIL import Image
+    return Image.merge("RGB", (blue, blue, blue))
+
+
 def _encode_texture(dds_path, max_size=2048, preserve_alpha=False,
                     texture_role=None):
     """DDS → PNG in-memory → base64 data URI.  Returns None on failure."""
@@ -278,6 +290,8 @@ def _encode_texture(dds_path, max_size=2048, preserve_alpha=False,
             img.thumbnail((max_size, max_size), Image.LANCZOS)
         if texture_role == "normal_map":
             img = _reconstruct_normal_z(img)
+        elif texture_role == "light_map":
+            img = _extract_light_mask(img)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()

@@ -31,6 +31,7 @@ async function pickInto(opt, field) {
   if (result.error) return showError(result.error);
   addTexture(result.tex_key, result.uri);
   opt[field] = result.tex_key;
+  opt[`${field}_manual`] = true;
   render();
   if (onChange) onChange();
 }
@@ -80,6 +81,7 @@ function render() {
         clear.addEventListener('click', (evt) => {
           evt.stopPropagation();
           delete opt[field];
+          opt[`${field}_manual`] = true;
           render();
           if (onChange) onChange();
         });
