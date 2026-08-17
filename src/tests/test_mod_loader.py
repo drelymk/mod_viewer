@@ -245,6 +245,43 @@ $swapvar = 0,1
               "unique parser identities retain the shared compact UI group")
 
 
+def test_nested_sibling_menu_images_do_not_bleed():
+    ini = """[Constants]
+global persist ${0} = 0
+global persist $dummy = 0
+global $clickedSlot
+global $hoveredSlot
+[CommandListClickedSlot]
+$clickedSlot = $hoveredSlot
+if $clickedSlot == 1
+    ${0} = 1 - ${0}
+elif $clickedSlot == 2
+    $dummy = 1 - $dummy
+endif
+[CommandListIcon1]
+ps-t100 = ResourceIcon
+[ResourceIcon]
+filename = {1}.dds
+"""
+    with tempfile.TemporaryDirectory() as root:
+        nested = os.path.join(root, "nested")
+        os.makedirs(nested)
+        paths = []
+        for stem in ("body", "hair"):
+            path = os.path.join(nested, f"{stem}.ini")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(ini.format(stem, stem))
+            paths.append(path)
+
+        _groups, _toggles, menu, _defaults, _rules, _present = _parse_inis(
+            paths, root)
+        images = {os.path.basename(info["ini_path"]): info.get("image_file")
+                  for info in menu.values() if info.get("slot") == 1}
+        check(images == {"body.ini": os.path.join("nested", "body.dds"),
+                         "hair.ini": os.path.join("nested", "hair.dds")},
+              f"nested sibling menu entries retain their own images (got {images})")
+
+
 if __name__ == "__main__":
     for fn in (test_wired_toggle_shows_only_its_gating_vars,
                test_unwired_pending_toggle_shown_with_writable_vars,
@@ -256,7 +293,8 @@ if __name__ == "__main__":
                test_wired_and_unwired_can_coexist_across_sections,
                test_shape_sliders_follow_mid_section_position_reassignments,
                test_nested_ini_resources_are_relative_to_their_ini,
-               test_nested_sibling_inis_have_unique_parser_namespaces):
+               test_nested_sibling_inis_have_unique_parser_namespaces,
+               test_nested_sibling_menu_images_do_not_bleed):
         fn()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
     sys.exit(1 if FAILS else 0)

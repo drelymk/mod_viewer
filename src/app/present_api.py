@@ -27,8 +27,6 @@ def _unexpected_error():
 def _batch_run(mod_dir, targets, mutate, metadata_change=None):
     records = []
     try:
-        if metadata_change:
-            edit_session.stage_present_metadata(mod_dir)
         for ini_rel, path, _doc in targets:
             sess, key, doc, was_pending, snapshot = edit_session.begin(mod_dir, path)
             records.append((sess, key, doc, was_pending, snapshot, path, ini_rel))
@@ -37,6 +35,7 @@ def _batch_run(mod_dir, targets, mutate, metadata_change=None):
             for _sess, _key, doc, _was, _snapshot, _path, ini_rel in records:
                 results.append(mutate(ini_rel, doc))
             if metadata_change:
+                edit_session.stage_present_metadata(mod_dir)
                 metadata_change(results)
         except BaseException:
             for sess, key, _doc, was_pending, snapshot, path, _ini_rel in reversed(records):

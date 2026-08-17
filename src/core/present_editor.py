@@ -4,7 +4,8 @@ import re
 
 from .ini_document import ASSIGN, BLANK
 from .ini_menu import extract_menu_toggles
-from .ini_sections import parse_sections
+from .ini_sections import extract_resources, parse_sections
+from .ini_shapes import extract_shape_sliders
 from .ini_toggles import extract_toggle_keys
 from .toggle_editor import ToggleEditError, cycle_vars, is_cycle_section
 
@@ -60,7 +61,7 @@ def details(doc):
 
 
 def capturable_variables(doc):
-    """Local variables controlled by ordinary key or clickable-menu toggles."""
+    """Local variables controlled by keys, menus, or recognized sliders."""
     sections = parse_sections(doc.path or "", text=doc.to_string())
     found = []
     seen = set()
@@ -77,6 +78,9 @@ def capturable_variables(doc):
         for name in info.get("vars", {}):
             add(name)
     for info in extract_menu_toggles(sections).values():
+        add(info.get("var", ""))
+    resources = extract_resources(sections)
+    for info in extract_shape_sliders(sections, resources):
         add(info.get("var", ""))
     return found
 
