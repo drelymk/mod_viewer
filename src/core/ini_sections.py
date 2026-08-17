@@ -10,8 +10,25 @@ import re
 _DECL_RE = re.compile(r'^global\s+(?:persist\s+)?\$(\w+)\b', re.I)
 _VAR_RE  = re.compile(r'\$(\w+)')
 
-_MAX_INI_FILES = 10
-_MAX_INI_DEPTH = 2
+class ResourceTable(dict):
+    """Resource records plus one canonical case-insensitive lookup index.
+
+    Resource identifiers are case-insensitive in 3DMigoto.  Keeping the
+    original spelling as the dict key preserves the existing analysis API,
+    while the lower-case index avoids repeating a linear scan in every
+    resolver.
+    """
+
+    def __init__(self, records=None):
+        super().__init__(records or {})
+        self._by_name = {}
+        for name, value in self.items():
+            self._by_name.setdefault(name.lower(), value)
+
+    def get_ci(self, name):
+        if not name:
+            return {}
+        return self.get(name) or self._by_name.get(str(name).lower(), {})
 
 
 def canonical_var_names(sections):
@@ -38,65 +55,7 @@ def canonical_var_names(sections):
     return declared
 
 
-def _active_ini_names(folder):
-    try:
-        names = os.listdir(folder)
-    except OSError:
-        return []
-    return [name for name in sorted(names)
-            if not name.upper().startswith("DISABLED")
-            and name.lower().endswith(".ini")
-            and os.path.isfile(os.path.join(folder, name))]
-
-
-def _ini_has_geometry(path):
-    """Whether one INI describes at least one resolvable draw group.
-
-    Buffer files do not have to exist yet; this is the same structural
-    geometry test the loader performs before it tries to read those files.
-    The import is intentionally local because ini_parser re-exports this
-    discovery function.
-    """
-    try:
-        from .ini_parser import build_draw_groups
-        sections = parse_sections(path)
-        return bool(build_draw_groups(sections, extract_resources(sections)))
-    except Exception:
-        return False
-
-
-def find_inis(mod_dir):
-    """Return active direct INIs, optionally including bounded nested files.
-
-    A selected folder is a mod root only when one of its direct INIs has
-    geometry. In that case active INIs are discovered up to two directories
-    below it, up to ten files total unless the direct files alone exceed that
-    limit. Direct INIs are never truncated: without that root anchor, retain
-    the complete flat behavior so selecting a library/category folder cannot
-    accidentally combine several nested mods.
-    """
-    direct = [os.path.join(mod_dir, name) for name in _active_ini_names(mod_dir)]
-    root_geometry = next((path for path in direct if _ini_has_geometry(path)), None)
-    if root_geometry is None:
-        return direct
-
-    found = list(direct)
-    if len(found) >= _MAX_INI_FILES:
-        return found
-    for base, dirs, _files in os.walk(mod_dir):
-        rel = os.path.relpath(base, mod_dir)
-        depth = 0 if rel == os.curdir else len(rel.split(os.sep))
-        dirs[:] = sorted(dirs) if depth < _MAX_INI_DEPTH else []
-        if depth == 0:
-            continue
-        for name in _active_ini_names(base):
-            found.append(os.path.join(base, name))
-            if len(found) >= _MAX_INI_FILES:
-                return found
-    return found
-
-
-def merge_sections(ini_paths, overrides=None):
+def merge_sections(ini_paths, overrides=None, documents=None):
     """Parse all ini files and merge sections with the same name.
 
     `overrides`, if given, is {ini_path: text} — parse that ini from this
@@ -106,9 +65,17 @@ def merge_sections(ini_paths, overrides=None):
     read from disk exactly as before.
     """
     overrides = overrides or {}
+    documents = documents or {}
     combined: dict = {}
     for path in ini_paths:
-        for name, lines in parse_sections(path, text=overrides.get(path)).items():
+        document = documents.get(path)
+        if document is None:
+            document = documents.get(os.path.normcase(os.path.abspath(path)))
+        if document is not None:
+            parsed = sections_from_document(document)
+        else:
+            parsed = parse_sections(path, text=overrides.get(path))
+        for name, lines in parsed.items():
             combined.setdefault(name, []).extend(lines)
     return combined
 
@@ -187,6 +154,25 @@ def parse_sections(ini_path, text=None):
     return sections
 
 
+def sections_from_document(document):
+    """Project one authoritative :class:`IniDocument` into read-path sections.
+
+    The lossless document remains the source of truth for editing and staged
+    reloads.  Analysis only needs stripped, comment-free ``SrcLine`` values,
+    so this small projection lets every semantic pass consume the same parsed
+    file instead of reparsing its serialized text.
+    """
+    sections = {}
+    for section in document.sections:
+        lines = sections.setdefault(section.name, [])
+        for line in section.lines:
+            text = line.text
+            if text:
+                lines.append(SrcLine(text, document.path, line.no + 1,
+                                     section.name))
+    return sections
+
+
 def extract_resources(sections):
     """Return {resource_name: {filename, stride, format}} from Resource sections."""
     SKIP = ("TextureOverride", "CommandList", "ShaderOverride", "Present", "Key", "Constants")
@@ -205,4 +191,10 @@ def extract_resources(sections):
             elif k == "format":   res["format"] = v
         if "filename" in res:
             resources[name] = res
-    return resources
+    return ResourceTable(resources)
+
+
+def find_inis(mod_dir):
+    """Compatibility wrapper; new code should use mod_discovery directly."""
+    from .mod_discovery import discover_ini_paths
+    return discover_ini_paths(mod_dir)

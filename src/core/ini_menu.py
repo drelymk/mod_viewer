@@ -276,7 +276,8 @@ def _parse_arrow_button(lines):
     return variable, _cycle_values(lo, hi)
 
 
-def extract_menu_toggles(sections, var_prefix=None, source=None):
+def extract_menu_toggles(sections, var_prefix=None, source=None,
+                         canonical_vars=None):
     """Return {entry key: {name, slot, var, values, effects, source, ini_path,
     section}} for every clickable menu slot found in the mod's CommandLists.
 
@@ -284,7 +285,8 @@ def extract_menu_toggles(sections, var_prefix=None, source=None):
     is a .dds image), so the variable name doubles as the display name.
     """
     menu = {}
-    canon = canonical_var_names(sections)
+    canon = (canonical_vars if canonical_vars is not None
+             else canonical_var_names(sections))
 
     def declared(name):
         return canon.get(name.lower(), name)
@@ -384,11 +386,15 @@ def extract_menu_toggles(sections, var_prefix=None, source=None):
     return menu
 
 
-def extract_menu_var_names(sections, var_prefix=None):
+def extract_menu_var_names(sections, var_prefix=None, menu=None,
+                          canonical_vars=None):
     """Flat set of every variable a clickable menu can change — the cycled
     variables plus the ones their mutual-exclusion rules write."""
     found = set()
-    for info in extract_menu_toggles(sections, var_prefix=var_prefix).values():
+    menu = (menu if menu is not None else
+            extract_menu_toggles(sections, var_prefix=var_prefix,
+                                 canonical_vars=canonical_vars))
+    for info in menu.values():
         found.add(info["var"])
         found.update(e["var"] for e in info["effects"])
     return found
@@ -397,10 +403,16 @@ def extract_menu_var_names(sections, var_prefix=None):
 def attach_menu_images(menu, sections, resources):
     """Attach authored menu-item filenames to recognized slots/sliders."""
     slot_images = {}
-    resources_by_name = {name.lower(): info for name, info in resources.items()}
 
     def resource(name):
-        return resources_by_name.get(name.lower(), {}) if name else {}
+        if not name:
+            return {}
+        lookup = getattr(resources, "get_ci", None)
+        if lookup is not None:
+            return lookup(name)
+        lowered = name.lower()
+        return next((info for key, info in resources.items()
+                     if key.lower() == lowered), {})
 
     # Arrow-pair menus render item N in its own CommandListIconN section.
     for name, lines in sections.items():

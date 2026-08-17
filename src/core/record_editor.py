@@ -37,9 +37,11 @@ guess and reports it instead.
 import re
 
 from . import ini_condition as ic
-from . import ini_parser
+from .ini_parser import _scan_sections_for_draws
 from . import toggle_editor as te
-from .ini_document import IF, ELIF, ELSE, ENDIF, DRAW, BLANK, COMMENT
+from .ini_document import (IniDocument, IF, ELIF, ELSE, ENDIF, DRAW, BLANK,
+                           COMMENT)
+from .ini_sections import sections_from_document
 
 _COND_RE = re.compile(r"^(if|else\s+if|elif)\s+(.*)$", re.I)
 
@@ -482,22 +484,26 @@ def _dnf_satisfied(conds, bindings):
                for group in conds)
 
 
-def verify_recording(path, report, text=None):
-    """Re-parse `path` fresh and confirm it actually shows the gating
+def verify_recording(path, report, text=None, document=None):
+    """Project the current document and confirm it shows the gating
     recorded in `report["verify"]`. Returns a list of mismatch dicts, empty
     if every recorded draw's freshly re-parsed gating matches.
 
-    `text`, if given, is verified against directly instead of re-reading
-    `path` from disk -- used to check a pending, not-yet-exported in-memory
-    edit (see app/edit_session.py); `path` still tags provenance either way.
+    `document`, when supplied, is the authoritative staged document. The
+    `text` fallback is converted to an ``IniDocument`` rather than sent
+    through the lossy text parser; without either, the saved document is
+    loaded losslessly from `path`.
     """
     verify = report.get("verify") or {}
     if not verify:
         return []
 
     try:
-        sections = ini_parser.parse_sections(path, text=text)
-        draw_info = ini_parser._scan_sections_for_draws(sections)
+        if document is None:
+            document = (IniDocument.from_string(text, path=path)
+                        if text is not None else IniDocument.load(path))
+        sections = sections_from_document(document)
+        draw_info = _scan_sections_for_draws(sections)
     except Exception as e:
         return [{"var": None, "reason": f"file failed to re-parse after saving: {e!r}"}]
 

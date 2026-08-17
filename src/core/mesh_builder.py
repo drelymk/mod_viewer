@@ -3,6 +3,7 @@
 import re, struct, os, base64, io, threading
 import warnings
 from collections import OrderedDict
+from dataclasses import dataclass
 
 # ── Buffer constants ───────────────────────────────────────────────────────────
 POSITION_STRIDE   = 40
@@ -54,6 +55,9 @@ def _cache_texture(key, uri):
 def _res_get(resources, name):
     """Case-insensitive resource lookup (handles WWMI naming inconsistencies)."""
     if not name: return {}
+    lookup = getattr(resources, "get_ci", None)
+    if lookup is not None:
+        return lookup(name)
     if name in resources: return resources[name]
     nl = name.lower()
     for k, v in resources.items():
@@ -227,6 +231,43 @@ def _b64u(arr):
     """Pack int list as little-endian Uint32 and base64-encode."""
     return base64.b64encode(struct.pack(f"<{len(arr)}I", *arr)).decode()
 
+
+class GeometryBlob:
+    """Append-only binary geometry storage shared by one mod load."""
+
+    __slots__ = ("data",)
+
+    def __init__(self):
+        self.data = bytearray()
+
+    def add(self, value):
+        raw = bytes(value)
+        offset = len(self.data)
+        self.data.extend(raw)
+        return {"offset": offset, "length": len(raw)}
+
+    def __len__(self):
+        return len(self.data)
+
+    def to_bytes(self):
+        return bytes(self.data)
+
+
+@dataclass
+class MeshBuildResult:
+    """Named intermediate produced by the mesh-building pipeline.
+
+    ``meshes`` contains only draw entries and ``textures`` is the shared
+    texture registry.  ``geometry`` records the optional caller-owned blob
+    writer used to produce offset/length references.  Keeping these outputs
+    separate prevents the application loader from translating a flat dict of
+    mesh data and reserved keys before it can assemble its public payload.
+    """
+
+    meshes: dict
+    textures: dict
+    geometry: GeometryBlob | None = None
+
 def _reconstruct_normal_z(img):
     """Expand a game-style two-channel XY normal into tangent-space RGB.
 
@@ -351,12 +392,128 @@ def _rel_source(src, mod_dir):
     return {"ini": path, "line": src.get("line_no"), "section": src.get("section")}
 
 
-def build_mesh_payload(groups, mod_dir, max_draws=0):
+def _deduplicate_draws(group, max_draws=0):
+    """Merge repeated draw regions while preserving every gate and source.
+
+    This is a distinct pipeline stage: geometry packing receives one
+    deterministic draw list and does not own the condition-merging rules.
     """
-    Returns {draw_label: {pos, uv, idx, tex_key, normal_map_key?,
-    light_map_key?, material_map_key?, drawindexed?, source?, component?,
-    texture_variants?, texture_options?}, '__textures__': {key: uri}}.
-    Textures are stored once in a shared registry keyed by filename.
+    merged = {}
+    order = []
+    for draw in group["draws"]:
+        key = (draw.get("ib_file"), draw.get("position_file"),
+               draw.get("texcoord_file"), draw["start"], draw["count"])
+        if key not in merged:
+            merged[key] = {"draw": draw, "alts": [], "sources": []}
+            order.append(key)
+        entry = merged[key]
+        for src in draw.get("sources") or []:
+            if src not in entry["sources"]:
+                entry["sources"].append(src)
+        cond_groups = draw.get("conditions") or []
+        if not cond_groups:
+            if [] not in entry["alts"]:
+                entry["alts"].append([])
+        else:
+            for condition_group in cond_groups:
+                if condition_group not in entry["alts"]:
+                    entry["alts"].append(condition_group)
+
+    unique = []
+    for key in order:
+        entry = merged[key]
+        draw, alternatives = entry["draw"], entry["alts"]
+        draw["conditions"] = (
+            [] if any(not group for group in alternatives) else alternatives)
+        draw["sources"] = entry["sources"]
+        unique.append(draw)
+    return unique[:max_draws] if max_draws else unique
+
+
+def _geometry_ref(raw, geometry):
+    """Serialize one binary field into the caller-owned geometry store."""
+    if geometry is not None:
+        return geometry.add(raw)
+    # Direct core fixtures and older integrations retain the historical
+    # base64 representation when no shared blob was supplied.
+    return base64.b64encode(raw).decode()
+
+
+def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
+                         raw_buf_cache, sparse_shape_cache, read_buffer):
+    """Load and prepare dense or sparse shape targets for one draw."""
+    shape_buffers = []
+    for shape in shape_sliders or []:
+        shape_base_path = _safe_join(mod_dir, shape["base_file"])
+        if os.path.normcase(os.path.normpath(shape_base_path or "")) != \
+                os.path.normcase(os.path.normpath(effective_pos_path)):
+            continue
+        if shape.get("shape_id") is not None:
+            paths = tuple(_safe_join(mod_dir, shape[k]) for k in
+                          ("offset_file", "vertex_id_file", "vertex_offset_file"))
+            if not all(path and os.path.exists(path) for path in paths):
+                continue
+            # WWMI aligns each 127-key batch to a 128-entry container;
+            # user-facing IDs omit that padding slot (SkapeKeySetter.hlsl).
+            key_id = shape.get(
+                "buffer_shape_id",
+                shape["shape_id"] + shape["shape_id"] // 127)
+            cache_key = paths + (key_id,)
+            if cache_key not in sparse_shape_cache:
+                for path in paths:
+                    if path not in raw_buf_cache:
+                        raw_buf_cache[path] = read_buffer(path)
+                offsets, vertex_ids, deltas = (raw_buf_cache[path]
+                                               for path in paths)
+                if (key_id + 2) * 4 > len(offsets):
+                    continue
+                begin, end = struct.unpack_from("<II", offsets, key_id * 4)
+                entry_offset = shape.get("sparse_entry_offset", 0)
+                begin += entry_offset
+                end += entry_offset
+                limit = min(end, len(vertex_ids) // 4, len(deltas) // 12)
+                sparse = {}
+                for i in range(begin, limit):
+                    vertex_id = struct.unpack_from("<I", vertex_ids, i * 4)[0]
+                    delta = struct.unpack_from("<eee", deltas, i * 12)
+                    prior = sparse.get(vertex_id, (0., 0., 0.))
+                    sparse[vertex_id] = tuple(
+                        prior[j] + delta[j] for j in range(3))
+                sparse_shape_cache[cache_key] = sparse
+            shape_buffers.append((shape, sparse_shape_cache[cache_key],
+                                  bytearray(len(used) * 12), True))
+        else:
+            target_path = _safe_join(mod_dir, shape["target_file"])
+            if not target_path or not os.path.exists(target_path):
+                continue
+            if target_path not in raw_buf_cache:
+                raw_buf_cache[target_path] = read_buffer(target_path)
+            low_data = None
+            low_bytes = None
+            if shape.get("low_file"):
+                low_path = _safe_join(mod_dir, shape["low_file"])
+                if not low_path or not os.path.exists(low_path):
+                    continue
+                if low_path not in raw_buf_cache:
+                    raw_buf_cache[low_path] = read_buffer(low_path)
+                low_data = raw_buf_cache[low_path]
+                low_bytes = bytearray(len(used) * 12)
+            shape_buffers.append((shape, raw_buf_cache[target_path],
+                                  bytearray(len(used) * 12), False,
+                                  low_data, low_bytes))
+    return shape_buffers
+
+
+def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None):
+    """
+    Build mesh draw entries and a shared texture registry.
+
+    Returns :class:`MeshBuildResult` whose ``meshes`` map contains
+    ``{draw_label: {pos, uv, idx, tex_key, ...}}`` and whose ``textures`` map
+    contains encoded data URIs keyed by mod-relative filename.  Geometry is
+    written into ``geometry`` when a ``GeometryBlob`` is supplied; otherwise
+    direct callers retain base64 geometry fields for fixture compatibility.
+
     `drawindexed` is the ini's [count, start, base] triple (missing for the
     rare unconditional whole-buffer draw); `source` is the per-ini tag from
     build_draw_groups, present only in multi-ini mods. `component` is the
@@ -382,6 +539,7 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
     component-level "manage textures" pool.
     """
     _begin_texture_cache(mod_dir)
+
     result:    dict = {}
     tex_uris:  dict = {}  # basename → data URI  (encoded once)
     tex_cache: dict = {}  # full path → basename  (dedup lookup)
@@ -440,52 +598,9 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
         if ib_path not in ib_cache:
             ib_cache[ib_path] = _read_buffer(ib_path)
 
-        # Deduplicate draws by (ib file, position/texcoord override, start, count).
-        # The SAME mesh region is
-        # often reused across several mutually-exclusive `if $var == value`
-        # branches of one cycle variable (e.g. a shared base body part present in
-        # values 0-4 of a swap key, with only an accessory part differing per
-        # value). Keeping only the first occurrence's condition would hide the
-        # mesh for every other value that also draws it — instead, OR together
-        # every occurrence's alternatives. Each draw's "conditions" is already
-        # DNF (a list of OR'd AND-groups), so a single `if $x == 0 || $x == 2`
-        # contributes two alternatives on its own. If any occurrence was
-        # unconditional (drawn outside an if-block), the merged result is
-        # unconditional too, since it's then always visible anyway.
-        merged: dict = {}
-        order: list = []
-        for draw in grp["draws"]:
-            key = (draw.get("ib_file"), draw.get("position_file"),
-                   draw.get("texcoord_file"), draw["start"], draw["count"])
-            if key not in merged:
-                merged[key] = {"draw": draw, "alts": [], "sources": []}
-                order.append(key)
-            entry = merged[key]
-
-            alts = entry["alts"]
-            # Every contributing drawindexed line must survive the merge —
-            # an authoring edit to this mesh has to fan back out to all of
-            # them, possibly across several ini files.
-            for src in draw.get("sources") or []:
-                if src not in entry["sources"]:
-                    entry["sources"].append(src)
-            cond_groups = draw.get("conditions") or []
-            if not cond_groups:
-                if [] not in alts:
-                    alts.append([])
-            else:
-                for group in cond_groups:
-                    if group not in alts:
-                        alts.append(group)
-        unique = []
-        for key in order:
-            entry = merged[key]
-            draw, alts = entry["draw"], entry["alts"]
-            draw["conditions"] = [] if any(not a for a in alts) else alts
-            draw["sources"] = entry["sources"]
-            unique.append(draw)
-        if max_draws:
-            unique = unique[:max_draws]
+        unique = _deduplicate_draws(grp, max_draws=max_draws)
+        # Draws have already been deduplicated by the named pipeline stage
+        # above; the remaining stages only resolve files and pack bytes.
 
         # Resolve texture keys cheaply. Pool-only options are encoded lazily
         # when selected in the UI; defaults and toggle variants are still
@@ -561,63 +676,9 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
             pos_data, draw_pos_stride, tc_data, draw_tc_stride, uv_off, uv_fmt = draw_buffers
             uv_size = struct.calcsize(uv_fmt)
             pos_bytes = bytearray(len(used) * 12)
-            shape_buffers = []
-            for shape in grp.get("shape_sliders") or []:
-                shape_base_path = _safe_join(mod_dir, shape["base_file"])
-                if os.path.normcase(os.path.normpath(shape_base_path or "")) != \
-                        os.path.normcase(os.path.normpath(effective_pos_path)):
-                    continue
-                if shape.get("shape_id") is not None:
-                    paths = tuple(_safe_join(mod_dir, shape[k]) for k in
-                                  ("offset_file", "vertex_id_file", "vertex_offset_file"))
-                    if not all(path and os.path.exists(path) for path in paths):
-                        continue
-                    # WWMI aligns each 127-key batch to a 128-entry container;
-                    # user-facing IDs omit that padding slot (SkapeKeySetter.hlsl).
-                    key_id = shape.get(
-                        "buffer_shape_id",
-                        shape["shape_id"] + shape["shape_id"] // 127)
-                    cache_key = paths + (key_id,)
-                    if cache_key not in sparse_shape_cache:
-                        for path in paths:
-                            if path not in raw_buf_cache:
-                                raw_buf_cache[path] = _read_buffer(path)
-                        offsets, vertex_ids, deltas = (raw_buf_cache[path] for path in paths)
-                        if (key_id + 2) * 4 > len(offsets):
-                            continue
-                        begin, end = struct.unpack_from("<II", offsets, key_id * 4)
-                        entry_offset = shape.get("sparse_entry_offset", 0)
-                        begin += entry_offset
-                        end += entry_offset
-                        limit = min(end, len(vertex_ids) // 4, len(deltas) // 12)
-                        sparse = {}
-                        for i in range(begin, limit):
-                            vertex_id = struct.unpack_from("<I", vertex_ids, i * 4)[0]
-                            delta = struct.unpack_from("<eee", deltas, i * 12)
-                            prior = sparse.get(vertex_id, (0., 0., 0.))
-                            sparse[vertex_id] = tuple(prior[j] + delta[j] for j in range(3))
-                        sparse_shape_cache[cache_key] = sparse
-                    shape_buffers.append((shape, sparse_shape_cache[cache_key],
-                                          bytearray(len(used) * 12), True))
-                else:
-                    target_path = _safe_join(mod_dir, shape["target_file"])
-                    if not target_path or not os.path.exists(target_path):
-                        continue
-                    if target_path not in raw_buf_cache:
-                        raw_buf_cache[target_path] = _read_buffer(target_path)
-                    low_data = None
-                    low_bytes = None
-                    if shape.get("low_file"):
-                        low_path = _safe_join(mod_dir, shape["low_file"])
-                        if not low_path or not os.path.exists(low_path):
-                            continue
-                        if low_path not in raw_buf_cache:
-                            raw_buf_cache[low_path] = _read_buffer(low_path)
-                        low_data = raw_buf_cache[low_path]
-                        low_bytes = bytearray(len(used) * 12)
-                    shape_buffers.append((shape, raw_buf_cache[target_path],
-                                          bytearray(len(used) * 12), False,
-                                          low_data, low_bytes))
+            shape_buffers = _build_shape_buffers(
+                grp.get("shape_sliders"), mod_dir, effective_pos_path, used,
+                raw_buf_cache, sparse_shape_cache, _read_buffer)
             uv_bytes = bytearray(len(used) * 8) if tc_data else None
             for out_i, vi in enumerate(used):
                 pos_off = vi * draw_pos_stride + POSITION_OFFSET
@@ -662,8 +723,8 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
             default_key = _ensure_texture(
                 _safe_join(mod_dir, draw.get("texture_default_file")))
             entry: dict = {
-                "pos": base64.b64encode(pos_bytes).decode(),
-                "idx": base64.b64encode(idx_bytes).decode(),
+                "pos": _geometry_ref(pos_bytes, geometry),
+                "idx": _geometry_ref(idx_bytes, geometry),
                 "tex_key": default_key,
             }
             for channel in ("normal_map", "light_map", "material_map"):
@@ -686,17 +747,17 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                             option[channel] = key
             _seed_option_maps(default_key)
             if uv_bytes:
-                entry["uv"] = base64.b64encode(uv_bytes).decode()
+                entry["uv"] = _geometry_ref(uv_bytes, geometry)
             if shape_buffers:
                 entry["shape_targets"] = []
                 for item in shape_buffers:
                     shape, _target_data, target_bytes, _sparse = item[:4]
                     target = {"var": shape["var"],
-                              "pos": base64.b64encode(target_bytes).decode()}
+                              "pos": _geometry_ref(target_bytes, geometry)}
                     if shape.get("mode"):
                         target["mode"] = shape["mode"]
                     if len(item) > 5 and item[5] is not None:
-                        target["low_pos"] = base64.b64encode(item[5]).decode()
+                        target["low_pos"] = _geometry_ref(item[5], geometry)
                     entry["shape_targets"].append(target)
             if draw.get("conditions"):
                 entry["conditions"] = draw["conditions"]
@@ -748,5 +809,22 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                 entry["component"] = component
             result[lbl] = entry
 
-    result["__textures__"] = {k: v for k, v in tex_uris.items() if v}
-    return result
+    return MeshBuildResult(
+        meshes=result,
+        textures={k: v for k, v in tex_uris.items() if v},
+        geometry=geometry,
+    )
+
+
+def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None):
+    """Compatibility wrapper for direct core fixtures.
+
+    The application uses :func:`build_mesh_result`; older tests and scripts
+    can continue to inspect the historical flat builder dictionary, including
+    its private ``__textures__`` entry.
+    """
+    built = build_mesh_result(groups, mod_dir, max_draws=max_draws,
+                              geometry=geometry)
+    payload = dict(built.meshes)
+    payload["__textures__"] = built.textures
+    return payload

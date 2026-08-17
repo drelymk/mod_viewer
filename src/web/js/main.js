@@ -11,7 +11,7 @@ import { buildMenuPanel } from './menu-panel.js';
 import { buildPresentPanel } from './present-panel.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { setGeometryBlob } from './decode.js';
-import { setHealthReport } from './health-report.js';
+import { setHealthLoader, setHealthReport } from './health-report.js';
 import { setIniEditorContext } from './ini-editor.js';
 
 const $ = (id) => document.getElementById(id);
@@ -21,7 +21,7 @@ const $ = (id) => document.getElementById(id);
 // to reload after a successful write.
 let currentModPath = null;
 
-// The last-loaded payload's Toggle panel model (payload.__toggles__), kept
+// The last-loaded payload's controls.toggles model, kept
 // around purely so refreshPendingState() can check for a still-unwired
 // toggle without re-fetching anything — see hasUnwiredToggle().
 let lastToggles = {};
@@ -78,7 +78,7 @@ async function displayMeshPayload(payload) {
   clearScene();
   $('hint').style.display = 'none';
 
-  const geometry = payload.__geometry__;
+  const geometry = payload.geometry;
   if (geometry) {
     const response = await fetch(geometry.url, { cache: 'no-store' });
     if (!response.ok) throw new Error(`Geometry download failed (${response.status}).`);
@@ -89,13 +89,16 @@ async function displayMeshPayload(payload) {
     setGeometryBlob(null);
   }
 
-  lastToggles = payload.__toggles__ || {};
-  setStateRules(payload.__state_rules__ || [], payload.__state_defaults__ || {});
-  setTextures(payload.__textures__);
-  buildMeshPanel(payload, currentModPath, payload.__mesh_names__ || {});
-  buildTogglePanel(payload.__toggles__, { modPath: currentModPath, onChange: reloadCurrentMod });
-  buildMenuPanel(payload.__menu__);
-  buildPresentPanel(payload.__present__, { modPath: currentModPath, onChange: reloadCurrentMod });
+  const controls = payload.controls || {};
+  const state = payload.state || {};
+  const meshes = payload.meshes || {};
+  lastToggles = controls.toggles || {};
+  setStateRules(state.rules || [], state.defaults || {});
+  setTextures(payload.textures);
+  buildMeshPanel(meshes, currentModPath, payload.metadata?.mesh_names || {});
+  buildTogglePanel(controls.toggles, { modPath: currentModPath, onChange: reloadCurrentMod });
+  buildMenuPanel(controls.menu);
+  buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });
   fitTo(activeMeshes);
 
   showLoading(false);
@@ -106,10 +109,11 @@ async function loadModAt(path) {
   $('ini-view-btn').disabled = true;
   $('mod-path').textContent = path;
   showLoading(true, 'Loading Model…');
+  setHealthLoader(null);
   setHealthReport(null);
 
   const data = await window.pywebview.api.load_mod(path);
-  setHealthReport(data?.__health__);
+  setHealthReport(data?.health);
   if (data && data.error) {
     showLoading(false);
     setIniEditorContext(path, reloadCurrentMod);
@@ -124,6 +128,7 @@ async function loadModAt(path) {
     await alertDialog('Could not load mod geometry:\n\n' + error.message);
     return;
   }
+  setHealthLoader(() => window.pywebview.api.get_diagnostics(path));
   setIniEditorContext(path, reloadCurrentMod);
   await refreshPendingState();
 

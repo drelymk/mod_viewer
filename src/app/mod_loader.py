@@ -1,32 +1,47 @@
-"""Turn a 3DMigoto mod folder into the JSON payload the UI renders.
+"""Turn a 3DMigoto mod folder into the structured payload the UI renders.
 
 Deliberately free of any GUI imports so it can be exercised from tests and
 scripts without pywebview or a display.
 
-The payload is a flat dict keyed by mesh name, plus three reserved keys:
-    __textures__   {texture key: data URI}
-    __toggles__    the Toggle panel model (see build_toggle_panel)
-    __menu__       the Menu panel model  (see build_menu_panel)
+The public payload keeps meshes, textures, controls, state, geometry and
+metadata in separate named fields.  ``build_mesh_payload`` still exposes its
+older flat builder result for direct core fixtures; this module is the
+application boundary that turns it into the public schema.
 """
 
 import os
 import traceback
+from dataclasses import dataclass, field
 
 from core.ini_condition import is_namespaced
-from core.ini_parser import (build_draw_groups, extract_menu_toggles,
-                        extract_resources, extract_toggle_keys,
-                        extract_variable_defaults, find_inis, merge_sections)
-from core.mesh_builder import build_mesh_payload
+from core.ini_sections import extract_resources, merge_sections
+from core.ini_analysis import analyze_ini
+from core.mod_discovery import discover_ini_paths
+from core.mesh_builder import build_mesh_result
 from core.mesh_builder import _encode_texture, _safe_join
 from core.ini_menu import attach_menu_images
-from core.ini_shapes import extract_shape_sliders
-from core.ini_state import extract_state_rules
 from core.ini_health import analyze_mod
 from core.present_editor import SECTION_NAME as PRESENT_SECTION
 
+# Kept for scripts that still inspect the low-level mesh-builder result.  These
+# keys are no longer emitted by load_mod's public application payload.
 RESERVED_KEYS = ("__textures__", "__toggles__", "__menu__", "__mesh_names__",
                  "__geometry__", "__state_rules__", "__state_defaults__",
                  "__health__", "__present__")
+
+# Kept for callers that imported the old helper from this module. The loader
+# itself only consumes an explicit path list or ModLoadContext.
+find_inis = discover_ini_paths
+
+
+@dataclass
+class ModLoadContext:
+    """Inputs shared by one open/reload of a mod."""
+
+    mod_dir: str
+    ini_paths: list[str]
+    docs: dict = field(default_factory=dict)
+    metadata: dict = field(default_factory=dict)
 
 
 def _attach_shape_sliders(groups, shape_sliders):
@@ -90,23 +105,7 @@ def _rebase_resources(resources, ini_path, folder_path):
     return resources
 
 
-def _ini_rel(ini_path, folder_path):
-    return os.path.relpath(ini_path, folder_path).replace(os.sep, "/")
-
-
-def _rebase_resources(resources, ini_path, folder_path):
-    """Make filenames authored relative to a nested INI relative to the root."""
-    rel_dir = os.path.relpath(os.path.dirname(ini_path), folder_path)
-    if rel_dir == os.curdir:
-        return resources
-    for info in resources.values():
-        filename = info.get("filename")
-        if filename:
-            info["filename"] = os.path.normpath(os.path.join(rel_dir, filename))
-    return resources
-
-
-def _parse_inis(ini_paths, folder_path, overrides=None):
+def _parse_inis(ini_paths, folder_path, overrides=None, documents=None):
     """Parse each ini independently, so one mod's resource definitions never
     overwrite another's. Returns (draw groups, toggle keys, menu slots,
     variable defaults).
@@ -125,22 +124,22 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
     seen_labels = {}
 
     for ini_path in ini_paths:
-        secs = merge_sections([ini_path], overrides=overrides)
+        secs = merge_sections([ini_path], overrides=overrides,
+                              documents=documents)
         var_prefix, source = _ini_scope(ini_path, folder_path, multi)
 
         resources = _rebase_resources(
             extract_resources(secs), ini_path, folder_path)
-        ini_groups = build_draw_groups(secs, resources, var_prefix=var_prefix,
-                                       source=source, seen=seen_labels)
-        shape_sliders = extract_shape_sliders(
-            secs, resources, var_prefix=var_prefix, source=source)
-        state_rules.extend(extract_state_rules(secs, var_prefix=var_prefix))
+        analysis = analyze_ini(
+            secs, resources=resources, var_prefix=var_prefix, source=source,
+            seen=seen_labels)
+        ini_groups = analysis.draw_groups
+        shape_sliders = analysis.shapes
+        state_rules.extend(analysis.state_rules)
         _attach_shape_sliders(ini_groups, shape_sliders)
         groups.extend(ini_groups)
-        ini_toggles = extract_toggle_keys(
-            secs, var_prefix=var_prefix, source=source)
-        ini_menu = extract_menu_toggles(
-            secs, var_prefix=var_prefix, source=source)
+        ini_toggles = analysis.toggles
+        ini_menu = analysis.menu
         own_menu = dict(ini_menu)
         ini_present = None
         for key, info in ini_toggles.items():
@@ -178,7 +177,7 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
             menu_slots[key] = slider
             own_menu[key] = slider
         attach_menu_images(own_menu, secs, resources)
-        for var, val in extract_variable_defaults(secs, var_prefix=var_prefix).items():
+        for var, val in analysis.defaults.items():
             toggle_defaults.setdefault(var, val)
 
     present_items = []
@@ -383,7 +382,8 @@ def _gating_vars_from_groups(groups):
     return found
 
 
-def unwired_pending_sections(folder_path, overrides, pending_new_sections):
+def unwired_pending_sections(folder_path, overrides, pending_new_sections,
+                             ini_paths=None, documents=None):
     """{ini basename: [section name, ...]} — the subset of
     `pending_new_sections` (toggles added this session, not yet exported)
     that still don't gate any mesh. {} once every freshly-added toggle is
@@ -398,7 +398,9 @@ def unwired_pending_sections(folder_path, overrides, pending_new_sections):
     """
     if not pending_new_sections:
         return {}
-    by_name = {_ini_rel(p, folder_path): p for p in find_inis(folder_path)}
+    ini_paths = (list(ini_paths) if ini_paths is not None
+                 else discover_ini_paths(folder_path))
+    by_name = {_ini_rel(p, folder_path): p for p in ini_paths}
 
     result = {}
     for ini_name, sections in pending_new_sections.items():
@@ -408,7 +410,7 @@ def unwired_pending_sections(folder_path, overrides, pending_new_sections):
         if ini_path is None:
             continue
         groups, toggle_keys, _menu, _, _rules, _present = _parse_inis(
-            [ini_path], folder_path, overrides)
+            [ini_path], folder_path, overrides, documents)
         gating = _gating_vars_from_groups(groups)
         still_unwired = [
             section for section in sections
@@ -419,8 +421,55 @@ def unwired_pending_sections(folder_path, overrides, pending_new_sections):
     return result
 
 
-def load_mod(folder_path, overrides=None, pending_new_sections=None):
-    """Parse a mod folder and return the in-memory mesh payload.
+def _failure_health(context, overrides):
+    """Best-effort diagnostics reserved for a failed model load."""
+    try:
+        return analyze_mod(
+            context.mod_dir, ini_paths=context.ini_paths, overrides=overrides,
+            documents=context.docs)
+    except Exception:
+        traceback.print_exc()
+        return {
+            "summary": {"errors": 0, "warnings": 1, "issues": 1,
+                        "unused_files": 0, "unused_resources": 0},
+            "files": {"unreferenced": 0, "inactive_only": 0,
+                      "viewer_only": 0, "referenced": 0},
+            "issues": [{
+                "code": "health_check_failed", "severity": "warning",
+                "category": "ini",
+                "message": "The INI diagnostics could not be completed.",
+            }],
+        }
+
+
+def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
+                        present=None, state_rules=None, state_defaults=None,
+                        health=None, error=None):
+    """Create the stable application-to-frontend payload shape."""
+    payload = {
+        "meshes": meshes or {},
+        "textures": textures or {},
+        "controls": {
+            "toggles": toggles or {},
+            "menu": menu or {},
+            "present": present or {"target_inis": [], "item": None},
+        },
+        "state": {
+            "rules": state_rules or [],
+            "defaults": state_defaults or {},
+        },
+        "geometry": None,
+        "metadata": {"mesh_names": {}},
+        "health": health,
+    }
+    if error:
+        payload["error"] = error
+    return payload
+
+
+def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
+             ini_paths=None, documents=None, geometry=None, context=None):
+    """Parse a mod folder and return the structured application payload.
 
     `overrides`, if given, is {ini_path: text} — read that ini from this
     in-memory text instead of disk, to preview a pending edit (see
@@ -435,50 +484,57 @@ def load_mod(folder_path, overrides=None, pending_new_sections=None):
     called across the JS bridge where an exception surfaces as an opaque
     rejection.
     """
-    ini_paths = find_inis(folder_path)
-    try:
-        health = analyze_mod(folder_path, ini_paths=ini_paths, overrides=overrides)
-    except Exception:
-        # Diagnostics must never turn an otherwise loadable mod into a load
-        # failure. Keep the failure visible in the report for debugging.
-        traceback.print_exc()
-        health = {
-            "summary": {"errors": 0, "warnings": 1, "issues": 1,
-                        "unused_files": 0, "unused_resources": 0},
-            "files": {"unreferenced": 0, "inactive_only": 0,
-                      "viewer_only": 0, "referenced": 0},
-            "issues": [{
-                "code": "health_check_failed", "severity": "warning",
-                "category": "ini",
-                "message": "The INI diagnostics could not be completed.",
-            }],
-        }
+    if context is None:
+        if folder_path is None:
+            raise ValueError("folder_path is required")
+        if ini_paths is None:
+            # Direct core/test callers retain the old convenience form. The
+            # application supplies paths through ModLoadContext before this
+            # function is called, so the normal open path never rediscovers.
+            ini_paths = find_inis(folder_path)
+        context = ModLoadContext(
+            folder_path, list(ini_paths), documents or {}, {})
+    else:
+        folder_path = context.mod_dir
+        ini_paths = list(context.ini_paths)
+        documents = context.docs
+    overrides = overrides or {}
+    health = None
     if not ini_paths:
-        return {"error": "No active .ini files found in this folder.",
-                "__health__": health}
+        health = _failure_health(context, overrides)
+        return _structured_payload(
+            health=health,
+            error="No active .ini files found in this folder.")
 
     try:
         groups, toggle_keys, menu_slots, toggle_defaults, state_rules, present = _parse_inis(
-            ini_paths, folder_path, overrides)
+            ini_paths, folder_path, overrides, documents)
         if not groups:
-            return {"error": f"No mesh geometry found across {len(ini_paths)} ini file(s).",
-                    "__health__": health}
+            health = _failure_health(context, overrides)
+            return _structured_payload(
+                health=health,
+                error=f"No mesh geometry found across {len(ini_paths)} ini file(s).")
 
-        payload = build_mesh_payload(groups, folder_path)
-        if not payload:
-            return {"error": "No mesh data could be extracted (buffer files missing?).",
-                    "__health__": health}
+        built = build_mesh_result(groups, folder_path, geometry=geometry)
+        mesh_payload = built.meshes
+        textures = built.textures
+        if not mesh_payload:
+            health = _failure_health(context, overrides)
+            return _structured_payload(
+                health=health,
+                error="No mesh data could be extracted (buffer files missing?).")
 
-        payload["__toggles__"] = build_toggle_panel(
-            toggle_keys, toggle_defaults, _gating_vars(payload), folder_path,
+        toggles = build_toggle_panel(
+            toggle_keys, toggle_defaults, _gating_vars(mesh_payload), folder_path,
             pending_new_sections)
-        payload["__menu__"] = build_menu_panel(menu_slots, toggle_defaults, folder_path)
-        payload["__present__"] = present
-        payload["__state_rules__"] = state_rules
-        payload["__state_defaults__"] = toggle_defaults
-        payload["__health__"] = health
-        return payload
+        menu = build_menu_panel(menu_slots, toggle_defaults, folder_path)
+        return _structured_payload(
+            meshes=mesh_payload, textures=textures, toggles=toggles, menu=menu,
+            present=present, state_rules=state_rules,
+            state_defaults=toggle_defaults)
     except Exception:
         traceback.print_exc()
-        return {"error": "Unexpected backend error. See the application log for details.",
-                "__health__": health}
+        health = _failure_health(context, overrides)
+        return _structured_payload(
+            health=health,
+            error="Unexpected backend error. See the application log for details.")

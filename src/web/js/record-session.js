@@ -58,7 +58,7 @@ function positionLabel() {
 }
 
 /**
- * Start recording `info` (a __toggles__ payload entry). `ctx` is the same
+ * Start recording `info` (a controls.toggles entry). `ctx` is the same
  * {modPath, onChange} the panel already threads through to add/edit/delete.
  * `ui` is the set of DOM handles toggle-panel.js built for this item:
  * {item, row, cycleBtn, valSpan, recordBtn, editBtn, deleteBtn, recordRow,

@@ -143,7 +143,7 @@ function buildSourceSection(source, container) {
 }
 
 /**
- * Build the panel from the payload's __menu__ model. Hidden entirely when the
+ * Build the panel from the structured controls.menu model. Hidden entirely when the
  * mod has no clickable menu, which is the common case.
  */
 export function buildMenuPanel(menu) {

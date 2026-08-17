@@ -254,8 +254,7 @@ def test_cross_ini_component_collision_recovered():
         payload = mod_loader.load_mod(tmp)
         check("error" not in payload, f"loads cleanly (got {payload.get('error')})")
 
-        mesh_entries = {k: v for k, v in payload.items()
-                        if k not in mod_loader.RESERVED_KEYS}
+        mesh_entries = payload.get("meshes", {})
         check(len(mesh_entries) == 2,
               f"both inis' Component0 survive as distinct entries (got {list(mesh_entries)})")
 
@@ -345,8 +344,8 @@ def test_real_mods():
                 check(False, f"{os.path.basename(mod)} failed to load: "
                              f"{payload['error'].strip().splitlines()[-1][:100]}")
             continue
-        for name, entry in payload.items():
-            if name in mod_loader.RESERVED_KEYS or not isinstance(entry, dict):
+        for name, entry in payload.get("meshes", {}).items():
+            if not isinstance(entry, dict):
                 continue
             total_meshes += 1
             srcs = entry.get("sources") or []
@@ -593,7 +592,7 @@ def test_toggle_panel_provenance():
     checked = bad = 0
     for mod in mods:
         payload = mod_loader.load_mod(mod)
-        for section, info in (payload.get("__toggles__") or {}).items():
+        for section, info in (payload.get("controls", {}).get("toggles") or {}).items():
             checked += 1
             ini = info.get("ini")
             if not ini or not os.path.isfile(os.path.join(mod, ini)):

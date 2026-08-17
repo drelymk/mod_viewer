@@ -21,7 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.mod_loader import (_attach_shape_sliders, build_toggle_panel,
-                            load_mod, RESERVED_KEYS, _parse_inis)
+                            load_mod, _parse_inis)
 
 FAILS = []
 
@@ -205,8 +205,7 @@ format = R32_UINT
                 stream.write(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
 
         payload = load_mod(root)
-        meshes = [value for key, value in payload.items()
-                  if key not in RESERVED_KEYS]
+        meshes = list(payload.get("meshes", {}).values())
         check(not payload.get("error") and len(meshes) == 2,
               "root and nested geometry both load from same-named local buffers")
         check({mesh.get("source") for mesh in meshes} == {"root", "nested"},

@@ -3,7 +3,8 @@ and what gates it.
 
 The rest of the READ path lives in siblings and is re-exported here so
 existing `from core.ini_parser import ...` callers keep working:
-    ini_sections.py  file discovery, section parsing, resource records
+    ini_sections.py  section parsing, resource records
+    mod_discovery.py bounded mod-folder INI discovery
     ini_dnf.py       condition -> DNF
     ini_toggles.py   [Key...] cycle toggles, variable defaults
     ini_menu.py      clickable in-game menu slots
@@ -12,8 +13,10 @@ existing `from core.ini_parser import ...` callers keep working:
 import re
 
 from .mesh_builder import POSITION_STRIDE, DEFAULT_UV_OFFSET, _res_get
-from .ini_sections import (SrcLine, extract_resources, find_inis, first_source,
-                           line_source, merge_sections, parse_sections)
+from .ini_sections import (SrcLine, extract_resources, first_source,
+                           line_source, merge_sections, parse_sections,
+                           sections_from_document)
+from .mod_discovery import discover_ini_paths
 from .ini_dnf import (DNF_FALSE, DNF_TRUE, build_bool_alias_map, dnf_and,
                       dnf_not, dnf_or, normalize_dnf, parse_condition_dnf)
 from .ini_menu import extract_menu_toggles, extract_menu_var_names
@@ -22,14 +25,20 @@ from .ini_toggles import (extract_toggle_keys, extract_toggle_var_names,
                           extract_variable_defaults)
 
 __all__ = [
-    "SrcLine", "extract_resources", "find_inis", "first_source", "line_source",
-    "merge_sections", "parse_sections",
+    "SrcLine", "extract_resources", "discover_ini_paths", "find_inis",
+    "first_source", "line_source", "merge_sections", "parse_sections",
+    "sections_from_document",
     "DNF_FALSE", "DNF_TRUE", "build_bool_alias_map", "dnf_and", "dnf_not",
     "dnf_or", "normalize_dnf", "parse_condition_dnf",
     "extract_menu_toggles", "extract_menu_var_names",
     "extract_toggle_keys", "extract_toggle_var_names", "extract_variable_defaults",
     "gating_var_names", "build_draw_groups",
 ]
+
+# Compatibility name retained for tests and third-party scripts.  Internal
+# application code uses the explicitly named discovery function so loading
+# ownership is visible at the call site.
+find_inis = discover_ini_paths
 
 
 def _ib_res_to_component(ib_res):
@@ -59,18 +68,22 @@ _AUX_MAP_CHANNELS = {
 }
 
 
-def gating_var_names(sections, var_prefix=None):
+def gating_var_names(sections, var_prefix=None, *, toggle_keys=None,
+                     menu=None, state_rules=None):
     """Variables worth tracking as per-draw show/hide gates: those a cycle-type
     [Key...] section drives, those an in-game clickable menu mutates, plus
     literal state variables safely derived in [Present]. Other internal state
     vars like $mod_enabled remain deliberately untracked."""
-    return (extract_toggle_var_names(sections, var_prefix=var_prefix)
-            | extract_menu_var_names(sections, var_prefix=var_prefix)
-            | {rule["var"] for rule in extract_state_rules(
-                sections, var_prefix=var_prefix)})
+    toggle_vars = extract_toggle_var_names(
+        sections, var_prefix=var_prefix, toggle_keys=toggle_keys)
+    menu_vars = extract_menu_var_names(
+        sections, var_prefix=var_prefix, menu=menu)
+    state_rules = (state_rules if state_rules is not None else
+                   extract_state_rules(sections, var_prefix=var_prefix))
+    return toggle_vars | menu_vars | {rule["var"] for rule in state_rules}
 
 
-def _scan_sections_for_draws(sections, var_prefix=None):
+def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     """Pass 1 of build_draw_groups: walk every TextureOverride/CommandList
     section and record its buffer refs plus each drawindexed line's gating
     condition (as normalized DNF) and provenance.
@@ -100,7 +113,8 @@ def _scan_sections_for_draws(sections, var_prefix=None):
     re-derives the actual position/texcoord buffers for a reassigned `ib`
     from its component instead of trusting these literal values.
     """
-    toggle_vars = gating_var_names(sections)
+    toggle_vars = (gating_vars if gating_vars is not None else
+                   gating_var_names(sections))
     alias_map = build_bool_alias_map(sections)
     seq_counter = [0]   # unique id per `if` block
     bare_counter = [0]  # unique id per diffuse line reached with an empty cond_stack
@@ -302,36 +316,10 @@ def _scan_sections_for_draws(sections, var_prefix=None):
 
 
 
-def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None):
-    """Each group's `display_name` is the TextureOverride section name minus
-    its "TextureOverride" prefix (e.g. "TextureOverrideBodyA" -> "BodyA") --
-    what the UI shows, always clean. `name`/`label` (the mesh payload's dict
-    key) starts identical but gets a "_2"/"_3"... suffix when it repeats,
-    since payload keys must be unique even though the UI never shows that.
-    `source` tags each group with its originating ini (see
-    app.mod_loader._ini_scope), same as it already does for Toggle keys.
-
-    `seen`, if given, is a dict shared across multiple calls (one per ini in
-    an "AllInOne" mod folder — see app.mod_loader._parse_inis) so two inis
-    reusing a generic name like "Component0" get distinct payload keys
-    instead of the second silently overwriting the first's mesh entry; both
-    still *display* as "Component0" since the per-ini source header already
-    disambiguates them for the user. Defaults to a fresh dict when omitted."""
-    if seen is None:
-        seen = {}
-    sec_info = _scan_sections_for_draws(sections, var_prefix)
-
-    # Some ZZMI shape-key mods bind an empty, writable Resource as vb0 and
-    # populate it in [Present]/CommandList code from a file-backed rest pose:
-    #
-    #   ResourceBodyPosition = copy ResourceBodyPositionBase
-    #
-    # `extract_resources` intentionally contains only file-backed resources,
-    # so remember these explicit copy edges here and follow them whenever a
-    # vertex resource has no filename of its own.  This is provenance from the
-    # INI, not a fuzzy component-name match, and therefore also works for a
-    # component reached by a mid-section `ib =` reassignment.
+def _collect_resource_copy_sources(sections, resources):
+    """Resolve explicit/rest-pose resource copy edges before group building."""
     resource_copy_sources = {}
+
     copy_re = re.compile(
         r'^\s*(Resource\S+)\s*=\s*copy(?:\s+ref)?\s+(Resource\S+)\s*$', re.I)
     for lines in sections.values():
@@ -349,9 +337,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
     # LL/ZZMI skeleton skinning writes a runtime-only vertex buffer from a
     # file-backed position buffer plus the stride-32 blend buffer, then binds
-    # that output with `vb0 = ref Resource...`.  Treat the input position as
-    # the output's viewer rest pose.  Requiring the complete cs-t1/cs-t2/cs-u0
-    # pattern avoids guessing from similarly named resources.
+    # that output with cs-u0. Treat the input position as the rest pose only
+    # when the complete read/write pattern is present.
     cs_read_re = re.compile(r'^\s*cs-t([12])\s*=\s*(?:ref\s+)?(\S+)\s*$', re.I)
     cs_write_re = re.compile(r'^\s*cs-u0\s*=\s*(?:ref\s+)?(\S+)\s*$', re.I)
     for lines in sections.values():
@@ -378,7 +365,24 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 sources = resource_copy_sources.setdefault(output.lower(), [])
                 if all(existing.lower() != position.lower() for existing in sources):
                     sources.append(position)
+    return resource_copy_sources
 
+
+def _select_draw_sections(sec_info, global_ib):
+    """Select TextureOverride sections that can produce viewer geometry."""
+    return [(name, info) for name, info in sec_info.items()
+            if name.startswith("TextureOverride")
+            and (info["ib"] or global_ib)
+            and (info["draws"] or (info["ib"] and not info["handling_skip"]))]
+
+
+def _resolve_component_buffers(sec_info, resources, resource_copy_sources):
+    """Resolve component, hash and WWMI global buffer bindings.
+
+    This stage owns resource provenance and buffer selection.  Group assembly
+    can therefore focus on authored draw history and output records instead of
+    interleaving GIMI, ZZMI and WWMI binding heuristics.
+    """
     vertex_info_cache = {}
 
     def _resolve_vertex_info(res_name, visiting=None):
@@ -389,10 +393,10 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         if cache_key in vertex_info_cache:
             return vertex_info_cache[cache_key]
 
-        ri = _res_get(resources, res_name)
-        if ri.get("filename"):
-            vertex_info_cache[cache_key] = ri
-            return ri
+        resource_info = _res_get(resources, res_name)
+        if resource_info.get("filename"):
+            vertex_info_cache[cache_key] = resource_info
+            return resource_info
 
         visiting = set(visiting or ())
         if cache_key in visiting:
@@ -415,55 +419,73 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         return {}
 
     comp_pos, comp_tc = {}, {}
-    # Index by underscore-delimited hex hash for mods that use _<hash>_ in section names
+    # Index by underscore-delimited hex hash for mods that use _<hash>_ in
+    # section names.
     hash_pos: dict = {}
-    hash_tc:  dict = {}
+    hash_tc: dict = {}
 
-    # Texcoord sections set comp_tc first (highest priority — must win over Blend)
+    # Texcoord sections set comp_tc first (highest priority -- must win over
+    # Blend).
     for name, info in sec_info.items():
-        if not name.startswith("TextureOverride"): continue
+        if not name.startswith("TextureOverride"):
+            continue
         base = name[len("TextureOverride"):]
         if base.endswith("Texcoord"):
             comp = base[:-len("Texcoord")]
-            if info["vb1"]: comp_tc[comp] = info["vb1"]
+            if info["vb1"]:
+                comp_tc[comp] = info["vb1"]
 
-    # Blend and Position sections (lower priority for tc)
+    # Blend and Position sections (lower priority for tc).
     for name, info in sec_info.items():
-        if not name.startswith("TextureOverride"): continue
+        if not name.startswith("TextureOverride"):
+            continue
         base = name[len("TextureOverride"):]
         if base.endswith("Blend"):
             comp = base[:-len("Blend")]
-            if info["vb0"] and comp not in comp_pos: comp_pos[comp] = info["vb0"]
-            # GIMI: *Blend sets vb1 to the blend buffer (stride 32), not texcoord
+            if info["vb0"] and comp not in comp_pos:
+                comp_pos[comp] = info["vb0"]
+            # GIMI: *Blend sets vb1 to the blend buffer (stride 32), not tc.
             if info["vb1"] and comp not in comp_tc:
                 if _res_get(resources, info["vb1"]).get("stride", 0) != 32:
                     comp_tc[comp] = info["vb1"]
         elif base.endswith("Position"):
-            # GIMI: vb0 is in a *Position section, not *Blend
+            # GIMI: vb0 is in a *Position section, not *Blend.
             comp = base[:-len("Position")]
-            if info["vb0"] and comp not in comp_pos: comp_pos[comp] = info["vb0"]
-        # Build hash map; skip vb2 if it's a blend buffer (stride=32, ZZMI format)
-        # so it doesn't shadow the real texcoord in vb1. WWMI uses vb2=TexCoord (stride≠32).
+            if info["vb0"] and comp not in comp_pos:
+                comp_pos[comp] = info["vb0"]
+
+        # Skip vb2 if it's a blend buffer (stride 32, ZZMI format) so it does
+        # not shadow the real texcoord in vb1. WWMI uses vb2=TexCoord.
         h = _extract_hash(name)
         if h:
-            if info["vb0"] and h not in hash_pos: hash_pos[h] = info["vb0"]
-            vb2_stride = _res_get(resources, info["vb2"]).get("stride", 0) if info["vb2"] else 0
-            tc = (info["vb2"] if info["vb2"] and vb2_stride != 32 else None) or info["vb1"]
-            if tc and h not in hash_tc: hash_tc[h] = tc
-    comp_bufs = {c: {"position": comp_pos[c], "texcoord": comp_tc[c]}
-                 for c in comp_pos if c in comp_tc}
+            if info["vb0"] and h not in hash_pos:
+                hash_pos[h] = info["vb0"]
+            vb2_stride = (_res_get(resources, info["vb2"]).get("stride", 0)
+                          if info["vb2"] else 0)
+            tc = ((info["vb2"] if info["vb2"] and vb2_stride != 32 else None)
+                  or info["vb1"])
+            if tc and h not in hash_tc:
+                hash_tc[h] = tc
 
-    # pass 2b: discover global IB/position/texcoord from CommandList sections (WWMI)
+    comp_bufs = {component: {"position": comp_pos[component],
+                             "texcoord": comp_tc[component]}
+                 for component in comp_pos if component in comp_tc}
+
+    # Discover global IB/position/texcoord from CommandList sections (WWMI).
     global_ib, global_pos, global_tc = None, None, None
     for name, info in sec_info.items():
-        if not name.startswith("CommandList"): continue
-        if info["ib"]  and not global_ib:  global_ib  = info["ib"]
-        if info["vb0"] and not global_pos: global_pos = info["vb0"]
-        tc = info["vb2"] or info["vb1"]  # vb2=TexCoord, vb1=Vector in WWMI
-        if tc and not global_tc: global_tc = tc
+        if not name.startswith("CommandList"):
+            continue
+        if info["ib"] and not global_ib:
+            global_ib = info["ib"]
+        if info["vb0"] and not global_pos:
+            global_pos = info["vb0"]
+        tc = info["vb2"] or info["vb1"]
+        if tc and not global_tc:
+            global_tc = tc
 
-    # If global_pos is a computed buffer (no filename, e.g. ResourceShapeKeyedPosition),
-    # fall back to the nearest file-backed R32G32B32 position buffer (WWMI shape keys).
+    # If global_pos is computed (e.g. ResourceShapeKeyedPosition), fall back
+    # to the nearest file-backed R32G32B32 position buffer.
     if global_pos and not _res_get(resources, global_pos).get("filename"):
         for res_name, res_info in resources.items():
             fmt = res_info.get("format", "")
@@ -471,16 +493,69 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 global_pos = res_name
                 break
 
+    return {
+        "resolve_vertex_info": _resolve_vertex_info,
+        "component_buffers": comp_bufs,
+        "component_positions": comp_pos,
+        "component_texcoords": comp_tc,
+        "hash_positions": hash_pos,
+        "hash_texcoords": hash_tc,
+        "global_ib": global_ib,
+        "global_position": global_pos,
+        "global_texcoord": global_tc,
+    }
+
+
+def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
+                      gating_vars=None):
+    """Each group's `display_name` is the TextureOverride section name minus
+    its "TextureOverride" prefix (e.g. "TextureOverrideBodyA" -> "BodyA") --
+    what the UI shows, always clean. `name`/`label` (the mesh payload's dict
+    key) starts identical but gets a "_2"/"_3"... suffix when it repeats,
+    since payload keys must be unique even though the UI never shows that.
+    `source` tags each group with its originating ini (see
+    app.mod_loader._ini_scope), same as it already does for Toggle keys.
+
+    `seen`, if given, is a dict shared across multiple calls (one per ini in
+    an "AllInOne" mod folder — see app.mod_loader._parse_inis) so two inis
+    reusing a generic name like "Component0" get distinct payload keys
+    instead of the second silently overwriting the first's mesh entry; both
+    still *display* as "Component0" since the per-ini source header already
+    disambiguates them for the user. Defaults to a fresh dict when omitted."""
+    if seen is None:
+        seen = {}
+    sec_info = _scan_sections_for_draws(sections, var_prefix, gating_vars)
+
+    # Some ZZMI shape-key mods bind an empty, writable Resource as vb0 and
+    # populate it in [Present]/CommandList code from a file-backed rest pose:
+    #
+    #   ResourceBodyPosition = copy ResourceBodyPositionBase
+    #
+    # `extract_resources` intentionally contains only file-backed resources,
+    # so remember these explicit copy edges here and follow them whenever a
+    # vertex resource has no filename of its own.  This is provenance from the
+    # INI, not a fuzzy component-name match, and therefore also works for a
+    # component reached by a mid-section `ib =` reassignment.
+    resource_copy_sources = _collect_resource_copy_sources(sections, resources)
+
+    resolved_buffers = _resolve_component_buffers(
+        sec_info, resources, resource_copy_sources)
+    resolve_vertex_info = resolved_buffers["resolve_vertex_info"]
+    comp_bufs = resolved_buffers["component_buffers"]
+    comp_pos = resolved_buffers["component_positions"]
+    comp_tc = resolved_buffers["component_texcoords"]
+    hash_pos = resolved_buffers["hash_positions"]
+    hash_tc = resolved_buffers["hash_texcoords"]
+    global_ib = resolved_buffers["global_ib"]
+    global_pos = resolved_buffers["global_position"]
+    global_tc = resolved_buffers["global_texcoord"]
     # pass 3: collect draw sections.
     # A section with `ib=` but no drawindexed lines normally lets the game's
     # original (whole-buffer) draw call proceed unmodified, just against the
     # new ib -- so it's kept as an implicit full-buffer draw. But `handling =
     # skip` means the opposite: the original draw call itself is suppressed,
     # so with no drawindexed lines to replace it, nothing is drawn at all.
-    draw_secs = [(n, i) for n, i in sec_info.items()
-                 if n.startswith("TextureOverride")
-                 and (i["ib"] or global_ib)
-                 and (i["draws"] or (i["ib"] and not i["handling_skip"]))]
+    draw_secs = _select_draw_sections(sec_info, global_ib)
     if not draw_secs: return []
 
     # pass 4: build group dicts
@@ -499,7 +574,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         return diffuse_file_cache[res_name]
 
     def _resolve_vertex_res(res_name):
-        ri = _resolve_vertex_info(res_name)
+        ri = resolve_vertex_info(res_name)
         return ri.get("filename"), ri.get("stride")
 
     def _lookup_comp_value(mapping, comp):
@@ -536,7 +611,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             texcoord = ((info["vb2"] if info["vb2"] and vb2_stride != 32 else None)
                         or info["vb1"] or _lookup_comp_value(comp_tc, comp))
             if (position and texcoord
-                    and _resolve_vertex_info(position).get("filename")):
+                    and resolve_vertex_info(position).get("filename")):
                 buf = {"position": position, "texcoord": texcoord}
         if not buf:
             h = _extract_hash(sec_name) or _extract_hash(ib_res)
@@ -546,7 +621,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             buf = {"position": global_pos, "texcoord": global_tc}  # WWMI fallback
         if not buf: continue
 
-        pos_ri  = _resolve_vertex_info(buf["position"])
+        pos_ri  = resolve_vertex_info(buf["position"])
         tc_ri   = _res_get(resources, buf["texcoord"])
         ib_ri   = _res_get(resources, ib_res)
         diff_ri = _res_get(resources, info["diffuse"]) if info["diffuse"] else {}

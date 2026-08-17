@@ -40,7 +40,7 @@ def _possible_groups(groups):
     return out
 
 
-def extract_state_rules(sections, var_prefix=None):
+def extract_state_rules(sections, var_prefix=None, canonical_vars=None):
     """Return ordered literal assignments guarded by conditions in Present.
 
     This intentionally models only deterministic numeric assignments. It is
@@ -50,7 +50,8 @@ def extract_state_rules(sections, var_prefix=None):
     lines = next((v for k, v in sections.items() if k.lower() == "present"), None)
     if not lines:
         return []
-    canon = canonical_var_names(sections)
+    canon = (canonical_vars if canonical_vars is not None
+             else canonical_var_names(sections))
     tracked = set(canon.values())
     aliases = build_bool_alias_map(sections)
     stack = []

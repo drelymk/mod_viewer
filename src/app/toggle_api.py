@@ -16,7 +16,7 @@ unexpected becomes {"error": "<full traceback>"} for debugging.
 import os
 import traceback
 
-from core.ini_parser import find_inis
+from core.mod_discovery import discover_ini_paths
 from core import record_editor
 from core import toggle_editor as te
 from . import edit_session
@@ -32,8 +32,9 @@ def _ini_path(mod_dir, ini_rel):
     """Resolve a payload's relative ini name back to an absolute path,
     constrained to actually be one of this mod folder's own ini files (never
     an arbitrary path the JS side might pass in)."""
+    paths = edit_session.document_paths(mod_dir) or discover_ini_paths(mod_dir)
     candidates = {os.path.relpath(p, mod_dir).replace(os.sep, "/"): p
-                  for p in find_inis(mod_dir)}
+                  for p in paths}
     name = str(ini_rel or "").replace("\\", "/")
     path = candidates.get(name)
     if path is None:
@@ -59,7 +60,8 @@ def list_source_inis(mod_dir):
     the list from an already-loaded payload."""
     return [{"value": os.path.relpath(p, mod_dir).replace(os.sep, "/"),
              "label": os.path.relpath(p, mod_dir).replace(os.sep, "/")}
-            for p in find_inis(mod_dir)]
+            for p in (edit_session.document_paths(mod_dir)
+                      or discover_ini_paths(mod_dir))]
 
 
 def get_toggle_details(mod_dir, ini_rel, section_name):
@@ -158,7 +160,9 @@ def export_changes(mod_dir):
     pending_new = edit_session.new_sections_for(mod_dir)
     if pending_new:
         unwired = mod_loader.unwired_pending_sections(
-            mod_dir, edit_session.overrides_for(mod_dir), pending_new)
+            mod_dir, edit_session.overrides_for(mod_dir), pending_new,
+            ini_paths=edit_session.document_paths(mod_dir),
+            documents=edit_session.documents_for(mod_dir))
         if unwired:
             names = ", ".join(f"{sec} ({ini})" for ini, secs in unwired.items() for sec in secs)
             return {"error": "Can't export yet: newly-added toggle(s) aren't wired to any "
@@ -216,7 +220,10 @@ def record_toggle(mod_dir, ini_rel, section_name, position_lines):
         sess, key, doc, was_pending, snapshot = edit_session.begin(mod_dir, path)
         try:
             result = record_editor.record_toggle(doc, section_name, position_lines)
-            mismatches = record_editor.verify_recording(path, result, text=doc.to_string())
+            # Pass the authoritative staged text; verify_recording converts it
+            # to an IniDocument projection instead of invoking parse_sections.
+            mismatches = record_editor.verify_recording(path, result,
+                                                         text=doc.to_string())
         except BaseException:
             edit_session.rollback(sess, key, was_pending, snapshot, path)
             raise

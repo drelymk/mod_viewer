@@ -50,7 +50,9 @@ def _path_key(path):
     return os.path.normcase(os.path.abspath(path))
 
 
-def _load_document(path, override=None):
+def _load_document(path, override=None, document=None):
+    if document is not None:
+        return document
     return (IniDocument.from_string(override, path=path)
             if override is not None else IniDocument.load(path))
 
@@ -244,7 +246,7 @@ def _inventory_files(mod_dir):
                 yield os.path.join(base, name)
 
 
-def analyze_mod(mod_dir, ini_paths=None, overrides=None):
+def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None):
     """Return a JSON-ready health report for active INIs in ``mod_dir``.
 
     Any staged text in ``overrides`` is analyzed instead of the disk version.
@@ -252,6 +254,7 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None):
     from being checked.
     """
     overrides = overrides or {}
+    documents = documents or {}
     if ini_paths is None:
         ini_paths = [os.path.join(mod_dir, name) for name in sorted(os.listdir(mod_dir))
                      if name.lower().endswith(".ini")
@@ -261,7 +264,10 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None):
     for path in ini_paths:
         ini_rel = _relative(path, mod_dir)
         try:
-            doc = _load_document(path, overrides.get(path))
+            doc = documents.get(path)
+            if doc is None:
+                doc = documents.get(_path_key(path))
+            doc = _load_document(path, overrides.get(path), document=doc)
         except (OSError, UnicodeError) as exc:
             issues.append(_issue(
                 "unreadable_ini", "error", "ini",

@@ -237,9 +237,9 @@ def test_health_survives_geometry_failure():
         _write(os.path.join(tmp, "mod.ini"), "[Present]\nendif\n")
         result = mod_loader.load_mod(tmp)
 
-    check("error" in result and "__health__" in result,
+    check("error" in result and "health" in result,
           "geometry failure still returns the health report")
-    check("malformed_condition_nesting" in _codes(result["__health__"]),
+    check("malformed_condition_nesting" in _codes(result["health"]),
           "failure-path health report retains INI findings")
 
 
