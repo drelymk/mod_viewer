@@ -873,6 +873,68 @@ def test_runtime_position_copy_resolution():
               f"(got {group['draws'][1].get('position_file')})")
 
 
+LL_SKELETON_OUTPUT_INI = """[TextureOverrideBodyBlend]
+vb2 = ResourceBodyBlend
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideBodyA]
+run = CommandListBodyA
+
+[CommandListBodyA]
+ib = ResourceBodyAIB
+run = CommandListLLSkeletonSkin_Body
+drawindexed = 3, 0, 0
+
+[CommandListLLSkeletonSkin_Body]
+cs-t1 = ref ResourceBodyPosition
+cs-t2 = ref ResourceBodyBlend
+cs-u0 = ref ResourceLLSkelOutput_Body
+cs-u0 = null
+cs-t1 = null
+cs-t2 = null
+vb0 = ref ResourceLLSkelOutput_Body
+
+[ResourceBodyPosition]
+filename = bodyPosition.buf
+stride = 40
+
+[ResourceBodyBlend]
+filename = bodyBlend.buf
+stride = 32
+
+[ResourceBodyTexcoord]
+filename = bodyTexcoord.buf
+stride = 24
+
+[ResourceLLSkelOutput_Body]
+
+[ResourceBodyAIB]
+filename = bodyA.ib
+format = DXGI_FORMAT_R32_UINT
+"""
+
+
+def test_ll_skeleton_compute_output_uses_rest_position():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", LL_SKELETON_OUTPUT_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+
+        check(len(groups) == 1,
+              f"LL compute-skinned body is retained (got {len(groups)})")
+        if not groups:
+            return
+        group = groups[0]
+        check(group["position_file"] == "bodyPosition.buf",
+              f"runtime LL output resolves to its cs-t1 rest position "
+              f"(got {group['position_file']})")
+        check(group["texcoord_file"] == "bodyTexcoord.buf",
+              f"runtime LL output keeps the sibling texcoord binding "
+              f"(got {group['texcoord_file']})")
+
+
 # ── `handling = skip` with no `drawindexed` line at all means "suppress the
 #    original draw and replace it with nothing", NOT "draw the whole ib".
 #    Only a section that omits `handling = skip` gets the implicit
@@ -1533,6 +1595,7 @@ if __name__ == "__main__":
                test_cross_ib_vb_reassignment_ini_parser,
                test_cross_ib_vb_reassignment_mesh_builder,
                test_runtime_position_copy_resolution,
+               test_ll_skeleton_compute_output_uses_rest_position,
                test_handling_skip_with_no_drawindexed_draws_nothing,
                test_component_name_ending_in_uppercase_abbreviation,
                test_run_inlines_nested_commandlist_draws,

@@ -41,7 +41,8 @@ from core.ini_document import IniDocument
 
 
 class _Session:
-    __slots__ = ("mod_dir", "docs", "baselines", "dirty", "new_sections")
+    __slots__ = ("mod_dir", "docs", "baselines", "dirty", "new_sections",
+                 "present_names_baseline")
 
     def __init__(self, mod_dir):
         self.mod_dir = mod_dir
@@ -50,9 +51,11 @@ class _Session:
         self.dirty = set()      # ini basenames whose text differs from baseline
         self.new_sections = {}  # ini basename -> {section name, ...} added via add_toggle
                                  # this session and not yet exported -- see mark_added
+        self.present_names_baseline = _NO_METADATA_BASELINE
 
 
 _session = None
+_NO_METADATA_BASELINE = object()
 
 
 def _same_mod(mod_dir):
@@ -66,6 +69,11 @@ def _get_or_create(mod_dir):
     return _session
 
 
+def _key(mod_dir, path):
+    """Stable, browser-safe identity for an INI, including nested folders."""
+    return os.path.relpath(os.path.abspath(path), os.path.abspath(mod_dir)).replace(os.sep, "/")
+
+
 def load_documents(mod_dir, ini_paths):
     """Load every active INI into the authoritative in-memory session.
 
@@ -76,7 +84,7 @@ def load_documents(mod_dir, ini_paths):
     """
     sess = _get_or_create(mod_dir)
     for path in ini_paths:
-        key = os.path.basename(path)
+        key = _key(mod_dir, path)
         if key in sess.docs:
             continue
         doc = IniDocument.load(path)
@@ -94,7 +102,7 @@ def begin(mod_dir, ini_path):
     to `commit()` on success or `rollback()` on failure.
     """
     sess = _get_or_create(mod_dir)
-    key = os.path.basename(ini_path)
+    key = _key(mod_dir, ini_path)
     if key not in sess.docs:
         load_documents(mod_dir, [ini_path])
     was_pending = key in sess.dirty
@@ -124,14 +132,17 @@ def rollback(sess, key, was_pending, snapshot, ini_path):
 
 def peek(mod_dir, ini_path):
     """Return the authoritative document for a read-only query."""
-    if not _same_mod(mod_dir) or os.path.basename(ini_path) not in _session.docs:
+    key = _key(mod_dir, ini_path)
+    if not _same_mod(mod_dir) or key not in _session.docs:
         load_documents(mod_dir, [ini_path])
-    return _session.docs[os.path.basename(ini_path)]
+    return _session.docs[key]
 
 
 def has_pending(mod_dir):
     """True if mod_dir has at least one staged, not-yet-exported edit."""
-    return _same_mod(mod_dir) and bool(_session.dirty)
+    return (_same_mod(mod_dir)
+            and (bool(_session.dirty)
+                 or _session.present_names_baseline is not _NO_METADATA_BASELINE))
 
 
 def list_documents(mod_dir):
@@ -150,8 +161,9 @@ def document(mod_dir, ini_name):
     """Return a loaded document by basename, rejecting browser-made paths."""
     if not _same_mod(mod_dir):
         raise KeyError("no INI session is loaded for this mod")
-    key = os.path.basename(ini_name or "")
-    if key != ini_name or key not in _session.docs:
+    key = str(ini_name or "").replace("\\", "/")
+    if (not key or os.path.isabs(key) or key.startswith("../")
+            or "/../" in f"/{key}/" or key not in _session.docs):
         raise KeyError(f"{ini_name!r} is not an active INI in this mod")
     return key, _session.docs[key]
 
@@ -196,7 +208,7 @@ def mark_added(mod_dir, ini_path, section_name):
     mod_loader.build_toggle_panel / unwired_pending_sections).
     """
     sess = _get_or_create(mod_dir)
-    sess.new_sections.setdefault(os.path.basename(ini_path), set()).add(section_name)
+    sess.new_sections.setdefault(_key(mod_dir, ini_path), set()).add(section_name)
 
 
 def rename_added(mod_dir, ini_path, old_name, new_name):
@@ -204,7 +216,7 @@ def rename_added(mod_dir, ini_path, old_name, new_name):
     from edit_toggle (which returns the possibly-changed section name)."""
     if old_name == new_name or not _same_mod(mod_dir):
         return
-    names = _session.new_sections.get(os.path.basename(ini_path))
+    names = _session.new_sections.get(_key(mod_dir, ini_path))
     if names and old_name in names:
         names.discard(old_name)
         names.add(new_name)
@@ -214,7 +226,7 @@ def mark_removed(mod_dir, ini_path, section_name):
     """Stop tracking a section removed via delete_toggle."""
     if not _same_mod(mod_dir):
         return
-    names = _session.new_sections.get(os.path.basename(ini_path))
+    names = _session.new_sections.get(_key(mod_dir, ini_path))
     if names:
         names.discard(section_name)
 
@@ -236,10 +248,26 @@ def overrides_for(mod_dir):
     return {doc.path: doc.to_string() for doc in _session.docs.values()}
 
 
+def stage_present_metadata(mod_dir):
+    """Remember PRESENT names before their first staged authoring change."""
+    from . import metadata
+    sess = _get_or_create(mod_dir)
+    if sess.present_names_baseline is _NO_METADATA_BASELINE:
+        sess.present_names_baseline = metadata.all_present_names(mod_dir)
+
+
+def _restore_present_metadata(sess):
+    if sess.present_names_baseline is _NO_METADATA_BASELINE:
+        return
+    from . import metadata
+    metadata.restore_present_names(sess.mod_dir, sess.present_names_baseline)
+
+
 def discard(mod_dir):
     """Drop every pending edit for mod_dir without writing anything."""
     global _session
     if _same_mod(mod_dir):
+        _restore_present_metadata(_session)
         _session = None
 
 
@@ -251,7 +279,10 @@ def export(mod_dir):
     Returns {"saved": [ini basename, ...], "failed": [{"ini": ..., "error":
     ...}, ...]}.
     """
-    if not _same_mod(mod_dir) or not _session.dirty:
+    if not _same_mod(mod_dir):
+        return {"saved": [], "failed": []}
+    if not _session.dirty:
+        _session.present_names_baseline = _NO_METADATA_BASELINE
         return {"saved": [], "failed": []}
 
     saved, failed = [], []
@@ -265,4 +296,6 @@ def export(mod_dir):
             _session.new_sections.pop(key, None)
         except Exception as e:
             failed.append({"ini": key, "error": str(e)})
+    if not _session.dirty:
+        _session.present_names_baseline = _NO_METADATA_BASELINE
     return {"saved": saved, "failed": failed}

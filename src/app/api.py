@@ -12,7 +12,8 @@ import webview
 from core.mesh_builder import encode_texture_file
 from core.ini_sections import find_inis
 
-from . import edit_session, ini_api, metadata, mod_loader, server, toggle_api
+from . import (edit_session, ini_api, metadata, mod_loader, present_api,
+               server, toggle_api)
 
 
 class ModViewerAPI:
@@ -73,6 +74,7 @@ class ModViewerAPI:
             saved_metadata = metadata.load(folder_path)
             result["__mesh_names__"] = saved_metadata.get("mesh_names", {})
             metadata.hydrate_textures(folder_path, result)
+            metadata.hydrate_present(folder_path, result.get("__present__"))
             server.publish_payload_geometry(result)
         return result
 
@@ -112,6 +114,29 @@ class ModViewerAPI:
 
     def delete_toggle(self, folder_path, ini_rel, section_name):
         return toggle_api.delete_toggle(self._folder(folder_path), ini_rel, section_name)
+
+    # -- PRESENT preset cycle -----------------------------------------------
+
+    def add_present(self, folder_path, key_combo, back_combo, snapshots):
+        return present_api.add_present(
+            self._folder(folder_path), key_combo, back_combo, snapshots)
+
+    def edit_present(self, folder_path, key_combo, back_combo):
+        return present_api.edit_present(
+            self._folder(folder_path), key_combo, back_combo)
+
+    def delete_present(self, folder_path):
+        return present_api.delete_present(self._folder(folder_path))
+
+    def capture_present(self, folder_path, snapshots, name, position=None,
+                        allow_duplicate=False):
+        return present_api.capture_present(
+            self._folder(folder_path), snapshots, name, position,
+            allow_duplicate)
+
+    def delete_present_position(self, folder_path, position):
+        return present_api.delete_present_position(
+            self._folder(folder_path), position)
 
     # -- export / discard ----------------------------------------------------
 

@@ -6,18 +6,25 @@ let resolveActive = null;
 
 function close(result) {
   $('dialog-backdrop').classList.remove('show');
+  $('dialog-input').style.display = 'none';
   const resolve = resolveActive;
   resolveActive = null;
   if (resolve) resolve(result);
 }
 
-function open(message, { cancelable } = {}) {
+function open(message, { cancelable, inputValue } = {}) {
   return new Promise((resolve) => {
     resolveActive = resolve;
     $('dialog-message').textContent = message;
     $('dialog-cancel').style.display = cancelable ? '' : 'none';
+    const input = $('dialog-input');
+    const hasInput = inputValue !== undefined;
+    input.style.display = hasInput ? 'block' : 'none';
+    input.value = hasInput ? inputValue : '';
+    $('dialog-ok').textContent = hasInput ? 'Yes' : 'OK';
     $('dialog-backdrop').classList.add('show');
-    $('dialog-ok').focus();
+    (hasInput ? input : $('dialog-ok')).focus();
+    if (hasInput) input.select();
   });
 }
 
@@ -29,6 +36,12 @@ export function alertDialog(message) {
 /** Drop-in replacement for window.confirm() — resolves true/false. */
 export function confirmDialog(message) {
   return open(message, { cancelable: true });
+}
+
+/** Confirm with an editable name; resolves the trimmed name or null. */
+export function inputConfirmDialog(message, value) {
+  return open(message, { cancelable: true, inputValue: value })
+    .then((confirmed) => confirmed ? $('dialog-input').value.trim() : null);
 }
 
 $('dialog-ok').addEventListener('click', () => close(true));

@@ -135,18 +135,21 @@ def _scan_sections_for_draws(sections, var_prefix=None):
             if low == "endif":
                 if cond_stack: cond_stack.pop()
                 continue
-            m = re.match(r"vb0\s*=\s*(\S+)", line, re.I)
+            m = re.match(r"vb0\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if m:
-                if not info["vb0"]: info["vb0"] = m.group(1)
-                info["_cur_vb0"] = m.group(1)
-            m = re.match(r"vb1\s*=\s*(\S+)", line, re.I)
+                value = None if m.group(1).lower() == "null" else m.group(1)
+                if value and not info["vb0"]: info["vb0"] = value
+                info["_cur_vb0"] = value
+            m = re.match(r"vb1\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if m:
-                if not info["vb1"]: info["vb1"] = m.group(1)
-                info["_cur_vb1"] = m.group(1)
-            m = re.match(r"vb2\s*=\s*(\S+)", line, re.I)
+                value = None if m.group(1).lower() == "null" else m.group(1)
+                if value and not info["vb1"]: info["vb1"] = value
+                info["_cur_vb1"] = value
+            m = re.match(r"vb2\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if m:
-                if not info["vb2"]: info["vb2"] = m.group(1)
-                info["_cur_vb2"] = m.group(1)
+                value = None if m.group(1).lower() == "null" else m.group(1)
+                if value and not info["vb2"]: info["vb2"] = value
+                info["_cur_vb2"] = value
             m = re.match(r"ib\s*=\s*(\S+)", line, re.I)
             if m:
                 if not info["ib"]: info["ib"] = m.group(1)
@@ -298,6 +301,38 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             if all(existing.lower() != copy_source.lower() for existing in sources):
                 sources.append(copy_source)
 
+    # LL/ZZMI skeleton skinning writes a runtime-only vertex buffer from a
+    # file-backed position buffer plus the stride-32 blend buffer, then binds
+    # that output with `vb0 = ref Resource...`.  Treat the input position as
+    # the output's viewer rest pose.  Requiring the complete cs-t1/cs-t2/cs-u0
+    # pattern avoids guessing from similarly named resources.
+    cs_read_re = re.compile(r'^\s*cs-t([12])\s*=\s*(?:ref\s+)?(\S+)\s*$', re.I)
+    cs_write_re = re.compile(r'^\s*cs-u0\s*=\s*(?:ref\s+)?(\S+)\s*$', re.I)
+    for lines in sections.values():
+        cs_inputs = {}
+        for raw in lines:
+            line = raw.split(";", 1)[0].strip()
+            match = cs_read_re.match(line)
+            if match:
+                slot, res_name = match.groups()
+                if res_name.lower() == "null":
+                    cs_inputs.pop(slot, None)
+                else:
+                    cs_inputs[slot] = res_name
+                continue
+            match = cs_write_re.match(line)
+            if not match or match.group(1).lower() == "null":
+                continue
+            output = match.group(1)
+            position = cs_inputs.get("1")
+            blend = cs_inputs.get("2")
+            if (position and blend
+                    and _res_get(resources, position).get("filename")
+                    and _res_get(resources, blend).get("stride") == 32):
+                sources = resource_copy_sources.setdefault(output.lower(), [])
+                if all(existing.lower() != position.lower() for existing in sources):
+                    sources.append(position)
+
     vertex_info_cache = {}
 
     def _resolve_vertex_info(res_name, visiting=None):
@@ -421,16 +456,19 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         ri = _resolve_vertex_info(res_name)
         return ri.get("filename"), ri.get("stride")
 
-    def _lookup_comp_buf(comp):
-        buf = comp_bufs.get(comp)
-        if not buf:
+    def _lookup_comp_value(mapping, comp):
+        value = mapping.get(comp)
+        if not value:
             c2 = re.sub(r"[A-Za-z]+$", "", comp)
-            if c2 and c2 != comp: buf = comp_bufs.get(c2)
-        if not buf:
+            if c2 and c2 != comp: value = mapping.get(c2)
+        if not value:
             # Strip last CamelCase word.
             c2 = re.sub(r"(?<=.)[A-Z][a-z]+$", "", comp)
-            if c2 and c2 != comp: buf = comp_bufs.get(c2)
-        return buf
+            if c2 and c2 != comp: value = mapping.get(c2)
+        return value
+
+    def _lookup_comp_buf(comp):
+        return _lookup_comp_value(comp_bufs, comp)
 
     groups: list = []
     for sec_name, info in draw_secs:
@@ -442,6 +480,18 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         ib_res = info["ib"] or global_ib
         comp   = _ib_res_to_component(ib_res)
         buf    = _lookup_comp_buf(comp)
+        if not buf:
+            # Some compute-skinned ZZMI components bind their runtime vb0 only
+            # inside the draw CommandList, while the sibling *Texcoord section
+            # still owns the UV buffer.  Combine those two authored bindings.
+            position = info["vb0"] or _lookup_comp_value(comp_pos, comp)
+            vb2_stride = (_res_get(resources, info["vb2"]).get("stride", 0)
+                          if info["vb2"] else 0)
+            texcoord = ((info["vb2"] if info["vb2"] and vb2_stride != 32 else None)
+                        or info["vb1"] or _lookup_comp_value(comp_tc, comp))
+            if (position and texcoord
+                    and _resolve_vertex_info(position).get("filename")):
+                buf = {"position": position, "texcoord": texcoord}
         if not buf:
             h = _extract_hash(sec_name) or _extract_hash(ib_res)
             if h and h in hash_pos and h in hash_tc:

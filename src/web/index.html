@@ -93,6 +93,15 @@
 </div>
 
 <div id="right-dock">
+  <div id="present-panel">
+    <div class="panel-hdr">
+      <span class="group-toggle">&#9660;</span>
+      <h3>Present</h3>
+      <button id="present-action-btn" class="icon-btn" title="Add PRESENT">+</button>
+    </div>
+    <div id="present-list"></div>
+  </div>
+
   <div id="toggle-panel">
     <div class="panel-hdr">
       <span class="group-toggle">▼</span>
@@ -108,6 +117,27 @@
       <h3>Menu Toggle</h3>
     </div>
     <div id="menu-list"></div>
+  </div>
+</div>
+
+<div id="present-modal-backdrop" class="modal-backdrop">
+  <div class="modal">
+    <h4 id="pm-title">Add PRESENT</h4>
+    <div id="pm-error" class="modal-error"></div>
+    <form id="pm-form">
+      <label class="modal-field">
+        <span>Key</span>
+        <input id="pm-key" type="text" autocomplete="off" placeholder="e.g. p or ctrl p"/>
+      </label>
+      <label class="modal-field">
+        <span>Back key (optional)</span>
+        <input id="pm-back" type="text" autocomplete="off"/>
+      </label>
+      <div class="modal-actions">
+        <button type="button" id="pm-cancel">Cancel</button>
+        <button type="submit" id="pm-save">Save</button>
+      </div>
+    </form>
   </div>
 </div>
 
@@ -210,6 +240,7 @@
 <div id="dialog-backdrop" class="dialog-backdrop">
   <div class="dialog-box">
     <div id="dialog-message" class="dialog-message"></div>
+    <input id="dialog-input" class="dialog-input" type="text" autocomplete="off"/>
     <div class="modal-actions">
       <button type="button" id="dialog-cancel">Cancel</button>
       <button type="button" id="dialog-ok">OK</button>

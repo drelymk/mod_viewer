@@ -2,6 +2,7 @@
 // deliberately separate boundary that writes physical files.
 
 import { alertDialog, confirmDialog } from './dialogs.js';
+import { registerIniHighlightMode } from './ini-highlight.js';
 
 const $ = (id) => document.getElementById(id);
 let modPath = null;
@@ -10,8 +11,9 @@ let loadedText = '';
 let onApplied = null;
 const textEditor = $('ini-editor-text');
 window.ace.config.set('basePath', 'lib/ace');
+registerIniHighlightMode();
 const iniEditor = window.ace.edit(textEditor, {
-  mode: 'ace/mode/ini',
+  mode: 'ace/mode/mod_viewer_ini',
   theme: 'ace/theme/tomorrow_night',
   fontFamily: 'Consolas, "Courier New", monospace',
   fontSize: 12,

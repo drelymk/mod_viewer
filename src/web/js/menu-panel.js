@@ -65,7 +65,7 @@ function buildMenuItem(info) {
       if (guardHolds(e.when)) setToggleValue(e.var, e.value);
     }
     refreshAll();
-    refreshValues();
+    refreshMenuValues();
   });
 
   item.append(btn, nameSpan, valSpan);
@@ -101,13 +101,18 @@ function buildShapeSlider(info) {
     refreshAll();
   });
   item.append(nameSpan, input, valSpan);
-  return { item, sync: () => { valSpan.textContent = Number(getToggleValue(info.var)).toFixed(2); } };
+  return { item, sync: () => {
+    const value = getToggleValue(info.var);
+    if (value === undefined) return;
+    input.value = value;
+    valSpan.textContent = Number(input.value).toFixed(2);
+  } };
 }
 
 // Cycling one slot can change another slot's variable via a mutual-exclusion
 // rule, so every displayed value is re-read after any click.
 let syncers = [];
-function refreshValues() {
+export function refreshMenuValues() {
   syncers.forEach((fn) => fn());
 }
 

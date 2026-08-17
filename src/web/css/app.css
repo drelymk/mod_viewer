@@ -147,13 +147,13 @@ body {
 }
 
 /* ── shared floating panel chrome ────────────────────────────────────────── */
-#sidebar, #camera-panel, #toggle-panel, #tool-panel, #menu-panel {
+#sidebar, #camera-panel, #present-panel, #toggle-panel, #tool-panel, #menu-panel {
   display: none; background: rgba(13,17,23,.88); border: 1px solid #30363d;
   border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(8px);
 }
 #sidebar {
   box-sizing: border-box; width: 288px; max-width: min(288px, calc(50vw - 36px));
-  max-height: calc(100vh - 104px); overflow-y: auto;
+  max-height: calc(100vh - 104px); overflow-x: hidden; overflow-y: auto;
 }
 #camera-panel { min-width: 166px; padding: 9px 10px; }
 #camera-buttons { display: grid; grid-template-columns: repeat(3, 44px); gap: 6px; }
@@ -177,11 +177,20 @@ body {
 #tool-buttons > #flip-btn, #tool-buttons > #reset-view-btn { display: none; }
 /* min-height:0 lets a tall panel scroll instead of pushing the other one off
  * the bottom of the dock. */
-#toggle-panel, #menu-panel {
+#present-panel, #toggle-panel, #menu-panel {
   box-sizing: border-box; width: 316px; max-width: min(316px, calc(50vw - 24px));
-  overflow-y: auto; min-height: 0;
+  overflow-x: hidden; overflow-y: auto; min-height: 0;
 }
-#sidebar h3, #camera-panel h3, #toggle-panel h3, #tool-panel h3, #menu-panel h3 {
+/* PRESENT contains one fixed logical cycle, so keep its natural minimum
+ * content height and give the remaining dock space to the growing panels. */
+#present-panel { flex-shrink: 0; overflow-y: hidden; }
+/* A tall sibling can otherwise flex-shrink a collapsed panel below the height
+ * of its own header, leaving a vertical scrollbar beside an empty body. */
+#toggle-panel:has(> #toggle-list.collapsed),
+#menu-panel:has(> #menu-list.collapsed) {
+  flex-shrink: 0; overflow-y: hidden;
+}
+#sidebar h3, #camera-panel h3, #present-panel h3, #toggle-panel h3, #tool-panel h3, #menu-panel h3 {
   font-size: 10px; color: #8b949e; text-transform: uppercase;
   letter-spacing: .1em; margin: 0; flex: 1;
 }
@@ -216,7 +225,7 @@ body {
 .nav-gizmo-icon .nav-y { stroke: #67c96b; fill: #67c96b; }
 .nav-gizmo-icon .nav-z { stroke: #64a5f5; fill: #64a5f5; }
 .panel-hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; cursor: pointer; }
-#mesh-list.collapsed, #toggle-list.collapsed, #menu-list.collapsed { display: none; }
+#mesh-list.collapsed, #present-list.collapsed, #toggle-list.collapsed, #menu-list.collapsed { display: none; }
 .icon-btn {
   background: #21262d; border: 1px solid #30363d; color: #e6edf3; border-radius: 4px;
   width: 20px; height: 20px; font-size: 13px; line-height: 1; cursor: pointer;
@@ -304,6 +313,19 @@ body {
 
 /* ── toggle panel (right) ────────────────────────────────────────────────── */
 #toggle-list { display: flex; flex-direction: column; gap: 10px; }
+#present-list { display: flex; flex-direction: column; gap: 8px; }
+.present-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.present-buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.present-buttons button {
+  background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+  border-radius: 4px; padding: 5px 7px; font-size: 11px; cursor: pointer;
+}
+.present-buttons button:hover { background: #30363d; }
+.present-buttons button:disabled { opacity: .4; cursor: default; background: #21262d; }
+.present-sync-error {
+  color: #ff7b72; font-size: 11px; line-height: 1.4;
+  border-top: 1px solid #30363d; padding-top: 7px;
+}
 .toggle-src-hdr {
   display: flex; align-items: center; gap: 7px; font-size: 12px; color: #cdd9e5;
   font-weight: 600; margin-top: 6px; cursor: pointer;
@@ -463,6 +485,11 @@ body {
 #tm-save { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
 #tm-save:hover:not(:disabled) { background: #2ea043; }
 #tm-save:disabled { opacity: .6; cursor: default; }
+#pm-cancel { background: #21262d; color: #e6edf3; }
+#pm-cancel:hover { background: #30363d; }
+#pm-save { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
+#pm-save:hover:not(:disabled) { background: #2ea043; }
+#pm-save:disabled { opacity: .6; cursor: default; }
 
 /* Read-only INI health report. */
 .health-modal {
@@ -565,6 +592,11 @@ body {
   box-shadow: 0 12px 40px rgba(0,0,0,.5);
 }
 .dialog-message { font-size: 12px; color: #e6edf3; white-space: pre-wrap; line-height: 1.5; }
+.dialog-input {
+  display: none; box-sizing: border-box; width: 100%; margin-top: 12px;
+  background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+  border-radius: 6px; padding: 7px 9px; font-size: 12px; font-family: inherit;
+}
 #dialog-cancel { background: #21262d; color: #e6edf3; }
 #dialog-cancel:hover { background: #30363d; }
 #dialog-ok { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
@@ -578,6 +610,8 @@ body {
 body.feature-export-off #export-btn { display: none; }
 body.feature-modify-toggle-off #toggle-add-btn { display: none; }
 body.feature-modify-toggle-off .toggle-actions { display: none; }
+body.feature-modify-toggle-off #present-action-btn { display: none; }
+body.feature-modify-toggle-off .present-author-actions { display: none; }
 .menu-slider-item {
   gap: 7px;
 }
@@ -590,7 +624,7 @@ body.feature-modify-toggle-off .toggle-actions { display: none; }
 
 @media (max-width: 900px) {
   #sidebar { width: 230px; max-width: calc(50vw - 28px); }
-  #toggle-panel, #menu-panel { width: 250px; max-width: calc(50vw - 20px); }
+  #present-panel, #toggle-panel, #menu-panel { width: 250px; max-width: calc(50vw - 20px); }
   #menu-list.image-layout { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   #menu-list.image-layout > .toggle-src-items {
     grid-template-columns: repeat(3, minmax(0, 1fr));
