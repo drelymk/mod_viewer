@@ -52,6 +52,11 @@ def _extract_hash(name):
 
 
 _RUN_SKIP_PREFIXES = ("TextureOverride", "ShaderOverride", "Resource", "Present", "Key", "Constants")
+_AUX_MAP_CHANNELS = {
+    "normalmap": "normal_map",
+    "lightmap": "light_map",
+    "materialmap": "material_map",
+}
 
 
 def gating_var_names(sections, var_prefix=None):
@@ -99,6 +104,17 @@ def _scan_sections_for_draws(sections, var_prefix=None):
     alias_map = build_bool_alias_map(sections)
     seq_counter = [0]   # unique id per `if` block
     bare_counter = [0]  # unique id per diffuse line reached with an empty cond_stack
+    aux_bare_counters = {channel: 0 for channel in _AUX_MAP_CHANNELS.values()}
+
+    def _aux_snapshot(info):
+        return {
+            channel: {
+                "variants": list(state.get("variants") or []),
+                "history": list(state.get("history") or []),
+            }
+            for channel, state in info.get("_aux_maps", {}).items()
+            if state.get("variants") or state.get("history")
+        }
 
     def _scan(lines, info, cond_stack, visiting):
         # cond_stack tracks the stack of active gate branches. Each frame is
@@ -169,6 +185,7 @@ def _scan_sections_for_draws(sections, var_prefix=None):
                                       list(info.get("_diffuse_history") or []),
                                       (info.get("_cur_vb0"), info.get("_cur_vb1"),
                                        info.get("_cur_vb2"))))
+                info["aux_draw_states"].append(_aux_snapshot(info))
             # "ref" is optional -- XXMI-generated mods omit it (e.g. "Resource\GIMI\Diffuse = X").
             m_diff = re.match(r"Resource\\[^\\]+\\Diffuse\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if not m_diff:
@@ -215,6 +232,33 @@ def _scan_sections_for_draws(sections, var_prefix=None):
                 # Independent/nested condition chains can successively
                 # override a diffuse; the last matching assignment wins.
                 info["_diffuse_history"].append({"res": res, "cond": cond})
+            m_aux = re.match(
+                r"Resource\\[^\\]+\\(NormalMap|LightMap|MaterialMap)\s*=\s*"
+                r"(?:ref\s+)?(\S+)", line, re.I)
+            if m_aux:
+                channel = _AUX_MAP_CHANNELS[m_aux.group(1).lower()]
+                res = m_aux.group(2)
+                state = info["_aux_maps"].setdefault(channel, {
+                    "variants": [], "history": [], "chain_key": None,
+                    "last_cond": None,
+                })
+                combined = DNF_TRUE
+                for frame in cond_stack:
+                    combined = dnf_and(combined, frame["cur"])
+                cond = normalize_dnf(combined, toggle_vars, var_prefix)
+                if cond_stack:
+                    chain_key = cond_stack[-1]["seq"]
+                else:
+                    aux_bare_counters[channel] += 1
+                    chain_key = ("bare", channel, aux_bare_counters[channel])
+                if chain_key != state["chain_key"]:
+                    state["variants"] = []
+                    state["chain_key"] = chain_key
+                elif state["last_cond"] == cond and state["variants"]:
+                    state["variants"].pop()
+                state["variants"].append({"res": res, "cond": cond})
+                state["last_cond"] = cond
+                state["history"].append({"res": res, "cond": cond})
             m = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if m:
                 target = m.group(1)
@@ -232,7 +276,7 @@ def _scan_sections_for_draws(sections, var_prefix=None):
         info: dict = dict(vb0=None, vb1=None, vb2=None, ib=None, draws=[],
                           diffuse=None, diffuse_pool=[], src=None, handling_skip=False,
                           _cur_diffuse_variants=[], _diffuse_chain_key=None,
-                          _diffuse_history=[])
+                          _diffuse_history=[], _aux_maps={}, aux_draw_states=[])
         _scan(lines, info, [], {name})
         info.pop("_cur_ib", None)
         info.pop("_cur_vb0", None)
@@ -247,10 +291,12 @@ def _scan_sections_for_draws(sections, var_prefix=None):
         # drawindexed line would've seen at this point in execution order.
         info["diffuse_variants_at_end"] = list(info.get("_cur_diffuse_variants") or [])
         info["diffuse_history_at_end"] = list(info.get("_diffuse_history") or [])
+        info["aux_maps_at_end"] = _aux_snapshot(info)
         info.pop("_cur_diffuse_variants", None)
         info.pop("_diffuse_chain_key", None)
         info.pop("_diffuse_last_cond", None)
         info.pop("_diffuse_history", None)
+        info.pop("_aux_maps", None)
         sec_info[name] = info
     return sec_info
 
@@ -518,6 +564,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             (None, 0, 0, [], info["src"], None,
              info.get("diffuse_variants_at_end") or [],
              info.get("diffuse_history_at_end") or [], (None, None, None))]
+        aux_draw_states = (info.get("aux_draw_states") or
+                           [info.get("aux_maps_at_end") or {}])
         draws = []
         for i, (c, s, b, cd, src, draw_ib, diff_variants,
                 diff_history, _vb_ov) in enumerate(draws_list, 1):
@@ -572,6 +620,29 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     (history_vars - legacy_vars or
                      len(history) > len(variants))):
                 d["texture_assignments"] = history
+
+            # Authored PBR companions follow the same execution-order model
+            # as diffuse assignments, but remain INI-only (no manual pool).
+            # A conditional single assignment has no unconditional default;
+            # the frontend must be able to fall back to no map when it fails.
+            aux_state = aux_draw_states[min(i - 1, len(aux_draw_states) - 1)]
+            for channel, state in aux_state.items():
+                authored = state.get("history") or state.get("variants") or []
+                resolved = []
+                default_file = None
+                for assignment in authored:
+                    file = _resolve_diffuse_file(assignment["res"])
+                    if not file:
+                        continue
+                    conditions = assignment["cond"]
+                    resolved.append({"conditions": conditions, "file": file})
+                    if not conditions:
+                        default_file = file
+                if default_file:
+                    d[f"{channel}_default_file"] = default_file
+                if (len(resolved) > 1 or
+                        (resolved and resolved[0]["conditions"])):
+                    d[f"{channel}_variants"] = resolved
             draws.append(d)
         pool_files, seen_pool_files = [], set()
         for res in info["diffuse_pool"]:

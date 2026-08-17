@@ -227,12 +227,32 @@ def _b64u(arr):
     """Pack int list as little-endian Uint32 and base64-encode."""
     return base64.b64encode(struct.pack(f"<{len(arr)}I", *arr)).decode()
 
-def _encode_texture(dds_path, max_size=2048, preserve_alpha=False):
+def _reconstruct_normal_z(img):
+    """Expand a game-style two-channel XY normal into tangent-space RGB.
+
+    ZZMI normal DDS files commonly store X/Y in red/green while blue contains
+    unrelated or placeholder data. Three.js expects a complete XYZ normal.
+    """
+    source = img.convert("RGB").tobytes()
+    result = bytearray(len(source))
+    for offset in range(0, len(source), 3):
+        x = source[offset] / 127.5 - 1.0
+        y = source[offset + 1] / 127.5 - 1.0
+        z = max(0.0, 1.0 - x * x - y * y) ** 0.5
+        result[offset] = source[offset]
+        result[offset + 1] = source[offset + 1]
+        result[offset + 2] = round((z * 0.5 + 0.5) * 255.0)
+    from PIL import Image
+    return Image.frombytes("RGB", img.size, bytes(result))
+
+
+def _encode_texture(dds_path, max_size=2048, preserve_alpha=False,
+                    texture_role=None):
     """DDS → PNG in-memory → base64 data URI.  Returns None on failure."""
     try:
         stat = os.stat(dds_path)
         cache_key = (os.path.normcase(os.path.abspath(dds_path)), stat.st_size,
-                     stat.st_mtime_ns, max_size, preserve_alpha)
+                     stat.st_mtime_ns, max_size, preserve_alpha, texture_role)
         with _texture_cache_lock:
             cached = _texture_cache.pop(cache_key, None)
             if cached is not None:
@@ -256,6 +276,8 @@ def _encode_texture(dds_path, max_size=2048, preserve_alpha=False):
             return None
         if max(img.size) > max_size:
             img.thumbnail((max_size, max_size), Image.LANCZOS)
+        if texture_role == "normal_map":
+            img = _reconstruct_normal_z(img)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
@@ -266,7 +288,7 @@ def _encode_texture(dds_path, max_size=2048, preserve_alpha=False):
         return None
 
 
-def encode_texture_file(mod_dir, abs_path):
+def encode_texture_file(mod_dir, abs_path, texture_role=None):
     """Encode an arbitrary texture file the user picked via a native file
     dialog (app/api.py's pick_texture_file) into the same {tex_key, uri}
     shape build_mesh_payload's own textures use, so it can be merged
@@ -292,7 +314,7 @@ def encode_texture_file(mod_dir, abs_path):
         return {"error": "Selected file is not inside the mod folder."}
     if not os.path.isfile(abs_path):
         return {"error": "Selected file does not exist."}
-    uri = _encode_texture(abs_path)
+    uri = _encode_texture(abs_path, texture_role=texture_role)
     if not uri:
         return {"error": "Could not read this file as an image."}
     return {"tex_key": rel.replace(os.sep, "/"), "uri": uri}
@@ -317,9 +339,10 @@ def _rel_source(src, mod_dir):
 
 def build_mesh_payload(groups, mod_dir, max_draws=0):
     """
-    Returns {draw_label: {pos, uv, idx, tex_key, drawindexed?, source?,
-    component?, texture_variants?, texture_options?}, '__textures__': {key:
-    uri}}. Textures are stored once in a shared registry keyed by filename.
+    Returns {draw_label: {pos, uv, idx, tex_key, normal_map_key?,
+    light_map_key?, material_map_key?, drawindexed?, source?, component?,
+    texture_variants?, texture_options?}, '__textures__': {key: uri}}.
+    Textures are stored once in a shared registry keyed by filename.
     `drawindexed` is the ini's [count, start, base] triple (missing for the
     rare unconditional whole-buffer draw); `source` is the per-ini tag from
     build_draw_groups, present only in multi-ini mods. `component` is the
@@ -463,10 +486,11 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                 tex_cache[dds_path] = key
             return tex_cache[dds_path]
 
-        def _ensure_texture(dds_path):
+        def _ensure_texture(dds_path, texture_role=None):
             key = _tex_key(dds_path)
             if key and key not in tex_uris:
-                tex_uris[key] = _encode_texture(dds_path) or ""
+                tex_uris[key] = _encode_texture(
+                    dds_path, texture_role=texture_role) or ""
             return key
 
         # Every diffuse this component's ini ever references, resolved once
@@ -628,6 +652,25 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                 "idx": base64.b64encode(idx_bytes).decode(),
                 "tex_key": default_key,
             }
+            for channel in ("normal_map", "light_map", "material_map"):
+                key = _ensure_texture(_safe_join(
+                    mod_dir, draw.get(f"{channel}_default_file")), channel)
+                if key:
+                    entry[f"{channel}_key"] = key
+            # The manager presents one row per diffuse. Seed that row with the
+            # auxiliary maps resolved alongside this draw so authored maps can
+            # be inspected/replaced with the same controls as manual ones.
+            def _seed_option_maps(diffuse_key):
+                if not diffuse_key:
+                    return
+                option = next((item for item in texture_options
+                               if item["tex_key"] == diffuse_key), None)
+                if option:
+                    for channel in ("normal_map", "light_map", "material_map"):
+                        key = entry.get(f"{channel}_key")
+                        if key and not option.get(channel):
+                            option[channel] = key
+            _seed_option_maps(default_key)
             if uv_bytes:
                 entry["uv"] = base64.b64encode(uv_bytes).decode()
             if shape_buffers:
@@ -653,9 +696,26 @@ def build_mesh_payload(groups, mod_dir, max_draws=0):
                 for v in texture_rules:
                     key = _ensure_texture(_safe_join(mod_dir, v["file"]))
                     if key:
+                        # Auxiliary assignments after a conditional diffuse
+                        # branch belong to every branch reaching this draw,
+                        # not only to whichever branch supplied tex_key.
+                        _seed_option_maps(key)
                         variants.append({"conditions": v["conditions"], "tex_key": key})
                 if len(variants) > 1:
                     entry["texture_variants"] = variants
+            for channel in ("normal_map", "light_map", "material_map"):
+                rules = draw.get(f"{channel}_variants") or []
+                variants = []
+                for variant in rules:
+                    key = _ensure_texture(
+                        _safe_join(mod_dir, variant["file"]), channel)
+                    if key:
+                        variants.append({
+                            "conditions": variant["conditions"],
+                            "tex_key": key,
+                        })
+                if variants:
+                    entry[f"{channel}_variants"] = variants
             # Keep even a single resolved texture in the UI pool. A component
             # with one diffuse still has a useful texture to display/manage;
             # only components with no resolved textures need the frontend's

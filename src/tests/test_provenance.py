@@ -15,7 +15,8 @@ from _corpus import corpus_roots
 from core import ini_parser
 from core.ini_parser import parse_sections, merge_sections, build_draw_groups, \
     extract_resources, extract_toggle_keys, line_source, SrcLine
-from core.mesh_builder import build_mesh_payload, encode_texture_file
+from core.mesh_builder import build_mesh_payload, encode_texture_file, \
+    _reconstruct_normal_z
 from app import mod_loader
 
 FAILS = []
@@ -935,6 +936,90 @@ def test_ll_skeleton_compute_output_uses_rest_position():
               f"(got {group['texcoord_file']})")
 
 
+AUXILIARY_MAPS_INI = """[Constants]
+global $detail = 0
+global $metal = 0
+
+[KeyDetail]
+type = cycle
+$detail = 0,1
+
+[KeyMetal]
+type = cycle
+$metal = 0,1
+
+[TextureOverrideBodyBlend]
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideBodyA]
+ib = ResourceBodyAIB
+if $detail == 0
+Resource\\ZZMI\\NormalMap = ref ResourceNormalA
+else
+Resource\\ZZMI\\NormalMap = ref ResourceNormalB
+endif
+Resource\\ZZMI\\LightMap = ref ResourceLight
+if $metal == 1
+Resource\\ZZMI\\MaterialMap = ref ResourceMaterial
+endif
+drawindexed = 3, 0, 0
+
+[ResourceBodyPosition]
+filename = pos.buf
+stride = 40
+[ResourceBodyTexcoord]
+filename = tc.buf
+stride = 20
+[ResourceBodyAIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+[ResourceNormalA]
+filename = normal-a.dds
+[ResourceNormalB]
+filename = normal-b.dds
+[ResourceLight]
+filename = light.dds
+[ResourceMaterial]
+filename = material.dds
+"""
+
+
+def test_authored_auxiliary_material_maps():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", AUXILIARY_MAPS_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+
+        check(len(groups) == 1, f"auxiliary-map fixture builds (got {len(groups)})")
+        if not groups:
+            return
+        draw = groups[0]["draws"][0]
+        normals = draw.get("normal_map_variants") or []
+        check([v["file"] for v in normals] == ["normal-a.dds", "normal-b.dds"],
+              f"conditional normal maps retain both authored branches (got {normals})")
+        check(draw.get("light_map_default_file") == "light.dds",
+              f"unconditional light map becomes the draw default "
+              f"(got {draw.get('light_map_default_file')})")
+        materials = draw.get("material_map_variants") or []
+        check(len(materials) == 1 and materials[0]["file"] == "material.dds"
+              and materials[0]["conditions"],
+              f"a conditional-only material map retains a no-map fallback "
+              f"(got {materials})")
+
+
+def test_two_channel_normal_reconstructs_z():
+    from PIL import Image
+    source = Image.new("RGB", (2, 1))
+    source.putdata([(128, 128, 0), (255, 128, 0)])
+    rebuilt = _reconstruct_normal_z(source)
+    pixels = [rebuilt.getpixel((x, 0)) for x in range(2)]
+    check(pixels[0][2] == 255,
+          f"a flat XY normal reconstructs a forward-facing Z (got {pixels[0]})")
+    check(127 <= pixels[1][2] <= 129,
+          f"a full-strength X normal reconstructs a near-zero Z (got {pixels[1]})")
+
+
 # ── `handling = skip` with no `drawindexed` line at all means "suppress the
 #    original draw and replace it with nothing", NOT "draw the whole ib".
 #    Only a section that omits `handling = skip` gets the implicit
@@ -1596,6 +1681,8 @@ if __name__ == "__main__":
                test_cross_ib_vb_reassignment_mesh_builder,
                test_runtime_position_copy_resolution,
                test_ll_skeleton_compute_output_uses_rest_position,
+               test_authored_auxiliary_material_maps,
+               test_two_channel_normal_reconstructs_z,
                test_handling_skip_with_no_drawindexed_draws_nothing,
                test_component_name_ending_in_uppercase_abbreviation,
                test_run_inlines_nested_commandlist_draws,

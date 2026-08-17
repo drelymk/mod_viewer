@@ -6,7 +6,7 @@
 // bugs; changing either one will reintroduce them.
 
 import { scene, resetModelOrientation } from './scene.js';
-import { setMeshTexture, refreshMeshTexture, setTexturesEnabled } from './mesh-factory.js';
+import { setMeshTexture, setMeshMaterialMaps, refreshMeshTexture, setTextureMode } from './mesh-factory.js';
 
 /** Every mesh currently in the scene. */
 export const activeMeshes = [];
@@ -20,7 +20,8 @@ let groupsUI = [];
 
 let wireframe = false;
 let smoothShading = true;
-let textures = true;
+const textureModes = ['all', 'diffuse', 'none'];
+let textureModeIndex = 0;
 
 export function reset() {
   activeMeshes.forEach(m => {
@@ -45,13 +46,16 @@ export function resetMeshState() {
   syncCheckboxes();
 }
 
-export function addMesh(mesh, conditions, sources, textureVariants) {
+export function addMesh(mesh, conditions, sources, textureVariants, materialVariants = {}) {
   mesh.userData.manualVisible = true;
   mesh.userData.loadedVisible = true;
   mesh.userData.manuallyToggled = false;
   mesh.userData.conditions = conditions || [];
   mesh.userData.sources = sources || [];
   mesh.userData.textureVariants = textureVariants || [];
+  mesh.userData.normalMapVariants = materialVariants.normal_map || [];
+  mesh.userData.lightMapVariants = materialVariants.light_map || [];
+  mesh.userData.materialMapVariants = materialVariants.material_map || [];
   // The texture selected by the ini under the current toggle/menu state.
   // Kept separately from texKey because the component's ordered texture-run
   // pass may make this mesh follow a highlighted boundary above it.
@@ -117,18 +121,31 @@ export function conditionsSatisfied(mesh) {
 // matches -- a draw whose toggle only swaps texture under a specific value
 // (or that has no texture_variants at all) must still revert cleanly.
 export function applyTextureVariant(mesh) {
+  const resolve = (variants, fallback) => {
+    variants = variants || [];
+    const variant = variants.findLast
+      ? variants.findLast(v => dnfSatisfied(v.conditions))
+      : [...variants].reverse().find(v => dnfSatisfied(v.conditions));
+    return variant ? variant.tex_key : fallback;
+  };
   const variants = mesh.userData.textureVariants || [];
   // Diffuse assignments execute in source order; later matching writes
   // override earlier ones (including nested, independent condition chains).
-  const variant = variants.findLast
-    ? variants.findLast(v => dnfSatisfied(v.conditions))
-    : [...variants].reverse().find(v => dnfSatisfied(v.conditions));
-  mesh.userData.resolvedTexKey = variant
-    ? variant.tex_key
-    : mesh.userData.defaultTexKey;
+  mesh.userData.resolvedTexKey = resolve(variants, mesh.userData.defaultTexKey);
+  mesh.userData.resolvedNormalMapKey = resolve(mesh.userData.normalMapVariants,
+    mesh.userData.defaultNormalMapKey);
+  mesh.userData.resolvedLightMapKey = resolve(mesh.userData.lightMapVariants,
+    mesh.userData.defaultLightMapKey);
+  mesh.userData.resolvedMaterialMapKey = resolve(mesh.userData.materialMapVariants,
+    mesh.userData.defaultMaterialMapKey);
   setMeshTexture(mesh, mesh.userData.manualTexOverride !== undefined
     ? mesh.userData.manualTexOverride
     : mesh.userData.resolvedTexKey);
+  setMeshMaterialMaps(mesh, {
+    normal_map: mesh.userData.resolvedNormalMapKey,
+    light_map: mesh.userData.resolvedLightMapKey,
+    material_map: mesh.userData.resolvedMaterialMapKey,
+  });
 }
 
 export function setStateRules(rules, defaults) {
@@ -248,8 +265,18 @@ export function toggleSmoothShading() {
 }
 
 export function toggleTextures() {
-  textures = !textures;
-  document.getElementById('texture-btn').classList.toggle('off', !textures);
-  setTexturesEnabled(textures);
+  textureModeIndex = (textureModeIndex + 1) % textureModes.length;
+  const mode = textureModes[textureModeIndex];
+  const button = document.getElementById('texture-btn');
+  button.classList.toggle('diffuse-only', mode === 'diffuse');
+  button.classList.toggle('off', mode === 'none');
+  const labels = {
+    all: 'Textures: all maps',
+    diffuse: 'Textures: diffuse only',
+    none: 'Textures: none',
+  };
+  button.title = labels[mode];
+  button.setAttribute('aria-label', labels[mode]);
+  setTextureMode(mode);
   activeMeshes.forEach(refreshMeshTexture);
 }

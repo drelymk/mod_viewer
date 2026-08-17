@@ -1,6 +1,7 @@
 // Entry point: wires the toolbar and orchestrates loading a mod.
 
-import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn, toggleGrid, toggleTrackballGizmo } from './scene.js';
+import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
+         toggleGrid, toggleLightHandle, toggleTrackballGizmo } from './scene.js';
 import { setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
@@ -211,6 +212,7 @@ $('wire-btn').addEventListener('click', toggleWireframe);
 $('grid-btn').addEventListener('click', toggleGrid);
 $('shading-btn').addEventListener('click', toggleSmoothShading);
 $('texture-btn').addEventListener('click', toggleTextures);
+$('light-btn').addEventListener('click', toggleLightHandle);
 $('reset-state-btn').addEventListener('click', resetMeshState);
 $('trackball-btn').addEventListener('click', toggleTrackballGizmo);
 $('camera-reset-view-btn').addEventListener('click', () => resetView(activeMeshes));

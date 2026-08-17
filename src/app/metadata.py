@@ -174,7 +174,12 @@ def hydrate_textures(folder_path, payload):
                 or not isinstance(label, str) or not label
                 or not isinstance(manual, bool)):
             continue
-        highlighted[name] = {"tex_key": key, "label": label, "manual": manual}
+        item = {"tex_key": key, "label": label, "manual": manual}
+        for field in ("normal_map", "light_map", "material_map"):
+            value = state.get(field)
+            if isinstance(value, str) and value:
+                item[field] = value
+        highlighted[name] = item
 
     restored = {}
     for name, entry in payload.items():
@@ -199,11 +204,19 @@ def hydrate_textures(folder_path, payload):
         mesh_key = _mesh_key(name, entry)
         if mesh_key in restored:
             state = restored[mesh_key]
-            candidates.append({"tex_key": state["tex_key"], "label": state["label"]})
+            candidates.append({key: value for key, value in state.items()
+                               if key != "manual"})
         for opt in candidates:
-            if (isinstance(opt, dict) and isinstance(opt.get("tex_key"), str)
-                    and not any(old["tex_key"] == opt["tex_key"] for old in pool)):
+            if not isinstance(opt, dict) or not isinstance(opt.get("tex_key"), str):
+                continue
+            old = next((item for item in pool
+                        if item["tex_key"] == opt["tex_key"]), None)
+            if old is None:
                 pool.append(opt)
+            else:
+                for field in ("normal_map", "light_map", "material_map"):
+                    if opt.get(field):
+                        old[field] = opt[field]
 
     for name, entry in payload.items():
         if name.startswith("__") or not isinstance(entry, dict) or entry.get("error"):
@@ -214,10 +227,17 @@ def hydrate_textures(folder_path, payload):
         else:
             entry.pop("texture_options", None)
         state = restored.get(_mesh_key(name, entry))
-        for key in ([state["tex_key"]] if state else []):
+        texture_roles = [(state["tex_key"], None)] if state else []
+        if state:
+            texture_roles.extend((state.get(field), field) for field in
+                                 ("normal_map", "light_map", "material_map"))
+        for key, role in texture_roles:
+            if not key:
+                continue
             if key in payload["__textures__"]:
                 continue
-            encoded = encode_texture_file(folder_path, os.path.join(folder_path, key))
+            encoded = encode_texture_file(folder_path, os.path.join(folder_path, key),
+                                          texture_role=role)
             if encoded and not encoded.get("error"):
                 payload["__textures__"][encoded["tex_key"]] = encoded["uri"]
 

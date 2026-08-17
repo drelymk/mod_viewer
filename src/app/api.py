@@ -40,19 +40,21 @@ class ModViewerAPI:
         self._authorized_folders.add(folder)
         return folder
 
-    def pick_texture_file(self, folder_path):
+    def pick_texture_file(self, folder_path, texture_role=None):
         """Open a native file-picker rooted at the mod folder for the
         per-mesh/per-component texture picker. Returns {"tex_key", "uri"} / {"error"} on
         a real pick, None if the dialog was cancelled -- same shape as
         select_folder's own cancel case.
         """
         folder_path = self._folder(folder_path)
+        if texture_role not in (None, "normal_map", "light_map", "material_map"):
+            return {"error": "Unknown texture role."}
         result = self._window.create_file_dialog(
             webview.FileDialog.OPEN, directory=folder_path,
             file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg;*.tga)",))
         if not result:
             return None
-        return encode_texture_file(folder_path, result[0])
+        return encode_texture_file(folder_path, result[0], texture_role)
 
     def load_texture_file(self, folder_path, tex_key):
         """Encode a known mod-relative picker texture on first use."""

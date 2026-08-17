@@ -2,7 +2,8 @@
 // source ini (mirroring the Toggle panel); within each, one collapsible group
 // per component, one checkbox per draw call within it.
 
-import { addTexture, buildMesh, hasTexture, setMeshTexture } from './mesh-factory.js';
+import { addTexture, buildMesh, hasTexture, setMeshMaterialMaps,
+         setMeshTexture } from './mesh-factory.js';
 import { activeMeshes, addMesh, applyMeshVisibility, registerGroup,
          setManualTexOverride } from './visibility.js';
 import { selectMesh } from './selection.js';
@@ -134,17 +135,31 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath, onPoolChan
  * inheritance is recomputed from top to bottom after every selection. */
 function recomputeTextureRuns(groupMeshes) {
   let activeKey = null;
+  let activeMaps = null;
   for (const item of groupMeshes) {
     if (item.userData.manualTexOverride !== undefined) {
       activeKey = item.userData.manualTexOverride;
+      const option = (item.userData.texturePool || [])
+        .find(opt => opt.tex_key === activeKey);
+      activeMaps = option ? {
+        normal_map: option.normal_map || null,
+        light_map: option.light_map || null,
+        material_map: option.material_map || null,
+      } : null;
     } else if (item.userData.automaticTextureBoundary
                && !item.userData.textureHighlightDisabled) {
       // Follow the texture currently resolved by toggle/menu state, not the
       // immutable load-time default. This boundary then applies downward only
       // until the next highlighted boundary in this component.
       activeKey = item.userData.resolvedTexKey;
+      activeMaps = null;
     }
     setMeshTexture(item, activeKey);
+    setMeshMaterialMaps(item, activeMaps || {
+      normal_map: item.userData.resolvedNormalMapKey,
+      light_map: item.userData.resolvedLightMapKey,
+      material_map: item.userData.resolvedMaterialMapKey,
+    });
   }
 }
 
@@ -189,6 +204,9 @@ function saveTextureState(modPath) {
       tex_key: texKey,
       label: option.label,
       manual,
+      normal_map: option.normal_map || null,
+      light_map: option.light_map || null,
+      material_map: option.material_map || null,
     };
   }
   window.pywebview.api.save_mesh_textures(modPath, state);
@@ -428,6 +446,7 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
       // already-built DOM rows.
       const onPoolChange = () => {
         texListRenderers.forEach(r => r());
+        recomputeTextureRuns(itemObjs);
         onActiveChanged();
         saveTextureState(modPath);
       };
@@ -443,7 +462,12 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
         mesh.userData.displayName = meshNames[mesh.userData.metadataKey] || null;
         mesh.userData.meshNames = meshNames;
         mesh.userData.modPath = modPath;
-        addMesh(mesh, payload[name].conditions, payload[name].sources, payload[name].texture_variants);
+        addMesh(mesh, payload[name].conditions, payload[name].sources,
+          payload[name].texture_variants, {
+            normal_map: payload[name].normal_map_variants,
+            light_map: payload[name].light_map_variants,
+            material_map: payload[name].material_map_variants,
+          });
         // addMesh establishes the automatic defaults; restore persisted
         // viewer choices only after that initialization has completed.
         if (Object.hasOwn(payload[name], 'saved_texture_override')) {
