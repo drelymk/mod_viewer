@@ -56,12 +56,50 @@ filename = i.buf
 format = R32_UINT
 """
 
+SLIDER_INI = """[Constants]
+global persist $currFlat = 0.5
+
+[CustomShaderComputeShapes]
+x88 = $currFlat
+cs-t50 = copy ResourceBodyPosition.Base
+cs-t51 = copy ResourceBodyPosition.Flat
+
+[ResourceBodyPosition.Base]
+type = Buffer
+stride = 40
+filename = BodyPosition.buf
+
+[ResourceBodyPosition.Flat]
+type = Buffer
+stride = 40
+filename = BodyPositionFlat.buf
+"""
+
 
 def snapshots(a_hat="0", a_coat="0", b_hat="1", b_coat="1"):
     return {
         "a.ini": {"a::Hat": a_hat, "a::Coat": a_coat},
         "b.ini": {"b::Hat": b_hat, "b::Coat": b_coat},
     }
+
+
+def test_present_captures_shape_slider_variables():
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "slider.ini")
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(SLIDER_INI)
+        edit_session.discard(folder)
+        edit_session.load_documents(folder, [path])
+
+        check(present_editor.capturable_variables(
+            edit_session.peek(folder, path)) == ["currFlat"],
+              "recognized shape sliders are capturable PRESENT variables")
+        added = present_api.add_present(
+            folder, "p", "", {"slider.ini": {"currFlat": "0.75"}})
+        details = present_editor.details(edit_session.peek(folder, path))
+        check(added.get("ok") and details["vars"] == {"currFlat": ["0.75"]},
+              "PRESENT Add records the current shape-slider value")
+        edit_session.discard(folder)
 
 
 def test_present_lifecycle():
@@ -175,6 +213,8 @@ def test_add_is_atomic_when_one_snapshot_is_missing():
             f"[{SECTION_NAME}]" not in edit_session.peek(folder, path).to_string()
             for path in paths),
               "a failed multi-INI Add rolls every staged document back")
+        check(not edit_session.has_pending(folder),
+              "a failed PRESENT action leaves no phantom pending state")
         edit_session.discard(folder)
 
 
@@ -226,9 +266,52 @@ def test_partial_present_is_completed_and_mismatches_are_reported():
         edit_session.discard(folder)
 
 
+def test_discard_restores_present_names_with_staged_position_delete():
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "a.ini")
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(INI)
+        edit_session.discard(folder)
+        edit_session.load_documents(folder, [path])
+        one = {"a.ini": {"Hat": "0", "Coat": "0"}}
+        two = {"a.ini": {"Hat": "1", "Coat": "1"}}
+        three = {"a.ini": {"Hat": "0", "Coat": "2"}}
+        check(present_api.add_present(folder, "p", "", one).get("ok"),
+              "discard fixture creates its first PRESENT position")
+        check(present_api.capture_present(folder, two, "B").get("ok") and
+              present_api.capture_present(folder, three, "C").get("ok"),
+              "discard fixture creates three named positions")
+        metadata.save_present_name(folder, metadata.PRESENT_NAMES_KEY, 0, "A")
+        check(not edit_session.export(folder).get("failed"),
+              "discard fixture exports its three-position baseline")
+
+        check(present_api.capture_present(folder, two, "Bee", 1).get("ok") and
+              edit_session.has_pending(folder),
+              "a name-only PRESENT edit remains pending even when INI text is unchanged")
+        check(edit_session.export(folder) == {"saved": [], "failed": []},
+              "Export commits a name-only PRESENT edit without rewriting an INI")
+        edit_session.discard(folder)
+        edit_session.load_documents(folder, [path])
+
+        check(present_api.delete_present_position(folder, 1).get("ok") and
+              metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) ==
+              {"0": "A", "1": "C"},
+              "staged position deletion shifts PRESENT names for preview")
+        edit_session.discard(folder)
+        check(metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) ==
+              {"0": "A", "1": "Bee", "2": "C"},
+              "discard restores the exported PRESENT name mapping")
+        doc = edit_session.peek(folder, path)
+        check(present_editor.details(doc)["count"] == 3,
+              "discard reloads the matching three-position INI baseline")
+        edit_session.discard(folder)
+
+
 if __name__ == "__main__":
+    test_present_captures_shape_slider_variables()
     test_present_lifecycle()
     test_add_is_atomic_when_one_snapshot_is_missing()
     test_partial_present_is_completed_and_mismatches_are_reported()
+    test_discard_restores_present_names_with_staged_position_delete()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
     raise SystemExit(1 if FAILS else 0)

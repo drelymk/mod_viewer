@@ -21,7 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.mod_loader import (_attach_shape_sliders, build_toggle_panel,
-                            load_mod, RESERVED_KEYS)
+                            load_mod, RESERVED_KEYS, _parse_inis)
 
 FAILS = []
 
@@ -217,6 +217,71 @@ format = R32_UINT
               "nested mesh provenance uses a root-relative INI path")
 
 
+def test_nested_sibling_inis_have_unique_parser_namespaces():
+    ini = """[Constants]
+global persist $swapvar = 0
+[KeySwap]
+key = x
+type = cycle
+$swapvar = 0,1
+"""
+    with tempfile.TemporaryDirectory() as root:
+        nested = os.path.join(root, "nested")
+        os.makedirs(nested)
+        paths = []
+        for name in ("body.ini", "hair.ini"):
+            path = os.path.join(nested, name)
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(ini)
+            paths.append(path)
+
+        _groups, toggles, _menu, defaults, _rules, _present = _parse_inis(
+            paths, root)
+        check(set(toggles) == {"nested/body::KeySwap", "nested/hair::KeySwap"},
+              "nested sibling INIs keep duplicate key sections distinct")
+        check(set(defaults) == {"nested/body::swapvar", "nested/hair::swapvar"},
+              "nested sibling INIs keep duplicate variables distinct")
+        check({item.get("source") for item in toggles.values()} == {"nested"},
+              "unique parser identities retain the shared compact UI group")
+
+
+def test_nested_sibling_menu_images_do_not_bleed():
+    ini = """[Constants]
+global persist ${0} = 0
+global persist $dummy = 0
+global $clickedSlot
+global $hoveredSlot
+[CommandListClickedSlot]
+$clickedSlot = $hoveredSlot
+if $clickedSlot == 1
+    ${0} = 1 - ${0}
+elif $clickedSlot == 2
+    $dummy = 1 - $dummy
+endif
+[CommandListIcon1]
+ps-t100 = ResourceIcon
+[ResourceIcon]
+filename = {1}.dds
+"""
+    with tempfile.TemporaryDirectory() as root:
+        nested = os.path.join(root, "nested")
+        os.makedirs(nested)
+        paths = []
+        for stem in ("body", "hair"):
+            path = os.path.join(nested, f"{stem}.ini")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(ini.format(stem, stem))
+            paths.append(path)
+
+        _groups, _toggles, menu, _defaults, _rules, _present = _parse_inis(
+            paths, root)
+        images = {os.path.basename(info["ini_path"]): info.get("image_file")
+                  for info in menu.values() if info.get("slot") == 1}
+        check(images == {"body.ini": os.path.join("nested", "body.dds"),
+                         "hair.ini": os.path.join("nested", "hair.dds")},
+              f"nested sibling menu entries retain their own images (got {images})")
+
+
 if __name__ == "__main__":
     for fn in (test_wired_toggle_shows_only_its_gating_vars,
                test_unwired_pending_toggle_shown_with_writable_vars,
@@ -227,7 +292,9 @@ if __name__ == "__main__":
                test_default_prefers_declared_default_over_first_cycle_value,
                test_wired_and_unwired_can_coexist_across_sections,
                test_shape_sliders_follow_mid_section_position_reassignments,
-               test_nested_ini_resources_are_relative_to_their_ini):
+               test_nested_ini_resources_are_relative_to_their_ini,
+               test_nested_sibling_inis_have_unique_parser_namespaces,
+               test_nested_sibling_menu_images_do_not_bleed):
         fn()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
     sys.exit(1 if FAILS else 0)

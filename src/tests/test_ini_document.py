@@ -212,6 +212,17 @@ def test_find_inis_bounded_recursion():
         fh.write(geometry)
     check("geometry-free root does not recurse", find_inis(library), [direct])
 
+    flat = tempfile.mkdtemp()
+    flat_paths = []
+    for index in range(11):
+        path = os.path.join(flat, f"{index + 1:02d}.ini")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(geometry if index == 0 else
+                     "[Constants]\nglobal $x = 0\n")
+        flat_paths.append(path)
+    check("direct find_inis never truncates a valid flat mod",
+          find_inis(flat), flat_paths)
+
 
 def test_roundtrip_corpus():
     """The real guarantee: every mod ini on disk survives byte-for-byte."""

@@ -35,6 +35,7 @@ def _batch_run(mod_dir, targets, mutate, metadata_change=None):
             for _sess, _key, doc, _was, _snapshot, _path, ini_rel in records:
                 results.append(mutate(ini_rel, doc))
             if metadata_change:
+                edit_session.stage_present_metadata(mod_dir)
                 metadata_change(results)
         except BaseException:
             for sess, key, _doc, was_pending, snapshot, path, _ini_rel in reversed(records):

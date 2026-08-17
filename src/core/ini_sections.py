@@ -66,21 +66,21 @@ def _ini_has_geometry(path):
 
 
 def find_inis(mod_dir):
-    """Return at most ten active INIs, optionally including nested files.
+    """Return active direct INIs, optionally including bounded nested files.
 
     A selected folder is a mod root only when one of its direct INIs has
     geometry. In that case active INIs are discovered up to two directories
-    below it. Without that root anchor, retain the flat behavior so selecting
-    a library/category folder cannot accidentally combine several mods.
+    below it, up to ten files total unless the direct files alone exceed that
+    limit. Direct INIs are never truncated: without that root anchor, retain
+    the complete flat behavior so selecting a library/category folder cannot
+    accidentally combine several nested mods.
     """
     direct = [os.path.join(mod_dir, name) for name in _active_ini_names(mod_dir)]
     root_geometry = next((path for path in direct if _ini_has_geometry(path)), None)
     if root_geometry is None:
-        return direct[:_MAX_INI_FILES]
+        return direct
 
-    found = list(direct[:_MAX_INI_FILES])
-    if root_geometry not in found:
-        found[-1] = root_geometry
+    found = list(direct)
     if len(found) >= _MAX_INI_FILES:
         return found
     for base, dirs, _files in os.walk(mod_dir):
@@ -93,7 +93,7 @@ def find_inis(mod_dir):
             found.append(os.path.join(base, name))
             if len(found) >= _MAX_INI_FILES:
                 return found
-    return found[:_MAX_INI_FILES]
+    return found
 
 
 def merge_sections(ini_paths, overrides=None):

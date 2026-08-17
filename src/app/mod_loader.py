@@ -67,7 +67,27 @@ def _ini_scope(ini_path, folder_path, multi):
         source = os.path.relpath(parent_dir, folder_path).replace(os.sep, "/")
     else:
         source = os.path.splitext(os.path.basename(ini_path))[0]
-    return f"{source}::", source
+    # `source` is deliberately a compact UI grouping label, so all INIs in a
+    # nested component folder share it.  It cannot also be the parser identity:
+    # sibling files commonly reuse [Key...] names and plain variables.
+    identity = os.path.splitext(_ini_rel(ini_path, folder_path))[0]
+    return f"{identity}::", source
+
+
+def _ini_rel(ini_path, folder_path):
+    return os.path.relpath(ini_path, folder_path).replace(os.sep, "/")
+
+
+def _rebase_resources(resources, ini_path, folder_path):
+    """Make filenames authored relative to a nested INI relative to the root."""
+    rel_dir = os.path.relpath(os.path.dirname(ini_path), folder_path)
+    if rel_dir == os.curdir:
+        return resources
+    for info in resources.values():
+        filename = info.get("filename")
+        if filename:
+            info["filename"] = os.path.normpath(os.path.join(rel_dir, filename))
+    return resources
 
 
 def _ini_rel(ini_path, folder_path):
@@ -121,6 +141,7 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
             secs, var_prefix=var_prefix, source=source)
         ini_menu = extract_menu_toggles(
             secs, var_prefix=var_prefix, source=source)
+        own_menu = dict(ini_menu)
         ini_present = None
         for key, info in ini_toggles.items():
             if info.get("section", "").lower() == PRESENT_SECTION.lower():
@@ -130,7 +151,8 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
             toggle_keys[key] = info
         menu_slots.update(ini_menu)
         has_controls = (any(info.get("section", "").lower() != PRESENT_SECTION.lower()
-                            for info in ini_toggles.values()) or bool(ini_menu))
+                            for info in ini_toggles.values()) or bool(ini_menu)
+                        or bool(shape_sliders))
         capture_vars = []
         if has_controls:
             rel = _ini_rel(ini_path, folder_path)
@@ -139,6 +161,7 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
                     continue
                 capture_vars.extend(info.get("vars", {}))
             capture_vars.extend(info.get("var") for info in ini_menu.values())
+            capture_vars.extend(info.get("var") for info in shape_sliders)
             capture_vars = list(dict.fromkeys(var for var in capture_vars if var))
             present_sources.append({
                 "value": rel, "label": rel, "vars": capture_vars,
@@ -153,8 +176,7 @@ def _parse_inis(ini_paths, folder_path, overrides=None):
             seen_slider_vars.add(slider["var"].lower())
             key = f"{var_prefix or ''}{slider['section']}#shape{index}"
             menu_slots[key] = slider
-        own_menu = {key: value for key, value in menu_slots.items()
-                    if value.get("source") == source}
+            own_menu[key] = slider
         attach_menu_images(own_menu, secs, resources)
         for var, val in extract_variable_defaults(secs, var_prefix=var_prefix).items():
             toggle_defaults.setdefault(var, val)

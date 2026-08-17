@@ -2,6 +2,7 @@
 import json
 import os
 import threading
+from copy import deepcopy
 
 from core.mesh_builder import encode_texture_file
 
@@ -59,6 +60,23 @@ def present_names(folder_path, ini_rel):
         return {}
     return {str(index): name for index, name in names.items()
             if str(index).isdigit() and isinstance(name, str) and name.strip()}
+
+
+def all_present_names(folder_path):
+    """Return a detached snapshot suitable for edit-session rollback."""
+    names = load(folder_path).get("present_names")
+    return deepcopy(names) if isinstance(names, dict) else None
+
+
+def restore_present_names(folder_path, names):
+    """Restore only PRESENT metadata, preserving unrelated viewer settings."""
+    with _LOCK:
+        data = load(folder_path)
+        if isinstance(names, dict) and names:
+            data["present_names"] = deepcopy(names)
+        else:
+            data.pop("present_names", None)
+        return _save(folder_path, data)
 
 
 def save_present_name(folder_path, ini_rel, position, name):
