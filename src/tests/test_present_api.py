@@ -226,9 +226,51 @@ def test_partial_present_is_completed_and_mismatches_are_reported():
         edit_session.discard(folder)
 
 
+def test_discard_restores_present_names_with_staged_position_delete():
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "a.ini")
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(INI)
+        edit_session.discard(folder)
+        edit_session.load_documents(folder, [path])
+        one = {"a.ini": {"Hat": "0", "Coat": "0"}}
+        two = {"a.ini": {"Hat": "1", "Coat": "1"}}
+        three = {"a.ini": {"Hat": "0", "Coat": "2"}}
+        check(present_api.add_present(folder, "p", "", one).get("ok"),
+              "discard fixture creates its first PRESENT position")
+        check(present_api.capture_present(folder, two, "B").get("ok") and
+              present_api.capture_present(folder, three, "C").get("ok"),
+              "discard fixture creates three named positions")
+        metadata.save_present_name(folder, metadata.PRESENT_NAMES_KEY, 0, "A")
+        check(not edit_session.export(folder).get("failed"),
+              "discard fixture exports its three-position baseline")
+
+        check(present_api.capture_present(folder, two, "Bee", 1).get("ok") and
+              edit_session.has_pending(folder),
+              "a name-only PRESENT edit remains pending even when INI text is unchanged")
+        check(edit_session.export(folder) == {"saved": [], "failed": []},
+              "Export commits a name-only PRESENT edit without rewriting an INI")
+        edit_session.discard(folder)
+        edit_session.load_documents(folder, [path])
+
+        check(present_api.delete_present_position(folder, 1).get("ok") and
+              metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) ==
+              {"0": "A", "1": "C"},
+              "staged position deletion shifts PRESENT names for preview")
+        edit_session.discard(folder)
+        check(metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) ==
+              {"0": "A", "1": "Bee", "2": "C"},
+              "discard restores the exported PRESENT name mapping")
+        doc = edit_session.peek(folder, path)
+        check(present_editor.details(doc)["count"] == 3,
+              "discard reloads the matching three-position INI baseline")
+        edit_session.discard(folder)
+
+
 if __name__ == "__main__":
     test_present_lifecycle()
     test_add_is_atomic_when_one_snapshot_is_missing()
     test_partial_present_is_completed_and_mismatches_are_reported()
+    test_discard_restores_present_names_with_staged_position_delete()
     print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
     raise SystemExit(1 if FAILS else 0)

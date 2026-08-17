@@ -41,7 +41,8 @@ from core.ini_document import IniDocument
 
 
 class _Session:
-    __slots__ = ("mod_dir", "docs", "baselines", "dirty", "new_sections")
+    __slots__ = ("mod_dir", "docs", "baselines", "dirty", "new_sections",
+                 "present_names_baseline")
 
     def __init__(self, mod_dir):
         self.mod_dir = mod_dir
@@ -50,9 +51,11 @@ class _Session:
         self.dirty = set()      # ini basenames whose text differs from baseline
         self.new_sections = {}  # ini basename -> {section name, ...} added via add_toggle
                                  # this session and not yet exported -- see mark_added
+        self.present_names_baseline = _NO_METADATA_BASELINE
 
 
 _session = None
+_NO_METADATA_BASELINE = object()
 
 
 def _same_mod(mod_dir):
@@ -137,7 +140,9 @@ def peek(mod_dir, ini_path):
 
 def has_pending(mod_dir):
     """True if mod_dir has at least one staged, not-yet-exported edit."""
-    return _same_mod(mod_dir) and bool(_session.dirty)
+    return (_same_mod(mod_dir)
+            and (bool(_session.dirty)
+                 or _session.present_names_baseline is not _NO_METADATA_BASELINE))
 
 
 def list_documents(mod_dir):
@@ -243,10 +248,26 @@ def overrides_for(mod_dir):
     return {doc.path: doc.to_string() for doc in _session.docs.values()}
 
 
+def stage_present_metadata(mod_dir):
+    """Remember PRESENT names before their first staged authoring change."""
+    from . import metadata
+    sess = _get_or_create(mod_dir)
+    if sess.present_names_baseline is _NO_METADATA_BASELINE:
+        sess.present_names_baseline = metadata.all_present_names(mod_dir)
+
+
+def _restore_present_metadata(sess):
+    if sess.present_names_baseline is _NO_METADATA_BASELINE:
+        return
+    from . import metadata
+    metadata.restore_present_names(sess.mod_dir, sess.present_names_baseline)
+
+
 def discard(mod_dir):
     """Drop every pending edit for mod_dir without writing anything."""
     global _session
     if _same_mod(mod_dir):
+        _restore_present_metadata(_session)
         _session = None
 
 
@@ -258,7 +279,10 @@ def export(mod_dir):
     Returns {"saved": [ini basename, ...], "failed": [{"ini": ..., "error":
     ...}, ...]}.
     """
-    if not _same_mod(mod_dir) or not _session.dirty:
+    if not _same_mod(mod_dir):
+        return {"saved": [], "failed": []}
+    if not _session.dirty:
+        _session.present_names_baseline = _NO_METADATA_BASELINE
         return {"saved": [], "failed": []}
 
     saved, failed = [], []
@@ -272,4 +296,6 @@ def export(mod_dir):
             _session.new_sections.pop(key, None)
         except Exception as e:
             failed.append({"ini": key, "error": str(e)})
+    if not _session.dirty:
+        _session.present_names_baseline = _NO_METADATA_BASELINE
     return {"saved": saved, "failed": failed}

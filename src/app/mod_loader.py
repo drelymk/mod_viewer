@@ -67,7 +67,11 @@ def _ini_scope(ini_path, folder_path, multi):
         source = os.path.relpath(parent_dir, folder_path).replace(os.sep, "/")
     else:
         source = os.path.splitext(os.path.basename(ini_path))[0]
-    return f"{source}::", source
+    # `source` is deliberately a compact UI grouping label, so all INIs in a
+    # nested component folder share it.  It cannot also be the parser identity:
+    # sibling files commonly reuse [Key...] names and plain variables.
+    identity = os.path.splitext(_ini_rel(ini_path, folder_path))[0]
+    return f"{identity}::", source
 
 
 def _ini_rel(ini_path, folder_path):
