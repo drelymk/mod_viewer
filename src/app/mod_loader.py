@@ -468,7 +468,8 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
 
 
 def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
-             ini_paths=None, documents=None, geometry=None, context=None):
+             ini_paths=None, documents=None, geometry=None, context=None,
+             texture_source=None):
     """Parse a mod folder and return the structured application payload.
 
     `overrides`, if given, is {ini_path: text} — read that ini from this
@@ -479,6 +480,10 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
     `pending_new_sections`, if given, is {ini basename: {section name, ...}}
     (edit_session.new_sections_for), passed through to build_toggle_panel so
     a freshly-added, not-yet-wired toggle stays visible.
+
+    `texture_source`, if supplied, receives each resolved model texture path and
+    role and returns its application-facing URI. Without it, direct callers
+    retain the eager data-URI compatibility path.
 
     Errors are returned as {"error": ...} rather than raised, since this is
     called across the JS bridge where an exception surfaces as an opaque
@@ -515,7 +520,9 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
                 health=health,
                 error=f"No mesh geometry found across {len(ini_paths)} ini file(s).")
 
-        built = build_mesh_result(groups, folder_path, geometry=geometry)
+        built = build_mesh_result(
+            groups, folder_path, geometry=geometry,
+            texture_source=texture_source)
         mesh_payload = built.meshes
         textures = built.textures
         if not mesh_payload:

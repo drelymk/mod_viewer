@@ -9,6 +9,7 @@ origin lets index.html, the stylesheet and the JS modules be ordinary files.
 Two roots are exposed:
     /            the web/ directory (index.html, css/, js/)
     /vendor/     the vendored Three.js copy, when build.py has fetched it
+    /texture/    opaque URLs for the active load's lazily rendered PNGs
 
 index.html is rendered rather than served verbatim, so the importmap can
 point at either the vendored copy or the CDN.
@@ -21,7 +22,9 @@ import os
 import socketserver
 import threading
 import uuid
+from dataclasses import dataclass
 
+from core.mesh_builder import _render_texture_png, normalize_texture_role
 from . import features, paths
 
 THREE_VERSION = "0.165.0"
@@ -29,9 +32,121 @@ REPO_URL = "https://github.com/drelymk/mod_viewer"
 
 _VENDOR_PREFIX = "/vendor/"
 _GEOMETRY_PREFIX = "/geometry/"
+_TEXTURE_PREFIX = "/texture/"
 _MAX_GEOMETRY_BYTES = 512 * 1024 * 1024
 _geometry_lock = threading.RLock()
 _geometry_blobs = {}
+_texture_lock = threading.RLock()
+_texture_publications = {}
+_active_texture_publication = None
+
+
+@dataclass(frozen=True)
+class TextureSource:
+    """One filesystem source registered in a committed texture publication."""
+
+    path: str
+    role: str = "diffuse"
+    max_size: int = 2048
+    preserve_alpha: bool = False
+
+
+class TexturePublication:
+    """Transactional, opaque URL registry for one application model load."""
+
+    def __init__(self, mod_dir=None):
+        self.token = uuid.uuid4().hex
+        self.mod_dir = (os.path.normcase(os.path.abspath(mod_dir))
+                        if mod_dir else None)
+        self._sources = {}
+        self._dedupe = {}
+        self._state = "pending"
+
+    def register(self, path, role=None, max_size=2048, preserve_alpha=False):
+        """Publish a source once and return its opaque same-origin URL.
+
+        The caller has already resolved the path through the core sandbox. The
+        registry still requires a real file and never exposes that path in the
+        URL, so browser requests can only address sources registered here.
+        """
+        if not path:
+            return None
+        path = os.path.abspath(path)
+        if not os.path.isfile(path):
+            return None
+        role = normalize_texture_role(role)
+        try:
+            max_size = int(max_size)
+        except (TypeError, ValueError):
+            return None
+        if max_size <= 0:
+            return None
+        preserve_alpha = bool(preserve_alpha)
+        dedupe_key = (os.path.normcase(path), role, max_size, preserve_alpha)
+        with _texture_lock:
+            if (_texture_publications.get(self.token) is not self
+                    or self._state == "discarded"):
+                return None
+            source_id = self._dedupe.get(dedupe_key)
+            if source_id is None:
+                source_id = str(len(self._sources))
+                self._dedupe[dedupe_key] = source_id
+                self._sources[source_id] = TextureSource(
+                    path=path, role=role, max_size=max_size,
+                    preserve_alpha=preserve_alpha)
+            return f"{_TEXTURE_PREFIX}{self.token}/{source_id}"
+
+    def commit(self):
+        """Make this publication active and retire every older publication."""
+        global _active_texture_publication
+        with _texture_lock:
+            if self._state == "discarded":
+                return False
+            _texture_publications.clear()
+            _texture_publications[self.token] = self
+            _active_texture_publication = self
+            self._state = "committed"
+            return True
+
+    def discard(self):
+        """Drop only this unfinished publication, preserving the active one."""
+        with _texture_lock:
+            if self._state == "committed":
+                return False
+            _texture_publications.pop(self.token, None)
+            self._state = "discarded"
+            self._sources.clear()
+            self._dedupe.clear()
+            return True
+
+
+def begin_texture_publication(mod_dir=None):
+    """Create a pending texture publication without changing the active one."""
+    publication = TexturePublication(mod_dir)
+    with _texture_lock:
+        _texture_publications[publication.token] = publication
+    return publication
+
+
+def active_texture_publication(mod_dir=None):
+    """Return the committed publication for ``mod_dir``, if it matches."""
+    with _texture_lock:
+        publication = _active_texture_publication
+        if publication is None:
+            return None
+        if mod_dir is not None:
+            requested = os.path.normcase(os.path.abspath(mod_dir))
+            if publication.mod_dir != requested:
+                return None
+        return publication
+
+
+def _lookup_texture(token, source_id):
+    with _texture_lock:
+        publication = _texture_publications.get(token)
+        if publication is None:
+            return None
+        return publication._sources.get(source_id)
 
 
 def publish_geometry(blob):
@@ -119,6 +234,8 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             return self._send_index()
         if path.startswith(_GEOMETRY_PREFIX):
             return self._send_geometry(path[len(_GEOMETRY_PREFIX):])
+        if path.startswith(_TEXTURE_PREFIX):
+            return self._send_texture(path[len(_TEXTURE_PREFIX):])
         return super().do_GET()
 
     def translate_path(self, path):
@@ -183,6 +300,33 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(blob)
+
+    def _send_texture(self, address):
+        """Serve one registered PNG without consuming its publication entry."""
+        parts = address.split("/")
+        if len(parts) != 2 or not all(parts):
+            self.send_error(404, "Texture not found")
+            return
+        token, source_id = parts
+        source = _lookup_texture(token, source_id)
+        if source is None:
+            self.send_error(404, "Texture not found")
+            return
+        png = _render_texture_png(
+            source.path,
+            max_size=source.max_size,
+            preserve_alpha=source.preserve_alpha,
+            texture_role=source.role,
+        )
+        if png is None:
+            self.send_error(404, "Texture unavailable")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(png)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(png)
 
 
 def start():

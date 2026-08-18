@@ -33,6 +33,11 @@ class ModViewerAPI:
             raise PermissionError("This folder was not selected through the native folder picker.")
         return requested
 
+    @staticmethod
+    def _active_texture_source(folder_path):
+        publication = server.active_texture_publication(folder_path)
+        return publication.register if publication is not None else None
+
     def select_folder(self):
         """Open a native folder-picker dialog. Returns None if cancelled."""
         result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
@@ -56,12 +61,16 @@ class ModViewerAPI:
             file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg;*.tga)",))
         if not result:
             return None
-        return encode_texture_file(folder_path, result[0], texture_role)
+        return encode_texture_file(
+            folder_path, result[0], texture_role,
+            texture_source=self._active_texture_source(folder_path))
 
     def load_texture_file(self, folder_path, tex_key):
-        """Encode a known mod-relative picker texture on first use."""
+        """Resolve a known mod-relative picker texture on first use."""
         folder_path = self._folder(folder_path)
-        return encode_texture_key(folder_path, tex_key)
+        return encode_texture_key(
+            folder_path, tex_key,
+            texture_source=self._active_texture_source(folder_path))
 
     def load_mod(self, folder_path):
         folder_path = self._folder(folder_path)
@@ -80,19 +89,31 @@ class ModViewerAPI:
             folder_path, ini_paths, edit_session.documents_for(folder_path),
             metadata.load(folder_path))
         geometry = GeometryBlob()
-        result = mod_loader.load_mod(
-            context=context, overrides=overrides,
-            pending_new_sections=pending_new_sections, geometry=geometry)
-        if isinstance(result, dict) and not result.get("error"):
+        publication = server.begin_texture_publication(folder_path)
+        try:
+            result = mod_loader.load_mod(
+                context=context, overrides=overrides,
+                pending_new_sections=pending_new_sections, geometry=geometry,
+                texture_source=publication.register)
+            if not isinstance(result, dict) or result.get("error"):
+                publication.discard()
+                return result
+
             saved_metadata = context.metadata
             result.setdefault("metadata", {})["mesh_names"] = \
                 saved_metadata.get("mesh_names", {})
-            metadata.hydrate_textures(folder_path, result, saved_metadata)
+            metadata.hydrate_textures(
+                folder_path, result, saved_metadata,
+                texture_source=publication.register)
             controls = result.setdefault("controls", {})
             metadata.hydrate_present(folder_path, controls.get("present"),
                                       saved_metadata)
             server.publish_payload_geometry(result, geometry)
-        return result
+            publication.commit()
+            return result
+        except Exception:
+            publication.discard()
+            raise
 
     def get_diagnostics(self, folder_path):
         """Return the read-only health scan for the current edit revision."""

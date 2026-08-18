@@ -3,8 +3,8 @@
 import * as THREE from 'three';
 import { decodeF32, decodeU32 } from './decode.js';
 
-// Textures arrive as data URIs keyed by name; loaders are cached so several
-// meshes sharing a texture share one GPU upload.
+// Textures arrive as data URIs or same-origin localhost URLs keyed by name;
+// loaders are cached so several meshes sharing a texture share one GPU upload.
 let registry = {};
 const loaders = {};
 // all: diffuse + INI material maps; diffuse: diffuse only; none: flat colour.

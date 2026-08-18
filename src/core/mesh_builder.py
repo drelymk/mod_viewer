@@ -11,10 +11,10 @@ POSITION_OFFSET   = 0
 DEFAULT_UV_OFFSET = 4
 INDEX_SIZE        = 4
 
-# Encoded PNG data URIs are expensive to regenerate during authoring reloads.
-# Keep only the current mod's entries, bounded by encoded string size. A noisy
-# 2048x2048 RGB image can occupy ~16 MiB after base64, so 256 MiB retains about
-# sixteen worst-case textures (and many more typical game textures).
+# Rendered PNGs are expensive to regenerate during authoring reloads. Keep only
+# the current mod's entries, bounded by rendered byte size. A noisy 2048x2048
+# RGB image can occupy ~12 MiB as PNG bytes, so 256 MiB retains about twenty
+# worst-case textures (and many more typical game textures).
 _TEXTURE_CACHE_LIMIT = 256 * 1024 * 1024
 _MAX_BUFFER_FILE_BYTES = 512 * 1024 * 1024
 _MAX_TOTAL_BUFFER_BYTES = 2 * 1024 * 1024 * 1024
@@ -64,19 +64,19 @@ def _begin_texture_cache(mod_dir):
             _texture_cache_mod = root
 
 
-def _cache_texture(key, uri):
+def _cache_texture(key, png):
     global _texture_cache_bytes
-    size = len(uri.encode("ascii"))
+    size = len(png)
     if size > _TEXTURE_CACHE_LIMIT:
         return
     with _texture_cache_lock:
         previous = _texture_cache.pop(key, None)
         if previous is not None:
             _texture_cache_bytes -= previous[1]
-        _texture_cache[key] = (uri, size)
+        _texture_cache[key] = (png, size)
         _texture_cache_bytes += size
         while _texture_cache_bytes > _TEXTURE_CACHE_LIMIT:
-            _old_key, (_old_uri, old_size) = _texture_cache.popitem(last=False)
+            _old_key, (_old_png, old_size) = _texture_cache.popitem(last=False)
             _texture_cache_bytes -= old_size
 
 
@@ -327,9 +327,9 @@ def _extract_light_mask(img):
     return Image.merge("RGB", (blue, blue, blue))
 
 
-def _encode_texture(dds_path, max_size=2048, preserve_alpha=False,
-                    texture_role=None):
-    """DDS → PNG in-memory → base64 data URI.  Returns None on failure."""
+def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
+                        texture_role=None):
+    """Decode and role-process an image into PNG bytes, or return None."""
     try:
         texture_role = normalize_texture_role(texture_role)
         stat = os.stat(dds_path)
@@ -364,16 +364,31 @@ def _encode_texture(dds_path, max_size=2048, preserve_alpha=False,
             img = _extract_light_mask(img)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-        _cache_texture(cache_key, uri)
-        return uri
+        png = buf.getvalue()
+        _cache_texture(cache_key, png)
+        return png
     except Exception as e:
         print(f"  texture skipped: {e}")
         return None
 
 
-def encode_texture_file(mod_dir, abs_path, texture_role=None):
-    """Encode a picked file into ``{tex_key, file, role, uri}``.
+def _encode_texture(dds_path, max_size=2048, preserve_alpha=False,
+                    texture_role=None):
+    """Return the historical base64 data URI compatibility representation."""
+    png = _render_texture_png(dds_path, max_size=max_size,
+                              preserve_alpha=preserve_alpha,
+                              texture_role=texture_role)
+    if png is None:
+        return None
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+def encode_texture_file(mod_dir, abs_path, texture_role=None,
+                        texture_source=None):
+    """Resolve a picked file into ``{tex_key, file, role, uri}``.
+
+    Without ``texture_source`` the URI is the historical eager data URI. With
+    a callback, the callback publishes the source and supplies its URI.
 
     The result uses the same role-aware registry shape as the mesh payload, so
     it can be merged straight into the frontend's shared registry
@@ -400,7 +415,10 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None):
         return {"error": "Selected file is not inside the mod folder."}
     if not os.path.isfile(abs_path):
         return {"error": "Selected file does not exist."}
-    uri = _encode_texture(abs_path, texture_role=texture_role)
+    if texture_source is None:
+        uri = _encode_texture(abs_path, texture_role=texture_role)
+    else:
+        uri = texture_source(abs_path, texture_role)
     if not uri:
         return {"error": "Could not read this file as an image."}
     relative_path = rel.replace(os.sep, "/")
@@ -408,13 +426,14 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None):
             "file": relative_path, "role": texture_role, "uri": uri}
 
 
-def encode_texture_key(mod_dir, key, texture_role=None):
+def encode_texture_key(mod_dir, key, texture_role=None, texture_source=None):
     """Encode a role-aware registry key, accepting legacy path-only keys."""
     role, relative_path = split_texture_key(key, texture_role)
     resolved = _safe_join(mod_dir, relative_path)
     if not resolved:
         return {"error": "Selected file is not inside the mod folder."}
-    return encode_texture_file(mod_dir, resolved, role)
+    return encode_texture_file(mod_dir, resolved, role,
+                               texture_source=texture_source)
 
 
 # ── In-memory mesh payload builder ────────────────────────────────────────────
@@ -546,15 +565,19 @@ def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
     return shape_buffers
 
 
-def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None):
+def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
+                      texture_source=None):
     """
     Build mesh draw entries and a shared texture registry.
 
     Returns :class:`MeshBuildResult` whose ``meshes`` map contains
     ``{draw_label: {pos, uv, idx, tex_key, ...}}`` and whose ``textures`` map
-    contains encoded data URIs keyed by mod-relative filename.  Geometry is
-    written into ``geometry`` when a ``GeometryBlob`` is supplied; otherwise
-    direct callers retain base64 geometry fields for fixture compatibility.
+    contains rendered texture sources keyed by role-aware mod-relative filename.
+    With no ``texture_source`` callback these are encoded data URIs for direct
+    fixture compatibility. The application passes a callback that returns an
+    opaque localhost URL instead. Geometry is written into ``geometry`` when a
+    ``GeometryBlob`` is supplied; otherwise direct callers retain base64
+    geometry fields for fixture compatibility.
 
     `drawindexed` is the ini's [count, start, base] triple (missing for the
     rare unconditional whole-buffer draw); `source` is the per-ini tag from
@@ -583,7 +606,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None):
     _begin_texture_cache(mod_dir)
 
     result:    dict = {}
-    tex_uris:  dict = {}  # role-aware key -> data URI  (encoded once)
+    tex_uris:  dict = {}  # role-aware key -> data URI or lazy source URL
     tex_cache: dict = {}  # (full path, role) -> role-aware key
     ib_cache:  dict = {}  # absolute ib path → raw bytes
     buf_cache: dict = {}  # (pos_path, pos_stride, tc_path, tc_stride) → (positions, uvs)
@@ -645,8 +668,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None):
         # above; the remaining stages only resolve files and pack bytes.
 
         # Resolve texture keys cheaply. Pool-only options are encoded lazily
-        # when selected in the UI; defaults and toggle variants are still
-        # encoded now so synchronous visibility refreshes remain instant.
+        # when selected in the UI. Direct callers encode defaults and toggle
+        # variants now; the application callback only publishes their source.
         def _tex_key(dds_path, texture_role=None):
             if not dds_path or not os.path.exists(dds_path):
                 return None
@@ -664,8 +687,12 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None):
             texture_role = normalize_texture_role(texture_role)
             key = _tex_key(dds_path, texture_role)
             if key and key not in tex_uris:
-                tex_uris[key] = _encode_texture(
-                    dds_path, texture_role=texture_role) or ""
+                if texture_source is None:
+                    value = _encode_texture(
+                        dds_path, texture_role=texture_role)
+                else:
+                    value = texture_source(dds_path, texture_role)
+                tex_uris[key] = value or ""
             return key
 
         # Every diffuse this component's ini ever references, resolved once
@@ -864,7 +891,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None):
     )
 
 
-def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None):
+def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None,
+                       texture_source=None):
     """Compatibility wrapper for direct core fixtures.
 
     The application uses :func:`build_mesh_result`; older tests and scripts
@@ -872,7 +900,8 @@ def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None):
     its private ``__textures__`` entry.
     """
     built = build_mesh_result(groups, mod_dir, max_draws=max_draws,
-                              geometry=geometry)
+                              geometry=geometry,
+                              texture_source=texture_source)
     payload = dict(built.meshes)
     payload["__textures__"] = built.textures
     return payload
