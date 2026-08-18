@@ -9,16 +9,40 @@ const container = document.getElementById('canvas-container');
 export const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(container.clientWidth, container.clientHeight);
-renderer.shadowMap.enabled = true;
 container.appendChild(renderer.domElement);
 
 export const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d1117);
-scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+// Ambient light alone cannot reveal normal-map detail because it has no
+// direction. Keep a soft neutral base plus a low hemisphere fill so surfaces
+// remain readable when the movable key light is in its Gray/off stage.
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35));
 
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
 dirLight.position.set(5, 10, 7);
 scene.add(dirLight);
+scene.add(dirLight.target);
+
+// Compact screen-facing key-light handle. A sprite reads as a viewport control
+// instead of an object in the model, and stays legible from every angle.
+const lightIconCanvas = document.createElement('canvas');
+lightIconCanvas.width = lightIconCanvas.height = 64;
+const lightIconContext = lightIconCanvas.getContext('2d');
+const lightGlow = lightIconContext.createRadialGradient(32, 32, 4, 32, 32, 30);
+lightGlow.addColorStop(0, 'rgba(255,248,190,1)');
+lightGlow.addColorStop(0.35, 'rgba(255,216,102,.95)');
+lightGlow.addColorStop(0.7, 'rgba(255,184,70,.4)');
+lightGlow.addColorStop(1, 'rgba(255,184,70,0)');
+lightIconContext.fillStyle = lightGlow;
+lightIconContext.fillRect(0, 0, 64, 64);
+const lightHandle = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: new THREE.CanvasTexture(lightIconCanvas), transparent: true,
+  depthTest: false, depthWrite: false,
+}));
+lightHandle.renderOrder = 1000;
+lightHandle.visible = true;
+scene.add(lightHandle);
 
 const grid = new THREE.GridHelper(4, 20, 0x21262d, 0x161b22);
 scene.add(grid);
@@ -54,6 +78,13 @@ let clipFar = camera.far;
 let uprightApplied = false;
 let modelQuarterTurns = 0;
 let modelPivot = null;
+let lightDrag = null;
+const lightModes = ['double', 'current', 'off'];
+let lightModeIndex = 0;
+const lightRaycaster = new THREE.Raycaster();
+const lightPointer = new THREE.Vector2();
+const lightDragPlane = new THREE.Plane();
+const lightHit = new THREE.Vector3();
 const INITIAL_CAMERA_DIRECTION = new THREE.Vector3(0, 0, 1);
 const INITIAL_CAMERA_UP = new THREE.Vector3(0, 1, 0);
 
@@ -106,6 +137,13 @@ new ResizeObserver(() => {
   requestAnimationFrame(tick);
   updateViewSnap();
   controls.update();
+  dirLight.target.position.copy(controls.target);
+  lightHandle.position.copy(dirLight.position);
+  const handleMultiplier = lightModes[lightModeIndex] === 'double' ? 2 : 1;
+  const handleSize = Math.max(
+    camera.position.distanceTo(controls.target) * 0.035 * handleMultiplier,
+    0.0001);
+  lightHandle.scale.set(handleSize, handleSize, 1);
   // ArcballControls may restore its startup clip values during a scale
   // operation. Reapply the viewer's model-scaled planes after that update.
   const viewDistance = camera.position.distanceTo(controls.target);
@@ -131,6 +169,80 @@ export function toggleTrackballGizmo() {
   document.getElementById('trackball-btn').classList.toggle('active', visible);
   document.getElementById('trackball-btn').classList.toggle('off', !visible);
 }
+
+export function toggleLightHandle() {
+  lightModeIndex = (lightModeIndex + 1) % lightModes.length;
+  const mode = lightModes[lightModeIndex];
+  const visible = mode !== 'off';
+  lightHandle.visible = visible;
+  dirLight.intensity = mode === 'double' ? 1 : (mode === 'current' ? 0.5 : 0);
+  const button = document.getElementById('light-btn');
+  button.classList.toggle('double', mode === 'double');
+  button.classList.toggle('current', mode === 'current');
+  button.classList.toggle('off', mode === 'off');
+  const labels = {
+    double: 'Key light: double brightness and handle size',
+    current: 'Key light: normal (drag; Shift-drag for depth)',
+    off: 'Key light: off',
+  };
+  button.title = labels[mode];
+  button.setAttribute('aria-label', labels[mode]);
+  renderer.domElement.style.cursor = visible ? 'crosshair' : '';
+}
+
+function updateLightPointer(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  lightPointer.set(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1);
+  lightRaycaster.setFromCamera(lightPointer, camera);
+}
+
+renderer.domElement.addEventListener('pointerdown', event => {
+  if (!lightHandle.visible || event.button !== 0) return;
+  updateLightPointer(event);
+  if (!lightRaycaster.intersectObject(lightHandle, false).length) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
+  lightDragPlane.setFromNormalAndCoplanarPoint(cameraDirection, dirLight.position);
+  lightDrag = {
+    pointerId: event.pointerId,
+    depthMode: event.shiftKey,
+    startY: event.clientY,
+    startPosition: dirLight.position.clone(),
+    cameraDirection,
+    depthScale: Math.max(camera.position.distanceTo(controls.target) * 0.004,
+      0.0001),
+  };
+  controls.enabled = false;
+  renderer.domElement.setPointerCapture(event.pointerId);
+  renderer.domElement.style.cursor = 'grabbing';
+}, { capture: true });
+
+renderer.domElement.addEventListener('pointermove', event => {
+  if (!lightDrag || event.pointerId !== lightDrag.pointerId) return;
+  if (lightDrag.depthMode) {
+    dirLight.position.copy(lightDrag.startPosition).addScaledVector(
+      lightDrag.cameraDirection,
+      (lightDrag.startY - event.clientY) * lightDrag.depthScale);
+    return;
+  }
+  updateLightPointer(event);
+  if (lightRaycaster.ray.intersectPlane(lightDragPlane, lightHit)) {
+    dirLight.position.copy(lightHit);
+  }
+});
+
+function finishLightDrag(event) {
+  if (!lightDrag || event.pointerId !== lightDrag.pointerId) return;
+  renderer.domElement.releasePointerCapture(event.pointerId);
+  lightDrag = null;
+  controls.enabled = true;
+  renderer.domElement.style.cursor = lightHandle.visible ? 'crosshair' : '';
+}
+renderer.domElement.addEventListener('pointerup', finishLightDrag);
+renderer.domElement.addEventListener('pointercancel', finishLightDrag);
 
 /** The canvas runs behind the floating side panels. Aim the projection at the
  * center of the unobstructed region while leaving controls.target on the
@@ -430,6 +542,14 @@ export function fitTo(meshes) {
   viewSnap = null;
   camera.up.copy(INITIAL_CAMERA_UP);
   frameView(meshes, INITIAL_CAMERA_DIRECTION, bSize.y * 0.08);
+  // Directional lights ignore distance, but their draggable helper does not.
+  // Rebase it for every model so tiny, huge, or far-from-origin meshes keep
+  // the marker inside the newly fitted view (Beidou exposed the fixed-world
+  // position bug).
+  const lightDistance = Math.max(size * 0.55, 0.001);
+  dirLight.position.copy(controls.target).addScaledVector(
+    new THREE.Vector3(-0.55, 0.82, 0.35).normalize(), lightDistance);
+  lightHandle.position.copy(dirLight.position);
   homeView = {
     position: camera.position.clone(),
     target: controls.target.clone(),

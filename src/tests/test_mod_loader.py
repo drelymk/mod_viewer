@@ -15,21 +15,11 @@ the app has no business loading or touching it at all (see
 .copilot/context.md's Key decisions for the full rationale).
 """
 
-import os, struct, sys, tempfile
+import os, struct, tempfile
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.mod_loader import (_attach_shape_sliders, build_toggle_panel,
-                            load_mod, RESERVED_KEYS, _parse_inis)
-
-FAILS = []
-
-
-def check(cond, msg):
-    print(("PASS  " if cond else "FAIL  ") + msg)
-    if not cond:
-        FAILS.append(msg)
+                            load_mod, _parse_inis)
 
 
 def _key(name, varvals, key="", key_display="", source=None, ini_path="mod.ini"):
@@ -46,11 +36,11 @@ def test_wired_toggle_shows_only_its_gating_vars():
     shown — and the whole section counts as wired."""
     toggle_keys = {"KeyUpper": _key("Upper", {"Upper": ["0", "1"], "TT": ["0", "1"]})}
     panel = build_toggle_panel(toggle_keys, {}, gating_vars={"Upper"}, mod_dir=None)
-    check("KeyUpper" in panel, "the section appears")
+    assert ("KeyUpper" in panel), ("the section appears")
     entry = panel["KeyUpper"]
-    check(entry["wired"] is True, f"marked wired (got {entry['wired']})")
+    assert (entry["wired"] is True), (f"marked wired (got {entry['wired']})")
     names = [v["var"] for v in entry["vars"]]
-    check(names == ["Upper"], f"only the gating var is listed (got {names})")
+    assert (names == ["Upper"]), (f"only the gating var is listed (got {names})")
 
 
 def test_unwired_pending_toggle_shown_with_writable_vars():
@@ -61,11 +51,11 @@ def test_unwired_pending_toggle_shown_with_writable_vars():
     toggle_keys = {"KeyNew": _key("New", {"Fresh": ["0", "1", "2"]})}
     panel = build_toggle_panel(toggle_keys, {}, gating_vars=set(), mod_dir=None,
                                pending_new_sections={"mod.ini": {"KeyNew"}})
-    check("KeyNew" in panel, "a pending, not-yet-gating toggle still appears in the panel")
+    assert ("KeyNew" in panel), ("a pending, not-yet-gating toggle still appears in the panel")
     entry = panel["KeyNew"]
-    check(entry["wired"] is False, f"marked unwired (got {entry['wired']})")
+    assert (entry["wired"] is False), (f"marked unwired (got {entry['wired']})")
     names = [v["var"] for v in entry["vars"]]
-    check(names == ["Fresh"], f"its writable var is listed for Record to use (got {names})")
+    assert (names == ["Fresh"]), (f"its writable var is listed for Record to use (got {names})")
 
 
 def test_unwired_non_pending_toggle_is_hidden():
@@ -76,11 +66,11 @@ def test_unwired_non_pending_toggle_is_hidden():
     argument at all (the default) behaves the same way."""
     toggle_keys = {"KeyMenu": _key("Menu", {"menu": ["0", "1"]})}
     panel = build_toggle_panel(toggle_keys, {}, gating_vars=set(), mod_dir=None)
-    check("KeyMenu" not in panel, "a non-gating, non-pending section is never shown")
+    assert ("KeyMenu" not in panel), ("a non-gating, non-pending section is never shown")
 
     panel2 = build_toggle_panel(toggle_keys, {}, gating_vars=set(), mod_dir=None,
                                 pending_new_sections={"mod.ini": {"KeyOther"}})
-    check("KeyMenu" not in panel2, "still hidden when pending_new_sections lists a different section")
+    assert ("KeyMenu" not in panel2), ("still hidden when pending_new_sections lists a different section")
 
 
 def test_pending_new_sections_scoped_by_ini():
@@ -89,7 +79,7 @@ def test_pending_new_sections_scoped_by_ini():
     toggle_keys = {"KeyNew": _key("New", {"Fresh": ["0", "1"]}, ini_path="other.ini")}
     panel = build_toggle_panel(toggle_keys, {}, gating_vars=set(), mod_dir=None,
                                pending_new_sections={"mod.ini": {"KeyNew"}})
-    check("KeyNew" not in panel, "same section name in a different ini doesn't match")
+    assert ("KeyNew" not in panel), ("same section name in a different ini doesn't match")
 
 
 def test_unwired_toggle_excludes_namespaced_vars():
@@ -101,9 +91,9 @@ def test_unwired_toggle_excludes_namespaced_vars():
     })}
     panel = build_toggle_panel(toggle_keys, {}, gating_vars=set(), mod_dir=None,
                                pending_new_sections={"mod.ini": {"KeyMixed"}})
-    check("KeyMixed" in panel, "the section still appears (has a writable var)")
+    assert ("KeyMixed" in panel), ("the section still appears (has a writable var)")
     names = [v["var"] for v in panel["KeyMixed"]["vars"]]
-    check(names == ["Local"], f"only the non-namespaced var is listed (got {names})")
+    assert (names == ["Local"]), (f"only the non-namespaced var is listed (got {names})")
 
 
 def test_fully_namespaced_ungated_pending_section_is_still_hidden():
@@ -115,7 +105,7 @@ def test_fully_namespaced_ungated_pending_section_is_still_hidden():
     toggle_keys = {"KeyGlobal": _key("Global", {"\\Mod\\Master\\swapvar": ["0", "1"]})}
     panel = build_toggle_panel(toggle_keys, {}, gating_vars=set(), mod_dir=None,
                                pending_new_sections={"mod.ini": {"KeyGlobal"}})
-    check("KeyGlobal" not in panel, "a section with nothing recordable is still dropped")
+    assert ("KeyGlobal" not in panel), ("a section with nothing recordable is still dropped")
 
 
 def test_default_prefers_declared_default_over_first_cycle_value():
@@ -127,7 +117,7 @@ def test_default_prefers_declared_default_over_first_cycle_value():
     panel = build_toggle_panel(toggle_keys, {"Fresh": "1"}, gating_vars=set(), mod_dir=None,
                                pending_new_sections={"mod.ini": {"KeyNew"}})
     entry = panel["KeyNew"]["vars"][0]
-    check(entry["default"] == "1", f"declared default wins over values[0] (got {entry['default']!r})")
+    assert (entry["default"] == "1"), (f"declared default wins over values[0] (got {entry['default']!r})")
 
 
 def test_wired_and_unwired_can_coexist_across_sections():
@@ -141,9 +131,9 @@ def test_wired_and_unwired_can_coexist_across_sections():
     }
     panel = build_toggle_panel(toggle_keys, {}, gating_vars={"Upper"}, mod_dir=None,
                                pending_new_sections={"mod.ini": {"KeyNew"}})
-    check(panel.get("KeyUpper", {}).get("wired") is True, "the pre-existing toggle stays wired")
-    check(panel.get("KeyNew", {}).get("wired") is False, "the pending new toggle is present and marked unwired")
-    check("KeyMenu" not in panel, "the unrelated non-gating, non-pending key stays hidden")
+    assert (panel.get("KeyUpper", {}).get("wired") is True), ("the pre-existing toggle stays wired")
+    assert (panel.get("KeyNew", {}).get("wired") is False), ("the pending new toggle is present and marked unwired")
+    assert ("KeyMenu" not in panel), ("the unrelated non-gating, non-pending key stays hidden")
 
 
 def test_shape_sliders_follow_mid_section_position_reassignments():
@@ -167,9 +157,8 @@ def test_shape_sliders_follow_mid_section_position_reassignments():
     ]
     _attach_shape_sliders(groups, sliders)
     attached = groups[0].get("shape_sliders", [])
-    check([item["target_file"] for item in attached] ==
-          [r"Meshes\LegsPositionFlat.buf", r"Meshes\BodyPositionFlat.buf"],
-          f"group receives its base and reassigned-draw morphs only (got {attached})")
+    assert ([item["target_file"] for item in attached] ==
+          [r"Meshes\LegsPositionFlat.buf", r"Meshes\BodyPositionFlat.buf"]), (f"group receives its base and reassigned-draw morphs only (got {attached})")
 
 
 def test_nested_ini_resources_are_relative_to_their_ini():
@@ -205,16 +194,12 @@ format = R32_UINT
                 stream.write(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
 
         payload = load_mod(root)
-        meshes = [value for key, value in payload.items()
-                  if key not in RESERVED_KEYS]
-        check(not payload.get("error") and len(meshes) == 2,
-              "root and nested geometry both load from same-named local buffers")
-        check({mesh.get("source") for mesh in meshes} == {"root", "nested"},
-              "nested geometry keeps a distinct root-relative source label")
+        meshes = list(payload.get("meshes", {}).values())
+        assert (not payload.get("error") and len(meshes) == 2), ("root and nested geometry both load from same-named local buffers")
+        assert ({mesh.get("source") for mesh in meshes} == {"root", "nested"}), ("nested geometry keeps a distinct root-relative source label")
         source_inis = {src.get("ini") for mesh in meshes
                        for src in mesh.get("sources", [])}
-        check("nested/nested.ini" in source_inis,
-              "nested mesh provenance uses a root-relative INI path")
+        assert ("nested/nested.ini" in source_inis), ("nested mesh provenance uses a root-relative INI path")
 
 
 def test_nested_sibling_inis_have_unique_parser_namespaces():
@@ -237,12 +222,9 @@ $swapvar = 0,1
 
         _groups, toggles, _menu, defaults, _rules, _present = _parse_inis(
             paths, root)
-        check(set(toggles) == {"nested/body::KeySwap", "nested/hair::KeySwap"},
-              "nested sibling INIs keep duplicate key sections distinct")
-        check(set(defaults) == {"nested/body::swapvar", "nested/hair::swapvar"},
-              "nested sibling INIs keep duplicate variables distinct")
-        check({item.get("source") for item in toggles.values()} == {"nested"},
-              "unique parser identities retain the shared compact UI group")
+        assert (set(toggles) == {"nested/body::KeySwap", "nested/hair::KeySwap"}), ("nested sibling INIs keep duplicate key sections distinct")
+        assert (set(defaults) == {"nested/body::swapvar", "nested/hair::swapvar"}), ("nested sibling INIs keep duplicate variables distinct")
+        assert ({item.get("source") for item in toggles.values()} == {"nested"}), ("unique parser identities retain the shared compact UI group")
 
 
 def test_nested_sibling_menu_images_do_not_bleed():
@@ -277,24 +259,5 @@ filename = {1}.dds
             paths, root)
         images = {os.path.basename(info["ini_path"]): info.get("image_file")
                   for info in menu.values() if info.get("slot") == 1}
-        check(images == {"body.ini": os.path.join("nested", "body.dds"),
-                         "hair.ini": os.path.join("nested", "hair.dds")},
-              f"nested sibling menu entries retain their own images (got {images})")
-
-
-if __name__ == "__main__":
-    for fn in (test_wired_toggle_shows_only_its_gating_vars,
-               test_unwired_pending_toggle_shown_with_writable_vars,
-               test_unwired_non_pending_toggle_is_hidden,
-               test_pending_new_sections_scoped_by_ini,
-               test_unwired_toggle_excludes_namespaced_vars,
-               test_fully_namespaced_ungated_pending_section_is_still_hidden,
-               test_default_prefers_declared_default_over_first_cycle_value,
-               test_wired_and_unwired_can_coexist_across_sections,
-               test_shape_sliders_follow_mid_section_position_reassignments,
-               test_nested_ini_resources_are_relative_to_their_ini,
-               test_nested_sibling_inis_have_unique_parser_namespaces,
-               test_nested_sibling_menu_images_do_not_bleed):
-        fn()
-    print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
-    sys.exit(1 if FAILS else 0)
+        assert (images == {"body.ini": os.path.join("nested", "body.dds"),
+                         "hair.ini": os.path.join("nested", "hair.dds")}), (f"nested sibling menu entries retain their own images (got {images})")

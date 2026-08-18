@@ -235,7 +235,7 @@ function buildSourceSection(source, container) {
 }
 
 /**
- * Build the panel from the payload's __toggles__ model.
+ * Build the panel from the structured controls.toggles model.
  *
  * Entries carry a `source` (ini tag) when the mod folder has multiple inis —
  * same-named keys are grouped under a collapsible per-ini sub-section instead

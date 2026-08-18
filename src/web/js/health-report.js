@@ -7,6 +7,8 @@ const $ = (id) => document.getElementById(id);
 
 let currentReport = null;
 let currentFilter = 'all';
+let reportLoader = null;
+let loadingReport = false;
 
 function matchesFilter(issue) {
   if (currentFilter === 'all') return true;
@@ -108,18 +110,47 @@ export function setHealthReport(report) {
   const button = $('health-btn');
   const count = report?.summary?.issues || 0;
   const errors = report?.summary?.errors || 0;
-  button.disabled = !report;
+  button.disabled = !report && !reportLoader;
   button.classList.toggle('healthy', !!report && count === 0);
   button.classList.toggle('warning', !!report && count > 0 && errors === 0);
   button.classList.toggle('error', errors > 0);
   $('health-count').textContent = String(count);
-  button.title = !report ? 'Open a mod to run INI diagnostics'
+  button.title = !report ? (reportLoader ? 'Run INI diagnostics' : 'Open a mod to run INI diagnostics')
     : count ? `${count} INI diagnostic issue${count === 1 ? '' : 's'}`
       : 'No INI issues found';
   if ($('health-modal-backdrop').classList.contains('show')) renderReport();
 }
 
-function openReport() {
+export function setHealthLoader(loader) {
+  reportLoader = typeof loader === 'function' ? loader : null;
+  if (!currentReport) setHealthReport(null);
+}
+
+async function openReport() {
+  if (!currentReport && reportLoader && !loadingReport) {
+    loadingReport = true;
+    const button = $('health-btn');
+    button.disabled = true;
+    button.title = 'Running INI diagnostics…';
+    try {
+      const report = await reportLoader();
+      setHealthReport(report && !report.error ? report : {
+        summary: { errors: 0, warnings: 1, issues: 1 },
+        files: {},
+        issues: [{ severity: 'warning', category: 'ini',
+          message: 'The INI diagnostics could not be completed.' }],
+      });
+    } catch (error) {
+      setHealthReport({
+        summary: { errors: 0, warnings: 1, issues: 1 },
+        files: {},
+        issues: [{ severity: 'warning', category: 'ini',
+          message: `The INI diagnostics could not be completed: ${error.message}` }],
+      });
+    } finally {
+      loadingReport = false;
+    }
+  }
   if (!currentReport) return;
   currentFilter = 'all';
   for (const button of $('health-filters').querySelectorAll('button')) {

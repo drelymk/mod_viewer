@@ -36,13 +36,14 @@ mod_loader.build_toggle_panel/unwired_pending_sections.
 """
 
 import os
+from copy import deepcopy
 
 from core.ini_document import IniDocument
 
 
 class _Session:
     __slots__ = ("mod_dir", "docs", "baselines", "dirty", "new_sections",
-                 "present_names_baseline")
+                 "present_names_baseline", "revision", "diagnostics_cache")
 
     def __init__(self, mod_dir):
         self.mod_dir = mod_dir
@@ -52,6 +53,8 @@ class _Session:
         self.new_sections = {}  # ini basename -> {section name, ...} added via add_toggle
                                  # this session and not yet exported -- see mark_added
         self.present_names_baseline = _NO_METADATA_BASELINE
+        self.revision = 0
+        self.diagnostics_cache = None
 
 
 _session = None
@@ -74,6 +77,12 @@ def _key(mod_dir, path):
     return os.path.relpath(os.path.abspath(path), os.path.abspath(mod_dir)).replace(os.sep, "/")
 
 
+def _touch(sess):
+    """Advance the authoritative document revision and invalidate derived data."""
+    sess.revision += 1
+    sess.diagnostics_cache = None
+
+
 def load_documents(mod_dir, ini_paths):
     """Load every active INI into the authoritative in-memory session.
 
@@ -83,6 +92,7 @@ def load_documents(mod_dir, ini_paths):
     session; the frontend confirms before allowing that switch when dirty.
     """
     sess = _get_or_create(mod_dir)
+    added = False
     for path in ini_paths:
         key = _key(mod_dir, path)
         if key in sess.docs:
@@ -90,6 +100,9 @@ def load_documents(mod_dir, ini_paths):
         doc = IniDocument.load(path)
         sess.docs[key] = doc
         sess.baselines[key] = doc.to_string()
+        added = True
+    if added:
+        _touch(sess)
     return sess
 
 
@@ -119,6 +132,7 @@ def commit(sess, key, doc):
         sess.new_sections.pop(key, None)
     else:
         sess.dirty.add(key)
+    _touch(sess)
 
 
 def rollback(sess, key, was_pending, snapshot, ini_path):
@@ -150,6 +164,49 @@ def list_documents(mod_dir):
     if not _same_mod(mod_dir):
         return []
     return list(_session.docs)
+
+
+def document_paths(mod_dir):
+    """Absolute paths for the active INIs already loaded in this session."""
+    if not _same_mod(mod_dir):
+        return []
+    return [doc.path for doc in _session.docs.values()]
+
+
+def documents_for(mod_dir):
+    """Map absolute INI paths to their authoritative staged documents."""
+    if not _same_mod(mod_dir):
+        return {}
+    return {doc.path: doc for doc in _session.docs.values()}
+
+
+def current_revision(mod_dir):
+    """Return the revision of the authoritative document set, or ``None``."""
+    return _session.revision if _same_mod(mod_dir) else None
+
+
+def cached_diagnostics(mod_dir):
+    """Return a detached diagnostics report for the current revision, if any."""
+    if not _same_mod(mod_dir) or _session.diagnostics_cache is None:
+        return None
+    revision, report = _session.diagnostics_cache
+    if revision != _session.revision:
+        return None
+    return deepcopy(report)
+
+
+def cache_diagnostics(mod_dir, report):
+    """Cache and return a detached diagnostics report for this revision."""
+    if not _same_mod(mod_dir):
+        return deepcopy(report)
+    _session.diagnostics_cache = (_session.revision, deepcopy(report))
+    return deepcopy(report)
+
+
+def invalidate_diagnostics(mod_dir):
+    """Invalidate diagnostics derived from viewer metadata without editing INIs."""
+    if _same_mod(mod_dir):
+        _session.diagnostics_cache = None
 
 
 def dirty_documents(mod_dir):

@@ -19,7 +19,8 @@ def _format_key_combo(combo):
     return "+".join(mods + [key_part])
 
 
-def extract_toggle_keys(sections, var_prefix=None, source=None):
+def extract_toggle_keys(sections, var_prefix=None, source=None,
+                        canonical_vars=None):
     """Return {group: {name, key, key_display, vars, source}} for cycle-type
     [Key...] sections, where `vars` is {variable: [cycle values]}.
 
@@ -31,7 +32,8 @@ def extract_toggle_keys(sections, var_prefix=None, source=None):
     filename) tags each entry so the UI can group same-named keys into per-ini
     sub-sections instead of lengthening every display name."""
     keys = {}
-    canon = canonical_var_names(sections)
+    canon = (canonical_vars if canonical_vars is not None
+             else canonical_var_names(sections))
     for name, lines in sections.items():
         if not name.startswith("Key"): continue
         key_combo, back_combo, ktype, cvars = None, None, None, {}
@@ -67,22 +69,27 @@ def extract_toggle_keys(sections, var_prefix=None, source=None):
     return keys
 
 
-def extract_toggle_var_names(sections, var_prefix=None):
+def extract_toggle_var_names(sections, var_prefix=None, toggle_keys=None,
+                             canonical_vars=None):
     """Flat set of every variable driven by a cycle-type [Key...] section."""
+    toggle_keys = (toggle_keys if toggle_keys is not None else
+                   extract_toggle_keys(sections, var_prefix=var_prefix,
+                                       canonical_vars=canonical_vars))
     return {var
-            for info in extract_toggle_keys(sections, var_prefix=var_prefix).values()
+            for info in toggle_keys.values()
             for var in info["vars"]}
 
 
 _DEFAULT_VAR_RE = re.compile(r'^(?:global\s+)?(?:persist\s+)?\$(\w+)\s*=\s*([^,]+)$', re.I)
 
 
-def extract_variable_defaults(sections, var_prefix=None):
+def extract_variable_defaults(sections, var_prefix=None, canonical_vars=None):
     """Return {variable: default_value} from `global [persist] $var = value` lines
     (comma-separated cycle-list assignments inside Key sections don't match).
     var_prefix namespaces keys so same-named vars from different ini files don't collide."""
     defaults = {}
-    canon = canonical_var_names(sections)
+    canon = (canonical_vars if canonical_vars is not None
+             else canonical_var_names(sections))
     for lines in sections.values():
         for line in lines:
             m = _DEFAULT_VAR_RE.match(line.strip())

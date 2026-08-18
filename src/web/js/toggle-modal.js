@@ -72,7 +72,7 @@ async function populateIniPicker(modPath, selected, editable) {
 /**
  * Open the modal in 'add' or 'edit' mode.
  *   add:  { mode: 'add', modPath, onSaved }
- *   edit: { mode: 'edit', modPath, info, onSaved }  — info is a __toggles__
+ *   edit: { mode: 'edit', modPath, info, onSaved }  — info is a controls.toggles
  *         payload entry (needs .ini, .section, .name); the real field values
  *         are re-read fresh from disk via get_toggle_details.
  */

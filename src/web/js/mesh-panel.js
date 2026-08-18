@@ -2,23 +2,23 @@
 // source ini (mirroring the Toggle panel); within each, one collapsible group
 // per component, one checkbox per draw call within it.
 
-import { addTexture, buildMesh, hasTexture, setMeshTexture } from './mesh-factory.js';
+import { addTexture, buildMesh, hasTexture, setMeshMaterialMaps,
+         setMeshTexture } from './mesh-factory.js';
 import { activeMeshes, addMesh, applyMeshVisibility, registerGroup,
          setManualTexOverride } from './visibility.js';
 import { selectMesh } from './selection.js';
-import { RESERVED_KEYS } from './payload.js';
 import { openTextureModal } from './texture-modal.js';
+import { setHealthReport } from './health-report.js';
 
 /** Bucket mesh names by their ini "source" tag (see app/mod_loader.py's
  * _ini_scope). Single-ini mods carry no tag at all — everything lands in the
  * '' bucket, which buildMeshPanel renders flat with no per-ini header,
  * exactly like the Toggle panel. */
-function groupBySource(payload) {
+function groupBySource(meshes) {
   const grouped = {};
-  for (const name of Object.keys(payload)) {
-    if (RESERVED_KEYS.includes(name)) continue;
-    if (payload[name]?.error) continue;
-    const src = payload[name].source || '';
+  for (const name of Object.keys(meshes)) {
+    if (meshes[name]?.error) continue;
+    const src = meshes[name].source || '';
     (grouped[src] = grouped[src] || []).push(name);
   }
   return grouped;
@@ -31,10 +31,10 @@ function groupBySource(payload) {
  * means a cross-ini name collision's internal "_2" uniqueness suffix (see
  * core/ini_parser.py's build_draw_groups) never leaks into the displayed
  * group header — the per-source section above it already disambiguates. */
-function groupByComponent(names, payload) {
+function groupByComponent(names, meshes) {
   const grouped = {};
   for (const name of names) {
-    const explicit = payload[name]?.component;
+    const explicit = meshes[name]?.component;
     let key = explicit;
     if (!key) {
       const m = name.match(/^(.+)-\d+$/);
@@ -134,17 +134,49 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath, onPoolChan
  * inheritance is recomputed from top to bottom after every selection. */
 function recomputeTextureRuns(groupMeshes) {
   let activeKey = null;
+  let activeMaps = null;
   for (const item of groupMeshes) {
     if (item.userData.manualTexOverride !== undefined) {
       activeKey = item.userData.manualTexOverride;
+      const option = (item.userData.texturePool || [])
+        .find(opt => opt.tex_key === activeKey);
+      activeMaps = option ? {
+        normal_map: option.normal_map || null,
+        light_map: option.light_map || null,
+        material_map: option.material_map || null,
+      } : null;
     } else if (item.userData.automaticTextureBoundary
                && !item.userData.textureHighlightDisabled) {
       // Follow the texture currently resolved by toggle/menu state, not the
       // immutable load-time default. This boundary then applies downward only
       // until the next highlighted boundary in this component.
       activeKey = item.userData.resolvedTexKey;
+      const diffuseKeys = new Set([
+        activeKey,
+        item.userData.defaultTexKey,
+        ...(item.userData.textureVariants || []).map(variant => variant.tex_key),
+      ].filter(Boolean));
+      for (const option of (item.userData.texturePool || [])) {
+        if (!diffuseKeys.has(option.tex_key)) continue;
+        const resolvedMaps = {
+          normal_map: item.userData.resolvedNormalMapKey,
+          light_map: item.userData.resolvedLightMapKey,
+          material_map: item.userData.resolvedMaterialMapKey,
+        };
+        for (const [field, key] of Object.entries(resolvedMaps)) {
+          if (option[`${field}_manual`]) continue;
+          if (key) option[field] = key;
+          else delete option[field];
+        }
+      }
+      activeMaps = null;
     }
     setMeshTexture(item, activeKey);
+    setMeshMaterialMaps(item, activeMaps || {
+      normal_map: item.userData.resolvedNormalMapKey,
+      light_map: item.userData.resolvedLightMapKey,
+      material_map: item.userData.resolvedMaterialMapKey,
+    });
   }
 }
 
@@ -189,9 +221,22 @@ function saveTextureState(modPath) {
       tex_key: texKey,
       label: option.label,
       manual,
+      normal_map: option.normal_map || null,
+      light_map: option.light_map || null,
+      material_map: option.material_map || null,
+      normal_map_manual: !!option.normal_map_manual,
+      light_map_manual: !!option.light_map_manual,
+      material_map_manual: !!option.material_map_manual,
     };
   }
-  window.pywebview.api.save_mesh_textures(modPath, state);
+  const request = window.pywebview.api.save_mesh_textures(modPath, state);
+  if (request && typeof request.then === 'function') {
+    request.then(result => {
+      if (!result?.error) setHealthReport(null);
+    }, () => {});
+  } else {
+    setHealthReport(null);
+  }
 }
 
 function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
@@ -391,21 +436,21 @@ function updateTexButtonState(texBtn, itemObjs) {
   texBtn.classList.toggle('active', itemObjs.some(m => !!m.material.map));
 }
 
-/** Build the panel and add every mesh in the payload to the scene. `modPath`
+/** Build the panel and add every mesh in the mesh map to the scene. `modPath`
  * is threaded through to the per-component texture popup, which needs it to
  * open the native file picker rooted at the mod folder. */
-export function buildMeshPanel(payload, modPath, meshNames = {}) {
+export function buildMeshPanel(meshes, modPath, meshNames = {}) {
   const list = document.getElementById('mesh-list');
   list.innerHTML = '';
 
-  const bySource = groupBySource(payload);
+  const bySource = groupBySource(meshes);
   const sources = Object.keys(bySource);
   const multiSource = sources.length > 1 || (sources.length === 1 && sources[0] !== '');
 
   for (const src of sources) {
     const container = (multiSource && src) ? buildSourceSection(src, list) : list;
 
-    for (const [groupName, names] of Object.entries(groupByComponent(bySource[src], payload))) {
+    for (const [groupName, names] of Object.entries(groupByComponent(bySource[src], meshes))) {
       const itemsWrap = document.createElement('div');
       itemsWrap.className = 'group-items';
 
@@ -417,7 +462,7 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
       // something to push an added texture into; it's captured by this
       // closure, so reopening the popup for the same component within the
       // session sees what was added.
-      const texturePool = names.map(n => payload[n].texture_options).find(Boolean) || [];
+      const texturePool = names.map(n => meshes[n].texture_options).find(Boolean) || [];
 
       const itemCbs = [], itemObjs = [], texListRenderers = [];
       const highlightedDefaults = new Set();
@@ -428,6 +473,7 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
       // already-built DOM rows.
       const onPoolChange = () => {
         texListRenderers.forEach(r => r());
+        recomputeTextureRuns(itemObjs);
         onActiveChanged();
         saveTextureState(modPath);
       };
@@ -437,17 +483,22 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
       container.append(hdr, itemsWrap);
 
       for (const name of names) {
-        const mesh = buildMesh(name, payload[name]);
-        mesh.userData.metadataKey = metadataKey(name, payload[name]);
+        const mesh = buildMesh(name, meshes[name]);
+        mesh.userData.metadataKey = metadataKey(name, meshes[name]);
         mesh.userData.texturePool = texturePool;
         mesh.userData.displayName = meshNames[mesh.userData.metadataKey] || null;
         mesh.userData.meshNames = meshNames;
         mesh.userData.modPath = modPath;
-        addMesh(mesh, payload[name].conditions, payload[name].sources, payload[name].texture_variants);
+        addMesh(mesh, meshes[name].conditions, meshes[name].sources,
+          meshes[name].texture_variants, {
+            normal_map: meshes[name].normal_map_variants,
+            light_map: meshes[name].light_map_variants,
+            material_map: meshes[name].material_map_variants,
+          });
         // addMesh establishes the automatic defaults; restore persisted
         // viewer choices only after that initialization has completed.
-        if (Object.hasOwn(payload[name], 'saved_texture_override')) {
-          mesh.userData.manualTexOverride = payload[name].saved_texture_override;
+        if (Object.hasOwn(meshes[name], 'saved_texture_override')) {
+          mesh.userData.manualTexOverride = meshes[name].saved_texture_override;
         }
         itemObjs.push(mesh);
         // The first mesh for each resolved texture becomes an automatic
@@ -459,7 +510,7 @@ export function buildMeshPanel(payload, modPath, meshNames = {}) {
           mesh.userData.automaticTextureBoundary = true;
         }
         const { wrap, renderTexList } = buildDrawRow(
-          name, groupName, payload[name], mesh, texturePool, itemCbs, masterCb,
+          name, groupName, meshes[name], mesh, texturePool, itemCbs, masterCb,
           itemObjs, onActiveChanged);
         texListRenderers.push(renderTexList);
         itemsWrap.appendChild(wrap);

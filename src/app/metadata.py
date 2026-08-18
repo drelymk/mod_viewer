@@ -4,7 +4,8 @@ import os
 import threading
 from copy import deepcopy
 
-from core.mesh_builder import encode_texture_file
+from core.mesh_builder import (encode_texture_key, normalize_texture_key,
+                               split_texture_key)
 
 METADATA_NAME = ".mod_viewer.json"
 PRESENT_NAMES_KEY = "__all__"
@@ -53,8 +54,8 @@ def save_textures(folder_path, textures):
         return _save(folder_path, data)
 
 
-def present_names(folder_path, ini_rel):
-    data = load(folder_path).get("present_names", {})
+def present_names(folder_path, ini_rel, data=None):
+    data = (load(folder_path) if data is None else data).get("present_names", {})
     names = data.get(ini_rel, {}) if isinstance(data, dict) else {}
     if not isinstance(names, dict):
         return {}
@@ -160,24 +161,31 @@ def delete_present_name(folder_path, ini_rel, position, old_count):
         return _save(folder_path, data)
 
 
-def hydrate_present(folder_path, present):
+def hydrate_present(folder_path, present, data=None):
     item = present.get("item") if isinstance(present, dict) else None
     if not isinstance(item, dict):
         return
     count = int(item.get("count") or 0)
-    custom = present_names(folder_path, PRESENT_NAMES_KEY)
+    data = load(folder_path) if data is None else data
+    custom = present_names(folder_path, PRESENT_NAMES_KEY, data)
     if not custom:
         for ini in item.get("inis", []):
-            custom = present_names(folder_path, ini)
+            custom = present_names(folder_path, ini, data)
             if custom:
                 break
     item["names"] = [custom.get(str(index), f"Present {index + 1}")
                      for index in range(count)]
 
 
-def hydrate_textures(folder_path, payload):
-    """Restore sparse highlighted boundaries, then rebuild component pools."""
-    data = load(folder_path)
+def hydrate_textures(folder_path, payload, data=None):
+    """Restore sparse highlighted boundaries, then rebuild component pools.
+
+    ``payload`` is the structured application payload; only its ``meshes``
+    and ``textures`` fields are mutated here.
+    """
+    data = load(folder_path) if data is None else data
+    meshes = payload.setdefault("meshes", {})
+    textures = payload.setdefault("textures", {})
     saved = data.get("textures")
     if not isinstance(saved, dict):
         saved = {}
@@ -186,17 +194,28 @@ def hydrate_textures(folder_path, payload):
     for name, state in saved.items():
         if not isinstance(state, dict):
             continue
-        key, label, manual = (state.get("tex_key"), state.get("label"),
-                              state.get("manual"))
+        key, label, manual = (normalize_texture_key(
+                                  state.get("tex_key"), "diffuse"),
+                              state.get("label"), state.get("manual"))
         if (not isinstance(key, str) or not key
                 or not isinstance(label, str) or not label
                 or not isinstance(manual, bool)):
             continue
-        highlighted[name] = {"tex_key": key, "label": label, "manual": manual}
+        _role, relative_path = split_texture_key(key)
+        item = {"tex_key": key, "file": relative_path,
+                "label": label, "manual": manual}
+        for field in ("normal_map", "light_map", "material_map"):
+            value = normalize_texture_key(state.get(field), field)
+            if value:
+                item[field] = value
+            manual = state.get(f"{field}_manual")
+            if isinstance(manual, bool) and manual:
+                item[f"{field}_manual"] = True
+        highlighted[name] = item
 
     restored = {}
-    for name, entry in payload.items():
-        if name.startswith("__") or not isinstance(entry, dict) or entry.get("error"):
+    for name, entry in meshes.items():
+        if not isinstance(entry, dict) or entry.get("error"):
             continue
         mesh_key = _mesh_key(name, entry)
         state = highlighted.get(mesh_key)
@@ -208,8 +227,8 @@ def hydrate_textures(folder_path, payload):
     # Rebuild each shared component pool from ini options plus saved boundary
     # textures. The pool no longer needs to be duplicated for every draw in JSON.
     pools = {}
-    for name, entry in payload.items():
-        if name.startswith("__") or not isinstance(entry, dict) or entry.get("error"):
+    for name, entry in meshes.items():
+        if not isinstance(entry, dict) or entry.get("error"):
             continue
         group = (entry.get("source"), entry.get("component"))
         pool = pools.setdefault(group, [])
@@ -217,14 +236,24 @@ def hydrate_textures(folder_path, payload):
         mesh_key = _mesh_key(name, entry)
         if mesh_key in restored:
             state = restored[mesh_key]
-            candidates.append({"tex_key": state["tex_key"], "label": state["label"]})
+            candidates.append({key: value for key, value in state.items()
+                               if key != "manual"})
         for opt in candidates:
-            if (isinstance(opt, dict) and isinstance(opt.get("tex_key"), str)
-                    and not any(old["tex_key"] == opt["tex_key"] for old in pool)):
+            if not isinstance(opt, dict) or not isinstance(opt.get("tex_key"), str):
+                continue
+            old = next((item for item in pool
+                        if item["tex_key"] == opt["tex_key"]), None)
+            if old is None:
                 pool.append(opt)
+            else:
+                for field in ("normal_map", "light_map", "material_map"):
+                    if opt.get(field):
+                        old[field] = opt[field]
+                    if opt.get(f"{field}_manual"):
+                        old[f"{field}_manual"] = True
 
-    for name, entry in payload.items():
-        if name.startswith("__") or not isinstance(entry, dict) or entry.get("error"):
+    for name, entry in meshes.items():
+        if not isinstance(entry, dict) or entry.get("error"):
             continue
         options = pools.get((entry.get("source"), entry.get("component")), [])
         if options:
@@ -232,11 +261,17 @@ def hydrate_textures(folder_path, payload):
         else:
             entry.pop("texture_options", None)
         state = restored.get(_mesh_key(name, entry))
-        for key in ([state["tex_key"]] if state else []):
-            if key in payload["__textures__"]:
+        texture_roles = [(state["tex_key"], None)] if state else []
+        if state:
+            texture_roles.extend((state.get(field), field) for field in
+                                 ("normal_map", "light_map", "material_map"))
+        for key, role in texture_roles:
+            if not key:
                 continue
-            encoded = encode_texture_file(folder_path, os.path.join(folder_path, key))
+            if key in textures:
+                continue
+            encoded = encode_texture_key(folder_path, key, role)
             if encoded and not encoded.get("error"):
-                payload["__textures__"][encoded["tex_key"]] = encoded["uri"]
+                textures[encoded["tex_key"]] = encoded["uri"]
 
     return restored

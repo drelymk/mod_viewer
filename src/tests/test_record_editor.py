@@ -15,24 +15,17 @@ of real ini shapes to get honest safe-vs-refused numbers before the UI is
 built on top of this.
 """
 
-import os, sys, random
+import os
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import pytest
 
-from _corpus import corpus_roots
+
+from _corpus import sample_mods
+from core.ini_sections import sections_from_document
 from core.ini_document import IniDocument, IF, ENDIF, DRAW
 from core import ini_condition as ic
 from core import toggle_editor as te
 from core import record_editor as re_
-
-FAILS = []
-
-
-def check(cond, msg):
-    print(("PASS  " if cond else "FAIL  ") + msg)
-    if not cond:
-        FAILS.append(msg)
 
 
 def doc(text):
@@ -50,9 +43,9 @@ def dline(d, needle):
 def fails(fn, msg):
     try:
         fn()
-        check(False, msg + " (no error raised)")
+        assert (False), (msg + " (no error raised)")
     except te.ToggleEditError:
-        check(True, msg)
+        assert (True), (msg)
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
@@ -280,8 +273,7 @@ def test_record_toggle_accepts_string_position_keys():
     d = doc(BARE)
     line = dline(d, "500,0,0")
     report = re_.record_toggle(d, "KeySwap", {"0": [], "1": [line.no + 1], "2": []})
-    check(report["wraps_added"] == 1,
-          f"string position keys (as pywebview/JSON would deliver) are accepted ({report})")
+    assert (report["wraps_added"] == 1), (f"string position keys (as pywebview/JSON would deliver) are accepted ({report})")
 
 
 def test_position_referencing_non_draw_line_is_reported_and_ignored():
@@ -289,11 +281,9 @@ def test_position_referencing_non_draw_line_is_reported_and_ignored():
     key_line = dline(d, "type = cycle")
     line = dline(d, "500,0,0")
     report = re_.record_toggle(d, "KeySwap", {0: [key_line.no + 1], 1: [line.no + 1], 2: []})
-    check(any(s["var"] is None and "not a drawindexed line" in s["reason"]
-              for s in report["skipped"]),
-          f"a non-drawindexed line number is reported, not silently trusted ({report['skipped']})")
-    check(report["wraps_added"] == 1,
-          f"the genuine draw line is still recorded normally ({report})")
+    assert (any(s["var"] is None and "not a drawindexed line" in s["reason"]
+              for s in report["skipped"])), (f"a non-drawindexed line number is reported, not silently trusted ({report['skipped']})")
+    assert (report["wraps_added"] == 1), (f"the genuine draw line is still recorded normally ({report})")
 
 
 # ── bare (previously unconditional) lines ───────────────────────────────────
@@ -302,16 +292,13 @@ def test_bare_line_wrapped_when_partially_visible():
     d = doc(BARE)
     line = dline(d, "500,0,0")
     report = re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1], 2: []})
-    check(report["vars_updated"] == ["swap"] and report["chains_rewritten"] == 0
-          and report["wraps_added"] == 1 and report["skipped"] == [],
-          f"clean private wrap, no refusals ({report})")
+    assert (report["vars_updated"] == ["swap"] and report["chains_rewritten"] == 0
+          and report["wraps_added"] == 1 and report["skipped"] == []), (f"clean private wrap, no refusals ({report})")
     gate = d.lines[dline(d, "500,0,0").no - 1]
-    check(gate.kind == IF and gate.text == "if $swap == 1",
-          f"new private if wraps the line at its one visible position ({gate.text})")
-    check(d.lines[dline(d, "500,0,0").no + 1].kind == ENDIF, "endif follows immediately")
+    assert (gate.kind == IF and gate.text == "if $swap == 1"), (f"new private if wraps the line at its one visible position ({gate.text})")
+    assert (d.lines[dline(d, "500,0,0").no + 1].kind == ENDIF), ("endif follows immediately")
     reparsed = doc(d.to_string())
-    check(reparsed.section("TextureOverrideBody") is not None,
-          "the rewritten document round-trips through from_string")
+    assert (reparsed.section("TextureOverrideBody") is not None), ("the rewritten document round-trips through from_string")
 
 
 def test_bare_line_untouched_when_visible_everywhere():
@@ -320,10 +307,9 @@ def test_bare_line_untouched_when_visible_everywhere():
     before = d.to_string()
     report = re_.record_toggle(
         d, "KeySwap", {0: [line.no + 1], 1: [line.no + 1], 2: [line.no + 1]})
-    check(report["wraps_added"] == 0 and report["chains_rewritten"] == 0
-          and report["skipped"] == [],
-          f"nothing to do when already visible at every position ({report})")
-    check(d.to_string() == before, "document is byte-identical (true no-op)")
+    assert (report["wraps_added"] == 0 and report["chains_rewritten"] == 0
+          and report["skipped"] == []), (f"nothing to do when already visible at every position ({report})")
+    assert (d.to_string() == before), ("document is byte-identical (true no-op)")
 
 
 def test_or_expression_for_multi_position_subset():
@@ -331,11 +317,9 @@ def test_or_expression_for_multi_position_subset():
     line = dline(d, "900,0,0")
     report = re_.record_toggle(
         d, "KeyStage", {0: [line.no + 1], 1: [], 2: [line.no + 1], 3: []})
-    check(report["wraps_added"] == 1 and report["skipped"] == [],
-          f"clean OR-wrap across a 2-of-4 position subset ({report})")
+    assert (report["wraps_added"] == 1 and report["skipped"] == []), (f"clean OR-wrap across a 2-of-4 position subset ({report})")
     gate = d.lines[dline(d, "900,0,0").no - 1]
-    check(gate.text == "if $stage == 0 || $stage == 2",
-          f"OR-expression lists exactly the recorded-visible positions ({gate.text})")
+    assert (gate.text == "if $stage == 0 || $stage == 2"), (f"OR-expression lists exactly the recorded-visible positions ({gate.text})")
 
 
 def test_two_variables_claiming_same_bare_line_refused():
@@ -343,12 +327,10 @@ def test_two_variables_claiming_same_bare_line_refused():
     before = d.to_string()
     line = dline(d, "999,0,0")
     report = re_.record_toggle(d, "KeyMulti", {0: [], 1: [line.no + 1]})
-    check(report["wraps_added"] == 0,
-          f"neither variable claims a line both could equally explain ({report})")
-    check(len(report["skipped"]) == 1
-          and "more than one variable" in report["skipped"][0]["reason"],
-          f"the ambiguity is reported ({report['skipped']})")
-    check(d.to_string() == before, "document left completely untouched")
+    assert (report["wraps_added"] == 0), (f"neither variable claims a line both could equally explain ({report})")
+    assert (len(report["skipped"]) == 1
+          and "more than one variable" in report["skipped"][0]["reason"]), (f"the ambiguity is reported ({report['skipped']})")
+    assert (d.to_string() == before), ("document left completely untouched")
 
 
 # ── chain regeneration ───────────────────────────────────────────────────────
@@ -357,14 +339,12 @@ def test_single_branch_chain_value_reassigned():
     d = doc(SINGLE_IF)
     line = dline(d, "100,0,0")
     report = re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1]})
-    check(report["chains_rewritten"] == 1 and report["wraps_added"] == 0
-          and report["skipped"] == [],
-          f"single-if (no elif) chain regenerated cleanly ({report})")
+    assert (report["chains_rewritten"] == 1 and report["wraps_added"] == 0
+          and report["skipped"] == []), (f"single-if (no elif) chain regenerated cleanly ({report})")
     gate = d.lines[dline(d, "100,0,0").no - 1]
-    check(gate.text == "if $swap == 1",
-          f"condition now selects the new value ({gate.text})")
+    assert (gate.text == "if $swap == 1"), (f"condition now selects the new value ({gate.text})")
     reparsed = doc(d.to_string())
-    check(reparsed.section("TextureOverrideBody") is not None, "round-trips through from_string")
+    assert (reparsed.section("TextureOverrideBody") is not None), ("round-trips through from_string")
 
 
 def test_elif_chain_value_reshuffle_matches_intent():
@@ -381,8 +361,7 @@ def test_elif_chain_value_reshuffle_matches_intent():
         1: [l600.no + 1],
         2: [l800.no + 1],
     })
-    check(report["chains_rewritten"] == 1 and report["skipped"] == [],
-          f"whole chain regenerated as one unit ({report})")
+    assert (report["chains_rewritten"] == 1 and report["skipped"] == []), (f"whole chain regenerated as one unit ({report})")
 
     sec = d.section("TextureOverrideBody2")
     visible = {"0": [], "1": [], "2": []}
@@ -397,10 +376,9 @@ def test_elif_chain_value_reshuffle_matches_intent():
             for val in visible:
                 if cond is None or ic.reduce(cond, {"swap": val}) is ic.TRUE:
                     visible[val].append(count)
-    check(visible == {"0": ["700"], "1": ["600"], "2": ["800"]},
-          f"gating matches the intended swap exactly, not just the text ({visible})")
+    assert (visible == {"0": ["700"], "1": ["600"], "2": ["800"]}), (f"gating matches the intended swap exactly, not just the text ({visible})")
     reparsed = doc(d.to_string())
-    check(reparsed.section("TextureOverrideBody2") is not None, "round-trips through from_string")
+    assert (reparsed.section("TextureOverrideBody2") is not None), ("round-trips through from_string")
 
 
 def test_bare_wrap_overlapping_another_vars_chain_refused():
@@ -412,104 +390,65 @@ def test_bare_wrap_overlapping_another_vars_chain_refused():
     # edit is about to replace — must be refused, not silently dropped or
     # (worse) spliced into a stale line range.
     report = re_.record_toggle(d, "KeyMulti", {0: [l200.no + 1], 1: [l100.no + 1]})
-    check(report["chains_rewritten"] == 1, f"upper's chain is regenerated ({report})")
-    check(report["wraps_added"] == 0,
-          f"tt's bare-wrap candidates inside upper's chain are refused, not applied ({report})")
+    assert (report["chains_rewritten"] == 1), (f"upper's chain is regenerated ({report})")
+    assert (report["wraps_added"] == 0), (f"tt's bare-wrap candidates inside upper's chain are refused, not applied ({report})")
     overlap_skips = [s for s in report["skipped"] if s["var"] == "tt"]
-    check(len(overlap_skips) == 2 and all("same save" in s["reason"] for s in overlap_skips),
-          f"both of tt's candidate lines are refused with the overlap reason ({overlap_skips})")
-    check("$tt ==" not in d.to_string(), "no $tt gate was actually written")
+    assert (len(overlap_skips) == 2 and all("same save" in s["reason"] for s in overlap_skips)), (f"both of tt's candidate lines are refused with the overlap reason ({overlap_skips})")
+    assert ("$tt ==" not in d.to_string()), ("no $tt gate was actually written")
 
 
 # ── refusals ─────────────────────────────────────────────────────────────────
 
-def test_else_branch_chain_refused():
-    d = doc(ELSE_CHAIN)
+def _swap_recording(d, first, second):
+    return {
+        0: [dline(d, second).no + 1],
+        1: [dline(d, first).no + 1],
+    }
+
+
+_REFUSAL_CASES = [
+    ("else-branch", ELSE_CHAIN,
+     lambda d: _swap_recording(d, "100,0,0", "200,0,0"), "else"),
+    ("mixed-condition", MIXED,
+     lambda d: _swap_recording(d, "100,0,0", "200,0,0"), "mixes"),
+    ("outer-ancestor", OUTER_REF,
+     lambda d: {0: [], 1: [dline(d, "100,0,0").no + 1]},
+     "outer nesting level"),
+    ("nested-if", NESTED_IN_CHAIN,
+     lambda d: _swap_recording(d, "150,0,0", "200,0,0"),
+     "non-drawindexed"),
+    ("non-draw-content", ASSIGN_IN_CHAIN,
+     lambda d: _swap_recording(d, "100,0,0", "200,0,0"),
+     "non-drawindexed"),
+    ("missing-recorded-data", MULTISRC,
+     lambda d: {0: [dline(d, "100,0,0").no + 1], 1: []},
+     "no recorded data"),
+    ("ambiguous-nesting", UNSAFE,
+     lambda d: {0: [], 1: [dline(d, "100,0,0").no + 1]},
+     "ambiguous"),
+]
+
+
+def _assert_refusal_case(case):
+    name, fixture, positions_fn, reason = case
+    d = doc(fixture)
+    if name == "ambiguous-nesting":
+        assert (d.structure_errors() != []), ("fixture really is structurally ambiguous")
     before = d.to_string()
-    l100, l200 = dline(d, "100,0,0"), dline(d, "200,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [l200.no + 1], 1: [l100.no + 1]})
-    check(report["chains_rewritten"] == 0, "an else-branch chain is never auto-rewritten")
-    check(len(report["skipped"]) == 1 and "else" in report["skipped"][0]["reason"],
-          f"refusal explains why ({report['skipped']})")
-    check(d.to_string() == before, "document left completely untouched")
+    report = re_.record_toggle(d, "KeySwap", positions_fn(d))
+    assert (report["chains_rewritten"] == 0), (f"{name}: unsafe shape is never auto-rewritten ({report})")
+    assert (report["wraps_added"] == 0), (f"{name}: unsafe shape does not add a partial wrapper ({report})")
+    assert (any(reason in skipped["reason"] for skipped in report["skipped"])), (f"{name}: refusal explains the unsafe shape ({report['skipped']})")
+    assert (d.to_string() == before), (f"{name}: document remains completely untouched")
 
 
-def test_mixed_condition_chain_refused():
-    d = doc(MIXED)
-    before = d.to_string()
-    l100, l200 = dline(d, "100,0,0"), dline(d, "200,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [l200.no + 1], 1: [l100.no + 1]})
-    check(report["chains_rewritten"] == 0, "a mixed condition prevents auto-rewrite")
-    check(any("mixes" in s["reason"] for s in report["skipped"]),
-          f"refusal names the mixed condition ({report['skipped']})")
-    check(d.to_string() == before, "document left completely untouched")
-
-
-def test_outer_ancestor_reference_refused():
-    """`var` is referenced only by an outer (non-immediate) ancestor — an
-    unusual nesting the design deliberately declines to guess at."""
-    d = doc(OUTER_REF)
-    before = d.to_string()
-    line = dline(d, "100,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1]})
-    check(report["chains_rewritten"] == 0 and report["wraps_added"] == 0,
-          "a var referenced only by an outer ancestor is never auto-rewritten")
-    check(any("outer nesting level" in s["reason"] for s in report["skipped"]),
-          f"refusal names the outer-nesting shape ({report['skipped']})")
-    check(d.to_string() == before, "document left completely untouched")
-
-
-def test_nested_if_inside_chain_body_refused():
-    d = doc(NESTED_IN_CHAIN)
-    before = d.to_string()
-    l150, l200 = dline(d, "150,0,0"), dline(d, "200,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [l200.no + 1], 1: [l150.no + 1]})
-    check(report["chains_rewritten"] == 0,
-          "a nested if inside the chain body prevents auto-rewrite")
-    check(any("non-drawindexed" in s["reason"] for s in report["skipped"]),
-          f"refusal names the offending content ({report['skipped']})")
-    check(d.to_string() == before, "document left completely untouched")
-
-
-def test_non_draw_content_line_refused():
-    d = doc(ASSIGN_IN_CHAIN)
-    before = d.to_string()
-    l100, l200 = dline(d, "100,0,0"), dline(d, "200,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [l200.no + 1], 1: [l100.no + 1]})
-    check(report["chains_rewritten"] == 0,
-          "a non-drawindexed content line prevents auto-rewrite")
-    check(any("non-drawindexed" in s["reason"] for s in report["skipped"]),
-          f"refusal names the offending content ({report['skipped']})")
-    check(d.to_string() == before, "document left completely untouched")
-
-
-def test_line_with_no_recorded_data_refused():
-    """Stands in for the real-world case this guards: a mesh merged from more
-    than one drawindexed line, which the frontend is responsible for
-    excluding from what it sends — the backend's only signal is exactly this,
-    a chain-body line absent from every position's list."""
-    d = doc(MULTISRC)
-    before = d.to_string()
-    l100 = dline(d, "100,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [l100.no + 1], 1: []})
-    check(report["chains_rewritten"] == 0,
-          "a chain with an unrecorded line prevents auto-rewrite")
-    check(any("no recorded data" in s["reason"] for s in report["skipped"]),
-          f"refusal explains the missing data ({report['skipped']})")
-    check(d.to_string() == before, "document left completely untouched")
-
-
-def test_ambiguous_section_nesting_refused():
-    d = doc(UNSAFE)
-    check(d.structure_errors() != [], "fixture really is structurally ambiguous")
-    before = d.to_string()
-    line = dline(d, "100,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1]})
-    check(report["chains_rewritten"] == 0 and report["wraps_added"] == 0,
-          "an ambiguously-nested section is never auto-rewritten")
-    check(any("ambiguous" in s["reason"] for s in report["skipped"]),
-          f"refusal explains why ({report['skipped']})")
-    check(d.to_string() == before, "document left completely untouched")
+@pytest.mark.parametrize(
+    "case",
+    _REFUSAL_CASES,
+    ids=[case[0] for case in _REFUSAL_CASES],
+)
+def test_record_refuses_unsafe_shape(case):
+    _assert_refusal_case(case)
 
 
 # ── post-save self-check (report["verify"] / verify_recording) ─────────────
@@ -543,14 +482,11 @@ def test_verify_report_reflects_chain_rewrites():
         0: [l700.no + 1], 1: [l600.no + 1], 2: [l800.no + 1],
     })
     verify = report["verify"]
-    check(set(verify) == {"swap"}, f"verify is keyed by the rewritten var ({verify})")
-    check(verify["swap"]["values"] == ["0", "1", "2"],
-          f"the var's own values list is included ({verify['swap']})")
+    assert (set(verify) == {"swap"}), (f"verify is keyed by the rewritten var ({verify})")
+    assert (verify["swap"]["values"] == ["0", "1", "2"]), (f"the var's own values list is included ({verify['swap']})")
     draws = verify["swap"]["draws"]
-    check(all(dr["section"] == "TextureOverrideBody2" for dr in draws),
-          f"every draw carries its own section name ({draws})")
-    check(_draws_by_key(draws) == {(600, 0, 0): [1], (700, 0, 0): [0], (800, 0, 0): [2]},
-          f"every rewritten chain draw's exact recorded position set is present, keyed "
+    assert (all(dr["section"] == "TextureOverrideBody2" for dr in draws)), (f"every draw carries its own section name ({draws})")
+    assert (_draws_by_key(draws) == {(600, 0, 0): [1], (700, 0, 0): [0], (800, 0, 0): [2]}), (f"every rewritten chain draw's exact recorded position set is present, keyed "
           f"by its own (count, start, base) identity rather than a line number that "
           f"chain regeneration can shift ({draws})")
 
@@ -559,20 +495,18 @@ def test_verify_report_includes_bare_wraps_and_untouched_bare_lines():
     d = doc(BARE)
     line = dline(d, "500,0,0")
     report = re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1], 2: []})
-    check(report["verify"] == {"swap": {"values": ["0", "1", "2"], "draws": [
+    assert (report["verify"] == {"swap": {"values": ["0", "1", "2"], "draws": [
         {"section": "TextureOverrideBody", "count": 500, "start": 0, "base": 0,
-         "positions": [1]}]}},
-          f"a wrapped bare line is recorded in verify with its own draw identity and "
+         "positions": [1]}]}}), (f"a wrapped bare line is recorded in verify with its own draw identity and "
           f"recorded positions ({report['verify']})")
 
     d2 = doc(BARE)
     line2 = dline(d2, "500,0,0")
     report2 = re_.record_toggle(
         d2, "KeySwap", {0: [line2.no + 1], 1: [line2.no + 1], 2: [line2.no + 1]})
-    check(report2["verify"] == {"swap": {"values": ["0", "1", "2"], "draws": [
+    assert (report2["verify"] == {"swap": {"values": ["0", "1", "2"], "draws": [
         {"section": "TextureOverrideBody", "count": 500, "start": 0, "base": 0,
-         "positions": [0, 1, 2]}]}},
-          f"a bare line left untouched (already visible everywhere) is still "
+         "positions": [0, 1, 2]}]}}), (f"a bare line left untouched (already visible everywhere) is still "
           f"verifiable ({report2['verify']})")
 
 
@@ -588,8 +522,7 @@ def test_verify_report_excludes_lines_refused_for_any_reason():
     for text, section, positions_fn in cases:
         d = doc(text)
         report = re_.record_toggle(d, section, positions_fn(d))
-        check(report["verify"] == {},
-              f"a fully-refused recording leaves verify empty ({section}: {report['verify']})")
+        assert (report["verify"] == {}), (f"a fully-refused recording leaves verify empty ({section}: {report['verify']})")
 
     # OVERLAP: $upper's chain genuinely succeeds (and must stay verified)
     # while $tt's bare-wrap on the very same two lines is refused for
@@ -597,11 +530,9 @@ def test_verify_report_excludes_lines_refused_for_any_reason():
     d = doc(OVERLAP)
     l100, l200 = dline(d, "100,0,0"), dline(d, "200,0,0")
     report = re_.record_toggle(d, "KeyMulti", {0: [l200.no + 1], 1: [l100.no + 1]})
-    check(set(report["verify"]) == {"upper"},
-          f"only upper's successful chain is verified; tt's refused, overlapping "
+    assert (set(report["verify"]) == {"upper"}), (f"only upper's successful chain is verified; tt's refused, overlapping "
           f"wrap is excluded, not just silently omitted from a wrong var ({report['verify']})")
-    check(_draws_by_key(report["verify"]["upper"]["draws"]) == {(100, 0, 0): [1], (200, 0, 0): [0]},
-          f"upper's own rewritten draws are both still verified despite tt's "
+    assert (_draws_by_key(report["verify"]["upper"]["draws"]) == {(100, 0, 0): [1], (200, 0, 0): [0]}), (f"upper's own rewritten draws are both still verified despite tt's "
           f"refusal on the same lines ({report['verify']})")
 
 
@@ -619,7 +550,7 @@ def test_verify_recording_confirms_a_genuine_match():
         mismatches = re_.verify_recording(path, report)
     finally:
         os.remove(path)
-    check(mismatches == [], f"a genuine, correctly-saved rewrite verifies clean ({mismatches})")
+    assert (mismatches == []), (f"a genuine, correctly-saved rewrite verifies clean ({mismatches})")
 
 
 def test_verify_recording_detects_a_genuine_mismatch():
@@ -650,15 +581,13 @@ def test_verify_recording_detects_a_genuine_mismatch():
         mismatches = re_.verify_recording(path, wrong_report)
     finally:
         os.remove(path)
-    check(len(mismatches) == 1 and mismatches[0]["draw"] == [600, 0, 0]
-          and mismatches[0]["position"] == 0 and mismatches[0]["expected"] is True,
-          f"a deliberately-wrong recorded position is caught, not silently accepted "
+    assert (len(mismatches) == 1 and mismatches[0]["draw"] == [600, 0, 0]
+          and mismatches[0]["position"] == 0 and mismatches[0]["expected"] is True), (f"a deliberately-wrong recorded position is caught, not silently accepted "
           f"({mismatches})")
 
 
 def test_verify_recording_is_noop_without_a_verify_field():
-    check(re_.verify_recording("<does not exist>.ini", {}) == [],
-          "a report with no verify field (or an empty one) trivially verifies clean, "
+    assert (re_.verify_recording("<does not exist>.ini", {}) == []), ("a report with no verify field (or an empty one) trivially verifies clean, "
           "without even touching the filesystem")
 
 
@@ -674,23 +603,6 @@ def test_verify_recording_is_noop_without_a_verify_field():
 # as visible there. Feeding that back into record_toggle exercises the real
 # distribution of real ini shapes, not just the fixtures above.
 
-MOD_ROOTS = corpus_roots()
-
-
-def _find_mods(limit, seed=11):
-    mods = []
-    for root in MOD_ROOTS:
-        if not os.path.isdir(root):
-            continue
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if not d.upper().startswith("DISABLED")]
-            if any(f.lower().endswith(".ini") and not f.upper().startswith("DISABLED")
-                   for f in filenames):
-                mods.append(dirpath)
-    random.Random(seed).shuffle(mods)
-    return mods[:limit]
-
-
 def _dnf_visible(conds, bindings):
     """True if a _scan_sections_for_draws DNF (conds) is satisfied given
     `bindings` ({var: value string}); [] means unconditional. Every var that
@@ -702,29 +614,6 @@ def _dnf_visible(conds, bindings):
         return True
     return any(all((bindings.get(c["var"]) == c["value"]) != c["negate"] for c in group)
                for group in conds)
-
-
-def _parse_sections_from_text(text, fake_path):
-    """ini_parser.parse_sections's exact rules, minus the file read — lets the
-    dry run re-analyze record_editor's in-memory output through the same DNF
-    machinery the app already trusts, without writing a temp file."""
-    from core.ini_parser import SrcLine
-    sections, current = {}, None
-    for line_no, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith(";"):
-            continue
-        lhs = line.split("=", 1)[0].strip().lower()
-        if lhs not in ("key", "back"):
-            line = line.split(";")[0].strip()
-        if not line:
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            current = line[1:-1].strip()
-            sections.setdefault(current, [])
-        elif current is not None:
-            sections[current].append(SrcLine(line, fake_path, line_no, current))
-    return sections
 
 
 _REASON_BUCKETS = [
@@ -756,7 +645,7 @@ def test_real_mods_record_toggle():
     from core.ini_parser import (parse_sections, _scan_sections_for_draws,
                              extract_variable_defaults, find_inis)
 
-    mods = _find_mods(300)
+    mods = sample_mods(300, seed=11)
     if not mods:
         print("SKIP  no local mod libraries found")
         return
@@ -895,7 +784,8 @@ def test_real_mods_record_toggle():
                     continue
 
                 try:
-                    after_sections = _parse_sections_from_text(after_text, path)
+                    after_doc = IniDocument.from_string(after_text, path=path)
+                    after_sections = sections_from_document(after_doc)
                     after_draw_info = _scan_sections_for_draws(after_sections)
                 except Exception as e:
                     exceptions.append((path, section_name, "after-parse: " + repr(e)))
@@ -953,49 +843,14 @@ def test_real_mods_record_toggle():
     for label, count in sorted(reason_counts.items(), key=lambda kv: -kv[1]):
         print(f"        refused[{count:>5}]  {label}")
 
-    check(total_sections > 0, "real mods produced cycle toggles to test")
-    check(exceptions == [],
-          f"record_toggle never raises or hangs on a real file (first: {exceptions[:3]})")
-    check(reparse_failures == [],
-          f"every rewritten document still round-trips through from_string "
+    assert (total_sections > 0), ("real mods produced cycle toggles to test")
+    assert (exceptions == []), (f"record_toggle never raises or hangs on a real file (first: {exceptions[:3]})")
+    assert (reparse_failures == []), (f"every rewritten document still round-trips through from_string "
           f"(first: {reparse_failures[:3]})")
-    check(content_lost == [],
-          f"every drawindexed line survives a rewrite, none lost or duplicated "
+    assert (content_lost == []), (f"every drawindexed line survives a rewrite, none lost or duplicated "
           f"(first: {content_lost[:3]})")
-    check(mismatches == [],
-          f"a rewritten chain's actual gating always matches the recorded intent "
+    assert (mismatches == []), (f"a rewritten chain's actual gating always matches the recorded intent "
           f"(first: {mismatches[:3]})")
-    check(verify_mismatches == [],
-          f"verify_recording (the runtime post-save self-check) reports zero "
+    assert (verify_mismatches == []), (f"verify_recording (the runtime post-save self-check) reports zero "
           f"false-positive mismatches across the whole real-mod corpus "
           f"(first: {verify_mismatches[:3]})")
-
-
-if __name__ == "__main__":
-    for fn in (test_record_toggle_validates_section_and_positions,
-               test_record_toggle_accepts_string_position_keys,
-               test_position_referencing_non_draw_line_is_reported_and_ignored,
-               test_bare_line_wrapped_when_partially_visible,
-               test_bare_line_untouched_when_visible_everywhere,
-               test_or_expression_for_multi_position_subset,
-               test_two_variables_claiming_same_bare_line_refused,
-               test_single_branch_chain_value_reassigned,
-               test_elif_chain_value_reshuffle_matches_intent,
-               test_bare_wrap_overlapping_another_vars_chain_refused,
-               test_else_branch_chain_refused,
-               test_mixed_condition_chain_refused,
-               test_outer_ancestor_reference_refused,
-               test_nested_if_inside_chain_body_refused,
-               test_non_draw_content_line_refused,
-               test_line_with_no_recorded_data_refused,
-               test_ambiguous_section_nesting_refused,
-               test_verify_report_reflects_chain_rewrites,
-               test_verify_report_includes_bare_wraps_and_untouched_bare_lines,
-               test_verify_report_excludes_lines_refused_for_any_reason,
-               test_verify_recording_confirms_a_genuine_match,
-               test_verify_recording_detects_a_genuine_mismatch,
-               test_verify_recording_is_noop_without_a_verify_field,
-               test_real_mods_record_toggle):
-        fn()
-    print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"))
-    sys.exit(1 if FAILS else 0)

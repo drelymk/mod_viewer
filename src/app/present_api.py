@@ -3,7 +3,7 @@
 import os
 import traceback
 
-from core.ini_sections import find_inis
+from core.mod_discovery import discover_ini_paths
 from core import present_editor
 from core.toggle_editor import ToggleEditError
 
@@ -15,8 +15,12 @@ def _ini_rel(mod_dir, path):
 
 
 def _documents(mod_dir):
+    paths = edit_session.document_paths(mod_dir)
+    if not paths:
+        paths = discover_ini_paths(mod_dir)
+        edit_session.load_documents(mod_dir, paths)
     return [(_ini_rel(mod_dir, path), path, edit_session.peek(mod_dir, path))
-            for path in find_inis(mod_dir)]
+            for path in paths]
 
 
 def _unexpected_error():

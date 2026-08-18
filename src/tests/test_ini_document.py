@@ -6,27 +6,13 @@ the whole write-back feature rests on.
 
     py -3 tests\test_ini_document.py
 """
-import glob
 import os
-import sys
 import tempfile
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _corpus import corpus_roots
+from _corpus import active_ini_files
 from core.ini_document import (ASSIGN, BLANK, COMMENT, DRAW, ELIF, ELSE, ENDIF, IF,
                           SECTION, IniDocument)
-
-failures = []
-
-
-def check(name, got, want):
-    if got == want:
-        print(f"PASS  {name}")
-    else:
-        print(f"FAIL  {name}\n        got  {got!r}\n        want {want!r}")
-        failures.append(name)
 
 
 def test_roundtrip_string():
@@ -45,7 +31,7 @@ def test_roundtrip_string():
     }
     for name, text in cases.items():
         doc = IniDocument.from_string(text)
-        check(f"roundtrip {name}", doc.to_string(), text)
+    assert (doc.to_string()) == (text), (f"roundtrip {name}")
 
 
 def test_line_kinds():
@@ -60,9 +46,7 @@ def test_line_kinds():
             "else\r\n"
             "endif\r\n")
     doc = IniDocument.from_string(text)
-    check("line kinds",
-          [ln.kind for ln in doc.lines],
-          [COMMENT, BLANK, SECTION, ASSIGN, IF, DRAW, ELIF, ELIF, ELSE, ENDIF])
+    assert ([ln.kind for ln in doc.lines]) == ([COMMENT, BLANK, SECTION, ASSIGN, IF, DRAW, ELIF, ELIF, ELSE, ENDIF]), ("line kinds")
 
 
 def test_depth():
@@ -75,27 +59,25 @@ def test_depth():
             "drawindexed = 2,0,0\r\n"
             "endif\r\n")
     doc = IniDocument.from_string(text)
-    check("nesting depth",
-          [ln.depth for ln in doc.lines],
-          [0, 0, 1, 2, 1, 0, 1, 0])
+    assert ([ln.depth for ln in doc.lines]) == ([0, 0, 1, 2, 1, 0, 1, 0]), ("nesting depth")
 
 
 def test_sections():
     text = "[A]\r\nx = 1\r\n\r\n[B]\r\ny = 2\r\n"
     doc = IniDocument.from_string(text)
-    check("section names", [s.name for s in doc.sections], ["A", "B"])
-    check("section A span", (doc.sections[0].start, doc.sections[0].end), (0, 3))
-    check("section B span", (doc.sections[1].start, doc.sections[1].end), (3, 5))
-    check("lookup is case-insensitive", doc.section("a").name, "A")
-    check("missing section", doc.section("nope"), None)
+    assert ([s.name for s in doc.sections]) == (["A", "B"]), ("section names")
+    assert ((doc.sections[0].start, doc.sections[0].end)) == ((0, 3)), ("section A span")
+    assert ((doc.sections[1].start, doc.sections[1].end)) == ((3, 5)), ("section B span")
+    assert (doc.section("a").name) == ("A"), ("lookup is case-insensitive")
+    assert (doc.section("nope")) == (None), ("missing section")
 
 
 def test_inline_comment_stripping():
     doc = IniDocument.from_string(
         "[KeyA]\r\nkey = no_ctrl no_Shift no_alt ;\r\nhash = aabb ; trailing\r\n")
-    check("';' key binding kept", doc.lines[1].text, "key = no_ctrl no_Shift no_alt ;")
-    check("inline comment stripped", doc.lines[2].text, "hash = aabb")
-    check("raw untouched by stripping", doc.lines[2].raw, "hash = aabb ; trailing")
+    assert (doc.lines[1].text) == ("key = no_ctrl no_Shift no_alt ;"), ("';' key binding kept")
+    assert (doc.lines[2].text) == ("hash = aabb"), ("inline comment stripped")
+    assert (doc.lines[2].raw) == ("hash = aabb ; trailing"), ("raw untouched by stripping")
 
 
 def test_edits():
@@ -103,43 +85,42 @@ def test_edits():
 
     doc = IniDocument.from_string(text)
     doc.replace_lines(2, 3, ["y = 99"])
-    check("replace same count", doc.to_string(), "[A]\r\nx = 1\r\ny = 99\r\nz = 3\r\n")
+    assert (doc.to_string()) == ("[A]\r\nx = 1\r\ny = 99\r\nz = 3\r\n"), ("replace same count")
 
     doc = IniDocument.from_string(text)
     doc.insert_lines(2, ["w = 0"])
-    check("insert", doc.to_string(), "[A]\r\nx = 1\r\nw = 0\r\ny = 2\r\nz = 3\r\n")
+    assert (doc.to_string()) == ("[A]\r\nx = 1\r\nw = 0\r\ny = 2\r\nz = 3\r\n"), ("insert")
 
     doc = IniDocument.from_string(text)
     doc.delete_lines(1, 2)
-    check("delete", doc.to_string(), "[A]\r\ny = 2\r\nz = 3\r\n")
+    assert (doc.to_string()) == ("[A]\r\ny = 2\r\nz = 3\r\n"), ("delete")
 
     doc = IniDocument.from_string(text)
     doc.replace_lines(1, 2, ["a = 1", "b = 2", "c = 3"])
-    check("expand", doc.to_string(), "[A]\r\na = 1\r\nb = 2\r\nc = 3\r\ny = 2\r\nz = 3\r\n")
+    assert (doc.to_string()) == ("[A]\r\na = 1\r\nb = 2\r\nc = 3\r\ny = 2\r\nz = 3\r\n"), ("expand")
 
     # An LF file must not acquire CRLF from inserted lines.
     doc = IniDocument.from_string("[A]\nx = 1\n")
     doc.insert_lines(2, ["y = 2"])
-    check("inserted line adopts LF", doc.to_string(), "[A]\nx = 1\ny = 2\n")
+    assert (doc.to_string()) == ("[A]\nx = 1\ny = 2\n"), ("inserted line adopts LF")
 
     # Appending after a terminator-less last line must not fuse the two.
     doc = IniDocument.from_string("[A]\r\nx = 1")
     doc.insert_lines(2, ["y = 2"])
-    check("append after bare last line", doc.to_string(), "[A]\r\nx = 1\r\ny = 2")
+    assert (doc.to_string()) == ("[A]\r\nx = 1\r\ny = 2"), ("append after bare last line")
 
     doc = IniDocument.from_string(text)
     doc.replace_lines(1, 2, ["if $x == 1", "drawindexed = 1,0,0", "endif"])
-    check("edits reindex kinds",
-          [ln.kind for ln in doc.lines[1:4]], [IF, DRAW, ENDIF])
-    check("edits reindex depth", [ln.depth for ln in doc.lines[1:4]], [0, 1, 0])
+    assert ([ln.kind for ln in doc.lines[1:4]]) == ([IF, DRAW, ENDIF]), ("edits reindex kinds")
+    assert ([ln.depth for ln in doc.lines[1:4]]) == ([0, 1, 0]), ("edits reindex depth")
 
     doc = IniDocument.from_string(text)
     for bad in [(-1, 2), (0, 99), (3, 1)]:
         try:
             doc.replace_lines(bad[0], bad[1], [])
-            check(f"rejects range {bad}", "no error", "IndexError")
+            assert ("no error") == ("IndexError"), (f"rejects range {bad}")
         except IndexError:
-            check(f"rejects range {bad}", "IndexError", "IndexError")
+            assert ("IndexError") == ("IndexError"), (f"rejects range {bad}")
 
 
 def test_save_atomic_and_backup():
@@ -154,16 +135,16 @@ def test_save_atomic_and_backup():
     backup = doc.save()
 
     with open(path, encoding="utf-8", newline="") as fh:
-        check("saved content", fh.read(), "[A]\r\nx = 2\r\n")
+        assert (fh.read()) == ("[A]\r\nx = 2\r\n"), ("saved content")
     with open(backup, encoding="utf-8", newline="") as fh:
-        check("backup holds original", fh.read(), original)
-    check("backup named *.BAK", backup.endswith(".BAK"), True)
-    check("backup keeps .ini in name", ".ini_" in os.path.basename(backup), True)
-    check("no temp file left", os.path.exists(path + ".tmp"), False)
+        assert (fh.read()) == (original), ("backup holds original")
+    assert (backup.endswith(".BAK")) == (True), ("backup named *.BAK")
+    assert (".ini_" in os.path.basename(backup)) == (True), ("backup keeps .ini in name")
+    assert (os.path.exists(path + ".tmp")) == (False), ("no temp file left")
 
     # A backup must never be picked up as a loadable mod ini.
     from core.ini_parser import find_inis
-    check("find_inis ignores backups", find_inis(d), [path])
+    assert (find_inis(d)) == ([path]), ("find_inis ignores backups")
 
 
 def test_find_inis_bounded_recursion():
@@ -197,10 +178,9 @@ def test_find_inis_bounded_recursion():
         fh.write(geometry)
 
     found = find_inis(d)
-    check("recursive find_inis is capped at ten", len(found), 10)
-    check("recursive find_inis retains the root anchor", found[0], root_ini)
-    check("recursive find_inis stops below depth two",
-          any(os.path.basename(path) == "ignored.ini" for path in found), False)
+    assert (len(found)) == (10), ("recursive find_inis is capped at ten")
+    assert (found[0]) == (root_ini), ("recursive find_inis retains the root anchor")
+    assert (any(os.path.basename(path) == "ignored.ini" for path in found)) == (False), ("recursive find_inis stops below depth two")
 
     library = tempfile.mkdtemp()
     direct = os.path.join(library, "notes.ini")
@@ -210,7 +190,7 @@ def test_find_inis_bounded_recursion():
     os.makedirs(nested)
     with open(os.path.join(nested, "mod.ini"), "w", encoding="utf-8") as fh:
         fh.write(geometry)
-    check("geometry-free root does not recurse", find_inis(library), [direct])
+    assert (find_inis(library)) == ([direct]), ("geometry-free root does not recurse")
 
     flat = tempfile.mkdtemp()
     flat_paths = []
@@ -220,16 +200,12 @@ def test_find_inis_bounded_recursion():
             fh.write(geometry if index == 0 else
                      "[Constants]\nglobal $x = 0\n")
         flat_paths.append(path)
-    check("direct find_inis never truncates a valid flat mod",
-          find_inis(flat), flat_paths)
+    assert (find_inis(flat)) == (flat_paths), ("direct find_inis never truncates a valid flat mod")
 
 
 def test_roundtrip_corpus():
     """The real guarantee: every mod ini on disk survives byte-for-byte."""
-    files = []
-    for root in corpus_roots():
-        if os.path.isdir(root):
-            files += glob.glob(os.path.join(root, "**", "*.ini"), recursive=True)
+    files = active_ini_files()
     if not files:
         print("SKIP  corpus roundtrip (no mod libraries found)")
         return
@@ -244,8 +220,7 @@ def test_roundtrip_corpus():
         except Exception as exc:
             errored.append(f"{path}: {type(exc).__name__}: {exc}")
 
-    check(f"corpus roundtrip byte-identical ({len(files)} files)",
-          (len(mismatched), len(errored)), (0, 0))
+    assert ((len(mismatched), len(errored))) == ((0, 0)), (f"corpus roundtrip byte-identical ({len(files)} files)")
     for p in mismatched[:5]:
         print(f"        mismatch: {p}")
     for e in errored[:5]:
@@ -255,42 +230,34 @@ def test_roundtrip_corpus():
 def test_structure_errors():
     ok = IniDocument.from_string(
         "[A]\r\nif $x == 1\r\ndrawindexed = 1,0,0\r\nelse\r\nendif\r\n")
-    check("balanced section has no errors", ok.structure_errors(), [])
-    check("balanced section is safe", ok.is_safe_to_rewrite("A"), True)
+    assert (ok.structure_errors()) == ([]), ("balanced section has no errors")
+    assert (ok.is_safe_to_rewrite("A")) == (True), ("balanced section is safe")
 
     # Real pattern from MasterCorinV1.ini: endif closes the block, then an
     # `else if` appears with nothing open.
     orphan = IniDocument.from_string(
         "[A]\r\nif $x == 1\r\nendif\r\nelse if $x == 2\r\nendif\r\n")
     problems = [p["problem"] for p in orphan.structure_errors()]
-    check("orphan else-if reported", problems,
-          ["elif without an open if", "endif without a matching if"])
-    check("orphan section not safe", orphan.is_safe_to_rewrite("A"), False)
+    assert (problems) == (["elif without an open if", "endif without a matching if"]), ("orphan else-if reported")
+    assert (orphan.is_safe_to_rewrite("A")) == (False), ("orphan section not safe")
 
     unclosed = IniDocument.from_string("[A]\r\nif $x == 1\r\ndrawindexed = 1,0,0\r\n")
-    check("unclosed if reported",
-          [p["problem"] for p in unclosed.structure_errors()], ["1 unclosed if"])
-    check("unclosed if points to its opening line",
-          unclosed.structure_errors()[0]["line"], 1)
+    assert ([p["problem"] for p in unclosed.structure_errors()]) == (["1 unclosed if"]), ("unclosed if reported")
+    assert (unclosed.structure_errors()[0]["line"]) == (1), ("unclosed if points to its opening line")
 
     extra = IniDocument.from_string("[A]\r\nif $x == 1\r\nendif\r\nendif\r\n")
-    check("extra endif reported",
-          [p["problem"] for p in extra.structure_errors()],
-          ["endif without a matching if"])
+    assert ([p["problem"] for p in extra.structure_errors()]) == (["endif without a matching if"]), ("extra endif reported")
 
     # A malformed section must not taint a healthy one in the same file.
     mixed = IniDocument.from_string(
         "[Bad]\r\nendif\r\n[Good]\r\nif $x == 1\r\nendif\r\n")
-    check("errors are per-section", mixed.is_safe_to_rewrite("Good"), True)
-    check("bad section still flagged", mixed.is_safe_to_rewrite("Bad"), False)
+    assert (mixed.is_safe_to_rewrite("Good")) == (True), ("errors are per-section")
+    assert (mixed.is_safe_to_rewrite("Bad")) == (False), ("bad section still flagged")
 
     branch_order = IniDocument.from_string(
         "[A]\r\nif $x == 1\r\nelse\r\nelse\r\nelif $x == 2\r\nendif\r\n")
-    check("duplicate else and elif-after-else reported",
-          [p["problem"] for p in branch_order.structure_errors()],
-          ["duplicate else", "elif after else"])
-    check("invalid branch order is unsafe to rewrite",
-          branch_order.is_safe_to_rewrite("A"), False)
+    assert ([p["problem"] for p in branch_order.structure_errors()]) == (["duplicate else", "elif after else"]), ("duplicate else and elif-after-else reported")
+    assert (branch_order.is_safe_to_rewrite("A")) == (False), ("invalid branch order is unsafe to rewrite")
 
 
 def test_syntax_errors():
@@ -311,33 +278,8 @@ def test_syntax_errors():
         "[Trailing] garbage\r\n")
     errors = doc.syntax_errors()
     commented_header = IniDocument.from_string("[Good] ; allowed header comment\r\n")
-    check("valid header comment is accepted",
-          commented_header.syntax_errors(), [])
-    check("malformed conditional forms reported",
-          sum(p["code"] == "malformed_condition_syntax" for p in errors), 8)
-    check("unbalanced condition parentheses reported",
-          sum(p["code"] == "unbalanced_condition_parentheses" for p in errors), 2)
-    check("malformed section headers reported",
-          sum(p["code"] == "malformed_section_header" for p in errors), 3)
-    check("condition syntax makes section unsafe",
-          doc.is_safe_to_rewrite("Good"), False)
-
-
-def main():
-    test_roundtrip_string()
-    test_line_kinds()
-    test_depth()
-    test_sections()
-    test_inline_comment_stripping()
-    test_edits()
-    test_structure_errors()
-    test_syntax_errors()
-    test_save_atomic_and_backup()
-    test_find_inis_bounded_recursion()
-    test_roundtrip_corpus()
-    print(f"\n{'ALL PASS' if not failures else str(len(failures)) + ' FAILURE(S)'}")
-    return 1 if failures else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    assert (commented_header.syntax_errors()) == ([]), ("valid header comment is accepted")
+    assert (sum(p["code"] == "malformed_condition_syntax" for p in errors)) == (8), ("malformed conditional forms reported")
+    assert (sum(p["code"] == "unbalanced_condition_parentheses" for p in errors)) == (2), ("unbalanced condition parentheses reported")
+    assert (sum(p["code"] == "malformed_section_header" for p in errors)) == (3), ("malformed section headers reported")
+    assert (doc.is_safe_to_rewrite("Good")) == (False), ("condition syntax makes section unsafe")

@@ -9,12 +9,51 @@ const $ = (id) => document.getElementById(id);
 
 let currentPool = null;   // the shared array for the open component
 let currentTitle = '';
+let currentModPath = '';
 let onChange = null;      // re-render callback for every open per-mesh list
+
+const mapColumns = [
+  ['light_map', 'LightMap'],
+  ['normal_map', 'NormalMap'],
+  ['material_map', 'MaterialMap'],
+];
+
+function textureFile(key) {
+  const value = String(key || '');
+  const separator = value.indexOf('::');
+  return separator === -1 ? value : value.slice(separator + 2);
+}
+
+function showError(message) {
+  const err = document.createElement('div');
+  err.className = 'texm-empty';
+  err.textContent = message;
+  $('texm-list').prepend(err);
+}
+
+async function pickInto(opt, field) {
+  const result = await window.pywebview.api.pick_texture_file(currentModPath, field);
+  if (!result) return;
+  if (result.error) return showError(result.error);
+  addTexture(result.tex_key, result.uri);
+  opt[field] = result.tex_key;
+  opt[`${field}_manual`] = true;
+  render();
+  if (onChange) onChange();
+}
 
 function render() {
   $('texm-title').textContent = `Manage Textures — ${currentTitle}`;
   const list = $('texm-list');
   list.innerHTML = '';
+  const header = document.createElement('div');
+  header.className = 'texm-grid texm-header';
+  for (const text of ['Diffuse', 'LightMap', 'NormalMap', 'MaterialMap', '']) {
+    const cell = document.createElement('span');
+    cell.textContent = text;
+    header.appendChild(cell);
+  }
+  list.appendChild(header);
   if (!currentPool || !currentPool.length) {
     const empty = document.createElement('div');
     empty.className = 'texm-empty';
@@ -23,9 +62,40 @@ function render() {
   }
   for (const opt of (currentPool || [])) {
     const row = document.createElement('div');
-    row.className = 'texm-row';
+    row.className = 'texm-row texm-grid';
     const label = document.createElement('span');
+    label.className = 'texm-diffuse';
     label.textContent = opt.label;
+    label.title = opt.file || opt.tex_key;
+    row.appendChild(label);
+    for (const [field, title] of mapColumns) {
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'texm-map-cell';
+      const file = textureFile(opt[field]);
+      cell.title = opt[field] ? `Replace ${title}: ${file}` : `Add ${title}`;
+      const name = document.createElement('span');
+      name.textContent = file
+        ? file.split('/').pop().replace(/\.[^.]+$/, '')
+        : `+ ${title}`;
+      cell.appendChild(name);
+      cell.addEventListener('click', () => pickInto(opt, field));
+      if (opt[field]) {
+        const clear = document.createElement('span');
+        clear.className = 'texm-map-clear';
+        clear.textContent = '×';
+        clear.title = `Remove ${title}`;
+        clear.addEventListener('click', (evt) => {
+          evt.stopPropagation();
+          delete opt[field];
+          opt[`${field}_manual`] = true;
+          render();
+          if (onChange) onChange();
+        });
+        cell.appendChild(clear);
+      }
+      row.appendChild(cell);
+    }
     const del = document.createElement('button');
     del.className = 'toggle-icon-btn';
     del.textContent = '🗑';
@@ -36,7 +106,7 @@ function render() {
       render();
       if (onChange) onChange();
     });
-    row.append(label, del);
+    row.appendChild(del);
     list.appendChild(row);
   }
 }
@@ -49,6 +119,7 @@ function render() {
 export function openTextureModal(componentName, pool, modPath, onPoolChange) {
   currentPool = pool;
   currentTitle = componentName;
+  currentModPath = modPath;
   onChange = onPoolChange;
   render();
   $('texture-modal-backdrop').classList.add('show');
@@ -60,15 +131,12 @@ export function openTextureModal(componentName, pool, modPath, onPoolChange) {
       // Reuses the modal's own list area for feedback -- no separate error
       // box exists here, unlike the toggle modal, since this is a much
       // smaller, lower-stakes surface (view-only, nothing to lose on retry).
-      const err = document.createElement('div');
-      err.className = 'texm-empty';
-      err.textContent = result.error;
-      $('texm-list').prepend(err);
-      return;
+      return showError(result.error);
     }
     addTexture(result.tex_key, result.uri);
-    const label = result.tex_key.split('/').pop().replace(/\.[^.]+$/, '');
-    currentPool.push({ tex_key: result.tex_key, label });
+    const file = result.file || result.tex_key;
+    const label = file.split('/').pop().replace(/\.[^.]+$/, '');
+    currentPool.push({ tex_key: result.tex_key, file, label });
     render();
     if (onChange) onChange();
   };
@@ -77,6 +145,7 @@ export function openTextureModal(componentName, pool, modPath, onPoolChange) {
 function close() {
   $('texture-modal-backdrop').classList.remove('show');
   currentPool = null;
+  currentModPath = '';
   onChange = null;
 }
 

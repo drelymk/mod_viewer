@@ -10,7 +10,7 @@ import os
 import re
 
 from .ini_document import IniDocument
-from .mesh_builder import safe_resource_path
+from .mesh_builder import safe_resource_path, split_texture_key
 
 
 _RESOURCE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_.])Resource[A-Za-z0-9_.\\-]*(?![A-Za-z0-9_.])", re.I)
@@ -50,7 +50,9 @@ def _path_key(path):
     return os.path.normcase(os.path.abspath(path))
 
 
-def _load_document(path, override=None):
+def _load_document(path, override=None, document=None):
+    if document is not None:
+        return document
     return (IniDocument.from_string(override, path=path)
             if override is not None else IniDocument.load(path))
 
@@ -224,10 +226,14 @@ def _viewer_texture_paths(mod_dir):
             data = json.load(fh)
         textures = data.get("textures", {}) if isinstance(data, dict) else {}
         for state in textures.values() if isinstance(textures, dict) else ():
-            key = state.get("tex_key") if isinstance(state, dict) else None
-            resolved = safe_resource_path(mod_dir, key)
-            if resolved is not None:
-                result.add(_path_key(resolved))
+            if not isinstance(state, dict):
+                continue
+            for field in ("tex_key", "normal_map", "light_map", "material_map"):
+                key = state.get(field)
+                _role, relative_path = split_texture_key(key)
+                resolved = safe_resource_path(mod_dir, relative_path)
+                if resolved is not None:
+                    result.add(_path_key(resolved))
     except (OSError, ValueError, TypeError):
         pass
     return result
@@ -244,7 +250,7 @@ def _inventory_files(mod_dir):
                 yield os.path.join(base, name)
 
 
-def analyze_mod(mod_dir, ini_paths=None, overrides=None):
+def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None):
     """Return a JSON-ready health report for active INIs in ``mod_dir``.
 
     Any staged text in ``overrides`` is analyzed instead of the disk version.
@@ -252,6 +258,7 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None):
     from being checked.
     """
     overrides = overrides or {}
+    documents = documents or {}
     if ini_paths is None:
         ini_paths = [os.path.join(mod_dir, name) for name in sorted(os.listdir(mod_dir))
                      if name.lower().endswith(".ini")
@@ -261,7 +268,10 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None):
     for path in ini_paths:
         ini_rel = _relative(path, mod_dir)
         try:
-            doc = _load_document(path, overrides.get(path))
+            doc = documents.get(path)
+            if doc is None:
+                doc = documents.get(_path_key(path))
+            doc = _load_document(path, overrides.get(path), document=doc)
         except (OSError, UnicodeError) as exc:
             issues.append(_issue(
                 "unreadable_ini", "error", "ini",

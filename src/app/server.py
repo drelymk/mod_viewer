@@ -45,11 +45,30 @@ def publish_geometry(blob):
     return f"{_GEOMETRY_PREFIX}{token}"
 
 
-def publish_payload_geometry(payload):
-    """Replace mesh base64 fields with offsets into one published blob."""
+def publish_payload_geometry(payload, geometry=None):
+    """Publish the structured payload's packed geometry and its references.
+
+    Normal loads pass the builder's append-only blob, so no encoded geometry
+    string is created or decoded.  The structured mesh map also supports a
+    base64-to-blob fallback for tests that deliberately exercise the direct
+    builder form.
+    """
+    meshes = payload.setdefault("meshes", {})
+    if geometry is not None:
+        blob = (geometry.to_bytes() if hasattr(geometry, "to_bytes")
+                else bytes(geometry))
+        if blob:
+            payload["geometry"] = {
+                "url": publish_geometry(blob),
+                "length": len(blob),
+            }
+        else:
+            payload["geometry"] = None
+        return
+
     blob = bytearray()
-    for name, entry in payload.items():
-        if name.startswith("__") or not isinstance(entry, dict) or entry.get("error"):
+    for _name, entry in meshes.items():
+        if not isinstance(entry, dict) or entry.get("error"):
             continue
         for field in ("pos", "uv", "idx"):
             encoded = entry.get(field)
@@ -69,10 +88,12 @@ def publish_payload_geometry(payload):
                 blob.extend(raw)
                 target[field] = {"offset": offset, "length": len(raw)}
     if blob:
-        payload["__geometry__"] = {
+        payload["geometry"] = {
             "url": publish_geometry(blob),
             "length": len(blob),
         }
+    else:
+        payload["geometry"] = None
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):

@@ -3,36 +3,21 @@
 The two views must agree about what a file contains, or an edit made through
 one would be validated against the other's different idea of the same file.
 """
-import glob
 import os
-import random
-import sys
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _corpus import corpus_roots
+from _corpus import sample_inis
 from core import ini_parser
 from core.ini_document import BLANK, COMMENT, ENDIF, IF, SECTION, IniDocument
 
 SAMPLE = 400
 
 
-def corpus():
-    files = []
-    for root in corpus_roots():
-        if os.path.isdir(root):
-            files += glob.glob(os.path.join(root, "**", "*.ini"), recursive=True)
-    return files
-
-
 def main():
-    files = [f for f in corpus() if not os.path.basename(f).upper().startswith("DISABLED")]
-    if not files:
+    sample = sample_inis(SAMPLE, seed=7)
+    if not sample:
         print("SKIP (no mod libraries found)")
         return 0
-    random.seed(7)
-    sample = random.sample(files, min(SAMPLE, len(files)))
 
     bad_sections = bad_lines = unbalanced = 0
     checked = 0
@@ -101,5 +86,5 @@ def main():
     return 0 if ok else 1
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def test_document_projection_matches_parser_corpus():
+    assert main() == 0

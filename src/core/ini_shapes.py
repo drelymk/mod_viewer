@@ -27,9 +27,11 @@ _BATCH_OFFSET_RE = re.compile(
     r"^global\s+\$shapekey_vertex_offset_batch(\d+)\s*=\s*(\d+)\s*$", re.I)
 
 
-def extract_shape_sliders(sections, resources, var_prefix=None, source=None):
+def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
+                          canonical_vars=None):
     """Return slider descriptions for conservative two-buffer shape shaders."""
-    canon = canonical_var_names(sections)
+    canon = (canonical_vars if canonical_vars is not None
+             else canonical_var_names(sections))
     found = []
 
     # When a mod has authored slider drawing sections, they are a strong
@@ -55,6 +57,9 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None):
         """3DMigoto resource identifiers are case-insensitive."""
         if not name:
             return {}
+        lookup = getattr(resources, "get_ci", None)
+        if lookup is not None:
+            return lookup(name)
         lowered = name.lower()
         for key, value in resources.items():
             if key.lower() == lowered:

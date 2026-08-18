@@ -81,7 +81,8 @@
       <button id="wire-btn" class="tool-btn" title="Wireframe rendering">⬡</button>
       <button id="grid-btn" class="tool-btn" title="Grid visibility">⊞</button>
       <button id="shading-btn" class="tool-btn" title="Smooth/flat shading">◐</button>
-      <button id="texture-btn" class="tool-btn" title="Textures visibility">▩</button>
+      <button id="texture-btn" class="tool-btn" title="Textures: all maps" aria-label="Textures: all maps">▩</button>
+      <button id="light-btn" class="tool-btn double" title="Key light: normal (drag; Shift-drag for depth)" aria-label="Key light: normal">☀</button>
       <button id="trackball-btn" class="tool-btn active" title="Toggle navigation gizmo" aria-label="Toggle navigation gizmo">
         <svg class="nav-gizmo-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path class="nav-x" d="M12 12L20 15"/><path class="nav-y" d="M12 12V3"/><path class="nav-z" d="M12 12L5 18"/>
@@ -186,7 +187,7 @@
 </div>
 
 <div id="texture-modal-backdrop" class="modal-backdrop">
-  <div class="modal">
+  <div class="modal texture-modal">
     <h4 id="texm-title">Manage Textures</h4>
     <div id="texm-list" class="texm-list"></div>
     <div class="modal-actions">

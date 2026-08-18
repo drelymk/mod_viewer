@@ -9,8 +9,10 @@ import os
 
 import webview
 
-from core.mesh_builder import encode_texture_file
-from core.ini_sections import find_inis
+from core.mesh_builder import (GeometryBlob, encode_texture_file,
+                               encode_texture_key)
+from core.mod_discovery import discover_ini_paths
+from core.ini_health import analyze_mod
 
 from . import (edit_session, ini_api, metadata, mod_loader, present_api,
                server, toggle_api)
@@ -40,49 +42,95 @@ class ModViewerAPI:
         self._authorized_folders.add(folder)
         return folder
 
-    def pick_texture_file(self, folder_path):
+    def pick_texture_file(self, folder_path, texture_role=None):
         """Open a native file-picker rooted at the mod folder for the
         per-mesh/per-component texture picker. Returns {"tex_key", "uri"} / {"error"} on
         a real pick, None if the dialog was cancelled -- same shape as
         select_folder's own cancel case.
         """
         folder_path = self._folder(folder_path)
+        if texture_role not in (None, "normal_map", "light_map", "material_map"):
+            return {"error": "Unknown texture role."}
         result = self._window.create_file_dialog(
             webview.FileDialog.OPEN, directory=folder_path,
             file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg;*.tga)",))
         if not result:
             return None
-        return encode_texture_file(folder_path, result[0])
+        return encode_texture_file(folder_path, result[0], texture_role)
 
     def load_texture_file(self, folder_path, tex_key):
         """Encode a known mod-relative picker texture on first use."""
         folder_path = self._folder(folder_path)
-        return encode_texture_file(folder_path,
-                                   os.path.join(folder_path, tex_key))
+        return encode_texture_key(folder_path, tex_key)
 
     def load_mod(self, folder_path):
         folder_path = self._folder(folder_path)
+        # Reopen the same mod from its already-owned path set.  This keeps a
+        # staged edit that changes root geometry from triggering a new disk
+        # discovery and leaves only the first open responsible for selection.
+        ini_paths = (edit_session.document_paths(folder_path)
+                     or discover_ini_paths(folder_path))
         # Every active INI is loaded once into the authoritative in-memory
         # session. Reloads, text edits and toggle edits all read these docs;
         # only Export copies dirty versions back to physical files.
-        edit_session.load_documents(folder_path, find_inis(folder_path))
+        edit_session.load_documents(folder_path, ini_paths)
         overrides = edit_session.overrides_for(folder_path)
         pending_new_sections = edit_session.new_sections_for(folder_path)
-        result = mod_loader.load_mod(folder_path, overrides=overrides,
-                                     pending_new_sections=pending_new_sections)
+        context = mod_loader.ModLoadContext(
+            folder_path, ini_paths, edit_session.documents_for(folder_path),
+            metadata.load(folder_path))
+        geometry = GeometryBlob()
+        result = mod_loader.load_mod(
+            context=context, overrides=overrides,
+            pending_new_sections=pending_new_sections, geometry=geometry)
         if isinstance(result, dict) and not result.get("error"):
-            saved_metadata = metadata.load(folder_path)
-            result["__mesh_names__"] = saved_metadata.get("mesh_names", {})
-            metadata.hydrate_textures(folder_path, result)
-            metadata.hydrate_present(folder_path, result.get("__present__"))
-            server.publish_payload_geometry(result)
+            saved_metadata = context.metadata
+            result.setdefault("metadata", {})["mesh_names"] = \
+                saved_metadata.get("mesh_names", {})
+            metadata.hydrate_textures(folder_path, result, saved_metadata)
+            controls = result.setdefault("controls", {})
+            metadata.hydrate_present(folder_path, controls.get("present"),
+                                      saved_metadata)
+            server.publish_payload_geometry(result, geometry)
         return result
+
+    def get_diagnostics(self, folder_path):
+        """Return the read-only health scan for the current edit revision."""
+        folder_path = self._folder(folder_path)
+        cached = edit_session.cached_diagnostics(folder_path)
+        if cached is not None:
+            return cached
+        ini_paths = edit_session.document_paths(folder_path)
+        if not ini_paths:
+            ini_paths = discover_ini_paths(folder_path)
+            edit_session.load_documents(folder_path, ini_paths)
+        try:
+            report = analyze_mod(
+                folder_path, ini_paths=ini_paths,
+                overrides=edit_session.overrides_for(folder_path),
+                documents=edit_session.documents_for(folder_path))
+            return edit_session.cache_diagnostics(folder_path, report)
+        except Exception:
+            return edit_session.cache_diagnostics(folder_path, {
+                "summary": {"errors": 0, "warnings": 1, "issues": 1,
+                            "unused_files": 0, "unused_resources": 0},
+                "files": {"unreferenced": 0, "inactive_only": 0,
+                          "viewer_only": 0, "referenced": 0},
+                "issues": [{
+                    "code": "health_check_failed", "severity": "warning",
+                    "category": "ini",
+                    "message": "The INI diagnostics could not be completed.",
+                }],
+            })
 
     def save_mesh_names(self, folder_path, names):
         return metadata.save_mesh_names(self._folder(folder_path), names)
 
     def save_mesh_textures(self, folder_path, textures):
-        return metadata.save_textures(self._folder(folder_path), textures)
+        folder_path = self._folder(folder_path)
+        result = metadata.save_textures(folder_path, textures)
+        edit_session.invalidate_diagnostics(folder_path)
+        return result
 
     # -- in-memory INI viewer/editor ----------------------------------------
 

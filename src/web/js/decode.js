@@ -1,6 +1,6 @@
 // Base64 -> typed array decoding for the mesh buffers the Python side sends.
-// Buffers arrive base64-encoded because the JS bridge carries JSON, which has
-// no binary type.
+// Normal loads fetch one binary localhost blob. Direct fixtures may still use
+// the legacy base64 fields, so decodeBytes keeps that fallback.
 
 let geometryBlob = null;
 
