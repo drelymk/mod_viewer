@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 import { ArcballControls } from 'three/addons/controls/ArcballControls.js';
+import { createEnvironmentController } from './environment.js';
 
 const container = document.getElementById('canvas-container');
 
@@ -16,8 +17,10 @@ scene.background = new THREE.Color(0x0d1117);
 // Ambient light alone cannot reveal normal-map detail because it has no
 // direction. Keep a soft neutral base plus a low hemisphere fill so surfaces
 // remain readable when the movable key light is in its Gray/off stage.
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-scene.add(new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35));
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
+const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
+scene.add(ambientLight);
+scene.add(hemisphereLight);
 
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
 dirLight.position.set(5, 10, 7);
@@ -60,6 +63,35 @@ controls.enableAnimations = true;
 // while zooming.
 controls.adjustNearFar = false;
 controls.setGizmosVisible(false);
+
+// The key light is deliberately not handed to EnvironmentController: its
+// intensity is an explicit user interaction (double/current/off) and must not
+// be mistaken for environment-owned lighting. The ambient and hemisphere
+// lights are stable viewer-owned fill lights and are scaled from their
+// captured startup intensities by each preset.
+const environmentController = createEnvironmentController({
+  scene,
+  renderer,
+  viewerLights: { ambient: ambientLight, hemisphere: hemisphereLight },
+  requestRender: () => renderer.render(scene, camera),
+});
+
+export function setEnvironmentPreset(id) {
+  return environmentController.setPreset(id);
+}
+
+export function getEnvironmentPreset() {
+  return environmentController.getPreset();
+}
+
+export function subscribeEnvironment(listener) {
+  return environmentController.subscribe(listener);
+}
+
+export function disposeEnvironment() {
+  environmentController.dispose();
+}
+
 let trackballGizmoVisible = true;
 const viewGizmo = document.getElementById('view-gizmo');
 const gizmoAxes = [...viewGizmo.querySelectorAll('.gizmo-axis')];

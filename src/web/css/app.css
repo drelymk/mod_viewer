@@ -77,11 +77,11 @@ body {
 /* ── canvas ──────────────────────────────────────────────────────────────── */
 #canvas-container { position: fixed; top: 46px; left: 0; right: 0; bottom: 28px; }
 
-/* Blender-style viewport navigation compass. It sits just left of the right
- * dock, rotates with the camera, and remains a DOM overlay so it stays crisp
- * at every WebView scale factor. */
+/* Blender-style viewport navigation compass. It sits in the upper-right when
+ * no right-side panel is visible and moves left to clear the dock otherwise.
+ * It remains a DOM overlay so it stays crisp at every WebView scale factor. */
 #view-gizmo {
-  position: absolute; top: 12px; right: 338px; width: 104px; height: 104px;
+  position: absolute; top: 86px; right: 12px; width: 104px; height: 104px;
   z-index: 9; border-radius: 50%; cursor: grab; touch-action: none;
   filter: drop-shadow(0 4px 10px rgba(0,0,0,.34));
   transition: opacity .16s ease, transform .16s ease;
@@ -228,6 +228,58 @@ body {
 .nav-gizmo-icon .nav-x { stroke: #f06a6a; fill: #f06a6a; }
 .nav-gizmo-icon .nav-y { stroke: #67c96b; fill: #67c96b; }
 .nav-gizmo-icon .nav-z { stroke: #64a5f5; fill: #64a5f5; }
+.environment-control {
+  position: absolute; top: 8px; right: 12px; z-index: 10;
+  width: 104px; display: flex; flex-direction: column; align-items: center;
+  gap: 2px; pointer-events: none;
+}
+.environment-btn {
+  width: 46px; height: 46px; padding: 5px; pointer-events: auto;
+  color: #e6edf3; background: rgba(22,27,34,.9);
+  border: 1px solid #30363d; border-radius: 8px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 10px rgba(0,0,0,.28);
+  transition: border-color .12s, background .12s, transform .12s;
+}
+.environment-btn:hover, .environment-btn:focus-visible {
+  background: #1f6feb; border-color: #58a6ff; outline: none;
+}
+.environment-btn:active { transform: scale(.94); }
+.environment-btn.loading { animation: environment-pulse 1s ease-in-out infinite; }
+@keyframes environment-pulse {
+  50% { opacity: .58; }
+}
+.environment-icon {
+  width: 34px; height: 34px; overflow: visible;
+}
+.environment-icon [data-environment-icon] { display: none; }
+.environment-icon[data-environment="default"] [data-environment-icon="default"],
+.environment-icon[data-environment="studio"] [data-environment-icon="studio"],
+.environment-icon[data-environment="indoor"] [data-environment-icon="indoor"],
+.environment-icon[data-environment="outdoor"] [data-environment-icon="outdoor"] {
+  display: block;
+}
+.environment-icon g { fill: none; stroke: #e6edf3; stroke-width: 2.1;
+  stroke-linecap: round; stroke-linejoin: round; }
+.environment-icon [data-environment-icon="default"] circle { fill: #f5c542; stroke: #ffe69a; }
+.environment-icon [data-environment-icon="studio"] { stroke: #d2a8ff; }
+.environment-icon [data-environment-icon="studio"] circle { fill: #ffcf70; stroke: #ffe69a; }
+.environment-icon [data-environment-icon="indoor"] { stroke: #ff9b70; }
+.environment-icon [data-environment-icon="indoor"] path:nth-child(2) { fill: #f2c879; }
+.environment-icon [data-environment-icon="outdoor"] { stroke: #79c0ff; }
+.environment-icon [data-environment-icon="outdoor"] circle { fill: #ffd866; stroke: #fff0a8; }
+.environment-label {
+  color: #c9d1d9; font-size: 10px; line-height: 12px; white-space: nowrap;
+  text-shadow: 0 1px 3px #0d1117;
+}
+.environment-status {
+  max-width: 104px; min-height: 11px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: #8b949e; font-size: 9px; line-height: 11px;
+  text-shadow: 0 1px 3px #0d1117; pointer-events: none;
+}
+.environment-status.error { color: #ff7b72; }
+body.right-dock-visible #view-gizmo,
+body.right-dock-visible .environment-control { right: 338px; }
 .panel-hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; cursor: pointer; }
 #mesh-list.collapsed, #present-list.collapsed, #toggle-list.collapsed, #menu-list.collapsed { display: none; }
 .icon-btn {
@@ -639,5 +691,5 @@ body.feature-modify-toggle-off .present-author-actions { display: none; }
   #menu-list.image-layout > .toggle-src-items {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  #view-gizmo { right: 272px; }
+  #view-gizmo, .environment-control { right: 272px; }
 }

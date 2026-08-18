@@ -1,7 +1,9 @@
 // Entry point: wires the toolbar and orchestrates loading a mod.
 
 import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
-         toggleGrid, toggleLightHandle, toggleTrackballGizmo } from './scene.js';
+         toggleGrid, toggleLightHandle, toggleTrackballGizmo,
+         getEnvironmentPreset, setEnvironmentPreset, subscribeEnvironment } from './scene.js';
+import { ENVIRONMENT_PRESETS } from './environment.js';
 import { setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
@@ -15,6 +17,90 @@ import { setHealthLoader, setHealthReport } from './health-report.js';
 import { setIniEditorContext } from './ini-editor.js';
 
 const $ = (id) => document.getElementById(id);
+
+function initEnvironmentControl() {
+  const button = $('environment-btn');
+  const icon = $('environment-icon');
+  const label = $('environment-label');
+  const status = $('environment-status');
+  const ids = Object.values(ENVIRONMENT_PRESETS).map(preset => preset.id);
+  const labels = Object.fromEntries(
+    Object.values(ENVIRONMENT_PRESETS).map(preset => [preset.id, preset.label]));
+  let requestedId = getEnvironmentPreset().id;
+
+  function updateControl(id) {
+    const name = labels[id] || id;
+    icon.dataset.environment = id;
+    button.dataset.environment = id;
+    label.textContent = name;
+    button.setAttribute('aria-label', `Environment: ${name}. Click to change.`);
+    button.title = `Environment: ${name} (click to change)`;
+  }
+
+  function setLoading(loading) {
+    button.classList.toggle('loading', loading);
+    button.setAttribute('aria-busy', String(loading));
+  }
+
+  function setStatus(message = '', error = false) {
+    status.textContent = message;
+    status.title = message;
+    status.classList.toggle('error', error);
+  }
+
+  updateControl(requestedId);
+  setLoading(false);
+  subscribeEnvironment((event) => {
+    if (event.type === 'loading') {
+      if (event.loading && event.id === requestedId) {
+        setLoading(true);
+        setStatus(`Loading ${labels[event.id] || event.id}...`);
+      } else if (!event.loading && event.id === requestedId &&
+                 getEnvironmentPreset().id === event.id) {
+        setLoading(false);
+        setStatus();
+      }
+      return;
+    }
+    if (event.type === 'active') {
+      requestedId = event.id;
+      updateControl(event.id);
+      setLoading(false);
+      setStatus();
+      return;
+    }
+    if (event.type === 'error') {
+      requestedId = event.previousId;
+      updateControl(event.previousId);
+      setLoading(false);
+      setStatus(`${labels[event.id] || event.id} unavailable`, true);
+    }
+  });
+
+  button.addEventListener('click', async () => {
+    const currentIndex = Math.max(ids.indexOf(requestedId), 0);
+    requestedId = ids[(currentIndex + 1) % ids.length];
+    const id = requestedId;
+    updateControl(id);
+    setLoading(true);
+    setStatus(`Loading ${labels[id] || id}...`);
+    const result = await setEnvironmentPreset(id);
+    if (!result.ok && !result.stale) {
+      const active = getEnvironmentPreset().id;
+      requestedId = active;
+      updateControl(active);
+      setLoading(false);
+      setStatus(`${labels[id] || id} unavailable`, true);
+    }
+  });
+}
+
+function syncViewportControlPlacement() {
+  const rightDock = $('right-dock');
+  const hasVisiblePanel = [...(rightDock?.children || [])].some((panel) =>
+    getComputedStyle(panel).display !== 'none');
+  document.body.classList.toggle('right-dock-visible', hasVisiblePanel);
+}
 
 // The currently open mod folder, so the Toggle panel's add/edit/delete
 // actions know which folder to write into and reloadCurrentMod() knows what
@@ -72,6 +158,7 @@ function clearScene() {
   $('present-panel').style.display = 'none';
   $('menu-list').innerHTML = '';
   $('menu-panel').style.display = 'none';
+  syncViewportControlPlacement();
 }
 
 async function displayMeshPayload(payload) {
@@ -99,6 +186,7 @@ async function displayMeshPayload(payload) {
   buildTogglePanel(controls.toggles, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(controls.menu);
   buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });
+  syncViewportControlPlacement();
   fitTo(activeMeshes);
 
   showLoading(false);
@@ -223,7 +311,9 @@ $('trackball-btn').addEventListener('click', toggleTrackballGizmo);
 $('camera-reset-view-btn').addEventListener('click', () => resetView(activeMeshes));
 $('camera-flip-btn').addEventListener('click', () => rotateModelQuarterTurn(activeMeshes));
 $('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
+initEnvironmentControl();
 initSelection();
+syncViewportControlPlacement();
 
 // Collapses a panel's body when its header is clicked.
 function initPanelCollapse(panel, contentId) {
@@ -245,4 +335,7 @@ initPanelCollapse($('menu-panel'), 'menu-list');
 
 // Exposed for automated smoke tests and for poking at the app from the
 // devtools console; the UI itself always goes through the listeners above.
-window.modViewer = { displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes };
+window.modViewer = {
+  displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes,
+  setEnvironmentPreset, getEnvironmentPreset,
+};
