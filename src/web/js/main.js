@@ -225,9 +225,8 @@ async function openMod() {
   }
 }
 
-// Re-fetches and re-renders the currently open mod folder — used after a
-// toggle add/edit/delete writes to its ini file, so the panel and 3D view
-// pick up the change via the exact same path a fresh open would take.
+// Re-renders the current authoritative edit session after a staged authoring
+// change, using the same load path as an ordinary reopen.
 export async function reloadCurrentMod() {
   if (!currentModPath) return;
   try {

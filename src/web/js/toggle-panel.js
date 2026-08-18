@@ -11,6 +11,7 @@ import { openToggleModal } from './toggle-modal.js';
 import { startRecordSession } from './record-session.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { registerViewSync, syncView } from './view-sync.js';
+import { buildSourceSection, groupKeysBySource, usesSourceSections } from './panel-utils.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -208,32 +209,6 @@ function buildToggleItem(info, ctx) {
   return item;
 }
 
-function buildSourceSection(source, container) {
-  const hdr = document.createElement('div');
-  hdr.className = 'toggle-src-hdr';
-
-  const chevron = document.createElement('span');
-  chevron.className = 'group-toggle';
-  chevron.textContent = '▼';
-
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'group-name';
-  nameSpan.textContent = source;
-
-  hdr.append(chevron, nameSpan);
-
-  const itemsWrap = document.createElement('div');
-  itemsWrap.className = 'toggle-src-items';
-
-  hdr.addEventListener('click', () => {
-    chevron.classList.toggle('collapsed');
-    itemsWrap.classList.toggle('collapsed');
-  });
-
-  container.append(hdr, itemsWrap);
-  return itemsWrap;
-}
-
 /**
  * Build the panel from the structured controls.toggles model.
  *
@@ -241,9 +216,9 @@ function buildSourceSection(source, container) {
  * same-named keys are grouped under a collapsible per-ini sub-section instead
  * of lengthening every toggle's display name with a prefix.
  *
- * `ctx` carries what the add/edit/delete actions need: `modPath` (which
- * folder to write into) and `onChange` (called after a successful write to
- * reload the mod and refresh the 3D view). The panel is shown whenever a mod
+ * `ctx` carries what the add/edit/delete actions need: `modPath` (which edit
+ * session to update) and `onChange` (called after a successful staged change
+ * to refresh the model and controls). The panel is shown whenever a mod
  * is loaded — even with zero toggles — since "Add" must stay reachable.
  */
 export function buildTogglePanel(toggles, ctx = {}) {
@@ -274,14 +249,9 @@ export function buildTogglePanel(toggles, ctx = {}) {
 
   // Sections with no source (single-ini mods) go in a '' bucket rendered flat,
   // with no header.
-  const bySource = {};
-  for (const section of sections) {
-    const src = toggles[section].source || '';
-    (bySource[src] = bySource[src] || []).push(section);
-  }
-
+  const bySource = groupKeysBySource(toggles, sections);
   const sources = Object.keys(bySource);
-  const multiSource = sources.length > 1 || (sources.length === 1 && sources[0] !== '');
+  const multiSource = usesSourceSections(bySource);
 
   for (const src of sources) {
     const container = (multiSource && src) ? buildSourceSection(src, list) : list;

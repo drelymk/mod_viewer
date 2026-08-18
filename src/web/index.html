@@ -150,7 +150,7 @@
 </div>
 
 <div id="present-modal-backdrop" class="modal-backdrop">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pm-title">
     <h4 id="pm-title">Add PRESENT</h4>
     <div id="pm-error" class="modal-error"></div>
     <form id="pm-form">
@@ -171,7 +171,7 @@
 </div>
 
 <div id="toggle-modal-backdrop" class="modal-backdrop">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tm-title">
     <h4 id="tm-title">Add Toggle</h4>
     <div id="tm-error" class="modal-error"></div>
     <form id="tm-form">
@@ -215,7 +215,7 @@
 </div>
 
 <div id="texture-modal-backdrop" class="modal-backdrop">
-  <div class="modal texture-modal">
+  <div class="modal texture-modal" role="dialog" aria-modal="true" aria-labelledby="texm-title">
     <h4 id="texm-title">Manage Textures</h4>
     <div id="texm-list" class="texm-list"></div>
     <div class="modal-actions">
@@ -267,7 +267,7 @@
 </div>
 
 <div id="dialog-backdrop" class="dialog-backdrop">
-  <div class="dialog-box">
+  <div class="dialog-box" role="alertdialog" aria-modal="true" aria-describedby="dialog-message">
     <div id="dialog-message" class="dialog-message"></div>
     <input id="dialog-input" class="dialog-input" type="text" autocomplete="off"/>
     <div class="modal-actions">

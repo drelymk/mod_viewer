@@ -7,19 +7,18 @@
 // remove one (see toggle_editor.add_toggle / edit_toggle).
 
 import { confirmDialog } from './dialogs.js';
+import { bindModalDismiss, setModalError } from './modal-shell.js';
 
 const $ = (id) => document.getElementById(id);
 
 let currentMode = null;    // 'add' | 'edit'
 let currentModPath = null;
 let currentInfo = null;    // the payload entry being edited (add: null)
-let onSaved = null;        // callback invoked after a successful write
+let onSaved = null;        // callback invoked after a successful staged edit
 let editVarRows = [];      // [{var, original, input}] built for edit mode
 
 function setError(message) {
-  const box = $('tm-error');
-  box.textContent = message || '';
-  box.style.display = message ? 'block' : 'none';
+  setModalError($('tm-error'), message);
 }
 
 function closeModal() {
@@ -74,7 +73,7 @@ async function populateIniPicker(modPath, selected, editable) {
  *   add:  { mode: 'add', modPath, onSaved }
  *   edit: { mode: 'edit', modPath, info, onSaved }  — info is a controls.toggles
  *         payload entry (needs .ini, .section, .name); the real field values
- *         are re-read fresh from disk via get_toggle_details.
+ *         are read from the authoritative edit session via get_toggle_details.
  */
 export async function openToggleModal({ mode, modPath, info, onSaved: cb }) {
   currentMode = mode;
@@ -189,10 +188,8 @@ async function handleSubmit(evt) {
 }
 
 $('tm-form').addEventListener('submit', handleSubmit);
-$('tm-cancel').addEventListener('click', closeModal);
-$('toggle-modal-backdrop').addEventListener('click', (evt) => {
-  if (evt.target.id === 'toggle-modal-backdrop') closeModal();
-});
-document.addEventListener('keydown', (evt) => {
-  if (evt.key === 'Escape' && $('toggle-modal-backdrop').classList.contains('show')) closeModal();
+bindModalDismiss({
+  backdrop: $('toggle-modal-backdrop'),
+  close: closeModal,
+  buttons: [$('tm-cancel')],
 });

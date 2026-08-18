@@ -7,6 +7,7 @@
 
 import { refreshAll, setToggleValue, getToggleValue } from './visibility.js';
 import { registerViewSync, syncView } from './view-sync.js';
+import { buildSourceSection, groupKeysBySource, usesSourceSections } from './panel-utils.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -115,32 +116,6 @@ export function refreshMenuValues() {
   syncView('menu-panel');
 }
 
-function buildSourceSection(source, container) {
-  const hdr = document.createElement('div');
-  hdr.className = 'toggle-src-hdr';
-
-  const chevron = document.createElement('span');
-  chevron.className = 'group-toggle';
-  chevron.textContent = '▼';
-
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'group-name';
-  nameSpan.textContent = source;
-
-  hdr.append(chevron, nameSpan);
-
-  const itemsWrap = document.createElement('div');
-  itemsWrap.className = 'toggle-src-items';
-
-  hdr.addEventListener('click', () => {
-    chevron.classList.toggle('collapsed');
-    itemsWrap.classList.toggle('collapsed');
-  });
-
-  container.append(hdr, itemsWrap);
-  return itemsWrap;
-}
-
 /**
  * Build the panel from the structured controls.menu model. Hidden entirely when the
  * mod has no clickable menu, which is the common case.
@@ -174,13 +149,9 @@ export function buildMenuPanel(menu) {
     setToggleValue(info.var, String(info.default));
   }
 
-  const bySource = {};
-  for (const key of keys) {
-    const src = menu[key].source || '';
-    (bySource[src] = bySource[src] || []).push(key);
-  }
+  const bySource = groupKeysBySource(menu, keys);
   const sources = Object.keys(bySource);
-  const multiSource = sources.length > 1 || (sources.length === 1 && sources[0] !== '');
+  const multiSource = usesSourceSections(bySource);
 
   for (const src of sources) {
     const container = (multiSource && src) ? buildSourceSection(src, list) : list;

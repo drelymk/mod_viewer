@@ -11,6 +11,7 @@ import {
 } from './mesh-texture-state.js';
 import { bindMeshView, getMeshView } from './mesh-view-bindings.js';
 import { registerViewSync } from './view-sync.js';
+import { buildSourceSection, groupKeysBySource, usesSourceSections } from './panel-utils.js';
 import { selectMesh } from './selection.js';
 import { openTextureModal } from './texture-modal.js';
 
@@ -33,20 +34,6 @@ function syncMeshPanel() {
   }
 }
 
-/** Bucket mesh names by their ini "source" tag (see app/mod_loader.py's
- * _ini_scope). Single-ini mods carry no tag at all — everything lands in the
- * '' bucket, which buildMeshPanel renders flat with no per-ini header,
- * exactly like the Toggle panel. */
-function groupBySource(meshes) {
-  const grouped = {};
-  for (const name of Object.keys(meshes)) {
-    if (meshes[name]?.error) continue;
-    const src = meshes[name].source || '';
-    (grouped[src] = grouped[src] || []).push(name);
-  }
-  return grouped;
-}
-
 /** Group mesh names by their clean, never-disambiguated component name
  * (see core/mesh_builder.py's `component` field) — falls back to parsing the
  * dict key itself (stripping a trailing "-N" draw index) for the rare case
@@ -66,32 +53,6 @@ function groupByComponent(names, meshes) {
     (grouped[key] = grouped[key] || []).push(name);
   }
   return grouped;
-}
-
-function buildSourceSection(source, container) {
-  const hdr = document.createElement('div');
-  hdr.className = 'mesh-src-hdr';
-
-  const chevron = document.createElement('span');
-  chevron.className = 'group-toggle';
-  chevron.textContent = '▼';
-
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'group-name';
-  nameSpan.textContent = source;
-
-  hdr.append(chevron, nameSpan);
-
-  const itemsWrap = document.createElement('div');
-  itemsWrap.className = 'mesh-src-items';
-
-  hdr.addEventListener('click', () => {
-    chevron.classList.toggle('collapsed');
-    itemsWrap.classList.toggle('collapsed');
-  });
-
-  container.append(hdr, itemsWrap);
-  return itemsWrap;
 }
 
 function buildGroupHeader(groupName, itemsWrap, texturePool, modPath, onPoolChange) {
@@ -366,12 +327,15 @@ export function buildMeshPanel(meshes, modPath, meshNames = {}) {
   groupsUI = [];
   registerViewSync('mesh-panel', syncMeshPanel);
 
-  const bySource = groupBySource(meshes);
+  const validNames = Object.keys(meshes).filter(name => !meshes[name]?.error);
+  const bySource = groupKeysBySource(meshes, validNames);
   const sources = Object.keys(bySource);
-  const multiSource = sources.length > 1 || (sources.length === 1 && sources[0] !== '');
+  const multiSource = usesSourceSections(bySource);
 
   for (const src of sources) {
-    const container = (multiSource && src) ? buildSourceSection(src, list) : list;
+    const container = (multiSource && src) ? buildSourceSection(src, list, {
+      headerClass: 'mesh-src-hdr', itemsClass: 'mesh-src-items',
+    }) : list;
 
     for (const [groupName, names] of Object.entries(groupByComponent(bySource[src], meshes))) {
       const itemsWrap = document.createElement('div');
