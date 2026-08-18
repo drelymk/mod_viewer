@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 import { ArcballControls } from 'three/addons/controls/ArcballControls.js';
+import { createEnvironmentController } from './environment.js';
 
 const container = document.getElementById('canvas-container');
 
@@ -16,8 +17,10 @@ scene.background = new THREE.Color(0x0d1117);
 // Ambient light alone cannot reveal normal-map detail because it has no
 // direction. Keep a soft neutral base plus a low hemisphere fill so surfaces
 // remain readable when the movable key light is in its Gray/off stage.
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-scene.add(new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35));
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
+const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
+scene.add(ambientLight);
+scene.add(hemisphereLight);
 
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
 dirLight.position.set(5, 10, 7);
@@ -38,7 +41,9 @@ lightIconContext.fillStyle = lightGlow;
 lightIconContext.fillRect(0, 0, 64, 64);
 const lightHandle = new THREE.Sprite(new THREE.SpriteMaterial({
   map: new THREE.CanvasTexture(lightIconCanvas), transparent: true,
-  depthTest: false, depthWrite: false,
+  // Let model depth occlude the draggable marker so the handle does not
+  // remain visible through the character.
+  depthTest: true, depthWrite: false,
 }));
 lightHandle.renderOrder = 1000;
 lightHandle.visible = true;
@@ -60,6 +65,27 @@ controls.enableAnimations = true;
 // while zooming.
 controls.adjustNearFar = false;
 controls.setGizmosVisible(false);
+
+// The key light is deliberately not handed to EnvironmentController: its
+// intensity is an explicit user interaction (double/current/off) and must not
+// be mistaken for environment-owned lighting. Environment presets own the
+// ambient, hemisphere and one accent light; the movable key remains an
+// independent inspection light layered on top.
+const environmentController = createEnvironmentController({
+  scene,
+  ambientLight,
+  hemisphereLight,
+  lightTarget: dirLight.target,
+});
+
+export function setEnvironmentPreset(id) {
+  return environmentController.setPreset(id);
+}
+
+export function getEnvironmentPreset() {
+  return environmentController.getPreset();
+}
+
 let trackballGizmoVisible = true;
 const viewGizmo = document.getElementById('view-gizmo');
 const gizmoAxes = [...viewGizmo.querySelectorAll('.gizmo-axis')];
@@ -79,6 +105,7 @@ let uprightApplied = false;
 let modelQuarterTurns = 0;
 let modelPivot = null;
 let lightDrag = null;
+let lightPointerInside = false;
 const lightModes = ['double', 'current', 'off'];
 let lightModeIndex = 0;
 const lightRaycaster = new THREE.Raycaster();
@@ -187,7 +214,7 @@ export function toggleLightHandle() {
   };
   button.title = labels[mode];
   button.setAttribute('aria-label', labels[mode]);
-  renderer.domElement.style.cursor = visible ? 'crosshair' : '';
+  updateLightCursor();
 }
 
 function updateLightPointer(event) {
@@ -198,10 +225,45 @@ function updateLightPointer(event) {
   lightRaycaster.setFromCamera(lightPointer, camera);
 }
 
+function canInteractWithLight(event = null) {
+  if (event) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    lightPointerInside = event.clientX >= rect.left && event.clientX <= rect.right &&
+      event.clientY >= rect.top && event.clientY <= rect.bottom;
+    updateLightPointer(event);
+  }
+  if (!lightPointerInside || !lightHandle.visible) return false;
+
+  // Hovering the small sprite is cheap. Only build/raycast the visible model
+  // set after it is a candidate, so ordinary pointer movement never tests all
+  // of a mod's triangles.
+  const handleHit = lightRaycaster.intersectObject(lightHandle, false)[0];
+  if (!handleHit) return false;
+
+  const visibleMeshes = [];
+  scene.traverseVisible(object => {
+    if (object.isMesh) visibleMeshes.push(object);
+  });
+  const blocker = lightRaycaster.intersectObjects(visibleMeshes, false)[0];
+  return !blocker || blocker.distance >= handleHit.distance;
+}
+
+function updateLightCursor(event = null) {
+  if (lightDrag) return;
+  renderer.domElement.style.cursor = canInteractWithLight(event) ? 'crosshair' : '';
+}
+
+renderer.domElement.addEventListener('pointerenter', event => {
+  lightPointerInside = true;
+  updateLightCursor(event);
+});
+renderer.domElement.addEventListener('pointerleave', () => {
+  lightPointerInside = false;
+  if (!lightDrag) renderer.domElement.style.cursor = '';
+});
+
 renderer.domElement.addEventListener('pointerdown', event => {
-  if (!lightHandle.visible || event.button !== 0) return;
-  updateLightPointer(event);
-  if (!lightRaycaster.intersectObject(lightHandle, false).length) return;
+  if (event.button !== 0 || !canInteractWithLight(event)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
@@ -221,7 +283,12 @@ renderer.domElement.addEventListener('pointerdown', event => {
 }, { capture: true });
 
 renderer.domElement.addEventListener('pointermove', event => {
-  if (!lightDrag || event.pointerId !== lightDrag.pointerId) return;
+  if (!lightDrag) {
+    lightPointerInside = true;
+    updateLightCursor(event);
+    return;
+  }
+  if (event.pointerId !== lightDrag.pointerId) return;
   if (lightDrag.depthMode) {
     dirLight.position.copy(lightDrag.startPosition).addScaledVector(
       lightDrag.cameraDirection,
@@ -239,7 +306,7 @@ function finishLightDrag(event) {
   renderer.domElement.releasePointerCapture(event.pointerId);
   lightDrag = null;
   controls.enabled = true;
-  renderer.domElement.style.cursor = lightHandle.visible ? 'crosshair' : '';
+  updateLightCursor(event);
 }
 renderer.domElement.addEventListener('pointerup', finishLightDrag);
 renderer.domElement.addEventListener('pointercancel', finishLightDrag);

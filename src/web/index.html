@@ -27,6 +27,34 @@
 </div>
 
 <div id="canvas-container">
+  <div id="environment-control" class="environment-control">
+    <button id="environment-btn" class="environment-btn" type="button"
+            aria-label="Environment: Default. Click to change."
+            title="Environment: Default (click to change)">
+      <svg id="environment-icon" class="environment-icon" data-environment="default"
+           viewBox="0 0 40 40" aria-hidden="true">
+        <g data-environment-icon="default">
+          <circle cx="20" cy="20" r="7"/>
+          <path d="M20 3v5M20 32v5M3 20h5M32 20h5M8 8l4 4M28 28l4 4M32 8l-4 4M12 28l-4 4"/>
+        </g>
+        <g data-environment-icon="studio">
+          <path d="M8 13h18l3 12H5zM17 25v8M11 33h12"/>
+          <path d="M12 17h10M14 20h6"/>
+          <circle cx="29" cy="9" r="3"/>
+        </g>
+        <g data-environment-icon="indoor">
+          <path d="M5 34V17L20 6l15 11v17M5 34h30M12 34V22h16v12"/>
+          <path d="M16 16h8v6h-8zM20 28v6"/>
+        </g>
+        <g data-environment-icon="outdoor">
+          <circle cx="29" cy="10" r="5"/>
+          <path d="M3 33l11-13 7 8 5-6 11 11M3 34h34"/>
+          <path d="M8 15v-5M5.5 12.5l2.5-2.5 2.5 2.5"/>
+        </g>
+      </svg>
+    </button>
+    <span id="environment-label" class="environment-label">Default</span>
+  </div>
   <div id="view-gizmo" title="Drag to orbit · Click an axis to snap · Scroll to zoom">
     <svg viewBox="0 0 104 104" aria-label="Camera navigation gizmo">
       <circle class="gizmo-backdrop" cx="52" cy="52" r="46"/>
@@ -276,8 +304,8 @@
   </a>
 </div>
 
-<!-- Rewritten at serve time to point at either the vendored Three.js copy or
-     the CDN (see app/server.py). -->
+<!-- Rewritten at serve time to point at the vendored Three.js copy
+     (see app/server.py). -->
 <script type="importmap">
 {
   "imports": {
