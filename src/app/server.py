@@ -182,6 +182,19 @@ def _render_texture_source(source):
         )
 
 
+def _render_texture_request(token, source_id, source):
+    """Render a request only if its publication is still active."""
+    with _texture_encode_semaphore:
+        if _lookup_texture(token, source_id) is not source:
+            return None
+        return _render_texture_png(
+            source.path,
+            max_size=source.max_size,
+            preserve_alpha=source.preserve_alpha,
+            texture_role=source.role,
+        )
+
+
 def publish_geometry(blob):
     """Publish one load's packed geometry and discard every older load."""
     if len(blob) > _MAX_GEOMETRY_BYTES:
@@ -345,7 +358,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         if source is None:
             self.send_error(404, "Texture not found")
             return
-        png = _render_texture_source(source)
+        png = _render_texture_request(token, source_id, source)
         if png is None:
             self.send_error(404, "Texture unavailable")
             return
@@ -360,7 +373,6 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 class _ThreadingTCPServer(socketserver.ThreadingTCPServer):
     """Serve independent browser requests without serializing the UI."""
 
-    allow_reuse_address = True
     daemon_threads = True
 
 

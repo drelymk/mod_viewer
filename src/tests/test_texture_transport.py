@@ -272,6 +272,87 @@ def test_texture_requests_are_threaded_but_rendering_is_bounded(tmp_path):
     assert peak == server._TEXTURE_ENCODE_CONCURRENCY == 2
 
 
+def test_retired_texture_request_skips_render_after_waiting_for_slot(tmp_path):
+    old_first = tmp_path / "old-first.png"
+    old_queued = tmp_path / "old-queued.png"
+    current = tmp_path / "current.png"
+    for path, color in ((old_first, (1, 128, 32)),
+                        (old_queued, (2, 128, 32)),
+                        (current, (3, 128, 32))):
+        Image.new("RGB", (1, 1), color).save(path)
+
+    old_publication = server.begin_texture_publication(str(tmp_path / "old"))
+    old_first_url = old_publication.register(str(old_first))
+    old_queued_url = old_publication.register(str(old_queued))
+    old_publication.commit()
+    old_first_source = server._lookup_texture(old_publication.token, "0")
+    old_queued_source = server._lookup_texture(old_publication.token, "1")
+
+    current_publication = server.begin_texture_publication(
+        str(tmp_path / "current"))
+    current_url = current_publication.register(str(current))
+    current_source = server._lookup_texture(current_publication.token, "0")
+
+    class ObservableSemaphore:
+        def __init__(self):
+            self._semaphore = threading.BoundedSemaphore(1)
+            self.waiting = threading.Event()
+
+        def __enter__(self):
+            if not self._semaphore.acquire(blocking=False):
+                self.waiting.set()
+                self._semaphore.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self._semaphore.release()
+
+    semaphore = ObservableSemaphore()
+    first_started = threading.Event()
+    release_first = threading.Event()
+    rendered_paths = []
+    rendered_paths_lock = threading.Lock()
+
+    def blocked_render(path, **kwargs):
+        with rendered_paths_lock:
+            rendered_paths.append(path)
+        if path == str(old_first):
+            first_started.set()
+            if not release_first.wait(5):
+                raise RuntimeError("test render gate was not released")
+        return b"PNG"
+
+    with patch.object(server, "_texture_encode_semaphore", semaphore), \
+            patch("app.server._render_texture_png", side_effect=blocked_render):
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first_future = executor.submit(
+                    server._render_texture_request,
+                    old_publication.token, "0", old_first_source)
+                assert first_started.wait(2)
+                queued_future = executor.submit(
+                    server._render_texture_request,
+                    old_publication.token, "1", old_queued_source)
+                assert semaphore.waiting.wait(2)
+
+                current_publication.commit()
+                release_first.set()
+
+                assert first_future.result(timeout=5) == b"PNG"
+                assert queued_future.result(timeout=5) is None
+                assert executor.submit(
+                    server._render_texture_request,
+                    current_publication.token, "0", current_source,
+                ).result(timeout=5) == b"PNG"
+        finally:
+            release_first.set()
+
+    assert old_first_url.endswith("/0")
+    assert old_queued_url.endswith("/1")
+    assert current_url.endswith("/0")
+    assert rendered_paths == [str(old_first), str(current)]
+
+
 def test_metadata_hydration_registers_saved_textures_without_rendering(tmp_path):
     path = tmp_path / "shared.png"
     Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
