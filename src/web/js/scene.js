@@ -21,7 +21,7 @@ const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
 scene.add(ambientLight, hemisphereLight);
 
 // The movable key light remains independent from environment-owned lighting.
-const keyLight = new THREE.DirectionalLight(0xffffff, 0.5);
+const keyLight = new THREE.DirectionalLight(0xffffff, 1);
 keyLight.position.set(5, 10, 7);
 scene.add(keyLight, keyLight.target);
 
