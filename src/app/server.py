@@ -34,11 +34,14 @@ _VENDOR_PREFIX = "/vendor/"
 _GEOMETRY_PREFIX = "/geometry/"
 _TEXTURE_PREFIX = "/texture/"
 _MAX_GEOMETRY_BYTES = 512 * 1024 * 1024
+_TEXTURE_ENCODE_CONCURRENCY = 2
 _geometry_lock = threading.RLock()
 _geometry_blobs = {}
 _texture_lock = threading.RLock()
 _texture_publications = {}
 _active_texture_publication = None
+_texture_encode_semaphore = threading.BoundedSemaphore(
+    _TEXTURE_ENCODE_CONCURRENCY)
 
 
 @dataclass(frozen=True)
@@ -101,10 +104,7 @@ class TexturePublication:
         source = existing_source or TextureSource(
             path=path, role=role, max_size=max_size,
             preserve_alpha=preserve_alpha)
-        if validate and _render_texture_png(
-                source.path, max_size=source.max_size,
-                preserve_alpha=source.preserve_alpha,
-                texture_role=source.role) is None:
+        if validate and _render_texture_source(source) is None:
             return None
 
         with _texture_lock:
@@ -169,6 +169,17 @@ def _lookup_texture(token, source_id):
         if publication is None:
             return None
         return publication._sources.get(source_id)
+
+
+def _render_texture_source(source):
+    """Render one source while bounding concurrent image decode/encoding."""
+    with _texture_encode_semaphore:
+        return _render_texture_png(
+            source.path,
+            max_size=source.max_size,
+            preserve_alpha=source.preserve_alpha,
+            texture_role=source.role,
+        )
 
 
 def publish_geometry(blob):
@@ -334,12 +345,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         if source is None:
             self.send_error(404, "Texture not found")
             return
-        png = _render_texture_png(
-            source.path,
-            max_size=source.max_size,
-            preserve_alpha=source.preserve_alpha,
-            texture_role=source.role,
-        )
+        png = _render_texture_source(source)
         if png is None:
             self.send_error(404, "Texture unavailable")
             return
@@ -349,6 +355,13 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(png)
+
+
+class _ThreadingTCPServer(socketserver.ThreadingTCPServer):
+    """Serve independent browser requests without serializing the UI."""
+
+    allow_reuse_address = True
+    daemon_threads = True
 
 
 def start():
@@ -384,7 +397,6 @@ def start():
         "__REPO_URL__": REPO_URL,
     }
 
-    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
-    httpd.daemon_threads = True
+    httpd = _ThreadingTCPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{httpd.server_address[1]}"

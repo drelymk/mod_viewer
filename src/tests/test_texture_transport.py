@@ -5,6 +5,7 @@ import os
 import socketserver
 import struct
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError
 from urllib.request import urlopen
 from unittest.mock import patch
@@ -208,6 +209,67 @@ def test_texture_endpoint_serves_png_and_keeps_source_reusable(tmp_path):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_texture_requests_are_threaded_but_rendering_is_bounded(tmp_path):
+    paths = []
+    for index in range(3):
+        path = tmp_path / f"texture-{index}.png"
+        Image.new("RGB", (1, 1), (index, 128, 32)).save(path)
+        paths.append(path)
+
+    publication = server.begin_texture_publication(str(tmp_path))
+    texture_urls = [publication.register(str(path)) for path in paths]
+    publication.commit()
+
+    active = 0
+    peak = 0
+    state_lock = threading.Lock()
+    two_started = threading.Event()
+    release = threading.Event()
+
+    def blocked_render(*args, **kwargs):
+        nonlocal active, peak
+        with state_lock:
+            active += 1
+            peak = max(peak, active)
+            if active == 2:
+                two_started.set()
+        try:
+            assert release.wait(5), "test render gate was not released"
+            return b"PNG"
+        finally:
+            with state_lock:
+                active -= 1
+
+    handler = functools.partial(server._Handler, directory=str(tmp_path))
+    httpd = server._ThreadingTCPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def fetch(texture_url):
+        with urlopen(base_url + texture_url, timeout=5) as response:
+            return response.read()
+
+    reached_two = False
+    try:
+        with patch("app.server._render_texture_png", side_effect=blocked_render):
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = [executor.submit(fetch, texture_url)
+                           for texture_url in texture_urls]
+                reached_two = two_started.wait(2)
+                release.set()
+                results = [future.result(timeout=5) for future in futures]
+        assert results == [b"PNG"] * 3
+    finally:
+        release.set()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+    assert reached_two
+    assert peak == server._TEXTURE_ENCODE_CONCURRENCY == 2
 
 
 def test_metadata_hydration_registers_saved_textures_without_rendering(tmp_path):
