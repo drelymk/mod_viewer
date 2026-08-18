@@ -41,8 +41,8 @@ lightIconContext.fillStyle = lightGlow;
 lightIconContext.fillRect(0, 0, 64, 64);
 const lightHandle = new THREE.Sprite(new THREE.SpriteMaterial({
   map: new THREE.CanvasTexture(lightIconCanvas), transparent: true,
-  // Keep the draggable marker in the viewport, but let model depth occlude
-  // it so the light cannot appear to shine through the mesh.
+  // Let model depth occlude the draggable marker so the handle does not
+  // remain visible through the character.
   depthTest: true, depthWrite: false,
 }));
 lightHandle.renderOrder = 1000;
@@ -75,6 +75,7 @@ const environmentController = createEnvironmentController({
   scene,
   ambientLight,
   hemisphereLight,
+  lightTarget: dirLight.target,
 });
 
 export function setEnvironmentPreset(id) {
@@ -233,9 +234,18 @@ function canInteractWithLight(event = null) {
   }
   if (!lightPointerInside || !lightHandle.visible) return false;
 
-  // The first ray hit matches the depth-tested render: if a model is in front
-  // of the sprite, the marker is not visually available for interaction.
-  return lightRaycaster.intersectObjects(scene.children, true)[0]?.object === lightHandle;
+  // Hovering the small sprite is cheap. Only build/raycast the visible model
+  // set after it is a candidate, so ordinary pointer movement never tests all
+  // of a mod's triangles.
+  const handleHit = lightRaycaster.intersectObject(lightHandle, false)[0];
+  if (!handleHit) return false;
+
+  const visibleMeshes = [];
+  scene.traverseVisible(object => {
+    if (object.isMesh) visibleMeshes.push(object);
+  });
+  const blocker = lightRaycaster.intersectObjects(visibleMeshes, false)[0];
+  return !blocker || blocker.distance >= handleHit.distance;
 }
 
 function updateLightCursor(event = null) {

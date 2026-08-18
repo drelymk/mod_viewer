@@ -154,9 +154,10 @@ export function createEnvironmentController({
   scene,
   ambientLight,
   hemisphereLight,
+  lightTarget,
 }) {
-  if (!scene || !ambientLight || !hemisphereLight) {
-    throw new Error('EnvironmentController needs a scene and viewer lights.');
+  if (!scene || !ambientLight || !hemisphereLight || !lightTarget) {
+    throw new Error('EnvironmentController needs a scene, viewer lights and target.');
   }
 
   const originalBackground = scene.background;
@@ -165,8 +166,10 @@ export function createEnvironmentController({
   const background = createBackgroundTexture();
   const accentLight = new THREE.DirectionalLight(0xffffff, 0);
   accentLight.visible = false;
-  scene.add(accentLight);
-  scene.add(accentLight.target);
+  accentLight.target = lightTarget;
+  // Preset positions are offsets from the model target. The existing
+  // movable key light updates this target whenever the model is reframed.
+  lightTarget.add(accentLight);
 
   let currentPresetId = 'default';
   let disposed = false;
@@ -193,6 +196,7 @@ export function createEnvironmentController({
       return;
     }
     accentLight.color.set(config.color);
+    // This is local to lightTarget, so the accent follows offset models.
     accentLight.position.fromArray(config.position);
     accentLight.intensity = config.intensity;
     accentLight.visible = true;
@@ -237,8 +241,7 @@ export function createEnvironmentController({
     if (disposed) return;
     applyDefault();
     background.texture.dispose();
-    scene.remove(accentLight);
-    scene.remove(accentLight.target);
+    lightTarget.remove(accentLight);
     disposed = true;
   }
 

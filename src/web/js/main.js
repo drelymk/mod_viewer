@@ -36,14 +36,21 @@ function initEnvironmentControl() {
     button.title = `Environment: ${name} (click to change)`;
   }
 
+  function applyEnvironmentPreset(id) {
+    if (!setEnvironmentPreset(id)) return false;
+    currentId = getEnvironmentPreset().id;
+    updateControl(currentId);
+    return true;
+  }
+
   updateControl(currentId);
   button.addEventListener('click', () => {
     const currentIndex = Math.max(ids.indexOf(currentId), 0);
     const nextId = ids[(currentIndex + 1) % ids.length];
-    if (!setEnvironmentPreset(nextId)) return;
-    currentId = nextId;
-    updateControl(currentId);
+    applyEnvironmentPreset(nextId);
   });
+
+  return applyEnvironmentPreset;
 }
 
 function syncViewportControlPlacement() {
@@ -262,7 +269,7 @@ $('trackball-btn').addEventListener('click', toggleTrackballGizmo);
 $('camera-reset-view-btn').addEventListener('click', () => resetView(activeMeshes));
 $('camera-flip-btn').addEventListener('click', () => rotateModelQuarterTurn(activeMeshes));
 $('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
-initEnvironmentControl();
+const applyEnvironmentPreset = initEnvironmentControl();
 initSelection();
 syncViewportControlPlacement();
 
@@ -288,5 +295,5 @@ initPanelCollapse($('menu-panel'), 'menu-list');
 // devtools console; the UI itself always goes through the listeners above.
 window.modViewer = {
   displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes,
-  setEnvironmentPreset, getEnvironmentPreset,
+  setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
 };
