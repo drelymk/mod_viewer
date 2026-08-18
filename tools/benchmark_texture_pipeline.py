@@ -3,7 +3,7 @@
 The default command runs one isolated worker for each requested semaphore size
 and prints JSON suitable for comparing PRs:
 
-    python tools/benchmark_texture_pipeline.py "D:\\Mod\\Chisa-Caramel Attire"
+    python tools/benchmark_texture_pipeline.py "<mod-folder>"
 
 Each worker loads the mod through ``ModViewerAPI``, starts the real localhost
 server, displays the payload in Edge, and waits for the visible texture
@@ -347,7 +347,6 @@ def _run_browser(base_url, payload, profiler, sampler, concurrency,
 
     requested_urls = set()
     texture_responses = []
-    first_texture_at = None
     page_errors = []
     display_started = None
 
@@ -356,11 +355,8 @@ def _run_browser(base_url, payload, profiler, sampler, concurrency,
             requested_urls.add(request.url)
 
     def on_response(response):
-        nonlocal first_texture_at
         if "/texture/" not in response.url:
             return
-        if first_texture_at is None:
-            first_texture_at = time.perf_counter()
         try:
             bytes_served = int(response.headers.get("content-length", "0"))
         except (TypeError, ValueError):
@@ -391,8 +387,12 @@ def _run_browser(base_url, payload, profiler, sampler, concurrency,
         navigation_seconds = time.perf_counter() - navigation_started
 
         display_started = time.perf_counter()
-        page.evaluate(
-            "payload => window.modViewer.displayMeshPayload(payload)",
+        display_start_browser_ms = page.evaluate(
+            """async payload => {
+              const started = performance.now();
+              await window.modViewer.displayMeshPayload(payload);
+              return started;
+            }""",
             payload)
         display_seconds = time.perf_counter() - display_started
         texture_started = display_started
@@ -403,22 +403,28 @@ def _run_browser(base_url, payload, profiler, sampler, concurrency,
             network_idle_error = str(error)
         page.wait_for_timeout(250)
         texture_finished = time.perf_counter()
-        resource_metrics = page.evaluate("""() => performance
+        resource_metrics = page.evaluate("""displayStart => performance
           .getEntriesByType('resource')
           .filter(entry => entry.name.includes('/texture/'))
           .map(entry => ({
             duration: entry.duration,
             response_end: entry.responseEnd - entry.startTime,
-          }))""")
+            elapsed_since_display: entry.responseEnd - displayStart,
+          }))""", display_start_browser_ms)
+        response_elapsed = [
+            entry["elapsed_since_display"] / 1000.0
+            for entry in resource_metrics
+            if entry["elapsed_since_display"] >= 0
+        ]
         active_meshes = page.evaluate(
             "window.modViewer.activeMeshes.length")
         browser_result = {
             "navigation_seconds": navigation_seconds,
             "browser_display_seconds": display_seconds,
-            "first_texture_seconds": (
-                first_texture_at - display_started
-                if first_texture_at is not None else None),
-            "all_visible_texture_seconds": texture_finished - texture_started,
+            "first_texture_response_seconds": min(
+                response_elapsed, default=None),
+            "all_texture_responses_seconds": max(
+                response_elapsed, default=None),
             "requested_texture_sources": len(requested_urls),
             "texture_response_count": len(texture_responses),
             "texture_statuses": sorted({

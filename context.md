@@ -22,10 +22,11 @@ meshes, previews menu state and stages toggle edits without running the game.
 
 Texture performance:
 
+    pip install -r requirements-dev.txt
     python tools/benchmark_texture_pipeline.py "<mod-folder>" --pretty
 
 - Use this benchmark to compare lazy texture loading with isolated concurrency
-  rows 1, 2 and 4. It reports first/all-visible texture timing, registered,
+  rows 1, 2 and 4. It reports first/last texture-response timing, registered,
   requested and rendered sources, cache hits/misses, stage timings, PNG bytes,
   process-tree RSS/CPU and peak simultaneous encodes.
 - The profiled stages are DDS/image decode, RGB/RGBA conversion, resize,
