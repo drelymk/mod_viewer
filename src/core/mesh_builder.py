@@ -1,6 +1,6 @@
 """3DMigoto binary buffer readers and in-memory mesh payload builder."""
 
-import re, struct, os, base64, io, threading
+import re, struct, os, base64, io, threading, time
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -25,11 +25,45 @@ _texture_cache = OrderedDict()
 _texture_cache_bytes = 0
 _texture_cache_mod = None
 _texture_cache_lock = threading.RLock()
+_texture_profile_hook = None
 
 
 def normalize_texture_role(role=None):
     """Return the canonical registry role used for one texture instance."""
     return role if role in TEXTURE_ROLES else "diffuse"
+
+
+def set_texture_profile_hook(hook):
+    """Install an optional texture-stage callback and return the previous one.
+
+    The normal application leaves this unset, so profiling adds no work to the
+    loading path. Benchmark tooling uses the callback to measure expensive
+    stages without duplicating the renderer's image-processing implementation.
+    """
+    global _texture_profile_hook
+    previous = _texture_profile_hook
+    _texture_profile_hook = hook
+    return previous
+
+
+def _profile_texture(stage, seconds=0.0, **details):
+    hook = _texture_profile_hook
+    if hook is None:
+        return
+    try:
+        hook(stage, seconds, details)
+    except Exception:
+        # Profiling must never change texture loading behavior.
+        pass
+
+
+def _profile_started():
+    return time.perf_counter() if _texture_profile_hook is not None else None
+
+
+def _profile_elapsed(stage, started, **details):
+    if started is not None:
+        _profile_texture(stage, time.perf_counter() - started, **details)
 
 
 def texture_key(relative_path, role=None):
@@ -335,37 +369,80 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
         stat = os.stat(dds_path)
         cache_key = (os.path.normcase(os.path.abspath(dds_path)), stat.st_size,
                      stat.st_mtime_ns, max_size, preserve_alpha, texture_role)
+        cache_started = _profile_started()
         with _texture_cache_lock:
             cached = _texture_cache.pop(cache_key, None)
             if cached is not None:
                 _texture_cache[cache_key] = cached
+                _profile_elapsed(
+                    "cache_hit", cache_started,
+                    path=cache_key[0], role=texture_role, bytes=len(cached[0]))
                 return cached[0]
+        _profile_elapsed("cache_miss", cache_started,
+                         path=cache_key[0], role=texture_role)
         from PIL import Image
         Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
+        stage_started = _profile_started()
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             img = Image.open(dds_path)
             img.load()
+        _profile_elapsed("decode", stage_started,
+                         path=cache_key[0], role=texture_role)
         # Material textures historically drop alpha because some DDS decoders
         # expose unusable colour in fully-transparent pixels. Menu artwork is
         # different: its authored transparency is part of the icon and must
         # survive conversion to PNG.
-        img = img.convert('RGBA' if preserve_alpha else 'RGB')
-        if preserve_alpha and img.getchannel('A').getextrema()[1] == 0:
-            # Some menu packs deliberately point several slots at an empty
-            # placeholder DDS. Sending it to the browser produces a blank or
-            # black-looking tile; let the menu UI use its cycle glyph instead.
-            return None
+        stage_started = _profile_started()
+        try:
+            img = img.convert('RGBA' if preserve_alpha else 'RGB')
+            if preserve_alpha and img.getchannel('A').getextrema()[1] == 0:
+                # Some menu packs deliberately point several slots at an empty
+                # placeholder DDS. Sending it to the browser produces a blank
+                # or black-looking tile; let the menu UI use its cycle glyph.
+                return None
+        finally:
+            _profile_elapsed(
+                "rgb_rgba_conversion", stage_started,
+                path=cache_key[0], role=texture_role)
         if max(img.size) > max_size:
+            stage_started = _profile_started()
             img.thumbnail((max_size, max_size), Image.LANCZOS)
+            _profile_elapsed(
+                "resize", stage_started,
+                path=cache_key[0], role=texture_role)
         if texture_role == "normal_map":
-            img = _reconstruct_normal_z(img)
+            stage_started = _profile_started()
+            try:
+                img = _reconstruct_normal_z(img)
+            finally:
+                _profile_elapsed(
+                    "normal_z_reconstruction",
+                    stage_started,
+                    path=cache_key[0], role=texture_role)
         elif texture_role == "light_map":
-            img = _extract_light_mask(img)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        png = buf.getvalue()
+            stage_started = _profile_started()
+            try:
+                img = _extract_light_mask(img)
+            finally:
+                _profile_elapsed(
+                    "light_mask_extraction",
+                    stage_started,
+                    path=cache_key[0], role=texture_role)
+        stage_started = _profile_started()
+        try:
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            png = buf.getvalue()
+        finally:
+            _profile_elapsed(
+                "png_encoding", stage_started,
+                path=cache_key[0], role=texture_role,
+                bytes=len(png) if "png" in locals() else 0)
         _cache_texture(cache_key, png)
+        _profile_texture(
+            "encoded", 0.0, path=cache_key[0], role=texture_role,
+            bytes=len(png))
         return png
     except Exception as e:
         print(f"  texture skipped: {e}")

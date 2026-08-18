@@ -16,7 +16,8 @@ from PIL import Image
 from app import metadata, mod_loader, server
 from core.ini_document import IniDocument
 from core.mesh_builder import (GeometryBlob, _encode_texture,
-                               _render_texture_png, build_mesh_result)
+                               _render_texture_png, build_mesh_result,
+                               set_texture_profile_hook)
 
 
 def _write_geometry(root):
@@ -53,6 +54,27 @@ def test_render_cache_stores_png_bytes_but_direct_wrapper_stays_data_uri(tmp_pat
 
     assert isinstance(png, bytes) and png.startswith(b"\x89PNG")
     assert uri.startswith("data:image/png;base64,")
+
+
+def test_texture_profile_hook_reports_cache_hit_and_miss(tmp_path):
+    path = tmp_path / "profiled.png"
+    Image.new("RGB", (2, 1), (128, 128, 32)).save(path)
+    events = []
+    previous = set_texture_profile_hook(
+        lambda stage, seconds, details: events.append((stage, details)))
+    try:
+        first = _render_texture_png(str(path))
+        second = _render_texture_png(str(path))
+    finally:
+        set_texture_profile_hook(previous)
+
+    stages = [stage for stage, _details in events]
+    assert first == second and first.startswith(b"\x89PNG")
+    assert stages.count("cache_miss") == 1
+    assert stages.count("cache_hit") == 1
+    assert stages.count("encoded") == 1
+    assert all(stage in stages for stage in (
+        "decode", "rgb_rgba_conversion", "png_encoding"))
 
 
 def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
