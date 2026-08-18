@@ -20,6 +20,21 @@ meshes, previews menu state and stages toggle edits without running the game.
     pip install -r requirements.txt
     python src/viewer_app.py
 
+Texture performance:
+
+    python tools/benchmark_texture_pipeline.py "<mod-folder>" --pretty
+
+- Use this benchmark to compare lazy texture loading with isolated concurrency
+  rows 1, 2 and 4. It reports first/all-visible texture timing, registered,
+  requested and rendered sources, cache hits/misses, stage timings, PNG bytes,
+  process-tree RSS/CPU and peak simultaneous encodes.
+- The profiled stages are DDS/image decode, RGB/RGBA conversion, resize,
+  normal-Z reconstruction, light-mask extraction and PNG encoding. Headless
+  browser frame-gap samples are not reliable for comparing interactive
+  rendering.
+- Keep the production texture render bound at 2 unless controlled measurements
+  show a meaningful completion improvement at acceptable memory cost.
+
 Development tests use pytest for discovery; install the test-only dependency
 with `pip install -r requirements-dev.txt`, then run from the repository root:
 
