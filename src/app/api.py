@@ -34,9 +34,17 @@ class ModViewerAPI:
         return requested
 
     @staticmethod
-    def _active_texture_source(folder_path):
+    def _active_texture_source(folder_path, validate=False):
         publication = server.active_texture_publication(folder_path)
-        return publication.register if publication is not None else None
+        if publication is None:
+            return None
+        if not validate:
+            return publication.register
+
+        def register(path, role=None):
+            return publication.register(path, role, validate=True)
+
+        return register
 
     def select_folder(self):
         """Open a native folder-picker dialog. Returns None if cancelled."""
@@ -63,14 +71,14 @@ class ModViewerAPI:
             return None
         return encode_texture_file(
             folder_path, result[0], texture_role,
-            texture_source=self._active_texture_source(folder_path))
+            texture_source=self._active_texture_source(folder_path, validate=True))
 
     def load_texture_file(self, folder_path, tex_key):
         """Resolve a known mod-relative picker texture on first use."""
         folder_path = self._folder(folder_path)
         return encode_texture_key(
             folder_path, tex_key,
-            texture_source=self._active_texture_source(folder_path))
+            texture_source=self._active_texture_source(folder_path, validate=True))
 
     def load_mod(self, folder_path):
         folder_path = self._folder(folder_path)

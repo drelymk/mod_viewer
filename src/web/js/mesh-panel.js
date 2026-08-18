@@ -484,6 +484,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {}) {
 
       for (const name of names) {
         const mesh = buildMesh(name, meshes[name]);
+        mesh.userData.onTextureChanged = onActiveChanged;
         mesh.userData.metadataKey = metadataKey(name, meshes[name]);
         mesh.userData.texturePool = texturePool;
         mesh.userData.displayName = meshNames[mesh.userData.metadataKey] || null;

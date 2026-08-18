@@ -62,12 +62,16 @@ class TexturePublication:
         self._dedupe = {}
         self._state = "pending"
 
-    def register(self, path, role=None, max_size=2048, preserve_alpha=False):
+    def register(self, path, role=None, max_size=2048, preserve_alpha=False,
+                 validate=False):
         """Publish a source once and return its opaque same-origin URL.
 
         The caller has already resolved the path through the core sandbox. The
         registry still requires a real file and never exposes that path in the
         URL, so browser requests can only address sources registered here.
+        ``validate=True`` is reserved for explicit manual picks and performs
+        one immediate render so corrupt files return an error before they are
+        persisted in viewer metadata.
         """
         if not path:
             return None
@@ -83,6 +87,26 @@ class TexturePublication:
             return None
         preserve_alpha = bool(preserve_alpha)
         dedupe_key = (os.path.normcase(path), role, max_size, preserve_alpha)
+        existing_source = None
+        with _texture_lock:
+            if (_texture_publications.get(self.token) is not self
+                    or self._state == "discarded"):
+                return None
+            source_id = self._dedupe.get(dedupe_key)
+            if source_id is not None:
+                existing_source = self._sources[source_id]
+                if not validate:
+                    return f"{_TEXTURE_PREFIX}{self.token}/{source_id}"
+
+        source = existing_source or TextureSource(
+            path=path, role=role, max_size=max_size,
+            preserve_alpha=preserve_alpha)
+        if validate and _render_texture_png(
+                source.path, max_size=source.max_size,
+                preserve_alpha=source.preserve_alpha,
+                texture_role=source.role) is None:
+            return None
+
         with _texture_lock:
             if (_texture_publications.get(self.token) is not self
                     or self._state == "discarded"):
@@ -91,9 +115,7 @@ class TexturePublication:
             if source_id is None:
                 source_id = str(len(self._sources))
                 self._dedupe[dedupe_key] = source_id
-                self._sources[source_id] = TextureSource(
-                    path=path, role=role, max_size=max_size,
-                    preserve_alpha=preserve_alpha)
+                self._sources[source_id] = source
             return f"{_TEXTURE_PREFIX}{self.token}/{source_id}"
 
     def commit(self):

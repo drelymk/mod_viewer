@@ -12,7 +12,8 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
-from app import metadata, server
+from app import metadata, mod_loader, server
+from core.ini_document import IniDocument
 from core.mesh_builder import (GeometryBlob, _encode_texture,
                                _render_texture_png, build_mesh_result)
 
@@ -84,6 +85,51 @@ def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
     ]
 
 
+def test_mod_loader_app_path_never_renders_model_textures(tmp_path):
+    _write_geometry(str(tmp_path))
+    Image.new("RGB", (1, 1), (128, 128, 32)).save(tmp_path / "shared.png")
+    ini_path = tmp_path / "mod.ini"
+    ini_path.write_text(
+        "[TextureOverrideBodyPosition]\n"
+        "vb0 = ResourceBodyPosition\n"
+        "[TextureOverrideBodyTexcoord]\n"
+        "vb1 = ResourceBodyTexcoord\n"
+        "[TextureOverrideBody]\n"
+        "ib = ResourceBodyIB\n"
+        "Resource\\GIMI\\Diffuse = ResourceBodyDiffuse\n"
+        "drawindexed = 3, 0, 0\n"
+        "[ResourceBodyPosition]\n"
+        "filename = p.buf\n"
+        "stride = 12\n"
+        "[ResourceBodyTexcoord]\n"
+        "filename = t.buf\n"
+        "stride = 8\n"
+        "[ResourceBodyIB]\n"
+        "filename = i.buf\n"
+        "format = R32_UINT\n"
+        "[ResourceBodyDiffuse]\n"
+        "filename = shared.png\n",
+        encoding="utf-8",
+    )
+    context = mod_loader.ModLoadContext(
+        str(tmp_path), [str(ini_path)],
+        {str(ini_path): IniDocument.load(str(ini_path))}, {})
+    registered = []
+
+    def register(path, role):
+        registered.append((os.path.basename(path), role))
+        return f"/texture/integration/{len(registered) - 1}"
+
+    with patch("core.mesh_builder._render_texture_png",
+               side_effect=AssertionError("loader rendered a model texture")):
+        loaded = mod_loader.load_mod(
+            context=context, geometry=GeometryBlob(), texture_source=register)
+
+    assert not loaded.get("error")
+    assert loaded["textures"] == {"diffuse::shared.png": "/texture/integration/0"}
+    assert registered == [("shared.png", "diffuse")]
+
+
 def test_publication_deduplicates_by_role_and_invalidates_old_load(tmp_path):
     path = tmp_path / "shared.png"
     Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
@@ -100,17 +146,43 @@ def test_publication_deduplicates_by_role_and_invalidates_old_load(tmp_path):
 
     second = server.begin_texture_publication(str(tmp_path))
     second_url = second.register(str(path), "diffuse")
-    second.commit()
+    second.discard()
 
+    later_manual_url = first.register(str(path), "material_map")
+    assert second_url.endswith("/0")
+    assert server._lookup_texture(first.token, "0").path == str(path)
+    assert server._lookup_texture(first.token, "2").role == "material_map"
+    assert later_manual_url.endswith("/2")
+    assert server._lookup_texture(second.token, "0") is None
+
+    replacement = server.begin_texture_publication(str(tmp_path))
+    replacement.register(str(path), "diffuse")
+    replacement.commit()
     assert server._lookup_texture(first.token, "0") is None
-    assert server._lookup_texture(second.token, "0").path == str(path)
+    assert server._lookup_texture(replacement.token, "0").path == str(path)
+
+
+def test_explicit_manual_validation_rejects_invalid_image(tmp_path):
+    invalid = tmp_path / "broken.dds"
+    invalid.write_bytes(b"not an image")
+    valid = tmp_path / "valid.png"
+    Image.new("RGB", (1, 1), (128, 128, 32)).save(valid)
+    publication = server.begin_texture_publication(str(tmp_path))
+
+    assert publication.register(str(invalid))
+    assert publication.register(str(invalid), validate=True) is None
+    valid_url = publication.register(str(valid), validate=True)
+    assert valid_url and server._lookup_texture(publication.token, "1").path == str(valid)
 
 
 def test_texture_endpoint_serves_png_and_keeps_source_reusable(tmp_path):
     path = tmp_path / "shared.png"
     Image.new("RGB", (2, 1), (128, 128, 32)).save(path)
+    invalid = tmp_path / "broken.dds"
+    invalid.write_bytes(b"not an image")
     publication = server.begin_texture_publication(str(tmp_path))
     texture_url = publication.register(str(path))
+    invalid_url = publication.register(str(invalid))
     publication.commit()
 
     handler = functools.partial(server._Handler, directory=str(tmp_path))
@@ -125,6 +197,10 @@ def test_texture_endpoint_serves_png_and_keeps_source_reusable(tmp_path):
         with urlopen(url) as response:
             second = response.read()
         assert first == second and first.startswith(b"\x89PNG")
+
+        with pytest.raises(HTTPError) as error:
+            urlopen(f"http://127.0.0.1:{httpd.server_address[1]}{invalid_url}")
+        assert error.value.code == 404
 
         with pytest.raises(HTTPError) as error:
             urlopen(url + "/not-an-id")
