@@ -196,7 +196,8 @@ body {
 }
 
 /* ── toolbox (wireframe / grid) ───────────────────────────────────────────── */
-#tool-panel { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); z-index: 200; display: flex !important; align-items: center; gap: 8px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 4px 8px; }
+#tool-panel { display: block; min-width: 166px; padding: 9px 10px; }
+#tool-panel .panel-hdr { margin-bottom: 7px; }
 #tool-buttons { display: flex; align-items: center; gap: 6px; }
 #tool-buttons.collapsed { display: none; }
 #camera-buttons.collapsed { display: none; }

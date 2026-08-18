@@ -60,9 +60,9 @@ function syncViewportControlPlacement() {
   document.body.classList.toggle('right-dock-visible', hasVisiblePanel);
 }
 
-// The currently open mod folder, so the Toggle panel's add/edit/delete
-// actions know which folder to write into and reloadCurrentMod() knows what
-// to reload after a successful write.
+// The currently open mod folder, so the Toggle panel's staged add/edit/delete
+// actions know which session to update and reloadCurrentMod() knows what to
+// refresh afterward.
 let currentModPath = null;
 
 // The last-loaded payload's controls.toggles model, kept
@@ -107,6 +107,7 @@ async function refreshPendingState() {
 function clearScene() {
   clearSelection();
   reset();
+  setGeometryBlob(null);
   lastToggles = {};
   $('mesh-list').innerHTML = '';
   $('camera-panel').style.display = 'none';
@@ -119,10 +120,29 @@ function clearScene() {
   syncViewportControlPlacement();
 }
 
-async function displayMeshPayload(payload) {
-  clearScene();
-  $('hint').style.display = 'none';
+function clearPendingState() {
+  $('pending-indicator').classList.remove('show');
+  $('export-btn').disabled = true;
+  $('export-btn').title = '';
+}
 
+/** Commit the UI to a new folder before asking the backend to load it. This
+ * makes the folder path, editor/diagnostic context, model, panels and pending
+ * state one transition: a failed replacement can never leave the previous
+ * mod visible under the new folder's toolbar state. */
+function beginModLoad(path, message) {
+  currentModPath = path;
+  clearScene();
+  clearPendingState();
+  $('hint').style.display = 'none';
+  $('mod-path').textContent = path;
+  setHealthReport(null);
+  setHealthLoader(() => window.pywebview.api.get_diagnostics(path));
+  setIniEditorContext(path, reloadCurrentMod);
+  showLoading(true, message);
+}
+
+async function displayMeshPayload(payload) {
   const geometry = payload.geometry;
   if (geometry) {
     const response = await fetch(geometry.url, { cache: 'no-store' });
@@ -151,18 +171,13 @@ async function displayMeshPayload(payload) {
 }
 
 async function loadModAt(path) {
-  currentModPath = path;
-  $('ini-view-btn').disabled = true;
-  $('mod-path').textContent = path;
-  showLoading(true, 'Loading Model…');
-  setHealthLoader(null);
-  setHealthReport(null);
+  beginModLoad(path, 'Loading Model…');
 
   const data = await window.pywebview.api.load_mod(path);
   setHealthReport(data?.health);
   if (data && data.error) {
     showLoading(false);
-    setIniEditorContext(path, reloadCurrentMod);
+    await refreshPendingState();
     await alertDialog('Could not load mod:\n\n' + data.error);
     return;
   }
@@ -170,12 +185,10 @@ async function loadModAt(path) {
     await displayMeshPayload(data);
   } catch (error) {
     showLoading(false);
-    setIniEditorContext(path, reloadCurrentMod);
+    await refreshPendingState();
     await alertDialog('Could not load mod geometry:\n\n' + error.message);
     return;
   }
-  setHealthLoader(() => window.pywebview.api.get_diagnostics(path));
-  setIniEditorContext(path, reloadCurrentMod);
   await refreshPendingState();
 
   // Lead with the folder name; the full path is long and rarely the useful part.
@@ -217,7 +230,6 @@ async function openMod() {
 // pick up the change via the exact same path a fresh open would take.
 export async function reloadCurrentMod() {
   if (!currentModPath) return;
-  showLoading(true, 'Reloading mod…');
   try {
     await loadModAt(currentModPath);
   } catch (e) {
@@ -245,7 +257,7 @@ async function exportChanges() {
         `${result.saved.length} ini file(s) exported, but ${result.failed.length} failed ` +
         `and are still pending:\n\n${detail}`);
     }
-    // Refreshes the panel/badges from the now-partly-or-fully-written disk
+    // Refreshes the panel/badges from the now-partly-or-fully-exported session
     // state either way, and re-syncs the indicator via its own call to
     // refreshPendingState (a partial failure leaves those inis' edits
     // pending, so it stays lit rather than clearing, and the button

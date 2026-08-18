@@ -173,6 +173,15 @@ export function setMeshMaterialMaps(mesh, maps) {
   refreshMeshTexture(mesh);
 }
 
+/** Update the complete resolved texture state with one material refresh. */
+export function setMeshTextureState(mesh, state) {
+  mesh.userData.texKey = state.diffuse || null;
+  mesh.userData.normalMapKey = state.normal_map || null;
+  mesh.userData.lightMapKey = state.light_map || null;
+  mesh.userData.materialMapKey = state.material_map || null;
+  refreshMeshTexture(mesh);
+}
+
 /** Colour for meshes with no texture, guessed from the component name. */
 function fallbackColor(name) {
   const n = name.toLowerCase();

@@ -6,7 +6,7 @@
 // bugs; changing either one will reintroduce them.
 
 import { scene, resetModelOrientation } from './scene.js';
-import { setMeshTexture, setMeshMaterialMaps, refreshMeshTexture, setTextureMode } from './mesh-factory.js';
+import { setMeshTexture, setMeshTextureState, refreshMeshTexture, setTextureMode } from './mesh-factory.js';
 
 /** Every mesh currently in the scene. */
 export const activeMeshes = [];
@@ -138,10 +138,10 @@ export function applyTextureVariant(mesh) {
     mesh.userData.defaultLightMapKey);
   mesh.userData.resolvedMaterialMapKey = resolve(mesh.userData.materialMapVariants,
     mesh.userData.defaultMaterialMapKey);
-  setMeshTexture(mesh, mesh.userData.manualTexOverride !== undefined
-    ? mesh.userData.manualTexOverride
-    : mesh.userData.resolvedTexKey);
-  setMeshMaterialMaps(mesh, {
+  setMeshTextureState(mesh, {
+    diffuse: mesh.userData.manualTexOverride !== undefined
+      ? mesh.userData.manualTexOverride
+      : mesh.userData.resolvedTexKey,
     normal_map: mesh.userData.resolvedNormalMapKey,
     light_map: mesh.userData.resolvedLightMapKey,
     material_map: mesh.userData.resolvedMaterialMapKey,
@@ -168,6 +168,11 @@ export function applyMeshVisibility(mesh) {
 function applyShapeTargets(mesh) {
   const targets = mesh.userData.shapeTargets || [];
   if (!targets.length) return;
+  const controlValues = targets.map(target => toggleState[target.var] ?? 0);
+  const previous = mesh.userData.shapeControlValues;
+  if (previous?.length === controlValues.length
+      && controlValues.every((value, index) => value === previous[index])) return;
+  mesh.userData.shapeControlValues = controlValues;
   const attr = mesh.geometry.attributes.position;
   const base = mesh.userData.basePositions;
   attr.array.set(base);
