@@ -3,16 +3,27 @@
 import * as THREE from 'three';
 import { decodeF32, decodeU32 } from './decode.js';
 
-// Textures arrive as data URIs keyed by name; loaders are cached so several
-// meshes sharing a texture share one GPU upload.
+// Textures arrive as data URIs or same-origin localhost URLs keyed by name;
+// loaders are cached so several meshes sharing a texture share one GPU upload.
 let registry = {};
 const loaders = {};
+const failedTextures = new Set();
+const textureUsers = new Map();
 // all: diffuse + INI material maps; diffuse: diffuse only; none: flat colour.
 let textureMode = 'all';
 
+function disposeTexture(texture) {
+  texture?.dispose?.();
+}
+
 export function setTextures(textures) {
   registry = textures || {};
-  for (const key of Object.keys(loaders)) delete loaders[key];
+  for (const key of Object.keys(loaders)) {
+    disposeTexture(loaders[key]);
+    delete loaders[key];
+  }
+  failedTextures.clear();
+  textureUsers.clear();
 }
 
 /** Merge one texture into the shared registry without touching the rest --
@@ -21,7 +32,18 @@ export function setTextures(textures) {
 export function addTexture(key, uri) {
   registry[key] = uri;
   for (const cacheKey of Object.keys(loaders)) {
-    if (cacheKey.endsWith(`|${key}`)) delete loaders[cacheKey];
+    if (cacheKey.endsWith(`|${key}`)) {
+      disposeTexture(loaders[cacheKey]);
+      delete loaders[cacheKey];
+      failedTextures.delete(cacheKey);
+      textureUsers.delete(cacheKey);
+    }
+  }
+  for (const cacheKey of [...failedTextures]) {
+    if (cacheKey.endsWith(`|${key}`)) {
+      failedTextures.delete(cacheKey);
+      textureUsers.delete(cacheKey);
+    }
   }
 }
 
@@ -34,19 +56,60 @@ function registryKey(key, role = 'diffuse') {
 
 export function hasTexture(key, role = 'diffuse') {
   const resolved = registryKey(key, role);
-  return !!(resolved && registry[resolved]);
+  const cacheKey = resolved && registry[resolved]
+    ? `${role}|${resolved}` : null;
+  return !!(cacheKey && !failedTextures.has(cacheKey));
 }
 
-function getTexture(key, role = 'diffuse') {
+function trackTextureUser(mesh, cacheKey) {
+  let users = textureUsers.get(cacheKey);
+  if (!users) {
+    users = new Set();
+    textureUsers.set(cacheKey, users);
+  }
+  users.add(mesh);
+}
+
+function handleTextureError(cacheKey, texture, resolved, uri) {
+  // A manual replacement or a newer model may have evicted this request
+  // before the browser reported its failure. Do not mark the replacement as
+  // unavailable in that case.
+  if (registry[resolved] !== uri
+      || (loaders[cacheKey] && loaders[cacheKey] !== texture)) {
+    disposeTexture(texture);
+    return;
+  }
+  failedTextures.add(cacheKey);
+  if (loaders[cacheKey] === texture) delete loaders[cacheKey];
+  disposeTexture(texture);
+  for (const mesh of textureUsers.get(cacheKey) || []) refreshMeshTexture(mesh);
+}
+
+function getTexture(mesh, key, role = 'diffuse') {
   const resolved = registryKey(key, role);
   if (!resolved || !registry[resolved]) return null;
   const cacheKey = `${role}|${resolved}`;
+  trackTextureUser(mesh, cacheKey);
+  if (failedTextures.has(cacheKey)) return null;
   if (!loaders[cacheKey]) {
-    const texture = new THREE.TextureLoader().load(registry[resolved]);
+    const uri = registry[resolved];
+    let texture;
+    let failedBeforeAssignment = false;
+    const onError = () => {
+      if (!texture) {
+        failedBeforeAssignment = true;
+        return;
+      }
+      handleTextureError(cacheKey, texture, resolved, uri);
+    };
+    texture = new THREE.TextureLoader().load(uri, undefined, undefined, onError);
     texture.colorSpace = role === 'diffuse'
       ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     texture.needsUpdate = true;
     loaders[cacheKey] = texture;
+    if (failedBeforeAssignment) {
+      handleTextureError(cacheKey, texture, resolved, uri);
+    }
   }
   return loaders[cacheKey];
 }
@@ -57,13 +120,13 @@ function getTexture(key, role = 'diffuse') {
 export function refreshMeshTexture(mesh) {
   const showDiffuse = textureMode !== 'none';
   const showMaterialMaps = textureMode === 'all';
-  const map = showDiffuse ? getTexture(mesh.userData.texKey, 'diffuse') : null;
+  const map = showDiffuse ? getTexture(mesh, mesh.userData.texKey, 'diffuse') : null;
   const normalMap = showMaterialMaps
-    ? getTexture(mesh.userData.normalMapKey, 'normal_map') : null;
+    ? getTexture(mesh, mesh.userData.normalMapKey, 'normal_map') : null;
   const lightMap = showMaterialMaps
-    ? getTexture(mesh.userData.lightMapKey, 'light_map') : null;
+    ? getTexture(mesh, mesh.userData.lightMapKey, 'light_map') : null;
   const materialMap = showMaterialMaps
-    ? getTexture(mesh.userData.materialMapKey, 'material_map') : null;
+    ? getTexture(mesh, mesh.userData.materialMapKey, 'material_map') : null;
   if (map === mesh.material.map
       && normalMap === mesh.material.normalMap
       && lightMap === mesh.material.aoMap
@@ -88,6 +151,7 @@ export function refreshMeshTexture(mesh) {
   mesh.material.metalness = 0;
   mesh.material.color.setHex(map ? 0xffffff : mesh.userData.fallbackColor);
   mesh.material.needsUpdate = true;
+  mesh.userData.onTextureChanged?.();
 }
 
 export function setTextureMode(mode) {
