@@ -10,6 +10,7 @@ import { refreshAll, setToggleValue, getToggleValue } from './visibility.js';
 import { openToggleModal } from './toggle-modal.js';
 import { startRecordSession } from './record-session.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
+import { registerViewSync, syncView } from './view-sync.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -37,7 +38,7 @@ let currentCtx = { modPath: null, onChange: null };
 let valueSyncers = [];
 
 export function refreshToggleValues() {
-  valueSyncers.forEach((sync) => sync());
+  syncView('toggle-panel');
 }
 
 document.getElementById('toggle-add-btn').addEventListener('click', () => {
@@ -170,7 +171,6 @@ function buildToggleItem(info, ctx) {
       setToggleValue(v.var, v.values[next % v.values.length]);
     }
     cyclePosition = next;
-    valSpan.textContent = describe();
     refreshAll();
   };
   valueSyncers.push(() => {
@@ -253,6 +253,9 @@ export function buildTogglePanel(toggles, ctx = {}) {
   const panel = document.getElementById('toggle-panel');
   list.innerHTML = '';
   valueSyncers = [];
+  registerViewSync('toggle-panel', () => {
+    valueSyncers.forEach(sync => sync());
+  });
 
   if (!currentCtx.modPath) {
     panel.style.display = 'none';

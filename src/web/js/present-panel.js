@@ -1,15 +1,15 @@
 // One logical PRESENT cycle, authored atomically across every eligible INI.
 
-import { refreshAll, setToggleValue } from './visibility.js';
-import { refreshToggleValues } from './toggle-panel.js';
-import { refreshMenuValues } from './menu-panel.js';
+import { getToggleValue, refreshAll, setToggleValue } from './visibility.js';
 import { alertDialog, confirmDialog, inputConfirmDialog } from './dialogs.js';
 import { openPresentModal, presentSnapshots } from './present-modal.js';
+import { registerViewSync } from './view-sync.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_PRESENTS = 10;
 let current = { modPath: null, present: null, onChange: null };
 let pendingSelection = null;
+let syncCurrentValue = () => {};
 
 async function removeKey() {
   const confirmed = await confirmDialog(
@@ -113,16 +113,25 @@ function buildItem(item) {
       ? (item.names[position] || `Present ${position + 1}`)
       : 'Unavailable';
   };
+  const sync = () => {
+    if (synchronized) {
+      const matches = candidate => item.vars.every(variable =>
+        variable.values[candidate] === getToggleValue(variable.var));
+      if (!matches(position)) {
+        const next = Array.from({ length: item.count }, (_, index) => index)
+          .find(matches);
+        if (next !== undefined) position = next;
+      }
+    }
+    showName();
+  };
   showName();
   cycle.onclick = () => {
     position = (position + 1) % item.count;
     for (const variable of item.vars) {
       setToggleValue(variable.var, variable.values[position]);
     }
-    showName();
     refreshAll();
-    refreshToggleValues();
-    refreshMenuValues();
   };
   row.append(cycle, name);
 
@@ -131,7 +140,7 @@ function buildItem(item) {
     error.className = 'present-sync-error';
     error.textContent = item.sync_error || 'PRESENT has no usable positions.';
     wrap.append(header, row, error);
-    return wrap;
+    return { wrap, sync };
   }
 
   const actions = document.createElement('div');
@@ -184,7 +193,7 @@ function buildItem(item) {
   });
   actions.append(add, replace, remove);
   wrap.append(header, row, actions);
-  return wrap;
+  return { wrap, sync };
 }
 
 export function buildPresentPanel(present, context = {}) {
@@ -194,6 +203,8 @@ export function buildPresentPanel(present, context = {}) {
   const list = $('present-list');
   const action = $('present-action-btn');
   list.innerHTML = '';
+  syncCurrentValue = () => {};
+  registerViewSync('present-panel', () => syncCurrentValue());
   if (!current.modPath) {
     panel.style.display = 'none';
     return;
@@ -217,8 +228,8 @@ export function buildPresentPanel(present, context = {}) {
     return;
   }
 
-  list.appendChild(buildItem(item));
+  const built = buildItem(item);
+  syncCurrentValue = built.sync;
+  list.appendChild(built.wrap);
   refreshAll();
-  refreshToggleValues();
-  refreshMenuValues();
 }

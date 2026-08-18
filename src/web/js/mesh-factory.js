@@ -2,6 +2,7 @@
 
 import * as THREE from 'three';
 import { decodeF32, decodeU32 } from './decode.js';
+import { getMeshView } from './mesh-view-bindings.js';
 
 // Textures arrive as data URIs or same-origin localhost URLs keyed by name;
 // loaders are cached so several meshes sharing a texture share one GPU upload.
@@ -151,7 +152,7 @@ export function refreshMeshTexture(mesh) {
   mesh.material.metalness = 0;
   mesh.material.color.setHex(map ? 0xffffff : mesh.userData.fallbackColor);
   mesh.material.needsUpdate = true;
-  mesh.userData.onTextureChanged?.();
+  getMeshView(mesh)?.onTextureChanged?.();
 }
 
 export function setTextureMode(mode) {

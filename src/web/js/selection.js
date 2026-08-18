@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { camera, renderer } from './scene.js';
 import { activeMeshes } from './visibility.js';
+import { getMeshView } from './mesh-view-bindings.js';
 
 const HIGHLIGHT_COLOR = 0xffd60a; // selection yellow
 const HIGHLIGHT_INTENSITY = 0.22;  // kept low so the mesh's own texture reads through
@@ -20,7 +21,7 @@ function setHighlight(mesh, on) {
 }
 
 function setRowSelected(mesh, on) {
-  const row = mesh.userData.row;
+  const row = getMeshView(mesh)?.row;
   if (!row) return;
   row.classList.toggle('selected', on);
   if (on) expandAncestorsAndScrollTo(row);

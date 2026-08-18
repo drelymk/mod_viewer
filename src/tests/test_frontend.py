@@ -69,6 +69,36 @@ def _payload(label="A"):
     }
 
 
+def _state_sync_payload():
+    payload = _payload("Sync")
+    payload["controls"]["menu"]["sibling"] = {
+        "name": "Sibling", "slot": 2, "var": "sibling",
+        "default": "0", "values": ["0", "1"], "effects": [],
+    }
+    payload["controls"]["menu"]["menu"]["effects"] = [
+        {"var": "sibling", "value": "1"},
+    ]
+    payload["controls"]["present"] = {
+        "target_inis": [],
+        "item": {
+            "key": "p", "back": "", "count": 2, "names": ["Base", "Alt"],
+            "vars": [
+                {"var": "toggle", "values": ["0", "1"]},
+                {"var": "menu", "values": ["0", "1"]},
+            ],
+            "capture_vars": ["toggle", "menu"], "missing_inis": [],
+        },
+    }
+    payload["state"] = {
+        "defaults": {"toggle": "0", "menu": "0", "sibling": "0", "shape": "0"},
+        "rules": [{
+            "conditions": [[{"var": "toggle", "value": "1", "negate": False}]],
+            "var": "menu", "value": "1",
+        }],
+    }
+    return payload
+
+
 @pytest.fixture(scope="session")
 def frontend_url():
     if not paths.has_vendored_three():
@@ -203,12 +233,23 @@ def test_record_handler_is_replaced_and_restored(edge_browser, frontend_url):
         _open(page, "A")
         cycle = page.locator("#toggle-list .toggle-cycle-btn")
         cycle.wait_for()
-        page.evaluate("window.__cycleHandler = document.querySelector('#toggle-list .toggle-cycle-btn').onclick")
+        original_label = page.locator("#toggle-list .toggle-value").inner_text()
+        original_state = page.evaluate(
+            "import('./js/visibility.js').then(module => module.getToggleState())")
+        page.evaluate("""
+          () => { window.__cycleHandler = document.querySelector('#toggle-list .toggle-cycle-btn').onclick; }
+        """)
         page.locator("#toggle-list [title^='Record']").click()
         page.locator("#toggle-list .toggle-row.recording").wait_for()
+        recording_state = page.evaluate(
+            "import('./js/visibility.js').then(module => module.getToggleState())")
         assert page.evaluate("window.__cycleHandler !== document.querySelector('#toggle-list .toggle-cycle-btn').onclick")
         page.locator("#toggle-list .toggle-record-cancel").click()
         assert page.evaluate("window.__cycleHandler === document.querySelector('#toggle-list .toggle-cycle-btn').onclick")
+        restored_state = page.evaluate(
+            "import('./js/visibility.js').then(module => module.getToggleState())")
+        assert page.locator("#toggle-list .toggle-value").inner_text() == original_label, (
+            original_state, recording_state, restored_state)
     finally:
         context.close()
 
@@ -220,5 +261,69 @@ def test_tool_panel_is_in_left_dock_and_available_before_load(edge_browser, fron
         assert page.evaluate("getComputedStyle(document.querySelector('#tool-panel')).position") != "fixed"
         assert page.locator("#tool-panel").is_visible()
         assert page.locator("#tool-buttons .tool-btn").count() == 6
+    finally:
+        context.close()
+
+
+def test_control_updates_synchronize_all_current_panels(edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Sync": _state_sync_payload()})
+    try:
+        _open(page, "Sync")
+        page.locator("#present-list .toggle-item").wait_for()
+
+        page.locator("#toggle-list .toggle-cycle-btn").click()
+        assert "toggle=1" in page.locator("#toggle-list .toggle-value").inner_text()
+        menu_values = page.evaluate("""
+          Object.fromEntries([...document.querySelectorAll('#menu-list .menu-item')]
+            .map(item => [item.querySelector('.menu-name').textContent,
+                          item.querySelector('.menu-value').textContent]))
+        """)
+        assert menu_values["Menu"] == "1"
+
+        page.locator("#menu-list .menu-item").filter(has_text="Menu").locator("button").click()
+        menu_values = page.evaluate("""
+          Object.fromEntries([...document.querySelectorAll('#menu-list .menu-item')]
+            .map(item => [item.querySelector('.menu-name').textContent,
+                          item.querySelector('.menu-value').textContent]))
+        """)
+        assert menu_values["Sibling"] == "1"
+
+        page.locator("#present-list .toggle-cycle-btn").click()
+        assert "toggle=0" in page.locator("#toggle-list .toggle-value").inner_text()
+        assert page.locator("#menu-list .menu-item").filter(
+            has_text="Menu").locator(".menu-value").inner_text() == "0"
+    finally:
+        context.close()
+
+
+def test_selection_uses_view_binding_and_reload_replaces_sync_callbacks(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.locator(".group-hdr").click()
+        assert page.locator(".group-items.collapsed").count() == 1
+        page.evaluate("""
+          async () => {
+            const row = document.querySelector('.draw-item');
+            row.scrollIntoView = () => { window.__selectionScrolled = true; };
+            const selection = await import('./js/selection.js');
+            selection.selectMesh(window.modViewer.activeMeshes[0]);
+          }
+        """)
+        assert page.locator(".draw-item.selected").count() == 1
+        assert page.locator(".group-items.collapsed").count() == 0
+        assert page.evaluate("window.__selectionScrolled")
+
+        before = page.evaluate("import('./js/view-sync.js').then(module => module.viewSyncCount())")
+        page.evaluate("window.__oldDrawRow = document.querySelector('.draw-item')")
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function("""
+          document.querySelector('.draw-item') !== window.__oldDrawRow
+            && !document.querySelector('#loading').classList.contains('show')
+        """)
+        after = page.evaluate("import('./js/view-sync.js').then(module => module.viewSyncCount())")
+        assert before == after == 4
     finally:
         context.close()

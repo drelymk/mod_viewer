@@ -6,6 +6,7 @@
 // edits, records or exports.
 
 import { refreshAll, setToggleValue, getToggleValue } from './visibility.js';
+import { registerViewSync, syncView } from './view-sync.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -65,7 +66,6 @@ function buildMenuItem(info) {
       if (guardHolds(e.when)) setToggleValue(e.var, e.value);
     }
     refreshAll();
-    refreshMenuValues();
   });
 
   item.append(btn, nameSpan, valSpan);
@@ -97,7 +97,6 @@ function buildShapeSlider(info) {
   valSpan.textContent = Number(input.value).toFixed(2);
   input.addEventListener('input', () => {
     setToggleValue(info.var, input.value);
-    valSpan.textContent = Number(input.value).toFixed(2);
     refreshAll();
   });
   item.append(nameSpan, input, valSpan);
@@ -113,7 +112,7 @@ function buildShapeSlider(info) {
 // rule, so every displayed value is re-read after any click.
 let syncers = [];
 export function refreshMenuValues() {
-  syncers.forEach((fn) => fn());
+  syncView('menu-panel');
 }
 
 function buildSourceSection(source, container) {
@@ -151,6 +150,9 @@ export function buildMenuPanel(menu) {
   const panel = document.getElementById('menu-panel');
   list.innerHTML = '';
   syncers = [];
+  registerViewSync('menu-panel', () => {
+    syncers.forEach(sync => sync());
+  });
 
   const keys = Object.keys(menu || {});
   if (!keys.length) {
