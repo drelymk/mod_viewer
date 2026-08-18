@@ -73,8 +73,6 @@ ASSET_FILES = {
         f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/OrbitControls.js",
     os.path.join("addons", "controls", "ArcballControls.js"):
         f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/ArcballControls.js",
-    os.path.join("addons", "environments", "RoomEnvironment.js"):
-        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/environments/RoomEnvironment.js",
 }
 
 

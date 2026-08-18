@@ -1,336 +1,250 @@
-// Viewer-only environment presets. This module deliberately knows nothing
+// Viewer-only environment moods. This module deliberately knows nothing
 // about mods, meshes, INIs, or the Python bridge.
 
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-const SCENE_STATE_PROPERTIES = [
-  'environmentIntensity',
-  'environmentRotation',
-];
+const BACKGROUND_WIDTH = 512;
+const BACKGROUND_HEIGHT = 256;
+const freeze = Object.freeze;
 
-// Keep all visual tuning in the preset table. The light scales are applied to
-// captured viewer-light intensities, never to their already-scaled values.
-export const ENVIRONMENT_PRESETS = Object.freeze({
-  default: Object.freeze({
-    id: 'default',
-    type: 'default',
-    label: 'Default',
-    lightScale: 1,
-  }),
-  studio: Object.freeze({
-    id: 'studio',
-    type: 'room',
-    label: 'Studio',
-    // Keep the procedural studio neutral without stacking a full-strength
-    // room map on top of the viewer's ambient and hemisphere fill.
-    environmentIntensity: 0.55,
-    lightScale: 0.85,
-    background: 0x20252e,
-  }),
-  indoor: Object.freeze({
-    id: 'indoor',
-    type: 'room',
-    label: 'Indoor',
-    environmentIntensity: 0.4,
-    lightScale: 0.85,
-    lightProfile: 'indoor',
-    background: 0x2b211e,
-  }),
-  outdoor: Object.freeze({
-    id: 'outdoor',
-    type: 'room',
-    label: 'Outdoor',
-    environmentIntensity: 0.85,
-    lightScale: 1,
-    lightProfile: 'outdoor',
-    background: 0x162b43,
-  }),
+const makeStops = (entries) => freeze(
+  entries.map(([offset, color]) => freeze({ offset, color })));
+
+const makeGradient = (type, entries, options = {}) => freeze({
+  type,
+  stops: makeStops(entries),
+  ...options,
 });
 
-const LIGHT_PROFILES = Object.freeze({
-  indoor: Object.freeze([
-    Object.freeze({
-      id: 'indoorKey', color: 0xffc27d, intensity: 0.8,
-      position: Object.freeze([4, 8, 5]),
-    }),
-    Object.freeze({
-      id: 'indoorFill', color: 0x9dbde5, intensity: 0.22,
-      position: Object.freeze([-5, 4, -4]),
-    }),
-  ]),
-  outdoor: Object.freeze([
-    Object.freeze({
-      id: 'outdoorSun', color: 0xffe7bf, intensity: 1.05,
-      position: Object.freeze([-6, 10, 6]),
-    }),
-    Object.freeze({
-      id: 'outdoorSkyFill', color: 0x8ebdff, intensity: 0.28,
-      position: Object.freeze([4, 5, -6]),
-    }),
-  ]),
+const radialBackground = (center, outerRadius, entries, overlay) => makeGradient(
+  'radial',
+  entries,
+  {
+    center: freeze(center),
+    innerRadius: 0.04,
+    outerRadius,
+    ...(overlay ? { overlay: makeGradient('vertical', overlay) } : {}),
+  },
+);
+
+const verticalBackground = (entries) => makeGradient('vertical', entries);
+const makeAmbient = (color, intensity) => freeze({ color, intensity });
+const makeHemisphere = (color, groundColor, intensity) => freeze({
+  color, groundColor, intensity,
+});
+const makeAccent = (color, intensity, position) => freeze({
+  color, intensity, position: freeze(position),
+});
+const makePreset = (id, label, background, ambient, hemisphere, accent) => freeze({
+  id,
+  label,
+  ...(background ? { background } : {}),
+  ...(ambient ? { ambient } : {}),
+  ...(hemisphere ? { hemisphere } : {}),
+  ...(accent ? { accent } : {}),
 });
 
-function cloneSceneValue(value) {
-  return value && typeof value.clone === 'function' ? value.clone() : value;
+// Keep the visual vocabulary in one declarative table. These are presentation
+// moods, not attempts to reproduce literal rooms or outdoor photographs.
+export const ENVIRONMENT_PRESETS = freeze({
+  default: makePreset('default', 'Default'),
+  studio: makePreset(
+    'studio',
+    'Studio',
+    radialBackground(
+      [0.5, 0.4],
+      0.82,
+      [[0, '#4a515c'], [0.38, '#343b46'], [1, '#151b24']],
+      [[0, 'rgba(0,0,0,0)'], [0.7, 'rgba(0,0,0,0.02)'],
+       [1, 'rgba(0,0,0,0.24)']],
+    ),
+    makeAmbient(0xf5f7fa, 0.38),
+    makeHemisphere(0xe1e9f3, 0x454b55, 0.42),
+    makeAccent(0xffffff, 0.18, [4, 8, 6]),
+  ),
+  indoor: makePreset(
+    'indoor',
+    'Indoor',
+    radialBackground(
+      [0.5, 0.43],
+      0.88,
+      [[0, '#735746'], [0.42, '#4b382f'], [1, '#1b1717']],
+      [[0, 'rgba(24,12,8,0.34)'], [0.66, 'rgba(0,0,0,0)'],
+       [1, 'rgba(0,0,0,0.28)']],
+    ),
+    makeAmbient(0xffd4af, 0.32),
+    makeHemisphere(0xffd3a6, 0x2b3440, 0.38),
+    makeAccent(0xffb36b, 0.45, [4, 8, 5]),
+  ),
+  outdoor: makePreset(
+    'outdoor',
+    'Outdoor',
+    verticalBackground([
+      [0, '#285b8a'], [0.42, '#75a8ce'], [0.68, '#879eae'], [1, '#46515a'],
+    ]),
+    makeAmbient(0xdbeaff, 0.26),
+    makeHemisphere(0x78b5ed, 0x667068, 0.45),
+    makeAccent(0xffe6bd, 0.7, [-6, 10, 6]),
+  ),
+});
+
+function createBackgroundTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = BACKGROUND_WIDTH;
+  canvas.height = BACKGROUND_HEIGHT;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not create the environment background canvas.');
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return { context, texture };
 }
 
-function captureSceneState(scene) {
-  const state = {
-    background: scene.background,
-    environment: scene.environment,
+function createGradient(context, spec) {
+  if (spec.type === 'radial') {
+    const [x, y] = spec.center;
+    const radiusScale = Math.max(BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
+    return context.createRadialGradient(
+      x * BACKGROUND_WIDTH,
+      y * BACKGROUND_HEIGHT,
+      spec.innerRadius * radiusScale,
+      x * BACKGROUND_WIDTH,
+      y * BACKGROUND_HEIGHT,
+      spec.outerRadius * radiusScale,
+    );
+  }
+  if (spec.type === 'vertical') {
+    return context.createLinearGradient(0, 0, 0, BACKGROUND_HEIGHT);
+  }
+  throw new Error(`Unknown procedural background type: ${spec.type}`);
+}
+
+function paintGradient(context, spec) {
+  const gradient = createGradient(context, spec);
+  for (const stop of spec.stops) gradient.addColorStop(stop.offset, stop.color);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
+}
+
+function captureLightState(light, includeGround = false) {
+  return {
+    color: light.color.clone(),
+    ...(includeGround ? { groundColor: light.groundColor.clone() } : {}),
+    intensity: light.intensity,
   };
-  for (const property of SCENE_STATE_PROPERTIES) {
-    if (property in scene) state[property] = cloneSceneValue(scene[property]);
-  }
-  return state;
 }
 
-function restoreSceneState(scene, state) {
-  scene.background = state.background;
-  scene.environment = state.environment;
-  for (const property of SCENE_STATE_PROPERTIES) {
-    if (!(property in state) || !(property in scene)) continue;
-    const current = scene[property];
-    const original = state[property];
-    if (current && typeof current.copy === 'function' && original) {
-      current.copy(original);
-    } else {
-      scene[property] = original;
-    }
-  }
-}
-
-function collectLights(viewerLights) {
-  const values = Array.isArray(viewerLights)
-    ? viewerLights
-    : Object.values(viewerLights || {});
-  const lights = [];
-  const seen = new Set();
-  for (const value of values) {
-    const light = value?.light || value;
-    if (!light || !light.isLight || typeof light.intensity !== 'number' ||
-        seen.has(light)) continue;
-    seen.add(light);
-    lights.push({ light, intensity: light.intensity });
-  }
-  return lights;
-}
-
-function disposeRoomEnvironment(room) {
-  if (!room) return;
-  if (typeof room.dispose === 'function') {
-    room.dispose();
-    return;
-  }
-  const resources = new Set();
-  room.traverse?.((object) => {
-    if (!object.isMesh) return;
-    if (object.geometry) resources.add(object.geometry);
-    if (Array.isArray(object.material)) {
-      object.material.forEach(material => resources.add(material));
-    } else if (object.material) {
-      resources.add(object.material);
-    }
-  });
-  resources.forEach(resource => resource.dispose?.());
-}
-
-function createProfileLights(scene) {
-  const target = new THREE.Object3D();
-  scene.add(target);
-  const lights = new Map();
-  for (const profile of Object.values(LIGHT_PROFILES)) {
-    for (const config of profile) {
-      if (lights.has(config.id)) continue;
-      const light = new THREE.DirectionalLight(config.color, 0);
-      light.visible = false;
-      light.target = target;
-      scene.add(light);
-      lights.set(config.id, light);
-    }
-  }
-  return { target, lights };
+function restoreLightState(light, state) {
+  light.color.copy(state.color);
+  if (state.groundColor) light.groundColor.copy(state.groundColor);
+  light.intensity = state.intensity;
 }
 
 /**
- * Create a scene-level environment controller.
+ * Create the synchronous, asset-free environment controller.
  *
- * `subscribe()` events are intentionally data-only so the toolbar can own all
- * DOM handling. Room lighting is generated lazily and preset selection uses a
- * generation token so a future asynchronous lighting source can remain safe.
+ * Environment presets define baseline scene lighting. The movable key light
+ * in scene.js remains an independent user-controlled inspection light layered
+ * on top of these presets.
  */
 export function createEnvironmentController({
   scene,
-  renderer,
-  viewerLights,
-  requestRender = () => {},
+  ambientLight,
+  hemisphereLight,
 }) {
-  if (!scene || !renderer) throw new Error('EnvironmentController needs a scene and renderer.');
+  if (!scene || !ambientLight || !hemisphereLight) {
+    throw new Error('EnvironmentController needs a scene and viewer lights.');
+  }
 
-  const originalScene = captureSceneState(scene);
-  const lights = collectLights(viewerLights);
-  const subscribers = new Set();
-  const profileLights = createProfileLights(scene);
-  let roomTarget = null;
+  const originalBackground = scene.background;
+  const originalAmbient = captureLightState(ambientLight);
+  const originalHemisphere = captureLightState(hemisphereLight, true);
+  const background = createBackgroundTexture();
+  const accentLight = new THREE.DirectionalLight(0xffffff, 0);
+  accentLight.visible = false;
+  scene.add(accentLight);
+  scene.add(accentLight.target);
+
   let currentPresetId = 'default';
-  let applyGeneration = 0;
   let disposed = false;
 
-  function emit(event) {
-    for (const subscriber of subscribers) {
-      try {
-        subscriber(event);
-      } catch (error) {
-        console.error('Environment subscriber failed:', error);
-      }
+  function drawBackground(preset) {
+    if (!preset.background) {
+      scene.background = originalBackground;
+      return;
     }
+
+    background.context.clearRect(0, 0, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
+    paintGradient(background.context, preset.background);
+    if (preset.background.overlay) {
+      paintGradient(background.context, preset.background.overlay);
+    }
+    background.texture.needsUpdate = true;
+    scene.background = background.texture;
   }
 
-  function requestSceneRender() {
-    try {
-      requestRender();
-    } catch (error) {
-      console.error('Environment render request failed:', error);
+  function applyAccent(config) {
+    if (!config) {
+      accentLight.visible = false;
+      accentLight.intensity = 0;
+      return;
     }
+    accentLight.color.set(config.color);
+    accentLight.position.fromArray(config.position);
+    accentLight.intensity = config.intensity;
+    accentLight.visible = true;
   }
 
-  function applyLightScale(scale) {
-    for (const { light, intensity } of lights) {
-      light.intensity = intensity * scale;
-    }
-  }
-
-  function applyLightProfile(profileId) {
-    for (const light of profileLights.lights.values()) {
-      light.visible = false;
-      light.intensity = 0;
-    }
-    for (const config of LIGHT_PROFILES[profileId] || []) {
-      const light = profileLights.lights.get(config.id);
-      if (!light) continue;
-      light.color.set(config.color);
-      light.position.fromArray(config.position);
-      light.intensity = config.intensity;
-      light.visible = true;
-    }
-  }
-
-  function setOptionalSceneProperty(property, value) {
-    if (property in scene && value !== undefined) scene[property] = value;
-  }
-
-  function applyPresetScene(preset, environment) {
-    // Environments provide lighting and a dark, theme-matched presentation
-    // color; they never restore or display a panorama.
-    scene.background = preset.background === undefined
-      ? originalScene.background
-      : new THREE.Color(preset.background);
-    scene.environment = environment;
-    setOptionalSceneProperty('environmentIntensity', preset.environmentIntensity);
-    applyLightScale(preset.lightScale ?? 1);
-    applyLightProfile(preset.lightProfile);
-  }
-
-  function ensureRoomEnvironment() {
-    if (roomTarget) return roomTarget;
-
-    const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    const room = new RoomEnvironment(renderer);
-    try {
-      roomTarget = pmremGenerator.fromScene(room);
-    } finally {
-      disposeRoomEnvironment(room);
-      pmremGenerator.dispose();
-    }
-    return roomTarget;
+  function applyLights(preset) {
+    ambientLight.color.set(preset.ambient.color);
+    ambientLight.intensity = preset.ambient.intensity;
+    hemisphereLight.color.set(preset.hemisphere.color);
+    hemisphereLight.groundColor.set(preset.hemisphere.groundColor);
+    hemisphereLight.intensity = preset.hemisphere.intensity;
+    applyAccent(preset.accent);
   }
 
   function applyDefault() {
-    restoreSceneState(scene, originalScene);
-    applyLightScale(ENVIRONMENT_PRESETS.default.lightScale);
-    applyLightProfile(null);
+    scene.background = originalBackground;
+    restoreLightState(ambientLight, originalAmbient);
+    restoreLightState(hemisphereLight, originalHemisphere);
+    applyAccent(null);
   }
 
-  async function setPreset(id) {
+  function setPreset(id) {
+    if (disposed) return false;
     const preset = ENVIRONMENT_PRESETS[id];
-    if (!preset) {
-      return { ok: false, id, error: new Error(`Unknown environment preset: ${id}`) };
-    }
-    if (disposed) {
-      return { ok: false, id, error: new Error('Environment controller is disposed.') };
-    }
-    if (id === currentPresetId) {
-      return { ok: true, id, changed: false };
-    }
+    if (!preset) return false;
 
-    const generation = ++applyGeneration;
-    if (preset.type === 'default') {
+    if (id === 'default') {
       applyDefault();
-      currentPresetId = preset.id;
-      emit({ type: 'active', id: preset.id });
-      requestSceneRender();
-      return { ok: true, id: preset.id };
+    } else {
+      drawBackground(preset);
+      applyLights(preset);
     }
-
-    const isRoom = preset.type === 'room';
-    if (isRoom) emit({ type: 'loading', id: preset.id, loading: true });
-    try {
-      const environment = ensureRoomEnvironment().texture;
-      if (disposed || generation !== applyGeneration) {
-        return { ok: false, id: preset.id, stale: true };
-      }
-
-      applyPresetScene(preset, environment);
-      currentPresetId = preset.id;
-      emit({ type: 'active', id: preset.id });
-      requestSceneRender();
-      return { ok: true, id: preset.id };
-    } catch (error) {
-      const stale = disposed || generation !== applyGeneration;
-      console.error(`Could not load environment ${preset.id}:`, error);
-      if (!stale) {
-        emit({
-          type: 'error',
-          id: preset.id,
-          error,
-          previousId: currentPresetId,
-        });
-      }
-      return { ok: false, id: preset.id, error, stale };
-    } finally {
-      if (isRoom) emit({ type: 'loading', id: preset.id, loading: false });
-    }
+    currentPresetId = preset.id;
+    return true;
   }
 
   function getPreset() {
     return ENVIRONMENT_PRESETS[currentPresetId];
   }
 
-  function subscribe(listener) {
-    if (typeof listener !== 'function') return () => {};
-    subscribers.add(listener);
-    return () => subscribers.delete(listener);
-  }
-
   function dispose() {
     if (disposed) return;
+    applyDefault();
+    background.texture.dispose();
+    scene.remove(accentLight);
+    scene.remove(accentLight.target);
     disposed = true;
-    applyGeneration += 1;
-    restoreSceneState(scene, originalScene);
-    applyLightScale(ENVIRONMENT_PRESETS.default.lightScale);
-    roomTarget?.dispose?.();
-    roomTarget = null;
-    for (const light of profileLights.lights.values()) scene.remove(light);
-    scene.remove(profileLights.target);
-    subscribers.clear();
   }
 
   return {
     setPreset,
     getPreset,
-    getLightScale: () => ENVIRONMENT_PRESETS[currentPresetId].lightScale ?? 1,
-    subscribe,
     dispose,
   };
 }

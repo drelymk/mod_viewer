@@ -2,7 +2,7 @@
 
 import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
          toggleGrid, toggleLightHandle, toggleTrackballGizmo,
-         getEnvironmentPreset, setEnvironmentPreset, subscribeEnvironment } from './scene.js';
+         getEnvironmentPreset, setEnvironmentPreset } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
 import { setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
@@ -22,11 +22,10 @@ function initEnvironmentControl() {
   const button = $('environment-btn');
   const icon = $('environment-icon');
   const label = $('environment-label');
-  const status = $('environment-status');
   const ids = Object.values(ENVIRONMENT_PRESETS).map(preset => preset.id);
   const labels = Object.fromEntries(
     Object.values(ENVIRONMENT_PRESETS).map(preset => [preset.id, preset.label]));
-  let requestedId = getEnvironmentPreset().id;
+  let currentId = getEnvironmentPreset().id;
 
   function updateControl(id) {
     const name = labels[id] || id;
@@ -37,61 +36,13 @@ function initEnvironmentControl() {
     button.title = `Environment: ${name} (click to change)`;
   }
 
-  function setLoading(loading) {
-    button.classList.toggle('loading', loading);
-    button.setAttribute('aria-busy', String(loading));
-  }
-
-  function setStatus(message = '', error = false) {
-    status.textContent = message;
-    status.title = message;
-    status.classList.toggle('error', error);
-  }
-
-  updateControl(requestedId);
-  setLoading(false);
-  subscribeEnvironment((event) => {
-    if (event.type === 'loading') {
-      if (event.loading && event.id === requestedId) {
-        setLoading(true);
-        setStatus(`Loading ${labels[event.id] || event.id}...`);
-      } else if (!event.loading && event.id === requestedId &&
-                 getEnvironmentPreset().id === event.id) {
-        setLoading(false);
-        setStatus();
-      }
-      return;
-    }
-    if (event.type === 'active') {
-      requestedId = event.id;
-      updateControl(event.id);
-      setLoading(false);
-      setStatus();
-      return;
-    }
-    if (event.type === 'error') {
-      requestedId = event.previousId;
-      updateControl(event.previousId);
-      setLoading(false);
-      setStatus(`${labels[event.id] || event.id} unavailable`, true);
-    }
-  });
-
-  button.addEventListener('click', async () => {
-    const currentIndex = Math.max(ids.indexOf(requestedId), 0);
-    requestedId = ids[(currentIndex + 1) % ids.length];
-    const id = requestedId;
-    updateControl(id);
-    setLoading(true);
-    setStatus(`Loading ${labels[id] || id}...`);
-    const result = await setEnvironmentPreset(id);
-    if (!result.ok && !result.stale) {
-      const active = getEnvironmentPreset().id;
-      requestedId = active;
-      updateControl(active);
-      setLoading(false);
-      setStatus(`${labels[id] || id} unavailable`, true);
-    }
+  updateControl(currentId);
+  button.addEventListener('click', () => {
+    const currentIndex = Math.max(ids.indexOf(currentId), 0);
+    const nextId = ids[(currentIndex + 1) % ids.length];
+    if (!setEnvironmentPreset(nextId)) return;
+    currentId = nextId;
+    updateControl(currentId);
   });
 }
 

@@ -41,7 +41,9 @@ lightIconContext.fillStyle = lightGlow;
 lightIconContext.fillRect(0, 0, 64, 64);
 const lightHandle = new THREE.Sprite(new THREE.SpriteMaterial({
   map: new THREE.CanvasTexture(lightIconCanvas), transparent: true,
-  depthTest: false, depthWrite: false,
+  // Keep the draggable marker in the viewport, but let model depth occlude
+  // it so the light cannot appear to shine through the mesh.
+  depthTest: true, depthWrite: false,
 }));
 lightHandle.renderOrder = 1000;
 lightHandle.visible = true;
@@ -66,14 +68,13 @@ controls.setGizmosVisible(false);
 
 // The key light is deliberately not handed to EnvironmentController: its
 // intensity is an explicit user interaction (double/current/off) and must not
-// be mistaken for environment-owned lighting. The ambient and hemisphere
-// lights are stable viewer-owned fill lights and are scaled from their
-// captured startup intensities by each preset.
+// be mistaken for environment-owned lighting. Environment presets own the
+// ambient, hemisphere and one accent light; the movable key remains an
+// independent inspection light layered on top.
 const environmentController = createEnvironmentController({
   scene,
-  renderer,
-  viewerLights: { ambient: ambientLight, hemisphere: hemisphereLight },
-  requestRender: () => renderer.render(scene, camera),
+  ambientLight,
+  hemisphereLight,
 });
 
 export function setEnvironmentPreset(id) {
@@ -82,14 +83,6 @@ export function setEnvironmentPreset(id) {
 
 export function getEnvironmentPreset() {
   return environmentController.getPreset();
-}
-
-export function subscribeEnvironment(listener) {
-  return environmentController.subscribe(listener);
-}
-
-export function disposeEnvironment() {
-  environmentController.dispose();
 }
 
 let trackballGizmoVisible = true;
@@ -111,6 +104,7 @@ let uprightApplied = false;
 let modelQuarterTurns = 0;
 let modelPivot = null;
 let lightDrag = null;
+let lightPointerInside = false;
 const lightModes = ['double', 'current', 'off'];
 let lightModeIndex = 0;
 const lightRaycaster = new THREE.Raycaster();
@@ -219,7 +213,7 @@ export function toggleLightHandle() {
   };
   button.title = labels[mode];
   button.setAttribute('aria-label', labels[mode]);
-  renderer.domElement.style.cursor = visible ? 'crosshair' : '';
+  updateLightCursor();
 }
 
 function updateLightPointer(event) {
@@ -230,10 +224,36 @@ function updateLightPointer(event) {
   lightRaycaster.setFromCamera(lightPointer, camera);
 }
 
+function canInteractWithLight(event = null) {
+  if (event) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    lightPointerInside = event.clientX >= rect.left && event.clientX <= rect.right &&
+      event.clientY >= rect.top && event.clientY <= rect.bottom;
+    updateLightPointer(event);
+  }
+  if (!lightPointerInside || !lightHandle.visible) return false;
+
+  // The first ray hit matches the depth-tested render: if a model is in front
+  // of the sprite, the marker is not visually available for interaction.
+  return lightRaycaster.intersectObjects(scene.children, true)[0]?.object === lightHandle;
+}
+
+function updateLightCursor(event = null) {
+  if (lightDrag) return;
+  renderer.domElement.style.cursor = canInteractWithLight(event) ? 'crosshair' : '';
+}
+
+renderer.domElement.addEventListener('pointerenter', event => {
+  lightPointerInside = true;
+  updateLightCursor(event);
+});
+renderer.domElement.addEventListener('pointerleave', () => {
+  lightPointerInside = false;
+  if (!lightDrag) renderer.domElement.style.cursor = '';
+});
+
 renderer.domElement.addEventListener('pointerdown', event => {
-  if (!lightHandle.visible || event.button !== 0) return;
-  updateLightPointer(event);
-  if (!lightRaycaster.intersectObject(lightHandle, false).length) return;
+  if (event.button !== 0 || !canInteractWithLight(event)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
@@ -253,7 +273,12 @@ renderer.domElement.addEventListener('pointerdown', event => {
 }, { capture: true });
 
 renderer.domElement.addEventListener('pointermove', event => {
-  if (!lightDrag || event.pointerId !== lightDrag.pointerId) return;
+  if (!lightDrag) {
+    lightPointerInside = true;
+    updateLightCursor(event);
+    return;
+  }
+  if (event.pointerId !== lightDrag.pointerId) return;
   if (lightDrag.depthMode) {
     dirLight.position.copy(lightDrag.startPosition).addScaledVector(
       lightDrag.cameraDirection,
@@ -271,7 +296,7 @@ function finishLightDrag(event) {
   renderer.domElement.releasePointerCapture(event.pointerId);
   lightDrag = null;
   controls.enabled = true;
-  renderer.domElement.style.cursor = lightHandle.visible ? 'crosshair' : '';
+  updateLightCursor(event);
 }
 renderer.domElement.addEventListener('pointerup', finishLightDrag);
 renderer.domElement.addEventListener('pointercancel', finishLightDrag);
