@@ -27,6 +27,7 @@ def test_genshin_uses_conservative_light_map_r_and_b_response():
     profile = material_profile_for("genshin", "gimi")
 
     assert profile.id == "genshin:gimi"
+    assert profile.shadow_mask == ChannelRef("light_map", "g")
     assert profile.metalness == ChannelRef("light_map", "r")
     assert profile.specular == ChannelRef("light_map", "r")
     assert profile.metalness_scale == 0.08

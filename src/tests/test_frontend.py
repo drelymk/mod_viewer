@@ -310,6 +310,9 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
         edge_browser, frontend_url,
         {"Packed": _packed_material_payload(profile_id)},
     )
+    shader_errors = []
+    page.on("console", lambda message: shader_errors.append(message.text)
+            if message.type == "error" and "Shader Error" in message.text else None)
     try:
         _open(page, "Packed")
         page.locator(".draw-item").wait_for()
@@ -331,6 +334,11 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
             specularInfluence: game.uniforms.gameMaterialSpecularInfluence.value,
             usesInfluenceBlend: game.shader.fragmentShader
               .includes('gameMaterialSpecularResponse = mix('),
+            usesToonShadow: game.shader.fragmentShader
+              .includes('float gameToonShadow('),
+            patchesDirectDiffuse: game.shader.fragmentShader
+              .includes('gameDirectDiffuseBefore') &&
+              game.shader.fragmentShader.includes('reflectedLight.directDiffuse = mix('),
             version: material.version,
           };
         }""")
@@ -345,6 +353,11 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
         assert state["specularScale"] == 1
         assert state["specularInfluence"] == (0 if profile_id == "zzz:zzmi" else 0.15)
         assert state["usesInfluenceBlend"] == (profile_id == "genshin:gimi")
+        assert state["usesToonShadow"] == (profile_id == "genshin:gimi")
+        assert state["patchesDirectDiffuse"] == (profile_id == "genshin:gimi")
+        if profile_id == "genshin:gimi":
+            assert "gameToonShadowMask = gameLightMapSample.g" in state["fragment"]
+        assert not shader_errors, "\n".join(shader_errors)
         assert state["materialMap"] if profile_id == "zzz:zzmi" else state["lightMap"]
 
         after = page.evaluate("""async () => {

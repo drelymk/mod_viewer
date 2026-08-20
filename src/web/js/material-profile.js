@@ -7,7 +7,7 @@ import {
   DoubleSide, MeshPhysicalMaterial, MeshStandardMaterial, ShaderChunk,
 } from 'three';
 
-const SHADER_VERSION = 'r165-packed-material-v1';
+const SHADER_VERSION = 'r165-packed-material-v2';
 const SOURCE_INFO = Object.freeze({
   normal_data: { uniform: 'gameNormalData', enabled: 'gameNormalDataEnabled', sample: 'gameNormalDataSample' },
   light_map: { uniform: 'gameLightMap', enabled: 'gameLightMapEnabled', sample: 'gameLightMapSample' },
@@ -25,6 +25,26 @@ uniform bool gameMaterialMapEnabled;
 uniform float gameMaterialMetalnessScale;
 uniform float gameMaterialSpecularScale;
 uniform float gameMaterialSpecularInfluence;
+uniform float gameToonShadowThreshold;
+uniform float gameToonShadowSoftness;
+uniform float gameToonShadowMaskStrength;
+uniform float gameToonShadowInfluence;
+`;
+
+const TOON_SHADOW_FUNCTIONS = `
+float gameToonShadow(
+    float ndotl,
+    float authoredMask,
+    float threshold,
+    float softness
+) {
+    float lightValue = ndotl * 0.5 + 0.5;
+    float boundary = lightValue
+        + ( authoredMask - 0.5 )
+        * clamp( gameToonShadowMaskStrength, 0.0, 1.0 );
+    float edge = max( softness, 0.0001 );
+    return smoothstep( threshold - edge, threshold + edge, boundary );
+}
 `;
 
 function requiredReplace(source, marker, replacement, label) {
@@ -50,7 +70,7 @@ function refExpression(ref) {
 }
 
 function profileSources(profile) {
-  return [profile.metalness, profile.specular]
+  return [profile.shadow_mask, profile.metalness, profile.specular]
     .filter(validRef)
     .map(ref => ref.source)
     .filter((source, index, all) => all.indexOf(source) === index);
@@ -97,24 +117,80 @@ if ( ${info.enabled} ) {
 	gameMaterialSpecularResponse = ${response};
 }`;
     })() : '';
+  const shadow = validRef(profile.shadow_mask)
+    ? (() => {
+      const info = SOURCE_INFO[profile.shadow_mask.source];
+      const sample = refExpression(profile.shadow_mask);
+      return [
+        'if ( ' + info.enabled + ' ) {',
+        '\tgameToonShadowMask = ' + sample + ';',
+        '\tgameToonShadowEnabled = true;',
+        '}',
+      ].join('\n');
+    })() : '';
   return {
     metalness,
     specular,
     declarations: `
 float gameMaterialMetalnessResponse = 0.0;
 float gameMaterialSpecularResponse = 1.0;
+bool gameToonShadowEnabled = false;
+float gameToonShadowMask = 0.5;
 ${metalness}
 ${specular}
+${shadow}
 `,
   };
 }
 
+function patchDirectionalToonShadow(source) {
+  const directionalMarker = '#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )';
+  const directCall =
+    '\t\tRE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );';
+  const sectionStart = source.indexOf(directionalMarker);
+  if (sectionStart < 0) {
+    throw new Error(
+      'Packed material shader marker missing in Three.js r165: directional lights');
+  }
+  const callStart = source.indexOf(directCall, sectionStart);
+  if (callStart < 0) {
+    throw new Error(
+      'Packed material shader marker missing in Three.js r165: directional RE_Direct');
+  }
+  const replacement = [
+    '\t\tvec3 gameDirectDiffuseBefore = reflectedLight.directDiffuse;',
+    directCall,
+    '\t\tif ( gameToonShadowEnabled ) {',
+    '\t\t\tfloat gameToonShadowFactor = gameToonShadow(',
+    '\t\t\t\tsaturate( dot( geometryNormal, directLight.direction ) ),',
+    '\t\t\t\tgameToonShadowMask,',
+    '\t\t\t\tgameToonShadowThreshold,',
+    '\t\t\t\tgameToonShadowSoftness',
+    '\t\t\t);',
+    '\t\t\tgameToonShadowFactor = mix(',
+    '\t\t\t\t1.0,',
+    '\t\t\t\tgameToonShadowFactor,',
+    '\t\t\t\tclamp( gameToonShadowInfluence, 0.0, 1.0 )',
+    '\t\t\t);',
+    '\t\t\treflectedLight.directDiffuse = mix(',
+    '\t\t\t\tgameDirectDiffuseBefore,',
+    '\t\t\t\treflectedLight.directDiffuse,',
+    '\t\t\t\tgameToonShadowFactor',
+    '\t\t\t);',
+    '\t\t}',
+  ].join('\n');
+  return source.slice(0, callStart) + replacement
+    + source.slice(callStart + directCall.length);
+}
+
 function patchPackedMaterialShader(shader, profile) {
   let fragment = shader.fragmentShader;
+  const toonShadowFunctions = validRef(profile.shadow_mask)
+    ? TOON_SHADOW_FUNCTIONS : '';
   fragment = requiredReplace(
     fragment,
     '#include <uv_pars_fragment>',
-    `#include <uv_pars_fragment>\n${PACKED_UNIFORM_DECLARATIONS}`,
+    `#include <uv_pars_fragment>\n${PACKED_UNIFORM_DECLARATIONS}\n${toonShadowFunctions}`,
     'uv_pars_fragment');
 
   const responses = responseCode(profile);
@@ -144,6 +220,18 @@ function patchPackedMaterialShader(shader, profile) {
       'float specularIntensityFactor = specularIntensity * gameMaterialSpecularResponse;',
       'lights_physical_fragment.specularIntensityFactor');
   }
+  if (validRef(profile.shadow_mask)) {
+    let lightsBegin = ShaderChunk.lights_fragment_begin;
+    if (!lightsBegin) {
+      throw new Error('Three.js r165 directional lighting shader is unavailable.');
+    }
+    lightsBegin = patchDirectionalToonShadow(lightsBegin);
+    fragment = requiredReplace(
+      fragment,
+      '#include <lights_fragment_begin>',
+      lightsBegin,
+      'lights_fragment_begin');
+  }
   fragment = requiredReplace(
     fragment,
     '#include <lights_physical_fragment>',
@@ -161,7 +249,9 @@ function declarePackedUniforms(shader) {
 }
 
 function hasPackedResponse(profile) {
-  return validRef(profile?.metalness) || validRef(profile?.specular);
+  return validRef(profile?.shadow_mask)
+    || validRef(profile?.metalness)
+    || validRef(profile?.specular);
 }
 
 function materialUniforms(profile) {
@@ -184,6 +274,10 @@ function materialUniforms(profile) {
       value: hasNumericValue(profile?.specular_influence)
         ? Number(profile.specular_influence) : 0,
     },
+    gameToonShadowThreshold: { value: 0.5 },
+    gameToonShadowSoftness: { value: 0.08 },
+    gameToonShadowMaskStrength: { value: 0.5 },
+    gameToonShadowInfluence: { value: 1.0 },
   };
 }
 

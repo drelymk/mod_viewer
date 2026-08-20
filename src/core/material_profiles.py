@@ -51,7 +51,7 @@ class MaterialInterpretation:
     specular: ChannelRef | None = None
     ao: ChannelRef | None = None
     # Genshin's R response is deliberately capped until the later LightMap
-    # threshold, toon-shadow, and material-ID work. The source channel is
+    # highlight-threshold and material-ID work. The source channel is
     # classification data on some face materials, not a literal full-range
     # metalness map.
     metalness_scale: float = 1.0
@@ -96,9 +96,12 @@ def _profile_for(game, texture_api):
         return MaterialInterpretation(
             id=f"genshin:{texture_api}", game=game,
             texture_api=texture_api,
+            # G is the validated first toon-shadow mask. B remains reserved
+            # for the later highlight-threshold response, and A for IDs.
+            shadow_mask=ChannelRef("light_map", "g"),
             metalness=ChannelRef("light_map", "r"),
-            # R is the first-pass specular mask. B controls the toon
-            # highlight threshold and remains reserved for that later phase.
+            # R is the first-pass specular mask. B controls the highlight
+            # threshold and remains reserved for that later phase.
             specular=ChannelRef("light_map", "r"),
             metalness_scale=0.08,
             specular_scale=1.0,
