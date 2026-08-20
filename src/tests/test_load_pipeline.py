@@ -205,6 +205,20 @@ def test_wuwa_retains_raw_normal_data_alongside_derived_display_normal():
         assert uri_mode(built.textures[entry["normal_data_key"]]) == "RGBA"
 
 
+def test_body_profile_source_contract_does_not_make_material_map_a_shader_input():
+    from core.material_profiles import material_profile_for
+
+    profile = material_profile_for("wuwa", "rabbitfx", "body")
+    sources = {
+        ref.source for ref in (
+            profile.shadow_mask, profile.toon_specular_mask,
+            profile.metal_route,
+        ) if ref is not None
+    }
+    assert sources == {"light_map", "normal_data"}
+    assert "material_map" not in sources
+
+
 def test_legacy_texture_metadata_is_normalized_by_role():
     from PIL import Image
 
@@ -226,3 +240,61 @@ def test_legacy_texture_metadata_is_normalized_by_role():
         entry = payload["meshes"]["Body-1"]
         assert (entry.get("saved_texture_override") == "diffuse::shared.png"
               and "normal_map::shared.png" in payload["textures"]), ("legacy texture metadata is upgraded to role-aware keys")
+
+
+def test_component_material_kind_overrides_apply_to_every_draw_and_auto_removes(
+        tmp_path):
+    root = str(tmp_path)
+
+    assert metadata.save_component_material_kind(
+        root, "Component3", "body")["saved"]
+    saved = metadata.load(root)
+    assert saved["component_material_kinds"] == {"Component3": "body"}
+    assert metadata.component_material_kinds(root, {
+        "component_material_kinds": {
+            "Component3": "body", "stale": "not-a-kind",
+        },
+    }) == {"Component3": "body"}
+
+    payload = {"meshes": {
+        "Jacket-0": {"component": "Component3", "drawindexed": [3, 0, 0]},
+        "Jacket-1": {"component": "Component3", "drawindexed": [3, 1, 0]},
+        "Jacket-2": {"component": "Component3", "drawindexed": [3, 2, 0]},
+        "Other-0": {"component": "Component4", "drawindexed": [3, 3, 0]},
+    }}
+    hydrated = metadata.hydrate_component_material_kinds(
+        payload["meshes"], saved)
+    assert hydrated == {"Component3": "body"}
+    for name in ("Jacket-0", "Jacket-1", "Jacket-2"):
+        assert payload["meshes"][name]["material_kind_evidence"] == {
+            "kind": "body", "reliable": True,
+            "reason": "viewer component material-kind override",
+        }
+        assert payload["meshes"][name]["material_kind_override"] == "body"
+    assert payload["meshes"]["Other-0"]["material_kind_override"] is None
+    from core.game_profile import GameDetection
+    from app.mod_loader import _assign_material_profiles
+    _assign_material_profiles(payload["meshes"], GameDetection(
+        game="wuwa", runtime="rabbitfx", texture_api="rabbitfx",
+        confidence="high", scores={}))
+    assert all(payload["meshes"][name]["material_profile_id"] ==
+               "wuwa:rabbitfx:body"
+               for name in ("Jacket-0", "Jacket-1", "Jacket-2"))
+    assert payload["meshes"]["Other-0"]["material_profile_id"] == (
+        "wuwa:rabbitfx")
+
+    assert metadata.save_component_material_kind(
+        root, "Component3", "auto")["saved"]
+    assert "component_material_kinds" not in metadata.load(root)
+
+    reset = {
+        name: {key: value for key, value in entry.items()
+               if key not in ("material_kind_evidence",
+                              "material_kind_override")}
+        for name, entry in payload["meshes"].items()
+    }
+    metadata.hydrate_component_material_kinds(reset, metadata.load(root))
+    assert all(entry["material_kind_override"] is None
+               for entry in reset.values())
+    assert all("material_kind_evidence" not in entry
+               for entry in reset.values())

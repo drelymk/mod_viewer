@@ -101,7 +101,8 @@ function hasNumericValue(value) {
 
 function profileRenderSources(profile) {
   return [profile?.shadow_mask, profile?.metalness, profile?.specular,
-    profile?.specular_area]
+    profile?.specular_area, profile?.toon_specular_mask,
+    profile?.metal_route]
     .filter(validRef)
     .map(ref => ref.source)
     .filter((source, index, all) => all.indexOf(source) === index);
@@ -437,6 +438,68 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
   }
 }
 
+/**
+ * Approximate HoyoToon's near-binary body metal route.  A is routing data,
+ * not Three.js metalness: the authored value is shaped with a low exponent
+ * and then passed through a scale/bias saturate before it selects the
+ * physical fallback for the not-yet-implemented matcap path.
+ */
+export function wuwaMetalRouteNode(a) {
+  return a.clamp(0, 1).max(0.0001).pow(float(0.1))
+    .mul(2).sub(1).clamp(0, 1);
+}
+
+/** WuWa RabbitFX body response layered on top of the validated shadow model. */
+class WuwaBodyLightingModel extends WuwaLightingModel {
+  direct(lightData, builder) {
+    const { reflectedLight } = lightData;
+    const specularBefore = reflectedLight.directSpecular.toVar(
+      'wuwaBodyDirectSpecularBefore');
+    super.direct(lightData, builder);
+
+    const {
+      profile,
+      bindings,
+      wuwaSpecularPowerNode,
+      wuwaToonSpecularCutoffNode,
+      wuwaSpecularMaskCutoffNode,
+      toonSpecularMaskNode,
+      metalRouteNode,
+    } = this.gameMaterialState;
+    const physicalSpecular = reflectedLight.directSpecular.sub(specularBefore);
+    const halfDirection = lightData.lightDirection
+      .add(positionViewDirection).normalize();
+    const ndoth = normalView.dot(halfDirection).clamp(0, 1);
+    const specTerm = ndoth.max(0.001).pow(wuwaSpecularPowerNode);
+    const shapeGate = step(wuwaToonSpecularCutoffNode, specTerm);
+    const maskRef = profile.shadow_mask;
+    const maskBinding = validRef(maskRef) ? bindings[maskRef.source] : null;
+    const shadowMask = maskBinding
+      ? enabledChannelNode(maskRef, bindings, 1) : float(1);
+    const shadowGate = step(0.1, shadowMask);
+    const packedB = toonSpecularMaskNode;
+    const packedA = metalRouteNode;
+    const maskGate = step(wuwaSpecularMaskCutoffNode, packedB);
+    const exponent = mix(float(0.5), float(2.0), packedB);
+    const responseColor = diffuseColor.rgb.clamp(0.001, 1).pow(exponent);
+    const toonSpecular = physicalSpecular
+      .mul(responseColor)
+      .mul(shapeGate)
+      .mul(shadowGate)
+      .mul(maskGate)
+      .mul(float(1).sub(packedA).clamp(0, 1));
+    const replacement = mix(toonSpecular, physicalSpecular,
+      wuwaMetalRouteNode(packedA));
+    // The packed source is optional.  A missing/failed Normalmap must retain
+    // the exact PR18 physical direct-specular contribution.
+    const normalDataBinding = bindings.normal_data;
+    const bodySpecular = normalDataBinding.enabledNode.select(
+      replacement, physicalSpecular);
+    reflectedLight.directSpecular.assign(
+      specularBefore.add(bodySpecular));
+  }
+}
+
 class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
   setupSpecular() {
     const response = this.userData.gameMaterial?.specularResponseNode ?? float(1);
@@ -460,6 +523,9 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
       return new GenshinLightingModel(this, state);
     }
     if (state?.profile?.direct_shadow_model === 'wuwa_base') {
+      if (state.profile.direct_specular_model === 'wuwa_body') {
+        return new WuwaBodyLightingModel(this, state);
+      }
       return new WuwaLightingModel(this, state);
     }
     return new ThreePhysicalLightingModel(...physicalLightingFlags(this));
@@ -549,6 +615,14 @@ export function configureGameMaterial(material, profile, options = {}) {
       numericOr(profile?.wuwa_shadow_width, 0.01)),
     wuwaShadowInfluenceNode: uniform(
       numericOr(profile?.wuwa_shadow_influence, 1.0)),
+    wuwaSpecularPowerNode: uniform(
+      numericOr(profile?.wuwa_specular_power, 1.0)),
+    wuwaMetalSpecularPowerNode: uniform(
+      numericOr(profile?.wuwa_metal_specular_power, 1.0)),
+    wuwaToonSpecularCutoffNode: uniform(
+      numericOr(profile?.wuwa_toon_specular_cutoff, 0.1)),
+    wuwaSpecularMaskCutoffNode: uniform(
+      numericOr(profile?.wuwa_specular_mask_cutoff, 0.5)),
     materialIdNode: float(0),
     specularAreaNode: float(1),
     shadowMaskNode: float(0),
@@ -586,6 +660,12 @@ export function configureGameMaterial(material, profile, options = {}) {
     : float(0);
   state.normalDataANode = hasNormalDataA
     ? createRawChannelNode(resolvedProfile.normal_data_a, state.bindings)
+    : float(0);
+  state.toonSpecularMaskNode = validRef(resolvedProfile.toon_specular_mask)
+    ? createRawChannelNode(resolvedProfile.toon_specular_mask, state.bindings)
+    : float(0);
+  state.metalRouteNode = validRef(resolvedProfile.metal_route)
+    ? createRawChannelNode(resolvedProfile.metal_route, state.bindings)
     : float(0);
   state.sources = state.bindings;
   state.nodes = {

@@ -6,6 +6,7 @@ from copy import deepcopy
 
 from core.mesh_builder import (encode_texture_key, normalize_texture_key,
                                split_texture_key)
+from core.material_kind import normalize_material_kind
 
 METADATA_NAME = ".mod_viewer.json"
 PRESENT_NAMES_KEY = "__all__"
@@ -51,6 +52,44 @@ def save_textures(folder_path, textures):
     with _LOCK:
         data = load(folder_path)
         data["textures"] = textures if isinstance(textures, dict) else {}
+        return _save(folder_path, data)
+
+
+def component_material_kinds(folder_path, data=None):
+    """Return supported component-level material-kind overrides."""
+    data = (load(folder_path) if data is None and folder_path is not None
+            else ({} if data is None else data))
+    saved = data.get("component_material_kinds") if isinstance(data, dict) else None
+    if not isinstance(saved, dict):
+        return {}
+    return {
+        component: kind
+        for component, value in saved.items()
+        if isinstance(component, str) and component
+        for kind in [normalize_material_kind(value, overrides_only=True)]
+        if kind is not None
+    }
+
+
+def save_component_material_kind(folder_path, component, material_kind):
+    """Save or remove one canonical component material-kind override."""
+    if not isinstance(component, str) or not component:
+        return {"saved": False}
+    normalized = str(material_kind or "").strip().lower()
+    kind = normalize_material_kind(normalized, overrides_only=True)
+    if normalized not in ("", "auto", "unknown") and kind is None:
+        return {"saved": False}
+    with _LOCK:
+        data = load(folder_path)
+        overrides = component_material_kinds(folder_path, data)
+        if kind is not None:
+            overrides[component] = kind
+        else:
+            overrides.pop(component, None)
+        if overrides:
+            data["component_material_kinds"] = overrides
+        else:
+            data.pop("component_material_kinds", None)
         return _save(folder_path, data)
 
 
@@ -175,6 +214,30 @@ def hydrate_present(folder_path, present, data=None):
                 break
     item["names"] = [custom.get(str(index), f"Present {index + 1}")
                      for index in range(count)]
+
+
+def hydrate_component_material_kinds(meshes, data=None):
+    """Apply one saved component override to every draw in that component."""
+    if not isinstance(meshes, dict):
+        return {}
+    saved = component_material_kinds(None, data)
+    hydrated = {}
+    for name, entry in meshes.items():
+        if not isinstance(entry, dict) or entry.get("error"):
+            continue
+        component = entry.get("component")
+        override = saved.get(component) if isinstance(component, str) else None
+        if override is None:
+            entry["material_kind_override"] = None
+            continue
+        entry["material_kind_override"] = override
+        entry["material_kind_evidence"] = {
+            "kind": override,
+            "reliable": True,
+            "reason": "viewer component material-kind override",
+        }
+        hydrated[component] = override
+    return hydrated
 
 
 def hydrate_textures(folder_path, payload, data=None, texture_source=None,

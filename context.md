@@ -163,6 +163,21 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   first validated authored shadow-mask input, and Normalmap B/A remain packed
   material data available for flat diagnostics only. They must not be mapped
   directly to stock Three.js roughness or metalness without further evidence.
+  The base `wuwa:rabbitfx` profile remains shadow-only. The first specialized
+  production profile is `wuwa:rabbitfx:body`, and it can be selected only by
+  reliable exact body evidence. Material-kind overrides are authored at the
+  component level and persisted in `.mod_viewer.json` by canonical component
+  identity, never by display name or individual draw key. Every draw in that
+  component inherits the same reliable viewer override; Auto removes it, and
+  weak component-name hints never activate specialization. In that body
+  approximation, Normalmap B is a toon-specular classification/color-response
+  input, while A suppresses the ordinary lobe and routes high-A pixels toward
+  the existing physical direct-specular fallback until WuWa matcap behavior is
+  implemented. Neither channel is a stock roughness or metalness map, and no
+  second skin/type-mask lobe is inferred. Hair, face and eye overrides remain
+  on the conservative base profile. RabbitFX Materialmap is a recognized
+  transport role but has no validated shader meaning and is not loaded by the
+  body response.
   Missing RabbitFX Lightmap does not imply Diffuse.A shadow semantics; that
   alternate requires explicit per-draw evidence. HoyoToon's TypeMask is not a
   current RabbitFX transport role, and no specialized WuWa face/hair/eye
@@ -170,8 +185,9 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   Developer debug modes are capability-gated per material. Requesting an
   unsupported diagnostic leaves that material's normal rendering unchanged.
   Diagnostic-only packed channels do not choose a physical material or add
-  startup texture requests. WuWa Normalmap B/A data is loaded through the
-  existing stable binding only while its diagnostic mode is active.
+  startup texture requests. Base-profile WuWa Normalmap B/A data is loaded
+  through the existing stable binding only while its diagnostic mode is active;
+  the body profile is the explicit exception because B/A affect its response.
 - A section with an `ib` but no `drawindexed` uses a synthetic whole-buffer
   draw. It inherits `diffuse_variants_at_end`; do not discard a section’s final
   diffuse. A real draw before the first diffuse legitimately remains untextured.

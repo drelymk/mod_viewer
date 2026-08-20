@@ -17,6 +17,24 @@ import { openTextureModal } from './texture-modal.js';
 
 let groupsUI = [];
 
+const MATERIAL_KIND_OPTIONS = Object.freeze([
+  ['auto', 'Auto'],
+  ['body', 'Body'],
+  ['face', 'Face'],
+  ['hair', 'Hair'],
+  ['eye', 'Eye'],
+  ['weapon', 'Weapon'],
+  ['special', 'Special'],
+]);
+
+function saveComponentMaterialKind(modPath, component, kind) {
+  if (!modPath || !window.pywebview?.api?.save_component_material_kind) {
+    return Promise.resolve({ saved: false });
+  }
+  return window.pywebview.api.save_component_material_kind(
+    modPath, component, kind);
+}
+
 function syncMeshPanel() {
   for (const group of groupsUI) {
     group.applyTextureRuns?.();
@@ -55,7 +73,9 @@ function groupByComponent(names, meshes) {
   return grouped;
 }
 
-function buildGroupHeader(groupName, itemsWrap, texturePool, modPath, onPoolChange) {
+function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
+                          onPoolChange, componentKind,
+                          onMaterialKindChanged, componentIdentity = groupName) {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
 
@@ -72,6 +92,44 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath, onPoolChan
   nameSpan.textContent = groupName;
 
   hdr.append(chevron, masterCb, nameSpan);
+
+  const materialLabel = document.createElement('label');
+  materialLabel.className = 'material-kind-control component-material-kind-control';
+  materialLabel.textContent = 'Material:';
+  const materialSelect = document.createElement('select');
+  materialSelect.className = 'material-kind-select';
+  materialSelect.title = 'Choose a viewer material kind for this component';
+  for (const [value, label] of MATERIAL_KIND_OPTIONS) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    materialSelect.appendChild(option);
+  }
+  materialSelect.value = componentKind || 'auto';
+  materialSelect.disabled = !componentIdentity;
+  materialSelect.addEventListener('click', event => event.stopPropagation());
+  materialSelect.addEventListener('change', async event => {
+    event.stopPropagation();
+    const previous = componentKind || 'auto';
+    const next = materialSelect.value;
+    materialSelect.disabled = true;
+    try {
+      const result = await saveComponentMaterialKind(
+        modPath, componentIdentity, next);
+      if (result?.error || result?.saved === false) {
+        throw new Error(result?.error || 'material kind was not saved');
+      }
+      componentKind = next === 'auto' ? null : next;
+      await onMaterialKindChanged?.();
+    } catch (error) {
+      materialSelect.value = previous;
+      console.error('Could not save component material kind', error);
+    } finally {
+      materialSelect.disabled = false;
+    }
+  });
+  materialLabel.appendChild(materialSelect);
+  hdr.appendChild(materialLabel);
 
   // Always shown, even for a component with no diffuse loaded at all --
   // that's the only way to attach one via "Add". updateTexButtonState gives
@@ -90,7 +148,8 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath, onPoolChan
 
   // Expand/collapse the item list without touching mesh visibility.
   hdr.addEventListener('click', (e) => {
-    if (e.target === masterCb || e.target === texBtn) return;
+    if (e.target === masterCb || e.target === texBtn
+        || e.target.closest('select')) return;
     chevron.classList.toggle('collapsed');
     itemsWrap.classList.toggle('collapsed');
   });
@@ -295,7 +354,7 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
     onTextureChanged: onActiveChanged,
   });
   row.addEventListener('click', (e) => {
-    if (e.target === cb) return; // the state button only ever toggles visibility
+    if (e.target === cb) return;
     if (e.target === chevron) {
       chevron.classList.toggle('collapsed');
       texList.classList.toggle('collapsed');
@@ -322,7 +381,7 @@ function updateTexButtonState(texBtn, itemObjs) {
  * is threaded through to the per-component texture popup, which needs it to
  * open the native file picker rooted at the mod folder. */
 export function buildMeshPanel(meshes, modPath, meshNames = {},
-                               materialProfiles = {}) {
+                               materialProfiles = {}, options = {}) {
   const list = document.getElementById('mesh-list');
   list.innerHTML = '';
   groupsUI = [];
@@ -351,6 +410,12 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
       // closure, so reopening the popup for the same component within the
       // session sees what was added.
       const texturePool = names.map(n => meshes[n].texture_options).find(Boolean) || [];
+      const componentKind = names
+        .map(n => meshes[n].material_kind_override)
+        .find(Boolean) || null;
+      const componentIdentity = names
+        .map(n => meshes[n].component)
+        .find(Boolean) || null;
 
       const itemCbs = [], itemObjs = [], texListRenderers = [];
       const highlightedDefaults = new Set();
@@ -367,7 +432,8 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
       };
 
       const { hdr, masterCb, texBtn } = buildGroupHeader(
-        groupName, itemsWrap, texturePool, modPath, onPoolChange);
+        groupName, itemsWrap, texturePool, modPath, onPoolChange,
+        componentKind, options.onMaterialKindChanged, componentIdentity);
       container.append(hdr, itemsWrap);
 
       for (const name of names) {

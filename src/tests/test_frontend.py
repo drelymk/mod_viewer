@@ -128,6 +128,7 @@ def _packed_material_payload(profile_id="zzz:zzmi"):
         "zzz:zzmi": ("zzz", "zzmi"),
         "genshin:gimi": ("genshin", "gimi"),
         "wuwa:rabbitfx": ("wuwa", "rabbitfx"),
+        "wuwa:rabbitfx:body": ("wuwa", "rabbitfx", "body"),
         "wuwa:raw": ("wuwa", "raw"),
     }
     profile = (material_profile_for(*profile_args[profile_id]).to_metadata()
@@ -262,6 +263,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None):
             update_ini_text: async () => ({pending: true}),
             save_mesh_textures: async () => ({}),
             save_mesh_names: async () => ({}),
+            save_component_material_kind: async () => ({}),
             pick_texture_file: async () => copy(state.picks.shift() || null),
             load_texture_file: async (path, key) => ({tex_key: key, uri: ''}),
             get_record_positions: async () => ({positions: 2, vars: ['toggle']}),
@@ -927,6 +929,146 @@ def test_wuwa_debug_modes_are_capability_gated_and_uniform_only(
         page.wait_for_timeout(400)
         high_pixel = _sample_mesh_pixel(page)
         assert sum(high_pixel) > sum(low_pixel), (low_pixel, high_pixel)
+    finally:
+        context.close()
+
+
+def test_wuwa_body_profile_binds_normal_data_without_stock_pbr_mapping(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx:body")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry["material_kind"] = "body"
+    entry["material_kind_reliable"] = True
+    entry["material_kind_reason"] = "viewer material-kind override"
+    entry["material_kind_override"] = "body"
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
+        page.wait_for_timeout(300)
+        assert page.locator(".component-material-kind-control").count() == 1
+        assert page.locator(".draw-item .material-kind-select").count() == 0
+        state = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const game = mesh.material.userData.gameMaterial;
+          return {
+            physical: !!mesh.material.isMeshPhysicalNodeMaterial,
+            profileId: game.profile.id,
+            directShadowModel: game.profile.direct_shadow_model,
+            directSpecularModel: game.profile.direct_specular_model,
+            materialKindOverride: window.modViewer.getMaterialState(0)
+              .materialKindOverride,
+            normalData: game.bindings.normal_data.enabledNode.value,
+            lightMap: game.bindings.light_map.enabledNode.value,
+            materialMap: game.bindings.material_map.enabledNode.value,
+            stockMetalness: game.profile.metalness,
+            stockSpecular: game.profile.specular,
+            model: mesh.material.setupLightingModel().constructor.name,
+          };
+        }""")
+        assert state == {
+            "physical": True,
+            "profileId": "wuwa:rabbitfx:body",
+            "directShadowModel": "wuwa_base",
+            "directSpecularModel": "wuwa_body",
+            "materialKindOverride": "body",
+            "normalData": True,
+            "lightMap": True,
+            "materialMap": False,
+            "stockMetalness": None,
+            "stockSpecular": None,
+            "model": "WuwaBodyLightingModel",
+        }
+        _sample_mesh_pixel(page)
+        before = page.evaluate("""() => {
+          window.__bodyMaterial = window.modViewer.activeMeshes[0].material;
+          return window.__bodyMaterial.version;
+        }""")
+        page.evaluate("""async () => {
+          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {
+            diffuse: mesh.userData.texKey,
+            normal_map: null,
+            normal_data: null,
+            light_map: mesh.userData.lightMapKey,
+            material_map: null,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        missing = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return {
+            bound: mesh.material.userData.gameMaterial
+              .bindings.normal_data.enabledNode.value,
+            sameMaterial: mesh.material === window.__bodyMaterial,
+            version: mesh.material.version,
+          };
+        }""")
+        assert missing["bound"] is False
+        assert missing["sameMaterial"]
+        assert missing["version"] == before
+    finally:
+        context.close()
+
+
+def test_wuwa_body_b_threshold_controls_toon_classification(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx:body")
+    entry = payload["meshes"]["Body-Packed-0"]
+    low_key = "normal_data::Packed-body-b-low.png"
+    high_key = "normal_data::Packed-body-b-high.png"
+    payload["textures"] = {
+        key: _flat_png_uri((255, 255, 255, 255))
+        for key in payload["textures"]
+    }
+    payload["textures"]["diffuse::Packed-one.png"] = _flat_png_uri(
+        (72, 72, 72, 255))
+    payload["textures"][low_key] = _flat_png_uri((128, 128, 124, 0))
+    payload["textures"][high_key] = _flat_png_uri((128, 128, 130, 0))
+    entry["normal_data_key"] = low_key
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings.normal_data.enabledNode.value === true")
+        page.evaluate("window.modViewer.setEnvironmentPreset('studio')")
+        page.evaluate("""
+          async () => {
+            const THREE = await import('three');
+            const {scene, controls} = await import('./js/scene.js');
+            scene.traverse(object => {
+              if (object.isAmbientLight || object.isHemisphereLight) object.intensity = 0;
+              if (object.isSprite || object.isGridHelper) object.visible = false;
+            });
+            const key = scene.children.find(object => object.isDirectionalLight);
+            key.target.position.copy(controls.target);
+            key.position.copy(controls.target).add(new THREE.Vector3(0, 0, 3));
+            key.intensity = 3;
+          }
+        """)
+        page.wait_for_timeout(400)
+        low_pixels = [_sample_mesh_pixel_at(page, x, 0.1)
+                      for x in (0.1, 0.3, 0.5, 0.7, 0.9)]
+        page.evaluate("""async key => {
+          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {
+            diffuse: mesh.userData.texKey,
+            normal_map: null,
+            normal_data: key,
+            light_map: mesh.userData.lightMapKey,
+            material_map: null,
+          });
+        }""", high_key)
+        page.wait_for_timeout(400)
+        high_pixels = [_sample_mesh_pixel_at(page, x, 0.1)
+                       for x in (0.1, 0.3, 0.5, 0.7, 0.9)]
+        assert any(sum(high) != sum(low)
+                   for low, high in zip(low_pixels, high_pixels)), (
+                       low_pixels, high_pixels)
     finally:
         context.close()
 

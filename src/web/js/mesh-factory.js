@@ -252,6 +252,8 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.materialKind = data.material_kind || 'unknown';
   mesh.userData.materialKindReliable = data.material_kind_reliable === true;
   mesh.userData.materialKindReason = data.material_kind_reason || '';
+  mesh.userData.materialKindOverride = data.material_kind_override || null;
+  mesh.userData.component = data.component || null;
   mesh.userData.materialProfileId = data.material_profile_id || 'none';
   mesh.userData.materialProfile = materialProfile;
   mesh.userData.aoMapKey = data.ao_map_key || null;
