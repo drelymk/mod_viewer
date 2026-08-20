@@ -156,6 +156,18 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   material-ID data.
   Unknown game/API pairs keep packed maps available but do not guess PBR
   semantics.
+  WuWa/RabbitFX texture semantics come from explicit `Resource\\RabbitFX\\...`
+  assignments, not resource filenames. For the validated WuWa base profile,
+  RabbitFX Normalmap R/G remains the normal input, RabbitFX Lightmap G is the
+  first validated authored shadow-mask input, and Normalmap B/A remain packed
+  material data available for flat diagnostics only. They must not be mapped
+  directly to stock Three.js roughness or metalness without further evidence.
+  Missing RabbitFX Lightmap does not imply Diffuse.A shadow semantics; that
+  alternate requires explicit per-draw evidence. HoyoToon's TypeMask is not a
+  current RabbitFX transport role, and no specialized WuWa face/hair/eye
+  profile is inferred from weak component labels.
+  Developer debug modes are capability-gated per material. Requesting an
+  unsupported diagnostic leaves that material's normal rendering unchanged.
 - A section with an `ib` but no `drawindexed` uses a synthetic whole-buffer
   draw. It inherits `diffuse_variants_at_end`; do not discard a section’s final
   diffuse. A real draw before the first diffuse legitimately remains untextured.

@@ -327,6 +327,13 @@ rendererReady.then(ready => {
       materialIdDecoder: game?.profile?.material_id_decoder || null,
       hasMaterialId: !!game?.hasMaterialId,
       hasSpecularArea: !!game?.hasSpecularArea,
+      hasShadowMask: !!game?.hasShadowMask,
+      hasNormalData: !!(game?.hasNormalDataB || game?.hasNormalDataA),
+      hasNormalDataB: !!game?.hasNormalDataB,
+      hasNormalDataA: !!game?.hasNormalDataA,
+      shadowMaskBound: !!game?.bindings?.light_map?.enabledNode?.value,
+      normalDataBound: !!game?.bindings?.normal_data?.enabledNode?.value,
+      supportedDebugModes: game?.supportedDebugModes || [],
       debugMode: getMaterialDebugMode(mesh?.material),
     };
   };

@@ -2,6 +2,7 @@
 
 from core.game_profile import detect_game
 from core.ini_analysis import analyze_ini
+from core.ini_parser import _scan_sections_for_draws
 from core.ini_sections import parse_sections
 from core.texture_profiles import texture_profile_for
 
@@ -80,6 +81,36 @@ def test_realistic_rabbitfx_statements_stay_separate_from_wwmi_game():
         "wuwa", "wwmi", "rabbitfx")
     assert any(item.code == "rabbitfx_resource_assignment"
                for item in detection.evidence)
+
+
+def test_rabbitfx_settextures_maps_explicit_roles_case_insensitively():
+    sections = {
+        "TextureOverrideBody": [r"run = commandlist\rabbitfx\settextures"],
+        r"CommandList\RabbitFX\SetTextures": [
+            r"Resource\RabbitFX\Diffuse = ref ResourceDiffuse",
+            r"Resource\RabbitFX\Lightmap = ref ResourceLightmap",
+            r"Resource\RabbitFX\Normalmap = ref ResourceNormalmap",
+        ],
+    }
+
+    info = _scan_sections_for_draws(sections)["TextureOverrideBody"]
+
+    assert info["diffuse"] == "ResourceDiffuse"
+    assert info["aux_maps_at_end"]["light_map"]["variants"] == [{
+        "res": "ResourceLightmap", "cond": [],
+    }]
+    assert info["aux_maps_at_end"]["normal_map"]["variants"] == [{
+        "res": "ResourceNormalmap", "cond": [],
+    }]
+
+
+def test_resource_filename_alone_does_not_create_rabbitfx_semantics():
+    detection = detect_game({
+        "ResourceDefinitelyALightmap": ["filename = face_lightmap.dds"],
+    })
+
+    assert detection.game == "unknown"
+    assert detection.texture_api == "unknown"
 
 
 def test_namespaces_alone_do_not_force_a_game():

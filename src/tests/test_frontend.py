@@ -851,6 +851,83 @@ def test_genshin_debug_modes_render_flat_material_id_and_raw_area_values(
         context.close()
 
 
+def test_wuwa_debug_modes_are_capability_gated_and_uniform_only(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx")
+    entry = payload["meshes"]["Body-Packed-0"]
+    normal_low = "normal_data::Packed-debug-low.png"
+    normal_high = "normal_data::Packed-debug-high.png"
+    entry["normal_data_key"] = normal_low
+    payload["textures"][normal_low] = _flat_png_uri((0, 0, 0, 255))
+    payload["textures"][normal_high] = _flat_png_uri((0, 0, 255, 255))
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"Packed": payload},
+    )
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
+        state = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const game = material.userData.gameMaterial;
+          const colorNode = material.colorNode;
+          const version = material.version;
+          const before = window.modViewer.getMaterialState(0);
+          const modes = [
+            window.modViewer.setMaterialDebugMode('material-id'),
+            window.modViewer.getMaterialState(0).debugMode,
+            window.modViewer.setMaterialDebugMode('normal-data-b'),
+            window.modViewer.getMaterialState(0).debugMode,
+            window.modViewer.setMaterialDebugMode('normal-data-a'),
+            window.modViewer.getMaterialState(0).debugMode,
+          ];
+          return {
+            before,
+            modes,
+            sameMaterial: material === mesh.material,
+            sameColorNode: material.colorNode === colorNode,
+            sameVersion: material.version === version,
+            hasDebugNodes: !!game.normalDataBNode && !!game.normalDataANode,
+          };
+        }""")
+        assert state["before"]["supportedDebugModes"] == [
+            "shadow-mask", "normal-data-b", "normal-data-a"]
+        assert state["before"]["hasShadowMask"] is True
+        assert state["before"]["hasNormalData"] is True
+        assert state["before"]["hasNormalDataB"] is True
+        assert state["before"]["hasNormalDataA"] is True
+        assert state["modes"] == [
+            "material-id", "material-id", "normal-data-b", "normal-data-b",
+            "normal-data-a", "normal-data-a",
+        ]
+        assert state["sameMaterial"]
+        assert state["sameColorNode"]
+        assert state["sameVersion"]
+        assert state["hasDebugNodes"]
+
+        page.evaluate("window.modViewer.setMaterialDebugMode('normal-data-b')")
+        page.wait_for_timeout(300)
+        low_pixel = _sample_mesh_pixel(page)
+        page.evaluate("""async key => {
+          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {
+            diffuse: mesh.userData.texKey,
+            normal_map: null,
+            normal_data: key,
+            light_map: null,
+            material_map: null,
+          });
+        }""", normal_high)
+        page.wait_for_timeout(400)
+        high_pixel = _sample_mesh_pixel(page)
+        assert sum(high_pixel) > sum(low_pixel), (low_pixel, high_pixel)
+    finally:
+        context.close()
+
+
 def test_genshin_tsl_material_renders_with_environment_accent_directional_light(
         edge_browser, frontend_url):
     context, page = _page(
@@ -894,14 +971,16 @@ def test_genshin_tsl_material_renders_with_environment_accent_directional_light(
      (0.8, 0, 0.35), 0.35, True),
     ("genshin:gimi", "light_map", (0, 255, 0, 255), (255, 255, 0, 255),
      (0, 0, 3), 0.2, True),
+    ("wuwa:rabbitfx", "light_map", (0, 0, 0, 255), (0, 255, 0, 255),
+     (0.8, 0, 0.35), 0.35, True),
     ("zzz:zzmi", "material_map", (0, 0, 0, 255), (0, 255, 0, 255),
      (0, 0, 3), 0.35, True),
     ("zzz:zzmi", "material_map", (0, 0, 0, 255), (0, 0, 255, 255),
      (0, 0, 3), 0.35, True),
     ("zzz:zzmi", "material_map", (0, 255, 0, 255), (0, 255, 255, 255),
      (0, 0, 3), 0.35, None),
-], ids=["genshin-shadow-g", "genshin-specular-r", "zzz-metalness-g",
-       "zzz-specular-b", "zzz-metallic-b-independent"])
+], ids=["genshin-shadow-g", "genshin-specular-r", "wuwa-shadow-g",
+       "zzz-metalness-g", "zzz-specular-b", "zzz-metallic-b-independent"])
 def test_packed_channel_changes_rendered_luminance(
         edge_browser, frontend_url, profile_id, role, low, high, offset,
         roughness, comparison):
@@ -1125,8 +1204,8 @@ def test_genshin_high_r_region_bypasses_lightmap_b_specular_gate(
         "lightMap": True, "materialMap": False,
     }),
     ("wuwa:rabbitfx", {
-        "physical": False, "profile": "wuwa:rabbitfx", "normalData": False,
-        "lightMap": False, "materialMap": False,
+        "physical": True, "profile": "wuwa:rabbitfx", "normalData": True,
+        "lightMap": True, "materialMap": False,
     }),
     ("none", {
         "physical": False, "profile": "none", "normalData": False,
