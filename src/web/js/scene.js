@@ -6,6 +6,7 @@ import { createCameraFrame } from './camera-frame.js';
 import { createEnvironmentController } from './environment.js';
 import { createKeyLightController } from './key-light-controller.js';
 import { updateOutlineCameraScale } from './outline-renderer.js';
+import { setBCTextureCompression } from './renderer-capabilities.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 
 const container = document.getElementById('canvas-container');
@@ -63,8 +64,14 @@ async function initializeRenderer() {
     featureLevel: 'core',
   });
   if (!adapter) throw new Error('No WebGPU adapter is available.');
-  const device = await adapter.requestDevice();
+  const supportsBC = adapter.features?.has?.(
+    'texture-compression-bc') === true;
+  const device = await adapter.requestDevice({
+    requiredFeatures: supportsBC ? ['texture-compression-bc'] : [],
+  });
   if (!device) throw new Error('The WebGPU device could not be created.');
+  setBCTextureCompression(
+    device.features?.has?.('texture-compression-bc') === true);
 
   // WebGPUBackend accepts an application-owned device through its public
   // parameters object. Supplying the preflighted device keeps renderer.init()

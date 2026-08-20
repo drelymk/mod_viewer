@@ -6,12 +6,15 @@ import {
   createGameMaterial, getGameMaterialSources, updateGameMaterialTextures,
 } from './material-profile.js';
 import { getMeshView } from './mesh-view-bindings.js';
+import { loadDDSTexture } from './dds-loader.js';
+import { supportsBCTextureCompression } from './renderer-capabilities.js';
 
 // Textures arrive as data URIs or same-origin localhost URLs keyed by name;
 // loaders are cached so several meshes sharing a texture share one GPU upload.
 let registry = {};
 const loaders = {};
 const failedTextures = new Set();
+const nativeDDSFallbacks = new Set();
 const textureUsers = new Map();
 // all: diffuse + INI material maps; diffuse: diffuse only; none: flat colour.
 let textureMode = 'all';
@@ -27,6 +30,7 @@ export function setTextures(textures) {
     delete loaders[key];
   }
   failedTextures.clear();
+  nativeDDSFallbacks.clear();
   textureUsers.clear();
 }
 
@@ -40,12 +44,14 @@ export function addTexture(key, uri) {
       disposeTexture(loaders[cacheKey]);
       delete loaders[cacheKey];
       failedTextures.delete(cacheKey);
+      nativeDDSFallbacks.delete(cacheKey);
       textureUsers.delete(cacheKey);
     }
   }
   for (const cacheKey of [...failedTextures]) {
     if (cacheKey.endsWith(`|${key}`)) {
       failedTextures.delete(cacheKey);
+      nativeDDSFallbacks.delete(cacheKey);
       textureUsers.delete(cacheKey);
     }
   }
@@ -89,6 +95,29 @@ function handleTextureError(cacheKey, texture, resolved, uri) {
   for (const mesh of textureUsers.get(cacheKey) || []) refreshMeshTexture(mesh);
 }
 
+function isDDSUri(uri) {
+  return typeof uri === 'string' && /\.dds(?:[?#]|$)/i.test(uri);
+}
+
+function pngFallbackUri(uri) {
+  return uri.replace(/\.dds(?=([?#]|$))/i, '.png');
+}
+
+function handleNativeDDSFailure(cacheKey, texture, resolved, uri) {
+  // A stale native request must not evict a replacement texture.  The next
+  // refresh uses the same registry key and the existing PNG publication.
+  if (registry[resolved] !== uri
+      || loaders[cacheKey] !== texture) {
+    disposeTexture(texture);
+    return;
+  }
+  if (nativeDDSFallbacks.has(cacheKey)) return;
+  nativeDDSFallbacks.add(cacheKey);
+  if (loaders[cacheKey] === texture) delete loaders[cacheKey];
+  disposeTexture(texture);
+  for (const mesh of textureUsers.get(cacheKey) || []) refreshMeshTexture(mesh);
+}
+
 function getTexture(mesh, key, role = 'diffuse') {
   const resolved = registryKey(key, role);
   if (!resolved || !registry[resolved]) return null;
@@ -97,6 +126,11 @@ function getTexture(mesh, key, role = 'diffuse') {
   if (failedTextures.has(cacheKey)) return null;
   if (!loaders[cacheKey]) {
     const uri = registry[resolved];
+    const nativeDDS = isDDSUri(uri)
+      && supportsBCTextureCompression()
+      && !nativeDDSFallbacks.has(cacheKey);
+    const requestUri = nativeDDS ? uri
+      : isDDSUri(uri) ? pngFallbackUri(uri) : uri;
     let texture;
     let failedBeforeAssignment = false;
     const onError = () => {
@@ -106,7 +140,14 @@ function getTexture(mesh, key, role = 'diffuse') {
       }
       handleTextureError(cacheKey, texture, resolved, uri);
     };
-    texture = new THREE.TextureLoader().load(uri, undefined, undefined, onError);
+    if (nativeDDS) {
+      texture = loadDDSTexture(
+        requestUri, undefined,
+        () => handleNativeDDSFailure(cacheKey, texture, resolved, uri));
+    } else {
+      texture = new THREE.TextureLoader().load(
+        requestUri, undefined, undefined, onError);
+    }
     texture.colorSpace = role === 'diffuse'
       ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     loaders[cacheKey] = texture;

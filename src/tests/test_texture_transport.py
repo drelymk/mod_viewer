@@ -46,6 +46,19 @@ def _group(texture_names):
     }]
 
 
+def _write_bc7_dds(path, width=4, height=4):
+    """Write one valid DX10 BC7 block for transport endpoint tests."""
+    data = bytearray(148)
+    data[:4] = b"DDS "
+    struct.pack_into("<I", data, 4, 124)
+    struct.pack_into("<II", data, 12, height, width)
+    struct.pack_into("<I", data, 76, 32)
+    struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DX10", "little"))
+    struct.pack_into("<IIIII", data, 128, 98, 3, 1, 0, 0)
+    data.extend(bytes(((width + 3) // 4) * ((height + 3) // 4) * 16))
+    path.write_bytes(data)
+
+
 def test_render_cache_stores_png_bytes_but_direct_wrapper_stays_data_uri(tmp_path):
     path = tmp_path / "shared.png"
     Image.new("RGB", (2, 1), (128, 128, 32)).save(path)
@@ -197,10 +210,10 @@ def test_publication_deduplicates_by_role_and_invalidates_old_load(tmp_path):
     second.discard()
 
     later_manual_url = first.register(str(path), "material_map")
-    assert second_url.endswith("/0")
+    assert second_url.endswith("/0.png")
     assert server._lookup_texture(first.token, "0").path == str(path)
     assert server._lookup_texture(first.token, "2").role == "material_map"
-    assert later_manual_url.endswith("/2")
+    assert later_manual_url.endswith("/2.png")
     assert server._lookup_texture(second.token, "0") is None
 
     replacement = server.begin_texture_publication(str(tmp_path))
@@ -269,12 +282,16 @@ def test_explicit_manual_validation_rejects_invalid_image(tmp_path):
     invalid.write_bytes(b"not an image")
     valid = tmp_path / "valid.png"
     Image.new("RGB", (1, 1), (128, 128, 32)).save(valid)
+    valid_dds = tmp_path / "valid.dds"
+    _write_bc7_dds(valid_dds)
     publication = server.begin_texture_publication(str(tmp_path))
 
     assert publication.register(str(invalid))
     assert publication.register(str(invalid), validate=True) is None
     valid_url = publication.register(str(valid), validate=True)
     assert valid_url and server._lookup_texture(publication.token, "1").path == str(valid)
+    validated_dds_url = publication.register(str(valid_dds), validate=True)
+    assert validated_dds_url.endswith(".dds")
 
 
 def test_texture_endpoint_serves_png_and_keeps_source_reusable(tmp_path):
@@ -310,6 +327,78 @@ def test_texture_endpoint_serves_png_and_keeps_source_reusable(tmp_path):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_native_dds_endpoint_streams_original_bytes_and_png_alias_is_valid(tmp_path):
+    dds = tmp_path / "native.dds"
+    _write_bc7_dds(dds)
+    invalid = tmp_path / "unsupported.dds"
+    invalid.write_bytes(b"not a DDS")
+    publication = server.begin_texture_publication(str(tmp_path))
+    native_url = publication.register(str(dds))
+    fallback_url = publication.register(str(invalid))
+    publication.commit()
+
+    assert native_url.endswith("/0.dds")
+    assert fallback_url.endswith("/1.png")
+    assert server._lookup_texture(publication.token, "0").native_dds
+
+    handler = functools.partial(server._Handler, directory=str(tmp_path))
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        class RejectEncodeSemaphore:
+            def __enter__(self):
+                raise AssertionError("native DDS entered the PNG semaphore")
+
+            def __exit__(self, *_args):
+                return False
+
+        with patch.object(server, "_texture_encode_semaphore",
+                          RejectEncodeSemaphore()):
+            for attempt in range(2):
+                with urlopen(base_url + native_url) as response:
+                    if attempt == 0:
+                        assert response.headers["Content-Type"] == (
+                            "image/vnd-ms.dds")
+                        assert int(response.headers["Content-Length"]) == (
+                            dds.stat().st_size)
+                    assert response.read() == dds.read_bytes()
+
+        with patch("app.server._render_texture_png", return_value=b"PNG"):
+            with urlopen(base_url + native_url[:-4] + ".png") as response:
+                assert response.headers["Content-Type"].startswith("image/png")
+                assert response.read() == b"PNG"
+
+        with pytest.raises(HTTPError) as error:
+            urlopen(base_url + fallback_url[:-4] + ".dds")
+        assert error.value.code == 404
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_native_eligibility_is_role_and_transform_aware(tmp_path):
+    dds = tmp_path / "shared.dds"
+    _write_bc7_dds(dds)
+    publication = server.begin_texture_publication(str(tmp_path))
+
+    normal_map_url = publication.register(
+        str(dds), "normal_map", transform="normal_xy_reconstruct")
+    normal_data_url = publication.register(
+        str(dds), "normal_data", transform="passthrough")
+    oversized_path = tmp_path / "oversized.dds"
+    _write_bc7_dds(oversized_path, width=2049, height=4)
+    oversized_url = publication.register(str(oversized_path))
+
+    assert normal_map_url.endswith(".png")
+    assert normal_data_url.endswith(".dds")
+    assert oversized_url.endswith(".png")
+    assert server._lookup_texture(publication.token, "0").native_dds is False
+    assert server._lookup_texture(publication.token, "1").native_dds is True
+    assert server._lookup_texture(publication.token, "2").native_dds is False
 
 
 def test_texture_requests_are_threaded_but_rendering_is_bounded(tmp_path):
@@ -448,9 +537,9 @@ def test_retired_texture_request_skips_render_after_waiting_for_slot(tmp_path):
         finally:
             release_first.set()
 
-    assert old_first_url.endswith("/0")
-    assert old_queued_url.endswith("/1")
-    assert current_url.endswith("/0")
+    assert old_first_url.endswith("/0.png")
+    assert old_queued_url.endswith("/1.png")
+    assert current_url.endswith("/0.png")
     assert rendered_paths == [str(old_first), str(current)]
 
 

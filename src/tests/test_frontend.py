@@ -61,6 +61,22 @@ def _banded_png_uri(rgba_columns, height=4):
     return "data:image/png;base64," + base64.b64encode(png).decode()
 
 
+def _bc7_dds_bytes(width=8, height=4, mip_count=2):
+    data = bytearray(148)
+    data[:4] = b"DDS "
+    struct.pack_into("<I", data, 4, 124)
+    struct.pack_into("<II", data, 12, height, width)
+    struct.pack_into("<I", data, 28, mip_count)
+    struct.pack_into("<I", data, 76, 32)
+    struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DX10", "little"))
+    struct.pack_into("<IIIII", data, 128, 98, 3, 1, 0, 0)
+    w, h = width, height
+    for level in range(mip_count):
+        data.extend(bytes([level + 1]) * (((w + 3) // 4) * ((h + 3) // 4) * 16))
+        w, h = max(1, w // 2), max(1, h // 2)
+    return bytes(data)
+
+
 def _payload(label="A"):
     texture_pool = [
         {"tex_key": f"diffuse::{label}-one.png", "label": f"{label} one"},
@@ -334,6 +350,91 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         assert state["outputColorSpace"] == "srgb"
         assert state["toneMapping"] == 0
         assert state["clearAlpha"] == 1
+    finally:
+        context.close()
+
+
+def test_browser_dds_parser_and_loader_preserve_authored_mips(
+        edge_browser, frontend_url):
+    context = edge_browser.new_context(bypass_csp=True)
+    page = context.new_page()
+    encoded = base64.b64encode(_bc7_dds_bytes()).decode()
+    try:
+        page.goto(frontend_url)
+        state = page.evaluate("""async encoded => {
+          const {parseDDS, loadDDSTexture} = await import('./js/dds-loader.js');
+          const THREE = await import('three');
+          const bytes = Uint8Array.from(atob(encoded), value => value.charCodeAt(0));
+          const parsed = parseDDS(bytes);
+          let malformed = false;
+          try { parseDDS(bytes.slice(0, -1)); } catch (_error) { malformed = true; }
+          const dataUrl = 'data:application/octet-stream;base64,' + encoded;
+          const loaded = await new Promise((resolve, reject) => {
+            const stable = loadDDSTexture(dataUrl,
+              value => resolve({stable, value}), reject);
+          });
+          return {
+            parsed: {
+              formatId: parsed.formatId,
+              compressed: parsed.compressed,
+              mipCount: parsed.mipCount,
+              mipLengths: parsed.mipmaps.map(mip => mip.data.byteLength),
+            },
+            malformed,
+            loaded: {
+              sameObject: loaded.stable === loaded.value,
+              compressed: loaded.stable.isCompressedTexture === true,
+              mipCount: loaded.stable.mipmaps.length,
+              authoredFilter: loaded.stable.minFilter === THREE.LinearMipmapLinearFilter,
+            },
+          };
+        }""", encoded)
+        assert state["parsed"] == {
+            "formatId": "bc7_unorm", "compressed": True,
+            "mipCount": 2, "mipLengths": [32, 16],
+        }
+        assert state["malformed"]
+        assert state["loaded"] == {
+            "sameObject": True, "compressed": True,
+            "mipCount": 2, "authoredFilter": True,
+        }
+    finally:
+        context.close()
+
+
+def test_eligible_dds_uses_stable_compressed_texture_when_bc_is_available(
+        edge_browser, frontend_url, tmp_path):
+    dds_path = tmp_path / "direct.dds"
+    dds_path.write_bytes(_bc7_dds_bytes(width=4, height=4, mip_count=1))
+    publication = server.begin_texture_publication(str(tmp_path))
+    dds_url = publication.register(str(dds_path))
+    publication.commit()
+    payload = _payload("DirectDDS")
+    payload["textures"] = {"diffuse::DirectDDS-one.png": dds_url}
+    context, page = _page(edge_browser, frontend_url, {"DirectDDS": payload})
+    try:
+        _open(page, "DirectDDS")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.map?.image?.width === 4")
+        state = page.evaluate("""async () => {
+          const {supportsBCTextureCompression} =
+            await import('./js/renderer-capabilities.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const beforeVersion = material.version;
+          return {
+            bc: supportsBCTextureCompression(),
+            compressed: material.map?.isCompressedTexture === true,
+            colorSpace: material.map?.colorSpace,
+            stableMaterial: material === mesh.material,
+            version: material.version,
+            beforeVersion,
+          };
+        }""")
+        assert state["stableMaterial"]
+        assert state["version"] == state["beforeVersion"]
+        assert state["colorSpace"] == "srgb"
+        assert state["compressed"] is state["bc"]
     finally:
         context.close()
 
