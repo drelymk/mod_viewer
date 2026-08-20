@@ -37,11 +37,17 @@ def web_dir():
 def vendor_dir():
     """Vendored third-party browser assets (Three.js), populated by build.py.
 
-    Absent when running from a fresh source checkout, in which case the app
-    falls back to the CDN.
+    A source checkout must run build.py once before the app can start; the
+    viewer does not load runtime third-party scripts from a CDN.
     """
     return os.path.join(app_root(), "assets")
 
 
 def has_vendored_three():
-    return os.path.isfile(os.path.join(vendor_dir(), "three.module.js"))
+    required = (
+        "three.core.js",
+        "three.webgpu.js",
+        "three.tsl.js",
+        os.path.join("addons", "controls", "ArcballControls.js"),
+    )
+    return all(os.path.isfile(os.path.join(vendor_dir(), rel)) for rel in required)

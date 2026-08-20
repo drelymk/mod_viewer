@@ -192,7 +192,10 @@ def edge_browser():
 
 
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None):
-    context = edge_browser.new_context()
+    # Playwright's wait_for_function uses eval internally. Bypass the app's
+    # production CSP only in this isolated test context so behavioral waits
+    # do not require weakening the served application's policy.
+    context = edge_browser.new_context(bypass_csp=True)
     state = {
         "responses": responses,
         "pending": pending or {},
@@ -236,6 +239,79 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None):
 def _open(page, path):
     page.evaluate("path => { window.__fakeApi.nextPath = path; }", path)
     page.locator("#open-btn").click()
+
+
+def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
+    context = edge_browser.new_context(bypass_csp=True)
+    page = context.new_page()
+    try:
+        page.goto(frontend_url)
+        page.locator("#open-btn:not([disabled])").wait_for(timeout=10000)
+        state = page.evaluate("""async () => {
+          const {renderer} = await import('./js/scene.js');
+          return {
+            isWebGPURenderer: renderer.isWebGPURenderer === true,
+            isWebGPUBackend: renderer.backend?.isWebGPUBackend === true,
+            animationLoop: renderer.getAnimationLoop() !== null,
+            outputColorSpace: renderer.outputColorSpace,
+            toneMapping: renderer.toneMapping,
+            clearAlpha: renderer.getClearAlpha(),
+          };
+        }""")
+        assert state["isWebGPURenderer"]
+        assert state["isWebGPUBackend"]
+        assert state["animationLoop"]
+        assert state["outputColorSpace"] == "srgb"
+        assert state["toneMapping"] == 0
+        assert state["clearAlpha"] == 1
+    finally:
+        context.close()
+
+
+def test_webgpu_unsupported_state_is_visible_and_never_falls_back(
+        edge_browser, frontend_url):
+    context = edge_browser.new_context(bypass_csp=True)
+    context.add_init_script("""
+      Object.defineProperty(Navigator.prototype, 'gpu', {
+        configurable: true, get: () => undefined,
+      });
+      window.__webglFallbackRequested = false;
+      const getContext = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+        if (type === 'webgl' || type === 'webgl2') {
+          window.__webglFallbackRequested = true;
+        }
+        return getContext.call(this, type, ...args);
+      };
+    """)
+    page = context.new_page()
+    try:
+        page.goto(frontend_url)
+        page.locator("#renderer-error.show").wait_for(timeout=5000)
+        assert "WebGPU is required" in page.locator("#renderer-error").inner_text()
+        assert page.locator("#open-btn").is_disabled()
+        assert not page.evaluate("window.__webglFallbackRequested")
+    finally:
+        context.close()
+
+
+def test_webgpu_device_loss_stops_loop_and_surfaces_error(edge_browser, frontend_url):
+    context = edge_browser.new_context(bypass_csp=True)
+    page = context.new_page()
+    try:
+        page.goto(frontend_url)
+        page.locator("#open-btn:not([disabled])").wait_for(timeout=10000)
+        loop_stopped = page.evaluate("""async () => {
+          const {renderer} = await import('./js/scene.js');
+          renderer.onDeviceLost({message: 'simulated device loss'});
+          return renderer.getAnimationLoop() === null;
+        }""")
+        page.locator("#renderer-error.show").wait_for(timeout=5000)
+        assert loop_stopped
+        assert "device was lost" in page.locator("#renderer-error").inner_text()
+        assert page.locator("#open-btn").is_disabled()
+    finally:
+        context.close()
 
 
 @pytest.mark.parametrize("failed_payload", [
@@ -304,67 +380,72 @@ def test_frontend_construction_failure_rolls_back_partial_scene(
 
 
 @pytest.mark.parametrize("profile_id", ["zzz:zzmi", "genshin:gimi"])
-def test_packed_material_profile_compiles_and_toggles_update_uniforms(
+def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
         edge_browser, frontend_url, profile_id):
     context, page = _page(
         edge_browser, frontend_url,
         {"Packed": _packed_material_payload(profile_id)},
     )
-    shader_errors = []
-    page.on("console", lambda message: shader_errors.append(message.text)
-            if message.type == "error" and "Shader Error" in message.text else None)
+    runtime_errors = []
+    page.on("pageerror", lambda error: runtime_errors.append(str(error)))
+    page.on("console", lambda message: runtime_errors.append(message.text)
+            if message.type == "error" and "Failed to load resource" not in message.text
+            else None)
     try:
         _open(page, "Packed")
         page.locator(".draw-item").wait_for()
         page.wait_for_function(
-            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial?.shader")
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
+        packed_role = "material_map" if profile_id == "zzz:zzmi" else "light_map"
+        page.wait_for_function(
+            f"window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            f"?.bindings?.{packed_role}?.enabledNode?.value")
 
         state = page.evaluate("""() => {
           const material = window.modViewer.activeMeshes[0].material;
           const game = material.userData.gameMaterial;
+          const packedRole = game.profile.id.startsWith('zzz') ? 'material_map' : 'light_map';
+          const lightingModel = material.setupLightingModel();
           return {
-            physical: material.isMeshPhysicalMaterial,
+            physical: material.isMeshPhysicalNodeMaterial,
             profile: game.profile.id,
-            shader: !!game.shader,
-            fragment: game.shader.fragmentShader,
-            lightMap: !!game.uniforms.gameLightMap.value,
-            materialMap: !!game.uniforms.gameMaterialMap.value,
-            metalnessScale: game.uniforms.gameMaterialMetalnessScale.value,
-            specularScale: game.uniforms.gameMaterialSpecularScale.value,
-            specularInfluence: game.uniforms.gameMaterialSpecularInfluence.value,
-            usesInfluenceBlend: game.shader.fragmentShader
-              .includes('gameMaterialSpecularResponse = mix('),
-            usesToonShadow: game.shader.fragmentShader
-              .includes('float gameToonShadow('),
-            patchesDirectDiffuse: game.shader.fragmentShader
-              .includes('gameDirectDiffuseBefore') &&
-              game.shader.fragmentShader.includes('reflectedLight.directDiffuse = mix('),
+            hasGeneratedShaderState: Object.hasOwn(game, 'shader'),
+            hasLegacyUniformState: Object.hasOwn(game, 'uniforms'),
+            lightMap: game.bindings.light_map.enabledNode.value,
+            materialMap: game.bindings.material_map.enabledNode.value,
+            sampledRole: game.bindings[packedRole].textureNode.value
+              !== game.bindings[packedRole].placeholder,
+            hasMetalnessNode: !!material.metalnessNode,
+            hasSpecularNode: !!material.specularIntensityNode,
+            lightingModel: lightingModel.constructor.name,
+            metalnessScale: game.profile.metalness_scale,
+            specularScale: game.profile.specular_scale,
+            specularInfluence: game.profile.specular_influence,
             version: material.version,
           };
         }""")
         assert state["physical"]
         assert state["profile"] == profile_id
-        assert "gameMaterialSpecularResponse" in state["fragment"]
-        assert "gameMaterialMetalnessResponse" in state["fragment"]
-        source_sample = ("gameMaterialMapSample" if profile_id == "zzz:zzmi"
-                         else "gameLightMapSample")
-        assert source_sample in state["fragment"]
+        assert not state["hasGeneratedShaderState"]
+        assert not state["hasLegacyUniformState"]
         assert state["metalnessScale"] == (1 if profile_id == "zzz:zzmi" else 0.08)
         assert state["specularScale"] == 1
-        assert state["specularInfluence"] == (0 if profile_id == "zzz:zzmi" else 0.15)
-        assert state["usesInfluenceBlend"] == (profile_id == "genshin:gimi")
-        assert state["usesToonShadow"] == (profile_id == "genshin:gimi")
-        assert state["patchesDirectDiffuse"] == (profile_id == "genshin:gimi")
-        if profile_id == "genshin:gimi":
-            assert "gameToonShadowMask = gameLightMapSample.g" in state["fragment"]
-        assert not shader_errors, "\n".join(shader_errors)
+        assert state["specularInfluence"] == (None if profile_id == "zzz:zzmi" else 0.15)
+        assert state["lightingModel"] == (
+            "GenshinLightingModel" if profile_id == "genshin:gimi"
+            else "PhysicalLightingModel")
+        assert state["sampledRole"]
+        assert not runtime_errors, "\n".join(runtime_errors)
         assert state["materialMap"] if profile_id == "zzz:zzmi" else state["lightMap"]
 
         after = page.evaluate("""async () => {
           const {setMeshTextureState} = await import('./js/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
           const material = mesh.material;
-          const shader = material.userData.gameMaterial.shader;
+          const game = material.userData.gameMaterial;
+          const packedRole = game.profile.id.startsWith('zzz') ? 'material_map' : 'light_map';
+          const packedNode = game.bindings[packedRole].textureNode;
+          const packedEnabled = game.bindings[packedRole].enabledNode;
           const version = material.version;
           setMeshTextureState(mesh, {
             diffuse: mesh.userData.texKey,
@@ -374,32 +455,37 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
             material_map: null,
           });
           return {
-            sameShader: material.userData.gameMaterial.shader === shader,
+            sameTextureNode: game.bindings[packedRole].textureNode === packedNode,
+            sameEnabledNode: game.bindings[packedRole].enabledNode === packedEnabled,
             sameVersion: material.version === version,
-            mapEnabled: material.userData.gameMaterial.uniforms
-              .gameMaterialMapEnabled.value,
+            mapEnabled: packedEnabled.value,
+            usesPlaceholder: game.bindings[packedRole].textureNode.value
+              === game.bindings[packedRole].placeholder,
           };
         }""")
-        assert after == {"sameShader": True, "sameVersion": True,
-                         "mapEnabled": False}
+        assert after == {"sameTextureNode": True, "sameEnabledNode": True,
+                         "sameVersion": True, "mapEnabled": False,
+                         "usesPlaceholder": True}
     finally:
         context.close()
 
 
-def test_genshin_shader_compiles_with_environment_accent_directional_light(
+def test_genshin_tsl_material_renders_with_environment_accent_directional_light(
         edge_browser, frontend_url):
     context, page = _page(
         edge_browser, frontend_url,
         {"Packed": _packed_material_payload("genshin:gimi")},
     )
-    shader_errors = []
-    page.on("console", lambda message: shader_errors.append(message.text)
-            if message.type == "error" and "Shader Error" in message.text else None)
+    runtime_errors = []
+    page.on("pageerror", lambda error: runtime_errors.append(str(error)))
+    page.on("console", lambda message: runtime_errors.append(message.text)
+            if message.type == "error" and "Failed to load resource" not in message.text
+            else None)
     try:
         _open(page, "Packed")
         page.locator(".draw-item").wait_for()
         page.wait_for_function(
-            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial?.shader")
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
 
         page.evaluate("window.modViewer.setEnvironmentPreset('studio')")
         page.wait_for_timeout(800)
@@ -416,7 +502,7 @@ def test_genshin_shader_compiles_with_environment_accent_directional_light(
         }""")
         assert state["directionalLights"] == 2
         assert state["activeMeshes"] == 1
-        assert not shader_errors, "\n".join(shader_errors)
+        assert not runtime_errors, "\n".join(runtime_errors)
     finally:
         context.close()
 
@@ -435,7 +521,7 @@ def test_genshin_shader_compiles_with_environment_accent_directional_light(
         "lightMap": False, "materialMap": False,
     }),
     ("none", {
-        "physical": False, "profile": None, "normalData": False,
+        "physical": False, "profile": "none", "normalData": False,
         "lightMap": False, "materialMap": False,
     }),
 ])
@@ -452,13 +538,13 @@ def test_packed_material_sources_are_loaded_only_when_sampled(
         state = page.evaluate("""() => {
           const material = window.modViewer.activeMeshes[0].material;
           const game = material.userData.gameMaterial;
-          const uniforms = game?.uniforms || {};
+          const bindings = game?.bindings || {};
           return {
-            physical: !!material.isMeshPhysicalMaterial,
+            physical: !!material.isMeshPhysicalNodeMaterial,
             profile: game?.profile?.id || null,
-            normalData: !!uniforms.gameNormalData?.value,
-            lightMap: !!uniforms.gameLightMap?.value,
-            materialMap: !!uniforms.gameMaterialMap?.value,
+            normalData: !!bindings.normal_data?.enabledNode?.value,
+            lightMap: !!bindings.light_map?.enabledNode?.value,
+            materialMap: !!bindings.material_map?.enabledNode?.value,
           };
         }""")
         assert state == expected

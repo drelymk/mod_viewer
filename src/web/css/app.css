@@ -92,6 +92,16 @@ body {
 /* ── canvas ──────────────────────────────────────────────────────────────── */
 #canvas-container { position: fixed; top: 46px; left: 0; right: 0; bottom: 28px; }
 
+#renderer-error {
+  display: none; position: absolute; inset: 0; z-index: 180;
+  align-items: center; justify-content: center; flex-direction: column;
+  gap: 10px; padding: 24px; text-align: center;
+  color: #c9d1d9; background: rgba(13,17,23,.96);
+}
+#renderer-error.show { display: flex; }
+#renderer-error h2 { margin: 0; color: #f0f6fc; font-size: 18px; font-weight: 600; }
+#renderer-error p { max-width: 560px; margin: 0; color: #8b949e; font-size: 13px; line-height: 1.5; }
+
 /* Blender-style viewport navigation compass. It sits in the upper-right when
  * no right-side panel is visible and moves left to clear the dock otherwise.
  * It remains a DOM overlay so it stays crisp at every WebView scale factor. */

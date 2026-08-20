@@ -11,8 +11,8 @@ Two roots are exposed:
     /vendor/     the vendored Three.js copy, when build.py has fetched it
     /texture/    opaque URLs for the active load's lazily rendered PNGs
 
-index.html is rendered rather than served verbatim, so the importmap can
-point at either the vendored copy or the CDN.
+index.html is rendered rather than served verbatim, so the importmap points at
+the vendored WebGPU and TSL entry points.
 """
 
 import functools
@@ -29,7 +29,7 @@ from core.mesh_builder import (_render_texture_png, normalize_texture_role,
 from core.texture_profiles import texture_profile_for
 from . import features, paths
 
-THREE_VERSION = "0.165.0"
+THREE_VERSION = "0.185.0"
 REPO_URL = "https://github.com/drelymk/mod_viewer"
 
 _VENDOR_PREFIX = "/vendor/"
@@ -398,7 +398,8 @@ def start():
     """
     if not paths.has_vendored_three():
         raise RuntimeError("Vendored Three.js assets are required; run src/build.py to fetch them.")
-    three_url = f"{_VENDOR_PREFIX}three.module.js"
+    three_url = f"{_VENDOR_PREFIX}three.webgpu.js"
+    tsl_url = f"{_VENDOR_PREFIX}three.tsl.js"
     addons_url = f"{_VENDOR_PREFIX}addons/"
 
     # Feature flags only ever hide a button (app/features.py) -- baked into
@@ -418,6 +419,7 @@ def start():
     _Handler.vendor_root = paths.vendor_dir()
     _Handler.template_vars = {
         "__THREE_URL__": three_url,
+        "__THREE_TSL_URL__": tsl_url,
         "__ADDONS_URL__": addons_url,
         "__BODY_CLASS__": " ".join(body_classes),
         "__APP_VERSION__": paths.APP_VERSION,

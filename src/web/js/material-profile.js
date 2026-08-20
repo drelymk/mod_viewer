@@ -1,293 +1,223 @@
-// Packed material interpretation for the pinned Three.js r165 renderer.
-// Texture roles stay intact; this adapter samples their channels directly in
-// the built-in physical shader instead of creating one derived texture per
-// semantic channel.
+// Game-specific material interpretation for the pinned Three.js WebGPU
+// renderer. Packed textures remain intact: their authored channels are read
+// through stable TSL nodes and their bindings are changed in place.
 
 import {
-  DoubleSide, MeshPhysicalMaterial, MeshStandardMaterial, ShaderChunk,
-} from 'three';
+  DataTexture,
+  DoubleSide,
+  MeshPhysicalNodeMaterial,
+  MeshStandardNodeMaterial,
+  NoColorSpace,
+  PhysicalLightingModel,
+  RGBAFormat,
+  SRGBColorSpace,
+  UnsignedByteType,
+  Vector2,
+} from 'three/webgpu';
+import {
+  clamp,
+  color,
+  float,
+  mix,
+  normalMap,
+  normalView,
+  normalViewGeometry,
+  smoothstep,
+  texture,
+  uniform,
+  uv,
+} from 'three/tsl';
 
-const SHADER_VERSION = 'r165-packed-material-v2';
 const SOURCE_INFO = Object.freeze({
-  normal_data: { uniform: 'gameNormalData', enabled: 'gameNormalDataEnabled', sample: 'gameNormalDataSample' },
-  light_map: { uniform: 'gameLightMap', enabled: 'gameLightMapEnabled', sample: 'gameLightMapSample' },
-  material_map: { uniform: 'gameMaterialMap', enabled: 'gameMaterialMapEnabled', sample: 'gameMaterialMapSample' },
+  normal_data: true,
+  light_map: true,
+  material_map: true,
 });
 const CHANNELS = new Set(['r', 'g', 'b', 'a']);
 
-const PACKED_UNIFORM_DECLARATIONS = `
-uniform sampler2D gameNormalData;
-uniform sampler2D gameLightMap;
-uniform sampler2D gameMaterialMap;
-uniform bool gameNormalDataEnabled;
-uniform bool gameLightMapEnabled;
-uniform bool gameMaterialMapEnabled;
-uniform float gameMaterialMetalnessScale;
-uniform float gameMaterialSpecularScale;
-uniform float gameMaterialSpecularInfluence;
-uniform float gameToonShadowThreshold;
-uniform float gameToonShadowSoftness;
-uniform float gameToonShadowMaskStrength;
-uniform float gameToonShadowInfluence;
-`;
-
-const TOON_SHADOW_FUNCTIONS = `
-// The channel is validated; this boundary is a viewer approximation of the
-// game response, not a literal reproduction of the source shader equation.
-float gameToonShadow(
-    float ndotl,
-    float authoredMask,
-    float threshold,
-    float softness
-) {
-    float lightValue = ndotl * 0.5 + 0.5;
-    float boundary = lightValue
-        + ( authoredMask - 0.5 )
-        * clamp( gameToonShadowMaskStrength, 0.0, 1.0 );
-    float edge = max( softness, 0.0001 );
-    return smoothstep( threshold - edge, threshold + edge, boundary );
+function createPlaceholder(name, bytes, colorSpace) {
+  const result = new DataTexture(
+    new Uint8Array(bytes), 1, 1, RGBAFormat, UnsignedByteType);
+  result.name = `mod-viewer-${name}-placeholder`;
+  result.colorSpace = colorSpace;
+  result.needsUpdate = true;
+  return result;
 }
-`;
 
-function requiredReplace(source, marker, replacement, label) {
-  if (!source.includes(marker)) {
-    throw new Error(`Packed material shader marker missing in Three.js r165: ${label}`);
-  }
-  return source.replace(marker, replacement);
-}
+// These textures are deliberately shared. A disabled binding still needs a
+// valid texture object so changing a role does not introduce a new graph or
+// force a material/pipeline rebuild.
+const DIFFUSE_PLACEHOLDER = createPlaceholder(
+  'diffuse', [255, 255, 255, 255], SRGBColorSpace);
+const NORMAL_PLACEHOLDER = createPlaceholder(
+  'normal', [128, 128, 255, 255], NoColorSpace);
+const PACKED_PLACEHOLDER = createPlaceholder(
+  'packed', [0, 0, 0, 255], NoColorSpace);
+
+const PLACEHOLDERS = Object.freeze({
+  diffuse: DIFFUSE_PLACEHOLDER,
+  normal_map: NORMAL_PLACEHOLDER,
+  occlusion_map: PACKED_PLACEHOLDER,
+  normal_data: PACKED_PLACEHOLDER,
+  light_map: PACKED_PLACEHOLDER,
+  material_map: PACKED_PLACEHOLDER,
+});
 
 function validRef(ref) {
-  return !!ref && SOURCE_INFO[ref.source] && CHANNELS.has(ref.channel);
+  return !!ref && SOURCE_INFO[ref.source] === true && CHANNELS.has(ref.channel);
 }
 
 function hasNumericValue(value) {
   return value != null && Number.isFinite(Number(value));
 }
 
-function refExpression(ref) {
-  if (!validRef(ref)) return null;
-  const sample = SOURCE_INFO[ref.source].sample;
-  const channel = `${sample}.${ref.channel}`;
-  return ref.invert ? `( 1.0 - ${channel} )` : channel;
-}
-
 function profileSources(profile) {
-  return [profile.shadow_mask, profile.metalness, profile.specular]
+  return [profile?.shadow_mask, profile?.metalness, profile?.specular]
     .filter(validRef)
     .map(ref => ref.source)
     .filter((source, index, all) => all.indexOf(source) === index);
 }
 
-function packedSampleCode(profile) {
-  const sources = profileSources(profile);
-  return sources.map(source => {
-    const info = SOURCE_INFO[source];
-    return `
-vec4 ${info.sample} = vec4( 0.0 );
-if ( ${info.enabled} ) {
-	${info.sample} = texture2D( ${info.uniform}, vUv );
-}`;
-  }).join('\n');
+function hasPackedResponse(profile) {
+  return profileSources(profile).length > 0;
 }
 
-function responseCode(profile) {
-  const metalness = validRef(profile.metalness)
-    ? (() => {
-      const info = SOURCE_INFO[profile.metalness.source];
-      return `
-if ( ${info.enabled} ) {
-	gameMaterialMetalnessResponse = clamp(
-		${refExpression(profile.metalness)} * gameMaterialMetalnessScale,
-		0.0, 1.0 );
-}`;
-    })() : '';
-  const specular = validRef(profile.specular)
-    ? (() => {
-      const info = SOURCE_INFO[profile.specular.source];
-      const sample = refExpression(profile.specular);
-      const hasInfluence = hasNumericValue(profile.specular_influence);
-      const response = hasInfluence
-        ? `mix(
-		1.0,
-		clamp( ${sample} * gameMaterialSpecularScale, 0.0, 1.0 ),
-		clamp( gameMaterialSpecularInfluence, 0.0, 1.0 ) )`
-        : `clamp(
-		${sample} * gameMaterialSpecularScale,
-		0.0, 1.0 )`;
-      return `
-if ( ${info.enabled} ) {
-	gameMaterialSpecularResponse = ${response};
-}`;
-    })() : '';
-  const shadow = validRef(profile.shadow_mask)
-    ? (() => {
-      const info = SOURCE_INFO[profile.shadow_mask.source];
-      const sample = refExpression(profile.shadow_mask);
-      return [
-        'if ( ' + info.enabled + ' ) {',
-        '\tgameToonShadowMask = ' + sample + ';',
-        '\tgameToonShadowEnabled = true;',
-        '}',
-      ].join('\n');
-    })() : '';
+function createBinding(role, uvNode) {
   return {
-    metalness,
-    specular,
-    declarations: `
-float gameMaterialMetalnessResponse = 0.0;
-float gameMaterialSpecularResponse = 1.0;
-bool gameToonShadowEnabled = false;
-float gameToonShadowMask = 0.5;
-${metalness}
-${specular}
-${shadow}
-`,
+    role,
+    placeholder: PLACEHOLDERS[role],
+    textureNode: texture(PLACEHOLDERS[role], uvNode),
+    enabledNode: uniform(false),
   };
 }
 
-function patchDirectionalToonShadow(source) {
-  const directionalMarker = '#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )';
-  const directCall =
-    '\t\tRE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );';
-  const sectionStart = source.indexOf(directionalMarker);
-  if (sectionStart < 0) {
-    throw new Error(
-      'Packed material shader marker missing in Three.js r165: directional lights');
-  }
-  const callStart = source.indexOf(directCall, sectionStart);
-  if (callStart < 0) {
-    throw new Error(
-      'Packed material shader marker missing in Three.js r165: directional RE_Direct');
-  }
-  const replacement = [
-    '\t\t{',
-    '\t\t\tvec3 gameDirectDiffuseBefore = reflectedLight.directDiffuse;',
-    '\t\t\t' + directCall.trim(),
-    '\t\t\tif ( gameToonShadowEnabled ) {',
-    '\t\t\t\tfloat gameToonShadowFactor = gameToonShadow(',
-    '\t\t\t\t\tsaturate( dot( geometryNormal, directLight.direction ) ),',
-    '\t\t\t\t\tgameToonShadowMask,',
-    '\t\t\t\t\tgameToonShadowThreshold,',
-    '\t\t\t\t\tgameToonShadowSoftness',
-    '\t\t\t\t);',
-    '\t\t\t\tgameToonShadowFactor = mix(',
-    '\t\t\t\t\t1.0,',
-    '\t\t\t\t\tgameToonShadowFactor,',
-    '\t\t\t\t\tclamp( gameToonShadowInfluence, 0.0, 1.0 )',
-    '\t\t\t\t);',
-    '\t\t\t\treflectedLight.directDiffuse = mix(',
-    '\t\t\t\t\tgameDirectDiffuseBefore,',
-    '\t\t\t\t\treflectedLight.directDiffuse,',
-    '\t\t\t\t\tgameToonShadowFactor',
-    '\t\t\t\t);',
-    '\t\t\t}',
-    '\t\t}',
-  ].join('\n');
-  return source.slice(0, callStart) + replacement
-    + source.slice(callStart + directCall.length);
+function createBindings(hasUv) {
+  // Keep the UV nodes stable for the lifetime of the material. They are only
+  // attached to the graph when the geometry actually has a UV attribute.
+  const primaryUv = hasUv ? uv() : null;
+  const secondaryUv = hasUv ? uv(1) : null;
+  return {
+    diffuse: createBinding('diffuse', primaryUv),
+    normal_map: createBinding('normal_map', primaryUv),
+    occlusion_map: createBinding('occlusion_map', secondaryUv),
+    normal_data: createBinding('normal_data', primaryUv),
+    light_map: createBinding('light_map', primaryUv),
+    material_map: createBinding('material_map', primaryUv),
+  };
 }
 
-function patchPackedMaterialShader(shader, profile) {
-  let fragment = shader.fragmentShader;
-  const toonShadowFunctions = validRef(profile.shadow_mask)
-    ? TOON_SHADOW_FUNCTIONS : '';
-  fragment = requiredReplace(
-    fragment,
-    '#include <uv_pars_fragment>',
-    `#include <uv_pars_fragment>\n${PACKED_UNIFORM_DECLARATIONS}\n${toonShadowFunctions}`,
-    'uv_pars_fragment');
+function channelNode(ref, bindings) {
+  const binding = bindings[ref.source];
+  let result = binding.textureNode[ref.channel];
+  if (ref.invert) result = float(1).sub(result);
+  return result;
+}
 
-  const responses = responseCode(profile);
-  fragment = requiredReplace(
-    fragment,
-    '#include <roughnessmap_fragment>',
-    `${packedSampleCode(profile)}\n${responses.declarations}\n#include <roughnessmap_fragment>`,
-    'roughnessmap_fragment');
+function enabledChannelNode(ref, bindings, disabledValue) {
+  const binding = bindings[ref.source];
+  return binding.enabledNode.select(
+    channelNode(ref, bindings), float(disabledValue));
+}
+
+function numericOr(value, fallback) {
+  return hasNumericValue(value) ? Number(value) : fallback;
+}
+
+function setStableMaterialNodes(material, state, fallbackColor) {
+  const { bindings, hasUv, profile } = state;
+  if (hasUv) {
+    // The conditional keeps the texture binding live without changing the
+    // material graph when a diffuse texture is loaded or removed.
+    material.colorNode = bindings.diffuse.enabledNode.select(
+      bindings.diffuse.textureNode.rgb, color(fallbackColor));
+    material.normalNode = bindings.normal_map.enabledNode.select(
+      normalMap(bindings.normal_map.textureNode, state.normalScaleNode), normalViewGeometry);
+    material.aoNode = bindings.occlusion_map.enabledNode.select(
+      bindings.occlusion_map.textureNode.r, float(1));
+  } else {
+    material.colorNode = color(fallbackColor);
+    material.normalNode = normalViewGeometry;
+    material.aoNode = float(1);
+  }
+
+  if (!state.packedResponse) return;
 
   if (validRef(profile.metalness)) {
-    const info = SOURCE_INFO[profile.metalness.source];
-    fragment = requiredReplace(
-      fragment,
-      '#include <metalnessmap_fragment>',
-      `#include <metalnessmap_fragment>\nif ( ${info.enabled} ) {\n\tmetalnessFactor = gameMaterialMetalnessResponse;\n}`,
-      'metalnessmap_fragment');
+    const sampled = enabledChannelNode(profile.metalness, bindings, 0);
+    material.metalnessNode = sampled
+      .mul(float(numericOr(profile.metalness_scale, 1)))
+      .clamp(0, 1);
   }
 
-  let physicalLights = ShaderChunk.lights_physical_fragment;
-  if (!physicalLights) {
-    throw new Error('Three.js r165 physical lighting shader is unavailable.');
-  }
   if (validRef(profile.specular)) {
-    physicalLights = requiredReplace(
-      physicalLights,
-      'float specularIntensityFactor = specularIntensity;',
-      'float specularIntensityFactor = specularIntensity * gameMaterialSpecularResponse;',
-      'lights_physical_fragment.specularIntensityFactor');
+    const sampled = enabledChannelNode(profile.specular, bindings, 1);
+    const response = sampled
+      .mul(float(numericOr(profile.specular_scale, 1)))
+      .clamp(0, 1);
+    material.specularIntensityNode = hasNumericValue(profile.specular_influence)
+      ? mix(float(1), response,
+        clamp(float(Number(profile.specular_influence)), 0, 1))
+      : response;
   }
-  if (validRef(profile.shadow_mask)) {
-    let lightsBegin = ShaderChunk.lights_fragment_begin;
-    if (!lightsBegin) {
-      throw new Error('Three.js r165 directional lighting shader is unavailable.');
+}
+
+function physicalLightingFlags(material) {
+  return [
+    material.useClearcoat,
+    material.useSheen,
+    material.useIridescence,
+    material.useAnisotropy,
+    material.useTransmission,
+    material.useDispersion,
+  ].map(value => value === true);
+}
+
+/**
+ * Genshin's LightMap.G is a per-light toon-shadow mask. The lighting model
+ * captures only the direct diffuse contribution produced by the current
+ * light, leaving direct specular and all indirect terms untouched.
+ */
+class GenshinLightingModel extends PhysicalLightingModel {
+  constructor(material, state) {
+    super(...physicalLightingFlags(material));
+    this.gameMaterialState = state;
+  }
+
+  direct(lightData, builder) {
+    const { lightDirection, reflectedLight } = lightData;
+    const before = reflectedLight.directDiffuse.toVar('gameDirectDiffuseBefore');
+    super.direct(lightData, builder);
+
+    const { profile, bindings } = this.gameMaterialState;
+    const maskRef = profile.shadow_mask;
+    const maskBinding = bindings[maskRef.source];
+    const authoredMask = maskBinding.enabledNode.select(
+      channelNode(maskRef, bindings), float(0.5));
+    const lightValue = lightDirection.dot(normalView).clamp()
+      .mul(0.5).add(0.5);
+    const boundary = lightValue.add(authoredMask.sub(0.5).mul(0.5));
+    const factor = smoothstep(float(0.5 - 0.08), float(0.5 + 0.08), boundary);
+    const enabledFactor = maskBinding.enabledNode.select(factor, float(1));
+    const contribution = reflectedLight.directDiffuse.sub(before);
+    reflectedLight.directDiffuse.assign(
+      before.add(contribution.mul(enabledFactor)));
+  }
+}
+
+class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
+  setupLightingModel() {
+    const state = this.userData.gameMaterial;
+    if (validRef(state?.profile?.shadow_mask)) {
+      return new GenshinLightingModel(this, state);
     }
-    lightsBegin = patchDirectionalToonShadow(lightsBegin);
-    fragment = requiredReplace(
-      fragment,
-      '#include <lights_fragment_begin>',
-      lightsBegin,
-      'lights_fragment_begin');
+    return new PhysicalLightingModel(...physicalLightingFlags(this));
   }
-  fragment = requiredReplace(
-    fragment,
-    '#include <lights_physical_fragment>',
-    physicalLights,
-    'lights_physical_fragment');
-  shader.fragmentShader = fragment;
-}
-
-function declarePackedUniforms(shader) {
-  shader.fragmentShader = requiredReplace(
-    shader.fragmentShader,
-    '#include <common>',
-    `#include <common>\n${PACKED_UNIFORM_DECLARATIONS}`,
-    'common');
-}
-
-function hasPackedResponse(profile) {
-  return validRef(profile?.shadow_mask)
-    || validRef(profile?.metalness)
-    || validRef(profile?.specular);
-}
-
-function materialUniforms(profile) {
-  return {
-    gameNormalData: { value: null },
-    gameLightMap: { value: null },
-    gameMaterialMap: { value: null },
-    gameNormalDataEnabled: { value: false },
-    gameLightMapEnabled: { value: false },
-    gameMaterialMapEnabled: { value: false },
-    gameMaterialMetalnessScale: {
-      value: Number.isFinite(Number(profile?.metalness_scale))
-        ? Number(profile.metalness_scale) : 1,
-    },
-    gameMaterialSpecularScale: {
-      value: Number.isFinite(Number(profile?.specular_scale))
-        ? Number(profile.specular_scale) : 1,
-    },
-    gameMaterialSpecularInfluence: {
-      value: hasNumericValue(profile?.specular_influence)
-        ? Number(profile.specular_influence) : 0,
-    },
-    gameToonShadowThreshold: { value: 0.5 },
-    gameToonShadowSoftness: { value: 0.08 },
-    gameToonShadowMaskStrength: { value: 0.5 },
-    gameToonShadowInfluence: { value: 1.0 },
-  };
 }
 
 /** Create the stock or physical material appropriate for one profile. */
 export function createGameMaterial(profile, fallbackColor, options = {}) {
-  const packedResponse = hasPackedResponse(profile) && options.hasUv !== false;
+  const hasUv = options.hasUv !== false;
+  const packedResponse = hasPackedResponse(profile) && hasUv;
   const materialOptions = {
     side: DoubleSide,
     roughness: 1.0,
@@ -295,62 +225,70 @@ export function createGameMaterial(profile, fallbackColor, options = {}) {
     color: fallbackColor,
   };
   const material = packedResponse
-    ? new MeshPhysicalMaterial({ ...materialOptions, specularIntensity: 1.0 })
-    : new MeshStandardMaterial(materialOptions);
-  configureGameMaterial(material, profile, { packedResponse });
+    ? new GamePhysicalNodeMaterial({ ...materialOptions, specularIntensity: 1.0 })
+    : new MeshStandardNodeMaterial(materialOptions);
+  configureGameMaterial(material, profile, { packedResponse, hasUv, fallbackColor });
   return material;
 }
 
-/** Attach a stable profile-specific shader adapter to a material. */
+/** Attach stable profile-specific TSL nodes to a material. */
 export function configureGameMaterial(material, profile, options = {}) {
-  if (!profile || !profile.id || profile.id === 'none') return material;
-  const uniforms = materialUniforms(profile);
-  const packedResponse = options.packedResponse ?? hasPackedResponse(profile);
-  const state = { profile, uniforms, shader: null, packedResponse };
-  material.userData.gameMaterial = state;
-  if (packedResponse) {
-    // The packed maps use the same primary UV set as the authored diffuse.
-    // Force the built-in UV varying even when a fixture has no diffuse map.
-    material.defines = { ...(material.defines || {}), USE_UV: '' };
-  }
-  material.customProgramCacheKey = () =>
-    `mod-viewer:${SHADER_VERSION}:${profile.id}`;
-  material.onBeforeCompile = shader => {
-    state.shader = shader;
-    Object.assign(shader.uniforms, uniforms);
-    if (state.packedResponse) patchPackedMaterialShader(shader, profile);
-    else declarePackedUniforms(shader);
+  const hasUv = options.hasUv !== false;
+  const packedResponse = options.packedResponse ?? (hasPackedResponse(profile) && hasUv);
+  const state = {
+    profile: profile || { id: 'none' },
+    packedResponse,
+    hasUv,
+    bindings: createBindings(hasUv),
+    normalScaleNode: uniform(new Vector2(1, -1)),
   };
+  state.sources = state.bindings;
+  state.nodes = {
+    diffuse: state.bindings.diffuse,
+    normal: state.bindings.normal_map,
+    ao: state.bindings.occlusion_map,
+    normalData: state.bindings.normal_data,
+    lightMap: state.bindings.light_map,
+    materialMap: state.bindings.material_map,
+  };
+  material.userData.gameMaterial = state;
+  setStableMaterialNodes(material, state, options.fallbackColor ?? material.color);
   return material;
 }
 
-/** Update packed texture uniforms without invalidating/recompiling the shader. */
-export function updateGameMaterialTextures(mesh, maps) {
+function updateBinding(binding, value) {
+  const next = value || binding.placeholder;
+  const changed = binding.textureNode.value !== next
+    || binding.enabledNode.value !== !!value;
+  binding.textureNode.value = next;
+  binding.enabledNode.value = !!value;
+  return changed;
+}
+
+/** Update texture bindings without invalidating or rebuilding the material. */
+export function updateGameMaterialTextures(mesh, maps = {}) {
   const state = mesh.material?.userData?.gameMaterial;
   if (!state) return false;
-  const values = {
-    gameNormalData: maps.normal_data || null,
-    gameLightMap: maps.light_map || null,
-    gameMaterialMap: maps.material_map || null,
-  };
   let changed = false;
-  for (const [name, value] of Object.entries(values)) {
-    if (state.uniforms[name].value !== value) changed = true;
-    state.uniforms[name].value = value;
-  }
-  const enabled = {
-    gameNormalDataEnabled: !!values.gameNormalData,
-    gameLightMapEnabled: !!values.gameLightMap,
-    gameMaterialMapEnabled: !!values.gameMaterialMap,
+  const values = {
+    diffuse: maps.diffuse,
+    normal_map: maps.normal_map,
+    occlusion_map: maps.ao_map,
+    normal_data: maps.normal_data,
+    light_map: maps.light_map,
+    material_map: maps.material_map,
   };
-  for (const [name, value] of Object.entries(enabled)) {
-    if (state.uniforms[name].value !== value) changed = true;
-    state.uniforms[name].value = value;
+  for (const [role, value] of Object.entries(values)) {
+    changed = updateBinding(state.bindings[role], value) || changed;
+  }
+  if (Object.hasOwn(maps, 'normal_map_y_sign')) {
+    state.normalScaleNode.value.set(
+      1, Number.isFinite(maps.normal_map_y_sign) ? maps.normal_map_y_sign : -1);
   }
   return changed;
 }
 
-/** Return the packed roles sampled by this material's current shader. */
+/** Return the packed roles sampled by this material's current node graph. */
 export function getGameMaterialSources(material) {
   const state = material?.userData?.gameMaterial;
   if (!state?.packedResponse) return new Set();
@@ -361,7 +299,9 @@ export function getGameMaterialSources(material) {
 export function disposeGameMaterial(material) {
   const state = material?.userData?.gameMaterial;
   if (!state) return;
-  for (const uniform of Object.values(state.uniforms)) uniform.value = null;
-  state.shader = null;
+  for (const binding of Object.values(state.bindings)) {
+    binding.textureNode.value = binding.placeholder;
+    binding.enabledNode.value = false;
+  }
   delete material.userData.gameMaterial;
 }

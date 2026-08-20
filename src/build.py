@@ -63,14 +63,16 @@ BUILD_REQUIREMENTS = ["pywebview>=5.0", "Pillow>=10.0",
 VENV_DIR = os.path.join(HERE, ".venv-build")
 
 # Kept in sync with THREE_VERSION in app/server.py. The layout below mirrors the
-# CDN so the importmap's "three/addons/" prefix resolves exactly as it does when
-# falling back to the CDN.
-THREE_VERSION = "0.165.0"
+# CDN so the import map can resolve the WebGPU and TSL entry points entirely
+# offline.
+THREE_VERSION = "0.185.0"
 ASSET_FILES = {
-    "three.module.js":
-        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.module.js",
-    os.path.join("addons", "controls", "OrbitControls.js"):
-        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/OrbitControls.js",
+    "three.core.js":
+        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.core.js",
+    "three.webgpu.js":
+        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.webgpu.js",
+    "three.tsl.js":
+        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.tsl.js",
     os.path.join("addons", "controls", "ArcballControls.js"):
         f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/ArcballControls.js",
 }
