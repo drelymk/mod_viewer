@@ -265,7 +265,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
     """Restore sparse highlighted boundaries, then rebuild component pools.
 
     ``payload`` is the structured application payload; only its ``meshes``
-    and ``textures`` fields are mutated here.
+    and texture registry fields are mutated here.
     """
     data = load(folder_path) if data is None else data
     meshes = payload.setdefault("meshes", {})
@@ -285,6 +285,22 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         _source_role, relative_path = split_texture_key(value, role)
         return normalize_texture_key(relative_path, role)
 
+    def _pool_option(value):
+        if not isinstance(value, dict):
+            return None
+        key = normalize_texture_key(value.get("tex_key"), "diffuse")
+        if not key:
+            return None
+        _role, relative_path = split_texture_key(key)
+        option = dict(value)
+        option["tex_key"] = key
+        option["file"] = relative_path
+        for field in ("normal_map", "normal_data", "light_map",
+                      "material_map"):
+            if field in option:
+                option[field] = _role_key(option[field], field)
+        return option
+
     for name, state in saved.items():
         if not isinstance(state, dict):
             continue
@@ -302,7 +318,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         if not packed_normal_transport:
             fields = ("normal_map", "normal_data", *fields)
         for field in fields:
-            value = normalize_texture_key(state.get(field), field)
+            value = _role_key(state.get(field), field)
             if value:
                 item[field] = value
             manual = state.get(f"{field}_manual")
@@ -350,8 +366,9 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
             state = restored[mesh_key]
             candidates.append({key: value for key, value in state.items()
                                if key != "manual"})
-        for opt in candidates:
-            if not isinstance(opt, dict) or not isinstance(opt.get("tex_key"), str):
+        for raw_opt in candidates:
+            opt = _pool_option(raw_opt)
+            if opt is None:
                 continue
             old = next((item for item in pool
                         if item["tex_key"] == opt["tex_key"]), None)
@@ -376,32 +393,39 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
                     elif opt.get(field):
                         old[field] = opt[field]
 
+    texture_pools = {}
+    pool_ids = {}
     for name, entry in meshes.items():
         if not isinstance(entry, dict) or entry.get("error"):
             continue
-        options = pools.get((entry.get("source"), entry.get("component")), [])
-        if options:
-            entry["texture_options"] = options
-        else:
-            entry.pop("texture_options", None)
-        state = restored.get(_mesh_key(name, entry))
-        texture_roles = [(state["tex_key"], None)] if state else []
-        if state:
-            fields = ("light_map", "material_map")
-            if not packed_normal_transport:
-                fields = ("normal_map", "normal_data", *fields)
-            else:
-                fields = ("normal_data", *fields)
-            texture_roles.extend((state.get(field), field) for field in fields)
-        for key, role in texture_roles:
-            if not key:
-                continue
-            if key in textures:
-                continue
-            encoded = encode_texture_key(
-                folder_path, key, role, texture_source=texture_source,
-                texture_profile=texture_profile)
-            if encoded and not encoded.get("error"):
-                textures[encoded["tex_key"]] = encoded["uri"]
+        group = (entry.get("source"), entry.get("component"))
+        pool_id = pool_ids.get(group)
+        if pool_id is None:
+            pool_id = f"p{len(pool_ids)}"
+            pool_ids[group] = pool_id
+            texture_pools[pool_id] = pools.get(group, [])
+        entry["texture_pool_id"] = pool_id
+        entry.pop("texture_options", None)
+
+    role_fields = (
+        ("tex_key", "diffuse"),
+        ("normal_map", "normal_map"),
+        ("normal_data", "normal_data"),
+        ("light_map", "light_map"),
+        ("material_map", "material_map"),
+    )
+    for pool in texture_pools.values():
+        for option in pool:
+            for field, role in role_fields:
+                key = option.get(field)
+                if not key or key in textures:
+                    continue
+                encoded = encode_texture_key(
+                    folder_path, key, role, texture_source=texture_source,
+                    texture_profile=texture_profile)
+                if encoded and not encoded.get("error"):
+                    textures[encoded["tex_key"]] = encoded["uri"]
+
+    payload["texture_pools"] = texture_pools
 
     return restored

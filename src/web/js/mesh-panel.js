@@ -8,7 +8,7 @@ import {
   activeMeshes, addMesh, applyMeshVisibility, setManualTexOverride,
 } from './mesh-state.js';
 import {
-  ensureTextureLoaded, meshMetadataKey, recomputeTextureRuns, saveTextureState,
+  meshMetadataKey, recomputeTextureRuns, saveTextureState,
 } from './mesh-texture-state.js';
 import { bindMeshView, getMeshView } from './mesh-view-bindings.js';
 import { registerViewSync } from './view-sync.js';
@@ -160,8 +160,8 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
 }
 
 /** Collapsed-by-default child list of every diffuse this mesh's component
- * ever references (the shared `pool` array -- core/mesh_builder.py's
- * `texture_options`, or the fresh empty array a component with none loaded
+ * ever references (the shared `pool` array -- the application payload's
+ * `texture_pools` entry, or the fresh empty array a component with none loaded
  * yet falls back to in buildMeshPanel) -- a radio-style single-select that
  * drives mesh.userData.manualTexOverride (see visibility.js).
  *
@@ -207,7 +207,7 @@ function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
       const row = document.createElement('div');
       row.className = 'tex-item';
       row.textContent = label;
-      row.addEventListener('click', async () => {
+      row.addEventListener('click', () => {
         const current = mesh.userData.manualTexOverride;
         const autoHighlighted = current === undefined
           && mesh.userData.automaticTextureBoundary
@@ -215,10 +215,10 @@ function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
           && !mesh.userData.textureHighlightDisabled;
         // Click the already-selected row -> de-select (revert to ini default).
         const newVal = (current === value || autoHighlighted) ? undefined : value;
-        // Preserve synchronous selection for textures already in the startup
-        // registry; only yield to the bridge for a genuinely lazy option.
-        if (newVal !== undefined && !hasTexture(newVal)
-            && !await ensureTextureLoaded(mesh, newVal)) return;
+        if (newVal !== undefined && !hasTexture(newVal)) {
+          console.warn('Texture pool entry missing registry source', newVal);
+          return;
+        }
         if (newVal === undefined && autoHighlighted) {
           // Clicking an automatic boundary disables that boundary. Clearing a
           // manual pin is different: it must restore automatic propagation so
@@ -389,6 +389,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
   list.innerHTML = '';
   groupsUI = [];
   registerViewSync('mesh-panel', syncMeshPanel);
+  const texturePools = options.texturePools || {};
 
   const validNames = Object.keys(meshes).filter(name => !meshes[name]?.error);
   const bySource = groupKeysBySource(meshes, validNames);
@@ -404,15 +405,13 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
       const itemsWrap = document.createElement('div');
       itemsWrap.className = 'group-items';
 
-      // Every mesh in a component shares the SAME texture_options array
-      // object (see mesh_builder.build_mesh_payload) -- read it once so
-      // add/remove via the popup is reflected across every mesh's own list.
-      // A component with no resolved diffuses carries no such array -- fall
-      // back to a fresh empty array so the "manage textures" popup still has
-      // something to push an added texture into; it's captured by this
-      // closure, so reopening the popup for the same component within the
-      // session sees what was added.
-      const texturePool = names.map(n => meshes[n].texture_options).find(Boolean) || [];
+      const poolIds = new Set(names.map(name => meshes[name].texture_pool_id)
+        .filter(Boolean));
+      if (poolIds.size > 1) {
+        throw new Error(`Component ${groupName} has multiple texture pools`);
+      }
+      const poolId = poolIds.values().next().value;
+      const texturePool = poolId ? texturePools[poolId] || [] : [];
       const componentKind = names
         .map(n => meshes[n].material_kind_override)
         .find(Boolean) || null;

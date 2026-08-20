@@ -90,7 +90,7 @@ def _payload(label="A"):
                 "pos": _f32(0, 0, 0, 1, 0, 0, 0, 1, 0),
                 "idx": _u32(0, 1, 2),
                 "tex_key": texture_pool[0]["tex_key"],
-                "texture_options": texture_pool,
+                "texture_pool_id": "p0",
                 "texture_variants": [{
                     "conditions": [[{"var": "menu", "value": "1", "negate": False}]],
                     "tex_key": texture_pool[1]["tex_key"],
@@ -103,7 +103,8 @@ def _payload(label="A"):
                 "sources": [{"ini": f"{label}.ini", "line": 10}],
             },
         },
-        "textures": {},
+        "texture_pools": {"p0": texture_pool},
+        "textures": {option["tex_key"]: _PNG_URI for option in texture_pool},
         "controls": {
             "toggles": {
                 f"Key{label}": {
@@ -242,7 +243,12 @@ def _source_payload():
         entry = copy.deepcopy(template)
         entry["component"] = "Body"
         entry["source"] = source
+        entry["texture_pool_id"] = "p0" if source == "Root.ini" else "p1"
         payload["meshes"][key] = entry
+    payload["texture_pools"] = {
+        "p0": copy.deepcopy(payload["texture_pools"]["p0"]),
+        "p1": copy.deepcopy(payload["texture_pools"]["p0"]),
+    }
 
     first_toggle = next(iter(payload["controls"]["toggles"].values()))
     payload["controls"]["toggles"] = {
@@ -307,7 +313,6 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None):
             save_mesh_names: async () => ({}),
             save_component_material_kind: async () => ({}),
             pick_texture_file: async () => copy(state.picks.shift() || null),
-            load_texture_file: async (path, key) => ({tex_key: key, uri: ''}),
             get_record_positions: async () => ({positions: 2, vars: ['toggle']}),
           }};
         }
@@ -525,6 +530,53 @@ def test_direct_dds_matches_png_orientation_and_diffuse_color(
                 direct_pixels, png_pixels)
         assert direct_pixels[0] != direct_pixels[1]
         assert png_pixels[0] != png_pixels[1]
+    finally:
+        context.close()
+
+
+def test_texture_registry_requires_canonical_keys_and_separates_roles(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:raw")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry["tex_key"] = "diffuse::shared.png"
+    entry["normal_data_key"] = "normal_data::shared.png"
+    payload["texture_pools"]["p0"][0]["tex_key"] = "diffuse::shared.png"
+    shared_uri = _flat_png_uri((160, 192, 17, 241))
+    payload["textures"] = {
+        "diffuse::shared.png": shared_uri,
+        "normal_data::shared.png": shared_uri,
+    }
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings?.normal_data?.textureNode?.value?.image?.width === 4")
+        state = page.evaluate("""async sharedUri => {
+          const THREE = await import('three');
+          const {addTexture, hasTexture} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const bindings = mesh.material.userData.gameMaterial.bindings;
+          return {
+            pathOnly: hasTexture('shared.png'),
+            diffuse: hasTexture('diffuse::shared.png'),
+            normalData: hasTexture('normal_data::shared.png'),
+            sameTexture: bindings.diffuse.textureNode.value
+              === bindings.normal_data.textureNode.value,
+            diffuseSrgb: bindings.diffuse.textureNode.value.colorSpace
+              === THREE.SRGBColorSpace,
+            normalDataNoColor: bindings.normal_data.textureNode.value.colorSpace
+              === THREE.NoColorSpace,
+            invalidAdded: addTexture('shared.png', 'data:image/png;base64,x'),
+            validAdded: addTexture('light_map::shared.png', sharedUri),
+          };
+        }""", shared_uri)
+        assert state == {
+            "pathOnly": False, "diffuse": True, "normalData": True,
+            "sameTexture": False, "diffuseSrgb": True,
+            "normalDataNoColor": True, "invalidAdded": False,
+            "validAdded": True,
+        }
     finally:
         context.close()
 
@@ -2154,6 +2206,11 @@ def test_texture_rows_are_reused_for_control_changes_and_rebuilt_for_pool_change
     try:
         _open(page, "A")
         page.locator(".draw-item").wait_for()
+        page.locator(".draw-item .group-toggle").click()
+        page.locator(".tex-item").nth(1).click()
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.manualTexOverride"
+            " === 'diffuse::A-two.png'")
         page.evaluate("window.__textureRows = [...document.querySelectorAll('.tex-item')]")
 
         page.locator("#toggle-list .toggle-cycle-btn").click()
@@ -2706,12 +2763,27 @@ def test_source_grouping_and_collapse_are_shared_without_losing_duplicates(
         _open(page, "Sources")
         page.wait_for_function(
             "document.querySelector('.draw-item') !== window.__oldDrawRow")
+        pool_identity = page.evaluate("""() => {
+          const meshes = window.modViewer.activeMeshes;
+          const root = meshes[0];
+          const nested = meshes.slice(1);
+          return {
+            poolCount: new Set(meshes.map(mesh => mesh.userData.texturePool)).size,
+            nestedShared: nested[0]?.userData.texturePool
+              === nested[1]?.userData.texturePool,
+            rootDistinct: root?.userData.texturePool
+              !== nested[0]?.userData.texturePool,
+          };
+        }""")
         expected = ["Root.ini", "variants/sub"]
         assert page.locator("#mesh-list .mesh-src-hdr .group-name").all_inner_texts() == expected
         assert page.locator("#toggle-list .toggle-src-hdr .group-name").all_inner_texts() == expected
         assert page.locator("#menu-list .toggle-src-hdr .group-name").all_inner_texts() == expected
         assert page.locator("#mesh-list .group-hdr .group-name").all_inner_texts() == ["Body", "Body"]
         assert page.locator("#toggle-list .toggle-name").all_inner_texts() == ["Duplicate", "Duplicate"]
+        assert pool_identity["poolCount"] == 2
+        assert pool_identity["nestedShared"]
+        assert pool_identity["rootDistinct"]
 
         first_header = page.locator("#mesh-list .mesh-src-hdr").first
         first_header.click()

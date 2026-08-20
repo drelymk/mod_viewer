@@ -527,6 +527,19 @@ def _run_once(mod_path, concurrency, browser_channel):
     source_bytes = sum(
         os.path.getsize(source.path) for source in sources
         if os.path.isfile(source.path))
+    mesh_entries = [
+        entry for entry in payload.get("meshes", {}).values()
+        if isinstance(entry, dict) and not entry.get("error")]
+    component_groups = {
+        (entry.get("source"), entry.get("component"))
+        for entry in mesh_entries
+    }
+    texture_pools = payload.get("texture_pools", {})
+    pool_option_count = sum(
+        len(pool) for pool in texture_pools.values()
+        if isinstance(pool, list))
+    payload_bytes = len(json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
     return {
         "concurrency": concurrency,
         "backend": {
@@ -548,8 +561,12 @@ def _run_once(mod_path, concurrency, browser_channel):
                 - len(backend_model_rendered),
         },
         "assets": {
-            "mesh_count": len(payload.get("meshes", {})),
+            "mesh_count": len(mesh_entries),
+            "component_count": len(component_groups),
+            "texture_pool_count": len(texture_pools),
+            "texture_pool_option_count": pool_option_count,
             "texture_key_count": len(payload.get("textures", {})),
+            "payload_json_bytes": payload_bytes,
             "texture_source_bytes": source_bytes,
             "geometry_bytes": (payload.get("geometry") or {}).get("length"),
         },

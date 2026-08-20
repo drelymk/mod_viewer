@@ -30,7 +30,7 @@ Texture performance:
   requested and rendered sources, cache hits/misses, stage timings, PNG bytes,
   process-tree RSS/CPU and peak simultaneous encodes.
 - The profiled stages are DDS/image decode, RGB/RGBA conversion, resize,
-  normal-Z reconstruction, light-mask extraction and PNG encoding. Headless
+  normal-Z reconstruction and PNG encoding. Headless
   browser frame-gap samples are not reliable for comparing interactive
   rendering.
 - Keep the production texture render bound at 2 unless controlled measurements
@@ -64,7 +64,8 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
 - `edit_session` owns the authoritative loaded `IniDocument`s. Reload, health,
   toggle CRUD, Record and text editing all use this shared in-memory state.
 - `mod_loader.load_mod()` parses active flat INIs independently and returns the
-  structured application payload: `meshes`, `textures`, `controls`, `state`,
+  structured application payload: `meshes`, `textures`, `texture_pools`,
+  `controls`, `state`,
   `geometry`, `metadata` and `health`. `overrides` previews staged text and
   `pending_new_sections` keeps new unwired toggles reachable. The low-level
   mesh builder may retain its direct-fixture representation, but reserved
@@ -146,8 +147,7 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   hard-coded frontend game branches.
   LightMaps remain packed game data and are retained as toggle-aware keys; the
   passthrough transport preserves authored RGBA for packed auxiliary roles,
-  ordinary diffuse passthrough remains RGB, and explicit channel masks read the
-  source channel before conversion. Known Genshin profiles use a bounded
+  ordinary diffuse passthrough remains RGB. Known Genshin profiles use a bounded
   LightMap R response and the validated G toon-shadow input with a
   viewer-friendly approximation on direct diffuse light; LightMap B gates the
   direct toon-specular highlight area (it is not a linear intensity map), A
@@ -323,6 +323,17 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   or material data and each role has a different encoding/color-space contract.
   Diffuse maps are sRGB; auxiliary maps are non-color data. Legacy path-only
   viewer metadata must be normalized when loaded.
+- Browser texture registry keys are canonical role-aware keys:
+  `diffuse::`, `normal_map::`, `normal_data::`, `light_map::` or
+  `material_map::` followed by the mod-relative path. Python normalizes legacy
+  path-only metadata before payload publication; frontend code rejects and
+  never guesses a missing role.
+- `payload.texture_pools` serializes one mutable pool per source-qualified
+  component. Each mesh carries only its runtime `texture_pool_id`; pool IDs
+  are not persisted. Every final pool source is published into `payload.textures`
+  without fetching or decoding it, so browser requests remain lazy until a
+  source becomes an active render dependency. Known pool selection is
+  synchronous; only an explicit native file picker may add a post-load source.
 - `safe_resource_path`/`_safe_join` is the one sandbox implementation for both
   geometry and health. Reject absolute/drive paths, allow relative parent climbs
   only up to live `_MAX_ESCAPE_DEPTH`, and do not duplicate these rules.
@@ -438,8 +449,8 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   without changing the user's outline-enabled setting; texture mode remains
   independent.
 - A component’s popup and every child list share the same mutable
-  `texture_options` array (normally attached for pools of 2+). When absent,
-  create one fresh component-local empty array. Always render the component
+  `payload.texture_pools[texture_pool_id]` array. Empty components retain a
+  fresh mutable pool so Add remains available. Always render the component
   texture button, even with zero textures; its active state follows whether any
   component mesh has its diffuse TSL binding enabled. Child lists are rerenderable
   closures invoked after pool changes and reread `manualTexOverride`; one-time

@@ -9,8 +9,7 @@ import os
 
 import webview
 
-from core.mesh_builder import (GeometryBlob, encode_texture_file,
-                               encode_texture_key)
+from core.mesh_builder import GeometryBlob, encode_texture_file
 from core.mod_discovery import discover_ini_paths
 from core.ini_health import analyze_mod
 from core.texture_profiles import texture_profile_for
@@ -84,13 +83,6 @@ class ModViewerAPI:
             folder_path, result[0], transport_role,
             texture_source=texture_source, texture_profile=profile)
         return encoded
-
-    def load_texture_file(self, folder_path, tex_key):
-        """Resolve a known mod-relative picker texture on first use."""
-        folder_path = self._folder(folder_path)
-        return encode_texture_key(
-            folder_path, tex_key,
-            texture_source=self._active_texture_source(folder_path))
 
     def load_mod(self, folder_path):
         folder_path = self._folder(folder_path)

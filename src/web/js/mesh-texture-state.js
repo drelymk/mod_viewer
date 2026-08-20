@@ -1,6 +1,6 @@
 // Component texture propagation, lazy loading and viewer-only persistence.
 
-import { addTexture, hasTexture, setMeshTextureState } from './mesh-factory.js';
+import { setMeshTextureState } from './mesh-factory.js';
 import { activeMeshes } from './mesh-state.js';
 import { usesPackedNormal } from './material-profile.js';
 import { setHealthReport } from './health-report.js';
@@ -69,17 +69,6 @@ export function recomputeTextureRuns(groupMeshes) {
     };
     setMeshTextureState(mesh, { diffuse: activeKey, ...maps });
   }
-}
-
-export async function ensureTextureLoaded(mesh, texKey) {
-  if (!texKey || hasTexture(texKey)) return true;
-  const api = window.pywebview?.api;
-  // Browser-only fixtures exercise state without the native image bridge.
-  if (!api?.load_texture_file) return true;
-  const result = await api.load_texture_file(mesh.userData.modPath, texKey);
-  if (!result || result.error) return false;
-  addTexture(result.tex_key, result.uri);
-  return true;
 }
 
 export function meshMetadataKey(name, entry) {

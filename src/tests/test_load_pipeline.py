@@ -247,6 +247,49 @@ def test_legacy_texture_metadata_is_normalized_by_role():
               and "normal_map::shared.png" in payload["textures"]), ("legacy texture metadata is upgraded to role-aware keys")
 
 
+def test_hydration_serializes_one_pool_per_source_component_and_keeps_empty_pool(
+        tmp_path):
+    from PIL import Image
+
+    for name in ("a.png", "b.png", "c.png"):
+        Image.new("RGB", (1, 1), (128, 128, 32)).save(tmp_path / name)
+    option_a = {"tex_key": "diffuse::a.png", "file": "a.png", "label": "A"}
+    option_b = {"tex_key": "diffuse::b.png", "file": "b.png", "label": "B"}
+    option_c = {"tex_key": "diffuse::c.png", "file": "c.png", "label": "C"}
+    payload = {
+        "meshes": {
+            "A-0": {"source": "A.ini", "component": "Component3",
+                    "drawindexed": [3, 0, 0],
+                    "texture_options": [option_a, option_b]},
+            "A-1": {"source": "A.ini", "component": "Component3",
+                    "drawindexed": [3, 1, 0],
+                    "texture_options": [option_b]},
+            "B-0": {"source": "B.ini", "component": "Component3",
+                    "drawindexed": [3, 0, 0],
+                    "texture_options": [option_c]},
+            "Empty-0": {"source": "Empty.ini", "component": "Empty",
+                        "drawindexed": [3, 0, 0], "texture_options": []},
+        },
+        "textures": {},
+    }
+
+    def register(path, role, transform=None):
+        return f"/texture/test/{os.path.basename(path)}"
+
+    metadata.hydrate_textures(
+        str(tmp_path), payload, texture_source=register)
+
+    assert payload["texture_pools"] == {
+        "p0": [option_a, option_b],
+        "p1": [option_c],
+        "p2": [],
+    }
+    assert [payload["meshes"][key]["texture_pool_id"] for key in (
+            "A-0", "A-1", "B-0", "Empty-0")] == ["p0", "p0", "p1", "p2"]
+    assert all("texture_options" not in entry
+               for entry in payload["meshes"].values())
+
+
 @pytest.mark.parametrize("saved_normals", [
     {"normal_map": "normal.png"},
     {"normal_map": "normal.png", "normal_data": "normal.png"},
@@ -307,7 +350,9 @@ def test_wuwa_normal_data_tombstone_removes_ini_pool_value_on_hydration(
 
     restored = metadata.hydrate_textures(
         str(tmp_path), payload, data, texture_profile="wuwa")
-    option = payload["meshes"]["Body-1"]["texture_options"][0]
+    assert payload["meshes"]["Body-1"]["texture_pool_id"] == "p0"
+    assert "texture_options" not in payload["meshes"]["Body-1"]
+    option = payload["texture_pools"]["p0"][0]
     assert restored["Body::3,0,0"]["normal_data_manual"] is True
     assert "normal_data" not in option
     assert option["normal_data_manual"] is True

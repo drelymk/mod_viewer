@@ -291,20 +291,47 @@ def test_explicit_manual_validation_rejects_invalid_image(tmp_path):
     assert validated_dds_url.endswith(".dds")
 
 
-def test_lazy_known_texture_resolution_skips_png_validation(tmp_path):
-    path = tmp_path / "pool.png"
-    Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
-    publication = server.begin_texture_publication(str(tmp_path))
-    publication.commit()
+def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
+    assert not hasattr(ModViewerAPI, "load_texture_file")
+    for name in ("pool.png", "normal.png", "packed.png", "light.png",
+                 "material.png"):
+        Image.new("RGBA", (1, 1), (128, 128, 32, 255)).save(tmp_path / name)
+    payload = {
+        "meshes": {
+            "Body-1": {
+                "source": "Root.ini", "component": "Body",
+                "drawindexed": [3, 0, 0],
+                "texture_options": [{
+                    "tex_key": "diffuse::pool.png", "file": "pool.png",
+                    "label": "Pool", "normal_map": "normal.png",
+                    "normal_data": "packed.png", "light_map": "light.png",
+                    "material_map": "material.png",
+                }],
+            },
+        },
+        "textures": {},
+    }
+    registered = []
 
-    api = ModViewerAPI()
-    api._authorized_folders.add(os.path.normcase(os.path.abspath(tmp_path)))
-    with patch.object(server, "_render_texture_source",
-                      side_effect=AssertionError("lazy pool load rendered")):
-        result = api.load_texture_file(str(tmp_path), "diffuse::pool.png")
+    def register(path, role, transform=None):
+        registered.append((os.path.basename(path), role, transform))
+        return f"/texture/test/{role}"
 
-    assert result["tex_key"] == "diffuse::pool.png"
-    assert result["uri"].endswith("/0.png")
+    with patch("core.mesh_builder._render_texture_png",
+               side_effect=AssertionError("pool publication rendered a texture")):
+        metadata.hydrate_textures(
+            str(tmp_path), payload, texture_source=register)
+
+    assert payload["meshes"]["Body-1"]["texture_pool_id"] == "p0"
+    assert "texture_options" not in payload["meshes"]["Body-1"]
+    assert set(payload["textures"]) == {
+        "diffuse::pool.png", "normal_map::normal.png",
+        "normal_data::packed.png", "light_map::light.png",
+        "material_map::material.png",
+    }
+    assert {role for _name, role, _transform in registered} == {
+        "diffuse", "normal_map", "normal_data", "light_map", "material_map",
+    }
 
 
 def test_texture_endpoint_serves_png_and_keeps_source_reusable(tmp_path):
@@ -588,3 +615,6 @@ def test_metadata_hydration_registers_saved_textures_without_rendering(tmp_path)
         "diffuse::shared.png": "/texture/test/diffuse",
         "normal_map::shared.png": "/texture/test/normal_map",
     }
+    assert payload["texture_pools"]["p0"][0]["tex_key"] == (
+        "diffuse::shared.png")
+    assert "texture_options" not in payload["meshes"]["Body-1"]
