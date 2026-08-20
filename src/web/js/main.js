@@ -5,7 +5,7 @@ import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterT
          getEnvironmentPreset, isRendererAvailable, rendererReady,
          setEnvironmentPreset } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
-import { setTextures } from './mesh-factory.js';
+import { refreshMeshTexture, setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
@@ -337,7 +337,14 @@ rendererReady.then(ready => {
       debugMode: getMaterialDebugMode(mesh?.material),
     };
   };
-  const setMaterialDebugModeForMeshes = mode => setMaterialDebugMode(activeMeshes, mode);
+  const setMaterialDebugModeForMeshes = mode => {
+    const normalized = setMaterialDebugMode(activeMeshes, mode);
+    // Diagnostics use the same stable packed bindings as normal rendering.
+    // Refreshing after the uniform switch makes normal_data lazy: it is
+    // requested only when a B/A view is active, without rebuilding a graph.
+    activeMeshes.forEach(refreshMeshTexture);
+    return normalized;
+  };
   window.modViewer = {
     displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,

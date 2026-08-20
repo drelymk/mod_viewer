@@ -91,13 +91,20 @@ def test_wuwa_keeps_normal_data_available_for_raw_or_unknown_api():
 
         assert profile.id == f"wuwa:{texture_api}"
         assert profile.normal_xy == ("r", "g")
-        assert profile.shadow_mask == ChannelRef("light_map", "g")
-        assert profile.direct_shadow_model == "wuwa_base"
         assert profile.normal_data_b == ChannelRef("normal_data", "b")
         assert profile.normal_data_a == ChannelRef("normal_data", "a")
+        assert profile.shadow_mask is None
+        assert profile.direct_shadow_model is None
         assert profile.metalness is None
         assert profile.gloss is None
         assert profile.specular is None
+
+
+def test_wuwa_rabbitfx_alone_enables_validated_shadow_semantics():
+    profile = material_profile_for("wuwa", "rabbitfx")
+
+    assert profile.shadow_mask == ChannelRef("light_map", "g")
+    assert profile.direct_shadow_model == "wuwa_base"
 
 
 def test_wuwa_shadow_tuning_is_serialized_without_genshin_reuse():

@@ -99,13 +99,21 @@ function hasNumericValue(value) {
   return value != null && Number.isFinite(Number(value));
 }
 
-function profileSources(profile) {
-  return [profile?.normal_data_b, profile?.normal_data_a,
-    profile?.shadow_mask, profile?.material_id, profile?.metalness,
-    profile?.specular, profile?.specular_area]
+function profileRenderSources(profile) {
+  return [profile?.shadow_mask, profile?.metalness, profile?.specular,
+    profile?.specular_area]
     .filter(validRef)
     .map(ref => ref.source)
     .filter((source, index, all) => all.indexOf(source) === index);
+}
+
+function profileDebugSource(profile, mode) {
+  let ref = null;
+  if (mode === 'material-id') ref = profile?.material_id;
+  else if (mode === 'shadow-mask') ref = profile?.shadow_mask;
+  else if (mode === 'normal-data-b') ref = profile?.normal_data_b;
+  else if (mode === 'normal-data-a') ref = profile?.normal_data_a;
+  return validRef(ref) ? ref.source : null;
 }
 
 const DEBUG_MODE_VALUES = Object.freeze({
@@ -132,7 +140,7 @@ export function decodeMaterialIdValue(raw, decoder) {
 }
 
 function hasPackedResponse(profile) {
-  return profileSources(profile).length > 0;
+  return profileRenderSources(profile).length > 0;
 }
 
 function createBinding(role, uvNode) {
@@ -468,6 +476,16 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
   }
 }
 
+class GameStandardNodeMaterial extends MeshStandardNodeMaterial {
+  setupOutput(builder, outputNode) {
+    const result = super.setupOutput(builder, outputNode);
+    const state = this.userData.gameMaterial;
+    if (!state?.debugOutputNode || !state?.debugActiveNode) return result;
+    return state.debugActiveNode.lessThan(0.5).select(
+      result, vec4(state.debugOutputNode, result.a));
+  }
+}
+
 /** Create the stock or physical material appropriate for one profile. */
 export function createGameMaterial(profile, fallbackColor, options = {}) {
   const hasUv = options.hasUv !== false;
@@ -480,7 +498,7 @@ export function createGameMaterial(profile, fallbackColor, options = {}) {
   };
   const material = packedResponse
     ? new GamePhysicalNodeMaterial({ ...materialOptions, specularIntensity: 1.0 })
-    : new MeshStandardNodeMaterial(materialOptions);
+    : new GameStandardNodeMaterial(materialOptions);
   configureGameMaterial(material, profile, { packedResponse, hasUv, fallbackColor });
   return material;
 }
@@ -491,16 +509,16 @@ export function configureGameMaterial(material, profile, options = {}) {
   const packedResponse = Boolean(
     (options.packedResponse ?? hasPackedResponse(profile)) && hasUv);
   const resolvedProfile = profile || { id: 'none' };
-  const hasMaterialId = packedResponse && hasUv
+  const hasMaterialId = hasUv
     && validRef(resolvedProfile.material_id)
     && resolvedProfile.material_id_decoder === 'genshin_5_region';
-  const hasSpecularArea = packedResponse && hasUv
+  const hasSpecularArea = hasUv
     && validRef(resolvedProfile.specular_area);
-  const hasShadowMask = packedResponse && hasUv
+  const hasShadowMask = hasUv
     && validRef(resolvedProfile.shadow_mask);
-  const hasNormalDataB = packedResponse && hasUv
+  const hasNormalDataB = hasUv
     && validRef(resolvedProfile.normal_data_b);
-  const hasNormalDataA = packedResponse && hasUv
+  const hasNormalDataA = hasUv
     && validRef(resolvedProfile.normal_data_a);
   const supportedDebugModes = [
     hasMaterialId ? 'material-id' : null,
@@ -618,8 +636,12 @@ export function updateGameMaterialTextures(mesh, maps = {}) {
 /** Return the packed roles sampled by this material's current node graph. */
 export function getGameMaterialSources(material) {
   const state = material?.userData?.gameMaterial;
-  if (!state?.packedResponse) return new Set();
-  return new Set(profileSources(state.profile));
+  if (!state || !state.hasUv) return new Set();
+  const sources = new Set(profileRenderSources(state.profile));
+  const debugSource = profileDebugSource(
+    state.profile, getMaterialDebugMode(material));
+  if (debugSource) sources.add(debugSource);
+  return sources;
 }
 
 /** Release adapter-side references before the owning material is disposed. */

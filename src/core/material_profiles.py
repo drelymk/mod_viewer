@@ -170,13 +170,19 @@ def _base_profile_for(game, texture_api):
         # RabbitFX/WuWa's packed normal/material layout is retained for the
         # shader adapter. B/A are exposed only as raw diagnostics; their
         # material response remains deliberately unguessed in this PR.
+        kwargs = {
+            "normal_xy": ("r", "g"),
+            "normal_data_b": ChannelRef("normal_data", "b"),
+            "normal_data_a": ChannelRef("normal_data", "a"),
+        }
+        if texture_api == "rabbitfx":
+            kwargs.update(
+                shadow_mask=ChannelRef("light_map", "g"),
+                direct_shadow_model="wuwa_base",
+            )
         return MaterialInterpretation(
             id=f"wuwa:{texture_api}", game=game, texture_api=texture_api,
-            normal_xy=("r", "g"),
-            normal_data_b=ChannelRef("normal_data", "b"),
-            normal_data_a=ChannelRef("normal_data", "a"),
-            shadow_mask=ChannelRef("light_map", "g"),
-            direct_shadow_model="wuwa_base",
+            **kwargs,
         )
     return None
 

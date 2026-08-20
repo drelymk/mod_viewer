@@ -128,6 +128,7 @@ def _packed_material_payload(profile_id="zzz:zzmi"):
         "zzz:zzmi": ("zzz", "zzmi"),
         "genshin:gimi": ("genshin", "gimi"),
         "wuwa:rabbitfx": ("wuwa", "rabbitfx"),
+        "wuwa:raw": ("wuwa", "raw"),
     }
     profile = (material_profile_for(*profile_args[profile_id]).to_metadata()
                if profile_id in profile_args
@@ -736,6 +737,8 @@ def test_genshin_no_uv_keeps_a_and_b_out_of_conservative_material_graph(
           const mesh = window.modViewer.activeMeshes[0];
           const material = mesh.material;
           const game = material.userData.gameMaterial;
+          window.__rawMaterial = material;
+          window.__rawColorNode = material.colorNode;
           return {
             standard: !!material.isMeshStandardNodeMaterial,
             physical: !!material.isMeshPhysicalNodeMaterial,
@@ -924,6 +927,273 @@ def test_wuwa_debug_modes_are_capability_gated_and_uniform_only(
         page.wait_for_timeout(400)
         high_pixel = _sample_mesh_pixel(page)
         assert sum(high_pixel) > sum(low_pixel), (low_pixel, high_pixel)
+    finally:
+        context.close()
+
+
+def test_wuwa_raw_normal_data_debug_is_lazy_and_keeps_standard_material(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:raw")
+    payload["textures"]["normal_data::Packed-normal.png"] = _flat_png_uri(
+        (0, 0, 128, 255))
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
+        initial = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const game = material.userData.gameMaterial;
+          window.__rawMaterial = material;
+          window.__rawColorNode = material.colorNode;
+          return {
+            standard: !!material.isMeshStandardNodeMaterial,
+            physical: !!material.isMeshPhysicalNodeMaterial,
+            normalData: game.bindings.normal_data.enabledNode.value,
+            lightMap: game.bindings.light_map.enabledNode.value,
+            supported: window.modViewer.getMaterialState(0).supportedDebugModes,
+            version: material.version,
+          };
+        }""")
+        assert initial["standard"] is True
+        assert initial["physical"] is False
+        assert initial["normalData"] is False
+        assert initial["lightMap"] is False
+        assert initial["supported"] == ["normal-data-b", "normal-data-a"]
+
+        page.evaluate("window.modViewer.setMaterialDebugMode('normal-data-b')")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial"
+            ".bindings.normal_data.enabledNode.value === true")
+        after_b = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const game = mesh.material.userData.gameMaterial;
+          return {
+            normalData: game.bindings.normal_data.enabledNode.value,
+            version: mesh.material.version,
+            sameMaterial: mesh.material === window.__rawMaterial,
+            sameColorNode: mesh.material.colorNode === window.__rawColorNode,
+            imageWidth: game.bindings.normal_data.textureNode.value.image?.width || 0,
+          };
+        }""")
+        assert after_b["normalData"] is True
+        assert after_b["imageWidth"] == 4
+        assert after_b["version"] == initial["version"]
+        assert after_b["sameMaterial"]
+        assert after_b["sameColorNode"]
+
+        page.evaluate("""window.__rawNormalDataTexture =
+          window.modViewer.activeMeshes[0].material.userData.gameMaterial
+            .bindings.normal_data.textureNode.value;
+          window.modViewer.setMaterialDebugMode('normal-data-a')""")
+        after_a = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const game = mesh.material.userData.gameMaterial;
+          return {
+            sameTexture: game.bindings.normal_data.textureNode.value
+              === window.__rawNormalDataTexture,
+            version: mesh.material.version,
+          };
+        }""")
+        assert after_a["sameTexture"]
+        assert after_a["version"] == initial["version"]
+    finally:
+        context.close()
+
+
+def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx")
+    entry = payload["meshes"]["Body-Packed-0"]
+    low_key = "light_map::Packed-shadow-low.png"
+    payload["textures"] = {
+        key: _flat_png_uri((255, 255, 255, 255))
+        for key in payload["textures"]
+    }
+    payload["textures"]["diffuse::Packed-one.png"] = _flat_png_uri(
+        (24, 24, 24, 255))
+    payload["textures"][low_key] = _flat_png_uri((0, 0, 0, 255))
+    entry["light_map_key"] = low_key
+
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings.light_map.enabledNode.value === true")
+        page.evaluate("""
+          async () => {
+            const THREE = await import('three');
+            const {scene, controls} = await import('./js/scene.js');
+            scene.traverse(object => {
+              if (object.isAmbientLight || object.isHemisphereLight) {
+                object.intensity = 0;
+              } else if (object.isSprite || object.isGridHelper) {
+                object.visible = false;
+              }
+            });
+            const key = scene.children.find(object => object.isDirectionalLight);
+            key.target.position.copy(controls.target);
+            key.position.copy(controls.target).add(new THREE.Vector3(0.8, 0, 0.35));
+            key.intensity = 1;
+          }
+        """)
+        page.wait_for_timeout(400)
+        shadowed_pixel = _sample_mesh_pixel(page)
+        before_version = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          window.__missingLightmapMaterial = mesh.material;
+          return mesh.material.version;
+        }""")
+        page.evaluate("""async () => {
+          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {
+            diffuse: mesh.userData.texKey,
+            normal_map: null,
+            normal_data: null,
+            light_map: null,
+            material_map: null,
+          });
+        }""")
+        page.wait_for_timeout(400)
+        state = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return {
+            bound: mesh.material.userData.gameMaterial
+              .bindings.light_map.enabledNode.value,
+            sameMaterial: mesh.material === window.__missingLightmapMaterial,
+            version: mesh.material.version,
+          };
+        }""")
+        missing_pixel = _sample_mesh_pixel(page)
+        assert state["bound"] is False
+        assert state["version"] == before_version
+        assert state["sameMaterial"]
+        assert sum(missing_pixel) > sum(shadowed_pixel), (
+            shadowed_pixel, missing_pixel)
+    finally:
+        context.close()
+
+
+def test_wuwa_normal_data_ba_do_not_change_normal_rendering_when_debug_is_off(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx")
+    entry = payload["meshes"]["Body-Packed-0"]
+    low_key = "normal_data::Packed-neutral-low.png"
+    high_key = "normal_data::Packed-neutral-high.png"
+    payload["textures"] = {
+        key: _flat_png_uri((255, 255, 255, 255))
+        for key in payload["textures"]
+    }
+    payload["textures"]["diffuse::Packed-one.png"] = _flat_png_uri(
+        (80, 80, 80, 255))
+    payload["textures"][low_key] = _flat_png_uri((128, 128, 0, 0))
+    payload["textures"][high_key] = _flat_png_uri((128, 128, 255, 255))
+    entry["normal_data_key"] = low_key
+
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
+        page.wait_for_timeout(400)
+        low_pixel = _sample_mesh_pixel(page)
+        page.evaluate("""async key => {
+          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {
+            diffuse: mesh.userData.texKey,
+            normal_map: null,
+            normal_data: key,
+            light_map: mesh.userData.lightMapKey,
+            material_map: null,
+          });
+        }""", high_key)
+        page.wait_for_timeout(400)
+        high_pixel = _sample_mesh_pixel(page)
+        bound = page.evaluate("""
+          window.modViewer.activeMeshes[0].material.userData.gameMaterial
+            .bindings.normal_data.enabledNode.value
+        """)
+        assert bound is False
+        assert abs(sum(high_pixel) - sum(low_pixel)) <= 3, (
+            low_pixel, high_pixel)
+    finally:
+        context.close()
+
+
+def test_wuwa_two_direct_lights_shadow_each_light_contribution_once(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx")
+    entry = payload["meshes"]["Body-Packed-0"]
+    payload["textures"] = {
+        key: _flat_png_uri((255, 255, 255, 255))
+        for key in payload["textures"]
+    }
+    payload["textures"]["diffuse::Packed-one.png"] = _flat_png_uri(
+        (24, 24, 24, 255))
+    light_key = "light_map::Packed-two-light.png"
+    payload["textures"][light_key] = _flat_png_uri((0, 255, 0, 255))
+    entry["light_map_key"] = light_key
+
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings.light_map.enabledNode.value === true")
+        page.evaluate("window.modViewer.setEnvironmentPreset('studio')")
+        page.evaluate("""
+          async () => {
+            const THREE = await import('three');
+            const {scene, controls} = await import('./js/scene.js');
+            scene.traverse(object => {
+              if (object.isAmbientLight || object.isHemisphereLight) {
+                object.intensity = 0;
+              } else if (object.isSprite || object.isGridHelper) {
+                object.visible = false;
+              }
+            });
+            const lights = [];
+            scene.traverse(object => {
+              if (object.isDirectionalLight) lights.push(object);
+            });
+            if (lights.length < 2) throw new Error('WuWa two-light test needs two directional lights');
+            const positions = [
+              new THREE.Vector3(0, 0, 3),
+              new THREE.Vector3(0.8, 0, 0.35),
+            ];
+            lights.forEach((light, index) => {
+              light.target.position.copy(controls.target);
+              light.position.copy(controls.target).add(positions[index]);
+              light.intensity = 0;
+            });
+            window.__wuwaLights = lights;
+            window.__setWuWaLights = indices => lights.forEach((light, index) => {
+              light.intensity = indices.includes(index) ? 0.2 : 0;
+            });
+          }
+        """)
+
+        def render_for(indices):
+            page.evaluate("indices => window.__setWuWaLights(indices)", indices)
+            page.wait_for_timeout(300)
+            return _sample_mesh_pixel(page)
+
+        light_a = render_for([0])
+        light_b = render_for([1])
+        both = render_for([0, 1])
+
+        def linear_luminance(pixel):
+            return sum((channel / 255) ** 2.2 for channel in pixel)
+
+        expected = linear_luminance(light_a) + linear_luminance(light_b)
+        actual = linear_luminance(both)
+        assert actual > max(linear_luminance(light_a), linear_luminance(light_b))
+        assert abs(actual - expected) <= max(0.015, expected * 0.25), (
+            light_a, light_b, both, expected, actual)
     finally:
         context.close()
 
@@ -1204,7 +1474,7 @@ def test_genshin_high_r_region_bypasses_lightmap_b_specular_gate(
         "lightMap": True, "materialMap": False,
     }),
     ("wuwa:rabbitfx", {
-        "physical": True, "profile": "wuwa:rabbitfx", "normalData": True,
+        "physical": True, "profile": "wuwa:rabbitfx", "normalData": False,
         "lightMap": True, "materialMap": False,
     }),
     ("none", {
