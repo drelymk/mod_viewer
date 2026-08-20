@@ -535,7 +535,10 @@ def test_direct_dds_matches_png_for_non_color_packed_channel(
           return {noColorSpace: texture.colorSpace === THREE.NoColorSpace,
             compressed: texture.isCompressedTexture === true};
         }""")
-        direct_pixels = [_sample_mesh_pixel(page)]
+        direct_pixels = [
+            _sample_mesh_pixel_at(page, 0, 0.65),
+            _sample_mesh_pixel_at(page, 0, -0.65),
+        ]
 
         png_textures = dict(payload["textures"])
         png_textures[normal_key] = png_url
@@ -558,13 +561,19 @@ def test_direct_dds_matches_png_for_non_color_packed_channel(
           return {colorSpace: texture.colorSpace,
             noColorSpace: texture.colorSpace === THREE.NoColorSpace};
         }""")
-        png_pixels = [_sample_mesh_pixel(page)]
+        png_pixels = [
+            _sample_mesh_pixel_at(page, 0, 0.65),
+            _sample_mesh_pixel_at(page, 0, -0.65),
+        ]
 
         assert direct == {"noColorSpace": True, "compressed": True}
         assert png["noColorSpace"]
-        assert max(abs(left - right)
-                   for left, right in zip(direct_pixels[0], png_pixels[0])) <= 40, (
-            direct_pixels, png_pixels)
+        assert all(
+            max(abs(left - right) for left, right in zip(direct, fallback)) <= 40
+            for direct, fallback in zip(direct_pixels, png_pixels)), (
+                direct_pixels, png_pixels)
+        assert direct_pixels[0] != direct_pixels[1]
+        assert png_pixels[0] != png_pixels[1]
     finally:
         context.close()
 
