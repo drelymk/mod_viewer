@@ -42,6 +42,7 @@ import {
   uniform,
   uv,
   vec3,
+  vec4,
 } from 'three/tsl';
 
 const specularColorBlended = TSL.specularColorBlended;
@@ -119,9 +120,9 @@ function normalizeDebugMode(mode) {
 /** Decode the scalar LightMap.A region value used by the Genshin profile. */
 export function decodeMaterialIdValue(raw, decoder) {
   if (decoder !== 'genshin_5_region') return 0;
-  if (raw >= 0.8) return 2;
+  if (raw > 0.8) return 2;
   if (raw >= 0.6) return 5;
-  if (raw >= 0.4) return 3;
+  if (raw > 0.4) return 3;
   if (raw >= 0.2) return 4;
   return 1;
 }
@@ -189,13 +190,12 @@ function createMaterialIdNode(profile, bindings) {
     return float(0);
   }
   const raw = channelNode(ref, bindings);
-  // The descending order matches decodeMaterialIdValue() and keeps the
-  // region classification per-pixel without introducing material variants.
-  return step(0.2, raw).mul(3)
-    .sub(step(0.4, raw))
-    .add(step(0.6, raw).mul(2))
-    .sub(step(0.8, raw).mul(3))
-    .add(1);
+  // The inclusive/exclusive comparisons mirror HoyoToon's sequential
+  // assignments: later overlapping regions own the exact .40/.80 edges.
+  return raw.greaterThan(0.8).select(
+    2, raw.greaterThanEqual(0.6).select(
+      5, raw.greaterThan(0.4).select(
+        3, raw.greaterThanEqual(0.2).select(4, 1))));
 }
 
 function createSpecularAreaNode(profile, bindings) {
@@ -211,6 +211,8 @@ function debugColorNode(state, baseColor) {
   const areaColor = state.hasSpecularArea
     ? vec3(state.specularAreaNode)
     : baseColor;
+  state.debugOutputNode = state.debugModeNode.lessThan(1.5).select(
+    materialIdColor, areaColor);
   return state.debugModeNode.lessThan(0.5).select(
     baseColor, state.debugModeNode.lessThan(1.5).select(
       materialIdColor, areaColor));
@@ -375,6 +377,16 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
     }
     return new ThreePhysicalLightingModel(...physicalLightingFlags(this));
   }
+
+  setupOutput(builder, outputNode) {
+    const result = super.setupOutput(builder, outputNode);
+    const state = this.userData.gameMaterial;
+    if (!state?.debugOutputNode) return result;
+    // Keep diagnostics out of the lighting, environment and fog result while
+    // leaving the normal graph and pipeline selected by the same uniform.
+    return state.debugModeNode.lessThan(0.5).select(
+      result, vec4(state.debugOutputNode, result.a));
+  }
 }
 
 /** Create the stock or physical material appropriate for one profile. */
@@ -397,9 +409,16 @@ export function createGameMaterial(profile, fallbackColor, options = {}) {
 /** Attach stable profile-specific TSL nodes to a material. */
 export function configureGameMaterial(material, profile, options = {}) {
   const hasUv = options.hasUv !== false;
-  const packedResponse = options.packedResponse ?? (hasPackedResponse(profile) && hasUv);
+  const packedResponse = Boolean(
+    (options.packedResponse ?? hasPackedResponse(profile)) && hasUv);
+  const resolvedProfile = profile || { id: 'none' };
+  const hasMaterialId = packedResponse && hasUv
+    && validRef(resolvedProfile.material_id)
+    && resolvedProfile.material_id_decoder === 'genshin_5_region';
+  const hasSpecularArea = packedResponse && hasUv
+    && validRef(resolvedProfile.specular_area);
   const state = {
-    profile: profile || { id: 'none' },
+    profile: resolvedProfile,
     packedResponse,
     hasUv,
     bindings: createBindings(hasUv),
@@ -423,14 +442,17 @@ export function configureGameMaterial(material, profile, options = {}) {
     toonSpecularMetalCutoffNode: hasNumericValue(profile?.toon_specular_metal_cutoff)
       ? uniform(Number(profile.toon_specular_metal_cutoff)) : null,
     debugModeNode: uniform(0),
+    hasMaterialId,
+    hasSpecularArea,
   };
   // Channel nodes need the final binding table, but the node objects remain
-  // stable for the lifetime of the material.
-  state.materialIdNode = createMaterialIdNode(profile, state.bindings);
-  state.specularAreaNode = createSpecularAreaNode(profile, state.bindings);
-  state.hasMaterialId = validRef(profile?.material_id)
-    && profile?.material_id_decoder === 'genshin_5_region';
-  state.hasSpecularArea = validRef(profile?.specular_area);
+  // stable for the lifetime of the material. Conservative no-UV materials
+  // deliberately keep these as scalar fallbacks, so no packed texture node
+  // can become reachable in that path.
+  state.materialIdNode = hasMaterialId
+    ? createMaterialIdNode(resolvedProfile, state.bindings) : float(0);
+  state.specularAreaNode = hasSpecularArea
+    ? createSpecularAreaNode(resolvedProfile, state.bindings) : float(1);
   state.sources = state.bindings;
   state.nodes = {
     diffuse: state.bindings.diffuse,
