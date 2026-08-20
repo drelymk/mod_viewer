@@ -221,16 +221,29 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
     const before = reflectedLight.directDiffuse.toVar('gameDirectDiffuseBefore');
     super.direct(lightData, builder);
 
-    const { profile, bindings } = this.gameMaterialState;
+    const {
+      profile,
+      bindings,
+      shadowThresholdNode,
+      shadowSoftnessNode,
+      shadowMaskStrengthNode,
+      shadowInfluenceNode,
+    } = this.gameMaterialState;
     const maskRef = profile.shadow_mask;
     const maskBinding = bindings[maskRef.source];
     const authoredMask = maskBinding.enabledNode.select(
       channelNode(maskRef, bindings), float(0.5));
     const lightValue = lightDirection.dot(normalView).clamp()
       .mul(0.5).add(0.5);
-    const boundary = lightValue.add(authoredMask.sub(0.5).mul(0.5));
-    const factor = smoothstep(float(0.5 - 0.08), float(0.5 + 0.08), boundary);
-    const enabledFactor = maskBinding.enabledNode.select(factor, float(1));
+    const boundary = lightValue.add(
+      authoredMask.sub(0.5).mul(shadowMaskStrengthNode));
+    const factor = smoothstep(
+      shadowThresholdNode.sub(shadowSoftnessNode),
+      shadowThresholdNode.add(shadowSoftnessNode),
+      boundary);
+    const influencedFactor = mix(float(1), factor, shadowInfluenceNode);
+    const enabledFactor = maskBinding.enabledNode.select(
+      influencedFactor, float(1));
     const contribution = reflectedLight.directDiffuse.sub(before);
     reflectedLight.directDiffuse.assign(
       before.add(contribution.mul(enabledFactor)));
@@ -290,6 +303,14 @@ export function configureGameMaterial(material, profile, options = {}) {
     hasUv,
     bindings: createBindings(hasUv),
     normalScaleNode: uniform(new Vector2(1, -1)),
+    shadowThresholdNode: uniform(
+      numericOr(profile?.shadow_threshold, 0.5)),
+    shadowSoftnessNode: uniform(
+      numericOr(profile?.shadow_softness, 0.08)),
+    shadowMaskStrengthNode: uniform(
+      numericOr(profile?.shadow_mask_strength, 0.5)),
+    shadowInfluenceNode: uniform(
+      numericOr(profile?.shadow_influence, 1.0)),
   };
   state.sources = state.bindings;
   state.nodes = {

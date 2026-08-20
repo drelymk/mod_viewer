@@ -9,6 +9,8 @@ from silently becoming a rendering assumption.
 
 from dataclasses import dataclass
 
+from .material_kind import MATERIAL_KINDS
+
 
 _SOURCES = frozenset(("normal_data", "light_map", "material_map"))
 _CHANNELS = frozenset("rgba")
@@ -43,6 +45,7 @@ class MaterialInterpretation:
     id: str
     game: str
     texture_api: str
+    material_kind: str = "unknown"
     normal_xy: tuple[str, str] | None = None
     shadow_mask: ChannelRef | None = None
     material_id: ChannelRef | None = None
@@ -60,12 +63,21 @@ class MaterialInterpretation:
     # response outright. This is useful for Genshin's classification-like R
     # channel; ZZZ's authored specular mask remains a direct response.
     specular_influence: float | None = None
+    shadow_threshold: float = 0.5
+    shadow_softness: float = 0.08
+    shadow_mask_strength: float = 0.5
+    shadow_influence: float = 1.0
+
+    def __post_init__(self):
+        if self.material_kind not in MATERIAL_KINDS:
+            raise ValueError(f"Unknown material kind: {self.material_kind}")
 
     def to_metadata(self):
         result = {
             "id": self.id,
             "game": self.game,
             "texture_api": self.texture_api,
+            "material_kind": self.material_kind,
             "normal_xy": list(self.normal_xy) if self.normal_xy else None,
             "shadow_mask": (self.shadow_mask.to_metadata()
                             if self.shadow_mask else None),
@@ -80,11 +92,15 @@ class MaterialInterpretation:
             "metalness_scale": self.metalness_scale,
             "specular_scale": self.specular_scale,
             "specular_influence": self.specular_influence,
+            "shadow_threshold": self.shadow_threshold,
+            "shadow_softness": self.shadow_softness,
+            "shadow_mask_strength": self.shadow_mask_strength,
+            "shadow_influence": self.shadow_influence,
         }
         return result
 
 
-def _profile_for(game, texture_api):
+def _base_profile_for(game, texture_api):
     if game == "zzz" and texture_api in ("zzmi", "rabbitfx"):
         return MaterialInterpretation(
             id=f"zzz:{texture_api}", game=game, texture_api=texture_api,
@@ -118,12 +134,32 @@ def _profile_for(game, texture_api):
     return None
 
 
-def material_profile_for(game=None, texture_api=None):
+def _specialized_profile_for(game, texture_api, material_kind):
+    """Return a validated kind-specific profile, when one exists.
+
+    PR16 intentionally has no production specialized profiles yet.  Keeping
+    this hook separate makes exact-kind precedence testable and gives later
+    validated semantics one narrow insertion point.
+    """
+    del game, texture_api, material_kind
+    return None
+
+
+def _profile_for(game, texture_api, material_kind="unknown"):
+    if material_kind != "unknown":
+        specialized = _specialized_profile_for(
+            game, texture_api, material_kind)
+        if specialized is not None:
+            return specialized
+    return _base_profile_for(game, texture_api)
+
+
+def material_profile_for(game=None, texture_api=None, material_kind="unknown"):
     """Resolve a conservative material interpretation from full detection.
 
     Accepts a ``GameDetection`` object or metadata dictionary as ``game`` for
     callers that already carry the complete detection, while retaining the
-    explicit two-axis form for tests and small core integrations.
+    explicit game/API/kind form for tests and small core integrations.
     """
     if hasattr(game, "game"):
         detection = game
@@ -133,7 +169,10 @@ def material_profile_for(game=None, texture_api=None):
                              game.get("texture_api", texture_api))
     game = str(game or "unknown").lower()
     texture_api = str(texture_api or "unknown").lower()
-    profile = _profile_for(game, texture_api)
+    material_kind = str(material_kind or "unknown").lower()
+    if material_kind not in MATERIAL_KINDS:
+        material_kind = "unknown"
+    profile = _profile_for(game, texture_api, material_kind)
     if profile is not None:
         return profile
     return MaterialInterpretation(

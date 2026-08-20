@@ -23,6 +23,7 @@ from core.ini_menu import attach_menu_images
 from core.ini_health import analyze_mod
 from core.present_editor import SECTION_NAME as PRESENT_SECTION
 from core.game_profile import GameDetection, resolve_game_detection
+from core.material_kind import detect_material_kind
 from core.material_profiles import material_profile_for
 
 # Kept for scripts that still inspect the low-level mesh-builder result.  These
@@ -423,6 +424,23 @@ def _gating_vars_from_groups(groups):
     return found
 
 
+def _assign_material_profiles(meshes, game):
+    """Attach per-mesh kind/profile identity and return a shared profile table."""
+    profiles = {}
+    for entry in (meshes or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        detection = detect_material_kind(entry)
+        selected_kind = detection.kind if detection.reliable else "unknown"
+        profile = material_profile_for(game, material_kind=selected_kind)
+        entry["material_kind"] = detection.kind
+        entry["material_kind_reliable"] = detection.reliable
+        entry["material_kind_reason"] = detection.reason
+        entry["material_profile_id"] = profile.id
+        profiles.setdefault(profile.id, profile.to_metadata())
+    return profiles
+
+
 def unwired_pending_sections(folder_path, overrides, pending_new_sections,
                              ini_paths=None, documents=None):
     """{ini basename: [section name, ...]} — the subset of
@@ -485,8 +503,13 @@ def _failure_health(context, overrides):
 
 def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
                         present=None, state_rules=None, state_defaults=None,
-                        health=None, error=None, game=None):
+                        health=None, error=None, game=None,
+                        material_profiles=None):
     """Create the stable application-to-frontend payload shape."""
+    profile_table = dict(material_profiles or {})
+    if game is not None:
+        base_profile = material_profile_for(game).to_metadata()
+        profile_table.setdefault(base_profile["id"], base_profile)
     payload = {
         "meshes": meshes or {},
         "textures": textures or {},
@@ -500,13 +523,11 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
             "defaults": state_defaults or {},
         },
         "geometry": None,
-        "metadata": {"mesh_names": {}},
+        "metadata": {"mesh_names": {}, "material_profiles": profile_table},
         "health": health,
     }
     if game is not None:
         payload["metadata"]["game"] = game.to_metadata()
-        payload["metadata"]["material_profile"] = \
-            material_profile_for(game).to_metadata()
     if error:
         payload["error"] = error
     return payload
@@ -585,6 +606,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
                 error="No mesh data could be extracted (buffer files missing?).",
                 game=parsed.game)
 
+        material_profiles = _assign_material_profiles(mesh_payload, parsed.game)
+
         toggles = build_toggle_panel(
             toggle_keys, toggle_defaults, _gating_vars(mesh_payload), folder_path,
             pending_new_sections)
@@ -592,7 +615,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         return _structured_payload(
             meshes=mesh_payload, textures=textures, toggles=toggles, menu=menu,
             present=present, state_rules=state_rules,
-            state_defaults=toggle_defaults, game=parsed.game)
+            state_defaults=toggle_defaults, game=parsed.game,
+            material_profiles=material_profiles)
     except Exception:
         traceback.print_exc()
         health = _failure_health(context, overrides)

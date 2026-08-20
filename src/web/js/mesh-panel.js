@@ -322,7 +322,7 @@ function updateTexButtonState(texBtn, itemObjs) {
  * is threaded through to the per-component texture popup, which needs it to
  * open the native file picker rooted at the mod folder. */
 export function buildMeshPanel(meshes, modPath, meshNames = {},
-                               materialProfile = null) {
+                               materialProfiles = {}) {
   const list = document.getElementById('mesh-list');
   list.innerHTML = '';
   groupsUI = [];
@@ -371,7 +371,9 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
       container.append(hdr, itemsWrap);
 
       for (const name of names) {
-        const mesh = buildMesh(name, meshes[name], materialProfile);
+        const entry = meshes[name];
+        const materialProfile = materialProfiles?.[entry.material_profile_id] || null;
+        const mesh = buildMesh(name, entry, materialProfile);
         mesh.userData.metadataKey = meshMetadataKey(name, meshes[name]);
         mesh.userData.texturePool = texturePool;
         mesh.userData.displayName = meshNames[mesh.userData.metadataKey] || null;

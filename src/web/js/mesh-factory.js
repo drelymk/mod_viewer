@@ -249,6 +249,10 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.normalDataKey = data.normal_data_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
   mesh.userData.materialMapKey = data.material_map_key || null;
+  mesh.userData.materialKind = data.material_kind || 'unknown';
+  mesh.userData.materialKindReliable = data.material_kind_reliable === true;
+  mesh.userData.materialKindReason = data.material_kind_reason || '';
+  mesh.userData.materialProfileId = data.material_profile_id || 'none';
   mesh.userData.materialProfile = materialProfile;
   mesh.userData.aoMapKey = data.ao_map_key || null;
   mesh.userData.normalMapEnabled = data.normal_map_enabled !== false;
