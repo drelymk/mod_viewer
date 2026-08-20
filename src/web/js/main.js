@@ -350,6 +350,10 @@ rendererReady.then(ready => {
       hasNormalDataB: !!game?.hasNormalDataB,
       hasNormalDataA: !!game?.hasNormalDataA,
       shadowMaskBound: !!game?.bindings?.light_map?.enabledNode?.value,
+      normalSource: game?.normalSource || 'normal_map',
+      normalPacking: game?.normalPacking || 'rgb',
+      normalSourceBound: !!game?.bindings?.[game?.normalSource || 'normal_map']
+        ?.enabledNode?.value,
       normalDataBound: !!game?.bindings?.normal_data?.enabledNode?.value,
       lightMapBound: !!game?.bindings?.light_map?.enabledNode?.value,
       materialMapBound: !!game?.bindings?.material_map?.enabledNode?.value,
@@ -361,8 +365,8 @@ rendererReady.then(ready => {
     const normalized = setMaterialDebugMode(activeMeshes, mode);
     setOutlineSuppressedByDebug(normalized !== 'off');
     // Diagnostics use the same stable packed bindings as normal rendering.
-    // Refreshing after the uniform switch makes normal_data lazy: it is
-    // requested only when a B/A view is active, without rebuilding a graph.
+    // WuWa's packed normal is already resident when debug mode changes, so a
+    // B/A view only changes the diagnostic uniform and binding selection.
     activeMeshes.forEach(refreshMeshTexture);
     return normalized;
   };

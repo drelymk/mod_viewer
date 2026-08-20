@@ -7,6 +7,7 @@ import {
   DoubleSide,
   MeshPhysicalNodeMaterial,
   MeshStandardNodeMaterial,
+  NormalRGPacking,
   NoColorSpace,
   PhysicalLightingModel as ThreePhysicalLightingModel,
   RGBAFormat,
@@ -106,6 +107,19 @@ function profileRenderSources(profile) {
     .filter(validRef)
     .map(ref => ref.source)
     .filter((source, index, all) => all.indexOf(source) === index);
+}
+
+function profileNormalXY(profile) {
+  const xy = profile?.normal_xy;
+  return Array.isArray(xy) && xy.length === 2
+    && xy.every(channel => CHANNELS.has(channel)) ? xy : null;
+}
+
+function profileNormalSources(profile) {
+  // MaterialInterpretation.normal_xy is defined against WuWa's intact
+  // normal_data source.  Keep this dependency separate from packed response
+  // classification: raw WuWa still uses a standard material.
+  return profileNormalXY(profile) ? ['normal_data'] : [];
 }
 
 function profileDebugSource(profile, mode) {
@@ -222,6 +236,22 @@ function createSpecularAreaNode(profile, bindings) {
     : float(1);
 }
 
+function createProfileNormalNode(profile, bindings, normalScaleNode,
+  fallbackNormal) {
+  const xy = profileNormalXY(profile);
+  if (xy) {
+    const binding = bindings.normal_data;
+    const sampled = vec3(
+      binding.textureNode[xy[0]], binding.textureNode[xy[1]], 1);
+    const packedNormal = normalMap(sampled, normalScaleNode);
+    packedNormal.unpackNormalMode = NormalRGPacking;
+    return binding.enabledNode.select(packedNormal, fallbackNormal);
+  }
+  const binding = bindings.normal_map;
+  return binding.enabledNode.select(
+    normalMap(binding.textureNode, normalScaleNode), fallbackNormal);
+}
+
 function createRawChannelNode(ref, bindings) {
   return validRef(ref)
     ? enabledChannelNode(ref, bindings, 0)
@@ -273,8 +303,8 @@ function setStableMaterialNodes(material, state, fallbackColor) {
     // material graph when a diffuse texture is loaded or removed.
     baseColor = bindings.diffuse.enabledNode.select(
       bindings.diffuse.textureNode.rgb, color(fallbackColor));
-    material.normalNode = bindings.normal_map.enabledNode.select(
-      normalMap(bindings.normal_map.textureNode, state.normalScaleNode), fallbackNormal);
+    material.normalNode = createProfileNormalNode(
+      profile, bindings, state.normalScaleNode, fallbackNormal);
     material.aoNode = bindings.occlusion_map.enabledNode.select(
       bindings.occlusion_map.textureNode.r, float(1));
   } else {
@@ -598,6 +628,8 @@ export function configureGameMaterial(material, profile, options = {}) {
   const packedResponse = Boolean(
     (options.packedResponse ?? hasPackedResponse(profile)) && hasUv);
   const resolvedProfile = profile || { id: 'none' };
+  const normalSource = profileNormalXY(resolvedProfile)
+    ? 'normal_data' : 'normal_map';
   const hasMaterialId = hasUv
     && validRef(resolvedProfile.material_id)
     && resolvedProfile.material_id_decoder === 'genshin_5_region';
@@ -618,6 +650,8 @@ export function configureGameMaterial(material, profile, options = {}) {
   ].filter(Boolean);
   const state = {
     profile: resolvedProfile,
+    normalSource,
+    normalPacking: normalSource === 'normal_data' ? 'rg' : 'rgb',
     packedResponse,
     hasUv,
     bindings: createBindings(hasUv),
@@ -691,7 +725,7 @@ export function configureGameMaterial(material, profile, options = {}) {
   state.sources = state.bindings;
   state.nodes = {
     diffuse: state.bindings.diffuse,
-    normal: state.bindings.normal_map,
+    normal: state.bindings[normalSource],
     ao: state.bindings.occlusion_map,
     normalData: state.bindings.normal_data,
     lightMap: state.bindings.light_map,
@@ -739,6 +773,9 @@ export function getGameMaterialSources(material) {
   const state = material?.userData?.gameMaterial;
   if (!state || !state.hasUv) return new Set();
   const sources = new Set(profileRenderSources(state.profile));
+  for (const source of profileNormalSources(state.profile)) {
+    sources.add(source);
+  }
   const debugSource = profileDebugSource(
     state.profile, getMaterialDebugMode(material));
   if (debugSource) sources.add(debugSource);

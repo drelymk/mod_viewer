@@ -122,7 +122,7 @@ def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
     ]
 
 
-def test_wuwa_mesh_builder_publishes_raw_normal_source_separately(tmp_path):
+def test_wuwa_mesh_builder_publishes_only_raw_normal_source(tmp_path):
     _write_geometry(str(tmp_path))
     Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(tmp_path / "normal.png")
     registered = []
@@ -138,10 +138,8 @@ def test_wuwa_mesh_builder_publishes_raw_normal_source_separately(tmp_path):
             geometry=GeometryBlob(), texture_source=register,
             game_profile="wuwa")
 
-    assert set(built.textures) == {
-        "normal_map::normal.png", "normal_data::normal.png"}
+    assert set(built.textures) == {"normal_data::normal.png"}
     assert registered == [
-        ("normal.png", "normal_map"),
         ("normal.png", "normal_data"),
     ]
 
@@ -251,7 +249,7 @@ def test_publication_profile_selects_manual_normal_recipe(tmp_path):
         "normal_xy_reconstruct")
 
 
-def test_wuwa_manual_normal_pick_returns_paired_raw_source(tmp_path):
+def test_wuwa_manual_normal_pick_publishes_only_raw_source(tmp_path):
     path = tmp_path / "normal.png"
     Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(path)
     publication = server.begin_texture_publication(str(tmp_path))
@@ -268,12 +266,10 @@ def test_wuwa_manual_normal_pick_returns_paired_raw_source(tmp_path):
 
     result = api.pick_texture_file(str(tmp_path), "normal_map")
 
-    assert result["tex_key"] == "normal_map::normal.png"
-    assert result["normal_data_key"] == "normal_data::normal.png"
-    assert result["normal_data_uri"].startswith("/texture/")
+    assert result["tex_key"] == "normal_data::normal.png"
+    assert result["role"] == "normal_data"
+    assert "normal_data_key" not in result
     assert server._lookup_texture(publication.token, "0").transform == (
-        "normal_xy_reconstruct")
-    assert server._lookup_texture(publication.token, "1").transform == (
         "passthrough")
 
 

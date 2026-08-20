@@ -121,14 +121,18 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   same per-draw execution-order model, including conditional variants and a
   no-map fallback for a conditional-only assignment. They are INI-driven only;
   manual texture pools remain diffuse-only. The detected profile chooses
-  explicit image transforms and normal-map Y orientation; two-channel normal
-  maps may have Z reconstructed during encoding. SRMI/HSR markers take
+  explicit image transforms and normal-map Y orientation; Genshin/ZZZ
+  two-channel normal maps may have Z reconstructed during encoding, while
+  WuWa keeps its packed source intact and reconstructs RG in TSL. SRMI/HSR
+  markers take
   precedence over generic DRAW_TYPE/vb2 heuristics, while ZZZ requires its
   more-specific 2/4 route and ZZMI evidence.
-  Profiles that derive a display normal from packed source data, such as WuWa,
-  publish both `normal_map_key` and an intact `normal_data_key`; the latter is
-  available to the selected material adapter and is never silently used as a
-  standard Three.js map. Material interpretation is resolved per mesh from
+  WuWa publishes one intact authored NormalMap as `normal_data_key`; its RG
+  channels are reconstructed as a tangent normal by the TSL material adapter,
+  while B/A retain profile-specific diagnostic/material meanings. It must not
+  publish a duplicate derived `normal_map_key`. Genshin and ZZZ continue to
+  publish their derived `normal_map_key` path. Material interpretation is
+  resolved per mesh from
   `(game, texture_api, material_kind)`, with the validated base profile as a
   fallback. Material kind and material profile are separate concepts: a mesh
   may be classified as face while still using `genshin:gimi` until a
@@ -159,10 +163,14 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   WuWa/RabbitFX texture semantics come from explicit `Resource\\RabbitFX\\...`
   assignments, not resource filenames. For the validated WuWa/RabbitFX base
   profile,
-  RabbitFX Normalmap R/G remains the normal input, RabbitFX Lightmap G is the
-  first validated authored shadow-mask input, and Normalmap B/A remain packed
-  material data available for flat diagnostics only. They must not be mapped
-  directly to stock Three.js roughness or metalness without further evidence.
+  RabbitFX Normalmap R/G remains the normal input, reconstructed in TSL from
+  the same intact `normal_data` texture. RabbitFX Lightmap G is the first
+  validated authored shadow-mask input, and Normalmap B/A remain packed
+  material data available for flat diagnostics or the validated body route.
+  Base `wuwa:raw` keeps B/A diagnostic-only and remains a standard material;
+  the existence of `normal_xy` is a normal dependency, not a packed-response
+  classification signal. B/A must not be mapped directly to stock Three.js
+  roughness or metalness without further evidence.
   The base `wuwa:rabbitfx` profile remains shadow-only. The first specialized
   production profile is `wuwa:rabbitfx:body`, and it can be selected only by
   reliable exact body evidence. Material-kind overrides are authored at the
@@ -186,9 +194,10 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   Developer debug modes are capability-gated per material. Requesting an
   unsupported diagnostic leaves that material's normal rendering unchanged.
   Diagnostic-only packed channels do not choose a physical material or add
-  startup texture requests. Base-profile WuWa Normalmap B/A data is loaded
-  through the existing stable binding only while its diagnostic mode is active;
-  the body profile is the explicit exception because B/A affect its response.
+  startup texture requests by themselves. Base-profile WuWa `normal_data` is
+  loaded at startup because RG drives the normal; its B/A diagnostic views add
+  no request and only select the existing stable binding. The body profile is
+  the explicit exception because B/A affect its response.
 - A section with an `ib` but no `drawindexed` uses a synthetic whole-buffer
   draw. It inherits `diffuse_variants_at_end`; do not discard a section’s final
   diffuse. A real draw before the first diffuse legitimately remains untextured.
@@ -358,8 +367,10 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   non-DDS sources use the existing `.png` transport. The browser's strict DDS
   parser owns one-time fallback to that PNG URL, while diffuse color space is
   sRGB and every auxiliary role is non-color data regardless of a DDS SRGB
-  tag. WuWa `normal_map` remains transformed PNG and `normal_data` may use
-  native DDS. BC WebGPU support is optional and must never make WebGPU startup
+  tag. Genshin/ZZZ `normal_map` remains transformed PNG. WuWa publishes only
+  intact `normal_data`, which may use native DDS and is render-required for RG
+  normals even when B/A diagnostics are off. BC WebGPU support is optional and
+  must never make WebGPU startup
   fail. Compressed DDS uses one shared texture-matrix vertical convention so
   direct and PNG fallback renders have matching orientation for every role;
   this is transport behavior, not a game/material branch.

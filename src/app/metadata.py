@@ -7,6 +7,7 @@ from copy import deepcopy
 from core.mesh_builder import (encode_texture_key, normalize_texture_key,
                                split_texture_key)
 from core.material_kind import normalize_material_kind
+from core.texture_profiles import texture_profile_for
 
 METADATA_NAME = ".mod_viewer.json"
 PRESENT_NAMES_KEY = "__all__"
@@ -274,6 +275,16 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         saved = {}
 
     highlighted = {}
+    packed_normal_transport = (
+        texture_profile_for(texture_profile).normal_transport_role
+        == "normal_data")
+
+    def _role_key(value, role):
+        if not value:
+            return None
+        _source_role, relative_path = split_texture_key(value, role)
+        return normalize_texture_key(relative_path, role)
+
     for name, state in saved.items():
         if not isinstance(state, dict):
             continue
@@ -287,14 +298,31 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         _role, relative_path = split_texture_key(key)
         item = {"tex_key": key, "file": relative_path,
                 "label": label, "manual": manual}
-        for field in ("normal_map", "normal_data", "light_map",
-                      "material_map"):
+        fields = ("light_map", "material_map")
+        if not packed_normal_transport:
+            fields = ("normal_map", "normal_data", *fields)
+        for field in fields:
             value = normalize_texture_key(state.get(field), field)
             if value:
                 item[field] = value
             manual = state.get(f"{field}_manual")
             if isinstance(manual, bool) and manual:
                 item[f"{field}_manual"] = True
+        if packed_normal_transport:
+            packed = _role_key(state.get("normal_data"), "normal_data")
+            legacy = _role_key(state.get("normal_map"), "normal_map")
+            if packed:
+                item["normal_data"] = packed
+            elif legacy:
+                # Older WuWa metadata stored the same authored file under
+                # normal_map.  Migrate only the in-memory representation; the
+                # next legitimate save converges it on normal_data.
+                _legacy_role, legacy_path = split_texture_key(legacy)
+                item["normal_data"] = normalize_texture_key(
+                    legacy_path, "normal_data")
+            if (state.get("normal_data_manual") is True
+                    or state.get("normal_map_manual") is True):
+                item["normal_data_manual"] = True
         highlighted[name] = item
 
     restored = {}
@@ -332,10 +360,21 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
             else:
                 for field in ("normal_map", "normal_data", "light_map",
                               "material_map"):
-                    if opt.get(field):
+                    manual_key = f"{field}_manual"
+                    if opt.get(manual_key):
+                        old[manual_key] = True
+                        # A saved manual flag without a value is an explicit
+                        # tombstone. Remove the fresh INI-derived value
+                        # instead of merely winning future writes.
+                        if field in opt:
+                            if opt[field]:
+                                old[field] = opt[field]
+                            else:
+                                old.pop(field, None)
+                        else:
+                            old.pop(field, None)
+                    elif opt.get(field):
                         old[field] = opt[field]
-                    if opt.get(f"{field}_manual"):
-                        old[f"{field}_manual"] = True
 
     for name, entry in meshes.items():
         if not isinstance(entry, dict) or entry.get("error"):
@@ -348,9 +387,12 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         state = restored.get(_mesh_key(name, entry))
         texture_roles = [(state["tex_key"], None)] if state else []
         if state:
-            texture_roles.extend((state.get(field), field) for field in
-                                 ("normal_map", "normal_data", "light_map",
-                                  "material_map"))
+            fields = ("light_map", "material_map")
+            if not packed_normal_transport:
+                fields = ("normal_map", "normal_data", *fields)
+            else:
+                fields = ("normal_data", *fields)
+            texture_roles.extend((state.get(field), field) for field in fields)
         for key, role in texture_roles:
             if not key:
                 continue
