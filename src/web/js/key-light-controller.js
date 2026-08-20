@@ -147,7 +147,7 @@ export function createKeyLightController({
   function rebase(modelSize) {
     const distance = Math.max(modelSize * 0.55, 0.001);
     light.position.copy(controls.target).addScaledVector(
-      new THREE.Vector3(-0.55, 0.35, 0.82).normalize(), distance);
+      new THREE.Vector3(-0.55, 0.82, 0.35).normalize(), distance);
     handle.position.copy(light.position);
   }
 

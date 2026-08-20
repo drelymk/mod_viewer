@@ -312,8 +312,11 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   `exitRecordingUI()` calls the item’s `describe()` closure to restore its label.
 - Mesh and Toggle panels share `source` grouping: subfolder name, root INI stem,
   or `None` for one INI. Stamp it on groups and payload entries.
-- `#sidebar` and `#tool-panel` share the flex `#left-dock`; do not restore fixed
-  pixel offsets. Tool buttons remain available before load.
+- `#sidebar` participates in the flex `#left-dock` layout. `#tool-panel` remains
+  nested under `#left-dock` for ownership but is intentionally viewport-anchored:
+  center it horizontally and keep it above the fixed `#footer` with responsive
+  clearance. Tool buttons remain available before load; do not move Tools into
+  the dock flow or restore an old fixed-pixel dock offset.
 - The trackball button controls custom `#view-gizmo`. Take pointer capture only
   after drag threshold so click-to-snap works; reorder SVG axes only when depth
   order changes or pressed nodes lose clicks.
