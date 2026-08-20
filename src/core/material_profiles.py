@@ -50,11 +50,16 @@ class MaterialInterpretation:
     gloss: ChannelRef | None = None
     specular: ChannelRef | None = None
     ao: ChannelRef | None = None
-    # Genshin's R/B response is deliberately capped until the later LightMap
-    # toon-shadow and material-ID work. The source channels are classification
-    # data on some face materials, not a literal full-range metalness map.
+    # Genshin's R response is deliberately capped until the later LightMap
+    # threshold, toon-shadow, and material-ID work. The source channel is
+    # classification data on some face materials, not a literal full-range
+    # metalness map.
     metalness_scale: float = 1.0
     specular_scale: float = 1.0
+    # An optional influence blend keeps a mask from replacing the stock
+    # response outright. This is useful for Genshin's classification-like R
+    # channel; ZZZ's authored specular mask remains a direct response.
+    specular_influence: float | None = None
 
     def to_metadata(self):
         result = {
@@ -74,6 +79,7 @@ class MaterialInterpretation:
             "ao": self.ao.to_metadata() if self.ao else None,
             "metalness_scale": self.metalness_scale,
             "specular_scale": self.specular_scale,
+            "specular_influence": self.specular_influence,
         }
         return result
 
@@ -91,9 +97,12 @@ def _profile_for(game, texture_api):
             id=f"genshin:{texture_api}", game=game,
             texture_api=texture_api,
             metalness=ChannelRef("light_map", "r"),
-            specular=ChannelRef("light_map", "b"),
+            # R is the first-pass specular mask. B controls the toon
+            # highlight threshold and remains reserved for that later phase.
+            specular=ChannelRef("light_map", "r"),
             metalness_scale=0.08,
-            specular_scale=0.15,
+            specular_scale=1.0,
+            specular_influence=0.15,
         )
     if game == "wuwa":
         # RabbitFX/WuWa's packed normal/material layout is retained for the

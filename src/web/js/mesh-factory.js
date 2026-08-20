@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { decodeF32, decodeU32 } from './decode.js';
 import {
-  createGameMaterial, updateGameMaterialTextures,
+  createGameMaterial, getGameMaterialSources, updateGameMaterialTextures,
 } from './material-profile.js';
 import { getMeshView } from './mesh-view-bindings.js';
 
@@ -124,14 +124,17 @@ function getTexture(mesh, key, role = 'diffuse') {
 export function refreshMeshTexture(mesh) {
   const showDiffuse = textureMode !== 'none';
   const showMaterialMaps = textureMode === 'all';
+  const gameMaterialSources = getGameMaterialSources(mesh.material);
+  const usePackedSource = role =>
+    showMaterialMaps && gameMaterialSources.has(role);
   const map = showDiffuse ? getTexture(mesh, mesh.userData.texKey, 'diffuse') : null;
   const normalMap = showMaterialMaps && mesh.userData.normalMapEnabled !== false
     ? getTexture(mesh, mesh.userData.normalMapKey, 'normal_map') : null;
-  const normalData = showMaterialMaps
+  const normalData = usePackedSource('normal_data')
     ? getTexture(mesh, mesh.userData.normalDataKey, 'normal_data') : null;
-  const lightMap = showMaterialMaps
+  const lightMap = usePackedSource('light_map')
     ? getTexture(mesh, mesh.userData.lightMapKey, 'light_map') : null;
-  const materialMap = showMaterialMaps
+  const materialMap = usePackedSource('material_map')
     ? getTexture(mesh, mesh.userData.materialMapKey, 'material_map') : null;
   const aoMap = showMaterialMaps
     ? getTexture(mesh, mesh.userData.aoMapKey, 'occlusion_map') : null;

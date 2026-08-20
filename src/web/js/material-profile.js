@@ -24,6 +24,7 @@ uniform bool gameLightMapEnabled;
 uniform bool gameMaterialMapEnabled;
 uniform float gameMaterialMetalnessScale;
 uniform float gameMaterialSpecularScale;
+uniform float gameMaterialSpecularInfluence;
 `;
 
 function requiredReplace(source, marker, replacement, label) {
@@ -77,11 +78,19 @@ if ( ${info.enabled} ) {
   const specular = validRef(profile.specular)
     ? (() => {
       const info = SOURCE_INFO[profile.specular.source];
+      const sample = refExpression(profile.specular);
+      const influence = Number(profile.specular_influence);
+      const response = Number.isFinite(influence)
+        ? `mix(
+		1.0,
+		clamp( ${sample} * gameMaterialSpecularScale, 0.0, 1.0 ),
+		clamp( gameMaterialSpecularInfluence, 0.0, 1.0 ) )`
+        : `clamp(
+		${sample} * gameMaterialSpecularScale,
+		0.0, 1.0 )`;
       return `
 if ( ${info.enabled} ) {
-	gameMaterialSpecularResponse = clamp(
-		${refExpression(profile.specular)} * gameMaterialSpecularScale,
-		0.0, 1.0 );
+	gameMaterialSpecularResponse = ${response};
 }`;
     })() : '';
   return {
@@ -167,6 +176,10 @@ function materialUniforms(profile) {
       value: Number.isFinite(Number(profile?.specular_scale))
         ? Number(profile.specular_scale) : 1,
     },
+    gameMaterialSpecularInfluence: {
+      value: Number.isFinite(Number(profile?.specular_influence))
+        ? Number(profile.specular_influence) : 0,
+    },
   };
 }
 
@@ -233,6 +246,13 @@ export function updateGameMaterialTextures(mesh, maps) {
     state.uniforms[name].value = value;
   }
   return changed;
+}
+
+/** Return the packed roles sampled by this material's current shader. */
+export function getGameMaterialSources(material) {
+  const state = material?.userData?.gameMaterial;
+  if (!state?.packedResponse) return new Set();
+  return new Set(profileSources(state.profile));
 }
 
 /** Release adapter-side references before the owning material is disposed. */

@@ -95,10 +95,25 @@ def _packed_material_payload(profile_id="zzz:zzmi"):
             "metalness": {"source": "light_map", "channel": "r",
                            "invert": False},
             "gloss": None,
-            "specular": {"source": "light_map", "channel": "b",
+            "specular": {"source": "light_map", "channel": "r",
                           "invert": False},
             "ao": None, "metalness_scale": 0.08,
-            "specular_scale": 0.15,
+            "specular_scale": 1.0, "specular_influence": 0.15,
+        }
+    elif profile_id == "wuwa:rabbitfx":
+        profile = {
+            "id": profile_id, "game": "wuwa", "texture_api": "rabbitfx",
+            "normal_xy": ["r", "g"], "shadow_mask": None,
+            "material_id": None, "metalness": None, "gloss": None,
+            "specular": None, "ao": None, "metalness_scale": 1,
+            "specular_scale": 1,
+        }
+    elif profile_id == "none":
+        profile = {
+            "id": "none", "game": "unknown", "texture_api": "unknown",
+            "normal_xy": None, "shadow_mask": None, "material_id": None,
+            "metalness": None, "gloss": None, "specular": None,
+            "ao": None, "metalness_scale": 1, "specular_scale": 1,
         }
     else:
         profile = {
@@ -344,6 +359,7 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
             materialMap: !!game.uniforms.gameMaterialMap.value,
             metalnessScale: game.uniforms.gameMaterialMetalnessScale.value,
             specularScale: game.uniforms.gameMaterialSpecularScale.value,
+            specularInfluence: game.uniforms.gameMaterialSpecularInfluence.value,
             version: material.version,
           };
         }""")
@@ -355,7 +371,8 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
                          else "gameLightMapSample")
         assert source_sample in state["fragment"]
         assert state["metalnessScale"] == (1 if profile_id == "zzz:zzmi" else 0.08)
-        assert state["specularScale"] == (1 if profile_id == "zzz:zzmi" else 0.15)
+        assert state["specularScale"] == 1
+        assert state["specularInfluence"] == (0 if profile_id == "zzz:zzmi" else 0.15)
         assert state["materialMap"] if profile_id == "zzz:zzmi" else state["lightMap"]
 
         after = page.evaluate("""async () => {
@@ -380,6 +397,51 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
         }""")
         assert after == {"sameShader": True, "sameVersion": True,
                          "mapEnabled": False}
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize(("profile_id", "expected"), [
+    ("zzz:zzmi", {
+        "physical": True, "profile": "zzz:zzmi", "normalData": False,
+        "lightMap": False, "materialMap": True,
+    }),
+    ("genshin:gimi", {
+        "physical": True, "profile": "genshin:gimi", "normalData": False,
+        "lightMap": True, "materialMap": False,
+    }),
+    ("wuwa:rabbitfx", {
+        "physical": False, "profile": "wuwa:rabbitfx", "normalData": False,
+        "lightMap": False, "materialMap": False,
+    }),
+    ("none", {
+        "physical": False, "profile": None, "normalData": False,
+        "lightMap": False, "materialMap": False,
+    }),
+])
+def test_packed_material_sources_are_loaded_only_when_sampled(
+        edge_browser, frontend_url, profile_id, expected):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"Packed": _packed_material_payload(profile_id)},
+    )
+    try:
+        _open(page, "Packed")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_timeout(300)
+        state = page.evaluate("""() => {
+          const material = window.modViewer.activeMeshes[0].material;
+          const game = material.userData.gameMaterial;
+          const uniforms = game?.uniforms || {};
+          return {
+            physical: !!material.isMeshPhysicalMaterial,
+            profile: game?.profile?.id || null,
+            normalData: !!uniforms.gameNormalData?.value,
+            lightMap: !!uniforms.gameLightMap?.value,
+            materialMap: !!uniforms.gameMaterialMap?.value,
+          };
+        }""")
+        assert state == expected
     finally:
         context.close()
 
