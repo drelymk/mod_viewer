@@ -2,14 +2,11 @@
 
 import { addTexture, hasTexture, setMeshTextureState } from './mesh-factory.js';
 import { activeMeshes } from './mesh-state.js';
+import { usesPackedNormal } from './material-profile.js';
 import { setHealthReport } from './health-report.js';
 
-function usesPackedNormal(mesh) {
-  return mesh.material?.userData?.gameMaterial?.normalSource === 'normal_data';
-}
-
 function normalMapsFor(mesh, option) {
-  if (usesPackedNormal(mesh)) {
+  if (usesPackedNormal(mesh.material)) {
     return {
       normal_map: null,
       normal_data: option?.normal_data || null,
@@ -120,7 +117,7 @@ export function saveTextureState(modPath) {
       light_map_manual: !!option.light_map_manual,
       material_map_manual: !!option.material_map_manual,
     };
-    if (!usesPackedNormal(mesh)) {
+    if (!usesPackedNormal(mesh.material)) {
       savedState.normal_map = option.normal_map || null;
       savedState.normal_map_manual = !!option.normal_map_manual;
     }

@@ -443,17 +443,27 @@ def test_eligible_dds_uses_stable_compressed_texture_when_bc_is_available(
     try:
         _open(page, "DirectDDS")
         page.wait_for_function(
-            "window.modViewer.activeMeshes[0]?.material?.map?.image?.width === 4")
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings?.diffuse?.textureNode?.value?.image?.width === 4")
         state = page.evaluate("""async () => {
           const {supportsBCTextureCompression} =
             await import('./js/renderer-capabilities.js');
           const mesh = window.modViewer.activeMeshes[0];
           const material = mesh.material;
+          const diffuse = material.userData.gameMaterial.bindings.diffuse
+            .textureNode.value;
           const beforeVersion = material.version;
           return {
             bc: supportsBCTextureCompression(),
-            compressed: material.map?.isCompressedTexture === true,
-            colorSpace: material.map?.colorSpace,
+            compressed: diffuse?.isCompressedTexture === true,
+            colorSpace: diffuse?.colorSpace,
+            stockMaps: {
+              diffuse: material.map,
+              normal: material.normalMap,
+              ao: material.aoMap,
+              roughness: material.roughnessMap,
+              metalness: material.metalnessMap,
+            },
             stableMaterial: material === mesh.material,
             version: material.version,
             beforeVersion,
@@ -463,6 +473,10 @@ def test_eligible_dds_uses_stable_compressed_texture_when_bc_is_available(
         assert state["version"] == state["beforeVersion"]
         assert state["colorSpace"] == "srgb"
         assert state["compressed"] is state["bc"]
+        assert state["stockMaps"] == {
+            "diffuse": None, "normal": None, "ao": None,
+            "roughness": None, "metalness": None,
+        }
     finally:
         context.close()
 
@@ -480,7 +494,8 @@ def test_direct_dds_matches_png_orientation_and_diffuse_color(
     try:
         _open(page, "Parity")
         page.wait_for_function(
-            "window.modViewer.activeMeshes[0]?.material?.map?.image?.width === 4")
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings?.diffuse?.textureNode?.value?.image?.width === 4")
         page.wait_for_timeout(250)
         direct_pixels = [
             _sample_mesh_pixel_at(page, 0, 0.65),
@@ -494,8 +509,10 @@ def test_direct_dds_matches_png_orientation_and_diffuse_color(
           refreshMeshTexture(mesh);
         }""", {"key": "diffuse::Parity-one.png", "uri": png_url})
         page.wait_for_function(
-            "window.modViewer.activeMeshes[0]?.material?.map?.image?.width === 4"
-            " && window.modViewer.activeMeshes[0]?.material?.map?.isCompressedTexture !== true")
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings?.diffuse?.textureNode?.value?.image?.width === 4"
+            " && window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings?.diffuse?.textureNode?.value?.isCompressedTexture !== true")
         page.wait_for_timeout(250)
         png_pixels = [
             _sample_mesh_pixel_at(page, 0, 0.65),
@@ -955,6 +972,7 @@ def test_missing_material_profile_uses_conservative_material_without_packed_maps
               ?.enabledNode?.value ?? false,
             map: !!material.map,
             normalMap: !!material.normalMap,
+            aoMap: !!material.aoMap,
             lightMapKey: mesh.userData.lightMapKey,
           };
         }""")
@@ -962,7 +980,7 @@ def test_missing_material_profile_uses_conservative_material_without_packed_maps
             "profileId": "missing:profile", "profile": None,
             "physical": False, "gameMaterial": True,
             "packedResponse": False, "lightMap": False,
-            "map": True, "normalMap": False,
+            "map": False, "normalMap": False, "aoMap": False,
             "lightMapKey": "light_map::Packed-light.png",
         }
     finally:

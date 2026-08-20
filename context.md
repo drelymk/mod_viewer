@@ -441,7 +441,7 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   `texture_options` array (normally attached for pools of 2+). When absent,
   create one fresh component-local empty array. Always render the component
   texture button, even with zero textures; its active state follows whether any
-  component mesh resolves a real `material.map`. Child lists are rerenderable
+  component mesh has its diffuse TSL binding enabled. Child lists are rerenderable
   closures invoked after pool changes and reread `manualTexOverride`; one-time
   DOM snapshots become stale. Automatic texture-run propagation starts from
   each boundary’s live `resolvedTexKey`.

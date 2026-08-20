@@ -349,6 +349,8 @@ rendererReady.then(ready => {
       hasNormalData: !!(game?.hasNormalDataB || game?.hasNormalDataA),
       hasNormalDataB: !!game?.hasNormalDataB,
       hasNormalDataA: !!game?.hasNormalDataA,
+      diffuseBound: !!game?.bindings?.diffuse?.enabledNode?.value,
+      normalMapBound: !!game?.bindings?.normal_map?.enabledNode?.value,
       shadowMaskBound: !!game?.bindings?.light_map?.enabledNode?.value,
       normalSource: game?.normalSource || 'normal_map',
       normalPacking: game?.normalPacking || 'rgb',

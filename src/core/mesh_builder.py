@@ -23,8 +23,7 @@ _MAX_IMAGE_PIXELS = 100_000_000
 TEXTURE_ROLES = (
     "diffuse", "normal_map", "normal_data", "light_map", "material_map")
 TEXTURE_TRANSFORMS = (
-    "passthrough", "normal_xy_reconstruct", "channel_r", "channel_g",
-    "channel_b", "channel_a",
+    "passthrough", "normal_xy_reconstruct",
 )
 _texture_cache = OrderedDict()
 _texture_cache_bytes = 0
@@ -375,23 +374,10 @@ def _reconstruct_normal_z(img):
     return Image.frombytes("RGB", img.size, bytes(result))
 
 
-def _extract_channel_mask(img, channel):
-    """Extract one explicitly requested channel as a neutral RGB mask."""
-    channel = str(channel or "B").upper()
-    if channel not in "RGBA":
-        raise ValueError(f"Unknown image channel: {channel}")
-    source = img.convert("RGBA") if channel == "A" else img.convert("RGB")
-    selected = source.getchannel(channel)
-    from PIL import Image
-    return Image.merge("RGB", (selected, selected, selected))
-
-
 def _apply_texture_transform(img, texture_transform):
     texture_transform = normalize_texture_transform(texture_transform)
     if texture_transform == "normal_xy_reconstruct":
         return _reconstruct_normal_z(img)
-    if texture_transform.startswith("channel_"):
-        return _extract_channel_mask(img, texture_transform[-1])
     return img
 
 
@@ -428,19 +414,13 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
         _profile_elapsed("decode", stage_started,
                          path=cache_key[0], role=texture_role,
                          transform=texture_transform)
-        # Preserve the authored source channels whenever the caller asks for
-        # alpha, when a packed map is passed through unchanged, or when a
-        # channel mask will be extracted.  The latter must happen before any
-        # RGB conversion turns an authored alpha channel into opaque 255s.
+        # Preserve authored RGBA for packed maps and explicit alpha requests.
         # Derived normal images intentionally become RGB after their source
         # channels have been interpreted.
         packed_passthrough = (
             texture_transform == "passthrough"
             and texture_role != "diffuse")
-        keep_source_alpha = (
-            preserve_alpha
-            or packed_passthrough
-            or texture_transform.startswith("channel_"))
+        keep_source_alpha = preserve_alpha or packed_passthrough
         stage_started = _profile_started()
         try:
             img = img.convert('RGBA' if keep_source_alpha else 'RGB')
@@ -466,11 +446,8 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
             try:
                 img = _apply_texture_transform(img, texture_transform)
             finally:
-                stage = ("normal_z_reconstruction"
-                         if texture_transform == "normal_xy_reconstruct"
-                         else "channel_mask_extraction")
                 _profile_elapsed(
-                    stage,
+                    "normal_z_reconstruction",
                     stage_started,
                     path=cache_key[0], role=texture_role,
                     transform=texture_transform)
@@ -843,12 +820,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 tex_uris[key] = value or ""
             return key
 
-        def _ensure_normal_data(dds_path):
-            """Retain a raw authored normal source when the profile needs it."""
-            if not texture_profile.retain_normal_data:
-                return None
-            return _ensure_texture(dds_path, "normal_data")
-
         # Every diffuse this component's ini ever references, resolved once
         # and shared by every draw in the group -- the UI's per-mesh texture
         # picker list (core/ini_parser.py's build_draw_groups). Uses the same
@@ -955,13 +926,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 "pos": _geometry_ref(pos_bytes, geometry),
                 "idx": _geometry_ref(idx_bytes, geometry),
                 "tex_key": default_key,
-                # Authored auxiliary keys remain visible even when the
-                # conservative profile chooses not to bind them.  An
-                # explicit AO slot is reserved for a future validated
-                # derived map and is intentionally empty today.
                 "normal_map_y_sign": texture_profile.normal_y_sign,
                 "normal_map_enabled": texture_profile.bind_normal_map,
-                "ao_map_key": None,
             }
             # NormalMap is a user-facing authored role, but its transport is
             # profile-owned.  WuWa publishes the intact packed source as
@@ -972,14 +938,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             normal_key = _ensure_texture(normal_path, normal_role)
             if normal_key:
                 entry[f"{normal_role}_key"] = normal_key
-            # Profiles that use a derived normal may still explicitly retain
-            # an authored packed source for a future adapter.  Do not create a
-            # second registry entry when the transport role already is
-            # normal_data.
-            if normal_role != "normal_data":
-                normal_data_key = _ensure_normal_data(normal_path)
-                if normal_data_key:
-                    entry["normal_data_key"] = normal_data_key
             for channel in ("light_map", "material_map"):
                 key = _ensure_texture(_safe_join(
                     mod_dir, draw.get(f"{channel}_default_file")), channel)
@@ -1057,18 +1015,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     })
             if normal_variants:
                 entry[f"{normal_role}_variants"] = normal_variants
-            if normal_role != "normal_data" and texture_profile.retain_normal_data:
-                data_variants = []
-                for variant in normal_rules:
-                    key = _ensure_normal_data(_safe_join(
-                        mod_dir, variant["file"]))
-                    if key:
-                        data_variants.append({
-                            "conditions": variant["conditions"],
-                            "tex_key": key,
-                        })
-                if data_variants:
-                    entry["normal_data_variants"] = data_variants
             # Keep even a single resolved texture in the UI pool. A component
             # with one diffuse still has a useful texture to display/manage;
             # only components with no resolved textures need the frontend's

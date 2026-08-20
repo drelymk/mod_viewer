@@ -169,6 +169,8 @@ def test_texture_registry_identity_includes_role():
                   "diffuse::shared.png", "normal_map::shared.png"}
               and entry["tex_key"] == "diffuse::shared.png"
               and entry["normal_map_key"] == "normal_map::shared.png"), ("mesh building keeps shared diffuse and normal roles separate")
+        assert "normal_data_key" not in entry
+        assert "ao_map_key" not in entry
 
 
 def test_wuwa_publishes_one_intact_normal_data_source():
@@ -203,6 +205,7 @@ def test_wuwa_publishes_one_intact_normal_data_source():
         assert entry["normal_data_key"] == "normal_data::normal.png"
         assert "normal_map_key" not in entry
         assert entry["normal_map_enabled"] is False
+        assert "ao_map_key" not in entry
         assert set(built.textures) == {"normal_data::normal.png"}
         assert uri_mode(built.textures[entry["normal_data_key"]]) == "RGBA"
 

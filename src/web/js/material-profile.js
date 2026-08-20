@@ -86,7 +86,6 @@ const PACKED_PLACEHOLDER = createPlaceholder(
 const PLACEHOLDERS = Object.freeze({
   diffuse: DIFFUSE_PLACEHOLDER,
   normal_map: NORMAL_PLACEHOLDER,
-  occlusion_map: PACKED_PLACEHOLDER,
   normal_data: PACKED_PLACEHOLDER,
   light_map: PACKED_PLACEHOLDER,
   material_map: PACKED_PLACEHOLDER,
@@ -176,11 +175,9 @@ function createBindings(hasUv) {
   // Keep the UV nodes stable for the lifetime of the material. They are only
   // attached to the graph when the geometry actually has a UV attribute.
   const primaryUv = hasUv ? uv() : null;
-  const secondaryUv = hasUv ? uv(1) : null;
   return {
     diffuse: createBinding('diffuse', primaryUv),
     normal_map: createBinding('normal_map', primaryUv),
-    occlusion_map: createBinding('occlusion_map', secondaryUv),
     normal_data: createBinding('normal_data', primaryUv),
     light_map: createBinding('light_map', primaryUv),
     material_map: createBinding('material_map', primaryUv),
@@ -305,12 +302,9 @@ function setStableMaterialNodes(material, state, fallbackColor) {
       bindings.diffuse.textureNode.rgb, color(fallbackColor));
     material.normalNode = createProfileNormalNode(
       profile, bindings, state.normalScaleNode, fallbackNormal);
-    material.aoNode = bindings.occlusion_map.enabledNode.select(
-      bindings.occlusion_map.textureNode.r, float(1));
   } else {
     baseColor = color(fallbackColor);
     material.normalNode = fallbackNormal;
-    material.aoNode = float(1);
   }
   material.colorNode = createDebugOutputNode(state, baseColor);
 
@@ -726,7 +720,6 @@ export function configureGameMaterial(material, profile, options = {}) {
   state.nodes = {
     diffuse: state.bindings.diffuse,
     normal: state.bindings[normalSource],
-    ao: state.bindings.occlusion_map,
     normalData: state.bindings.normal_data,
     lightMap: state.bindings.light_map,
     materialMap: state.bindings.material_map,
@@ -753,7 +746,6 @@ export function updateGameMaterialTextures(mesh, maps = {}) {
   const values = {
     diffuse: maps.diffuse,
     normal_map: maps.normal_map,
-    occlusion_map: maps.ao_map,
     normal_data: maps.normal_data,
     light_map: maps.light_map,
     material_map: maps.material_map,
@@ -766,6 +758,20 @@ export function updateGameMaterialTextures(mesh, maps = {}) {
       1, Number.isFinite(maps.normal_map_y_sign) ? maps.normal_map_y_sign : -1);
   }
   return changed;
+}
+
+export function usesPackedNormal(material) {
+  return material?.userData?.gameMaterial?.normalSource === 'normal_data';
+}
+
+export function isGameMaterialTextureBound(material, role) {
+  return material?.userData?.gameMaterial?.bindings?.[role]
+    ?.enabledNode?.value === true;
+}
+
+export function getGameMaterialTexture(material, role) {
+  const binding = material?.userData?.gameMaterial?.bindings?.[role];
+  return binding?.enabledNode?.value ? binding.textureNode.value : null;
 }
 
 /** Return the packed roles sampled by this material's current node graph. */

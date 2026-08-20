@@ -38,8 +38,7 @@ async function pickInto(opt, field) {
   if (result.error) return showError(result.error);
   addTexture(result.tex_key, result.uri);
   if (field === 'normal_map') {
-    const transportRole = result.role || result.texture_role
-      || String(result.tex_key || '').split('::', 1)[0];
+    const transportRole = result.role;
     if (transportRole === 'normal_data') {
       delete opt.normal_map;
       delete opt.normal_map_manual;
@@ -48,14 +47,8 @@ async function pickInto(opt, field) {
     } else {
       opt.normal_map = result.tex_key;
       opt.normal_map_manual = true;
-      if (result.normal_data_key) {
-        addTexture(result.normal_data_key, result.normal_data_uri);
-        opt.normal_data = result.normal_data_key;
-        opt.normal_data_manual = true;
-      } else {
-        delete opt.normal_data;
-        delete opt.normal_data_manual;
-      }
+      delete opt.normal_data;
+      delete opt.normal_data_manual;
     }
   } else {
     opt[field] = result.tex_key;
