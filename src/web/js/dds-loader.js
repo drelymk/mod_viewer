@@ -156,7 +156,7 @@ export function parseDDS(input) {
       fail('truncated mip payload');
     }
     const mip = COMPRESSED_FORMATS.has(header.format)
-      ? { data: bytes.slice(offset, offset + length), width, height }
+      ? { data: bytes.subarray(offset, offset + length), width, height }
       : decodeUncompressed(bytes, offset, length, width, height, header.format);
     mipmaps.push(mip);
     offset += length;
@@ -178,7 +178,6 @@ export function parseDDS(input) {
 function setDDSOrientation(texture, compressed) {
   texture.flipY = compressed ? false : true;
   if (compressed) {
-    texture.wrapT = THREE.RepeatWrapping;
     texture.repeat.y = -1;
     texture.offset.y = 1;
   } else {

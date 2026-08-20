@@ -290,6 +290,22 @@ def test_explicit_manual_validation_rejects_invalid_image(tmp_path):
     assert validated_dds_url.endswith(".dds")
 
 
+def test_lazy_known_texture_resolution_skips_png_validation(tmp_path):
+    path = tmp_path / "pool.png"
+    Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
+    publication = server.begin_texture_publication(str(tmp_path))
+    publication.commit()
+
+    api = ModViewerAPI()
+    api._authorized_folders.add(os.path.normcase(os.path.abspath(tmp_path)))
+    with patch.object(server, "_render_texture_source",
+                      side_effect=AssertionError("lazy pool load rendered")):
+        result = api.load_texture_file(str(tmp_path), "diffuse::pool.png")
+
+    assert result["tex_key"] == "diffuse::pool.png"
+    assert result["uri"].endswith("/0.png")
+
+
 def test_texture_endpoint_serves_png_and_keeps_source_reusable(tmp_path):
     path = tmp_path / "shared.png"
     Image.new("RGB", (2, 1), (128, 128, 32)).save(path)
