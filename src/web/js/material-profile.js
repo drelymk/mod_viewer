@@ -99,18 +99,30 @@ function hasNumericValue(value) {
   return value != null && Number.isFinite(Number(value));
 }
 
-function profileSources(profile) {
-  return [profile?.shadow_mask, profile?.material_id, profile?.metalness,
-    profile?.specular, profile?.specular_area]
+function profileRenderSources(profile) {
+  return [profile?.shadow_mask, profile?.metalness, profile?.specular,
+    profile?.specular_area]
     .filter(validRef)
     .map(ref => ref.source)
     .filter((source, index, all) => all.indexOf(source) === index);
+}
+
+function profileDebugSource(profile, mode) {
+  let ref = null;
+  if (mode === 'material-id') ref = profile?.material_id;
+  else if (mode === 'shadow-mask') ref = profile?.shadow_mask;
+  else if (mode === 'normal-data-b') ref = profile?.normal_data_b;
+  else if (mode === 'normal-data-a') ref = profile?.normal_data_a;
+  return validRef(ref) ? ref.source : null;
 }
 
 const DEBUG_MODE_VALUES = Object.freeze({
   off: 0,
   'material-id': 1,
   'specular-area': 2,
+  'shadow-mask': 3,
+  'normal-data-b': 4,
+  'normal-data-a': 5,
 });
 
 function normalizeDebugMode(mode) {
@@ -128,7 +140,7 @@ export function decodeMaterialIdValue(raw, decoder) {
 }
 
 function hasPackedResponse(profile) {
-  return profileSources(profile).length > 0;
+  return profileRenderSources(profile).length > 0;
 }
 
 function createBinding(role, uvNode) {
@@ -204,18 +216,38 @@ function createSpecularAreaNode(profile, bindings) {
     : float(1);
 }
 
-function debugColorNode(state, baseColor) {
-  const materialIdColor = state.hasMaterialId
-    ? materialIdDebugColor(state.materialIdNode)
-    : baseColor;
-  const areaColor = state.hasSpecularArea
-    ? vec3(state.specularAreaNode)
-    : baseColor;
-  state.debugOutputNode = state.debugModeNode.lessThan(1.5).select(
-    materialIdColor, areaColor);
-  return state.debugModeNode.lessThan(0.5).select(
-    baseColor, state.debugModeNode.lessThan(1.5).select(
-      materialIdColor, areaColor));
+function createRawChannelNode(ref, bindings) {
+  return validRef(ref)
+    ? enabledChannelNode(ref, bindings, 0)
+    : float(0);
+}
+
+function createDebugOutputNode(state, baseColor) {
+  // Build the mode table once while the material graph is created.  An
+  // unsupported mode has no active branch, so the final output remains the
+  // normal shaded result for that material in a mixed-profile scene.
+  const outputs = [
+    ['material-id', state.hasMaterialId
+      ? materialIdDebugColor(state.materialIdNode) : null],
+    ['specular-area', state.hasSpecularArea
+      ? vec3(state.specularAreaNode) : null],
+    ['shadow-mask', state.hasShadowMask ? vec3(state.shadowMaskNode) : null],
+    ['normal-data-b', state.hasNormalDataB
+      ? vec3(state.normalDataBNode) : null],
+    ['normal-data-a', state.hasNormalDataA
+      ? vec3(state.normalDataANode) : null],
+  ].filter(([, node]) => node !== null);
+
+  let output = baseColor;
+  let active = float(0);
+  for (const [mode, node] of outputs.reverse()) {
+    const selected = state.debugModeNode.equal(DEBUG_MODE_VALUES[mode]);
+    output = selected.select(node, output);
+    active = selected.select(1, active);
+  }
+  state.debugOutputNode = output;
+  state.debugActiveNode = active;
+  return output;
 }
 
 function materialIdDebugColor(materialIdNode) {
@@ -244,7 +276,7 @@ function setStableMaterialNodes(material, state, fallbackColor) {
     material.normalNode = fallbackNormal;
     material.aoNode = float(1);
   }
-  material.colorNode = debugColorNode(state, baseColor);
+  material.colorNode = createDebugOutputNode(state, baseColor);
 
   if (!state.packedResponse) return;
 
@@ -353,6 +385,58 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
   }
 }
 
+/**
+ * WuWa's validated base response uses LightMap.G as an authored shadow mask
+ * over a direct-light N·L boundary.  Like the Genshin model, only the direct
+ * diffuse contribution produced by this invocation is replaced, so multiple
+ * directional lights remain additive and indirect terms are untouched.
+ */
+class WuwaLightingModel extends ThreePhysicalLightingModel {
+  constructor(material, state) {
+    super(...physicalLightingFlags(material));
+    this.gameMaterialState = state;
+  }
+
+  direct(lightData, builder) {
+    const { lightDirection, reflectedLight } = lightData;
+    const diffuseBefore = reflectedLight.directDiffuse.toVar('wuwaDirectDiffuseBefore');
+    super.direct(lightData, builder);
+
+    const {
+      profile,
+      bindings,
+      wuwaShadowProcessNode,
+      wuwaShadowFrontOffsetNode,
+      wuwaShadowWidthNode,
+      wuwaShadowInfluenceNode,
+    } = this.gameMaterialState;
+    const maskRef = profile.shadow_mask;
+    const maskBinding = validRef(maskRef) ? bindings[maskRef.source] : null;
+    const ndotl = normalView.dot(lightDirection);
+    const area = ndotl.add(wuwaShadowFrontOffsetNode);
+    const width = wuwaShadowWidthNode.add(0.25).clamp(0, 1);
+    const lightBoundary = smoothstep(
+      wuwaShadowProcessNode,
+      wuwaShadowProcessNode.add(width),
+      area,
+    );
+    const authoredMask = maskBinding
+      ? enabledChannelNode(maskRef, bindings, 1) : float(1);
+    const shadowArea = lightBoundary.mul(authoredMask).clamp(0, 1);
+    const computedFactor = mix(
+      float(1), shadowArea, wuwaShadowInfluenceNode);
+    // A missing Lightmap is an explicit no-mask case, not permission to
+    // borrow Diffuse.A or a Normalmap channel.
+    const factor = maskBinding
+      ? maskBinding.enabledNode.select(computedFactor, float(1))
+      : float(1);
+
+    const diffuseContribution = reflectedLight.directDiffuse.sub(diffuseBefore);
+    reflectedLight.directDiffuse.assign(
+      diffuseBefore.add(diffuseContribution.mul(factor)));
+  }
+}
+
 class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
   setupSpecular() {
     const response = this.userData.gameMaterial?.specularResponseNode ?? float(1);
@@ -372,8 +456,11 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
 
   setupLightingModel() {
     const state = this.userData.gameMaterial;
-    if (validRef(state?.profile?.shadow_mask)) {
+    if (state?.profile?.direct_shadow_model === 'genshin_toon') {
       return new GenshinLightingModel(this, state);
+    }
+    if (state?.profile?.direct_shadow_model === 'wuwa_base') {
+      return new WuwaLightingModel(this, state);
     }
     return new ThreePhysicalLightingModel(...physicalLightingFlags(this));
   }
@@ -381,10 +468,20 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
   setupOutput(builder, outputNode) {
     const result = super.setupOutput(builder, outputNode);
     const state = this.userData.gameMaterial;
-    if (!state?.debugOutputNode) return result;
+    if (!state?.debugOutputNode || !state?.debugActiveNode) return result;
     // Keep diagnostics out of the lighting, environment and fog result while
     // leaving the normal graph and pipeline selected by the same uniform.
-    return state.debugModeNode.lessThan(0.5).select(
+    return state.debugActiveNode.lessThan(0.5).select(
+      result, vec4(state.debugOutputNode, result.a));
+  }
+}
+
+class GameStandardNodeMaterial extends MeshStandardNodeMaterial {
+  setupOutput(builder, outputNode) {
+    const result = super.setupOutput(builder, outputNode);
+    const state = this.userData.gameMaterial;
+    if (!state?.debugOutputNode || !state?.debugActiveNode) return result;
+    return state.debugActiveNode.lessThan(0.5).select(
       result, vec4(state.debugOutputNode, result.a));
   }
 }
@@ -401,7 +498,7 @@ export function createGameMaterial(profile, fallbackColor, options = {}) {
   };
   const material = packedResponse
     ? new GamePhysicalNodeMaterial({ ...materialOptions, specularIntensity: 1.0 })
-    : new MeshStandardNodeMaterial(materialOptions);
+    : new GameStandardNodeMaterial(materialOptions);
   configureGameMaterial(material, profile, { packedResponse, hasUv, fallbackColor });
   return material;
 }
@@ -412,11 +509,24 @@ export function configureGameMaterial(material, profile, options = {}) {
   const packedResponse = Boolean(
     (options.packedResponse ?? hasPackedResponse(profile)) && hasUv);
   const resolvedProfile = profile || { id: 'none' };
-  const hasMaterialId = packedResponse && hasUv
+  const hasMaterialId = hasUv
     && validRef(resolvedProfile.material_id)
     && resolvedProfile.material_id_decoder === 'genshin_5_region';
-  const hasSpecularArea = packedResponse && hasUv
+  const hasSpecularArea = hasUv
     && validRef(resolvedProfile.specular_area);
+  const hasShadowMask = hasUv
+    && validRef(resolvedProfile.shadow_mask);
+  const hasNormalDataB = hasUv
+    && validRef(resolvedProfile.normal_data_b);
+  const hasNormalDataA = hasUv
+    && validRef(resolvedProfile.normal_data_a);
+  const supportedDebugModes = [
+    hasMaterialId ? 'material-id' : null,
+    hasSpecularArea ? 'specular-area' : null,
+    hasShadowMask ? 'shadow-mask' : null,
+    hasNormalDataB ? 'normal-data-b' : null,
+    hasNormalDataA ? 'normal-data-a' : null,
+  ].filter(Boolean);
   const state = {
     profile: resolvedProfile,
     packedResponse,
@@ -431,8 +541,19 @@ export function configureGameMaterial(material, profile, options = {}) {
       numericOr(profile?.shadow_mask_strength, 0.5)),
     shadowInfluenceNode: uniform(
       numericOr(profile?.shadow_influence, 1.0)),
+    wuwaShadowProcessNode: uniform(
+      numericOr(profile?.wuwa_shadow_process, 0.55)),
+    wuwaShadowFrontOffsetNode: uniform(
+      numericOr(profile?.wuwa_shadow_front_offset, 0.4)),
+    wuwaShadowWidthNode: uniform(
+      numericOr(profile?.wuwa_shadow_width, 0.01)),
+    wuwaShadowInfluenceNode: uniform(
+      numericOr(profile?.wuwa_shadow_influence, 1.0)),
     materialIdNode: float(0),
     specularAreaNode: float(1),
+    shadowMaskNode: float(0),
+    normalDataBNode: float(0),
+    normalDataANode: float(0),
     toonSpecularShininessNode: uniform(
       numericOr(profile?.toon_specular_shininess, 10.0)),
     toonSpecularThresholdBiasNode: uniform(
@@ -444,6 +565,10 @@ export function configureGameMaterial(material, profile, options = {}) {
     debugModeNode: uniform(0),
     hasMaterialId,
     hasSpecularArea,
+    hasShadowMask,
+    hasNormalDataB,
+    hasNormalDataA,
+    supportedDebugModes,
   };
   // Channel nodes need the final binding table, but the node objects remain
   // stable for the lifetime of the material. Conservative no-UV materials
@@ -453,6 +578,15 @@ export function configureGameMaterial(material, profile, options = {}) {
     ? createMaterialIdNode(resolvedProfile, state.bindings) : float(0);
   state.specularAreaNode = hasSpecularArea
     ? createSpecularAreaNode(resolvedProfile, state.bindings) : float(1);
+  state.shadowMaskNode = hasShadowMask
+    ? createRawChannelNode(resolvedProfile.shadow_mask, state.bindings)
+    : float(0);
+  state.normalDataBNode = hasNormalDataB
+    ? createRawChannelNode(resolvedProfile.normal_data_b, state.bindings)
+    : float(0);
+  state.normalDataANode = hasNormalDataA
+    ? createRawChannelNode(resolvedProfile.normal_data_a, state.bindings)
+    : float(0);
   state.sources = state.bindings;
   state.nodes = {
     diffuse: state.bindings.diffuse,
@@ -502,8 +636,12 @@ export function updateGameMaterialTextures(mesh, maps = {}) {
 /** Return the packed roles sampled by this material's current node graph. */
 export function getGameMaterialSources(material) {
   const state = material?.userData?.gameMaterial;
-  if (!state?.packedResponse) return new Set();
-  return new Set(profileSources(state.profile));
+  if (!state || !state.hasUv) return new Set();
+  const sources = new Set(profileRenderSources(state.profile));
+  const debugSource = profileDebugSource(
+    state.profile, getMaterialDebugMode(material));
+  if (debugSource) sources.add(debugSource);
+  return sources;
 }
 
 /** Release adapter-side references before the owning material is disposed. */

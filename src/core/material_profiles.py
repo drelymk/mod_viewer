@@ -47,6 +47,11 @@ class MaterialInterpretation:
     texture_api: str
     material_kind: str = "unknown"
     normal_xy: tuple[str, str] | None = None
+    # These are diagnostic-only views of packed WuWa normal data.  They are
+    # deliberately separate from metalness/gloss/specular so the packed B/A
+    # channels cannot become stock PBR inputs by accident.
+    normal_data_b: ChannelRef | None = None
+    normal_data_a: ChannelRef | None = None
     shadow_mask: ChannelRef | None = None
     material_id: ChannelRef | None = None
     material_id_decoder: str | None = None
@@ -72,10 +77,18 @@ class MaterialInterpretation:
     shadow_softness: float = 0.08
     shadow_mask_strength: float = 0.5
     shadow_influence: float = 1.0
+    direct_shadow_model: str | None = None
+    wuwa_shadow_process: float = 0.55
+    wuwa_shadow_front_offset: float = 0.4
+    wuwa_shadow_width: float = 0.01
+    wuwa_shadow_influence: float = 1.0
 
     def __post_init__(self):
         if self.material_kind not in MATERIAL_KINDS:
             raise ValueError(f"Unknown material kind: {self.material_kind}")
+        if self.direct_shadow_model not in (None, "genshin_toon", "wuwa_base"):
+            raise ValueError(
+                f"Unknown direct shadow model: {self.direct_shadow_model}")
 
     def to_metadata(self):
         result = {
@@ -84,6 +97,10 @@ class MaterialInterpretation:
             "texture_api": self.texture_api,
             "material_kind": self.material_kind,
             "normal_xy": list(self.normal_xy) if self.normal_xy else None,
+            "normal_data_b": (self.normal_data_b.to_metadata()
+                              if self.normal_data_b else None),
+            "normal_data_a": (self.normal_data_a.to_metadata()
+                              if self.normal_data_a else None),
             "shadow_mask": (self.shadow_mask.to_metadata()
                             if self.shadow_mask else None),
             "material_id": (self.material_id.to_metadata()
@@ -108,6 +125,11 @@ class MaterialInterpretation:
             "shadow_softness": self.shadow_softness,
             "shadow_mask_strength": self.shadow_mask_strength,
             "shadow_influence": self.shadow_influence,
+            "direct_shadow_model": self.direct_shadow_model,
+            "wuwa_shadow_process": self.wuwa_shadow_process,
+            "wuwa_shadow_front_offset": self.wuwa_shadow_front_offset,
+            "wuwa_shadow_width": self.wuwa_shadow_width,
+            "wuwa_shadow_influence": self.wuwa_shadow_influence,
         }
         return result
 
@@ -142,13 +164,25 @@ def _base_profile_for(game, texture_api):
             toon_specular_threshold_bias=1.015,
             toon_specular_softness=0.0,
             toon_specular_metal_cutoff=0.90,
+            direct_shadow_model="genshin_toon",
         )
     if game == "wuwa":
         # RabbitFX/WuWa's packed normal/material layout is retained for the
-        # shader adapter, but Z/W semantics remain unguessed in this PR.
+        # shader adapter. B/A are exposed only as raw diagnostics; their
+        # material response remains deliberately unguessed in this PR.
+        kwargs = {
+            "normal_xy": ("r", "g"),
+            "normal_data_b": ChannelRef("normal_data", "b"),
+            "normal_data_a": ChannelRef("normal_data", "a"),
+        }
+        if texture_api == "rabbitfx":
+            kwargs.update(
+                shadow_mask=ChannelRef("light_map", "g"),
+                direct_shadow_model="wuwa_base",
+            )
         return MaterialInterpretation(
             id=f"wuwa:{texture_api}", game=game, texture_api=texture_api,
-            normal_xy=("r", "g"),
+            **kwargs,
         )
     return None
 

@@ -115,6 +115,11 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     """
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
+    # 3DMigoto command-list names are case-insensitive.  Keep the authored
+    # section key for recursion/provenance, but resolve `run =` targets by a
+    # case-folded lookup so RabbitFX's real SetTextures spelling is preserved
+    # even when a mod uses `commandlist\\rabbitfx\\settextures`.
+    section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
     seq_counter = [0]   # unique id per `if` block
     bare_counter = [0]  # unique id per diffuse line reached with an empty cond_stack
@@ -291,11 +296,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             m = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if m:
                 target = m.group(1)
-                if (target in sections and target not in visiting
-                        and not any(target.startswith(p) for p in _RUN_SKIP_PREFIXES)):
-                    visiting.add(target)
-                    _scan(sections[target], info, cond_stack, visiting)
-                    visiting.discard(target)
+                target_name = section_lookup.get(target.lower())
+                target_low = target_name.lower() if target_name else ""
+                if (target_name and target_name not in visiting
+                        and not any(target_low.startswith(p.lower())
+                                   for p in _RUN_SKIP_PREFIXES)):
+                    visiting.add(target_name)
+                    _scan(sections[target_name], info, cond_stack, visiting)
+                    visiting.discard(target_name)
 
     # scan BOTH TextureOverride AND CommandList sections.
     sec_info: dict = {}
