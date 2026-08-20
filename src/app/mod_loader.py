@@ -424,6 +424,15 @@ def _gating_vars_from_groups(groups):
     return found
 
 
+def _register_material_profile(table, profile):
+    """Register one immutable profile, rejecting same-ID contradictions."""
+    metadata = profile.to_metadata()
+    existing = table.get(profile.id)
+    if existing is not None and existing != metadata:
+        raise RuntimeError(f"Material profile ID collision: {profile.id}")
+    table[profile.id] = metadata
+
+
 def _assign_material_profiles(meshes, game):
     """Attach per-mesh kind/profile identity and return a shared profile table."""
     profiles = {}
@@ -437,7 +446,7 @@ def _assign_material_profiles(meshes, game):
         entry["material_kind_reliable"] = detection.reliable
         entry["material_kind_reason"] = detection.reason
         entry["material_profile_id"] = profile.id
-        profiles.setdefault(profile.id, profile.to_metadata())
+        _register_material_profile(profiles, profile)
     return profiles
 
 
@@ -508,8 +517,7 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
     """Create the stable application-to-frontend payload shape."""
     profile_table = dict(material_profiles or {})
     if game is not None:
-        base_profile = material_profile_for(game).to_metadata()
-        profile_table.setdefault(base_profile["id"], base_profile)
+        _register_material_profile(profile_table, material_profile_for(game))
     payload = {
         "meshes": meshes or {},
         "textures": textures or {},

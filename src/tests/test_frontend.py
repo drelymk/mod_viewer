@@ -663,6 +663,101 @@ def test_each_mesh_resolves_its_own_profile_and_packed_source(
         context.close()
 
 
+def test_missing_material_profile_uses_conservative_material_without_packed_maps(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("genshin:gimi")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry["material_profile_id"] = "missing:profile"
+
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        state = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          return {
+            profileId: mesh.userData.materialProfileId,
+            profile: window.modViewer.getMaterialState(0).profile,
+            physical: !!material.isMeshPhysicalNodeMaterial,
+            gameMaterial: !!material.userData.gameMaterial,
+            packedResponse: material.userData.gameMaterial?.packedResponse ?? false,
+            lightMap: material.userData.gameMaterial?.bindings?.light_map
+              ?.enabledNode?.value ?? false,
+            map: !!material.map,
+            normalMap: !!material.normalMap,
+            lightMapKey: mesh.userData.lightMapKey,
+          };
+        }""")
+        assert state == {
+            "profileId": "missing:profile", "profile": None,
+            "physical": False, "gameMaterial": True,
+            "packedResponse": False, "lightMap": False,
+            "map": True, "normalMap": False,
+            "lightMapKey": "light_map::Packed-light.png",
+        }
+    finally:
+        context.close()
+
+
+def test_genshin_material_id_decoder_and_uniform_debug_modes(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"Packed": _packed_material_payload("genshin:gimi")},
+    )
+    try:
+        values = page.evaluate("""async () => {
+          const {decodeMaterialIdValue} = await import('./js/material-profile.js');
+          return [0.10, 0.90, 0.50, 0.30, 0.70, 0.20, 0.40, 0.60, 0.80]
+            .map(raw => decodeMaterialIdValue(raw, 'genshin_5_region'));
+        }""")
+        assert values == [1, 2, 3, 4, 5, 4, 3, 5, 2]
+
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
+        state = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const game = material.userData.gameMaterial;
+          const colorNode = material.colorNode;
+          const version = material.version;
+          const beforeMaterial = material;
+          return {
+            before: window.modViewer.getMaterialState(0),
+            results: [
+              window.modViewer.setMaterialDebugMode('material-id'),
+              window.modViewer.getMaterialState(0).debugMode,
+              game.debugModeNode.value,
+              window.modViewer.setMaterialDebugMode('specular-area'),
+              window.modViewer.getMaterialState(0).debugMode,
+              game.debugModeNode.value,
+              window.modViewer.setMaterialDebugMode('off'),
+              window.modViewer.getMaterialState(0).debugMode,
+              game.debugModeNode.value,
+            ],
+            sameMaterial: material === beforeMaterial,
+            sameColorNode: material.colorNode === colorNode,
+            sameVersion: material.version === version,
+          };
+        }""")
+        assert state["before"]["reason"] == ""
+        assert state["before"]["materialIdDecoder"] == "genshin_5_region"
+        assert state["before"]["hasMaterialId"] is True
+        assert state["before"]["hasSpecularArea"] is True
+        assert state["results"] == [
+            "material-id", "material-id", 1,
+            "specular-area", "specular-area", 2,
+            "off", "off", 0,
+        ]
+        assert state["sameMaterial"]
+        assert state["sameColorNode"]
+        assert state["sameVersion"]
+    finally:
+        context.close()
+
+
 def test_genshin_tsl_material_renders_with_environment_accent_directional_light(
         edge_browser, frontend_url):
     context, page = _page(
@@ -785,6 +880,84 @@ def test_packed_channel_changes_rendered_luminance(
         else:
             assert abs(high_luminance - low_luminance) <= 3, (
                 low_pixel, high_pixel)
+    finally:
+        context.close()
+
+
+def test_genshin_lightmap_b_gates_direct_specular_area_without_changing_r_response(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("genshin:gimi")
+    entry = payload["meshes"]["Body-Packed-0"]
+    white = _flat_png_uri((255, 255, 255, 255))
+    payload["textures"] = {key: white for key in payload["textures"]}
+    payload["textures"]["diffuse::Packed-one.png"] = _flat_png_uri(
+        (24, 24, 24, 255))
+    low_key = "light_map::Packed-area-low.png"
+    high_key = "light_map::Packed-area-high.png"
+    max_key = "light_map::Packed-area-max.png"
+    entry["light_map_key"] = low_key
+    # R stays fixed (non-metal) and G/A stay fixed. Only B crosses the
+    # authored threshold so this is an area-gate regression, not an R test.
+    payload["textures"][low_key] = _flat_png_uri((51, 255, 0, 255))
+    payload["textures"][high_key] = _flat_png_uri((51, 255, 204, 255))
+    payload["textures"][max_key] = _flat_png_uri((51, 255, 255, 255))
+
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings.diffuse.textureNode.value.image?.width === 4")
+        page.evaluate("""
+          async () => {
+            const THREE = await import('three');
+            const {scene, controls} = await import('./js/scene.js');
+            scene.traverse(object => {
+              if (object.isAmbientLight || object.isHemisphereLight) {
+                object.intensity = 0;
+              } else if (object.isSprite || object.isGridHelper) {
+                object.visible = false;
+              }
+            });
+            const key = scene.children.find(object => object.isDirectionalLight);
+            key.target.position.copy(controls.target);
+            key.position.copy(controls.target).add(new THREE.Vector3(0, 0, 3));
+            key.intensity = 1;
+            window.modViewer.activeMeshes[0].material.roughness = 0.2;
+          }
+        """)
+        page.wait_for_timeout(400)
+        low_pixel = _sample_mesh_pixel(page)
+        page.evaluate("""
+          async key => {
+            const {setMeshTextureState} = await import('./js/mesh-factory.js');
+            const mesh = window.modViewer.activeMeshes[0];
+            setMeshTextureState(mesh, {
+              diffuse: mesh.userData.texKey,
+              normal_map: null, normal_data: null,
+              light_map: key, material_map: null,
+            });
+          }
+        """, high_key)
+        page.wait_for_timeout(500)
+        high_pixel = _sample_mesh_pixel(page)
+        assert sum(high_pixel) > sum(low_pixel), (low_pixel, high_pixel)
+        page.evaluate("""
+          async key => {
+            const {setMeshTextureState} = await import('./js/mesh-factory.js');
+            const mesh = window.modViewer.activeMeshes[0];
+            setMeshTextureState(mesh, {
+              diffuse: mesh.userData.texKey,
+              normal_map: null, normal_data: null,
+              light_map: key, material_map: null,
+            });
+          }
+        """, max_key)
+        page.wait_for_timeout(500)
+        max_pixel = _sample_mesh_pixel(page)
+        assert abs(sum(max_pixel) - sum(high_pixel)) <= 3, (
+            high_pixel, max_pixel)
     finally:
         context.close()
 

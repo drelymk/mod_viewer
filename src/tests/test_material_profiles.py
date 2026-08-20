@@ -1,5 +1,9 @@
 """Packed material interpretation regressions."""
 
+from dataclasses import replace
+
+import pytest
+
 from core.game_profile import GameDetection
 from core.material_profiles import (ChannelRef, MaterialInterpretation,
                                     material_profile_for)
@@ -29,11 +33,18 @@ def test_genshin_uses_light_map_r_response_and_g_toon_shadow():
 
     assert profile.id == "genshin:gimi"
     assert profile.shadow_mask == ChannelRef("light_map", "g")
+    assert profile.material_id == ChannelRef("light_map", "a")
+    assert profile.material_id_decoder == "genshin_5_region"
     assert profile.metalness == ChannelRef("light_map", "r")
     assert profile.specular == ChannelRef("light_map", "r")
+    assert profile.specular_area == ChannelRef("light_map", "b")
     assert profile.metalness_scale == 0.08
     assert profile.specular_scale == 1.0
     assert profile.specular_influence == 0.15
+    assert (profile.toon_specular_shininess,
+            profile.toon_specular_threshold_bias,
+            profile.toon_specular_softness,
+            profile.toon_specular_metal_cutoff) == (10.0, 1.015, 0.0, 0.90)
     assert (profile.shadow_threshold, profile.shadow_softness,
             profile.shadow_mask_strength, profile.shadow_influence) == (
                 0.5, 0.08, 0.5, 1.0)
@@ -96,6 +107,10 @@ def test_structured_payload_exposes_material_profile_metadata():
     assert profiles["genshin:gimi"]["id"] == "genshin:gimi"
     assert profiles["genshin:gimi"]["metalness"] == {
         "source": "light_map", "channel": "r", "invert": False}
+    assert profiles["genshin:gimi"]["material_id_decoder"] == (
+        "genshin_5_region")
+    assert profiles["genshin:gimi"]["specular_area"] == {
+        "source": "light_map", "channel": "b", "invert": False}
 
 
 def test_mesh_profiles_are_deduplicated_and_keep_kind_identity():
@@ -119,3 +134,16 @@ def test_mesh_profiles_are_deduplicated_and_keep_kind_identity():
                for entry in meshes.values())
     assert meshes["Face-0"]["material_kind"] == "face"
     assert meshes["Face-0"]["material_kind_reliable"] is False
+
+
+def test_material_profile_id_collision_is_rejected_but_identical_registration_is_ok():
+    from app.mod_loader import _register_material_profile
+
+    profile = material_profile_for("genshin", "gimi")
+    table = {}
+    _register_material_profile(table, profile)
+    _register_material_profile(table, profile)
+
+    conflicting = replace(profile, specular_scale=0.5)
+    with pytest.raises(RuntimeError, match="Material profile ID collision"):
+        _register_material_profile(table, conflicting)
