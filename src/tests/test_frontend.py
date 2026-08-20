@@ -8,6 +8,7 @@ import struct
 import pytest
 
 from app import paths, server
+from core.material_profiles import material_profile_for
 
 playwright = pytest.importorskip("playwright.sync_api")
 
@@ -88,46 +89,14 @@ def _packed_material_payload(profile_id="zzz:zzmi"):
         "material_map::Packed-material.png": _PNG_URI,
         "normal_data::Packed-normal.png": _PNG_URI,
     }
-    if profile_id == "genshin:gimi":
-        profile = {
-            "id": profile_id, "game": "genshin", "texture_api": "gimi",
-            "normal_xy": None, "shadow_mask": None, "material_id": None,
-            "metalness": {"source": "light_map", "channel": "r",
-                           "invert": False},
-            "gloss": None,
-            "specular": {"source": "light_map", "channel": "r",
-                          "invert": False},
-            "ao": None, "metalness_scale": 0.08,
-            "specular_scale": 1.0, "specular_influence": 0.15,
-        }
-    elif profile_id == "wuwa:rabbitfx":
-        profile = {
-            "id": profile_id, "game": "wuwa", "texture_api": "rabbitfx",
-            "normal_xy": ["r", "g"], "shadow_mask": None,
-            "material_id": None, "metalness": None, "gloss": None,
-            "specular": None, "ao": None, "metalness_scale": 1,
-            "specular_scale": 1,
-        }
-    elif profile_id == "none":
-        profile = {
-            "id": "none", "game": "unknown", "texture_api": "unknown",
-            "normal_xy": None, "shadow_mask": None, "material_id": None,
-            "metalness": None, "gloss": None, "specular": None,
-            "ao": None, "metalness_scale": 1, "specular_scale": 1,
-        }
-    else:
-        profile = {
-            "id": profile_id, "game": "zzz", "texture_api": "zzmi",
-            "normal_xy": None, "shadow_mask": None,
-            "material_id": {"source": "material_map", "channel": "r",
-                             "invert": False},
-            "metalness": {"source": "material_map", "channel": "g",
-                           "invert": False},
-            "gloss": None,
-            "specular": {"source": "material_map", "channel": "b",
-                          "invert": False},
-            "ao": None, "metalness_scale": 1, "specular_scale": 1,
-        }
+    profile_args = {
+        "zzz:zzmi": ("zzz", "zzmi"),
+        "genshin:gimi": ("genshin", "gimi"),
+        "wuwa:rabbitfx": ("wuwa", "rabbitfx"),
+    }
+    profile = (material_profile_for(*profile_args[profile_id]).to_metadata()
+               if profile_id in profile_args
+               else material_profile_for("unknown", "unknown").to_metadata())
     payload["metadata"]["material_profile"] = profile
     return payload
 
@@ -360,6 +329,8 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
             metalnessScale: game.uniforms.gameMaterialMetalnessScale.value,
             specularScale: game.uniforms.gameMaterialSpecularScale.value,
             specularInfluence: game.uniforms.gameMaterialSpecularInfluence.value,
+            usesInfluenceBlend: game.shader.fragmentShader
+              .includes('gameMaterialSpecularResponse = mix('),
             version: material.version,
           };
         }""")
@@ -373,6 +344,7 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
         assert state["metalnessScale"] == (1 if profile_id == "zzz:zzmi" else 0.08)
         assert state["specularScale"] == 1
         assert state["specularInfluence"] == (0 if profile_id == "zzz:zzmi" else 0.15)
+        assert state["usesInfluenceBlend"] == (profile_id == "genshin:gimi")
         assert state["materialMap"] if profile_id == "zzz:zzmi" else state["lightMap"]
 
         after = page.evaluate("""async () => {

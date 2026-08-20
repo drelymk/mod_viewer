@@ -38,6 +38,10 @@ function validRef(ref) {
   return !!ref && SOURCE_INFO[ref.source] && CHANNELS.has(ref.channel);
 }
 
+function hasNumericValue(value) {
+  return value != null && Number.isFinite(Number(value));
+}
+
 function refExpression(ref) {
   if (!validRef(ref)) return null;
   const sample = SOURCE_INFO[ref.source].sample;
@@ -79,8 +83,8 @@ if ( ${info.enabled} ) {
     ? (() => {
       const info = SOURCE_INFO[profile.specular.source];
       const sample = refExpression(profile.specular);
-      const influence = Number(profile.specular_influence);
-      const response = Number.isFinite(influence)
+      const hasInfluence = hasNumericValue(profile.specular_influence);
+      const response = hasInfluence
         ? `mix(
 		1.0,
 		clamp( ${sample} * gameMaterialSpecularScale, 0.0, 1.0 ),
@@ -177,7 +181,7 @@ function materialUniforms(profile) {
         ? Number(profile.specular_scale) : 1,
     },
     gameMaterialSpecularInfluence: {
-      value: Number.isFinite(Number(profile?.specular_influence))
+      value: hasNumericValue(profile?.specular_influence)
         ? Number(profile.specular_influence) : 0,
     },
   };

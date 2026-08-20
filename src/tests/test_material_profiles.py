@@ -11,6 +11,7 @@ def test_zzz_uses_material_map_g_for_metalness_and_b_for_specular():
     assert profile.metalness == ChannelRef("material_map", "g")
     assert profile.specular == ChannelRef("material_map", "b")
     assert profile.material_id == ChannelRef("material_map", "r")
+    assert profile.to_metadata()["specular_influence"] is None
 
 
 def test_zzz_rabbitfx_profile_is_separate_from_zzmi_but_keeps_semantics():
