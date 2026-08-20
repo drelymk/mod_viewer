@@ -2,6 +2,7 @@
 // report even when geometry cannot load, so this module has no scene dependency.
 
 import { openIniEditor } from './ini-editor.js';
+import { bindModalDismiss } from './modal-shell.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -165,8 +166,6 @@ function closeReport() {
 }
 
 $('health-btn').addEventListener('click', openReport);
-$('health-close').addEventListener('click', closeReport);
-$('health-close-x').addEventListener('click', closeReport);
 $('health-filters').addEventListener('click', (event) => {
   const button = event.target.closest('[data-health-filter]');
   if (!button) return;
@@ -176,11 +175,8 @@ $('health-filters').addEventListener('click', (event) => {
   }
   renderReport();
 });
-$('health-modal-backdrop').addEventListener('click', (event) => {
-  if (event.target.id === 'health-modal-backdrop') closeReport();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && $('health-modal-backdrop').classList.contains('show')) {
-    closeReport();
-  }
+bindModalDismiss({
+  backdrop: $('health-modal-backdrop'),
+  close: closeReport,
+  buttons: [$('health-close'), $('health-close-x')],
 });

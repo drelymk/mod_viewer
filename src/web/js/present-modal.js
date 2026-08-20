@@ -1,6 +1,7 @@
 // Add/edit dialog for the reserved [KeyModViewerPresent] binding.
 
 import { getToggleState } from './visibility.js';
+import { bindModalDismiss, setModalError } from './modal-shell.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -17,8 +18,7 @@ export function presentSnapshots(present) {
 }
 
 function setError(message) {
-  $('pm-error').textContent = message || '';
-  $('pm-error').style.display = message ? 'block' : 'none';
+  setModalError($('pm-error'), message);
 }
 
 function close() {
@@ -70,10 +70,8 @@ async function submit(event) {
 }
 
 $('pm-form').addEventListener('submit', submit);
-$('pm-cancel').addEventListener('click', close);
-$('present-modal-backdrop').addEventListener('click', (event) => {
-  if (event.target.id === 'present-modal-backdrop') close();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && $('present-modal-backdrop').classList.contains('show')) close();
+bindModalDismiss({
+  backdrop: $('present-modal-backdrop'),
+  close,
+  buttons: [$('pm-cancel')],
 });

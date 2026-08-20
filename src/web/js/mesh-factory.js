@@ -2,6 +2,7 @@
 
 import * as THREE from 'three';
 import { decodeF32, decodeU32 } from './decode.js';
+import { getMeshView } from './mesh-view-bindings.js';
 
 // Textures arrive as data URIs or same-origin localhost URLs keyed by name;
 // loaders are cached so several meshes sharing a texture share one GPU upload.
@@ -151,7 +152,7 @@ export function refreshMeshTexture(mesh) {
   mesh.material.metalness = 0;
   mesh.material.color.setHex(map ? 0xffffff : mesh.userData.fallbackColor);
   mesh.material.needsUpdate = true;
-  mesh.userData.onTextureChanged?.();
+  getMeshView(mesh)?.onTextureChanged?.();
 }
 
 export function setTextureMode(mode) {
@@ -170,6 +171,15 @@ export function setMeshMaterialMaps(mesh, maps) {
   mesh.userData.normalMapKey = maps.normal_map || null;
   mesh.userData.lightMapKey = maps.light_map || null;
   mesh.userData.materialMapKey = maps.material_map || null;
+  refreshMeshTexture(mesh);
+}
+
+/** Update the complete resolved texture state with one material refresh. */
+export function setMeshTextureState(mesh, state) {
+  mesh.userData.texKey = state.diffuse || null;
+  mesh.userData.normalMapKey = state.normal_map || null;
+  mesh.userData.lightMapKey = state.light_map || null;
+  mesh.userData.materialMapKey = state.material_map || null;
   refreshMeshTexture(mesh);
 }
 

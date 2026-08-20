@@ -1,6 +1,21 @@
+:root {
+  --bg-canvas: #0d1117;
+  --bg-panel: #161b22;
+  --bg-control: #21262d;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #1f6feb;
+  --accent-hover: #388bfd;
+  --accent-soft: #58a6ff;
+  --success: #238636;
+  --success-hover: #2ea043;
+  --warning: #e3b341;
+  --danger: #f85149;
+}
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  background: #0d1117; color: #e6edf3;
+  background: var(--bg-canvas); color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   overflow: hidden; user-select: none;
 }
@@ -8,25 +23,25 @@ body {
 /* ── toolbar ─────────────────────────────────────────────────────────────── */
 #toolbar {
   position: fixed; top: 0; left: 0; right: 0; height: 46px;
-  background: #161b22; border-bottom: 1px solid #30363d;
+  background: var(--bg-panel); border-bottom: 1px solid var(--border);
   display: flex; align-items: center; padding: 0 14px; gap: 10px; z-index: 100;
 }
 .app-icon  { font-size: 18px; }
-.app-title { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; }
+.app-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; }
 #mod-path  {
-  flex: 1; font-size: 11px; color: #8b949e;
+  flex: 1; font-size: 11px; color: var(--text-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  padding: 4px 8px; background: #0d1117; border-radius: 6px;
-  border: 1px solid #30363d; min-width: 0;
+  padding: 4px 8px; background: var(--bg-canvas); border-radius: 6px;
+  border: 1px solid var(--border); min-width: 0;
 }
 #open-btn {
-  background: #238636; color: #fff; border: 1px solid rgba(240,246,252,.15);
+  background: var(--success); color: #fff; border: 1px solid rgba(240,246,252,.15);
   border-radius: 6px; padding: 5px 14px; font-size: 13px; cursor: pointer; white-space: nowrap;
 }
-#open-btn:hover:not(:disabled) { background: #2ea043; }
+#open-btn:hover:not(:disabled) { background: var(--success-hover); }
 #open-btn:disabled { opacity: .45; cursor: default; }
 .pending-indicator {
-  display: none; font-size: 11px; color: #e3b341; background: #2b2111;
+  display: none; font-size: 11px; color: var(--warning); background: #2b2111;
   border: 1px solid #4d3a14; border-radius: 6px; padding: 4px 8px; white-space: nowrap;
 }
 .pending-indicator.show { display: inline-block; }
@@ -37,8 +52,8 @@ body {
 #export-btn:hover:not(:disabled) { background: #bb8009; }
 #export-btn:disabled { opacity: .35; cursor: default; background: #21262d; color: #8b949e; }
 #health-btn {
-  display: flex; align-items: center; gap: 6px; color: #e6edf3;
-  background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+  display: flex; align-items: center; gap: 6px; color: var(--text);
+  background: var(--bg-control); border: 1px solid var(--border); border-radius: 6px;
   padding: 5px 9px; font-size: 12px; cursor: pointer; white-space: nowrap;
 }
 #health-btn:disabled { opacity: .4; cursor: default; }
@@ -47,11 +62,11 @@ body {
 #health-btn.error { border-color: #da3633; background: #321b1b; }
 .ini-view-wrap { position: relative; display: flex; align-items: center; }
 #ini-view-btn {
-  background: #1f6feb; color: #fff; border: 1px solid rgba(240,246,252,.15);
+  background: var(--accent); color: #fff; border: 1px solid rgba(240,246,252,.15);
   border-radius: 6px; padding: 5px 14px; font-size: 13px; cursor: pointer;
   white-space: nowrap;
 }
-#ini-view-btn:hover:not(:disabled) { background: #388bfd; }
+#ini-view-btn:hover:not(:disabled) { background: var(--accent-hover); }
 #ini-view-btn:disabled {
   opacity: .35; cursor: default; background: #21262d; color: #8b949e;
 }
@@ -136,7 +151,8 @@ body {
 /* ── left dock (meshes panel + toolbox) ──────────────────────────────────── */
 #left-dock {
   position: fixed; top: 58px; left: 12px; z-index: 110;
-  display: flex; align-items: flex-start; gap: 10px;
+  display: flex; flex-direction: row; align-items: flex-start; gap: 10px;
+  max-height: calc(100vh - 104px);
 }
 
 /* ── right dock (toggle panel + menu panel) ──────────────────────────────── */
@@ -148,12 +164,13 @@ body {
 
 /* ── shared floating panel chrome ────────────────────────────────────────── */
 #sidebar, #camera-panel, #present-panel, #toggle-panel, #tool-panel, #menu-panel {
-  display: none; background: rgba(13,17,23,.88); border: 1px solid #30363d;
+  display: none; background: rgba(13,17,23,.88); border: 1px solid var(--border);
   border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(8px);
 }
 #sidebar {
   box-sizing: border-box; width: 288px; max-width: min(288px, calc(50vw - 36px));
-  max-height: calc(100vh - 104px); overflow-x: hidden; overflow-y: auto;
+  max-height: calc(100vh - 104px); min-height: 0;
+  overflow-x: hidden; overflow-y: auto;
 }
 #camera-panel { min-width: 166px; padding: 9px 10px; }
 #camera-buttons { display: grid; grid-template-columns: repeat(3, 44px); gap: 6px; }
@@ -161,12 +178,12 @@ body {
 .camera-btn {
   width: 44px; height: 46px; padding: 5px 3px 4px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  color: #c9d1d9; background: #161b22; border: 1px solid #30363d;
+  color: #c9d1d9; background: var(--bg-panel); border: 1px solid var(--border);
   border-radius: 6px; cursor: pointer; font-family: inherit;
   transition: background .12s, border-color .12s, color .12s, transform .12s;
 }
 .camera-btn:hover {
-  color: #fff; background: #1f6feb; border-color: #388bfd; transform: translateY(-1px);
+  color: #fff; background: var(--accent); border-color: var(--accent-hover); transform: translateY(-1px);
 }
 .camera-btn:active { transform: translateY(0); }
 .camera-btn svg {
@@ -191,37 +208,42 @@ body {
   flex-shrink: 0; overflow-y: hidden;
 }
 #sidebar h3, #camera-panel h3, #present-panel h3, #toggle-panel h3, #tool-panel h3, #menu-panel h3 {
-  font-size: 10px; color: #8b949e; text-transform: uppercase;
+  font-size: 10px; color: var(--text-muted); text-transform: uppercase;
   letter-spacing: .1em; margin: 0; flex: 1;
 }
 
 /* ── toolbox (wireframe / grid) ───────────────────────────────────────────── */
-#tool-panel { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); z-index: 200; display: flex !important; align-items: center; gap: 8px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 4px 8px; }
+#tool-panel {
+  display: block; min-width: 166px; padding: 9px 10px;
+  position: fixed; left: 50%; bottom: calc(28px + 12px);
+  transform: translateX(-50%); z-index: 200;
+}
+#tool-panel .panel-hdr { margin-bottom: 7px; }
 #tool-buttons { display: flex; align-items: center; gap: 6px; }
 #tool-buttons.collapsed { display: none; }
 #camera-buttons.collapsed { display: none; }
 .tool-btn {
   width: 40px; height: 40px; padding: 0;
-  background: #21262d; border: 1px solid #30363d;
-  color: #e6edf3; border-radius: 6px; cursor: pointer;
+  background: var(--bg-control); border: 1px solid var(--border);
+  color: var(--text); border-radius: 6px; cursor: pointer;
   font-size: 20px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
 }
 .mesh-state-btn { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; font-size: 13px; line-height: 18px; cursor: pointer; flex-shrink: 0; }
 .mesh-state-btn:hover { filter: brightness(1.25); transform: scale(1.08); }
-#wire-btn.active { background: #1f6feb; }
-#grid-btn { background: #1f6feb; }
-#grid-btn.off { background: #21262d; }
-#shading-btn { background: #1f6feb; }
-#shading-btn.off { background: #21262d; }
-#texture-btn { background: #1f6feb; }
+#wire-btn.active { background: var(--accent); }
+#grid-btn { background: var(--accent); }
+#grid-btn.off { background: var(--bg-control); }
+#shading-btn { background: var(--accent); }
+#shading-btn.off { background: var(--bg-control); }
+#texture-btn { background: var(--accent); }
 #texture-btn.diffuse-only { background: #9a6700; }
-#texture-btn.off { background: #21262d; }
-#light-btn.double { background: #1f6feb; color: #fff; }
+#texture-btn.off { background: var(--bg-control); }
+#light-btn.double { background: var(--accent); color: #fff; }
 #light-btn.current { background: #9a6700; color: #fff3b0; }
-#light-btn.off { background: #21262d; color: #e6edf3; }
-#trackball-btn { background: #1f6feb; }
-#trackball-btn.off { background: #21262d; }
+#light-btn.off { background: var(--bg-control); color: var(--text); }
+#trackball-btn { background: var(--accent); }
+#trackball-btn.off { background: var(--bg-control); }
 .nav-gizmo-icon { width: 24px; height: 24px; overflow: visible; }
 .nav-gizmo-icon path { fill: none; stroke-width: 1.7; stroke-linecap: round; }
 .nav-gizmo-icon circle { stroke: none; }
@@ -283,7 +305,7 @@ body.right-dock-visible .environment-control { right: 338px; }
 .group-toggle {
   width: 14px; height: 14px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
-  color: #8b949e; font-size: 9px; transition: transform .15s ease; user-select: none;
+  color: var(--text-muted); font-size: 9px; transition: transform .15s ease; user-select: none;
 }
 .group-toggle.collapsed { transform: rotate(-90deg); }
 .group-name { flex: 1; user-select: none; }
@@ -301,7 +323,7 @@ body.right-dock-visible .environment-control { right: 338px; }
   color: #cdd9e5; font-weight: 600; margin-top: 6px; cursor: pointer;
   position: relative;
 }
-.group-hdr input { width: 14px; height: 14px; cursor: pointer; accent-color: #58a6ff; flex-shrink: 0; }
+.group-hdr input { width: 14px; height: 14px; cursor: pointer; accent-color: var(--accent-soft); flex-shrink: 0; }
 /* Room for .group-tex-btn, absolutely positioned in the top-right corner --
  * keeps the button pinned there regardless of name length, rather than
  * being pushed out of the flex row by a long component name. */
@@ -324,7 +346,7 @@ body.right-dock-visible .environment-control { right: 338px; }
 }
 .draw-item input { width: 12px; height: 12px; cursor: pointer; accent-color: #3fb950; flex-shrink: 0; }
 .mesh-state-btn { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; font-size: 13px; line-height: 18px; cursor: pointer; flex-shrink: 0; }
-.draw-item.selected { background: rgba(88,166,255,.15); outline: 1px solid #58a6ff; border-radius: 4px; }
+.draw-item.selected { background: rgba(88,166,255,.15); outline: 1px solid var(--accent-soft); border-radius: 4px; }
 .mesh-name { min-width: 0; flex: 1; }
 .draw-item .mesh-name-input {
   width: 100%; min-width: 0; box-sizing: border-box; padding: 2px 4px;
@@ -341,7 +363,7 @@ body.right-dock-visible .environment-control { right: 338px; }
   border-radius: 4px;
 }
 .tex-item:hover { background: #21262d; color: #e6edf3; }
-.tex-item.selected { background: rgba(88,166,255,.15); color: #58a6ff; outline: 1px solid #58a6ff; }
+.tex-item.selected { background: rgba(88,166,255,.15); color: var(--accent-soft); outline: 1px solid var(--accent-soft); }
 
 /* Per-component "manage textures" popup (texture-modal.js) -- reuses the
  * toggle modal's .modal-backdrop/.modal chrome. */
@@ -410,7 +432,7 @@ body.right-dock-visible .environment-control { right: 338px; }
   width: 24px; height: 22px; font-size: 13px; cursor: pointer; flex-shrink: 0;
 }
 .toggle-cycle-btn:hover { background: #1f6feb; }
-.toggle-value { font-size: 12px; color: #58a6ff; font-weight: 600; flex: 1; min-width: 0; overflow-wrap: break-word; }
+.toggle-value { font-size: 12px; color: var(--accent-soft); font-weight: 600; flex: 1; min-width: 0; overflow-wrap: break-word; }
 
 /* Recording session: the row being recorded gets an accent outline, and the
  * cycle button + value describe "Position N of M" instead of the live value. */
@@ -476,7 +498,7 @@ body.right-dock-visible .environment-control { right: 338px; }
   font-size: 12px; color: #cdd9e5; font-weight: 600;
   flex: 1; min-width: 0; overflow-wrap: break-word;
 }
-.menu-value { font-size: 12px; color: #58a6ff; font-weight: 600; flex-shrink: 0; }
+.menu-value { font-size: 12px; color: var(--accent-soft); font-weight: 600; flex-shrink: 0; }
 
 /* ── loading overlay ─────────────────────────────────────────────────────── */
 #loading {
@@ -509,38 +531,38 @@ body.right-dock-visible .environment-control { right: 338px; }
 }
 .modal-backdrop.show { display: flex; }
 .modal {
-  background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 18px 20px; width: 320px; max-width: calc(100vw - 40px);
   max-height: calc(100vh - 40px); overflow-y: auto;
   box-shadow: 0 12px 40px rgba(0,0,0,.5);
 }
-.modal h4 { font-size: 14px; color: #e6edf3; margin-bottom: 12px; }
+.modal h4 { font-size: 14px; color: var(--text); margin-bottom: 12px; }
 .modal-error {
-  display: none; font-size: 11px; color: #f85149; background: rgba(248,81,73,.1);
+  display: none; font-size: 11px; color: var(--danger); background: rgba(248,81,73,.1);
   border: 1px solid rgba(248,81,73,.4); border-radius: 6px; padding: 6px 8px; margin-bottom: 10px;
   white-space: pre-wrap;
 }
 .modal-field {
-  display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 11px; color: #8b949e;
+  display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 11px; color: var(--text-muted);
 }
 .modal-field input, .modal-field select {
-  background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+  background: var(--bg-canvas); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 6px 8px; font-size: 12px; font-family: inherit;
 }
 .modal-field input:disabled, .modal-field select:disabled { opacity: .6; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .modal-actions button {
-  border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; border: 1px solid #30363d;
+  border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; border: 1px solid var(--border);
 }
-#tm-cancel { background: #21262d; color: #e6edf3; }
-#tm-cancel:hover { background: #30363d; }
-#tm-save { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
-#tm-save:hover:not(:disabled) { background: #2ea043; }
+#tm-cancel { background: var(--bg-control); color: var(--text); }
+#tm-cancel:hover { background: var(--border); }
+#tm-save { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
+#tm-save:hover:not(:disabled) { background: var(--success-hover); }
 #tm-save:disabled { opacity: .6; cursor: default; }
-#pm-cancel { background: #21262d; color: #e6edf3; }
-#pm-cancel:hover { background: #30363d; }
-#pm-save { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
-#pm-save:hover:not(:disabled) { background: #2ea043; }
+#pm-cancel { background: var(--bg-control); color: var(--text); }
+#pm-cancel:hover { background: var(--border); }
+#pm-save { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
+#pm-save:hover:not(:disabled) { background: var(--success-hover); }
 #pm-save:disabled { opacity: .6; cursor: default; }
 
 /* Read-only INI health report. */
@@ -638,21 +660,21 @@ body.right-dock-visible .environment-control { right: 338px; }
 }
 .dialog-backdrop.show { display: flex; }
 .dialog-box {
-  background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 18px 20px; width: 340px; max-width: calc(100vw - 40px);
   max-height: calc(100vh - 40px); overflow-y: auto;
   box-shadow: 0 12px 40px rgba(0,0,0,.5);
 }
-.dialog-message { font-size: 12px; color: #e6edf3; white-space: pre-wrap; line-height: 1.5; }
+.dialog-message { font-size: 12px; color: var(--text); white-space: pre-wrap; line-height: 1.5; }
 .dialog-input {
   display: none; box-sizing: border-box; width: 100%; margin-top: 12px;
-  background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+  background: var(--bg-canvas); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 7px 9px; font-size: 12px; font-family: inherit;
 }
-#dialog-cancel { background: #21262d; color: #e6edf3; }
-#dialog-cancel:hover { background: #30363d; }
-#dialog-ok { background: #238636; color: #fff; border-color: rgba(240,246,252,.15); }
-#dialog-ok:hover { background: #2ea043; }
+#dialog-cancel { background: var(--bg-control); color: var(--text); }
+#dialog-cancel:hover { background: var(--border); }
+#dialog-ok { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
+#dialog-ok:hover { background: var(--success-hover); }
 
 /* ── build-time feature flags (app/features.py) ──────────────────────────── */
 /* Only hides the button; the frontend/backend behind it is unaffected -- see

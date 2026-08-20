@@ -1,5 +1,5 @@
 // Record mode: assign which meshes are visible at each cycle position of a
-// toggle, then rewrite the ini's gates to match.
+// toggle, then stage a rewrite of the INI gates to match.
 //
 // Repurposes the toggle's own MESHES panel and cycle button rather than a
 // modal: cycling the same ⟳ button steps through positions, and the

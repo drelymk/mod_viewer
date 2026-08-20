@@ -4,6 +4,7 @@
 // or remove an option. Changes persist in .mod_viewer.json, never in the ini.
 
 import { addTexture } from './mesh-factory.js';
+import { bindModalDismiss } from './modal-shell.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -149,10 +150,8 @@ function close() {
   onChange = null;
 }
 
-$('texm-close').addEventListener('click', close);
-$('texture-modal-backdrop').addEventListener('click', (evt) => {
-  if (evt.target.id === 'texture-modal-backdrop') close();
-});
-document.addEventListener('keydown', (evt) => {
-  if (evt.key === 'Escape' && $('texture-modal-backdrop').classList.contains('show')) close();
+bindModalDismiss({
+  backdrop: $('texture-modal-backdrop'),
+  close,
+  buttons: [$('texm-close')],
 });

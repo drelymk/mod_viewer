@@ -6,6 +6,8 @@
 // edits, records or exports.
 
 import { refreshAll, setToggleValue, getToggleValue } from './visibility.js';
+import { registerViewSync, syncView } from './view-sync.js';
+import { buildSourceSection, groupKeysBySource, usesSourceSections } from './panel-utils.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -65,7 +67,6 @@ function buildMenuItem(info) {
       if (guardHolds(e.when)) setToggleValue(e.var, e.value);
     }
     refreshAll();
-    refreshMenuValues();
   });
 
   item.append(btn, nameSpan, valSpan);
@@ -97,7 +98,6 @@ function buildShapeSlider(info) {
   valSpan.textContent = Number(input.value).toFixed(2);
   input.addEventListener('input', () => {
     setToggleValue(info.var, input.value);
-    valSpan.textContent = Number(input.value).toFixed(2);
     refreshAll();
   });
   item.append(nameSpan, input, valSpan);
@@ -113,33 +113,7 @@ function buildShapeSlider(info) {
 // rule, so every displayed value is re-read after any click.
 let syncers = [];
 export function refreshMenuValues() {
-  syncers.forEach((fn) => fn());
-}
-
-function buildSourceSection(source, container) {
-  const hdr = document.createElement('div');
-  hdr.className = 'toggle-src-hdr';
-
-  const chevron = document.createElement('span');
-  chevron.className = 'group-toggle';
-  chevron.textContent = '▼';
-
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'group-name';
-  nameSpan.textContent = source;
-
-  hdr.append(chevron, nameSpan);
-
-  const itemsWrap = document.createElement('div');
-  itemsWrap.className = 'toggle-src-items';
-
-  hdr.addEventListener('click', () => {
-    chevron.classList.toggle('collapsed');
-    itemsWrap.classList.toggle('collapsed');
-  });
-
-  container.append(hdr, itemsWrap);
-  return itemsWrap;
+  syncView('menu-panel');
 }
 
 /**
@@ -151,6 +125,9 @@ export function buildMenuPanel(menu) {
   const panel = document.getElementById('menu-panel');
   list.innerHTML = '';
   syncers = [];
+  registerViewSync('menu-panel', () => {
+    syncers.forEach(sync => sync());
+  });
 
   const keys = Object.keys(menu || {});
   if (!keys.length) {
@@ -172,13 +149,9 @@ export function buildMenuPanel(menu) {
     setToggleValue(info.var, String(info.default));
   }
 
-  const bySource = {};
-  for (const key of keys) {
-    const src = menu[key].source || '';
-    (bySource[src] = bySource[src] || []).push(key);
-  }
+  const bySource = groupKeysBySource(menu, keys);
   const sources = Object.keys(bySource);
-  const multiSource = sources.length > 1 || (sources.length === 1 && sources[0] !== '');
+  const multiSource = usesSourceSections(bySource);
 
   for (const src of sources) {
     const container = (multiSource && src) ? buildSourceSection(src, list) : list;
