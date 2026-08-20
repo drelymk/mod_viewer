@@ -2,7 +2,8 @@
 
 import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
          toggleGrid, toggleLightHandle, toggleTrackballGizmo,
-         getEnvironmentPreset, setEnvironmentPreset } from './scene.js';
+         getEnvironmentPreset, isRendererAvailable, rendererReady,
+         setEnvironmentPreset } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
 import { setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
@@ -227,7 +228,7 @@ async function openMod() {
     showLoading(false);
     await alertDialog('Unexpected error:\n\n' + e);
   } finally {
-    btn.disabled = false;
+    btn.disabled = !isRendererAvailable();
   }
 }
 
@@ -274,22 +275,6 @@ async function exportChanges() {
   }
 }
 
-$('open-btn').addEventListener('click', openMod);
-$('export-btn').addEventListener('click', exportChanges);
-$('wire-btn').addEventListener('click', toggleWireframe);
-$('grid-btn').addEventListener('click', toggleGrid);
-$('shading-btn').addEventListener('click', toggleSmoothShading);
-$('texture-btn').addEventListener('click', toggleTextures);
-$('light-btn').addEventListener('click', toggleLightHandle);
-$('reset-state-btn').addEventListener('click', resetMeshState);
-$('trackball-btn').addEventListener('click', toggleTrackballGizmo);
-$('camera-reset-view-btn').addEventListener('click', () => resetView(activeMeshes));
-$('camera-flip-btn').addEventListener('click', () => rotateModelQuarterTurn(activeMeshes));
-$('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
-const applyEnvironmentPreset = initEnvironmentControl();
-initSelection();
-syncViewportControlPlacement();
-
 // Collapses a panel's body when its header is clicked.
 function initPanelCollapse(panel, contentId) {
   const hdr = panel.querySelector('.panel-hdr');
@@ -301,16 +286,36 @@ function initPanelCollapse(panel, contentId) {
     content.classList.toggle('collapsed');
   });
 }
-initPanelCollapse($('sidebar'), 'mesh-list');
-initPanelCollapse($('camera-panel'), 'camera-buttons');
-initPanelCollapse($('tool-panel'), 'tool-buttons');
-initPanelCollapse($('present-panel'), 'present-list');
-initPanelCollapse($('toggle-panel'), 'toggle-list');
-initPanelCollapse($('menu-panel'), 'menu-list');
 
-// Exposed for automated smoke tests and for poking at the app from the
-// devtools console; the UI itself always goes through the listeners above.
-window.modViewer = {
-  displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes,
-  setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
-};
+rendererReady.then(ready => {
+  if (!ready || !isRendererAvailable()) return;
+
+  $('open-btn').addEventListener('click', openMod);
+  $('export-btn').addEventListener('click', exportChanges);
+  $('wire-btn').addEventListener('click', toggleWireframe);
+  $('grid-btn').addEventListener('click', toggleGrid);
+  $('shading-btn').addEventListener('click', toggleSmoothShading);
+  $('texture-btn').addEventListener('click', toggleTextures);
+  $('light-btn').addEventListener('click', toggleLightHandle);
+  $('reset-state-btn').addEventListener('click', resetMeshState);
+  $('trackball-btn').addEventListener('click', toggleTrackballGizmo);
+  $('camera-reset-view-btn').addEventListener('click', () => resetView(activeMeshes));
+  $('camera-flip-btn').addEventListener('click', () => rotateModelQuarterTurn(activeMeshes));
+  $('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
+  const applyEnvironmentPreset = initEnvironmentControl();
+  initSelection();
+  syncViewportControlPlacement();
+  initPanelCollapse($('sidebar'), 'mesh-list');
+  initPanelCollapse($('camera-panel'), 'camera-buttons');
+  initPanelCollapse($('tool-panel'), 'tool-buttons');
+  initPanelCollapse($('present-panel'), 'present-list');
+  initPanelCollapse($('toggle-panel'), 'toggle-list');
+  initPanelCollapse($('menu-panel'), 'menu-list');
+
+  // Exposed for automated smoke tests and for poking at the app from the
+  // devtools console; the UI itself always goes through the listeners above.
+  window.modViewer = {
+    displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes,
+    setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
+  };
+});

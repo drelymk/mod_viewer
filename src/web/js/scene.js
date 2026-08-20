@@ -1,6 +1,6 @@
-// Three.js scene composition and the permanent viewport render loop.
+// Three.js scene composition and the WebGPU-native viewport render loop.
 
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { ArcballControls } from 'three/addons/controls/ArcballControls.js';
 import { createCameraFrame } from './camera-frame.js';
 import { createEnvironmentController } from './environment.js';
@@ -8,11 +8,103 @@ import { createKeyLightController } from './key-light-controller.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 
 const container = document.getElementById('canvas-container');
+const openButton = document.getElementById('open-btn');
+const rendererError = document.getElementById('renderer-error');
+let rendererStopped = false;
 
-export const renderer = new THREE.WebGLRenderer({ antialias: true });
+export const renderer = new THREE.WebGPURenderer({
+  antialias: true,
+  samples: 4,
+  alpha: false,
+});
+// r185 installs an automatic WebGL2 fallback callback on WebGPURenderer. This
+// application is intentionally WebGPU-only, so disable that private hook
+// before init and verify the actual backend after init as a second guard.
+renderer._getFallback = null;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.toneMappingExposure = 1;
+renderer.setClearColor(0x0d1117, 1);
+renderer.setClearAlpha(1);
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(container.clientWidth, container.clientHeight);
 container.appendChild(renderer.domElement);
+
+function showRendererError(message) {
+  rendererStopped = true;
+  openButton.disabled = true;
+  if (!rendererError) return;
+  const detail = rendererError.querySelector('.renderer-error-detail');
+  if (detail) detail.textContent = message;
+  rendererError.classList.add('show');
+}
+
+function failRenderer(message) {
+  if (rendererStopped) return;
+  rendererStopped = true;
+  if (renderer._animation) renderer.setAnimationLoop(null);
+  showRendererError(message);
+}
+
+function rendererFailureMessage(error) {
+  const detail = error?.message ? ` (${error.message})` : '';
+  return `WebGPU is required by this version of Mod Viewer. Update your `
+    + `graphics driver or use a browser with WebGPU support${detail}`;
+}
+
+async function initializeRenderer() {
+  if (!globalThis.navigator?.gpu
+      || typeof globalThis.navigator.gpu.requestAdapter !== 'function') {
+    throw new Error('This browser does not expose navigator.gpu.');
+  }
+  const adapter = await globalThis.navigator.gpu.requestAdapter({
+    powerPreference: 'high-performance',
+    featureLevel: 'core',
+  });
+  if (!adapter) throw new Error('No WebGPU adapter is available.');
+  const device = await adapter.requestDevice();
+  if (!device) throw new Error('The WebGPU device could not be created.');
+
+  // WebGPUBackend accepts an application-owned device through its public
+  // parameters object. Supplying the preflighted device keeps renderer.init()
+  // from attempting an implicit backend choice.
+  renderer.backend.parameters.device = device;
+  await renderer.init();
+  if (renderer.backend?.isWebGPUBackend !== true
+      || renderer.backend.compatibilityMode !== false
+      || renderer.samples !== 4) {
+    throw new Error('The renderer initialized with a non-WebGPU backend.');
+  }
+  return true;
+}
+
+export function isRendererAvailable() {
+  return !rendererStopped
+    && renderer.backend?.isWebGPUBackend === true
+    && renderer.backend.compatibilityMode === false
+    && renderer.samples === 4;
+}
+
+renderer.onDeviceLost = info => {
+  failRenderer(`The WebGPU device was lost: ${info?.message || 'unknown reason'}.`);
+};
+renderer.onError = info => {
+  failRenderer(`WebGPU reported an unrecoverable error: ${info?.message || 'unknown error'}.`);
+};
+
+export const rendererReady = initializeRenderer()
+  .then(() => {
+    if (!isRendererAvailable()) {
+      throw new Error('The renderer is not using the required WebGPU core backend.');
+    }
+    renderer.setAnimationLoop(tick);
+    openButton.disabled = !isRendererAvailable();
+    return true;
+  })
+  .catch(error => {
+    showRendererError(rendererFailureMessage(error));
+    return false;
+  });
 
 export const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d1117);
@@ -64,15 +156,15 @@ new ResizeObserver(() => {
   cameraFrame.resize(container.clientWidth, container.clientHeight);
 }).observe(container);
 
-(function tick() {
-  requestAnimationFrame(tick);
+function tick() {
+  if (rendererStopped || renderer.backend?.isWebGPUBackend !== true) return;
   viewGizmoController.updateSnap();
   controls.update();
   keyLightController.update();
   cameraFrame.updateClipping();
   viewGizmoController.updateAxes();
   renderer.render(scene, camera);
-})();
+}
 
 export function setEnvironmentPreset(id) {
   return environmentController.setPreset(id);

@@ -15,7 +15,7 @@
   <span class="app-title">3DMigoto Mod Viewer</span>
   <span id="mod-path">No mod loaded</span>
   <span id="pending-indicator" class="pending-indicator">● Unsaved changes</span>
-  <button id="open-btn">📂 Open Mod</button>
+  <button id="open-btn" disabled>📂 Open Mod</button>
   <div class="ini-view-wrap">
     <button id="ini-view-btn" disabled>📄 View INI</button>
     <div id="ini-file-menu" class="ini-file-menu" role="menu"></div>
@@ -27,6 +27,10 @@
 </div>
 
 <div id="canvas-container">
+  <div id="renderer-error" role="alert" aria-live="assertive">
+    <h2>WebGPU unavailable</h2>
+    <p class="renderer-error-detail">WebGPU is required by this version of Mod Viewer.</p>
+  </div>
   <div id="environment-control" class="environment-control">
     <button id="environment-btn" class="environment-btn" type="button"
             aria-label="Environment: Default. Click to change."
@@ -310,6 +314,8 @@
 {
   "imports": {
     "three":          "__THREE_URL__",
+    "three/webgpu":    "__THREE_URL__",
+    "three/tsl":       "__THREE_TSL_URL__",
     "three/addons/":  "__ADDONS_URL__"
   }
 }

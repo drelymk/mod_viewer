@@ -294,9 +294,16 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   unobstructed viewport: keep orbit target at the true model center and shift
   projection with `setViewOffset`; back up when horizontal space is limiting.
   Materials use DoubleSide, roughness 1 and flat shading by default; known
-  packed-material profiles may vary metallic/specular response in their shader.
+  packed-material profiles may vary metallic/specular response in their node graph.
 
 ## Frontend, hosting and security
+
+- The viewer uses the vendored Three.js `0.185.0` `WebGPURenderer` with TSL
+  Node Materials. WebGPU is required: verify the initialized renderer's
+  actual backend and never silently fall back to WebGL2. Packed-map updates
+  change stable texture-binding and enabled-node values using shared valid
+  placeholders; they must not rebuild materials or patch generated shader
+  source.
 
 - INI Diagnostics is read-only and survives geometry failure. Analyze staged
   text when present; attach `health` even to error payloads. A health failure

@@ -109,7 +109,6 @@ function getTexture(mesh, key, role = 'diffuse') {
     texture = new THREE.TextureLoader().load(uri, undefined, undefined, onError);
     texture.colorSpace = role === 'diffuse'
       ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-    texture.needsUpdate = true;
     loaders[cacheKey] = texture;
     if (failedBeforeAssignment) {
       handleTextureError(cacheKey, texture, resolved, uri);
@@ -139,7 +138,11 @@ export function refreshMeshTexture(mesh) {
   const aoMap = showMaterialMaps
     ? getTexture(mesh, mesh.userData.aoMapKey, 'occlusion_map') : null;
   const packedChanged = updateGameMaterialTextures(mesh, {
+    diffuse: map,
+    normal_map: normalMap,
+    ao_map: aoMap,
     normal_data: normalData, light_map: lightMap, material_map: materialMap,
+    normal_map_y_sign: mesh.userData.normalMapYSign ?? -1,
   });
   const stockChanged = map !== mesh.material.map
     || normalMap !== mesh.material.normalMap
@@ -158,9 +161,6 @@ export function refreshMeshTexture(mesh) {
     mesh.material.roughness = 1;
     mesh.material.metalness = 0;
     mesh.material.color.setHex(map ? 0xffffff : mesh.userData.fallbackColor);
-    // Stock map defines can change when a derived normal/diffuse appears or
-    // disappears. Packed map changes above only mutate shader uniforms.
-    mesh.material.needsUpdate = true;
   }
   getMeshView(mesh)?.onTextureChanged?.();
 }
