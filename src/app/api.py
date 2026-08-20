@@ -189,10 +189,11 @@ class ModViewerAPI:
         edit_session.invalidate_diagnostics(folder_path)
         return result
 
-    def save_component_material_kind(self, folder_path, component, material_kind):
+    def save_component_material_kind(self, folder_path, source, component,
+                                     material_kind):
         folder_path = self._folder(folder_path)
         result = metadata.save_component_material_kind(
-            folder_path, component, material_kind)
+            folder_path, source, component, material_kind)
         edit_session.invalidate_diagnostics(folder_path)
         return result
 

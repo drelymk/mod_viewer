@@ -166,9 +166,10 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   The base `wuwa:rabbitfx` profile remains shadow-only. The first specialized
   production profile is `wuwa:rabbitfx:body`, and it can be selected only by
   reliable exact body evidence. Material-kind overrides are authored at the
-  component level and persisted in `.mod_viewer.json` by canonical component
-  identity, never by display name or individual draw key. Every draw in that
-  component inherits the same reliable viewer override; Auto removes it, and
+  component level and persisted in `.mod_viewer.json` by the logical
+  `(source, component)` identity, never by display name or individual draw
+  key. Every draw in that source/component group inherits the same reliable
+  viewer override; Auto removes it, and
   weak component-name hints never activate specialization. In that body
   approximation, Normalmap B is a toon-specular classification/color-response
   input, while A suppresses the ordinary lobe and routes high-A pixels toward

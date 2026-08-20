@@ -121,9 +121,8 @@ def test_wuwa_rabbitfx_body_is_the_only_first_specialized_profile():
     assert body.gloss is None
     assert body.specular is None
     assert (body.wuwa_specular_power,
-            body.wuwa_metal_specular_power,
             body.wuwa_toon_specular_cutoff,
-            body.wuwa_specular_mask_cutoff) == (1.0, 1.0, 0.1, 0.5)
+            body.wuwa_specular_mask_cutoff) == (1.0, 0.1, 0.5)
 
     assert material_profile_for("wuwa", "rabbitfx", "hair").id == (
         "wuwa:rabbitfx")

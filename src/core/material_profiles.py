@@ -86,7 +86,6 @@ class MaterialInterpretation:
     wuwa_shadow_width: float = 0.01
     wuwa_shadow_influence: float = 1.0
     wuwa_specular_power: float = 1.0
-    wuwa_metal_specular_power: float = 1.0
     wuwa_toon_specular_cutoff: float = 0.1
     wuwa_specular_mask_cutoff: float = 0.5
 
@@ -146,7 +145,6 @@ class MaterialInterpretation:
             "wuwa_shadow_width": self.wuwa_shadow_width,
             "wuwa_shadow_influence": self.wuwa_shadow_influence,
             "wuwa_specular_power": self.wuwa_specular_power,
-            "wuwa_metal_specular_power": self.wuwa_metal_specular_power,
             "wuwa_toon_specular_cutoff": self.wuwa_toon_specular_cutoff,
             "wuwa_specular_mask_cutoff": self.wuwa_specular_mask_cutoff,
         }
@@ -226,7 +224,6 @@ def _specialized_profile_for(game, texture_api, material_kind):
         metal_route=ChannelRef("normal_data", "a"),
         direct_specular_model="wuwa_body",
         wuwa_specular_power=1.0,
-        wuwa_metal_specular_power=1.0,
         wuwa_toon_specular_cutoff=0.1,
         wuwa_specular_mask_cutoff=0.5,
     )

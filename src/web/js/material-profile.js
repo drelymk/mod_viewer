@@ -444,9 +444,27 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
  * and then passed through a scale/bias saturate before it selects the
  * physical fallback for the not-yet-implemented matcap path.
  */
+/** Numeric companion used by regression probes for the authored route curve. */
+export function wuwaMetalRouteValue(value) {
+  const raw = Math.min(Math.max(Number(value), 0), 1);
+  const shaped = raw > 0.00000003 ? Math.pow(raw, 0.1) : 0;
+  return Math.min(Math.max(
+    ((1 - shaped) * 19.899 + 0.1) * -999 + 1000, 0), 1);
+}
+
 export function wuwaMetalRouteNode(a) {
-  return a.clamp(0, 1).max(0.0001).pow(float(0.1))
-    .mul(2).sub(1).clamp(0, 1);
+  const raw = a.clamp(0, 1);
+  const shaped = raw.greaterThan(0.00000003).select(
+    raw.pow(float(0.1)),
+    float(0),
+  );
+  return float(1)
+    .sub(shaped)
+    .mul(19.899)
+    .add(0.1)
+    .mul(-999)
+    .add(1000)
+    .clamp(0, 1);
 }
 
 /** WuWa RabbitFX body response layered on top of the validated shadow model. */
@@ -617,8 +635,6 @@ export function configureGameMaterial(material, profile, options = {}) {
       numericOr(profile?.wuwa_shadow_influence, 1.0)),
     wuwaSpecularPowerNode: uniform(
       numericOr(profile?.wuwa_specular_power, 1.0)),
-    wuwaMetalSpecularPowerNode: uniform(
-      numericOr(profile?.wuwa_metal_specular_power, 1.0)),
     wuwaToonSpecularCutoffNode: uniform(
       numericOr(profile?.wuwa_toon_specular_cutoff, 0.1)),
     wuwaSpecularMaskCutoffNode: uniform(

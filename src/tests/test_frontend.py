@@ -1073,6 +1073,81 @@ def test_wuwa_body_b_threshold_controls_toon_classification(
         context.close()
 
 
+def test_wuwa_body_a_route_matches_near_binary_reference_boundary(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx:body")
+    entry = payload["meshes"]["Body-Packed-0"]
+    boundary_low_key = "normal_data::Packed-body-a-160.png"
+    boundary_high_key = "normal_data::Packed-body-a-161.png"
+    payload["textures"] = {
+        key: _flat_png_uri((255, 255, 255, 255))
+        for key in payload["textures"]
+    }
+    payload["textures"]["diffuse::Packed-one.png"] = _flat_png_uri(
+        (72, 72, 72, 255))
+    # B is above the first-lobe classification threshold in every sample.
+    for key, a in (
+        (boundary_low_key, 160), (boundary_high_key, 161),
+    ):
+        payload["textures"][key] = _flat_png_uri((128, 128, 200, a))
+    entry["normal_data_key"] = boundary_low_key
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings.normal_data.enabledNode.value === true")
+        page.evaluate("window.modViewer.setEnvironmentPreset('studio')")
+        page.evaluate("""
+          async () => {
+            const THREE = await import('three');
+            const {scene, controls} = await import('./js/scene.js');
+            scene.traverse(object => {
+              if (object.isAmbientLight || object.isHemisphereLight) object.intensity = 0;
+              if (object.isSprite || object.isGridHelper) object.visible = false;
+            });
+            const key = scene.children.find(object => object.isDirectionalLight);
+            key.target.position.copy(controls.target);
+            key.position.copy(controls.target).add(new THREE.Vector3(0, 0, 3));
+            key.intensity = 3;
+          }
+        """)
+
+        def set_normal_data(key):
+            page.evaluate("""async key => {
+              const {setMeshTextureState} = await import('./js/mesh-factory.js');
+              const mesh = window.modViewer.activeMeshes[0];
+              setMeshTextureState(mesh, {
+                diffuse: mesh.userData.texKey,
+                normal_map: null,
+                normal_data: key,
+                light_map: mesh.userData.lightMapKey,
+                material_map: null,
+              });
+            }""", key)
+            page.wait_for_timeout(300)
+            return [_sample_mesh_pixel_at(page, x, 0.1)
+                    for x in (0.1, 0.3, 0.5, 0.7, 0.9)]
+
+        boundary_low_pixel = set_normal_data(boundary_low_key)
+        boundary_high_pixel = set_normal_data(boundary_high_key)
+
+        route_values = page.evaluate("""async () => {
+          const {wuwaMetalRouteValue} = await import('./js/material-profile.js');
+          return [0.10, 160 / 255, 161 / 255, 0.80]
+            .map(wuwaMetalRouteValue);
+        }""")
+        assert route_values[0] == 0
+        assert route_values[1] == 0
+        assert route_values[2] == 1
+        assert route_values[3] == 1
+        assert any(sum(low) != sum(high)
+                   for low, high in zip(boundary_low_pixel, boundary_high_pixel)), (
+            boundary_low_pixel, boundary_high_pixel)
+    finally:
+        context.close()
+
+
 def test_wuwa_raw_normal_data_debug_is_lazy_and_keeps_standard_material(
         edge_browser, frontend_url):
     payload = _packed_material_payload("wuwa:raw")

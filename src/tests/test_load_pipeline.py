@@ -247,24 +247,29 @@ def test_component_material_kind_overrides_apply_to_every_draw_and_auto_removes(
     root = str(tmp_path)
 
     assert metadata.save_component_material_kind(
-        root, "Component3", "body")["saved"]
+        root, "SourceA", "Component3", "body")["saved"]
     saved = metadata.load(root)
-    assert saved["component_material_kinds"] == {"Component3": "body"}
+    assert saved["component_material_kinds"] == {
+        "SourceA": {"Component3": "body"}}
     assert metadata.component_material_kinds(root, {
         "component_material_kinds": {
-            "Component3": "body", "stale": "not-a-kind",
+            "SourceA": {"Component3": "body", "stale": "not-a-kind"},
         },
-    }) == {"Component3": "body"}
+    }) == {"SourceA": {"Component3": "body"}}
 
     payload = {"meshes": {
-        "Jacket-0": {"component": "Component3", "drawindexed": [3, 0, 0]},
-        "Jacket-1": {"component": "Component3", "drawindexed": [3, 1, 0]},
-        "Jacket-2": {"component": "Component3", "drawindexed": [3, 2, 0]},
-        "Other-0": {"component": "Component4", "drawindexed": [3, 3, 0]},
+        "Jacket-0": {"source": "SourceA", "component": "Component3",
+                     "drawindexed": [3, 0, 0]},
+        "Jacket-1": {"source": "SourceA", "component": "Component3",
+                     "drawindexed": [3, 1, 0]},
+        "Jacket-2": {"source": "SourceA", "component": "Component3",
+                     "drawindexed": [3, 2, 0]},
+        "Other-0": {"source": "SourceB", "component": "Component3",
+                    "drawindexed": [3, 3, 0]},
     }}
     hydrated = metadata.hydrate_component_material_kinds(
         payload["meshes"], saved)
-    assert hydrated == {"Component3": "body"}
+    assert hydrated == {"SourceA": {"Component3": "body"}}
     for name in ("Jacket-0", "Jacket-1", "Jacket-2"):
         assert payload["meshes"][name]["material_kind_evidence"] == {
             "kind": "body", "reliable": True,
@@ -284,7 +289,7 @@ def test_component_material_kind_overrides_apply_to_every_draw_and_auto_removes(
         "wuwa:rabbitfx")
 
     assert metadata.save_component_material_kind(
-        root, "Component3", "auto")["saved"]
+        root, "SourceA", "Component3", "auto")["saved"]
     assert "component_material_kinds" not in metadata.load(root)
 
     reset = {

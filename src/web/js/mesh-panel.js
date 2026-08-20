@@ -27,12 +27,12 @@ const MATERIAL_KIND_OPTIONS = Object.freeze([
   ['special', 'Special'],
 ]);
 
-function saveComponentMaterialKind(modPath, component, kind) {
+function saveComponentMaterialKind(modPath, source, component, kind) {
   if (!modPath || !window.pywebview?.api?.save_component_material_kind) {
     return Promise.resolve({ saved: false });
   }
   return window.pywebview.api.save_component_material_kind(
-    modPath, component, kind);
+    modPath, source, component, kind);
 }
 
 function syncMeshPanel() {
@@ -75,7 +75,8 @@ function groupByComponent(names, meshes) {
 
 function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
                           onPoolChange, componentKind,
-                          onMaterialKindChanged, componentIdentity = groupName) {
+                          onMaterialKindChanged, componentIdentity = groupName,
+                          source = '') {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
 
@@ -115,7 +116,7 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
     materialSelect.disabled = true;
     try {
       const result = await saveComponentMaterialKind(
-        modPath, componentIdentity, next);
+        modPath, source, componentIdentity, next);
       if (result?.error || result?.saved === false) {
         throw new Error(result?.error || 'material kind was not saved');
       }
@@ -433,7 +434,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
 
       const { hdr, masterCb, texBtn } = buildGroupHeader(
         groupName, itemsWrap, texturePool, modPath, onPoolChange,
-        componentKind, options.onMaterialKindChanged, componentIdentity);
+        componentKind, options.onMaterialKindChanged, componentIdentity, src);
       container.append(hdr, itemsWrap);
 
       for (const name of names) {

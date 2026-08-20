@@ -55,24 +55,37 @@ def save_textures(folder_path, textures):
         return _save(folder_path, data)
 
 
+def _source_key(value):
+    return str(value or "")
+
+
 def component_material_kinds(folder_path, data=None):
-    """Return supported component-level material-kind overrides."""
+    """Return supported overrides keyed by source and canonical component."""
     data = (load(folder_path) if data is None and folder_path is not None
             else ({} if data is None else data))
     saved = data.get("component_material_kinds") if isinstance(data, dict) else None
     if not isinstance(saved, dict):
         return {}
-    return {
-        component: kind
-        for component, value in saved.items()
-        if isinstance(component, str) and component
-        for kind in [normalize_material_kind(value, overrides_only=True)]
-        if kind is not None
-    }
+    result = {}
+    for source, components in saved.items():
+        if not isinstance(source, str) or not isinstance(components, dict):
+            continue
+        clean = {}
+        for component, value in components.items():
+            if not isinstance(component, str) or not component:
+                continue
+            kind = normalize_material_kind(value, overrides_only=True)
+            if kind is not None:
+                clean[component] = kind
+        if clean:
+            result[source] = clean
+    return result
 
 
-def save_component_material_kind(folder_path, component, material_kind):
-    """Save or remove one canonical component material-kind override."""
+def save_component_material_kind(folder_path, source, component, material_kind):
+    """Save/remove one source-qualified component material-kind override."""
+    if not isinstance(source, str):
+        source = _source_key(source)
     if not isinstance(component, str) or not component:
         return {"saved": False}
     normalized = str(material_kind or "").strip().lower()
@@ -82,10 +95,13 @@ def save_component_material_kind(folder_path, component, material_kind):
     with _LOCK:
         data = load(folder_path)
         overrides = component_material_kinds(folder_path, data)
+        source_overrides = overrides.setdefault(source, {})
         if kind is not None:
-            overrides[component] = kind
+            source_overrides[component] = kind
         else:
-            overrides.pop(component, None)
+            source_overrides.pop(component, None)
+            if not source_overrides:
+                overrides.pop(source, None)
         if overrides:
             data["component_material_kinds"] = overrides
         else:
@@ -225,8 +241,11 @@ def hydrate_component_material_kinds(meshes, data=None):
     for name, entry in meshes.items():
         if not isinstance(entry, dict) or entry.get("error"):
             continue
+        source = _source_key(entry.get("source"))
         component = entry.get("component")
-        override = saved.get(component) if isinstance(component, str) else None
+        source_overrides = saved.get(source, {})
+        override = (source_overrides.get(component)
+                    if isinstance(component, str) else None)
         if override is None:
             entry["material_kind_override"] = None
             continue
@@ -236,7 +255,7 @@ def hydrate_component_material_kinds(meshes, data=None):
             "reliable": True,
             "reason": "viewer component material-kind override",
         }
-        hydrated[component] = override
+        hydrated.setdefault(source, {})[component] = override
     return hydrated
 
 
