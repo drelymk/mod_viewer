@@ -2,6 +2,7 @@
 
 import { scene, resetModelOrientation } from './scene.js';
 import { dnfSatisfied, getControlValue } from './control-state.js';
+import { disposeGameMaterial } from './material-profile.js';
 import { setMeshTextureState } from './mesh-factory.js';
 import { initializeMeshRenderModes } from './render-modes.js';
 
@@ -12,7 +13,10 @@ export function resetMeshes() {
     scene.remove(mesh);
     mesh.geometry.dispose();
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach(material => material.dispose());
+    materials.forEach(material => {
+      disposeGameMaterial(material);
+      material.dispose();
+    });
   });
   activeMeshes.length = 0;
   resetModelOrientation();
@@ -26,6 +30,7 @@ export function addMesh(mesh, conditions, sources, textureVariants, materialVari
   mesh.userData.sources = sources || [];
   mesh.userData.textureVariants = textureVariants || [];
   mesh.userData.normalMapVariants = materialVariants.normal_map || [];
+  mesh.userData.normalDataVariants = materialVariants.normal_data || [];
   mesh.userData.lightMapVariants = materialVariants.light_map || [];
   mesh.userData.materialMapVariants = materialVariants.material_map || [];
   // The texture selected by the INI under the current control state. Ordered
@@ -70,6 +75,8 @@ export function applyTextureVariant(mesh) {
     mesh.userData.textureVariants, mesh.userData.defaultTexKey);
   mesh.userData.resolvedNormalMapKey = resolve(
     mesh.userData.normalMapVariants, mesh.userData.defaultNormalMapKey);
+  mesh.userData.resolvedNormalDataKey = resolve(
+    mesh.userData.normalDataVariants, mesh.userData.defaultNormalDataKey);
   mesh.userData.resolvedLightMapKey = resolve(
     mesh.userData.lightMapVariants, mesh.userData.defaultLightMapKey);
   mesh.userData.resolvedMaterialMapKey = resolve(
@@ -79,6 +86,7 @@ export function applyTextureVariant(mesh) {
       ? mesh.userData.manualTexOverride
       : mesh.userData.resolvedTexKey,
     normal_map: mesh.userData.resolvedNormalMapKey,
+    normal_data: mesh.userData.resolvedNormalDataKey,
     light_map: mesh.userData.resolvedLightMapKey,
     material_map: mesh.userData.resolvedMaterialMapKey,
   });

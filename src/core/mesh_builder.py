@@ -20,7 +20,8 @@ _MAX_BUFFER_FILE_BYTES = 512 * 1024 * 1024
 _MAX_TOTAL_BUFFER_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_DRAWS = 10_000
 _MAX_IMAGE_PIXELS = 100_000_000
-TEXTURE_ROLES = ("diffuse", "normal_map", "light_map", "material_map")
+TEXTURE_ROLES = (
+    "diffuse", "normal_map", "normal_data", "light_map", "material_map")
 TEXTURE_TRANSFORMS = (
     "passthrough", "normal_xy_reconstruct", "channel_r", "channel_g",
     "channel_b", "channel_a",
@@ -842,6 +843,12 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 tex_uris[key] = value or ""
             return key
 
+        def _ensure_normal_data(dds_path):
+            """Retain a raw authored normal source when the profile needs it."""
+            if not texture_profile.retain_normal_data:
+                return None
+            return _ensure_texture(dds_path, "normal_data")
+
         # Every diffuse this component's ini ever references, resolved once
         # and shared by every draw in the group -- the UI's per-mesh texture
         # picker list (core/ini_parser.py's build_draw_groups). Uses the same
@@ -961,6 +968,11 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     mod_dir, draw.get(f"{channel}_default_file")), channel)
                 if key:
                     entry[f"{channel}_key"] = key
+            normal_path = _safe_join(
+                mod_dir, draw.get("normal_map_default_file"))
+            normal_data_key = _ensure_normal_data(normal_path)
+            if normal_data_key:
+                entry["normal_data_key"] = normal_data_key
             # The manager presents one row per diffuse. Seed that row with the
             # auxiliary maps resolved alongside this draw so authored maps can
             # be inspected/replaced with the same controls as manual ones.
@@ -970,7 +982,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 option = next((item for item in texture_options
                                if item["tex_key"] == diffuse_key), None)
                 if option:
-                    for channel in ("normal_map", "light_map", "material_map"):
+                    for channel in ("normal_map", "light_map", "normal_data",
+                                    "material_map"):
                         key = entry.get(f"{channel}_key")
                         if key and not option.get(channel):
                             option[channel] = key
@@ -1020,6 +1033,18 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                         })
                 if variants:
                     entry[f"{channel}_variants"] = variants
+                if channel == "normal_map" and texture_profile.retain_normal_data:
+                    data_variants = []
+                    for variant in rules:
+                        key = _ensure_normal_data(_safe_join(
+                            mod_dir, variant["file"]))
+                        if key:
+                            data_variants.append({
+                                "conditions": variant["conditions"],
+                                "tex_key": key,
+                            })
+                    if data_variants:
+                        entry["normal_data_variants"] = data_variants
             # Keep even a single resolved texture in the UI pool. A component
             # with one diffuse still has a useful texture to display/manage;
             # only components with no resolved textures need the frontend's

@@ -205,7 +205,8 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         _role, relative_path = split_texture_key(key)
         item = {"tex_key": key, "file": relative_path,
                 "label": label, "manual": manual}
-        for field in ("normal_map", "light_map", "material_map"):
+        for field in ("normal_map", "normal_data", "light_map",
+                      "material_map"):
             value = normalize_texture_key(state.get(field), field)
             if value:
                 item[field] = value
@@ -247,7 +248,8 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
             if old is None:
                 pool.append(opt)
             else:
-                for field in ("normal_map", "light_map", "material_map"):
+                for field in ("normal_map", "normal_data", "light_map",
+                              "material_map"):
                     if opt.get(field):
                         old[field] = opt[field]
                     if opt.get(f"{field}_manual"):
@@ -265,7 +267,8 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         texture_roles = [(state["tex_key"], None)] if state else []
         if state:
             texture_roles.extend((state.get(field), field) for field in
-                                 ("normal_map", "light_map", "material_map"))
+                                 ("normal_map", "normal_data", "light_map",
+                                  "material_map"))
         for key, role in texture_roles:
             if not key:
                 continue

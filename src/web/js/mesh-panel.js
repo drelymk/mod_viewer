@@ -321,7 +321,8 @@ function updateTexButtonState(texBtn, itemObjs) {
 /** Build the panel and add every mesh in the mesh map to the scene. `modPath`
  * is threaded through to the per-component texture popup, which needs it to
  * open the native file picker rooted at the mod folder. */
-export function buildMeshPanel(meshes, modPath, meshNames = {}) {
+export function buildMeshPanel(meshes, modPath, meshNames = {},
+                               materialProfile = null) {
   const list = document.getElementById('mesh-list');
   list.innerHTML = '';
   groupsUI = [];
@@ -370,7 +371,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {}) {
       container.append(hdr, itemsWrap);
 
       for (const name of names) {
-        const mesh = buildMesh(name, meshes[name]);
+        const mesh = buildMesh(name, meshes[name], materialProfile);
         mesh.userData.metadataKey = meshMetadataKey(name, meshes[name]);
         mesh.userData.texturePool = texturePool;
         mesh.userData.displayName = meshNames[mesh.userData.metadataKey] || null;
@@ -379,6 +380,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {}) {
         addMesh(mesh, meshes[name].conditions, meshes[name].sources,
           meshes[name].texture_variants, {
             normal_map: meshes[name].normal_map_variants,
+            normal_data: meshes[name].normal_data_variants,
             light_map: meshes[name].light_map_variants,
             material_map: meshes[name].material_map_variants,
           });

@@ -14,6 +14,7 @@ import pytest
 from PIL import Image
 
 from app import metadata, mod_loader, server
+from app.api import ModViewerAPI
 from core.ini_document import IniDocument
 from core.mesh_builder import (GeometryBlob, _encode_texture,
                                _render_texture_png, build_mesh_result,
@@ -105,6 +106,30 @@ def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
         ("shared.png", "diffuse"),
         ("shared.png", "normal_map"),
         ("shared.png", "light_map"),
+    ]
+
+
+def test_wuwa_mesh_builder_publishes_raw_normal_source_separately(tmp_path):
+    _write_geometry(str(tmp_path))
+    Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(tmp_path / "normal.png")
+    registered = []
+
+    def register(path, role):
+        registered.append((os.path.basename(path), role))
+        return f"/texture/test/raw-{len(registered) - 1}"
+
+    with patch("core.mesh_builder._render_texture_png",
+               side_effect=AssertionError("lazy app path rendered a texture")):
+        built = build_mesh_result(
+            _group({"normal_map": "normal.png"}), str(tmp_path),
+            geometry=GeometryBlob(), texture_source=register,
+            game_profile="wuwa")
+
+    assert set(built.textures) == {
+        "normal_map::normal.png", "normal_data::normal.png"}
+    assert registered == [
+        ("normal.png", "normal_map"),
+        ("normal.png", "normal_data"),
     ]
 
 
@@ -211,6 +236,32 @@ def test_publication_profile_selects_manual_normal_recipe(tmp_path):
     publication.register(str(path), "normal_map")
     assert server._lookup_texture(publication.token, "0").transform == (
         "normal_xy_reconstruct")
+
+
+def test_wuwa_manual_normal_pick_returns_paired_raw_source(tmp_path):
+    path = tmp_path / "normal.png"
+    Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(path)
+    publication = server.begin_texture_publication(str(tmp_path))
+    publication.set_game_profile("wuwa")
+    publication.commit()
+
+    class Dialog:
+        def create_file_dialog(self, *_args, **_kwargs):
+            return [str(path)]
+
+    api = ModViewerAPI()
+    api._window = Dialog()
+    api._authorized_folders.add(os.path.normcase(os.path.abspath(tmp_path)))
+
+    result = api.pick_texture_file(str(tmp_path), "normal_map")
+
+    assert result["tex_key"] == "normal_map::normal.png"
+    assert result["normal_data_key"] == "normal_data::normal.png"
+    assert result["normal_data_uri"].startswith("/texture/")
+    assert server._lookup_texture(publication.token, "0").transform == (
+        "normal_xy_reconstruct")
+    assert server._lookup_texture(publication.token, "1").transform == (
+        "passthrough")
 
 
 def test_explicit_manual_validation_rejects_invalid_image(tmp_path):

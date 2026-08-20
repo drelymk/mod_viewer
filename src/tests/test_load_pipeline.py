@@ -165,6 +165,41 @@ def test_texture_registry_identity_includes_role():
               and entry["normal_map_key"] == "normal_map::shared.png"), ("mesh building keeps shared diffuse and normal roles separate")
 
 
+def test_wuwa_retains_raw_normal_data_alongside_derived_display_normal():
+    from PIL import Image
+
+    def uri_mode(uri):
+        payload = base64.b64decode(uri.split(",", 1)[1])
+        return Image.open(io.BytesIO(payload)).mode
+
+    with tempfile.TemporaryDirectory() as root:
+        Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(
+            os.path.join(root, "normal.png"))
+        with open(os.path.join(root, "p.buf"), "wb") as fh:
+            fh.write(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
+        with open(os.path.join(root, "t.buf"), "wb") as fh:
+            fh.write(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
+        with open(os.path.join(root, "i.buf"), "wb") as fh:
+            fh.write(struct.pack("<3I", 0, 1, 2))
+        group = [{
+            "name": "Body", "display_name": "Body",
+            "position_file": "p.buf", "texcoord_file": "t.buf",
+            "position_stride": 12, "texcoord_stride": 8,
+            "ib_file": "i.buf", "index_size": 4,
+            "draws": [{"label": "Body-1", "count": 3,
+                        "start": 0, "base": 0, "conditions": [],
+                        "normal_map_default_file": "normal.png"}],
+        }]
+        built = build_mesh_result(group, root, geometry=GeometryBlob(),
+                                  game_profile="wuwa")
+        entry = built.meshes["Body-1"]
+
+        assert entry["normal_map_key"] == "normal_map::normal.png"
+        assert entry["normal_data_key"] == "normal_data::normal.png"
+        assert uri_mode(built.textures[entry["normal_map_key"]]) == "RGB"
+        assert uri_mode(built.textures[entry["normal_data_key"]]) == "RGBA"
+
+
 def test_legacy_texture_metadata_is_normalized_by_role():
     from PIL import Image
 

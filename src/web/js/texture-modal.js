@@ -39,6 +39,16 @@ async function pickInto(opt, field) {
   addTexture(result.tex_key, result.uri);
   opt[field] = result.tex_key;
   opt[`${field}_manual`] = true;
+  if (field === 'normal_map') {
+    if (result.normal_data_key) {
+      addTexture(result.normal_data_key, result.normal_data_uri);
+      opt.normal_data = result.normal_data_key;
+      opt.normal_data_manual = true;
+    } else {
+      delete opt.normal_data;
+      delete opt.normal_data_manual;
+    }
+  }
   render();
   if (onChange) onChange();
 }
@@ -90,6 +100,10 @@ function render() {
           evt.stopPropagation();
           delete opt[field];
           opt[`${field}_manual`] = true;
+          if (field === 'normal_map') {
+            delete opt.normal_data;
+            delete opt.normal_data_manual;
+          }
           render();
           if (onChange) onChange();
         });

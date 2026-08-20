@@ -8,8 +8,14 @@ import struct
 import pytest
 
 from app import paths, server
+from core.material_profiles import material_profile_for
 
 playwright = pytest.importorskip("playwright.sync_api")
+
+_PNG_URI = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
+    "ScLkWQAAAABJRU5ErkJggg==")
 
 
 def _f32(*values):
@@ -68,6 +74,31 @@ def _payload(label="A"):
         "metadata": {"mesh_names": {}},
         "health": {"summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
     }
+
+
+def _packed_material_payload(profile_id="zzz:zzmi"):
+    payload = _payload("Packed")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["light_map_key"] = "light_map::Packed-light.png"
+    entry["material_map_key"] = "material_map::Packed-material.png"
+    entry["normal_data_key"] = "normal_data::Packed-normal.png"
+    payload["textures"] = {
+        "diffuse::Packed-one.png": _PNG_URI,
+        "light_map::Packed-light.png": _PNG_URI,
+        "material_map::Packed-material.png": _PNG_URI,
+        "normal_data::Packed-normal.png": _PNG_URI,
+    }
+    profile_args = {
+        "zzz:zzmi": ("zzz", "zzmi"),
+        "genshin:gimi": ("genshin", "gimi"),
+        "wuwa:rabbitfx": ("wuwa", "rabbitfx"),
+    }
+    profile = (material_profile_for(*profile_args[profile_id]).to_metadata()
+               if profile_id in profile_args
+               else material_profile_for("unknown", "unknown").to_metadata())
+    payload["metadata"]["material_profile"] = profile
+    return payload
 
 
 def _construction_failure_payload():
@@ -268,6 +299,121 @@ def test_frontend_construction_failure_rolls_back_partial_scene(
         assert page.locator("#mod-path").inner_text() == "B"
         assert not page.locator("#ini-view-btn").is_disabled()
         page.locator("#dialog-ok").click()
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("profile_id", ["zzz:zzmi", "genshin:gimi"])
+def test_packed_material_profile_compiles_and_toggles_update_uniforms(
+        edge_browser, frontend_url, profile_id):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"Packed": _packed_material_payload(profile_id)},
+    )
+    try:
+        _open(page, "Packed")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial?.shader")
+
+        state = page.evaluate("""() => {
+          const material = window.modViewer.activeMeshes[0].material;
+          const game = material.userData.gameMaterial;
+          return {
+            physical: material.isMeshPhysicalMaterial,
+            profile: game.profile.id,
+            shader: !!game.shader,
+            fragment: game.shader.fragmentShader,
+            lightMap: !!game.uniforms.gameLightMap.value,
+            materialMap: !!game.uniforms.gameMaterialMap.value,
+            metalnessScale: game.uniforms.gameMaterialMetalnessScale.value,
+            specularScale: game.uniforms.gameMaterialSpecularScale.value,
+            specularInfluence: game.uniforms.gameMaterialSpecularInfluence.value,
+            usesInfluenceBlend: game.shader.fragmentShader
+              .includes('gameMaterialSpecularResponse = mix('),
+            version: material.version,
+          };
+        }""")
+        assert state["physical"]
+        assert state["profile"] == profile_id
+        assert "gameMaterialSpecularResponse" in state["fragment"]
+        assert "gameMaterialMetalnessResponse" in state["fragment"]
+        source_sample = ("gameMaterialMapSample" if profile_id == "zzz:zzmi"
+                         else "gameLightMapSample")
+        assert source_sample in state["fragment"]
+        assert state["metalnessScale"] == (1 if profile_id == "zzz:zzmi" else 0.08)
+        assert state["specularScale"] == 1
+        assert state["specularInfluence"] == (0 if profile_id == "zzz:zzmi" else 0.15)
+        assert state["usesInfluenceBlend"] == (profile_id == "genshin:gimi")
+        assert state["materialMap"] if profile_id == "zzz:zzmi" else state["lightMap"]
+
+        after = page.evaluate("""async () => {
+          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const shader = material.userData.gameMaterial.shader;
+          const version = material.version;
+          setMeshTextureState(mesh, {
+            diffuse: mesh.userData.texKey,
+            normal_map: mesh.userData.normalMapKey,
+            normal_data: null,
+            light_map: null,
+            material_map: null,
+          });
+          return {
+            sameShader: material.userData.gameMaterial.shader === shader,
+            sameVersion: material.version === version,
+            mapEnabled: material.userData.gameMaterial.uniforms
+              .gameMaterialMapEnabled.value,
+          };
+        }""")
+        assert after == {"sameShader": True, "sameVersion": True,
+                         "mapEnabled": False}
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize(("profile_id", "expected"), [
+    ("zzz:zzmi", {
+        "physical": True, "profile": "zzz:zzmi", "normalData": False,
+        "lightMap": False, "materialMap": True,
+    }),
+    ("genshin:gimi", {
+        "physical": True, "profile": "genshin:gimi", "normalData": False,
+        "lightMap": True, "materialMap": False,
+    }),
+    ("wuwa:rabbitfx", {
+        "physical": False, "profile": "wuwa:rabbitfx", "normalData": False,
+        "lightMap": False, "materialMap": False,
+    }),
+    ("none", {
+        "physical": False, "profile": None, "normalData": False,
+        "lightMap": False, "materialMap": False,
+    }),
+])
+def test_packed_material_sources_are_loaded_only_when_sampled(
+        edge_browser, frontend_url, profile_id, expected):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"Packed": _packed_material_payload(profile_id)},
+    )
+    try:
+        _open(page, "Packed")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_timeout(300)
+        state = page.evaluate("""() => {
+          const material = window.modViewer.activeMeshes[0].material;
+          const game = material.userData.gameMaterial;
+          const uniforms = game?.uniforms || {};
+          return {
+            physical: !!material.isMeshPhysicalMaterial,
+            profile: game?.profile?.id || null,
+            normalData: !!uniforms.gameNormalData?.value,
+            lightMap: !!uniforms.gameLightMap?.value,
+            materialMap: !!uniforms.gameMaterialMap?.value,
+          };
+        }""")
+        assert state == expected
     finally:
         context.close()
 

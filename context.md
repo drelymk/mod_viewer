@@ -125,14 +125,20 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   maps may have Z reconstructed during encoding. SRMI/HSR markers take
   precedence over generic DRAW_TYPE/vb2 heuristics, while ZZZ requires its
   more-specific 2/4 route and ZZMI evidence.
+  Profiles that derive a display normal from packed source data, such as WuWa,
+  publish both `normal_map_key` and an intact `normal_data_key`; the latter is
+  available to the selected material adapter and is never silently used as a
+  standard Three.js map. Material interpretation is selected from `(game,
+  texture_api)`, not from a texture name alone.
   LightMaps remain packed game data and are retained as toggle-aware keys; the
   passthrough transport preserves authored RGBA for packed auxiliary roles,
   ordinary diffuse passthrough remains RGB, and explicit channel masks read the
-  source channel before conversion. They are not bound to Three.js AO or RGB
-  light inputs. MaterialMaps remain loaded
-  and toggle-aware but are not guessed into incompatible standard PBR channels
-  without known shader semantics. A future validated AO derivation must use an
-  explicit occlusion role.
+  source channel before conversion. Known Genshin profiles use a bounded
+  LightMap R response; LightMap B/G/A remain packed for later threshold,
+  toon-shadow, and material-ID phases, and no LightMap is bound as Three.js AO.
+  Known ZZZ profiles use MaterialMap G/B for metallic/specular response while
+  retaining R as material-ID data. Unknown game/API pairs keep packed maps
+  available but do not guess PBR semantics.
 - A section with an `ib` but no `drawindexed` uses a synthetic whole-buffer
   draw. It inherits `diffuse_variants_at_end`; do not discard a section’s final
   diffuse. A real draw before the first diffuse legitimately remains untextured.
@@ -254,10 +260,10 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
 - Texture source paths are mod-relative, never basenames, because variant
   folders commonly repeat filenames.
 - Rendered texture identity is `role::mod-relative-path`, because one source
-  file may be used as diffuse, normal, light or material data and each role
-  has a different encoding/color-space contract. Diffuse maps are sRGB;
-  auxiliary maps are non-color data. Legacy path-only viewer metadata must be
-  normalized when loaded.
+  file may be used as diffuse, derived normal, retained raw normal data, light
+  or material data and each role has a different encoding/color-space contract.
+  Diffuse maps are sRGB; auxiliary maps are non-color data. Legacy path-only
+  viewer metadata must be normalized when loaded.
 - `safe_resource_path`/`_safe_join` is the one sandbox implementation for both
   geometry and health. Reject absolute/drive paths, allow relative parent climbs
   only up to live `_MAX_ESCAPE_DEPTH`, and do not duplicate these rules.
@@ -284,7 +290,8 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   scale from model bounds. Camera framing targets the
   unobstructed viewport: keep orbit target at the true model center and shift
   projection with `setViewOffset`; back up when horizontal space is limiting.
-  Materials use DoubleSide, roughness 1 and flat shading by default.
+  Materials use DoubleSide, roughness 1 and flat shading by default; known
+  packed-material profiles may vary metallic/specular response in their shader.
 
 ## Frontend, hosting and security
 

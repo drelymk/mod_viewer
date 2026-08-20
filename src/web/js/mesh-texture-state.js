@@ -14,6 +14,7 @@ export function recomputeTextureRuns(groupMeshes) {
         .find(candidate => candidate.tex_key === activeKey);
       activeMaps = option ? {
         normal_map: option.normal_map || null,
+        normal_data: option.normal_data || null,
         light_map: option.light_map || null,
         material_map: option.material_map || null,
       } : null;
@@ -31,6 +32,7 @@ export function recomputeTextureRuns(groupMeshes) {
         if (!diffuseKeys.has(option.tex_key)) continue;
         const resolvedMaps = {
           normal_map: mesh.userData.resolvedNormalMapKey,
+          normal_data: mesh.userData.resolvedNormalDataKey,
           light_map: mesh.userData.resolvedLightMapKey,
           material_map: mesh.userData.resolvedMaterialMapKey,
         };
@@ -44,6 +46,7 @@ export function recomputeTextureRuns(groupMeshes) {
     }
     const maps = activeMaps || {
       normal_map: mesh.userData.resolvedNormalMapKey,
+      normal_data: mesh.userData.resolvedNormalDataKey,
       light_map: mesh.userData.resolvedLightMapKey,
       material_map: mesh.userData.resolvedMaterialMapKey,
     };
@@ -91,9 +94,11 @@ export function saveTextureState(modPath) {
       label: option.label,
       manual,
       normal_map: option.normal_map || null,
+      normal_data: option.normal_data || null,
       light_map: option.light_map || null,
       material_map: option.material_map || null,
       normal_map_manual: !!option.normal_map_manual,
+      normal_data_manual: !!option.normal_data_manual,
       light_map_manual: !!option.light_map_manual,
       material_map_manual: !!option.material_map_manual,
     };
