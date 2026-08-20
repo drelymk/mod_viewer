@@ -89,7 +89,7 @@ def _payload(label="A"):
         },
         "state": {"rules": [], "defaults": {"toggle": "0", "menu": "0", "shape": "0"}},
         "geometry": None,
-        "metadata": {"mesh_names": {}},
+        "metadata": {"mesh_names": {}, "material_profiles": {}},
         "health": {"summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
     }
 
@@ -115,7 +115,10 @@ def _packed_material_payload(profile_id="zzz:zzmi"):
     profile = (material_profile_for(*profile_args[profile_id]).to_metadata()
                if profile_id in profile_args
                else material_profile_for("unknown", "unknown").to_metadata())
-    payload["metadata"]["material_profile"] = profile
+    entry["material_kind"] = "body"
+    entry["material_kind_reliable"] = False
+    entry["material_profile_id"] = profile["id"]
+    payload["metadata"]["material_profiles"] = {profile["id"]: profile}
     return payload
 
 
@@ -539,7 +542,8 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
             f"?.bindings?.{packed_role}?.enabledNode?.value")
 
         state = page.evaluate("""() => {
-          const material = window.modViewer.activeMeshes[0].material;
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
           const game = material.userData.gameMaterial;
           const packedRole = game.profile.id.startsWith('zzz') ? 'material_map' : 'light_map';
           const lightingModel = material.setupLightingModel();
@@ -558,6 +562,13 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
             metalnessScale: game.profile.metalness_scale,
             specularScale: game.profile.specular_scale,
             specularInfluence: game.profile.specular_influence,
+            shadowThreshold: game.shadowThresholdNode.value,
+            shadowSoftness: game.shadowSoftnessNode.value,
+            shadowMaskStrength: game.shadowMaskStrengthNode.value,
+            shadowInfluence: game.shadowInfluenceNode.value,
+            materialKind: mesh.userData.materialKind,
+            materialKindReliable: mesh.userData.materialKindReliable,
+            materialProfileId: mesh.userData.materialProfileId,
             version: material.version,
           };
         }""")
@@ -568,6 +579,11 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
         assert state["metalnessScale"] == (1 if profile_id == "zzz:zzmi" else 0.08)
         assert state["specularScale"] == 1
         assert state["specularInfluence"] == (None if profile_id == "zzz:zzmi" else 0.15)
+        assert (state["shadowThreshold"], state["shadowSoftness"],
+                state["shadowMaskStrength"], state["shadowInfluence"]) == (
+                    0.5, 0.08, 0.5, 1)
+        assert (state["materialKind"], state["materialKindReliable"],
+                state["materialProfileId"]) == ("body", False, profile_id)
         assert state["lightingModel"] == (
             "GenshinLightingModel" if profile_id == "genshin:gimi"
             else "PhysicalLightingModel")
@@ -604,6 +620,45 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
         assert after == {"sameTextureNode": True, "sameEnabledNode": True,
                          "sameVersion": True, "mapEnabled": False,
                          "usesPlaceholder": True}
+    finally:
+        context.close()
+
+
+def test_each_mesh_resolves_its_own_profile_and_packed_source(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("zzz:zzmi")
+    body_name, body = next(iter(payload["meshes"].items()))
+    face_name = "Face-Packed-0"
+    face = copy.deepcopy(body)
+    face["component"] = "Face Packed"
+    face["material_kind"] = "face"
+    face["material_kind_reliable"] = False
+    face["material_profile_id"] = "genshin:gimi"
+    payload["meshes"] = {body_name: body, face_name: face}
+    payload["metadata"]["material_profiles"]["genshin:gimi"] = \
+        material_profile_for("genshin", "gimi").to_metadata()
+
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes.length === 2 && "
+            "window.modViewer.activeMeshes.every(mesh => "
+            "mesh.material.userData.gameMaterial)")
+        states = page.evaluate("""() => window.modViewer.activeMeshes.map(mesh => ({
+          profileId: mesh.userData.materialProfileId,
+          kind: mesh.userData.materialKind,
+          lightMap: mesh.material.userData.gameMaterial.bindings.light_map.enabledNode.value,
+          materialMap: mesh.material.userData.gameMaterial.bindings.material_map.enabledNode.value,
+        }))""")
+        assert states == [
+            {"profileId": "zzz:zzmi", "kind": "body",
+             "lightMap": False, "materialMap": True},
+            {"profileId": "genshin:gimi", "kind": "face",
+             "lightMap": True, "materialMap": False},
+        ]
+        assert page.evaluate("window.modViewer.getMaterialState(1).profileId") == (
+            "genshin:gimi")
     finally:
         context.close()
 

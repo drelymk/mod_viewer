@@ -128,8 +128,18 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   Profiles that derive a display normal from packed source data, such as WuWa,
   publish both `normal_map_key` and an intact `normal_data_key`; the latter is
   available to the selected material adapter and is never silently used as a
-  standard Three.js map. Material interpretation is selected from `(game,
-  texture_api)`, not from a texture name alone.
+  standard Three.js map. Material interpretation is resolved per mesh from
+  `(game, texture_api, material_kind)`, with the validated base profile as a
+  fallback. Material kind and material profile are separate concepts: a mesh
+  may be classified as face while still using `genshin:gimi` until a
+  face-specific interpretation is validated. Unknown or unreliable kind
+  detection must resolve conservatively and must not activate specialized
+  semantics. Full profile metadata is deduplicated in a payload-level
+  `material_profiles` table; meshes reference it with
+  `material_profile_id`. Kind detection must not infer authoritative game
+  semantics from texture filenames alone. Toon threshold, softness,
+  mask-strength and influence values belong to `MaterialInterpretation`, not
+  hard-coded frontend game branches.
   LightMaps remain packed game data and are retained as toggle-aware keys; the
   passthrough transport preserves authored RGBA for packed auxiliary roles,
   ordinary diffuse passthrough remains RGB, and explicit channel masks read the

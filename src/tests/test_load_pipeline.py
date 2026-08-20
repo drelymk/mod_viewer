@@ -95,6 +95,11 @@ def test_geometry_blob_bypasses_base64_intermediate():
                "metadata", "health"}.issubset(loaded)), ("the application loader returns the structured payload contract")
         assert (not loaded.get("error") and
               isinstance(loaded["meshes"]["Body-1"]["pos"], dict)), ("the context-based loader keeps authoritative documents and raw geometry refs")
+        loaded_entry = loaded["meshes"]["Body-1"]
+        assert (loaded_entry["material_kind"] == "body"
+                and loaded_entry["material_kind_reliable"] is False
+                and loaded_entry["material_profile_id"] == "none"), ("mesh material identity is assigned conservatively")
+        assert set(loaded["metadata"]["material_profiles"]) == {"none"}, ("profile metadata is deduplicated at payload scope")
 
 
 def test_diagnostics_cache_tracks_authoritative_revision():

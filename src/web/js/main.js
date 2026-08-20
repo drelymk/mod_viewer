@@ -165,7 +165,7 @@ async function displayMeshPayload(payload) {
   setTextures(payload.textures);
   buildMeshPanel(
     meshes, currentModPath, payload.metadata?.mesh_names || {},
-    payload.metadata?.material_profile || null);
+    payload.metadata?.material_profiles || {});
   buildTogglePanel(controls.toggles, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(controls.menu);
   buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });
@@ -314,8 +314,18 @@ rendererReady.then(ready => {
 
   // Exposed for automated smoke tests and for poking at the app from the
   // devtools console; the UI itself always goes through the listeners above.
+  const getMaterialState = (index) => {
+    const mesh = activeMeshes[index];
+    return {
+      kind: mesh?.userData.materialKind,
+      reliable: mesh?.userData.materialKindReliable,
+      profileId: mesh?.userData.materialProfileId,
+      profile: mesh?.userData.materialProfile,
+    };
+  };
   window.modViewer = {
     displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
+    getMaterialState,
   };
 });
