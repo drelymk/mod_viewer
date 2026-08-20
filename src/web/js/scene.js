@@ -5,6 +5,7 @@ import { ArcballControls } from 'three/addons/controls/ArcballControls.js';
 import { createCameraFrame } from './camera-frame.js';
 import { createEnvironmentController } from './environment.js';
 import { createKeyLightController } from './key-light-controller.js';
+import { updateOutlineCameraScale } from './outline-renderer.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 
 const container = document.getElementById('canvas-container');
@@ -162,6 +163,8 @@ function tick() {
   controls.update();
   keyLightController.update();
   cameraFrame.updateClipping();
+  updateOutlineCameraScale(camera, controls.target,
+    renderer.domElement.clientHeight);
   viewGizmoController.updateAxes();
   renderer.render(scene, camera);
 }

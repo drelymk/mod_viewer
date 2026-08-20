@@ -5,6 +5,15 @@ import * as THREE from 'three';
 const INITIAL_CAMERA_DIRECTION = new THREE.Vector3(0, 0, 1);
 const INITIAL_CAMERA_UP = new THREE.Vector3(0, 1, 0);
 
+function expandByBaseMesh(box, mesh) {
+  if (!mesh?.geometry) return;
+  mesh.updateWorldMatrix(true, false);
+  if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+  if (mesh.geometry.boundingBox) {
+    box.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));
+  }
+}
+
 export function createCameraFrame({
   camera, renderer, controls, grid, cancelViewSnap, onModelFit,
 }) {
@@ -80,7 +89,7 @@ export function createCameraFrame({
 
   function frameView(meshes = [], direction = null, targetYOffset = 0) {
     const box = new THREE.Box3();
-    meshes.forEach(mesh => box.expandByObject(mesh));
+    meshes.forEach(mesh => expandByBaseMesh(box, mesh));
     if (box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
@@ -111,7 +120,7 @@ export function createCameraFrame({
     let center = modelPivot && modelPivot.clone();
     if (!center) {
       const box = new THREE.Box3();
-      meshes.forEach(mesh => box.expandByObject(mesh));
+      meshes.forEach(mesh => expandByBaseMesh(box, mesh));
       if (box.isEmpty()) return;
       center = box.getCenter(new THREE.Vector3());
     }
@@ -147,7 +156,7 @@ export function createCameraFrame({
       mesh.position.copy(position);
     });
     const box = new THREE.Box3();
-    homeView.meshes.forEach(({ mesh }) => box.expandByObject(mesh));
+    homeView.meshes.forEach(({ mesh }) => expandByBaseMesh(box, mesh));
     if (box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3());
     camera.up.copy(INITIAL_CAMERA_UP);
@@ -161,7 +170,7 @@ export function createCameraFrame({
   function fitTo(meshes) {
     if (!uprightApplied && meshes.length) {
       const rawBox = new THREE.Box3();
-      meshes.forEach(mesh => rawBox.expandByObject(mesh));
+      meshes.forEach(mesh => expandByBaseMesh(rawBox, mesh));
       const rawSize = rawBox.getSize(new THREE.Vector3());
       if (rawSize.z > rawSize.y * 1.5 && rawSize.z > rawSize.x * 1.15) {
         meshes.forEach(mesh => {
@@ -172,7 +181,7 @@ export function createCameraFrame({
       uprightApplied = true;
     }
     const box = new THREE.Box3();
-    meshes.forEach(mesh => box.expandByObject(mesh));
+    meshes.forEach(mesh => expandByBaseMesh(box, mesh));
     if (box.isEmpty()) return;
 
     const boxSize = box.getSize(new THREE.Vector3());

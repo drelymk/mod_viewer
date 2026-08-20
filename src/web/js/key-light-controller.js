@@ -60,7 +60,9 @@ export function createKeyLightController({
     if (!handleHit) return false;
     const visibleMeshes = [];
     scene.traverseVisible(object => {
-      if (object.isMesh) visibleMeshes.push(object);
+      if (object.isMesh && !object.userData.isViewerOutline) {
+        visibleMeshes.push(object);
+      }
     });
     const blocker = raycaster.intersectObjects(visibleMeshes, false)[0];
     return !blocker || blocker.distance >= handleHit.distance;

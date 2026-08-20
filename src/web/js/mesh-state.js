@@ -4,12 +4,14 @@ import { scene, resetModelOrientation } from './scene.js';
 import { dnfSatisfied, getControlValue } from './control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
 import { setMeshTextureState } from './mesh-factory.js';
+import { attachOutline, detachOutline } from './outline-renderer.js';
 import { initializeMeshRenderModes } from './render-modes.js';
 
 export const activeMeshes = [];
 
 export function resetMeshes() {
   activeMeshes.forEach(mesh => {
+    detachOutline(mesh);
     scene.remove(mesh);
     mesh.geometry.dispose();
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -39,6 +41,7 @@ export function addMesh(mesh, conditions, sources, textureVariants, materialVari
   // undefined = automatic; string = a sticky manual selection.
   mesh.userData.manualTexOverride = undefined;
   initializeMeshRenderModes(mesh);
+  attachOutline(mesh);
   scene.add(mesh);
   activeMeshes.push(mesh);
   applyTextureVariant(mesh);

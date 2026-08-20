@@ -17,6 +17,11 @@ import { setGeometryBlob } from './decode.js';
 import { setHealthLoader, setHealthReport } from './health-report.js';
 import { setIniEditorContext } from './ini-editor.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.js';
+import {
+  getOutlineState as getMeshOutlineState,
+  setOutlineSuppressedByDebug,
+  setOutlinesEnabled,
+} from './outline-renderer.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -109,6 +114,10 @@ async function refreshPendingState() {
 function clearScene() {
   clearSelection();
   reset();
+  // Debug mode is material-local and does not survive a reload; keep outline
+  // suppression in the same lifecycle rather than carrying stale state onto
+  // the next mod's normal materials.
+  setOutlineSuppressedByDebug(false);
   setTextures(null);
   setGeometryBlob(null);
   lastToggles = {};
@@ -295,6 +304,10 @@ rendererReady.then(ready => {
   $('open-btn').addEventListener('click', openMod);
   $('export-btn').addEventListener('click', exportChanges);
   $('wire-btn').addEventListener('click', toggleWireframe);
+  $('outline-btn').addEventListener('click', () => {
+    const enabled = setOutlinesEnabled();
+    $('outline-btn').classList.toggle('active', enabled);
+  });
   $('grid-btn').addEventListener('click', toggleGrid);
   $('shading-btn').addEventListener('click', toggleSmoothShading);
   $('texture-btn').addEventListener('click', toggleTextures);
@@ -346,6 +359,7 @@ rendererReady.then(ready => {
   };
   const setMaterialDebugModeForMeshes = mode => {
     const normalized = setMaterialDebugMode(activeMeshes, mode);
+    setOutlineSuppressedByDebug(normalized !== 'off');
     // Diagnostics use the same stable packed bindings as normal rendering.
     // Refreshing after the uniform switch makes normal_data lazy: it is
     // requested only when a B/A view is active, without rebuilding a graph.
@@ -356,5 +370,11 @@ rendererReady.then(ready => {
     displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
     getMaterialState, setMaterialDebugMode: setMaterialDebugModeForMeshes,
+    setOutlineEnabled: value => {
+      const enabled = setOutlinesEnabled(value);
+      $('outline-btn').classList.toggle('active', enabled);
+      return enabled;
+    },
+    getOutlineState: index => getMeshOutlineState(activeMeshes[index]),
   };
 });
