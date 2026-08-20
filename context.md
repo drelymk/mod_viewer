@@ -145,9 +145,13 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   ordinary diffuse passthrough remains RGB, and explicit channel masks read the
   source channel before conversion. Known Genshin profiles use a bounded
   LightMap R response and the validated G toon-shadow input with a
-  viewer-friendly approximation on direct diffuse light; LightMap B remains
-  reserved for the later highlight threshold, A for material IDs, and no
-  LightMap is bound as Three.js AO. Known ZZZ profiles
+  viewer-friendly approximation on direct diffuse light; LightMap B gates the
+  direct toon-specular highlight area (it is not a linear intensity map), A
+  classifies authored material regions without inventing per-region values,
+  and no LightMap is bound as Three.js AO. The packed LightMap remains one
+  RGBA source with role-aware channel semantics, so A/B do not create channel
+  textures or extra texture requests. Profile IDs are immutable metadata keys;
+  a collision with different metadata is a programming error. Known ZZZ profiles
   use MaterialMap G/B for metallic/specular response while retaining R as
   material-ID data.
   Unknown game/API pairs keep packed maps available but do not guess PBR

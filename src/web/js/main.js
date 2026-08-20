@@ -16,6 +16,7 @@ import { alertDialog, confirmDialog } from './dialogs.js';
 import { setGeometryBlob } from './decode.js';
 import { setHealthLoader, setHealthReport } from './health-report.js';
 import { setIniEditorContext } from './ini-editor.js';
+import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -316,16 +317,23 @@ rendererReady.then(ready => {
   // devtools console; the UI itself always goes through the listeners above.
   const getMaterialState = (index) => {
     const mesh = activeMeshes[index];
+    const game = mesh?.material?.userData?.gameMaterial;
     return {
       kind: mesh?.userData.materialKind,
       reliable: mesh?.userData.materialKindReliable,
+      reason: mesh?.userData.materialKindReason,
       profileId: mesh?.userData.materialProfileId,
       profile: mesh?.userData.materialProfile,
+      materialIdDecoder: game?.profile?.material_id_decoder || null,
+      hasMaterialId: !!game?.hasMaterialId,
+      hasSpecularArea: !!game?.hasSpecularArea,
+      debugMode: getMaterialDebugMode(mesh?.material),
     };
   };
+  const setMaterialDebugModeForMeshes = mode => setMaterialDebugMode(activeMeshes, mode);
   window.modViewer = {
     displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
-    getMaterialState,
+    getMaterialState, setMaterialDebugMode: setMaterialDebugModeForMeshes,
   };
 });

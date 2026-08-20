@@ -49,13 +49,14 @@ class MaterialInterpretation:
     normal_xy: tuple[str, str] | None = None
     shadow_mask: ChannelRef | None = None
     material_id: ChannelRef | None = None
+    material_id_decoder: str | None = None
     metalness: ChannelRef | None = None
     gloss: ChannelRef | None = None
     specular: ChannelRef | None = None
+    specular_area: ChannelRef | None = None
     ao: ChannelRef | None = None
-    # Genshin's R response is deliberately capped until the later LightMap
-    # highlight-threshold and material-ID work. The source channel is
-    # classification data on some face materials, not a literal full-range
+    # Genshin's R response remains deliberately bounded. The source channel
+    # is classification data on some face materials, not a literal full-range
     # metalness map.
     metalness_scale: float = 1.0
     specular_scale: float = 1.0
@@ -63,6 +64,10 @@ class MaterialInterpretation:
     # response outright. This is useful for Genshin's classification-like R
     # channel; ZZZ's authored specular mask remains a direct response.
     specular_influence: float | None = None
+    toon_specular_shininess: float = 10.0
+    toon_specular_threshold_bias: float = 1.015
+    toon_specular_softness: float = 0.0
+    toon_specular_metal_cutoff: float | None = None
     shadow_threshold: float = 0.5
     shadow_softness: float = 0.08
     shadow_mask_strength: float = 0.5
@@ -83,15 +88,22 @@ class MaterialInterpretation:
                             if self.shadow_mask else None),
             "material_id": (self.material_id.to_metadata()
                             if self.material_id else None),
+            "material_id_decoder": self.material_id_decoder,
             "metalness": (self.metalness.to_metadata()
                           if self.metalness else None),
             "gloss": self.gloss.to_metadata() if self.gloss else None,
             "specular": (self.specular.to_metadata()
                           if self.specular else None),
+            "specular_area": (self.specular_area.to_metadata()
+                              if self.specular_area else None),
             "ao": self.ao.to_metadata() if self.ao else None,
             "metalness_scale": self.metalness_scale,
             "specular_scale": self.specular_scale,
             "specular_influence": self.specular_influence,
+            "toon_specular_shininess": self.toon_specular_shininess,
+            "toon_specular_threshold_bias": self.toon_specular_threshold_bias,
+            "toon_specular_softness": self.toon_specular_softness,
+            "toon_specular_metal_cutoff": self.toon_specular_metal_cutoff,
             "shadow_threshold": self.shadow_threshold,
             "shadow_softness": self.shadow_softness,
             "shadow_mask_strength": self.shadow_mask_strength,
@@ -112,17 +124,24 @@ def _base_profile_for(game, texture_api):
         return MaterialInterpretation(
             id=f"genshin:{texture_api}", game=game,
             texture_api=texture_api,
-            # G is the validated first toon-shadow input. The frontend uses a
-            # viewer approximation; B remains reserved for the later
-            # highlight-threshold response, and A for IDs.
+            # G is the validated first toon-shadow input. A classifies the
+            # authored material region and B gates the toon highlight area;
+            # both are read from this same intact packed texture.
             shadow_mask=ChannelRef("light_map", "g"),
+            material_id=ChannelRef("light_map", "a"),
+            material_id_decoder="genshin_5_region",
             metalness=ChannelRef("light_map", "r"),
-            # R is the first-pass specular mask. B controls the highlight
-            # threshold and remains reserved for that later phase.
+            # R remains the first-pass specular response. B controls the
+            # highlight threshold and is deliberately not an intensity map.
             specular=ChannelRef("light_map", "r"),
+            specular_area=ChannelRef("light_map", "b"),
             metalness_scale=0.08,
             specular_scale=1.0,
             specular_influence=0.15,
+            toon_specular_shininess=10.0,
+            toon_specular_threshold_bias=1.015,
+            toon_specular_softness=0.0,
+            toon_specular_metal_cutoff=0.90,
         )
     if game == "wuwa":
         # RabbitFX/WuWa's packed normal/material layout is retained for the

@@ -33,13 +33,16 @@ import {
   normalView,
   normalViewGeometry,
   pow2,
+  positionViewDirection,
   smoothstep,
+  step,
   specularColor,
   specularF90,
   texture,
   uniform,
   uv,
   vec3,
+  vec4,
 } from 'three/tsl';
 
 const specularColorBlended = TSL.specularColorBlended;
@@ -97,10 +100,31 @@ function hasNumericValue(value) {
 }
 
 function profileSources(profile) {
-  return [profile?.shadow_mask, profile?.metalness, profile?.specular]
+  return [profile?.shadow_mask, profile?.material_id, profile?.metalness,
+    profile?.specular, profile?.specular_area]
     .filter(validRef)
     .map(ref => ref.source)
     .filter((source, index, all) => all.indexOf(source) === index);
+}
+
+const DEBUG_MODE_VALUES = Object.freeze({
+  off: 0,
+  'material-id': 1,
+  'specular-area': 2,
+});
+
+function normalizeDebugMode(mode) {
+  return Object.hasOwn(DEBUG_MODE_VALUES, mode) ? mode : 'off';
+}
+
+/** Decode the scalar LightMap.A region value used by the Genshin profile. */
+export function decodeMaterialIdValue(raw, decoder) {
+  if (decoder !== 'genshin_5_region') return 0;
+  if (raw > 0.8) return 2;
+  if (raw >= 0.6) return 5;
+  if (raw > 0.4) return 3;
+  if (raw >= 0.2) return 4;
+  return 1;
 }
 
 function hasPackedResponse(profile) {
@@ -160,23 +184,67 @@ function createSpecularResponseNode(profile, bindings) {
     : response;
 }
 
+function createMaterialIdNode(profile, bindings) {
+  const ref = profile?.material_id;
+  if (!validRef(ref) || profile?.material_id_decoder !== 'genshin_5_region') {
+    return float(0);
+  }
+  const raw = channelNode(ref, bindings);
+  // The inclusive/exclusive comparisons mirror HoyoToon's sequential
+  // assignments: later overlapping regions own the exact .40/.80 edges.
+  return raw.greaterThan(0.8).select(
+    2, raw.greaterThanEqual(0.6).select(
+      5, raw.greaterThan(0.4).select(
+        3, raw.greaterThanEqual(0.2).select(4, 1))));
+}
+
+function createSpecularAreaNode(profile, bindings) {
+  return validRef(profile?.specular_area)
+    ? enabledChannelNode(profile.specular_area, bindings, 1)
+    : float(1);
+}
+
+function debugColorNode(state, baseColor) {
+  const materialIdColor = state.hasMaterialId
+    ? materialIdDebugColor(state.materialIdNode)
+    : baseColor;
+  const areaColor = state.hasSpecularArea
+    ? vec3(state.specularAreaNode)
+    : baseColor;
+  state.debugOutputNode = state.debugModeNode.lessThan(1.5).select(
+    materialIdColor, areaColor);
+  return state.debugModeNode.lessThan(0.5).select(
+    baseColor, state.debugModeNode.lessThan(1.5).select(
+      materialIdColor, areaColor));
+}
+
+function materialIdDebugColor(materialIdNode) {
+  const id5 = color(0x9b59b6);
+  const id4 = materialIdNode.lessThan(5).select(color(0xf1c40f), id5);
+  const id3 = materialIdNode.lessThan(4).select(color(0x2ecc71), id4);
+  const id2 = materialIdNode.lessThan(3).select(color(0xe74c3c), id3);
+  return materialIdNode.lessThan(2).select(color(0x2e86de), id2);
+}
+
 function setStableMaterialNodes(material, state, fallbackColor) {
   const { bindings, hasUv, profile } = state;
   const fallbackNormal = orientedGeometryNormal;
+  let baseColor;
   if (hasUv) {
     // The conditional keeps the texture binding live without changing the
     // material graph when a diffuse texture is loaded or removed.
-    material.colorNode = bindings.diffuse.enabledNode.select(
+    baseColor = bindings.diffuse.enabledNode.select(
       bindings.diffuse.textureNode.rgb, color(fallbackColor));
     material.normalNode = bindings.normal_map.enabledNode.select(
       normalMap(bindings.normal_map.textureNode, state.normalScaleNode), fallbackNormal);
     material.aoNode = bindings.occlusion_map.enabledNode.select(
       bindings.occlusion_map.textureNode.r, float(1));
   } else {
-    material.colorNode = color(fallbackColor);
+    baseColor = color(fallbackColor);
     material.normalNode = fallbackNormal;
     material.aoNode = float(1);
   }
+  material.colorNode = debugColorNode(state, baseColor);
 
   if (!state.packedResponse) return;
 
@@ -218,7 +286,8 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
 
   direct(lightData, builder) {
     const { lightDirection, reflectedLight } = lightData;
-    const before = reflectedLight.directDiffuse.toVar('gameDirectDiffuseBefore');
+    const diffuseBefore = reflectedLight.directDiffuse.toVar('gameDirectDiffuseBefore');
+    const specularBefore = reflectedLight.directSpecular.toVar('gameDirectSpecularBefore');
     super.direct(lightData, builder);
 
     const {
@@ -228,6 +297,11 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
       shadowSoftnessNode,
       shadowMaskStrengthNode,
       shadowInfluenceNode,
+      specularAreaNode,
+      toonSpecularShininessNode,
+      toonSpecularThresholdBiasNode,
+      toonSpecularSoftnessNode,
+      toonSpecularMetalCutoffNode,
     } = this.gameMaterialState;
     const maskRef = profile.shadow_mask;
     const maskBinding = bindings[maskRef.source];
@@ -244,9 +318,38 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
     const influencedFactor = mix(float(1), factor, shadowInfluenceNode);
     const enabledFactor = maskBinding.enabledNode.select(
       influencedFactor, float(1));
-    const contribution = reflectedLight.directDiffuse.sub(before);
+    const diffuseContribution = reflectedLight.directDiffuse.sub(diffuseBefore);
     reflectedLight.directDiffuse.assign(
-      before.add(contribution.mul(enabledFactor)));
+      diffuseBefore.add(diffuseContribution.mul(enabledFactor)));
+
+    const areaRef = profile.specular_area;
+    let areaGate = float(1);
+    if (validRef(areaRef)) {
+      const areaBinding = bindings[areaRef.source];
+      const threshold = toonSpecularThresholdBiasNode.sub(specularAreaNode);
+      const halfDirection = lightDirection.add(positionViewDirection).normalize();
+      const ndoth = normalView.dot(halfDirection).clamp(0, 1);
+      const term = ndoth.max(0.001).pow(toonSpecularShininessNode);
+      const softness = numericOr(profile.toon_specular_softness, 0);
+      const computedGate = softness > 0
+        ? smoothstep(threshold.sub(toonSpecularSoftnessNode),
+          threshold.add(toonSpecularSoftnessNode), term)
+        : step(threshold, term);
+      areaGate = areaBinding.enabledNode.select(computedGate, float(1));
+
+      const metalRef = validRef(profile.metalness)
+        ? profile.metalness : profile.specular;
+      if (validRef(metalRef) && toonSpecularMetalCutoffNode) {
+        const metalBinding = bindings[metalRef.source];
+        const metalRaw = enabledChannelNode(metalRef, bindings, 0);
+        const metalRegion = metalBinding.enabledNode.select(
+          step(toonSpecularMetalCutoffNode, metalRaw), float(0));
+        areaGate = mix(areaGate, float(1), metalRegion);
+      }
+    }
+    const specularContribution = reflectedLight.directSpecular.sub(specularBefore);
+    reflectedLight.directSpecular.assign(
+      specularBefore.add(specularContribution.mul(areaGate)));
   }
 }
 
@@ -274,6 +377,16 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
     }
     return new ThreePhysicalLightingModel(...physicalLightingFlags(this));
   }
+
+  setupOutput(builder, outputNode) {
+    const result = super.setupOutput(builder, outputNode);
+    const state = this.userData.gameMaterial;
+    if (!state?.debugOutputNode) return result;
+    // Keep diagnostics out of the lighting, environment and fog result while
+    // leaving the normal graph and pipeline selected by the same uniform.
+    return state.debugModeNode.lessThan(0.5).select(
+      result, vec4(state.debugOutputNode, result.a));
+  }
 }
 
 /** Create the stock or physical material appropriate for one profile. */
@@ -296,9 +409,16 @@ export function createGameMaterial(profile, fallbackColor, options = {}) {
 /** Attach stable profile-specific TSL nodes to a material. */
 export function configureGameMaterial(material, profile, options = {}) {
   const hasUv = options.hasUv !== false;
-  const packedResponse = options.packedResponse ?? (hasPackedResponse(profile) && hasUv);
+  const packedResponse = Boolean(
+    (options.packedResponse ?? hasPackedResponse(profile)) && hasUv);
+  const resolvedProfile = profile || { id: 'none' };
+  const hasMaterialId = packedResponse && hasUv
+    && validRef(resolvedProfile.material_id)
+    && resolvedProfile.material_id_decoder === 'genshin_5_region';
+  const hasSpecularArea = packedResponse && hasUv
+    && validRef(resolvedProfile.specular_area);
   const state = {
-    profile: profile || { id: 'none' },
+    profile: resolvedProfile,
     packedResponse,
     hasUv,
     bindings: createBindings(hasUv),
@@ -311,7 +431,28 @@ export function configureGameMaterial(material, profile, options = {}) {
       numericOr(profile?.shadow_mask_strength, 0.5)),
     shadowInfluenceNode: uniform(
       numericOr(profile?.shadow_influence, 1.0)),
+    materialIdNode: float(0),
+    specularAreaNode: float(1),
+    toonSpecularShininessNode: uniform(
+      numericOr(profile?.toon_specular_shininess, 10.0)),
+    toonSpecularThresholdBiasNode: uniform(
+      numericOr(profile?.toon_specular_threshold_bias, 1.015)),
+    toonSpecularSoftnessNode: uniform(
+      numericOr(profile?.toon_specular_softness, 0.0)),
+    toonSpecularMetalCutoffNode: hasNumericValue(profile?.toon_specular_metal_cutoff)
+      ? uniform(Number(profile.toon_specular_metal_cutoff)) : null,
+    debugModeNode: uniform(0),
+    hasMaterialId,
+    hasSpecularArea,
   };
+  // Channel nodes need the final binding table, but the node objects remain
+  // stable for the lifetime of the material. Conservative no-UV materials
+  // deliberately keep these as scalar fallbacks, so no packed texture node
+  // can become reachable in that path.
+  state.materialIdNode = hasMaterialId
+    ? createMaterialIdNode(resolvedProfile, state.bindings) : float(0);
+  state.specularAreaNode = hasSpecularArea
+    ? createSpecularAreaNode(resolvedProfile, state.bindings) : float(1);
   state.sources = state.bindings;
   state.nodes = {
     diffuse: state.bindings.diffuse,
@@ -374,4 +515,22 @@ export function disposeGameMaterial(material) {
     binding.enabledNode.value = false;
   }
   delete material.userData.gameMaterial;
+}
+
+/** Change developer visualization through stable uniforms only. */
+export function setMaterialDebugMode(materials, mode) {
+  const normalized = normalizeDebugMode(mode);
+  const value = DEBUG_MODE_VALUES[normalized];
+  for (const item of materials || []) {
+    const material = item?.isMaterial ? item : item?.material;
+    const state = material?.userData?.gameMaterial;
+    if (state?.debugModeNode) state.debugModeNode.value = value;
+  }
+  return normalized;
+}
+
+export function getMaterialDebugMode(material) {
+  const value = material?.userData?.gameMaterial?.debugModeNode?.value;
+  return Object.entries(DEBUG_MODE_VALUES).find(([, id]) => id === value)?.[0]
+    || 'off';
 }
