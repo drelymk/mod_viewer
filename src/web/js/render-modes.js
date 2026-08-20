@@ -1,6 +1,7 @@
 // Viewer-only material display modes and their toolbar state.
 
 import { refreshMeshTexture, setTextureMode } from './mesh-factory.js';
+import { setOutlineSuppressedByWireframe } from './outline-renderer.js';
 
 let wireframe = false;
 let smoothShading = true;
@@ -14,6 +15,7 @@ export function initializeMeshRenderModes(mesh) {
 
 export function toggleWireframeMode(meshes) {
   wireframe = !wireframe;
+  setOutlineSuppressedByWireframe(wireframe);
   document.getElementById('wire-btn').classList.toggle('active', wireframe);
   meshes.forEach(mesh => {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];

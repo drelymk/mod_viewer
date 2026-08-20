@@ -242,6 +242,7 @@ body {
 .mesh-state-btn { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; font-size: 13px; line-height: 18px; cursor: pointer; flex-shrink: 0; }
 .mesh-state-btn:hover { filter: brightness(1.25); transform: scale(1.08); }
 #wire-btn.active { background: var(--accent); }
+#outline-btn.active { background: var(--accent); }
 #grid-btn { background: var(--accent); }
 #grid-btn.off { background: var(--bg-control); }
 #shading-btn { background: var(--accent); }

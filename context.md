@@ -404,6 +404,16 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   staged into INIs. `manualTexOverride` is `undefined` (automatic), `null`
   (none), or a texture key. Clearing restores immutable `defaultTexKey`, and
   automatic highlighting uses live `resolvedTexKey`, not load-time default.
+- Viewer outlines use a WebGPU/TSL inverted-hull pass. Each outline is a child
+  of its base mesh, shares the exact `BufferGeometry`, uses one shared
+  `MeshBasicNodeMaterial`, renders `BackSide` with depth testing but no depth
+  writes, and is excluded from selection, camera framing and light occlusion.
+  Outline width is viewer-defined and approximately CSS-pixel constant. The
+  viewer lacks the tangent, vertex-color and outline-mask data needed for
+  authored game-specific behavior, so PR20 does not claim game outline
+  width/color parity. Wireframe and material debug modes suppress outlines
+  without changing the user's outline-enabled setting; texture mode remains
+  independent.
 - A component’s popup and every child list share the same mutable
   `texture_options` array (normally attached for pools of 2+). When absent,
   create one fresh component-local empty array. Always render the component

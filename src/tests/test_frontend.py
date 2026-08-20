@@ -1806,7 +1806,172 @@ def test_tool_panel_is_in_left_dock_and_available_before_load(edge_browser, fron
         assert abs(placement["center"] - placement["viewportCenter"]) < 1
         assert placement["aboveFooter"]
         assert page.locator("#tool-panel").is_visible()
-        assert page.locator("#tool-buttons .tool-btn").count() == 6
+        assert page.locator("#tool-buttons .tool-btn").count() == 7
+        assert page.locator("#outline-btn").get_attribute("aria-label") == (
+            "Silhouette outlines")
+    finally:
+        context.close()
+
+
+def test_outline_child_shares_geometry_and_render_modes_suppress_it(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        structure = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const mesh = window.modViewer.activeMeshes[0];
+          const outline = mesh.children.filter(
+            child => child.userData.isViewerOutline);
+          const item = outline[0];
+          return {
+            count: outline.length,
+            sharedGeometry: item?.geometry === mesh.geometry,
+            isMeshBasicNodeMaterial: item?.material?.isMeshBasicNodeMaterial === true,
+            side: item?.material?.side,
+            backSide: THREE.BackSide,
+            depthTest: item?.material?.depthTest,
+            depthWrite: item?.material?.depthWrite,
+            renderOrder: item?.renderOrder,
+            baseRenderOrder: mesh.renderOrder,
+            map: item?.material?.map || null,
+            state: window.modViewer.getOutlineState(0),
+          };
+        }""")
+        assert structure["count"] == 1
+        assert structure["sharedGeometry"]
+        assert structure["isMeshBasicNodeMaterial"]
+        assert structure["side"] == structure["backSide"]
+        assert structure["depthTest"] is True
+        assert structure["depthWrite"] is False
+        assert structure["renderOrder"] > structure["baseRenderOrder"]
+        assert structure["map"] is None
+        assert structure["state"] == {
+            "attached": True, "visible": False, "globalEnabled": False,
+            "widthPixels": 1.5, "suppressedByWireframe": False,
+            "suppressedByDebug": False,
+        }
+
+        page.locator("#outline-btn").click()
+        assert page.evaluate("window.modViewer.getOutlineState(0)") == {
+            "attached": True, "visible": True, "globalEnabled": True,
+            "widthPixels": 1.5, "suppressedByWireframe": False,
+            "suppressedByDebug": False,
+        }
+        page.locator("#wire-btn").click()
+        assert page.evaluate("window.modViewer.getOutlineState(0)") == {
+            "attached": True, "visible": False, "globalEnabled": True,
+            "widthPixels": 1.5, "suppressedByWireframe": True,
+            "suppressedByDebug": False,
+        }
+        page.locator("#wire-btn").click()
+        page.evaluate("window.modViewer.setMaterialDebugMode('shadow-mask')")
+        assert page.evaluate("window.modViewer.getOutlineState(0)") == {
+            "attached": True, "visible": False, "globalEnabled": True,
+            "widthPixels": 1.5, "suppressedByWireframe": False,
+            "suppressedByDebug": True,
+        }
+        page.evaluate("window.modViewer.setMaterialDebugMode('off')")
+        assert page.evaluate("window.modViewer.getOutlineState(0).visible")
+
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        assert page.evaluate("window.modViewer.getOutlineState(0)") == {
+            "attached": True, "visible": True, "globalEnabled": True,
+            "widthPixels": 1.5, "suppressedByWireframe": False,
+            "suppressedByDebug": False,
+        }
+    finally:
+        context.close()
+
+
+def test_outline_render_is_outer_silhouette_without_covering_front_surface(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        bounds = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const {scene, camera} = await import('./js/scene.js');
+          const {attachOutline, setOutlinesEnabled} =
+            await import('./js/outline-renderer.js');
+          const probe = new THREE.Mesh(
+            new THREE.BoxGeometry(0.6, 0.6, 0.6),
+            new THREE.MeshBasicMaterial({color: 0xf0f0f0}));
+          probe.position.set(0.5, 0.5, 0);
+          scene.add(probe);
+          attachOutline(probe);
+          setOutlinesEnabled(false);
+          scene.updateMatrixWorld(true);
+          const box = new THREE.Box3().setFromObject(probe);
+          const points = [];
+          for (const x of [box.min.x, box.max.x]) {
+            for (const y of [box.min.y, box.max.y]) {
+              for (const z of [box.min.z, box.max.z]) {
+                points.push(new THREE.Vector3(x, y, z).project(camera));
+              }
+            }
+          }
+          const rect = scene.userData.__outlineCanvasRect =
+            document.querySelector('#canvas-container canvas').getBoundingClientRect();
+          const xs = points.map(p => rect.left + (p.x + 1) * rect.width / 2);
+          const ys = points.map(p => rect.top + (1 - p.y) * rect.height / 2);
+          return {
+            minX: Math.min(...xs), maxX: Math.max(...xs),
+            minY: Math.min(...ys), maxY: Math.max(...ys),
+            centerX: (Math.min(...xs) + Math.max(...xs)) / 2,
+            centerY: (Math.min(...ys) + Math.max(...ys)) / 2,
+          };
+        }""")
+        page.wait_for_timeout(120)
+        off = Image.open(io.BytesIO(page.screenshot())).convert("RGB")
+        page.evaluate("window.modViewer.setOutlineEnabled(true)")
+        page.wait_for_timeout(300)
+        on = Image.open(io.BytesIO(page.screenshot())).convert("RGB")
+
+        left = max(0, round(bounds["minX"]) - 1)
+        center_y = min(on.height - 1, max(0, round(bounds["centerY"])))
+        assert off.getpixel((left, center_y)) != on.getpixel((left, center_y)), (
+            bounds, off.getpixel((left, center_y)), on.getpixel((left, center_y)))
+
+        center = (round(bounds["centerX"]), round(bounds["centerY"]))
+        interior_delta = max(
+            abs(a - b) for a, b in zip(off.getpixel(center), on.getpixel(center)))
+        assert interior_delta <= 3, (
+            bounds, off.getpixel(center), on.getpixel(center))
+    finally:
+        context.close()
+
+
+def test_outline_width_uses_css_viewport_height_and_camera_distance(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        widths = page.evaluate("""async () => {
+          const {camera, controls, renderer} = await import('./js/scene.js');
+          const {updateOutlineCameraScale} =
+            await import('./js/outline-renderer.js');
+          const target = controls.target;
+          const original = camera.position.clone();
+          const direction = original.clone().sub(target).normalize();
+          const distance = original.distanceTo(target);
+          const height = renderer.domElement.clientHeight;
+          const near = updateOutlineCameraScale(camera, target, height);
+          camera.position.copy(target).addScaledVector(direction, distance * 2);
+          const far = updateOutlineCameraScale(camera, target, height);
+          const resized = updateOutlineCameraScale(camera, target, height * 2);
+          camera.position.copy(original);
+          return {near, far, resized, height};
+        }""")
+        assert widths["near"] > 0
+        assert widths["far"] / widths["near"] == pytest.approx(2, rel=1e-5)
+        assert widths["resized"] / widths["far"] == pytest.approx(
+            0.5, rel=1e-5)
+        assert widths["height"] > 0
     finally:
         context.close()
 
