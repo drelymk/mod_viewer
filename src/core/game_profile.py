@@ -55,12 +55,20 @@ _RESOURCE_ASSIGN_RE = re.compile(
 _COMMAND_TEXTURE_RE = re.compile(r"settextures", re.I)
 _SET_TEXTURES_RUN_RE = re.compile(
     r"^run\s*=\s*commandlist[\\/]([^\\/]+)[\\/]settextures\b", re.I)
+_DRAW_TYPE_ROUTE_RE = re.compile(
+    r"\$?draw_type\s*==\s*(?:2|4)\b", re.I)
 _VB_RE = re.compile(r"^vb([012])\s*=\s*(?:ref\s+)?(\S+)", re.I)
 _CHECK_IB_RE = re.compile(r"^checktextureoverride\s*=\s*ib\b", re.I)
 _DIRECT_TEXTURE_RE = re.compile(r"^ps-t\d+\s*=\s*(?:ref\s+)?(\S+)", re.I)
 _WWMI_MARKER_RE = re.compile(
     r"(?:required[_\\]?wwmi[_\\]?version|object[_\\]?guid|"
     r"\\wwmi(?:v\d+)?\\)", re.I)
+_SRMI_MARKER_RE = re.compile(
+    r"(?:resource[\\/]srmi(?:v\d+)?[\\/]"
+    r"(?:positionbuffer|blendbuffer|drawbuffer)\b|"
+    r"\$\s*[\\/]?srmi(?:v\d+)?[\\/]"
+    r"(?:vertex_count|vertcount)\b|"
+    r"\bnamespace\s*=\s*srmi(?:v\d+)?\b)", re.I)
 
 
 def _is_wwmi_structural(section, text):
@@ -69,6 +77,14 @@ def _is_wwmi_structural(section, text):
         return False
     return bool(_WWMI_MARKER_RE.search(text)
                 or _WWMI_MARKER_RE.search(str(section)))
+
+
+def _is_srmi_structural(section, text):
+    """Ignore asset filenames when looking for SRMI markers."""
+    if re.match(r"filename\s*=", text, re.I):
+        return False
+    return bool(_SRMI_MARKER_RE.search(text)
+                or _SRMI_MARKER_RE.search(str(section)))
 
 
 def _source(section, line):
@@ -106,8 +122,11 @@ def _binding_is_blend(section, value, sections):
     if target == "ref":
         return False
     for name in sections:
-        if str(name).lower() == target and "blend" in str(name).lower():
-            return True
+        if str(name).lower() == target:
+            # Once the binding target resolves, its resource name is the
+            # authoritative signal. Do not let a parent `...Blend` override
+            # turn an explicitly resolved Texcoord resource into a blend.
+            return "blend" in str(name).lower()
     return "blend" in str(section).lower()
 
 
@@ -125,6 +144,23 @@ def _command_texture_namespace(section):
 def _resource_namespace(value, pattern=_RESOURCE_ROLE_RE):
     match = pattern.match(str(value))
     return match.group(1).lower() if match else None
+
+
+def _zzmi_texture_item(items):
+    """Return one real ZZMI texture/API observation, if present."""
+    for section, line, text in items:
+        if _command_texture_namespace(section) == "zzmi":
+            return section, line, text
+        run_match = _SET_TEXTURES_RUN_RE.match(text)
+        if run_match and run_match.group(1).lower() == "zzmi":
+            return section, line, text
+        if (_resource_namespace(section) == "zzmi"
+                or _resource_namespace(text, _RESOURCE_ASSIGN_RE) == "zzmi"):
+            return section, line, text
+        direct_match = _DIRECT_TEXTURE_RE.match(text)
+        if direct_match and _resource_namespace(direct_match.group(1)) == "zzmi":
+            return section, line, text
+    return None
 
 
 def _add_settextures_evidence(game, runtime, texture_api, namespace,
@@ -188,9 +224,25 @@ def collect_game_evidence(sections, resources=None):
         _add(game, "wuwa", 100, "wwmi_runtime_marker", section, line)
         _add(runtime, "wwmi", 100, "wwmi_runtime_marker", section, line)
 
-    draw_type_item = next(
-        (item for item in items if re.search(r"\$?draw_type\b", item[2], re.I)),
-        None)
+    # SRMI has an explicit namespace and runtime-owned buffer vocabulary. It
+    # must be resolved before generic DRAW_TYPE/vb2 heuristics can be applied;
+    # otherwise modern HSR templates look like ZZZ mods.
+    srmi_item = next(
+        (item for item in items if _is_srmi_structural(item[0], item[2])), None)
+    if srmi_item is None:
+        for section, lines in (sections or {}).items():
+            if _SRMI_MARKER_RE.search(str(section)):
+                line = next(iter(lines), section)
+                srmi_item = (section, line, str(line))
+                break
+    if srmi_item:
+        section, line, _text = srmi_item
+        _add(game, "hsr", 100, "srmi_runtime_marker", section, line)
+        _add(runtime, "srmi", 100, "srmi_runtime_marker", section, line)
+        _add(texture_api, "raw", 20, "srmi_runtime_marker", section, line)
+
+    draw_type_route_item = next(
+        (item for item in items if _DRAW_TYPE_ROUTE_RE.search(item[2])), None)
     has_vb2_blend = False
     has_vb1_blend = False
     vb2_item = None
@@ -210,16 +262,18 @@ def collect_game_evidence(sections, resources=None):
     check_ib_item = next(
         (item for item in items if _CHECK_IB_RE.match(item[2])), None)
 
-    if draw_type_item and has_vb2_blend:
-        section, line, _text = draw_type_item
+    # DRAW_TYPE + vb2=Blend is shared by SRMI and other modern templates. A
+    # ZZZ classification needs its 2/4 route plus the other ZZMI-specific
+    # structure, including checktextureoverride and a ZZMI texture binding.
+    zzmi_texture_item = _zzmi_texture_item(items)
+    if (not srmi_item and draw_type_route_item and has_vb2_blend
+            and check_ib_item and zzmi_texture_item):
+        section, line, _text = draw_type_route_item
         _add(game, "zzz", 90, "zzz_draw_type_vb2_blend", section, line)
         _add(runtime, "zzmi", 80, "zzz_draw_type_vb2_blend", section, line)
         if vb2_item:
             _add(runtime, "zzmi", 80, "zzmi_vb2_blend_binding",
                  vb2_item[0], vb2_item[1])
-    if draw_type_item and check_ib_item:
-        section, line, _text = draw_type_item
-        _add(game, "zzz", 70, "zzz_draw_type_checktextureoverride", section, line)
         _add(runtime, "zzmi", 60, "zzz_draw_type_checktextureoverride",
              check_ib_item[0], check_ib_item[1])
 

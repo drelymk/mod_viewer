@@ -146,13 +146,18 @@ def test_packed_passthrough_preserves_rgba_for_channel_extraction():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "packed-rgba.png")
         Image.new("RGBA", (1, 1), (10, 20, 30, 40)).save(path)
+        diffuse = Image.open(io.BytesIO(_render_texture_png(
+            path, texture_role="diffuse", texture_transform="passthrough")))
         packed = Image.open(io.BytesIO(_render_texture_png(
             path, texture_role="light_map", texture_transform="passthrough")))
         alpha = Image.open(io.BytesIO(_render_texture_png(
             path, texture_role="material_map", texture_transform="channel_a")))
+        diffuse.load()
         packed.load()
         alpha.load()
 
+    assert diffuse.mode == "RGB"
+    assert diffuse.getpixel((0, 0)) == (10, 20, 30)
     assert packed.mode == "RGBA"
     assert packed.getpixel((0, 0)) == (10, 20, 30, 40)
     assert alpha.mode == "RGB"

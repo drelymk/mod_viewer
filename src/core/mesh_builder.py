@@ -433,9 +433,12 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
         # RGB conversion turns an authored alpha channel into opaque 255s.
         # Derived normal images intentionally become RGB after their source
         # channels have been interpreted.
+        packed_passthrough = (
+            texture_transform == "passthrough"
+            and texture_role != "diffuse")
         keep_source_alpha = (
             preserve_alpha
-            or texture_transform == "passthrough"
+            or packed_passthrough
             or texture_transform.startswith("channel_"))
         stage_started = _profile_started()
         try:

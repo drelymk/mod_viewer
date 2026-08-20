@@ -19,7 +19,7 @@ def test_wuwa_runtime_and_rabbitfx_api_are_separate():
 
 def test_zzz_draw_type_vb2_blend_and_zzmi_texture_namespace():
     detection = detect_game({
-        "TextureOverrideBody": ["if $DRAW_TYPE == 1", "checktextureoverride = ib"],
+        "TextureOverrideBody": ["if $DRAW_TYPE == 2", "checktextureoverride = ib"],
         "TextureOverrideBodyBlend": ["vb2 = ResourceZZMIBlend"],
         r"Resource\ZZMI\Diffuse": ["filename = diffuse.dds"],
     })
@@ -57,7 +57,8 @@ def test_realistic_gimi_statements_detect_texture_api():
 def test_realistic_zzmi_statements_detect_zzz():
     detection = detect_game({
         "TextureOverrideBody": [
-            "if $DRAW_TYPE == 1",
+            "if $DRAW_TYPE == 2",
+            "checktextureoverride = ib",
             r"Resource\ZZMI\Diffuse = ref ResourceBodyDiffuse",
             r"run = CommandList\ZZMI\SetTextures",
         ],
@@ -123,9 +124,54 @@ def test_strong_runtime_evidence_beats_conflicting_weak_namespace():
     assert detection.runtime == "wwmi"
 
 
+def test_srmi_markers_do_not_resolve_ambiguous_draw_type_as_zzz():
+    detection = detect_game({
+        "Constants": [r"global $namespace = SRMIv1"],
+        "TextureOverrideBody": [
+            "if DRAW_TYPE == 1",
+            "vb2 = ResourceBodyBlend",
+            r"Resource\SRMI\PositionBuffer = ref ResourcePosition",
+            r"Resource\SRMI\BlendBuffer = ref ResourceBlend",
+            r"$\SRMI\vertex_count = 123",
+        ],
+    })
+    assert (detection.game, detection.runtime, detection.texture_api) == (
+        "hsr", "srmi", "raw")
+    assert detection.confidence == "high"
+    assert not any(item.code == "zzz_draw_type_vb2_blend"
+                   for item in detection.evidence)
+
+
+def test_resolved_texcoord_binding_does_not_inherit_blend_parent():
+    from core.game_profile import _binding_is_blend
+
+    sections = {
+        "TextureOverrideBodyBlend": [
+            "vb1 = ResourceBodyTexcoord",
+            "vb2 = ResourceBodyBlend",
+        ],
+        "ResourceBodyTexcoord": ["filename = texcoord.buf"],
+        "ResourceBodyBlend": ["filename = blend.buf"],
+    }
+    assert not _binding_is_blend(
+        "TextureOverrideBodyBlend", "ResourceBodyTexcoord", sections)
+    assert _binding_is_blend(
+        "TextureOverrideBodyBlend", "ResourceBodyBlend", sections)
+
+
+def test_texture_profile_for_hsr_is_conservative():
+    profile = texture_profile_for("hsr")
+    assert profile.recipe_for("normal_map") == "passthrough"
+    assert profile.normal_y_sign == 1
+    assert not profile.bind_normal_map
+
+
 def test_semantic_analysis_carries_detection_evidence_in_one_pass():
     analysis = analyze_ini({
-        "TextureOverrideBody": ["if $DRAW_TYPE == 1"],
+        "TextureOverrideBody": [
+            "if $DRAW_TYPE == 2",
+            "checktextureoverride = ib",
+        ],
         "TextureOverrideBodyBlend": ["vb2 = ResourceZZMIBlend"],
         r"Resource\ZZMI\Diffuse": ["filename = diffuse.dds"],
     })

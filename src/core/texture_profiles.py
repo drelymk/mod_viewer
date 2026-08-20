@@ -32,6 +32,9 @@ _PROFILES = {
     "genshin": TextureProfile("genshin", -1, True),
     "zzz": TextureProfile("zzz", -1, True),
     "wuwa": TextureProfile("wuwa", -1, True),
+    # SRMI/HSR texture semantics are intentionally conservative until the
+    # runtime's packed normal/material layout is modeled explicitly.
+    "hsr": TextureProfile("hsr", 1, False),
     # Unknown mods retain authored keys for inspection, but the renderer only
     # binds the diffuse until a known recipe is justified.
     "unknown": TextureProfile("unknown", 1, False),
