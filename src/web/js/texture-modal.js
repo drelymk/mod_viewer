@@ -1,10 +1,11 @@
 // Per-component "manage textures" popup: lists a component's shared texture
-// pool (viewer-only -- see core/mesh_builder.py's
-// texture_options), lets the user add an existing file from the mod folder
+// pool (viewer-only -- see the application payload's texture_pools table),
+// lets the user add an existing file from the mod folder
 // or remove an option. Changes persist in .mod_viewer.json, never in the ini.
 
 import { addTexture } from './mesh-factory.js';
 import { bindModalDismiss } from './modal-shell.js';
+import { textureFile } from './texture-key.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,12 +19,6 @@ const mapColumns = [
   ['normal_map', 'NormalMap'],
   ['material_map', 'MaterialMap'],
 ];
-
-function textureFile(key) {
-  const value = String(key || '');
-  const separator = value.indexOf('::');
-  return separator === -1 ? value : value.slice(separator + 2);
-}
 
 function showError(message) {
   const err = document.createElement('div');
@@ -141,7 +136,7 @@ function render() {
   }
 }
 
-/** Open the popup for one component. `pool` is the shared texture_options
+/** Open the popup for one component. `pool` is the shared texture_pools
  * array (same object reference every mesh in the component carries) --
  * mutated in place so add/remove is instantly reflected everywhere.
  * `onPoolChange` re-renders every open per-mesh texture list for this

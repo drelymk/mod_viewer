@@ -176,7 +176,10 @@ async function displayMeshPayload(payload) {
   buildMeshPanel(
     meshes, currentModPath, payload.metadata?.mesh_names || {},
     payload.metadata?.material_profiles || {},
-    { onMaterialKindChanged: reloadCurrentMod });
+    {
+      onMaterialKindChanged: reloadCurrentMod,
+      texturePools: payload.texture_pools || {},
+    });
   buildTogglePanel(controls.toggles, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(controls.menu);
   buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });

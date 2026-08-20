@@ -521,6 +521,7 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
     payload = {
         "meshes": meshes or {},
         "textures": textures or {},
+        "texture_pools": {},
         "controls": {
             "toggles": toggles or {},
             "menu": menu or {},
