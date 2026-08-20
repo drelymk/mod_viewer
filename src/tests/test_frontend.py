@@ -646,20 +646,22 @@ def test_genshin_tsl_material_renders_with_environment_accent_directional_light(
 
 
 @pytest.mark.parametrize(("profile_id", "role", "low", "high", "offset",
-                          "roughness", "high_is_brighter"), [
+                          "roughness", "comparison"), [
     ("genshin:gimi", "light_map", (0, 0, 0, 255), (0, 255, 0, 255),
      (0.8, 0, 0.35), 0.35, True),
     ("genshin:gimi", "light_map", (0, 255, 0, 255), (255, 255, 0, 255),
      (0, 0, 3), 0.2, True),
     ("zzz:zzmi", "material_map", (0, 0, 0, 255), (0, 255, 0, 255),
-     (0, 0, 3), 0.35, False),
+     (0, 0, 3), 0.35, True),
     ("zzz:zzmi", "material_map", (0, 0, 0, 255), (0, 0, 255, 255),
      (0, 0, 3), 0.35, True),
+    ("zzz:zzmi", "material_map", (0, 255, 0, 255), (0, 255, 255, 255),
+     (0, 0, 3), 0.35, None),
 ], ids=["genshin-shadow-g", "genshin-specular-r", "zzz-metalness-g",
-       "zzz-specular-b"])
+       "zzz-specular-b", "zzz-metallic-b-independent"])
 def test_packed_channel_changes_rendered_luminance(
         edge_browser, frontend_url, profile_id, role, low, high, offset,
-        roughness, high_is_brighter):
+        roughness, comparison):
     payload = _packed_material_payload(profile_id)
     entry = payload["meshes"]["Body-Packed-0"]
     white = _flat_png_uri((255, 255, 255, 255))
@@ -721,10 +723,13 @@ def test_packed_channel_changes_rendered_luminance(
         high_pixel = _sample_mesh_pixel(page)
         low_luminance = sum(low_pixel)
         high_luminance = sum(high_pixel)
-        if high_is_brighter:
+        if comparison is True:
             assert high_luminance > low_luminance, (low_pixel, high_pixel)
-        else:
+        elif comparison is False:
             assert high_luminance < low_luminance, (low_pixel, high_pixel)
+        else:
+            assert abs(high_luminance - low_luminance) <= 3, (
+                low_pixel, high_pixel)
     finally:
         context.close()
 

@@ -11,24 +11,38 @@ import {
   PhysicalLightingModel as ThreePhysicalLightingModel,
   RGBAFormat,
   SRGBColorSpace,
+  TSL,
   UnsignedByteType,
   Vector2,
 } from 'three/webgpu';
 import {
   clamp,
   color,
+  diffuseColor,
   float,
   Fn,
+  ior,
+  materialIOR,
+  materialSpecularColor,
+  materialSpecularIntensity,
+  metalness,
+  min,
   mix,
   negateOnBackSide,
   normalMap,
   normalView,
   normalViewGeometry,
+  pow2,
   smoothstep,
+  specularColor,
+  specularF90,
   texture,
   uniform,
   uv,
+  vec3,
 } from 'three/tsl';
+
+const specularColorBlended = TSL.specularColorBlended;
 
 const SOURCE_INFO = Object.freeze({
   normal_data: true,
@@ -167,8 +181,8 @@ function setStableMaterialNodes(material, state, fallbackColor) {
   if (!state.packedResponse) return;
 
   // r185 exposes specularIntensityNode but MeshPhysicalNodeMaterial's
-  // built-in setup does not consume that override. Keep the stable response
-  // node on the state and apply it in the lighting model below instead.
+  // built-in setup does not consume that override. GamePhysicalNodeMaterial
+  // applies this stable response before the metallic mix instead.
   state.specularResponseNode = createSpecularResponseNode(profile, bindings);
 
   if (validRef(profile.metalness)) {
@@ -191,32 +205,17 @@ function physicalLightingFlags(material) {
   ].map(value => value === true);
 }
 
-/** Apply an authored packed specular response to each direct light. */
-class PhysicalLightingModel extends ThreePhysicalLightingModel {
-  constructor(material, state) {
-    super(...physicalLightingFlags(material));
-    this.gameMaterialState = state;
-  }
-
-  direct(lightData, builder) {
-    const { reflectedLight } = lightData;
-    const before = reflectedLight.directSpecular.toVar('gameDirectSpecularBefore');
-    super.direct(lightData, builder);
-
-    const response = this.gameMaterialState?.specularResponseNode;
-    if (!response) return;
-    const contribution = reflectedLight.directSpecular.sub(before);
-    reflectedLight.directSpecular.assign(
-      before.add(contribution.mul(response)));
-  }
-}
-
 /**
  * Genshin's LightMap.G is a per-light toon-shadow mask. The lighting model
  * captures only the direct diffuse contribution produced by the current
  * light, leaving indirect terms untouched.
  */
-class GenshinLightingModel extends PhysicalLightingModel {
+class GenshinLightingModel extends ThreePhysicalLightingModel {
+  constructor(material, state) {
+    super(...physicalLightingFlags(material));
+    this.gameMaterialState = state;
+  }
+
   direct(lightData, builder) {
     const { lightDirection, reflectedLight } = lightData;
     const before = reflectedLight.directDiffuse.toVar('gameDirectDiffuseBefore');
@@ -239,13 +238,26 @@ class GenshinLightingModel extends PhysicalLightingModel {
 }
 
 class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
+  setupSpecular() {
+    const response = this.userData.gameMaterial?.specularResponseNode ?? float(1);
+    const specularIntensity = materialSpecularIntensity.mul(response);
+    const iorNode = this.iorNode ? float(this.iorNode) : materialIOR;
+
+    ior.assign(iorNode);
+    specularColor.assign(
+      min(
+        pow2(ior.sub(1).div(ior.add(1))).mul(materialSpecularColor),
+        vec3(1),
+      ).mul(specularIntensity));
+    specularColorBlended.assign(
+      mix(specularColor, diffuseColor.rgb, metalness));
+    specularF90.assign(mix(specularIntensity, 1, metalness));
+  }
+
   setupLightingModel() {
     const state = this.userData.gameMaterial;
     if (validRef(state?.profile?.shadow_mask)) {
       return new GenshinLightingModel(this, state);
-    }
-    if (validRef(state?.profile?.specular)) {
-      return new PhysicalLightingModel(this, state);
     }
     return new ThreePhysicalLightingModel(...physicalLightingFlags(this));
   }
