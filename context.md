@@ -123,8 +123,10 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   manual texture pools remain diffuse-only. The detected profile chooses
   explicit image transforms and normal-map Y orientation; two-channel normal
   maps may have Z reconstructed during encoding.
-  LightMaps remain packed game data and are retained as toggle-aware keys but
-  are not bound to Three.js AO or RGB light inputs. MaterialMaps remain loaded
+  LightMaps remain packed game data and are retained as toggle-aware keys; their
+  passthrough transport preserves authored RGBA, and explicit channel masks
+  read the source channel before conversion. They are not bound to Three.js AO
+  or RGB light inputs. MaterialMaps remain loaded
   and toggle-aware but are not guessed into incompatible standard PBR channels
   without known shader semantics. A future validated AO derivation must use an
   explicit occlusion role.

@@ -39,6 +39,48 @@ def test_classic_gimi_routing_and_settextures_detect_genshin():
         "genshin", "gimi", "gimi")
 
 
+def test_realistic_gimi_statements_detect_texture_api():
+    detection = detect_game({
+        "TextureOverrideBody": [
+            r"Resource\GIMI\Diffuse = ref ResourceBodyDiffuse",
+            r"run = CommandList\GIMI\SetTextures",
+        ],
+    })
+    assert (detection.game, detection.runtime, detection.texture_api) == (
+        "genshin", "gimi", "gimi")
+    assert any(item.code == "gimi_resource_assignment"
+               for item in detection.evidence)
+    assert any(item.code == "gimi_settextures"
+               for item in detection.evidence)
+
+
+def test_realistic_zzmi_statements_detect_zzz():
+    detection = detect_game({
+        "TextureOverrideBody": [
+            "if $DRAW_TYPE == 1",
+            r"Resource\ZZMI\Diffuse = ref ResourceBodyDiffuse",
+            r"run = CommandList\ZZMI\SetTextures",
+        ],
+        "TextureOverrideBodyBlend": ["vb2 = ResourceBodyBlend"],
+    })
+    assert (detection.game, detection.runtime, detection.texture_api) == (
+        "zzz", "zzmi", "zzmi")
+
+
+def test_realistic_rabbitfx_statements_stay_separate_from_wwmi_game():
+    detection = detect_game({
+        "Constants": [r"global $\WWMIv1\object_guid = 1"],
+        "TextureOverrideBody": [
+            r"Resource\RabbitFX\Diffuse = ref ResourceBodyDiffuse",
+            r"run = CommandList\RabbitFX\SetTextures",
+        ],
+    })
+    assert (detection.game, detection.runtime, detection.texture_api) == (
+        "wuwa", "wwmi", "rabbitfx")
+    assert any(item.code == "rabbitfx_resource_assignment"
+               for item in detection.evidence)
+
+
 def test_namespaces_alone_do_not_force_a_game():
     rabbitfx = detect_game({
         r"Resource\RabbitFX\Diffuse": ["filename = diffuse.dds"],

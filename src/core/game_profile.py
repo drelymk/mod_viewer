@@ -49,7 +49,12 @@ class GameDetection:
 _RESOURCE_ROLE_RE = re.compile(
     r"^resource[\\/]([^\\/]+)[\\/]"
     r"(diffuse|normalmap|lightmap|materialmap)\b", re.I)
+_RESOURCE_ASSIGN_RE = re.compile(
+    r"^resource[\\/]([^\\/]+)[\\/]"
+    r"(diffuse|normalmap|lightmap|materialmap)\b\s*=", re.I)
 _COMMAND_TEXTURE_RE = re.compile(r"settextures", re.I)
+_SET_TEXTURES_RUN_RE = re.compile(
+    r"^run\s*=\s*commandlist[\\/]([^\\/]+)[\\/]settextures\b", re.I)
 _VB_RE = re.compile(r"^vb([012])\s*=\s*(?:ref\s+)?(\S+)", re.I)
 _CHECK_IB_RE = re.compile(r"^checktextureoverride\s*=\s*ib\b", re.I)
 _DIRECT_TEXTURE_RE = re.compile(r"^ps-t\d+\s*=\s*(?:ref\s+)?(\S+)", re.I)
@@ -115,6 +120,45 @@ def _command_texture_namespace(section):
         if namespace in lower:
             return namespace
     return None
+
+
+def _resource_namespace(value, pattern=_RESOURCE_ROLE_RE):
+    match = pattern.match(str(value))
+    return match.group(1).lower() if match else None
+
+
+def _add_settextures_evidence(game, runtime, texture_api, namespace,
+                               section, line):
+    """Add one command-list API observation across the relevant axes."""
+    if namespace == "rabbitfx":
+        _add(texture_api, "rabbitfx", 45, "rabbitfx_settextures", section, line)
+    elif namespace == "gimi":
+        _add(texture_api, "gimi", 45, "gimi_settextures", section, line)
+        _add(game, "genshin", 45, "gimi_settextures", section, line)
+        _add(runtime, "gimi", 45, "gimi_settextures", section, line)
+    elif namespace == "zzmi":
+        _add(texture_api, "zzmi", 45, "zzmi_settextures", section, line)
+        _add(game, "zzz", 45, "zzmi_settextures", section, line)
+        _add(runtime, "zzmi", 45, "zzmi_settextures", section, line)
+    elif namespace == "wwmi":
+        _add(texture_api, "raw", 20, "wwmi_settextures", section, line)
+
+
+def _add_resource_namespace_evidence(game, runtime, texture_api, namespace,
+                                     section, line, code):
+    """Add weak resource-namespace evidence without assigning a game."""
+    if namespace == "rabbitfx":
+        _add(texture_api, "rabbitfx", 30, code, section, line)
+    elif namespace == "gimi":
+        _add(texture_api, "gimi", 18, code, section, line)
+        _add(game, "genshin", 8, code, section, line)
+        _add(runtime, "gimi", 8, code, section, line)
+    elif namespace == "zzmi":
+        _add(texture_api, "zzmi", 18, code, section, line)
+        _add(game, "zzz", 8, code, section, line)
+        _add(runtime, "zzmi", 8, code, section, line)
+    elif namespace == "wwmi":
+        _add(texture_api, "raw", 12, code, section, line)
 
 
 def collect_game_evidence(sections, resources=None):
@@ -201,54 +245,47 @@ def collect_game_evidence(sections, resources=None):
         if not namespace:
             continue
         line = next(iter(lines), section)
-        if namespace == "rabbitfx":
-            _add(texture_api, "rabbitfx", 45, "rabbitfx_settextures",
-                 section, line)
-        elif namespace == "gimi":
-            _add(texture_api, "gimi", 45, "gimi_settextures", section, line)
-            _add(game, "genshin", 45, "gimi_settextures", section, line)
-            _add(runtime, "gimi", 45, "gimi_settextures", section, line)
-        elif namespace == "zzmi":
-            _add(texture_api, "zzmi", 45, "zzmi_settextures", section, line)
-            _add(game, "zzz", 45, "zzmi_settextures", section, line)
-            _add(runtime, "zzmi", 45, "zzmi_settextures", section, line)
-        elif namespace == "wwmi":
-            _add(texture_api, "raw", 20, "wwmi_settextures", section, line)
+        _add_settextures_evidence(game, runtime, texture_api, namespace,
+                                  section, line)
+
+    # Real mods normally invoke the command list from an override body rather
+    # than exposing a section named CommandList\...\SetTextures.  Inspect the
+    # parsed statement itself so detection does not depend on synthetic
+    # section names.
+    for section, line, text in items:
+        match = _SET_TEXTURES_RUN_RE.match(text)
+        if not match:
+            continue
+        namespace = match.group(1).lower()
+        _add_settextures_evidence(game, runtime, texture_api, namespace,
+                                  section, line)
 
     # Texture role resource namespaces identify a binding API, but are weak
     # game evidence by design.  In particular, RabbitFX alone never forces
     # WuWa and a GIMI resource line alone never forces Genshin.
     seen_resource_namespaces = set()
     for section, line, _text in items:
-        match = _RESOURCE_ROLE_RE.match(str(section))
-        if not match:
+        namespace = _resource_namespace(section)
+        if namespace is None:
+            namespace = _resource_namespace(_text, _RESOURCE_ASSIGN_RE)
+            code = f"{namespace}_resource_assignment" if namespace else None
+        else:
+            code = f"{namespace}_resource_namespace"
+        if not namespace:
             continue
-        namespace = match.group(1).lower()
         if namespace in seen_resource_namespaces:
             continue
         seen_resource_namespaces.add(namespace)
-        if namespace == "rabbitfx":
-            _add(texture_api, "rabbitfx", 30, "rabbitfx_resource_namespace",
-                 section, line)
-        elif namespace == "gimi":
-            _add(texture_api, "gimi", 18, "gimi_resource_namespace", section, line)
-            _add(game, "genshin", 8, "gimi_resource_namespace", section, line)
-            _add(runtime, "gimi", 8, "gimi_resource_namespace", section, line)
-        elif namespace == "zzmi":
-            _add(texture_api, "zzmi", 18, "zzmi_resource_namespace", section, line)
-            _add(game, "zzz", 8, "zzmi_resource_namespace", section, line)
-            _add(runtime, "zzmi", 8, "zzmi_resource_namespace", section, line)
-        elif namespace == "wwmi":
-            _add(texture_api, "raw", 12, "wwmi_resource_namespace", section, line)
+        _add_resource_namespace_evidence(
+            game, runtime, texture_api, namespace, section, line, code)
 
     direct_item = next(
         (item for item in items if _DIRECT_TEXTURE_RE.match(item[2])), None)
     if direct_item:
         direct_match = _DIRECT_TEXTURE_RE.match(direct_item[2])
         direct_value = direct_match.group(1) if direct_match else ""
-        namespace_match = _RESOURCE_ROLE_RE.match(direct_value)
-        if namespace_match:
-            namespace = namespace_match.group(1).lower()
+        namespace = _resource_namespace(direct_value)
+        if namespace:
             if namespace == "rabbitfx":
                 _add(texture_api, "rabbitfx", 30,
                      "rabbitfx_direct_binding", direct_item[0], direct_item[1])

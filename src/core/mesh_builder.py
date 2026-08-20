@@ -427,13 +427,19 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
         _profile_elapsed("decode", stage_started,
                          path=cache_key[0], role=texture_role,
                          transform=texture_transform)
-        # Material textures historically drop alpha because some DDS decoders
-        # expose unusable colour in fully-transparent pixels. Menu artwork is
-        # different: its authored transparency is part of the icon and must
-        # survive conversion to PNG.
+        # Preserve the authored source channels whenever the caller asks for
+        # alpha, when a packed map is passed through unchanged, or when a
+        # channel mask will be extracted.  The latter must happen before any
+        # RGB conversion turns an authored alpha channel into opaque 255s.
+        # Derived normal images intentionally become RGB after their source
+        # channels have been interpreted.
+        keep_source_alpha = (
+            preserve_alpha
+            or texture_transform == "passthrough"
+            or texture_transform.startswith("channel_"))
         stage_started = _profile_started()
         try:
-            img = img.convert('RGBA' if preserve_alpha else 'RGB')
+            img = img.convert('RGBA' if keep_source_alpha else 'RGB')
             if preserve_alpha and img.getchannel('A').getextrema()[1] == 0:
                 # Some menu packs deliberately point several slots at an empty
                 # placeholder DDS. Sending it to the browser produces a blank

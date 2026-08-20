@@ -136,8 +136,27 @@ def test_packed_light_map_is_passthrough_unless_a_channel_recipe_is_explicit():
         derived = Image.open(io.BytesIO(_render_texture_png(
             path, texture_role="light_map", texture_transform="channel_b")))
 
-    assert packed.getpixel((0, 0)) == (210, 12, 94)
+    assert packed.mode == "RGBA"
+    assert packed.getpixel((0, 0)) == (210, 12, 94, 255)
     assert derived.getpixel((0, 0)) == (94, 94, 94)
+
+
+def test_packed_passthrough_preserves_rgba_for_channel_extraction():
+    from PIL import Image
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "packed-rgba.png")
+        Image.new("RGBA", (1, 1), (10, 20, 30, 40)).save(path)
+        packed = Image.open(io.BytesIO(_render_texture_png(
+            path, texture_role="light_map", texture_transform="passthrough")))
+        alpha = Image.open(io.BytesIO(_render_texture_png(
+            path, texture_role="material_map", texture_transform="channel_a")))
+        packed.load()
+        alpha.load()
+
+    assert packed.mode == "RGBA"
+    assert packed.getpixel((0, 0)) == (10, 20, 30, 40)
+    assert alpha.mode == "RGB"
+    assert alpha.getpixel((0, 0)) == (40, 40, 40)
 
 
 DIFFUSE_SWAP_INI = """[Constants]
