@@ -73,19 +73,27 @@ class ModViewerAPI:
             return None
         texture_source = self._active_texture_source(
             folder_path, validate=True)
-        encoded = encode_texture_file(
-            folder_path, result[0], texture_role,
-            texture_source=texture_source)
-        if (encoded.get("error") or texture_role != "normal_map"):
-            return encoded
-
-        # WuWa's display normal is derived from a packed source. Keep the
-        # original RGBA source paired with a manually selected NormalMap so
-        # the material adapter can consume the exact authored data rather than
-        # whichever normal happened to be selected before it.
         publication = server.active_texture_publication(folder_path)
         profile = texture_profile_for(
             publication.game_profile if publication else None)
+        transport_role = texture_role
+        if (texture_role == "normal_map"
+                and profile.normal_transport_role == "normal_data"):
+            transport_role = profile.normal_transport_role
+        encoded = encode_texture_file(
+            folder_path, result[0], transport_role,
+            texture_source=texture_source, texture_profile=profile)
+        if encoded.get("error") or texture_role != "normal_map":
+            return encoded
+
+        # A packed-normal transport is already the complete authored source;
+        # do not publish a derived normal or pair a second registry entry with
+        # the manual selection.  The UI still presents this as NormalMap.
+        if transport_role == "normal_data":
+            return encoded
+
+        # Profiles that retain an authored source alongside a derived stock
+        # normal continue to receive the old paired representation.
         if not profile.retain_normal_data:
             return encoded
         raw = encode_texture_file(

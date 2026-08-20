@@ -80,6 +80,18 @@ function trackTextureUser(mesh, cacheKey) {
   users.add(mesh);
 }
 
+function usesPackedNormal(mesh) {
+  return mesh.material?.userData?.gameMaterial?.normalSource === 'normal_data';
+}
+
+function normalDataKey(key) {
+  if (!key) return null;
+  const separator = String(key).indexOf('::');
+  const relative = separator === -1
+    ? String(key) : String(key).slice(separator + 2);
+  return `normal_data::${relative}`;
+}
+
 function handleTextureError(cacheKey, texture, resolved, uri) {
   // A manual replacement or a newer model may have evicted this request
   // before the browser reported its failure. Do not mark the replacement as
@@ -167,8 +179,11 @@ export function refreshMeshTexture(mesh) {
   const gameMaterialSources = getGameMaterialSources(mesh.material);
   const usePackedSource = role =>
     showMaterialMaps && gameMaterialSources.has(role);
+  const normalSource = mesh.material?.userData?.gameMaterial?.normalSource
+    || 'normal_map';
   const map = showDiffuse ? getTexture(mesh, mesh.userData.texKey, 'diffuse') : null;
-  const normalMap = showMaterialMaps && mesh.userData.normalMapEnabled !== false
+  const normalMap = showMaterialMaps && normalSource === 'normal_map'
+    && mesh.userData.normalMapEnabled !== false
     ? getTexture(mesh, mesh.userData.normalMapKey, 'normal_map') : null;
   const normalData = usePackedSource('normal_data')
     ? getTexture(mesh, mesh.userData.normalDataKey, 'normal_data') : null;
@@ -219,9 +234,12 @@ export function setMeshTexture(mesh, texKey) {
 /** Apply the INI-resolved non-diffuse material textures. Manual texture
  * selection intentionally remains diffuse-only for now. */
 export function setMeshMaterialMaps(mesh, maps) {
-  mesh.userData.normalMapKey = maps.normal_map || null;
+  mesh.userData.normalMapKey = usesPackedNormal(mesh)
+    ? null : (maps.normal_map || null);
   if (Object.hasOwn(maps, 'normal_data')) {
-    mesh.userData.normalDataKey = maps.normal_data || null;
+    mesh.userData.normalDataKey = usesPackedNormal(mesh)
+      ? (maps.normal_data || normalDataKey(maps.normal_map))
+      : (maps.normal_data || null);
   }
   mesh.userData.lightMapKey = maps.light_map || null;
   mesh.userData.materialMapKey = maps.material_map || null;
@@ -231,9 +249,12 @@ export function setMeshMaterialMaps(mesh, maps) {
 /** Update the complete resolved texture state with one material refresh. */
 export function setMeshTextureState(mesh, state) {
   mesh.userData.texKey = state.diffuse || null;
-  mesh.userData.normalMapKey = state.normal_map || null;
+  mesh.userData.normalMapKey = usesPackedNormal(mesh)
+    ? null : (state.normal_map || null);
   if (Object.hasOwn(state, 'normal_data')) {
-    mesh.userData.normalDataKey = state.normal_data || null;
+    mesh.userData.normalDataKey = usesPackedNormal(mesh)
+      ? (state.normal_data || normalDataKey(state.normal_map))
+      : (state.normal_data || null);
   }
   mesh.userData.lightMapKey = state.light_map || null;
   mesh.userData.materialMapKey = state.material_map || null;
@@ -286,7 +307,8 @@ export function buildMesh(name, data, materialProfile = null) {
   // texture_variants condition matches (see visibility.js's
   // applyTextureVariant). Immutable; setMeshTexture only ever touches texKey.
   mesh.userData.defaultTexKey = data.tex_key || null;
-  mesh.userData.normalMapKey = data.normal_map_key || null;
+  mesh.userData.normalMapKey = mat.userData.gameMaterial.normalSource === 'normal_data'
+    ? null : (data.normal_map_key || null);
   mesh.userData.normalDataKey = data.normal_data_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
   mesh.userData.materialMapKey = data.material_map_key || null;

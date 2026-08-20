@@ -8,6 +8,7 @@ import base64
 import io
 from unittest.mock import patch
 
+import pytest
 
 from app import edit_session, metadata, mod_loader, server
 from core.ini_analysis import analyze_ini
@@ -170,7 +171,7 @@ def test_texture_registry_identity_includes_role():
               and entry["normal_map_key"] == "normal_map::shared.png"), ("mesh building keeps shared diffuse and normal roles separate")
 
 
-def test_wuwa_retains_raw_normal_data_alongside_derived_display_normal():
+def test_wuwa_publishes_one_intact_normal_data_source():
     from PIL import Image
 
     def uri_mode(uri):
@@ -199,9 +200,10 @@ def test_wuwa_retains_raw_normal_data_alongside_derived_display_normal():
                                   game_profile="wuwa")
         entry = built.meshes["Body-1"]
 
-        assert entry["normal_map_key"] == "normal_map::normal.png"
         assert entry["normal_data_key"] == "normal_data::normal.png"
-        assert uri_mode(built.textures[entry["normal_map_key"]]) == "RGB"
+        assert "normal_map_key" not in entry
+        assert entry["normal_map_enabled"] is False
+        assert set(built.textures) == {"normal_data::normal.png"}
         assert uri_mode(built.textures[entry["normal_data_key"]]) == "RGBA"
 
 
@@ -240,6 +242,45 @@ def test_legacy_texture_metadata_is_normalized_by_role():
         entry = payload["meshes"]["Body-1"]
         assert (entry.get("saved_texture_override") == "diffuse::shared.png"
               and "normal_map::shared.png" in payload["textures"]), ("legacy texture metadata is upgraded to role-aware keys")
+
+
+@pytest.mark.parametrize("saved_normals", [
+    {"normal_map": "normal.png"},
+    {"normal_map": "normal.png", "normal_data": "normal.png"},
+])
+def test_wuwa_metadata_migrates_legacy_normal_map_to_normal_data(
+        tmp_path, saved_normals):
+    from PIL import Image
+
+    Image.new("RGBA", (1, 1), (128, 128, 255, 255)).save(
+        tmp_path / "normal.png")
+    Image.new("RGB", (1, 1), (128, 128, 128)).save(
+        tmp_path / "shared.png")
+    data = {"textures": {"Body::3,0,0": {
+        "tex_key": "shared.png", "label": "Shared", "manual": True,
+        **saved_normals,
+    }}}
+    payload = {"meshes": {"Body-1": {
+        "component": "Body", "drawindexed": [3, 0, 0],
+        "texture_options": [],
+    }}, "textures": {}}
+    registered = []
+
+    def register(source, role):
+        registered.append(role)
+        return f"/texture/test/{role}"
+
+    restored = metadata.hydrate_textures(
+        str(tmp_path), payload, data, texture_source=register,
+        texture_profile="wuwa")
+    migrated = restored["Body::3,0,0"]
+    assert migrated["normal_data"] == "normal_data::normal.png"
+    assert "normal_map" not in migrated
+    assert registered == ["diffuse", "normal_data"]
+    assert payload["textures"] == {
+        "diffuse::shared.png": "/texture/test/diffuse",
+        "normal_data::normal.png": "/texture/test/normal_data",
+    }
 
 
 def test_component_material_kind_overrides_apply_to_every_draw_and_auto_removes(

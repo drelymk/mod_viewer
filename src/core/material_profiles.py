@@ -92,6 +92,13 @@ class MaterialInterpretation:
     def __post_init__(self):
         if self.material_kind not in MATERIAL_KINDS:
             raise ValueError(f"Unknown material kind: {self.material_kind}")
+        if self.normal_xy is not None:
+            if (not isinstance(self.normal_xy, (tuple, list))
+                    or len(self.normal_xy) != 2
+                    or any(channel not in _CHANNELS
+                           for channel in self.normal_xy)):
+                raise ValueError(
+                    "normal_xy must contain exactly two RGBA channels")
         if self.direct_shadow_model not in (None, "genshin_toon", "wuwa_base"):
             raise ValueError(
                 f"Unknown direct shadow model: {self.direct_shadow_model}")

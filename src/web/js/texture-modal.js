@@ -37,17 +37,29 @@ async function pickInto(opt, field) {
   if (!result) return;
   if (result.error) return showError(result.error);
   addTexture(result.tex_key, result.uri);
-  opt[field] = result.tex_key;
-  opt[`${field}_manual`] = true;
   if (field === 'normal_map') {
-    if (result.normal_data_key) {
-      addTexture(result.normal_data_key, result.normal_data_uri);
-      opt.normal_data = result.normal_data_key;
+    const transportRole = result.role || result.texture_role
+      || String(result.tex_key || '').split('::', 1)[0];
+    if (transportRole === 'normal_data') {
+      delete opt.normal_map;
+      delete opt.normal_map_manual;
+      opt.normal_data = result.tex_key;
       opt.normal_data_manual = true;
     } else {
-      delete opt.normal_data;
-      delete opt.normal_data_manual;
+      opt.normal_map = result.tex_key;
+      opt.normal_map_manual = true;
+      if (result.normal_data_key) {
+        addTexture(result.normal_data_key, result.normal_data_uri);
+        opt.normal_data = result.normal_data_key;
+        opt.normal_data_manual = true;
+      } else {
+        delete opt.normal_data;
+        delete opt.normal_data_manual;
+      }
     }
+  } else {
+    opt[field] = result.tex_key;
+    opt[`${field}_manual`] = true;
   }
   render();
   if (onChange) onChange();
@@ -83,26 +95,36 @@ function render() {
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'texm-map-cell';
-      const file = textureFile(opt[field]);
-      cell.title = opt[field] ? `Replace ${title}: ${file}` : `Add ${title}`;
+      const displayKey = field === 'normal_map'
+        ? (opt.normal_map || opt.normal_data) : opt[field];
+      const file = textureFile(displayKey);
+      cell.title = displayKey ? `Replace ${title}: ${file}` : `Add ${title}`;
       const name = document.createElement('span');
       name.textContent = file
         ? file.split('/').pop().replace(/\.[^.]+$/, '')
         : `+ ${title}`;
       cell.appendChild(name);
       cell.addEventListener('click', () => pickInto(opt, field));
-      if (opt[field]) {
+      if (displayKey) {
         const clear = document.createElement('span');
         clear.className = 'texm-map-clear';
         clear.textContent = '×';
         clear.title = `Remove ${title}`;
         clear.addEventListener('click', (evt) => {
           evt.stopPropagation();
-          delete opt[field];
-          opt[`${field}_manual`] = true;
           if (field === 'normal_map') {
+            const hadNormalData = Object.hasOwn(opt, 'normal_data')
+              || Object.hasOwn(opt, 'normal_data_manual');
+            delete opt.normal_map;
             delete opt.normal_data;
-            delete opt.normal_data_manual;
+            // Keep the clear authoritative against automatic component
+            // propagation. The value is gone; this flag is only a
+            // viewer-side tombstone until the option is replaced.
+            opt.normal_map_manual = true;
+            if (hadNormalData) opt.normal_data_manual = true;
+          } else {
+            delete opt[field];
+            opt[`${field}_manual`] = true;
           }
           render();
           if (onChange) onChange();

@@ -963,16 +963,28 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 "normal_map_enabled": texture_profile.bind_normal_map,
                 "ao_map_key": None,
             }
-            for channel in ("normal_map", "light_map", "material_map"):
+            # NormalMap is a user-facing authored role, but its transport is
+            # profile-owned.  WuWa publishes the intact packed source as
+            # normal_data; Genshin/ZZZ retain the derived normal_map path.
+            normal_path = _safe_join(
+                mod_dir, draw.get("normal_map_default_file"))
+            normal_role = texture_profile.normal_transport_role
+            normal_key = _ensure_texture(normal_path, normal_role)
+            if normal_key:
+                entry[f"{normal_role}_key"] = normal_key
+            # Profiles that use a derived normal may still explicitly retain
+            # an authored packed source for a future adapter.  Do not create a
+            # second registry entry when the transport role already is
+            # normal_data.
+            if normal_role != "normal_data":
+                normal_data_key = _ensure_normal_data(normal_path)
+                if normal_data_key:
+                    entry["normal_data_key"] = normal_data_key
+            for channel in ("light_map", "material_map"):
                 key = _ensure_texture(_safe_join(
                     mod_dir, draw.get(f"{channel}_default_file")), channel)
                 if key:
                     entry[f"{channel}_key"] = key
-            normal_path = _safe_join(
-                mod_dir, draw.get("normal_map_default_file"))
-            normal_data_key = _ensure_normal_data(normal_path)
-            if normal_data_key:
-                entry["normal_data_key"] = normal_data_key
             # The manager presents one row per diffuse. Seed that row with the
             # auxiliary maps resolved alongside this draw so authored maps can
             # be inspected/replaced with the same controls as manual ones.
@@ -1020,7 +1032,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                         variants.append({"conditions": v["conditions"], "tex_key": key})
                 if len(variants) > 1:
                     entry["texture_variants"] = variants
-            for channel in ("normal_map", "light_map", "material_map"):
+            for channel in ("light_map", "material_map"):
                 rules = draw.get(f"{channel}_variants") or []
                 variants = []
                 for variant in rules:
@@ -1033,18 +1045,30 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                         })
                 if variants:
                     entry[f"{channel}_variants"] = variants
-                if channel == "normal_map" and texture_profile.retain_normal_data:
-                    data_variants = []
-                    for variant in rules:
-                        key = _ensure_normal_data(_safe_join(
-                            mod_dir, variant["file"]))
-                        if key:
-                            data_variants.append({
-                                "conditions": variant["conditions"],
-                                "tex_key": key,
-                            })
-                    if data_variants:
-                        entry["normal_data_variants"] = data_variants
+            normal_rules = draw.get("normal_map_variants") or []
+            normal_variants = []
+            for variant in normal_rules:
+                key = _ensure_texture(
+                    _safe_join(mod_dir, variant["file"]), normal_role)
+                if key:
+                    normal_variants.append({
+                        "conditions": variant["conditions"],
+                        "tex_key": key,
+                    })
+            if normal_variants:
+                entry[f"{normal_role}_variants"] = normal_variants
+            if normal_role != "normal_data" and texture_profile.retain_normal_data:
+                data_variants = []
+                for variant in normal_rules:
+                    key = _ensure_normal_data(_safe_join(
+                        mod_dir, variant["file"]))
+                    if key:
+                        data_variants.append({
+                            "conditions": variant["conditions"],
+                            "tex_key": key,
+                        })
+                if data_variants:
+                    entry["normal_data_variants"] = data_variants
             # Keep even a single resolved texture in the UI pool. A component
             # with one diffuse still has a useful texture to display/manage;
             # only components with no resolved textures need the frontend's

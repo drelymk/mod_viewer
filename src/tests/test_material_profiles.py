@@ -100,6 +100,17 @@ def test_wuwa_keeps_normal_data_available_for_raw_or_unknown_api():
         assert profile.specular is None
 
 
+def test_material_interpretation_validates_normal_xy_channels():
+    with pytest.raises(ValueError):
+        MaterialInterpretation(
+            id="bad", game="wuwa", texture_api="raw",
+            normal_xy=("r", "x"))
+    with pytest.raises(ValueError):
+        MaterialInterpretation(
+            id="bad", game="wuwa", texture_api="raw",
+            normal_xy=("r",))
+
+
 def test_wuwa_rabbitfx_alone_enables_validated_shadow_semantics():
     profile = material_profile_for("wuwa", "rabbitfx")
 

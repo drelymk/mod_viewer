@@ -1202,6 +1202,10 @@ def test_wuwa_body_profile_binds_normal_data_without_stock_pbr_mapping(
             normalData: game.bindings.normal_data.enabledNode.value,
             lightMap: game.bindings.light_map.enabledNode.value,
             materialMap: game.bindings.material_map.enabledNode.value,
+            normalSource: game.normalSource,
+            normalPacking: game.normalPacking,
+            normalMapKey: mesh.userData.normalMapKey,
+            stockNormalMap: mesh.material.normalMap === null,
             stockMetalness: game.profile.metalness,
             stockSpecular: game.profile.specular,
             model: mesh.material.setupLightingModel().constructor.name,
@@ -1216,6 +1220,10 @@ def test_wuwa_body_profile_binds_normal_data_without_stock_pbr_mapping(
             "normalData": True,
             "lightMap": True,
             "materialMap": False,
+            "normalSource": "normal_data",
+            "normalPacking": "rg",
+            "normalMapKey": None,
+            "stockNormalMap": True,
             "stockMetalness": None,
             "stockSpecular": None,
             "model": "WuwaBodyLightingModel",
@@ -1388,11 +1396,11 @@ def test_wuwa_body_a_route_matches_near_binary_reference_boundary(
         context.close()
 
 
-def test_wuwa_raw_normal_data_debug_is_lazy_and_keeps_standard_material(
+def test_wuwa_raw_normal_data_is_bound_before_debug_and_keeps_standard_material(
         edge_browser, frontend_url):
     payload = _packed_material_payload("wuwa:raw")
     payload["textures"]["normal_data::Packed-normal.png"] = _flat_png_uri(
-        (0, 0, 128, 255))
+        (128, 128, 255, 255))
     context, page = _page(edge_browser, frontend_url, {"Packed": payload})
     try:
         _open(page, "Packed")
@@ -1404,6 +1412,8 @@ def test_wuwa_raw_normal_data_debug_is_lazy_and_keeps_standard_material(
           const game = material.userData.gameMaterial;
           window.__rawMaterial = material;
           window.__rawColorNode = material.colorNode;
+          window.__rawNormalDataTexture =
+            game.bindings.normal_data.textureNode.value;
           return {
             standard: !!material.isMeshStandardNodeMaterial,
             physical: !!material.isMeshPhysicalNodeMaterial,
@@ -1415,10 +1425,9 @@ def test_wuwa_raw_normal_data_debug_is_lazy_and_keeps_standard_material(
         }""")
         assert initial["standard"] is True
         assert initial["physical"] is False
-        assert initial["normalData"] is False
+        assert initial["normalData"] is True
         assert initial["lightMap"] is False
         assert initial["supported"] == ["normal-data-b", "normal-data-a"]
-
         page.evaluate("window.modViewer.setMaterialDebugMode('normal-data-b')")
         page.wait_for_function(
             "window.modViewer.activeMeshes[0].material.userData.gameMaterial"
@@ -1431,6 +1440,8 @@ def test_wuwa_raw_normal_data_debug_is_lazy_and_keeps_standard_material(
             version: mesh.material.version,
             sameMaterial: mesh.material === window.__rawMaterial,
             sameColorNode: mesh.material.colorNode === window.__rawColorNode,
+            sameTexture: game.bindings.normal_data.textureNode.value
+              === window.__rawNormalDataTexture,
             imageWidth: game.bindings.normal_data.textureNode.value.image?.width || 0,
           };
         }""")
@@ -1439,6 +1450,7 @@ def test_wuwa_raw_normal_data_debug_is_lazy_and_keeps_standard_material(
         assert after_b["version"] == initial["version"]
         assert after_b["sameMaterial"]
         assert after_b["sameColorNode"]
+        assert after_b["sameTexture"]
 
         page.evaluate("""window.__rawNormalDataTexture =
           window.modViewer.activeMeshes[0].material.userData.gameMaterial
@@ -1470,6 +1482,8 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
     }
     payload["textures"]["diffuse::Packed-one.png"] = _flat_png_uri(
         (24, 24, 24, 255))
+    payload["textures"][entry["normal_data_key"]] = _flat_png_uri(
+        (128, 128, 255, 255))
     payload["textures"][low_key] = _flat_png_uri((0, 0, 0, 255))
     entry["light_map_key"] = low_key
 
@@ -1509,7 +1523,7 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
           setMeshTextureState(mesh, {
             diffuse: mesh.userData.texKey,
             normal_map: null,
-            normal_data: null,
+            normal_data: mesh.userData.normalDataKey,
             light_map: null,
             material_map: null,
           });
@@ -1574,7 +1588,7 @@ def test_wuwa_normal_data_ba_do_not_change_normal_rendering_when_debug_is_off(
           window.modViewer.activeMeshes[0].material.userData.gameMaterial
             .bindings.normal_data.enabledNode.value
         """)
-        assert bound is False
+        assert bound is True
         assert abs(sum(high_pixel) - sum(low_pixel)) <= 3, (
             low_pixel, high_pixel)
     finally:
@@ -1591,6 +1605,8 @@ def test_wuwa_two_direct_lights_shadow_each_light_contribution_once(
     }
     payload["textures"]["diffuse::Packed-one.png"] = _flat_png_uri(
         (24, 24, 24, 255))
+    payload["textures"][entry["normal_data_key"]] = _flat_png_uri(
+        (128, 128, 255, 255))
     light_key = "light_map::Packed-two-light.png"
     payload["textures"][light_key] = _flat_png_uri((0, 255, 0, 255))
     entry["light_map_key"] = light_key
@@ -1931,7 +1947,7 @@ def test_genshin_high_r_region_bypasses_lightmap_b_specular_gate(
         "lightMap": True, "materialMap": False,
     }),
     ("wuwa:rabbitfx", {
-        "physical": True, "profile": "wuwa:rabbitfx", "normalData": False,
+        "physical": True, "profile": "wuwa:rabbitfx", "normalData": True,
         "lightMap": True, "materialMap": False,
     }),
     ("none", {
