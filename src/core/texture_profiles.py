@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 
 
-TEXTURE_ROLES = ("diffuse", "normal_map", "light_map", "material_map")
+TEXTURE_ROLES = (
+    "diffuse", "normal_map", "normal_data", "light_map", "material_map")
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class TextureProfile:
     bind_normal_map: bool
     bind_light_map: bool = False
     bind_material_map: bool = False
+    retain_normal_data: bool = False
 
     @property
     def game(self):
@@ -25,13 +27,15 @@ class TextureProfile:
         role = role if role in TEXTURE_ROLES else "diffuse"
         if role == "normal_map" and self.bind_normal_map:
             return "normal_xy_reconstruct"
+        if role == "normal_data":
+            return "passthrough"
         return "passthrough"
 
 
 _PROFILES = {
     "genshin": TextureProfile("genshin", -1, True),
     "zzz": TextureProfile("zzz", -1, True),
-    "wuwa": TextureProfile("wuwa", -1, True),
+    "wuwa": TextureProfile("wuwa", -1, True, retain_normal_data=True),
     # SRMI/HSR texture semantics are intentionally conservative until the
     # runtime's packed normal/material layout is modeled explicitly.
     "hsr": TextureProfile("hsr", 1, False),

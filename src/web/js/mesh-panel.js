@@ -379,6 +379,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {}) {
         addMesh(mesh, meshes[name].conditions, meshes[name].sources,
           meshes[name].texture_variants, {
             normal_map: meshes[name].normal_map_variants,
+            normal_data: meshes[name].normal_data_variants,
             light_map: meshes[name].light_map_variants,
             material_map: meshes[name].material_map_variants,
           });

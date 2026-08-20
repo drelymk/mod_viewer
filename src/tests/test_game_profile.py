@@ -189,3 +189,10 @@ def test_texture_profiles_keep_auxiliary_maps_packed():
     assert not profile.bind_light_map
     assert not profile.bind_material_map
     assert profile.normal_y_sign == -1
+
+
+def test_wuwa_profile_retains_raw_normal_data_for_future_material_shaders():
+    profile = texture_profile_for("wuwa")
+    assert profile.recipe_for("normal_map") == "normal_xy_reconstruct"
+    assert profile.recipe_for("normal_data") == "passthrough"
+    assert profile.retain_normal_data

@@ -162,6 +162,9 @@ export function setMeshTexture(mesh, texKey) {
  * selection intentionally remains diffuse-only for now. */
 export function setMeshMaterialMaps(mesh, maps) {
   mesh.userData.normalMapKey = maps.normal_map || null;
+  if (Object.hasOwn(maps, 'normal_data')) {
+    mesh.userData.normalDataKey = maps.normal_data || null;
+  }
   mesh.userData.lightMapKey = maps.light_map || null;
   mesh.userData.materialMapKey = maps.material_map || null;
   refreshMeshTexture(mesh);
@@ -171,6 +174,9 @@ export function setMeshMaterialMaps(mesh, maps) {
 export function setMeshTextureState(mesh, state) {
   mesh.userData.texKey = state.diffuse || null;
   mesh.userData.normalMapKey = state.normal_map || null;
+  if (Object.hasOwn(state, 'normal_data')) {
+    mesh.userData.normalDataKey = state.normal_data || null;
+  }
   mesh.userData.lightMapKey = state.light_map || null;
   mesh.userData.materialMapKey = state.material_map || null;
   refreshMeshTexture(mesh);
@@ -223,6 +229,7 @@ export function buildMesh(name, data) {
   // applyTextureVariant). Immutable; setMeshTexture only ever touches texKey.
   mesh.userData.defaultTexKey = data.tex_key || null;
   mesh.userData.normalMapKey = data.normal_map_key || null;
+  mesh.userData.normalDataKey = data.normal_data_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
   mesh.userData.materialMapKey = data.material_map_key || null;
   mesh.userData.aoMapKey = data.ao_map_key || null;
@@ -230,6 +237,7 @@ export function buildMesh(name, data) {
   mesh.userData.normalMapYSign = Number.isFinite(data.normal_map_y_sign)
     ? data.normal_map_y_sign : -1;
   mesh.userData.defaultNormalMapKey = mesh.userData.normalMapKey;
+  mesh.userData.defaultNormalDataKey = mesh.userData.normalDataKey;
   mesh.userData.defaultLightMapKey = mesh.userData.lightMapKey;
   mesh.userData.defaultMaterialMapKey = mesh.userData.materialMapKey;
   mesh.userData.fallbackColor = fallback;

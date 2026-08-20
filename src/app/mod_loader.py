@@ -283,7 +283,8 @@ def _gating_vars(payload):
             for cond in group:
                 found.add(cond["var"])
         for field in ("texture_variants", "normal_map_variants",
-                      "light_map_variants", "material_map_variants"):
+                      "normal_data_variants", "light_map_variants",
+                      "material_map_variants"):
             for variant in entry.get(field, []):
                 for group in variant.get("conditions", []):
                     for cond in group:
@@ -412,7 +413,8 @@ def _gating_vars_from_groups(groups):
                 for cond in cond_group:
                     found.add(cond["var"])
             for field in ("texture_variants", "normal_map_variants",
-                          "light_map_variants", "material_map_variants"):
+                          "normal_data_variants", "light_map_variants",
+                          "material_map_variants"):
                 for variant in draw.get(field, []):
                     for cond_group in variant.get("conditions", []):
                         for cond in cond_group:

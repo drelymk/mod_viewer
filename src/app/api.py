@@ -13,6 +13,7 @@ from core.mesh_builder import (GeometryBlob, encode_texture_file,
                                encode_texture_key)
 from core.mod_discovery import discover_ini_paths
 from core.ini_health import analyze_mod
+from core.texture_profiles import texture_profile_for
 
 from . import (edit_session, ini_api, metadata, mod_loader, present_api,
                server, toggle_api)
@@ -70,9 +71,32 @@ class ModViewerAPI:
             file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg;*.tga)",))
         if not result:
             return None
-        return encode_texture_file(
+        texture_source = self._active_texture_source(
+            folder_path, validate=True)
+        encoded = encode_texture_file(
             folder_path, result[0], texture_role,
-            texture_source=self._active_texture_source(folder_path, validate=True))
+            texture_source=texture_source)
+        if (encoded.get("error") or texture_role != "normal_map"):
+            return encoded
+
+        # WuWa's display normal is derived from a packed source. Keep the
+        # original RGBA source paired with a manually selected NormalMap so a
+        # future material shader can consume the exact authored data rather
+        # than whichever normal happened to be selected before it.
+        publication = server.active_texture_publication(folder_path)
+        profile = texture_profile_for(
+            publication.game_profile if publication else None)
+        if not profile.retain_normal_data:
+            return encoded
+        raw = encode_texture_file(
+            folder_path, result[0], "normal_data",
+            texture_source=texture_source, texture_profile=profile)
+        if raw.get("error"):
+            return raw
+        encoded["normal_data_key"] = raw["tex_key"]
+        encoded["normal_data_file"] = raw["file"]
+        encoded["normal_data_uri"] = raw["uri"]
+        return encoded
 
     def load_texture_file(self, folder_path, tex_key):
         """Resolve a known mod-relative picker texture on first use."""

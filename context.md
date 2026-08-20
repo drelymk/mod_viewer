@@ -125,6 +125,10 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   maps may have Z reconstructed during encoding. SRMI/HSR markers take
   precedence over generic DRAW_TYPE/vb2 heuristics, while ZZZ requires its
   more-specific 2/4 route and ZZMI evidence.
+  Profiles that derive a display normal from packed source data, such as WuWa,
+  publish both `normal_map_key` and an intact `normal_data_key`; the latter is
+  reserved for a future validated material shader and is never silently used
+  as a standard Three.js map.
   LightMaps remain packed game data and are retained as toggle-aware keys; the
   passthrough transport preserves authored RGBA for packed auxiliary roles,
   ordinary diffuse passthrough remains RGB, and explicit channel masks read the
@@ -254,10 +258,10 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
 - Texture source paths are mod-relative, never basenames, because variant
   folders commonly repeat filenames.
 - Rendered texture identity is `role::mod-relative-path`, because one source
-  file may be used as diffuse, normal, light or material data and each role
-  has a different encoding/color-space contract. Diffuse maps are sRGB;
-  auxiliary maps are non-color data. Legacy path-only viewer metadata must be
-  normalized when loaded.
+  file may be used as diffuse, derived normal, retained raw normal data, light
+  or material data and each role has a different encoding/color-space contract.
+  Diffuse maps are sRGB; auxiliary maps are non-color data. Legacy path-only
+  viewer metadata must be normalized when loaded.
 - `safe_resource_path`/`_safe_join` is the one sandbox implementation for both
   geometry and health. Reject absolute/drive paths, allow relative parent climbs
   only up to live `_MAX_ESCAPE_DEPTH`, and do not duplicate these rules.
