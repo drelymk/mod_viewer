@@ -1471,6 +1471,145 @@ def test_wuwa_raw_normal_data_is_bound_before_debug_and_keeps_standard_material(
         context.close()
 
 
+def test_wuwa_packed_rg_normal_matches_derived_reference_and_y_sign(
+        edge_browser, frontend_url):
+    # Keep the source constant so the comparison exercises normal decoding,
+    # not texture filtering or mip selection.  These are the same channels
+    # used to build the old CPU-derived RGB reference.
+    red, green = 160, 192
+    x = red / 127.5 - 1.0
+    y = green / 127.5 - 1.0
+    z = max(0.0, 1.0 - x * x - y * y) ** 0.5
+    blue = round((z * 0.5 + 0.5) * 255.0)
+    diffuse_uri = _flat_png_uri((120, 120, 120, 255))
+    packed_uri = _flat_png_uri((red, green, 17, 241))
+    derived_uri = _flat_png_uri((red, green, blue, 255))
+
+    def configure_light(page):
+        page.evaluate("""
+          async () => {
+            const THREE = await import('three');
+            const {scene, controls} = await import('./js/scene.js');
+            let key = null;
+            scene.traverse(object => {
+              if (object.isAmbientLight || object.isHemisphereLight) {
+                object.intensity = 0;
+              } else if (object.isSprite || object.isGridHelper) {
+                object.visible = false;
+              } else if (object.isDirectionalLight) {
+                if (!key) key = object;
+                else object.intensity = 0;
+              }
+            });
+            key.target.position.copy(controls.target);
+            key.position.copy(controls.target)
+              .add(new THREE.Vector3(0.8, 0.4, 2.0));
+            key.intensity = 1;
+          }
+        """)
+        page.wait_for_timeout(400)
+
+    def sample_quad(page):
+        return [
+            _sample_mesh_pixel_at(page, x, y)
+            for x, y in ((0.15, 0.15), (0.5, 0.15), (0.85, 0.15),
+                         (0.15, 0.85), (0.85, 0.85))
+        ]
+
+    reference = _parity_payload(diffuse_uri)
+    reference_entry = reference["meshes"]["Body-Parity-0"]
+    reference_key = "normal_map::Parity-reference.png"
+    reference_entry["normal_map_key"] = reference_key
+    reference["textures"][reference_key] = derived_uri
+
+    reference_context, reference_page = _page(
+        edge_browser, frontend_url, {"Reference": reference})
+    packed_context = None
+    try:
+        _open(reference_page, "Reference")
+        reference_page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData"
+            "?.gameMaterial?.bindings.normal_map.textureNode.value.image"
+            "?.width === 4")
+        configure_light(reference_page)
+        reference_pixels = sample_quad(reference_page)
+
+        packed = _packed_material_payload("wuwa:raw")
+        packed_entry = packed["meshes"]["Body-Packed-0"]
+        packed_entry["drawindexed"] = [6, 0, 0]
+        packed_entry["pos"] = _f32(
+            -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0)
+        packed_entry["uv"] = _f32(0, 0, 1, 0, 1, 1, 0, 1)
+        packed_entry["idx"] = _u32(0, 1, 2, 0, 2, 3)
+        packed_entry["normal_data_key"] = "normal_data::Packed-reference.png"
+        packed["textures"] = {
+            "diffuse::Packed-one.png": diffuse_uri,
+            packed_entry["normal_data_key"]: packed_uri,
+        }
+        packed_context, packed_page = _page(
+            edge_browser, frontend_url, {"Packed": packed})
+        _open(packed_page, "Packed")
+        packed_page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData"
+            "?.gameMaterial?.bindings.normal_data.textureNode.value.image"
+            "?.width === 4")
+        configure_light(packed_page)
+        packed_pixels = sample_quad(packed_page)
+
+        assert all(
+            max(abs(a - b) for a, b in zip(reference_pixel, packed_pixel)) <= 8
+            for reference_pixel, packed_pixel
+            in zip(reference_pixels, packed_pixels)
+        ), (reference_pixels, packed_pixels, (red, green, blue))
+
+        packed_page.evaluate("""
+          async () => {
+            const {setMeshTextureState} = await import('./js/mesh-factory.js');
+            const mesh = window.modViewer.activeMeshes[0];
+            setMeshTextureState(mesh, {
+              diffuse: mesh.userData.texKey,
+              normal_map: null,
+              normal_data: null,
+              light_map: null,
+              material_map: null,
+            });
+          }
+        """)
+        packed_page.wait_for_timeout(300)
+        geometry_pixels = sample_quad(packed_page)
+        assert any(
+            sum(abs(a - b) for a, b in zip(packed_pixel, geometry_pixel)) > 6
+            for packed_pixel, geometry_pixel
+            in zip(packed_pixels, geometry_pixels)
+        ), (packed_pixels, geometry_pixels)
+
+        packed_page.evaluate("""
+          async key => {
+            const {setMeshTextureState} = await import('./js/mesh-factory.js');
+            const mesh = window.modViewer.activeMeshes[0];
+            mesh.userData.normalMapYSign = 1;
+            setMeshTextureState(mesh, {
+              diffuse: mesh.userData.texKey,
+              normal_map: null,
+              normal_data: key,
+              light_map: null,
+              material_map: null,
+            });
+          }
+        """, packed_entry["normal_data_key"])
+        packed_page.wait_for_timeout(300)
+        positive_y_pixels = sample_quad(packed_page)
+        assert any(
+            sum(abs(a - b) for a, b in zip(packed_pixel, positive_pixel)) > 6
+            for packed_pixel, positive_pixel
+            in zip(packed_pixels, positive_y_pixels)
+        ), (packed_pixels, positive_y_pixels)
+    finally:
+        reference_context.close()
+        if packed_context is not None:
+            packed_context.close()
+
+
 def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
         edge_browser, frontend_url):
     payload = _packed_material_payload("wuwa:rabbitfx")

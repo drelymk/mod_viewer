@@ -283,6 +283,33 @@ def test_wuwa_metadata_migrates_legacy_normal_map_to_normal_data(
     }
 
 
+def test_wuwa_normal_data_tombstone_removes_ini_pool_value_on_hydration(
+        tmp_path):
+    from PIL import Image
+
+    Image.new("RGB", (1, 1), (128, 128, 128)).save(
+        tmp_path / "shared.png")
+    data = {"textures": {"Body::3,0,0": {
+        "tex_key": "shared.png", "label": "Shared", "manual": True,
+        "normal_data": None, "normal_data_manual": True,
+    }}}
+    payload = {"meshes": {"Body-1": {
+        "component": "Body", "drawindexed": [3, 0, 0],
+        "texture_options": [{
+            "tex_key": "diffuse::shared.png", "file": "shared.png",
+            "label": "Shared",
+            "normal_data": "normal_data::BodyNormal.dds",
+        }],
+    }}, "textures": {}}
+
+    restored = metadata.hydrate_textures(
+        str(tmp_path), payload, data, texture_profile="wuwa")
+    option = payload["meshes"]["Body-1"]["texture_options"][0]
+    assert restored["Body::3,0,0"]["normal_data_manual"] is True
+    assert "normal_data" not in option
+    assert option["normal_data_manual"] is True
+
+
 def test_component_material_kind_overrides_apply_to_every_draw_and_auto_removes(
         tmp_path):
     root = str(tmp_path)

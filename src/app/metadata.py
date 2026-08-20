@@ -360,10 +360,21 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
             else:
                 for field in ("normal_map", "normal_data", "light_map",
                               "material_map"):
-                    if opt.get(field):
+                    manual_key = f"{field}_manual"
+                    if opt.get(manual_key):
+                        old[manual_key] = True
+                        # A saved manual flag without a value is an explicit
+                        # tombstone. Remove the fresh INI-derived value
+                        # instead of merely winning future writes.
+                        if field in opt:
+                            if opt[field]:
+                                old[field] = opt[field]
+                            else:
+                                old.pop(field, None)
+                        else:
+                            old.pop(field, None)
+                    elif opt.get(field):
                         old[field] = opt[field]
-                    if opt.get(f"{field}_manual"):
-                        old[f"{field}_manual"] = True
 
     for name, entry in meshes.items():
         if not isinstance(entry, dict) or entry.get("error"):
