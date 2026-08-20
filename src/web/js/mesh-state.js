@@ -2,6 +2,7 @@
 
 import { scene, resetModelOrientation } from './scene.js';
 import { dnfSatisfied, getControlValue } from './control-state.js';
+import { disposeGameMaterial } from './material-profile.js';
 import { setMeshTextureState } from './mesh-factory.js';
 import { initializeMeshRenderModes } from './render-modes.js';
 
@@ -12,7 +13,10 @@ export function resetMeshes() {
     scene.remove(mesh);
     mesh.geometry.dispose();
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach(material => material.dispose());
+    materials.forEach(material => {
+      disposeGameMaterial(material);
+      material.dispose();
+    });
   });
   activeMeshes.length = 0;
   resetModelOrientation();

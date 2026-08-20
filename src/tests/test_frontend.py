@@ -11,6 +11,11 @@ from app import paths, server
 
 playwright = pytest.importorskip("playwright.sync_api")
 
+_PNG_URI = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
+    "ScLkWQAAAABJRU5ErkJggg==")
+
 
 def _f32(*values):
     return base64.b64encode(struct.pack(f"<{len(values)}f", *values)).decode()
@@ -68,6 +73,48 @@ def _payload(label="A"):
         "metadata": {"mesh_names": {}},
         "health": {"summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
     }
+
+
+def _packed_material_payload(profile_id="zzz:zzmi"):
+    payload = _payload("Packed")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["light_map_key"] = "light_map::Packed-light.png"
+    entry["material_map_key"] = "material_map::Packed-material.png"
+    entry["normal_data_key"] = "normal_data::Packed-normal.png"
+    payload["textures"] = {
+        "diffuse::Packed-one.png": _PNG_URI,
+        "light_map::Packed-light.png": _PNG_URI,
+        "material_map::Packed-material.png": _PNG_URI,
+        "normal_data::Packed-normal.png": _PNG_URI,
+    }
+    if profile_id == "genshin:gimi":
+        profile = {
+            "id": profile_id, "game": "genshin", "texture_api": "gimi",
+            "normal_xy": None, "shadow_mask": None, "material_id": None,
+            "metalness": {"source": "light_map", "channel": "r",
+                           "invert": False},
+            "gloss": None,
+            "specular": {"source": "light_map", "channel": "b",
+                          "invert": False},
+            "ao": None, "metalness_scale": 0.08,
+            "specular_scale": 0.15,
+        }
+    else:
+        profile = {
+            "id": profile_id, "game": "zzz", "texture_api": "zzmi",
+            "normal_xy": None, "shadow_mask": None,
+            "material_id": {"source": "material_map", "channel": "r",
+                             "invert": False},
+            "metalness": {"source": "material_map", "channel": "g",
+                           "invert": False},
+            "gloss": None,
+            "specular": {"source": "material_map", "channel": "b",
+                          "invert": False},
+            "ao": None, "metalness_scale": 1, "specular_scale": 1,
+        }
+    payload["metadata"]["material_profile"] = profile
+    return payload
 
 
 def _construction_failure_payload():
@@ -268,6 +315,71 @@ def test_frontend_construction_failure_rolls_back_partial_scene(
         assert page.locator("#mod-path").inner_text() == "B"
         assert not page.locator("#ini-view-btn").is_disabled()
         page.locator("#dialog-ok").click()
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("profile_id", ["zzz:zzmi", "genshin:gimi"])
+def test_packed_material_profile_compiles_and_toggles_update_uniforms(
+        edge_browser, frontend_url, profile_id):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"Packed": _packed_material_payload(profile_id)},
+    )
+    try:
+        _open(page, "Packed")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial?.shader")
+
+        state = page.evaluate("""() => {
+          const material = window.modViewer.activeMeshes[0].material;
+          const game = material.userData.gameMaterial;
+          return {
+            physical: material.isMeshPhysicalMaterial,
+            profile: game.profile.id,
+            shader: !!game.shader,
+            fragment: game.shader.fragmentShader,
+            lightMap: !!game.uniforms.gameLightMap.value,
+            materialMap: !!game.uniforms.gameMaterialMap.value,
+            metalnessScale: game.uniforms.gameMaterialMetalnessScale.value,
+            specularScale: game.uniforms.gameMaterialSpecularScale.value,
+            version: material.version,
+          };
+        }""")
+        assert state["physical"]
+        assert state["profile"] == profile_id
+        assert "gameMaterialSpecularResponse" in state["fragment"]
+        assert "gameMaterialMetalnessResponse" in state["fragment"]
+        source_sample = ("gameMaterialMapSample" if profile_id == "zzz:zzmi"
+                         else "gameLightMapSample")
+        assert source_sample in state["fragment"]
+        assert state["metalnessScale"] == (1 if profile_id == "zzz:zzmi" else 0.08)
+        assert state["specularScale"] == (1 if profile_id == "zzz:zzmi" else 0.15)
+        assert state["materialMap"] if profile_id == "zzz:zzmi" else state["lightMap"]
+
+        after = page.evaluate("""async () => {
+          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const shader = material.userData.gameMaterial.shader;
+          const version = material.version;
+          setMeshTextureState(mesh, {
+            diffuse: mesh.userData.texKey,
+            normal_map: mesh.userData.normalMapKey,
+            normal_data: null,
+            light_map: null,
+            material_map: null,
+          });
+          return {
+            sameShader: material.userData.gameMaterial.shader === shader,
+            sameVersion: material.version === version,
+            mapEnabled: material.userData.gameMaterial.uniforms
+              .gameMaterialMapEnabled.value,
+          };
+        }""")
+        assert after == {"sameShader": True, "sameVersion": True,
+                         "mapEnabled": False}
     finally:
         context.close()
 

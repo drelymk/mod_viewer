@@ -23,6 +23,7 @@ from core.ini_menu import attach_menu_images
 from core.ini_health import analyze_mod
 from core.present_editor import SECTION_NAME as PRESENT_SECTION
 from core.game_profile import GameDetection, resolve_game_detection
+from core.material_profiles import material_profile_for
 
 # Kept for scripts that still inspect the low-level mesh-builder result.  These
 # keys are no longer emitted by load_mod's public application payload.
@@ -504,6 +505,8 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
     }
     if game is not None:
         payload["metadata"]["game"] = game.to_metadata()
+        payload["metadata"]["material_profile"] = \
+            material_profile_for(game).to_metadata()
     if error:
         payload["error"] = error
     return payload

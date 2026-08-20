@@ -127,16 +127,18 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   more-specific 2/4 route and ZZMI evidence.
   Profiles that derive a display normal from packed source data, such as WuWa,
   publish both `normal_map_key` and an intact `normal_data_key`; the latter is
-  reserved for a future validated material shader and is never silently used
-  as a standard Three.js map.
+  available to the selected material adapter and is never silently used as a
+  standard Three.js map. Material interpretation is selected from `(game,
+  texture_api)`, not from a texture name alone.
   LightMaps remain packed game data and are retained as toggle-aware keys; the
   passthrough transport preserves authored RGBA for packed auxiliary roles,
   ordinary diffuse passthrough remains RGB, and explicit channel masks read the
-  source channel before conversion. They are not bound to Three.js AO or RGB
-  light inputs. MaterialMaps remain loaded
-  and toggle-aware but are not guessed into incompatible standard PBR channels
-  without known shader semantics. A future validated AO derivation must use an
-  explicit occlusion role.
+  source channel before conversion. Known Genshin profiles use only LightMap R/B
+  for a restrained material response; LightMap G remains reserved for the
+  later toon-shadow phase and no LightMap is bound as Three.js AO. Known ZZZ
+  profiles use MaterialMap G/B for metallic/specular response while retaining R
+  as material-ID data. Unknown game/API pairs keep packed maps available but
+  do not guess PBR semantics.
 - A section with an `ib` but no `drawindexed` uses a synthetic whole-buffer
   draw. It inherits `diffuse_variants_at_end`; do not discard a section’s final
   diffuse. A real draw before the first diffuse legitimately remains untextured.
@@ -288,7 +290,8 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   scale from model bounds. Camera framing targets the
   unobstructed viewport: keep orbit target at the true model center and shift
   projection with `setViewOffset`; back up when horizontal space is limiting.
-  Materials use DoubleSide, roughness 1 and flat shading by default.
+  Materials use DoubleSide, roughness 1 and flat shading by default; known
+  packed-material profiles may vary metallic/specular response in their shader.
 
 ## Frontend, hosting and security
 

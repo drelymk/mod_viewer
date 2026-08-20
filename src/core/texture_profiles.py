@@ -39,8 +39,9 @@ _PROFILES = {
     # SRMI/HSR texture semantics are intentionally conservative until the
     # runtime's packed normal/material layout is modeled explicitly.
     "hsr": TextureProfile("hsr", 1, False),
-    # Unknown mods retain authored keys for inspection, but the renderer only
-    # binds the diffuse until a known recipe is justified.
+    # Unknown mods retain authored keys for inspection; the renderer only
+    # applies a semantic packed-map response when a separate material profile
+    # justifies it.
     "unknown": TextureProfile("unknown", 1, False),
 }
 

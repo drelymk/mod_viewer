@@ -80,9 +80,9 @@ class ModViewerAPI:
             return encoded
 
         # WuWa's display normal is derived from a packed source. Keep the
-        # original RGBA source paired with a manually selected NormalMap so a
-        # future material shader can consume the exact authored data rather
-        # than whichever normal happened to be selected before it.
+        # original RGBA source paired with a manually selected NormalMap so
+        # the material adapter can consume the exact authored data rather than
+        # whichever normal happened to be selected before it.
         publication = server.active_texture_publication(folder_path)
         profile = texture_profile_for(
             publication.game_profile if publication else None)

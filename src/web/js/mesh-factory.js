@@ -2,6 +2,9 @@
 
 import * as THREE from 'three';
 import { decodeF32, decodeU32 } from './decode.js';
+import {
+  createGameMaterial, updateGameMaterialTextures,
+} from './material-profile.js';
 import { getMeshView } from './mesh-view-bindings.js';
 
 // Textures arrive as data URIs or same-origin localhost URLs keyed by name;
@@ -124,27 +127,38 @@ export function refreshMeshTexture(mesh) {
   const map = showDiffuse ? getTexture(mesh, mesh.userData.texKey, 'diffuse') : null;
   const normalMap = showMaterialMaps && mesh.userData.normalMapEnabled !== false
     ? getTexture(mesh, mesh.userData.normalMapKey, 'normal_map') : null;
-  // LightMap and MaterialMap are retained as authored, toggle-aware keys but
-  // are packed game data rather than standard Three.js light/PBR inputs.
-  // There is no validated derived AO slot in the baseline profile yet.
+  const normalData = showMaterialMaps
+    ? getTexture(mesh, mesh.userData.normalDataKey, 'normal_data') : null;
+  const lightMap = showMaterialMaps
+    ? getTexture(mesh, mesh.userData.lightMapKey, 'light_map') : null;
+  const materialMap = showMaterialMaps
+    ? getTexture(mesh, mesh.userData.materialMapKey, 'material_map') : null;
   const aoMap = showMaterialMaps
     ? getTexture(mesh, mesh.userData.aoMapKey, 'occlusion_map') : null;
-  if (map === mesh.material.map
-      && normalMap === mesh.material.normalMap
-      && aoMap === mesh.material.aoMap) return;
-  mesh.material.map = map;
-  mesh.material.normalMap = normalMap;
-  mesh.material.normalScale.set(
-    1, normalMap ? (mesh.userData.normalMapYSign ?? -1) : 1);
-  mesh.material.aoMap = aoMap;
-  mesh.material.aoMapIntensity = 1.0;
-  mesh.material.lightMap = null;
-  mesh.material.roughnessMap = null;
-  mesh.material.metalnessMap = null;
-  mesh.material.roughness = 1;
-  mesh.material.metalness = 0;
-  mesh.material.color.setHex(map ? 0xffffff : mesh.userData.fallbackColor);
-  mesh.material.needsUpdate = true;
+  const packedChanged = updateGameMaterialTextures(mesh, {
+    normal_data: normalData, light_map: lightMap, material_map: materialMap,
+  });
+  const stockChanged = map !== mesh.material.map
+    || normalMap !== mesh.material.normalMap
+    || aoMap !== mesh.material.aoMap;
+  if (!stockChanged && !packedChanged) return;
+  if (stockChanged) {
+    mesh.material.map = map;
+    mesh.material.normalMap = normalMap;
+    mesh.material.normalScale.set(
+      1, normalMap ? (mesh.userData.normalMapYSign ?? -1) : 1);
+    mesh.material.aoMap = aoMap;
+    mesh.material.aoMapIntensity = 1.0;
+    mesh.material.lightMap = null;
+    mesh.material.roughnessMap = null;
+    mesh.material.metalnessMap = null;
+    mesh.material.roughness = 1;
+    mesh.material.metalness = 0;
+    mesh.material.color.setHex(map ? 0xffffff : mesh.userData.fallbackColor);
+    // Stock map defines can change when a derived normal/diffuse appears or
+    // disappears. Packed map changes above only mutate shader uniforms.
+    mesh.material.needsUpdate = true;
+  }
   getMeshView(mesh)?.onTextureChanged?.();
 }
 
@@ -193,7 +207,7 @@ function fallbackColor(name) {
   return 0xcccccc;
 }
 
-export function buildMesh(name, data) {
+export function buildMesh(name, data, materialProfile = null) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(decodeF32(data.pos), 3));
   if (data.uv) {
@@ -211,8 +225,8 @@ export function buildMesh(name, data) {
   geo.computeVertexNormals();
 
   const fallback = fallbackColor(name);
-  const mat = new THREE.MeshStandardMaterial({
-    side: THREE.DoubleSide, roughness: 1.0, metalness: 0.0, color: fallback });
+  const mat = createGameMaterial(materialProfile, fallback,
+    { hasUv: !!data.uv });
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData.basePositions = new Float32Array(geo.attributes.position.array);
@@ -232,6 +246,7 @@ export function buildMesh(name, data) {
   mesh.userData.normalDataKey = data.normal_data_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
   mesh.userData.materialMapKey = data.material_map_key || null;
+  mesh.userData.materialProfile = materialProfile;
   mesh.userData.aoMapKey = data.ao_map_key || null;
   mesh.userData.normalMapEnabled = data.normal_map_enabled !== false;
   mesh.userData.normalMapYSign = Number.isFinite(data.normal_map_y_sign)

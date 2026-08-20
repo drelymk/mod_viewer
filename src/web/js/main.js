@@ -162,7 +162,9 @@ async function displayMeshPayload(payload) {
   lastToggles = controls.toggles || {};
   setStateRules(state.rules || [], state.defaults || {});
   setTextures(payload.textures);
-  buildMeshPanel(meshes, currentModPath, payload.metadata?.mesh_names || {});
+  buildMeshPanel(
+    meshes, currentModPath, payload.metadata?.mesh_names || {},
+    payload.metadata?.material_profile || null);
   buildTogglePanel(controls.toggles, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(controls.menu);
   buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });
