@@ -7,7 +7,7 @@ viewer shader.  Keeping the two tables separate prevents a transport recipe
 from silently becoming a rendering assumption.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .material_kind import MATERIAL_KINDS
 
@@ -52,6 +52,9 @@ class MaterialInterpretation:
     # channels cannot become stock PBR inputs by accident.
     normal_data_b: ChannelRef | None = None
     normal_data_a: ChannelRef | None = None
+    toon_specular_mask: ChannelRef | None = None
+    metal_route: ChannelRef | None = None
+    direct_specular_model: str | None = None
     shadow_mask: ChannelRef | None = None
     material_id: ChannelRef | None = None
     material_id_decoder: str | None = None
@@ -82,6 +85,9 @@ class MaterialInterpretation:
     wuwa_shadow_front_offset: float = 0.4
     wuwa_shadow_width: float = 0.01
     wuwa_shadow_influence: float = 1.0
+    wuwa_specular_power: float = 1.0
+    wuwa_toon_specular_cutoff: float = 0.1
+    wuwa_specular_mask_cutoff: float = 0.5
 
     def __post_init__(self):
         if self.material_kind not in MATERIAL_KINDS:
@@ -89,6 +95,9 @@ class MaterialInterpretation:
         if self.direct_shadow_model not in (None, "genshin_toon", "wuwa_base"):
             raise ValueError(
                 f"Unknown direct shadow model: {self.direct_shadow_model}")
+        if self.direct_specular_model not in (None, "wuwa_body"):
+            raise ValueError(
+                f"Unknown direct specular model: {self.direct_specular_model}")
 
     def to_metadata(self):
         result = {
@@ -101,6 +110,11 @@ class MaterialInterpretation:
                               if self.normal_data_b else None),
             "normal_data_a": (self.normal_data_a.to_metadata()
                               if self.normal_data_a else None),
+            "toon_specular_mask": (self.toon_specular_mask.to_metadata()
+                                    if self.toon_specular_mask else None),
+            "metal_route": (self.metal_route.to_metadata()
+                             if self.metal_route else None),
+            "direct_specular_model": self.direct_specular_model,
             "shadow_mask": (self.shadow_mask.to_metadata()
                             if self.shadow_mask else None),
             "material_id": (self.material_id.to_metadata()
@@ -130,6 +144,9 @@ class MaterialInterpretation:
             "wuwa_shadow_front_offset": self.wuwa_shadow_front_offset,
             "wuwa_shadow_width": self.wuwa_shadow_width,
             "wuwa_shadow_influence": self.wuwa_shadow_influence,
+            "wuwa_specular_power": self.wuwa_specular_power,
+            "wuwa_toon_specular_cutoff": self.wuwa_toon_specular_cutoff,
+            "wuwa_specular_mask_cutoff": self.wuwa_specular_mask_cutoff,
         }
         return result
 
@@ -168,8 +185,8 @@ def _base_profile_for(game, texture_api):
         )
     if game == "wuwa":
         # RabbitFX/WuWa's packed normal/material layout is retained for the
-        # shader adapter. B/A are exposed only as raw diagnostics; their
-        # material response remains deliberately unguessed in this PR.
+        # shader adapter. The conservative base keeps B/A diagnostic-only;
+        # the exact reliable body specialization adds its own response refs.
         kwargs = {
             "normal_xy": ("r", "g"),
             "normal_data_b": ChannelRef("normal_data", "b"),
@@ -190,12 +207,26 @@ def _base_profile_for(game, texture_api):
 def _specialized_profile_for(game, texture_api, material_kind):
     """Return a validated kind-specific profile, when one exists.
 
-    PR16 intentionally has no production specialized profiles yet.  Keeping
-    this hook separate makes exact-kind precedence testable and gives later
-    validated semantics one narrow insertion point.
+    Only reliable exact-kind selection reaches this hook.  The first
+    production specialization is intentionally limited to WuWa RabbitFX
+    body/cloth semantics; other kinds keep the conservative base profile.
     """
-    del game, texture_api, material_kind
-    return None
+    if (game, texture_api, material_kind) != ("wuwa", "rabbitfx", "body"):
+        return None
+    base = _base_profile_for(game, texture_api)
+    if base is None:
+        return None
+    return replace(
+        base,
+        id="wuwa:rabbitfx:body",
+        material_kind="body",
+        toon_specular_mask=ChannelRef("normal_data", "b"),
+        metal_route=ChannelRef("normal_data", "a"),
+        direct_specular_model="wuwa_body",
+        wuwa_specular_power=1.0,
+        wuwa_toon_specular_cutoff=0.1,
+        wuwa_specular_mask_cutoff=0.5,
+    )
 
 
 def _profile_for(game, texture_api, material_kind="unknown"):

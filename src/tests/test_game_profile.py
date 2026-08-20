@@ -89,6 +89,7 @@ def test_rabbitfx_settextures_maps_explicit_roles_case_insensitively():
         r"CommandList\RabbitFX\SetTextures": [
             r"Resource\RabbitFX\Diffuse = ref ResourceDiffuse",
             r"Resource\RabbitFX\Lightmap = ref ResourceLightmap",
+            r"Resource\RabbitFX\Materialmap = ref ResourceMaterialmap",
             r"Resource\RabbitFX\Normalmap = ref ResourceNormalmap",
         ],
     }
@@ -101,6 +102,9 @@ def test_rabbitfx_settextures_maps_explicit_roles_case_insensitively():
     }]
     assert info["aux_maps_at_end"]["normal_map"]["variants"] == [{
         "res": "ResourceNormalmap", "cond": [],
+    }]
+    assert info["aux_maps_at_end"]["material_map"]["variants"] == [{
+        "res": "ResourceMaterialmap", "cond": [],
     }]
 
 

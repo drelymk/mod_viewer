@@ -107,6 +107,45 @@ def test_wuwa_rabbitfx_alone_enables_validated_shadow_semantics():
     assert profile.direct_shadow_model == "wuwa_base"
 
 
+def test_wuwa_rabbitfx_body_is_the_only_first_specialized_profile():
+    body = material_profile_for("wuwa", "rabbitfx", "body")
+
+    assert body.id == "wuwa:rabbitfx:body"
+    assert body.material_kind == "body"
+    assert body.normal_data_b == ChannelRef("normal_data", "b")
+    assert body.normal_data_a == ChannelRef("normal_data", "a")
+    assert body.toon_specular_mask == ChannelRef("normal_data", "b")
+    assert body.metal_route == ChannelRef("normal_data", "a")
+    assert body.direct_specular_model == "wuwa_body"
+    assert body.metalness is None
+    assert body.gloss is None
+    assert body.specular is None
+    assert (body.wuwa_specular_power,
+            body.wuwa_toon_specular_cutoff,
+            body.wuwa_specular_mask_cutoff) == (1.0, 0.1, 0.5)
+
+    assert material_profile_for("wuwa", "rabbitfx", "hair").id == (
+        "wuwa:rabbitfx")
+    assert material_profile_for("wuwa", "rabbitfx", "face").id == (
+        "wuwa:rabbitfx")
+    assert material_profile_for("wuwa", "rabbitfx", "eye").id == (
+        "wuwa:rabbitfx")
+    assert material_profile_for("wuwa", "raw", "body").id == "wuwa:raw"
+    assert material_profile_for("unknown", "unknown", "body").id == "none"
+
+
+def test_wuwa_body_profile_serializes_explicit_non_pbr_semantics():
+    metadata = material_profile_for("wuwa", "rabbitfx", "body").to_metadata()
+
+    assert metadata["toon_specular_mask"] == {
+        "source": "normal_data", "channel": "b", "invert": False}
+    assert metadata["metal_route"] == {
+        "source": "normal_data", "channel": "a", "invert": False}
+    assert metadata["direct_specular_model"] == "wuwa_body"
+    assert metadata["metalness"] is None
+    assert metadata["specular"] is None
+
+
 def test_wuwa_shadow_tuning_is_serialized_without_genshin_reuse():
     profile = material_profile_for("wuwa", "rabbitfx")
 
@@ -136,6 +175,28 @@ def test_structured_payload_exposes_material_profile_metadata():
         "genshin_5_region")
     assert profiles["genshin:gimi"]["specular_area"] == {
         "source": "light_map", "channel": "b", "invert": False}
+
+
+def test_explicit_kind_evidence_selects_body_but_weak_hint_does_not():
+    from app.mod_loader import _assign_material_profiles
+
+    detection = GameDetection(
+        game="wuwa", runtime="rabbitfx", texture_api="rabbitfx",
+        confidence="high", scores={})
+    meshes = {
+        "Body-0": {"component": "Body"},
+        "Override-0": {"component": "Anything", "material_kind_evidence": {
+            "kind": "body", "reliable": True,
+            "reason": "viewer material-kind override",
+        }},
+    }
+
+    profiles = _assign_material_profiles(meshes, detection)
+
+    assert meshes["Body-0"]["material_profile_id"] == "wuwa:rabbitfx"
+    assert meshes["Override-0"]["material_profile_id"] == (
+        "wuwa:rabbitfx:body")
+    assert set(profiles) == {"wuwa:rabbitfx", "wuwa:rabbitfx:body"}
 
 
 def test_mesh_profiles_are_deduplicated_and_keep_kind_identity():

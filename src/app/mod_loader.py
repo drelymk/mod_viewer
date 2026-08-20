@@ -614,6 +614,11 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
                 error="No mesh data could be extracted (buffer files missing?).",
                 game=parsed.game)
 
+        # Viewer-only material choices are hydrated into the same evidence
+        # field used by the classifier.  This keeps reliable override handling
+        # in one profile-selection path and never edits the source INI.
+        from .metadata import hydrate_component_material_kinds
+        hydrate_component_material_kinds(mesh_payload, context.metadata)
         material_profiles = _assign_material_profiles(mesh_payload, parsed.game)
 
         toggles = build_toggle_panel(

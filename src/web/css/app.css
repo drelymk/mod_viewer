@@ -365,6 +365,17 @@ body.right-dock-visible .environment-control { right: 338px; }
   border-radius: 3px; font: inherit; outline: none;
 }
 
+.material-kind-control {
+  display: flex; align-items: center; gap: 5px; padding: 2px 0 2px 38px;
+  color: #8b949e; font-size: 10px;
+}
+.component-material-kind-control { margin-left: auto; padding-left: 8px; }
+.material-kind-select {
+  min-width: 78px; padding: 1px 3px; color: #cdd9e5; background: #161b22;
+  border: 1px solid #30363d; border-radius: 3px; font: inherit; cursor: pointer;
+}
+.material-kind-select:focus { border-color: #58a6ff; outline: none; }
+
 /* Per-mesh texture picker: one level deeper than .draw-item's own indent. */
 .tex-list { display: flex; flex-direction: column; gap: 2px; padding-left: 38px; margin: 2px 0 4px; }
 .tex-list.collapsed { display: none; }

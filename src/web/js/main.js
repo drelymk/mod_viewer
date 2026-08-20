@@ -166,7 +166,8 @@ async function displayMeshPayload(payload) {
   setTextures(payload.textures);
   buildMeshPanel(
     meshes, currentModPath, payload.metadata?.mesh_names || {},
-    payload.metadata?.material_profiles || {});
+    payload.metadata?.material_profiles || {},
+    { onMaterialKindChanged: reloadCurrentMod });
   buildTogglePanel(controls.toggles, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(controls.menu);
   buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });
@@ -322,9 +323,13 @@ rendererReady.then(ready => {
       kind: mesh?.userData.materialKind,
       reliable: mesh?.userData.materialKindReliable,
       reason: mesh?.userData.materialKindReason,
+      materialKindOverride: mesh?.userData.materialKindOverride || null,
+      component: mesh?.userData.component || null,
       profileId: mesh?.userData.materialProfileId,
       profile: mesh?.userData.materialProfile,
       materialIdDecoder: game?.profile?.material_id_decoder || null,
+      directShadowModel: game?.profile?.direct_shadow_model || null,
+      directSpecularModel: game?.profile?.direct_specular_model || null,
       hasMaterialId: !!game?.hasMaterialId,
       hasSpecularArea: !!game?.hasSpecularArea,
       hasShadowMask: !!game?.hasShadowMask,
@@ -333,6 +338,8 @@ rendererReady.then(ready => {
       hasNormalDataA: !!game?.hasNormalDataA,
       shadowMaskBound: !!game?.bindings?.light_map?.enabledNode?.value,
       normalDataBound: !!game?.bindings?.normal_data?.enabledNode?.value,
+      lightMapBound: !!game?.bindings?.light_map?.enabledNode?.value,
+      materialMapBound: !!game?.bindings?.material_map?.enabledNode?.value,
       supportedDebugModes: game?.supportedDebugModes || [],
       debugMode: getMaterialDebugMode(mesh?.material),
     };

@@ -26,6 +26,7 @@ MATERIAL_KINDS = frozenset({
     MATERIAL_KIND_WEAPON,
     MATERIAL_KIND_SPECIAL,
 })
+MATERIAL_KIND_OVERRIDES = frozenset(MATERIAL_KINDS - {MATERIAL_KIND_UNKNOWN})
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,14 @@ class MaterialKindDetection:
 def _normalize_kind(value):
     value = str(value or "").strip().lower()
     return value if value in MATERIAL_KINDS else None
+
+
+def normalize_material_kind(value, *, overrides_only=False):
+    """Normalize a persisted/viewer kind without treating unknown as a choice."""
+    kind = _normalize_kind(value)
+    if overrides_only and kind not in MATERIAL_KIND_OVERRIDES:
+        return None
+    return kind
 
 
 def _component_hint(value):
