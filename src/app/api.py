@@ -111,7 +111,7 @@ class ModViewerAPI:
         folder_path = self._folder(folder_path)
         return encode_texture_key(
             folder_path, tex_key,
-            texture_source=self._active_texture_source(folder_path, validate=True))
+            texture_source=self._active_texture_source(folder_path))
 
     def load_mod(self, folder_path):
         folder_path = self._folder(folder_path)

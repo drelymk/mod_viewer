@@ -144,7 +144,10 @@ def _parity_payload(uri):
     entry = payload["meshes"]["Body-Parity-0"]
     entry["drawindexed"] = [6, 0, 0]
     entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0)
-    entry["uv"] = _f32(0, 0, 1, 0, 1, 1, 0, 1)
+    # Exercise the sampler outside the nominal range so DDS and PNG transport
+    # must agree on their default clamp-to-edge wrapping.
+    entry["uv"] = _f32(-0.25, -0.25, 1.25, -0.25,
+                       1.25, 1.25, -0.25, 1.25)
     entry["idx"] = _u32(0, 1, 2, 0, 2, 3)
     payload["textures"] = {"diffuse::Parity-one.png": uri}
     return payload
@@ -402,24 +405,26 @@ def test_browser_dds_parser_and_loader_preserve_authored_mips(
               compressed: parsed.compressed,
               mipCount: parsed.mipCount,
               mipLengths: parsed.mipmaps.map(mip => mip.data.byteLength),
+              sharedMipBuffer: parsed.mipmaps[0].data.buffer === bytes.buffer,
             },
             malformed,
             loaded: {
               sameObject: loaded.stable === loaded.value,
               compressed: loaded.stable.isCompressedTexture === true,
               mipCount: loaded.stable.mipmaps.length,
+              clampWrapT: loaded.stable.wrapT === THREE.ClampToEdgeWrapping,
               authoredFilter: loaded.stable.minFilter === THREE.LinearMipmapLinearFilter,
             },
           };
         }""", encoded)
         assert state["parsed"] == {
             "formatId": "bc7_unorm", "compressed": True,
-            "mipCount": 2, "mipLengths": [32, 16],
+            "mipCount": 2, "mipLengths": [32, 16], "sharedMipBuffer": True,
         }
         assert state["malformed"]
         assert state["loaded"] == {
             "sameObject": True, "compressed": True,
-            "mipCount": 2, "authoredFilter": True,
+            "mipCount": 2, "authoredFilter": True, "clampWrapT": True,
         }
     finally:
         context.close()
