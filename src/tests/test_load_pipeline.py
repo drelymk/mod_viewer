@@ -125,12 +125,14 @@ def test_texture_registry_identity_includes_role():
         path = os.path.join(root, "shared.png")
         Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
         diffuse = encode_texture_file(root, path)
-        normal = encode_texture_file(root, path, "normal_map")
+        normal = encode_texture_file(root, path, "normal_map",
+                                     texture_profile="zzz")
         light = encode_texture_file(root, path, "light_map")
         assert (diffuse["tex_key"] == "diffuse::shared.png"
               and normal["tex_key"] == "normal_map::shared.png"
               and light["tex_key"] == "light_map::shared.png"), ("texture registry keys include their usage role")
-        assert (len({diffuse["uri"], normal["uri"], light["uri"]}) == 3), ("shared source files keep distinct role-specific encodings")
+        assert (len({diffuse["uri"], normal["uri"]}) == 2
+                and light["uri"] == diffuse["uri"]), ("shared sources use explicit profile transforms while packed LightMaps remain unchanged")
 
         with open(os.path.join(root, "p.buf"), "wb") as fh:
             fh.write(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))

@@ -22,6 +22,7 @@ from core.mesh_builder import _encode_texture, _safe_join
 from core.ini_menu import attach_menu_images
 from core.ini_health import analyze_mod
 from core.present_editor import SECTION_NAME as PRESENT_SECTION
+from core.game_profile import GameDetection, resolve_game_detection
 
 # Kept for scripts that still inspect the low-level mesh-builder result.  These
 # keys are no longer emitted by load_mod's public application payload.
@@ -42,6 +43,28 @@ class ModLoadContext:
     ini_paths: list[str]
     docs: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class ParsedModAnalysis:
+    """Named result of the shared per-INI semantic analysis pass."""
+
+    groups: list
+    toggles: dict
+    menu: dict
+    defaults: dict
+    state_rules: list
+    present: dict
+    game: GameDetection
+
+    def __iter__(self):
+        """Keep old six-value helper callers source-compatible."""
+        yield self.groups
+        yield self.toggles
+        yield self.menu
+        yield self.defaults
+        yield self.state_rules
+        yield self.present
 
 
 def _attach_shape_sliders(groups, shape_sliders):
@@ -116,6 +139,9 @@ def _parse_inis(ini_paths, folder_path, overrides=None, documents=None):
     groups = []
     toggle_keys, menu_slots, toggle_defaults, state_rules = {}, {}, {}, []
     present_infos, present_sources = [], []
+    game_evidence = []
+    runtime_evidence = []
+    texture_api_evidence = []
     multi = len(ini_paths) > 1
 
     # Shared across every ini (not reset per file): two sibling inis reusing
@@ -136,6 +162,9 @@ def _parse_inis(ini_paths, folder_path, overrides=None, documents=None):
         ini_groups = analysis.draw_groups
         shape_sliders = analysis.shapes
         state_rules.extend(analysis.state_rules)
+        game_evidence.extend(analysis.game_evidence)
+        runtime_evidence.extend(analysis.runtime_evidence)
+        texture_api_evidence.extend(analysis.texture_api_evidence)
         _attach_shape_sliders(ini_groups, shape_sliders)
         groups.extend(ini_groups)
         ini_toggles = analysis.toggles
@@ -225,7 +254,16 @@ def _parse_inis(ini_paths, folder_path, overrides=None, documents=None):
             "sync_error": sync_error,
         }
     present = {"target_inis": present_sources, "item": present_item}
-    return groups, toggle_keys, menu_slots, toggle_defaults, state_rules, present
+    return ParsedModAnalysis(
+        groups=groups,
+        toggles=toggle_keys,
+        menu=menu_slots,
+        defaults=toggle_defaults,
+        state_rules=state_rules,
+        present=present,
+        game=resolve_game_detection(
+            game_evidence, runtime_evidence, texture_api_evidence),
+    )
 
 
 def _gating_vars(payload):
@@ -444,7 +482,7 @@ def _failure_health(context, overrides):
 
 def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
                         present=None, state_rules=None, state_defaults=None,
-                        health=None, error=None):
+                        health=None, error=None, game=None):
     """Create the stable application-to-frontend payload shape."""
     payload = {
         "meshes": meshes or {},
@@ -462,6 +500,8 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
         "metadata": {"mesh_names": {}},
         "health": health,
     }
+    if game is not None:
+        payload["metadata"]["game"] = game.to_metadata()
     if error:
         payload["error"] = error
     return payload
@@ -481,8 +521,9 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
     (edit_session.new_sections_for), passed through to build_toggle_panel so
     a freshly-added, not-yet-wired toggle stays visible.
 
-    `texture_source`, if supplied, receives each resolved model texture path and
-    role and returns its application-facing URI. Without it, direct callers
+    `texture_source`, if supplied, receives each resolved model texture path,
+    role and explicit transform and returns its application-facing URI.
+    Legacy two-argument callbacks remain supported. Without it, direct callers
     retain the eager data-URI compatibility path.
 
     Errors are returned as {"error": ...} rather than raised, since this is
@@ -512,24 +553,32 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             error="No active .ini files found in this folder.")
 
     try:
-        groups, toggle_keys, menu_slots, toggle_defaults, state_rules, present = _parse_inis(
-            ini_paths, folder_path, overrides, documents)
+        parsed = _parse_inis(ini_paths, folder_path, overrides, documents)
+        groups = parsed.groups
+        toggle_keys = parsed.toggles
+        menu_slots = parsed.menu
+        toggle_defaults = parsed.defaults
+        state_rules = parsed.state_rules
+        present = parsed.present
         if not groups:
             health = _failure_health(context, overrides)
             return _structured_payload(
                 health=health,
-                error=f"No mesh geometry found across {len(ini_paths)} ini file(s).")
+                error=f"No mesh geometry found across {len(ini_paths)} ini file(s).",
+                game=parsed.game)
 
         built = build_mesh_result(
             groups, folder_path, geometry=geometry,
-            texture_source=texture_source)
+            texture_source=texture_source,
+            game_profile=parsed.game.game)
         mesh_payload = built.meshes
         textures = built.textures
         if not mesh_payload:
             health = _failure_health(context, overrides)
             return _structured_payload(
                 health=health,
-                error="No mesh data could be extracted (buffer files missing?).")
+                error="No mesh data could be extracted (buffer files missing?).",
+                game=parsed.game)
 
         toggles = build_toggle_panel(
             toggle_keys, toggle_defaults, _gating_vars(mesh_payload), folder_path,
@@ -538,7 +587,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         return _structured_payload(
             meshes=mesh_payload, textures=textures, toggles=toggles, menu=menu,
             present=present, state_rules=state_rules,
-            state_defaults=toggle_defaults)
+            state_defaults=toggle_defaults, game=parsed.game)
     except Exception:
         traceback.print_exc()
         health = _failure_health(context, overrides)

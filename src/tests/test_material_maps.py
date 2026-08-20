@@ -1,12 +1,14 @@
 """Diffuse, normal, light, and material-map resolution regressions."""
 
 import os
+import io
 import struct
 import tempfile
 
 from core import ini_parser
 from core.ini_parser import build_draw_groups, extract_resources, merge_sections, parse_sections
-from core.mesh_builder import encode_texture_file, _extract_light_mask, _reconstruct_normal_z
+from core.mesh_builder import (encode_texture_file, _reconstruct_normal_z,
+                               _render_texture_png)
 from _provenance_support import (DIFFUSE_NO_REF_INI, build_mesh_fixture,
                                  geometry_values, texture_file, visible, write)
 
@@ -123,10 +125,19 @@ def test_two_channel_normal_reconstructs_z():
     assert (127 <= pixels[1][2] <= 129), (f"a full-strength X normal reconstructs a near-zero Z (got {pixels[1]})")
 
 
-def test_packed_light_map_uses_blue_mask_without_colour_cast():
+def test_packed_light_map_is_passthrough_unless_a_channel_recipe_is_explicit():
     from PIL import Image
-    source = Image.new("RGB", (1, 1), (210, 12, 94))
-    assert (_extract_light_mask(source).getpixel((0, 0)) == (94, 94, 94)), ("packed LightMap blue is exposed as a neutral scalar mask")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "packed.png")
+        source = Image.new("RGB", (1, 1), (210, 12, 94))
+        source.save(path)
+        packed = Image.open(io.BytesIO(_render_texture_png(
+            path, texture_role="light_map")))
+        derived = Image.open(io.BytesIO(_render_texture_png(
+            path, texture_role="light_map", texture_transform="channel_b")))
+
+    assert packed.getpixel((0, 0)) == (210, 12, 94)
+    assert derived.getpixel((0, 0)) == (94, 94, 94)
 
 
 DIFFUSE_SWAP_INI = """[Constants]

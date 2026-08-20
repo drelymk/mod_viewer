@@ -120,11 +120,14 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
 - Authored `NormalMap`, `LightMap` and `MaterialMap` assignments follow the
   same per-draw execution-order model, including conditional variants and a
   no-map fallback for a conditional-only assignment. They are INI-driven only;
-  manual texture pools remain diffuse-only. Two-channel normal maps have Z
-  reconstructed during encoding and Three.js flips their DirectX Y axis.
-  Packed LightMaps are used only as scalar AO (never RGB light, which causes a
-  red cast). MaterialMaps remain loaded and toggle-aware but are not guessed
-  into incompatible standard PBR channels without known shader semantics.
+  manual texture pools remain diffuse-only. The detected profile chooses
+  explicit image transforms and normal-map Y orientation; two-channel normal
+  maps may have Z reconstructed during encoding.
+  LightMaps remain packed game data and are retained as toggle-aware keys but
+  are not bound to Three.js AO or RGB light inputs. MaterialMaps remain loaded
+  and toggle-aware but are not guessed into incompatible standard PBR channels
+  without known shader semantics. A future validated AO derivation must use an
+  explicit occlusion role.
 - A section with an `ib` but no `drawindexed` uses a synthetic whole-buffer
   draw. It inherits `diffuse_variants_at_end`; do not discard a section’s final
   diffuse. A real draw before the first diffuse legitimately remains untextured.

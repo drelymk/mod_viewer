@@ -185,6 +185,34 @@ def test_publication_deduplicates_by_role_and_invalidates_old_load(tmp_path):
     assert server._lookup_texture(replacement.token, "0").path == str(path)
 
 
+def test_publication_deduplicates_same_transform_but_separates_transforms(tmp_path):
+    path = tmp_path / "packed.png"
+    Image.new("RGB", (1, 1), (210, 12, 94)).save(path)
+    publication = server.begin_texture_publication(str(tmp_path))
+
+    packed = publication.register(
+        str(path), "light_map", transform="passthrough")
+    packed_again = publication.register(
+        str(path), "light_map", transform="passthrough")
+    blue_mask = publication.register(
+        str(path), "light_map", transform="channel_b")
+
+    assert packed == packed_again
+    assert blue_mask != packed
+    assert server._lookup_texture(publication.token, "0").transform == "passthrough"
+    assert server._lookup_texture(publication.token, "1").transform == "channel_b"
+
+
+def test_publication_profile_selects_manual_normal_recipe(tmp_path):
+    path = tmp_path / "normal.png"
+    Image.new("RGB", (1, 1), (128, 128, 0)).save(path)
+    publication = server.begin_texture_publication(str(tmp_path))
+    publication.set_game_profile("zzz")
+    publication.register(str(path), "normal_map")
+    assert server._lookup_texture(publication.token, "0").transform == (
+        "normal_xy_reconstruct")
+
+
 def test_explicit_manual_validation_rejects_invalid_image(tmp_path):
     invalid = tmp_path / "broken.dds"
     invalid.write_bytes(b"not an image")

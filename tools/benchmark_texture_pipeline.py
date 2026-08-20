@@ -38,7 +38,7 @@ _PROFILE_STAGES = (
     "rgb_rgba_conversion",
     "resize",
     "normal_z_reconstruction",
-    "light_mask_extraction",
+    "channel_mask_extraction",
     "png_encoding",
 )
 
@@ -67,7 +67,7 @@ class TextureProfiler:
     @staticmethod
     def _identities(events, stage):
         return {
-            (event.get("path"), event.get("role"))
+            (event.get("path"), event.get("role"), event.get("transform"))
             for event in events if event["stage"] == stage
         }
 

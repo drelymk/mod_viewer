@@ -41,8 +41,9 @@ class ModViewerAPI:
         if not validate:
             return publication.register
 
-        def register(path, role=None):
-            return publication.register(path, role, validate=True)
+        def register(path, role=None, transform=None):
+            return publication.register(
+                path, role, validate=True, transform=transform)
 
         return register
 
@@ -110,9 +111,12 @@ class ModViewerAPI:
             saved_metadata = context.metadata
             result.setdefault("metadata", {})["mesh_names"] = \
                 saved_metadata.get("mesh_names", {})
+            game_metadata = result.get("metadata", {}).get("game", {})
+            publication.set_game_profile(game_metadata.get("id"))
             metadata.hydrate_textures(
                 folder_path, result, saved_metadata,
-                texture_source=publication.register)
+                texture_source=publication.register,
+                texture_profile=game_metadata.get("id"))
             controls = result.setdefault("controls", {})
             metadata.hydrate_present(folder_path, controls.get("present"),
                                       saved_metadata)

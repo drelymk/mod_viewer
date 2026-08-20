@@ -24,7 +24,9 @@ import threading
 import uuid
 from dataclasses import dataclass
 
-from core.mesh_builder import _render_texture_png, normalize_texture_role
+from core.mesh_builder import (_render_texture_png, normalize_texture_role,
+                               normalize_texture_transform)
+from core.texture_profiles import texture_profile_for
 from . import features, paths
 
 THREE_VERSION = "0.165.0"
@@ -52,6 +54,7 @@ class TextureSource:
     role: str = "diffuse"
     max_size: int = 2048
     preserve_alpha: bool = False
+    transform: str = "passthrough"
 
 
 class TexturePublication:
@@ -64,9 +67,15 @@ class TexturePublication:
         self._sources = {}
         self._dedupe = {}
         self._state = "pending"
+        self.game_profile = "unknown"
+
+    def set_game_profile(self, game):
+        """Set the default recipe used by later manual texture requests."""
+        self.game_profile = texture_profile_for(game).name
+        return self.game_profile
 
     def register(self, path, role=None, max_size=2048, preserve_alpha=False,
-                 validate=False):
+                 validate=False, transform=None):
         """Publish a source once and return its opaque same-origin URL.
 
         The caller has already resolved the path through the core sandbox. The
@@ -82,6 +91,9 @@ class TexturePublication:
         if not os.path.isfile(path):
             return None
         role = normalize_texture_role(role)
+        if transform is None:
+            transform = texture_profile_for(self.game_profile).recipe_for(role)
+        transform = normalize_texture_transform(transform)
         try:
             max_size = int(max_size)
         except (TypeError, ValueError):
@@ -89,7 +101,8 @@ class TexturePublication:
         if max_size <= 0:
             return None
         preserve_alpha = bool(preserve_alpha)
-        dedupe_key = (os.path.normcase(path), role, max_size, preserve_alpha)
+        dedupe_key = (os.path.normcase(path), role, max_size, preserve_alpha,
+                      transform)
         existing_source = None
         with _texture_lock:
             if (_texture_publications.get(self.token) is not self
@@ -103,7 +116,7 @@ class TexturePublication:
 
         source = existing_source or TextureSource(
             path=path, role=role, max_size=max_size,
-            preserve_alpha=preserve_alpha)
+            preserve_alpha=preserve_alpha, transform=transform)
         if validate and _render_texture_source(source) is None:
             return None
 
@@ -179,6 +192,7 @@ def _render_texture_source(source):
             max_size=source.max_size,
             preserve_alpha=source.preserve_alpha,
             texture_role=source.role,
+            texture_transform=source.transform,
         )
 
 
@@ -192,6 +206,7 @@ def _render_texture_request(token, source_id, source):
             max_size=source.max_size,
             preserve_alpha=source.preserve_alpha,
             texture_role=source.role,
+            texture_transform=source.transform,
         )
 
 
