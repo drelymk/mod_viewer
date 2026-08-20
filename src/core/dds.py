@@ -108,9 +108,9 @@ def _inspect_header(header):
             return None
         if _u32(header, 132) != _D3D10_RESOURCE_DIMENSION_TEXTURE2D:
             return None
-        if _u32(header, 136) != 1:
+        if _u32(header, 140) != 1:
             return None
-        if _u32(header, 140) & _D3D10_RESOURCE_MISC_TEXTURECUBE:
+        if _u32(header, 136) & _D3D10_RESOURCE_MISC_TEXTURECUBE:
             return None
         return _info(width, height, mip_count, format_name)
 

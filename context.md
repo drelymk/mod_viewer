@@ -360,7 +360,9 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   sRGB and every auxiliary role is non-color data regardless of a DDS SRGB
   tag. WuWa `normal_map` remains transformed PNG and `normal_data` may use
   native DDS. BC WebGPU support is optional and must never make WebGPU startup
-  fail.
+  fail. Compressed DDS uses one shared texture-matrix vertical convention so
+  direct and PNG fallback renders have matching orientation for every role;
+  this is transport behavior, not a game/material branch.
 
 - INI Diagnostics is read-only and survives geometry failure. Analyze staged
   text when present; attach `health` even to error payloads. A health failure

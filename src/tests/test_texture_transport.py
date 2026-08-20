@@ -54,7 +54,7 @@ def _write_bc7_dds(path, width=4, height=4):
     struct.pack_into("<II", data, 12, height, width)
     struct.pack_into("<I", data, 76, 32)
     struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DX10", "little"))
-    struct.pack_into("<IIIII", data, 128, 98, 3, 1, 0, 0)
+    struct.pack_into("<IIIII", data, 128, 98, 3, 0, 1, 0)
     data.extend(bytes(((width + 3) // 4) * ((height + 3) // 4) * 16))
     path.write_bytes(data)
 

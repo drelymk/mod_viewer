@@ -69,7 +69,7 @@ def _bc7_dds_bytes(width=8, height=4, mip_count=2):
     struct.pack_into("<I", data, 28, mip_count)
     struct.pack_into("<I", data, 76, 32)
     struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DX10", "little"))
-    struct.pack_into("<IIIII", data, 128, 98, 3, 1, 0, 0)
+    struct.pack_into("<IIIII", data, 128, 98, 3, 0, 1, 0)
     w, h = width, height
     for level in range(mip_count):
         data.extend(bytes([level + 1]) * (((w + 3) // 4) * ((h + 3) // 4) * 16))
@@ -125,6 +125,29 @@ def _payload(label="A"):
         "metadata": {"mesh_names": {}, "material_profiles": {}},
         "health": {"summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
     }
+
+
+def _dxt1_vertical_gradient():
+    """One DXT1 block with red top rows and blue bottom rows."""
+    data = bytearray(136)
+    data[:4] = b"DDS "
+    struct.pack_into("<I", data, 4, 124)
+    struct.pack_into("<II", data, 12, 4, 4)
+    struct.pack_into("<I", data, 76, 32)
+    struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DXT1", "little"))
+    struct.pack_into("<HHI", data, 128, 0xF800, 0x001F, 0x55550000)
+    return bytes(data)
+
+
+def _parity_payload(uri):
+    payload = _payload("Parity")
+    entry = payload["meshes"]["Body-Parity-0"]
+    entry["drawindexed"] = [6, 0, 0]
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0)
+    entry["uv"] = _f32(0, 0, 1, 0, 1, 1, 0, 1)
+    entry["idx"] = _u32(0, 1, 2, 0, 2, 3)
+    payload["textures"] = {"diffuse::Parity-one.png": uri}
+    return payload
 
 
 def _packed_material_payload(profile_id="zzz:zzmi"):
@@ -435,6 +458,113 @@ def test_eligible_dds_uses_stable_compressed_texture_when_bc_is_available(
         assert state["version"] == state["beforeVersion"]
         assert state["colorSpace"] == "srgb"
         assert state["compressed"] is state["bc"]
+    finally:
+        context.close()
+
+
+def test_direct_dds_matches_png_orientation_and_diffuse_color(
+        edge_browser, frontend_url, tmp_path):
+    dds_path = tmp_path / "orientation.dds"
+    dds_path.write_bytes(_dxt1_vertical_gradient())
+    publication = server.begin_texture_publication(str(tmp_path))
+    dds_url = publication.register(str(dds_path))
+    publication.commit()
+    png_url = dds_url[:-4] + ".png"
+    payload = _parity_payload(dds_url)
+    context, page = _page(edge_browser, frontend_url, {"Parity": payload})
+    try:
+        _open(page, "Parity")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.map?.image?.width === 4")
+        page.wait_for_timeout(250)
+        direct_pixels = [
+            _sample_mesh_pixel_at(page, 0, 0.65),
+            _sample_mesh_pixel_at(page, 0, -0.65),
+        ]
+
+        page.evaluate("""async ({key, uri}) => {
+          const {refreshMeshTexture, setTextures} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setTextures({[key]: uri});
+          refreshMeshTexture(mesh);
+        }""", {"key": "diffuse::Parity-one.png", "uri": png_url})
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.map?.image?.width === 4"
+            " && window.modViewer.activeMeshes[0]?.material?.map?.isCompressedTexture !== true")
+        page.wait_for_timeout(250)
+        png_pixels = [
+            _sample_mesh_pixel_at(page, 0, 0.65),
+            _sample_mesh_pixel_at(page, 0, -0.65),
+        ]
+
+        assert all(
+            max(abs(left - right) for left, right in zip(direct, fallback)) <= 40
+            for direct, fallback in zip(direct_pixels, png_pixels)), (
+                direct_pixels, png_pixels)
+        assert direct_pixels[0] != direct_pixels[1]
+        assert png_pixels[0] != png_pixels[1]
+    finally:
+        context.close()
+
+
+def test_direct_dds_matches_png_for_non_color_packed_channel(
+        edge_browser, frontend_url, tmp_path):
+    dds_path = tmp_path / "packed.dds"
+    dds_path.write_bytes(_dxt1_vertical_gradient())
+    publication = server.begin_texture_publication(str(tmp_path))
+    dds_url = publication.register(str(dds_path), "normal_data")
+    publication.commit()
+    png_url = dds_url[:-4] + ".png"
+    normal_key = "normal_data::Packed-normal.png"
+    payload = _packed_material_payload("wuwa:raw")
+    payload["textures"][normal_key] = dds_url
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
+        page.evaluate("window.modViewer.setMaterialDebugMode('normal-data-b')")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial"
+            ".bindings.normal_data.enabledNode.value === true")
+        page.wait_for_timeout(250)
+        direct = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const texture = window.modViewer.activeMeshes[0].material.userData
+            .gameMaterial.bindings.normal_data.textureNode.value;
+          return {noColorSpace: texture.colorSpace === THREE.NoColorSpace,
+            compressed: texture.isCompressedTexture === true};
+        }""")
+        direct_pixels = [_sample_mesh_pixel(page)]
+
+        png_textures = dict(payload["textures"])
+        png_textures[normal_key] = png_url
+        page.evaluate("""async textures => {
+          const {refreshMeshTexture, setTextures} = await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setTextures(textures);
+          refreshMeshTexture(mesh);
+        }""", png_textures)
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial"
+            ".bindings.normal_data.textureNode.value.image?.width === 4"
+            " && window.modViewer.activeMeshes[0].material.userData.gameMaterial"
+            ".bindings.normal_data.textureNode.value.isCompressedTexture !== true")
+        page.wait_for_timeout(250)
+        png = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const texture = window.modViewer.activeMeshes[0].material.userData
+            .gameMaterial.bindings.normal_data.textureNode.value;
+          return {colorSpace: texture.colorSpace,
+            noColorSpace: texture.colorSpace === THREE.NoColorSpace};
+        }""")
+        png_pixels = [_sample_mesh_pixel(page)]
+
+        assert direct == {"noColorSpace": True, "compressed": True}
+        assert png["noColorSpace"]
+        assert max(abs(left - right)
+                   for left, right in zip(direct_pixels[0], png_pixels[0])) <= 40, (
+            direct_pixels, png_pixels)
     finally:
         context.close()
 

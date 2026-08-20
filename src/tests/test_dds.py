@@ -45,7 +45,7 @@ def _dds(width=4, height=4, format_name="bc7_unorm", mip_count=1,
     if is_dx10:
         struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DX10", "little"))
         struct.pack_into("<IIIII", data, 128, _DXGI[format_name], 3,
-                         array_size, 4 if cube else 0, 0)
+                         4 if cube else 0, array_size, 0)
     elif compressed:
         legacy_code = next(code for code, value in _LEGACY.items()
                            if value == format_name)
@@ -124,3 +124,13 @@ def test_typeless_dxgi_is_rejected(tmp_path):
     struct.pack_into("<I", data, 128, 97)  # BC7 typeless
     path.write_bytes(data)
     assert inspect_dds(path) is None
+
+
+def test_ordinary_dx10_header_uses_zero_misc_flag_and_one_array(tmp_path):
+    path = tmp_path / "ordinary.dds"
+    path.write_bytes(_dds(format_name="bc7_unorm"))
+    raw = path.read_bytes()
+
+    assert struct.unpack_from("<I", raw, 136)[0] == 0
+    assert struct.unpack_from("<I", raw, 140)[0] == 1
+    assert native_dds_info(path) is not None

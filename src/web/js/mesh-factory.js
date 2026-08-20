@@ -80,6 +80,17 @@ function trackTextureUser(mesh, cacheKey) {
   users.add(mesh);
 }
 
+function enableTextureTransforms(mesh) {
+  // Material-profile bindings pass an explicit UV node to TSL, which disables
+  // TextureNode's matrix path by default. Native DDS needs one transport-wide
+  // vertical transform for orientation parity; identity matrices keep PNG
+  // and data-URI textures unchanged.
+  const bindings = mesh.material?.userData?.gameMaterial?.bindings;
+  for (const binding of Object.values(bindings || {})) {
+    binding.textureNode.setUpdateMatrix?.(true);
+  }
+}
+
 function handleTextureError(cacheKey, texture, resolved, uri) {
   // A manual replacement or a newer model may have evicted this request
   // before the browser reported its failure. Do not mark the replacement as
@@ -185,6 +196,7 @@ export function refreshMeshTexture(mesh) {
     normal_data: normalData, light_map: lightMap, material_map: materialMap,
     normal_map_y_sign: mesh.userData.normalMapYSign ?? -1,
   });
+  enableTextureTransforms(mesh);
   const stockChanged = map !== mesh.material.map
     || normalMap !== mesh.material.normalMap
     || aoMap !== mesh.material.aoMap;

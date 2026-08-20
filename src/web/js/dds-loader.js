@@ -94,8 +94,8 @@ function readFormat(view) {
     const dxgi = view.getUint32(128, true);
     const format = DXGI_FORMATS.get(dxgi);
     if (!format || view.getUint32(132, true) !== RESOURCE_DIMENSION_TEXTURE2D
-        || view.getUint32(136, true) !== 1
-        || (view.getUint32(140, true) & RESOURCE_MISC_TEXTURECUBE)) {
+        || view.getUint32(140, true) !== 1
+        || (view.getUint32(136, true) & RESOURCE_MISC_TEXTURECUBE)) {
       fail('unsupported DX10 resource');
     }
     return { width, height, mipCount: mipCountValue, format, dataOffset: 148 };
@@ -175,6 +175,19 @@ export function parseDDS(input) {
   };
 }
 
+function setDDSOrientation(texture, compressed) {
+  texture.flipY = compressed ? false : true;
+  if (compressed) {
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.y = -1;
+    texture.offset.y = 1;
+  } else {
+    texture.repeat.set(1, 1);
+    texture.offset.set(0, 0);
+  }
+  texture.updateMatrix();
+}
+
 function applyParsedTexture(texture, parsed) {
   texture.mipmaps = parsed.mipmaps;
   texture.image = parsed.compressed
@@ -182,7 +195,11 @@ function applyParsedTexture(texture, parsed) {
     : parsed.mipmaps[0];
   texture.format = parsed.format;
   texture.generateMipmaps = false;
-  texture.flipY = parsed.compressed ? false : true;
+  // DDS payload rows use the opposite convention from TextureLoader's
+  // browser image upload. Compressed uploads cannot use Three's flipY upload
+  // path, so express the same vertical inversion in the shared texture
+  // transform instead of branching on material role or game.
+  setDDSOrientation(texture, parsed.compressed);
   texture.minFilter = parsed.mipCount === 1
     ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
   texture.isCompressedTexture = parsed.compressed;
@@ -195,6 +212,10 @@ export function loadDDSTexture(url, onLoad, onError) {
   // before the network request completes and a failed DDS can be evicted once.
   const texture = new THREE.CompressedTexture(
     [], 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+  // The placeholder is bound before fetch resolves, so its matrix must carry
+  // the eventual compressed-texture orientation when the material graph is
+  // first compiled.
+  setDDSOrientation(texture, true);
   fetch(url).then(response => {
     if (!response.ok) throw new Error(`DDS request failed (${response.status})`);
     return response.arrayBuffer();
