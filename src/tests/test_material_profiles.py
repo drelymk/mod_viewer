@@ -96,7 +96,6 @@ def test_wuwa_keeps_normal_data_available_for_raw_or_unknown_api():
         assert profile.shadow_mask is None
         assert profile.direct_shadow_model is None
         assert profile.metalness is None
-        assert profile.gloss is None
         assert profile.specular is None
 
 
@@ -129,7 +128,6 @@ def test_wuwa_rabbitfx_body_is_the_only_first_specialized_profile():
     assert body.metal_route == ChannelRef("normal_data", "a")
     assert body.direct_specular_model == "wuwa_body"
     assert body.metalness is None
-    assert body.gloss is None
     assert body.specular is None
     assert (body.wuwa_specular_power,
             body.wuwa_toon_specular_cutoff,

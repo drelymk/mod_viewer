@@ -3,6 +3,7 @@
 // per component, one checkbox per draw call within it.
 
 import { buildMesh, hasTexture } from './mesh-factory.js';
+import { isGameMaterialTextureBound } from './material-profile.js';
 import {
   activeMeshes, addMesh, applyMeshVisibility, setManualTexOverride,
 } from './mesh-state.js';
@@ -375,7 +376,8 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
  * same on/off visual language as #texture-btn/#wire-btn in app.css. */
 function updateTexButtonState(texBtn, itemObjs) {
   if (!texBtn) return;
-  texBtn.classList.toggle('active', itemObjs.some(m => !!m.material.map));
+  texBtn.classList.toggle('active', itemObjs.some(mesh =>
+    isGameMaterialTextureBound(mesh.material, 'diffuse')));
 }
 
 /** Build the panel and add every mesh in the mesh map to the scene. `modPath`

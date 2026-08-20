@@ -221,7 +221,7 @@ def test_publication_deduplicates_by_role_and_invalidates_old_load(tmp_path):
     assert server._lookup_texture(replacement.token, "0").path == str(path)
 
 
-def test_publication_deduplicates_same_transform_but_separates_transforms(tmp_path):
+def test_publication_normalizes_removed_channel_transform_to_passthrough(tmp_path):
     path = tmp_path / "packed.png"
     Image.new("RGB", (1, 1), (210, 12, 94)).save(path)
     publication = server.begin_texture_publication(str(tmp_path))
@@ -230,13 +230,12 @@ def test_publication_deduplicates_same_transform_but_separates_transforms(tmp_pa
         str(path), "light_map", transform="passthrough")
     packed_again = publication.register(
         str(path), "light_map", transform="passthrough")
-    blue_mask = publication.register(
+    legacy_transform = publication.register(
         str(path), "light_map", transform="channel_b")
 
     assert packed == packed_again
-    assert blue_mask != packed
+    assert legacy_transform == packed
     assert server._lookup_texture(publication.token, "0").transform == "passthrough"
-    assert server._lookup_texture(publication.token, "1").transform == "channel_b"
 
 
 def test_publication_profile_selects_manual_normal_recipe(tmp_path):
@@ -269,6 +268,8 @@ def test_wuwa_manual_normal_pick_publishes_only_raw_source(tmp_path):
     assert result["tex_key"] == "normal_data::normal.png"
     assert result["role"] == "normal_data"
     assert "normal_data_key" not in result
+    assert "normal_data_file" not in result
+    assert "normal_data_uri" not in result
     assert server._lookup_texture(publication.token, "0").transform == (
         "passthrough")
 

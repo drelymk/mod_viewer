@@ -38,7 +38,6 @@ _PROFILE_STAGES = (
     "rgb_rgba_conversion",
     "resize",
     "normal_z_reconstruction",
-    "channel_mask_extraction",
     "png_encoding",
 )
 

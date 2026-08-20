@@ -14,9 +14,6 @@ class TextureProfile:
     name: str
     normal_y_sign: int
     bind_normal_map: bool
-    bind_light_map: bool = False
-    bind_material_map: bool = False
-    retain_normal_data: bool = False
     # The user-facing NormalMap assignment may be transported either as the
     # stock derived RGB normal or as the intact authored packed source.  Keep
     # this decision with the detected profile so callers do not grow game
@@ -46,8 +43,7 @@ _PROFILES = {
     "genshin": TextureProfile("genshin", -1, True),
     "zzz": TextureProfile("zzz", -1, True),
     "wuwa": TextureProfile(
-        "wuwa", -1, False, retain_normal_data=True,
-        normal_transport_role="normal_data"),
+        "wuwa", -1, False, normal_transport_role="normal_data"),
     # SRMI/HSR texture semantics are intentionally conservative until the
     # runtime's packed normal/material layout is modeled explicitly.
     "hsr": TextureProfile("hsr", 1, False),

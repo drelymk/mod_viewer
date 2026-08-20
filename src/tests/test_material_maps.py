@@ -7,8 +7,8 @@ import tempfile
 
 from core import ini_parser
 from core.ini_parser import build_draw_groups, extract_resources, merge_sections, parse_sections
-from core.mesh_builder import (encode_texture_file, _reconstruct_normal_z,
-                               _render_texture_png)
+from core.mesh_builder import (TEXTURE_TRANSFORMS, encode_texture_file,
+                               _reconstruct_normal_z, _render_texture_png)
 from _provenance_support import (DIFFUSE_NO_REF_INI, build_mesh_fixture,
                                  geometry_values, texture_file, visible, write)
 
@@ -125,7 +125,7 @@ def test_two_channel_normal_reconstructs_z():
     assert (127 <= pixels[1][2] <= 129), (f"a full-strength X normal reconstructs a near-zero Z (got {pixels[1]})")
 
 
-def test_packed_light_map_is_passthrough_unless_a_channel_recipe_is_explicit():
+def test_packed_light_map_passthrough_preserves_authored_rgb():
     from PIL import Image
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "packed.png")
@@ -133,15 +133,16 @@ def test_packed_light_map_is_passthrough_unless_a_channel_recipe_is_explicit():
         source.save(path)
         packed = Image.open(io.BytesIO(_render_texture_png(
             path, texture_role="light_map")))
-        derived = Image.open(io.BytesIO(_render_texture_png(
-            path, texture_role="light_map", texture_transform="channel_b")))
 
     assert packed.mode == "RGBA"
     assert packed.getpixel((0, 0)) == (210, 12, 94, 255)
-    assert derived.getpixel((0, 0)) == (94, 94, 94)
 
 
-def test_packed_passthrough_preserves_rgba_for_channel_extraction():
+def test_texture_transforms_only_keep_live_production_recipes():
+    assert TEXTURE_TRANSFORMS == ("passthrough", "normal_xy_reconstruct")
+
+
+def test_packed_passthrough_preserves_rgba():
     from PIL import Image
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "packed-rgba.png")
@@ -150,18 +151,13 @@ def test_packed_passthrough_preserves_rgba_for_channel_extraction():
             path, texture_role="diffuse", texture_transform="passthrough")))
         packed = Image.open(io.BytesIO(_render_texture_png(
             path, texture_role="light_map", texture_transform="passthrough")))
-        alpha = Image.open(io.BytesIO(_render_texture_png(
-            path, texture_role="material_map", texture_transform="channel_a")))
         diffuse.load()
         packed.load()
-        alpha.load()
 
     assert diffuse.mode == "RGB"
     assert diffuse.getpixel((0, 0)) == (10, 20, 30)
     assert packed.mode == "RGBA"
     assert packed.getpixel((0, 0)) == (10, 20, 30, 40)
-    assert alpha.mode == "RGB"
-    assert alpha.getpixel((0, 0)) == (40, 40, 40)
 
 
 DIFFUSE_SWAP_INI = """[Constants]

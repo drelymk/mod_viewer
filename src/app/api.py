@@ -83,27 +83,6 @@ class ModViewerAPI:
         encoded = encode_texture_file(
             folder_path, result[0], transport_role,
             texture_source=texture_source, texture_profile=profile)
-        if encoded.get("error") or texture_role != "normal_map":
-            return encoded
-
-        # A packed-normal transport is already the complete authored source;
-        # do not publish a derived normal or pair a second registry entry with
-        # the manual selection.  The UI still presents this as NormalMap.
-        if transport_role == "normal_data":
-            return encoded
-
-        # Profiles that retain an authored source alongside a derived stock
-        # normal continue to receive the old paired representation.
-        if not profile.retain_normal_data:
-            return encoded
-        raw = encode_texture_file(
-            folder_path, result[0], "normal_data",
-            texture_source=texture_source, texture_profile=profile)
-        if raw.get("error"):
-            return raw
-        encoded["normal_data_key"] = raw["tex_key"]
-        encoded["normal_data_file"] = raw["file"]
-        encoded["normal_data_uri"] = raw["uri"]
         return encoded
 
     def load_texture_file(self, folder_path, tex_key):

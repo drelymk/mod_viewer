@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { decodeF32, decodeU32 } from './decode.js';
 import {
   createGameMaterial, getGameMaterialSources, updateGameMaterialTextures,
+  usesPackedNormal,
 } from './material-profile.js';
 import { getMeshView } from './mesh-view-bindings.js';
 import { loadDDSTexture } from './dds-loader.js';
@@ -78,18 +79,6 @@ function trackTextureUser(mesh, cacheKey) {
     textureUsers.set(cacheKey, users);
   }
   users.add(mesh);
-}
-
-function usesPackedNormal(mesh) {
-  return mesh.material?.userData?.gameMaterial?.normalSource === 'normal_data';
-}
-
-function normalDataKey(key) {
-  if (!key) return null;
-  const separator = String(key).indexOf('::');
-  const relative = separator === -1
-    ? String(key) : String(key).slice(separator + 2);
-  return `normal_data::${relative}`;
 }
 
 function handleTextureError(cacheKey, texture, resolved, uri) {
@@ -191,33 +180,13 @@ export function refreshMeshTexture(mesh) {
     ? getTexture(mesh, mesh.userData.lightMapKey, 'light_map') : null;
   const materialMap = usePackedSource('material_map')
     ? getTexture(mesh, mesh.userData.materialMapKey, 'material_map') : null;
-  const aoMap = showMaterialMaps
-    ? getTexture(mesh, mesh.userData.aoMapKey, 'occlusion_map') : null;
-  const packedChanged = updateGameMaterialTextures(mesh, {
+  const changed = updateGameMaterialTextures(mesh, {
     diffuse: map,
     normal_map: normalMap,
-    ao_map: aoMap,
     normal_data: normalData, light_map: lightMap, material_map: materialMap,
     normal_map_y_sign: mesh.userData.normalMapYSign ?? -1,
   });
-  const stockChanged = map !== mesh.material.map
-    || normalMap !== mesh.material.normalMap
-    || aoMap !== mesh.material.aoMap;
-  if (!stockChanged && !packedChanged) return;
-  if (stockChanged) {
-    mesh.material.map = map;
-    mesh.material.normalMap = normalMap;
-    mesh.material.normalScale.set(
-      1, normalMap ? (mesh.userData.normalMapYSign ?? -1) : 1);
-    mesh.material.aoMap = aoMap;
-    mesh.material.aoMapIntensity = 1.0;
-    mesh.material.lightMap = null;
-    mesh.material.roughnessMap = null;
-    mesh.material.metalnessMap = null;
-    mesh.material.roughness = 1;
-    mesh.material.metalness = 0;
-    mesh.material.color.setHex(map ? 0xffffff : mesh.userData.fallbackColor);
-  }
+  if (!changed) return;
   getMeshView(mesh)?.onTextureChanged?.();
 }
 
@@ -225,36 +194,13 @@ export function setTextureMode(mode) {
   textureMode = mode;
 }
 
-/** Swap a mesh's diffuse map to another registry entry (a texture-swap toggle). */
-export function setMeshTexture(mesh, texKey) {
-  mesh.userData.texKey = texKey;
-  refreshMeshTexture(mesh);
-}
-
-/** Apply the INI-resolved non-diffuse material textures. Manual texture
- * selection intentionally remains diffuse-only for now. */
-export function setMeshMaterialMaps(mesh, maps) {
-  mesh.userData.normalMapKey = usesPackedNormal(mesh)
-    ? null : (maps.normal_map || null);
-  if (Object.hasOwn(maps, 'normal_data')) {
-    mesh.userData.normalDataKey = usesPackedNormal(mesh)
-      ? (maps.normal_data || normalDataKey(maps.normal_map))
-      : (maps.normal_data || null);
-  }
-  mesh.userData.lightMapKey = maps.light_map || null;
-  mesh.userData.materialMapKey = maps.material_map || null;
-  refreshMeshTexture(mesh);
-}
-
 /** Update the complete resolved texture state with one material refresh. */
 export function setMeshTextureState(mesh, state) {
   mesh.userData.texKey = state.diffuse || null;
-  mesh.userData.normalMapKey = usesPackedNormal(mesh)
+  mesh.userData.normalMapKey = usesPackedNormal(mesh.material)
     ? null : (state.normal_map || null);
   if (Object.hasOwn(state, 'normal_data')) {
-    mesh.userData.normalDataKey = usesPackedNormal(mesh)
-      ? (state.normal_data || normalDataKey(state.normal_map))
-      : (state.normal_data || null);
+    mesh.userData.normalDataKey = state.normal_data || null;
   }
   mesh.userData.lightMapKey = state.light_map || null;
   mesh.userData.materialMapKey = state.material_map || null;
@@ -278,10 +224,6 @@ export function buildMesh(name, data, materialProfile = null) {
   if (data.uv) {
     const uv = new THREE.BufferAttribute(decodeF32(data.uv), 2);
     geo.setAttribute('uv', uv);
-    // Light maps use the secondary UV channel. These mods author all material
-    // maps against the same Texcoord buffer, so mirror it without inventing UVs.
-    geo.setAttribute('uv1', uv);
-    geo.setAttribute('uv2', uv);
   }
   geo.setIndex(new THREE.BufferAttribute(decodeU32(data.idx), 1));
 
@@ -305,9 +247,10 @@ export function buildMesh(name, data, materialProfile = null) {
   // The draw's own resolved default (core/mesh_builder.py's per-draw
   // tex_key) -- what an unselected mesh falls back to once no toggle-driven
   // texture_variants condition matches (see visibility.js's
-  // applyTextureVariant). Immutable; setMeshTexture only ever touches texKey.
+  // applyTextureVariant). Immutable; setMeshTextureState updates the stable
+  // binding state without rebuilding the material.
   mesh.userData.defaultTexKey = data.tex_key || null;
-  mesh.userData.normalMapKey = mat.userData.gameMaterial.normalSource === 'normal_data'
+  mesh.userData.normalMapKey = usesPackedNormal(mat)
     ? null : (data.normal_map_key || null);
   mesh.userData.normalDataKey = data.normal_data_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
@@ -319,7 +262,6 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.component = data.component || null;
   mesh.userData.materialProfileId = data.material_profile_id || 'none';
   mesh.userData.materialProfile = materialProfile;
-  mesh.userData.aoMapKey = data.ao_map_key || null;
   mesh.userData.normalMapEnabled = data.normal_map_enabled !== false;
   mesh.userData.normalMapYSign = Number.isFinite(data.normal_map_y_sign)
     ? data.normal_map_y_sign : -1;

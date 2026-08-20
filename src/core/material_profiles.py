@@ -48,7 +48,7 @@ class MaterialInterpretation:
     material_kind: str = "unknown"
     normal_xy: tuple[str, str] | None = None
     # These are diagnostic-only views of packed WuWa normal data.  They are
-    # deliberately separate from metalness/gloss/specular so the packed B/A
+    # deliberately separate from metalness/specular so the packed B/A
     # channels cannot become stock PBR inputs by accident.
     normal_data_b: ChannelRef | None = None
     normal_data_a: ChannelRef | None = None
@@ -59,10 +59,8 @@ class MaterialInterpretation:
     material_id: ChannelRef | None = None
     material_id_decoder: str | None = None
     metalness: ChannelRef | None = None
-    gloss: ChannelRef | None = None
     specular: ChannelRef | None = None
     specular_area: ChannelRef | None = None
-    ao: ChannelRef | None = None
     # Genshin's R response remains deliberately bounded. The source channel
     # is classification data on some face materials, not a literal full-range
     # metalness map.
@@ -129,12 +127,10 @@ class MaterialInterpretation:
             "material_id_decoder": self.material_id_decoder,
             "metalness": (self.metalness.to_metadata()
                           if self.metalness else None),
-            "gloss": self.gloss.to_metadata() if self.gloss else None,
             "specular": (self.specular.to_metadata()
                           if self.specular else None),
             "specular_area": (self.specular_area.to_metadata()
                               if self.specular_area else None),
-            "ao": self.ao.to_metadata() if self.ao else None,
             "metalness_scale": self.metalness_scale,
             "specular_scale": self.specular_scale,
             "specular_influence": self.specular_influence,
