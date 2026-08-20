@@ -134,11 +134,14 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   passthrough transport preserves authored RGBA for packed auxiliary roles,
   ordinary diffuse passthrough remains RGB, and explicit channel masks read the
   source channel before conversion. Known Genshin profiles use a bounded
-  LightMap R response; LightMap B/G/A remain packed for later threshold,
-  toon-shadow, and material-ID phases, and no LightMap is bound as Three.js AO.
-  Known ZZZ profiles use MaterialMap G/B for metallic/specular response while
-  retaining R as material-ID data. Unknown game/API pairs keep packed maps
-  available but do not guess PBR semantics.
+  LightMap R response and the validated G toon-shadow input with a
+  viewer-friendly approximation on direct diffuse light; LightMap B remains
+  reserved for the later highlight threshold, A for material IDs, and no
+  LightMap is bound as Three.js AO. Known ZZZ profiles
+  use MaterialMap G/B for metallic/specular response while retaining R as
+  material-ID data.
+  Unknown game/API pairs keep packed maps available but do not guess PBR
+  semantics.
 - A section with an `ib` but no `drawindexed` uses a synthetic whole-buffer
   draw. It inherits `diffuse_variants_at_end`; do not discard a section’s final
   diffuse. A real draw before the first diffuse legitimately remains untextured.

@@ -310,6 +310,9 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
         edge_browser, frontend_url,
         {"Packed": _packed_material_payload(profile_id)},
     )
+    shader_errors = []
+    page.on("console", lambda message: shader_errors.append(message.text)
+            if message.type == "error" and "Shader Error" in message.text else None)
     try:
         _open(page, "Packed")
         page.locator(".draw-item").wait_for()
@@ -331,6 +334,11 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
             specularInfluence: game.uniforms.gameMaterialSpecularInfluence.value,
             usesInfluenceBlend: game.shader.fragmentShader
               .includes('gameMaterialSpecularResponse = mix('),
+            usesToonShadow: game.shader.fragmentShader
+              .includes('float gameToonShadow('),
+            patchesDirectDiffuse: game.shader.fragmentShader
+              .includes('gameDirectDiffuseBefore') &&
+              game.shader.fragmentShader.includes('reflectedLight.directDiffuse = mix('),
             version: material.version,
           };
         }""")
@@ -345,6 +353,11 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
         assert state["specularScale"] == 1
         assert state["specularInfluence"] == (0 if profile_id == "zzz:zzmi" else 0.15)
         assert state["usesInfluenceBlend"] == (profile_id == "genshin:gimi")
+        assert state["usesToonShadow"] == (profile_id == "genshin:gimi")
+        assert state["patchesDirectDiffuse"] == (profile_id == "genshin:gimi")
+        if profile_id == "genshin:gimi":
+            assert "gameToonShadowMask = gameLightMapSample.g" in state["fragment"]
+        assert not shader_errors, "\n".join(shader_errors)
         assert state["materialMap"] if profile_id == "zzz:zzmi" else state["lightMap"]
 
         after = page.evaluate("""async () => {
@@ -369,6 +382,41 @@ def test_packed_material_profile_compiles_and_toggles_update_uniforms(
         }""")
         assert after == {"sameShader": True, "sameVersion": True,
                          "mapEnabled": False}
+    finally:
+        context.close()
+
+
+def test_genshin_shader_compiles_with_environment_accent_directional_light(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"Packed": _packed_material_payload("genshin:gimi")},
+    )
+    shader_errors = []
+    page.on("console", lambda message: shader_errors.append(message.text)
+            if message.type == "error" and "Shader Error" in message.text else None)
+    try:
+        _open(page, "Packed")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial?.shader")
+
+        page.evaluate("window.modViewer.setEnvironmentPreset('studio')")
+        page.wait_for_timeout(800)
+        state = page.evaluate("""async () => {
+          const {scene} = await import('./js/scene.js');
+          let directionalLights = 0;
+          scene.traverse(object => {
+            if (object.isDirectionalLight && object.visible) directionalLights += 1;
+          });
+          return {
+            directionalLights,
+            activeMeshes: window.modViewer.activeMeshes.length,
+          };
+        }""")
+        assert state["directionalLights"] == 2
+        assert state["activeMeshes"] == 1
+        assert not shader_errors, "\n".join(shader_errors)
     finally:
         context.close()
 
