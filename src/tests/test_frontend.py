@@ -2,10 +2,13 @@
 
 import base64
 import copy
+import io
 import json
 import struct
+import zlib
 
 import pytest
+from PIL import Image
 
 from app import paths, server
 from core.material_profiles import material_profile_for
@@ -24,6 +27,21 @@ def _f32(*values):
 
 def _u32(*values):
     return base64.b64encode(struct.pack(f"<{len(values)}I", *values)).decode()
+
+
+def _flat_png_uri(rgba, size=4):
+    """Build a real multi-pixel PNG so WebGPU texture mip sampling is tested."""
+    raw = b"".join(b"\x00" + bytes(rgba) * size for _ in range(size))
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw))
+           + chunk(b"IEND", b""))
+    return "data:image/png;base64," + base64.b64encode(png).decode()
 
 
 def _payload(label="A"):
@@ -241,17 +259,40 @@ def _open(page, path):
     page.locator("#open-btn").click()
 
 
+def _sample_mesh_pixel(page):
+    point = page.evaluate("""
+      async () => {
+        const THREE = await import('three');
+        const {camera, renderer} = await import('./js/scene.js');
+        const mesh = window.modViewer.activeMeshes[0];
+        const projected = new THREE.Vector3(0.25, 0.25, 0)
+          .applyMatrix4(mesh.matrixWorld).project(camera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        return {
+          x: Math.round(rect.left + (projected.x + 1) * rect.width / 2),
+          y: Math.round(rect.top + (1 - projected.y) * rect.height / 2),
+        };
+      }
+    """)
+    image = Image.open(io.BytesIO(page.screenshot())).convert("RGB")
+    return image.getpixel((point["x"], point["y"]))
+
+
 def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
     context = edge_browser.new_context(bypass_csp=True)
     page = context.new_page()
     try:
         page.goto(frontend_url)
         page.locator("#open-btn:not([disabled])").wait_for(timeout=10000)
+        page.wait_for_function(
+            "import('./js/scene.js').then(({renderer}) => renderer.currentSamples === 4)")
         state = page.evaluate("""async () => {
           const {renderer} = await import('./js/scene.js');
           return {
             isWebGPURenderer: renderer.isWebGPURenderer === true,
             isWebGPUBackend: renderer.backend?.isWebGPUBackend === true,
+            compatibilityMode: renderer.backend?.compatibilityMode,
+            samples: renderer.samples,
             animationLoop: renderer.getAnimationLoop() !== null,
             outputColorSpace: renderer.outputColorSpace,
             toneMapping: renderer.toneMapping,
@@ -260,6 +301,8 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         }""")
         assert state["isWebGPURenderer"]
         assert state["isWebGPUBackend"]
+        assert state["compatibilityMode"] is False
+        assert state["samples"] == 4
         assert state["animationLoop"]
         assert state["outputColorSpace"] == "srgb"
         assert state["toneMapping"] == 0
@@ -310,6 +353,100 @@ def test_webgpu_device_loss_stops_loop_and_surfaces_error(edge_browser, frontend
         assert loop_stopped
         assert "device was lost" in page.locator("#renderer-error").inner_text()
         assert page.locator("#open-btn").is_disabled()
+    finally:
+        context.close()
+
+
+def test_webgpu_device_loss_keeps_open_disabled_after_open_finishes(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        page.evaluate("""
+          () => {
+            window.__resolveFolder = null;
+            window.pywebview.api.select_folder = () => new Promise(resolve => {
+              window.__resolveFolder = resolve;
+            });
+          }
+        """)
+        page.locator("#open-btn").click()
+        page.wait_for_function("window.__resolveFolder !== null")
+        page.evaluate("""
+          import('./js/scene.js').then(({renderer}) =>
+            renderer.onDeviceLost({message: 'simulated open-time loss'}))
+        """)
+        page.locator("#renderer-error.show").wait_for(timeout=5000)
+        page.evaluate("window.__resolveFolder(null)")
+        page.wait_for_timeout(100)
+        assert page.locator("#open-btn").is_disabled()
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("flat_shading", [False, True])
+def test_double_side_fallback_normal_faces_back_light(
+        edge_browser, frontend_url, flat_shading):
+    payload = _payload("A")
+    entry = payload["meshes"]["Body-A-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["normal_map_key"] = "normal_map::A-neutral.png"
+    payload["textures"] = {
+        "normal_map::A-neutral.png": _flat_png_uri((128, 128, 255, 255)),
+    }
+    context, page = _page(edge_browser, frontend_url, {"A": payload})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings.normal_map.textureNode.value.image?.width === 4")
+        page.evaluate("""
+          async flatShading => {
+            const THREE = await import('three');
+            const {scene, camera, controls} = await import('./js/scene.js');
+            let key = null;
+            scene.traverse(object => {
+              if (object.isAmbientLight || object.isHemisphereLight
+                  || object.isGridHelper || object.isSprite) {
+                if (object.isAmbientLight || object.isHemisphereLight) {
+                  object.intensity = 0;
+                } else {
+                  object.visible = false;
+                }
+              }
+              if (object.isDirectionalLight) {
+                if (!key) key = object;
+                else object.intensity = 0;
+              }
+            });
+            const target = new THREE.Vector3(0.25, 0.25, 0);
+            const mesh = window.modViewer.activeMeshes[0];
+            mesh.material.flatShading = flatShading;
+            mesh.material.needsUpdate = true;
+            camera.position.set(0.25, 0.25, -3);
+            controls.target.copy(target);
+            controls.update();
+            key.target.position.copy(target);
+            key.position.set(0.25, 0.25, -3);
+            key.intensity = 1;
+          }
+        """, flat_shading)
+        page.evaluate("""
+          async () => {
+            const {setMeshTextureState} = await import('./js/mesh-factory.js');
+            const mesh = window.modViewer.activeMeshes[0];
+            setMeshTextureState(mesh, {
+              diffuse: mesh.userData.texKey,
+              normal_map: null,
+              normal_data: null,
+              light_map: null,
+              material_map: null,
+            });
+          }
+        """)
+        page.wait_for_timeout(700)
+        pixel = _sample_mesh_pixel(page)
+        assert min(pixel) > 60, (flat_shading, pixel)
     finally:
         context.close()
 
@@ -416,7 +553,7 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
             sampledRole: game.bindings[packedRole].textureNode.value
               !== game.bindings[packedRole].placeholder,
             hasMetalnessNode: !!material.metalnessNode,
-            hasSpecularNode: !!material.specularIntensityNode,
+            hasSpecularResponseNode: !!game.specularResponseNode,
             lightingModel: lightingModel.constructor.name,
             metalnessScale: game.profile.metalness_scale,
             specularScale: game.profile.specular_scale,
@@ -434,6 +571,7 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
         assert state["lightingModel"] == (
             "GenshinLightingModel" if profile_id == "genshin:gimi"
             else "PhysicalLightingModel")
+        assert state["hasSpecularResponseNode"]
         assert state["sampledRole"]
         assert not runtime_errors, "\n".join(runtime_errors)
         assert state["materialMap"] if profile_id == "zzz:zzmi" else state["lightMap"]
@@ -503,6 +641,90 @@ def test_genshin_tsl_material_renders_with_environment_accent_directional_light(
         assert state["directionalLights"] == 2
         assert state["activeMeshes"] == 1
         assert not runtime_errors, "\n".join(runtime_errors)
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize(("profile_id", "role", "low", "high", "offset",
+                          "roughness", "high_is_brighter"), [
+    ("genshin:gimi", "light_map", (0, 0, 0, 255), (0, 255, 0, 255),
+     (0.8, 0, 0.35), 0.35, True),
+    ("genshin:gimi", "light_map", (0, 255, 0, 255), (255, 255, 0, 255),
+     (0, 0, 3), 0.2, True),
+    ("zzz:zzmi", "material_map", (0, 0, 0, 255), (0, 255, 0, 255),
+     (0, 0, 3), 0.35, False),
+    ("zzz:zzmi", "material_map", (0, 0, 0, 255), (0, 0, 255, 255),
+     (0, 0, 3), 0.35, True),
+], ids=["genshin-shadow-g", "genshin-specular-r", "zzz-metalness-g",
+       "zzz-specular-b"])
+def test_packed_channel_changes_rendered_luminance(
+        edge_browser, frontend_url, profile_id, role, low, high, offset,
+        roughness, high_is_brighter):
+    payload = _packed_material_payload(profile_id)
+    entry = payload["meshes"]["Body-Packed-0"]
+    white = _flat_png_uri((255, 255, 255, 255))
+    payload["textures"] = {key: white for key in payload["textures"]}
+    payload["textures"]["diffuse::Packed-one.png"] = _flat_png_uri(
+        (24, 24, 24, 255))
+    low_key = f"{role}::Packed-probe-low.png"
+    high_key = f"{role}::Packed-probe-high.png"
+    entry[f"{role}_key"] = low_key
+    payload["textures"][low_key] = _flat_png_uri(low)
+    payload["textures"][high_key] = _flat_png_uri(high)
+
+    context, page = _page(
+        edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
+            "?.bindings.diffuse.textureNode.value.image?.width === 4")
+        page.evaluate("""
+          async ({offset, roughness}) => {
+            const THREE = await import('three');
+            const {scene, controls} = await import('./js/scene.js');
+            scene.traverse(object => {
+              if (object.isAmbientLight || object.isHemisphereLight) {
+                object.intensity = 0;
+              } else if (object.isSprite || object.isGridHelper) {
+                object.visible = false;
+              }
+            });
+            const key = scene.children.find(object => object.isDirectionalLight);
+            const target = controls.target;
+            key.target.position.copy(target);
+            key.position.copy(target).add(new THREE.Vector3(...offset));
+            key.intensity = 1;
+            window.modViewer.activeMeshes[0].material.roughness = roughness;
+          }
+        """, {"offset": offset, "roughness": roughness})
+        page.wait_for_timeout(400)
+        low_pixel = _sample_mesh_pixel(page)
+
+        page.evaluate("""
+          async ({role, key}) => {
+            const {setMeshTextureState} = await import('./js/mesh-factory.js');
+            const mesh = window.modViewer.activeMeshes[0];
+            const state = {
+              diffuse: mesh.userData.texKey,
+              normal_map: null,
+              normal_data: null,
+              light_map: null,
+              material_map: null,
+            };
+            state[role] = key;
+            setMeshTextureState(mesh, state);
+          }
+        """, {"role": role, "key": high_key})
+        page.wait_for_timeout(500)
+        high_pixel = _sample_mesh_pixel(page)
+        low_luminance = sum(low_pixel)
+        high_luminance = sum(high_pixel)
+        if high_is_brighter:
+            assert high_luminance > low_luminance, (low_pixel, high_pixel)
+        else:
+            assert high_luminance < low_luminance, (low_pixel, high_pixel)
     finally:
         context.close()
 

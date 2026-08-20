@@ -8,7 +8,7 @@ import {
   MeshPhysicalNodeMaterial,
   MeshStandardNodeMaterial,
   NoColorSpace,
-  PhysicalLightingModel,
+  PhysicalLightingModel as ThreePhysicalLightingModel,
   RGBAFormat,
   SRGBColorSpace,
   UnsignedByteType,
@@ -18,7 +18,9 @@ import {
   clamp,
   color,
   float,
+  Fn,
   mix,
+  negateOnBackSide,
   normalMap,
   normalView,
   normalViewGeometry,
@@ -34,6 +36,15 @@ const SOURCE_INFO = Object.freeze({
   material_map: true,
 });
 const CHANNELS = new Set(['r', 'g', 'b', 'a']);
+
+// `normalView` delegates to the material's normal node outside its NORMAL
+// sub-build, so assigning it back to `material.normalNode` would recurse.
+// Keep the NORMAL-path behavior locally, including r185's flat-shading rule.
+const orientedGeometryNormal = /*@__PURE__*/ (Fn((builder) => {
+  let node = normalViewGeometry;
+  if (builder.isFlatShading() !== true) node = negateOnBackSide(node);
+  return node;
+}, 'vec3').once())();
 
 function createPlaceholder(name, bytes, colorSpace) {
   const result = new DataTexture(
@@ -123,24 +134,42 @@ function numericOr(value, fallback) {
   return hasNumericValue(value) ? Number(value) : fallback;
 }
 
+function createSpecularResponseNode(profile, bindings) {
+  if (!validRef(profile?.specular)) return float(1);
+  const sampled = enabledChannelNode(profile.specular, bindings, 1);
+  const response = sampled
+    .mul(float(numericOr(profile.specular_scale, 1)))
+    .clamp(0, 1);
+  return hasNumericValue(profile.specular_influence)
+    ? mix(float(1), response,
+      clamp(float(Number(profile.specular_influence)), 0, 1))
+    : response;
+}
+
 function setStableMaterialNodes(material, state, fallbackColor) {
   const { bindings, hasUv, profile } = state;
+  const fallbackNormal = orientedGeometryNormal;
   if (hasUv) {
     // The conditional keeps the texture binding live without changing the
     // material graph when a diffuse texture is loaded or removed.
     material.colorNode = bindings.diffuse.enabledNode.select(
       bindings.diffuse.textureNode.rgb, color(fallbackColor));
     material.normalNode = bindings.normal_map.enabledNode.select(
-      normalMap(bindings.normal_map.textureNode, state.normalScaleNode), normalViewGeometry);
+      normalMap(bindings.normal_map.textureNode, state.normalScaleNode), fallbackNormal);
     material.aoNode = bindings.occlusion_map.enabledNode.select(
       bindings.occlusion_map.textureNode.r, float(1));
   } else {
     material.colorNode = color(fallbackColor);
-    material.normalNode = normalViewGeometry;
+    material.normalNode = fallbackNormal;
     material.aoNode = float(1);
   }
 
   if (!state.packedResponse) return;
+
+  // r185 exposes specularIntensityNode but MeshPhysicalNodeMaterial's
+  // built-in setup does not consume that override. Keep the stable response
+  // node on the state and apply it in the lighting model below instead.
+  state.specularResponseNode = createSpecularResponseNode(profile, bindings);
 
   if (validRef(profile.metalness)) {
     const sampled = enabledChannelNode(profile.metalness, bindings, 0);
@@ -149,16 +178,6 @@ function setStableMaterialNodes(material, state, fallbackColor) {
       .clamp(0, 1);
   }
 
-  if (validRef(profile.specular)) {
-    const sampled = enabledChannelNode(profile.specular, bindings, 1);
-    const response = sampled
-      .mul(float(numericOr(profile.specular_scale, 1)))
-      .clamp(0, 1);
-    material.specularIntensityNode = hasNumericValue(profile.specular_influence)
-      ? mix(float(1), response,
-        clamp(float(Number(profile.specular_influence)), 0, 1))
-      : response;
-  }
 }
 
 function physicalLightingFlags(material) {
@@ -172,17 +191,32 @@ function physicalLightingFlags(material) {
   ].map(value => value === true);
 }
 
-/**
- * Genshin's LightMap.G is a per-light toon-shadow mask. The lighting model
- * captures only the direct diffuse contribution produced by the current
- * light, leaving direct specular and all indirect terms untouched.
- */
-class GenshinLightingModel extends PhysicalLightingModel {
+/** Apply an authored packed specular response to each direct light. */
+class PhysicalLightingModel extends ThreePhysicalLightingModel {
   constructor(material, state) {
     super(...physicalLightingFlags(material));
     this.gameMaterialState = state;
   }
 
+  direct(lightData, builder) {
+    const { reflectedLight } = lightData;
+    const before = reflectedLight.directSpecular.toVar('gameDirectSpecularBefore');
+    super.direct(lightData, builder);
+
+    const response = this.gameMaterialState?.specularResponseNode;
+    if (!response) return;
+    const contribution = reflectedLight.directSpecular.sub(before);
+    reflectedLight.directSpecular.assign(
+      before.add(contribution.mul(response)));
+  }
+}
+
+/**
+ * Genshin's LightMap.G is a per-light toon-shadow mask. The lighting model
+ * captures only the direct diffuse contribution produced by the current
+ * light, leaving indirect terms untouched.
+ */
+class GenshinLightingModel extends PhysicalLightingModel {
   direct(lightData, builder) {
     const { lightDirection, reflectedLight } = lightData;
     const before = reflectedLight.directDiffuse.toVar('gameDirectDiffuseBefore');
@@ -210,7 +244,10 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
     if (validRef(state?.profile?.shadow_mask)) {
       return new GenshinLightingModel(this, state);
     }
-    return new PhysicalLightingModel(...physicalLightingFlags(this));
+    if (validRef(state?.profile?.specular)) {
+      return new PhysicalLightingModel(this, state);
+    }
+    return new ThreePhysicalLightingModel(...physicalLightingFlags(this));
   }
 }
 

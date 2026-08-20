@@ -2,7 +2,8 @@
 
 import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
          toggleGrid, toggleLightHandle, toggleTrackballGizmo,
-         getEnvironmentPreset, rendererReady, setEnvironmentPreset } from './scene.js';
+         getEnvironmentPreset, isRendererAvailable, rendererReady,
+         setEnvironmentPreset } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
 import { setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
@@ -227,7 +228,7 @@ async function openMod() {
     showLoading(false);
     await alertDialog('Unexpected error:\n\n' + e);
   } finally {
-    btn.disabled = false;
+    btn.disabled = !isRendererAvailable();
   }
 }
 
@@ -287,7 +288,7 @@ function initPanelCollapse(panel, contentId) {
 }
 
 rendererReady.then(ready => {
-  if (!ready) return;
+  if (!ready || !isRendererAvailable()) return;
 
   $('open-btn').addEventListener('click', openMod);
   $('export-btn').addEventListener('click', exportChanges);

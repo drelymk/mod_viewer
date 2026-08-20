@@ -59,6 +59,7 @@ async function initializeRenderer() {
   }
   const adapter = await globalThis.navigator.gpu.requestAdapter({
     powerPreference: 'high-performance',
+    featureLevel: 'core',
   });
   if (!adapter) throw new Error('No WebGPU adapter is available.');
   const device = await adapter.requestDevice();
@@ -69,10 +70,19 @@ async function initializeRenderer() {
   // from attempting an implicit backend choice.
   renderer.backend.parameters.device = device;
   await renderer.init();
-  if (renderer.backend?.isWebGPUBackend !== true) {
+  if (renderer.backend?.isWebGPUBackend !== true
+      || renderer.backend.compatibilityMode !== false
+      || renderer.samples !== 4) {
     throw new Error('The renderer initialized with a non-WebGPU backend.');
   }
   return true;
+}
+
+export function isRendererAvailable() {
+  return !rendererStopped
+    && renderer.backend?.isWebGPUBackend === true
+    && renderer.backend.compatibilityMode === false
+    && renderer.samples === 4;
 }
 
 renderer.onDeviceLost = info => {
@@ -84,11 +94,11 @@ renderer.onError = info => {
 
 export const rendererReady = initializeRenderer()
   .then(() => {
-    if (renderer.backend?.isWebGPUBackend !== true) {
-      throw new Error('The renderer backend is not WebGPU.');
+    if (!isRendererAvailable()) {
+      throw new Error('The renderer is not using the required WebGPU core backend.');
     }
     renderer.setAnimationLoop(tick);
-    openButton.disabled = false;
+    openButton.disabled = !isRendererAvailable();
     return true;
   })
   .catch(error => {
