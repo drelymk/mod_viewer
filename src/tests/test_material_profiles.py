@@ -23,7 +23,7 @@ def test_zzz_rabbitfx_profile_is_separate_from_zzmi_but_keeps_semantics():
     assert profile.specular.channel == "b"
 
 
-def test_genshin_uses_conservative_light_map_r_and_b_response():
+def test_genshin_uses_light_map_r_response_and_g_toon_shadow():
     profile = material_profile_for("genshin", "gimi")
 
     assert profile.id == "genshin:gimi"

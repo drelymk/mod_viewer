@@ -32,6 +32,8 @@ uniform float gameToonShadowInfluence;
 `;
 
 const TOON_SHADOW_FUNCTIONS = `
+// The channel is validated; this boundary is a viewer approximation of the
+// game response, not a literal reproduction of the source shader equation.
 float gameToonShadow(
     float ndotl,
     float authoredMask,
@@ -158,25 +160,27 @@ function patchDirectionalToonShadow(source) {
       'Packed material shader marker missing in Three.js r165: directional RE_Direct');
   }
   const replacement = [
-    '\t\tvec3 gameDirectDiffuseBefore = reflectedLight.directDiffuse;',
-    directCall,
-    '\t\tif ( gameToonShadowEnabled ) {',
-    '\t\t\tfloat gameToonShadowFactor = gameToonShadow(',
-    '\t\t\t\tsaturate( dot( geometryNormal, directLight.direction ) ),',
-    '\t\t\t\tgameToonShadowMask,',
-    '\t\t\t\tgameToonShadowThreshold,',
-    '\t\t\t\tgameToonShadowSoftness',
-    '\t\t\t);',
-    '\t\t\tgameToonShadowFactor = mix(',
-    '\t\t\t\t1.0,',
-    '\t\t\t\tgameToonShadowFactor,',
-    '\t\t\t\tclamp( gameToonShadowInfluence, 0.0, 1.0 )',
-    '\t\t\t);',
-    '\t\t\treflectedLight.directDiffuse = mix(',
-    '\t\t\t\tgameDirectDiffuseBefore,',
-    '\t\t\t\treflectedLight.directDiffuse,',
-    '\t\t\t\tgameToonShadowFactor',
-    '\t\t\t);',
+    '\t\t{',
+    '\t\t\tvec3 gameDirectDiffuseBefore = reflectedLight.directDiffuse;',
+    '\t\t\t' + directCall.trim(),
+    '\t\t\tif ( gameToonShadowEnabled ) {',
+    '\t\t\t\tfloat gameToonShadowFactor = gameToonShadow(',
+    '\t\t\t\t\tsaturate( dot( geometryNormal, directLight.direction ) ),',
+    '\t\t\t\t\tgameToonShadowMask,',
+    '\t\t\t\t\tgameToonShadowThreshold,',
+    '\t\t\t\t\tgameToonShadowSoftness',
+    '\t\t\t\t);',
+    '\t\t\t\tgameToonShadowFactor = mix(',
+    '\t\t\t\t\t1.0,',
+    '\t\t\t\t\tgameToonShadowFactor,',
+    '\t\t\t\t\tclamp( gameToonShadowInfluence, 0.0, 1.0 )',
+    '\t\t\t\t);',
+    '\t\t\t\treflectedLight.directDiffuse = mix(',
+    '\t\t\t\t\tgameDirectDiffuseBefore,',
+    '\t\t\t\t\treflectedLight.directDiffuse,',
+    '\t\t\t\t\tgameToonShadowFactor',
+    '\t\t\t\t);',
+    '\t\t\t}',
     '\t\t}',
   ].join('\n');
   return source.slice(0, callStart) + replacement

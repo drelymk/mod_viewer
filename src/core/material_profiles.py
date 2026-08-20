@@ -96,8 +96,9 @@ def _profile_for(game, texture_api):
         return MaterialInterpretation(
             id=f"genshin:{texture_api}", game=game,
             texture_api=texture_api,
-            # G is the validated first toon-shadow mask. B remains reserved
-            # for the later highlight-threshold response, and A for IDs.
+            # G is the validated first toon-shadow input. The frontend uses a
+            # viewer approximation; B remains reserved for the later
+            # highlight-threshold response, and A for IDs.
             shadow_mask=ChannelRef("light_map", "g"),
             metalness=ChannelRef("light_map", "r"),
             # R is the first-pass specular mask. B controls the highlight
