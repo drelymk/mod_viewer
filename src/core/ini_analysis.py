@@ -8,6 +8,7 @@ from .ini_menu import extract_menu_toggles
 from .ini_state import extract_state_rules
 from .ini_shapes import extract_shape_sliders
 from .ini_parser import build_draw_groups
+from .game_profile import collect_game_evidence
 
 
 @dataclass
@@ -24,6 +25,9 @@ class IniAnalysis:
     defaults: dict
     gating_vars: set
     draw_groups: list = field(default_factory=list)
+    game_evidence: list = field(default_factory=list)
+    runtime_evidence: list = field(default_factory=list)
+    texture_api_evidence: list = field(default_factory=list)
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
@@ -37,6 +41,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     """
     canonical_vars = canonical_var_names(sections)
     resources = resources if resources is not None else extract_resources(sections)
+    game_evidence, runtime_evidence, texture_api_evidence = \
+        collect_game_evidence(sections, resources)
     toggles = extract_toggle_keys(
         sections, var_prefix=var_prefix, source=source,
         canonical_vars=canonical_vars)
@@ -83,4 +89,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         defaults=defaults,
         gating_vars=gating_vars,
         draw_groups=draw_groups,
+        game_evidence=game_evidence,
+        runtime_evidence=runtime_evidence,
+        texture_api_evidence=texture_api_evidence,
     )

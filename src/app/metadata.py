@@ -177,7 +177,8 @@ def hydrate_present(folder_path, present, data=None):
                      for index in range(count)]
 
 
-def hydrate_textures(folder_path, payload, data=None, texture_source=None):
+def hydrate_textures(folder_path, payload, data=None, texture_source=None,
+                     texture_profile=None):
     """Restore sparse highlighted boundaries, then rebuild component pools.
 
     ``payload`` is the structured application payload; only its ``meshes``
@@ -271,7 +272,8 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None):
             if key in textures:
                 continue
             encoded = encode_texture_key(
-                folder_path, key, role, texture_source=texture_source)
+                folder_path, key, role, texture_source=texture_source,
+                texture_profile=texture_profile)
             if encoded and not encoded.get("error"):
                 textures[encoded["tex_key"]] = encoded["uri"]
 

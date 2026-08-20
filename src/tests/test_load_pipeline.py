@@ -4,6 +4,8 @@ import os
 import json
 import struct
 import tempfile
+import base64
+import io
 from unittest.mock import patch
 
 
@@ -121,16 +123,23 @@ def test_diagnostics_cache_tracks_authoritative_revision():
 def test_texture_registry_identity_includes_role():
     from PIL import Image
 
+    def uri_mode(uri):
+        payload = base64.b64decode(uri.split(",", 1)[1])
+        return Image.open(io.BytesIO(payload)).mode
+
     with tempfile.TemporaryDirectory() as root:
         path = os.path.join(root, "shared.png")
         Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
         diffuse = encode_texture_file(root, path)
-        normal = encode_texture_file(root, path, "normal_map")
+        normal = encode_texture_file(root, path, "normal_map",
+                                     texture_profile="zzz")
         light = encode_texture_file(root, path, "light_map")
         assert (diffuse["tex_key"] == "diffuse::shared.png"
               and normal["tex_key"] == "normal_map::shared.png"
               and light["tex_key"] == "light_map::shared.png"), ("texture registry keys include their usage role")
-        assert (len({diffuse["uri"], normal["uri"], light["uri"]}) == 3), ("shared source files keep distinct role-specific encodings")
+        assert (len({diffuse["uri"], normal["uri"], light["uri"]}) == 3
+                and uri_mode(diffuse["uri"]) == "RGB"
+                and uri_mode(light["uri"]) == "RGBA"), ("shared sources keep role-specific transforms while packed LightMaps retain RGBA")
 
         with open(os.path.join(root, "p.buf"), "wb") as fh:
             fh.write(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))

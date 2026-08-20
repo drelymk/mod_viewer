@@ -21,6 +21,10 @@ _MAX_TOTAL_BUFFER_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_DRAWS = 10_000
 _MAX_IMAGE_PIXELS = 100_000_000
 TEXTURE_ROLES = ("diffuse", "normal_map", "light_map", "material_map")
+TEXTURE_TRANSFORMS = (
+    "passthrough", "normal_xy_reconstruct", "channel_r", "channel_g",
+    "channel_b", "channel_a",
+)
 _texture_cache = OrderedDict()
 _texture_cache_bytes = 0
 _texture_cache_mod = None
@@ -31,6 +35,27 @@ _texture_profile_hook = None
 def normalize_texture_role(role=None):
     """Return the canonical registry role used for one texture instance."""
     return role if role in TEXTURE_ROLES else "diffuse"
+
+
+def normalize_texture_transform(transform=None):
+    """Return a known image transform, defaulting to raw packed data."""
+    return transform if transform in TEXTURE_TRANSFORMS else "passthrough"
+
+
+def _texture_source_uri(texture_source, path, role, transform):
+    """Call old two-argument and new transform-aware source callbacks."""
+    if texture_source is None:
+        return None
+    try:
+        return texture_source(path, role, transform=transform)
+    except TypeError as first_error:
+        # Direct fixtures and third-party callers historically supplied
+        # ``(path, role)`` callbacks.  Keep those working while the app's
+        # publication registry receives the explicit transform.
+        try:
+            return texture_source(path, role)
+        except TypeError:
+            raise first_error
 
 
 def set_texture_profile_hook(hook):
@@ -349,26 +374,36 @@ def _reconstruct_normal_z(img):
     return Image.frombytes("RGB", img.size, bytes(result))
 
 
-def _extract_light_mask(img):
-    """Convert the packed game LightMap's blue mask to neutral grayscale.
-
-    Feeding packed RGB directly into standard lighting causes a red cast, and
-    reading only red misses variants such as LucySummer's Oiled/Base pair,
-    whose authored difference lives almost entirely in blue.
-    """
-    blue = img.convert("RGB").getchannel("B")
+def _extract_channel_mask(img, channel):
+    """Extract one explicitly requested channel as a neutral RGB mask."""
+    channel = str(channel or "B").upper()
+    if channel not in "RGBA":
+        raise ValueError(f"Unknown image channel: {channel}")
+    source = img.convert("RGBA") if channel == "A" else img.convert("RGB")
+    selected = source.getchannel(channel)
     from PIL import Image
-    return Image.merge("RGB", (blue, blue, blue))
+    return Image.merge("RGB", (selected, selected, selected))
+
+
+def _apply_texture_transform(img, texture_transform):
+    texture_transform = normalize_texture_transform(texture_transform)
+    if texture_transform == "normal_xy_reconstruct":
+        return _reconstruct_normal_z(img)
+    if texture_transform.startswith("channel_"):
+        return _extract_channel_mask(img, texture_transform[-1])
+    return img
 
 
 def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
-                        texture_role=None):
-    """Decode and role-process an image into PNG bytes, or return None."""
+                        texture_role=None, texture_transform="passthrough"):
+    """Decode and explicitly transform an image into PNG bytes."""
     try:
         texture_role = normalize_texture_role(texture_role)
+        texture_transform = normalize_texture_transform(texture_transform)
         stat = os.stat(dds_path)
         cache_key = (os.path.normcase(os.path.abspath(dds_path)), stat.st_size,
-                     stat.st_mtime_ns, max_size, preserve_alpha, texture_role)
+                     stat.st_mtime_ns, max_size, preserve_alpha, texture_role,
+                     texture_transform)
         cache_started = _profile_started()
         with _texture_cache_lock:
             cached = _texture_cache.pop(cache_key, None)
@@ -376,10 +411,12 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
                 _texture_cache[cache_key] = cached
                 _profile_elapsed(
                     "cache_hit", cache_started,
-                    path=cache_key[0], role=texture_role, bytes=len(cached[0]))
+                    path=cache_key[0], role=texture_role,
+                    transform=texture_transform, bytes=len(cached[0]))
                 return cached[0]
         _profile_elapsed("cache_miss", cache_started,
-                         path=cache_key[0], role=texture_role)
+                         path=cache_key[0], role=texture_role,
+                         transform=texture_transform)
         from PIL import Image
         Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
         stage_started = _profile_started()
@@ -388,14 +425,24 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
             img = Image.open(dds_path)
             img.load()
         _profile_elapsed("decode", stage_started,
-                         path=cache_key[0], role=texture_role)
-        # Material textures historically drop alpha because some DDS decoders
-        # expose unusable colour in fully-transparent pixels. Menu artwork is
-        # different: its authored transparency is part of the icon and must
-        # survive conversion to PNG.
+                         path=cache_key[0], role=texture_role,
+                         transform=texture_transform)
+        # Preserve the authored source channels whenever the caller asks for
+        # alpha, when a packed map is passed through unchanged, or when a
+        # channel mask will be extracted.  The latter must happen before any
+        # RGB conversion turns an authored alpha channel into opaque 255s.
+        # Derived normal images intentionally become RGB after their source
+        # channels have been interpreted.
+        packed_passthrough = (
+            texture_transform == "passthrough"
+            and texture_role != "diffuse")
+        keep_source_alpha = (
+            preserve_alpha
+            or packed_passthrough
+            or texture_transform.startswith("channel_"))
         stage_started = _profile_started()
         try:
-            img = img.convert('RGBA' if preserve_alpha else 'RGB')
+            img = img.convert('RGBA' if keep_source_alpha else 'RGB')
             if preserve_alpha and img.getchannel('A').getextrema()[1] == 0:
                 # Some menu packs deliberately point several slots at an empty
                 # placeholder DDS. Sending it to the browser produces a blank
@@ -404,31 +451,28 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
         finally:
             _profile_elapsed(
                 "rgb_rgba_conversion", stage_started,
-                path=cache_key[0], role=texture_role)
+                path=cache_key[0], role=texture_role,
+                transform=texture_transform)
         if max(img.size) > max_size:
             stage_started = _profile_started()
             img.thumbnail((max_size, max_size), Image.LANCZOS)
             _profile_elapsed(
                 "resize", stage_started,
-                path=cache_key[0], role=texture_role)
-        if texture_role == "normal_map":
+                path=cache_key[0], role=texture_role,
+                transform=texture_transform)
+        if texture_transform != "passthrough":
             stage_started = _profile_started()
             try:
-                img = _reconstruct_normal_z(img)
+                img = _apply_texture_transform(img, texture_transform)
             finally:
+                stage = ("normal_z_reconstruction"
+                         if texture_transform == "normal_xy_reconstruct"
+                         else "channel_mask_extraction")
                 _profile_elapsed(
-                    "normal_z_reconstruction",
+                    stage,
                     stage_started,
-                    path=cache_key[0], role=texture_role)
-        elif texture_role == "light_map":
-            stage_started = _profile_started()
-            try:
-                img = _extract_light_mask(img)
-            finally:
-                _profile_elapsed(
-                    "light_mask_extraction",
-                    stage_started,
-                    path=cache_key[0], role=texture_role)
+                    path=cache_key[0], role=texture_role,
+                    transform=texture_transform)
         stage_started = _profile_started()
         try:
             buf = io.BytesIO()
@@ -438,10 +482,12 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
             _profile_elapsed(
                 "png_encoding", stage_started,
                 path=cache_key[0], role=texture_role,
+                transform=texture_transform,
                 bytes=len(png) if "png" in locals() else 0)
         _cache_texture(cache_key, png)
         _profile_texture(
             "encoded", 0.0, path=cache_key[0], role=texture_role,
+            transform=texture_transform,
             bytes=len(png))
         return png
     except Exception as e:
@@ -450,18 +496,20 @@ def _render_texture_png(dds_path, max_size=2048, preserve_alpha=False,
 
 
 def _encode_texture(dds_path, max_size=2048, preserve_alpha=False,
-                    texture_role=None):
+                    texture_role=None, texture_transform="passthrough"):
     """Return the historical base64 data URI compatibility representation."""
     png = _render_texture_png(dds_path, max_size=max_size,
                               preserve_alpha=preserve_alpha,
-                              texture_role=texture_role)
+                              texture_role=texture_role,
+                              texture_transform=texture_transform)
     if png is None:
         return None
     return "data:image/png;base64," + base64.b64encode(png).decode()
 
 
 def encode_texture_file(mod_dir, abs_path, texture_role=None,
-                        texture_source=None):
+                        texture_source=None, texture_profile=None,
+                        texture_transform=None):
     """Resolve a picked file into ``{tex_key, file, role, uri}``.
 
     Without ``texture_source`` the URI is the historical eager data URI. With
@@ -476,6 +524,13 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
     resolution is already held to.
     """
     texture_role = normalize_texture_role(texture_role)
+    if texture_transform is None and (texture_source is None
+                                      or texture_profile is not None):
+        from .texture_profiles import texture_profile_for
+        texture_transform = texture_profile_for(texture_profile).recipe_for(
+            texture_role)
+    if texture_transform is not None:
+        texture_transform = normalize_texture_transform(texture_transform)
     _begin_texture_cache(mod_dir)
     try:
         rel = os.path.relpath(abs_path, mod_dir)
@@ -493,9 +548,12 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
     if not os.path.isfile(abs_path):
         return {"error": "Selected file does not exist."}
     if texture_source is None:
-        uri = _encode_texture(abs_path, texture_role=texture_role)
+        uri = _encode_texture(
+            abs_path, texture_role=texture_role,
+            texture_transform=texture_transform)
     else:
-        uri = texture_source(abs_path, texture_role)
+        uri = _texture_source_uri(
+            texture_source, abs_path, texture_role, texture_transform)
     if not uri:
         return {"error": "Could not read this file as an image."}
     relative_path = rel.replace(os.sep, "/")
@@ -503,14 +561,17 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
             "file": relative_path, "role": texture_role, "uri": uri}
 
 
-def encode_texture_key(mod_dir, key, texture_role=None, texture_source=None):
+def encode_texture_key(mod_dir, key, texture_role=None, texture_source=None,
+                        texture_profile=None, texture_transform=None):
     """Encode a role-aware registry key, accepting legacy path-only keys."""
     role, relative_path = split_texture_key(key, texture_role)
     resolved = _safe_join(mod_dir, relative_path)
     if not resolved:
         return {"error": "Selected file is not inside the mod folder."}
     return encode_texture_file(mod_dir, resolved, role,
-                               texture_source=texture_source)
+                               texture_source=texture_source,
+                               texture_profile=texture_profile,
+                               texture_transform=texture_transform)
 
 
 # ── In-memory mesh payload builder ────────────────────────────────────────────
@@ -643,7 +704,7 @@ def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
 
 
 def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
-                      texture_source=None):
+                      texture_source=None, game_profile=None):
     """
     Build mesh draw entries and a shared texture registry.
 
@@ -681,10 +742,12 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     component-level "manage textures" pool.
     """
     _begin_texture_cache(mod_dir)
+    from .texture_profiles import texture_profile_for
+    texture_profile = texture_profile_for(game_profile)
 
     result:    dict = {}
     tex_uris:  dict = {}  # role-aware key -> data URI or lazy source URL
-    tex_cache: dict = {}  # (full path, role) -> role-aware key
+    tex_cache: dict = {}  # (full path, role, transform) -> role-aware key
     ib_cache:  dict = {}  # absolute ib path → raw bytes
     buf_cache: dict = {}  # (pos_path, pos_stride, tc_path, tc_stride) → (positions, uvs)
 
@@ -747,11 +810,14 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         # Resolve texture keys cheaply. Pool-only options are encoded lazily
         # when selected in the UI. Direct callers encode defaults and toggle
         # variants now; the application callback only publishes their source.
-        def _tex_key(dds_path, texture_role=None):
+        def _tex_key(dds_path, texture_role=None, texture_transform=None):
             if not dds_path or not os.path.exists(dds_path):
                 return None
             texture_role = normalize_texture_role(texture_role)
-            cache_key = (dds_path, texture_role)
+            if texture_transform is None:
+                texture_transform = texture_profile.recipe_for(texture_role)
+            texture_transform = normalize_texture_transform(texture_transform)
+            cache_key = (dds_path, texture_role, texture_transform)
             if cache_key not in tex_cache:
                 # Keyed by path, not basename: variant mods routinely keep
                 # same-named diffuses in per-variant folders (Texture\00..\04).
@@ -762,13 +828,17 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
         def _ensure_texture(dds_path, texture_role=None):
             texture_role = normalize_texture_role(texture_role)
-            key = _tex_key(dds_path, texture_role)
+            texture_transform = texture_profile.recipe_for(texture_role)
+            key = _tex_key(dds_path, texture_role, texture_transform)
             if key and key not in tex_uris:
                 if texture_source is None:
                     value = _encode_texture(
-                        dds_path, texture_role=texture_role)
+                        dds_path, texture_role=texture_role,
+                        texture_transform=texture_transform)
                 else:
-                    value = texture_source(dds_path, texture_role)
+                    value = _texture_source_uri(
+                        texture_source, dds_path, texture_role,
+                        texture_transform)
                 tex_uris[key] = value or ""
             return key
 
@@ -878,6 +948,13 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 "pos": _geometry_ref(pos_bytes, geometry),
                 "idx": _geometry_ref(idx_bytes, geometry),
                 "tex_key": default_key,
+                # Authored auxiliary keys remain visible even when the
+                # conservative profile chooses not to bind them.  An
+                # explicit AO slot is reserved for a future validated
+                # derived map and is intentionally empty today.
+                "normal_map_y_sign": texture_profile.normal_y_sign,
+                "normal_map_enabled": texture_profile.bind_normal_map,
+                "ao_map_key": None,
             }
             for channel in ("normal_map", "light_map", "material_map"):
                 key = _ensure_texture(_safe_join(
@@ -969,7 +1046,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
 
 def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None,
-                       texture_source=None):
+                       texture_source=None, game_profile=None):
     """Compatibility wrapper for direct core fixtures.
 
     The application uses :func:`build_mesh_result`; older tests and scripts
@@ -978,7 +1055,8 @@ def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None,
     """
     built = build_mesh_result(groups, mod_dir, max_draws=max_draws,
                               geometry=geometry,
-                              texture_source=texture_source)
+                              texture_source=texture_source,
+                              game_profile=game_profile)
     payload = dict(built.meshes)
     payload["__textures__"] = built.textures
     return payload

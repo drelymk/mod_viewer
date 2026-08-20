@@ -122,30 +122,23 @@ export function refreshMeshTexture(mesh) {
   const showDiffuse = textureMode !== 'none';
   const showMaterialMaps = textureMode === 'all';
   const map = showDiffuse ? getTexture(mesh, mesh.userData.texKey, 'diffuse') : null;
-  const normalMap = showMaterialMaps
+  const normalMap = showMaterialMaps && mesh.userData.normalMapEnabled !== false
     ? getTexture(mesh, mesh.userData.normalMapKey, 'normal_map') : null;
-  const lightMap = showMaterialMaps
-    ? getTexture(mesh, mesh.userData.lightMapKey, 'light_map') : null;
-  const materialMap = showMaterialMaps
-    ? getTexture(mesh, mesh.userData.materialMapKey, 'material_map') : null;
+  // LightMap and MaterialMap are retained as authored, toggle-aware keys but
+  // are packed game data rather than standard Three.js light/PBR inputs.
+  // There is no validated derived AO slot in the baseline profile yet.
+  const aoMap = showMaterialMaps
+    ? getTexture(mesh, mesh.userData.aoMapKey, 'occlusion_map') : null;
   if (map === mesh.material.map
       && normalMap === mesh.material.normalMap
-      && lightMap === mesh.material.aoMap
-      && materialMap === mesh.userData.boundMaterialMap) return;
+      && aoMap === mesh.material.aoMap) return;
   mesh.material.map = map;
   mesh.material.normalMap = normalMap;
-  // 3DMigoto normal maps use DirectX's Y convention; Three.js expects the
-  // opposite green-axis direction.
-  mesh.material.normalScale.set(1, normalMap ? -1 : 1);
-  // Game LightMaps are packed masks, not RGB irradiance. Treating them as a
-  // Three.js lightMap produces their characteristic red cast; scalar AO uses
-  // the red mask without introducing a hue.
-  mesh.material.aoMap = lightMap;
-  mesh.material.aoMapIntensity = 0.5;
-  // Keep MaterialMap loaded and variant-aware, but don't guess its
-  // game-specific packed channels into standard PBR slots. The previous guess
-  // made surfaces metallic and glossy even when the authored material wasn't.
-  mesh.userData.boundMaterialMap = materialMap;
+  mesh.material.normalScale.set(
+    1, normalMap ? (mesh.userData.normalMapYSign ?? -1) : 1);
+  mesh.material.aoMap = aoMap;
+  mesh.material.aoMapIntensity = 1.0;
+  mesh.material.lightMap = null;
   mesh.material.roughnessMap = null;
   mesh.material.metalnessMap = null;
   mesh.material.roughness = 1;
@@ -232,6 +225,10 @@ export function buildMesh(name, data) {
   mesh.userData.normalMapKey = data.normal_map_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
   mesh.userData.materialMapKey = data.material_map_key || null;
+  mesh.userData.aoMapKey = data.ao_map_key || null;
+  mesh.userData.normalMapEnabled = data.normal_map_enabled !== false;
+  mesh.userData.normalMapYSign = Number.isFinite(data.normal_map_y_sign)
+    ? data.normal_map_y_sign : -1;
   mesh.userData.defaultNormalMapKey = mesh.userData.normalMapKey;
   mesh.userData.defaultLightMapKey = mesh.userData.lightMapKey;
   mesh.userData.defaultMaterialMapKey = mesh.userData.materialMapKey;
