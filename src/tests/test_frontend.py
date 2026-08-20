@@ -70,6 +70,25 @@ def _payload(label="A"):
     }
 
 
+def _construction_failure_payload():
+    payload = _payload("Broken")
+    payload["textures"] = {
+        "diffuse::Broken-one.png":
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLkWQAAAABJRU5ErkJggg==",
+    }
+    # Keep one valid mesh first so the frontend has already allocated scene,
+    # material and texture state when the next mesh construction fails.
+    payload["meshes"]["Broken-after-first"] = {
+        "component": "Broken after",
+        "drawindexed": [3, 0, 0],
+        "pos": "!",  # invalid base64: decodeF32 must reject this buffer
+        "idx": _u32(0, 1, 2),
+        "conditions": [],
+        "sources": [{"ini": "Broken.ini", "line": 20}],
+    }
+    return payload
+
+
 def _state_sync_payload():
     payload = _payload("Sync")
     payload["controls"]["menu"]["sibling"] = {
@@ -214,8 +233,38 @@ def test_failed_mod_switch_clears_previous_ui_and_pending_state(
         assert page.locator("#toggle-list .toggle-item").count() == 0
         assert page.locator("#menu-list .menu-item").count() == 0
         assert page.locator("#present-list .toggle-item").count() == 0
+        assert not page.locator("#sidebar").is_visible()
+        assert not page.locator("#camera-panel").is_visible()
         assert page.locator("#pending-indicator.show").count() == 0
         assert page.locator("#export-btn").is_disabled()
+        assert page.locator("#mod-path").inner_text() == "B"
+        assert not page.locator("#ini-view-btn").is_disabled()
+        page.locator("#dialog-ok").click()
+    finally:
+        context.close()
+
+
+def test_frontend_construction_failure_rolls_back_partial_scene(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"A": _payload("A"), "B": _construction_failure_payload()},
+        pending={"A": True, "B": False},
+    )
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__fakeApi.pending.A = false")
+
+        _open(page, "B")
+        page.locator("#dialog-backdrop.show").wait_for()
+        assert page.locator(".draw-item").count() == 0
+        assert page.locator("#mesh-list").inner_text() == ""
+        assert not page.locator("#sidebar").is_visible()
+        assert not page.locator("#camera-panel").is_visible()
+        assert not page.locator("#toggle-panel").is_visible()
+        assert not page.locator("#menu-panel").is_visible()
+        assert not page.locator("#present-panel").is_visible()
         assert page.locator("#mod-path").inner_text() == "B"
         assert not page.locator("#ini-view-btn").is_disabled()
         page.locator("#dialog-ok").click()
@@ -286,7 +335,22 @@ def test_tool_panel_is_in_left_dock_and_available_before_load(edge_browser, fron
     context, page = _page(edge_browser, frontend_url, {})
     try:
         assert page.evaluate("document.querySelector('#tool-panel').parentElement.id") == "left-dock"
-        assert page.evaluate("getComputedStyle(document.querySelector('#tool-panel')).position") != "fixed"
+        placement = page.evaluate("""
+          () => {
+            const panel = document.querySelector('#tool-panel');
+            const footer = document.querySelector('#footer').getBoundingClientRect();
+            const rect = panel.getBoundingClientRect();
+            return {
+              position: getComputedStyle(panel).position,
+              center: rect.left + rect.width / 2,
+              viewportCenter: window.innerWidth / 2,
+              aboveFooter: rect.bottom < footer.top,
+            };
+          }
+        """)
+        assert placement["position"] == "fixed"
+        assert abs(placement["center"] - placement["viewportCenter"]) < 1
+        assert placement["aboveFooter"]
         assert page.locator("#tool-panel").is_visible()
         assert page.locator("#tool-buttons .tool-btn").count() == 6
     finally:

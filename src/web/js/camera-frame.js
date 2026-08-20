@@ -136,6 +136,7 @@ export function createCameraFrame({
     uprightApplied = false;
     modelQuarterTurns = 0;
     modelPivot = null;
+    homeView = null;
   }
 
   function resetView() {

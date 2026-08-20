@@ -107,8 +107,10 @@ async function refreshPendingState() {
 function clearScene() {
   clearSelection();
   reset();
+  setTextures(null);
   setGeometryBlob(null);
   lastToggles = {};
+  $('sidebar').style.display = 'none';
   $('mesh-list').innerHTML = '';
   $('camera-panel').style.display = 'none';
   $('toggle-list').innerHTML = '';
@@ -184,6 +186,8 @@ async function loadModAt(path) {
   try {
     await displayMeshPayload(data);
   } catch (error) {
+    clearScene();
+    clearPendingState();
     showLoading(false);
     await refreshPendingState();
     await alertDialog('Could not load mod geometry:\n\n' + error.message);
