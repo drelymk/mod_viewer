@@ -9,7 +9,7 @@ origin lets index.html, the stylesheet and the JS modules be ordinary files.
 Two roots are exposed:
     /            the web/ directory (index.html, css/, js/)
     /vendor/     the vendored Three.js copy, when build.py has fetched it
-    /texture/    opaque URLs for the active load's lazily rendered PNGs
+    /texture/    opaque URLs for the active load's native DDS or PNG textures
 
 index.html is rendered rather than served verbatim, so the importmap points at
 the vendored WebGPU and TSL entry points.
@@ -20,10 +20,12 @@ import base64
 import http.server
 import os
 import socketserver
+import shutil
 import threading
 import uuid
 from dataclasses import dataclass
 
+from core.dds import DDSInfo, native_dds_info
 from core.mesh_builder import (_render_texture_png, normalize_texture_role,
                                normalize_texture_transform)
 from core.texture_profiles import texture_profile_for
@@ -55,6 +57,8 @@ class TextureSource:
     max_size: int = 2048
     preserve_alpha: bool = False
     transform: str = "passthrough"
+    native_dds: bool = False
+    dds_info: DDSInfo | None = None
 
 
 class TexturePublication:
@@ -112,11 +116,13 @@ class TexturePublication:
             if source_id is not None:
                 existing_source = self._sources[source_id]
                 if not validate:
-                    return f"{_TEXTURE_PREFIX}{self.token}/{source_id}"
+                    return _texture_url(self.token, source_id, existing_source)
 
+        dds_info = native_dds_info(path, max_size, transform)
         source = existing_source or TextureSource(
             path=path, role=role, max_size=max_size,
-            preserve_alpha=preserve_alpha, transform=transform)
+            preserve_alpha=preserve_alpha, transform=transform,
+            dds_info=dds_info, native_dds=dds_info is not None)
         if validate and _render_texture_source(source) is None:
             return None
 
@@ -129,7 +135,7 @@ class TexturePublication:
                 source_id = str(len(self._sources))
                 self._dedupe[dedupe_key] = source_id
                 self._sources[source_id] = source
-            return f"{_TEXTURE_PREFIX}{self.token}/{source_id}"
+            return _texture_url(self.token, source_id, source)
 
     def commit(self):
         """Make this publication active and retire every older publication."""
@@ -182,6 +188,11 @@ def _lookup_texture(token, source_id):
         if publication is None:
             return None
         return publication._sources.get(source_id)
+
+
+def _texture_url(token, source_id, source):
+    suffix = ".dds" if source.native_dds else ".png"
+    return f"{_TEXTURE_PREFIX}{token}/{source_id}{suffix}"
 
 
 def _render_texture_source(source):
@@ -363,16 +374,35 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(blob)
 
     def _send_texture(self, address):
-        """Serve one registered PNG without consuming its publication entry."""
+        """Serve one registered native DDS or PNG fallback."""
         parts = address.split("/")
         if len(parts) != 2 or not all(parts):
             self.send_error(404, "Texture not found")
             return
-        token, source_id = parts
+        token, requested_id = parts
+        if requested_id.endswith(".dds"):
+            suffix = "dds"
+            source_id = requested_id[:-4]
+        elif requested_id.endswith(".png"):
+            suffix = "png"
+            source_id = requested_id[:-4]
+        else:
+            # Extensionless URLs remain a PNG compatibility path for direct
+            # fixtures and older payloads during the transport migration.
+            suffix = "png"
+            source_id = requested_id
+        if not source_id:
+            self.send_error(404, "Texture not found")
+            return
         source = _lookup_texture(token, source_id)
         if source is None:
             self.send_error(404, "Texture not found")
             return
+        if suffix == "dds":
+            if not source.native_dds:
+                self.send_error(404, "Texture not found")
+                return
+            return self._send_native_dds(token, source_id, source)
         png = _render_texture_request(token, source_id, source)
         if png is None:
             self.send_error(404, "Texture unavailable")
@@ -383,6 +413,27 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(png)
+
+    def _send_native_dds(self, token, source_id, source):
+        """Stream the registered DDS without entering the PNG semaphore."""
+        try:
+            stream = open(source.path, "rb")
+            size = os.fstat(stream.fileno()).st_size
+        except OSError:
+            self.send_error(404, "Texture unavailable")
+            return
+        try:
+            if _lookup_texture(token, source_id) is not source:
+                self.send_error(404, "Texture unavailable")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/vnd-ms.dds")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            shutil.copyfileobj(stream, self.wfile, length=1024 * 1024)
+        finally:
+            stream.close()
 
 
 class _ThreadingTCPServer(socketserver.ThreadingTCPServer):

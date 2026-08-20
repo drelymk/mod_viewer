@@ -429,7 +429,19 @@ def _run_browser(base_url, payload, profiler, sampler, concurrency,
             "texture_response_count": len(texture_responses),
             "texture_statuses": sorted({
                 response["status"] for response in texture_responses}),
+            "native_dds_request_count": sum(
+                response["url"].split("?", 1)[0].lower().endswith(".dds")
+                for response in texture_responses),
+            "png_request_count": sum(
+                not response["url"].split("?", 1)[0].lower().endswith(".dds")
+                for response in texture_responses),
+            "dds_bytes_served": sum(
+                response["bytes"] for response in texture_responses
+                if response["url"].split("?", 1)[0].lower().endswith(".dds")),
             "png_bytes_served": sum(
+                response["bytes"] for response in texture_responses
+                if not response["url"].split("?", 1)[0].lower().endswith(".dds")),
+            "texture_bytes_served": sum(
                 response["bytes"] for response in texture_responses),
             "http_resource_max_seconds": max(
                 (entry["response_end"] / 1000.0
@@ -530,6 +542,8 @@ def _run_once(mod_path, concurrency, browser_channel):
             "geometry_publication_seconds": sum(
                 timings["geometry_publication"]),
             "registered_texture_sources": len(sources),
+            "native_dds_sources": sum(source.native_dds for source in sources),
+            "png_fallback_sources": sum(not source.native_dds for source in sources),
             "backend_model_texture_renders": len(backend_model_rendered),
             "backend_other_texture_renders": len(backend_rendered)
                 - len(backend_model_rendered),

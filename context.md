@@ -351,6 +351,18 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   change stable texture-binding and enabled-node values using shared valid
   placeholders; they must not rebuild materials or patch generated shader
   source.
+- Texture publication may use a native `.dds` URL only for a validated,
+  supported 2D single-layer non-cube/non-volume DDS with passthrough transform
+  and dimensions within the normal 2048 cap. Authored BC compression and mip
+  chains stay intact; transformed, oversized, unsupported, malformed and
+  non-DDS sources use the existing `.png` transport. The browser's strict DDS
+  parser owns one-time fallback to that PNG URL, while diffuse color space is
+  sRGB and every auxiliary role is non-color data regardless of a DDS SRGB
+  tag. WuWa `normal_map` remains transformed PNG and `normal_data` may use
+  native DDS. BC WebGPU support is optional and must never make WebGPU startup
+  fail. Compressed DDS uses one shared texture-matrix vertical convention so
+  direct and PNG fallback renders have matching orientation for every role;
+  this is transport behavior, not a game/material branch.
 
 - INI Diagnostics is read-only and survives geometry failure. Analyze staged
   text when present; attach `health` even to error payloads. A health failure

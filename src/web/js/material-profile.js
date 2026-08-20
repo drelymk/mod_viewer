@@ -145,10 +145,15 @@ function hasPackedResponse(profile) {
 }
 
 function createBinding(role, uvNode) {
+  const textureNode = texture(PLACEHOLDERS[role], uvNode);
+  // Explicit UV nodes disable TextureNode's matrix path by default. Keep it
+  // enabled for stable bindings so transport-owned DDS orientation matrices
+  // are consumed after async texture replacement without rebuilding a graph.
+  textureNode.setUpdateMatrix(true);
   return {
     role,
     placeholder: PLACEHOLDERS[role],
-    textureNode: texture(PLACEHOLDERS[role], uvNode),
+    textureNode,
     enabledNode: uniform(false),
   };
 }
