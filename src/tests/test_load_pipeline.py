@@ -15,8 +15,8 @@ from core.ini_analysis import analyze_ini
 from core.ini_document import IniDocument
 from core.ini_sections import (extract_resources, sections_from_document)
 from core.mesh_builder import (GeometryBlob, MeshBuildResult,
-                               build_mesh_payload, build_mesh_result,
-                               encode_texture_file)
+                               build_mesh_payload, build_mesh_result)
+from core.textures import encode_texture_file
 
 
 def test_document_projection_keeps_authoritative_text_and_source():

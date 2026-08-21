@@ -16,9 +16,9 @@ from PIL import Image
 from app import metadata, mod_loader, server
 from app.api import ModViewerAPI
 from core.ini_document import IniDocument
-from core.mesh_builder import (GeometryBlob, _encode_texture,
-                               _render_texture_png, build_mesh_result,
-                               set_texture_profile_hook)
+from core.mesh_builder import GeometryBlob, build_mesh_result
+from core.textures import (encode_texture_data_uri, render_texture_png,
+                           set_texture_profile_hook)
 
 
 def _write_geometry(root):
@@ -63,8 +63,8 @@ def test_render_cache_stores_png_bytes_but_direct_wrapper_stays_data_uri(tmp_pat
     path = tmp_path / "shared.png"
     Image.new("RGB", (2, 1), (128, 128, 32)).save(path)
 
-    png = _render_texture_png(str(path))
-    uri = _encode_texture(str(path))
+    png = render_texture_png(str(path))
+    uri = encode_texture_data_uri(str(path))
 
     assert isinstance(png, bytes) and png.startswith(b"\x89PNG")
     assert uri.startswith("data:image/png;base64,")
@@ -77,8 +77,8 @@ def test_texture_profile_hook_reports_cache_hit_and_miss(tmp_path):
     previous = set_texture_profile_hook(
         lambda stage, seconds, details: events.append((stage, details)))
     try:
-        first = _render_texture_png(str(path))
-        second = _render_texture_png(str(path))
+        first = render_texture_png(str(path))
+        second = render_texture_png(str(path))
     finally:
         set_texture_profile_hook(previous)
 
@@ -100,7 +100,7 @@ def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
         registered.append((os.path.basename(path), role))
         return f"/texture/test/{len(registered) - 1}"
 
-    with patch("core.mesh_builder._render_texture_png",
+    with patch("core.textures.render_texture_png",
                side_effect=AssertionError("lazy app path rendered a texture")):
         built = build_mesh_result(
             _group({
@@ -131,7 +131,7 @@ def test_wuwa_mesh_builder_publishes_only_raw_normal_source(tmp_path):
         registered.append((os.path.basename(path), role))
         return f"/texture/test/raw-{len(registered) - 1}"
 
-    with patch("core.mesh_builder._render_texture_png",
+    with patch("core.textures.render_texture_png",
                side_effect=AssertionError("lazy app path rendered a texture")):
         built = build_mesh_result(
             _group({"normal_map": "normal.png"}), str(tmp_path),
@@ -179,7 +179,7 @@ def test_mod_loader_app_path_never_renders_model_textures(tmp_path):
         registered.append((os.path.basename(path), role))
         return f"/texture/integration/{len(registered) - 1}"
 
-    with patch("core.mesh_builder._render_texture_png",
+    with patch("core.textures.render_texture_png",
                side_effect=AssertionError("loader rendered a model texture")):
         loaded = mod_loader.load_mod(
             context=context, geometry=GeometryBlob(), texture_source=register)
@@ -317,7 +317,7 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
         registered.append((os.path.basename(path), role, transform))
         return f"/texture/test/{role}"
 
-    with patch("core.mesh_builder._render_texture_png",
+    with patch("core.textures.render_texture_png",
                side_effect=AssertionError("pool publication rendered a texture")):
         metadata.hydrate_textures(
             str(tmp_path), payload, texture_source=register)
@@ -407,7 +407,7 @@ def test_native_dds_endpoint_streams_original_bytes_and_png_alias_is_valid(tmp_p
                             dds.stat().st_size)
                     assert response.read() == dds.read_bytes()
 
-        with patch("app.server._render_texture_png", return_value=b"PNG"):
+        with patch("app.server.render_texture_png", return_value=b"PNG"):
             with urlopen(base_url + native_url[:-4] + ".png") as response:
                 assert response.headers["Content-Type"].startswith("image/png")
                 assert response.read() == b"PNG"
@@ -484,7 +484,7 @@ def test_texture_requests_are_threaded_but_rendering_is_bounded(tmp_path):
 
     reached_two = False
     try:
-        with patch("app.server._render_texture_png", side_effect=blocked_render):
+        with patch("app.server.render_texture_png", side_effect=blocked_render):
             with ThreadPoolExecutor(max_workers=3) as executor:
                 futures = [executor.submit(fetch, texture_url)
                            for texture_url in texture_urls]
@@ -553,7 +553,7 @@ def test_retired_texture_request_skips_render_after_waiting_for_slot(tmp_path):
         return b"PNG"
 
     with patch.object(server, "_texture_encode_semaphore", semaphore), \
-            patch("app.server._render_texture_png", side_effect=blocked_render):
+            patch("app.server.render_texture_png", side_effect=blocked_render):
         try:
             with ThreadPoolExecutor(max_workers=2) as executor:
                 first_future = executor.submit(
@@ -605,7 +605,7 @@ def test_metadata_hydration_registers_saved_textures_without_rendering(tmp_path)
         registered.append(role)
         return f"/texture/test/{role}"
 
-    with patch("core.mesh_builder._render_texture_png",
+    with patch("core.textures.render_texture_png",
                side_effect=AssertionError("metadata hydration rendered a texture")):
         metadata.hydrate_textures(
             str(tmp_path), payload, data, texture_source=register)

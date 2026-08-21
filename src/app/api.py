@@ -9,7 +9,8 @@ import os
 
 import webview
 
-from core.mesh_builder import GeometryBlob, encode_texture_file
+from core.mesh_builder import GeometryBlob
+from core.textures import encode_texture_file
 from core.mod_discovery import discover_ini_paths
 from core.ini_health import analyze_mod
 from core.texture_profiles import texture_profile_for

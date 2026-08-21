@@ -130,13 +130,6 @@ def _install_timing(module, name, label, timings):
     setattr(module, name, measured)
 
 
-def _reset_texture_cache(mesh_builder):
-    with mesh_builder._texture_cache_lock:
-        mesh_builder._texture_cache.clear()
-        mesh_builder._texture_cache_bytes = 0
-        mesh_builder._texture_cache_mod = None
-
-
 class _ProcessSampler:
     """Sample aggregate RSS/CPU for this worker and its descendants."""
 
@@ -463,14 +456,14 @@ def _run_once(mod_path, concurrency, browser_channel):
     from app import api as api_module
     from app import edit_session, metadata, mod_loader, server
     from app.api import ModViewerAPI
-    from core import mesh_builder
+    from core import textures
 
     timings = defaultdict(list)
     profiler = TextureProfiler()
     sampler = _ProcessSampler()
     sampler.start()
-    old_hook = mesh_builder.set_texture_profile_hook(profiler)
-    _reset_texture_cache(mesh_builder)
+    old_hook = textures.set_texture_profile_hook(profiler)
+    textures.reset_texture_cache()
     for module, name, label in (
         (api_module, "discover_ini_paths", "ini_discovery"),
         (edit_session, "load_documents", "session_load"),
@@ -505,16 +498,16 @@ def _run_once(mod_path, concurrency, browser_channel):
 
     server._texture_encode_semaphore = threading.BoundedSemaphore(concurrency)
     render_probe = RenderConcurrencyProbe()
-    original_server_render = server._render_texture_png
-    server._render_texture_png = render_probe.wrap(original_server_render)
+    original_server_render = server.render_texture_png
+    server.render_texture_png = render_probe.wrap(original_server_render)
     try:
         base_url = server.start()
         browser = _run_browser(
             base_url, payload, profiler, sampler, concurrency,
             browser_channel, render_probe)
     finally:
-        server._render_texture_png = original_server_render
-        mesh_builder.set_texture_profile_hook(old_hook)
+        server.render_texture_png = original_server_render
+        textures.set_texture_profile_hook(old_hook)
         sampler.stop()
 
     texture_events = profiler.clear()

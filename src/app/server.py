@@ -26,8 +26,8 @@ import uuid
 from dataclasses import dataclass
 
 from core.dds import DDSInfo, native_dds_info
-from core.mesh_builder import (_render_texture_png, normalize_texture_role,
-                               normalize_texture_transform)
+from core.textures import (render_texture_png, normalize_texture_role,
+                           normalize_texture_transform)
 from core.texture_profiles import texture_profile_for
 from . import features, paths
 
@@ -198,7 +198,7 @@ def _texture_url(token, source_id, source):
 def _render_texture_source(source):
     """Render one source while bounding concurrent image decode/encoding."""
     with _texture_encode_semaphore:
-        return _render_texture_png(
+        return render_texture_png(
             source.path,
             max_size=source.max_size,
             preserve_alpha=source.preserve_alpha,
@@ -212,7 +212,7 @@ def _render_texture_request(token, source_id, source):
     with _texture_encode_semaphore:
         if _lookup_texture(token, source_id) is not source:
             return None
-        return _render_texture_png(
+        return render_texture_png(
             source.path,
             max_size=source.max_size,
             preserve_alpha=source.preserve_alpha,
