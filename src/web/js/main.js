@@ -15,7 +15,7 @@ import { buildPresentPanel } from './present-panel.js';
 import { initModFolderPanel } from './mod-folder-panel.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { setGeometryBlob } from './decode.js';
-import { setHealthLoader, setHealthReport } from './health-report.js';
+import { refreshHealthReport, setHealthLoader, setHealthReport } from './health-report.js';
 import { setIniEditorContext } from './ini-editor.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.js';
 import {
@@ -223,6 +223,10 @@ async function loadModAt(path) {
   window.dispatchEvent(new CustomEvent('mod-viewer-mod-loaded', {
     detail: { path },
   }));
+  // Diagnostics are independent of geometry rendering. Start them after the
+  // mod is visible so the toolbar badge is populated without requiring a
+  // click on the Diagnostics button.
+  void refreshHealthReport();
   return true;
 }
 

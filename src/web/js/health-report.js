@@ -9,7 +9,8 @@ const $ = (id) => document.getElementById(id);
 let currentReport = null;
 let currentFilter = 'all';
 let reportLoader = null;
-let loadingReport = false;
+let reportGeneration = 0;
+let activeReportLoad = null;
 
 function matchesFilter(issue) {
   if (currentFilter === 'all') return true;
@@ -124,34 +125,55 @@ export function setHealthReport(report) {
 
 export function setHealthLoader(loader) {
   reportLoader = typeof loader === 'function' ? loader : null;
+  reportGeneration += 1;
   if (!currentReport) setHealthReport(null);
 }
 
-async function openReport() {
-  if (!currentReport && reportLoader && !loadingReport) {
-    loadingReport = true;
+function fallbackReport(message = 'The INI diagnostics could not be completed.') {
+  return {
+    summary: { errors: 0, warnings: 1, issues: 1 },
+    files: {},
+    issues: [{ severity: 'warning', category: 'ini', message }],
+  };
+}
+
+// Run diagnostics without opening the modal. Loads are tied to the current
+// loader generation so a slower report for the previous mod cannot overwrite
+// the badge after the user switches folders.
+export function refreshHealthReport() {
+  const loader = reportLoader;
+  const generation = reportGeneration;
+  if (!loader) return Promise.resolve(null);
+  if (activeReportLoad?.generation === generation) return activeReportLoad.promise;
+
+  const entry = { generation, promise: null };
+  entry.promise = (async () => {
     const button = $('health-btn');
     button.disabled = true;
     button.title = 'Running INI diagnostics…';
     try {
-      const report = await reportLoader();
-      setHealthReport(report && !report.error ? report : {
-        summary: { errors: 0, warnings: 1, issues: 1 },
-        files: {},
-        issues: [{ severity: 'warning', category: 'ini',
-          message: 'The INI diagnostics could not be completed.' }],
-      });
+      const report = await loader();
+      if (generation !== reportGeneration || loader !== reportLoader) return null;
+      const normalized = report && !report.error ? report : fallbackReport();
+      setHealthReport(normalized);
+      return normalized;
     } catch (error) {
-      setHealthReport({
-        summary: { errors: 0, warnings: 1, issues: 1 },
-        files: {},
-        issues: [{ severity: 'warning', category: 'ini',
-          message: `The INI diagnostics could not be completed: ${error.message}` }],
-      });
+      if (generation !== reportGeneration || loader !== reportLoader) return null;
+      const detail = error?.message ? `: ${error.message}` : '';
+      const fallback = fallbackReport(
+        `The INI diagnostics could not be completed${detail}`);
+      setHealthReport(fallback);
+      return fallback;
     } finally {
-      loadingReport = false;
+      if (activeReportLoad === entry) activeReportLoad = null;
     }
-  }
+  })();
+  activeReportLoad = entry;
+  return entry.promise;
+}
+
+async function openReport() {
+  if (!currentReport) await refreshHealthReport();
   if (!currentReport) return;
   currentFilter = 'all';
   for (const button of $('health-filters').querySelectorAll('button')) {

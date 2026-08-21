@@ -280,7 +280,7 @@ def edge_browser():
 
 
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
-          mod_folders=None, subfolders=None):
+          mod_folders=None, subfolders=None, diagnostics=None):
     # Playwright's wait_for_function uses eval internally. Bypass the app's
     # production CSP only in this isolated test context so behavioral waits
     # do not require weakening the served application's policy.
@@ -291,8 +291,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "picks": picks or [],
         "modFolders": mod_folders or [],
         "subfolders": subfolders or {},
+        "diagnostics": diagnostics or {
+            "summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
         "calls": {"loadMod": [], "listSubfolders": [],
-                   "discardChanges": [], "switches": []},
+                   "discardChanges": [], "switches": [], "diagnostics": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -344,7 +346,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.calls.listSubfolders.push(path);
               return copy({folders: state.subfolders[path] || []});
             },
-            get_diagnostics: async () => ({summary: {issues: 0, errors: 0}, files: {}, issues: []}),
+            get_diagnostics: async path => {
+              state.calls.diagnostics.push(path);
+              return copy(state.diagnostics);
+            },
             list_toggle_source_inis: async () => [{value: 'A.ini', label: 'A.ini'}],
             list_ini_files: async () => [{value: 'A.ini', label: 'A.ini', dirty: false}],
             get_ini_text: async () => ({ini: 'A.ini', text: '[Test]\\nkey = 1\\n', dirty: false}),
@@ -512,6 +517,31 @@ def test_webgpu_unsupported_state_is_visible_and_never_falls_back(
 
 
 
+
+
+def test_diagnostics_badge_populates_after_mod_load(
+        edge_browser, frontend_url):
+    diagnostics = {
+        "summary": {"issues": 2, "errors": 1, "warnings": 1},
+        "files": {"referenced": 1},
+        "issues": [{"severity": "error", "category": "ini",
+                     "message": "Missing resource"}],
+    }
+    context, page = _page(
+        edge_browser, frontend_url, {"A": _payload("A")},
+        diagnostics=diagnostics,
+    )
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "document.querySelector('#health-count').textContent === '2'")
+        assert page.locator("#health-btn").get_attribute("title") == (
+            "2 INI diagnostic issues")
+        assert page.locator("#health-modal-backdrop.show").count() == 0
+        assert page.evaluate("window.__fakeApi.calls.diagnostics") == ["A"]
+    finally:
+        context.close()
 
 
 @pytest.mark.parametrize("failed_payload", [
