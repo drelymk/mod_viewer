@@ -3,7 +3,7 @@
 import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
          toggleGrid, toggleLightHandle, toggleTrackballGizmo,
          getEnvironmentPreset, isRendererAvailable, rendererReady,
-         setEnvironmentPreset } from './scene.js';
+         setEnvironmentPreset, getRenderCount } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
 import { refreshMeshTexture, setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleGlossy, toggleTextures } from './visibility.js';
@@ -18,6 +18,7 @@ import { setGeometryBlob } from './decode.js';
 import { refreshHealthReport, setHealthLoader, setHealthReport } from './health-report.js';
 import { setIniEditorContext } from './ini-editor.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.js';
+import { requestRender } from './render-scheduler.js';
 import {
   getOutlineState as getMeshOutlineState,
   setOutlineSuppressedByDebug,
@@ -419,12 +420,14 @@ rendererReady.then(ready => {
     // WuWa's packed normal is already resident when debug mode changes, so a
     // B/A view only changes the diagnostic uniform and binding selection.
     activeMeshes.forEach(refreshMeshTexture);
+    requestRender();
     return normalized;
   };
   window.modViewer = {
     displayMeshPayload, openMod, switchMod, reloadCurrentMod, exportChanges, activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
-    getMaterialState, setMaterialDebugMode: setMaterialDebugModeForMeshes,
+    getMaterialState, getRenderCount,
+    setMaterialDebugMode: setMaterialDebugModeForMeshes,
     setOutlineEnabled: value => {
       const enabled = setOutlinesEnabled(value);
       $('outline-btn').classList.toggle('active', enabled);

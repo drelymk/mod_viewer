@@ -8,6 +8,7 @@ import {
 } from './material-profile.js';
 import { getMeshView } from './mesh-view-bindings.js';
 import { loadDDSTexture } from './dds-loader.js';
+import { requestRender } from './render-scheduler.js';
 import { supportsBCTextureCompression } from './renderer-capabilities.js';
 import { splitTextureKey } from './texture-key.js';
 
@@ -216,6 +217,7 @@ export function refreshMeshTexture(mesh) {
   });
   if (!changed) return;
   getMeshView(mesh)?.onTextureChanged?.();
+  if (mesh.visible) requestRender();
 }
 
 export function setTextureMode(mode) {

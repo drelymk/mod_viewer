@@ -422,7 +422,7 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         assert state["isWebGPUBackend"]
         assert state["compatibilityMode"] is False
         assert state["samples"] == 4
-        assert state["animationLoop"]
+        assert not state["animationLoop"]
         assert state["outputColorSpace"] == "srgb"
         assert state["toneMapping"] == 0
         assert state["clearAlpha"] == 1
@@ -490,9 +490,12 @@ def test_texture_stays_fallback_until_png_load_completes(
         edge_browser, frontend_url):
     payload = _payload("Delayed")
     entry = payload["meshes"]["Body-Delayed-0"]
-    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0)
+    entry["idx"] = _u32(0, 1, 2, 0, 2, 3)
+    entry["uv"] = _f32(0, 0, 1, 0, 1, 1, 0, 1)
     key = entry["tex_key"]
     payload["textures"][key] = f"{frontend_url}/delayed.png"
+    texture_uri = _flat_png_uri((236, 42, 38, 255))
     pending = {"requests": 0, "route": None}
 
     context, page = _page(edge_browser, frontend_url, {"Delayed": payload})
@@ -512,6 +515,7 @@ def test_texture_stays_fallback_until_png_load_completes(
               ?.bindings?.diffuse?.enabledNode?.value === false;
           }
         """)
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
         state = page.evaluate("""() => {
           const mesh = window.modViewer.activeMeshes[0];
           const game = mesh.material.userData.gameMaterial;
@@ -522,20 +526,65 @@ def test_texture_stays_fallback_until_png_load_completes(
         }""")
         assert pending["requests"] == 1
         assert state == {"diffuseEnabled": False, "fallbackColor": 0xcccccc}
+        pending_pixel = _sample_mesh_pixel(page)
+        assert min(pending_pixel) > 20
+        assert max(pending_pixel) - min(pending_pixel) < 30
+
+        idle_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.wait_for_timeout(200)
+        assert page.evaluate("window.modViewer.getRenderCount()") == idle_count
+
+        page.evaluate("window.modViewer.setEnvironmentPreset('studio')")
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count", arg=idle_count)
+        changed_count = page.evaluate("window.modViewer.getRenderCount()")
 
         pending["route"].fulfill(
             status=200,
             content_type="image/png",
-            body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+            body=base64.b64decode(texture_uri.split(",", 1)[1]),
         )
         page.wait_for_function("""
           () => {
             const binding = window.modViewer.activeMeshes[0]?.material
               ?.userData?.gameMaterial?.bindings?.diffuse;
             return binding?.enabledNode?.value === true
-              && binding.textureNode.value?.image?.width === 1;
+              && binding.textureNode.value?.image?.width === 4;
           }
         """)
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count", arg=changed_count)
+        loaded_pixel = _sample_mesh_pixel(page)
+        assert loaded_pixel[0] > loaded_pixel[1] * 1.5, loaded_pixel
+        assert loaded_pixel != pending_pixel, (pending_pixel, loaded_pixel)
+    finally:
+        context.close()
+
+
+def test_view_gizmo_snap_renders_only_during_animation(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Snap": _payload("Snap")})
+    try:
+        _open(page, "Snap")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        page.wait_for_timeout(200)
+        idle_count = page.evaluate("window.modViewer.getRenderCount()")
+
+        page.evaluate("""
+          () => document.querySelector('.gizmo-axis.positive')
+            .dispatchEvent(new KeyboardEvent('keydown', {
+              key: 'Enter', bubbles: true,
+            }))
+        """)
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() >= count + 2",
+            arg=idle_count)
+        page.wait_for_timeout(350)
+        settled_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.wait_for_timeout(200)
+        assert page.evaluate("window.modViewer.getRenderCount()") == settled_count
+        assert settled_count > idle_count + 2
     finally:
         context.close()
 
@@ -1301,6 +1350,7 @@ def test_wuwa_body_b_threshold_controls_toon_classification(
           async () => {
             const THREE = await import('three');
             const {scene, controls} = await import('./js/scene.js');
+            const {requestRender} = await import('./js/render-scheduler.js');
             scene.traverse(object => {
               if (object.isAmbientLight || object.isHemisphereLight) object.intensity = 0;
               if (object.isSprite || object.isGridHelper) object.visible = false;
@@ -1309,6 +1359,7 @@ def test_wuwa_body_b_threshold_controls_toon_classification(
             key.target.position.copy(controls.target);
             key.position.copy(controls.target).add(new THREE.Vector3(0, 0, 3));
             key.intensity = 3;
+            requestRender();
           }
         """)
         page.wait_for_timeout(400)
@@ -1372,6 +1423,7 @@ def test_wuwa_body_missing_toon_mask_keeps_physical_direct_specular(
               async () => {
                 const THREE = await import('three');
                 const {scene, controls} = await import('./js/scene.js');
+                const {requestRender} = await import('./js/render-scheduler.js');
                 scene.traverse(object => {
                   if (object.isAmbientLight || object.isHemisphereLight) {
                     object.intensity = 0;
@@ -1384,6 +1436,7 @@ def test_wuwa_body_missing_toon_mask_keeps_physical_direct_specular(
                 key.position.copy(controls.target).add(new THREE.Vector3(0, 0, 3));
                 key.intensity = 3;
                 window.modViewer.activeMeshes[0].material.roughness = 0.2;
+                requestRender();
               }
             """)
             page.wait_for_timeout(400)
@@ -1418,8 +1471,9 @@ def test_wuwa_packed_rg_normal_matches_derived_reference_and_y_sign(
     def configure_light(page):
         page.evaluate("""
           async () => {
-            const THREE = await import('three');
-            const {scene, controls} = await import('./js/scene.js');
+                const THREE = await import('three');
+                const {scene, controls} = await import('./js/scene.js');
+                const {requestRender} = await import('./js/render-scheduler.js');
             let key = null;
             scene.traverse(object => {
               if (object.isAmbientLight || object.isHemisphereLight) {
@@ -1435,6 +1489,7 @@ def test_wuwa_packed_rg_normal_matches_derived_reference_and_y_sign(
             key.position.copy(controls.target)
               .add(new THREE.Vector3(0.8, 0.4, 2.0));
             key.intensity = 1;
+            requestRender();
           }
         """)
         page.wait_for_timeout(400)
@@ -1577,6 +1632,7 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
           async () => {
             const THREE = await import('three');
             const {scene, controls} = await import('./js/scene.js');
+            const {requestRender} = await import('./js/render-scheduler.js');
             scene.traverse(object => {
               if (object.isAmbientLight || object.isHemisphereLight) {
                 object.intensity = 0;
@@ -1588,6 +1644,7 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
             key.target.position.copy(controls.target);
             key.position.copy(controls.target).add(new THREE.Vector3(0.8, 0, 0.35));
             key.intensity = 1;
+            requestRender();
           }
         """)
         page.wait_for_timeout(400)

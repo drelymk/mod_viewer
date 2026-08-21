@@ -6,6 +6,7 @@ import { disposeGameMaterial } from './material-profile.js';
 import { setMeshTextureState } from './mesh-factory.js';
 import { attachOutline, detachOutline } from './outline-renderer.js';
 import { initializeMeshRenderModes } from './render-modes.js';
+import { requestRender } from './render-scheduler.js';
 
 export const activeMeshes = [];
 
@@ -22,6 +23,7 @@ export function resetMeshes() {
   });
   activeMeshes.length = 0;
   resetModelOrientation();
+  requestRender();
 }
 
 export function addMesh(mesh, conditions, sources, textureVariants, materialVariants = {}) {
@@ -53,6 +55,7 @@ export function resetMeshVisibility() {
     mesh.userData.manuallyToggled = false;
     applyMeshVisibility(mesh);
   });
+  requestRender();
 }
 
 /** Pin or clear one mesh's highlighted diffuse. Ordered component propagation
@@ -60,6 +63,7 @@ export function resetMeshVisibility() {
 export function setManualTexOverride(mesh, value) {
   mesh.userData.manualTexOverride = value;
   applyTextureVariant(mesh);
+  requestRender();
 }
 
 export function conditionsSatisfied(mesh) {
@@ -100,6 +104,7 @@ export function applyTextureVariant(mesh) {
 // always reveal a currently gated mesh.
 export function applyMeshVisibility(mesh) {
   mesh.visible = mesh.userData.manualVisible !== false;
+  requestRender();
 }
 
 function applyShapeTargets(mesh) {
@@ -154,4 +159,5 @@ export function refreshMeshes() {
     applyTextureVariant(mesh);
     applyShapeTargets(mesh);
   });
+  requestRender();
 }

@@ -24,7 +24,7 @@ function createLightHandle() {
 }
 
 export function createKeyLightController({
-  scene, camera, renderer, controls, light,
+  scene, camera, renderer, controls, light, onChange,
 }) {
   const handle = createLightHandle();
   scene.add(handle);
@@ -109,10 +109,14 @@ export function createKeyLightController({
     if (drag.depthMode) {
       light.position.copy(drag.startPosition).addScaledVector(
         drag.cameraDirection, (drag.startY - event.clientY) * drag.depthScale);
+      onChange?.();
       return;
     }
     updatePointer(event);
-    if (raycaster.ray.intersectPlane(dragPlane, hit)) light.position.copy(hit);
+    if (raycaster.ray.intersectPlane(dragPlane, hit)) {
+      light.position.copy(hit);
+      onChange?.();
+    }
   });
 
   function finishDrag(event) {
@@ -144,6 +148,7 @@ export function createKeyLightController({
     button.title = labels[mode];
     button.setAttribute('aria-label', labels[mode]);
     updateCursor();
+    onChange?.();
   }
 
   function rebase(modelSize) {
@@ -151,6 +156,7 @@ export function createKeyLightController({
     light.position.copy(controls.target).addScaledVector(
       new THREE.Vector3(-0.55, 0.82, 0.35).normalize(), distance);
     handle.position.copy(light.position);
+    onChange?.();
   }
 
   function update() {

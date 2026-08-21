@@ -2,6 +2,7 @@
 
 import * as THREE from 'three/webgpu';
 import { normalLocal, positionLocal, uniform } from 'three/tsl';
+import { requestRender } from './render-scheduler.js';
 
 const OUTLINE_WIDTH_PIXELS = 1.5;
 const outlineWidthWorldNode = uniform(0);
@@ -63,6 +64,7 @@ export function detachOutline(mesh) {
 export function setOutlinesEnabled(value) {
   outlinesEnabled = value === undefined ? !outlinesEnabled : !!value;
   syncOutlineVisibility();
+  requestRender();
   return outlinesEnabled;
 }
 
@@ -73,11 +75,13 @@ export function isOutlineEnabled() {
 export function setOutlineSuppressedByWireframe(value) {
   suppressedByWireframe = !!value;
   syncOutlineVisibility();
+  requestRender();
 }
 
 export function setOutlineSuppressedByDebug(value) {
   suppressedByDebug = !!value;
   syncOutlineVisibility();
+  requestRender();
 }
 
 /** Update the shared world-space extrusion from the current CSS viewport. */
