@@ -15,6 +15,7 @@ import { splitTextureKey } from './texture-key.js';
 // loaders are cached so several meshes sharing a texture share one GPU upload.
 let registry = {};
 const loaders = {};
+const readyTextures = new Set();
 const failedTextures = new Set();
 const nativeDDSFallbacks = new Set();
 const textureUsers = new Map();
@@ -35,6 +36,7 @@ export function setTextures(textures) {
     delete loaders[key];
   }
   failedTextures.clear();
+  readyTextures.clear();
   nativeDDSFallbacks.clear();
   textureUsers.clear();
 }
@@ -47,6 +49,7 @@ export function addTexture(key, uri) {
   registry[key] = uri;
   disposeTexture(loaders[key]);
   delete loaders[key];
+  readyTextures.delete(key);
   failedTextures.delete(key);
   nativeDDSFallbacks.delete(key);
   textureUsers.delete(key);
@@ -67,15 +70,34 @@ function trackTextureUser(mesh, key) {
   users.add(mesh);
 }
 
+function primePendingTexture(mesh, role, texture) {
+  updateGameMaterialTextures(mesh, {[role]: texture}, {
+    pending: {[role]: true},
+  });
+}
+
+function handleTextureReady(key, texture, uri) {
+  // A manual replacement or a newer model may have evicted this request
+  // before the browser reported success. Do not revive the stale texture or
+  // mark the replacement as ready.
+  if (registry[key] !== uri || loaders[key] !== texture) {
+    disposeTexture(texture);
+    return;
+  }
+  readyTextures.add(key);
+  texture.needsUpdate = true;
+  for (const mesh of textureUsers.get(key) || []) refreshMeshTexture(mesh);
+}
+
 function handleTextureError(key, texture, uri) {
   // A manual replacement or a newer model may have evicted this request
   // before the browser reported its failure. Do not mark the replacement as
   // unavailable in that case.
-  if (registry[key] !== uri
-      || (loaders[key] && loaders[key] !== texture)) {
+  if (registry[key] !== uri || loaders[key] !== texture) {
     disposeTexture(texture);
     return;
   }
+  readyTextures.delete(key);
   failedTextures.add(key);
   if (loaders[key] === texture) delete loaders[key];
   disposeTexture(texture);
@@ -99,6 +121,7 @@ function handleNativeDDSFailure(key, texture, uri) {
   }
   if (nativeDDSFallbacks.has(key)) return;
   nativeDDSFallbacks.add(key);
+  readyTextures.delete(key);
   if (loaders[key] === texture) delete loaders[key];
   disposeTexture(texture);
   for (const mesh of textureUsers.get(key) || []) refreshMeshTexture(mesh);
@@ -118,6 +141,7 @@ function getTexture(mesh, key) {
       : isDDSUri(uri) ? pngFallbackUri(uri) : uri;
     let texture;
     let failedBeforeAssignment = false;
+    let readyBeforeAssignment = false;
     const onError = () => {
       if (!texture) {
         failedBeforeAssignment = true;
@@ -125,13 +149,20 @@ function getTexture(mesh, key) {
       }
       handleTextureError(key, texture, uri);
     };
+    const onReady = () => {
+      if (!texture) {
+        readyBeforeAssignment = true;
+        return;
+      }
+      handleTextureReady(key, texture, uri);
+    };
     if (nativeDDS) {
       texture = loadDDSTexture(
-        requestUri, undefined,
+        requestUri, onReady,
         () => handleNativeDDSFailure(key, texture, uri));
     } else {
       texture = new THREE.TextureLoader().load(
-        requestUri, undefined, undefined, onError);
+        requestUri, onReady, undefined, onError);
     }
     texture.colorSpace = parsed.role === 'diffuse'
       ? THREE.SRGBColorSpace : THREE.NoColorSpace;
@@ -139,8 +170,21 @@ function getTexture(mesh, key) {
     if (failedBeforeAssignment) {
       handleTextureError(key, texture, uri);
     }
+    if (readyBeforeAssignment) {
+      handleTextureReady(key, texture, uri);
+    }
   }
-  return loaders[key];
+  if (!readyTextures.has(key) && loaders[key]) {
+    const texture = loaders[key];
+    const uri = registry[key];
+    queueMicrotask(() => {
+      if (registry[key] === uri && loaders[key] === texture
+          && !readyTextures.has(key) && !failedTextures.has(key)) {
+        primePendingTexture(mesh, parsed.role, texture);
+      }
+    });
+  }
+  return readyTextures.has(key) ? loaders[key] : null;
 }
 
 /** Bind whatever diffuse map the mesh currently wants, honouring the global

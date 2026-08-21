@@ -486,6 +486,279 @@ def test_direct_dds_matches_png_orientation_and_diffuse_color(
 
 
 
+def test_texture_stays_fallback_until_png_load_completes(
+        edge_browser, frontend_url):
+    payload = _payload("Delayed")
+    entry = payload["meshes"]["Body-Delayed-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    key = entry["tex_key"]
+    payload["textures"][key] = f"{frontend_url}/delayed.png"
+    pending = {"requests": 0, "route": None}
+
+    context, page = _page(edge_browser, frontend_url, {"Delayed": payload})
+
+    def hold(route):
+        pending["requests"] += 1
+        pending["route"] = route
+
+    page.route("**/delayed.png", hold)
+    try:
+        _open(page, "Delayed")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("""
+          () => {
+            const mesh = window.modViewer.activeMeshes[0];
+            return mesh?.material?.userData?.gameMaterial
+              ?.bindings?.diffuse?.enabledNode?.value === false;
+          }
+        """)
+        state = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const game = mesh.material.userData.gameMaterial;
+          return {
+            diffuseEnabled: game.bindings.diffuse.enabledNode.value,
+            fallbackColor: mesh.material.color.getHex(),
+          };
+        }""")
+        assert pending["requests"] == 1
+        assert state == {"diffuseEnabled": False, "fallbackColor": 0xcccccc}
+
+        pending["route"].fulfill(
+            status=200,
+            content_type="image/png",
+            body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+        )
+        page.wait_for_function("""
+          () => {
+            const binding = window.modViewer.activeMeshes[0]?.material
+              ?.userData?.gameMaterial?.bindings?.diffuse;
+            return binding?.enabledNode?.value === true
+              && binding.textureNode.value?.image?.width === 1;
+          }
+        """)
+    finally:
+        context.close()
+
+
+def test_shared_texture_waits_once_and_updates_all_meshes(
+        edge_browser, frontend_url):
+    payload = _payload("Shared")
+    entry = payload["meshes"]["Body-Shared-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    second = copy.deepcopy(entry)
+    second["component"] = "Face Shared"
+    payload["meshes"]["Face-Shared-0"] = second
+    key = entry["tex_key"]
+    payload["textures"][key] = f"{frontend_url}/shared.png"
+    pending = {"requests": 0, "route": None}
+
+    context, page = _page(edge_browser, frontend_url, {"Shared": payload})
+
+    def hold(route):
+        pending["requests"] += 1
+        pending["route"] = route
+
+    page.route("**/shared.png", hold)
+    try:
+        _open(page, "Shared")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes.every(mesh =>
+            mesh.material.userData.gameMaterial.bindings.diffuse.enabledNode.value
+              === false)
+        """)
+        assert pending["requests"] == 1
+
+        pending["route"].fulfill(
+            status=200,
+            content_type="image/png",
+            body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+        )
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes.every(mesh =>
+            mesh.material.userData.gameMaterial.bindings.diffuse.enabledNode.value
+              === true)
+        """)
+    finally:
+        context.close()
+
+
+def test_failed_texture_stays_fallback_without_retrying(
+        edge_browser, frontend_url):
+    payload = _payload("FailedTexture")
+    entry = payload["meshes"]["Body-FailedTexture-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    key = entry["tex_key"]
+    payload["textures"][key] = f"{frontend_url}/failed.png"
+    pending = {"requests": 0, "route": None}
+
+    context, page = _page(
+        edge_browser, frontend_url, {"FailedTexture": payload})
+
+    def hold(route):
+        pending["requests"] += 1
+        pending["route"] = route
+
+    page.route("**/failed.png", hold)
+    try:
+        _open(page, "FailedTexture")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.bindings?.diffuse?.enabledNode?.value === false
+        """)
+        pending["route"].abort()
+        page.wait_for_function(
+            """async key => {
+              const {hasTexture} = await import('./js/mesh-factory.js');
+              return hasTexture(key) === false;
+            }""",
+            arg=key,
+        )
+        page.wait_for_timeout(100)
+        assert pending["requests"] == 1
+        assert page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return {
+            enabled: mesh.material.userData.gameMaterial
+              .bindings.diffuse.enabledNode.value,
+            fallbackColor: mesh.material.color.getHex(),
+          };
+        }""") == {"enabled": False, "fallbackColor": 0xcccccc}
+    finally:
+        context.close()
+
+
+def test_native_dds_failure_falls_back_without_black_frame(
+        edge_browser, frontend_url):
+    payload = _payload("NativeDDS")
+    entry = payload["meshes"]["Body-NativeDDS-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    key = "diffuse::NativeDDS.dds"
+    entry["tex_key"] = key
+    payload["textures"] = {key: f"{frontend_url}/native.dds"}
+    pending = {"dds": None}
+    requests = {"dds": 0, "png": 0}
+
+    context, page = _page(edge_browser, frontend_url, {"NativeDDS": payload})
+    try:
+        supported = page.evaluate("""
+          async () => {
+            const {supportsBCTextureCompression} =
+              await import('./js/renderer-capabilities.js');
+            return supportsBCTextureCompression();
+          }
+        """)
+        if not supported:
+            pytest.skip("native DDS is not supported by the test renderer")
+
+        def hold_dds(route):
+            requests["dds"] += 1
+            pending["dds"] = route
+
+        def fulfill_png(route):
+            requests["png"] += 1
+            route.fulfill(
+                status=200,
+                content_type="image/png",
+                body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+            )
+
+        page.route("**/native.dds", hold_dds)
+        page.route("**/native.png", fulfill_png)
+        _open(page, "NativeDDS")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.bindings?.diffuse?.enabledNode?.value === false
+        """)
+        assert requests == {"dds": 1, "png": 0}
+
+        pending["dds"].abort()
+        page.wait_for_function("""
+          () => {
+            const binding = window.modViewer.activeMeshes[0]?.material
+              ?.userData?.gameMaterial?.bindings?.diffuse;
+            return binding?.enabledNode?.value === true
+              && binding.textureNode.value?.isCompressedTexture !== true
+              && binding.textureNode.value?.image?.width === 1;
+          }
+        """)
+        assert requests == {"dds": 1, "png": 1}
+    finally:
+        context.close()
+
+
+def test_replaced_pending_texture_ignores_stale_completion(
+        edge_browser, frontend_url):
+    payload = _payload("Replacement")
+    entry = payload["meshes"]["Body-Replacement-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    key = entry["tex_key"]
+    payload["textures"][key] = f"{frontend_url}/old.png"
+    pending = {"old": None}
+    requests = {"old": 0, "new": 0}
+
+    context, page = _page(edge_browser, frontend_url, {"Replacement": payload})
+    try:
+        def hold_old(route):
+            requests["old"] += 1
+            pending["old"] = route
+
+        def fulfill_new(route):
+            requests["new"] += 1
+            route.fulfill(
+                status=200,
+                content_type="image/png",
+                body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+            )
+
+        page.route("**/old.png", hold_old)
+        page.route("**/new.png", fulfill_new)
+        _open(page, "Replacement")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.bindings?.diffuse?.enabledNode?.value === false
+        """)
+        assert requests == {"old": 1, "new": 0}
+
+        page.evaluate("""async ({key, uri}) => {
+          const {addTexture, refreshMeshTexture} =
+            await import('./js/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          addTexture(key, uri);
+          refreshMeshTexture(mesh);
+        }""", {"key": key, "uri": f"{frontend_url}/new.png"})
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.bindings?.diffuse?.enabledNode?.value === true
+        """)
+        assert requests == {"old": 1, "new": 1}
+        page.evaluate("""() => {
+          window.__replacementTexture = window.modViewer.activeMeshes[0]
+            .material.userData.gameMaterial.bindings.diffuse.textureNode.value;
+        }""")
+
+        pending["old"].fulfill(
+            status=200,
+            content_type="image/png",
+            body=base64.b64decode(_flat_png_uri((255, 0, 0, 255))
+                                 .split(",", 1)[1]),
+        )
+        page.wait_for_timeout(200)
+        assert page.evaluate("""
+          () => {
+            const binding = window.modViewer.activeMeshes[0].material
+              .userData.gameMaterial.bindings.diffuse;
+            return binding.enabledNode.value === true
+              && binding.textureNode.value === window.__replacementTexture;
+          }
+        """)
+    finally:
+        context.close()
+
+
 def test_webgpu_unsupported_state_is_visible_and_never_falls_back(
         edge_browser, frontend_url):
     context = edge_browser.new_context(bypass_csp=True)
@@ -852,11 +1125,21 @@ def test_wuwa_debug_modes_are_capability_gated_and_uniform_only(
         assert state["hasDebugNodes"]
 
         page.evaluate("window.modViewer.setMaterialDebugMode('normal-data-b')")
+        page.wait_for_function("""
+          () => {
+            const binding = window.modViewer.activeMeshes[0]?.material
+              ?.userData?.gameMaterial?.bindings?.normal_data;
+            return binding?.enabledNode?.value === true
+              && binding.textureNode.value?.image?.width === 4;
+          }
+        """)
         page.wait_for_timeout(300)
         low_pixel = _sample_mesh_pixel(page)
         page.evaluate("""async key => {
           const {setMeshTextureState} = await import('./js/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
+          window.__normalLowTexture = mesh.material.userData.gameMaterial
+            .bindings.normal_data.textureNode.value;
           setMeshTextureState(mesh, {
             diffuse: mesh.userData.texKey,
             normal_map: null,
@@ -865,7 +1148,16 @@ def test_wuwa_debug_modes_are_capability_gated_and_uniform_only(
             material_map: null,
           });
         }""", normal_high)
-        page.wait_for_timeout(400)
+        page.wait_for_function("""
+          () => {
+            const binding = window.modViewer.activeMeshes[0]?.material
+              ?.userData?.gameMaterial?.bindings?.normal_data;
+            return binding?.enabledNode?.value === true
+              && binding.textureNode.value !== window.__normalLowTexture
+              && binding.textureNode.value?.image?.width === 4;
+          }
+        """)
+        page.wait_for_timeout(300)
         high_pixel = _sample_mesh_pixel(page)
         assert sum(high_pixel) > sum(low_pixel), (low_pixel, high_pixel)
     finally:
@@ -1272,6 +1564,15 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
         page.wait_for_function(
             "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
             "?.bindings.light_map.enabledNode.value === true")
+        page.wait_for_function("""
+          () => {
+            const game = window.modViewer.activeMeshes[0]?.material
+              ?.userData?.gameMaterial;
+            return game?.bindings?.diffuse?.enabledNode?.value === true
+              && game.bindings.normal_data.enabledNode.value === true
+              && game.bindings.light_map.enabledNode.value === true;
+          }
+        """)
         page.evaluate("""
           async () => {
             const THREE = await import('three');
@@ -1307,7 +1608,10 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
             material_map: null,
           });
         }""")
-        page.wait_for_timeout(400)
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.bindings?.light_map?.enabledNode?.value === false
+        """)
         state = page.evaluate("""() => {
           const mesh = window.modViewer.activeMeshes[0];
           return {
