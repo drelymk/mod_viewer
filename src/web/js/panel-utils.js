@@ -1,5 +1,9 @@
 // Exact shared source grouping/collapse behavior used by the three panels.
 
+import { createIcon } from './ui-icons.js';
+
+let sourceSectionId = 0;
+
 export function groupKeysBySource(records, keys = Object.keys(records || {})) {
   const grouped = {};
   for (const key of keys) {
@@ -20,9 +24,12 @@ export function buildSourceSection(source, container, {
 } = {}) {
   const header = document.createElement('div');
   header.className = headerClass;
-  const chevron = document.createElement('span');
+  const chevron = document.createElement('button');
+  chevron.type = 'button';
   chevron.className = 'group-toggle';
-  chevron.textContent = '▼';
+  chevron.setAttribute('aria-expanded', 'true');
+  chevron.setAttribute('aria-label', `Collapse ${source}`);
+  chevron.appendChild(createIcon('chevron-down'));
   const name = document.createElement('span');
   name.className = 'group-name';
   name.textContent = source;
@@ -30,9 +37,14 @@ export function buildSourceSection(source, container, {
 
   const items = document.createElement('div');
   items.className = itemsClass;
+  items.id = `source-section-${++sourceSectionId}`;
+  chevron.setAttribute('aria-controls', items.id);
   header.addEventListener('click', () => {
-    chevron.classList.toggle('collapsed');
-    items.classList.toggle('collapsed');
+    const collapsed = !items.classList.contains('collapsed');
+    chevron.classList.toggle('collapsed', collapsed);
+    chevron.setAttribute('aria-expanded', String(!collapsed));
+    chevron.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${source}`);
+    items.classList.toggle('collapsed', collapsed);
   });
   container.append(header, items);
   return items;

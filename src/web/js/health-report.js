@@ -120,6 +120,9 @@ export function setHealthReport(report) {
   button.title = !report ? (reportLoader ? 'Run INI diagnostics' : 'Open a mod to run INI diagnostics')
     : count ? `${count} INI diagnostic issue${count === 1 ? '' : 's'}`
       : 'No INI issues found';
+  button.setAttribute('aria-label', !report
+    ? (reportLoader ? 'Run INI diagnostics' : 'Open a mod to run INI diagnostics')
+    : `${count} INI diagnostic issue${count === 1 ? '' : 's'}. Open diagnostics`);
   if ($('health-modal-backdrop').classList.contains('show')) renderReport();
 }
 

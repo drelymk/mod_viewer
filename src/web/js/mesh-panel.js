@@ -3,7 +3,6 @@
 // per component, one checkbox per draw call within it.
 
 import { buildMesh, hasTexture } from './mesh-factory.js';
-import { isGameMaterialTextureBound } from './material-profile.js';
 import {
   activeMeshes, addMesh, applyMeshVisibility, setManualTexOverride,
 } from './mesh-state.js';
@@ -15,8 +14,11 @@ import { registerViewSync } from './view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from './panel-utils.js';
 import { selectMesh } from './selection.js';
 import { openTextureModal } from './texture-modal.js';
+import { registerInspectorMesh } from './inspector-panel.js';
+import { createIcon } from './ui-icons.js';
 
 let groupsUI = [];
+let meshSectionId = 0;
 
 const MATERIAL_KIND_OPTIONS = Object.freeze([
   ['auto', 'Auto'],
@@ -49,7 +51,6 @@ function syncMeshPanel() {
     const all = group.itemCbs.every(control => control.checked);
     group.masterCb.checked = all;
     group.masterCb.indeterminate = any && !all;
-    group.onTexChanged?.();
   }
 }
 
@@ -77,13 +78,17 @@ function groupByComponent(names, meshes) {
 function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
                           onPoolChange, componentKind,
                           onMaterialKindChanged, componentIdentity = groupName,
-                          source = '') {
+                          source = '', onComponentSelected = null) {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
 
-  const chevron = document.createElement('span');
+  const chevron = document.createElement('button');
+  chevron.type = 'button';
   chevron.className = 'group-toggle';
-  chevron.textContent = '▼';
+  chevron.setAttribute('aria-expanded', 'true');
+  chevron.setAttribute('aria-label', `Collapse ${groupName}`);
+  chevron.setAttribute('aria-controls', itemsWrap.id);
+  chevron.appendChild(createIcon('chevron-down'));
 
   const masterCb = document.createElement('input');
   masterCb.type = 'checkbox';
@@ -95,6 +100,10 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
   nameSpan.title = groupName;
 
   hdr.append(chevron, masterCb, nameSpan);
+  nameSpan.addEventListener('click', event => {
+    event.stopPropagation();
+    onComponentSelected?.();
+  });
 
   const materialSelect = document.createElement('select');
   materialSelect.className = 'material-kind-select component-material-kind-control';
@@ -129,32 +138,35 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
       materialSelect.disabled = false;
     }
   });
-  hdr.appendChild(materialSelect);
-
-  // Always shown, even for a component with no diffuse loaded at all --
-  // that's the only way to attach one via "Add". updateTexButtonState gives
-  // it the plain (non-.active) look automatically whenever nothing's
-  // actually applied, which already reads as "disabled" without a separate
-  // CSS state.
+  // Always available to Inspector, even for a component with no diffuse
+  // loaded at all -- that is the only way to attach one via "Add".
   const texBtn = document.createElement('button');
+  texBtn.type = 'button';
   texBtn.className = 'group-tex-btn';
-  texBtn.textContent = '🖼';
+  texBtn.appendChild(createIcon('texture'));
   texBtn.title = 'Manage textures for this component';
+  texBtn.setAttribute('aria-label', 'Manage textures for this component');
   texBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     openTextureModal(groupName, texturePool, modPath, onPoolChange);
   });
-  hdr.appendChild(texBtn);
-
-  // Expand/collapse the item list without touching mesh visibility.
+  const toggleItems = () => {
+    const collapsed = !itemsWrap.classList.contains('collapsed');
+    chevron.classList.toggle('collapsed', collapsed);
+    chevron.setAttribute('aria-expanded', String(!collapsed));
+    chevron.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${groupName}`);
+    itemsWrap.classList.toggle('collapsed', collapsed);
+  };
+  chevron.addEventListener('click', event => {
+    event.stopPropagation();
+    toggleItems();
+  });
   hdr.addEventListener('click', (e) => {
-    if (e.target === masterCb || e.target === texBtn
-        || e.target.closest('select')) return;
-    chevron.classList.toggle('collapsed');
-    itemsWrap.classList.toggle('collapsed');
+    if (e.target === masterCb || e.target.closest('select')) return;
+    onComponentSelected?.();
   });
 
-  return { hdr, masterCb, texBtn };
+  return { hdr, masterCb, texBtn, materialSelect };
 }
 
 /** Collapsed-by-default child list of every diffuse this mesh's component
@@ -193,20 +205,45 @@ function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
 
   function syncSelection() {
     const selected = selectedKey();
+    const current = mesh.userData.manualTexOverride;
     rows.forEach(({ row, value }) => {
-      row.classList.toggle('selected', selected === value);
+      const kind = row.dataset.textureChoice;
+      row.classList.toggle('selected',
+        (kind === 'automatic' && current === undefined)
+        || (kind === 'none' && current === null)
+        || (kind === 'texture' && selected === value));
     });
   }
 
   function rebuild() {
     wrap.replaceChildren();
     rows = [];
-    function addRow(label, value) {
+    function addRow(label, value, kind = 'texture') {
       const row = document.createElement('div');
       row.className = 'tex-item';
+      row.dataset.textureChoice = kind;
       row.textContent = label;
       row.addEventListener('click', () => {
         const current = mesh.userData.manualTexOverride;
+        if (kind === 'automatic') {
+          mesh.userData.textureHighlightDisabled = false;
+          setManualTexOverride(mesh, undefined);
+          recomputeTextureRuns(groupMeshes);
+          syncSelection();
+          onActiveChanged?.('selection');
+          saveTextureState(mesh.userData.modPath);
+          return;
+        }
+        if (kind === 'none') {
+          const newVal = current === null ? undefined : null;
+          mesh.userData.textureHighlightDisabled = false;
+          setManualTexOverride(mesh, newVal);
+          recomputeTextureRuns(groupMeshes);
+          syncSelection();
+          onActiveChanged?.('selection');
+          saveTextureState(mesh.userData.modPath);
+          return;
+        }
         const autoHighlighted = current === undefined
           && mesh.userData.automaticTextureBoundary
           && mesh.userData.resolvedTexKey === value
@@ -228,16 +265,16 @@ function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
         setManualTexOverride(mesh, newVal);
         recomputeTextureRuns(groupMeshes);
         syncSelection();
-        if (onActiveChanged) onActiveChanged();
+        if (onActiveChanged) onActiveChanged('selection');
         saveTextureState(mesh.userData.modPath);
       });
       wrap.appendChild(row);
       rows.push({ row, value });
     }
 
-    for (const opt of pool) {
-      addRow(opt.label, opt.tex_key);
-    }
+    addRow('Automatic', undefined, 'automatic');
+    for (const opt of pool) addRow(opt.label, opt.tex_key);
+    addRow('None', null, 'none');
     // A removed active option has no matching row, so all rows remain clear.
     syncSelection();
   }
@@ -260,6 +297,7 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
   const cb = document.createElement('button');
   cb.type = 'button';
   cb.className = 'mesh-state-btn';
+  cb.appendChild(createIcon('visibility'));
   cb.checked = true;
   cb.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -278,20 +316,18 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
   const { wrap: texList, rebuild: rebuildTexList, syncSelection } = buildTextureList(
     pool, mesh, groupMeshes, onActiveChanged);
 
-  const chevron = document.createElement('span');
-  chevron.className = 'group-toggle collapsed';
-  chevron.textContent = '▼';
-
   const label = entry.drawindexed
     ? entry.drawindexed.join(', ')
     : '#' + name.slice(groupName.length + 1);
   const labelSpan = document.createElement('span');
   labelSpan.className = 'mesh-name';
   labelSpan.textContent = mesh.userData.displayName || label;
-  row.append(cb, chevron, labelSpan);
+  row.append(cb, labelSpan);
   const updateStateIndicator = (m) => {
     cb.checked = m.visible;
-    cb.textContent = m.userData.manuallyToggled ? (m.visible ? '✅' : '🟨') : (m.visible ? '✅' : '🟥');
+    cb.classList.toggle('state-hidden', !m.visible);
+    cb.classList.toggle('state-manual', !!m.userData.manuallyToggled);
+    cb.setAttribute('aria-pressed', String(m.visible));
     if (m.userData.manuallyToggled) {
       cb.title = 'Manually toggled in the viewer';
     } else if (m.visible === (m.userData.loadedVisible !== false)) {
@@ -351,31 +387,19 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
     syncStateIndicator: () => updateStateIndicator(mesh),
     syncTextureSelection: syncSelection,
     rebuildTextureList: rebuildTexList,
-    onTextureChanged: onActiveChanged,
+    onTextureChanged: () => onActiveChanged?.('state'),
   });
   row.addEventListener('click', (e) => {
     if (e.target === cb) return;
-    if (e.target === chevron) {
-      chevron.classList.toggle('collapsed');
-      texList.classList.toggle('collapsed');
-      return;
-    }
     selectMesh(mesh);
   });
 
   const wrap = document.createElement('div');
   wrap.className = 'draw-item-wrap';
-  wrap.append(row, texList);
-  return { wrap, rebuildTexList };
-}
-
-/** Reflects whether any mesh in the component currently has a texture
- * actually applied (post toggle/manual resolution) onto its header button --
- * same on/off visual language as #texture-btn/#wire-btn in app.css. */
-function updateTexButtonState(texBtn, itemObjs) {
-  if (!texBtn) return;
-  texBtn.classList.toggle('active', itemObjs.some(mesh =>
-    isGameMaterialTextureBound(mesh.material, 'diffuse')));
+  // Texture choices are rendered by Inspector. Keep this detached list as
+  // the authoritative event/state surface for its buttons.
+  wrap.append(row);
+  return { wrap, rebuildTexList, texList };
 }
 
 /** Build the panel and add every mesh in the mesh map to the scene. `modPath`
@@ -402,6 +426,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
     for (const [groupName, names] of Object.entries(groupByComponent(bySource[src], meshes))) {
       const itemsWrap = document.createElement('div');
       itemsWrap.className = 'group-items';
+      itemsWrap.id = `mesh-group-${++meshSectionId}`;
 
       const poolIds = new Set(names.map(name => meshes[name].texture_pool_id)
         .filter(Boolean));
@@ -419,7 +444,14 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
 
       const itemCbs = [], itemObjs = [], texListRenderers = [];
       const highlightedDefaults = new Set();
-      const onActiveChanged = () => updateTexButtonState(texBtn, itemObjs);
+      const componentDescriptor = {
+        type: 'component', component: groupName, source: src,
+        meshes: itemObjs, texturePool, modPath,
+      };
+      const onActiveChanged = (reason = 'selection') => window.dispatchEvent(
+        new CustomEvent('mod-viewer-inspector-refresh', {
+          detail: { component: componentDescriptor, reason },
+        }));
       // Re-renders every mesh's own texture list in this component after the
       // "manage textures" popup adds/removes an entry from the shared pool
       // -- a plain add/remove on `texturePool` doesn't itself touch the
@@ -427,13 +459,18 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
       const onPoolChange = () => {
         texListRenderers.forEach(r => r());
         recomputeTextureRuns(itemObjs);
-        onActiveChanged();
+        onActiveChanged('pool');
         saveTextureState(modPath);
       };
 
-      const { hdr, masterCb, texBtn } = buildGroupHeader(
+      const { hdr, masterCb, texBtn, materialSelect } = buildGroupHeader(
         groupName, itemsWrap, texturePool, modPath, onPoolChange,
-        componentKind, options.onMaterialKindChanged, componentIdentity, src);
+        componentKind, options.onMaterialKindChanged, componentIdentity, src,
+        () => window.dispatchEvent(new CustomEvent('mod-viewer-component-selected', {
+          detail: { component: componentDescriptor },
+        })));
+      componentDescriptor.materialSelect = materialSelect;
+      componentDescriptor.texBtn = texBtn;
       container.append(hdr, itemsWrap);
 
       for (const name of names) {
@@ -466,14 +503,19 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
           highlightedDefaults.add(defaultKey);
           mesh.userData.automaticTextureBoundary = true;
         }
-        const { wrap, rebuildTexList } = buildDrawRow(
+        const { wrap, rebuildTexList, texList } = buildDrawRow(
           name, groupName, meshes[name], mesh, texturePool, itemCbs, masterCb,
           itemObjs, onActiveChanged);
         texListRenderers.push(rebuildTexList);
         itemsWrap.appendChild(wrap);
+        registerInspectorMesh(mesh, {
+          component: componentDescriptor,
+          entry: meshes[name],
+          label: mesh.userData.displayName || name,
+          textureList: texList,
+        });
       }
       recomputeTextureRuns(itemObjs);
-      updateTexButtonState(texBtn, itemObjs);
 
       masterCb.addEventListener('change', () => {
         masterCb.indeterminate = false;
@@ -488,13 +530,13 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
       });
 
       groupsUI.push({
-        masterCb, itemCbs, itemObjs, onTexChanged: onActiveChanged,
+        masterCb, itemCbs, itemObjs,
         applyTextureRuns: () => recomputeTextureRuns(itemObjs),
       });
     }
   }
 
   document.getElementById('sidebar').style.display = 'block';
-  document.getElementById('camera-panel').style.display = 'block';
+  document.getElementById('camera-panel').style.display = 'none';
   return activeMeshes;
 }

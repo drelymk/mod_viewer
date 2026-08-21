@@ -372,6 +372,9 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
 def _open(page, path):
     page.evaluate("path => { window.__fakeApi.nextPath = path; }", path)
     page.locator("#open-btn").click()
+    # Existing control-state tests exercise the Controls tab explicitly. The
+    # production default remains Inspector for a newly loaded mod.
+    page.locator("#controls-tab").evaluate("button => button.click()")
 
 
 def _sample_mesh_pixel(page):
@@ -1283,7 +1286,9 @@ def test_wuwa_body_profile_binds_normal_data_without_stock_pbr_mapping(
         page.wait_for_function(
             "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
         page.wait_for_timeout(300)
-        assert page.locator(".component-material-kind-control").count() == 1
+        page.locator("#inspector-tab").click()
+        page.locator(".group-hdr .group-name").first.click()
+        assert page.locator(".inspector-material-kind-control").count() == 1
         assert page.locator(".draw-item .material-kind-select").count() == 0
         layout = page.evaluate("""
           () => {
@@ -1293,8 +1298,8 @@ def test_wuwa_body_profile_binds_normal_data_without_stock_pbr_mapping(
             const texture = header.querySelector('.group-tex-btn');
             return {
               hasMaterialLabel: !!header.querySelector('label'),
-              selectBeforeTexture: select.compareDocumentPosition(texture)
-                & Node.DOCUMENT_POSITION_FOLLOWING ? true : false,
+              hasMaterialControl: !!select,
+              hasTextureControl: !!texture,
               nameTitle: name.title,
               nameOverflow: getComputedStyle(name).textOverflow,
               nameWhiteSpace: getComputedStyle(name).whiteSpace,
@@ -1303,7 +1308,8 @@ def test_wuwa_body_profile_binds_normal_data_without_stock_pbr_mapping(
         """)
         assert layout == {
             "hasMaterialLabel": False,
-            "selectBeforeTexture": True,
+            "hasMaterialControl": False,
+            "hasTextureControl": False,
             "nameTitle": "Body Packed",
             "nameOverflow": "ellipsis",
             "nameWhiteSpace": "nowrap",
@@ -1768,29 +1774,33 @@ def test_texture_rows_are_reused_for_control_changes_and_rebuilt_for_pool_change
     try:
         _open(page, "A")
         page.locator(".draw-item").wait_for()
-        page.locator(".draw-item .group-toggle").click()
-        page.locator(".tex-item").nth(1).click()
+        page.locator("#inspector-tab").click()
+        page.locator(".group-hdr .group-name").first.click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-option", has_text="A two").click()
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].userData.manualTexOverride"
             " === 'diffuse::A-two.png'")
-        page.evaluate("window.__textureRows = [...document.querySelectorAll('.tex-item')]")
+        page.evaluate("window.__textureRows = [...document.querySelectorAll('.inspector-texture-option')]")
 
+        page.locator("#controls-tab").click()
         page.locator("#toggle-list .toggle-cycle-btn").click()
-        assert page.evaluate("window.__textureRows.every((row, i) => row === document.querySelectorAll('.tex-item')[i])")
+        assert page.evaluate("window.__textureRows.every((row, i) => row === document.querySelectorAll('.inspector-texture-option')[i])")
         page.locator("#menu-list .toggle-cycle-btn").click()
-        assert page.evaluate("window.__textureRows.every((row, i) => row === document.querySelectorAll('.tex-item')[i])")
+        assert page.evaluate("window.__textureRows.every((row, i) => row === document.querySelectorAll('.inspector-texture-option')[i])")
         page.locator("#menu-list .menu-slider").evaluate(
             "input => { input.value = '0.5'; input.dispatchEvent(new Event('input', {bubbles: true})); }")
-        assert page.evaluate("window.__textureRows.every((row, i) => row === document.querySelectorAll('.tex-item')[i])")
+        assert page.evaluate("window.__textureRows.every((row, i) => row === document.querySelectorAll('.inspector-texture-option')[i])")
 
-        page.locator(".group-tex-btn").click()
+        page.locator("#inspector-tab").click()
+        page.locator(".inspector-manage-textures").click()
         page.locator("#texm-add").click()
-        page.wait_for_function("document.querySelectorAll('.tex-item').length === 3")
-        assert not page.evaluate("window.__textureRows[0] === document.querySelector('.tex-item')")
-        page.evaluate("window.__textureRows = [...document.querySelectorAll('.tex-item')]")
+        page.wait_for_function("document.querySelectorAll('.inspector-texture-option').length === 5")
+        assert not page.evaluate("window.__textureRows[0] === document.querySelector('.inspector-texture-option')")
+        page.evaluate("window.__textureRows = [...document.querySelectorAll('.inspector-texture-option')]")
         page.locator(".texm-row .toggle-icon-btn").last.click()
-        page.wait_for_function("document.querySelectorAll('.tex-item').length === 2")
-        assert not page.evaluate("window.__textureRows[0] === document.querySelector('.tex-item')")
+        page.wait_for_function("document.querySelectorAll('.inspector-texture-option').length === 4")
+        assert not page.evaluate("window.__textureRows[0] === document.querySelector('.inspector-texture-option')")
     finally:
         context.close()
 
@@ -2087,7 +2097,7 @@ def test_empty_mod_folder_panel_keeps_fixed_height_above_navigation_hint(
         page.locator("#mod-folder-toggle").click()
         page.locator("#mod-folder-dock.expanded").wait_for()
         panel = page.locator("#mod-folder-panel").bounding_box()
-        info = page.locator("#info").bounding_box()
+        info = page.locator("#footer").bounding_box()
         viewport_height = page.evaluate("window.innerHeight")
         handle_style = page.evaluate("""() => {
           const style = getComputedStyle(document.querySelector('#mod-folder-toggle'));
@@ -2097,8 +2107,13 @@ def test_empty_mod_folder_panel_keeps_fixed_height_above_navigation_hint(
         assert abs(panel["height"] - (viewport_height - 116)) < 1
         assert panel["y"] + panel["height"] <= info["y"]
         assert page.locator("#mod-folder-list").inner_text() == ""
+        assert page.evaluate("""() => {
+          const panel = document.querySelector('#mod-folder-panel');
+          return {inert: panel.inert, ariaHidden: panel.getAttribute('aria-hidden')};
+        }""") == {"inert": False, "ariaHidden": "false"}
         page.locator("#mod-folder-close").click()
         assert "expanded" not in page.locator("#mod-folder-dock").get_attribute("class")
+        assert page.evaluate("document.querySelector('#mod-folder-panel').inert")
     finally:
         context.close()
 
@@ -2276,17 +2291,114 @@ def test_mod_folder_add_edit_delete_modal_flow(
         page.locator("#mod-folder-modal-backdrop.show").wait_for(state="hidden")
         page.locator(".mod-folder-select", has_text="Replacement").wait_for()
 
-        page.locator("[aria-label='Edit Original']").click()
+        page.locator("[aria-label='More actions for Original']").click()
+        page.locator(".mod-folder-node").filter(has_text="Original").locator(
+            ".mod-folder-action-menu button", has_text="Edit").click()
         page.locator("#mfm-name").fill("Renamed")
         page.locator("#mfm-save").click()
         page.locator(".mod-folder-select", has_text="Renamed").wait_for()
 
-        page.locator("[aria-label='Remove Renamed']").click()
+        page.locator("[aria-label='More actions for Renamed']").click()
+        page.locator(".mod-folder-node").filter(has_text="Renamed").locator(
+            ".mod-folder-action-menu button", has_text="Remove").click()
         page.locator("#dialog-backdrop.show").wait_for()
         assert "Files on disk will not be deleted." in page.locator(
             "#dialog-message").inner_text()
         page.locator("#dialog-ok").click()
         assert page.locator(".mod-folder-select", has_text="Renamed").count() == 0
         assert page.locator(".mod-folder-select", has_text="Replacement").count() == 1
+    finally:
+        context.close()
+
+
+def test_inspector_follows_component_and_mesh_selection(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
+    try:
+        _open(page, "A")
+        assert page.evaluate("document.querySelector('#camera-buttons').parentElement.id") == (
+            "viewport-camera-buttons")
+        assert not page.locator("#camera-panel").is_visible()
+        assert page.locator("#tool-panel").evaluate(
+            "panel => getComputedStyle(panel).flexDirection") == "column"
+        assert page.locator("#health-btn .ui-icon").count() == 1
+        assert page.locator("#wire-btn").get_attribute("aria-pressed") == "false"
+        assert page.locator("#interaction-help").inner_text() == "LMB Orbit · RMB Pan · Wheel Zoom"
+        assert page.locator("#sidebar > .panel-hdr .group-toggle").evaluate(
+            "button => button.tagName") == "BUTTON"
+        page.locator("#inspector-tab").click()
+        page.locator(".group-hdr .group-name").first.click()
+        page.locator("#inspector-content").wait_for()
+        assert "Draw calls" in page.locator("#inspector-content").inner_text()
+
+        page.locator(".draw-item").first.click()
+        assert page.locator("#inspector-content .inspector-header h3").inner_text()
+        assert "Body A >" in page.locator("#selected-mesh-status").inner_text()
+
+        page.locator("#controls-tab").click()
+        assert page.locator("#inspector-panel").is_hidden()
+        page.locator("#inspector-tab").click()
+        assert not page.locator("#inspector-panel").is_hidden()
+    finally:
+        context.close()
+
+
+def test_viewport_toolbar_popovers_and_responsive_overflow(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").first.wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        page.wait_for_timeout(250)
+
+        for button_id in ("camera-reset-view-btn", "camera-flip-btn",
+                          "camera-flip-horizontal-btn"):
+            before = page.evaluate("window.modViewer.getRenderCount()")
+            page.locator(f"#{button_id}").click()
+            page.wait_for_function(
+                "count => window.modViewer.getRenderCount() > count", arg=before)
+
+        page.locator("#environment-btn").click()
+        page.locator("#environment-popover:not([hidden])").wait_for()
+        page.locator("#environment-popover .ui-popover-option", has_text="Studio").click()
+        assert page.locator("#environment-label").inner_text() == "Studio"
+        assert page.locator("#environment-popover").is_hidden()
+
+        page.locator("#texture-btn").click()
+        page.locator("#texture-popover:not([hidden])").wait_for()
+        page.locator("#texture-popover .ui-popover-option", has_text="Diffuse only").click()
+        assert page.locator("#texture-btn").get_attribute("aria-label") == (
+            "Textures: diffuse only")
+        assert page.locator("#texture-popover").is_hidden()
+
+        page.locator("#light-btn").click()
+        page.locator("#light-popover:not([hidden])").wait_for()
+        page.locator("#light-popover .ui-popover-option").click()
+        assert page.locator("#light-popover").is_hidden()
+
+        page.locator("#environment-btn").click()
+        page.locator("#environment-popover:not([hidden])").wait_for()
+        page.keyboard.press("Escape")
+        assert page.locator("#environment-popover").is_hidden()
+
+        page.set_viewport_size({"width": 640, "height": 720})
+        page.locator("#toolbar-more").wait_for()
+        assert page.locator("#health-btn .health-label").is_hidden()
+        page.locator("#toolbar-more").click()
+        assert not page.locator("#toolbar-overflow").is_hidden()
+        assert page.locator("#toolbar-overflow [data-toolbar-target='health-btn']").count() == 1
+
+        assert page.evaluate("""() => {
+          const panel = document.querySelector('#mod-folder-panel');
+          return panel.inert && panel.getAttribute('aria-hidden') === 'true';
+        }""")
+        page.locator("#mod-folder-toggle").click()
+        assert page.evaluate("document.querySelector('#mod-folder-panel').inert === false")
+        page.locator("#mod-folder-close").click()
+        assert page.evaluate("""() => {
+          const panel = document.querySelector('#mod-folder-panel');
+          return panel.inert && panel.getAttribute('aria-hidden') === 'true';
+        }""")
     finally:
         context.close()

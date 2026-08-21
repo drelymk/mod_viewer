@@ -165,6 +165,8 @@ export function createViewGizmoController({ camera, controls, element, onChange 
     const button = document.getElementById('trackball-btn');
     button.classList.toggle('active', visible);
     button.classList.toggle('off', !visible);
+    button.setAttribute('aria-pressed', String(visible));
+    button.setAttribute('aria-label', `Toggle navigation gizmo: ${visible ? 'on' : 'off'}`);
   }
 
   function cancelSnap() {

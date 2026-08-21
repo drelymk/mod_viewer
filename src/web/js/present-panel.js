@@ -4,6 +4,7 @@ import { getToggleValue, refreshAll, setToggleValue } from './visibility.js';
 import { alertDialog, confirmDialog, inputConfirmDialog } from './dialogs.js';
 import { openPresentModal, presentSnapshots } from './present-modal.js';
 import { registerViewSync } from './view-sync.js';
+import { createIcon } from './ui-icons.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_PRESENTS = 10;
@@ -90,8 +91,9 @@ function buildItem(item) {
   headerActions.className = 'toggle-actions present-author-actions';
   const editKey = document.createElement('button');
   editKey.className = 'toggle-icon-btn';
-  editKey.textContent = '\u270E';
+  editKey.appendChild(createIcon('edit'));
   editKey.title = 'Edit PRESENT key binding';
+  editKey.setAttribute('aria-label', 'Edit PRESENT key binding');
   editKey.addEventListener('click', () => openPresentModal({
     mode: 'edit', modPath: current.modPath, present: current.present, item,
     onSaved: current.onChange,
@@ -103,8 +105,9 @@ function buildItem(item) {
   row.className = 'toggle-row';
   const cycle = document.createElement('button');
   cycle.className = 'toggle-cycle-btn';
-  cycle.textContent = '\u27F3';
+  cycle.appendChild(createIcon('cycle'));
   cycle.title = 'Cycle present';
+  cycle.setAttribute('aria-label', 'Cycle PRESENT');
   cycle.disabled = !synchronized;
   const name = document.createElement('span');
   name.className = 'toggle-value';
@@ -212,10 +215,11 @@ export function buildPresentPanel(present, context = {}) {
   panel.style.display = 'block';
   const item = current.present.item;
   const incomplete = !!item && (item.missing_inis || []).length > 0;
-  action.textContent = item && !incomplete ? '\u{1F5D1}' : '+';
+  action.replaceChildren(createIcon(item && !incomplete ? 'delete' : 'plus'));
   action.title = item
     ? (incomplete ? 'Complete PRESENT in the remaining INI files' : 'Delete PRESENT')
     : 'Add PRESENT';
+  action.setAttribute('aria-label', action.title);
   action.disabled = !item && !(current.present.target_inis || []).length;
 
   if (!item) {
@@ -223,7 +227,7 @@ export function buildPresentPanel(present, context = {}) {
     empty.className = 'toggle-empty';
     empty.textContent = action.disabled
       ? 'No key or menu toggle is available for PRESENT.'
-      : 'No presents yet - click + to add one.';
+      : 'No presents yet - click Add to create one.';
     list.appendChild(empty);
     return;
   }

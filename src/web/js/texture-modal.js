@@ -6,6 +6,7 @@
 import { addTexture } from './mesh-factory.js';
 import { bindModalDismiss } from './modal-shell.js';
 import { textureFile } from './texture-key.js';
+import { createIcon } from './ui-icons.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -96,7 +97,7 @@ function render() {
       if (displayKey) {
         const clear = document.createElement('span');
         clear.className = 'texm-map-clear';
-        clear.textContent = '×';
+        clear.appendChild(createIcon('close'));
         clear.title = `Remove ${title}`;
         clear.addEventListener('click', (evt) => {
           evt.stopPropagation();
@@ -123,8 +124,9 @@ function render() {
     }
     const del = document.createElement('button');
     del.className = 'toggle-icon-btn';
-    del.textContent = '🗑';
+    del.appendChild(createIcon('delete'));
     del.title = 'Remove from this component\'s texture list';
+    del.setAttribute('aria-label', 'Remove texture from this component');
     del.addEventListener('click', () => {
       const idx = currentPool.indexOf(opt);
       if (idx !== -1) currentPool.splice(idx, 1);

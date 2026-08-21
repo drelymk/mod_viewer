@@ -36,7 +36,9 @@ function expandAncestorsAndScrollTo(row) {
   while (el && !el.id) {
     if (el.classList && el.classList.contains('collapsed')) {
       el.classList.remove('collapsed');
-      el.previousElementSibling?.querySelector?.('.group-toggle')?.classList.remove('collapsed');
+      const toggle = el.previousElementSibling?.querySelector?.('.group-toggle');
+      toggle?.classList.remove('collapsed');
+      toggle?.setAttribute('aria-expanded', 'true');
     }
     el = el.parentElement;
   }
@@ -54,6 +56,9 @@ export function selectMesh(mesh) {
     setHighlight(mesh, true);
     setRowSelected(mesh, true);
   }
+  window.dispatchEvent(new CustomEvent('mod-viewer-mesh-selected', {
+    detail: { mesh },
+  }));
   requestRender();
 }
 

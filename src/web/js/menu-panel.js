@@ -8,6 +8,7 @@
 import { refreshAll, setToggleValue, getToggleValue } from './visibility.js';
 import { registerViewSync, syncView } from './view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from './panel-utils.js';
+import { createIcon } from './ui-icons.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -37,11 +38,11 @@ function buildMenuItem(info) {
 
   const btn = document.createElement('button');
   btn.className = 'toggle-cycle-btn';
-  btn.textContent = '⟳';
+  btn.appendChild(createIcon('cycle'));
   btn.title = `Cycle $${displayName(info.var)} (menu slot ${info.slot})`;
   if (info.image_slot) {
     btn.classList.add('menu-image-btn');
-    btn.textContent = '';
+    btn.replaceChildren();
   }
   if (info.image) {
     const img = document.createElement('img');

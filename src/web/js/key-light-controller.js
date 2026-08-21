@@ -147,6 +147,7 @@ export function createKeyLightController({
     };
     button.title = labels[mode];
     button.setAttribute('aria-label', labels[mode]);
+    button.setAttribute('aria-pressed', String(mode !== 'off'));
     updateCursor();
     onChange?.();
   }

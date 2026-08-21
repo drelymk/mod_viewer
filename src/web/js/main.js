@@ -6,7 +6,7 @@ import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterT
          setEnvironmentPreset, getRenderCount } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
 import { refreshMeshTexture, setTextures } from './mesh-factory.js';
-import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleGlossy, toggleTextures } from './visibility.js';
+import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleGlossy } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
@@ -19,6 +19,9 @@ import { refreshHealthReport, setHealthLoader, setHealthReport } from './health-
 import { setIniEditorContext } from './ini-editor.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.js';
 import { requestRender } from './render-scheduler.js';
+import { setTextureDisplayMode } from './render-modes.js';
+import { clearInspector, initInspectorPanel } from './inspector-panel.js';
+import { initRightDock, setRightDockVisible } from './right-dock.js';
 import {
   getOutlineState as getMeshOutlineState,
   setOutlineSuppressedByDebug,
@@ -34,6 +37,7 @@ function initEnvironmentControl() {
   const ids = Object.values(ENVIRONMENT_PRESETS).map(preset => preset.id);
   const labels = Object.fromEntries(
     Object.values(ENVIRONMENT_PRESETS).map(preset => [preset.id, preset.label]));
+  const popover = $('environment-popover');
   let currentId = getEnvironmentPreset().id;
 
   function updateControl(id) {
@@ -52,21 +56,152 @@ function initEnvironmentControl() {
     return true;
   }
 
+  function closePopover() {
+    if (!popover) return;
+    popover.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+  }
+
+  function openPopover() {
+    if (!popover) return;
+    popover.replaceChildren();
+    Object.values(ENVIRONMENT_PRESETS).forEach(preset => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'ui-popover-option';
+      option.setAttribute('role', 'menuitem');
+      option.textContent = preset.label;
+      option.classList.toggle('selected', preset.id === currentId);
+      option.addEventListener('click', () => {
+        applyEnvironmentPreset(preset.id);
+        closePopover();
+      });
+      popover.appendChild(option);
+    });
+    popover.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+  }
+
   updateControl(currentId);
+  button.setAttribute('aria-haspopup', 'menu');
+  button.setAttribute('aria-expanded', 'false');
   button.addEventListener('click', () => {
-    const currentIndex = Math.max(ids.indexOf(currentId), 0);
-    const nextId = ids[(currentIndex + 1) % ids.length];
-    applyEnvironmentPreset(nextId);
+    if (popover?.hidden === false) closePopover();
+    else openPopover();
+  });
+  document.addEventListener('click', event => {
+    if (!popover || popover.hidden || event.target.closest('#environment-control, #environment-popover')) return;
+    closePopover();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') closePopover();
   });
 
   return applyEnvironmentPreset;
 }
 
+function initToolPopovers() {
+  const textureButton = $('texture-btn');
+  const lightButton = $('light-btn');
+  const texturePopover = $('texture-popover');
+  const lightPopover = $('light-popover');
+  const close = popover => {
+    if (!popover) return;
+    popover.hidden = true;
+  };
+  const closeAll = () => { close(texturePopover); close(lightPopover); };
+
+  function toggleTexturePopover() {
+    if (!texturePopover) return;
+    const wasOpen = !texturePopover.hidden;
+    closeAll();
+    if (wasOpen) return;
+    texturePopover.replaceChildren();
+    [
+      ['all', 'All maps'], ['diffuse', 'Diffuse only'], ['none', 'No textures'],
+    ].forEach(([mode, label]) => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'ui-popover-option';
+      option.setAttribute('role', 'menuitem');
+      option.textContent = label;
+      option.addEventListener('click', () => {
+        setTextureDisplayMode(mode, activeMeshes);
+        closeAll();
+      });
+      texturePopover.appendChild(option);
+    });
+    texturePopover.hidden = false;
+  }
+
+  function toggleLightPopover() {
+    if (!lightPopover) return;
+    const wasOpen = !lightPopover.hidden;
+    closeAll();
+    if (wasOpen) return;
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'ui-popover-option';
+    option.setAttribute('role', 'menuitem');
+    option.textContent = 'Toggle key light handle';
+    option.addEventListener('click', () => {
+      toggleLightHandle();
+      closeAll();
+    });
+    lightPopover.appendChild(option);
+    lightPopover.hidden = false;
+  }
+
+  textureButton?.setAttribute('aria-haspopup', 'menu');
+  lightButton?.setAttribute('aria-haspopup', 'menu');
+  textureButton?.addEventListener('click', toggleTexturePopover);
+  lightButton?.addEventListener('click', toggleLightPopover);
+  document.addEventListener('click', event => {
+    if (event.target.closest('#texture-btn, #texture-popover, #light-btn, #light-popover')) return;
+    closeAll();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') closeAll();
+  });
+}
+
 function syncViewportControlPlacement() {
   const rightDock = $('right-dock');
-  const hasVisiblePanel = [...(rightDock?.children || [])].some((panel) =>
-    getComputedStyle(panel).display !== 'none');
+  const panelIds = ['inspector-panel', 'present-panel', 'toggle-panel', 'menu-panel'];
+  const hasVisiblePanel = rightDockEnabled && panelIds.some(id => {
+    const panel = $(id);
+    return panel && !panel.hidden && getComputedStyle(panel).display !== 'none';
+  });
+  setRightDockVisible(hasVisiblePanel);
   document.body.classList.toggle('right-dock-visible', hasVisiblePanel);
+}
+
+function initToolbarOverflow() {
+  const button = $('toolbar-more');
+  const menu = $('toolbar-overflow');
+  if (!button || !menu) return;
+  const close = () => {
+    menu.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+  };
+  button.addEventListener('click', event => {
+    event.stopPropagation();
+    menu.hidden = !menu.hidden;
+    button.setAttribute('aria-expanded', String(!menu.hidden));
+  });
+  menu.addEventListener('click', event => {
+    const item = event.target.closest('[data-toolbar-target]');
+    if (!item) return;
+    const target = $(item.dataset.toolbarTarget);
+    if (target && !target.disabled) target.click();
+    close();
+  });
+  document.addEventListener('click', event => {
+    if (!event.target.closest('#toolbar-more, #toolbar-overflow')) close();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') close();
+  });
 }
 
 // The currently open mod folder, so the Toggle panel's staged add/edit/delete
@@ -74,6 +209,7 @@ function syncViewportControlPlacement() {
 // refresh afterward.
 let currentModPath = null;
 let modTransitionInFlight = false;
+let rightDockEnabled = false;
 
 // The last-loaded payload's controls.toggles model, kept
 // around purely so refreshPendingState() can check for a still-unwired
@@ -116,6 +252,8 @@ async function refreshPendingState() {
 
 function clearScene() {
   clearSelection();
+  clearInspector();
+  rightDockEnabled = false;
   reset();
   // Debug mode is material-local and does not survive a reload; keep outline
   // suppression in the same lifecycle rather than carrying stale state onto
@@ -133,6 +271,7 @@ function clearScene() {
   $('present-panel').style.display = 'none';
   $('menu-list').innerHTML = '';
   $('menu-panel').style.display = 'none';
+  setRightDockVisible(false);
   syncViewportControlPlacement();
 }
 
@@ -154,7 +293,9 @@ function beginModLoad(path, message) {
     detail: { path },
   }));
   $('hint').style.display = 'none';
+  $('empty-actions').style.display = 'none';
   $('mod-path').textContent = path;
+  $('mod-path').title = path;
   setHealthReport(null);
   setHealthLoader(() => window.pywebview.api.get_diagnostics(path));
   setIniEditorContext(path, reloadCurrentMod);
@@ -189,6 +330,7 @@ async function displayMeshPayload(payload) {
   buildTogglePanel(controls.toggles, { modPath: currentModPath, onChange: reloadCurrentMod });
   buildMenuPanel(controls.menu);
   buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });
+  rightDockEnabled = true;
   syncViewportControlPlacement();
   fitTo(activeMeshes);
 
@@ -221,6 +363,8 @@ async function loadModAt(path) {
   // Lead with the folder name; the full path is long and rarely the useful part.
   const folderName = path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1);
   $('mod-path').textContent = `${folderName}  —  ${path}`;
+  $('mod-path').textContent = folderName;
+  $('mod-path').title = path;
   window.dispatchEvent(new CustomEvent('mod-viewer-mod-loaded', {
     detail: { path },
   }));
@@ -339,12 +483,33 @@ function initPanelCollapse(panel, contentId) {
   const hdr = panel.querySelector('.panel-hdr');
   const chevron = hdr.querySelector('.group-toggle');
   const content = $(contentId);
-  hdr.addEventListener('click', (e) => {
-    if (e.target.closest('.icon-btn')) return;
-    chevron.classList.toggle('collapsed');
-    content.classList.toggle('collapsed');
+  const storageKey = `mod-viewer.panel.${panel.id}.collapsed`;
+  const setCollapsed = (collapsed, persist = true) => {
+    chevron.classList.toggle('collapsed', collapsed);
+    content.classList.toggle('collapsed', collapsed);
+    chevron.setAttribute('aria-expanded', String(!collapsed));
+    chevron.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${panel.querySelector('h3')?.textContent || 'panel'}`);
+    if (persist) {
+      try { localStorage.setItem(storageKey, String(collapsed)); } catch (_) { /* private mode */ }
+    }
+  };
+  let initiallyCollapsed = false;
+  try { initiallyCollapsed = localStorage.getItem(storageKey) === 'true'; } catch (_) { /* private mode */ }
+  chevron.setAttribute('aria-controls', contentId);
+  setCollapsed(initiallyCollapsed, false);
+  const toggle = (e) => {
+    if (e?.target?.closest?.('.icon-btn')) return;
+    e?.stopPropagation?.();
+    setCollapsed(!content.classList.contains('collapsed'));
+  };
+  hdr.addEventListener('click', e => {
+    if (e.target.closest('.icon-btn, .group-toggle')) return;
+    setCollapsed(!content.classList.contains('collapsed'));
   });
+  chevron.addEventListener('click', toggle);
 }
+
+initToolbarOverflow();
 
 rendererReady.then(ready => {
   if (!ready || !isRendererAvailable()) return;
@@ -354,28 +519,42 @@ rendererReady.then(ready => {
   $('wire-btn').addEventListener('click', toggleWireframe);
   $('outline-btn').addEventListener('click', () => {
     const enabled = setOutlinesEnabled();
-    $('outline-btn').classList.toggle('active', enabled);
+    const button = $('outline-btn');
+    button.classList.toggle('active', enabled);
+    button.setAttribute('aria-pressed', String(enabled));
+    button.setAttribute('aria-label', `Silhouette outlines: ${enabled ? 'on' : 'off'}`);
   });
   $('grid-btn').addEventListener('click', toggleGrid);
   $('shading-btn').addEventListener('click', toggleSmoothShading);
   $('glossy-btn').addEventListener('click', toggleGlossy);
-  $('texture-btn').addEventListener('click', toggleTextures);
-  $('light-btn').addEventListener('click', toggleLightHandle);
+  initToolPopovers();
   $('reset-state-btn').addEventListener('click', resetMeshState);
   $('trackball-btn').addEventListener('click', toggleTrackballGizmo);
   $('camera-reset-view-btn').addEventListener('click', () => resetView(activeMeshes));
   $('camera-flip-btn').addEventListener('click', () => rotateModelQuarterTurn(activeMeshes));
   $('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
   const applyEnvironmentPreset = initEnvironmentControl();
+  initRightDock();
+  initInspectorPanel();
   initSelection();
+  const viewportCameraButtons = $('viewport-camera-buttons');
+  const cameraButtons = $('camera-buttons');
+  if (viewportCameraButtons && cameraButtons) viewportCameraButtons.append(cameraButtons);
   syncViewportControlPlacement();
   initPanelCollapse($('sidebar'), 'mesh-list');
-  initPanelCollapse($('camera-panel'), 'camera-buttons');
   initPanelCollapse($('tool-panel'), 'tool-buttons');
   initPanelCollapse($('present-panel'), 'present-list');
   initPanelCollapse($('toggle-panel'), 'toggle-list');
   initPanelCollapse($('menu-panel'), 'menu-list');
-  initModFolderPanel({ switchMod });
+  const modFolderPanel = initModFolderPanel({ switchMod });
+  $('empty-open-btn').disabled = false;
+  $('empty-add-folder-btn').disabled = false;
+  $('empty-open-btn').addEventListener('click', openMod);
+  $('empty-add-folder-btn').addEventListener('click', () => {
+    modFolderPanel.setExpanded(true);
+    modFolderPanel.openAddDialog();
+  });
+  $('mod-folder-empty-add')?.addEventListener('click', modFolderPanel.openAddDialog);
 
   // Exposed for automated smoke tests and for poking at the app from the
   // devtools console; the UI itself always goes through the listeners above.
@@ -430,7 +609,10 @@ rendererReady.then(ready => {
     setMaterialDebugMode: setMaterialDebugModeForMeshes,
     setOutlineEnabled: value => {
       const enabled = setOutlinesEnabled(value);
-      $('outline-btn').classList.toggle('active', enabled);
+      const button = $('outline-btn');
+      button.classList.toggle('active', enabled);
+      button.setAttribute('aria-pressed', String(enabled));
+      button.setAttribute('aria-label', `Silhouette outlines: ${enabled ? 'on' : 'off'}`);
       return enabled;
     },
     getOutlineState: index => getMeshOutlineState(activeMeshes[index]),

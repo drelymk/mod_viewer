@@ -10,20 +10,51 @@
      shown -- see app/server.py and the matching CSS rules in app.css. -->
 <body class="__BODY_CLASS__">
 
+<svg id="ui-icon-sprite" aria-hidden="true" focusable="false">
+  <symbol id="icon-library" viewBox="0 0 24 24"><path d="M4 6h6l2 2h8v11H4z"/><path d="M4 9h16"/></symbol>
+  <symbol id="icon-inspector" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h5M8 16h8"/></symbol>
+  <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></symbol>
+  <symbol id="icon-reset" viewBox="0 0 24 24"><path d="M4 9V4h5M4.6 4.6A9 9 0 1 1 3 14"/></symbol>
+  <symbol id="icon-diagnostics" viewBox="0 0 24 24"><path d="M12 4 21 20H3L12 4Z"/><path d="M12 9v5M12 17v.5"/></symbol>
+  <symbol id="icon-edit" viewBox="0 0 24 24"><path d="m4 17-.8 4 4-.8L19 8.4 15.6 5 4 17Z"/><path d="m14 6.6 3.4 3.4M16.8 3.8l3.4 3.4"/></symbol>
+  <symbol id="icon-delete" viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></symbol>
+  <symbol id="icon-visibility" viewBox="0 0 24 24"><path d="M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Z"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="icon-texture" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 16l3-4 2 2 2-3 3 5H7Z"/><circle cx="9" cy="9" r="1"/></symbol>
+  <symbol id="icon-wireframe" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3ZM4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+  <symbol id="icon-outline" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="icon-glossy" viewBox="0 0 24 24"><path d="m12 3 1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></symbol>
+  <symbol id="icon-grid" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 10h16M4 16h16M10 4v16M16 4v16"/></symbol>
+  <symbol id="icon-shading" viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z"/><path d="M12 4v16"/></symbol>
+  <symbol id="icon-light" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></symbol>
+  <symbol id="icon-cycle" viewBox="0 0 24 24"><path d="M5 8h11l-3-3M19 16H8l3 3M16 8a6 6 0 0 1 3 5M8 16a6 6 0 0 1-3-5"/></symbol>
+  <symbol id="icon-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m5 9 7 7 7-7"/></symbol>
+  <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="icon-close" viewBox="0 0 24 24"><path d="m5 5 14 14M19 5 5 19"/></symbol>
+</svg>
+
 <div id="toolbar">
-  <span class="app-icon">🎮</span>
-  <span class="app-title">3DMigoto Mod Viewer</span>
+  <span class="app-icon" aria-hidden="true"><span class="icon-glyph">M</span></span>
+  <span class="app-title">Mod Viewer</span>
   <span id="mod-path">No mod loaded</span>
-  <span id="pending-indicator" class="pending-indicator">● Unsaved changes</span>
-  <button id="open-btn" disabled>📂 Open Mod</button>
-  <div class="ini-view-wrap">
-    <button id="ini-view-btn" disabled>📄 View INI</button>
+  <span id="pending-indicator" class="pending-indicator" role="status">Edited</span>
+  <button id="open-btn" class="ui-button" disabled>Open Mod</button>
+  <div class="ini-view-wrap toolbar-secondary">
+    <button id="ini-view-btn" class="ui-button" disabled>View INI</button>
     <div id="ini-file-menu" class="ini-file-menu" role="menu"></div>
   </div>
-  <button id="health-btn" class="healthy" disabled>
-    Diagnostics <span id="health-count" class="health-count">0</span>
+  <button id="health-btn" class="ui-button healthy toolbar-secondary" aria-label="Open INI diagnostics" disabled>
+    <svg class="ui-icon" aria-hidden="true"><use href="#icon-diagnostics"></use></svg><span class="health-label">Diagnostics</span><span id="health-count" class="health-count">0</span>
   </button>
-  <button id="export-btn" disabled>💾 Export</button>
+  <button id="export-btn" class="ui-button ui-button-export toolbar-secondary" disabled>Export</button>
+  <button id="toolbar-more" class="icon-btn" type="button" aria-label="More toolbar actions"
+          aria-expanded="false" aria-haspopup="menu"><svg class="ui-icon" aria-hidden="true"><use href="#icon-more"></use></svg></button>
+  <div id="toolbar-overflow" class="toolbar-overflow" role="menu" hidden>
+    <button type="button" role="menuitem" data-toolbar-target="ini-view-btn">View INI</button>
+    <button type="button" role="menuitem" data-toolbar-target="health-btn">Diagnostics</button>
+    <button type="button" role="menuitem" data-toolbar-target="export-btn">Export</button>
+  </div>
 </div>
 
 <div id="canvas-container">
@@ -59,6 +90,7 @@
     </button>
     <span id="environment-label" class="environment-label">Default</span>
   </div>
+  <div id="environment-popover" class="ui-popover" role="menu" aria-label="Environment presets" hidden></div>
   <div id="view-gizmo" title="Drag to orbit · Click an axis to snap · Scroll to zoom">
     <svg viewBox="0 0 104 104" aria-label="Camera navigation gizmo">
       <circle class="gizmo-backdrop" cx="52" cy="52" r="46"/>
@@ -76,32 +108,38 @@
 <div id="left-dock">
   <div id="mod-folder-dock" class="mod-folder-dock">
     <button id="mod-folder-toggle" class="mod-folder-handle" type="button"
-            aria-label="Open Mod Folders" aria-expanded="false">▶</button>
-    <section id="mod-folder-panel" class="mod-folder-panel" aria-label="Mod Folders">
+            aria-label="Open Mod Library" aria-expanded="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
+    <section id="mod-folder-panel" class="mod-folder-panel" aria-label="Mod Library">
       <div class="panel-hdr">
         <button id="mod-folder-close" class="mod-folder-close" type="button"
-              aria-label="Close Mod Folders">◀</button>
-        <h3>Mod Folders</h3>
+              aria-label="Close Mod Library"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+        <h3>Mod Library</h3>
         <button id="mod-folder-add" class="icon-btn" type="button"
-                title="Add Mod Folder">+</button>
+                title="Add Mod Folder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
       </div>
       <div id="mod-folder-error" class="mod-folder-error" role="alert"></div>
       <div id="mod-folder-list" class="mod-folder-list"></div>
+      <div id="mod-folder-empty" class="mod-folder-empty" hidden>
+        <div class="empty-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-library"></use></svg></div>
+        <strong>No mod folders yet</strong>
+        <span>Add frequently used mod folders here for quick access.</span>
+        <button id="mod-folder-empty-add" class="ui-button ui-button-primary" type="button">Add Mod Folder</button>
+      </div>
     </section>
   </div>
 
   <div id="sidebar">
     <div class="panel-hdr">
-      <span class="group-toggle">▼</span>
+      <button type="button" class="group-toggle" aria-expanded="true" aria-controls="mesh-list"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
       <h3>Meshes</h3>
-      <button id="reset-state-btn" class="icon-btn" title="Reset mesh visibility">⟲</button>
+      <button id="reset-state-btn" class="icon-btn" title="Reset mesh visibility" aria-label="Reset mesh visibility"><svg class="ui-icon" aria-hidden="true"><use href="#icon-reset"></use></svg></button>
     </div>
     <div id="mesh-list"></div>
   </div>
 
   <div id="camera-panel">
     <div class="panel-hdr">
-      <span class="group-toggle">▼</span>
+      <button type="button" class="group-toggle" aria-expanded="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
       <h3>Orientation</h3>
     </div>
     <div id="camera-buttons">
@@ -120,20 +158,21 @@
     </div>
   </div>
 
-  <div id="tool-panel">
+  <div id="tool-panel" class="viewport-toolbar">
+    <div id="viewport-camera-buttons" class="viewport-camera-buttons" aria-label="Viewport orientation"></div>
     <div class="panel-hdr">
-      <span class="group-toggle">▼</span>
+      <button type="button" class="group-toggle" aria-expanded="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
       <h3>Tools</h3>
     </div>
     <div id="tool-buttons">
-      <button id="wire-btn" class="tool-btn" title="Wireframe rendering">⬡</button>
-      <button id="outline-btn" class="tool-btn" title="Silhouette outlines" aria-label="Silhouette outlines">◉</button>
-      <button id="glossy-btn" class="tool-btn off" title="Glossy materials: off" aria-label="Glossy materials: off" aria-pressed="false">✦</button>
-      <button id="grid-btn" class="tool-btn" title="Grid visibility">⊞</button>
-      <button id="shading-btn" class="tool-btn" title="Smooth/flat shading">◐</button>
-      <button id="texture-btn" class="tool-btn" title="Textures: all maps" aria-label="Textures: all maps">▩</button>
-      <button id="light-btn" class="tool-btn double" title="Key light: double brightness and handle size" aria-label="Key light: double">☀</button>
-      <button id="trackball-btn" class="tool-btn active" title="Toggle navigation gizmo" aria-label="Toggle navigation gizmo">
+      <button id="wire-btn" class="tool-btn" title="Wireframe rendering: off" aria-label="Wireframe rendering: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-wireframe"></use></svg></button>
+      <button id="outline-btn" class="tool-btn" title="Silhouette outlines: off" aria-label="Silhouette outlines: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-outline"></use></svg></button>
+      <button id="glossy-btn" class="tool-btn off" title="Glossy materials: off" aria-label="Glossy materials: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-glossy"></use></svg></button>
+      <button id="grid-btn" class="tool-btn" title="Grid visibility: on" aria-label="Grid visibility: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-grid"></use></svg></button>
+      <button id="shading-btn" class="tool-btn" title="Smooth shading: on" aria-label="Smooth shading: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shading"></use></svg></button>
+      <button id="texture-btn" class="tool-btn" title="Textures: all maps" aria-label="Textures: all maps"><svg class="ui-icon" aria-hidden="true"><use href="#icon-texture"></use></svg></button>
+      <button id="light-btn" class="tool-btn double" title="Key light: double brightness and handle size" aria-label="Key light: double" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-light"></use></svg></button>
+      <button id="trackball-btn" class="tool-btn active" title="Toggle navigation gizmo: on" aria-label="Toggle navigation gizmo: on" aria-pressed="true">
         <svg class="nav-gizmo-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path class="nav-x" d="M12 12L20 15"/><path class="nav-y" d="M12 12V3"/><path class="nav-z" d="M12 12L5 18"/>
           <circle class="nav-x" cx="20" cy="15" r="2"/><circle class="nav-y" cx="12" cy="3" r="2"/><circle class="nav-z" cx="5" cy="18" r="2"/>
@@ -144,31 +183,49 @@
 </div>
 
 <div id="right-dock">
+  <div class="right-dock-tabs" role="tablist" aria-label="Details panels">
+    <button id="inspector-tab" class="right-dock-tab active" type="button" role="tab"
+            aria-selected="true" aria-controls="inspector-panel">Inspector</button>
+    <button id="controls-tab" class="right-dock-tab" type="button" role="tab"
+            aria-selected="false" aria-controls="controls-panel">Controls</button>
+  </div>
+  <section id="inspector-panel" class="right-dock-pane" role="tabpanel" aria-labelledby="inspector-tab">
+    <div class="inspector-empty" id="inspector-empty">
+      <div class="empty-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-inspector"></use></svg></div>
+      <strong>Nothing selected</strong>
+      <span>Select a component or mesh to inspect its properties.</span>
+    </div>
+    <div id="inspector-content" hidden></div>
+  </section>
+  <div id="controls-panel" class="right-dock-pane" role="tabpanel" aria-labelledby="controls-tab" hidden>
   <div id="present-panel">
     <div class="panel-hdr">
-      <span class="group-toggle">&#9660;</span>
+      <button type="button" class="group-toggle" aria-expanded="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
       <h3>Present</h3>
-      <button id="present-action-btn" class="icon-btn" title="Add PRESENT">+</button>
+      <button id="present-action-btn" class="icon-btn" title="Add PRESENT" aria-label="Add PRESENT"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
     </div>
     <div id="present-list"></div>
   </div>
 
   <div id="toggle-panel">
     <div class="panel-hdr">
-      <span class="group-toggle">▼</span>
+      <button type="button" class="group-toggle" aria-expanded="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
       <h3>Key Toggle</h3>
-      <button id="toggle-add-btn" class="icon-btn" title="Add toggle">＋</button>
+      <button id="toggle-add-btn" class="icon-btn" title="Add toggle" aria-label="Add toggle"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
     </div>
     <div id="toggle-list"></div>
   </div>
 
   <div id="menu-panel">
     <div class="panel-hdr">
-      <span class="group-toggle">▼</span>
+      <button type="button" class="group-toggle" aria-expanded="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
       <h3>Menu Toggle</h3>
     </div>
     <div id="menu-list"></div>
   </div>
+  </div>
+  <div id="texture-popover" class="ui-popover tool-popover" role="menu" aria-label="Texture display options" hidden></div>
+  <div id="light-popover" class="ui-popover tool-popover" role="menu" aria-label="Light options" hidden></div>
 </div>
 
 <div id="mod-folder-modal-backdrop" class="modal-backdrop">
@@ -265,7 +322,7 @@
     <h4 id="texm-title">Manage Textures</h4>
     <div id="texm-list" class="texm-list"></div>
     <div class="modal-actions">
-      <button type="button" id="texm-add">＋ Add texture…</button>
+      <button type="button" id="texm-add"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg> Add texture…</button>
       <button type="button" id="texm-close">Close</button>
     </div>
   </div>
@@ -329,13 +386,20 @@
 </div>
 
 <div id="hint">
-  <div class="big">📦</div>
-  <div class="msg">Click <strong>Open Mod</strong> and select a mod folder</div>
+  <div class="big"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></div>
+  <div class="msg"><strong>No mod loaded</strong><span>Open a mod folder directly, or add a folder to your Mod Library.</span></div>
 </div>
 
-<div id="info">Drag to rotate &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Right-drag to pan</div>
+<div id="empty-actions" class="empty-actions">
+  <button id="empty-open-btn" class="ui-button ui-button-primary" type="button" disabled>Open Mod</button>
+  <button id="empty-add-folder-btn" class="ui-button" type="button" disabled>Add Mod Folder</button>
+</div>
 
 <div id="footer">
+  <div id="footer-status" class="footer-status">
+    <span id="interaction-help">LMB Orbit · RMB Pan · Wheel Zoom</span>
+    <span id="selected-mesh-status" aria-live="polite"></span>
+  </div>
   <span id="app-version">v__APP_VERSION__</span>
   <a id="github-link" href="__REPO_URL__" title="GitHub Repository" target="_blank" rel="noopener noreferrer">
     <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">

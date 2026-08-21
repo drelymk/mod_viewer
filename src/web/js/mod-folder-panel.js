@@ -2,6 +2,7 @@
 
 import { confirmDialog } from './dialogs.js';
 import { requestRender } from './render-scheduler.js';
+import { createIcon } from './ui-icons.js';
 
 const $ = id => document.getElementById(id);
 
@@ -26,6 +27,7 @@ export function initModFolderPanel({ switchMod }) {
   const toggle = $('mod-folder-toggle');
   const close = $('mod-folder-close');
   const add = $('mod-folder-add');
+  const empty = $('mod-folder-empty');
   const backdrop = $('mod-folder-modal-backdrop');
   const title = $('mfm-title');
   const form = $('mfm-form');
@@ -42,14 +44,32 @@ export function initModFolderPanel({ switchMod }) {
   let editorMode = 'add';
   let originalPath = null;
   let selectedPath = null;
+  const layoutKey = 'mod-viewer.mod-library.expanded';
 
   function setExpanded(expanded) {
+    if (!expanded && panel.contains(document.activeElement)) toggle.focus();
+    panel.inert = !expanded;
+    panel.setAttribute('aria-hidden', String(!expanded));
     dock.classList.toggle('expanded', expanded);
     toggle.setAttribute('aria-expanded', String(expanded));
     toggle.setAttribute('aria-label', expanded
-      ? 'Close Mod Folders' : 'Open Mod Folders');
-    toggle.textContent = expanded ? '◀' : '▶';
+      ? 'Close Mod Library' : 'Open Mod Library');
+    toggle.replaceChildren(createIcon(expanded ? 'close' : 'library'));
+    toggle.title = expanded ? 'Close Mod Library' : 'Open Mod Library';
+    try { localStorage.setItem(layoutKey, String(expanded)); } catch (_) { /* private mode */ }
   }
+
+  document.addEventListener('click', event => {
+    if (event.target.closest('.mod-folder-actions')) return;
+    list.querySelectorAll('.mod-folder-action-menu').forEach(menu => {
+      menu.hidden = true;
+    });
+  });
+
+  panel.inert = true;
+  panel.setAttribute('aria-hidden', 'true');
+  try { if (localStorage.getItem(layoutKey) === 'true') setExpanded(true); }
+  catch (_) { /* private mode */ }
 
   function setActivePath(path) {
     activePath = canonicalPath(path);
@@ -153,7 +173,8 @@ export function initModFolderPanel({ switchMod }) {
       actions.className = 'mod-folder-actions';
       const edit = document.createElement('button');
       edit.type = 'button';
-      edit.textContent = '✎';
+      edit.className = 'mod-folder-edit';
+      edit.appendChild(createIcon('edit'));
       edit.title = 'Edit Mod Folder';
       edit.setAttribute('aria-label', `Edit ${entry.name}`);
       edit.addEventListener('click', event => {
@@ -162,14 +183,48 @@ export function initModFolderPanel({ switchMod }) {
       });
       const remove = document.createElement('button');
       remove.type = 'button';
-      remove.textContent = '🗑';
+      remove.className = 'mod-folder-remove';
+      remove.appendChild(createIcon('delete'));
       remove.title = 'Remove from Mod Folders';
       remove.setAttribute('aria-label', `Remove ${entry.name}`);
       remove.addEventListener('click', event => {
         event.stopPropagation();
         removeFolder(entry);
       });
-      actions.append(edit, remove);
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'mod-folder-more';
+      more.appendChild(createIcon('more'));
+      more.title = 'More folder actions';
+      more.setAttribute('aria-label', `More actions for ${entry.name}`);
+      const menu = document.createElement('span');
+      menu.className = 'mod-folder-action-menu';
+      menu.hidden = true;
+      const menuEdit = document.createElement('button');
+      menuEdit.type = 'button';
+      menuEdit.textContent = 'Edit';
+      const menuRemove = document.createElement('button');
+      menuRemove.type = 'button';
+      menuRemove.textContent = 'Remove from Mod Library';
+      menu.append(menuEdit, menuRemove);
+      more.addEventListener('click', event => {
+        event.stopPropagation();
+        list.querySelectorAll('.mod-folder-action-menu').forEach(candidate => {
+          if (candidate !== menu) candidate.hidden = true;
+        });
+        menu.hidden = !menu.hidden;
+      });
+      menuEdit.addEventListener('click', event => {
+        event.stopPropagation();
+        menu.hidden = true;
+        edit.click();
+      });
+      menuRemove.addEventListener('click', event => {
+        event.stopPropagation();
+        menu.hidden = true;
+        remove.click();
+      });
+      actions.append(edit, remove, more, menu);
       row.appendChild(actions);
     }
 
@@ -180,7 +235,7 @@ export function initModFolderPanel({ switchMod }) {
     if (entry.exists === false && isRoot) {
       const missing = document.createElement('div');
       missing.className = 'mod-folder-missing';
-      missing.textContent = 'Folder not found';
+      missing.append(createIcon('diagnostics'), document.createTextNode('Folder not found'));
       node.appendChild(missing);
     }
     if (canonicalPath(entry.path) === activePath) row.classList.add('active');
@@ -191,6 +246,7 @@ export function initModFolderPanel({ switchMod }) {
     roots = entries || [];
     list.innerHTML = '';
     roots.forEach(entry => list.appendChild(createNode(entry, true)));
+    if (empty) empty.hidden = roots.length !== 0;
     setActivePath(activePath);
   }
 
@@ -224,6 +280,10 @@ export function initModFolderPanel({ switchMod }) {
     nameInput.focus();
   }
 
+  function openAddDialog() {
+    openEditor('add');
+  }
+
   async function removeFolder(entry) {
     const confirmed = await confirmDialog(
       `Remove "${entry.name}" from Mod Folders?\n\n` +
@@ -241,7 +301,7 @@ export function initModFolderPanel({ switchMod }) {
     setExpanded(false);
     requestRender();
   });
-  add.addEventListener('click', () => openEditor('add'));
+  add.addEventListener('click', openAddDialog);
   cancel.addEventListener('click', closeEditor);
   backdrop.addEventListener('click', event => {
     if (event.target === backdrop) closeEditor();
@@ -300,5 +360,6 @@ export function initModFolderPanel({ switchMod }) {
     refresh: () => window.pywebview.api.get_mod_folders().then(applyRegistryResponse),
     setActivePath,
     setExpanded,
+    openAddDialog,
   };
 }

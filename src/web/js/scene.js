@@ -197,7 +197,10 @@ export function getEnvironmentPreset() {
 
 export function toggleGrid() {
   grid.visible = !grid.visible;
-  document.getElementById('grid-btn').classList.toggle('off', !grid.visible);
+  const button = document.getElementById('grid-btn');
+  button.classList.toggle('off', !grid.visible);
+  button.setAttribute('aria-pressed', String(grid.visible));
+  button.setAttribute('aria-label', `Grid visibility: ${grid.visible ? 'on' : 'off'}`);
   requestRender();
 }
 
