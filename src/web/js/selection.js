@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { camera, renderer } from './scene.js';
 import { activeMeshes } from './visibility.js';
 import { getMeshView } from './mesh-view-bindings.js';
+import { requestRender } from './render-scheduler.js';
 
 const HIGHLIGHT_COLOR = 0xffd60a; // selection yellow
 const HIGHLIGHT_INTENSITY = 0.22;  // kept low so the mesh's own texture reads through
@@ -53,6 +54,7 @@ export function selectMesh(mesh) {
     setHighlight(mesh, true);
     setRowSelected(mesh, true);
   }
+  requestRender();
 }
 
 export function clearSelection() {

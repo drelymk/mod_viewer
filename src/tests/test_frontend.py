@@ -589,6 +589,62 @@ def test_view_gizmo_snap_renders_only_during_animation(
         context.close()
 
 
+def test_mesh_row_selection_invalidates_on_demand_renderer(
+        edge_browser, frontend_url):
+    payload = _payload("Selection")
+    second = copy.deepcopy(payload["meshes"]["Body-Selection-0"])
+    second["component"] = "Face Selection"
+    payload["meshes"]["Face-Selection-0"] = second
+    context, page = _page(edge_browser, frontend_url, {"Selection": payload})
+    try:
+        _open(page, "Selection")
+        rows = page.locator(".draw-item")
+        rows.nth(0).wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        page.wait_for_timeout(300)
+        idle_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.wait_for_timeout(200)
+        assert page.evaluate("window.modViewer.getRenderCount()") == idle_count
+
+        rows.nth(0).click()
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count", arg=idle_count)
+        first_state = page.evaluate("""() => {
+          return window.modViewer.activeMeshes.map(mesh => ({
+            emissive: mesh.material.emissive.getHex(),
+            intensity: mesh.material.emissiveIntensity,
+          }));
+        }""")
+        assert first_state == [
+            {"emissive": 0xffd60a, "intensity": 0.22},
+            {"emissive": 0x000000, "intensity": 1},
+        ]
+
+        selected_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.wait_for_timeout(200)
+        assert page.evaluate("window.modViewer.getRenderCount()") == selected_count
+
+        rows.nth(1).click()
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count", arg=selected_count)
+        second_state = page.evaluate("""() => {
+          return window.modViewer.activeMeshes.map(mesh => ({
+            emissive: mesh.material.emissive.getHex(),
+            intensity: mesh.material.emissiveIntensity,
+          }));
+        }""")
+        assert second_state == [
+            {"emissive": 0x000000, "intensity": 1},
+            {"emissive": 0xffd60a, "intensity": 0.22},
+        ]
+
+        final_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.wait_for_timeout(200)
+        assert page.evaluate("window.modViewer.getRenderCount()") == final_count
+    finally:
+        context.close()
+
+
 def test_shared_texture_waits_once_and_updates_all_meshes(
         edge_browser, frontend_url):
     payload = _payload("Shared")
