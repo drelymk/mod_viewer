@@ -60,7 +60,9 @@ async function submit(event) {
     const saved = context.onSaved;
     close();
     $('present-list').classList.remove('collapsed');
-    $('present-panel').querySelector('.group-toggle').classList.remove('collapsed');
+    const toggle = $('present-panel').querySelector('.group-toggle');
+    toggle.classList.remove('collapsed');
+    toggle.setAttribute('aria-expanded', 'true');
     if (saved) await saved();
   } catch (error) {
     setError(String(error));

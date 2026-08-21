@@ -28,7 +28,10 @@ export function initializeMeshRenderModes(mesh) {
 export function toggleWireframeMode(meshes) {
   wireframe = !wireframe;
   setOutlineSuppressedByWireframe(wireframe);
-  document.getElementById('wire-btn').classList.toggle('active', wireframe);
+  const button = document.getElementById('wire-btn');
+  button.classList.toggle('active', wireframe);
+  button.setAttribute('aria-pressed', String(wireframe));
+  button.setAttribute('aria-label', `Wireframe rendering: ${wireframe ? 'on' : 'off'}`);
   meshes.forEach(mesh => {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(material => { material.wireframe = wireframe; });
@@ -38,7 +41,10 @@ export function toggleWireframeMode(meshes) {
 
 export function toggleSmoothShadingMode(meshes) {
   smoothShading = !smoothShading;
-  document.getElementById('shading-btn').classList.toggle('off', !smoothShading);
+  const button = document.getElementById('shading-btn');
+  button.classList.toggle('off', !smoothShading);
+  button.setAttribute('aria-pressed', String(smoothShading));
+  button.setAttribute('aria-label', `Smooth shading: ${smoothShading ? 'on' : 'off'}`);
   meshes.forEach(mesh => {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(material => {
@@ -68,8 +74,14 @@ export function toggleGlossyMode(meshes) {
 }
 
 export function toggleTextureDisplayMode(meshes) {
-  textureModeIndex = (textureModeIndex + 1) % textureModes.length;
-  const mode = textureModes[textureModeIndex];
+  const mode = textureModes[(textureModeIndex + 1) % textureModes.length];
+  setTextureDisplayMode(mode, meshes);
+}
+
+export function setTextureDisplayMode(mode, meshes) {
+  const nextIndex = textureModes.indexOf(mode);
+  if (nextIndex < 0) return false;
+  textureModeIndex = nextIndex;
   const button = document.getElementById('texture-btn');
   button.classList.toggle('diffuse-only', mode === 'diffuse');
   button.classList.toggle('off', mode === 'none');
@@ -83,4 +95,5 @@ export function toggleTextureDisplayMode(meshes) {
   setTextureMode(mode);
   meshes.forEach(refreshMeshTexture);
   requestRender();
+  return true;
 }

@@ -11,6 +11,7 @@ import {
   activeMeshes, conditionsSatisfied, getToggleValue, setToggleValue,
   applyMeshVisibility, syncCheckboxes, refreshAll,
 } from './visibility.js';
+import { notifyMeshStateChanged } from './mesh-state-events.js';
 import { alertDialog } from './dialogs.js';
 
 let active = null;    // non-null while a session is in progress
@@ -46,8 +47,9 @@ function snapshotVisibility() {
 function applySnapshot(snap) {
   for (const mesh of activeMeshes) {
     mesh.userData.manualVisible = snap.get(mesh) !== false;
-    applyMeshVisibility(mesh);
+    applyMeshVisibility(mesh, { notify: false });
   }
+  notifyMeshStateChanged(activeMeshes);
   syncCheckboxes();
 }
 

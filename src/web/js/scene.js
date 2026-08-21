@@ -197,7 +197,10 @@ export function getEnvironmentPreset() {
 
 export function toggleGrid() {
   grid.visible = !grid.visible;
-  document.getElementById('grid-btn').classList.toggle('off', !grid.visible);
+  const button = document.getElementById('grid-btn');
+  button.classList.toggle('off', !grid.visible);
+  button.setAttribute('aria-pressed', String(grid.visible));
+  button.setAttribute('aria-label', `Grid visibility: ${grid.visible ? 'on' : 'off'}`);
   requestRender();
 }
 
@@ -208,6 +211,16 @@ export function toggleTrackballGizmo() {
 export function toggleLightHandle() {
   keyLightController.toggleMode();
   requestRender();
+}
+
+export function setLightMode(mode) {
+  const changed = keyLightController.setMode(mode);
+  if (changed) requestRender();
+  return changed;
+}
+
+export function getLightMode() {
+  return keyLightController.getMode();
 }
 
 export function frameView(meshes = [], direction = null, targetYOffset = 0) {

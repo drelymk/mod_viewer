@@ -12,6 +12,7 @@ import { startRecordSession } from './record-session.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { registerViewSync, syncView } from './view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from './panel-utils.js';
+import { createIcon } from './ui-icons.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -110,7 +111,7 @@ function buildToggleItem(info, ctx) {
   if (info.wired === false) {
     const warnBadge = document.createElement('span');
     warnBadge.className = 'toggle-unwired-badge';
-    warnBadge.textContent = '⚠';
+    warnBadge.appendChild(createIcon('diagnostics'));
     warnBadge.title = 'Not wired to any mesh yet — click ⏺ Record below and check/uncheck ' +
       'meshes at each position to assign what this toggle shows. Export is disabled until ' +
       'this toggle is wired (or deleted).';
@@ -120,22 +121,25 @@ function buildToggleItem(info, ctx) {
 
   const editBtn = document.createElement('button');
   editBtn.className = 'toggle-icon-btn';
-  editBtn.textContent = '✎';
+  editBtn.appendChild(createIcon('edit'));
   editBtn.title = 'Edit toggle';
+  editBtn.setAttribute('aria-label', 'Edit toggle');
   editBtn.addEventListener('click', () => {
     openToggleModal({ mode: 'edit', modPath: ctx.modPath, info, onSaved: ctx.onChange });
   });
 
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'toggle-icon-btn';
-  deleteBtn.textContent = '🗑';
+  deleteBtn.appendChild(createIcon('delete'));
   deleteBtn.title = 'Delete toggle';
+  deleteBtn.setAttribute('aria-label', 'Delete toggle');
   deleteBtn.addEventListener('click', () => handleDelete(info, ctx));
 
   const recordBtn = document.createElement('button');
   recordBtn.className = 'toggle-icon-btn';
-  recordBtn.textContent = '⏺';
+  recordBtn.appendChild(createIcon('record'));
   recordBtn.title = 'Record which meshes show at each position';
+  recordBtn.setAttribute('aria-label', 'Record toggle mesh visibility');
 
   const actions = document.createElement('span');
   actions.className = 'toggle-actions';
@@ -155,8 +159,9 @@ function buildToggleItem(info, ctx) {
 
   const btn = document.createElement('button');
   btn.className = 'toggle-cycle-btn';
-  btn.textContent = '⟳';
+  btn.appendChild(createIcon('cycle'));
   btn.title = 'Cycle value';
+  btn.setAttribute('aria-label', 'Cycle toggle value');
 
   const valSpan = document.createElement('span');
   valSpan.className = 'toggle-value';
@@ -242,7 +247,7 @@ export function buildTogglePanel(toggles, ctx = {}) {
   if (!sections.length) {
     const empty = document.createElement('div');
     empty.className = 'toggle-empty';
-    empty.textContent = 'No toggles yet — click ＋ to add one.';
+    empty.textContent = 'No toggles yet — click Add to create one.';
     list.appendChild(empty);
     return;
   }

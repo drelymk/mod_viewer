@@ -207,6 +207,22 @@ machine-specific paths or facts that are obvious from the source.
   They must not reinterpret INI materials or become part of staged edits.
   Outlines remain child inverted-hull passes sharing base geometry, and
   wireframe/debug suppression must not change the user's outline preference.
+- Inspector/Controls tab choice, panel collapse state and Mod Library expansion
+  are presentation preferences stored in browser localStorage only. They are
+  not mod state, are not loaded from or written to INI/session edits, and must
+  never affect geometry, materials or export.
+- MESHES is the navigation surface: component and mesh selection should not
+  duplicate editing controls there. Inspector owns material kind, texture pool
+  management, per-mesh texture overrides and draw details; Controls owns
+  Present, Toggle and Menu state. Keep selection changes event-driven so the
+  Inspector follows the selected component or mesh without taking ownership of
+  mesh creation or texture state.
+- Authoritative mesh visibility, reset, refresh and texture-override mutations
+  must publish one shared frontend state notification so Inspector values cannot
+  drift from the rendered model or MESHES state.
+- Viewport camera actions (Reset, Turn and Tilt) belong in the compact viewport
+  toolbar with the render and navigation tools. Do not restore a separate
+  Orientation panel when changing camera behavior.
 
 ## Feature flags and test strategy
 
