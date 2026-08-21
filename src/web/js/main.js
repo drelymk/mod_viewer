@@ -6,7 +6,7 @@ import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterT
          setEnvironmentPreset } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
 import { refreshMeshTexture, setTextures } from './mesh-factory.js';
-import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleTextures } from './visibility.js';
+import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleGlossy, toggleTextures } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
@@ -313,6 +313,7 @@ rendererReady.then(ready => {
   });
   $('grid-btn').addEventListener('click', toggleGrid);
   $('shading-btn').addEventListener('click', toggleSmoothShading);
+  $('glossy-btn').addEventListener('click', toggleGlossy);
   $('texture-btn').addEventListener('click', toggleTextures);
   $('light-btn').addEventListener('click', toggleLightHandle);
   $('reset-state-btn').addEventListener('click', resetMeshState);

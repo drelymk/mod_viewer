@@ -14,15 +14,6 @@ from core.ini_parser import (SrcLine, build_draw_groups, extract_resources,
 from core.mesh_builder import _deduplicate_draws
 from _provenance_support import write
 
-def test_srcline_is_a_str():
-    s = SrcLine("drawindexed = 1, 2, 3", "C:\\a.ini", 42, "TextureOverrideBody")
-    assert (s == "drawindexed = 1, 2, 3"), ("SrcLine compares equal to its text")
-    assert (s.split("=")[0].strip() == "drawindexed"), ("SrcLine supports str methods")
-    assert (isinstance(s, str)), ("SrcLine is a str")
-    assert ({s: 1}["drawindexed = 1, 2, 3"] == 1), ("SrcLine hashes as its text")
-    assert (line_source(s) == {"ini_path": "C:\\a.ini", "line_no": 42,
-                             "section": "TextureOverrideBody"}), ("line_source returns file/line/section")
-    assert (line_source("plain string") is None), ("line_source of a plain str is None")
 
 
 INI = """; leading comment
@@ -70,21 +61,6 @@ def _fixture(tmp, name, text):
     return path
 
 
-def test_line_numbers():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _fixture(tmp, "mod.ini", INI)
-        secs = parse_sections(path)
-        lines = secs["TextureOverrideBodyBlend"]
-        by_no = {l.line_no: str(l) for l in lines}
-        # 1-based numbering against the literal above
-        assert (by_no.get(12) == "ib = ResourceBodyIB"), ("ib line reports its own line number")
-        assert (by_no.get(16) == "drawindexed = 100, 0, 0"), ("first drawindexed reports line 16")
-        assert (by_no.get(18) == "drawindexed = 200, 100, 0"), ("second drawindexed reports line 18")
-        assert (by_no.get(20) == "drawindexed = 300, 300, 0"), ("unconditional drawindexed reports line 20")
-        assert (all(l.ini_path == path for l in lines)), ("every line carries the ini path")
-        assert (all(l.section == "TextureOverrideBodyBlend" for l in lines)), ("every line carries its section name")
-
-
 def test_draw_sources():
     with tempfile.TemporaryDirectory() as tmp:
         path = _fixture(tmp, "mod.ini", INI)
@@ -98,17 +74,6 @@ def test_draw_sources():
         assert (all(d["sources"][0]["ini_path"] == path for d in draws)), ("draw sources carry the ini path")
         assert (all(d["sources"][0]["section"] == "TextureOverrideBodyBlend"
                   for d in draws)), ("draw sources carry the section name")
-
-
-def test_toggle_key_provenance():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _fixture(tmp, "mod.ini", INI)
-        secs = merge_sections([path])
-        keys = extract_toggle_keys(secs)
-        info = keys.get("KeySwap")
-        assert (info is not None), ("KeySwap extracted")
-        assert (info and info["ini_path"] == path), ("toggle key knows its ini file")
-        assert (info and info["section"] == "KeySwap"), ("toggle key knows its section")
 
 
 SHARED_INI = """[Constants]

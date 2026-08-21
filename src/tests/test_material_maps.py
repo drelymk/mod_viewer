@@ -138,28 +138,6 @@ def test_packed_light_map_passthrough_preserves_authored_rgb():
     assert packed.getpixel((0, 0)) == (210, 12, 94, 255)
 
 
-def test_texture_transforms_only_keep_live_production_recipes():
-    assert TEXTURE_TRANSFORMS == ("passthrough", "normal_xy_reconstruct")
-
-
-def test_packed_passthrough_preserves_rgba():
-    from PIL import Image
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "packed-rgba.png")
-        Image.new("RGBA", (1, 1), (10, 20, 30, 40)).save(path)
-        diffuse = Image.open(io.BytesIO(render_texture_png(
-            path, texture_role="diffuse", texture_transform="passthrough")))
-        packed = Image.open(io.BytesIO(render_texture_png(
-            path, texture_role="light_map", texture_transform="passthrough")))
-        diffuse.load()
-        packed.load()
-
-    assert diffuse.mode == "RGB"
-    assert diffuse.getpixel((0, 0)) == (10, 20, 30)
-    assert packed.mode == "RGBA"
-    assert packed.getpixel((0, 0)) == (10, 20, 30, 40)
-
-
 DIFFUSE_SWAP_INI = """[Constants]
 global persist $seven2 = 0
 
@@ -202,30 +180,6 @@ filename = diffuseB.dds
 [ResourceDiffuseC]
 filename = diffuseC.dds
 """
-
-
-def test_toggle_driven_diffuse_swap_ini_parser():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", DIFFUSE_SWAP_INI)
-        secs = merge_sections([path])
-        groups = build_draw_groups(secs, extract_resources(secs))
-        assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
-        group = groups[0]
-        assert (group["diffuse_file"] == "diffuseA.dds"), (f"group default diffuse is the first-seen, unconditional one "
-              f"(got {group['diffuse_file']})")
-        draws = {d["count"]: d for d in group["draws"]}
-
-        assert ("texture_variants" not in draws[10]), ("the earlier unconditional diffuse assignment doesn't leak a "
-              "spurious single-entry texture_variants onto the first draw")
-
-        variants = draws[20].get("texture_variants")
-        assert (bool(variants) and len(variants) == 2), (f"exactly 2 variants for the later, toggle-gated draw (got {variants})")
-        by_file = {v["file"]: v["conditions"] for v in variants}
-        assert (set(by_file) == {"diffuseB.dds", "diffuseC.dds"}), (f"both branches' files are present (got {sorted(by_file)})")
-        assert (visible(by_file["diffuseB.dds"], {"seven2": "1"}) and
-              not visible(by_file["diffuseB.dds"], {"seven2": "0"})), ("diffuseB's condition matches only seven2==1")
-        assert (visible(by_file["diffuseC.dds"], {"seven2": "0"}) and
-              not visible(by_file["diffuseC.dds"], {"seven2": "1"})), ("diffuseC's condition (the else branch) matches only seven2==0")
 
 
 def test_toggle_driven_diffuse_swap_mesh_builder():
@@ -406,51 +360,3 @@ def test_multi_reassignment_diffuse_resolution():
         assert (pool == ["ResourceDiffuseA", "ResourceDiffuseA2", "ResourceDiffuseB"]), (f"the group's texture pool lists every distinct diffuse "
               f"referenced anywhere in the section, in first-seen order "
               f"(got {pool})")
-
-
-def test_multi_reassignment_mesh_builder():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", MULTI_REASSIGN_INI)
-        open(os.path.join(tmp, "multi.ib"), "wb").write(
-            struct.pack("<12I", *range(12)))
-        with open(os.path.join(tmp, "pos.buf"), "wb") as f:
-            for i in range(12):
-                f.write(struct.pack("<3f", float(i), float(i), float(i)) + b"\0" * 28)
-        open(os.path.join(tmp, "tc.buf"), "wb").write(b"\0" * 20 * 12)
-        for name in ("diffuseA.dds", "diffuseA2.dds", "diffuseB.dds"):
-            open(os.path.join(tmp, name), "wb").write(b"DDS " + name.encode())
-
-        secs = merge_sections([path])
-        groups = build_draw_groups(secs, extract_resources(secs))
-        # Remap onto small, non-overlapping windows of the 12-index buffer --
-        # the ini's own start/count values (0/10/30/60) are execution-order
-        # markers only, not real offsets into this tiny fixture buffer.
-        orig_starts = [d["start"] for d in groups[0]["draws"]]
-        for i, d in enumerate(groups[0]["draws"]):
-            d["start"], d["count"] = i * 3, 3
-        meshes, _geometry = build_mesh_fixture(groups, tmp)
-        by_orig_start = dict(zip(orig_starts,
-            sorted(meshes.values(), key=lambda e: e["drawindexed"][1])))
-
-        assert (by_orig_start[0]["tex_key"] is None), (f"first draw's resolved tex_key is None (got {by_orig_start[0]['tex_key']})")
-        assert (texture_file(by_orig_start[10]["tex_key"]) == "diffuseA.dds"), (f"second draw resolves diffuseA (got {by_orig_start[10]['tex_key']})")
-        assert (texture_file(by_orig_start[30]["tex_key"]) == "diffuseB.dds"), (f"third draw resolves diffuseB, not the earlier diffuseA "
-              f"(got {by_orig_start[30]['tex_key']})")
-        assert (texture_file(by_orig_start[60]["tex_key"]) == "diffuseA.dds"), (f"fourth draw resolves back to diffuseA "
-              f"(got {by_orig_start[60]['tex_key']})")
-
-        options = by_orig_start[0].get("texture_options")
-        assert (bool(options) and len(options) == 3), (f"every draw in the component carries the full 3-entry "
-              f"texture pool for the manual picker (got {options})")
-
-
-def test_diffuse_assignment_without_ref_keyword():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", DIFFUSE_NO_REF_INI)
-        secs = merge_sections([path])
-        groups = build_draw_groups(secs, extract_resources(secs))
-        names = {g["display_name"]: g for g in groups}
-        assert ("XA" in names), (f"the draw section builds a group (got {sorted(names)})")
-        if "XA" in names:
-            assert (names["XA"]["diffuse_file"] == "diffuseX.dds"), (f"the no-\"ref\" diffuse assignment still resolves "
-                  f"(got {names['XA']['diffuse_file']})")

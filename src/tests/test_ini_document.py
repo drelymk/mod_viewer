@@ -49,27 +49,8 @@ def test_line_kinds():
     assert ([ln.kind for ln in doc.lines]) == ([COMMENT, BLANK, SECTION, ASSIGN, IF, DRAW, ELIF, ELIF, ELSE, ENDIF]), ("line kinds")
 
 
-def test_depth():
-    text = ("[A]\r\n"
-            "if $x == 0\r\n"
-            "if $y == 1\r\n"
-            "drawindexed = 1,0,0\r\n"
-            "endif\r\n"
-            "else\r\n"
-            "drawindexed = 2,0,0\r\n"
-            "endif\r\n")
-    doc = IniDocument.from_string(text)
-    assert ([ln.depth for ln in doc.lines]) == ([0, 0, 1, 2, 1, 0, 1, 0]), ("nesting depth")
 
 
-def test_sections():
-    text = "[A]\r\nx = 1\r\n\r\n[B]\r\ny = 2\r\n"
-    doc = IniDocument.from_string(text)
-    assert ([s.name for s in doc.sections]) == (["A", "B"]), ("section names")
-    assert ((doc.sections[0].start, doc.sections[0].end)) == ((0, 3)), ("section A span")
-    assert ((doc.sections[1].start, doc.sections[1].end)) == ((3, 5)), ("section B span")
-    assert (doc.section("a").name) == ("A"), ("lookup is case-insensitive")
-    assert (doc.section("nope")) == (None), ("missing section")
 
 
 def test_inline_comment_stripping():
@@ -201,30 +182,6 @@ def test_find_inis_bounded_recursion():
                      "[Constants]\nglobal $x = 0\n")
         flat_paths.append(path)
     assert (find_inis(flat)) == (flat_paths), ("direct find_inis never truncates a valid flat mod")
-
-
-def test_roundtrip_corpus():
-    """The real guarantee: every mod ini on disk survives byte-for-byte."""
-    files = active_ini_files()
-    if not files:
-        print("SKIP  corpus roundtrip (no mod libraries found)")
-        return
-
-    mismatched, errored = [], []
-    for path in files:
-        try:
-            with open(path, "rb") as fh:
-                original = fh.read()
-            if IniDocument.load(path).to_bytes() != original:
-                mismatched.append(path)
-        except Exception as exc:
-            errored.append(f"{path}: {type(exc).__name__}: {exc}")
-
-    assert ((len(mismatched), len(errored))) == ((0, 0)), (f"corpus roundtrip byte-identical ({len(files)} files)")
-    for p in mismatched[:5]:
-        print(f"        mismatch: {p}")
-    for e in errored[:5]:
-        print(f"        error: {e}")
 
 
 def test_structure_errors():

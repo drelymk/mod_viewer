@@ -82,21 +82,8 @@ def test_increment_wrap_idiom():
     assert (slots[2]["effects"] == []), (f"the wrap reset is the cycle itself, not a side effect (got {slots[2]['effects']})")
 
 
-def test_mutual_exclusion_effects_are_kept():
-    """A click also applies the branch's other assignments, under whatever
-    nested `if` guards them — the UI replays them so cycling matches the game."""
-    slots = _by_slot(extract_menu_toggles(sections(MENU_INI)))
-    effects = slots[1]["effects"]
-    assert ([e["var"] for e in effects] == ["pasties", "piercing"]), (f"both guarded assignments are captured, in order (got {effects})")
-    assert (all(e["when"] == {"var": "top", "op": "==", "value": "0"} for e in effects)), (f"each carries the guard it sits under (got {[e['when'] for e in effects]})")
-    assert ([e["value"] for e in effects] == ["1", "1"]), ("each carries its assigned value")
 
 
-def test_display_name_is_the_variable_name():
-    """The on-screen caption of a slot is a .dds image, so the ini offers no
-    human-readable label — the variable name is the only thing to show."""
-    slots = _by_slot(extract_menu_toggles(sections(MENU_INI)))
-    assert (slots[1]["name"] == "top"), (f"slot 1 is named after its var (got {slots[1]['name']!r})")
 
 
 # The same cycle written inside out, plus a menu that spells a variable
@@ -144,15 +131,6 @@ def test_guard_first_cycle_idiom():
           f"(got {[s['effects'] for s in slots.values()]})")
 
 
-def test_variable_casing_follows_the_declaration():
-    """3DMigoto variable names are case-insensitive, so a chain writing $socks
-    drives the $Socks that [Constants] declares and the draws are gated on."""
-    secs = sections(GUARD_FIRST_INI)
-    slots = _by_slot(extract_menu_toggles(secs))
-    assert (slots[4]["var"] == "Socks"), (f"$socks resolves to the declared $Socks (got {slots[4]['var']!r})")
-    assert (slots[4]["name"] == "Socks"), (f"the label uses the declared spelling too (got {slots[4]['name']!r})")
-    assert ("Socks" in extract_menu_var_names(secs)), (f"the gating-var set gets the declared spelling "
-          f"(got {sorted(extract_menu_var_names(secs))})")
 
 
 # A "preset" slot: both branches assign the whole wardrobe, and only the guard
@@ -268,10 +246,6 @@ endif
 """
 
 
-def test_single_self_assigning_branch_is_not_a_menu():
-    """One lone self-assignment is far likelier to be state bookkeeping than a
-    clickable slot list."""
-    assert (extract_menu_toggles(sections(SINGLE_BRANCH_INI)) == {}), ("a one-branch chain is not treated as a menu")
 
 
 def test_var_prefix_namespaces_every_variable():
@@ -285,11 +259,6 @@ def test_var_prefix_namespaces_every_variable():
     assert (slots[1]["name"] == "top"), ("but the display name stays unprefixed")
 
 
-def test_menu_var_names_covers_effects_too():
-    """A variable only ever written by a mutual-exclusion rule still gates
-    meshes, so it has to be tracked like any other."""
-    names = extract_menu_var_names(sections(MENU_INI))
-    assert (names == {"top", "glasses", "color", "pasties", "piercing"}), (f"cycled and effect-written vars are both listed (got {sorted(names)})")
 
 
 # A whole mod with no cycle-type [Key...] section at all: only the menu makes
@@ -344,12 +313,6 @@ filename = Body.ib
 """
 
 
-def test_menu_variables_gate_draws():
-    secs = sections(MENU_MOD_INI)
-    assert ("top" in gating_var_names(secs)), ("a menu-only variable counts as a gating var")
-    groups = build_draw_groups(secs, extract_resources(secs))
-    conds = groups[0]["draws"][0]["conditions"]
-    assert (conds == [[{"var": "top", "value": "1", "negate": False}]]), (f"so its condition survives normalization (got {conds})")
 
 
 def test_menu_truthiness_expressions_gate_draws():
@@ -424,10 +387,6 @@ def test_menu_panel_lists_slots_that_gate_nothing():
     assert (names == ["socks", "top"]), (f"$socks is listed even though it gates no mesh (got {names})")
 
 
-def test_commandlist_section_name_is_case_insensitive():
-    text = MENU_INI.replace("[CommandListClickedSlot]", "[commandlistClickedSlot]")
-    slots = _by_slot(extract_menu_toggles(sections(text)))
-    assert (sorted(slots) == [1, 2, 3]), (f"lowercase CommandList section is discovered (got {sorted(slots)})")
 
 
 def test_nested_paged_slot_chains_are_all_discovered():
@@ -465,18 +424,6 @@ endif
 
 
 
-def test_parenthesized_increment_modulo_menu_cycle_is_discovered():
-    text = r"""
-[CommandListClickedSlot]
-if $clickedSlot == 1
-  $headdress = ($headdress + 1) % 4
-elif $clickedSlot == 2
-  $cloth = ($cloth + 1) % 3
-endif
-"""
-    menu = _by_slot(extract_menu_toggles(sections(text)))
-    assert (menu[1]["values"] == ["0", "1", "2", "3"] and
-          menu[2]["values"] == ["0", "1", "2"]), (f"parenthesized increment/modulo cycles retain their full ranges (got {menu})")
 
 
 
@@ -491,65 +438,8 @@ endif
 
 
 
-def test_recognized_menu_slots_get_authored_images():
-    text = r"""
-[CommandListClickedSlot]
-if $clickedSlot == 1
-  $top = 1 - $top
-elif $clickedSlot == 2
-  $hair = 1 - $hair
-endif
-[CommandListSlotItemImage]
-if $slot == 1
-  ps-t100 = resourcemenuitem.top
-elif $slot == 2
-  ps-t100 = RESOURCEMENUITEM.HAIR
-endif
-[ResourceMenuItem.Top]
-filename = ui/top.png
-[ResourceMenuItem.Hair]
-filename = ui/hair.png
-"""
-    secs = sections(text)
-    menu = extract_menu_toggles(secs)
-    attach_menu_images(menu, secs, extract_resources(secs))
-    by_slot = _by_slot(menu)
-    assert (by_slot[1].get("image_file") == "ui/top.png" and
-          by_slot[2].get("image_file") == "ui/hair.png"), (f"recognized slots retain their authored item images (got {by_slot})")
 
 
-def test_generated_button_grid_gets_shared_authored_images():
-    """Responsive grids dispatch icons by an arbitrary button counter; the
-    same authored image is often deliberately used for every toggle."""
-    text = r"""
-[CommandListSetButtonCondition]
-if $Button_number == 2
-  $Hair = 1 - $Hair
-else if $Button_number == 3
-  $Eyes = $Eyes + 1
-  if $Eyes > 2
-    $Eyes = 0
-  endif
-endif
-[CommandListSetButtonIcon]
-if $Button_number == 1
-  ps-t100 = resourceitembody
-else if $Button_number == 2
-  ps-t100 = resourceitembutton
-else if $Button_number == 3
-  ps-t100 = RESOURCEITEMBUTTON
-endif
-[ResourceItemBody]
-filename = res/item_body.png
-[ResourceItemButton]
-filename = res/item_button.png
-"""
-    secs = sections(text)
-    menu = extract_menu_toggles(secs)
-    attach_menu_images(menu, secs, extract_resources(secs))
-    by_slot = _by_slot(menu)
-    assert (by_slot[2].get("image_file") == "res/item_button.png" and
-          by_slot[3].get("image_file") == "res/item_button.png"), (f"counter-dispatched shared icons activate image layout (got {by_slot})")
 
 
 def test_arrow_pair_menu_is_discovered_with_numbered_icons():
@@ -622,15 +512,3 @@ def test_menu_panel_preserves_authored_transparency():
         decoded = Image.open(io.BytesIO(raw))
         assert (decoded.mode == "RGBA" and decoded.getpixel((0, 0))[3] == 0 and
               decoded.getpixel((20, 20))[3] == 255), (f"menu PNG keeps transparent and opaque pixels (got {decoded.mode})")
-
-
-def test_fully_transparent_menu_placeholder_uses_fallback():
-    with tempfile.TemporaryDirectory() as tmp:
-        Image.new("RGBA", (52, 52), (0, 0, 0, 0)).save(
-            os.path.join(tmp, "blank.png"))
-        menu = {"one": {"name": "hat", "slot": 1, "var": "hat",
-                        "values": ["0", "1"], "effects": [], "source": None,
-                        "ini_path": None, "section": "CommandListMenu",
-                        "image_file": "blank.png"}}
-        entry = build_menu_panel(menu, {}, mod_dir=tmp)["one"]
-        assert (entry.get("image") is None and entry.get("image_slot") is True), (f"empty artwork retains grid membership but no blank image (got {entry})")

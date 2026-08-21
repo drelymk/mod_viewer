@@ -8,7 +8,8 @@ import {
   activeMeshes, refreshMeshes, resetMeshes, resetMeshVisibility,
 } from './mesh-state.js';
 import {
-  toggleSmoothShadingMode, toggleTextureDisplayMode, toggleWireframeMode,
+  toggleGlossyMode, toggleSmoothShadingMode, toggleTextureDisplayMode,
+  toggleWireframeMode,
 } from './render-modes.js';
 import { clearViewSyncs, syncView, syncViews } from './view-sync.js';
 
@@ -50,6 +51,10 @@ export function toggleWireframe() {
 
 export function toggleSmoothShading() {
   toggleSmoothShadingMode(activeMeshes);
+}
+
+export function toggleGlossy() {
+  toggleGlossyMode(activeMeshes);
 }
 
 export function toggleTextures() {

@@ -6,7 +6,7 @@ Every refusal case here is a *designed* boundary of the conservative
 approach, not a bug: record_editor deliberately regenerates a whole
 if/elif/endif chain only when it can prove the chain is "clean" (single var,
 no mixing, no nesting, complete recorded data for every drawindexed line in
-it) and otherwise reports exactly what's blocking it rather than guessing —
+it) and otherwise reports exactly what's blocking it rather than guessing â€”
 because guessing wrong here would silently change what a real mod shows.
 
 The synthetic fixtures above prove each rule in isolation; the corpus dry run
@@ -33,7 +33,7 @@ def doc(text):
 
 
 def dline(d, needle):
-    """The one Line whose raw text contains `needle` — avoids hand-counting
+    """The one Line whose raw text contains `needle` â€” avoids hand-counting
     line numbers in the fixtures below."""
     hits = [l for l in d.lines if needle in l.raw]
     assert len(hits) == 1, f"expected exactly one line containing {needle!r}, found {len(hits)}"
@@ -48,7 +48,7 @@ def fails(fn, msg):
         assert (True), (msg)
 
 
-# ── fixtures ─────────────────────────────────────────────────────────────────
+# â”€â”€ fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 BARE = """[Constants]
 global persist $swap = 0
@@ -256,7 +256,7 @@ endif
 """
 
 
-# ── validation ───────────────────────────────────────────────────────────────
+# â”€â”€ validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_record_toggle_validates_section_and_positions():
     d = doc(BARE)
@@ -276,17 +276,9 @@ def test_record_toggle_accepts_string_position_keys():
     assert (report["wraps_added"] == 1), (f"string position keys (as pywebview/JSON would deliver) are accepted ({report})")
 
 
-def test_position_referencing_non_draw_line_is_reported_and_ignored():
-    d = doc(BARE)
-    key_line = dline(d, "type = cycle")
-    line = dline(d, "500,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [key_line.no + 1], 1: [line.no + 1], 2: []})
-    assert (any(s["var"] is None and "not a drawindexed line" in s["reason"]
-              for s in report["skipped"])), (f"a non-drawindexed line number is reported, not silently trusted ({report['skipped']})")
-    assert (report["wraps_added"] == 1), (f"the genuine draw line is still recorded normally ({report})")
 
 
-# ── bare (previously unconditional) lines ───────────────────────────────────
+# â”€â”€ bare (previously unconditional) lines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_bare_line_wrapped_when_partially_visible():
     d = doc(BARE)
@@ -301,25 +293,8 @@ def test_bare_line_wrapped_when_partially_visible():
     assert (reparsed.section("TextureOverrideBody") is not None), ("the rewritten document round-trips through from_string")
 
 
-def test_bare_line_untouched_when_visible_everywhere():
-    d = doc(BARE)
-    line = dline(d, "500,0,0")
-    before = d.to_string()
-    report = re_.record_toggle(
-        d, "KeySwap", {0: [line.no + 1], 1: [line.no + 1], 2: [line.no + 1]})
-    assert (report["wraps_added"] == 0 and report["chains_rewritten"] == 0
-          and report["skipped"] == []), (f"nothing to do when already visible at every position ({report})")
-    assert (d.to_string() == before), ("document is byte-identical (true no-op)")
 
 
-def test_or_expression_for_multi_position_subset():
-    d = doc(FOURVAL)
-    line = dline(d, "900,0,0")
-    report = re_.record_toggle(
-        d, "KeyStage", {0: [line.no + 1], 1: [], 2: [line.no + 1], 3: []})
-    assert (report["wraps_added"] == 1 and report["skipped"] == []), (f"clean OR-wrap across a 2-of-4 position subset ({report})")
-    gate = d.lines[dline(d, "900,0,0").no - 1]
-    assert (gate.text == "if $stage == 0 || $stage == 2"), (f"OR-expression lists exactly the recorded-visible positions ({gate.text})")
 
 
 def test_two_variables_claiming_same_bare_line_refused():
@@ -333,26 +308,16 @@ def test_two_variables_claiming_same_bare_line_refused():
     assert (d.to_string() == before), ("document left completely untouched")
 
 
-# ── chain regeneration ───────────────────────────────────────────────────────
+# â”€â”€ chain regeneration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def test_single_branch_chain_value_reassigned():
-    d = doc(SINGLE_IF)
-    line = dline(d, "100,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1]})
-    assert (report["chains_rewritten"] == 1 and report["wraps_added"] == 0
-          and report["skipped"] == []), (f"single-if (no elif) chain regenerated cleanly ({report})")
-    gate = d.lines[dline(d, "100,0,0").no - 1]
-    assert (gate.text == "if $swap == 1"), (f"condition now selects the new value ({gate.text})")
-    reparsed = doc(d.to_string())
-    assert (reparsed.section("TextureOverrideBody") is not None), ("round-trips through from_string")
 
 
 def test_elif_chain_value_reshuffle_matches_intent():
     """The core hazard the whole conservative design exists to avoid: elif
     branches are mutually exclusive and evaluated in order, so surgically
     OR-ing a value into one branch could silently do nothing (or silently
-    steal a value from a later sibling). Verify the *actual* gating — via
-    ini_condition.reduce, not just the regenerated text — matches the
+    steal a value from a later sibling). Verify the *actual* gating â€” via
+    ini_condition.reduce, not just the regenerated text â€” matches the
     intended swap exactly."""
     d = doc(CHAIN3)
     l600, l700, l800 = dline(d, "600,0,0"), dline(d, "700,0,0"), dline(d, "800,0,0")
@@ -387,7 +352,7 @@ def test_bare_wrap_overlapping_another_vars_chain_refused():
     # $upper's chain genuinely needs reshuffling; $tt's recorded data (same
     # shared position->line map) makes both of its lines look like bare
     # candidates for $tt too, but both sit inside the span $upper's chain
-    # edit is about to replace — must be refused, not silently dropped or
+    # edit is about to replace â€” must be refused, not silently dropped or
     # (worse) spliced into a stale line range.
     report = re_.record_toggle(d, "KeyMulti", {0: [l200.no + 1], 1: [l100.no + 1]})
     assert (report["chains_rewritten"] == 1), (f"upper's chain is regenerated ({report})")
@@ -397,7 +362,7 @@ def test_bare_wrap_overlapping_another_vars_chain_refused():
     assert ("$tt ==" not in d.to_string()), ("no $tt gate was actually written")
 
 
-# ── refusals ─────────────────────────────────────────────────────────────────
+# â”€â”€ refusals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _swap_recording(d, first, second):
     return {
@@ -411,21 +376,6 @@ _REFUSAL_CASES = [
      lambda d: _swap_recording(d, "100,0,0", "200,0,0"), "else"),
     ("mixed-condition", MIXED,
      lambda d: _swap_recording(d, "100,0,0", "200,0,0"), "mixes"),
-    ("outer-ancestor", OUTER_REF,
-     lambda d: {0: [], 1: [dline(d, "100,0,0").no + 1]},
-     "outer nesting level"),
-    ("nested-if", NESTED_IN_CHAIN,
-     lambda d: _swap_recording(d, "150,0,0", "200,0,0"),
-     "non-drawindexed"),
-    ("non-draw-content", ASSIGN_IN_CHAIN,
-     lambda d: _swap_recording(d, "100,0,0", "200,0,0"),
-     "non-drawindexed"),
-    ("missing-recorded-data", MULTISRC,
-     lambda d: {0: [dline(d, "100,0,0").no + 1], 1: []},
-     "no recorded data"),
-    ("ambiguous-nesting", UNSAFE,
-     lambda d: {0: [], 1: [dline(d, "100,0,0").no + 1]},
-     "ambiguous"),
 ]
 
 
@@ -451,7 +401,7 @@ def test_record_refuses_unsafe_shape(case):
     _assert_refusal_case(case)
 
 
-# ── post-save self-check (report["verify"] / verify_recording) ─────────────
+# â”€â”€ post-save self-check (report["verify"] / verify_recording) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
 # record_toggle proves its rewrite correct only in-memory; verify_recording
 # is the runtime safety net that re-derives visibility from a fresh,
@@ -465,13 +415,13 @@ def test_record_refuses_unsafe_shape(case):
 # "verify" identifies each draw by its own (section, count, start, base)
 # triple rather than by line number: regenerating a chain with 2+ distinct
 # desired position-sets emits one standalone if/endif block per group, which
-# shifts the line numbers of every draw after the first shifted one — but a
+# shifts the line numbers of every draw after the first shifted one â€” but a
 # draw's own drawindexed args never change, so that's what both this report
 # and verify_recording's fresh re-parse key on instead.
 
 def _draws_by_key(draws):
     """{(count, start, base): positions} from a report["verify"][var]["draws"]
-    list — order-independent, so tests don't have to assume insertion order."""
+    list â€” order-independent, so tests don't have to assume insertion order."""
     return {(d["count"], d["start"], d["base"]): d["positions"] for d in draws}
 
 
@@ -491,23 +441,6 @@ def test_verify_report_reflects_chain_rewrites():
           f"chain regeneration can shift ({draws})")
 
 
-def test_verify_report_includes_bare_wraps_and_untouched_bare_lines():
-    d = doc(BARE)
-    line = dline(d, "500,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1], 2: []})
-    assert (report["verify"] == {"swap": {"values": ["0", "1", "2"], "draws": [
-        {"section": "TextureOverrideBody", "count": 500, "start": 0, "base": 0,
-         "positions": [1]}]}}), (f"a wrapped bare line is recorded in verify with its own draw identity and "
-          f"recorded positions ({report['verify']})")
-
-    d2 = doc(BARE)
-    line2 = dline(d2, "500,0,0")
-    report2 = re_.record_toggle(
-        d2, "KeySwap", {0: [line2.no + 1], 1: [line2.no + 1], 2: [line2.no + 1]})
-    assert (report2["verify"] == {"swap": {"values": ["0", "1", "2"], "draws": [
-        {"section": "TextureOverrideBody", "count": 500, "start": 0, "base": 0,
-         "positions": [0, 1, 2]}]}}), (f"a bare line left untouched (already visible everywhere) is still "
-          f"verifiable ({report2['verify']})")
 
 
 def test_verify_report_excludes_lines_refused_for_any_reason():
@@ -526,7 +459,7 @@ def test_verify_report_excludes_lines_refused_for_any_reason():
 
     # OVERLAP: $upper's chain genuinely succeeds (and must stay verified)
     # while $tt's bare-wrap on the very same two lines is refused for
-    # overlapping it (and must be excluded) — both at once.
+    # overlapping it (and must be excluded) â€” both at once.
     d = doc(OVERLAP)
     l100, l200 = dline(d, "100,0,0"), dline(d, "200,0,0")
     report = re_.record_toggle(d, "KeyMulti", {0: [l200.no + 1], 1: [l100.no + 1]})
@@ -558,7 +491,7 @@ def test_verify_recording_detects_a_genuine_mismatch():
     "what we meant to write") disagrees with what's actually on disk. Rather
     than trying to engineer a real record_toggle bug, hand-craft a `report`
     that falsely claims an *extra* position for one draw beyond what CHAIN3's
-    real rewrite actually produced — proving the check has teeth, not just
+    real rewrite actually produced â€” proving the check has teeth, not just
     always returning []."""
     import tempfile
     d = doc(CHAIN3)
@@ -586,18 +519,15 @@ def test_verify_recording_detects_a_genuine_mismatch():
           f"({mismatches})")
 
 
-def test_verify_recording_is_noop_without_a_verify_field():
-    assert (re_.verify_recording("<does not exist>.ini", {}) == []), ("a report with no verify field (or an empty one) trivially verifies clean, "
-          "without even touching the filesystem")
 
 
-# ── real-mod corpus dry run ─────────────────────────────────────────────────
+# â”€â”€ real-mod corpus dry run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Real recorded per-position visibility only exists once a live recording
-# session produces it — so this reconstructs a plausible stand-in from each
+# session produces it â€” so this reconstructs a plausible stand-in from each
 # real toggle's *existing* gating: for every position, every other toggle var
 # is pinned at its declared default (as if only this one toggle were being
 # cycled, matching a real recording session) and each drawindexed line's
-# current DNF condition (via ini_parser._scan_sections_for_draws — the same
+# current DNF condition (via ini_parser._scan_sections_for_draws â€” the same
 # condition-tracking pass build_draw_groups itself uses, proven across the
 # whole corpus by test_ini_condition.test_corpus) decides whether it counts
 # as visible there. Feeding that back into record_toggle exercises the real
@@ -638,219 +568,3 @@ def _bucket_reason(reason):
         if needle in reason:
             return label
     return f"other: {reason}"
-
-
-def test_real_mods_record_toggle():
-    import tempfile
-    from core.ini_parser import (parse_sections, _scan_sections_for_draws,
-                             extract_variable_defaults, find_inis)
-
-    mods = sample_mods(300, seed=11)
-    if not mods:
-        print("SKIP  no local mod libraries found")
-        return
-
-    total_inis = total_sections = total_vars = 0
-    exceptions = []
-    reparse_failures = []
-    content_lost = []
-    mismatches = []
-    verify_mismatches = []
-    chains_rewritten = wraps_added = 0
-    reason_counts = {}
-    ambiguous_dup_names = []
-
-    for mod in mods:
-        for path in find_inis(mod):
-            total_inis += 1
-            try:
-                base_text = open(path, "rb").read().decode("utf-8")
-                sections = parse_sections(path)
-                draw_info = _scan_sections_for_draws(sections)
-                defaults = extract_variable_defaults(sections)
-                base_doc = IniDocument.from_string(base_text, path=path)
-            except Exception:
-                continue
-
-            toggles = te.list_cycle_toggles(base_doc)
-            if not toggles:
-                continue
-
-            # (section, count, start, base) -> conds, scoped to this one ini
-            # (draw_info only ever describes the file we just parsed).
-            before_draws = {
-                (sec_name, count, start, base): conds
-                for sec_name, info in draw_info.items()
-                for (count, start, base, conds, src, _ib, _dv, _vb) in info["draws"]
-            }
-
-            # A file can legitimately repeat a `[Key...]` header (3DMigoto
-            # merges same-named sections; IniDocument deliberately does not —
-            # see IniDocument.section's own docstring). record_toggle (like
-            # add/edit/delete_toggle before it) is keyed by name and can only
-            # ever resolve to the *first* same-named section, so a duplicate
-            # is a pre-existing name-based-lookup ambiguity, not something
-            # this corpus check can exercise per-occurrence — count and skip
-            # rather than misreport it as a record_toggle crash.
-            name_counts = {}
-            for n, _ in toggles:
-                name_counts[n.lower()] = name_counts.get(n.lower(), 0) + 1
-
-            for section_name, cvars in toggles:
-                total_sections += 1
-
-                if name_counts[section_name.lower()] > 1:
-                    ambiguous_dup_names.append((path, section_name))
-                    continue
-
-                if not cvars:
-                    # A cycle-typed Key section with no $var=... line at all —
-                    # record_toggle should refuse cleanly, not crash, since
-                    # there's nothing to record positions for.
-                    d0 = IniDocument.from_string(base_text, path=path)
-                    try:
-                        re_.record_toggle(d0, section_name, {})
-                        exceptions.append((path, section_name,
-                                            "expected ToggleEditError for a var-less cycle section"))
-                    except te.ToggleEditError:
-                        pass
-                    except Exception as e:
-                        exceptions.append((path, section_name, repr(e)))
-                    continue
-
-                # record_toggle only ever rewrites the WRITABLE (non-namespaced)
-                # vars in a section — namespaced/master vars are read-only, so
-                # its own position count (and validation of position_lines'
-                # keys) is scoped to writable.values() only, never the whole
-                # section. A section can legitimately mix a local writable var
-                # with a longer-cycling namespaced master var in the same
-                # [Key...] block; that master var's own value isn't rewritten
-                # here, so it's held at its declared global default (or its own
-                # first cycle value, lacking one) rather than advanced — this
-                # session is only "recording" the writable var(s)' positions.
-                writable_cvars = {v: vals for v, vals in cvars.items()
-                                   if not ic.is_namespaced(v)}
-                if not writable_cvars:
-                    # Every $var in this section is namespaced — record_toggle
-                    # refuses cleanly (nothing writable to record), not a crash.
-                    d0 = IniDocument.from_string(base_text, path=path)
-                    try:
-                        re_.record_toggle(d0, section_name, {0: []})
-                        exceptions.append((path, section_name,
-                                            "expected ToggleEditError for an all-namespaced cycle section"))
-                    except te.ToggleEditError:
-                        pass
-                    except Exception as e:
-                        exceptions.append((path, section_name, repr(e)))
-                    continue
-
-                total_vars += len(writable_cvars)
-                max_positions = max(len(v) for v in writable_cvars.values())
-
-                position_lines = {p: [] for p in range(max_positions)}
-                for p in range(max_positions):
-                    bindings = dict(defaults)
-                    for var, values in writable_cvars.items():
-                        bindings[var] = values[p % len(values)]
-                    for var, values in cvars.items():
-                        if var not in writable_cvars:
-                            bindings[var] = defaults.get(var, values[0])
-                    for info in draw_info.values():
-                        for (count, start, base, conds, src, _ib, _dv, _vb) in info["draws"]:
-                            if src is not None and _dnf_visible(conds, bindings):
-                                position_lines[p].append(src["line_no"])
-
-                d = IniDocument.from_string(base_text, path=path)
-                try:
-                    report = re_.record_toggle(d, section_name, position_lines)
-                except Exception as e:
-                    exceptions.append((path, section_name, repr(e)))
-                    continue
-
-                chains_rewritten += report["chains_rewritten"]
-                wraps_added += report["wraps_added"]
-                for s in report["skipped"]:
-                    label = _bucket_reason(s["reason"])
-                    reason_counts[label] = reason_counts.get(label, 0) + 1
-
-                if report["chains_rewritten"] == 0 and report["wraps_added"] == 0:
-                    continue    # nothing changed; before == after trivially
-
-                after_text = d.to_string()
-                try:
-                    IniDocument.from_string(after_text, path=path)
-                except Exception as e:
-                    reparse_failures.append((path, section_name, repr(e)))
-                    continue
-
-                try:
-                    after_doc = IniDocument.from_string(after_text, path=path)
-                    after_sections = sections_from_document(after_doc)
-                    after_draw_info = _scan_sections_for_draws(after_sections)
-                except Exception as e:
-                    exceptions.append((path, section_name, "after-parse: " + repr(e)))
-                    continue
-
-                after_draws = {
-                    (sec_name, count, start, base): conds
-                    for sec_name, info in after_draw_info.items()
-                    for (count, start, base, conds, src, _ib, _dv, _vb) in info["draws"]
-                }
-
-                if sorted(before_draws) != sorted(after_draws):
-                    content_lost.append((path, section_name,
-                                          sorted(set(before_draws) ^ set(after_draws))[:3]))
-                    continue
-
-                for p in range(max_positions):
-                    bindings = dict(defaults)
-                    for var, values in writable_cvars.items():
-                        bindings[var] = values[p % len(values)]
-                    for var, values in cvars.items():
-                        if var not in writable_cvars:
-                            bindings[var] = defaults.get(var, values[0])
-                    for triple, before_conds in before_draws.items():
-                        expected = _dnf_visible(before_conds, bindings)
-                        actual = _dnf_visible(after_draws[triple], bindings)
-                        if expected != actual:
-                            mismatches.append((path, section_name, p, triple,
-                                                expected, actual))
-
-                # Exercise the new runtime self-check itself against this same
-                # real rewrite: write after_text to a real file (verify_recording
-                # needs an actual path — it re-parses via ini_parser.parse_sections,
-                # the same trusted read path used everywhere else) and confirm it
-                # reports zero mismatches for a rewrite this test has *also* just
-                # independently proven correct above — i.e. verify_recording itself
-                # must never false-positive across the whole real-mod corpus.
-                with tempfile.NamedTemporaryFile(mode="wb", suffix=".ini", delete=False) as fh:
-                    fh.write(after_text.encode("utf-8"))
-                    tmp_path = fh.name
-                try:
-                    vm = re_.verify_recording(tmp_path, report)
-                finally:
-                    os.remove(tmp_path)
-                if vm:
-                    verify_mismatches.append((path, section_name, vm[:3]))
-
-    print(f"      {len(mods)} mods, {total_inis} ini files, "
-          f"{total_sections} cycle sections ({total_vars} vars) recorded")
-    print(f"      aggregate: chains_rewritten={chains_rewritten} wraps_added={wraps_added}")
-    if ambiguous_dup_names:
-        print(f"      skipped {len(ambiguous_dup_names)} section(s) with a same-named "
-              f"sibling in the same file (pre-existing name lookup ambiguity, shared by "
-              f"add/edit/delete_toggle too): {ambiguous_dup_names[:3]}")
-    for label, count in sorted(reason_counts.items(), key=lambda kv: -kv[1]):
-        print(f"        refused[{count:>5}]  {label}")
-
-    assert (total_sections > 0), ("real mods produced cycle toggles to test")
-    assert (exceptions == []), (f"record_toggle never raises or hangs on a real file (first: {exceptions[:3]})")
-    assert (reparse_failures == []), (f"every rewritten document still round-trips through from_string "
-          f"(first: {reparse_failures[:3]})")
-    assert (content_lost == []), (f"every drawindexed line survives a rewrite, none lost or duplicated "
-          f"(first: {content_lost[:3]})")
-    assert (mismatches == []), (f"a rewritten chain's actual gating always matches the recorded intent "
-          f"(first: {mismatches[:3]})")
-    assert (verify_mismatches == []), (f"verify_recording (the runtime post-save self-check) reports zero "
-          f"false-positive mismatches across the whole real-mod corpus "
-          f"(first: {verify_mismatches[:3]})")

@@ -82,6 +82,13 @@ class MaterialInterpretation:
     wuwa_shadow_process: float = 0.55
     wuwa_shadow_front_offset: float = 0.4
     wuwa_shadow_width: float = 0.01
+    # RabbitFX LightMap.G is a packed shadow/visibility classification.  It
+    # is not a linear multiplier for the direct-light response.
+    wuwa_shadow_mask_cutoff: float = 0.1
+    # Exact LightMap.G endpoints are commonly an un-authored/alternate packed
+    # value rather than a RabbitFX shadow classification.  Ignore those
+    # endpoints while retaining midrange authored classifications.
+    wuwa_shadow_mask_endpoint_tolerance: float = 0.01
     wuwa_shadow_influence: float = 1.0
     wuwa_specular_power: float = 1.0
     wuwa_toon_specular_cutoff: float = 0.1
@@ -146,6 +153,9 @@ class MaterialInterpretation:
             "wuwa_shadow_process": self.wuwa_shadow_process,
             "wuwa_shadow_front_offset": self.wuwa_shadow_front_offset,
             "wuwa_shadow_width": self.wuwa_shadow_width,
+            "wuwa_shadow_mask_cutoff": self.wuwa_shadow_mask_cutoff,
+            "wuwa_shadow_mask_endpoint_tolerance": (
+                self.wuwa_shadow_mask_endpoint_tolerance),
             "wuwa_shadow_influence": self.wuwa_shadow_influence,
             "wuwa_specular_power": self.wuwa_specular_power,
             "wuwa_toon_specular_cutoff": self.wuwa_toon_specular_cutoff,
@@ -159,7 +169,10 @@ def _base_profile_for(game, texture_api):
         return MaterialInterpretation(
             id=f"zzz:{texture_api}", game=game, texture_api=texture_api,
             material_id=ChannelRef("material_map", "r"),
-            metalness=ChannelRef("material_map", "g"),
+            # ZZZ's LightMap.G is the conservative metallic input.  The
+            # similarly named MaterialMap.G varies between characters and is
+            # not safe to treat as a full-range PBR metalness map.
+            metalness=ChannelRef("light_map", "g"),
             specular=ChannelRef("material_map", "b"),
         )
     if game == "genshin" and texture_api in ("gimi", "rabbitfx"):

@@ -92,15 +92,14 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
   const nameSpan = document.createElement('span');
   nameSpan.className = 'group-name';
   nameSpan.textContent = groupName;
+  nameSpan.title = groupName;
 
   hdr.append(chevron, masterCb, nameSpan);
 
-  const materialLabel = document.createElement('label');
-  materialLabel.className = 'material-kind-control component-material-kind-control';
-  materialLabel.textContent = 'Material:';
   const materialSelect = document.createElement('select');
-  materialSelect.className = 'material-kind-select';
+  materialSelect.className = 'material-kind-select component-material-kind-control';
   materialSelect.title = 'Choose a viewer material kind for this component';
+  materialSelect.setAttribute('aria-label', 'Component material kind');
   for (const [value, label] of MATERIAL_KIND_OPTIONS) {
     const option = document.createElement('option');
     option.value = value;
@@ -130,8 +129,7 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
       materialSelect.disabled = false;
     }
   });
-  materialLabel.appendChild(materialSelect);
-  hdr.appendChild(materialLabel);
+  hdr.appendChild(materialSelect);
 
   // Always shown, even for a component with no diffuse loaded at all --
   // that's the only way to attach one via "Add". updateTexButtonState gives

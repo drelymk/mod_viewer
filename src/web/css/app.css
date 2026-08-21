@@ -247,6 +247,8 @@ body {
 #grid-btn.off { background: var(--bg-control); }
 #shading-btn { background: var(--accent); }
 #shading-btn.off { background: var(--bg-control); }
+#glossy-btn { background: var(--accent); }
+#glossy-btn.off { background: var(--bg-control); }
 #texture-btn { background: var(--accent); }
 #texture-btn.diffuse-only { background: #9a6700; }
 #texture-btn.off { background: var(--bg-control); }
@@ -335,10 +337,12 @@ body.right-dock-visible .environment-control { right: 338px; }
   position: relative;
 }
 .group-hdr input { width: 14px; height: 14px; cursor: pointer; accent-color: var(--accent-soft); flex-shrink: 0; }
-/* Room for .group-tex-btn, absolutely positioned in the top-right corner --
- * keeps the button pinned there regardless of name length, rather than
- * being pushed out of the flex row by a long component name. */
-.group-hdr .group-name { padding-right: 22px; }
+/* Reserve the fixed controls' space so long component names truncate before
+ * reaching the material selector or texture button. */
+.group-hdr .group-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding-right: 102px;
+}
 .group-tex-btn {
   position: absolute; top: 0; right: 0;
   background: #21262d; border: 1px solid #30363d; color: #8b949e;
@@ -366,13 +370,12 @@ body.right-dock-visible .environment-control { right: 338px; }
   border-radius: 3px; font: inherit; outline: none;
 }
 
-.material-kind-control {
-  display: flex; align-items: center; gap: 5px; padding: 2px 0 2px 38px;
-  color: #8b949e; font-size: 10px;
+.component-material-kind-control {
+  position: absolute; top: 0; right: 24px; width: 78px; min-width: 0;
+  box-sizing: border-box;
 }
-.component-material-kind-control { margin-left: auto; padding-left: 8px; }
 .material-kind-select {
-  min-width: 78px; padding: 1px 3px; color: #cdd9e5; background: #161b22;
+  min-width: 0; width: 78px; padding: 1px 3px; color: #cdd9e5; background: #161b22;
   border: 1px solid #30363d; border-radius: 3px; font: inherit; cursor: pointer;
 }
 .material-kind-select:focus { border-color: #58a6ff; outline: none; }

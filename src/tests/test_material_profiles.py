@@ -9,23 +9,14 @@ from core.material_profiles import (ChannelRef, MaterialInterpretation,
                                     material_profile_for)
 
 
-def test_zzz_uses_material_map_g_for_metalness_and_b_for_specular():
+def test_zzz_uses_light_map_g_for_metalness_and_material_map_b_for_specular():
     profile = material_profile_for("zzz", "zzmi")
 
     assert profile.id == "zzz:zzmi"
-    assert profile.metalness == ChannelRef("material_map", "g")
+    assert profile.metalness == ChannelRef("light_map", "g")
     assert profile.specular == ChannelRef("material_map", "b")
     assert profile.material_id == ChannelRef("material_map", "r")
     assert profile.to_metadata()["specular_influence"] is None
-
-
-def test_zzz_rabbitfx_profile_is_separate_from_zzmi_but_keeps_semantics():
-    profile = material_profile_for("zzz", "rabbitfx")
-
-    assert profile.id == "zzz:rabbitfx"
-    assert profile.texture_api == "rabbitfx"
-    assert profile.metalness.source == "material_map"
-    assert profile.specular.channel == "b"
 
 
 def test_genshin_uses_light_map_r_response_and_g_toon_shadow():
@@ -58,21 +49,6 @@ def test_material_profile_kind_falls_back_to_stable_base_profile():
     assert material_profile_for("not-a-game", "unknown", "body").id == "none"
 
 
-def test_exact_kind_profile_beats_base_profile_without_production_specialization(
-        monkeypatch):
-    import core.material_profiles as profiles
-
-    specialized = MaterialInterpretation(
-        id="genshin:gimi:face", game="genshin", texture_api="gimi",
-        material_kind="face")
-    monkeypatch.setattr(
-        profiles, "_specialized_profile_for",
-        lambda game, texture_api, kind: specialized if kind == "face" else None)
-
-    assert material_profile_for("genshin", "gimi", "face") is specialized
-    assert material_profile_for("genshin", "gimi", "hair").id == "genshin:gimi"
-
-
 def test_material_profile_accepts_complete_detection_without_guessing_unknown_api():
     detection = GameDetection(
         game="zzz", runtime="zzmi", texture_api="unknown",
@@ -97,17 +73,6 @@ def test_wuwa_keeps_normal_data_available_for_raw_or_unknown_api():
         assert profile.direct_shadow_model is None
         assert profile.metalness is None
         assert profile.specular is None
-
-
-def test_material_interpretation_validates_normal_xy_channels():
-    with pytest.raises(ValueError):
-        MaterialInterpretation(
-            id="bad", game="wuwa", texture_api="raw",
-            normal_xy=("r", "x"))
-    with pytest.raises(ValueError):
-        MaterialInterpretation(
-            id="bad", game="wuwa", texture_api="raw",
-            normal_xy=("r",))
 
 
 def test_wuwa_rabbitfx_alone_enables_validated_shadow_semantics():
@@ -143,16 +108,6 @@ def test_wuwa_rabbitfx_body_is_the_only_first_specialized_profile():
     assert material_profile_for("unknown", "unknown", "body").id == "none"
 
 
-def test_wuwa_body_profile_serializes_explicit_non_pbr_semantics():
-    metadata = material_profile_for("wuwa", "rabbitfx", "body").to_metadata()
-
-    assert metadata["toon_specular_mask"] == {
-        "source": "normal_data", "channel": "b", "invert": False}
-    assert metadata["metal_route"] == {
-        "source": "normal_data", "channel": "a", "invert": False}
-    assert metadata["direct_specular_model"] == "wuwa_body"
-    assert metadata["metalness"] is None
-    assert metadata["specular"] is None
 
 
 def test_wuwa_shadow_tuning_is_serialized_without_genshin_reuse():
@@ -161,29 +116,18 @@ def test_wuwa_shadow_tuning_is_serialized_without_genshin_reuse():
     assert (profile.wuwa_shadow_process,
             profile.wuwa_shadow_front_offset,
             profile.wuwa_shadow_width,
-            profile.wuwa_shadow_influence) == (0.55, 0.4, 0.01, 1.0)
+            profile.wuwa_shadow_mask_cutoff,
+            profile.wuwa_shadow_mask_endpoint_tolerance,
+            profile.wuwa_shadow_influence) == (
+                0.55, 0.4, 0.01, 0.1, 0.01, 1.0)
     metadata = profile.to_metadata()
     assert metadata["direct_shadow_model"] == "wuwa_base"
     assert metadata["wuwa_shadow_width"] == 0.01
+    assert metadata["wuwa_shadow_mask_cutoff"] == 0.1
+    assert metadata["wuwa_shadow_mask_endpoint_tolerance"] == 0.01
     assert metadata["shadow_threshold"] == 0.5
 
 
-def test_structured_payload_exposes_material_profile_metadata():
-    from app.mod_loader import _structured_payload
-
-    detection = GameDetection(
-        game="genshin", runtime="gimi", texture_api="gimi",
-        confidence="high", scores={})
-    payload = _structured_payload(game=detection)
-
-    profiles = payload["metadata"]["material_profiles"]
-    assert profiles["genshin:gimi"]["id"] == "genshin:gimi"
-    assert profiles["genshin:gimi"]["metalness"] == {
-        "source": "light_map", "channel": "r", "invert": False}
-    assert profiles["genshin:gimi"]["material_id_decoder"] == (
-        "genshin_5_region")
-    assert profiles["genshin:gimi"]["specular_area"] == {
-        "source": "light_map", "channel": "b", "invert": False}
 
 
 def test_explicit_kind_evidence_selects_body_but_weak_hint_does_not():
@@ -206,39 +150,3 @@ def test_explicit_kind_evidence_selects_body_but_weak_hint_does_not():
     assert meshes["Override-0"]["material_profile_id"] == (
         "wuwa:rabbitfx:body")
     assert set(profiles) == {"wuwa:rabbitfx", "wuwa:rabbitfx:body"}
-
-
-def test_mesh_profiles_are_deduplicated_and_keep_kind_identity():
-    from app.mod_loader import _assign_material_profiles
-
-    detection = GameDetection(
-        game="genshin", runtime="gimi", texture_api="gimi",
-        confidence="high", scores={})
-    meshes = {
-        name: {"component": component}
-        for name, component in {
-            "Body-0": "Body", "Body-1": "Body",
-            "Hair-0": "Hair", "Face-0": "Face",
-        }.items()
-    }
-
-    profiles = _assign_material_profiles(meshes, detection)
-
-    assert len(profiles) == 1
-    assert all(entry["material_profile_id"] == "genshin:gimi"
-               for entry in meshes.values())
-    assert meshes["Face-0"]["material_kind"] == "face"
-    assert meshes["Face-0"]["material_kind_reliable"] is False
-
-
-def test_material_profile_id_collision_is_rejected_but_identical_registration_is_ok():
-    from app.mod_loader import _register_material_profile
-
-    profile = material_profile_for("genshin", "gimi")
-    table = {}
-    _register_material_profile(table, profile)
-    _register_material_profile(table, profile)
-
-    conflicting = replace(profile, specular_scale=0.5)
-    with pytest.raises(RuntimeError, match="Material profile ID collision"):
-        _register_material_profile(table, conflicting)

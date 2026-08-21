@@ -438,6 +438,8 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
       wuwaShadowProcessNode,
       wuwaShadowFrontOffsetNode,
       wuwaShadowWidthNode,
+      wuwaShadowMaskCutoffNode,
+      wuwaShadowMaskEndpointToleranceNode,
       wuwaShadowInfluenceNode,
     } = this.gameMaterialState;
     const maskRef = profile.shadow_mask;
@@ -452,7 +454,27 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
     );
     const authoredMask = maskBinding
       ? enabledChannelNode(maskRef, bindings, 1) : float(1);
-    const shadowArea = lightBoundary.mul(authoredMask).clamp(0, 1);
+    // LightMap.G is a packed visibility classification, not a linear
+    // brightness value.  Multiplying by raw G can make a RabbitFX component
+    // nearly black in all-map mode when its valid authored values are below
+    // 0.5.
+    const classifiedVisibility = authoredMask
+      .greaterThanEqual(wuwaShadowMaskCutoffNode)
+      .select(float(1), float(0));
+    // A value at either endpoint is not a usable authored classification for
+    // every RabbitFX LightMap.  Treat it as an absent mask so binary/alternate
+    // packed maps do not erase the key light.  Midrange values retain the
+    // validated shadow behavior.
+    const endpointTolerance = wuwaShadowMaskEndpointToleranceNode;
+    const endpointInvalid = authoredMask
+      .lessThanEqual(endpointTolerance)
+      .select(float(1), authoredMask.greaterThanEqual(
+        float(1).sub(endpointTolerance)).select(float(1), float(0)));
+    const endpointAwareVisibility = endpointInvalid.greaterThan(0)
+      .select(float(1), classifiedVisibility);
+    const authoredVisibility = endpointTolerance.greaterThan(0)
+      .select(endpointAwareVisibility, classifiedVisibility);
+    const shadowArea = lightBoundary.mul(authoredVisibility).clamp(0, 1);
     const computedFactor = mix(
       float(1), shadowArea, wuwaShadowInfluenceNode);
     // A missing Lightmap is an explicit no-mask case, not permission to
@@ -505,7 +527,6 @@ class WuwaBodyLightingModel extends WuwaLightingModel {
     super.direct(lightData, builder);
 
     const {
-      profile,
       bindings,
       wuwaSpecularPowerNode,
       wuwaToonSpecularCutoffNode,
@@ -519,23 +540,27 @@ class WuwaBodyLightingModel extends WuwaLightingModel {
     const ndoth = normalView.dot(halfDirection).clamp(0, 1);
     const specTerm = ndoth.max(0.001).pow(wuwaSpecularPowerNode);
     const shapeGate = step(wuwaToonSpecularCutoffNode, specTerm);
-    const maskRef = profile.shadow_mask;
-    const maskBinding = validRef(maskRef) ? bindings[maskRef.source] : null;
-    const shadowMask = maskBinding
-      ? enabledChannelNode(maskRef, bindings, 1) : float(1);
-    const shadowGate = step(0.1, shadowMask);
     const packedB = toonSpecularMaskNode;
     const packedA = metalRouteNode;
     const maskGate = step(wuwaSpecularMaskCutoffNode, packedB);
     const exponent = mix(float(0.5), float(2.0), packedB);
     const responseColor = diffuseColor.rgb.clamp(0.001, 1).pow(exponent);
+    // LightMap.G is the validated direct-diffuse shadow mask applied by the
+    // base WuWa lighting model above. It must not zero the body's highlight:
+    // diffuse-only mode disables that map and otherwise changes the
+    // specular result merely by changing the viewer display mode.
     const toonSpecular = physicalSpecular
       .mul(responseColor)
       .mul(shapeGate)
-      .mul(shadowGate)
-      .mul(maskGate)
       .mul(float(1).sub(packedA).clamp(0, 1));
-    const replacement = mix(toonSpecular, physicalSpecular,
+    // A low B value means that this packed texture has no authored toon
+    // highlight at the pixel.  It must not erase the ordinary physical key
+    // light: some RabbitFX body textures (including BellyDancer Component4)
+    // keep B at zero across nearly the whole mesh.  In that case the packed
+    // path should match diffuse-only mode for direct specular.  When B is
+    // authored, it still selects the toon response above.
+    const authoredSpecular = mix(physicalSpecular, toonSpecular, maskGate);
+    const replacement = mix(authoredSpecular, physicalSpecular,
       wuwaMetalRouteNode(packedA));
     // The packed source is optional.  A missing/failed Normalmap must retain
     // the exact PR18 physical direct-specular contribution.
@@ -664,6 +689,10 @@ export function configureGameMaterial(material, profile, options = {}) {
       numericOr(profile?.wuwa_shadow_front_offset, 0.4)),
     wuwaShadowWidthNode: uniform(
       numericOr(profile?.wuwa_shadow_width, 0.01)),
+    wuwaShadowMaskCutoffNode: uniform(
+      numericOr(profile?.wuwa_shadow_mask_cutoff, 0.1)),
+    wuwaShadowMaskEndpointToleranceNode: uniform(
+      numericOr(profile?.wuwa_shadow_mask_endpoint_tolerance, 0.01)),
     wuwaShadowInfluenceNode: uniform(
       numericOr(profile?.wuwa_shadow_influence, 1.0)),
     wuwaSpecularPowerNode: uniform(

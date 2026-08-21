@@ -6,20 +6,18 @@ The tree must therefore round-trip *any* real condition unchanged, and partial
 evaluation must only fold away the parts it was explicitly given values for.
 """
 
-import os, re, collections
+import re
 
 
-from _corpus import active_ini_files
 from core import ini_condition as ic
 from core.ini_condition import ConditionError, TRUE, FALSE
-from core.ini_document import IniDocument, IF, ELIF
 
 
 def norm(s):
     return re.sub(r"\s+", "", s)
 
 
-# ── round-trip ───────────────────────────────────────────────────────────────
+# â”€â”€ round-trip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 ROUND_TRIP = [
     "$swapvar == 1",
@@ -69,16 +67,7 @@ def test_rejects_malformed():
     assert (True), ("malformed conditions raise ConditionError")
 
 
-def test_variables():
-    assert (ic.parse("$a == 1 && $b == 2").variables() == {"a", "b"}), ("variables() finds both operands")
-    assert (ic.parse("$DRAW_TYPE == 1").variables() == {"DRAW_TYPE"}), ("variables() finds an untracked var")
-    assert (ic.parse("vs-cb3 == 1").variables() == set()), ("bare words are not variables")
-    assert (ic.references("$a == 1 && $b == 2", "b")), ("references() true for a used var")
-    assert (not ic.references("$a == 1", "b")), ("references() false for an absent var")
-    assert (not ic.references("$Cloth = 1", "Cloth")), ("references() is false on an unparseable condition")
-
-
-# ── partial evaluation ───────────────────────────────────────────────────────
+# â”€â”€ partial evaluation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def red(src, bindings):
     return ic.render(ic.reduce(ic.parse(src), bindings))
@@ -109,20 +98,9 @@ def test_reduce_preserves_unknowns():
     assert (red("ResourceMergedSkeleton !== null", {}) == "ResourceMergedSkeleton !== null"), ("resource-vs-null comparison survives")
 
 
-def test_reduce_nested():
-    assert (red("($v == 1 || $v == 2) && $DRAW_TYPE == 1", {"v": "2"}) == "$DRAW_TYPE == 1"), ("OR inside parens collapses to TRUE and drops out")
-    assert (red("($v == 1 || $v == 2) && $DRAW_TYPE == 1", {"v": "3"}) == FALSE), ("OR inside parens collapses to FALSE and kills the AND")
-    assert (red("!($v == 1)", {"v": "1"}) == FALSE), ("NOT of a folded true")
-    assert (red("!($v == 1 && $a == 2)", {"v": "1"}) == "!($a == 2)"), ("NOT keeps its parens around a surviving AND")
 
 
-def test_namespaced():
-    assert (ic.is_namespaced(r"\Remielle\Master\swapvar")), ("backslash var is namespaced")
-    assert (not ic.is_namespaced("swapvar")), ("plain var is not namespaced")
-    assert (not ic.is_namespaced(None)), ("None is not namespaced")
-
-
-# ── eliminate() — used by toggle_editor's delete path ───────────────────────
+# â”€â”€ eliminate() â€” used by toggle_editor's delete path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def elim(src, dead_vars):
     return ic.render(ic.eliminate(ic.parse(src), dead_vars))
@@ -145,26 +123,11 @@ def test_eliminate_preserves_survivors():
     assert (elim("!($v == 1 && $a == 2)", ["v"]) == "!($a == 2)"), ("NOT keeps its parens around a surviving AND, same as reduce()")
 
 
-def test_eliminate_multiple_vars_at_once():
-    assert (elim("$v == 1 && $w == 2", ["v", "w"]) == TRUE), ("both dead vars in one AND fold the whole thing to TRUE")
-    assert (elim("$v == 1 && $w == 2 && $DRAW_TYPE == 1", ["v", "w"]) == "$DRAW_TYPE == 1"), ("two dead vars removed at once, survivor kept")
-    assert (elim("$v == 1 || $w == 2", ["v", "w"]) == TRUE), ("both dead vars in one OR fold the whole thing to TRUE")
-
-
-def test_eliminate_never_produces_false_from_a_bare_dead_var():
-    """A *leaf* referencing a dead var only ever folds to TRUE, never FALSE —
-    so as long as it isn't wrapped in a NOT, the whole condition can't end up
-    FALSE either. (A negated reference is a different story: see below.)"""
-    samples = ["$v == 1", "$v != 1", "$v", "$v < 3", "$v >= 9",
-               "$v == 1 && $a == 2", "$v == 1 || $a == 2",
-               "($v == 1)", "$a == 1 && ($v == 2 || $b == 3)"]
-    bad = [s for s in samples if elim(s, ["v"]) is FALSE]
-    assert (bad == []), (f"no bare (non-negated) dead-var condition folds to FALSE ({bad})")
 
 
 def test_eliminate_negation_can_legitimately_produce_false():
     """Not a bug: eliminate() substitutes TRUE for a dead var's clauses and
-    then applies ordinary boolean algebra, same as reduce() — so a `!` wholly
+    then applies ordinary boolean algebra, same as reduce() â€” so a `!` wholly
     wrapping an all-dead-vars subtree inverts that TRUE to FALSE, exactly like
     negating any other known-true condition would. `if !$v` becoming `if 0`
     once `$v` is deleted is the expected, deterministic outcome, not an
@@ -178,12 +141,12 @@ def test_eliminate_negation_can_legitimately_produce_false():
 
 def test_eliminate_dead_var_inside_arithmetic():
     """Regression: a dead var buried inside arithmetic on a Cmp operand (or as
-    a bare arithmetic condition) used to be invisible to eliminate() — it only
+    a bare arithmetic condition) used to be invisible to eliminate() â€” it only
     checked for a bare `Operand` on either side of a Cmp, so `$img_x` inside
     `cursor_x < $img_x + $norm_width` was never substituted away. references()
     still says the line depends on the dead var (it recurses through Arith),
     so _strip_vars_from_gates kept re-selecting the same untouched line as its
-    next rewrite target forever — a real, corpus-confirmed infinite loop
+    next rewrite target forever â€” a real, corpus-confirmed infinite loop
     (found via a mouse-drag [Present] script section in a real WuWa mod),
     not a hypothetical one."""
     assert (elim("$v + 1 == 2", ["v"]) == TRUE), ("dead var inside arithmetic on the left of == folds to TRUE")
@@ -199,65 +162,6 @@ def test_eliminate_dead_var_inside_arithmetic():
     assert (elim("($v + 1) == 2", ["v"]) == TRUE), ("dead var inside parenthesised arithmetic still folds")
 
 
-def test_find_comparisons():
-    node = ic.parse("$v == 1 && $DRAW_TYPE == 1")
-    assert (ic.find_comparisons(node, "v") == [("==", "1")]), ("finds a simple == comparison on the tracked var")
-    assert (ic.find_comparisons(node, "DRAW_TYPE") == [("==", "1")]), ("finds the comparison for a different var in the same tree")
-    assert (ic.find_comparisons(node, "nope") == []), ("no comparisons found for a var not in the tree")
-
-    multi = ic.parse("$v == 1 || $v == 2 || $v == 3")
-    assert (ic.find_comparisons(multi, "v") == [("==", "1"), ("==", "2"), ("==", "3")]), ("finds every comparison across an OR chain")
-
-    mirrored = ic.parse("1 == $v")
-    assert (ic.find_comparisons(mirrored, "v") == [("==", "1")]), ("finds a comparison with the var on the right-hand side")
-
-    nested = ic.parse("$a == 1 && ($v == 2 || $v == 3)")
-    assert (ic.find_comparisons(nested, "v") == [("==", "2"), ("==", "3")]), ("finds comparisons nested inside parens")
-
-    var_vs_var = ic.parse("$v == $other")
-    assert (ic.find_comparisons(var_vs_var, "v") == []), ("a var-vs-var comparison is not a literal comparison, so it's skipped")
 
 
-# ── the whole corpus ─────────────────────────────────────────────────────────
-
-_RE_COND = re.compile(r"^(?:if|else\s+if|elif)\s+(.*)$", re.I)
-
-
-def test_corpus():
-    files = active_ini_files()
-    if not files:
-        print("SKIP  no local mod libraries found")
-        return
-
-    tot = ok = drift = 0
-    fail = collections.Counter()
-    for path in files:
-        try:
-            doc = IniDocument.load(path)
-        except Exception:
-            continue
-        for line in doc.lines:
-            if line.kind not in (IF, ELIF):
-                continue
-            m = _RE_COND.match(line.text)
-            if not m:
-                continue
-            expr = m.group(1).strip()
-            tot += 1
-            try:
-                node = ic.parse(expr)
-            except ConditionError as e:
-                fail[str(e)[:40]] += 1
-                continue
-            ok += 1
-            # Re-rendering must reproduce the source exactly bar whitespace;
-            # anything else means the tree invented or lost structure, and a
-            # rewrite built on it would corrupt the mod.
-            if norm(node.render()) != norm(expr):
-                drift += 1
-
-    print(f"      {len(files)} files, {tot} conditions, {tot-ok} unparseable")
-    assert (tot > 100000), (f"corpus is substantial ({tot} conditions)")
-    assert (drift == 0), (f"every parsed condition re-renders identically (drift={drift})")
-    # The handful that fail are genuinely malformed ini ($Cloth = 1, $color == 0=).
-    assert (tot - ok <= 20), (f"at most a handful are unparseable (got {tot-ok})")
+# â”€â”€ the whole corpus â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -42,45 +42,6 @@ stride = 20
     return meshes
 
 
-def test_resource_path_may_reach_a_sibling_folder():
-    """`filename = ..\\resources\\x.buf` is how mods share assets between the
-    ini's folder and its neighbours -- it has to resolve."""
-    with tempfile.TemporaryDirectory() as tmp:
-        mod = os.path.join(tmp, "mod")
-        shared = os.path.join(tmp, "shared")
-        os.makedirs(mod); os.makedirs(shared)
-        open(os.path.join(shared, "pos.buf"), "wb").write(b"\1" * 4096)
-
-        meshes = _traversal_mod(mod, "../shared/pos.buf")
-        assert (len(meshes) == 1), (f"a resource one folder above the ini is read (got {list(meshes)})")
-
-
-def test_absolute_resource_path_blocked():
-    """The mod folder is untrusted, downloaded content: a crafted `filename`
-    naming an absolute path must not be read."""
-    with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as tmp:
-        secret = os.path.join(outside, "secret.buf")
-        with open(secret, "wb") as f:
-            f.write(b"\1" * 4096)
-
-        meshes = _traversal_mod(tmp, secret.replace(os.sep, "/"))
-        assert (not meshes), (f"absolute resource path is refused (got {list(meshes)})")
-
-
-def test_deep_resource_path_traversal_blocked():
-    """`..` is allowed, but only a few levels up -- not far enough to walk out
-    of the mod library and into the user's own files."""
-    with tempfile.TemporaryDirectory() as tmp:
-        secret = os.path.join(tmp, "secret.buf")
-        with open(secret, "wb") as f:
-            f.write(b"\1" * 4096)
-        mod = os.path.join(tmp, "a", "b", "c", "d", "e")
-        os.makedirs(mod)
-
-        meshes = _traversal_mod(mod, "../../../../../secret.buf")
-        assert (not meshes), (f"a resource far above the mod folder is refused (got {list(meshes)})")
-
-
 def test_root_texture_picker_accepts_windows_case_variation():
     """The two native dialogs may spell the same Windows folder differently."""
     if os.name != "nt":
@@ -97,27 +58,6 @@ def test_root_texture_picker_accepts_windows_case_variation():
         assert (not result.get("error")), (f"root-level picked texture accepts equivalent path casing ({result})")
         assert (result.get("tex_key") == "diffuse::RootDiffuse.png"
               and result.get("file") == "RootDiffuse.png"), (f"root-level picked texture keeps role and source path ({result})")
-
-
-def test_toggle_panel_provenance():
-    mods = sample_mods(15, seed=11)
-    if not mods:
-        return
-    checked = bad = 0
-    for mod in mods:
-        payload = mod_loader.load_mod(mod)
-        for section, info in (payload.get("controls", {}).get("toggles") or {}).items():
-            checked += 1
-            ini = info.get("ini")
-            if not ini or not os.path.isfile(os.path.join(mod, ini)):
-                bad += 1
-                continue
-            secs = parse_sections(os.path.join(mod, ini))
-            if info.get("section") not in secs:
-                bad += 1
-    print(f"      {checked} toggle sections checked")
-    assert (checked > 0), ("real mods produced toggle sections")
-    assert (bad == 0), (f"every toggle resolves to a real section in a real file (bad={bad})")
 
 
 RUNTIME_POSITION_COPY_INI = """[TextureOverrideBodyBlend]

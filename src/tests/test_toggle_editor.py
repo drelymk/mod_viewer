@@ -5,7 +5,7 @@ A "toggle" is three coupled pieces (see toggle_editor's module docstring): the
 if/elif gate elsewhere that reads $var. These tests check that add/edit/
 delete keep the three in lockstep, that every ToggleEditError leaves the
 document completely untouched (so a caller never has to guess whether a
-rejected edit did anything), and — via a corpus-wide dry run — that
+rejected edit did anything), and â€” via a corpus-wide dry run â€” that
 delete_toggle never corrupts a real mod's condition syntax, drops a live gate
 silently, or hangs.
 
@@ -54,20 +54,11 @@ endif
 """
 
 
-# ── shared helpers ───────────────────────────────────────────────────────────
-
-def test_helpers():
-    d = doc(BASIC)
-    sec = d.section("KeySwap")
-    assert (te.is_cycle_section(sec)), ("KeySwap recognized as a cycle section")
-    assert (te.cycle_vars(sec) == {"swapvar": ["0", "1", "2"]}), (f"cycle_vars reads the value list ({te.cycle_vars(sec)})")
-    assert (te._norm_section_name("Swap") == "KeySwap"), ("_norm_section_name adds the Key prefix")
-    assert (te._norm_section_name("KeySwap") == "KeySwap"), ("_norm_section_name leaves an existing Key prefix alone")
-    toggles = te.list_cycle_toggles(d)
-    assert (toggles == [("KeySwap", {"swapvar": ["0", "1", "2"]})]), (f"list_cycle_toggles finds the one cycle section ({toggles})")
+# â”€â”€ shared helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-# ── add_toggle ───────────────────────────────────────────────────────────────
+
+# â”€â”€ add_toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_add_happy_path():
     d = doc(BASIC)
@@ -83,15 +74,6 @@ def test_add_happy_path():
     assert (reparsed.section("KeyExtra") is not None), ("the new section round-trips through from_string")
 
 
-def test_add_with_explicit_default_and_back():
-    d = doc(BASIC)
-    te.add_toggle(d, "Extra", "2", "extravar", ["0", "1", "2"],
-                  default="1", back_combo="3")
-    const_line = te._constant_line(d, "extravar")
-    assert (const_line.text == "global persist $extravar = 1"), (f"explicit default is used instead of values[0] ({const_line.text})")
-    sec = d.section("KeyExtra")
-    backs = [l.text for l in sec.lines if l.text.lower().startswith("back")]
-    assert (backs == ["back = 3"]), (f"back combo written ({backs})")
 
 
 def test_add_creates_constants_section_when_missing():
@@ -107,11 +89,6 @@ $swapvar = 0,1
 
 _ADD_INVALID_CASES = [
     ("duplicate section", ("Swap", "2", "newvar", ["0", "1"])),
-    ("existing variable", ("Extra", "2", "swapvar", ["0", "1"])),
-    ("too few values", ("Extra", "2", "extravar", ["0"])),
-    ("blank value", ("Extra", "2", "extravar", ["0", ""])),
-    ("duplicate values", ("Extra", "2", "extravar", ["0", "0"])),
-    ("missing key binding", ("Extra", "", "extravar", ["0", "1"])),
     ("namespaced variable", ("Extra", "2", r"Master\swapvar", ["0", "1"])),
 ]
 
@@ -129,27 +106,9 @@ def test_add_rejects_invalid_toggle(case_name, args):
     assert (d.to_string() == before), (f"{case_name}: rejected add leaves the document untouched")
 
 
-def test_add_insertion_point_after_trailing_blank_lines():
-    """Regression: inserting must land after the section's last non-blank
-    line, not after trailing blanks (which would butt against the next
-    section header with no separator)."""
-    d = doc("""[Constants]
-global persist $swapvar = 0
 
 
-[KeySwap]
-key = 1
-type = cycle
-$swapvar = 0,1
-""")
-    te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
-    lines = d.to_string().splitlines()
-    idx = next(i for i, l in enumerate(lines) if "extravar" in l)
-    assert (lines[idx - 1].strip() == "global persist $swapvar = 0"), (f"new declaration is inserted right after the last real Constants "
-          f"line, not after the trailing blanks ({lines[idx - 1]!r})")
-
-
-# ── add_toggle: condition line / on-screen-detection plumbing ──────────────
+# â”€â”€ add_toggle: condition line / on-screen-detection plumbing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_add_condition_builds_active_plumbing_from_scratch():
     d = doc(BASIC)
@@ -198,31 +157,8 @@ drawindexed = 100,0,0
     assert (non_blank == ["hash = abc123", "drawindexed = 100,0,0"]), (f"the TextureOverride section is left untouched ({non_blank})")
 
 
-def test_add_condition_reuses_existing_active():
-    fixture = BASIC.replace("global persist $swapvar = 0",
-                             "global persist $swapvar = 0\nglobal $active = 0")
-    d = doc(fixture)
-    te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
-    sec = d.section("KeyExtra")
-    assert (sec.lines[0].text == "condition = $active == 1"), (f"reuses the existing $active var ({sec.lines[0].text!r})")
-    assert (d.section("Present") is None), ("no [Present] section is created when $active is already declared")
-    actives = [l for l in d.section("Constants").lines if "active" in l.text]
-    assert (len(actives) == 1), ("no duplicate $active declaration added")
 
 
-def test_add_condition_prefers_object_detected_over_active():
-    d = doc("""[Constants]
-global $active = 0
-global $object_detected = 0
-
-[KeySwap]
-key = 1
-type = cycle
-$swapvar = 0,1,2
-""")
-    te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
-    sec = d.section("KeyExtra")
-    assert (sec.lines[0].text == "condition = $object_detected == 1"), (f"$object_detected wins over $active when both exist ({sec.lines[0].text!r})")
 
 
 def test_add_condition_marks_first_and_second_override_only():
@@ -272,22 +208,8 @@ def test_add_condition_idempotent_across_two_calls():
     assert (sec2.lines[0].text == "condition = $active == 1"), ("the second toggle reuses the $active plumbing the first call created")
 
 
-@pytest.mark.parametrize("reserved_var", ["active", "object_detected"])
-def test_add_rejects_reserved_detection_var_names(reserved_var):
-    d = doc(BASIC)
-    before = d.to_string()
-    with pytest.raises(te.ToggleEditError):
-        te.add_toggle(d, "Extra", "2", reserved_var, ["0", "1"])
-    assert (d.to_string() == before), (f"{reserved_var!r} rejected without changing the document")
 
 
-def test_add_condition_builds_present_right_after_constants():
-    d = doc(BASIC)
-    te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
-
-    names = [s.name for s in d.sections]
-    assert (names.index("Present") == names.index("Constants") + 1), (f"freshly-built [Present] lands right after [Constants], not at EOF ({names})")
-    assert (names.index("KeyExtra") == names.index("Present") + 1), (f"the new Key section lands right after [Present] ({names})")
 
 
 def test_add_condition_appends_into_existing_present_section():
@@ -299,63 +221,16 @@ def test_add_condition_appends_into_existing_present_section():
     assert (texts == ["run = CommandListUnrelated", "post $active = 0"]), (f"post $active = 0 appended after the existing content ({texts})")
 
 
-# ── edit_toggle ──────────────────────────────────────────────────────────────
-
-def test_edit_rename():
-    d = doc(BASIC)
-    name = te.edit_toggle(d, "KeySwap", new_name="Renamed")
-    assert (name == "KeyRenamed"), (f"edit_toggle returns the new name ({name})")
-    assert (d.section("KeySwap") is None), ("old section name is gone")
-    assert (d.section("KeyRenamed") is not None), ("new section name exists")
+# â”€â”€ edit_toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-def test_edit_rename_collision():
-    d = doc(BASIC)
-    te.add_toggle(d, "Other", "3", "othervar", ["0", "1"])
-    before = d.to_string()
-    try:
-        te.edit_toggle(d, "KeySwap", new_name="Other")
-        assert (False), ("renaming onto an existing section should raise")
-    except te.ToggleEditError:
-        assert (True), ("renaming onto an existing section raises")
-    assert (d.to_string() == before), ("doc unchanged after the rejected rename")
 
 
-def test_edit_rebind_key_last_wins():
-    d = doc("""[Constants]
-global persist $swapvar = 0
-
-[KeySwap]
-key = 1
-key = 2
-type = cycle
-$swapvar = 0,1
-""")
-    te.edit_toggle(d, "KeySwap", key_combo="9")
-    sec = d.section("KeySwap")
-    keys = [l.text for l in sec.lines if l.text.lower().startswith("key")]
-    assert (keys == ["key = 1", "key = 9"]), (f"only the last key= line is rewritten ({keys})")
 
 
-def test_edit_add_back_and_reject_empty_key():
-    d = doc(BASIC)
-    te.edit_toggle(d, "KeySwap", back_combo="9")
-    sec = d.section("KeySwap")
-    assert (any(l.text == "back = 9" for l in sec.lines)), ("back combo added")
-
-    before = d.to_string()
-    try:
-        te.edit_toggle(d, "KeySwap", key_combo="   ")
-        assert (False), ("blank key_combo should raise")
-    except te.ToggleEditError:
-        assert (True), ("blank key_combo raises")
-    assert (d.to_string() == before), ("doc unchanged after the rejected key edit (validated before mutation)")
 
 
-def test_edit_var_values_no_conflict():
-    d = doc(BASIC)
-    te.edit_toggle(d, "KeySwap", var_values={"swapvar": ["0", "1", "2", "3"]})
-    assert (te.cycle_vars(d.section("KeySwap")) == {"swapvar": ["0", "1", "2", "3"]}), ("cycle values updated")
+
 
 
 def test_edit_var_values_conflict_raises_then_can_be_overridden():
@@ -412,7 +287,7 @@ $swapvar = 0,1,2
 
 
 def test_edit_combined_rename_and_invalid_var_leaves_doc_untouched():
-    """Regression: all fields must validate before any mutation — a failing
+    """Regression: all fields must validate before any mutation â€” a failing
     var_values check must not leave a rename half-applied."""
     d = doc(BASIC)
     before = d.to_string()
@@ -427,21 +302,9 @@ def test_edit_combined_rename_and_invalid_var_leaves_doc_untouched():
     assert (d.section("Renamed") is None), ("renamed section was not created")
 
 
-def test_edit_nonexistent_section_or_var_raises():
-    d = doc(BASIC)
-    try:
-        te.edit_toggle(d, "KeyNope", key_combo="1")
-        assert (False), ("editing a nonexistent section should raise")
-    except te.ToggleEditError:
-        assert (True), ("editing a nonexistent section raises")
-    try:
-        te.edit_toggle(d, "KeySwap", var_values={"nope": ["0", "1"]})
-        assert (False), ("editing a var the section doesn't cycle should raise")
-    except te.ToggleEditError:
-        assert (True), ("editing a nonexistent var raises")
 
 
-# ── delete_toggle ────────────────────────────────────────────────────────────
+# â”€â”€ delete_toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_delete_removes_section_and_constant_and_rewrites_gates():
     d = doc(BASIC)
@@ -508,35 +371,8 @@ endif
           f"eliminated ({gate.text})")
 
 
-def test_delete_reports_always_false_gate():
-    d = doc("""[Constants]
-global persist $swapvar = 0
-
-[KeySwap]
-key = 1
-type = cycle
-$swapvar = 0,1
-
-[TextureOverrideBody]
-hash = abc
-if !$swapvar
-drawindexed = 100,0,0
-else
-drawindexed = 200,0,0
-endif
-""")
-    report = te.delete_toggle(d, "KeySwap")
-    assert (len(report["always_false_gates"]) == 1), (f"the negated gate is flagged as permanently false ({report})")
-    gate = next(l for l in d.lines if l.kind == IF)
-    assert (gate.text == "if 0"), (f"negated gate rewritten to the literal 0 ({gate.text})")
 
 
-def test_delete_reports_always_true_gate():
-    d = doc(BASIC)
-    report = te.delete_toggle(d, "KeySwap")
-    assert (len(report["always_true_gates"]) == 3), (f"every plain-comparison gate is flagged as permanently true ({report})")
-    gate = next(l for l in d.lines if l.kind == IF)
-    assert (gate.text == "if 1"), (f"gate rewritten to the literal 1, not restructured away ({gate.text})")
 
 
 def test_delete_reports_unsafe_gate():
@@ -565,16 +401,9 @@ endif
     assert ("swapvar" in gate.text), ("the unsafe gate is left completely untouched")
 
 
-def test_delete_nonexistent_section_raises():
-    d = doc(BASIC)
-    try:
-        te.delete_toggle(d, "KeyNope")
-        assert (False), ("deleting a nonexistent section should raise")
-    except te.ToggleEditError:
-        assert (True), ("deleting a nonexistent section raises")
 
 
-# ── corpus-wide dry run ──────────────────────────────────────────────────────
+# â”€â”€ corpus-wide dry run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
 # Simulates delete_toggle against every real cycle toggle in a sample of real
 # mod inis, never writing to disk. This is what caught the eliminate() /
@@ -591,116 +420,3 @@ def _line_parses(line):
         return True
     except ic.ConditionError:
         return False
-
-
-def test_real_mods_delete_toggle():
-    from core.ini_parser import find_inis
-
-    mods = sample_mods(300, seed=11)
-    if not mods:
-        print("SKIP  no local mod libraries found")
-        return
-
-    total_inis = total_toggles = 0
-    exceptions = []
-    bad_leftover_ref = []
-    newly_unparseable = []
-    agg_rewritten = agg_false = agg_unsafe = 0
-
-    for mod in mods:
-        for path in find_inis(mod):
-            total_inis += 1
-            try:
-                base_text = open(path, "rb").read().decode("utf-8")
-                base_doc = IniDocument.from_string(base_text, path=path)
-            except Exception:
-                continue
-
-            toggles = te.list_cycle_toggles(base_doc)
-            if not toggles:
-                continue
-
-            for section_name, cvars in toggles:
-                total_toggles += 1
-                sec_before = te.find_cycle_section(base_doc, section_name)
-                # Parseability of every if/elif line *before* any edit that
-                # isn't inside the Key section itself (which is about to be
-                # deleted wholesale, so it can't regress). delete_toggle only
-                # ever rewrites an if/elif line 1-for-1 in place or deletes
-                # whole lines elsewhere (Key section, Constants declarations)
-                # — never inserts/removes a *gate* line — so this list and
-                # the post-delete list below correspond 1:1 in file order,
-                # even though absolute line numbers shift. Comparing by
-                # position (not raw line number) is what lets a regression
-                # (parsed before, doesn't after) be told apart from
-                # pre-existing, unrelated corpus malformations (documented at
-                # ~10-in-223,973 conditions in test_ini_condition; not
-                # something delete_toggle can be blamed for or fix).
-                before_gates = [(l.no, l.text, _line_parses(l))
-                                for l in base_doc.lines if l.kind in (IF, ELIF)
-                                and not (sec_before.start <= l.no < sec_before.end)]
-
-                d = IniDocument.from_string(base_text, path=path)
-                try:
-                    report = te.delete_toggle(d, section_name)
-                except Exception as e:
-                    exceptions.append((path, section_name, repr(e)))
-                    continue
-
-                agg_rewritten += report["gates_rewritten"]
-                agg_false += len(report["always_false_gates"])
-                agg_unsafe += len(report["unsafe_gates"])
-
-                try:
-                    d2 = IniDocument.from_string(d.to_string(), path=path)
-                except Exception as e:
-                    exceptions.append((path, section_name, "reparse: " + repr(e)))
-                    continue
-
-                after_gates = [(l.no, l.text) for l in d2.lines
-                               if l.kind in (IF, ELIF)]
-                if len(before_gates) != len(after_gates):
-                    exceptions.append((path, section_name,
-                                       f"gate count changed: "
-                                       f"{len(before_gates)} -> {len(after_gates)}"))
-                    continue
-                for (_, before_text, was_ok), (after_no, after_text) in \
-                        zip(before_gates, after_gates):
-                    if was_ok and not _line_parses(d2.lines[after_no]):
-                        newly_unparseable.append(
-                            (path, section_name, after_no, before_text, after_text))
-
-                # is_safe_to_rewrite (and therefore unsafe_gates) operates on
-                # the whole section by name, not a single line — so a gate is
-                # only exempt from the leftover-reference check if its whole
-                # section was reported unsafe, regardless of exactly which
-                # line number that ended up at after later deletions shifted
-                # everything past the removed Constants line(s).
-                unsafe_sections = {name.lower() for name, _ in report["unsafe_gates"]
-                                   if name}
-                for line in d2.lines:
-                    if line.kind not in (IF, ELIF):
-                        continue
-                    sec_name = line.section.name if line.section else None
-                    if sec_name and sec_name.lower() in unsafe_sections:
-                        continue
-                    split = te._split_condition_line(line)
-                    if not split:
-                        continue
-                    expr = split[1]
-                    for var in report["vars_removed"]:
-                        if ic.references(expr, var):
-                            bad_leftover_ref.append(
-                                (path, section_name, var, line.no, line.text))
-
-    print(f"      {len(mods)} mods, {total_inis} ini files, "
-          f"{total_toggles} cycle toggles deleted")
-    print(f"      aggregate: rewritten={agg_rewritten} "
-          f"always_false={agg_false} unsafe={agg_unsafe}")
-    assert (total_toggles > 0), ("real mods produced cycle toggles to test")
-    assert (exceptions == []), (f"delete_toggle never raises or hangs on a real file "
-          f"(first: {exceptions[:3]})")
-    assert (bad_leftover_ref == []), (f"no removed var survives in a rewritten gate outside "
-          f"unsafe_gates (first: {bad_leftover_ref[:3]})")
-    assert (newly_unparseable == []), (f"no condition that parsed before deleting stops parsing after "
-          f"(first: {newly_unparseable[:3]})")

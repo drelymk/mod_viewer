@@ -1,503 +1,236 @@
-# 3DMigoto Mod Viewer — Project Context
+# 3DMigoto Mod Viewer - Project Context
 
-pywebview + Three.js desktop viewer for ZZMI/ZZZ, SRMI/HSR, WWMI/WuWa and GIMI/Genshin
-3DMigoto mods. It reads flat mod folders, resolves INIs/buffers/textures, renders
-meshes, previews menu state and stages toggle edits without running the game.
+This is a pywebview desktop viewer for 3DMigoto character mods. It reads INI
+files, buffers and textures from a mod folder, builds meshes, renders them with
+Three.js/WebGPU, previews menu state, and stages INI edits until Export.
+Supported families include ZZZ/ZZMI, Genshin/GIMI, WuWa/WWMI and HSR/SRMI.
 
-> Keep this file to rules a future change must preserve. Record the invariant
-> and the failure it prevents; omit implementation inventories, verification
-> narratives, decision history and facts already obvious from code or git.
+Keep this file focused on durable invariants and the failure each one prevents.
+Do not add implementation inventories, historical explanations, test output,
+machine-specific paths or facts that are obvious from the source.
 
-## Context hygiene
+## Working rules
 
-- Never record secrets or machine-specific data here: credentials, tokens, API
-  keys, private URLs, usernames, hostnames, absolute local paths, environment
-  dumps, attachment paths or workspace paths. Use generic placeholders instead;
-  every entry must remain repository-portable and safe to publish.
+- Never put credentials, tokens, private URLs, usernames, hostnames, absolute
+  local paths or environment dumps here.
+- Read-only analysis may use the lossy parser. Any user-visible edit must use
+  the lossless document and shared edit session described below.
+- Preserve the existing trust boundaries and execution-order semantics even if
+  a simpler implementation appears equivalent.
 
-## Commands
+## Repository map and data flow
 
-    pip install -r requirements.txt
-    python src/viewer_app.py
+- `src/core/` contains GUI-free parsing, analysis, geometry, texture and
+  editing logic. `src/app/` owns the pywebview bridge, sessions and payload
+  orchestration. `src/web/` contains the localhost-served frontend.
+- `ini_parser` is the read/analysis path. `IniDocument` and `edit_session` are
+  the authoritative staged write path. Never write through `ini_parser`.
+- `app.api` loads the active INIs through `mod_loader.load_mod()`. The loader
+  parses each INI independently, consumes staged text when present, and returns
+  named payload fields for meshes, textures, texture pools, controls, state,
+  geometry, metadata and health.
+- Geometry is published through one shared localhost blob. The normal load path
+  must not base64 round-trip geometry or rediscover semantic stages. Direct
+  low-level fixtures may retain their older representation, but reserved
+  builder keys must not cross the public application payload boundary.
+- One active INI produces one canonical analysis shared by its controls, draw
+  groups, shapes and resources. Sibling INIs must not share resource discovery
+  state.
+- Diagnostics are read-only, lazy and cached by the edit-session revision.
+  Authoritative commits invalidate the cache, and returned reports must be
+  detached from mutable internal state. A diagnostics failure must not turn a
+  loadable mod into a load failure.
 
-Texture performance:
+## Lossless editing and staging
 
-    pip install -r requirements-dev.txt
-    python tools/benchmark_texture_pipeline.py "<mod-folder>" --pretty
+- Real INIs may contain CRLF, LF, mixed terminators, UTF-8 BOMs and no final
+  newline. Every line owns its terminator and untouched round trips must be
+  byte exact.
+- Malformed or ambiguous `if`/`elif`/`else` nesting, headers, conditions or
+  branch content is reported by `structure_errors()` and is not rewritten by
+  guessing. `section()` and similar single-section accessors intentionally use
+  the first duplicate; callers that need all duplicates must iterate the full
+  document.
+- Reload, diagnostics, Toggle CRUD, Record and INI editing all read the same
+  staged `IniDocument`s. Reopening the current mod must not reread disk over
+  staged state. A confirmed mod switch or restart discards the session.
+- All edits use `begin`/`commit`/`rollback`. `peek()` exposes the live staged
+  document so a subsequent edit sees earlier unexported changes.
+- Nothing reaches disk before Export. Export writes each dirty INI once,
+  creates one timestamped `.BAK` backup per file, and leaves failed documents
+  pending. Backup names must not be discovered as loadable INIs.
+- Namespaced globals are cross-INI and read-only. Add/edit/delete operations
+  target only plain variables declared in the edited INI.
+- Existing wired Toggle sections are shown normally. A newly added unwired
+  section is shown only while it is tracked as pending in the current session;
+  old unwired utility keys stay hidden. Export must also reject a still-unwired
+  newly added section.
+- `[Key...]` is the identity of a toggle, not an individual variable. A key
+  may cycle several variables in lockstep, so the UI and editor resolve a
+  position from the complete variable tuple. Duplicate tuples retain their
+  last-position tie break.
+- `[KeyModViewerPresent]` is one mod-wide, logically aligned cycle. Its edits
+  fan out atomically across participating INIs through the same edit session;
+  misaligned or incomplete state is visible but not applied.
+- Record rewrites only a provably safe single-variable if/elif shape. It
+  regenerates a whole chain, refuses ambiguous or partially observed cases,
+  reparses independently, and rolls back when verification fails.
 
-- Use this benchmark to compare lazy texture loading with isolated concurrency
-  rows 1, 2 and 4. It reports first/last texture-response timing, registered,
-  requested and rendered sources, cache hits/misses, stage timings, PNG bytes,
-  process-tree RSS/CPU and peak simultaneous encodes.
-- The profiled stages are DDS/image decode, RGB/RGBA conversion, resize,
-  normal-Z reconstruction and PNG encoding. Headless
-  browser frame-gap samples are not reliable for comparing interactive
-  rendering.
-- Keep the production texture render bound at 2 unless controlled measurements
-  show a meaningful completion improvement at acceptable memory cost.
+## Parsing and mod state
 
-Development tests use pytest for discovery; install the test-only dependency
-with `pip install -r requirements-dev.txt`, then run from the repository root:
+- Variable names are case-insensitive. `canonical_var_names()` is the source
+  of truth for spelling and must feed toggle extraction, defaults, menu state
+  and DNF normalization. Partial canonicalization can make an untracked gate
+  fail open and incorrectly show every mesh.
+- `SrcLine` retains source INI, line number and section metadata; use
+  `line_source()` instead of losing provenance. Every draw has a `sources`
+  list because merged payload entries can represent several authored lines or
+  files, and edits must fan out to every source.
+- Draw labels are unique payload identities; display names are UI text. Share
+  the seen-label map across all active INIs so same-named components cannot
+  overwrite one another.
+- Recognize both `elif` and `else if`. Draw DNF preserves contradictions and
+  treats an empty DNF as true. State-rule DNF may remove contradictory groups;
+  never apply that simplification to draw visibility.
+- Clickable menus are recognized from structural nested branches that assign
+  variables back to themselves. Track outer guards, and do not infer a menu
+  from a branch that merely resembles one. Increment/modulo cycles expose the
+  full `0..N-1` range.
+- Diffuse, NormalMap, LightMap and MaterialMap bindings are execution-order
+  state. Each draw uses the most recent applicable assignment; conditional
+  alternatives and no-map fallbacks remain per draw. Do not collapse them to
+  one component-level texture.
+- Discover INIs with the existing bounded rules: a direct root INI establishes
+  the mod, nested INIs are added only within the configured depth/count bounds,
+  and unrelated library/category folders must not be merged. Resource paths
+  stay relative to the INI that declares them; published/editor identities are
+  relative to the selected mod root.
 
+## Geometry and texture invariants
 
-Each test file remains directly runnable through a small dynamic compatibility
-runner, but new `test_*` functions are discovered automatically. The corpus
-checks in `test_document_vs_parser`, `test_record_editor` and related modules
-may scan external mod libraries and can be skipped or fail independently of the
-current change.
+- Geometry detection is conservative and format-specific. Do not infer a game
+  or material meaning from a filename alone. Unknown, malformed or too-small
+  buffers must be rejected or dropped safely rather than read beyond bounds.
+- An `ib` section without `drawindexed` may produce one synthetic whole-buffer
+  draw. A `handling=skip` section without an explicit draw produces nothing.
+  Real draw rows retain authored `count,start,base`; synthetic rows are the
+  only ones allowed a generated display marker.
+- Shape sliders affect geometry only when a complete recognized buffer layout
+  is present. Slider-looking variables without valid geometry targets remain
+  controls, and an override for one position buffer must not inherit another
+  buffer's shape target.
+- Resource filenames are mod-relative paths, never basenames. Rendered
+  texture identity is `role::mod-relative-path`; the roles are `diffuse`,
+  `normal_map`, `normal_data`, `light_map` and `material_map`. Diffuse is sRGB;
+  auxiliary roles are non-color data. A legacy path-only key is normalized
+  using the caller's known role, never guessed in the browser.
+- `core.resource_paths.safe_resource_path()` is the single sandbox for
+  mod-authored geometry, manual texture selection and diagnostics. Reject
+  absolute/drive paths and excessive parent traversal. The server's separate
+  static-web-root join protects a different boundary and must not be merged
+  with this rule.
+- `core.textures` owns role-aware keys, PNG fallback, transforms, caching and
+  texture profiling. `core.mesh_builder` owns geometry/payload assembly.
+  Keep texture processing independent from game/material interpretation.
+- Load texture sources lazily. Publishing or hydrating a texture pool must not
+  decode/render every source, and backend model loading must not eagerly render
+  textures. Production texture rendering is bounded at two concurrent jobs
+  unless controlled benchmark evidence justifies a change.
+- Native DDS delivery is allowed only for the existing validated eligibility
+  path. Unsupported, transformed, oversized or malformed sources use PNG
+  fallback. Compressed DDS and fallback PNG must share the same orientation;
+  color-space rules remain role-based.
 
-Build with `python src/build.py`; useful flags are `--onedir`, `--console` and
-`--rebuild-bootloader`. Builds require `src/features.ini`, vendor Three.js for
-offline use and target 64-bit Windows with Evergreen WebView2. One-file
-PyInstaller binaries resemble droppers because they unpack and execute from
-temp; `--noupx`, version metadata and preferably `--onedir` reduce false
-positives. `--rebuild-bootloader` needs MinGW-w64 and must verify that bootloader
-hashes changed—installing PyInstaller from sdist alone does not rebuild it.
+## Game and material interpretation
 
-## Architecture boundaries
-
-- `src/core/` is GUI-free domain logic; `src/app/` bridges it to pywebview;
-  `src/web/` is the localhost-served UI. Core cross-imports are relative, while
-  app/tests import `core` absolutely.
-- `ini_parser` is the lossy READ path. `ini_document` is the lossless WRITE
-  path. Never write through the reader.
-- `edit_session` owns the authoritative loaded `IniDocument`s. Reload, health,
-  toggle CRUD, Record and text editing all use this shared in-memory state.
-- `mod_loader.load_mod()` parses active flat INIs independently and returns the
-  structured application payload: `meshes`, `textures`, `texture_pools`,
-  `controls`, `state`,
-  `geometry`, `metadata` and `health`. `overrides` previews staged text and
-  `pending_new_sections` keeps new unwired toggles reachable. The low-level
-  mesh builder may retain its direct-fixture representation, but reserved
-  keys must not cross the backend/frontend boundary.
-- One active INI produces one `IniAnalysis`; controls, state, shapes and draw
-  groups consume its shared canonical-variable/resource results. Geometry
-  construction returns a named `MeshBuildResult` and appends binary fields
-  directly to the shared blob, so the normal load path must not base64 round
-  trip or rediscover semantic stages.
-- Full diagnostics are lazy and cached against the edit-session revision.
-  Any authoritative document commit invalidates that cache; a cached report
-  is detached before crossing the API boundary.
-- `find_inis` recurses only when a direct root INI has geometry, preventing a
-  library/category folder from combining unrelated mods. Always include every
-  active direct INI; add nested INIs through two directory levels up to ten
-  total files unless the direct set already exceeds that limit. Resource filenames remain
-  relative to the INI that declares them, while payload/editor identities are
-  paths relative to the selected root so duplicate basenames stay distinct.
-
-## Parsing and state invariants
-
-- 3DMigoto variables are case-insensitive. `canonical_var_names(sections)` is
-  the spelling source of truth (global declaration wins, otherwise first use)
-  and must feed `extract_toggle_keys`, `extract_variable_defaults`,
-  `extract_menu_toggles` and `normalize_dnf`. Partial canonicalization is worse
-  than none because untracked DNF clauses fail open and make meshes always
-  visible.
-- `parse_sections` returns `SrcLine`, a `str` subclass carrying
-  `ini_path/line_no/section`; use `line_source()`. Every draw has a `sources`
-  LIST because payload dedup can merge several lines/files. Authoring changes
-  must fan out to every source.
-- Draw groups have a unique `label` and clean `display_name`. Payload keys use
-  `label`; UI names use `component`/`display_name`. Share the `seen` label map
-  across all INIs in a mod or same-named components overwrite each other.
-- Toggle identity is the `[Key...]` SECTION, not one variable. A key can cycle
-  several variables in lockstep. The UI cycle position must be resolved from
-  the complete variable tuple, not `indexOf()` on a lead variable whose values
-  may repeat (`1,0,0`); retain the last position to break duplicate-tuple ties.
-- Recognize both `elif` and `else if`. Simplification removes redundant elif
-  exclusions, but draw DNF deliberately preserves contradictions: an empty
-  draw DNF means TRUE, so deleting an impossible group would make it visible.
-- Clickable menu chains are recognized structurally: nested
-  `if $slot == N`/`elif` branches that assign variables back to themselves.
-  Track outer guards as a stack. A simple `else` is the exact negation of its
-  one preceding branch; after multiple elifs its guard is unknown. Check the
-  `< N`/else cycle idiom before the trailing `> N` reset idiom. Also support
-  `$v = ($v + 1) % N`, which exposes `0..N-1`.
-- A diffuse is execution-order state, not one texture per component. Each draw
-  uses the most recent assignment before it. Reset `_cur_diffuse_variants` when
-  a new assignment is not a same-branch continuation; keep ordered independent
-  assignments so the last matching write wins. `texture_default_file` belongs
-  to each draw and `texture_variants` only to conditional alternatives.
-- Authored `NormalMap`, `LightMap` and `MaterialMap` assignments follow the
-  same per-draw execution-order model, including conditional variants and a
-  no-map fallback for a conditional-only assignment. They are INI-driven only;
-  manual texture pools remain diffuse-only. The detected profile chooses
-  explicit image transforms and normal-map Y orientation; Genshin/ZZZ
-  two-channel normal maps may have Z reconstructed during encoding, while
-  WuWa keeps its packed source intact and reconstructs RG in TSL. SRMI/HSR
-  markers take
-  precedence over generic DRAW_TYPE/vb2 heuristics, while ZZZ requires its
-  more-specific 2/4 route and ZZMI evidence.
-  WuWa publishes one intact authored NormalMap as `normal_data_key`; its RG
-  channels are reconstructed as a tangent normal by the TSL material adapter,
-  while B/A retain profile-specific diagnostic/material meanings. It must not
-  publish a duplicate derived `normal_map_key`. Genshin and ZZZ continue to
-  publish their derived `normal_map_key` path. Material interpretation is
-  resolved per mesh from
-  `(game, texture_api, material_kind)`, with the validated base profile as a
-  fallback. Material kind and material profile are separate concepts: a mesh
-  may be classified as face while still using `genshin:gimi` until a
-  face-specific interpretation is validated. Unknown or unreliable kind
-  detection must resolve conservatively and must not activate specialized
-  semantics. Full profile metadata is deduplicated in a payload-level
-  `material_profiles` table; meshes reference it with
-  `material_profile_id`. Kind detection must not infer authoritative game
-  semantics from texture filenames alone. Toon threshold, softness,
-  mask-strength and influence values belong to `MaterialInterpretation`, not
-  hard-coded frontend game branches.
-  LightMaps remain packed game data and are retained as toggle-aware keys; the
-  passthrough transport preserves authored RGBA for packed auxiliary roles,
-  ordinary diffuse passthrough remains RGB. Known Genshin profiles use a bounded
-  LightMap R response and the validated G toon-shadow input with a
-  viewer-friendly approximation on direct diffuse light; LightMap B gates the
-  direct toon-specular highlight area (it is not a linear intensity map), A
-  classifies authored material regions without inventing per-region values,
-  and no LightMap is bound as Three.js AO. The packed LightMap remains one
-  RGBA source with role-aware channel semantics, so A/B do not create channel
-  textures or extra texture requests. Profile IDs are immutable metadata keys;
-  a collision with different metadata is a programming error. Known ZZZ profiles
-  use MaterialMap G/B for metallic/specular response while retaining R as
-  material-ID data.
-  Unknown game/API pairs keep packed maps available but do not guess PBR
-  semantics.
-  WuWa/RabbitFX texture semantics come from explicit `Resource\\RabbitFX\\...`
-  assignments, not resource filenames. For the validated WuWa/RabbitFX base
-  profile,
-  RabbitFX Normalmap R/G remains the normal input, reconstructed in TSL from
-  the same intact `normal_data` texture. RabbitFX Lightmap G is the first
-  validated authored shadow-mask input, and Normalmap B/A remain packed
-  material data available for flat diagnostics or the validated body route.
-  Base `wuwa:raw` keeps B/A diagnostic-only and remains a standard material;
-  the existence of `normal_xy` is a normal dependency, not a packed-response
-  classification signal. B/A must not be mapped directly to stock Three.js
-  roughness or metalness without further evidence.
-  The base `wuwa:rabbitfx` profile remains shadow-only. The first specialized
-  production profile is `wuwa:rabbitfx:body`, and it can be selected only by
-  reliable exact body evidence. Material-kind overrides are authored at the
-  component level and persisted in `.mod_viewer.json` by the logical
-  `(source, component)` identity, never by display name or individual draw
-  key. Every draw in that source/component group inherits the same reliable
-  viewer override; Auto removes it, and
-  weak component-name hints never activate specialization. In that body
-  approximation, Normalmap B is a toon-specular classification/color-response
-  input, while A suppresses the ordinary lobe and routes high-A pixels toward
-  the existing physical direct-specular fallback until WuWa matcap behavior is
-  implemented. Neither channel is a stock roughness or metalness map, and no
-  second skin/type-mask lobe is inferred. Hair, face and eye overrides remain
-  on the conservative base profile. RabbitFX Materialmap is a recognized
-  transport role but has no validated shader meaning and is not loaded by the
-  body response.
-  Missing RabbitFX Lightmap does not imply Diffuse.A shadow semantics; that
-  alternate requires explicit per-draw evidence. HoyoToon's TypeMask is not a
-  current RabbitFX transport role, and no specialized WuWa face/hair/eye
-  profile is inferred from weak component labels.
-  Developer debug modes are capability-gated per material. Requesting an
-  unsupported diagnostic leaves that material's normal rendering unchanged.
-  Diagnostic-only packed channels do not choose a physical material or add
-  startup texture requests by themselves. Base-profile WuWa `normal_data` is
-  loaded at startup because RG drives the normal; its B/A diagnostic views add
-  no request and only select the existing stable binding. The body profile is
-  the explicit exception because B/A affect its response.
-- A section with an `ib` but no `drawindexed` uses a synthetic whole-buffer
-  draw. It inherits `diffuse_variants_at_end`; do not discard a section’s final
-  diffuse. A real draw before the first diffuse legitimately remains untextured.
-- `diffuse_pool_files` contains every distinct referenced diffuse in first-seen
-  order and feeds manual texture choices. Texture-only condition variables count
-  as gating/wired variables even when they never hide a draw.
-- WWMI menus often derive draw flags in `[Present]`. `ini_state` accepts only
-  safe literal assignments and the frontend replays them in source order from
-  all declared defaults, including hidden internal variables. State-rule DNF
-  drops contradictory groups (unlike draw DNF), and every state-rule assignment
-  target must be included in `gating_var_names`; otherwise gates such as
-  `qipao0..6` disappear while the simulator updates unused values.
-- Menu increment/modulo (`$v=$v+1; $v=$v%N`) exposes `0..N-1`, not `[0,1]`.
-
-## Lossless documents and editing
-
-- Real corpus files include CRLF, LF, mixed terminators, UTF-8 BOMs and missing
-  final newlines. Every `IniDocument` line owns its terminator and the document
-  preserves BOM/final-newline traits; untouched round trips must be byte exact.
-- Malformed if/endif nesting is common and tolerated by 3DMigoto. Report it via
-  `structure_errors()` and refuse ambiguous rewrites rather than rejecting mod
-  loading. Point unclosed-if errors at the unmatched opening line. Duplicate
-  `else`, elif-after-else, malformed conditions, trailing branch content,
-  unbalanced parentheses and malformed headers also make rewriting unsafe.
-  Unknown commands/sections must not be guessed invalid.
-- `section(name)`/`find_cycle_section` intentionally resolve the first duplicate
-  section name; callers needing all duplicates must use `sections`.
-- Nothing reaches disk until Export. CRUD, Record and INI Apply mutate the
-  session document only. Reopening the same mod does not reread external disk
-  changes; discard occurs on confirmed mod switch or restart.
-- `begin/commit/rollback` make every edit atomic. `peek()` must return the live
-  staged document so an immediate Record sees a preceding unexported edit.
-- Export writes each dirty document once, creates one
-  `mod.ini_YYYY-mm-DD HH-MM-SS.BAK` suffix backup per INI and is best effort;
-  failed documents remain pending. The suffix must not match the `.ini` loader.
-- The INI viewer opens one file directly or a picker for many; diagnostic rows
-  open the same editor at their one-based source line. Apply remains memory-only.
-- INI syntax highlighting treats single and double quotes as row-local. An
-  unmatched quote may color the rest of its own row, but must never carry string
-  state into later rows; 3DMigoto values use quotes as ordinary characters.
-- Namespaced globals (`$\Mod\Master\swapvar`) are cross-INI and read-only.
-  Add/edit/delete target only plain variables declared in the edited INI.
-- Wired toggle sections always show. An unwired section shows only when tracked
-  in `pending_new_sections` as newly added this session, so Record is reachable;
-  all old unwired utility keys remain hidden. Backend Export—not only UI state—
-  refuses while a tracked new section is unwired.
-- `[KeyModViewerPresent]` is one logical, mod-wide cycle shown only in the
-  PRESENT panel, never duplicated under KEY TOGGLE. Add asks only for its shared
-  key/back binding, then atomically creates the reserved section in every INI
-  that owns an ordinary key or clickable-menu toggle. Each generated section
-  captures only key, clickable-menu and recognized shape-slider variables
-  controlled by its own INI and copies that INI's first existing key condition.
-  All section/value edits remain staged through
-  `edit_session` until Export and fan out atomically across the participating
-  INIs. The logical cycle holds 1..10 aligned positions; deleting one shifts
-  sparse custom-name metadata. Duplicate complete cross-INI value tuples require
-  explicit confirmation. Implicit names are `Present N`; only customized names
-  are stored sparsely in `.mod_viewer.json`. Loading a mod applies its first
-  present to viewer state; an authoring refresh may restore the position that
-  was just created, edited or selected for deletion. The panel-header action is
-  Add only while no PRESENT exists, then becomes the section Delete action; the
-  item itself keeps only its binding Edit action. A legacy partial PRESENT uses
-  that header action to complete missing eligible INIs, repeating their current
-  snapshot to match the existing logical position count. Misaligned position
-  counts are a visible non-interactive error state; never cycle or apply them.
-- `add_toggle` gates hotkeys behind on-screen detection: reuse
-  `$object_detected`, then `$active`, otherwise add `global $active = 0`,
-  self-resetting `[Present] post $active = 0`, `$active = 1` in the first two
-  TextureOverrides and `condition = $active == 1`. This plumbing is idempotent;
-  `active`/`object_detected` cannot be the new toggle’s own variable.
-
-## Record mode
-
-- Record rewrites only a safe pattern: one target variable, no `else`, no mixed
-  conditions, no nested if inside a branch, drawindexed-only branch content and
-  complete observations for every position. Refuse every other line with a
-  reason; never guess.
-- Regenerate a safe if/elif chain as one whole splice. Editing branches
-  independently is wrong because earlier elif siblings can claim new values.
-- A bare draw with no ancestor referencing the variable may receive a private
-  wrapper. Refuse a line gated only at an outer level. `_refs()` treats `else`
-  as referencing a variable used by earlier siblings, preventing an unreachable
-  private wrapper inside that else.
-- `verify_recording` reparses independently and requires every rewritten draw
-  to match its recorded positions; mismatch rolls back. Identify draws by
-  `(section,count,start,base)`, not shifted line numbers. Verify only chains or
-  wrappers with no untouched outer ancestor. Remove backend-only `verify`
-  details before returning through the JS bridge.
-- Frontend Record gets its position count from `get_record_positions`, not the
-  Toggle panel; namespaced variables can enlarge the read-only panel cycle but
-  cannot match the writer’s plain-variable regex.
-
-## Geometry and textures
-
-- Supported families: ZZMI hash sections (stride-40 position, stride-24 UV,
-  f16 UV offset 4), WWMI shared resources (vb0 position, vb2 preferred UV and
-  sparse shape keys), GIMI Position/Texcoord/Blend (f32 UV offset 4), and
-  RabbitFX diffuse references.
-- Shape sliders are conservative and layout-specific:
-  - Simple full buffers use `base + (target-base)*value`.
-  - Repeated ZZMI shader blocks may bind `x88=$var`, `cs-t50=base`,
-    `cs-t51=target` several times with arbitrary suffixes such as `.1/.2`.
-    Recognize only 2+ complete blocks sharing one file-backed base; apply each
-    target additively and attach it to every matching position-buffer group.
-  - WWMI sparse data uses a 256-entry cumulative offset buffer, parallel uint
-    vertex IDs and six float16 values per record (position then normal).
-    `buffer_id = shape_id + shape_id//127`; add the declared per-batch vertex
-    offset before indexing. Sum repeated vertex-ID deltas like `InterlockedAdd`.
-  - Five-buffer ZZMI shapes have base, low/high target A, low/high target B and
-    two scalars. At `0.5` they are neutral. Preserve endpoint extrapolation:
-    low factor `2-4v`, high factor `4v-2`, then average independently shaped
-    positions. The high branch moves base toward bigger; zero is a real pose.
-  Slider-looking animation variables without geometry targets remain controls.
-  A mid-section position-buffer override never inherits another buffer’s target.
-- UV auto-detection is fragile. Sample evenly across the full buffer; reject a
-  constant U or V axis; tolerate a small fraction of outliers; rank cleanliness
-  before spread; and return only formats/offsets that fit the stride. Corpus
-  changes require a full buffer sweep, not a spot check.
-- Texture source paths are mod-relative, never basenames, because variant
-  folders commonly repeat filenames.
-- Rendered texture identity is `role::mod-relative-path`, because one source
-  file may be used as diffuse, derived normal, retained raw normal data, light
-  or material data and each role has a different encoding/color-space contract.
-  Diffuse maps are sRGB; auxiliary maps are non-color data. Legacy path-only
-  viewer metadata must be normalized when loaded.
-- Browser texture registry keys are canonical role-aware keys:
-  `diffuse::`, `normal_map::`, `normal_data::`, `light_map::` or
-  `material_map::` followed by the mod-relative path. Python normalizes legacy
-  path-only metadata before payload publication; frontend code rejects and
-  never guesses a missing role.
-- `core/resource_paths.py` owns the sandbox for mod-authored Resource
-  filenames. Mesh loading, manual texture selection and INI diagnostics use
-  this one resolver; the HTTP server's static-file join is a separate
-  localhost-web-root boundary.
-- `core/textures.py` owns role-aware keys, fallback PNG processing, rendered
-  PNG caching and texture profiling. It is independent of mesh construction
-  and contains no game or material interpretation. `core/mesh_builder.py`
-  owns binary geometry reading and mesh payload assembly and may request
-  texture encoding/publication through `core.textures`; application modules
-  import texture helpers from there rather than from the mesh builder.
-- `core/dds.py` owns structural DDS inspection, `core/texture_profiles.py`
-  owns game-specific transport recipes, and `app/server.py` owns opaque HTTP
-  texture publication and transport lifetime.
-- `payload.texture_pools` serializes one mutable pool per source-qualified
-  component. Each mesh carries only its runtime `texture_pool_id`; pool IDs
-  are not persisted. Every final pool source is published into `payload.textures`
-  without fetching or decoding it, so browser requests remain lazy until a
-  source becomes an active render dependency. Known pool selection is
-  synchronous; only an explicit native file picker may add a post-load source.
-- `core.resource_paths.safe_resource_path` is the one sandbox implementation
-  for geometry, manual texture selection and health. Reject absolute/drive
-  paths, allow relative parent climbs only up to live `_MAX_ESCAPE_DEPTH`, and
-  do not duplicate these rules. The server's private `_safe_join` protects a
-  different static web-root boundary and must not be conflated with it.
-- `read_texcoords` bounds with `struct.calcsize(uv_fmt)`; f32 pairs are 8 bytes.
-  Convert RGBA to RGB before LANCZOS thumbnails or transparent textures turn
-  black. Prefer vb2 over vb1 for WWMI UV except stride-32 ZZMI blend buffers.
-- `ResourceShapeKeyedPosition` without a file falls back to an R32G32B32_FLOAT
-  resource. Runtime writable positions may resolve through explicit resource
-  copy edges, the established `.B` rest-pose convention, or a complete LL
-  skeleton compute pattern whose file-backed `cs-t1` position and stride-32
-  `cs-t2` blend write `cs-u0`; `vb0 = ref` must bind the resource after `ref`,
-  not the literal word `ref`.
-- Auxiliary maps may be authored through namespaced `Resource\\...\\NormalMap`,
-  `LightMap` and `MaterialMap` assignments or direct `ps-tN` assignments whose
-  resource name identifies the map role.
-- Load resources per INI to prevent sibling-mod contamination. Component names
-  strip only literal `TextureOverride`, never a common prefix.
-- Draw rows display the authored `count,start,base`; only synthetic whole-buffer
-  draws use `#N`. `handling=skip` sections with no explicit draw draw nothing;
-  ordinary `ib`-only sections may use the synthetic draw.
-- `read_indices` clips to actual buffer length. Too-small buffers drop a draw
-  rather than reading beyond bounds. R16 index resources remain 16-bit.
-- Grid scale uses the median bounding-box dimension; camera near/far planes
-  scale from model bounds. Camera framing targets the
-  unobstructed viewport: keep orbit target at the true model center and shift
-  projection with `setViewOffset`; back up when horizontal space is limiting.
-  Materials use DoubleSide, roughness 1 and flat shading by default; known
-  packed-material profiles may vary metallic/specular response in their node graph.
+- Game, runtime, texture API and material kind are separate concepts. Resolve a
+  material profile per mesh from structural evidence and `(game, texture_api,
+  material_kind)`, falling back to the validated base profile. Weak component
+  names and texture filenames must never activate specialized semantics.
+- Profile metadata is deduplicated in the payload and referenced by immutable
+  `material_profile_id`. A profile ID collision with different metadata is a
+  programming error.
+- Packed maps retain their authored RGBA data and stable role binding. They are
+  not treated as generic Three.js AO/roughness/metalness maps without evidence.
+  Binding changes update stable texture and enabled nodes with valid
+  placeholders; they must not rebuild materials or patch generated shader
+  source.
+- Genshin uses the validated LightMap R response and G toon-shadow input;
+  LightMap B gates the toon-specular area and A classifies authored regions.
+  ZZZ uses LightMap G for conservative metalness and MaterialMap B for
+  specular response; MaterialMap R remains material-ID data and MaterialMap G
+  must remain packed because its meaning varies by character.
+- WuWa `normal_data` preserves the authored normal source and reconstructs RG
+  in TSL; B/A are diagnostic or profile-specific data, not stock PBR maps.
+  RabbitFX LightMap G is the validated shadow-mask input. The base RabbitFX
+  profile is shadow-only; the body specialization requires reliable exact body
+  evidence, and only that profile gives Normalmap B/A response semantics.
+- Unsupported diagnostic modes are capability-gated per material and leave
+  normal rendering unchanged. A diagnostic-only packed channel must not create
+  a new startup texture request.
 
 ## Frontend, hosting and security
 
-- The viewer uses the vendored Three.js `0.185.0` `WebGPURenderer` with TSL
-  Node Materials. WebGPU is required: verify the initialized renderer's
-  actual backend and never silently fall back to WebGL2. Packed-map updates
-  change stable texture-binding and enabled-node values using shared valid
-  placeholders; they must not rebuild materials or patch generated shader
-  source.
-- Texture publication may use a native `.dds` URL only for a validated,
-  supported 2D single-layer non-cube/non-volume DDS with passthrough transform
-  and dimensions within the normal 2048 cap. Authored BC compression and mip
-  chains stay intact; transformed, oversized, unsupported, malformed and
-  non-DDS sources use the existing `.png` transport. The browser's strict DDS
-  parser owns one-time fallback to that PNG URL, while diffuse color space is
-  sRGB and every auxiliary role is non-color data regardless of a DDS SRGB
-  tag. Genshin/ZZZ `normal_map` remains transformed PNG. WuWa publishes only
-  intact `normal_data`, which may use native DDS and is render-required for RG
-  normals even when B/A diagnostics are off. BC WebGPU support is optional and
-  must never make WebGPU startup
-  fail. Compressed DDS uses one shared texture-matrix vertical convention so
-  direct and PNG fallback renders have matching orientation for every role;
-  this is transport behavior, not a game/material branch.
+- The frontend uses the vendored Three.js `0.185.0` WebGPURenderer and TSL
+  Node Materials. WebGPU is required; verify the initialized backend and never
+  silently fall back to WebGL2. The default material is DoubleSide, roughness
+  1 and smooth shading. Viewer-only render modes, including glossy materials,
+  must not alter INI state.
+- The UI is served from an ephemeral `127.0.0.1` origin. Do not use
+  `NavigateToString`, runtime CDNs or third-party scripts in the privileged
+  page. Geometry uses the one-shot localhost blob transport.
+- Bridge filesystem operations accept only normalized roots authorized by the
+  native picker. Browser-invented paths must never reach loaders, metadata or
+  export. Keep the native window at the private `_window` bridge attribute.
+- Keep the existing separation between native file-picker authorization,
+  `safe_resource_path()` for mod resources and the server's static-root join;
+  do not duplicate or weaken any of the three boundaries.
+- The Toggle cycle control uses assignable `.onclick`, not an added listener,
+  so Record can capture, replace and restore exactly one handler.
+- Mesh and Toggle panels group by source: subfolder, root INI stem or `None`
+  for a single INI. Mesh source rows must retain their originating INI.
+- Manual mesh texture selection is viewer-only state in `.mod_viewer.json`.
+  `undefined` means automatic, `null` means none, and a texture key means a
+  sticky selection. Clearing returns to the immutable draw default; automatic
+  highlighting follows the live resolved key.
+- Environment presets, outlines and toolbar render modes are viewer-owned.
+  They must not reinterpret INI materials or become part of staged edits.
+  Outlines remain child inverted-hull passes sharing base geometry, and
+  wireframe/debug suppression must not change the user's outline preference.
 
-- INI Diagnostics is read-only and survives geometry failure. Analyze staged
-  text when present; attach `health` even to error payloads. A health failure
-  never makes a loadable mod fail. Resource/file analysis is conservative,
-  transitive, case-insensitive and per INI; comments/self-references do not mark
-  use, namespaced resources may be framework-provided, and disabled/viewer-only
-  files are classified separately. It never deletes or rewrites. Viewer texture
-  metadata changes invalidate the cached report and the open frontend report.
-- Recognized menus use authored item images when at least 60% and at least two
-  entries have images; otherwise use text controls. Images are clickable cycle
-  buttons and sliders keep native range inputs. `#menu-list.image-layout` must
-  retain an explicit `.image-layout.collapsed {display:none}` override.
-- The UI is served from `http://127.0.0.1:<ephemeral>`; never use
-  `NavigateToString` or a runtime CDN. String pages have opaque origins and size
-  limits, while third-party scripts would inherit the privileged bridge.
-- Geometry crosses the bridge as one packed localhost blob. API payload entries
-  contain offsets into a shared ArrayBuffer; the random URL is consumed on first
-  GET and new publication expires older blobs. Keep legacy base64 decoding for
-  direct fixtures/core tests.
-- Every bridge filesystem operation is restricted to normalized folders
-  returned by the native picker. Browser-invented paths must not reach loaders,
-  metadata or export. Keep the native window in underscore-private
-  `ModViewerAPI._window`; a public self-referential window breaks pywebview
-  reflection.
-- WebView2 detection reads the WOW6432Node registry view and treats
-  `pv="0.0.0.0"` as absent.
-- Toggle cycle buttons use assignable `.onclick`, not `addEventListener`, so
-  Record can capture, replace and restore exactly one handler.
-- Record UI pre-populates snapshots for every position. Mesh `sources` map
-  checkboxes back to lines and must be filtered to `src.ini === info.ini`.
-  `exitRecordingUI()` calls the item’s `describe()` closure to restore its label.
-- Mesh and Toggle panels share `source` grouping: subfolder name, root INI stem,
-  or `None` for one INI. Stamp it on groups and payload entries.
-- `#sidebar` participates in the flex `#left-dock` layout. `#tool-panel` remains
-  nested under `#left-dock` for ownership but is intentionally viewport-anchored:
-  center it horizontally and keep it above the fixed `#footer` with responsive
-  clearance. Tool buttons remain available before load; do not move Tools into
-  the dock flow or restore an old fixed-pixel dock offset.
-- The trackball button controls custom `#view-gizmo`. Take pointer capture only
-  after drag threshold so click-to-snap works; reorder SVG axes only when depth
-  order changes or pressed nodes lose clicks.
-- Menu is read-only and never filters ungated items; it is the mod’s own control
-  inventory.
-- Environment presets are viewer-only presentation state. They use procedural
-  backgrounds and viewer-owned lighting only: no external/background assets,
-  mod metadata, INI state or material reinterpretation. Default restores the
-  original scene and light state exactly. The environment accent follows the
-  current model target, while the movable key light and its depth-tested marker
-  remain independent user controls.
-- Manual mesh texture selection is viewer-only `.mod_viewer.json` state, never
-  staged into INIs. `manualTexOverride` is `undefined` (automatic), `null`
-  (none), or a texture key. Clearing restores immutable `defaultTexKey`, and
-  automatic highlighting uses live `resolvedTexKey`, not load-time default.
-- Viewer outlines use a WebGPU/TSL inverted-hull pass. Each outline is a child
-  of its base mesh, shares the exact `BufferGeometry`, uses one shared
-  `MeshBasicNodeMaterial`, renders `BackSide` with depth testing but no depth
-  writes, and is excluded from selection, camera framing and light occlusion.
-  Outline width is viewer-defined and approximately CSS-pixel constant. The
-  viewer lacks the tangent, vertex-color and outline-mask data needed for
-  authored game-specific behavior, so PR20 does not claim game outline
-  width/color parity. Wireframe and material debug modes suppress outlines
-  without changing the user's outline-enabled setting; texture mode remains
-  independent.
-- A component’s popup and every child list share the same mutable
-  `payload.texture_pools[texture_pool_id]` array. Empty components retain a
-  fresh mutable pool so Add remains available. Always render the component
-  texture button, even with zero textures; its active state follows whether any
-  component mesh has its diffuse TSL binding enabled. Child lists are rerenderable
-  closures invoked after pool changes and reread `manualTexOverride`; one-time
-  DOM snapshots become stale. Automatic texture-run propagation starts from
-  each boundary’s live `resolvedTexKey`.
+## Feature flags and test strategy
 
-## Feature flags and frontend verification
+- `features.ini` is build-time input only. `build.py` bakes its booleans into a
+  temporary generated module and removes that module afterward. Source
+  checkouts show all features; frozen builds may hide Export or Toggle CRUD in
+  the UI, but backend authorization remains authoritative. Missing or malformed
+  values default to enabled.
+- Tests are pytest-discovered from `src/tests` and run from the repository
+  root. Install `requirements-dev.txt`, then use `pytest`; use
+  `pytest --collect-only -q` to inspect the current suite rather than relying
+  on a hard-coded count.
+- The reduced suite is intentionally focused on representative boundaries and
+  regressions. Keep future coverage behavior-based and do not add a test when a
+  simpler existing case already proves the same contract.
+- Frontend tests use Playwright against the real local server and vendored
+  Three.js assets with an installed Edge browser. They may skip when Edge or
+  the assets are unavailable. Mock only `window.pywebview.api` for UI-state
+  tests; do not import `app.api` into a bare browser fixture because it pulls in
+  GUI webview state.
+- Real-mod corpus checks, if added again, must be explicitly opt-in through
+  `MOD_VIEWER_TEST_CORPUS`; the default suite must remain self-contained.
+  Add new regression coverage to the nearest existing test module and avoid
+  restoring tests that only repeat a simpler case.
+- Use `tools/benchmark_texture_pipeline.py` when changing texture concurrency,
+  lazy loading or transport. Keep deterministic formatting and mechanical
+  checks in CI; code review should focus on behavior and these invariants.
 
-- Build chain: build-time-only, unshipped `features.ini` → temporary
-  `_baked_features.py` →
-  `app/features.py` → server-rendered body class → CSS. Bake booleans before
-  PyInstaller analysis via a literal import and delete the generated module in
-  `finally`. Missing/malformed values default True.
-- Source checkouts always return all-True flags. Flags affect frozen builds only.
-  Server-side body classes prevent UI flash; CSS hides Export or toggle CRUD,
-  while backend guards remain authoritative. `Modify_Toggle` hides Add and the
-  Edit/Delete/Record wrapper, not the cycle preview.
-- There is no Node test stack. For frontend behavior use a disposable Playwright
-  venv with installed Edge (`channel="msedge"`) and the real local server. Mock
-  only `window.pywebview.api` for UI state tests, or expose real pure-Python
-  loader/session functions for end-to-end tests. Do not import `app.api` into a
-  bare fixture because it pulls in GUI webview; use a small compatible FakeAPI.
-- Real geometry fixtures need sufficiently large zero-filled buffers; index
-  clipping otherwise removes draws. A browser-chrome favicon 404 is expected.
-  Delete scratch venv/scripts after use.
+## Known intentional limitations
 
-## Accepted gaps
-
-- `_GUARD_RE` does not model `&&` menu guards; rare cases only weaken a guard,
-  never hide geometry.
-- There is no Discard button; mod-switch confirmation or restart drops staging.
-- Responsive/generated image grids may intentionally reuse one icon across many
-  slots; preserve those mappings.
-- Record mode intentionally refuses ambiguous real-world gating; edit such INIs
-  by hand.
+- Menu-guard parsing does not fully model every `&&` form; unsupported cases
+  weaken a guard rather than hide geometry.
+- There is no standalone Discard button; switching mods with confirmation or
+  restarting drops staged edits.
+- Record mode refuses ambiguous real-world gating instead of guessing.
+- Complex or unsupported mod layouts may fail to load; conservative omission is
+  preferable to silently displaying incorrect geometry or material semantics.

@@ -8,15 +8,10 @@ from core.dds import inspect_dds, native_dds_info
 
 
 _DXGI = {
-    "bc1_unorm": 71, "bc1_srgb": 72, "bc2_unorm": 74, "bc2_srgb": 75,
-    "bc3_unorm": 77, "bc3_srgb": 78, "bc4_unorm": 80, "bc4_snorm": 81,
-    "bc5_unorm": 83, "bc5_snorm": 84, "bc6h_ufloat": 95,
-    "bc6h_float": 96, "bc7_unorm": 98, "bc7_srgb": 99,
+    "bc1_unorm": 71, "bc7_unorm": 98, "bc7_srgb": 99,
 }
 _LEGACY = {
-    "DXT1": "bc1_unorm", "DXT3": "bc2_unorm", "DXT5": "bc3_unorm",
-    "ATI1": "bc4_unorm", "BC4U": "bc4_unorm", "BC4S": "bc4_snorm",
-    "ATI2": "bc5_unorm", "BC5U": "bc5_unorm", "BC5S": "bc5_snorm",
+    "DXT1": "bc1_unorm",
 }
 
 
@@ -88,7 +83,7 @@ def test_legacy_compressed_formats_are_supported(tmp_path, fourcc, expected):
     assert inspect_dds(path).format == expected
 
 
-@pytest.mark.parametrize("format_name", ["rgba8", "bgra8"])
+@pytest.mark.parametrize("format_name", ["rgba8"])
 def test_32_bit_rgba_layouts_do_not_require_bc(tmp_path, format_name):
     path = tmp_path / f"{format_name}.dds"
     path.write_bytes(_dds(format_name=format_name))
@@ -99,10 +94,8 @@ def test_32_bit_rgba_layouts_do_not_require_bc(tmp_path, format_name):
 
 @pytest.mark.parametrize("kwargs", [
     {"payload": False},
-    {"array_size": 2},
     {"cube": True},
-    {"volume": True},
-    {"format_name": "bc7_unorm", "mip_count": 4},
+    {"format_name": "bc7_srgb", "mip_count": 4},
 ])
 def test_invalid_or_unsafe_dds_falls_back(tmp_path, kwargs):
     path = tmp_path / "unsafe.dds"

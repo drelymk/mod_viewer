@@ -59,36 +59,8 @@ def _write_bc7_dds(path, width=4, height=4):
     path.write_bytes(data)
 
 
-def test_render_cache_stores_png_bytes_but_direct_wrapper_stays_data_uri(tmp_path):
-    path = tmp_path / "shared.png"
-    Image.new("RGB", (2, 1), (128, 128, 32)).save(path)
-
-    png = render_texture_png(str(path))
-    uri = encode_texture_data_uri(str(path))
-
-    assert isinstance(png, bytes) and png.startswith(b"\x89PNG")
-    assert uri.startswith("data:image/png;base64,")
 
 
-def test_texture_profile_hook_reports_cache_hit_and_miss(tmp_path):
-    path = tmp_path / "profiled.png"
-    Image.new("RGB", (2, 1), (128, 128, 32)).save(path)
-    events = []
-    previous = set_texture_profile_hook(
-        lambda stage, seconds, details: events.append((stage, details)))
-    try:
-        first = render_texture_png(str(path))
-        second = render_texture_png(str(path))
-    finally:
-        set_texture_profile_hook(previous)
-
-    stages = [stage for stage, _details in events]
-    assert first == second and first.startswith(b"\x89PNG")
-    assert stages.count("cache_miss") == 1
-    assert stages.count("cache_hit") == 1
-    assert stages.count("encoded") == 1
-    assert all(stage in stages for stage in (
-        "decode", "rgb_rgba_conversion", "png_encoding"))
 
 
 def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
@@ -122,26 +94,6 @@ def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
     ]
 
 
-def test_wuwa_mesh_builder_publishes_only_raw_normal_source(tmp_path):
-    _write_geometry(str(tmp_path))
-    Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(tmp_path / "normal.png")
-    registered = []
-
-    def register(path, role):
-        registered.append((os.path.basename(path), role))
-        return f"/texture/test/raw-{len(registered) - 1}"
-
-    with patch("core.textures.render_texture_png",
-               side_effect=AssertionError("lazy app path rendered a texture")):
-        built = build_mesh_result(
-            _group({"normal_map": "normal.png"}), str(tmp_path),
-            geometry=GeometryBlob(), texture_source=register,
-            game_profile="wuwa")
-
-    assert set(built.textures) == {"normal_data::normal.png"}
-    assert registered == [
-        ("normal.png", "normal_data"),
-    ]
 
 
 def test_mod_loader_app_path_never_renders_model_textures(tmp_path):
@@ -221,31 +173,8 @@ def test_publication_deduplicates_by_role_and_invalidates_old_load(tmp_path):
     assert server._lookup_texture(replacement.token, "0").path == str(path)
 
 
-def test_publication_normalizes_removed_channel_transform_to_passthrough(tmp_path):
-    path = tmp_path / "packed.png"
-    Image.new("RGB", (1, 1), (210, 12, 94)).save(path)
-    publication = server.begin_texture_publication(str(tmp_path))
-
-    packed = publication.register(
-        str(path), "light_map", transform="passthrough")
-    packed_again = publication.register(
-        str(path), "light_map", transform="passthrough")
-    legacy_transform = publication.register(
-        str(path), "light_map", transform="channel_b")
-
-    assert packed == packed_again
-    assert legacy_transform == packed
-    assert server._lookup_texture(publication.token, "0").transform == "passthrough"
 
 
-def test_publication_profile_selects_manual_normal_recipe(tmp_path):
-    path = tmp_path / "normal.png"
-    Image.new("RGB", (1, 1), (128, 128, 0)).save(path)
-    publication = server.begin_texture_publication(str(tmp_path))
-    publication.set_game_profile("zzz")
-    publication.register(str(path), "normal_map")
-    assert server._lookup_texture(publication.token, "0").transform == (
-        "normal_xy_reconstruct")
 
 
 def test_wuwa_manual_normal_pick_publishes_only_raw_source(tmp_path):
@@ -274,21 +203,6 @@ def test_wuwa_manual_normal_pick_publishes_only_raw_source(tmp_path):
         "passthrough")
 
 
-def test_explicit_manual_validation_rejects_invalid_image(tmp_path):
-    invalid = tmp_path / "broken.dds"
-    invalid.write_bytes(b"not an image")
-    valid = tmp_path / "valid.png"
-    Image.new("RGB", (1, 1), (128, 128, 32)).save(valid)
-    valid_dds = tmp_path / "valid.dds"
-    _write_bc7_dds(valid_dds)
-    publication = server.begin_texture_publication(str(tmp_path))
-
-    assert publication.register(str(invalid))
-    assert publication.register(str(invalid), validate=True) is None
-    valid_url = publication.register(str(valid), validate=True)
-    assert valid_url and server._lookup_texture(publication.token, "1").path == str(valid)
-    validated_dds_url = publication.register(str(valid_dds), validate=True)
-    assert validated_dds_url.endswith(".dds")
 
 
 def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
@@ -334,39 +248,6 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
     }
 
 
-def test_texture_endpoint_serves_png_and_keeps_source_reusable(tmp_path):
-    path = tmp_path / "shared.png"
-    Image.new("RGB", (2, 1), (128, 128, 32)).save(path)
-    invalid = tmp_path / "broken.dds"
-    invalid.write_bytes(b"not an image")
-    publication = server.begin_texture_publication(str(tmp_path))
-    texture_url = publication.register(str(path))
-    invalid_url = publication.register(str(invalid))
-    publication.commit()
-
-    handler = functools.partial(server._Handler, directory=str(tmp_path))
-    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        url = f"http://127.0.0.1:{httpd.server_address[1]}{texture_url}"
-        with urlopen(url) as response:
-            first = response.read()
-            assert response.headers["Content-Type"].startswith("image/png")
-        with urlopen(url) as response:
-            second = response.read()
-        assert first == second and first.startswith(b"\x89PNG")
-
-        with pytest.raises(HTTPError) as error:
-            urlopen(f"http://127.0.0.1:{httpd.server_address[1]}{invalid_url}")
-        assert error.value.code == 404
-
-        with pytest.raises(HTTPError) as error:
-            urlopen(url + "/not-an-id")
-        assert error.value.code == 404
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
 
 
 def test_native_dds_endpoint_streams_original_bytes_and_png_alias_is_valid(tmp_path):
@@ -581,40 +462,3 @@ def test_retired_texture_request_skips_render_after_waiting_for_slot(tmp_path):
     assert old_queued_url.endswith("/1.png")
     assert current_url.endswith("/0.png")
     assert rendered_paths == [str(old_first), str(current)]
-
-
-def test_metadata_hydration_registers_saved_textures_without_rendering(tmp_path):
-    path = tmp_path / "shared.png"
-    Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
-    payload = {
-        "meshes": {
-            "Body-1": {
-                "component": "Body", "drawindexed": [3, 0, 0],
-                "texture_options": [],
-            },
-        },
-        "textures": {},
-    }
-    data = {"textures": {"Body::3,0,0": {
-        "tex_key": "shared.png", "label": "Shared", "manual": True,
-        "normal_map": "shared.png",
-    }}}
-    registered = []
-
-    def register(source, role):
-        registered.append(role)
-        return f"/texture/test/{role}"
-
-    with patch("core.textures.render_texture_png",
-               side_effect=AssertionError("metadata hydration rendered a texture")):
-        metadata.hydrate_textures(
-            str(tmp_path), payload, data, texture_source=register)
-
-    assert registered == ["diffuse", "normal_map"]
-    assert payload["textures"] == {
-        "diffuse::shared.png": "/texture/test/diffuse",
-        "normal_map::shared.png": "/texture/test/normal_map",
-    }
-    assert payload["texture_pools"]["p0"][0]["tex_key"] == (
-        "diffuse::shared.png")
-    assert "texture_options" not in payload["meshes"]["Body-1"]

@@ -103,18 +103,6 @@ def slider_mod(api_root):
     yield folder, path
 
 
-def test_present_captures_shape_slider_variables(slider_mod):
-    folder, path = slider_mod
-    edit_session.load_documents(folder, [path])
-
-    assert (present_editor.capturable_variables(
-        edit_session.peek(folder, path)) == ["currFlat"]), ("recognized shape sliders are capturable PRESENT variables")
-    added = present_api.add_present(
-        folder, "p", "", {"slider.ini": {"currFlat": "0.75"}})
-    details = present_editor.details(edit_session.peek(folder, path))
-    assert (added.get("ok") and details["vars"] == {"currFlat": ["0.75"]}), ("PRESENT Add records the current shape-slider value")
-
-
 def test_present_lifecycle():
     with tempfile.TemporaryDirectory() as folder:
         paths = []

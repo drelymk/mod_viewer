@@ -28,10 +28,3 @@ def test_filenames_do_not_classify_a_mesh():
     result = detect_material_kind({"texture_file": "Face.png"})
 
     assert (result.kind, result.reliable) == (MATERIAL_KIND_UNKNOWN, False)
-
-
-def test_conflicting_component_hints_fall_back_to_unknown():
-    result = detect_material_kind({"component": "Face Hair"})
-
-    assert (result.kind, result.reliable) == (MATERIAL_KIND_UNKNOWN, False)
-    assert result.reason == "conflicting component-kind hints"

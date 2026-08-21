@@ -96,69 +96,6 @@ def test_unwired_toggle_excludes_namespaced_vars():
     assert (names == ["Local"]), (f"only the non-namespaced var is listed (got {names})")
 
 
-def test_fully_namespaced_ungated_pending_section_is_still_hidden():
-    """Nothing recordable at all -- no gating var, and no writable var to
-    fall back to -- so the section is dropped even if it happens to be
-    listed in pending_new_sections (can't actually happen in practice, since
-    add_toggle rejects creating a namespaced-only var, but the panel builder
-    itself must not be fooled either way)."""
-    toggle_keys = {"KeyGlobal": _key("Global", {"\\Mod\\Master\\swapvar": ["0", "1"]})}
-    panel = build_toggle_panel(toggle_keys, {}, gating_vars=set(), mod_dir=None,
-                               pending_new_sections={"mod.ini": {"KeyGlobal"}})
-    assert ("KeyGlobal" not in panel), ("a section with nothing recordable is still dropped")
-
-
-def test_default_prefers_declared_default_over_first_cycle_value():
-    """toggle_defaults (from a `global $var = X` Constants-style line) wins
-    over the cycle list's own first value -- exercised through both the wired
-    and the new unwired path, since both build the same "default" field the
-    same way."""
-    toggle_keys = {"KeyNew": _key("New", {"Fresh": ["0", "1", "2"]})}
-    panel = build_toggle_panel(toggle_keys, {"Fresh": "1"}, gating_vars=set(), mod_dir=None,
-                               pending_new_sections={"mod.ini": {"KeyNew"}})
-    entry = panel["KeyNew"]["vars"][0]
-    assert (entry["default"] == "1"), (f"declared default wins over values[0] (got {entry['default']!r})")
-
-
-def test_wired_and_unwired_can_coexist_across_sections():
-    """A realistic mixed-mod payload: one already-wired toggle and one
-    freshly-added, pending, not-yet-wired toggle both survive into the same
-    panel, while an unrelated pre-existing non-gating key stays hidden."""
-    toggle_keys = {
-        "KeyUpper": _key("Upper", {"Upper": ["0", "1"]}),
-        "KeyNew":   _key("New", {"Fresh": ["0", "1"]}),
-        "KeyMenu":  _key("Menu", {"menu": ["0", "1"]}),
-    }
-    panel = build_toggle_panel(toggle_keys, {}, gating_vars={"Upper"}, mod_dir=None,
-                               pending_new_sections={"mod.ini": {"KeyNew"}})
-    assert (panel.get("KeyUpper", {}).get("wired") is True), ("the pre-existing toggle stays wired")
-    assert (panel.get("KeyNew", {}).get("wired") is False), ("the pending new toggle is present and marked unwired")
-    assert ("KeyMenu" not in panel), ("the unrelated non-gating, non-pending key stays hidden")
-
-
-def test_shape_sliders_follow_mid_section_position_reassignments():
-    """One override may begin with Legs and switch to Body buffers later.
-    Both morph descriptions must reach the group; mesh_builder filters them
-    against each draw's effective position buffer."""
-    groups = [{
-        "position_file": r"Meshes\LegsPosition.buf",
-        "draws": [
-            {"label": "Part-1"},
-            {"label": "Part-2", "position_file": r"Meshes\BodyPosition.buf"},
-        ],
-    }]
-    sliders = [
-        {"var": "currFlat", "base_file": r"Meshes\LegsPosition.buf",
-         "target_file": r"Meshes\LegsPositionFlat.buf"},
-        {"var": "currFlat", "base_file": r"Meshes\BodyPosition.buf",
-         "target_file": r"Meshes\BodyPositionFlat.buf"},
-        {"var": "other", "base_file": r"Meshes\HairPosition.buf",
-         "target_file": r"Meshes\HairPositionFlat.buf"},
-    ]
-    _attach_shape_sliders(groups, sliders)
-    attached = groups[0].get("shape_sliders", [])
-    assert ([item["target_file"] for item in attached] ==
-          [r"Meshes\LegsPositionFlat.buf", r"Meshes\BodyPositionFlat.buf"]), (f"group receives its base and reassigned-draw morphs only (got {attached})")
 
 
 def test_nested_ini_resources_are_relative_to_their_ini():

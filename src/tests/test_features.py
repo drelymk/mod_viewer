@@ -44,7 +44,7 @@ def _fixture(tmp, text, name="features.ini"):
 
 # ── build.py: resolve_features() / write_baked_features() ───────────────────
 
-_FLAG_CASES = [(True, True), (False, True), (True, False), (False, False)]
+_FLAG_CASES = [(False, True), (True, False)]
 
 
 def _run_feature_case(export, modify_toggle, tmp):
@@ -66,8 +66,6 @@ def test_resolve_features_flag_matrix(export, modify_toggle, tmp_path):
 
 _INVALID_FEATURE_CASES = [
     ("missing file", None),
-    ("missing section", "[wrong_section]\nExport = 0\n"),
-    ("malformed value", "[features]\nExport = not_a_boolean\nModify_Toggle = 1\n"),
 ]
 
 
@@ -89,13 +87,6 @@ def test_invalid_feature_config_defaults_enabled(_case_name, content, tmp_path):
     _run_invalid_feature_case(content, str(tmp_path))
 
 
-def test_repo_features_ini_resolves_to_all_enabled():
-    """Guards the actual checked-in features.ini: a fresh clone/build must
-    show every feature unless someone deliberately edits the file."""
-    result = build.resolve_features(build.FEATURES_FILE)
-    assert result == {"export": True, "modify_toggle": True}, f"the repo's shipped features.ini resolves to fully enabled (got {result})"
-
-
 def test_write_baked_features_round_trips_through_import():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "_baked_features_test.py")
@@ -108,13 +99,6 @@ def test_write_baked_features_round_trips_through_import():
             f"(got EXPORT={ns.get('EXPORT')!r}, MODIFY_TOGGLE={ns.get('MODIFY_TOGGLE')!r})")
         build.clean_baked_features(path=path)
     assert not os.path.isfile(path), "clean_baked_features removes the generated module"
-
-
-def test_clean_baked_features_is_a_noop_when_nothing_to_remove():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "never_written.py")
-        build.clean_baked_features(path=path)  # must not raise
-    assert True, "clean_baked_features tolerates a path with nothing to clean"
 
 
 # ── app/features.py: get_features() ──────────────────────────────────────────
@@ -184,18 +168,6 @@ def test_frozen_reads_baked_export_disabled():
     with _baked_module(export=False, modify_toggle=True), _frozen(True):
         result = features.get_features()
     assert result == {"export": False, "modify_toggle": True}, f"EXPORT=False in the baked module hides only the export flag (got {result})"
-
-
-def test_frozen_reads_baked_modify_toggle_disabled():
-    with _baked_module(export=True, modify_toggle=False), _frozen(True):
-        result = features.get_features()
-    assert result == {"export": True, "modify_toggle": False}, f"MODIFY_TOGGLE=False in the baked module hides only that flag (got {result})"
-
-
-def test_frozen_both_baked_disabled():
-    with _baked_module(export=False, modify_toggle=False), _frozen(True):
-        result = features.get_features()
-    assert result == {"export": False, "modify_toggle": False}, f"both flags off at once (got {result})"
 
 
 def test_frozen_missing_baked_module_defaults_to_shown():

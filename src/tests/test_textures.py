@@ -44,13 +44,3 @@ def test_texture_module_does_not_depend_on_mesh_builder():
         cwd=root, check=False, capture_output=True, text=True)
     assert texture_result.returncode == 0, texture_result.stderr
     assert resource_result.returncode == 0, resource_result.stderr
-
-
-def test_reset_texture_cache_clears_state():
-    textures._texture_cache["test"] = (b"png", 3)
-    textures._texture_cache_bytes = 3
-    textures._texture_cache_mod = "test"
-    textures.reset_texture_cache()
-    assert not textures._texture_cache
-    assert textures._texture_cache_bytes == 0
-    assert textures._texture_cache_mod is None

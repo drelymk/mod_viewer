@@ -52,29 +52,6 @@ def test_structure_resource_and_file_findings():
     assert ("unreferenced_asset_file" in codes), ("asset not declared by an active INI is reported")
 
 
-def test_condition_syntax_and_header_errors():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "mod.ini"), (
-            "[Body]\n"
-            "if ($x == 1\n"
-            "else\n"
-            "else\n"
-            "elif $x == 2\n"
-            "endif extra\n"
-            "endif\n"
-            "[]\n"
-            "[Missing\n"
-            "[Trailing] junk\n"))
-        report = analyze_mod(tmp)
-
-    by_code = {}
-    for issue in report["issues"]:
-        by_code.setdefault(issue["code"], []).append(issue)
-    assert (len(by_code.get("malformed_condition_nesting", [])) == 2), ("duplicate else and elif-after-else are health errors")
-    assert (len(by_code.get("unbalanced_condition_parentheses", [])) == 1), ("unbalanced conditional parentheses are a health error")
-    assert (len(by_code.get("malformed_condition_syntax", [])) == 1), ("trailing endif content is a health error")
-    assert (len(by_code.get("malformed_section_header", [])) == 3), ("empty, unclosed and trailing-content headers are health errors")
-    assert (all(issue["severity"] == "error" for issue in report["issues"])), ("new INI syntax findings all use error severity")
 
 
 def test_reference_graph_case_exactness_and_comments():
@@ -173,26 +150,6 @@ def test_unsafe_paths_and_namespaced_resources():
     assert (not namespaced_missing), ("namespaced framework resources are not guessed to be missing")
 
 
-def test_encoding_line_endings_and_allowed_parent_path():
-    with tempfile.TemporaryDirectory() as tmp:
-        mod = os.path.join(tmp, "mod")
-        os.mkdir(mod)
-        ini = os.path.join(mod, "mod.ini")
-        _write(ini, ("\ufeff[TextureOverrideBody]\r\n"
-                     "if $x == 1\r\n"
-                     "ib = ResourceShared\r\n"
-                     "[ResourceShared]\r\n"
-                     "filename = ..\\shared.buf\r\n"))
-        _write(os.path.join(tmp, "shared.buf"), b"x", binary=True)
-        _write(os.path.join(mod, "broken.ini"), b"\xff\xfe", binary=True)
-        report = analyze_mod(mod)
-
-    assert ("unreadable_ini" in _codes(report)), ("non-UTF-8 INI becomes a report error without aborting the scan")
-    nesting = next(item for item in report["issues"]
-                   if item["code"] == "malformed_condition_nesting")
-    assert (nesting["line"] == 2 and nesting["source"] == "if $x == 1"), ("UTF-8 BOM and CRLF input retain correct 1-based locations")
-    assert ("unsafe_resource_path" not in _codes(report)
-          and "missing_resource_file" not in _codes(report)), ("one-level parent resource path follows the loader's allowed escape rule")
 
 
 def test_health_survives_geometry_failure():

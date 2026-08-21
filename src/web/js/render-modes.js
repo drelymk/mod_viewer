@@ -5,12 +5,23 @@ import { setOutlineSuppressedByWireframe } from './outline-renderer.js';
 
 let wireframe = false;
 let smoothShading = true;
+let glossy = false;
+const DEFAULT_ROUGHNESS = 1.0;
+const GLOSSY_ROUGHNESS = 0.2;
 const textureModes = ['all', 'diffuse', 'none'];
 let textureModeIndex = 0;
+
+function setMeshRoughness(mesh, roughness) {
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  materials.forEach(material => {
+    material.roughness = roughness;
+  });
+}
 
 export function initializeMeshRenderModes(mesh) {
   mesh.material.wireframe = wireframe;
   mesh.material.flatShading = !smoothShading;
+  setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
 }
 
 export function toggleWireframeMode(meshes) {
@@ -32,6 +43,23 @@ export function toggleSmoothShadingMode(meshes) {
       material.flatShading = !smoothShading;
       material.needsUpdate = true;
     });
+  });
+}
+
+export function toggleGlossyMode(meshes) {
+  glossy = !glossy;
+  const button = document.getElementById('glossy-btn');
+  // Glossy materials are off by default, like the other on/off display
+  // modes.  This control uses the shared `off` styling; toggling `active`
+  // leaves it looking enabled in both states because there is no glossy
+  // `.active` rule.
+  button.classList.toggle('off', !glossy);
+  const label = glossy ? 'Glossy materials: on' : 'Glossy materials: off';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', String(glossy));
+  meshes.forEach(mesh => {
+    setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
   });
 }
 

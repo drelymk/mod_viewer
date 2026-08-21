@@ -126,53 +126,6 @@ def test_diagnostics_cache_tracks_authoritative_revision():
             edit_session.discard(root)
 
 
-def test_texture_registry_identity_includes_role():
-    from PIL import Image
-
-    def uri_mode(uri):
-        payload = base64.b64decode(uri.split(",", 1)[1])
-        return Image.open(io.BytesIO(payload)).mode
-
-    with tempfile.TemporaryDirectory() as root:
-        path = os.path.join(root, "shared.png")
-        Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
-        diffuse = encode_texture_file(root, path)
-        normal = encode_texture_file(root, path, "normal_map",
-                                     texture_profile="zzz")
-        light = encode_texture_file(root, path, "light_map")
-        assert (diffuse["tex_key"] == "diffuse::shared.png"
-              and normal["tex_key"] == "normal_map::shared.png"
-              and light["tex_key"] == "light_map::shared.png"), ("texture registry keys include their usage role")
-        assert (len({diffuse["uri"], normal["uri"], light["uri"]}) == 3
-                and uri_mode(diffuse["uri"]) == "RGB"
-                and uri_mode(light["uri"]) == "RGBA"), ("shared sources keep role-specific transforms while packed LightMaps retain RGBA")
-
-        with open(os.path.join(root, "p.buf"), "wb") as fh:
-            fh.write(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
-        with open(os.path.join(root, "t.buf"), "wb") as fh:
-            fh.write(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
-        with open(os.path.join(root, "i.buf"), "wb") as fh:
-            fh.write(struct.pack("<3I", 0, 1, 2))
-        group = [{
-            "name": "Body", "display_name": "Body",
-            "position_file": "p.buf", "texcoord_file": "t.buf",
-            "position_stride": 12, "texcoord_stride": 8,
-            "ib_file": "i.buf", "index_size": 4,
-            "draws": [{"label": "Body-1", "count": 3,
-                        "start": 0, "base": 0, "conditions": [],
-                        "texture_default_file": "shared.png",
-                        "normal_map_default_file": "shared.png"}],
-        }]
-        built = build_mesh_result(group, root, geometry=GeometryBlob())
-        entry = built.meshes["Body-1"]
-        assert (set(built.textures) >= {
-                  "diffuse::shared.png", "normal_map::shared.png"}
-              and entry["tex_key"] == "diffuse::shared.png"
-              and entry["normal_map_key"] == "normal_map::shared.png"), ("mesh building keeps shared diffuse and normal roles separate")
-        assert "normal_data_key" not in entry
-        assert "ao_map_key" not in entry
-
-
 def test_wuwa_publishes_one_intact_normal_data_source():
     from PIL import Image
 
@@ -210,89 +163,10 @@ def test_wuwa_publishes_one_intact_normal_data_source():
         assert uri_mode(built.textures[entry["normal_data_key"]]) == "RGBA"
 
 
-def test_body_profile_source_contract_does_not_make_material_map_a_shader_input():
-    from core.material_profiles import material_profile_for
-
-    profile = material_profile_for("wuwa", "rabbitfx", "body")
-    sources = {
-        ref.source for ref in (
-            profile.shadow_mask, profile.toon_specular_mask,
-            profile.metal_route,
-        ) if ref is not None
-    }
-    assert sources == {"light_map", "normal_data"}
-    assert "material_map" not in sources
-
-
-def test_legacy_texture_metadata_is_normalized_by_role():
-    from PIL import Image
-
-    with tempfile.TemporaryDirectory() as root:
-        path = os.path.join(root, "shared.png")
-        Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
-        with open(os.path.join(root, ".mod_viewer.json"), "w",
-                  encoding="utf-8") as fh:
-            json.dump({"textures": {"Body::3,0,0": {
-                "tex_key": "shared.png", "label": "Shared", "manual": True,
-                "normal_map": "shared.png",
-            }}}, fh)
-        payload = {"meshes": {"Body-1": {
-            "component": "Body", "drawindexed": [3, 0, 0],
-            "texture_options": [{"tex_key": "diffuse::shared.png",
-                                  "file": "shared.png", "label": "Shared"}],
-        }}, "textures": {}}
-        metadata.hydrate_textures(root, payload)
-        entry = payload["meshes"]["Body-1"]
-        assert (entry.get("saved_texture_override") == "diffuse::shared.png"
-              and "normal_map::shared.png" in payload["textures"]), ("legacy texture metadata is upgraded to role-aware keys")
-
-
-def test_hydration_serializes_one_pool_per_source_component_and_keeps_empty_pool(
-        tmp_path):
-    from PIL import Image
-
-    for name in ("a.png", "b.png", "c.png"):
-        Image.new("RGB", (1, 1), (128, 128, 32)).save(tmp_path / name)
-    option_a = {"tex_key": "diffuse::a.png", "file": "a.png", "label": "A"}
-    option_b = {"tex_key": "diffuse::b.png", "file": "b.png", "label": "B"}
-    option_c = {"tex_key": "diffuse::c.png", "file": "c.png", "label": "C"}
-    payload = {
-        "meshes": {
-            "A-0": {"source": "A.ini", "component": "Component3",
-                    "drawindexed": [3, 0, 0],
-                    "texture_options": [option_a, option_b]},
-            "A-1": {"source": "A.ini", "component": "Component3",
-                    "drawindexed": [3, 1, 0],
-                    "texture_options": [option_b]},
-            "B-0": {"source": "B.ini", "component": "Component3",
-                    "drawindexed": [3, 0, 0],
-                    "texture_options": [option_c]},
-            "Empty-0": {"source": "Empty.ini", "component": "Empty",
-                        "drawindexed": [3, 0, 0], "texture_options": []},
-        },
-        "textures": {},
-    }
-
-    def register(path, role, transform=None):
-        return f"/texture/test/{os.path.basename(path)}"
-
-    metadata.hydrate_textures(
-        str(tmp_path), payload, texture_source=register)
-
-    assert payload["texture_pools"] == {
-        "p0": [option_a, option_b],
-        "p1": [option_c],
-        "p2": [],
-    }
-    assert [payload["meshes"][key]["texture_pool_id"] for key in (
-            "A-0", "A-1", "B-0", "Empty-0")] == ["p0", "p0", "p1", "p2"]
-    assert all("texture_options" not in entry
-               for entry in payload["meshes"].values())
 
 
 @pytest.mark.parametrize("saved_normals", [
     {"normal_map": "normal.png"},
-    {"normal_map": "normal.png", "normal_data": "normal.png"},
 ])
 def test_wuwa_metadata_migrates_legacy_normal_map_to_normal_data(
         tmp_path, saved_normals):

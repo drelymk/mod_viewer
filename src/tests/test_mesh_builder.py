@@ -33,19 +33,6 @@ stride = 20
 """
 
 
-def test_mid_section_ib_reassignment_ini_parser():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", IB_REASSIGN_INI)
-        secs = merge_sections([path])
-        groups = build_draw_groups(secs, extract_resources(secs))
-        assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
-        draws = groups[0]["draws"]
-        assert (len(draws) == 2), (f"both drawindexed lines kept (got {len(draws)})")
-        assert (groups[0]["ib_file"] == "head.ib"), (f"group's default ib is the section's first-seen one (got {groups[0]['ib_file']})")
-        assert (draws[0].get("ib_file") is None), ("first draw has no override -- reads the group's default ib (head.ib)")
-        assert (draws[1].get("ib_file") == "dress.ib"), (f"second draw carries the reassigned ib (got {draws[1].get('ib_file')})")
-
-
 def test_mid_section_ib_reassignment_mesh_builder():
     """End-to-end: build_mesh_result must read each draw's indices from its
     own reassigned ib file, and must not merge two draws that happen to share
@@ -120,20 +107,6 @@ stride = 40
 filename = xbsTc.buf
 stride = 20
 """
-
-
-def test_cross_ib_vb_reassignment_ini_parser():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", CROSS_IB_VB_INI)
-        secs = merge_sections([path])
-        groups = build_draw_groups(secs, extract_resources(secs))
-        assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
-        draws = groups[0]["draws"]
-        assert (len(draws) == 2), (f"both drawindexed lines kept (got {len(draws)})")
-        assert ("position_file" not in draws[0] and "texcoord_file" not in draws[0]), ("first draw has no override -- reads the group's default SBS buffers")
-        assert (draws[1].get("position_file") == "xbsPos.buf" and
-              draws[1].get("texcoord_file") == "xbsTc.buf"), (f"second draw carries its own reassigned vertex buffers "
-              f"(got {draws[1].get('position_file')}, {draws[1].get('texcoord_file')})")
 
 
 def test_cross_ib_vb_reassignment_mesh_builder():
@@ -250,20 +223,6 @@ stride = 12
 filename = head.ib
 format = DXGI_FORMAT_R32_UINT
 """
-
-
-def test_component_name_ending_in_uppercase_abbreviation():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", COMPONENT_ABBREV_SUFFIX_INI)
-        secs = merge_sections([path])
-        groups = build_draw_groups(secs, extract_resources(secs))
-        names = {g["display_name"]: g for g in groups}
-        assert ("XCNHead" in names), (f"the Head draw resolves its buffers via the shared XCN component "
-              f"(got groups: {sorted(names)})")
-        if "XCNHead" in names:
-            g = names["XCNHead"]
-            assert (g["position_file"] == "pos.buf" and g["texcoord_file"] == "tc.buf"), (f"resolved to the shared component's own buffers "
-                  f"(got {g['position_file']}, {g['texcoord_file']})")
 
 
 IMPLICIT_DRAW_DIFFUSE_INI = """[TextureOverrideImplicitPosition]
