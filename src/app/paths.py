@@ -29,6 +29,12 @@ def is_frozen():
     return bool(getattr(sys, "_MEIPASS", None))
 
 
+def config_path():
+    """Persistent application configuration, outside frozen bundle data."""
+    base = os.path.dirname(sys.executable) if is_frozen() else app_root()
+    return os.path.join(base, "config.json")
+
+
 def web_dir():
     """The HTML/CSS/JS UI served to the webview."""
     return os.path.join(app_root(), "web")

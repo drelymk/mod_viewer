@@ -279,7 +279,8 @@ def edge_browser():
         browser.close()
 
 
-def _page(edge_browser, frontend_url, responses, pending=None, picks=None):
+def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
+          mod_folders=None, subfolders=None):
     # Playwright's wait_for_function uses eval internally. Bypass the app's
     # production CSP only in this isolated test context so behavioral waits
     # do not require weakening the served application's policy.
@@ -288,6 +289,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None):
         "responses": responses,
         "pending": pending or {},
         "picks": picks or [],
+        "modFolders": mod_folders or [],
+        "subfolders": subfolders or {},
+        "calls": {"loadMod": [], "listSubfolders": [],
+                   "discardChanges": [], "switches": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -301,9 +306,33 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None):
               state.nextPath = null;
               return path;
             },
-            load_mod: async path => copy(state.responses[path]),
+            load_mod: async path => {
+              state.calls.loadMod.push(path);
+              return copy(state.responses[path]);
+            },
             has_pending_changes: async path => !!state.pending[path],
-            discard_changes: async path => { state.pending[path] = false; },
+            discard_changes: async path => {
+              state.calls.discardChanges.push(path);
+              state.pending[path] = false;
+            },
+            get_mod_folders: async () => copy({folders: state.modFolders}),
+            add_mod_folder: async (name, path) => {
+              state.modFolders.push({name, path, exists: true});
+              return copy({folders: state.modFolders});
+            },
+            edit_mod_folder: async (original, name, path) => {
+              const item = state.modFolders.find(folder => folder.path === original);
+              if (item) Object.assign(item, {name, path, exists: true});
+              return copy({folders: state.modFolders});
+            },
+            delete_mod_folder: async path => {
+              state.modFolders = state.modFolders.filter(folder => folder.path !== path);
+              return copy({folders: state.modFolders});
+            },
+            list_subfolders: async path => {
+              state.calls.listSubfolders.push(path);
+              return copy({folders: state.subfolders[path] || []});
+            },
             get_diagnostics: async () => ({summary: {issues: 0, errors: 0}, files: {}, issues: []}),
             list_toggle_source_inis: async () => [{value: 'A.ini', label: 'A.ini'}],
             list_ini_files: async () => [{value: 'A.ini', label: 'A.ini', dirty: false}],
@@ -1529,5 +1558,224 @@ def test_feature_flag_css_keeps_cycle_preview_and_core_invariants(
             html = handle.read()
         assert "https://cdn" not in html.lower()
         assert "http://" not in html.lower()
+    finally:
+        context.close()
+
+
+def test_mod_folder_panel_overlays_sidebar_and_browses_children_lazily(
+        edge_browser, frontend_url):
+    root = r"D:\Mods"
+    alice = root + r"\Alice"
+    astra = root + r"\Astra"
+    context, page = _page(
+        edge_browser, frontend_url, {},
+        mod_folders=[{"name": "Library", "path": root, "exists": True}],
+        subfolders={
+            root: [
+                {"name": "Alice", "path": alice},
+                {"name": "Astra", "path": astra},
+            ],
+            alice: [{"name": "Summer", "path": alice + r"\Summer"}],
+        },
+    )
+    try:
+        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
+        sidebar_before = page.locator("#sidebar").bounding_box()
+        assert "expanded" not in page.locator("#mod-folder-dock").get_attribute("class")
+
+        page.locator("#mod-folder-toggle").click()
+        page.locator("#mod-folder-dock.expanded").wait_for()
+        sidebar_after = page.locator("#sidebar").bounding_box()
+        assert sidebar_after == sidebar_before
+        z_indices = page.evaluate("""() => ({
+          dock: getComputedStyle(document.querySelector('#mod-folder-dock')).zIndex,
+          leftDock: getComputedStyle(document.querySelector('#left-dock')).zIndex,
+        })""")
+        assert int(z_indices["dock"]) > int(z_indices["leftDock"])
+
+        root_node = page.locator("#mod-folder-list > .mod-folder-node").first
+        arrow_style = page.evaluate("""() => {
+          const arrow = document.querySelector('.mod-folder-expand');
+          const style = getComputedStyle(arrow);
+          return {width: style.width, height: style.height, fontSize: style.fontSize};
+        }""")
+        assert arrow_style == {"width": "20px", "height": "22px", "fontSize": "13px"}
+        root_node.locator(":scope > .mod-folder-row > .mod-folder-expand").click()
+        page.locator(".mod-folder-select", has_text="Alice").wait_for()
+        assert page.evaluate("window.__fakeApi.calls.listSubfolders") == [root]
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == []
+
+        alice_node = page.locator(".mod-folder-select", has_text="Alice").locator(
+            "xpath=../..")
+        alice_node.locator(".mod-folder-expand").click()
+        page.locator(".mod-folder-select", has_text="Summer").wait_for()
+        assert page.evaluate("window.__fakeApi.calls.listSubfolders") == [root, alice]
+
+        root_arrow = root_node.locator(":scope > .mod-folder-row > .mod-folder-expand")
+        root_children = root_node.locator(":scope > .mod-folder-children")
+        root_arrow.click()
+        assert root_children.is_hidden()
+        root_arrow.click()
+        assert not root_children.is_hidden()
+        assert page.evaluate("window.__fakeApi.calls.listSubfolders") == [root, alice]
+    finally:
+        context.close()
+
+
+def test_empty_mod_folder_panel_keeps_fixed_height_above_navigation_hint(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {}, mod_folders=[])
+    try:
+        page.locator("#mod-folder-toggle").click()
+        page.locator("#mod-folder-dock.expanded").wait_for()
+        panel = page.locator("#mod-folder-panel").bounding_box()
+        info = page.locator("#info").bounding_box()
+        viewport_height = page.evaluate("window.innerHeight")
+        handle_style = page.evaluate("""() => {
+          const style = getComputedStyle(document.querySelector('#mod-folder-toggle'));
+          return {width: style.width, height: style.height, fontSize: style.fontSize};
+        }""")
+        assert handle_style == {"width": "32px", "height": "36px", "fontSize": "23px"}
+        assert abs(panel["height"] - (viewport_height - 116)) < 1
+        assert panel["y"] + panel["height"] <= info["y"]
+        assert page.locator("#mod-folder-list").inner_text() == ""
+        page.locator("#mod-folder-close").click()
+        assert "expanded" not in page.locator("#mod-folder-dock").get_attribute("class")
+    finally:
+        context.close()
+
+
+def test_mod_folder_name_selection_preserves_dock_state_across_reload(
+        edge_browser, frontend_url):
+    root = r"D:\Mods"
+    alice = root + r"\Alice"
+    context, page = _page(
+        edge_browser, frontend_url, {alice: _payload("Alice")},
+        mod_folders=[{"name": "Library", "path": root, "exists": True}],
+        subfolders={root: [{"name": "Alice", "path": alice}]},
+    )
+    try:
+        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
+        page.locator("#mod-folder-toggle").click()
+        page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
+        page.locator(".mod-folder-select", has_text="Alice").click()
+        page.locator(".draw-item").wait_for()
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == [alice]
+        assert "expanded" in page.locator("#mod-folder-dock").get_attribute("class")
+
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
+        assert "expanded" in page.locator("#mod-folder-dock").get_attribute("class")
+        page.locator("#mod-folder-close").click()
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 3")
+        assert "expanded" not in page.locator("#mod-folder-dock").get_attribute("class")
+    finally:
+        context.close()
+
+
+def test_mod_folder_failed_selection_keeps_panel_open_and_reports_error(
+        edge_browser, frontend_url):
+    root = r"D:\Mods"
+    broken = root + r"\Broken"
+    context, page = _page(
+        edge_browser, frontend_url, {broken: {"error": "loader failed"}},
+        mod_folders=[{"name": "Broken", "path": broken, "exists": True}],
+    )
+    try:
+        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
+        page.locator("#mod-folder-toggle").click()
+        page.locator("#mod-folder-list .mod-folder-select").first.click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        assert page.locator("#mod-folder-dock.expanded").count() == 1
+        page.locator("#dialog-ok").click()
+    finally:
+        context.close()
+
+
+def test_mod_folder_tree_switch_respects_pending_change_confirmation(
+        edge_browser, frontend_url):
+    root = r"D:\Mods"
+    first = root + r"\First"
+    second = root + r"\Second"
+    context, page = _page(
+        edge_browser, frontend_url,
+        {first: _payload("First"), second: _payload("Second")},
+        pending={first: True},
+        mod_folders=[{"name": "Library", "path": root, "exists": True}],
+        subfolders={root: [
+            {"name": "First", "path": first},
+            {"name": "Second", "path": second},
+        ]},
+    )
+    try:
+        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
+        page.locator("#mod-folder-toggle").click()
+        page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
+        page.locator(".mod-folder-select", has_text="First").click()
+        page.locator(".draw-item").wait_for()
+
+        page.locator(".mod-folder-select", has_text="Second").click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        assert page.locator("#dialog-message").inner_text().startswith(
+            "This mod has unsaved changes")
+        page.locator("#dialog-cancel").click()
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == [first]
+        assert page.locator("#mod-folder-dock.expanded").count() == 1
+    finally:
+        context.close()
+
+
+def test_mod_folder_add_edit_delete_modal_flow(
+        edge_browser, frontend_url):
+    original = r"D:\Mods\Original"
+    replacement = r"D:\Mods\Replacement"
+    context, page = _page(
+        edge_browser, frontend_url, {},
+        mod_folders=[{"name": "Original", "path": original, "exists": True}],
+    )
+    try:
+        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
+        page.locator("#mod-folder-toggle").click()
+
+        page.locator("#mod-folder-add").click()
+        page.locator("#mod-folder-modal-backdrop.show").wait_for()
+        modal_styles = page.evaluate("""() => {
+          const style = id => {
+            const value = getComputedStyle(document.querySelector(id));
+            return {background: value.backgroundColor, color: value.color,
+              fontSize: value.fontSize, padding: value.padding};
+          };
+          return {
+            cancel: style('#mfm-cancel'),
+            save: style('#mfm-save'),
+            browse: style('#mfm-browse'),
+            presentCancel: style('#pm-cancel'),
+            presentSave: style('#pm-save'),
+          };
+        }""")
+        assert modal_styles["cancel"] == modal_styles["presentCancel"]
+        assert modal_styles["save"] == modal_styles["presentSave"]
+        assert modal_styles["browse"]["background"] == modal_styles["cancel"]["background"]
+        page.evaluate("path => { window.__fakeApi.nextPath = path; }", replacement)
+        page.locator("#mfm-browse").click()
+        assert page.locator("#mfm-path").input_value() == replacement
+        assert page.locator("#mfm-name").input_value() == "Replacement"
+        page.locator("#mfm-save").click()
+        page.locator("#mod-folder-modal-backdrop.show").wait_for(state="hidden")
+        page.locator(".mod-folder-select", has_text="Replacement").wait_for()
+
+        page.locator("[aria-label='Edit Original']").click()
+        page.locator("#mfm-name").fill("Renamed")
+        page.locator("#mfm-save").click()
+        page.locator(".mod-folder-select", has_text="Renamed").wait_for()
+
+        page.locator("[aria-label='Remove Renamed']").click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        assert "Files on disk will not be deleted." in page.locator(
+            "#dialog-message").inner_text()
+        page.locator("#dialog-ok").click()
+        assert page.locator(".mod-folder-select", has_text="Renamed").count() == 0
+        assert page.locator(".mod-folder-select", has_text="Replacement").count() == 1
     finally:
         context.close()

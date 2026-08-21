@@ -12,6 +12,7 @@ import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
 import { buildMenuPanel } from './menu-panel.js';
 import { buildPresentPanel } from './present-panel.js';
+import { initModFolderPanel } from './mod-folder-panel.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { setGeometryBlob } from './decode.js';
 import { setHealthLoader, setHealthReport } from './health-report.js';
@@ -71,6 +72,7 @@ function syncViewportControlPlacement() {
 // actions know which session to update and reloadCurrentMod() knows what to
 // refresh afterward.
 let currentModPath = null;
+let modSwitchInFlight = false;
 
 // The last-loaded payload's controls.toggles model, kept
 // around purely so refreshPendingState() can check for a still-unwired
@@ -198,7 +200,7 @@ async function loadModAt(path) {
     showLoading(false);
     await refreshPendingState();
     await alertDialog('Could not load mod:\n\n' + data.error);
-    return;
+    return false;
   }
   try {
     await displayMeshPayload(data);
@@ -208,22 +210,25 @@ async function loadModAt(path) {
     showLoading(false);
     await refreshPendingState();
     await alertDialog('Could not load mod geometry:\n\n' + error.message);
-    return;
+    return false;
   }
   await refreshPendingState();
 
   // Lead with the folder name; the full path is long and rarely the useful part.
   const folderName = path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1);
   $('mod-path').textContent = `${folderName}  —  ${path}`;
+  window.dispatchEvent(new CustomEvent('mod-viewer-mod-loaded', {
+    detail: { path },
+  }));
+  return true;
 }
 
-async function openMod() {
+async function switchMod(path) {
+  if (!path || modSwitchInFlight || !isRendererAvailable()) return false;
+  modSwitchInFlight = true;
   const btn = $('open-btn');
   btn.disabled = true;
   try {
-    const path = await window.pywebview.api.select_folder();
-    if (!path) return;
-
     // Switching to a different folder while the current one has staged,
     // not-yet-exported edits would silently strand them in memory, so ask
     // first. Reopening the same folder, or one with nothing pending, needs
@@ -233,16 +238,35 @@ async function openMod() {
       const proceed = await confirmDialog(
         'This mod has unsaved changes that haven\'t been exported.\n\n' +
         'Opening a different mod folder will discard them. Continue?');
-      if (!proceed) return;
+      if (!proceed) return false;
       await window.pywebview.api.discard_changes(currentModPath);
     }
 
-    await loadModAt(path);
+    return await loadModAt(path);
   } catch (e) {
     showLoading(false);
     await alertDialog('Unexpected error:\n\n' + e);
+    return false;
   } finally {
+    modSwitchInFlight = false;
     btn.disabled = !isRendererAvailable();
+  }
+}
+
+async function openMod() {
+  if (modSwitchInFlight) return false;
+  const btn = $('open-btn');
+  btn.disabled = true;
+  try {
+    const path = await window.pywebview.api.select_folder();
+    if (!path) return false;
+    return await switchMod(path);
+  } catch (e) {
+    showLoading(false);
+    await alertDialog('Unexpected error:\n\n' + e);
+    return false;
+  } finally {
+    if (!modSwitchInFlight) btn.disabled = !isRendererAvailable();
   }
 }
 
@@ -330,6 +354,7 @@ rendererReady.then(ready => {
   initPanelCollapse($('present-panel'), 'present-list');
   initPanelCollapse($('toggle-panel'), 'toggle-list');
   initPanelCollapse($('menu-panel'), 'menu-list');
+  initModFolderPanel({ switchMod });
 
   // Exposed for automated smoke tests and for poking at the app from the
   // devtools console; the UI itself always goes through the listeners above.
@@ -377,7 +402,7 @@ rendererReady.then(ready => {
     return normalized;
   };
   window.modViewer = {
-    displayMeshPayload, openMod, reloadCurrentMod, exportChanges, activeMeshes,
+    displayMeshPayload, openMod, switchMod, reloadCurrentMod, exportChanges, activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
     getMaterialState, setMaterialDebugMode: setMaterialDebugModeForMeshes,
     setOutlineEnabled: value => {

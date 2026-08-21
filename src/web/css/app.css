@@ -165,6 +165,77 @@ body {
   max-height: calc(100vh - 104px);
 }
 
+/* Mod Folders is an overlay owned by the left dock. It must not become a
+ * flex item: opening it covers MESHES instead of moving the model panel. */
+#mod-folder-dock {
+  position: fixed; top: 58px; left: 12px; z-index: 130;
+  width: 288px; max-width: min(288px, calc(50vw - 36px));
+  height: calc(100vh - 116px); pointer-events: none;
+}
+#mod-folder-panel {
+  width: 100%; height: 100%; min-height: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: rgba(13,17,23,.96); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(8px);
+  opacity: 0; pointer-events: none; transform: translateX(-106%);
+  transition: transform .16s ease, opacity .16s ease;
+}
+#mod-folder-dock.expanded #mod-folder-panel {
+  opacity: 1; pointer-events: auto; transform: translateX(0);
+}
+#mod-folder-dock .panel-hdr { margin-bottom: 8px; cursor: default; }
+#mod-folder-dock h3 { font-size: 10px; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: .1em; margin: 0; flex: 1; }
+.mod-folder-handle, .mod-folder-close {
+  width: 32px; height: 36px; padding: 0; border: 1px solid var(--border);
+  border-radius: 5px; background: var(--bg-panel); color: var(--text);
+  cursor: pointer; font-size: 23px; font-weight: 700; line-height: 1;
+}
+.mod-folder-handle {
+  position: absolute; top: 0; left: 0; pointer-events: auto;
+  box-shadow: 0 4px 12px rgba(0,0,0,.3);
+}
+#mod-folder-dock.expanded .mod-folder-handle { display: none; }
+.mod-folder-handle:hover, .mod-folder-close:hover { background: var(--accent); }
+.mod-folder-error {
+  display: none; margin-bottom: 8px; padding: 6px 8px; border-radius: 5px;
+  color: var(--danger); background: rgba(248,81,73,.1);
+  border: 1px solid rgba(248,81,73,.35); font-size: 11px; white-space: pre-wrap;
+}
+.mod-folder-error.show { display: block; }
+.mod-folder-list { flex: 1; overflow-y: auto; min-height: 0; }
+.mod-folder-node { min-width: 0; }
+.mod-folder-row { display: flex; align-items: center; gap: 4px; min-height: 26px;
+  padding: 2px 0; border-radius: 5px; }
+.mod-folder-row.active { background: rgba(31,111,235,.24); }
+.mod-folder-row.missing { opacity: .58; }
+.mod-folder-expand { width: 20px; height: 22px; flex: 0 0 20px; padding: 0;
+  border: 0; background: transparent; color: var(--text-muted); cursor: pointer;
+  font-size: 13px; line-height: 1; }
+.mod-folder-expand.expanded { transform: rotate(90deg); }
+.mod-folder-expand.leaf { visibility: hidden; pointer-events: none; }
+.mod-folder-expand:disabled { cursor: default; }
+.mod-folder-select { min-width: 0; flex: 1; padding: 3px 4px; border: 0;
+  background: transparent; color: var(--text); text-align: left; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; }
+.mod-folder-select:hover { color: var(--accent-soft); }
+.mod-folder-actions { display: flex; gap: 3px; flex: 0 0 auto; }
+.mod-folder-actions button { width: 20px; height: 20px; padding: 0; border: 0;
+  border-radius: 4px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.mod-folder-actions button:hover { color: var(--text); background: var(--accent); }
+.mod-folder-children { display: flex; flex-direction: column; gap: 1px; margin-left: 20px; }
+.mod-folder-children[hidden] { display: none; }
+.mod-folder-child-error { padding: 4px 4px 4px 20px; color: var(--danger); font-size: 10px; }
+.mod-folder-missing { padding: 0 4px 4px 24px; color: var(--text-muted); font-size: 10px; }
+.mod-folder-path-field { display: flex; gap: 6px; }
+.mod-folder-path-field input { min-width: 0; flex: 1; }
+.mod-folder-path-field button {
+  flex: 0 0 auto; border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 14px; background: var(--bg-control); color: var(--text);
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.mod-folder-path-field button:hover { background: var(--border); }
+
 /* ── right dock (toggle panel + menu panel) ──────────────────────────────── */
 #right-dock {
   position: fixed; top: 58px; right: 12px; z-index: 10;
@@ -579,6 +650,11 @@ body.right-dock-visible .environment-control { right: 338px; }
 .modal-actions button {
   border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; border: 1px solid var(--border);
 }
+#mfm-cancel { background: var(--bg-control); color: var(--text); }
+#mfm-cancel:hover { background: var(--border); }
+#mfm-save { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
+#mfm-save:hover:not(:disabled) { background: var(--success-hover); }
+#mfm-save:disabled { opacity: .6; cursor: default; }
 #tm-cancel { background: var(--bg-control); color: var(--text); }
 #tm-cancel:hover { background: var(--border); }
 #tm-save { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
@@ -723,6 +799,7 @@ body.feature-modify-toggle-off .present-author-actions { display: none; }
 
 @media (max-width: 900px) {
   #sidebar { width: 230px; max-width: calc(50vw - 28px); }
+  #mod-folder-dock { width: 230px; max-width: calc(50vw - 28px); }
   #present-panel, #toggle-panel, #menu-panel { width: 250px; max-width: calc(50vw - 20px); }
   #menu-list.image-layout { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   #menu-list.image-layout > .toggle-src-items {
