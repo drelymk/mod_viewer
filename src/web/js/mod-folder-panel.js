@@ -281,6 +281,9 @@ export function initModFolderPanel({ switchMod }) {
   window.addEventListener('mod-viewer-mod-loaded', event => {
     setActivePath(event.detail?.path);
   });
+  window.addEventListener('mod-viewer-mod-load-started', () => {
+    setActivePath(null);
+  });
 
   window.pywebview.api.get_mod_folders()
     .then(applyRegistryResponse)

@@ -300,6 +300,12 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         {
           const state = window.__fakeApi = JSON.parse(__STATE__);
           const copy = value => value == null ? value : structuredClone(value);
+          const loadWaiters = {};
+          state.releaseLoad = path => {
+            state.blockLoads = state.blockLoads || {};
+            state.blockLoads[path] = false;
+            (loadWaiters[path] || []).splice(0).forEach(resolve => resolve());
+          };
           window.pywebview = { api: {
             select_folder: async () => {
               const path = state.nextPath || null;
@@ -308,6 +314,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             },
             load_mod: async path => {
               state.calls.loadMod.push(path);
+              if (state.blockLoads?.[path]) {
+                await new Promise(resolve => {
+                  (loadWaiters[path] ||= []).push(resolve);
+                });
+              }
               return copy(state.responses[path]);
             },
             has_pending_changes: async path => !!state.pending[path],
@@ -1674,20 +1685,73 @@ def test_mod_folder_name_selection_preserves_dock_state_across_reload(
         context.close()
 
 
-def test_mod_folder_failed_selection_keeps_panel_open_and_reports_error(
+def test_reload_and_tree_selection_share_one_transition_guard(
         edge_browser, frontend_url):
     root = r"D:\Mods"
-    broken = root + r"\Broken"
+    alice = root + r"\Alice"
+    astra = root + r"\Astra"
     context, page = _page(
-        edge_browser, frontend_url, {broken: {"error": "loader failed"}},
-        mod_folders=[{"name": "Broken", "path": broken, "exists": True}],
+        edge_browser, frontend_url,
+        {alice: _payload("Alice"), astra: _payload("Astra")},
+        mod_folders=[{"name": "Library", "path": root, "exists": True}],
+        subfolders={root: [
+            {"name": "Alice", "path": alice},
+            {"name": "Astra", "path": astra},
+        ]},
     )
     try:
         page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
         page.locator("#mod-folder-toggle").click()
-        page.locator("#mod-folder-list .mod-folder-select").first.click()
+        page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
+        page.locator(".mod-folder-select", has_text="Alice").click()
+        page.locator(".draw-item").wait_for()
+
+        page.evaluate("""path => {
+          window.__fakeApi.blockLoads = {[path]: true};
+        }""", alice)
+        page.evaluate("""() => {
+          window.__reloadPromise = window.modViewer.reloadCurrentMod();
+        }""")
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
+
+        # The loading veil normally blocks pointer input; force the tree event
+        # here to exercise the shared transition guard at the API boundary.
+        page.locator(".mod-folder-select", has_text="Astra").click(force=True)
+        page.wait_for_timeout(100)
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == [alice, alice]
+
+        page.evaluate("path => window.__fakeApi.releaseLoad(path)", alice)
+        page.evaluate("window.__reloadPromise")
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == [alice, alice]
+    finally:
+        context.close()
+
+
+def test_mod_folder_failed_selection_keeps_panel_open_and_reports_error(
+        edge_browser, frontend_url):
+    root = r"D:\Mods"
+    alice = r"D:\Mods\Alice"
+    broken = root + r"\Broken"
+    context, page = _page(
+        edge_browser, frontend_url,
+        {alice: _payload("Alice"), broken: {"error": "loader failed"}},
+        mod_folders=[
+            {"name": "Alice", "path": alice, "exists": True},
+            {"name": "Broken", "path": broken, "exists": True},
+        ],
+    )
+    try:
+        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
+        page.locator("#mod-folder-toggle").click()
+        page.locator(".mod-folder-select", has_text="Alice").click()
+        page.locator(".draw-item").wait_for()
+        assert page.locator(".mod-folder-row.active").count() == 1
+
+        page.locator(".mod-folder-select", has_text="Broken").click()
         page.locator("#dialog-backdrop.show").wait_for()
         assert page.locator("#mod-folder-dock.expanded").count() == 1
+        assert page.locator(".mod-folder-row.active").count() == 0
+        assert page.locator(".draw-item").count() == 0
         page.locator("#dialog-ok").click()
     finally:
         context.close()

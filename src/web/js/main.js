@@ -72,7 +72,7 @@ function syncViewportControlPlacement() {
 // actions know which session to update and reloadCurrentMod() knows what to
 // refresh afterward.
 let currentModPath = null;
-let modSwitchInFlight = false;
+let modTransitionInFlight = false;
 
 // The last-loaded payload's controls.toggles model, kept
 // around purely so refreshPendingState() can check for a still-unwired
@@ -149,6 +149,9 @@ function beginModLoad(path, message) {
   currentModPath = path;
   clearScene();
   clearPendingState();
+  window.dispatchEvent(new CustomEvent('mod-viewer-mod-load-started', {
+    detail: { path },
+  }));
   $('hint').style.display = 'none';
   $('mod-path').textContent = path;
   setHealthReport(null);
@@ -223,63 +226,76 @@ async function loadModAt(path) {
   return true;
 }
 
-async function switchMod(path) {
-  if (!path || modSwitchInFlight || !isRendererAvailable()) return false;
-  modSwitchInFlight = true;
+async function performModSwitch(path) {
+  // Switching to a different folder while the current one has staged,
+  // not-yet-exported edits would silently strand them in memory, so ask
+  // first. Reopening the same folder, or one with nothing pending, needs
+  // no confirmation.
+  if (currentModPath && !samePath(currentModPath, path) &&
+      await window.pywebview.api.has_pending_changes(currentModPath)) {
+    const proceed = await confirmDialog(
+      'This mod has unsaved changes that haven\'t been exported.\n\n' +
+      'Opening a different mod folder will discard them. Continue?');
+    if (!proceed) return false;
+    await window.pywebview.api.discard_changes(currentModPath);
+  }
+
+  return await loadModAt(path);
+}
+
+async function runModTransition(operation) {
+  if (modTransitionInFlight || !isRendererAvailable()) return false;
+  modTransitionInFlight = true;
   const btn = $('open-btn');
   btn.disabled = true;
   try {
-    // Switching to a different folder while the current one has staged,
-    // not-yet-exported edits would silently strand them in memory, so ask
-    // first. Reopening the same folder, or one with nothing pending, needs
-    // no confirmation.
-    if (currentModPath && !samePath(currentModPath, path) &&
-        await window.pywebview.api.has_pending_changes(currentModPath)) {
-      const proceed = await confirmDialog(
-        'This mod has unsaved changes that haven\'t been exported.\n\n' +
-        'Opening a different mod folder will discard them. Continue?');
-      if (!proceed) return false;
-      await window.pywebview.api.discard_changes(currentModPath);
-    }
-
-    return await loadModAt(path);
-  } catch (e) {
-    showLoading(false);
-    await alertDialog('Unexpected error:\n\n' + e);
-    return false;
+    return await operation();
   } finally {
-    modSwitchInFlight = false;
+    modTransitionInFlight = false;
     btn.disabled = !isRendererAvailable();
   }
 }
 
+async function switchMod(path) {
+  if (!path) return false;
+  return await runModTransition(async () => {
+    try {
+      return await performModSwitch(path);
+    } catch (e) {
+      showLoading(false);
+      await alertDialog('Unexpected error:\n\n' + e);
+      return false;
+    }
+  });
+}
+
 async function openMod() {
-  if (modSwitchInFlight) return false;
-  const btn = $('open-btn');
-  btn.disabled = true;
-  try {
-    const path = await window.pywebview.api.select_folder();
-    if (!path) return false;
-    return await switchMod(path);
-  } catch (e) {
-    showLoading(false);
-    await alertDialog('Unexpected error:\n\n' + e);
-    return false;
-  } finally {
-    if (!modSwitchInFlight) btn.disabled = !isRendererAvailable();
-  }
+  return await runModTransition(async () => {
+    try {
+      const path = await window.pywebview.api.select_folder();
+      if (!path) return false;
+      return await performModSwitch(path);
+    } catch (e) {
+      showLoading(false);
+      await alertDialog('Unexpected error:\n\n' + e);
+      return false;
+    }
+  });
 }
 
 // Re-renders the current authoritative edit session after a staged authoring
 // change, using the same load path as an ordinary reopen.
 export async function reloadCurrentMod() {
-  if (!currentModPath) return;
-  try {
-    await loadModAt(currentModPath);
-  } catch (e) {
-    showLoading(false);
-    await alertDialog('Unexpected error while reloading:\n\n' + e);
-  }
+  if (!currentModPath) return false;
+  return await runModTransition(async () => {
+    try {
+      return await loadModAt(currentModPath);
+    } catch (e) {
+      showLoading(false);
+      await alertDialog('Unexpected error while reloading:\n\n' + e);
+      return false;
+    }
+  });
 }
 
 async function exportChanges() {
