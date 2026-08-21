@@ -154,7 +154,9 @@ def test_api_registry_authorizes_descendants_and_keeps_active_exact_path(
     sibling = _directory(tmp_path, "sibling")
     monkeypatch.setattr("app.paths.config_path", lambda: filename)
     api = ModViewerAPI()
-    api._authorized_folders.add(mod_folders.normalize_path(root))
+    normalized_root = mod_folders.normalize_path(root)
+    api._authorized_folders.add(normalized_root)
+    api._picker_authorized_folders.add(normalized_root)
     assert api.add_mod_folder("Root", root)["folders"][0]["name"] == "Root"
 
     assert api._folder(child) == mod_folders.normalize_path(child)
@@ -173,7 +175,9 @@ def test_api_listing_requires_registered_root(tmp_path, monkeypatch):
     outside = _directory(tmp_path, "outside")
     monkeypatch.setattr("app.paths.config_path", lambda: filename)
     api = ModViewerAPI()
-    api._authorized_folders.add(mod_folders.normalize_path(root))
+    normalized_root = mod_folders.normalize_path(root)
+    api._authorized_folders.add(normalized_root)
+    api._picker_authorized_folders.add(normalized_root)
     api.add_mod_folder("Root", root)
 
     assert [item["path"] for item in api.list_subfolders(root)["folders"]] == [
@@ -188,12 +192,39 @@ def test_api_add_and_edit_require_native_picker_for_new_paths(tmp_path, monkeypa
     invented = _directory(tmp_path, "invented")
     monkeypatch.setattr("app.paths.config_path", lambda: filename)
     api = ModViewerAPI()
-    api._authorized_folders.add(mod_folders.normalize_path(first))
+    normalized_first = mod_folders.normalize_path(first)
+    normalized_second = mod_folders.normalize_path(second)
+    api._authorized_folders.add(normalized_first)
+    api._picker_authorized_folders.add(normalized_first)
     assert api.add_mod_folder("First", first).get("folders")
     assert "error" in api.add_mod_folder("Invented", invented)
     assert "error" in api.edit_mod_folder(first, "Second", second)
-    api._authorized_folders.add(mod_folders.normalize_path(second))
+    api._authorized_folders.add(normalized_second)
+    api._picker_authorized_folders.add(normalized_second)
     assert api.edit_mod_folder(first, "Second", second).get("folders")
+
+
+def test_descendant_runtime_authorization_cannot_persist_without_picker(
+        tmp_path, monkeypatch):
+    filename = _config(tmp_path)
+    root = _directory(tmp_path, "root")
+    child = _directory(tmp_path / "root", "child")
+    replacement = _directory(tmp_path, "replacement")
+    monkeypatch.setattr("app.paths.config_path", lambda: filename)
+    api = ModViewerAPI()
+    normalized_root = mod_folders.normalize_path(root)
+    api._authorized_folders.add(normalized_root)
+    api._picker_authorized_folders.add(normalized_root)
+    assert api.add_mod_folder("Root", root).get("folders")
+
+    # Browsing the child grants runtime access only; it is not picker proof.
+    assert api._folder(child) == mod_folders.normalize_path(child)
+    assert "error" in api.add_mod_folder("Child", child)
+    assert "error" in api.edit_mod_folder(root, "Child", child)
+
+    api._authorized_folders.add(mod_folders.normalize_path(replacement))
+    api._picker_authorized_folders.add(mod_folders.normalize_path(replacement))
+    assert api.edit_mod_folder(root, "Replacement", replacement).get("folders")
 
 
 def test_config_path_is_next_to_executable_when_frozen(monkeypatch, tmp_path):

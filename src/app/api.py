@@ -27,6 +27,7 @@ class ModViewerAPI:
         # sends that reflection into infinite recursion.
         self._window = None
         self._authorized_folders = set()
+        self._picker_authorized_folders = set()
         self._authorized_roots = set()
         try:
             self._authorized_roots = mod_folders.registered_paths(
@@ -71,6 +72,7 @@ class ModViewerAPI:
             return None
         folder = mod_folders.normalize_path(result[0])
         self._authorized_folders.add(folder)
+        self._picker_authorized_folders.add(folder)
         return folder
 
     # -- persistent Mod Folders registry -----------------------------------
@@ -93,7 +95,7 @@ class ModViewerAPI:
 
     def add_mod_folder(self, name, folder_path):
         folder_path = mod_folders.normalize_path(folder_path)
-        if folder_path not in self._authorized_folders:
+        if folder_path not in self._picker_authorized_folders:
             return {"error": "Choose the Mod Folder through the native folder picker first."}
         try:
             entries = mod_folders.add_folder(name, folder_path)
@@ -109,7 +111,8 @@ class ModViewerAPI:
             entries = mod_folders.load_registry()
             if not any(item["path"] == original_path for item in entries):
                 raise mod_folders.ModFolderError("That Mod Folder is not registered.")
-            if folder_path != original_path and folder_path not in self._authorized_folders:
+            if (folder_path != original_path and
+                    folder_path not in self._picker_authorized_folders):
                 raise mod_folders.ModFolderError(
                     "Choose the new Mod Folder through the native folder picker first.")
             entries = mod_folders.edit_folder(original_path, name, folder_path)
