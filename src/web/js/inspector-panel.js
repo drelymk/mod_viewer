@@ -2,12 +2,23 @@
 // this module only presents the already-authoritative mesh/component state.
 
 import { setRightDockTab } from './right-dock.js';
+import { clearSelection } from './selection.js';
 
 const meshRecords = new WeakMap();
 let current = null;
 let selectionCount = 0;
 
 const $ = id => document.getElementById(id);
+
+const MATERIAL_KIND_OPTIONS = Object.freeze([
+  ['auto', 'Auto'],
+  ['body', 'Body'],
+  ['face', 'Face'],
+  ['hair', 'Hair'],
+  ['eye', 'Eye'],
+  ['weapon', 'Weapon'],
+  ['special', 'Special'],
+]);
 
 export function registerInspectorMesh(mesh, record) {
   if (mesh) meshRecords.set(mesh, record);
@@ -57,7 +68,7 @@ function buildHeader(content, title, subtitle) {
 }
 
 function buildTextureControls(content, record, mesh) {
-  const sourceList = record.textureList;
+  const component = record.component;
   const section = document.createElement('section');
   section.className = 'inspector-section';
   const title = document.createElement('div');
@@ -65,27 +76,66 @@ function buildTextureControls(content, record, mesh) {
   title.textContent = 'Texture override';
   section.appendChild(title);
 
-  const rows = sourceList?.querySelectorAll('.tex-item') || [];
-  if (!rows.length) {
-    addText(section, 'inspector-muted', 'No texture variants registered.');
-  } else {
-    const list = document.createElement('div');
-    list.className = 'inspector-texture-list';
-    rows.forEach(row => {
-      const clone = document.createElement('button');
-      clone.type = 'button';
-      clone.className = 'inspector-texture-option';
-      clone.textContent = row.textContent;
-      clone.classList.toggle('selected', row.classList.contains('selected'));
-      clone.addEventListener('click', () => row.click());
-      list.appendChild(clone);
+  const pool = component?.texturePool || [];
+  const override = component?.getTextureOverride?.(mesh) || {
+    value: undefined, automatic: true, resolved: null,
+  };
+  const list = document.createElement('div');
+  list.className = 'inspector-texture-list';
+  const addOption = (label, value, selected, choice) => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'inspector-texture-option';
+    option.textContent = label;
+    option.dataset.textureChoice = choice;
+    option.dataset.textureValue = value == null ? '' : value;
+    option.classList.toggle('selected', selected);
+    option.addEventListener('click', () => {
+      component?.setTextureOverride?.(mesh, value);
     });
-    section.appendChild(list);
+    list.appendChild(option);
+  };
+  addOption(
+    override.resolved ? `Automatic (${override.resolved})` : 'Automatic',
+    undefined, override.automatic, 'automatic');
+  pool.forEach(option => addOption(
+    option.label || option.file || option.tex_key,
+    option.tex_key, !override.automatic && override.value === option.tex_key,
+    'texture'));
+  addOption('None', null, !override.automatic && override.value === null, 'none');
+  if (!pool.length) {
+    addText(section, 'inspector-muted', 'No texture variants registered.');
   }
+  section.appendChild(list);
   if (mesh?.userData?.resolvedTexKey) {
     addRow(section, 'Resolved', mesh.userData.resolvedTexKey);
   }
   content.appendChild(section);
+}
+
+function buildMaterialControl(record) {
+  const select = document.createElement('select');
+  select.className = 'inspector-material-kind-control material-kind-select';
+  select.setAttribute('aria-label', 'Material kind');
+  MATERIAL_KIND_OPTIONS.forEach(([value, label]) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+  });
+  const getKind = record.getMaterialKind || (() => null);
+  const setKind = record.setMaterialKind;
+  select.value = getKind() || 'auto';
+  select.disabled = typeof setKind !== 'function';
+  select.addEventListener('change', async () => {
+    if (typeof setKind !== 'function') return;
+    const previous = getKind() || 'auto';
+    select.disabled = true;
+    const saved = await setKind(select.value);
+    if (!saved) select.value = previous;
+    select.disabled = false;
+  });
+  return select;
 }
 
 function buildComponent(record) {
@@ -106,22 +156,13 @@ function buildComponent(record) {
   title.className = 'inspector-section-title';
   title.textContent = 'Material';
   material.appendChild(title);
-  if (record.materialSelect) {
-    const select = record.materialSelect.cloneNode(true);
-    select.className = 'inspector-material-kind-control material-kind-select';
-    select.removeAttribute('id');
-    select.addEventListener('change', () => {
-      record.materialSelect.value = select.value;
-      record.materialSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    material.appendChild(select);
-  }
-  if (record.texBtn) {
+  if (record.setMaterialKind) material.appendChild(buildMaterialControl(record));
+  if (record.openTextureManager) {
     const manage = document.createElement('button');
     manage.type = 'button';
     manage.className = 'ui-button inspector-manage-textures';
     manage.textContent = 'Manage textures';
-    manage.addEventListener('click', () => record.texBtn.click());
+    manage.addEventListener('click', () => record.openTextureManager());
     material.appendChild(manage);
   }
   content.appendChild(material);
@@ -170,22 +211,13 @@ function buildMesh(mesh, record) {
   materialTitle.textContent = 'Material';
   material.appendChild(materialTitle);
   const component = record.component;
-  if (component?.materialSelect) {
-    const select = component.materialSelect.cloneNode(true);
-    select.className = 'inspector-material-kind-control material-kind-select';
-    select.removeAttribute('id');
-    select.addEventListener('change', () => {
-      component.materialSelect.value = select.value;
-      component.materialSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    material.appendChild(select);
-  }
-  if (component?.texBtn) {
+  if (component?.setMaterialKind) material.appendChild(buildMaterialControl(component));
+  if (component?.openTextureManager) {
     const manage = document.createElement('button');
     manage.type = 'button';
     manage.className = 'ui-button inspector-manage-textures';
     manage.textContent = 'Manage textures';
-    manage.addEventListener('click', () => component.texBtn.click());
+    manage.addEventListener('click', () => component.openTextureManager());
     material.appendChild(manage);
   }
   content.appendChild(material);
@@ -233,18 +265,44 @@ function updateInspectorState() {
       resolved.querySelector('.inspector-value').textContent =
         mesh.userData.resolvedTexKey || 'None';
     }
+    const material = content.querySelector('.inspector-material-kind-control');
+    if (material) material.value = current.record.component.getMaterialKind?.() || 'auto';
+    const override = current.record.component.getTextureOverride?.(mesh);
+    if (override) {
+      content.querySelectorAll('.inspector-texture-option').forEach(option => {
+        const selected = option.dataset.textureChoice === 'automatic'
+          ? override.automatic
+          : option.dataset.textureChoice === 'none'
+            ? !override.automatic && override.value === null
+            : !override.automatic && override.value === option.dataset.textureValue;
+        option.classList.toggle('selected', selected);
+      });
+    }
   } else if (current.type === 'component') {
     const meshes = current.record.meshes || [];
     if (values.has('Visible')) {
       values.get('Visible').textContent =
         `${meshes.filter(mesh => mesh.visible).length} of ${meshes.length}`;
     }
+    const material = content.querySelector('.inspector-material-kind-control');
+    if (material) material.value = current.record.getMaterialKind?.() || 'auto';
+    content.querySelectorAll('.inspector-row').forEach(row => {
+      const label = row.querySelector('.inspector-label')?.textContent;
+      if (!label || label === 'Visible' || label === 'Draw calls') return;
+      const mesh = meshes.find(item =>
+        (item.userData.displayName || 'Mesh') === label);
+      if (mesh) row.querySelector('.inspector-value').textContent =
+        mesh.visible ? 'Visible' : 'Hidden';
+    });
   }
 }
 
 function selectComponent(record) {
+  if (current?.type === 'component') current.record.header?.classList.remove('selected');
+  clearSelection();
   if (selectionCount++ === 0) setRightDockTab('inspector', { persist: false });
   current = { type: 'component', record };
+  record.header?.classList.add('selected');
   buildComponent(record);
   const status = $('selected-mesh-status');
   if (status) status.textContent = record.component || 'Component';
@@ -254,6 +312,7 @@ function selectMesh(mesh) {
   const record = meshRecords.get(mesh);
   if (!record) return;
   if (selectionCount++ === 0) setRightDockTab('inspector', { persist: false });
+  if (current?.type === 'component') current.record.header?.classList.remove('selected');
   current = { type: 'mesh', mesh, record };
   buildMesh(mesh, record);
   const status = $('selected-mesh-status');
@@ -271,6 +330,7 @@ export function initInspectorPanel() {
   window.addEventListener('mod-viewer-mesh-selected', event => {
     if (event.detail?.mesh) selectMesh(event.detail.mesh);
     else {
+      if (current?.type === 'component') current.record.header?.classList.remove('selected');
       current = null;
       $('selected-mesh-status').textContent = '';
       clearContent();
@@ -292,10 +352,19 @@ export function initInspectorPanel() {
       buildMesh(current.mesh, current.record);
     }
   });
+  window.addEventListener('mod-viewer-mesh-state-changed', event => {
+    const changed = event.detail?.meshes || [];
+    if (!current || !changed.length) return;
+    const affected = current.type === 'mesh'
+      ? changed.includes(current.mesh)
+      : (current.record.meshes || []).some(mesh => changed.includes(mesh));
+    if (affected) updateInspectorState();
+  });
   clearContent();
 }
 
 export function clearInspector() {
+  if (current?.type === 'component') current.record.header?.classList.remove('selected');
   current = null;
   selectionCount = 0;
   $('selected-mesh-status').textContent = '';

@@ -2004,6 +2004,34 @@ def test_source_grouping_and_collapse_are_shared_without_losing_duplicates(
 
 
 
+def test_toggle_panel_headers_collapse_and_expand_their_content(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
+    try:
+        _open(page, "A")
+        page.locator("#toggle-list .toggle-item").wait_for()
+        page.locator("#menu-list .menu-item").first.wait_for()
+
+        for panel_id, content_id in (("toggle-panel", "toggle-list"),
+                                     ("menu-panel", "menu-list")):
+            panel = page.locator(f"#{panel_id}")
+            content = page.locator(f"#{content_id}")
+            chevron = panel.locator(".panel-hdr .group-toggle")
+
+            assert "collapsed" not in (content.get_attribute("class") or "")
+            chevron.click()
+            assert "collapsed" in (content.get_attribute("class") or "")
+            assert chevron.get_attribute("aria-expanded") == "false"
+            assert not content.is_visible()
+
+            chevron.click()
+            assert "collapsed" not in (content.get_attribute("class") or "")
+            assert chevron.get_attribute("aria-expanded") == "true"
+            assert content.is_visible()
+    finally:
+        context.close()
+
+
 def test_feature_flag_css_keeps_cycle_preview_and_core_invariants(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
@@ -2104,7 +2132,7 @@ def test_empty_mod_folder_panel_keeps_fixed_height_above_navigation_hint(
           return {width: style.width, height: style.height, fontSize: style.fontSize};
         }""")
         assert handle_style == {"width": "32px", "height": "36px", "fontSize": "23px"}
-        assert abs(panel["height"] - (viewport_height - 116)) < 1
+        assert abs(panel["height"] - (viewport_height - 104)) < 1
         assert panel["y"] + panel["height"] <= info["y"]
         assert page.locator("#mod-folder-list").inner_text() == ""
         assert page.evaluate("""() => {
@@ -2135,6 +2163,9 @@ def test_mod_folder_name_selection_preserves_dock_state_across_reload(
         page.locator(".draw-item").wait_for()
         assert page.evaluate("window.__fakeApi.calls.loadMod") == [alice]
         assert "expanded" in page.locator("#mod-folder-dock").get_attribute("class")
+        page.locator("#mod-folder-list > .mod-folder-node > .mod-folder-row > .mod-folder-expand").click()
+        assert "active-descendant" in page.locator(
+            "#mod-folder-list > .mod-folder-node > .mod-folder-row").get_attribute("class")
 
         page.evaluate("window.modViewer.reloadCurrentMod()")
         page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
@@ -2334,9 +2365,25 @@ def test_inspector_follows_component_and_mesh_selection(
         page.locator(".draw-item").first.click()
         assert page.locator("#inspector-content .inspector-header h3").inner_text()
         assert "Body A >" in page.locator("#selected-mesh-status").inner_text()
+        assert page.locator(".draw-item.selected").count() == 1
+
+        page.locator(".group-hdr .group-name").first.click()
+        assert page.locator(".draw-item.selected").count() == 0
+        assert "selected" in page.locator(".group-hdr").first.get_attribute("class")
+        assert page.locator("#inspector-content .inspector-row", has_text="1 of 1").count() == 1
+
+        page.locator(".draw-item .mesh-state-btn").first.click()
+        assert page.locator("#inspector-content .inspector-row", has_text="0 of 1").count() == 1
+        page.locator("#reset-state-btn").click()
+        assert page.locator("#inspector-content .inspector-row", has_text="1 of 1").count() == 1
+
+        assert page.locator(".group-hdr .material-kind-select").count() == 0
+        assert page.locator(".group-hdr .group-tex-btn").count() == 0
 
         page.locator("#controls-tab").click()
         assert page.locator("#inspector-panel").is_hidden()
+        assert page.locator("#controls-panel").evaluate(
+            "panel => getComputedStyle(panel).overflowY") == "auto"
         page.locator("#inspector-tab").click()
         assert not page.locator("#inspector-panel").is_hidden()
     finally:
@@ -2374,8 +2421,11 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
 
         page.locator("#light-btn").click()
         page.locator("#light-popover:not([hidden])").wait_for()
-        page.locator("#light-popover .ui-popover-option").click()
+        assert page.locator("#light-popover .ui-popover-option").all_inner_texts() == [
+            "Bright", "Normal", "Off"]
+        page.locator("#light-popover .ui-popover-option", has_text="Normal").click()
         assert page.locator("#light-popover").is_hidden()
+        assert page.locator("#light-btn").get_attribute("aria-label").startswith("Key light: normal")
 
         page.locator("#environment-btn").click()
         page.locator("#environment-popover:not([hidden])").wait_for()

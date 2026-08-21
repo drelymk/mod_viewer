@@ -131,8 +131,10 @@ export function createKeyLightController({
   renderer.domElement.addEventListener('pointerup', finishDrag);
   renderer.domElement.addEventListener('pointercancel', finishDrag);
 
-  function toggleMode() {
-    modeIndex = (modeIndex + 1) % modes.length;
+  function setMode(nextMode) {
+    const nextIndex = modes.indexOf(nextMode);
+    if (nextIndex < 0) return false;
+    modeIndex = nextIndex;
     const mode = modes[modeIndex];
     handle.visible = mode !== 'off';
     light.intensity = mode === 'double' ? 1 : (mode === 'current' ? 0.5 : 0);
@@ -150,6 +152,11 @@ export function createKeyLightController({
     button.setAttribute('aria-pressed', String(mode !== 'off'));
     updateCursor();
     onChange?.();
+    return true;
+  }
+
+  function toggleMode() {
+    return setMode(modes[(modeIndex + 1) % modes.length]);
   }
 
   function rebase(modelSize) {
@@ -170,5 +177,5 @@ export function createKeyLightController({
     handle.scale.set(size, size, 1);
   }
 
-  return { toggleMode, rebase, update };
+  return { toggleMode, setMode, getMode: () => modes[modeIndex], rebase, update };
 }

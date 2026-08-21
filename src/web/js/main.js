@@ -1,9 +1,9 @@
 // Entry point: wires the toolbar and orchestrates loading a mod.
 
 import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
-         toggleGrid, toggleLightHandle, toggleTrackballGizmo,
-         getEnvironmentPreset, isRendererAvailable, rendererReady,
-         setEnvironmentPreset, getRenderCount } from './scene.js';
+         toggleGrid, toggleTrackballGizmo,
+         getEnvironmentPreset, getLightMode, isRendererAvailable, rendererReady,
+         setEnvironmentPreset, setLightMode, getRenderCount } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
 import { refreshMeshTexture, setTextures } from './mesh-factory.js';
 import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleGlossy } from './visibility.js';
@@ -139,16 +139,19 @@ function initToolPopovers() {
     const wasOpen = !lightPopover.hidden;
     closeAll();
     if (wasOpen) return;
-    const option = document.createElement('button');
-    option.type = 'button';
-    option.className = 'ui-popover-option';
-    option.setAttribute('role', 'menuitem');
-    option.textContent = 'Toggle key light handle';
-    option.addEventListener('click', () => {
-      toggleLightHandle();
-      closeAll();
+    [['double', 'Bright'], ['current', 'Normal'], ['off', 'Off']].forEach(([mode, label]) => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'ui-popover-option';
+      option.setAttribute('role', 'menuitemradio');
+      option.setAttribute('aria-checked', String(getLightMode() === mode));
+      option.textContent = label;
+      option.addEventListener('click', () => {
+        setLightMode(mode);
+        closeAll();
+      });
+      lightPopover.appendChild(option);
     });
-    lightPopover.appendChild(option);
     lightPopover.hidden = false;
   }
 
@@ -498,12 +501,12 @@ function initPanelCollapse(panel, contentId) {
   chevron.setAttribute('aria-controls', contentId);
   setCollapsed(initiallyCollapsed, false);
   const toggle = (e) => {
-    if (e?.target?.closest?.('.icon-btn')) return;
+    if (e?.target?.closest?.('.icon-btn, .panel-actions, .panel-action-menu')) return;
     e?.stopPropagation?.();
     setCollapsed(!content.classList.contains('collapsed'));
   };
   hdr.addEventListener('click', e => {
-    if (e.target.closest('.icon-btn, .group-toggle')) return;
+    if (e.target.closest('.icon-btn, .group-toggle, .panel-actions, .panel-action-menu')) return;
     setCollapsed(!content.classList.contains('collapsed'));
   });
   chevron.addEventListener('click', toggle);

@@ -16,19 +16,10 @@ import { selectMesh } from './selection.js';
 import { openTextureModal } from './texture-modal.js';
 import { registerInspectorMesh } from './inspector-panel.js';
 import { createIcon } from './ui-icons.js';
+import { notifyMeshStateChanged } from './mesh-state-events.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
-
-const MATERIAL_KIND_OPTIONS = Object.freeze([
-  ['auto', 'Auto'],
-  ['body', 'Body'],
-  ['face', 'Face'],
-  ['hair', 'Hair'],
-  ['eye', 'Eye'],
-  ['weapon', 'Weapon'],
-  ['special', 'Special'],
-]);
 
 function saveComponentMaterialKind(modPath, source, component, kind) {
   if (!modPath || !window.pywebview?.api?.save_component_material_kind) {
@@ -75,10 +66,7 @@ function groupByComponent(names, meshes) {
   return grouped;
 }
 
-function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
-                          onPoolChange, componentKind,
-                          onMaterialKindChanged, componentIdentity = groupName,
-                          source = '', onComponentSelected = null) {
+function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null) {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
 
@@ -105,51 +93,6 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
     onComponentSelected?.();
   });
 
-  const materialSelect = document.createElement('select');
-  materialSelect.className = 'material-kind-select component-material-kind-control';
-  materialSelect.title = 'Choose a viewer material kind for this component';
-  materialSelect.setAttribute('aria-label', 'Component material kind');
-  for (const [value, label] of MATERIAL_KIND_OPTIONS) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = label;
-    materialSelect.appendChild(option);
-  }
-  materialSelect.value = componentKind || 'auto';
-  materialSelect.disabled = !componentIdentity;
-  materialSelect.addEventListener('click', event => event.stopPropagation());
-  materialSelect.addEventListener('change', async event => {
-    event.stopPropagation();
-    const previous = componentKind || 'auto';
-    const next = materialSelect.value;
-    materialSelect.disabled = true;
-    try {
-      const result = await saveComponentMaterialKind(
-        modPath, source, componentIdentity, next);
-      if (result?.error || result?.saved === false) {
-        throw new Error(result?.error || 'material kind was not saved');
-      }
-      componentKind = next === 'auto' ? null : next;
-      await onMaterialKindChanged?.();
-    } catch (error) {
-      materialSelect.value = previous;
-      console.error('Could not save component material kind', error);
-    } finally {
-      materialSelect.disabled = false;
-    }
-  });
-  // Always available to Inspector, even for a component with no diffuse
-  // loaded at all -- that is the only way to attach one via "Add".
-  const texBtn = document.createElement('button');
-  texBtn.type = 'button';
-  texBtn.className = 'group-tex-btn';
-  texBtn.appendChild(createIcon('texture'));
-  texBtn.title = 'Manage textures for this component';
-  texBtn.setAttribute('aria-label', 'Manage textures for this component');
-  texBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    openTextureModal(groupName, texturePool, modPath, onPoolChange);
-  });
   const toggleItems = () => {
     const collapsed = !itemsWrap.classList.contains('collapsed');
     chevron.classList.toggle('collapsed', collapsed);
@@ -162,125 +105,11 @@ function buildGroupHeader(groupName, itemsWrap, texturePool, modPath,
     toggleItems();
   });
   hdr.addEventListener('click', (e) => {
-    if (e.target === masterCb || e.target.closest('select')) return;
+    if (e.target === masterCb) return;
     onComponentSelected?.();
   });
 
-  return { hdr, masterCb, texBtn, materialSelect };
-}
-
-/** Collapsed-by-default child list of every diffuse this mesh's component
- * ever references (the shared `pool` array -- the application payload's
- * `texture_pools` entry, or the fresh empty array a component with none loaded
- * yet falls back to in buildMeshPanel) -- a radio-style single-select that
- * drives mesh.userData.manualTexOverride (see visibility.js).
- *
- * Returns a list element plus separate structural and selection sync calls.
- * `rebuild()` recreates rows from `pool`'s CURRENT contents and must be
- * re-invoked after the "manage textures" popup adds/removes an entry (see
- * buildMeshPanel's refreshers array), since `pool` starts empty for a
- * component with nothing loaded yet and is mutated in place afterward --
- * a one-time snapshot at build time would never see what gets added later.
- *
- * Clicking a row selects it (mesh.userData.manualTexOverride = that
- * tex_key, sticky until de-selected); clicking the already-selected row
- * de-selects it (clears back to undefined, mesh reverts to its ini
- * default). `groupMeshes` is the ordered list for this component; texture
- * inheritance is recomputed from top to bottom after every selection. */
-function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
-  const wrap = document.createElement('div');
-  wrap.className = 'tex-list collapsed';
-  let rows = [];
-
-  function selectedKey() {
-    const current = mesh.userData.manualTexOverride;
-    const autoKey = mesh.userData.automaticTextureBoundary
-      ? mesh.userData.resolvedTexKey
-      : undefined;
-    const isAutomaticBoundary = current === undefined && !!autoKey;
-    return current === undefined && !mesh.userData.textureHighlightDisabled
-      ? (isAutomaticBoundary ? autoKey : undefined)
-      : current;
-  }
-
-  function syncSelection() {
-    const selected = selectedKey();
-    const current = mesh.userData.manualTexOverride;
-    rows.forEach(({ row, value }) => {
-      const kind = row.dataset.textureChoice;
-      row.classList.toggle('selected',
-        (kind === 'automatic' && current === undefined)
-        || (kind === 'none' && current === null)
-        || (kind === 'texture' && selected === value));
-    });
-  }
-
-  function rebuild() {
-    wrap.replaceChildren();
-    rows = [];
-    function addRow(label, value, kind = 'texture') {
-      const row = document.createElement('div');
-      row.className = 'tex-item';
-      row.dataset.textureChoice = kind;
-      row.textContent = label;
-      row.addEventListener('click', () => {
-        const current = mesh.userData.manualTexOverride;
-        if (kind === 'automatic') {
-          mesh.userData.textureHighlightDisabled = false;
-          setManualTexOverride(mesh, undefined);
-          recomputeTextureRuns(groupMeshes);
-          syncSelection();
-          onActiveChanged?.('selection');
-          saveTextureState(mesh.userData.modPath);
-          return;
-        }
-        if (kind === 'none') {
-          const newVal = current === null ? undefined : null;
-          mesh.userData.textureHighlightDisabled = false;
-          setManualTexOverride(mesh, newVal);
-          recomputeTextureRuns(groupMeshes);
-          syncSelection();
-          onActiveChanged?.('selection');
-          saveTextureState(mesh.userData.modPath);
-          return;
-        }
-        const autoHighlighted = current === undefined
-          && mesh.userData.automaticTextureBoundary
-          && mesh.userData.resolvedTexKey === value
-          && !mesh.userData.textureHighlightDisabled;
-        // Click the already-selected row -> de-select (revert to ini default).
-        const newVal = (current === value || autoHighlighted) ? undefined : value;
-        if (newVal !== undefined && !hasTexture(newVal)) {
-          console.warn('Texture pool entry missing registry source', newVal);
-          return;
-        }
-        if (newVal === undefined && autoHighlighted) {
-          // Clicking an automatic boundary disables that boundary. Clearing a
-          // manual pin is different: it must restore automatic propagation so
-          // INI texture toggles can take control again.
-          mesh.userData.textureHighlightDisabled = true;
-        } else {
-          mesh.userData.textureHighlightDisabled = false;
-        }
-        setManualTexOverride(mesh, newVal);
-        recomputeTextureRuns(groupMeshes);
-        syncSelection();
-        if (onActiveChanged) onActiveChanged('selection');
-        saveTextureState(mesh.userData.modPath);
-      });
-      wrap.appendChild(row);
-      rows.push({ row, value });
-    }
-
-    addRow('Automatic', undefined, 'automatic');
-    for (const opt of pool) addRow(opt.label, opt.tex_key);
-    addRow('None', null, 'none');
-    // A removed active option has no matching row, so all rows remain clear.
-    syncSelection();
-  }
-
-  rebuild();
-  return { wrap, rebuild, syncSelection };
+  return { hdr, masterCb };
 }
 
 /** "count, start, base" from the ini's own drawindexed line — falls back to
@@ -289,8 +118,7 @@ function buildTextureList(pool, mesh, groupMeshes, onActiveChanged) {
  * Returns `{wrap, rebuildTexList}` -- the caller collects `rebuildTexList`
  * alongside every other mesh in the component so the "manage textures"
  * popup can refresh them all after an add/remove (see buildMeshPanel). */
-function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
-                      groupMeshes, onActiveChanged) {
+function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   const row = document.createElement('div');
   row.className = 'draw-item';
 
@@ -312,9 +140,6 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
     masterCb.checked = all;
   });
   itemCbs.push(cb);
-
-  const { wrap: texList, rebuild: rebuildTexList, syncSelection } = buildTextureList(
-    pool, mesh, groupMeshes, onActiveChanged);
 
   const label = entry.drawindexed
     ? entry.drawindexed.join(', ')
@@ -385,9 +210,6 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
     row,
     stateButton: cb,
     syncStateIndicator: () => updateStateIndicator(mesh),
-    syncTextureSelection: syncSelection,
-    rebuildTextureList: rebuildTexList,
-    onTextureChanged: () => onActiveChanged?.('state'),
   });
   row.addEventListener('click', (e) => {
     if (e.target === cb) return;
@@ -396,10 +218,8 @@ function buildDrawRow(name, groupName, entry, mesh, pool, itemCbs, masterCb,
 
   const wrap = document.createElement('div');
   wrap.className = 'draw-item-wrap';
-  // Texture choices are rendered by Inspector. Keep this detached list as
-  // the authoritative event/state surface for its buttons.
   wrap.append(row);
-  return { wrap, rebuildTexList, texList };
+  return { wrap };
 }
 
 /** Build the panel and add every mesh in the mesh map to the scene. `modPath`
@@ -442,35 +262,75 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
         .map(n => meshes[n].component)
         .find(Boolean) || null;
 
-      const itemCbs = [], itemObjs = [], texListRenderers = [];
+      const itemCbs = [], itemObjs = [];
       const highlightedDefaults = new Set();
       const componentDescriptor = {
         type: 'component', component: groupName, source: src,
         meshes: itemObjs, texturePool, modPath,
       };
-      const onActiveChanged = (reason = 'selection') => window.dispatchEvent(
-        new CustomEvent('mod-viewer-inspector-refresh', {
-          detail: { component: componentDescriptor, reason },
-        }));
-      // Re-renders every mesh's own texture list in this component after the
-      // "manage textures" popup adds/removes an entry from the shared pool
-      // -- a plain add/remove on `texturePool` doesn't itself touch the
-      // already-built DOM rows.
-      const onPoolChange = () => {
-        texListRenderers.forEach(r => r());
-        recomputeTextureRuns(itemObjs);
-        onActiveChanged('pool');
-        saveTextureState(modPath);
+      let materialKind = componentKind;
+      let materialKindInFlight = false;
+      const setMaterialKind = async kind => {
+        if (!componentIdentity || materialKindInFlight) return false;
+        materialKindInFlight = true;
+        try {
+          const result = await saveComponentMaterialKind(
+            modPath, src, componentIdentity, kind);
+          if (result?.error || result?.saved === false) {
+            throw new Error(result?.error || 'material kind was not saved');
+          }
+          materialKind = kind === 'auto' ? null : kind;
+          await options.onMaterialKindChanged?.();
+          return true;
+        } catch (error) {
+          console.error(`Could not save material kind for ${groupName}`, error);
+          return false;
+        } finally {
+          materialKindInFlight = false;
+        }
       };
 
-      const { hdr, masterCb, texBtn, materialSelect } = buildGroupHeader(
-        groupName, itemsWrap, texturePool, modPath, onPoolChange,
-        componentKind, options.onMaterialKindChanged, componentIdentity, src,
+      const setTextureOverride = (mesh, value) => {
+        if (value !== undefined && value !== null && !hasTexture(value)) {
+          console.warn('Texture pool entry missing registry source', value);
+          return false;
+        }
+        mesh.userData.textureHighlightDisabled = false;
+        setManualTexOverride(mesh, value, { notify: false });
+        recomputeTextureRuns(itemObjs);
+        notifyMeshStateChanged(itemObjs);
+        saveTextureState(modPath);
+        return true;
+      };
+      const getTextureOverride = mesh => ({
+        value: mesh.userData.manualTexOverride,
+        automatic: mesh.userData.manualTexOverride === undefined
+          && !mesh.userData.textureHighlightDisabled,
+        resolved: mesh.userData.resolvedTexKey || null,
+      });
+      const onPoolChange = () => {
+        recomputeTextureRuns(itemObjs);
+        notifyMeshStateChanged(itemObjs);
+        window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
+          detail: { component: componentDescriptor, reason: 'pool' },
+        }));
+        saveTextureState(modPath);
+      };
+      Object.assign(componentDescriptor, {
+        getMaterialKind: () => materialKind,
+        setMaterialKind,
+        openTextureManager: () => openTextureModal(
+          groupName, texturePool, modPath, onPoolChange),
+        getTextureOverride,
+        setTextureOverride,
+      });
+
+      const { hdr, masterCb } = buildGroupHeader(
+        groupName, itemsWrap,
         () => window.dispatchEvent(new CustomEvent('mod-viewer-component-selected', {
           detail: { component: componentDescriptor },
         })));
-      componentDescriptor.materialSelect = materialSelect;
-      componentDescriptor.texBtn = texBtn;
+      componentDescriptor.header = hdr;
       container.append(hdr, itemsWrap);
 
       for (const name of names) {
@@ -503,16 +363,13 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
           highlightedDefaults.add(defaultKey);
           mesh.userData.automaticTextureBoundary = true;
         }
-        const { wrap, rebuildTexList, texList } = buildDrawRow(
-          name, groupName, meshes[name], mesh, texturePool, itemCbs, masterCb,
-          itemObjs, onActiveChanged);
-        texListRenderers.push(rebuildTexList);
+        const { wrap } = buildDrawRow(
+          name, groupName, meshes[name], mesh, itemCbs, masterCb);
         itemsWrap.appendChild(wrap);
         registerInspectorMesh(mesh, {
           component: componentDescriptor,
           entry: meshes[name],
           label: mesh.userData.displayName || name,
-          textureList: texList,
         });
       }
       recomputeTextureRuns(itemObjs);
@@ -524,9 +381,10 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
           c.checked = v;
           itemObjs[i].userData.manualVisible = v;
           itemObjs[i].userData.manuallyToggled = true;
-          applyMeshVisibility(itemObjs[i]);
+          applyMeshVisibility(itemObjs[i], { notify: false });
           getMeshView(itemObjs[i])?.syncStateIndicator?.();
         });
+        notifyMeshStateChanged(itemObjs);
       });
 
       groupsUI.push({

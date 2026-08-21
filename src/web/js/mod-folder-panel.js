@@ -54,7 +54,7 @@ export function initModFolderPanel({ switchMod }) {
     toggle.setAttribute('aria-expanded', String(expanded));
     toggle.setAttribute('aria-label', expanded
       ? 'Close Mod Library' : 'Open Mod Library');
-    toggle.replaceChildren(createIcon(expanded ? 'close' : 'library'));
+    toggle.replaceChildren(createIcon(expanded ? 'chevron-left' : 'library'));
     toggle.title = expanded ? 'Close Mod Library' : 'Open Mod Library';
     try { localStorage.setItem(layoutKey, String(expanded)); } catch (_) { /* private mode */ }
   }
@@ -74,8 +74,10 @@ export function initModFolderPanel({ switchMod }) {
   function setActivePath(path) {
     activePath = canonicalPath(path);
     list.querySelectorAll('[data-mod-folder-path]').forEach(row => {
-      row.classList.toggle('active',
-        canonicalPath(row.dataset.modFolderPath) === activePath);
+      const rowPath = canonicalPath(row.dataset.modFolderPath);
+      row.classList.toggle('active', rowPath === activePath);
+      row.classList.toggle('active-descendant', !!activePath && rowPath !== activePath
+        && activePath.startsWith(`${rowPath}/`));
     });
   }
 

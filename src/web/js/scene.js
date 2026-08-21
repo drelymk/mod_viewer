@@ -213,6 +213,16 @@ export function toggleLightHandle() {
   requestRender();
 }
 
+export function setLightMode(mode) {
+  const changed = keyLightController.setMode(mode);
+  if (changed) requestRender();
+  return changed;
+}
+
+export function getLightMode() {
+  return keyLightController.getMode();
+}
+
 export function frameView(meshes = [], direction = null, targetYOffset = 0) {
   cameraFrame.frameView(meshes, direction, targetYOffset);
   requestRender();

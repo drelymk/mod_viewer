@@ -29,9 +29,23 @@ body {
   overflow: hidden; user-select: none;
 }
 
+/* Keep every scrollable surface consistent across the app: docks, library
+ * lists, inspector content, menus, dialogs, and future panels. */
+* {
+  scrollbar-color: #485363 rgba(13,17,23,.45);
+  scrollbar-width: thin;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: rgba(13,17,23,.45); }
+*::-webkit-scrollbar-thumb {
+  background: #485363; border: 2px solid rgba(13,17,23,.45); border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover { background: #66758a; }
+*::-webkit-scrollbar-corner { background: transparent; }
+
 /* ── toolbar ─────────────────────────────────────────────────────────────── */
 #toolbar {
-  position: fixed; top: 0; left: 0; right: 0; height: 46px;
+  position: fixed; top: 0; left: 0; right: 0; height: var(--toolbar-height);
   background: var(--bg-panel); border-bottom: 1px solid var(--border);
   display: flex; align-items: center; padding: 0 14px; gap: 10px; z-index: 100;
 }
@@ -40,8 +54,8 @@ body {
 #mod-path  {
   flex: 1; font-size: 11px; color: var(--text-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  padding: 4px 8px; background: var(--bg-canvas); border-radius: 6px;
-  border: 1px solid var(--border); min-width: 0;
+  padding: 4px 2px; background: transparent; border-radius: 4px;
+  border: 1px solid transparent; min-width: 0;
 }
 #open-btn {
   background: var(--success); color: #fff; border: 1px solid rgba(240,246,252,.15);
@@ -99,7 +113,10 @@ body {
 }
 
 /* ── canvas ──────────────────────────────────────────────────────────────── */
-#canvas-container { position: fixed; top: 46px; left: 0; right: 0; bottom: 28px; }
+#canvas-container {
+  position: fixed; top: var(--toolbar-height); left: 0; right: 0;
+  bottom: var(--footer-height);
+}
 
 #renderer-error {
   display: none; position: absolute; inset: 0; z-index: 180;
@@ -115,7 +132,8 @@ body {
  * no right-side panel is visible and moves left to clear the dock otherwise.
  * It remains a DOM overlay so it stays crisp at every WebView scale factor. */
 #view-gizmo {
-  position: absolute; top: 86px; right: 12px; width: 104px; height: 104px;
+  position: absolute; top: calc(var(--toolbar-height) + 40px); right: 12px;
+  width: 104px; height: 104px;
   z-index: 9; border-radius: 50%; cursor: grab; touch-action: none;
   filter: drop-shadow(0 4px 10px rgba(0,0,0,.34));
   transition: opacity .16s ease, transform .16s ease;
@@ -152,7 +170,7 @@ body {
 
 /* ── footer ──────────────────────────────────────────────────────────────── */
 #footer {
-  position: fixed; bottom: 0; left: 0; right: 0; height: 28px;
+  position: fixed; bottom: 0; left: 0; right: 0; height: var(--footer-height);
   background: #161b22; border-top: 1px solid #30363d;
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 14px; z-index: 100;
@@ -171,7 +189,7 @@ body {
 #left-dock {
   position: fixed; top: 58px; left: 12px; z-index: 110;
   display: flex; flex-direction: row; align-items: flex-start; gap: 10px;
-  max-height: calc(100vh - 104px);
+  max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
 }
 
 /* Mod Folders is an overlay owned by the left dock. It must not become a
@@ -179,7 +197,8 @@ body {
 #mod-folder-dock {
   position: fixed; top: 58px; left: 12px; z-index: 130;
   width: 288px; max-width: min(288px, calc(50vw - 36px));
-  height: calc(100vh - 116px); pointer-events: none;
+  height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
+  pointer-events: none;
 }
 #mod-folder-panel {
   width: 100%; height: 100%; min-height: 0;
@@ -218,6 +237,9 @@ body {
 .mod-folder-row { position: relative; display: flex; align-items: center; gap: 4px; min-height: 26px;
   padding: 2px 0; border-radius: 5px; }
 .mod-folder-row.active { background: rgba(31,111,235,.24); }
+.mod-folder-row.active-descendant {
+  box-shadow: inset 2px 0 0 var(--accent-soft); background: rgba(31,111,235,.09);
+}
 .mod-folder-row.missing { opacity: .58; }
 .mod-folder-expand { width: 20px; height: 22px; flex: 0 0 20px; padding: 0;
   border: 0; background: transparent; color: var(--text-muted); cursor: pointer;
@@ -264,7 +286,7 @@ body {
 /* ── right dock (toggle panel + menu panel) ──────────────────────────────── */
 #right-dock {
   position: fixed; top: 58px; right: 12px; z-index: 10;
-  max-height: calc(100vh - 104px);
+  max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
   display: flex; flex-direction: column; align-items: stretch; gap: 10px;
 }
 
@@ -275,7 +297,7 @@ body {
 }
 #sidebar {
   box-sizing: border-box; width: 288px; max-width: min(288px, calc(50vw - 36px));
-  max-height: calc(100vh - 104px); min-height: 0;
+  max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap)); min-height: 0;
   overflow-x: hidden; overflow-y: auto;
 }
 #camera-panel { display: none !important; }
@@ -324,7 +346,7 @@ body {
 /* ── toolbox (wireframe / grid) ───────────────────────────────────────────── */
 #tool-panel {
   display: block; min-width: 166px; padding: 9px 10px;
-  position: fixed; left: 50%; bottom: calc(28px + 12px);
+  position: fixed; left: 50%; bottom: calc(var(--footer-height) + 12px);
   transform: translateX(-50%); z-index: 200;
 }
 #tool-panel .panel-hdr { margin-bottom: 7px; }
@@ -358,6 +380,15 @@ body {
 #light-btn.off { background: var(--bg-control); color: var(--text); }
 #trackball-btn { background: var(--accent); }
 #trackball-btn.off { background: var(--bg-control); }
+.tool-btn.active,
+#grid-btn:not(.off), #shading-btn:not(.off), #glossy-btn:not(.off),
+#texture-btn:not(.off), #trackball-btn:not(.off),
+#light-btn.double, #light-btn.current {
+  background: rgba(31,111,235,.22); border-color: var(--accent-soft); color: var(--accent-soft);
+}
+#texture-btn.diffuse-only, #light-btn.current {
+  background: rgba(227,179,65,.18); border-color: var(--warning); color: #f2cc72;
+}
 .nav-gizmo-icon { width: 24px; height: 24px; overflow: visible; }
 .nav-gizmo-icon path { fill: none; stroke-width: 1.7; stroke-linecap: round; }
 .nav-gizmo-icon circle { stroke: none; }
@@ -415,6 +446,21 @@ body.right-dock-visible #environment-popover { right: 338px; }
   display: flex; align-items: center; justify-content: center; flex-shrink: 0; padding: 0;
 }
 .icon-btn:hover { background: #1f6feb; }
+.panel-actions { position: relative; display: inline-flex; align-items: center; }
+.panel-action-menu {
+  position: absolute; top: calc(100% + 5px); right: 0; z-index: 260;
+  display: flex; flex-direction: column; gap: 2px; min-width: 170px; padding: 5px;
+  background: rgba(22,27,34,.98); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: 0 10px 28px rgba(0,0,0,.45);
+}
+.panel-action-menu[hidden] { display: none; }
+.panel-action-menu button {
+  min-height: 30px; padding: 5px 8px; border: 0; border-radius: var(--radius-sm);
+  color: var(--text); background: transparent; text-align: left; cursor: pointer;
+  font: inherit; font-size: 11px; white-space: nowrap;
+}
+.panel-action-menu button:hover:not(:disabled) { background: var(--surface-active); }
+.panel-action-menu button:disabled { color: var(--text-muted); opacity: .55; cursor: default; }
 
 /* Collapse chevron, shared by both panels. */
 .group-toggle {
@@ -451,15 +497,7 @@ body.right-dock-visible #environment-popover { right: 338px; }
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding-right: 0;
 }
-.group-tex-btn {
-  position: absolute; top: 0; right: 0;
-  background: #21262d; border: 1px solid #30363d; color: #8b949e;
-  border-radius: 4px; width: 18px; height: 18px; font-size: 11px; padding: 0;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.group-tex-btn:hover { background: #30363d; color: #e6edf3; }
-.group-tex-btn.active { background: #1f6feb; color: #fff; border-color: rgba(240,246,252,.15); }
+.group-hdr.selected { color: var(--accent-soft); background: rgba(31,111,235,.12); border-radius: 4px; }
 .group-items { display: flex; flex-direction: column; gap: 3px; overflow: hidden; }
 .group-items.collapsed { display: none; }
 .draw-item-wrap { display: flex; flex-direction: column; }
@@ -478,25 +516,11 @@ body.right-dock-visible #environment-popover { right: 338px; }
   border-radius: 3px; font: inherit; outline: none;
 }
 
-.component-material-kind-control {
-  position: absolute; top: 0; right: 24px; width: 78px; min-width: 0;
-  box-sizing: border-box;
-}
 .material-kind-select {
   min-width: 0; width: 78px; padding: 1px 3px; color: #cdd9e5; background: #161b22;
   border: 1px solid #30363d; border-radius: 3px; font: inherit; cursor: pointer;
 }
 .material-kind-select:focus { border-color: #58a6ff; outline: none; }
-
-/* Per-mesh texture picker: one level deeper than .draw-item's own indent. */
-.tex-list { display: flex; flex-direction: column; gap: 2px; padding-left: 38px; margin: 2px 0 4px; }
-.tex-list.collapsed { display: none; }
-.tex-item {
-  font-size: 10px; color: #8b949e; cursor: pointer; padding: 2px 6px;
-  border-radius: 4px;
-}
-.tex-item:hover { background: #21262d; color: #e6edf3; }
-.tex-item.selected { background: rgba(88,166,255,.15); color: var(--accent-soft); outline: 1px solid var(--accent-soft); }
 
 /* Per-component "manage textures" popup (texture-modal.js) -- reuses the
  * toggle modal's .modal-backdrop/.modal chrome. */
@@ -639,7 +663,8 @@ body.right-dock-visible #environment-popover { right: 338px; }
 
 /* ── loading overlay ─────────────────────────────────────────────────────── */
 #loading {
-  display: none; position: fixed; inset: 46px 0 28px; z-index: 200;
+  display: none; position: fixed;
+  inset: var(--toolbar-height) 0 var(--footer-height); z-index: 200;
   background: rgba(13,17,23,.8); backdrop-filter: blur(4px);
   flex-direction: column; align-items: center; justify-content: center; gap: 16px;
 }
@@ -856,6 +881,10 @@ body.feature-modify-toggle-off .present-author-actions { display: none; }
  * behavior contract for the viewer modules; these tokens provide the shared
  * visual language around them. */
 :root {
+  --toolbar-height: 46px;
+  --footer-height: 28px;
+  --dock-gap: 30px;
+  --viewport-toolbar-width: 146px;
   --surface-raised: #1c232d;
   --surface-hover: #263241;
   --surface-active: rgba(88,166,255,.16);
@@ -917,7 +946,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 
 #right-dock {
   display: none; width: 316px; max-width: min(316px, calc(50vw - 24px));
-  gap: 8px; max-height: calc(100vh - 104px);
+  gap: 8px; max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
 }
 #right-dock.ui-visible { display: flex; }
 .right-dock-tabs {
@@ -941,10 +970,14 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 #inspector-panel[hidden], #controls-panel[hidden] { display: none !important; }
 #controls-panel {
   display: flex; flex-direction: column; align-items: stretch; gap: 10px;
-  min-height: 0; max-height: calc(100vh - 104px); overflow: hidden;
+  min-height: 0;
+  max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
+  overflow-y: auto; overflow-x: hidden;
 }
 #controls-panel > #present-panel, #controls-panel > #toggle-panel,
-#controls-panel > #menu-panel { width: 100%; max-width: none; }
+#controls-panel > #menu-panel {
+  width: 100%; max-width: none; flex: 0 0 auto; max-height: none; overflow: visible;
+}
 .inspector-empty, .mod-folder-empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 7px; min-height: 150px; padding: 20px; text-align: center; color: var(--text-muted);
@@ -1023,15 +1056,19 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 .ui-popover-option:hover, .ui-popover-option.selected { color: var(--text); background: var(--surface-active); }
 #tool-panel.viewport-toolbar {
-  left: auto; right: 12px; bottom: 40px; transform: none; min-width: 0;
+  left: auto; right: 12px; bottom: 40px; transform: none;
+  width: var(--viewport-toolbar-width); min-width: 0;
   display: flex; flex-direction: column; align-items: center;
-  max-height: calc(100vh - 112px); overflow-y: auto;
+  max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - 36px);
+  overflow-y: auto;
   padding: 7px; border-radius: var(--radius-md); background: rgba(13,17,23,.9);
 }
 #tool-panel.viewport-toolbar .panel-hdr { display: none; }
-#tool-panel.viewport-toolbar #tool-buttons { flex-direction: column; gap: 5px; }
+#tool-panel.viewport-toolbar #tool-buttons {
+  display: grid; grid-template-columns: repeat(3, 38px); gap: 5px;
+}
 #tool-panel.viewport-toolbar .viewport-camera-buttons {
-  flex-direction: column; padding: 0 0 7px; margin: 0 0 2px;
+  flex-direction: row; padding: 0 0 7px; margin: 0 0 7px;
   border-right: 0; border-bottom: 1px solid var(--border);
 }
 #tool-panel.viewport-toolbar .camera-btn {
@@ -1040,12 +1077,15 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 #tool-panel.viewport-toolbar .camera-btn svg { width: 17px; height: 17px; }
 #tool-panel.viewport-toolbar .camera-btn span { font-size: 8px; }
 .tool-popover {
-  position: fixed; top: auto; right: 72px; bottom: 104px;
+  position: fixed; top: auto;
+  right: calc(var(--viewport-toolbar-width) + 20px);
+  bottom: calc(var(--footer-height) + 76px);
   min-width: 170px;
 }
-body.right-dock-visible #tool-panel.viewport-toolbar,
 body.right-dock-visible #tool-panel.viewport-toolbar { right: 338px; }
-body.right-dock-visible .tool-popover { right: 398px; }
+body.right-dock-visible .tool-popover {
+  right: calc(338px + var(--viewport-toolbar-width) + 8px);
+}
 
 @media (max-width: 760px) {
   #toolbar { gap: 8px; padding: 0 10px; }
@@ -1059,7 +1099,11 @@ body.right-dock-visible .tool-popover { right: 398px; }
   #right-dock { right: 8px; width: min(316px, calc(100vw - 16px)); }
   #tool-panel.viewport-toolbar { right: 8px; }
   body.right-dock-visible #tool-panel.viewport-toolbar { right: min(324px, calc(100vw - 8px)); }
-  body.right-dock-visible .tool-popover { right: min(384px, calc(100vw - 8px)); }
+  #tool-panel.viewport-toolbar { right: 8px; }
+  .tool-popover { right: calc(var(--viewport-toolbar-width) + 16px); }
+  body.right-dock-visible .tool-popover {
+    right: min(478px, calc(100vw - 8px));
+  }
   body.right-dock-visible #environment-popover { right: min(324px, calc(100vw - 8px)); }
   #empty-actions { flex-direction: column; width: 160px; }
   .footer-status { max-width: 70vw; }

@@ -22,22 +22,49 @@ async function removeKey() {
   if (current.onChange) await current.onChange();
 }
 
-$('present-action-btn').addEventListener('click', async (event) => {
+function closeKeyMenu() {
+  const menu = $('present-key-menu');
+  const action = $('present-action-btn');
+  if (!menu || !action) return;
+  menu.hidden = true;
+  action.setAttribute('aria-expanded', 'false');
+}
+
+function openKeyMenu() {
+  const menu = $('present-key-menu');
+  const action = $('present-action-btn');
+  if (!menu || !action) return;
+  menu.hidden = !menu.hidden;
+  action.setAttribute('aria-expanded', String(!menu.hidden));
+}
+
+$('present-action-btn').addEventListener('click', event => {
   event.stopPropagation();
-  if (!current.modPath) return;
-  if (current.present?.item) {
-    if ((current.present.item.missing_inis || []).length) {
-      openPresentModal({ mode: 'complete', modPath: current.modPath,
-        present: current.present, item: current.present.item,
-        onSaved: current.onChange });
-      return;
-    }
-    await removeKey();
-    return;
-  }
+  openKeyMenu();
+});
+$('present-key-add').addEventListener('click', () => {
+  closeKeyMenu();
   if (!(current.present?.target_inis || []).length) return;
   openPresentModal({ mode: 'add', modPath: current.modPath,
     present: current.present, onSaved: current.onChange });
+});
+$('present-key-edit').addEventListener('click', () => {
+  closeKeyMenu();
+  const item = current.present?.item;
+  if (!item) return;
+  const incomplete = (item.missing_inis || []).length > 0;
+  openPresentModal({ mode: incomplete ? 'complete' : 'edit', modPath: current.modPath,
+    present: current.present, item, onSaved: current.onChange });
+});
+$('present-key-remove').addEventListener('click', () => {
+  closeKeyMenu();
+  if (current.present?.item) void removeKey();
+});
+document.addEventListener('click', event => {
+  if (!event.target.closest('.present-key-actions')) closeKeyMenu();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeKeyMenu();
 });
 
 async function capture(item, position, name, allowDuplicate = false) {
@@ -87,19 +114,7 @@ function buildItem(item) {
     badge.textContent = `${label}: ${value}`;
     fields.appendChild(badge);
   }
-  const headerActions = document.createElement('span');
-  headerActions.className = 'toggle-actions present-author-actions';
-  const editKey = document.createElement('button');
-  editKey.className = 'toggle-icon-btn';
-  editKey.appendChild(createIcon('edit'));
-  editKey.title = 'Edit PRESENT key binding';
-  editKey.setAttribute('aria-label', 'Edit PRESENT key binding');
-  editKey.addEventListener('click', () => openPresentModal({
-    mode: 'edit', modPath: current.modPath, present: current.present, item,
-    onSaved: current.onChange,
-  }));
-  headerActions.append(editKey);
-  header.append(fields, headerActions);
+  header.append(fields);
 
   const row = document.createElement('div');
   row.className = 'toggle-row';
@@ -165,9 +180,10 @@ function buildItem(item) {
     if (current.onChange) await current.onChange();
   });
   const replace = document.createElement('button');
-  replace.textContent = 'Edit';
+  replace.textContent = 'Update';
   replace.disabled = !(item.capture_vars || []).length;
-  replace.title = replace.disabled ? 'This mod has no key or menu toggle states to capture.' : '';
+  replace.title = replace.disabled ? 'This mod has no key or menu toggle states to capture.'
+    : 'Replace this present with the current key and menu toggle states.';
   replace.addEventListener('click', async () => {
     const chosen = await inputConfirmDialog(
       `Replace ${item.names[position] || `Present ${position + 1}`} with the current key and menu toggle states?`,
@@ -215,12 +231,21 @@ export function buildPresentPanel(present, context = {}) {
   panel.style.display = 'block';
   const item = current.present.item;
   const incomplete = !!item && (item.missing_inis || []).length > 0;
-  action.replaceChildren(createIcon(item && !incomplete ? 'delete' : 'plus'));
-  action.title = item
-    ? (incomplete ? 'Complete PRESENT in the remaining INI files' : 'Delete PRESENT')
-    : 'Add PRESENT';
+  const canAdd = !item && (current.present.target_inis || []).length > 0;
+  const addKey = $('present-key-add');
+  const editKey = $('present-key-edit');
+  const removeKeyButton = $('present-key-remove');
+  action.replaceChildren(createIcon('more'));
+  action.title = 'More PRESENT actions';
   action.setAttribute('aria-label', action.title);
-  action.disabled = !item && !(current.present.target_inis || []).length;
+  action.disabled = false;
+  addKey.hidden = !!item;
+  addKey.disabled = !canAdd;
+  editKey.hidden = !item;
+  editKey.disabled = !item;
+  editKey.textContent = incomplete ? 'Complete PRESENT' : 'Edit key binding';
+  removeKeyButton.hidden = !item;
+  removeKeyButton.disabled = !item;
 
   if (!item) {
     const empty = document.createElement('div');

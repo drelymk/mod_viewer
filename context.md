@@ -217,6 +217,9 @@ machine-specific paths or facts that are obvious from the source.
   Present, Toggle and Menu state. Keep selection changes event-driven so the
   Inspector follows the selected component or mesh without taking ownership of
   mesh creation or texture state.
+- Authoritative mesh visibility, reset, refresh and texture-override mutations
+  must publish one shared frontend state notification so Inspector values cannot
+  drift from the rendered model or MESHES state.
 - Viewport camera actions (Reset, Turn and Tilt) belong in the compact viewport
   toolbar with the render and navigation tools. Do not restore a separate
   Orientation panel when changing camera behavior.
