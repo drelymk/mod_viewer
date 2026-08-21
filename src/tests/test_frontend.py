@@ -2348,8 +2348,30 @@ def test_mod_folder_add_edit_delete_modal_flow(
         page.locator(".mod-folder-select", has_text="Replacement").wait_for()
 
         page.locator("[aria-label='More actions for Original']").click()
+        original_menu = page.locator(
+            ".mod-folder-node", has_text="Original").locator(
+            ".mod-folder-action-menu")
+        assert page.locator(
+            "[aria-label='More actions for Original']").get_attribute(
+                "aria-expanded") == "true"
+        assert original_menu.evaluate("menu => getComputedStyle(menu).position") == "absolute"
+        assert original_menu.evaluate(
+            "menu => getComputedStyle(menu).flexDirection") == "column"
+        menu_widths = original_menu.evaluate("""menu => {
+          const menuBox = menu.getBoundingClientRect();
+          return [...menu.querySelectorAll('button')].map(button => ({
+            button: button.getBoundingClientRect().width,
+            menu: menuBox.width,
+          }));
+        }""")
+        assert all(item["button"] >= item["menu"] - 12 for item in menu_widths)
+        assert original_menu.locator("button").all_inner_texts() == [
+            "Edit", "Remove from Mod Library"]
         page.locator(".mod-folder-node").filter(has_text="Original").locator(
             ".mod-folder-action-menu button", has_text="Edit").click()
+        assert page.locator(
+            "[aria-label='More actions for Original']").get_attribute(
+                "aria-expanded") == "false"
         page.locator("#mfm-name").fill("Renamed")
         page.locator("#mfm-save").click()
         page.locator(".mod-folder-select", has_text="Renamed").wait_for()
@@ -2376,7 +2398,7 @@ def test_inspector_follows_component_and_mesh_selection(
             "viewport-camera-buttons")
         assert not page.locator("#camera-panel").is_visible()
         assert page.locator("#tool-panel").evaluate(
-            "panel => getComputedStyle(panel).flexDirection") == "column"
+            "panel => getComputedStyle(panel).flexDirection") == "row"
         assert page.locator("#health-btn .ui-icon").count() == 1
         assert page.locator("#wire-btn").get_attribute("aria-pressed") == "false"
         assert page.locator("#interaction-help").inner_text() == "LMB Orbit · RMB Pan · Wheel Zoom"
@@ -2418,21 +2440,48 @@ def test_inspector_follows_component_and_mesh_selection(
         page.locator(".group-hdr .group-name").first.click()
         page.locator("#inspector-content").wait_for()
         assert "Draw calls" in page.locator("#inspector-content").inner_text()
+        assert page.locator("#inspector-empty").is_hidden()
 
         page.locator(".draw-item").first.click()
         assert page.locator("#inspector-content .inspector-header h3").inner_text()
         assert "Body A >" in page.locator("#selected-mesh-status").inner_text()
         assert page.locator(".draw-item.selected").count() == 1
+        page.evaluate("import('./js/selection.js').then(({clearSelection}) => clearSelection())")
+        assert page.locator("#inspector-empty").is_visible()
+        assert page.locator("#inspector-content").is_hidden()
 
         page.locator(".group-hdr .group-name").first.click()
         assert page.locator(".draw-item.selected").count() == 0
         assert "selected" in page.locator(".group-hdr").first.get_attribute("class")
         assert page.locator("#inspector-content .inspector-row", has_text="1 of 1").count() == 1
+        assert page.locator("#inspector-empty").is_hidden()
 
         page.locator(".draw-item .mesh-state-btn").first.click()
         assert page.locator("#inspector-content .inspector-row", has_text="0 of 1").count() == 1
+        eye = page.locator(".draw-item .mesh-state-btn").first
+        assert eye.get_attribute("aria-pressed") == "false"
+        assert "state-hidden" in eye.get_attribute("class")
+        assert "state-manual" in eye.get_attribute("class")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.manuallyToggled") is True
         page.locator("#reset-state-btn").click()
         assert page.locator("#inspector-content .inspector-row", has_text="1 of 1").count() == 1
+        assert eye.get_attribute("aria-pressed") == "true"
+        assert "state-hidden" not in eye.get_attribute("class")
+        assert "state-manual" not in eye.get_attribute("class")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.manuallyToggled") is False
+
+        eye.click()
+        eye.click()
+        assert eye.get_attribute("aria-pressed") == "true"
+        assert "state-manual" not in eye.get_attribute("class")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.manuallyToggled") is False
+        page.evaluate("import('./js/visibility.js').then(({refreshAll}) => refreshAll())")
+        assert eye.get_attribute("aria-pressed") == "true"
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.manuallyToggled") is False
 
         assert page.locator(".group-hdr .material-kind-select").count() == 0
         assert page.locator(".group-hdr .group-tex-btn").count() == 0
@@ -2471,6 +2520,44 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
             "leftDockTop": "58px",
             "rightDockTop": "58px",
         }
+        toolbar_layout = page.evaluate("""() => {
+          const rect = selector => document.querySelector(selector).getBoundingClientRect();
+          const style = selector => getComputedStyle(document.querySelector(selector));
+          const toolbar = rect('#tool-panel');
+          const camera = rect('#viewport-camera-buttons');
+          const tools = rect('#tool-buttons');
+          return {
+            centered: Math.abs(toolbar.left + toolbar.width / 2 - window.innerWidth / 2) < 1,
+            sameRow: Math.abs(camera.top + camera.height / 2
+              - tools.top - tools.height / 2) < 1,
+            toolbarDirection: style('#tool-panel').flexDirection,
+            toolbarWrap: style('#tool-panel').flexWrap,
+            toolsDisplay: style('#tool-buttons').display,
+            toolsDirection: style('#tool-buttons').flexDirection,
+            cameraLabelsHidden: [...document.querySelectorAll(
+              '#viewport-camera-buttons .camera-btn span')]
+              .every(span => getComputedStyle(span).display === 'none'),
+          };
+        }""")
+        assert toolbar_layout == {
+            "centered": True,
+            "sameRow": True,
+            "toolbarDirection": "row",
+            "toolbarWrap": "nowrap",
+            "toolsDisplay": "flex",
+            "toolsDirection": "row",
+            "cameraLabelsHidden": True,
+        }
+        toolbar_center = page.evaluate("""() => {
+          const box = document.querySelector('#tool-panel').getBoundingClientRect();
+          return box.left + box.width / 2;
+        }""")
+        page.locator("#inspector-tab").click()
+        page.wait_for_function("document.querySelector('#inspector-panel').hidden === false")
+        assert abs(page.evaluate("""() => {
+          const box = document.querySelector('#tool-panel').getBoundingClientRect();
+          return box.left + box.width / 2;
+        }""") - toolbar_center) < 1
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
         page.wait_for_timeout(250)
 
@@ -2490,6 +2577,16 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
         page.locator("#texture-btn").click()
         page.locator("#texture-popover:not([hidden])").wait_for()
         assert page.locator("#texture-btn").get_attribute("aria-expanded") == "true"
+        texture_position = page.evaluate("""() => {
+          const button = document.querySelector('#texture-btn').getBoundingClientRect();
+          const popover = document.querySelector('#texture-popover').getBoundingClientRect();
+          return {
+            above: popover.bottom <= button.top,
+            within: popover.left >= 0 && popover.right <= window.innerWidth
+              && popover.top >= 0 && popover.bottom <= window.innerHeight,
+          };
+        }""")
+        assert texture_position == {"above": True, "within": True}
         page.locator("#texture-popover .ui-popover-option", has_text="Diffuse only").click()
         assert page.locator("#texture-btn").get_attribute("aria-label") == (
             "Textures: diffuse only")
@@ -2499,12 +2596,29 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
         page.locator("#light-btn").click()
         page.locator("#light-popover:not([hidden])").wait_for()
         assert page.locator("#light-btn").get_attribute("aria-expanded") == "true"
+        light_position = page.evaluate("""() => {
+          const button = document.querySelector('#light-btn').getBoundingClientRect();
+          const popover = document.querySelector('#light-popover').getBoundingClientRect();
+          return {
+            above: popover.bottom <= button.top,
+            within: popover.left >= 0 && popover.right <= window.innerWidth
+              && popover.top >= 0 && popover.bottom <= window.innerHeight,
+          };
+        }""")
+        assert light_position == {"above": True, "within": True}
         assert page.locator("#light-popover .ui-popover-option").all_inner_texts() == [
             "Bright", "Normal", "Off"]
         page.locator("#light-popover .ui-popover-option", has_text="Normal").click()
         assert page.locator("#light-popover").is_hidden()
         assert page.locator("#light-btn").get_attribute("aria-expanded") == "false"
         assert page.locator("#light-btn").get_attribute("aria-label").startswith("Key light: normal")
+
+        page.locator("#light-btn").click()
+        page.locator("#light-popover:not([hidden])").wait_for()
+        assert page.locator("#light-popover .ui-popover-option").all_inner_texts() == [
+            "Bright", "Normal", "Off"]
+        page.locator("#light-btn").click()
+        assert page.locator("#light-popover").is_hidden()
 
         page.locator("#environment-btn").click()
         page.locator("#environment-popover:not([hidden])").wait_for()
@@ -2515,6 +2629,10 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
 
         page.set_viewport_size({"width": 640, "height": 720})
         page.locator("#toolbar-more").wait_for()
+        assert page.locator("#tool-panel").evaluate(
+            "panel => getComputedStyle(panel).flexWrap") == "nowrap"
+        assert page.locator("#tool-panel").evaluate(
+            "panel => getComputedStyle(panel).overflowX") == "auto"
         assert page.locator("#health-btn .health-label").is_hidden()
         page.locator("#toolbar-more").click()
         assert not page.locator("#toolbar-overflow").is_hidden()

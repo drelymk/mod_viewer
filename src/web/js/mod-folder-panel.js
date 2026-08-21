@@ -63,6 +63,8 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     if (event.target.closest('.mod-folder-actions')) return;
     list.querySelectorAll('.mod-folder-action-menu').forEach(menu => {
       menu.hidden = true;
+      menu.parentElement?.querySelector(':scope > .mod-folder-more')
+        ?.setAttribute('aria-expanded', 'false');
     });
   });
 
@@ -199,31 +201,43 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
       more.appendChild(createIcon('more'));
       more.title = 'More folder actions';
       more.setAttribute('aria-label', `More actions for ${entry.name}`);
+      more.setAttribute('aria-haspopup', 'menu');
+      more.setAttribute('aria-expanded', 'false');
       const menu = document.createElement('span');
       menu.className = 'mod-folder-action-menu';
+      menu.setAttribute('role', 'menu');
       menu.hidden = true;
       const menuEdit = document.createElement('button');
       menuEdit.type = 'button';
+      menuEdit.setAttribute('role', 'menuitem');
       menuEdit.textContent = 'Edit';
       const menuRemove = document.createElement('button');
       menuRemove.type = 'button';
+      menuRemove.setAttribute('role', 'menuitem');
       menuRemove.textContent = 'Remove from Mod Library';
       menu.append(menuEdit, menuRemove);
       more.addEventListener('click', event => {
         event.stopPropagation();
         list.querySelectorAll('.mod-folder-action-menu').forEach(candidate => {
-          if (candidate !== menu) candidate.hidden = true;
+          if (candidate !== menu) {
+            candidate.hidden = true;
+            candidate.parentElement?.querySelector(':scope > .mod-folder-more')
+              ?.setAttribute('aria-expanded', 'false');
+          }
         });
         menu.hidden = !menu.hidden;
+        more.setAttribute('aria-expanded', String(!menu.hidden));
       });
       menuEdit.addEventListener('click', event => {
         event.stopPropagation();
         menu.hidden = true;
+        more.setAttribute('aria-expanded', 'false');
         edit.click();
       });
       menuRemove.addEventListener('click', event => {
         event.stopPropagation();
         menu.hidden = true;
+        more.setAttribute('aria-expanded', 'false');
         remove.click();
       });
       actions.append(edit, remove, more, menu);

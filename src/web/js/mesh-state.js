@@ -102,9 +102,8 @@ export function applyTextureVariant(mesh) {
   });
 }
 
-// The MESHES control is the direct visibility source. Gating conditions only
-// re-baseline manualVisible during refreshMeshes(), so a manual click can
-// always reveal a currently gated mesh.
+// The MESHES control is the direct visibility source. Automatic refreshes
+// re-baseline visibility and clear any transient manual eye-click marker.
 export function applyMeshVisibility(mesh, { notify = true } = {}) {
   mesh.visible = mesh.userData.manualVisible !== false;
   if (notify) notifyMeshStateChanged([mesh]);
@@ -152,9 +151,8 @@ function applyShapeTargets(mesh) {
 
 export function refreshMeshes() {
   activeMeshes.forEach(mesh => {
-    if ((mesh.userData.conditions || []).length > 0) {
-      mesh.userData.manualVisible = conditionsSatisfied(mesh);
-    }
+    mesh.userData.manualVisible = conditionsSatisfied(mesh);
+    mesh.userData.manuallyToggled = false;
     applyMeshVisibility(mesh, { notify: false });
     if (!mesh.userData.defaultCaptured) {
       mesh.userData.loadedVisible = mesh.visible;

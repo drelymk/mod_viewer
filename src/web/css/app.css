@@ -246,7 +246,9 @@ body {
   background: transparent; color: var(--text); text-align: left; cursor: pointer;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; }
 .mod-folder-select:hover { color: var(--accent-soft); }
-.mod-folder-actions { display: flex; gap: 3px; flex: 0 0 auto; }
+.mod-folder-actions {
+  position: relative; display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+}
 .mod-folder-actions button { width: 20px; height: 20px; padding: 0; border: 0;
   border-radius: 4px; background: transparent; color: var(--text-muted); cursor: pointer; }
 .mod-folder-actions button .ui-icon { width: 16px; height: 16px; }
@@ -255,15 +257,20 @@ body {
 .mod-folder-actions > .mod-folder-remove { display: none; }
 .mod-folder-more { display: flex; }
 .mod-folder-action-menu {
-  position: absolute; top: calc(100% + 3px); right: 0; z-index: 180;
-  display: flex; flex-direction: column; gap: 2px; min-width: 100px; padding: 4px;
-  background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  box-shadow: 0 8px 20px rgba(0,0,0,.45);
+  position: absolute; top: calc(100% + 5px); right: 0; z-index: 180;
+  display: flex; flex-direction: column; gap: 2px; width: max-content;
+  min-width: 170px; max-width: calc(100vw - 16px); padding: 5px;
+  background: rgba(22,27,34,.98); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: 0 10px 28px rgba(0,0,0,.45);
 }
 .mod-folder-action-menu[hidden] { display: none; }
 .mod-folder-action-menu button {
-  width: auto; height: 28px; padding: 0 8px; text-align: left; color: var(--text);
+  display: block; width: 100%; height: auto; min-height: 30px; padding: 5px 8px;
+  border: 0; border-radius: var(--radius-sm); color: var(--text);
+  background: transparent; text-align: left; cursor: pointer;
+  font: inherit; font-size: 11px; white-space: nowrap;
 }
+.mod-folder-action-menu button:hover { background: var(--surface-active); }
 .mod-folder-children { display: flex; flex-direction: column; gap: 1px; margin-left: 20px; }
 .mod-folder-children[hidden] { display: none; }
 .mod-folder-child-error { padding: 4px 4px 4px 20px; color: var(--danger); font-size: 10px; }
@@ -359,7 +366,7 @@ body {
 .mesh-state-btn { width: 22px; height: 22px; min-height: 22px; padding: 0; border: 0; background: transparent; color: var(--text); cursor: pointer; flex-shrink: 0; }
 .mesh-state-btn .ui-icon { width: 16px; height: 16px; }
 .mesh-state-btn.state-hidden { color: var(--text-muted); opacity: .7; }
-.mesh-state-btn.state-manual { color: var(--accent-soft); }
+.mesh-state-btn.state-manual { color: var(--accent-soft); opacity: 1; }
 .mesh-state-btn:hover { filter: brightness(1.25); transform: scale(1.08); }
 #wire-btn.active { background: var(--accent); }
 #outline-btn.active { background: var(--accent); }
@@ -881,7 +888,6 @@ body.feature-modify-toggle-off .present-author-actions { display: none; }
   --toolbar-height: 54px;
   --footer-height: 28px;
   --dock-gap: 30px;
-  --viewport-toolbar-width: 146px;
   --surface-raised: #1c232d;
   --surface-hover: #263241;
   --surface-active: rgba(88,166,255,.16);
@@ -984,6 +990,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   gap: 7px; min-height: 150px; padding: 20px; text-align: center; color: var(--text-muted);
   font-size: 11px; line-height: 1.4;
 }
+#inspector-empty[hidden] { display: none; }
 .inspector-empty strong, .mod-folder-empty strong { color: var(--text); font-size: 12px; }
 .empty-icon {
   display: grid; place-items: center; width: 34px; height: 34px; margin-bottom: 3px;
@@ -1020,9 +1027,11 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .mod-folder-row { min-height: 32px; padding: 3px 0; }
 .mod-folder-select { min-height: 28px; }
 .mod-folder-expand { min-height: 0; }
-.mod-folder-actions button { width: 28px; height: 28px; }
-.mod-folder-actions button { min-height: 0; }
-.mod-folder-actions { gap: 4px; }
+.mod-folder-actions > .mod-folder-edit,
+.mod-folder-actions > .mod-folder-remove,
+.mod-folder-actions > .mod-folder-more {
+  width: 28px; height: 28px; min-height: 0;
+}
 
 #empty-actions {
   position: fixed; top: calc(50% + 54px); left: 50%; z-index: 20;
@@ -1057,35 +1066,34 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 .ui-popover-option:hover, .ui-popover-option.selected { color: var(--text); background: var(--surface-active); }
 #tool-panel.viewport-toolbar {
-  left: auto; right: 12px; bottom: 40px; transform: none;
-  width: var(--viewport-toolbar-width); min-width: 0;
-  display: flex; flex-direction: column; align-items: center;
-  max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - 36px);
-  overflow-y: auto;
-  padding: 7px; border-radius: var(--radius-md); background: rgba(13,17,23,.9);
+  left: 50%; right: auto; bottom: calc(var(--footer-height) + 10px);
+  transform: translateX(-50%);
+  width: auto; max-width: calc(100vw - 24px); min-width: 0;
+  display: flex; flex-direction: row; align-items: center; flex-wrap: nowrap;
+  max-height: none; overflow-x: auto; overflow-y: hidden;
+  padding: 5px 6px; border-radius: var(--radius-md); background: rgba(13,17,23,.9);
 }
 #tool-panel.viewport-toolbar .panel-hdr { display: none; }
 #tool-panel.viewport-toolbar #tool-buttons {
-  display: grid; grid-template-columns: repeat(3, 38px); gap: 5px;
+  display: flex; flex: 0 0 auto; flex-direction: row; align-items: center; gap: 4px;
 }
 #tool-panel.viewport-toolbar .viewport-camera-buttons {
-  flex-direction: row; padding: 0 0 7px; margin: 0 0 7px;
-  border-right: 0; border-bottom: 1px solid var(--border);
+  flex: 0 0 auto; flex-direction: row; align-items: center; gap: 4px;
+  padding: 0 6px 0 0; margin: 0 6px 0 0;
+  border-right: 1px solid var(--border); border-bottom: 0;
 }
 #tool-panel.viewport-toolbar .camera-btn {
-  width: 38px; height: 38px; padding: 4px 2px 3px;
+  width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0;
 }
-#tool-panel.viewport-toolbar .camera-btn svg { width: 17px; height: 17px; }
-#tool-panel.viewport-toolbar .camera-btn span { font-size: 8px; }
+#tool-panel.viewport-toolbar .camera-btn svg,
+#tool-panel.viewport-toolbar .tool-btn .ui-icon { width: 17px; height: 17px; }
+#tool-panel.viewport-toolbar .camera-btn span { display: none; }
+#tool-panel.viewport-toolbar .tool-btn {
+  width: 32px; height: 32px; min-width: 32px; min-height: 32px; font-size: 16px;
+}
 .tool-popover {
-  position: fixed; top: auto;
-  right: calc(var(--viewport-toolbar-width) + 20px);
-  bottom: calc(var(--footer-height) + 76px);
-  min-width: 170px;
-}
-body.right-dock-visible #tool-panel.viewport-toolbar { right: 338px; }
-body.right-dock-visible .tool-popover {
-  right: calc(338px + var(--viewport-toolbar-width) + 8px);
+  position: fixed; top: auto; right: auto; bottom: auto; left: auto;
+  min-width: 170px; max-width: calc(100vw - 16px);
 }
 
 @media (max-width: 760px) {
@@ -1098,14 +1106,12 @@ body.right-dock-visible .tool-popover {
   #ini-view-btn { font-size: 0; }
   #ini-view-btn::before { content: 'INI'; font-size: 12px; }
   #right-dock { right: 8px; width: min(316px, calc(100vw - 16px)); }
-  #tool-panel.viewport-toolbar { right: 8px; }
-  body.right-dock-visible #tool-panel.viewport-toolbar { right: min(324px, calc(100vw - 8px)); }
-  #tool-panel.viewport-toolbar { right: 8px; }
-  .tool-popover { right: calc(var(--viewport-toolbar-width) + 16px); }
-  body.right-dock-visible .tool-popover {
-    right: min(478px, calc(100vw - 8px));
-  }
   body.right-dock-visible #environment-popover { right: min(324px, calc(100vw - 8px)); }
+  #tool-panel.viewport-toolbar { max-width: calc(100vw - 16px); padding: 4px 5px; }
+  #tool-panel.viewport-toolbar .camera-btn,
+  #tool-panel.viewport-toolbar .tool-btn {
+    width: 30px; height: 30px; min-width: 30px; min-height: 30px;
+  }
   #empty-actions { flex-direction: column; width: 160px; }
   .footer-status { max-width: 70vw; }
   #interaction-help { display: none; }

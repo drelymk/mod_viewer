@@ -109,11 +109,26 @@ function initToolPopovers() {
     if (!popover) return;
     popover.hidden = true;
   };
+  let activeToolPopover = null;
+  const positionPopover = (popover, button) => {
+    if (!popover || !button) return;
+    const buttonRect = button.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    const gutter = 8;
+    const maxLeft = Math.max(gutter, window.innerWidth - popoverRect.width - gutter);
+    const desiredLeft = buttonRect.left
+      + (buttonRect.width - popoverRect.width) / 2;
+    const left = Math.min(maxLeft, Math.max(gutter, desiredLeft));
+    const top = Math.max(gutter, buttonRect.top - popoverRect.height - gutter);
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+  };
   const closeAll = () => {
     close(texturePopover);
     close(lightPopover);
     textureButton?.setAttribute('aria-expanded', 'false');
     lightButton?.setAttribute('aria-expanded', 'false');
+    activeToolPopover = null;
   };
 
   function toggleTexturePopover() {
@@ -138,6 +153,8 @@ function initToolPopovers() {
     });
     texturePopover.hidden = false;
     textureButton?.setAttribute('aria-expanded', 'true');
+    activeToolPopover = { popover: texturePopover, button: textureButton };
+    positionPopover(texturePopover, textureButton);
   }
 
   function toggleLightPopover() {
@@ -145,6 +162,7 @@ function initToolPopovers() {
     const wasOpen = !lightPopover.hidden;
     closeAll();
     if (wasOpen) return;
+    lightPopover.replaceChildren();
     [['double', 'Bright'], ['current', 'Normal'], ['off', 'Off']].forEach(([mode, label]) => {
       const option = document.createElement('button');
       option.type = 'button';
@@ -160,6 +178,8 @@ function initToolPopovers() {
     });
     lightPopover.hidden = false;
     lightButton?.setAttribute('aria-expanded', 'true');
+    activeToolPopover = { popover: lightPopover, button: lightButton };
+    positionPopover(lightPopover, lightButton);
   }
 
   textureButton?.setAttribute('aria-haspopup', 'menu');
@@ -174,6 +194,11 @@ function initToolPopovers() {
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') closeAll();
+  });
+  window.addEventListener('resize', () => {
+    if (activeToolPopover) {
+      positionPopover(activeToolPopover.popover, activeToolPopover.button);
+    }
   });
 }
 

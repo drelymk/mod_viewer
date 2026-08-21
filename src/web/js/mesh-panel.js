@@ -4,7 +4,8 @@
 
 import { buildMesh, hasTexture } from './mesh-factory.js';
 import {
-  activeMeshes, addMesh, applyMeshVisibility, setManualTexOverride,
+  activeMeshes, addMesh, applyMeshVisibility, conditionsSatisfied,
+  setManualTexOverride,
 } from './mesh-state.js';
 import {
   meshMetadataKey, recomputeTextureRuns, saveTextureState,
@@ -129,9 +130,11 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   cb.checked = true;
   cb.addEventListener('click', (e) => {
     e.stopPropagation();
-    cb.checked = !mesh.visible;
-    mesh.userData.manualVisible = cb.checked;
-    mesh.userData.manuallyToggled = true;
+    const nextVisible = !mesh.visible;
+    cb.checked = nextVisible;
+    mesh.userData.manualVisible = nextVisible;
+    const automaticVisible = conditionsSatisfied(mesh);
+    mesh.userData.manuallyToggled = nextVisible !== automaticVisible;
     applyMeshVisibility(mesh);
     updateStateIndicator(mesh);
     const any = itemCbs.some(c => c.checked);
@@ -154,11 +157,9 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     cb.classList.toggle('state-manual', !!m.userData.manuallyToggled);
     cb.setAttribute('aria-pressed', String(m.visible));
     if (m.userData.manuallyToggled) {
-      cb.title = 'Manually toggled in the viewer';
-    } else if (m.visible === (m.userData.loadedVisible !== false)) {
-      cb.title = m.visible ? 'Visible by default' : 'Hidden by the mod default state';
+      cb.title = m.visible ? 'Visible (manual override)' : 'Hidden (manual override)';
     } else {
-      cb.title = m.visible ? 'Visible under the current mod state' : 'Hidden under the current mod state';
+      cb.title = m.visible ? 'Visible automatically' : 'Hidden automatically';
     }
   };
   updateStateIndicator(mesh);
