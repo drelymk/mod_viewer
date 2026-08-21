@@ -7,8 +7,8 @@ import tempfile
 
 from core import ini_parser
 from core.ini_parser import build_draw_groups, extract_resources, merge_sections, parse_sections
-from core.mesh_builder import (TEXTURE_TRANSFORMS, encode_texture_file,
-                               _reconstruct_normal_z, _render_texture_png)
+from core.textures import (TEXTURE_TRANSFORMS, encode_texture_file,
+                           _reconstruct_normal_z, render_texture_png)
 from _provenance_support import (DIFFUSE_NO_REF_INI, build_mesh_fixture,
                                  geometry_values, texture_file, visible, write)
 
@@ -131,7 +131,7 @@ def test_packed_light_map_passthrough_preserves_authored_rgb():
         path = os.path.join(tmp, "packed.png")
         source = Image.new("RGB", (1, 1), (210, 12, 94))
         source.save(path)
-        packed = Image.open(io.BytesIO(_render_texture_png(
+        packed = Image.open(io.BytesIO(render_texture_png(
             path, texture_role="light_map")))
 
     assert packed.mode == "RGBA"
@@ -147,9 +147,9 @@ def test_packed_passthrough_preserves_rgba():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "packed-rgba.png")
         Image.new("RGBA", (1, 1), (10, 20, 30, 40)).save(path)
-        diffuse = Image.open(io.BytesIO(_render_texture_png(
+        diffuse = Image.open(io.BytesIO(render_texture_png(
             path, texture_role="diffuse", texture_transform="passthrough")))
-        packed = Image.open(io.BytesIO(_render_texture_png(
+        packed = Image.open(io.BytesIO(render_texture_png(
             path, texture_role="light_map", texture_transform="passthrough")))
         diffuse.load()
         packed.load()

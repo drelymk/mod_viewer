@@ -328,15 +328,30 @@ hashes changed—installing PyInstaller from sdist alone does not rebuild it.
   `material_map::` followed by the mod-relative path. Python normalizes legacy
   path-only metadata before payload publication; frontend code rejects and
   never guesses a missing role.
+- `core/resource_paths.py` owns the sandbox for mod-authored Resource
+  filenames. Mesh loading, manual texture selection and INI diagnostics use
+  this one resolver; the HTTP server's static-file join is a separate
+  localhost-web-root boundary.
+- `core/textures.py` owns role-aware keys, fallback PNG processing, rendered
+  PNG caching and texture profiling. It is independent of mesh construction
+  and contains no game or material interpretation. `core/mesh_builder.py`
+  owns binary geometry reading and mesh payload assembly and may request
+  texture encoding/publication through `core.textures`; application modules
+  import texture helpers from there rather than from the mesh builder.
+- `core/dds.py` owns structural DDS inspection, `core/texture_profiles.py`
+  owns game-specific transport recipes, and `app/server.py` owns opaque HTTP
+  texture publication and transport lifetime.
 - `payload.texture_pools` serializes one mutable pool per source-qualified
   component. Each mesh carries only its runtime `texture_pool_id`; pool IDs
   are not persisted. Every final pool source is published into `payload.textures`
   without fetching or decoding it, so browser requests remain lazy until a
   source becomes an active render dependency. Known pool selection is
   synchronous; only an explicit native file picker may add a post-load source.
-- `safe_resource_path`/`_safe_join` is the one sandbox implementation for both
-  geometry and health. Reject absolute/drive paths, allow relative parent climbs
-  only up to live `_MAX_ESCAPE_DEPTH`, and do not duplicate these rules.
+- `core.resource_paths.safe_resource_path` is the one sandbox implementation
+  for geometry, manual texture selection and health. Reject absolute/drive
+  paths, allow relative parent climbs only up to live `_MAX_ESCAPE_DEPTH`, and
+  do not duplicate these rules. The server's private `_safe_join` protects a
+  different static web-root boundary and must not be conflated with it.
 - `read_texcoords` bounds with `struct.calcsize(uv_fmt)`; f32 pairs are 8 bytes.
   Convert RGBA to RGB before LANCZOS thumbnails or transparent textures turn
   black. Prefer vb2 over vb1 for WWMI UV except stride-32 ZZMI blend buffers.

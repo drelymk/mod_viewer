@@ -3,7 +3,8 @@
 import os
 import struct
 
-from core.mesh_builder import GeometryBlob, build_mesh_result, split_texture_key
+from core.mesh_builder import GeometryBlob, build_mesh_result
+from core.textures import split_texture_key
 
 
 def geometry_values(blob, reference):

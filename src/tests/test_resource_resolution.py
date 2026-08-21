@@ -7,7 +7,7 @@ import tempfile
 from _corpus import sample_mods
 from app import mod_loader
 from core.ini_parser import build_draw_groups, extract_resources, merge_sections, parse_sections
-from core.mesh_builder import encode_texture_file
+from core.textures import encode_texture_file
 from _provenance_support import build_mesh_fixture, visible, write
 
 def _traversal_mod(tmp, pos_filename):

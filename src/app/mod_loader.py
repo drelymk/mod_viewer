@@ -18,7 +18,8 @@ from core.ini_sections import extract_resources, merge_sections
 from core.ini_analysis import analyze_ini
 from core.mod_discovery import discover_ini_paths
 from core.mesh_builder import build_mesh_result
-from core.mesh_builder import _encode_texture, _safe_join
+from core.resource_paths import safe_resource_path
+from core.textures import encode_texture_data_uri
 from core.ini_menu import attach_menu_images
 from core.ini_health import analyze_mod
 from core.present_editor import SECTION_NAME as PRESENT_SECTION
@@ -375,10 +376,10 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
                 "step": info["step"],
                 "default": toggle_defaults.get(info["var"], "0"),
             }
-            image_path = _safe_join(mod_dir, info.get("image_file"))
+            image_path = safe_resource_path(mod_dir, info.get("image_file"))
             if image_path and os.path.isfile(image_path):
                 panel[key]["image_slot"] = True
-                panel[key]["image"] = _encode_texture(
+                panel[key]["image"] = encode_texture_data_uri(
                     image_path, max_size=256, preserve_alpha=True)
             continue
         panel[key] = {
@@ -393,10 +394,10 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
             "default": toggle_defaults.get(info["var"], info["values"][0]),
             "effects": info["effects"],
         }
-        image_path = _safe_join(mod_dir, info.get("image_file"))
+        image_path = safe_resource_path(mod_dir, info.get("image_file"))
         if image_path and os.path.isfile(image_path):
             panel[key]["image_slot"] = True
-            panel[key]["image"] = _encode_texture(
+            panel[key]["image"] = encode_texture_data_uri(
                 image_path, max_size=256, preserve_alpha=True)
     return panel
 

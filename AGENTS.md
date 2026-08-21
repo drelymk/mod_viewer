@@ -12,7 +12,7 @@ Keep deterministic formatting, lint, and other mechanical checks in CI. Code rev
 
 ### Preserve trust boundaries and hot-path performance
 
-- Flag changes that let browser-invented filesystem paths reach loaders, metadata, or export; move the privileged UI away from localhost or introduce runtime third-party scripts; duplicate resource-path sandbox rules; base64-round-trip geometry on the normal load path; eagerly render model textures during backend loading; or raise production texture-render concurrency above 2 without controlled benchmark evidence. Safe path: use native-picker-authorized roots, the existing localhost/blob transport, shared `safe_resource_path`/`_safe_join` rules, and lazy role-aware texture loading.
+- Flag changes that let browser-invented filesystem paths reach loaders, metadata, or export; move the privileged UI away from localhost or introduce runtime third-party scripts; duplicate resource-path sandbox rules; base64-round-trip geometry on the normal load path; eagerly render model textures during backend loading; or raise production texture-render concurrency above 2 without controlled benchmark evidence. Safe path: use native-picker-authorized roots, the existing localhost/blob transport, shared `core.resource_paths.safe_resource_path` rules, the server's separate static-root join, and lazy role-aware texture loading.
 
 ### Preserve execution-order and identity semantics
 

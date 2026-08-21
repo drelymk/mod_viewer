@@ -10,7 +10,8 @@ import os
 import re
 
 from .ini_document import IniDocument
-from .mesh_builder import safe_resource_path, split_texture_key
+from .resource_paths import safe_resource_path
+from .textures import split_texture_key
 
 
 _RESOURCE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_.])Resource[A-Za-z0-9_.\\-]*(?![A-Za-z0-9_.])", re.I)

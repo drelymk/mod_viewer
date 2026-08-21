@@ -4,8 +4,8 @@ import os
 import threading
 from copy import deepcopy
 
-from core.mesh_builder import (encode_texture_key, normalize_texture_key,
-                               split_texture_key)
+from core.textures import (encode_texture_key, split_texture_key,
+                           texture_key_for_role)
 from core.material_kind import normalize_material_kind
 from core.texture_profiles import texture_profile_for
 
@@ -282,13 +282,12 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
     def _role_key(value, role):
         if not value:
             return None
-        _source_role, relative_path = split_texture_key(value, role)
-        return normalize_texture_key(relative_path, role)
+        return texture_key_for_role(value, role)
 
     def _pool_option(value):
         if not isinstance(value, dict):
             return None
-        key = normalize_texture_key(value.get("tex_key"), "diffuse")
+        key = texture_key_for_role(value.get("tex_key"), "diffuse")
         if not key:
             return None
         _role, relative_path = split_texture_key(key)
@@ -304,7 +303,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
     for name, state in saved.items():
         if not isinstance(state, dict):
             continue
-        key, label, manual = (normalize_texture_key(
+        key, label, manual = (texture_key_for_role(
                                   state.get("tex_key"), "diffuse"),
                               state.get("label"), state.get("manual"))
         if (not isinstance(key, str) or not key
@@ -334,7 +333,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
                 # normal_map.  Migrate only the in-memory representation; the
                 # next legitimate save converges it on normal_data.
                 _legacy_role, legacy_path = split_texture_key(legacy)
-                item["normal_data"] = normalize_texture_key(
+                item["normal_data"] = texture_key_for_role(
                     legacy_path, "normal_data")
             if (state.get("normal_data_manual") is True
                     or state.get("normal_map_manual") is True):
