@@ -74,6 +74,22 @@
 </div>
 
 <div id="left-dock">
+  <div id="mod-folder-dock" class="mod-folder-dock">
+    <button id="mod-folder-toggle" class="mod-folder-handle" type="button"
+            aria-label="Open Mod Folders" aria-expanded="false">▶</button>
+    <section id="mod-folder-panel" class="mod-folder-panel" aria-label="Mod Folders">
+      <div class="panel-hdr">
+        <button id="mod-folder-close" class="mod-folder-close" type="button"
+              aria-label="Close Mod Folders">◀</button>
+        <h3>Mod Folders</h3>
+        <button id="mod-folder-add" class="icon-btn" type="button"
+                title="Add Mod Folder">+</button>
+      </div>
+      <div id="mod-folder-error" class="mod-folder-error" role="alert"></div>
+      <div id="mod-folder-list" class="mod-folder-list"></div>
+    </section>
+  </div>
+
   <div id="sidebar">
     <div class="panel-hdr">
       <span class="group-toggle">▼</span>
@@ -152,6 +168,30 @@
       <h3>Menu Toggle</h3>
     </div>
     <div id="menu-list"></div>
+  </div>
+</div>
+
+<div id="mod-folder-modal-backdrop" class="modal-backdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mfm-title">
+    <h4 id="mfm-title">Add Mod Folder</h4>
+    <div id="mfm-error" class="modal-error"></div>
+    <form id="mfm-form">
+      <label class="modal-field">
+        <span>Name</span>
+        <input id="mfm-name" type="text" autocomplete="off" />
+      </label>
+      <label class="modal-field">
+        <span>Folder path</span>
+        <div class="mod-folder-path-field">
+          <input id="mfm-path" type="text" readonly />
+          <button id="mfm-browse" type="button">Browse</button>
+        </div>
+      </label>
+      <div class="modal-actions">
+        <button type="button" id="mfm-cancel">Cancel</button>
+        <button type="submit" id="mfm-save">Add</button>
+      </div>
+    </form>
   </div>
 </div>
 

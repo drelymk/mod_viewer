@@ -29,6 +29,9 @@ machine-specific paths or facts that are obvious from the source.
   parses each INI independently, consumes staged text when present, and returns
   named payload fields for meshes, textures, texture pools, controls, state,
   geometry, metadata and health.
+- `app.mod_folders` owns the optional persisted Mod Folder registry. A missing
+  config is an empty registry; valid writes use the versioned schema and an
+  atomic replace, while malformed or unsupported config must remain untouched.
 - Geometry is published through one shared localhost blob. The normal load path
   must not base64 round-trip geometry or rediscover semantic stages. Direct
   low-level fixtures may retain their older representation, but reserved
@@ -179,9 +182,16 @@ machine-specific paths or facts that are obvious from the source.
 - The UI is served from an ephemeral `127.0.0.1` origin. Do not use
   `NavigateToString`, runtime CDNs or third-party scripts in the privileged
   page. Geometry uses the one-shot localhost blob transport.
-- Bridge filesystem operations accept only normalized roots authorized by the
-  native picker. Browser-invented paths must never reach loaders, metadata or
-  export. Keep the native window at the private `_window` bridge attribute.
+- Bridge filesystem operations accept exact native-picker paths or canonical
+  descendants of persisted Mod Folder roots. Browser-invented paths must never
+  reach loaders, metadata or export. Descendants promoted to exact session
+  authorization remain usable after their registry root is edited or removed.
+  Adding a root or changing an edit path still requires a native picker result;
+  keep the native window at the private `_window` bridge attribute.
+- Mod Folder browsing is read-only filesystem navigation: list only immediate
+  directory children of a registered root, sort deterministically, and skip
+  symlink escapes. It must not load mods, discover INIs, validate mod shape or
+  expose Edit/Delete actions for non-root children.
 - Keep the existing separation between native file-picker authorization,
   `safe_resource_path()` for mod resources and the server's static-root join;
   do not duplicate or weaken any of the three boundaries.

@@ -15,8 +15,8 @@ from core.mod_discovery import discover_ini_paths
 from core.ini_health import analyze_mod
 from core.texture_profiles import texture_profile_for
 
-from . import (edit_session, ini_api, metadata, mod_loader, present_api,
-               server, toggle_api)
+from . import (edit_session, ini_api, metadata, mod_folders, mod_loader,
+               present_api, server, toggle_api)
 
 
 class ModViewerAPI:
@@ -27,12 +27,29 @@ class ModViewerAPI:
         # sends that reflection into infinite recursion.
         self._window = None
         self._authorized_folders = set()
+        self._picker_authorized_folders = set()
+        self._authorized_roots = set()
+        try:
+            self._authorized_roots = mod_folders.registered_paths(
+                mod_folders.load_registry())
+        except mod_folders.ModFolderError:
+            # The UI can report the readable config error. Do not let malformed
+            # optional configuration prevent the viewer from starting.
+            pass
 
     def _folder(self, folder_path):
-        requested = os.path.normcase(os.path.abspath(folder_path or ""))
-        if requested not in self._authorized_folders:
+        requested = mod_folders.normalize_path(folder_path)
+        if requested in self._authorized_folders:
+            return requested
+        if any(mod_folders.is_within(requested, root)
+               for root in self._authorized_roots):
+            # Preserve access to an exact descendant if its registry root is
+            # later edited or removed during this process lifetime.
+            self._authorized_folders.add(requested)
+            return requested
+        if not requested:
             raise PermissionError("This folder was not selected through the native folder picker.")
-        return requested
+        raise PermissionError("This folder was not selected through the native folder picker.")
 
     @staticmethod
     def _active_texture_source(folder_path, validate=False):
@@ -53,9 +70,82 @@ class ModViewerAPI:
         result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         if not result:
             return None
-        folder = os.path.normcase(os.path.abspath(result[0]))
+        folder = mod_folders.normalize_path(result[0])
         self._authorized_folders.add(folder)
+        self._picker_authorized_folders.add(folder)
         return folder
+
+    # -- persistent Mod Folders registry -----------------------------------
+
+    @staticmethod
+    def _folder_entries(entries):
+        return [{**entry, "exists": os.path.isdir(entry["path"])}
+                for entry in entries]
+
+    def _refresh_authorized_roots(self, entries):
+        self._authorized_roots = mod_folders.registered_paths(entries)
+
+    def get_mod_folders(self):
+        try:
+            entries = mod_folders.load_registry()
+        except mod_folders.ModFolderError as error:
+            return {"folders": [], "error": str(error)}
+        self._refresh_authorized_roots(entries)
+        return {"folders": self._folder_entries(entries)}
+
+    def add_mod_folder(self, name, folder_path):
+        folder_path = mod_folders.normalize_path(folder_path)
+        if folder_path not in self._picker_authorized_folders:
+            return {"error": "Choose the Mod Folder through the native folder picker first."}
+        try:
+            entries = mod_folders.add_folder(name, folder_path)
+        except mod_folders.ModFolderError as error:
+            return {"error": str(error)}
+        self._refresh_authorized_roots(entries)
+        return {"folders": self._folder_entries(entries)}
+
+    def edit_mod_folder(self, original_path, name, folder_path):
+        original_path = mod_folders.normalize_path(original_path)
+        folder_path = mod_folders.normalize_path(folder_path)
+        try:
+            entries = mod_folders.load_registry()
+            if not any(item["path"] == original_path for item in entries):
+                raise mod_folders.ModFolderError("That Mod Folder is not registered.")
+            if (folder_path != original_path and
+                    folder_path not in self._picker_authorized_folders):
+                raise mod_folders.ModFolderError(
+                    "Choose the new Mod Folder through the native folder picker first.")
+            entries = mod_folders.edit_folder(original_path, name, folder_path)
+        except mod_folders.ModFolderError as error:
+            return {"error": str(error)}
+        self._refresh_authorized_roots(entries)
+        return {"folders": self._folder_entries(entries)}
+
+    def delete_mod_folder(self, folder_path):
+        try:
+            entries = mod_folders.delete_folder(folder_path)
+        except mod_folders.ModFolderError as error:
+            return {"error": str(error)}
+        self._refresh_authorized_roots(entries)
+        return {"folders": self._folder_entries(entries)}
+
+    def list_subfolders(self, folder_path):
+        requested = mod_folders.normalize_path(folder_path)
+        try:
+            entries = mod_folders.load_registry()
+            roots = [entry["path"] for entry in entries
+                     if mod_folders.is_within(requested, entry["path"])]
+            if not roots:
+                raise PermissionError(
+                    "That folder is not inside a registered Mod Folder.")
+            # The narrowest matching root is the most precise boundary when
+            # registered roots are nested.
+            root = max(roots, key=len)
+            return {"folders": mod_folders.list_subfolders(requested, root)}
+        except PermissionError as error:
+            return {"error": str(error)}
+        except mod_folders.ModFolderError as error:
+            return {"error": str(error)}
 
     def pick_texture_file(self, folder_path, texture_role=None):
         """Open a native file-picker rooted at the mod folder for the
