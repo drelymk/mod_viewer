@@ -34,7 +34,6 @@ function initEnvironmentControl() {
   const button = $('environment-btn');
   const icon = $('environment-icon');
   const label = $('environment-label');
-  const ids = Object.values(ENVIRONMENT_PRESETS).map(preset => preset.id);
   const labels = Object.fromEntries(
     Object.values(ENVIRONMENT_PRESETS).map(preset => [preset.id, preset.label]));
   const popover = $('environment-popover');
@@ -582,7 +581,6 @@ rendererReady.then(ready => {
   if (viewportCameraButtons && cameraButtons) viewportCameraButtons.append(cameraButtons);
   syncViewportControlPlacement();
   initPanelCollapse($('sidebar'), 'mesh-list');
-  initPanelCollapse($('tool-panel'), 'tool-buttons');
   initPanelCollapse($('present-panel'), 'present-list');
   initPanelCollapse($('toggle-panel'), 'toggle-list');
   initPanelCollapse($('menu-panel'), 'menu-list');

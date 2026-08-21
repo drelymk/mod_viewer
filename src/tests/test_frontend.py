@@ -2500,8 +2500,13 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
     try:
+        page.evaluate(
+            "localStorage.setItem('mod-viewer.panel.tool-panel.collapsed', 'true')")
+        page.reload()
+        page.wait_for_function("window.modViewer !== undefined")
         _open(page, "A")
         page.locator(".draw-item").first.wait_for()
+        assert page.locator("#tool-buttons").is_visible()
         toolbar_geometry = page.evaluate("""() => {
           const style = selector => getComputedStyle(document.querySelector(selector));
           return {
