@@ -62,10 +62,10 @@ export function resetMeshVisibility() {
 
 /** Pin or clear one mesh's highlighted diffuse. Ordered component propagation
  * remains the texture-state module's responsibility. */
-export function setManualTexOverride(mesh, value) {
+export function setManualTexOverride(mesh, value, { notify = true } = {}) {
   mesh.userData.manualTexOverride = value;
   applyTextureVariant(mesh);
-  notifyMeshStateChanged([mesh]);
+  if (notify) notifyMeshStateChanged([mesh]);
   requestRender();
 }
 

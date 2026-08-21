@@ -19,7 +19,7 @@ function setTextError(element, message) {
   element.classList.toggle('show', !!message);
 }
 
-export function initModFolderPanel({ switchMod }) {
+export function initModFolderPanel({ switchMod, onRegistryChanged }) {
   const dock = $('mod-folder-dock');
   const panel = $('mod-folder-panel');
   const list = $('mod-folder-list');
@@ -249,6 +249,7 @@ export function initModFolderPanel({ switchMod }) {
     list.innerHTML = '';
     roots.forEach(entry => list.appendChild(createNode(entry, true)));
     if (empty) empty.hidden = roots.length !== 0;
+    onRegistryChanged?.(roots.length > 0);
     setActivePath(activePath);
   }
 
@@ -295,7 +296,8 @@ export function initModFolderPanel({ switchMod }) {
     applyRegistryResponse(response);
   }
 
-  toggle.addEventListener('click', () => {
+  toggle.addEventListener('click', event => {
+    event.stopPropagation();
     setExpanded(!dock.classList.contains('expanded'));
     requestRender();
   });

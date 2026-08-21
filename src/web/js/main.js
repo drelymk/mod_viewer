@@ -109,7 +109,12 @@ function initToolPopovers() {
     if (!popover) return;
     popover.hidden = true;
   };
-  const closeAll = () => { close(texturePopover); close(lightPopover); };
+  const closeAll = () => {
+    close(texturePopover);
+    close(lightPopover);
+    textureButton?.setAttribute('aria-expanded', 'false');
+    lightButton?.setAttribute('aria-expanded', 'false');
+  };
 
   function toggleTexturePopover() {
     if (!texturePopover) return;
@@ -132,6 +137,7 @@ function initToolPopovers() {
       texturePopover.appendChild(option);
     });
     texturePopover.hidden = false;
+    textureButton?.setAttribute('aria-expanded', 'true');
   }
 
   function toggleLightPopover() {
@@ -153,10 +159,13 @@ function initToolPopovers() {
       lightPopover.appendChild(option);
     });
     lightPopover.hidden = false;
+    lightButton?.setAttribute('aria-expanded', 'true');
   }
 
   textureButton?.setAttribute('aria-haspopup', 'menu');
   lightButton?.setAttribute('aria-haspopup', 'menu');
+  textureButton?.setAttribute('aria-expanded', 'false');
+  lightButton?.setAttribute('aria-expanded', 'false');
   textureButton?.addEventListener('click', toggleTexturePopover);
   lightButton?.addEventListener('click', toggleLightPopover);
   document.addEventListener('click', event => {
@@ -531,7 +540,10 @@ rendererReady.then(ready => {
   $('shading-btn').addEventListener('click', toggleSmoothShading);
   $('glossy-btn').addEventListener('click', toggleGlossy);
   initToolPopovers();
-  $('reset-state-btn').addEventListener('click', resetMeshState);
+  $('reset-state-btn').addEventListener('click', event => {
+    event.stopPropagation();
+    resetMeshState();
+  });
   $('trackball-btn').addEventListener('click', toggleTrackballGizmo);
   $('camera-reset-view-btn').addEventListener('click', () => resetView(activeMeshes));
   $('camera-flip-btn').addEventListener('click', () => rotateModelQuarterTurn(activeMeshes));
@@ -549,13 +561,25 @@ rendererReady.then(ready => {
   initPanelCollapse($('present-panel'), 'present-list');
   initPanelCollapse($('toggle-panel'), 'toggle-list');
   initPanelCollapse($('menu-panel'), 'menu-list');
-  const modFolderPanel = initModFolderPanel({ switchMod });
+  const emptyFolderAction = $('empty-add-folder-btn');
+  let hasModFolders = false;
+  const updateEmptyFolderAction = hasFolders => {
+    hasModFolders = !!hasFolders;
+    emptyFolderAction.textContent = hasModFolders
+      ? 'Open Mod Folder' : 'Add Mod Folder';
+    emptyFolderAction.setAttribute('aria-label', emptyFolderAction.textContent);
+  };
+  updateEmptyFolderAction(false);
+  const modFolderPanel = initModFolderPanel({
+    switchMod,
+    onRegistryChanged: updateEmptyFolderAction,
+  });
   $('empty-open-btn').disabled = false;
-  $('empty-add-folder-btn').disabled = false;
+  emptyFolderAction.disabled = false;
   $('empty-open-btn').addEventListener('click', openMod);
-  $('empty-add-folder-btn').addEventListener('click', () => {
+  emptyFolderAction.addEventListener('click', () => {
     modFolderPanel.setExpanded(true);
-    modFolderPanel.openAddDialog();
+    if (!hasModFolders) modFolderPanel.openAddDialog();
   });
   $('mod-folder-empty-add')?.addEventListener('click', modFolderPanel.openAddDialog);
 

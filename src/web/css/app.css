@@ -187,7 +187,7 @@ body {
 
 /* ── left dock (meshes panel + toolbox) ──────────────────────────────────── */
 #left-dock {
-  position: fixed; top: 58px; left: 12px; z-index: 110;
+  position: fixed; top: calc(var(--toolbar-height) + 4px); left: 12px; z-index: 110;
   display: flex; flex-direction: row; align-items: flex-start; gap: 10px;
   max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
 }
@@ -195,7 +195,7 @@ body {
 /* Mod Folders is an overlay owned by the left dock. It must not become a
  * flex item: opening it covers MESHES instead of moving the model panel. */
 #mod-folder-dock {
-  position: fixed; top: 58px; left: 12px; z-index: 130;
+  position: fixed; top: calc(var(--toolbar-height) + 4px); left: 12px; z-index: 130;
   width: 288px; max-width: min(288px, calc(50vw - 36px));
   height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
   pointer-events: none;
@@ -214,18 +214,13 @@ body {
 #mod-folder-dock .panel-hdr { margin-bottom: 8px; cursor: default; }
 #mod-folder-dock h3 { font-size: 10px; color: var(--text-muted); text-transform: uppercase;
   letter-spacing: .1em; margin: 0; flex: 1; }
-.mod-folder-handle, .mod-folder-close {
+.mod-folder-close {
   width: 32px; height: 36px; padding: 0; border: 1px solid var(--border);
   border-radius: 5px; background: var(--bg-panel); color: var(--text);
   cursor: pointer; font-size: 23px; font-weight: 700; line-height: 1;
 }
-.mod-folder-handle {
-  position: absolute; top: 0; left: 0; pointer-events: auto;
-  box-shadow: 0 4px 12px rgba(0,0,0,.3);
-}
-#mod-folder-dock.expanded .mod-folder-handle { display: none; }
-.mod-folder-handle:hover, .mod-folder-close:hover { background: var(--accent); }
-.mod-folder-handle .ui-icon, .mod-folder-close .ui-icon { width: 20px; height: 20px; }
+.mod-folder-close:hover { background: var(--accent); }
+.mod-folder-close .ui-icon { width: 20px; height: 20px; }
 .mod-folder-error {
   display: none; margin-bottom: 8px; padding: 6px 8px; border-radius: 5px;
   color: var(--danger); background: rgba(248,81,73,.1);
@@ -285,7 +280,7 @@ body {
 
 /* ── right dock (toggle panel + menu panel) ──────────────────────────────── */
 #right-dock {
-  position: fixed; top: 58px; right: 12px; z-index: 10;
+  position: fixed; top: calc(var(--toolbar-height) + 4px); right: 12px; z-index: 10;
   max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
   display: flex; flex-direction: column; align-items: stretch; gap: 10px;
 }
@@ -342,6 +337,8 @@ body {
   font-size: 10px; color: var(--text-muted); text-transform: uppercase;
   letter-spacing: .1em; margin: 0; flex: 1;
 }
+#sidebar > .panel-hdr h3 { flex: 0 0 auto; }
+#sidebar > .panel-hdr #mod-folder-toggle { margin-left: auto; }
 
 /* ── toolbox (wireframe / grid) ───────────────────────────────────────────── */
 #tool-panel {
@@ -881,7 +878,7 @@ body.feature-modify-toggle-off .present-author-actions { display: none; }
  * behavior contract for the viewer modules; these tokens provide the shared
  * visual language around them. */
 :root {
-  --toolbar-height: 46px;
+  --toolbar-height: 54px;
   --footer-height: 28px;
   --dock-gap: 30px;
   --viewport-toolbar-width: 146px;
@@ -899,7 +896,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 [tabindex]:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 #toolbar {
-  height: 54px; padding: 0 16px; gap: 14px;
+  height: var(--toolbar-height); padding: 0 16px; gap: 14px;
   background: rgba(22,27,34,.94); backdrop-filter: blur(14px);
 }
 .app-icon {
@@ -924,7 +921,11 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 #open-btn {
   color: var(--text); background: var(--surface-raised); border-color: var(--border);
 }
+#ini-view-btn {
+  color: var(--text); background: var(--surface-raised); border-color: var(--border);
+}
 #open-btn:hover:not(:disabled) { background: var(--surface-hover); border-color: #485363; }
+#ini-view-btn:hover:not(:disabled) { background: var(--surface-hover); border-color: #485363; }
 #open-btn:hover:not(:disabled), #ini-view-btn:hover:not(:disabled),
 #health-btn:hover:not(:disabled), #export-btn:hover:not(:disabled) { transform: translateY(-1px); }
 #export-btn { background: #9e6a03; }

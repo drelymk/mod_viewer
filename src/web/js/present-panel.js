@@ -250,9 +250,9 @@ export function buildPresentPanel(present, context = {}) {
   if (!item) {
     const empty = document.createElement('div');
     empty.className = 'toggle-empty';
-    empty.textContent = action.disabled
-      ? 'No key or menu toggle is available for PRESENT.'
-      : 'No presents yet - click Add to create one.';
+    empty.textContent = canAdd
+      ? 'No presents yet - click Add to create one.'
+      : 'No key or menu toggle is available for PRESENT.';
     list.appendChild(empty);
     return;
   }

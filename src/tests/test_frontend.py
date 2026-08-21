@@ -377,6 +377,20 @@ def _open(page, path):
     page.locator("#controls-tab").evaluate("button => button.click()")
 
 
+def _open_library(page):
+    launcher = page.locator("#mod-folder-toggle")
+    if launcher.is_visible():
+        launcher.click()
+    else:
+        action = page.locator("#empty-add-folder-btn")
+        opens_dialog = action.inner_text() == "Add Mod Folder"
+        action.click()
+        page.locator("#mod-folder-dock.expanded").wait_for()
+        if opens_dialog:
+            page.locator("#mfm-cancel").click()
+    page.locator("#mod-folder-dock.expanded").wait_for()
+
+
 def _sample_mesh_pixel(page):
     return _sample_mesh_pixel_at(page, 0.25, 0.25)
 
@@ -1777,7 +1791,14 @@ def test_texture_rows_are_reused_for_control_changes_and_rebuilt_for_pool_change
         page.locator("#inspector-tab").click()
         page.locator(".group-hdr .group-name").first.click()
         page.locator(".draw-item").first.click()
+        page.evaluate("""() => {
+          window.__meshStateEvents = 0;
+          window.addEventListener('mod-viewer-mesh-state-changed', () => {
+            window.__meshStateEvents += 1;
+          });
+        }""")
         page.locator(".inspector-texture-option", has_text="A two").click()
+        assert page.evaluate("window.__meshStateEvents") == 1
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].userData.manualTexOverride"
             " === 'diffuse::A-two.png'")
@@ -2038,6 +2059,9 @@ def test_feature_flag_css_keeps_cycle_preview_and_core_invariants(
     try:
         _open(page, "A")
         page.locator("#toggle-list .toggle-cycle-btn").wait_for()
+        assert page.locator("#present-list").inner_text() == (
+            "No key or menu toggle is available for PRESENT.")
+        assert page.locator("#present-action-btn").is_enabled()
         page.evaluate("""
           document.body.classList.add('feature-export-off', 'feature-modify-toggle-off')
         """)
@@ -2079,8 +2103,9 @@ def test_mod_folder_panel_overlays_sidebar_and_browses_children_lazily(
         sidebar_before = page.locator("#sidebar").bounding_box()
         assert "expanded" not in page.locator("#mod-folder-dock").get_attribute("class")
 
-        page.locator("#mod-folder-toggle").click()
-        page.locator("#mod-folder-dock.expanded").wait_for()
+        assert page.locator("#empty-add-folder-btn").inner_text() == "Open Mod Folder"
+        _open_library(page)
+        assert page.locator("#mod-folder-modal-backdrop.show").count() == 0
         sidebar_after = page.locator("#sidebar").bounding_box()
         assert sidebar_after == sidebar_before
         z_indices = page.evaluate("""() => ({
@@ -2122,17 +2147,17 @@ def test_empty_mod_folder_panel_keeps_fixed_height_above_navigation_hint(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {}, mod_folders=[])
     try:
-        page.locator("#mod-folder-toggle").click()
+        assert page.locator("#empty-add-folder-btn").inner_text() == "Add Mod Folder"
+        page.locator("#empty-add-folder-btn").click()
         page.locator("#mod-folder-dock.expanded").wait_for()
+        page.locator("#mod-folder-modal-backdrop.show").wait_for()
+        page.locator("#mfm-cancel").click()
         panel = page.locator("#mod-folder-panel").bounding_box()
         info = page.locator("#footer").bounding_box()
         viewport_height = page.evaluate("window.innerHeight")
-        handle_style = page.evaluate("""() => {
-          const style = getComputedStyle(document.querySelector('#mod-folder-toggle'));
-          return {width: style.width, height: style.height, fontSize: style.fontSize};
-        }""")
-        assert handle_style == {"width": "32px", "height": "36px", "fontSize": "23px"}
-        assert abs(panel["height"] - (viewport_height - 104)) < 1
+        assert page.locator("#sidebar > .panel-hdr #mod-folder-toggle").count() == 1
+        assert page.locator("#mod-folder-dock > #mod-folder-toggle").count() == 0
+        assert abs(panel["height"] - (viewport_height - 112)) < 1
         assert panel["y"] + panel["height"] <= info["y"]
         assert page.locator("#mod-folder-list").inner_text() == ""
         assert page.evaluate("""() => {
@@ -2157,7 +2182,7 @@ def test_mod_folder_name_selection_preserves_dock_state_across_reload(
     )
     try:
         page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
-        page.locator("#mod-folder-toggle").click()
+        _open_library(page)
         page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="Alice").click()
         page.locator(".draw-item").wait_for()
@@ -2194,7 +2219,7 @@ def test_reload_and_tree_selection_share_one_transition_guard(
     )
     try:
         page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
-        page.locator("#mod-folder-toggle").click()
+        _open_library(page)
         page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="Alice").click()
         page.locator(".draw-item").wait_for()
@@ -2235,7 +2260,7 @@ def test_mod_folder_failed_selection_keeps_panel_open_and_reports_error(
     )
     try:
         page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
-        page.locator("#mod-folder-toggle").click()
+        _open_library(page)
         page.locator(".mod-folder-select", has_text="Alice").click()
         page.locator(".draw-item").wait_for()
         assert page.locator(".mod-folder-row.active").count() == 1
@@ -2267,7 +2292,7 @@ def test_mod_folder_tree_switch_respects_pending_change_confirmation(
     )
     try:
         page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
-        page.locator("#mod-folder-toggle").click()
+        _open_library(page)
         page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="First").click()
         page.locator(".draw-item").wait_for()
@@ -2293,7 +2318,7 @@ def test_mod_folder_add_edit_delete_modal_flow(
     )
     try:
         page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
-        page.locator("#mod-folder-toggle").click()
+        _open_library(page)
 
         page.locator("#mod-folder-add").click()
         page.locator("#mod-folder-modal-backdrop.show").wait_for()
@@ -2357,6 +2382,38 @@ def test_inspector_follows_component_and_mesh_selection(
         assert page.locator("#interaction-help").inner_text() == "LMB Orbit · RMB Pan · Wheel Zoom"
         assert page.locator("#sidebar > .panel-hdr .group-toggle").evaluate(
             "button => button.tagName") == "BUTTON"
+        assert page.locator("#sidebar > .panel-hdr #mod-folder-toggle").count() == 1
+        assert page.locator("#mod-folder-dock > #mod-folder-toggle").count() == 0
+        assert page.locator("#sidebar > .panel-hdr #reset-state-btn").count() == 1
+        assert page.locator("#sidebar > .panel-hdr > *").evaluate_all(
+            "nodes => nodes.map(node => node.id || node.tagName)") == [
+                "BUTTON", "H3", "reset-state-btn", "mod-folder-toggle"]
+        header_positions = page.evaluate("""() => {
+          const rect = selector => document.querySelector(selector).getBoundingClientRect();
+          const label = rect('#sidebar > .panel-hdr h3');
+          const reset = rect('#reset-state-btn');
+          const library = rect('#mod-folder-toggle');
+              return {
+                resetAfterLabel: reset.left >= label.right,
+                libraryAfterReset: library.left >= reset.right,
+                libraryAtRight: library.right >=
+                  document.querySelector('#sidebar').getBoundingClientRect().right - 16,
+              };
+            }""")
+        assert header_positions == {
+            "resetAfterLabel": True,
+            "libraryAfterReset": True,
+            "libraryAtRight": True,
+        }, header_positions
+        assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
+            "aria-expanded") == "true"
+        page.locator("#mod-folder-toggle").click()
+        assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
+            "aria-expanded") == "true"
+        page.locator("#mod-folder-close").click()
+        page.locator("#reset-state-btn").click()
+        assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
+            "aria-expanded") == "true"
         page.locator("#inspector-tab").click()
         page.locator(".group-hdr .group-name").first.click()
         page.locator("#inspector-content").wait_for()
@@ -2396,6 +2453,24 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
     try:
         _open(page, "A")
         page.locator(".draw-item").first.wait_for()
+        toolbar_geometry = page.evaluate("""() => {
+          const style = selector => getComputedStyle(document.querySelector(selector));
+          return {
+            token: getComputedStyle(document.documentElement)
+              .getPropertyValue('--toolbar-height').trim(),
+            toolbarHeight: style('#toolbar').height,
+            canvasTop: style('#canvas-container').top,
+            leftDockTop: style('#left-dock').top,
+            rightDockTop: style('#right-dock').top,
+          };
+        }""")
+        assert toolbar_geometry == {
+            "token": "54px",
+            "toolbarHeight": "54px",
+            "canvasTop": "54px",
+            "leftDockTop": "58px",
+            "rightDockTop": "58px",
+        }
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
         page.wait_for_timeout(250)
 
@@ -2414,23 +2489,29 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
 
         page.locator("#texture-btn").click()
         page.locator("#texture-popover:not([hidden])").wait_for()
+        assert page.locator("#texture-btn").get_attribute("aria-expanded") == "true"
         page.locator("#texture-popover .ui-popover-option", has_text="Diffuse only").click()
         assert page.locator("#texture-btn").get_attribute("aria-label") == (
             "Textures: diffuse only")
+        assert page.locator("#texture-btn").get_attribute("aria-expanded") == "false"
         assert page.locator("#texture-popover").is_hidden()
 
         page.locator("#light-btn").click()
         page.locator("#light-popover:not([hidden])").wait_for()
+        assert page.locator("#light-btn").get_attribute("aria-expanded") == "true"
         assert page.locator("#light-popover .ui-popover-option").all_inner_texts() == [
             "Bright", "Normal", "Off"]
         page.locator("#light-popover .ui-popover-option", has_text="Normal").click()
         assert page.locator("#light-popover").is_hidden()
+        assert page.locator("#light-btn").get_attribute("aria-expanded") == "false"
         assert page.locator("#light-btn").get_attribute("aria-label").startswith("Key light: normal")
 
         page.locator("#environment-btn").click()
         page.locator("#environment-popover:not([hidden])").wait_for()
+        assert page.locator("#environment-btn").get_attribute("aria-expanded") == "true"
         page.keyboard.press("Escape")
         assert page.locator("#environment-popover").is_hidden()
+        assert page.locator("#environment-btn").get_attribute("aria-expanded") == "false"
 
         page.set_viewport_size({"width": 640, "height": 720})
         page.locator("#toolbar-more").wait_for()
