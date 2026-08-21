@@ -758,17 +758,18 @@ export function configureGameMaterial(material, profile, options = {}) {
   return material;
 }
 
-function updateBinding(binding, value) {
+function updateBinding(binding, value, enabled = !!value) {
   const next = value || binding.placeholder;
+  const isEnabled = enabled && !!value;
   const changed = binding.textureNode.value !== next
-    || binding.enabledNode.value !== !!value;
+    || binding.enabledNode.value !== isEnabled;
   binding.textureNode.value = next;
-  binding.enabledNode.value = !!value;
+  binding.enabledNode.value = isEnabled;
   return changed;
 }
 
 /** Update texture bindings without invalidating or rebuilding the material. */
-export function updateGameMaterialTextures(mesh, maps = {}) {
+export function updateGameMaterialTextures(mesh, maps = {}, options = {}) {
   const state = mesh.material?.userData?.gameMaterial;
   if (!state) return false;
   let changed = false;
@@ -780,7 +781,9 @@ export function updateGameMaterialTextures(mesh, maps = {}) {
     material_map: maps.material_map,
   };
   for (const [role, value] of Object.entries(values)) {
-    changed = updateBinding(state.bindings[role], value) || changed;
+    if (!Object.hasOwn(maps, role)) continue;
+    const pending = options.pending?.[role] === true;
+    changed = updateBinding(state.bindings[role], value, !pending) || changed;
   }
   if (Object.hasOwn(maps, 'normal_map_y_sign')) {
     state.normalScaleNode.value.set(

@@ -1,4 +1,4 @@
-// Three.js scene composition and the WebGPU-native viewport render loop.
+// Three.js scene composition and the WebGPU-native on-demand viewport renderer.
 
 import * as THREE from 'three/webgpu';
 import { ArcballControls } from 'three/addons/controls/ArcballControls.js';
@@ -7,6 +7,7 @@ import { createEnvironmentController } from './environment.js';
 import { createKeyLightController } from './key-light-controller.js';
 import { updateOutlineCameraScale } from './outline-renderer.js';
 import { setBCTextureCompression } from './renderer-capabilities.js';
+import { requestRender, setRenderCallback } from './render-scheduler.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 
 const container = document.getElementById('canvas-container');
@@ -44,7 +45,6 @@ function showRendererError(message) {
 function failRenderer(message) {
   if (rendererStopped) return;
   rendererStopped = true;
-  if (renderer._animation) renderer.setAnimationLoop(null);
   showRendererError(message);
 }
 
@@ -105,7 +105,7 @@ export const rendererReady = initializeRenderer()
     if (!isRendererAvailable()) {
       throw new Error('The renderer is not using the required WebGPU core backend.');
     }
-    renderer.setAnimationLoop(tick);
+    requestRender();
     openButton.disabled = !isRendererAvailable();
     return true;
   })
@@ -146,10 +146,11 @@ const environmentController = createEnvironmentController({
   lightTarget: keyLight.target,
 });
 const keyLightController = createKeyLightController({
-  scene, camera, renderer, controls, light: keyLight,
+  scene, camera, renderer, controls, light: keyLight, onChange: requestRender,
 });
 const viewGizmoController = createViewGizmoController({
   camera, controls, element: document.getElementById('view-gizmo'),
+  onChange: requestRender,
 });
 const cameraFrame = createCameraFrame({
   camera,
@@ -162,22 +163,32 @@ const cameraFrame = createCameraFrame({
 
 new ResizeObserver(() => {
   cameraFrame.resize(container.clientWidth, container.clientHeight);
+  requestRender();
 }).observe(container);
 
-function tick() {
+let renderCount = 0;
+
+function renderFrame() {
   if (rendererStopped || renderer.backend?.isWebGPUBackend !== true) return;
-  viewGizmoController.updateSnap();
-  controls.update();
+  const snapActive = viewGizmoController.updateSnap();
   keyLightController.update();
+  cameraFrame.updateViewport();
   cameraFrame.updateClipping();
   updateOutlineCameraScale(camera, controls.target,
     renderer.domElement.clientHeight);
   viewGizmoController.updateAxes();
   renderer.render(scene, camera);
+  renderCount += 1;
+  if (snapActive) requestRender();
 }
 
+setRenderCallback(renderFrame);
+controls.addEventListener('change', requestRender);
+
 export function setEnvironmentPreset(id) {
-  return environmentController.setPreset(id);
+  const changed = environmentController.setPreset(id);
+  if (changed) requestRender();
+  return changed;
 }
 
 export function getEnvironmentPreset() {
@@ -187,6 +198,7 @@ export function getEnvironmentPreset() {
 export function toggleGrid() {
   grid.visible = !grid.visible;
   document.getElementById('grid-btn').classList.toggle('off', !grid.visible);
+  requestRender();
 }
 
 export function toggleTrackballGizmo() {
@@ -195,18 +207,22 @@ export function toggleTrackballGizmo() {
 
 export function toggleLightHandle() {
   keyLightController.toggleMode();
+  requestRender();
 }
 
 export function frameView(meshes = [], direction = null, targetYOffset = 0) {
   cameraFrame.frameView(meshes, direction, targetYOffset);
+  requestRender();
 }
 
 export function resetView() {
   cameraFrame.resetView();
+  requestRender();
 }
 
 export function fitTo(meshes) {
   cameraFrame.fitTo(meshes);
+  requestRender();
 }
 
 export function resetModelOrientation() {
@@ -215,8 +231,14 @@ export function resetModelOrientation() {
 
 export function rotateModelQuarterTurn(meshes = []) {
   cameraFrame.rotateModelQuarterTurn(meshes);
+  requestRender();
 }
 
 export function rotateModelHorizontalQuarterTurn(meshes = []) {
   cameraFrame.rotateModelHorizontalQuarterTurn(meshes);
+  requestRender();
+}
+
+export function getRenderCount() {
+  return renderCount;
 }

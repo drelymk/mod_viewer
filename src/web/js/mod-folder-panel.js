@@ -1,6 +1,7 @@
 // Persistent Mod Folder registry and lazy directory navigator.
 
 import { confirmDialog } from './dialogs.js';
+import { requestRender } from './render-scheduler.js';
 
 const $ = id => document.getElementById(id);
 
@@ -232,8 +233,14 @@ export function initModFolderPanel({ switchMod }) {
     applyRegistryResponse(response);
   }
 
-  toggle.addEventListener('click', () => setExpanded(!dock.classList.contains('expanded')));
-  close.addEventListener('click', () => setExpanded(false));
+  toggle.addEventListener('click', () => {
+    setExpanded(!dock.classList.contains('expanded'));
+    requestRender();
+  });
+  close.addEventListener('click', () => {
+    setExpanded(false);
+    requestRender();
+  });
   add.addEventListener('click', () => openEditor('add'));
   cancel.addEventListener('click', closeEditor);
   backdrop.addEventListener('click', event => {

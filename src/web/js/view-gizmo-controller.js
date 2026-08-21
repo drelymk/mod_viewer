@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 
-export function createViewGizmoController({ camera, controls, element }) {
+export function createViewGizmoController({ camera, controls, element, onChange }) {
   const axes = [...element.querySelectorAll('.gizmo-axis')];
   const axisVectors = {
     x: new THREE.Vector3(1, 0, 0),
@@ -31,10 +31,11 @@ export function createViewGizmoController({ camera, controls, element }) {
       startUp: camera.up.clone().normalize(),
       endUp,
     };
+    onChange?.();
   }
 
   function updateSnap() {
-    if (!snap) return;
+    if (!snap) return false;
     const raw = Math.min(1, (performance.now() - snap.started) / snap.duration);
     const progress = 1 - Math.pow(1 - raw, 3);
     const rotation = new THREE.Quaternion().slerpQuaternions(
@@ -44,6 +45,7 @@ export function createViewGizmoController({ camera, controls, element }) {
     camera.up.lerpVectors(snap.startUp, snap.endUp, progress).normalize();
     camera.lookAt(controls.target);
     if (raw === 1) snap = null;
+    return !!snap;
   }
 
   function updateAxes() {
@@ -127,6 +129,7 @@ export function createViewGizmoController({ camera, controls, element }) {
     camera.position.copy(controls.target).add(offset.setFromSpherical(spherical));
     camera.up.set(0, 1, 0);
     camera.lookAt(controls.target);
+    onChange?.();
     drag.x = event.clientX;
     drag.y = event.clientY;
   });
@@ -153,6 +156,7 @@ export function createViewGizmoController({ camera, controls, element }) {
     const distance = THREE.MathUtils.clamp(
       offset.length() * scale, Math.max(camera.near * 4, 0.0001), camera.far * 0.8);
     camera.position.copy(controls.target).addScaledVector(offset.normalize(), distance);
+    onChange?.();
   }, { passive: false });
 
   function toggle() {

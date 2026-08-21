@@ -2,6 +2,7 @@
 
 import { refreshMeshTexture, setTextureMode } from './mesh-factory.js';
 import { setOutlineSuppressedByWireframe } from './outline-renderer.js';
+import { requestRender } from './render-scheduler.js';
 
 let wireframe = false;
 let smoothShading = true;
@@ -32,6 +33,7 @@ export function toggleWireframeMode(meshes) {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(material => { material.wireframe = wireframe; });
   });
+  requestRender();
 }
 
 export function toggleSmoothShadingMode(meshes) {
@@ -44,6 +46,7 @@ export function toggleSmoothShadingMode(meshes) {
       material.needsUpdate = true;
     });
   });
+  requestRender();
 }
 
 export function toggleGlossyMode(meshes) {
@@ -61,6 +64,7 @@ export function toggleGlossyMode(meshes) {
   meshes.forEach(mesh => {
     setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
   });
+  requestRender();
 }
 
 export function toggleTextureDisplayMode(meshes) {
@@ -78,4 +82,5 @@ export function toggleTextureDisplayMode(meshes) {
   button.setAttribute('aria-label', labels[mode]);
   setTextureMode(mode);
   meshes.forEach(refreshMeshTexture);
+  requestRender();
 }
