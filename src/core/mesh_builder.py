@@ -232,7 +232,7 @@ def _deduplicate_draws(group, max_draws=0):
     merged = {}
     order = []
     for raw_draw in group["draws"]:
-        draw = DrawCall.from_mapping(raw_draw).resolved(group)
+        draw = DrawCall.from_mapping(raw_draw, group)
         key = draw.render_identity()
         if key not in merged:
             merged[key] = {"draw": draw, "alts": [], "sources": []}

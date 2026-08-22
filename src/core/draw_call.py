@@ -9,7 +9,7 @@ rendered output instead of silently changing deduplication behavior.
 """
 
 from collections.abc import Iterator, Mapping, MutableMapping
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from typing import ClassVar
 
 
@@ -23,7 +23,7 @@ def _freeze(value):
     return value
 
 
-@dataclass
+@dataclass(slots=True)
 class AuthoredDrawCall:
     """One parsed ``drawindexed`` row before resource-name resolution."""
 
@@ -35,19 +35,19 @@ class AuthoredDrawCall:
     index_resource: str | None = None
     diffuse_variants: list = field(default_factory=list)
     diffuse_history: list = field(default_factory=list)
-    vertex_resources: tuple[str | None, str | None, str | None] = (
-        None, None, None)
+    # Missing slot = no authored state in this execution path; None = an
+    # explicit `vbN = null`; a string = the resource bound at this draw.
+    vertex_resources: dict[int, str | None] = field(default_factory=dict)
     auxiliary_maps: dict = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(slots=True)
 class DrawCall(MutableMapping):
     """Resolved draw geometry, material state, visibility and provenance.
 
-    Buffer fields may initially be ``None`` to inherit their draw group's
-    binding.  :meth:`resolved` applies those defaults before geometry packing
-    and deduplication, so :meth:`render_identity` describes effective state,
-    not the incidental difference between explicit and inherited bindings.
+    Buffer fields are effective resolved state. ``None`` means that slot is
+    unbound or unsupported, never "inherit from the group". Legacy dictionary
+    fixtures receive inheritance only in :meth:`from_mapping`.
     """
 
     label: str = ""
@@ -102,7 +102,7 @@ class DrawCall(MutableMapping):
         return tuple(item.name for item in fields(cls))
 
     @classmethod
-    def from_mapping(cls, value):
+    def from_mapping(cls, value, group=None):
         if isinstance(value, cls):
             return value
         if not isinstance(value, Mapping):
@@ -112,24 +112,16 @@ class DrawCall(MutableMapping):
         if unknown:
             names = ", ".join(sorted(unknown))
             raise TypeError(f"unsupported DrawCall field(s): {names}")
-        return cls(**dict(value))
+        values = dict(value)
+        for name in ("ib_file", "index_size", "position_file",
+                     "position_stride", "texcoord_file", "texcoord_stride"):
+            if name not in values and group is not None:
+                values[name] = group.get(name)
+        return cls(**values)
 
-    def resolved(self, group):
-        """Return a copy with effective group-level buffer state applied."""
-        def inherited(value, key):
-            return group.get(key) if value is None else value
-
-        return replace(
-            self,
-            ib_file=inherited(self.ib_file, "ib_file"),
-            index_size=inherited(self.index_size, "index_size"),
-            position_file=inherited(self.position_file, "position_file"),
-            texcoord_file=inherited(self.texcoord_file, "texcoord_file"),
-            position_stride=inherited(
-                self.position_stride, "position_stride"),
-            texcoord_stride=inherited(
-                self.texcoord_stride, "texcoord_stride"),
-        )
+    def to_dict(self):
+        """Return the legacy sparse mapping projection for external callers."""
+        return {name: self[name] for name in self}
 
     def render_identity(self):
         """Stable identity for geometry/material deduplication.

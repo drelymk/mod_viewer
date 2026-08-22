@@ -211,6 +211,10 @@ def test_draw_call_ir_rejects_unreviewed_fields():
                        "conditions": [], "sources": [],
                        "future_render_state": "unclassified"}],
         })
+    draw = DrawCall(count=3, start=0, base=0)
+    with pytest.raises(AttributeError):
+        draw.future_render_state = "unclassified"
+    assert draw.to_dict()["count"] == 3
 
 
 COMPONENT0_INI = """[CommandListShared]
