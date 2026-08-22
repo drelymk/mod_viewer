@@ -117,6 +117,13 @@ machine-specific paths or facts that are obvious from the source.
 - Geometry detection is conservative and format-specific. Do not infer a game
   or material meaning from a filename alone. Unknown, malformed or too-small
   buffers must be rejected or dropped safely rather than read beyond bounds.
+- Geometry resolution is compatibility-first. New typed or explicit geometry
+  knowledge may improve decoding when positively identified, but failure to
+  recognize it must not by itself make previously supported geometry
+  disappear.
+- Geometry-affecting changes require representative compatibility validation in
+  addition to unit tests. New load failures or unexplained geometry loss are
+  regressions.
 - Draw deduplication uses normalized effective buffer and material state.
   Classify each new draw field explicitly as render identity, visibility or
   provenance; never derive identity reflectively from every dictionary field.
