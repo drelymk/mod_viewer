@@ -222,7 +222,9 @@ function buildMesh(mesh, record) {
   }
   content.appendChild(material);
 
-  const draw = record.entry?.drawindexed;
+  const indexed = record.entry?.drawindexed;
+  const vertices = record.entry?.draw;
+  const draw = indexed || vertices;
   if (draw?.length) {
     const drawInfo = document.createElement('section');
     drawInfo.className = 'inspector-section';
@@ -230,9 +232,10 @@ function buildMesh(mesh, record) {
     title.className = 'inspector-section-title';
     title.textContent = 'Draw';
     drawInfo.appendChild(title);
+    addRow(drawInfo, 'Operation', indexed ? 'DrawIndexed' : 'Draw');
     addRow(drawInfo, 'Count', String(draw[0] ?? '—'));
     addRow(drawInfo, 'Start', String(draw[1] ?? '—'));
-    addRow(drawInfo, 'Base', String(draw[2] ?? '—'));
+    if (indexed) addRow(drawInfo, 'Base', String(draw[2] ?? '—'));
     content.appendChild(drawInfo);
   }
   buildTextureControls(content, record, mesh);

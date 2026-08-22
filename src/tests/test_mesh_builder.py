@@ -4,7 +4,11 @@ import os
 import struct
 import tempfile
 
-from core.ini_parser import (build_draw_groups, extract_resources,
+import pytest
+
+from core.buffer_layout import texcoord_layout
+from core.ini_parser import (_scan_sections_for_draws, build_draw_groups,
+                             extract_resources,
                              extract_toggle_keys, merge_sections)
 from _provenance_support import IB_R16_INI, build_mesh_fixture, geometry_values, write
 
@@ -396,3 +400,296 @@ def test_section_classification_is_case_insensitive():
         assert groups[0]["position_file"] == "pos.buf"
         assert groups[0]["texcoord_file"] == "tc.buf"
         assert list(toggles) == ["keyswap"]
+
+
+DRAW_CAPABILITIES_INI = """[TextureOverrideBody]
+vb3 = ResourceBodyPosition
+vb4 = ResourceBodyTexcoord
+draw = 3, 1
+
+[ResourceBodyPosition]
+filename = position.buf
+stride = 8
+format = DXGI_FORMAT_R16G16B16A16_FLOAT
+
+[ResourceBodyTexcoord]
+filename = texcoord.buf
+stride = 8
+format = DXGI_FORMAT_R32G32_FLOAT
+"""
+
+
+def test_nonindexed_draw_uses_typed_layouts_and_higher_vb_slots():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", DRAW_CAPABILITIES_INI)
+        with open(os.path.join(tmp, "position.buf"), "wb") as stream:
+            for values in ((-1, -1, -1, 1), (1, 2, 3, 1),
+                           (4, 5, 6, 1), (7, 8, 9, 1)):
+                stream.write(struct.pack("<4e", *values))
+        with open(os.path.join(tmp, "texcoord.buf"), "wb") as stream:
+            for values in ((0, 0), (.1, .2), (.3, .4), (.5, .6)):
+                stream.write(struct.pack("<2f", *values))
+
+        sections = merge_sections([path])
+        groups = build_draw_groups(sections, extract_resources(sections))
+        assert groups[0]["draws"][0].operation == "draw"
+        assert groups[0]["draws"][0].position_slot == 3
+        assert groups[0]["draws"][0].texcoord_slot == 4
+
+        meshes, geometry = build_mesh_fixture(groups, tmp)
+        assert len(meshes) == 1
+        entry = next(iter(meshes.values()))
+        assert entry["draw"] == [3, 1]
+        positions = geometry_values(geometry, entry["pos"])
+        assert positions == (1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+
+def test_nonindexed_range_is_bounded_before_materializing_indices():
+    ini = DRAW_CAPABILITIES_INI.replace(
+        "draw = 3, 1", "draw = 4000000000, 0")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        open(os.path.join(tmp, "position.buf"), "wb").write(
+            struct.pack("<4e", 0, 0, 0, 1))
+        open(os.path.join(tmp, "texcoord.buf"), "wb").write(
+            struct.pack("<2f", 0, 0))
+
+        sections = merge_sections([path])
+        groups = build_draw_groups(sections, extract_resources(sections))
+        meshes, _geometry = build_mesh_fixture(groups, tmp)
+
+        assert meshes == {}
+
+
+def test_higher_slots_are_not_admitted_by_resource_names_alone():
+    ini = DRAW_CAPABILITIES_INI.replace(
+        "stride = 8\nformat = DXGI_FORMAT_R16G16B16A16_FLOAT",
+        "stride = 12", 1).replace(
+        "stride = 8\nformat = DXGI_FORMAT_R32G32_FLOAT",
+        "stride = 8", 1)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+
+        groups = build_draw_groups(sections, extract_resources(sections))
+
+        assert groups == []
+
+
+def test_credible_legacy_uv_offset_wins_over_ambiguous_later_float_pairs():
+    data = bytearray()
+    for uv, later_pair in (
+            ((0.1, 0.2), (0.0, 0.0)),
+            ((0.9, 0.2), (1.0, 0.0)),
+            ((0.1, 0.8), (0.0, 1.0)),
+            ((0.9, 0.8), (1.0, 1.0))):
+        vertex = bytearray(28)
+        struct.pack_into("<2f", vertex, 4, *uv)
+        struct.pack_into("<2f", vertex, 20, *later_pair)
+        data.extend(vertex)
+
+    layout = texcoord_layout(data, 28)
+
+    assert (layout.offset, layout.format) == (4, "float32x2")
+
+
+def test_broader_uv_offset_remains_supported_when_legacy_offsets_are_invalid():
+    data = bytearray()
+    for uv in ((0.1, 0.2), (0.9, 0.2), (0.1, 0.8), (0.9, 0.8)):
+        vertex = bytearray(16)
+        struct.pack_into("<2I", vertex, 0, 0x7FC00000, 0x7FC00000)
+        struct.pack_into("<2f", vertex, 8, *uv)
+        data.extend(vertex)
+
+    layout = texcoord_layout(data, 16)
+
+    assert (layout.offset, layout.format) == (8, "float32x2")
+
+
+@pytest.mark.parametrize("runtime_name", ["DRAW_TYPE", "$DRAW_TYPE"])
+def test_branch_local_incomplete_draw_is_not_built_as_triangle_geometry(
+        runtime_name):
+    ini = f"""[TextureOverrideBodyBlend]
+handling = skip
+if {runtime_name} == 2 || {runtime_name} == 4
+vb1 = ResourceBodyTexcoord
+vb2 = ResourceBodyBlend
+checktextureoverride = ib
+elif {runtime_name} == 1
+vb0 = ResourceBodyPosition
+vb2 = ResourceBodyBlend
+draw = 3, 0
+endif
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideBodyA]
+handling = skip
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+
+[ResourceBodyPosition]
+filename = position.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceBodyBlend]
+filename = blend.buf
+stride = 32
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+        scanned = _scan_sections_for_draws(sections)
+        replay = scanned["TextureOverrideBodyBlend"]["draws"][0]
+        assert replay.vertex_resources == {
+            0: "ResourceBodyPosition",
+            2: "ResourceBodyBlend",
+        }
+
+        groups = build_draw_groups(sections, extract_resources(sections))
+        assert [group["display_name"] for group in groups] == ["BodyA"]
+        assert groups[0]["draws"][0].operation == "drawindexed"
+
+
+def test_unconditional_incomplete_draw_does_not_borrow_sibling_buffers():
+    ini = """[TextureOverrideBodyPosition]
+vb0 = ResourceBodyPosition
+
+[TextureOverrideBodyBlend]
+handling = skip
+vb1 = ResourceBodyBlend
+draw = 3, 0
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideBodyA]
+handling = skip
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+
+[ResourceBodyPosition]
+filename = position.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceBodyBlend]
+filename = blend.buf
+stride = 32
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+        groups = build_draw_groups(sections, extract_resources(sections))
+
+        assert [group["display_name"] for group in groups] == ["BodyA"]
+
+
+AUTO_INDEXED_INI = """[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+drawindexed = auto
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R16_UINT
+
+[ResourceBodyPosition]
+filename = position.buf
+stride = 12
+format = DXGI_FORMAT_R32G32B32_FLOAT
+
+[ResourceBodyTexcoord]
+filename = texcoord.buf
+stride = 8
+format = DXGI_FORMAT_R32G32_FLOAT
+"""
+
+
+def _write_auto_geometry(tmp, indices=(0, 1, 2, 2, 1, 3)):
+    open(os.path.join(tmp, "body.ib"), "wb").write(
+        struct.pack(f"<{len(indices)}H", *indices))
+    open(os.path.join(tmp, "position.buf"), "wb").write(
+        struct.pack("<12f", 0, 0, 0, 1, 0, 0,
+                    0, 1, 0, 1, 1, 0))
+    open(os.path.join(tmp, "texcoord.buf"), "wb").write(
+        struct.pack("<8f", 0, 0, 1, 0, 0, 1, 1, 1))
+
+
+def test_drawindexed_auto_uses_the_complete_aligned_index_buffer():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", AUTO_INDEXED_INI)
+        _write_auto_geometry(tmp)
+        sections = merge_sections([path])
+        groups = build_draw_groups(sections, extract_resources(sections))
+        draw = groups[0]["draws"][0]
+        assert draw.auto_count and draw.count is None
+
+        meshes, _geometry = build_mesh_fixture(groups, tmp)
+        entry = next(iter(meshes.values()))
+        assert entry["drawindexed"] == ["auto"]
+        assert entry["idx"]["length"] == 6 * 4
+
+
+@pytest.mark.parametrize("format_line", [
+    "format = DXGI_FORMAT_R8_UINT",
+    "",
+])
+def test_unsupported_index_format_is_not_coerced_to_r32(format_line):
+    ini = AUTO_INDEXED_INI.replace(
+        "format = DXGI_FORMAT_R16_UINT", format_line)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        _write_auto_geometry(tmp, indices=(0, 1, 2, 2))
+        sections = merge_sections([path])
+
+        groups = build_draw_groups(sections, extract_resources(sections))
+
+        assert groups == []
+
+
+def test_out_of_range_vertex_or_index_range_rejects_whole_draw():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", AUTO_INDEXED_INI.replace(
+            "drawindexed = auto", "drawindexed = 4, 4, 0"))
+        _write_auto_geometry(tmp)
+        sections = merge_sections([path])
+        groups = build_draw_groups(sections, extract_resources(sections))
+        meshes, _geometry = build_mesh_fixture(groups, tmp)
+        assert meshes == {}
+
+        open(os.path.join(tmp, "body.ib"), "wb").write(
+            struct.pack("<3H", 0, 1, 8))
+        path = write(tmp, "mod.ini", AUTO_INDEXED_INI.replace(
+            "drawindexed = auto", "drawindexed = 3, 0, 0"))
+        sections = merge_sections([path])
+        groups = build_draw_groups(sections, extract_resources(sections))
+        meshes, _geometry = build_mesh_fixture(groups, tmp)
+        assert meshes == {}
+
+
+def test_run_expansion_has_a_depth_limit():
+    sections = {"TextureOverrideBody": ["run = CommandList0"]}
+    for index in range(66):
+        sections[f"CommandList{index}"] = [
+            f"run = CommandList{index + 1}"]
+    sections["CommandList66"] = ["draw = 3, 0"]
+    with pytest.raises(ValueError, match="run chain exceeds"):
+        _scan_sections_for_draws(sections)

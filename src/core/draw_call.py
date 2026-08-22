@@ -25,19 +25,27 @@ def _freeze(value):
 
 @dataclass(slots=True)
 class AuthoredDrawCall:
-    """One parsed ``drawindexed`` row before resource-name resolution."""
+    """One parsed draw operation before resource-name resolution."""
 
     count: int | None
     start: int
     base: int
+    operation: str = "drawindexed"
+    auto_count: bool = False
     conditions: list = field(default_factory=list)
     source: dict | None = None
     index_resource: str | None = None
+    index_resource_bound: bool = False
+    ambiguous_index_resource: bool = False
+    unsupported_reason: str | None = None
     diffuse_variants: list = field(default_factory=list)
     diffuse_history: list = field(default_factory=list)
     # Missing slot = no authored state in this execution path; None = an
     # explicit `vbN = null`; a string = the resource bound at this draw.
     vertex_resources: dict[int, str | None] = field(default_factory=dict)
+    ambiguous_vertex_slots: tuple[int, ...] = ()
+    ambiguous_vertex_resources: dict[int, tuple[str, ...]] = field(
+        default_factory=dict)
     auxiliary_maps: dict = field(default_factory=dict)
 
 
@@ -51,9 +59,11 @@ class DrawCall(MutableMapping):
     """
 
     label: str = ""
+    operation: str = "drawindexed"
     count: int | None = None
     start: int = 0
     base: int = 0
+    auto_count: bool = False
     conditions: list = field(default_factory=list)
     sources: list = field(default_factory=list)
 
@@ -63,6 +73,12 @@ class DrawCall(MutableMapping):
     texcoord_file: str | None = None
     position_stride: int | None = None
     texcoord_stride: int | None = None
+    position_slot: int | None = None
+    texcoord_slot: int | None = None
+    position_format: str | None = None
+    texcoord_format: str | None = None
+    position_offset: int = 0
+    texcoord_offset: int | None = None
 
     texture_default_file: str | None = None
     texture_variants: list = field(default_factory=list)
@@ -75,7 +91,8 @@ class DrawCall(MutableMapping):
     material_map_variants: list = field(default_factory=list)
 
     _ALWAYS_PRESENT: ClassVar[frozenset[str]] = frozenset({
-        "count", "start", "base", "conditions", "sources",
+        "operation", "count", "start", "base", "auto_count",
+        "conditions", "sources", "position_offset",
     })
     _TEXTURE_PREFIX: ClassVar[dict[str, str]] = {
         "diffuse": "texture",
@@ -84,13 +101,15 @@ class DrawCall(MutableMapping):
         "material_map": "material_map",
     }
     _NON_RENDER_FIELDS: ClassVar[frozenset[str]] = frozenset({
-        "label", "conditions", "sources",
+        "label", "conditions", "sources", "position_slot", "texcoord_slot",
     })
     _RENDER_IDENTITY_FIELDS: ClassVar[tuple[str, ...]] = (
-        "count", "start", "base",
+        "operation", "count", "start", "base", "auto_count",
         "ib_file", "index_size",
-        "position_file", "position_stride",
-        "texcoord_file", "texcoord_stride",
+        "position_file", "position_stride", "position_format",
+        "position_offset",
+        "texcoord_file", "texcoord_stride", "texcoord_format",
+        "texcoord_offset",
         "texture_default_file", "texture_variants", "texture_assignments",
         "normal_map_default_file", "normal_map_variants",
         "light_map_default_file", "light_map_variants",
@@ -114,7 +133,9 @@ class DrawCall(MutableMapping):
             raise TypeError(f"unsupported DrawCall field(s): {names}")
         values = dict(value)
         for name in ("ib_file", "index_size", "position_file",
-                     "position_stride", "texcoord_file", "texcoord_stride"):
+                     "position_stride", "position_slot", "position_format",
+                     "position_offset", "texcoord_file", "texcoord_stride",
+                     "texcoord_slot", "texcoord_format", "texcoord_offset"):
             if name not in values and group is not None:
                 values[name] = group.get(name)
         return cls(**values)

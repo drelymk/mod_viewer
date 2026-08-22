@@ -22,7 +22,10 @@ _LOCAL_RUN_TARGET_RE = re.compile(
 _RESOURCE_REFERENCE_RE = re.compile(
     r"^(?P<prefix>\S+)\s+(?P<resource>Resource[A-Za-z0-9_.\\-]+)\s*$", re.I)
 _VIEWER_DRAWINDEXED_RE = re.compile(
-    r"^\d+\s*,\s*\d+\s*,\s*-?\d+$")
+    r"^(?:auto|\d+\s*,\s*\d+\s*,\s*-?\d+)$", re.I)
+_VIEWER_DRAW_RE = re.compile(r"^\d+\s*,\s*\d+$")
+_UNSUPPORTED_DRAW_OPERATION_RE = re.compile(
+    r"^draw(?:indexed)?instanced(?:indirect)?$", re.I)
 _ASSET_EXTENSIONS = {
     ".buf", ".ib", ".vb", ".dds", ".png", ".jpg", ".jpeg", ".tga", ".bmp",
 }
@@ -133,15 +136,34 @@ def _analyze_statements(doc, ini_rel, issues):
             if "=" in line.text:
                 draw_lhs, draw_rhs = (
                     part.strip() for part in line.text.split("=", 1))
-                if (draw_lhs.lower() == "drawindexed"
-                        and not _VIEWER_DRAWINDEXED_RE.fullmatch(
-                            draw_rhs.split(";", 1)[0].strip())):
+                draw_name = draw_lhs.lower()
+                draw_arguments = draw_rhs.split(";", 1)[0].strip()
+                if (draw_name == "drawindexed"
+                        and not _VIEWER_DRAWINDEXED_RE.fullmatch(draw_arguments)):
                     issues.append(_issue(
                         "unsupported_drawindexed_arguments", "warning", "ini",
                         "The viewer cannot build this drawindexed statement: "
-                        "expected numeric count, start index and signed base vertex.",
+                        "expected auto or numeric count, start index and signed "
+                        "base vertex.",
                         ini_rel, section.name, line.no + 1, line.raw.strip(),
                         arguments=draw_rhs,
+                    ))
+                elif (draw_name == "draw"
+                      and draw_arguments.lower() != "from_caller"
+                      and not _VIEWER_DRAW_RE.fullmatch(draw_arguments)):
+                    issues.append(_issue(
+                        "unsupported_draw_arguments", "warning", "ini",
+                        "The viewer cannot build this draw statement: expected "
+                        "numeric vertex count and start vertex.",
+                        ini_rel, section.name, line.no + 1, line.raw.strip(),
+                        operation=draw_lhs, arguments=draw_rhs,
+                    ))
+                elif _UNSUPPORTED_DRAW_OPERATION_RE.fullmatch(draw_name):
+                    issues.append(_issue(
+                        "unsupported_draw_operation", "warning", "ini",
+                        f"The viewer does not build {draw_lhs} statements yet.",
+                        ini_rel, section.name, line.no + 1, line.raw.strip(),
+                        operation=draw_lhs, arguments=draw_rhs,
                     ))
 
             if line.kind != "assign" or "=" not in line.text:

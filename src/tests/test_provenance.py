@@ -57,10 +57,12 @@ stride = 20
 def _fixture(tmp, name, text):
     """Write an ini plus the buffer files its Resource sections name."""
     path = write(tmp, name, text)
-    for buf in ("body.ib", "pos.buf", "tc.buf"):
+    sizes = {"body.ib": 4 * 1024, "pos.buf": 40 * 1024,
+             "tc.buf": 20 * 1024}
+    for buf, size in sizes.items():
         p = os.path.join(tmp, buf)
         if not os.path.exists(p):
-            open(p, "wb").write(b"\0" * 4096)
+            open(p, "wb").write(b"\0" * size)
     return path
 
 

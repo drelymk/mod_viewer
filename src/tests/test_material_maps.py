@@ -244,6 +244,7 @@ drawindexed = 3, 0, 0
 
 [ResourceBodyIB]
 filename = body.ib
+format = DXGI_FORMAT_R32_UINT
 [ResourceBodyPosition]
 filename = pos.buf
 stride = 40
