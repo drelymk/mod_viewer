@@ -29,9 +29,12 @@ machine-specific paths or facts that are obvious from the source.
   parses each INI independently, consumes staged text when present, and returns
   named payload fields for meshes, textures, texture pools, controls, state,
   geometry, metadata and health.
-- `app.mod_folders` owns the optional persisted Mod Folder registry. A missing
-  config is an empty registry; valid writes use the versioned schema and an
-  atomic replace, while malformed or unsupported config must remain untouched.
+- `app.mod_folders` owns the optional versioned app config, including the Mod
+  Folder registry and global panel opacity. A missing config uses defaults;
+  valid writes use an atomic replace, while malformed or unsupported config
+  must remain untouched. Untouched panel opacity is omitted from the file;
+  once changed, its explicit value remains persisted even when it equals the
+  default.
 - Geometry is published through one shared localhost blob. The normal load path
   must not base64 round-trip geometry or rediscover semantic stages. Direct
   low-level fixtures may retain their older representation, but reserved
@@ -210,7 +213,9 @@ machine-specific paths or facts that are obvious from the source.
 - Inspector/Controls tab choice, panel collapse state and Mod Library expansion
   are presentation preferences stored in browser localStorage only. They are
   not mod state, are not loaded from or written to INI/session edits, and must
-  never affect geometry, materials or export.
+  never affect geometry, materials or export. Global panel opacity is the one
+  app-config preference; it is omitted until changed and then retained as an
+  explicit value.
 - MESHES is the navigation surface: component and mesh selection should not
   duplicate editing controls there. Inspector owns material kind, texture pool
   management, per-mesh texture overrides and draw details; Controls owns

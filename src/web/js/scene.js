@@ -233,13 +233,13 @@ export function resetView() {
   requestRender();
 }
 
-export function fitTo(meshes) {
-  cameraFrame.fitTo(meshes);
+export function fitTo(meshes, options) {
+  cameraFrame.fitTo(meshes, options);
   requestRender();
 }
 
-export function resetModelOrientation() {
-  cameraFrame.resetModelOrientation();
+export function resetModelOrientation(options) {
+  cameraFrame.resetModelOrientation(options);
 }
 
 export function rotateModelQuarterTurn(meshes = []) {

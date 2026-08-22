@@ -1,9 +1,10 @@
-"""Persistent Mod Folders registry and safe one-level enumeration.
+"""Persistent app configuration and safe Mod Folder enumeration.
 
-The registry stores only user-approved roots.  This module deliberately does
-not decide whether a directory is a loadable mod; that remains the loader's
-responsibility.  The API layer supplies the native-picker authorization needed
-before a root can be added or changed.
+The registry stores only user-approved roots, alongside small global viewer
+preferences.  This module deliberately does not decide whether a directory is
+a loadable mod; that remains the loader's responsibility.  The API layer
+supplies the native-picker authorization needed before a root can be added or
+changed.
 """
 
 import json
@@ -13,6 +14,8 @@ from . import paths
 
 
 CONFIG_VERSION = 1
+DEFAULT_PANEL_OPACITY = 58
+PANEL_OPACITY_KEY = "panelOpacity"
 
 
 class ModFolderError(ValueError):
@@ -52,10 +55,10 @@ def _config_file(config_file=None):
     return os.fspath(config_file or paths.config_path())
 
 
-def _read_entries(config_file=None):
+def _read_config(config_file=None):
     filename = _config_file(config_file)
     if not os.path.exists(filename):
-        return []
+        return {"version": CONFIG_VERSION, "modFolders": []}
     try:
         with open(filename, encoding="utf-8") as stream:
             config = json.load(stream)
@@ -68,6 +71,11 @@ def _read_entries(config_file=None):
     raw_entries = config.get("modFolders")
     if not isinstance(raw_entries, list):
         raise ModFolderError("config.json modFolders must be a list.")
+    return config
+
+
+def _read_entries(config_file=None):
+    raw_entries = _read_config(config_file)["modFolders"]
 
     entries = []
     seen = set()
@@ -104,10 +112,9 @@ def _validated_entry(name, folder, *, require_exists):
     return {"name": name.strip(), "path": normalized}
 
 
-def _write_entries(entries, config_file=None):
+def _write_config(config, config_file=None):
     filename = _config_file(config_file)
     temp_name = filename + ".tmp"
-    config = {"version": CONFIG_VERSION, "modFolders": entries}
     try:
         with open(temp_name, "w", encoding="utf-8", newline="\n") as stream:
             json.dump(config, stream, indent=2, ensure_ascii=False)
@@ -123,6 +130,37 @@ def _write_entries(entries, config_file=None):
                 os.remove(temp_name)
             except OSError:
                 pass
+
+
+def _write_entries(entries, config_file=None):
+    config = _read_config(config_file)
+    config["modFolders"] = entries
+    _write_config(config, config_file)
+
+
+def _validated_panel_opacity(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ModFolderError("Panel opacity must be a whole number from 0 to 100.")
+    if not float(value).is_integer() or not 0 <= value <= 100:
+        raise ModFolderError("Panel opacity must be a whole number from 0 to 100.")
+    return int(value)
+
+
+def load_panel_opacity(config_file=None):
+    """Return the global panel opacity, using the implicit default when absent."""
+    config = _read_config(config_file)
+    if PANEL_OPACITY_KEY not in config:
+        return DEFAULT_PANEL_OPACITY
+    return _validated_panel_opacity(config[PANEL_OPACITY_KEY])
+
+
+def save_panel_opacity(value, config_file=None):
+    """Persist an explicitly changed global panel opacity."""
+    opacity = _validated_panel_opacity(value)
+    config = _read_config(config_file)
+    config[PANEL_OPACITY_KEY] = opacity
+    _write_config(config, config_file)
+    return opacity
 
 
 def add_folder(name, folder, config_file=None):

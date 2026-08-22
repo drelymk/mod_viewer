@@ -4,7 +4,7 @@
 
 const STORAGE_KEY = 'mod-viewer.right-dock-tab';
 
-let activeTab = 'inspector';
+let activeTab = 'controls';
 let ready = false;
 
 function elements() {

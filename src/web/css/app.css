@@ -12,6 +12,9 @@
   --success-hover: #2ea043;
   --warning: #e3b341;
   --danger: #f85149;
+  --panel-opacity: .58;
+  --panel-blur: 5.8px;
+  --panel-shadow-opacity: .1276;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 #ui-icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
@@ -132,7 +135,7 @@ body {
  * no right-side panel is visible and moves left to clear the dock otherwise.
  * It remains a DOM overlay so it stays crisp at every WebView scale factor. */
 #view-gizmo {
-  position: absolute; top: calc(var(--toolbar-height) + 40px); right: 12px;
+  position: absolute; top: 12px; right: 12px;
   width: 104px; height: 104px;
   z-index: 9; border-radius: 50%; cursor: grab; touch-action: none;
   filter: drop-shadow(0 4px 10px rgba(0,0,0,.34));
@@ -172,7 +175,8 @@ body {
 #footer {
   position: fixed; bottom: 0; left: 0; right: 0; height: var(--footer-height);
   background: #161b22; border-top: 1px solid #30363d;
-  display: flex; align-items: center; justify-content: space-between;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
   padding: 0 14px; z-index: 100;
 }
 #app-version {
@@ -181,6 +185,7 @@ body {
 }
 #github-link {
   display: flex; align-items: center; color: #8b949e;
+  justify-self: end;
   border-radius: 4px; padding: 3px; transform: translateY(-1px);
 }
 #github-link:hover { color: #e6edf3; background: #21262d; }
@@ -211,16 +216,13 @@ body {
 #mod-folder-dock.expanded #mod-folder-panel {
   opacity: 1; pointer-events: auto; transform: translateX(0);
 }
+#mod-folder-dock.expanded ~ #sidebar {
+  visibility: hidden; opacity: 0; pointer-events: none;
+}
 #mod-folder-dock .panel-hdr { margin-bottom: 8px; cursor: default; }
 #mod-folder-dock h3 { font-size: 10px; color: var(--text-muted); text-transform: uppercase;
-  letter-spacing: .1em; margin: 0; flex: 1; }
-.mod-folder-close {
-  width: 32px; height: 36px; padding: 0; border: 1px solid var(--border);
-  border-radius: 5px; background: var(--bg-panel); color: var(--text);
-  cursor: pointer; font-size: 23px; font-weight: 700; line-height: 1;
-}
-.mod-folder-close:hover { background: var(--accent); }
-.mod-folder-close .ui-icon { width: 20px; height: 20px; }
+  letter-spacing: .1em; margin: 0; flex: 0 0 auto; }
+.mod-folder-close { margin-left: auto; }
 .mod-folder-error {
   display: none; margin-bottom: 8px; padding: 6px 8px; border-radius: 5px;
   color: var(--danger); background: rgba(248,81,73,.1);
@@ -377,7 +379,7 @@ body {
 #glossy-btn { background: var(--accent); }
 #glossy-btn.off { background: var(--bg-control); }
 #texture-btn { background: var(--accent); }
-#texture-btn.diffuse-only { background: #9a6700; }
+#texture-btn.diffuse-normal, #texture-btn.diffuse-only { background: #9a6700; }
 #texture-btn.off { background: var(--bg-control); }
 #light-btn.double { background: var(--accent); color: #fff; }
 #light-btn.current { background: #9a6700; color: #fff3b0; }
@@ -390,7 +392,7 @@ body {
 #light-btn.double, #light-btn.current {
   background: rgba(31,111,235,.22); border-color: var(--accent-soft); color: var(--accent-soft);
 }
-#texture-btn.diffuse-only, #light-btn.current {
+#texture-btn.diffuse-normal, #texture-btn.diffuse-only, #light-btn.current {
   background: rgba(227,179,65,.18); border-color: var(--warning); color: #f2cc72;
 }
 .nav-gizmo-icon { width: 24px; height: 24px; overflow: visible; }
@@ -399,25 +401,8 @@ body {
 .nav-gizmo-icon .nav-x { stroke: #f06a6a; fill: #f06a6a; }
 .nav-gizmo-icon .nav-y { stroke: #67c96b; fill: #67c96b; }
 .nav-gizmo-icon .nav-z { stroke: #64a5f5; fill: #64a5f5; }
-.environment-control {
-  position: absolute; top: 8px; right: 12px; z-index: 10;
-  width: 104px; display: flex; flex-direction: column; align-items: center;
-  gap: 2px; pointer-events: none;
-}
-.environment-btn {
-  width: 46px; height: 46px; padding: 5px; pointer-events: auto;
-  color: #e6edf3; background: rgba(22,27,34,.9);
-  border: 1px solid #30363d; border-radius: 8px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 4px 10px rgba(0,0,0,.28);
-  transition: border-color .12s, background .12s, transform .12s;
-}
-.environment-btn:hover, .environment-btn:focus-visible {
-  background: #1f6feb; border-color: #58a6ff; outline: none;
-}
-.environment-btn:active { transform: scale(.94); }
 .environment-icon {
-  width: 34px; height: 34px; overflow: visible;
+  width: 22px; height: 22px; overflow: visible;
 }
 .environment-icon [data-environment-icon] { display: none; }
 .environment-icon[data-environment="default"] [data-environment-icon="default"],
@@ -435,13 +420,7 @@ body {
 .environment-icon [data-environment-icon="indoor"] path:nth-child(2) { fill: #f2c879; }
 .environment-icon [data-environment-icon="outdoor"] { stroke: #79c0ff; }
 .environment-icon [data-environment-icon="outdoor"] circle { fill: #ffd866; stroke: #fff0a8; }
-.environment-label {
-  color: #c9d1d9; font-size: 10px; line-height: 12px; white-space: nowrap;
-  text-shadow: 0 1px 3px #0d1117;
-}
-body.right-dock-visible #view-gizmo,
-body.right-dock-visible .environment-control { right: 338px; }
-body.right-dock-visible #environment-popover { right: 338px; }
+body.right-dock-visible #view-gizmo { right: 338px; }
 .panel-hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; cursor: pointer; }
 #mesh-list.collapsed, #present-list.collapsed, #toggle-list.collapsed, #menu-list.collapsed { display: none; }
 .icon-btn {
@@ -875,7 +854,7 @@ body.feature-modify-toggle-off .present-author-actions { display: none; }
   #menu-list.image-layout > .toggle-src-items {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  #view-gizmo, .environment-control { right: 272px; }
+  #view-gizmo { right: 272px; }
   .mod-folder-actions > .mod-folder-edit,
   .mod-folder-actions > .mod-folder-remove { display: none; }
   .mod-folder-actions > .mod-folder-more { display: flex; }
@@ -950,6 +929,29 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   font-size: 11px;
 }
 #toolbar-overflow button:hover { background: var(--surface-active); }
+.header-control-wrap, .appearance-wrap {
+  position: relative; display: flex; align-items: center;
+}
+#environment-control { margin-left: auto; }
+.header-setting-btn, #appearance-btn {
+  display: grid; place-items: center; width: 32px; height: 32px; padding: 0;
+}
+#environment-popover {
+  position: absolute; top: calc(100% + 8px); right: 0; bottom: auto; left: auto;
+}
+.appearance-popover {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 260;
+  width: 220px; padding: 12px; color: var(--text);
+  background: rgba(22,27,34,.98); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: 0 10px 28px rgba(0,0,0,.45);
+}
+.appearance-popover[hidden] { display: none; }
+.appearance-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px; font-size: 11px; font-weight: 600;
+}
+#panel-opacity-value { color: var(--accent-soft); font-variant-numeric: tabular-nums; }
+#panel-opacity { width: 100%; accent-color: var(--accent); cursor: pointer; }
 
 #right-dock {
   display: none; width: 316px; max-width: min(316px, calc(50vw - 24px));
@@ -958,8 +960,10 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 #right-dock.ui-visible { display: flex; }
 .right-dock-tabs {
   display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px;
-  background: rgba(13,17,23,.9); border: 1px solid var(--border);
-  border-radius: var(--radius-md); backdrop-filter: blur(8px);
+  background: rgba(13,17,23,var(--panel-opacity));
+  border: 1px solid rgba(139,148,158,.45);
+  border-radius: var(--radius-md); backdrop-filter: blur(var(--panel-blur));
+  box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
 }
 .right-dock-tab {
   min-height: 32px; border: 0; border-radius: var(--radius-sm);
@@ -973,6 +977,14 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   width: 100%; overflow: hidden; padding: 12px 14px;
   background: rgba(13,17,23,.92); border: 1px solid var(--border);
   border-radius: var(--radius-md); backdrop-filter: blur(8px);
+}
+/* Keep the viewport visible while maintaining contrast across environments. */
+#sidebar, #mod-folder-panel, #present-panel, #toggle-panel, #menu-panel,
+#inspector-panel {
+  background: rgba(13,17,23,var(--panel-opacity));
+  backdrop-filter: blur(var(--panel-blur));
+  border-color: rgba(139,148,158,.45);
+  box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
 }
 #inspector-panel[hidden], #controls-panel[hidden] { display: none !important; }
 #controls-panel {
@@ -1071,7 +1083,11 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   width: auto; max-width: calc(100vw - 24px); min-width: 0;
   display: flex; flex-direction: row; align-items: center; flex-wrap: nowrap;
   max-height: none; overflow-x: auto; overflow-y: hidden;
-  padding: 5px 6px; border-radius: var(--radius-md); background: rgba(13,17,23,.9);
+  padding: 5px 6px; border-radius: var(--radius-md);
+  background: rgba(13,17,23,var(--panel-opacity));
+  backdrop-filter: blur(var(--panel-blur));
+  border-color: rgba(139,148,158,.45);
+  box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
 }
 #tool-panel.viewport-toolbar .panel-hdr { display: none; }
 #tool-panel.viewport-toolbar #tool-buttons {
@@ -1106,7 +1122,6 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   #ini-view-btn { font-size: 0; }
   #ini-view-btn::before { content: 'INI'; font-size: 12px; }
   #right-dock { right: 8px; width: min(316px, calc(100vw - 16px)); }
-  body.right-dock-visible #environment-popover { right: min(324px, calc(100vw - 8px)); }
   #tool-panel.viewport-toolbar { max-width: calc(100vw - 16px); padding: 4px 5px; }
   #tool-panel.viewport-toolbar .camera-btn,
   #tool-panel.viewport-toolbar .tool-btn {

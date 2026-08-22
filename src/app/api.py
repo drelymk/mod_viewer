@@ -93,6 +93,18 @@ class ModViewerAPI:
         self._refresh_authorized_roots(entries)
         return {"folders": self._folder_entries(entries)}
 
+    def get_panel_opacity(self):
+        try:
+            return {"value": mod_folders.load_panel_opacity()}
+        except mod_folders.ModFolderError as error:
+            return {"error": str(error), "value": mod_folders.DEFAULT_PANEL_OPACITY}
+
+    def set_panel_opacity(self, value):
+        try:
+            return {"value": mod_folders.save_panel_opacity(value)}
+        except mod_folders.ModFolderError as error:
+            return {"error": str(error)}
+
     def add_mod_folder(self, name, folder_path):
         folder_path = mod_folders.normalize_path(folder_path)
         if folder_path not in self._picker_authorized_folders:

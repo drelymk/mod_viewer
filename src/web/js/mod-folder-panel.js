@@ -47,7 +47,8 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
   const layoutKey = 'mod-viewer.mod-library.expanded';
 
   function setExpanded(expanded) {
-    if (!expanded && panel.contains(document.activeElement)) toggle.focus();
+    const focusClose = expanded && document.activeElement === toggle;
+    const restoreToggleFocus = !expanded && panel.contains(document.activeElement);
     panel.inert = !expanded;
     panel.setAttribute('aria-hidden', String(!expanded));
     dock.classList.toggle('expanded', expanded);
@@ -56,6 +57,8 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
       ? 'Close Mod Library' : 'Open Mod Library');
     toggle.replaceChildren(createIcon(expanded ? 'chevron-left' : 'library'));
     toggle.title = expanded ? 'Close Mod Library' : 'Open Mod Library';
+    if (focusClose) close.focus();
+    else if (restoreToggleFocus) toggle.focus();
     try { localStorage.setItem(layoutKey, String(expanded)); } catch (_) { /* private mode */ }
   }
 

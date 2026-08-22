@@ -11,7 +11,7 @@ import { notifyMeshStateChanged } from './mesh-state-events.js';
 
 export const activeMeshes = [];
 
-export function resetMeshes() {
+export function resetMeshes({ preserveModelOrientation = false } = {}) {
   activeMeshes.forEach(mesh => {
     detachOutline(mesh);
     scene.remove(mesh);
@@ -23,7 +23,7 @@ export function resetMeshes() {
     });
   });
   activeMeshes.length = 0;
-  resetModelOrientation();
+  resetModelOrientation({ preserveRotation: preserveModelOrientation });
   requestRender();
 }
 

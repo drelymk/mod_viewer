@@ -23,8 +23,8 @@ export const getToggleValue = getControlValue;
 export const getToggleState = getControlState;
 export const setStateRules = setControlStateRules;
 
-export function reset() {
-  resetMeshes();
+export function reset(options) {
+  resetMeshes(options);
   resetControlState();
   clearViewSyncs();
 }

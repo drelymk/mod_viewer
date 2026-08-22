@@ -22,6 +22,7 @@ import { requestRender } from './render-scheduler.js';
 import { setTextureDisplayMode } from './render-modes.js';
 import { clearInspector, initInspectorPanel } from './inspector-panel.js';
 import { initRightDock, setRightDockVisible } from './right-dock.js';
+import { initPanelOpacityControl } from './appearance.js';
 import {
   getOutlineState as getMeshOutlineState,
   setOutlineSuppressedByDebug,
@@ -33,7 +34,6 @@ const $ = (id) => document.getElementById(id);
 function initEnvironmentControl() {
   const button = $('environment-btn');
   const icon = $('environment-icon');
-  const label = $('environment-label');
   const labels = Object.fromEntries(
     Object.values(ENVIRONMENT_PRESETS).map(preset => [preset.id, preset.label]));
   const popover = $('environment-popover');
@@ -43,7 +43,6 @@ function initEnvironmentControl() {
     const name = labels[id] || id;
     icon.dataset.environment = id;
     button.dataset.environment = id;
-    label.textContent = name;
     button.setAttribute('aria-label', `Environment: ${name}. Click to change.`);
     button.title = `Environment: ${name} (click to change)`;
   }
@@ -137,7 +136,10 @@ function initToolPopovers() {
     if (wasOpen) return;
     texturePopover.replaceChildren();
     [
-      ['all', 'All maps'], ['diffuse', 'Diffuse only'], ['none', 'No textures'],
+      ['all', 'All maps'],
+      ['diffuse-normal', 'Diffuse and NormalMap'],
+      ['diffuse', 'Diffuse only'],
+      ['none', 'No textures'],
     ].forEach(([mode, label]) => {
       const option = document.createElement('button');
       option.type = 'button';
@@ -244,6 +246,10 @@ function initToolbarOverflow() {
 // actions know which session to update and reloadCurrentMod() knows what to
 // refresh afterward.
 let currentModPath = null;
+// Unlike currentModPath, this changes only after a payload is displayed.
+// Camera framing follows displayed model identity so a failed switch and retry
+// still frames the replacement, while a reload of the visible mod does not.
+let displayedModPath = null;
 let modTransitionInFlight = false;
 let rightDockEnabled = false;
 
@@ -286,11 +292,11 @@ async function refreshPendingState() {
     : '';
 }
 
-function clearScene() {
+function clearScene({ preserveModelOrientation = false } = {}) {
   clearSelection();
   clearInspector();
   rightDockEnabled = false;
-  reset();
+  reset({ preserveModelOrientation });
   // Debug mode is material-local and does not survive a reload; keep outline
   // suppression in the same lifecycle rather than carrying stale state onto
   // the next mod's normal materials.
@@ -321,9 +327,9 @@ function clearPendingState() {
  * makes the folder path, editor/diagnostic context, model, panels and pending
  * state one transition: a failed replacement can never leave the previous
  * mod visible under the new folder's toolbar state. */
-function beginModLoad(path, message) {
+function beginModLoad(path, message, { preserveModelOrientation = false } = {}) {
   currentModPath = path;
-  clearScene();
+  clearScene({ preserveModelOrientation });
   clearPendingState();
   window.dispatchEvent(new CustomEvent('mod-viewer-mod-load-started', {
     detail: { path },
@@ -338,7 +344,7 @@ function beginModLoad(path, message) {
   showLoading(true, message);
 }
 
-async function displayMeshPayload(payload) {
+async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   const geometry = payload.geometry;
   if (geometry) {
     const response = await fetch(geometry.url, { cache: 'no-store' });
@@ -368,13 +374,16 @@ async function displayMeshPayload(payload) {
   buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });
   rightDockEnabled = true;
   syncViewportControlPlacement();
-  fitTo(activeMeshes);
+  fitTo(activeMeshes, { preserveCamera });
 
   showLoading(false);
 }
 
 async function loadModAt(path) {
-  beginModLoad(path, 'Loading Model…');
+  const preserveViewerPose = samePath(displayedModPath, path);
+  beginModLoad(path, 'Loading Model…', {
+    preserveModelOrientation: preserveViewerPose,
+  });
 
   const data = await window.pywebview.api.load_mod(path);
   setHealthReport(data?.health);
@@ -385,9 +394,9 @@ async function loadModAt(path) {
     return false;
   }
   try {
-    await displayMeshPayload(data);
+    await displayMeshPayload(data, { preserveCamera: preserveViewerPose });
   } catch (error) {
-    clearScene();
+    clearScene({ preserveModelOrientation: preserveViewerPose });
     clearPendingState();
     showLoading(false);
     await refreshPendingState();
@@ -401,6 +410,7 @@ async function loadModAt(path) {
   $('mod-path').textContent = `${folderName}  —  ${path}`;
   $('mod-path').textContent = folderName;
   $('mod-path').title = path;
+  displayedModPath = path;
   window.dispatchEvent(new CustomEvent('mod-viewer-mod-loaded', {
     detail: { path },
   }));
@@ -546,6 +556,7 @@ function initPanelCollapse(panel, contentId) {
 }
 
 initToolbarOverflow();
+initPanelOpacityControl();
 
 rendererReady.then(ready => {
   if (!ready || !isRendererAvailable()) return;

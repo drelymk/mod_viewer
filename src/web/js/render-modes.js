@@ -9,7 +9,7 @@ let smoothShading = true;
 let glossy = false;
 const DEFAULT_ROUGHNESS = 1.0;
 const GLOSSY_ROUGHNESS = 0.2;
-const textureModes = ['all', 'diffuse', 'none'];
+const textureModes = ['all', 'diffuse-normal', 'diffuse', 'none'];
 let textureModeIndex = 0;
 
 function setMeshRoughness(mesh, roughness) {
@@ -83,10 +83,12 @@ export function setTextureDisplayMode(mode, meshes) {
   if (nextIndex < 0) return false;
   textureModeIndex = nextIndex;
   const button = document.getElementById('texture-btn');
+  button.classList.toggle('diffuse-normal', mode === 'diffuse-normal');
   button.classList.toggle('diffuse-only', mode === 'diffuse');
   button.classList.toggle('off', mode === 'none');
   const labels = {
     all: 'Textures: all maps',
+    'diffuse-normal': 'Textures: diffuse and normal map',
     diffuse: 'Textures: diffuse only',
     none: 'Textures: none',
   };

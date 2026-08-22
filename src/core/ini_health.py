@@ -9,7 +9,7 @@ import json
 import os
 import re
 
-from .ini_document import IniDocument
+from .ini_document import IniDocument, OTHER
 from .resource_paths import safe_resource_path
 from .textures import split_texture_key
 
@@ -17,6 +17,10 @@ from .textures import split_texture_key
 _RESOURCE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_.])Resource[A-Za-z0-9_.\\-]*(?![A-Za-z0-9_.])", re.I)
 _LOCAL_RESOURCE_RE = re.compile(r"^Resource[A-Za-z0-9_.-]+$", re.I)
 _REFERENCE_LHS_RE = re.compile(r"^(?:ib|vb\d+|ps-t\d+|cs-t\d+)$", re.I)
+_LOCAL_RUN_TARGET_RE = re.compile(
+    r"^(?:CommandList|CustomShader)[A-Za-z0-9_.-]+$", re.I)
+_RESOURCE_REFERENCE_RE = re.compile(
+    r"^(?P<prefix>\S+)\s+(?P<resource>Resource[A-Za-z0-9_.\\-]+)\s*$", re.I)
 _ASSET_EXTENSIONS = {
     ".buf", ".ib", ".vb", ".dds", ".png", ".jpg", ".jpeg", ".tga", ".bmp",
 }
@@ -91,6 +95,88 @@ def _rebased_filename(filename, ini_path, mod_dir):
     return filename if rel_dir == os.curdir else os.path.join(rel_dir, filename)
 
 
+def _normalized_key_chord(value):
+    """Normalize enough key syntax to find chords that can fire together."""
+    modifiers, keys = [], []
+    for token in value.lower().split():
+        normalized = token.replace("-", "_")
+        if normalized in {"no_modifiers", "no_ctrl", "no_control",
+                          "no_shift", "no_alt"}:
+            continue
+        if normalized in {"ctrl", "control", "shift", "alt"}:
+            modifiers.append("ctrl" if normalized in {"ctrl", "control"}
+                             else normalized)
+        else:
+            keys.append(normalized)
+    if not keys:
+        return None
+    return "+".join(sorted(set(modifiers)) + keys)
+
+
+def _analyze_statements(doc, ini_rel, issues):
+    """Check conservative statement-level mistakes outside condition syntax."""
+    declared_sections = {section.name.lower() for section in doc.sections}
+    seen_keys = {}
+
+    for section in doc.sections:
+        is_key = section.name.lower().startswith("key")
+        for line in section.lines:
+            if is_key and line.kind == OTHER:
+                issues.append(_issue(
+                    "unexpected_key_statement", "error", "ini",
+                    f"Unexpected statement in [{section.name}]: {line.text}",
+                    ini_rel, section.name, line.no + 1, line.raw.strip(),
+                ))
+
+            if line.kind != "assign" or "=" not in line.text:
+                continue
+            lhs, rhs = (part.strip() for part in line.text.split("=", 1))
+            lowered_lhs = lhs.lower()
+
+            if _REFERENCE_LHS_RE.match(lhs):
+                malformed = _RESOURCE_REFERENCE_RE.match(rhs)
+                if malformed and malformed.group("prefix").lower() not in {
+                        "copy", "ref"}:
+                    issues.append(_issue(
+                        "malformed_resource_reference", "error", "resources",
+                        f"{lhs} uses an invalid resource reference prefix: "
+                        f"{malformed.group('prefix')!r}.",
+                        ini_rel, section.name, line.no + 1, line.raw.strip(),
+                        resource=malformed.group("resource"),
+                    ))
+
+            if lowered_lhs == "run":
+                target = rhs.split(";", 1)[0].strip()
+                if (_LOCAL_RUN_TARGET_RE.match(target)
+                        and target.lower() not in declared_sections):
+                    issues.append(_issue(
+                        "missing_local_run_target", "warning", "ini",
+                        f"{target} is run but is not declared in this INI; "
+                        "it may be supplied by the framework.",
+                        ini_rel, section.name, line.no + 1, line.raw.strip(),
+                        target=target,
+                    ))
+
+            if is_key and lowered_lhs == "key":
+                chord = _normalized_key_chord(rhs)
+                if not chord:
+                    continue
+                previous = seen_keys.get(chord)
+                if previous:
+                    issues.append(_issue(
+                        "duplicate_key_binding", "warning", "controls",
+                        f"[{section.name}] and [{previous['section']}] share "
+                        f"the key binding {rhs!r} and may activate together.",
+                        ini_rel, section.name, line.no + 1, line.raw.strip(),
+                        key=rhs, other_section=previous["section"],
+                        other_line=previous["line"],
+                    ))
+                else:
+                    seen_keys[chord] = {
+                        "section": section.name, "line": line.no + 1,
+                    }
+
+
 def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files):
     for problem in doc.structure_errors():
         issues.append(_issue(
@@ -107,6 +193,7 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files):
             ini_rel, problem.get("section"), problem["line"] + 1,
             doc.lines[problem["line"]].raw.strip() if doc.lines else None,
         ))
+    _analyze_statements(doc, ini_rel, issues)
 
     resources = _resource_sections(doc)
     declared = set(resources)

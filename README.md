@@ -1,110 +1,72 @@
 # 3DMigoto Mod Viewer
 
-Preview 3DMigoto character mods in 3D **without launching the game**.
+3DMigoto Mod Viewer is a desktop app for opening character mods and inspecting
+them in 3D without launching the game. Select a mod folder and the app reads its
+active INIs, buffers, and texture bindings, reconstructs the model, and presents
+it in an interactive viewport.
 
-Point it at a mod folder and it reads the `.ini` files and buffer data directly,
-rebuilds the meshes, and renders them in an interactive 3D view. No game, no
-load screen, no character select — just open the folder and look at the model.
+It supports mods made for ZZMI, GIMI, WWMI, and SRMI.
 
-Supports mods for: ZZMI, GIMI, WWMI, SRMI
+![3DMigoto Mod Viewer](https://github.com/drelymk/mod_viewer/blob/main/media/3DMigoto%20Mod%20Viewer.jpg)
 
-![3dmigoto-mod-viewer](https://github.com/drelymk/mod_viewer/blob/main/media/3DMigoto%20Mod%20Viewer.jpg)
+## What the app can do
 
-## Showing and hiding parts
+The viewer turns a mod's authored draw calls into a model you can orbit and
+inspect. Components and meshes remain tied to their source INIs, while the
+Inspector shows the selected material, texture assignments, and draw details.
+Viewer-owned display controls make it easier to examine geometry and material
+response without changing the mod.
 
-There are two ways to control what you see:
+The app also interprets the mod's controls. Toggle, menu, and PRESENT state can
+be previewed to see how outfit variants and conditional meshes behave before
+testing them in game. Individual meshes can still be isolated when you need to
+inspect a hidden part or track down an incorrect condition.
 
-- **Toggle panel (right)** — mirrors the in-game hotkeys. Every cycle-type
-  `[Key...]` section in the mod becomes a button showing its key binding and
-  current value. Click it to cycle, exactly as pressing that key would in game,
-  and the affected meshes appear or disappear. Handy for checking that all the
-  outfit variants and swaps actually work before you load the game.
-- **Meshes panel (left)** — a checkbox per mesh, grouped by component and
-  collapsible. Click any mesh to force it visible or hidden, regardless of what
-  the toggles say. Useful for inspecting a single part, or for seeing pieces
-  that are hidden in the mod's default state.
+Built-in diagnostics examine the active INIs and their resource graph. Reports
+identify structural mistakes, suspicious control bindings, missing or unsafe
+resources, unused declarations, and related file problems, with source locations
+that can be opened directly in the INI editor. Diagnostics are read-only and can
+still be viewed when a broken resource prevents the model from loading.
 
-Both stay in sync: cycling a toggle updates the mesh checkboxes to match, while
-a manual click always wins for that mesh.
+For authoring work, the app maintains a lossless in-memory edit session. The INI
+editor, toggle tools, and recording workflow all update the same staged version,
+so changes can be previewed before anything reaches disk. Export writes the
+pending INIs together and creates timestamped backups; switching to another mod
+warns before staged work is discarded.
 
-Camera: drag to orbit, scroll to zoom, right-drag to pan. **Wireframe**,
-**Grid** and **Shading** toggles are in the toolbar.
+Registered mod folders can be browsed as a small local library. Viewer-only
+choices such as panel state, environment, and manual texture previews remain
+separate from the mod's INIs.
 
-## INI diagnostics
+## Compatibility and limitations
 
-The **Diagnostics** button checks the active INIs without modifying them. It reports
-malformed `if`/`elif`/`else` nesting, missing or unsafe files used by resource
-sections, malformed condition statements and section headers, unused resource
-sections, and asset files that no active INI
-declares. Findings include the INI, section, line number, and source excerpt
-where available. The report remains available when broken resources prevent
-the model itself from loading. Double-click a finding to open its INI and jump
-to the reported line.
+The app requires a WebGPU-capable system. Texture preview works best with mods
+that use SlotFix/Stable Texture conventions. Unusual or highly customized mod
+layouts may not be reconstructed completely; diagnostics remain available for
+examining those folders.
 
-“Unused” is intentionally conservative: disabled-INI assets and textures saved
-only in `.mod_viewer.json` are classified separately and are not suggested as
-unused.
+## Running the app
 
-## Adding and editing toggles
+The portable Windows build requires no installation. Run the executable on
+64-bit Windows with the Microsoft Edge WebView2 Runtime available. WebView2 is
+included with Windows 11 and is normally delivered to Windows 10 through Windows
+Update.
 
-The Toggle panel isn't just for viewing — it can author new key bindings too:
+To run from source:
 
-- **＋** (panel header) adds a new toggle: pick the ini file (if the mod has
-  more than one), give it a name, key binding, variable name, and its list of
-  cycle values.
-- **✎** on a toggle edits its name, key binding, or values.
-- **🗑** on a toggle deletes it, cleaning up its variable and any `if`/`elif`
-  gates that referenced it.
+```console
+pip install -r requirements.txt
+python src/viewer_app.py
+```
 
-A newly added toggle doesn't show or hide anything by itself — it needs to be
-**wired** to meshes first, which is what Record mode is for. An unwired toggle
-shows a **⚠** warning and blocks Export until it's wired or deleted.
+To create a portable build:
 
-## Record mode
+```console
+python src/build.py
+```
 
-Click **⏺** on a toggle to record what each of its values should show. The
-Meshes panel becomes the recording surface: check/uncheck meshes for the
-current value, click through each position, then **Save** — the app rewrites
-the mod's `if`/`elif` conditions to match automatically, no manual ini editing
-required. **Cancel** leaves everything as it was.
-
-While recording, opening a different mod and the rest of the Toggle panel are
-locked so nothing else changes underneath the session.
-
-## Exporting changes
-
-Every active INI has an in-memory working version. **View INI** opens the file
-(or a file list for multi-INI mods); **Apply to memory** updates that working
-version and refreshes the model without touching disk. Toggle add/edit/delete
-and Record mode modify the same working versions.
-
-Every add, edit, delete, and recording is staged in memory only — the real
-`.ini` files aren't touched until you click **💾 Export**. Export writes a
-timestamped backup of each changed file before saving, so you can always roll
-back. A **● Unsaved changes** indicator appears in the toolbar whenever there's
-something pending, and opening a different mod folder with pending changes
-asks for confirmation before discarding them.
-
-## Limitation
-
-- Texture only loads for mods that applied Slotfix/Stable Texture.
-- Complex mods may not load correctly.
-
-## Running it
-
-Portable build — no install needed, just run the `.exe`. Requires 64-bit Windows
-and the Evergreen WebView2 Runtime (already present on Windows 11, and delivered
-to Windows 10 via Windows Update).
-
-From source:
-
-    pip install -r requirements.txt
-    python src/viewer_app.py
-
-To build the portable app yourself, see `src/build.py`. `src/features.ini` lets a
-build hide the Export and toggle-authoring buttons if you want a read-only viewer.
+Build output is written to `dist/`.
 
 ## License
 
-GPL-3.0-or-later — see [LICENSE](LICENSE).
-
+GPL-3.0-or-later. See [LICENSE](LICENSE).

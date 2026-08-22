@@ -150,6 +150,52 @@ def test_unsafe_paths_and_namespaced_resources():
     assert (not namespaced_missing), ("namespaced framework resources are not guessed to be missing")
 
 
+def test_statement_run_target_and_key_binding_findings():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(os.path.join(tmp, "mod.ini"), (
+            "[Constants]\n"
+            "global $active = 1\n"
+            "[KeyFirst]\n"
+            "condition = $active\n"
+            "key = no_modifiers ;\n"
+            "type = cycle\n"
+            "$first = 0,1\n"
+            "'\n"
+            "[KeySecond]\n"
+            "condition = $active\n"
+            "key = ;\n"
+            "type = cycle\n"
+            "$second = 0,1\n"
+            "[TextureOverrideBody]\n"
+            "ps-t8 = ef ResourceGlow\n"
+            "run = CommandListMissing\n"
+            "run = CommandListKnown\n"
+            "run = CommandList\\Framework\\External\n"
+            "run = BuiltInCommandListUnbindAllRenderTargets\n"
+            "[CommandListKnown]\n"
+            "ps-t8 = ref ResourceGlow\n"
+            "[ResourceGlow]\n"
+            "filename = glow.dds\n"))
+        _write(os.path.join(tmp, "glow.dds"), b"DDS " + b"\0" * 124,
+               binary=True)
+        report = analyze_mod(tmp)
+
+    by_code = {}
+    for issue in report["issues"]:
+        by_code.setdefault(issue["code"], []).append(issue)
+    assert len(by_code["unexpected_key_statement"]) == 1
+    assert by_code["unexpected_key_statement"][0]["line"] == 8
+    assert len(by_code["malformed_resource_reference"]) == 1
+    assert by_code["malformed_resource_reference"][0]["resource"] == (
+        "ResourceGlow")
+    assert len(by_code["duplicate_key_binding"]) == 1
+    duplicate = by_code["duplicate_key_binding"][0]
+    assert duplicate["other_section"] == "KeyFirst"
+    assert duplicate["section"] == "KeySecond"
+    assert [issue["target"] for issue in
+            by_code["missing_local_run_target"]] == ["CommandListMissing"]
+
+
 
 
 def test_health_survives_geometry_failure():

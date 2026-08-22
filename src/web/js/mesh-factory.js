@@ -20,7 +20,8 @@ const readyTextures = new Set();
 const failedTextures = new Set();
 const nativeDDSFallbacks = new Set();
 const textureUsers = new Map();
-// all: diffuse + INI material maps; diffuse: diffuse only; none: flat colour.
+// all: every authored map; diffuse-normal: color + the material's actual
+// normal source; diffuse: color only; none: flat colour.
 let textureMode = 'all';
 
 function disposeTexture(texture) {
@@ -194,16 +195,19 @@ function getTexture(mesh, key) {
 export function refreshMeshTexture(mesh) {
   const showDiffuse = textureMode !== 'none';
   const showMaterialMaps = textureMode === 'all';
+  const showNormal = showMaterialMaps || textureMode === 'diffuse-normal';
   const gameMaterialSources = getGameMaterialSources(mesh.material);
   const usePackedSource = role =>
     showMaterialMaps && gameMaterialSources.has(role);
   const normalSource = mesh.material?.userData?.gameMaterial?.normalSource
     || 'normal_map';
   const map = showDiffuse ? getTexture(mesh, mesh.userData.texKey) : null;
-  const normalMap = showMaterialMaps && normalSource === 'normal_map'
+  const normalMap = showNormal && normalSource === 'normal_map'
     && mesh.userData.normalMapEnabled !== false
     ? getTexture(mesh, mesh.userData.normalMapKey) : null;
-  const normalData = usePackedSource('normal_data')
+  const normalData = (usePackedSource('normal_data')
+      || (showNormal && normalSource === 'normal_data'
+        && gameMaterialSources.has('normal_data')))
     ? getTexture(mesh, mesh.userData.normalDataKey) : null;
   const lightMap = usePackedSource('light_map')
     ? getTexture(mesh, mesh.userData.lightMapKey) : null;

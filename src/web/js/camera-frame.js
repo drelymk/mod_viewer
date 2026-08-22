@@ -21,7 +21,7 @@ export function createCameraFrame({
   let clipNear = camera.near;
   let clipFar = camera.far;
   let uprightApplied = false;
-  let modelQuarterTurns = 0;
+  const modelRotation = new THREE.Quaternion();
   let modelPivot = null;
 
   /** Aim projection at the unobstructed region while retaining the real model
@@ -131,19 +131,24 @@ export function createCameraFrame({
   }
 
   function rotateModelQuarterTurn(meshes = []) {
-    rotateMeshesAroundCenter(meshes, new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(0, 1, 0), Math.PI / 2));
-    modelQuarterTurns = (modelQuarterTurns + 1) % 4;
+    if (!meshes.length) return;
+    const rotation = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0), Math.PI / 2);
+    rotateMeshesAroundCenter(meshes, rotation);
+    modelRotation.premultiply(rotation);
   }
 
   function rotateModelHorizontalQuarterTurn(meshes = []) {
-    rotateMeshesAroundCenter(meshes, new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(1, 0, 0), Math.PI / 2));
+    if (!meshes.length) return;
+    const rotation = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    rotateMeshesAroundCenter(meshes, rotation);
+    modelRotation.premultiply(rotation);
   }
 
-  function resetModelOrientation() {
+  function resetModelOrientation({ preserveRotation = false } = {}) {
     uprightApplied = false;
-    modelQuarterTurns = 0;
+    if (!preserveRotation) modelRotation.identity();
     modelPivot = null;
     homeView = null;
   }
@@ -155,6 +160,7 @@ export function createCameraFrame({
       mesh.quaternion.copy(quaternion);
       mesh.position.copy(position);
     });
+    modelRotation.identity();
     const box = new THREE.Box3();
     homeView.meshes.forEach(({ mesh }) => expandByBaseMesh(box, mesh));
     if (box.isEmpty()) return;
@@ -167,7 +173,15 @@ export function createCameraFrame({
     controls.saveState();
   }
 
-  function fitTo(meshes) {
+  function fitTo(meshes, { preserveCamera = false } = {}) {
+    const preservedView = preserveCamera ? {
+      position: camera.position.clone(),
+      quaternion: camera.quaternion.clone(),
+      up: camera.up.clone(),
+      target: controls.target.clone(),
+      zoom: camera.zoom,
+    } : null;
+    let homeMeshTransforms = null;
     if (!uprightApplied && meshes.length) {
       const rawBox = new THREE.Box3();
       meshes.forEach(mesh => expandByBaseMesh(rawBox, mesh));
@@ -178,6 +192,17 @@ export function createCameraFrame({
             new THREE.Vector3(1, 0, 0), -Math.PI / 2));
         });
       }
+      const uprightBox = new THREE.Box3();
+      meshes.forEach(mesh => expandByBaseMesh(uprightBox, mesh));
+      if (!uprightBox.isEmpty()) {
+        modelPivot = uprightBox.getCenter(new THREE.Vector3());
+      }
+      homeMeshTransforms = meshes.map(mesh => ({
+        mesh,
+        quaternion: mesh.quaternion.clone(),
+        position: mesh.position.clone(),
+      }));
+      rotateMeshesAroundCenter(meshes, modelRotation);
       uprightApplied = true;
     }
     const box = new THREE.Box3();
@@ -186,7 +211,7 @@ export function createCameraFrame({
 
     const boxSize = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
-    modelPivot = center.clone();
+    if (!modelPivot) modelPivot = center.clone();
     const size = boxSize.length();
     const dimensions = [boxSize.x, boxSize.y, boxSize.z].sort((a, b) => a - b);
     grid.scale.setScalar(Math.max(1.5, dimensions[1]));
@@ -207,14 +232,29 @@ export function createCameraFrame({
       target: controls.target.clone(),
       near: camera.near,
       far: camera.far,
-      meshes: meshes.map(mesh => ({
+      meshes: homeMeshTransforms || meshes.map(mesh => ({
         mesh,
         quaternion: mesh.quaternion.clone(),
         position: mesh.position.clone(),
       })),
     };
+    if (preservedView) {
+      camera.position.copy(preservedView.position);
+      camera.up.copy(preservedView.up);
+      camera.zoom = preservedView.zoom;
+      controls.target.copy(preservedView.target);
+      camera.updateProjectionMatrix();
+    }
     camera.updateMatrix();
     controls.update();
+    if (preservedView) {
+      // Arcball update synchronizes its target and position but reconstructs
+      // camera orientation. Restore its exact pre-reload roll/orientation only
+      // after that synchronization, then make it the new saved control state.
+      camera.quaternion.copy(preservedView.quaternion);
+      camera.updateMatrix();
+      camera.updateMatrixWorld();
+    }
     controls.saveState();
   }
 

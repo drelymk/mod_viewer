@@ -280,7 +280,8 @@ def edge_browser():
 
 
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
-          mod_folders=None, subfolders=None, diagnostics=None):
+          mod_folders=None, subfolders=None, diagnostics=None, panel_opacity=58,
+          panel_opacity_api=True):
     # Playwright's wait_for_function uses eval internally. Bypass the app's
     # production CSP only in this isolated test context so behavioral waits
     # do not require weakening the served application's policy.
@@ -293,8 +294,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "subfolders": subfolders or {},
         "diagnostics": diagnostics or {
             "summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
+        "panelOpacity": panel_opacity,
+        "panelOpacityApi": panel_opacity_api,
         "calls": {"loadMod": [], "listSubfolders": [],
-                   "discardChanges": [], "switches": [], "diagnostics": []},
+                   "discardChanges": [], "switches": [], "diagnostics": [],
+                   "panelOpacity": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -329,6 +333,12 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.pending[path] = false;
             },
             get_mod_folders: async () => copy({folders: state.modFolders}),
+            get_panel_opacity: async () => ({value: state.panelOpacity}),
+            set_panel_opacity: async value => {
+              state.panelOpacity = value;
+              state.calls.panelOpacity.push(value);
+              return {value};
+            },
             add_mod_folder: async (name, path) => {
               state.modFolders.push({name, path, exists: true});
               return copy({folders: state.modFolders});
@@ -360,6 +370,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             pick_texture_file: async () => copy(state.picks.shift() || null),
             get_record_positions: async () => ({positions: 2, vars: ['toggle']}),
           }};
+          if (!state.panelOpacityApi) {
+            delete window.pywebview.api.get_panel_opacity;
+            delete window.pywebview.api.set_panel_opacity;
+          }
         }
         """.replace("__STATE__", encoded_state),
     )
@@ -372,9 +386,6 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
 def _open(page, path):
     page.evaluate("path => { window.__fakeApi.nextPath = path; }", path)
     page.locator("#open-btn").click()
-    # Existing control-state tests exercise the Controls tab explicitly. The
-    # production default remains Inspector for a newly loaded mod.
-    page.locator("#controls-tab").evaluate("button => button.click()")
 
 
 def _open_library(page):
@@ -701,6 +712,58 @@ def test_shared_texture_waits_once_and_updates_all_meshes(
             mesh.material.userData.gameMaterial.bindings.diffuse.enabledNode.value
               === true)
         """)
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize(("profile_id", "normal_role"), [
+    ("zzz:zzmi", "normal_map"),
+    ("wuwa:rabbitfx:body", "normal_data"),
+])
+def test_diffuse_normal_mode_keeps_only_color_and_normal_bindings(
+        edge_browser, frontend_url, profile_id, normal_role):
+    payload = _packed_material_payload(profile_id)
+    entry = payload["meshes"]["Body-Packed-0"]
+    if normal_role == "normal_map":
+        normal_key = "normal_map::Packed-surface-normal.png"
+        entry["normal_map_key"] = normal_key
+        payload["textures"][normal_key] = _PNG_URI
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function("""normalRole => {
+          const bindings = window.modViewer.activeMeshes[0]?.material
+            ?.userData?.gameMaterial?.bindings;
+          return bindings?.diffuse.enabledNode.value === true
+            && bindings[normalRole].enabledNode.value === true;
+        }""", arg=normal_role)
+
+        page.locator("#texture-btn").click()
+        options = page.locator("#texture-popover .ui-popover-option")
+        assert options.all_inner_texts() == [
+            "All maps", "Diffuse and NormalMap", "Diffuse only", "No textures"]
+        options.filter(has_text="Diffuse and NormalMap").click()
+        bindings = page.evaluate("""() => {
+          const values = window.modViewer.activeMeshes[0].material
+            .userData.gameMaterial.bindings;
+          return Object.fromEntries(Object.entries(values).map(
+            ([role, binding]) => [role, binding.enabledNode.value]));
+        }""")
+        expected_bindings = {
+            "diffuse": True,
+            "normal_map": False,
+            "normal_data": False,
+            "light_map": False,
+            "material_map": False,
+        }
+        expected_bindings[normal_role] = True
+        assert bindings == expected_bindings
+        button = page.locator("#texture-btn")
+        assert "diffuse-normal" in (button.get_attribute("class") or "")
+        assert button.get_attribute("aria-label") == (
+            "Textures: diffuse and normal map")
+        assert button.evaluate("button => getComputedStyle(button).color") == (
+            "rgb(242, 204, 114)")
     finally:
         context.close()
 
@@ -1778,6 +1841,50 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
 
 
 
+def test_controls_precede_inspector_and_are_the_default_right_dock_tab(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        assert page.locator(".right-dock-tabs > button").evaluate_all(
+            "tabs => tabs.map(tab => tab.id)") == ["controls-tab", "inspector-tab"]
+        assert page.locator("#controls-tab").get_attribute(
+            "aria-selected") == "true"
+        assert page.locator("#controls-panel").is_visible()
+        assert page.locator("#inspector-panel").is_hidden()
+
+        page.locator("#inspector-tab").click()
+        page.reload()
+        page.wait_for_function("window.modViewer !== undefined")
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        assert page.locator("#inspector-tab").get_attribute(
+            "aria-selected") == "true"
+        assert page.locator("#inspector-panel").is_visible()
+        assert page.locator("#controls-panel").is_hidden()
+    finally:
+        context.close()
+
+
+def test_app_version_is_centered_in_footer(edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        for width in (1280, 600):
+            page.set_viewport_size({"width": width, "height": 720})
+            centers = page.evaluate("""() => {
+              const footer = document.querySelector('#footer').getBoundingClientRect();
+              const version = document.querySelector('#app-version').getBoundingClientRect();
+              return {
+                footer: footer.left + footer.width / 2,
+                version: version.left + version.width / 2,
+              };
+            }""")
+            assert abs(centers["footer"] - centers["version"]) < 0.5
+    finally:
+        context.close()
+
+
 def test_texture_rows_are_reused_for_control_changes_and_rebuilt_for_pool_changes(
         edge_browser, frontend_url):
     pick = {
@@ -2106,6 +2213,21 @@ def test_mod_folder_panel_overlays_sidebar_and_browses_children_lazily(
         assert page.locator("#empty-add-folder-btn").inner_text() == "Open Mod Folder"
         _open_library(page)
         assert page.locator("#mod-folder-modal-backdrop.show").count() == 0
+        assert page.locator("#mod-folder-panel > .panel-hdr > *").evaluate_all(
+            "nodes => nodes.map(node => node.id || node.tagName)") == [
+                "H3", "mod-folder-add", "mod-folder-close"]
+        header_positions = page.evaluate("""() => {
+          const rect = selector => document.querySelector(selector).getBoundingClientRect();
+          const panel = rect('#mod-folder-panel');
+          const label = rect('#mod-folder-panel > .panel-hdr h3');
+          const add = rect('#mod-folder-add');
+          const close = rect('#mod-folder-close');
+          return {
+            addBesideLabel: add.left >= label.right && add.left - label.right <= 8,
+            closeAtRight: close.right >= panel.right - 16,
+          };
+        }""")
+        assert header_positions == {"addBesideLabel": True, "closeAtRight": True}
         sidebar_after = page.locator("#sidebar").bounding_box()
         assert sidebar_after == sidebar_before
         z_indices = page.evaluate("""() => ({
@@ -2185,7 +2307,7 @@ def test_mod_folder_name_selection_preserves_dock_state_across_reload(
         _open_library(page)
         page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="Alice").click()
-        page.locator(".draw-item").wait_for()
+        page.locator(".draw-item").wait_for(state="attached")
         assert page.evaluate("window.__fakeApi.calls.loadMod") == [alice]
         assert "expanded" in page.locator("#mod-folder-dock").get_attribute("class")
         page.locator("#mod-folder-list > .mod-folder-node > .mod-folder-row > .mod-folder-expand").click()
@@ -2199,6 +2321,107 @@ def test_mod_folder_name_selection_preserves_dock_state_across_reload(
         page.evaluate("window.modViewer.reloadCurrentMod()")
         page.wait_for_function("window.__fakeApi.calls.loadMod.length === 3")
         assert "expanded" not in page.locator("#mod-folder-dock").get_attribute("class")
+    finally:
+        context.close()
+
+
+def test_reload_preserves_camera_but_switching_mod_resets_it(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"First": _payload("First"), "Second": _payload("Second")},
+    )
+    try:
+        _open(page, "First")
+        page.locator(".draw-item").wait_for()
+        baseline_model = page.evaluate("""() => ({
+          position: window.modViewer.activeMeshes[0].position.toArray(),
+          quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+        })""")
+        page.locator("#camera-flip-btn").click()
+        page.locator("#camera-flip-horizontal-btn").click()
+        expected = page.evaluate("""async () => {
+          const {camera, controls} = await import('./js/scene.js');
+          camera.position.set(7, 8, 9);
+          camera.up.set(0.2, 0.9, 0.3).normalize();
+          camera.zoom = 1.7;
+          controls.target.set(1, 2, 3);
+          camera.updateProjectionMatrix();
+          controls.update();
+          // Arcball orientation can include roll that position/target/up do
+          // not reconstruct after the model fitting pass.
+          camera.rotateZ(0.17);
+          camera.updateMatrix();
+          return {
+            position: camera.position.toArray(),
+            quaternion: camera.quaternion.toArray(),
+            up: camera.up.toArray(),
+            target: controls.target.toArray(),
+            zoom: camera.zoom,
+            modelPosition: window.modViewer.activeMeshes[0].position.toArray(),
+            modelQuaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+          };
+        }""")
+
+        reloaded = page.evaluate("""async () => {
+          await window.modViewer.reloadCurrentMod();
+          const {camera, controls} = await import('./js/scene.js');
+          return {
+            position: camera.position.toArray(),
+            quaternion: camera.quaternion.toArray(),
+            up: camera.up.toArray(),
+            target: controls.target.toArray(),
+            zoom: camera.zoom,
+            modelPosition: window.modViewer.activeMeshes[0].position.toArray(),
+            modelQuaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+          };
+        }""")
+        assert reloaded["position"] == pytest.approx(expected["position"])
+        assert reloaded["quaternion"] == pytest.approx(expected["quaternion"])
+        assert reloaded["up"] == pytest.approx(expected["up"])
+        assert reloaded["target"] == pytest.approx(expected["target"])
+        assert reloaded["zoom"] == pytest.approx(expected["zoom"])
+        assert reloaded["modelPosition"] == pytest.approx(expected["modelPosition"])
+        assert reloaded["modelQuaternion"] == pytest.approx(
+            expected["modelQuaternion"])
+
+        page.locator("#camera-reset-view-btn").click()
+        reset_model = page.evaluate("""() => ({
+          position: window.modViewer.activeMeshes[0].position.toArray(),
+          quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+        })""")
+        assert reset_model["position"] == pytest.approx(
+            baseline_model["position"])
+        assert reset_model["quaternion"] == pytest.approx(
+            baseline_model["quaternion"])
+        reset_reloaded = page.evaluate("""async () => {
+          await window.modViewer.reloadCurrentMod();
+          return {
+            position: window.modViewer.activeMeshes[0].position.toArray(),
+            quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+          };
+        }""")
+        assert reset_reloaded["position"] == pytest.approx(
+            baseline_model["position"])
+        assert reset_reloaded["quaternion"] == pytest.approx(
+            baseline_model["quaternion"])
+
+        switched = page.evaluate("""async () => {
+          await window.modViewer.switchMod('Second');
+          const {camera, controls} = await import('./js/scene.js');
+          return {
+            position: camera.position.toArray(),
+            target: controls.target.toArray(),
+            modelPosition: window.modViewer.activeMeshes[0].position.toArray(),
+            modelQuaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+          };
+        }""")
+        assert switched["position"] != pytest.approx(expected["position"])
+        assert switched["target"] != pytest.approx(expected["target"])
+        assert switched["modelPosition"] == pytest.approx(
+            baseline_model["position"])
+        assert switched["modelQuaternion"] == pytest.approx(
+            baseline_model["quaternion"])
     finally:
         context.close()
 
@@ -2222,7 +2445,7 @@ def test_reload_and_tree_selection_share_one_transition_guard(
         _open_library(page)
         page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="Alice").click()
-        page.locator(".draw-item").wait_for()
+        page.locator(".draw-item").wait_for(state="attached")
 
         page.evaluate("""path => {
           window.__fakeApi.blockLoads = {[path]: true};
@@ -2262,7 +2485,7 @@ def test_mod_folder_failed_selection_keeps_panel_open_and_reports_error(
         page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
         _open_library(page)
         page.locator(".mod-folder-select", has_text="Alice").click()
-        page.locator(".draw-item").wait_for()
+        page.locator(".draw-item").wait_for(state="attached")
         assert page.locator(".mod-folder-row.active").count() == 1
 
         page.locator(".mod-folder-select", has_text="Broken").click()
@@ -2295,7 +2518,7 @@ def test_mod_folder_tree_switch_respects_pending_change_confirmation(
         _open_library(page)
         page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="First").click()
-        page.locator(".draw-item").wait_for()
+        page.locator(".draw-item").wait_for(state="attached")
 
         page.locator(".mod-folder-select", has_text="Second").click()
         page.locator("#dialog-backdrop.show").wait_for()
@@ -2389,6 +2612,145 @@ def test_mod_folder_add_edit_delete_modal_flow(
         context.close()
 
 
+def test_missing_opacity_bridge_does_not_block_open_or_mod_library(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"A": _payload("A")},
+        panel_opacity_api=False)
+    try:
+        assert page.locator("#open-btn").is_enabled()
+        assert page.locator("#empty-add-folder-btn").is_enabled()
+        page.locator("#empty-add-folder-btn").click()
+        page.locator("#mod-folder-modal-backdrop.show").wait_for()
+        page.locator("#mfm-cancel").click()
+        page.locator("#mod-folder-close").click()
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+    finally:
+        context.close()
+
+
+def test_panel_opacity_control_applies_and_saves_whole_percent(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"A": _payload("A")}, panel_opacity=35)
+    try:
+        page.wait_for_function("document.querySelector('#panel-opacity').value === '35'")
+        _open(page, "A")
+        slider = page.locator("#panel-opacity")
+        assert slider.get_attribute("min") == "0"
+        assert slider.get_attribute("max") == "100"
+        assert page.locator("#appearance-btn").get_attribute("aria-label") == (
+            "Panel opacity: 35%")
+        page.evaluate("""() => document.querySelector('#panel-opacity')
+          .dispatchEvent(new Event('change', {bubbles: true}))""")
+        assert page.evaluate("window.__fakeApi.calls.panelOpacity") == []
+        header_controls = page.evaluate("""() => {
+          const toolbar = document.querySelector('#toolbar').getBoundingClientRect();
+          const environment = document.querySelector('#environment-btn').getBoundingClientRect();
+          const appearance = document.querySelector('#appearance-btn').getBoundingClientRect();
+          return {
+            environmentLeftOfAppearance: environment.right <= appearance.left,
+            equalSize: environment.width === appearance.width &&
+              environment.height === appearance.height,
+            appearanceAtRight: appearance.right >= toolbar.right - 16,
+          };
+        }""")
+        assert header_controls == {
+            "environmentLeftOfAppearance": True,
+            "equalSize": True,
+            "appearanceAtRight": True,
+        }
+        assert page.locator("#environment-label").count() == 0
+        opacity_surfaces = page.locator(
+            "#sidebar, .right-dock-tabs, #tool-panel.viewport-toolbar")
+        assert set(opacity_surfaces.evaluate_all(
+            "panels => panels.map(panel => getComputedStyle(panel).backgroundColor)")) == {
+                "rgba(13, 17, 23, 0.35)"}
+
+        page.locator("#appearance-btn").click()
+        assert not page.locator("#appearance-popover").is_hidden()
+        page.evaluate("""() => {
+          const slider = document.querySelector('#panel-opacity');
+          slider.value = '100';
+          slider.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
+        assert page.locator("#panel-opacity-value").inner_text() == "100%"
+        assert set(opacity_surfaces.evaluate_all(
+            "panels => panels.map(panel => getComputedStyle(panel).backgroundColor)")) == {
+                "rgb(13, 17, 23)"}
+        assert page.evaluate("""() => {
+          const style = getComputedStyle(document.documentElement);
+          return [
+            style.getPropertyValue('--panel-blur').trim(),
+            style.getPropertyValue('--panel-shadow-opacity').trim(),
+          ];
+        }""") == ["10px", "0.22"]
+        page.evaluate("""() => {
+          const slider = document.querySelector('#panel-opacity');
+          slider.value = '0';
+          slider.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
+        assert page.locator("#panel-opacity-value").inner_text() == "0%"
+        assert set(opacity_surfaces.evaluate_all(
+            "panels => panels.map(panel => getComputedStyle(panel).backgroundColor)")) == {
+                "rgba(13, 17, 23, 0)"}
+        assert page.evaluate("""() => {
+          const style = getComputedStyle(document.documentElement);
+          return [
+            style.getPropertyValue('--panel-blur').trim(),
+            style.getPropertyValue('--panel-shadow-opacity').trim(),
+          ];
+        }""") == ["0px", "0"]
+        assert set(opacity_surfaces.evaluate_all(
+            "panels => panels.map(panel => getComputedStyle(panel).borderColor)")) == {
+                "rgba(139, 148, 158, 0.45)"}
+        assert page.evaluate("window.__fakeApi.calls.panelOpacity") == []
+        page.evaluate("""() => document.querySelector('#panel-opacity')
+          .dispatchEvent(new Event('change', {bubbles: true}))""")
+        page.wait_for_function("window.__fakeApi.calls.panelOpacity.length === 1")
+        assert page.evaluate("window.__fakeApi.calls.panelOpacity") == [0]
+
+        page.evaluate("""() => {
+          const slider = document.querySelector('#panel-opacity');
+          slider.value = '58';
+          slider.dispatchEvent(new Event('input', {bubbles: true}));
+          slider.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        page.wait_for_function("window.__fakeApi.calls.panelOpacity.length === 2")
+        assert page.evaluate("window.__fakeApi.calls.panelOpacity") == [0, 58]
+        page.keyboard.press("Escape")
+        assert page.locator("#appearance-popover").is_hidden()
+        assert page.locator("#appearance-btn").get_attribute("aria-expanded") == "false"
+    finally:
+        context.close()
+
+
+def test_panel_opacity_loads_when_native_bridge_becomes_ready(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"A": _payload("A")},
+        panel_opacity=27, panel_opacity_api=False)
+    try:
+        assert page.locator("#panel-opacity").input_value() == "58"
+        page.evaluate("""() => {
+          const state = window.__fakeApi;
+          window.pywebview.api.get_panel_opacity = async () => ({value: state.panelOpacity});
+          window.pywebview.api.set_panel_opacity = async value => {
+            state.panelOpacity = value;
+            state.calls.panelOpacity.push(value);
+            return {value};
+          };
+          window.dispatchEvent(new Event('pywebviewready'));
+        }""")
+        page.wait_for_function("document.querySelector('#panel-opacity').value === '27'")
+        assert page.locator("#appearance-btn").get_attribute("aria-label") == (
+            "Panel opacity: 27%")
+        assert page.evaluate("window.__fakeApi.calls.panelOpacity") == []
+    finally:
+        context.close()
+
+
 def test_inspector_follows_component_and_mesh_selection(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
@@ -2399,6 +2761,21 @@ def test_inspector_follows_component_and_mesh_selection(
         assert not page.locator("#camera-panel").is_visible()
         assert page.locator("#tool-panel").evaluate(
             "panel => getComputedStyle(panel).flexDirection") == "row"
+        assert page.evaluate("""() => {
+          const toolbar = document.querySelector('#toolbar').getBoundingClientRect();
+          const gizmo = document.querySelector('#view-gizmo').getBoundingClientRect();
+          return Math.round(gizmo.top - toolbar.bottom);
+        }""") == 12
+        panel_styles = page.locator(
+            "#sidebar, #mod-folder-panel, #present-panel, #toggle-panel, "
+            "#menu-panel, #inspector-panel, .right-dock-tabs, "
+            "#tool-panel.viewport-toolbar").evaluate_all(
+                "panels => panels.map(panel => { const style = getComputedStyle(panel); "
+                "return {background: style.backgroundColor, backdrop: style.backdropFilter}; })")
+        assert panel_styles
+        assert {style["background"] for style in panel_styles} == {
+            "rgba(13, 17, 23, 0.58)"}
+        assert all("blur(5.8px)" in style["backdrop"] for style in panel_styles)
         assert page.locator("#health-btn .ui-icon").count() == 1
         assert page.locator("#wire-btn").get_attribute("aria-pressed") == "false"
         assert page.locator("#interaction-help").inner_text() == "LMB Orbit · RMB Pan · Wheel Zoom"
@@ -2429,10 +2806,22 @@ def test_inspector_follows_component_and_mesh_selection(
         }, header_positions
         assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
             "aria-expanded") == "true"
+        assert page.locator("#sidebar").is_visible()
+        left_dock_before = page.locator("#left-dock").evaluate(
+            "dock => ({width: dock.offsetWidth, height: dock.offsetHeight})")
         page.locator("#mod-folder-toggle").click()
+        assert page.locator("#sidebar").is_hidden()
+        assert page.locator("#left-dock").evaluate(
+            "dock => ({width: dock.offsetWidth, height: dock.offsetHeight})") == (
+                left_dock_before)
+        assert page.locator("#mod-folder-close").evaluate(
+            "button => document.activeElement === button")
         assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
             "aria-expanded") == "true"
         page.locator("#mod-folder-close").click()
+        assert page.locator("#sidebar").is_visible()
+        assert page.locator("#mod-folder-toggle").evaluate(
+            "button => document.activeElement === button")
         page.locator("#reset-state-btn").click()
         assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
             "aria-expanded") == "true"
@@ -2576,12 +2965,16 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
         page.locator("#environment-btn").click()
         page.locator("#environment-popover:not([hidden])").wait_for()
         page.locator("#environment-popover .ui-popover-option", has_text="Studio").click()
-        assert page.locator("#environment-label").inner_text() == "Studio"
+        assert page.locator("#environment-btn").get_attribute("aria-label") == (
+            "Environment: Studio. Click to change.")
         assert page.locator("#environment-popover").is_hidden()
 
         page.locator("#texture-btn").click()
         page.locator("#texture-popover:not([hidden])").wait_for()
         assert page.locator("#texture-btn").get_attribute("aria-expanded") == "true"
+        assert page.locator(
+            "#texture-popover .ui-popover-option").all_inner_texts() == [
+                "All maps", "Diffuse and NormalMap", "Diffuse only", "No textures"]
         texture_position = page.evaluate("""() => {
           const button = document.querySelector('#texture-btn').getBoundingClientRect();
           const popover = document.querySelector('#texture-popover').getBoundingClientRect();
