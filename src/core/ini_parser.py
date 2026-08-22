@@ -813,6 +813,12 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             "format": info.get("format"),
         }
 
+    def _first_resolvable_vertex_resource(*candidates):
+        for candidate in candidates:
+            if _resolve_vertex_binding(None, candidate):
+                return candidate
+        return None
+
     def _semantic_vertex_bindings(vertex_resources):
         """Choose supported position/UV bindings from concrete active slots.
 
@@ -976,24 +982,23 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         # replaces the old first-seen fields with state agreed at every draw,
         # and _resolve_component_buffers consumes only those stable values.
         component_buf = _lookup_comp_buf(comp)
-        fallback_position = (component_buf or {}).get("position")
-        fallback_texcoord = (component_buf or {}).get("texcoord")
-        fallback_position = (
-            fallback_position or info["vb0"]
-            or _lookup_comp_value(comp_pos, comp))
         vb2_stride = (_res_get(resources, info["vb2"]).get("stride", 0)
                       if info["vb2"] else 0)
-        fallback_texcoord = (
-            fallback_texcoord
-            or (info["vb2"] if info["vb2"] and vb2_stride != 32 else None)
-            or info["vb1"] or _lookup_comp_value(comp_tc, comp))
         h = _extract_hash(sec_name) or (
             _extract_hash(seed_ib) if seed_ib else None)
-        if h:
-            fallback_position = fallback_position or hash_pos.get(h)
-            fallback_texcoord = fallback_texcoord or hash_tc.get(h)
-        fallback_position = fallback_position or global_pos
-        fallback_texcoord = fallback_texcoord or global_tc
+        fallback_position = _first_resolvable_vertex_resource(
+            (component_buf or {}).get("position"),
+            info["vb0"],
+            _lookup_comp_value(comp_pos, comp),
+            hash_pos.get(h) if h else None,
+            global_pos)
+        fallback_texcoord = _first_resolvable_vertex_resource(
+            (component_buf or {}).get("texcoord"),
+            info["vb2"] if info["vb2"] and vb2_stride != 32 else None,
+            info["vb1"],
+            _lookup_comp_value(comp_tc, comp),
+            hash_tc.get(h) if h else None,
+            global_tc)
 
         # Pick one complete draw only to seed the group's compatibility fields.
         # Every output draw is resolved again below from its own execution

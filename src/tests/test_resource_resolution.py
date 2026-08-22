@@ -377,6 +377,43 @@ def test_runtime_position_copy_resolution():
               f"(got {group['draws'][1].get('position_file')})")
 
 
+def test_runtime_position_does_not_shadow_resolvable_global_fallback():
+    ini = """[TextureOverrideComponent0]
+run = CommandListSharedResources
+drawindexed = 3, 0, 0
+
+[CommandListSharedResources]
+ib = ResourceIndexBuffer
+vb0 = ResourceShapeKeyedPosition
+vb2 = ResourceTexcoordBuffer
+
+[ResourceShapeKeyedPosition]
+
+[ResourceIndexBuffer]
+filename = index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePositionBuffer]
+filename = position.buf
+stride = 12
+format = DXGI_FORMAT_R32G32B32_FLOAT
+
+[ResourceTexcoordBuffer]
+filename = texcoord.buf
+stride = 16
+format = DXGI_FORMAT_R16G16_FLOAT
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+
+        groups = build_draw_groups(sections, extract_resources(sections))
+
+        assert len(groups) == 1
+        assert groups[0]["position_file"] == "position.buf"
+        assert groups[0]["texcoord_file"] == "texcoord.buf"
+
+
 LL_SKELETON_OUTPUT_INI = """[TextureOverrideBodyBlend]
 vb2 = ResourceBodyBlend
 
