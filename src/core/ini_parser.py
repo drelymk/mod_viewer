@@ -465,7 +465,56 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                           _diffuse_history=[], _aux_maps={},
                           _resource_state=_new_resource_state())
         _scan(lines, info, [], {name}, {"steps": 0})
-        info.pop("_resource_state", None)
+        resource_state = info.pop("_resource_state")
+        # Keep textual discovery separate from an execution-safe fallback.
+        # For an explicit-draw section, a binding is stable only when every
+        # authored draw sees the same concrete resource.  For an implicit-draw
+        # section, terminal state is the only execution point available.
+        # Per-draw snapshots remain authoritative for branch-local bindings.
+        info["discovered_vertex_resources"] = {
+            slot: info[f"vb{slot}"] for slot in range(3)
+            if info[f"vb{slot}"]
+        }
+        info["discovered_index_resource"] = info["ib"]
+
+        def _stable_draw_vertex(slot):
+            if not info["draws"]:
+                if slot in resource_state["ambiguous_vertex_slots"]:
+                    return None
+                return resource_state["vertex_resources"].get(slot)
+            values = []
+            for draw in info["draws"]:
+                if (slot in draw.ambiguous_vertex_slots
+                        or slot not in draw.vertex_resources):
+                    return None
+                values.append(draw.vertex_resources[slot])
+            first = values[0]
+            if not first or any(value != first for value in values[1:]):
+                return None
+            return first
+
+        for slot in range(3):
+            info[f"vb{slot}"] = _stable_draw_vertex(slot)
+        if info["draws"]:
+            index_values = []
+            for draw in info["draws"]:
+                if (draw.ambiguous_index_resource
+                        or not draw.index_resource_bound):
+                    index_values = []
+                    break
+                index_values.append(draw.index_resource)
+            info["ib"] = (
+                index_values[0]
+                if (index_values and index_values[0]
+                    and all(value == index_values[0]
+                            for value in index_values[1:]))
+                else None)
+        else:
+            info["ib"] = (
+                resource_state["index_resource"]
+                if (resource_state["index_resource_bound"]
+                    and not resource_state["ambiguous_index_resource"])
+                else None)
         # Whatever diffuse was active at the end of the scan -- needed for a
         # section with NO drawindexed line at all (the game's original,
         # whole-buffer draw proceeds unmodified against this section's own
@@ -543,7 +592,9 @@ def _select_draw_sections(sec_info, global_ib):
     return [(name, info) for name, info in sec_info.items()
             if name.lower().startswith("textureoverride")
             and (info["ib"] or global_ib or any(
-                draw.operation == "draw" for draw in info["draws"]))
+                draw.operation == "draw"
+                or (draw.index_resource_bound and draw.index_resource)
+                for draw in info["draws"]))
             and (info["draws"] or (info["ib"] and not info["handling_skip"]))]
 
 
@@ -914,49 +965,97 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         label = display_name
         if seen[display_name] > 1: label = f"{display_name}_{seen[display_name]}"
 
-        ib_res = info["ib"] or global_ib
-        comp   = (_ib_res_to_component(ib_res) if ib_res else display_name)
-        buf    = _lookup_comp_buf(comp)
-        authored_position = authored_texcoord = None
-        if render_draws:
-            authored_position, authored_texcoord = _semantic_vertex_bindings(
-                render_draws[0].vertex_resources)
-        if not buf and render_draws:
-            if authored_position and authored_texcoord:
-                buf = {
-                    "position": authored_position["resource"],
-                    "texcoord": authored_texcoord["resource"],
-                }
-        if not buf:
-            # Some compute-skinned ZZMI components bind their runtime vb0 only
-            # inside the draw CommandList, while the sibling *Texcoord section
-            # still owns the UV buffer.  Combine those two authored bindings.
-            position = info["vb0"] or _lookup_comp_value(comp_pos, comp)
-            vb2_stride = (_res_get(resources, info["vb2"]).get("stride", 0)
-                          if info["vb2"] else 0)
-            texcoord = ((info["vb2"] if info["vb2"] and vb2_stride != 32 else None)
-                        or info["vb1"] or _lookup_comp_value(comp_tc, comp))
-            if (position and texcoord
-                    and resolve_vertex_info(position).get("filename")):
-                buf = {"position": position, "texcoord": texcoord}
-        if not buf:
-            h = _extract_hash(sec_name) or _extract_hash(ib_res)
-            if h and h in hash_pos and h in hash_tc:
-                buf = {"position": hash_pos[h], "texcoord": hash_tc[h]}
-        if not buf and global_pos and global_tc:
-            buf = {"position": global_pos, "texcoord": global_tc}  # WWMI fallback
-        if not buf: continue
+        fallback_ib = info["ib"] or global_ib
+        seed_ib = fallback_ib or next((
+            draw.index_resource for draw in render_draws
+            if (draw.operation != "draw" and draw.index_resource_bound
+                and draw.index_resource)), None)
+        comp = (_ib_res_to_component(seed_ib) if seed_ib else display_name)
 
-        pos_ri  = resolve_vertex_info(buf["position"])
-        tc_ri   = _res_get(resources, buf["texcoord"])
-        ib_ri   = _res_get(resources, ib_res)
+        # These component fallbacks are execution-safe: _scan_sections_for_draws
+        # replaces the old first-seen fields with state agreed at every draw,
+        # and _resolve_component_buffers consumes only those stable values.
+        component_buf = _lookup_comp_buf(comp)
+        fallback_position = (component_buf or {}).get("position")
+        fallback_texcoord = (component_buf or {}).get("texcoord")
+        fallback_position = (
+            fallback_position or info["vb0"]
+            or _lookup_comp_value(comp_pos, comp))
+        vb2_stride = (_res_get(resources, info["vb2"]).get("stride", 0)
+                      if info["vb2"] else 0)
+        fallback_texcoord = (
+            fallback_texcoord
+            or (info["vb2"] if info["vb2"] and vb2_stride != 32 else None)
+            or info["vb1"] or _lookup_comp_value(comp_tc, comp))
+        h = _extract_hash(sec_name) or (
+            _extract_hash(seed_ib) if seed_ib else None)
+        if h:
+            fallback_position = fallback_position or hash_pos.get(h)
+            fallback_texcoord = fallback_texcoord or hash_tc.get(h)
+        fallback_position = fallback_position or global_pos
+        fallback_texcoord = fallback_texcoord or global_tc
+
+        # Pick one complete draw only to seed the group's compatibility fields.
+        # Every output draw is resolved again below from its own execution
+        # snapshot, so this seed can never become a sibling-branch fallback.
+        seed = None
+        for authored in render_draws:
+            effective_ib = (authored.index_resource
+                            if authored.index_resource_bound else fallback_ib)
+            draw_component = (
+                _lookup_comp_buf(_ib_res_to_component(effective_ib))
+                if effective_ib else None)
+            authored_position, authored_texcoord = _semantic_vertex_bindings(
+                authored.vertex_resources)
+            if authored.operation == "draw":
+                position_res = (authored_position or {}).get("resource")
+                texcoord_res = (authored_texcoord or {}).get("resource")
+            else:
+                position_res = ((authored_position or {}).get("resource")
+                                or (draw_component or {}).get("position")
+                                or fallback_position)
+                texcoord_res = ((authored_texcoord or {}).get("resource")
+                                or (draw_component or {}).get("texcoord")
+                                or fallback_texcoord)
+            position_binding = _resolve_vertex_binding(None, position_res)
+            texcoord_binding = _resolve_vertex_binding(None, texcoord_res)
+            indexed_ok = True
+            if authored.operation != "draw":
+                ib_info = _res_get(resources, effective_ib)
+                indexed_ok = bool(
+                    ib_info.get("filename")
+                    and index_layout(ib_info.get("format")))
+            if position_binding and texcoord_binding and indexed_ok:
+                seed = (effective_ib, position_binding, texcoord_binding,
+                        authored_position, authored_texcoord)
+                break
+        if seed is None and not render_draws:
+            position_binding = _resolve_vertex_binding(
+                None, fallback_position)
+            texcoord_binding = _resolve_vertex_binding(None, fallback_texcoord)
+            ib_info = _res_get(resources, fallback_ib)
+            if (position_binding and texcoord_binding
+                    and ib_info.get("filename")
+                    and index_layout(ib_info.get("format"))):
+                seed = (fallback_ib, position_binding, texcoord_binding,
+                        None, None)
+        if seed is None:
+            continue
+
+        (ib_res, position_binding, texcoord_binding,
+         authored_position, authored_texcoord) = seed
+        buf = {
+            "position": position_binding["resource"],
+            "texcoord": texcoord_binding["resource"],
+        }
+        pos_ri = resolve_vertex_info(buf["position"])
+        tc_ri = _res_get(resources, buf["texcoord"])
+        ib_ri = _res_get(resources, ib_res)
         diff_ri = _res_get(resources, info["diffuse"]) if info["diffuse"] else {}
 
         pos_file = pos_ri.get("filename")
         tc_file  = tc_ri.get("filename")
         ib_file  = ib_ri.get("filename")
-        requires_ib = (not render_draws or any(
-            draw.operation != "draw" for draw in render_draws))
         tc_stride  = tc_ri.get("stride", 20)
         pos_stride = pos_ri.get("stride", POSITION_STRIDE)
         position_slot = (authored_position["slot"] if authored_position
@@ -969,8 +1068,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             index_layout(ib_ri.get("format")) if ib_file else None)
         index_size = (resolved_index_layout.size
                       if resolved_index_layout else None)
-        if (not (pos_file and tc_file)
-                or (requires_ib and (not ib_file or index_size is None))):
+        if not (pos_file and tc_file):
             continue
         uv_off     = DEFAULT_UV_OFFSET
 
@@ -1007,16 +1105,15 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 texcoord_slot=texcoord_slot,
                 texcoord_format=tc_ri.get("format"),
             )
-            # Resolve the effective buffers before deduplication. Concrete
-            # per-draw VB bindings win; runtime-only resources retain the
-            # existing IB/component heuristic, while an authored null stays
-            # unbound instead of inheriting the group's first binding.
+            # Resolve the effective buffers before deduplication.  The safe
+            # fallback is state that dominates every path, never the resource
+            # chosen above merely to seed the group compatibility fields.
             effective_ib = (authored.index_resource
-                            if authored.index_resource_bound else ib_res)
+                            if authored.index_resource_bound else fallback_ib)
             if authored.operation == "draw":
                 d.ib_file = None
                 d.index_size = None
-            elif effective_ib != ib_res:
+            else:
                 resolved_ib = _resolve_ib_file(effective_ib)
                 resolved_layout = index_layout(
                     _res_get(resources, effective_ib).get("format"))
@@ -1029,19 +1126,30 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
             draw_buf = (_lookup_comp_buf(_ib_res_to_component(effective_ib))
                         if effective_ib else None)
-            if draw_buf and draw_buf != buf:
-                position_binding = _resolve_vertex_binding(
-                    None, draw_buf["position"])
-                texcoord_binding = _resolve_vertex_binding(
-                    None, draw_buf["texcoord"])
-                if position_binding:
-                    d.position_file = position_binding["filename"]
-                    d.position_stride = position_binding["stride"]
-                    d.position_format = position_binding["format"]
-                if texcoord_binding:
-                    d.texcoord_file = texcoord_binding["filename"]
-                    d.texcoord_stride = texcoord_binding["stride"]
-                    d.texcoord_format = texcoord_binding["format"]
+            fallback_position_binding = _resolve_vertex_binding(
+                None, (draw_buf or {}).get("position") or fallback_position)
+            fallback_texcoord_binding = _resolve_vertex_binding(
+                None, (draw_buf or {}).get("texcoord") or fallback_texcoord)
+            if fallback_position_binding:
+                d.position_file = fallback_position_binding["filename"]
+                d.position_stride = fallback_position_binding["stride"]
+                d.position_slot = None
+                d.position_format = fallback_position_binding["format"]
+            else:
+                d.position_file = None
+                d.position_stride = None
+                d.position_slot = None
+                d.position_format = None
+            if fallback_texcoord_binding:
+                d.texcoord_file = fallback_texcoord_binding["filename"]
+                d.texcoord_stride = fallback_texcoord_binding["stride"]
+                d.texcoord_slot = None
+                d.texcoord_format = fallback_texcoord_binding["format"]
+            else:
+                d.texcoord_file = None
+                d.texcoord_stride = None
+                d.texcoord_slot = None
+                d.texcoord_format = None
 
             vertex_resources = authored.vertex_resources
             position_binding, texcoord_binding = _semantic_vertex_bindings(

@@ -170,6 +170,76 @@ stride = 8
             sections, extract_resources(sections)) == []
 
 
+def test_sibling_branch_does_not_inherit_first_seen_index_buffer():
+    ini = """[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+if $swap == 0
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+else
+drawindexed = 3, 0, 0
+endif
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+
+        groups = build_draw_groups(sections, extract_resources(sections))
+
+        assert len(groups) == 1
+        assert [draw.ib_file for draw in groups[0]["draws"]] == [
+            "body.ib", None,
+        ]
+
+
+def test_sibling_branch_does_not_inherit_first_seen_position_buffer():
+    ini = """[TextureOverrideBodyBlend]
+vb1 = ResourceTexcoord
+ib = ResourceBodyIB
+if $swap == 0
+vb0 = ResourcePosition
+drawindexed = 3, 0, 0
+else
+drawindexed = 3, 0, 0
+endif
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+
+        groups = build_draw_groups(sections, extract_resources(sections))
+
+        assert len(groups) == 1
+        assert [draw.position_file for draw in groups[0]["draws"]] == [
+            "position.buf", None,
+        ]
+
+
 def test_divergent_unused_vertex_stream_does_not_hide_geometry():
     ini = """[Constants]
 global persist $swap = 0
