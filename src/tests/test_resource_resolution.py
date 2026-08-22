@@ -170,6 +170,54 @@ stride = 8
             sections, extract_resources(sections)) == []
 
 
+def test_divergent_unused_vertex_stream_does_not_hide_geometry():
+    ini = """[Constants]
+global persist $swap = 0
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+vb4 = ResourceBlend
+ib = ResourceBodyIB
+if $swap == 1
+vb4 = ResourceBlendOverride
+endif
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+
+[ResourceBlend]
+filename = blend.buf
+stride = 16
+format = DXGI_FORMAT_R8_UINT
+
+[ResourceBlendOverride]
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+        draw = _scan_sections_for_draws(
+            sections)["TextureOverrideBody"]["draws"][0]
+
+        assert draw.ambiguous_vertex_slots == (4,)
+        assert set(draw.ambiguous_vertex_resources[4]) == {
+            "ResourceBlend", "ResourceBlendOverride",
+        }
+        groups = build_draw_groups(sections, extract_resources(sections))
+        assert len(groups) == 1
+        assert len(groups[0]["draws"]) == 1
+
+
 def test_root_texture_picker_accepts_windows_case_variation():
     """The two native dialogs may spell the same Windows folder differently."""
     if os.name != "nt":

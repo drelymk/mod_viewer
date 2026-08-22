@@ -44,6 +44,8 @@ class AuthoredDrawCall:
     # explicit `vbN = null`; a string = the resource bound at this draw.
     vertex_resources: dict[int, str | None] = field(default_factory=dict)
     ambiguous_vertex_slots: tuple[int, ...] = ()
+    ambiguous_vertex_resources: dict[int, tuple[str, ...]] = field(
+        default_factory=dict)
     auxiliary_maps: dict = field(default_factory=dict)
 
 

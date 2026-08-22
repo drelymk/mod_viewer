@@ -126,6 +126,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         return {
             "vertex_resources": {},
             "ambiguous_vertex_slots": set(),
+            "ambiguous_vertex_resources": {},
             "index_resource": None,
             "index_resource_bound": False,
             "ambiguous_index_resource": False,
@@ -136,6 +137,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             "vertex_resources": dict(state["vertex_resources"]),
             "ambiguous_vertex_slots": set(
                 state["ambiguous_vertex_slots"]),
+            "ambiguous_vertex_resources": dict(
+                state["ambiguous_vertex_resources"]),
             "index_resource": state["index_resource"],
             "index_resource_bound": state["index_resource_bound"],
             "ambiguous_index_resource": state["ambiguous_index_resource"],
@@ -154,13 +157,28 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         merged = _new_resource_state()
         slots = set().union(*(
             set(state["vertex_resources"])
-            | state["ambiguous_vertex_slots"] for state in states))
+            | state["ambiguous_vertex_slots"]
+            | set(state["ambiguous_vertex_resources"])
+            for state in states))
         for slot in slots:
             values = [state["vertex_resources"].get(slot, unset)
                       for state in states]
             if (any(slot in state["ambiguous_vertex_slots"]
                     for state in states) or not _all_same(values)):
                 merged["ambiguous_vertex_slots"].add(slot)
+                candidates = []
+                for state, value in zip(states, values):
+                    candidates.extend(
+                        state["ambiguous_vertex_resources"].get(slot, ()))
+                    if isinstance(value, str):
+                        candidates.append(value)
+                unique = []
+                for candidate in candidates:
+                    if all(existing.lower() != candidate.lower()
+                           for existing in unique):
+                        unique.append(candidate)
+                if unique:
+                    merged["ambiguous_vertex_resources"][slot] = tuple(unique)
             elif values[0] is not unset:
                 merged["vertex_resources"][slot] = values[0]
 
@@ -215,6 +233,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             diffuse_history=list(info.get("_diffuse_history") or []),
             vertex_resources=dict(resource_state["vertex_resources"]),
             ambiguous_vertex_slots=ambiguous_slots,
+            ambiguous_vertex_resources=dict(
+                resource_state["ambiguous_vertex_resources"]),
             auxiliary_maps=_aux_snapshot(info),
         ))
 
@@ -296,6 +316,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 state = info["_resource_state"]
                 state["vertex_resources"][slot] = value
                 state["ambiguous_vertex_slots"].discard(slot)
+                state["ambiguous_vertex_resources"].pop(slot, None)
             m = re.match(r"ib\s*=\s*(\S+)", line, re.I)
             if m:
                 resource = m.group(1)
@@ -829,6 +850,18 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             texcoord = None
         return position, texcoord
 
+    def _has_ambiguous_geometry_state(authored):
+        if (authored.operation != "draw"
+                and authored.ambiguous_index_resource):
+            return True
+        for slot, candidates in authored.ambiguous_vertex_resources.items():
+            for candidate in candidates:
+                position, texcoord = _semantic_vertex_bindings(
+                    {slot: candidate})
+                if position or texcoord:
+                    return True
+        return False
+
     def _lookup_comp_value(mapping, comp):
         candidates = [
             comp,
@@ -861,7 +894,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         # sequential triangle list after borrowing unrelated fallback buffers.
         render_draws = []
         for authored in info["draws"]:
-            if authored.unsupported_reason:
+            if _has_ambiguous_geometry_state(authored):
                 continue
             if authored.operation != "draw":
                 render_draws.append(authored)

@@ -126,8 +126,8 @@ machine-specific paths or facts that are obvious from the source.
   distinguishes an untouched slot from an explicit `null`. Resolve effective
   files per draw before deduplication; an IB change must not be required for a
   VB change to take effect. At a conditional join, retain VB and IB state only
-  when every path agrees; divergent state is unsupported rather than inherited
-  from an arbitrary branch.
+  when every path agrees; divergent state that can affect a consumed geometry
+  semantic is unsupported rather than inherited from an arbitrary branch.
 - Geometry decoding uses explicit position, texcoord and index layout
   descriptors. Numeric non-indexed draws and safely derived whole-IB
   `drawindexed = auto` are supported; variable, instanced and indirect calls
