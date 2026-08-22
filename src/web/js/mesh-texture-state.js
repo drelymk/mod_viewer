@@ -73,7 +73,11 @@ export function recomputeTextureRuns(groupMeshes) {
 
 export function meshMetadataKey(name, entry) {
   const component = entry.component || name.replace(/-\d+$/, '');
-  const draw = entry.drawindexed ? entry.drawindexed.join(',') : 'whole';
+  const draw = entry.drawindexed
+    ? entry.drawindexed.join(',')
+    : entry.draw
+      ? `draw:${entry.draw.join(',')}`
+      : 'whole';
   return `${component}::${draw}`;
 }
 

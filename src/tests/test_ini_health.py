@@ -207,9 +207,27 @@ def test_unsupported_drawindexed_arguments_are_structured_diagnostics():
 
     issues = [item for item in report["issues"]
               if item["code"] == "unsupported_drawindexed_arguments"]
-    assert [item["line"] for item in issues] == [3, 4]
+    assert [item["line"] for item in issues] == [4]
     assert [item["arguments"] for item in issues] == [
-        "auto", "$count, $start, 0"]
+        "$count, $start, 0"]
+
+
+def test_unsupported_draw_capabilities_are_structured_diagnostics():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(os.path.join(tmp, "mod.ini"), (
+            "[TextureOverrideBody]\n"
+            "draw = 3, 0\n"
+            "draw = auto\n"
+            "drawindexedinstanced = 3, 2, 0, 0, 0\n"))
+        report = analyze_mod(tmp)
+
+    by_code = {}
+    for issue in report["issues"]:
+        by_code.setdefault(issue["code"], []).append(issue)
+    assert "unsupported_draw_arguments" in by_code
+    assert by_code["unsupported_draw_arguments"][0]["line"] == 3
+    assert "unsupported_draw_operation" in by_code
+    assert by_code["unsupported_draw_operation"][0]["line"] == 4
 
 
 

@@ -124,6 +124,12 @@ machine-specific paths or facts that are obvious from the source.
   distinguishes an untouched slot from an explicit `null`. Resolve effective
   files per draw before deduplication; an IB change must not be required for a
   VB change to take effect.
+- Geometry decoding uses explicit position, texcoord and index layout
+  descriptors. Numeric non-indexed draws and safely derived whole-IB
+  `drawindexed = auto` are supported; variable, instanced and indirect calls
+  remain diagnostic-only. Reject a whole draw when its layout, stride, index
+  range or effective vertex range is invalid rather than truncating it or
+  manufacturing zero-valued vertices.
 - An `ib` section without `drawindexed` may produce one synthetic whole-buffer
   draw. A `handling=skip` section without an explicit draw produces nothing.
   Real draw rows retain authored `count,start,base`; synthetic rows are the

@@ -62,6 +62,9 @@ def _extract_hash(name):
 
 
 _RUN_SKIP_PREFIXES = ("TextureOverride", "ShaderOverride", "Resource", "Present", "Key", "Constants")
+_MAX_RUN_DEPTH = 64
+_MAX_EXECUTION_STEPS = 200_000
+_MAX_EXECUTION_DRAWS = 20_000
 _AUX_MAP_CHANNELS = {
     "normalmap": "normal_map",
     "lightmap": "light_map",
@@ -109,9 +112,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     Returns {section_name: {vb0, vb1, vb2, ib, draws, diffuse, src}} — the
     same per-section shape build_draw_groups uses internally as `sec_info`.
     `draws` entries are typed AuthoredDrawCall records. Their vertex_resources
-    snapshot is kept for provenance only; build_draw_groups re-derives the
-    actual position/texcoord buffers for a reassigned `ib` from its component
-    instead of trusting those literal values.
+    snapshot is resolved per draw before geometry deduplication.
     """
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
@@ -135,14 +136,42 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             if state.get("variants") or state.get("history")
         }
 
-    def _scan(lines, info, cond_stack, visiting):
+    def _record_draw(raw, info, cond_stack, operation, count, start, base,
+                     auto_count=False):
+        combined = DNF_TRUE
+        for frame in cond_stack:
+            combined = dnf_and(combined, frame["cur"])
+        info["draws"].append(AuthoredDrawCall(
+            count=count,
+            start=start,
+            base=base,
+            operation=operation,
+            auto_count=auto_count,
+            conditions=normalize_dnf(combined, toggle_vars, var_prefix),
+            source=line_source(raw),
+            index_resource=info.get("_cur_ib"),
+            diffuse_variants=list(
+                info.get("_cur_diffuse_variants") or []),
+            diffuse_history=list(info.get("_diffuse_history") or []),
+            vertex_resources=dict(info["_cur_vertex_resources"]),
+            auxiliary_maps=_aux_snapshot(info),
+        ))
+
+    def _scan(lines, info, cond_stack, visiting, budget, depth=0):
         # cond_stack tracks the stack of active gate branches. Each frame is
         # {"cur": <DNF active for the current branch>,
         #  "seen": <DNF of "some earlier branch at this level already matched">}
         # so `else if` / `else` correctly exclude every preceding branch. It's
         # threaded through run= recursion unchanged, so a called section's own
         # if/elif nests correctly under whichever branch called it.
+        if depth > _MAX_RUN_DEPTH:
+            raise ValueError(
+                f"INI run chain exceeds {_MAX_RUN_DEPTH} nested sections")
         for raw in lines:
+            budget["steps"] += 1
+            if budget["steps"] > _MAX_EXECUTION_STEPS:
+                raise ValueError(
+                    "INI command expansion exceeds the viewer safety limit")
             line = raw.split(";")[0].strip()
             if not line: continue
             if info["src"] is None:
@@ -188,23 +217,23 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 r"drawindexed\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)\s*",
                 line, re.I)
             if m:
-                combined = DNF_TRUE
-                for frame in cond_stack:
-                    combined = dnf_and(combined, frame["cur"])
-                conds = normalize_dnf(combined, toggle_vars, var_prefix)
-                info["draws"].append(AuthoredDrawCall(
-                    count=int(m.group(1)),
-                    start=int(m.group(2)),
-                    base=int(m.group(3)),
-                    conditions=conds,
-                    source=line_source(raw),
-                    index_resource=info.get("_cur_ib"),
-                    diffuse_variants=list(
-                        info.get("_cur_diffuse_variants") or []),
-                    diffuse_history=list(info.get("_diffuse_history") or []),
-                    vertex_resources=dict(info["_cur_vertex_resources"]),
-                    auxiliary_maps=_aux_snapshot(info),
-                ))
+                _record_draw(
+                    raw, info, cond_stack, "drawindexed",
+                    int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            elif re.fullmatch(r"drawindexed\s*=\s*auto\s*", line, re.I):
+                _record_draw(
+                    raw, info, cond_stack, "drawindexed", None, 0, 0,
+                    auto_count=True)
+            else:
+                m_draw = re.fullmatch(
+                    r"draw\s*=\s*(\d+)\s*,\s*(\d+)\s*", line, re.I)
+                if m_draw:
+                    _record_draw(
+                        raw, info, cond_stack, "draw",
+                        int(m_draw.group(1)), int(m_draw.group(2)), 0)
+            if len(info["draws"]) > _MAX_EXECUTION_DRAWS:
+                raise ValueError(
+                    "INI command expansion produces too many draw calls")
             # "ref" is optional -- XXMI-generated mods omit it (e.g. "Resource\GIMI\Diffuse = X").
             m_diff = re.match(r"Resource\\[^\\]+\\Diffuse\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if not m_diff:
@@ -302,7 +331,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                         and not any(target_low.startswith(p.lower())
                                    for p in _RUN_SKIP_PREFIXES)):
                     visiting.add(target_name)
-                    _scan(sections[target_name], info, cond_stack, visiting)
+                    _scan(
+                        sections[target_name], info, cond_stack, visiting,
+                        budget, depth + 1)
                     visiting.discard(target_name)
 
     # scan BOTH TextureOverride AND CommandList sections.
@@ -317,7 +348,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                           _cur_diffuse_variants=[], _diffuse_chain_key=None,
                           _diffuse_history=[], _aux_maps={},
                           _cur_vertex_resources={})
-        _scan(lines, info, [], {name})
+        _scan(lines, info, [], {name}, {"steps": 0})
         info.pop("_cur_ib", None)
         info.pop("_cur_vertex_resources", None)
         # Whatever diffuse was active at the end of the scan -- needed for a
@@ -396,7 +427,8 @@ def _select_draw_sections(sec_info, global_ib):
     """Select TextureOverride sections that can produce viewer geometry."""
     return [(name, info) for name, info in sec_info.items()
             if name.lower().startswith("textureoverride")
-            and (info["ib"] or global_ib)
+            and (info["ib"] or global_ib or any(
+                draw.operation == "draw" for draw in info["draws"]))
             and (info["draws"] or (info["ib"] and not info["handling_skip"]))]
 
 
@@ -599,9 +631,78 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             diffuse_file_cache[res_name] = _res_get(resources, res_name).get("filename")
         return diffuse_file_cache[res_name]
 
-    def _resolve_vertex_res(res_name):
-        ri = resolve_vertex_info(res_name)
-        return ri.get("filename"), ri.get("stride")
+    def _resolve_vertex_binding(slot, res_name):
+        if not res_name:
+            return None
+        info = resolve_vertex_info(res_name)
+        filename = info.get("filename")
+        stride = info.get("stride")
+        if not filename or not stride:
+            return None
+        return {
+            "slot": slot,
+            "resource": res_name,
+            "filename": filename,
+            "stride": stride,
+            "format": info.get("format"),
+        }
+
+    def _semantic_vertex_bindings(vertex_resources):
+        """Choose supported position/UV bindings from concrete active slots.
+
+        Slot conventions remain useful fallback evidence, but explicit
+        resource/filename roles and declared formats allow newer templates to
+        place those semantics in higher slots without teaching the renderer a
+        new game-specific section shape.
+        """
+        bindings = [
+            binding for slot, resource in vertex_resources.items()
+            if (binding := _resolve_vertex_binding(slot, resource)) is not None
+        ]
+
+        def _label(binding):
+            return (binding["resource"] + " " + binding["filename"]).lower()
+
+        def _position_score(binding):
+            label = _label(binding)
+            fmt = (binding.get("format") or "").upper()
+            score = 30 if binding["slot"] == 0 else 0
+            if "position" in label:
+                score += 120
+            elif "pos" in label:
+                score += 45
+            if "R32G32B32" in fmt or "R16G16B16A16_FLOAT" in fmt:
+                score += 80
+            if "texcoord" in label or "blend" in label:
+                score -= 150
+            return score
+
+        position = max(bindings, key=_position_score, default=None)
+        if position is not None and _position_score(position) <= 0:
+            position = None
+
+        def _texcoord_score(binding):
+            if binding is position:
+                return -1000
+            label = _label(binding)
+            fmt = (binding.get("format") or "").upper()
+            score = 25 if binding["slot"] in (1, 2) else 0
+            if "texcoord" in label:
+                score += 120
+            elif "uv" in label or "tc" in label:
+                score += 45
+            if ("R16G16_FLOAT" in fmt or "R32G32_FLOAT" in fmt):
+                score += 80
+            if "blend" in label or "position" in label:
+                score -= 150
+            if binding["stride"] == 32 and "texcoord" not in label:
+                score -= 100
+            return score
+
+        texcoord = max(bindings, key=_texcoord_score, default=None)
+        if texcoord is not None and _texcoord_score(texcoord) <= 0:
+            texcoord = None
+        return position, texcoord
 
     def _lookup_comp_value(mapping, comp):
         candidates = [
@@ -634,8 +735,18 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         if seen[display_name] > 1: label = f"{display_name}_{seen[display_name]}"
 
         ib_res = info["ib"] or global_ib
-        comp   = _ib_res_to_component(ib_res)
+        comp   = (_ib_res_to_component(ib_res) if ib_res else display_name)
         buf    = _lookup_comp_buf(comp)
+        authored_position = authored_texcoord = None
+        if info["draws"]:
+            authored_position, authored_texcoord = _semantic_vertex_bindings(
+                info["draws"][0].vertex_resources)
+        if not buf and info["draws"]:
+            if authored_position and authored_texcoord:
+                buf = {
+                    "position": authored_position["resource"],
+                    "texcoord": authored_texcoord["resource"],
+                }
         if not buf:
             # Some compute-skinned ZZMI components bind their runtime vb0 only
             # inside the draw CommandList, while the sibling *Texcoord section
@@ -664,17 +775,29 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         pos_file = pos_ri.get("filename")
         tc_file  = tc_ri.get("filename")
         ib_file  = ib_ri.get("filename")
-        if not (pos_file and tc_file and ib_file): continue
+        requires_ib = (not info["draws"] or any(
+            draw.operation != "draw" for draw in info["draws"]))
+        if not (pos_file and tc_file) or (requires_ib and not ib_file):
+            continue
 
         tc_stride  = tc_ri.get("stride", 20)
         pos_stride = pos_ri.get("stride", POSITION_STRIDE)
-        index_size = _ib_index_size(ib_ri.get("format"))
+        position_slot = (authored_position["slot"] if authored_position
+                         and authored_position["resource"] == buf["position"]
+                         else None)
+        texcoord_slot = (authored_texcoord["slot"] if authored_texcoord
+                         and authored_texcoord["resource"] == buf["texcoord"]
+                         else None)
+        index_size = (_ib_index_size(ib_ri.get("format"))
+                      if ib_file else None)
         uv_off     = DEFAULT_UV_OFFSET
 
         draws_list = list(info["draws"]) or [AuthoredDrawCall(
             count=None,
             start=0,
             base=0,
+            operation="implicit_indexed",
+            auto_count=True,
             source=info["src"],
             diffuse_variants=info.get("diffuse_variants_at_end") or [],
             diffuse_history=info.get("diffuse_history_at_end") or [],
@@ -684,73 +807,79 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         for i, authored in enumerate(draws_list, 1):
             d = DrawCall(
                 label=f"{label}-{i}",
+                operation=authored.operation,
                 count=authored.count,
                 start=authored.start,
                 base=authored.base,
+                auto_count=authored.auto_count,
                 conditions=authored.conditions,
                 sources=[authored.source] if authored.source else [],
                 ib_file=ib_file,
                 index_size=index_size,
                 position_file=pos_file,
                 position_stride=pos_stride,
+                position_slot=position_slot,
+                position_format=pos_ri.get("format"),
                 texcoord_file=tc_file,
                 texcoord_stride=tc_stride,
+                texcoord_slot=texcoord_slot,
+                texcoord_format=tc_ri.get("format"),
             )
             # Resolve the effective buffers before deduplication. Concrete
             # per-draw VB bindings win; runtime-only resources retain the
             # existing IB/component heuristic, while an authored null stays
             # unbound instead of inheriting the group's first binding.
             effective_ib = authored.index_resource or ib_res
-            if effective_ib != ib_res:
+            if authored.operation == "draw":
+                d.ib_file = None
+                d.index_size = None
+            elif effective_ib != ib_res:
                 resolved_ib = _resolve_ib_file(effective_ib)
                 if resolved_ib:
                     d.ib_file = resolved_ib
                     d.index_size = _ib_index_size(
                         _res_get(resources, effective_ib).get("format"))
 
-            draw_buf = _lookup_comp_buf(_ib_res_to_component(effective_ib))
+            draw_buf = (_lookup_comp_buf(_ib_res_to_component(effective_ib))
+                        if effective_ib else None)
             if draw_buf and draw_buf != buf:
-                pfile, pstride = _resolve_vertex_res(draw_buf["position"])
-                tfile, tstride = _resolve_vertex_res(draw_buf["texcoord"])
-                if pfile:
-                    d.position_file = pfile
-                    d.position_stride = pstride or POSITION_STRIDE
-                if tfile:
-                    d.texcoord_file = tfile
-                    d.texcoord_stride = tstride or 20
+                position_binding = _resolve_vertex_binding(
+                    None, draw_buf["position"])
+                texcoord_binding = _resolve_vertex_binding(
+                    None, draw_buf["texcoord"])
+                if position_binding:
+                    d.position_file = position_binding["filename"]
+                    d.position_stride = position_binding["stride"]
+                    d.position_format = position_binding["format"]
+                if texcoord_binding:
+                    d.texcoord_file = texcoord_binding["filename"]
+                    d.texcoord_stride = texcoord_binding["stride"]
+                    d.texcoord_format = texcoord_binding["format"]
 
             vertex_resources = authored.vertex_resources
-            if 0 in vertex_resources:
-                position_resource = vertex_resources[0]
-                if position_resource is None:
-                    d.position_file = None
-                    d.position_stride = None
-                else:
-                    pfile, pstride = _resolve_vertex_res(position_resource)
-                    if pfile:
-                        d.position_file = pfile
-                        d.position_stride = pstride or POSITION_STRIDE
-
-            authored_tc = {
-                slot: vertex_resources[slot]
-                for slot in (1, 2) if slot in vertex_resources
-            }
-            resolved_tc = None
-            for slot in (2, 1):
-                resource_name = authored_tc.get(slot)
-                if not resource_name:
-                    continue
-                tfile, tstride = _resolve_vertex_res(resource_name)
-                if tfile and (tstride or 0) != 32:
-                    resolved_tc = (tfile, tstride or 20)
-                    break
-            if resolved_tc:
-                d.texcoord_file, d.texcoord_stride = resolved_tc
-            elif authored_tc and any(
-                    resource_name is None
-                    for resource_name in authored_tc.values()):
+            position_binding, texcoord_binding = _semantic_vertex_bindings(
+                vertex_resources)
+            if position_binding:
+                d.position_file = position_binding["filename"]
+                d.position_stride = position_binding["stride"]
+                d.position_slot = position_binding["slot"]
+                d.position_format = position_binding["format"]
+            elif (0 in vertex_resources and vertex_resources[0] is None) or (
+                    d.position_slot in vertex_resources
+                    and vertex_resources[d.position_slot] is None):
+                d.position_file = None
+                d.position_stride = None
+                d.position_format = None
+            if texcoord_binding:
+                d.texcoord_file = texcoord_binding["filename"]
+                d.texcoord_stride = texcoord_binding["stride"]
+                d.texcoord_slot = texcoord_binding["slot"]
+                d.texcoord_format = texcoord_binding["format"]
+            elif any(vertex_resources.get(slot, "bound") is None
+                     for slot in {1, 2, d.texcoord_slot} if slot is not None):
                 d.texcoord_file = None
                 d.texcoord_stride = None
+                d.texcoord_format = None
             # Whichever Resource\...\Diffuse line most recently ran before
             # this draw, in execution order -- the draw's own default
             # texture (see core.mesh_builder.build_mesh_payload). The first
@@ -820,7 +949,11 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             source=source,
             position_file=pos_file, texcoord_file=tc_file,
             position_stride=pos_stride,
+            position_slot=position_slot, position_format=pos_ri.get("format"),
+            position_offset=0,
             texcoord_stride=tc_stride, texcoord_uv_off=uv_off,
+            texcoord_slot=texcoord_slot, texcoord_format=tc_ri.get("format"),
+            texcoord_offset=None,
             ib_file=ib_file, diffuse_file=diff_ri.get("filename"),
             diffuse_pool_files=pool_files,
             index_size=index_size,
