@@ -3,6 +3,7 @@
 import re, struct, os, base64
 from dataclasses import dataclass
 
+from .draw_call import DrawCall
 from .resource_paths import safe_resource_path
 from .textures import (_texture_source_uri, _begin_texture_cache,
                        encode_texture_data_uri, normalize_texture_role,
@@ -228,33 +229,19 @@ def _deduplicate_draws(group, max_draws=0):
     This is a distinct pipeline stage: geometry packing receives one
     deterministic draw list and does not own the condition-merging rules.
     """
-    def freeze(value):
-        """Turn nested draw metadata into a stable, hashable identity."""
-        if isinstance(value, dict):
-            return tuple(sorted((key, freeze(item))
-                                for key, item in value.items()))
-        if isinstance(value, (list, tuple)):
-            return tuple(freeze(item) for item in value)
-        return value
-
     merged = {}
     order = []
-    for draw in group["draws"]:
-        # TODO(DrawCall IR): replace this reflective key with an explicit,
-        # normalized render_identity once draw parsing has a typed IR.
-        # Only provenance, visibility alternatives and the generated label may
-        # differ between rows that are safe to merge. In particular, base
-        # vertex, index size and material/texture state are part of identity.
-        key = freeze({name: value for name, value in draw.items()
-                      if name not in {"label", "conditions", "sources"}})
+    for raw_draw in group["draws"]:
+        draw = DrawCall.from_mapping(raw_draw, group)
+        key = draw.render_identity()
         if key not in merged:
             merged[key] = {"draw": draw, "alts": [], "sources": []}
             order.append(key)
         entry = merged[key]
-        for src in draw.get("sources") or []:
+        for src in draw.sources:
             if src not in entry["sources"]:
                 entry["sources"].append(src)
-        cond_groups = draw.get("conditions") or []
+        cond_groups = draw.conditions
         if not cond_groups:
             if [] not in entry["alts"]:
                 entry["alts"].append([])
@@ -267,9 +254,9 @@ def _deduplicate_draws(group, max_draws=0):
     for key in order:
         entry = merged[key]
         draw, alternatives = entry["draw"], entry["alts"]
-        draw["conditions"] = (
+        draw.conditions = (
             [] if any(not group for group in alternatives) else alternatives)
-        draw["sources"] = entry["sources"]
+        draw.sources = entry["sources"]
         unique.append(draw)
     return unique[:max_draws] if max_draws else unique
 
@@ -503,22 +490,21 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                                         "label": label})
 
         for draw in unique:
-            lbl = draw["label"]
-            draw_ib_path = ib_path
-            if draw.get("ib_file"):
-                draw_ib_path = safe_resource_path(mod_dir, draw["ib_file"])
-                if not draw_ib_path or not os.path.exists(draw_ib_path):
-                    continue
-                if draw_ib_path not in ib_cache:
-                    ib_cache[draw_ib_path] = _read_buffer(draw_ib_path)
-            raw = read_indices(ib_cache[draw_ib_path], draw["start"], draw["count"],
-                               draw.get("index_size", index_size))
+            lbl = draw.label
+            draw_ib_path = safe_resource_path(mod_dir, draw.ib_file)
+            if not draw_ib_path or not os.path.exists(draw_ib_path):
+                continue
+            if draw_ib_path not in ib_cache:
+                ib_cache[draw_ib_path] = _read_buffer(draw_ib_path)
+            raw = read_indices(
+                ib_cache[draw_ib_path], draw.start, draw.count,
+                draw.index_size if draw.index_size is not None else index_size)
             if not raw:
                 continue
             # DirectX resolves each index as index_buffer_value + BaseVertexLocation
             # against the vertex buffer -- shared/merged buffers rely on this offset
             # to pick out this draw's own vertex range.
-            base = draw.get("base") or 0
+            base = draw.base
             if base:
                 raw = [v + base for v in raw]
             # A negative effective DirectX vertex index is invalid.  Reject it
@@ -533,17 +519,25 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
             # A mid-section `vb0/vb1/vb2 = ...` reassignment (paired with `ib`).
             draw_buffers = buffers
-            effective_pos_path = pos_path
-            if draw.get("position_file") and draw.get("texcoord_file"):
-                draw_pos_path = safe_resource_path(mod_dir, draw["position_file"])
-                draw_tc_path  = safe_resource_path(mod_dir, draw["texcoord_file"])
-                if not (draw_pos_path and draw_tc_path
-                        and os.path.exists(draw_pos_path) and os.path.exists(draw_tc_path)):
-                    continue
+            draw_pos_path = safe_resource_path(mod_dir, draw.position_file)
+            draw_tc_path = safe_resource_path(mod_dir, draw.texcoord_file)
+            if not (draw_pos_path and draw_tc_path
+                    and os.path.exists(draw_pos_path)
+                    and os.path.exists(draw_tc_path)):
+                continue
+            effective_pos_path = draw_pos_path
+            draw_position_stride = (
+                draw.position_stride
+                if draw.position_stride is not None else pos_stride)
+            draw_texcoord_stride = (
+                draw.texcoord_stride
+                if draw.texcoord_stride is not None else tc_stride)
+            if (draw_pos_path != pos_path or draw_tc_path != tc_path
+                    or draw_position_stride != pos_stride
+                    or draw_texcoord_stride != tc_stride):
                 draw_buffers = _load_buf(
-                    draw_pos_path, draw.get("position_stride", pos_stride),
-                    draw_tc_path, draw.get("texcoord_stride", tc_stride))
-                effective_pos_path = draw_pos_path
+                    draw_pos_path, draw_position_stride,
+                    draw_tc_path, draw_texcoord_stride)
 
             pos_data, draw_pos_stride, tc_data, draw_tc_stride, uv_off, uv_fmt = draw_buffers
             uv_size = struct.calcsize(uv_fmt)
@@ -593,7 +587,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 struct.pack_into("<I", idx_bytes, out_i * 4, remap[value])
 
             default_key = _ensure_texture(
-                safe_resource_path(mod_dir, draw.get("texture_default_file")))
+                safe_resource_path(mod_dir, draw.texture_default("diffuse")))
             entry: dict = {
                 "pos": _geometry_ref(pos_bytes, geometry),
                 "idx": _geometry_ref(idx_bytes, geometry),
@@ -605,14 +599,14 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             # profile-owned.  WuWa publishes the intact packed source as
             # normal_data; Genshin/ZZZ retain the derived normal_map path.
             normal_path = safe_resource_path(
-                mod_dir, draw.get("normal_map_default_file"))
+                mod_dir, draw.texture_default("normal_map"))
             normal_role = texture_profile.normal_transport_role
             normal_key = _ensure_texture(normal_path, normal_role)
             if normal_key:
                 entry[f"{normal_role}_key"] = normal_key
             for channel in ("light_map", "material_map"):
                 key = _ensure_texture(safe_resource_path(
-                    mod_dir, draw.get(f"{channel}_default_file")), channel)
+                    mod_dir, draw.texture_default(channel)), channel)
                 if key:
                     entry[f"{channel}_key"] = key
             # The manager presents one row per diffuse. Seed that row with the
@@ -643,13 +637,13 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     if len(item) > 5 and item[5] is not None:
                         target["low_pos"] = _geometry_ref(item[5], geometry)
                     entry["shape_targets"].append(target)
-            if draw.get("conditions"):
-                entry["conditions"] = draw["conditions"]
-            if draw.get("sources"):
-                entry["sources"] = [_rel_source(s, mod_dir) for s in draw["sources"]]
+            if draw.conditions:
+                entry["conditions"] = draw.conditions
+            if draw.sources:
+                entry["sources"] = [_rel_source(s, mod_dir)
+                                    for s in draw.sources]
             # A toggle can swap the diffuse texture.
-            texture_rules = (draw.get("texture_assignments")
-                             or draw.get("texture_variants"))
+            texture_rules = draw.texture_rules("diffuse")
             if texture_rules:
                 variants = []
                 for v in texture_rules:
@@ -663,7 +657,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 if len(variants) > 1:
                     entry["texture_variants"] = variants
             for channel in ("light_map", "material_map"):
-                rules = draw.get(f"{channel}_variants") or []
+                rules = draw.texture_rules(channel)
                 variants = []
                 for variant in rules:
                     key = _ensure_texture(
@@ -675,7 +669,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                         })
                 if variants:
                     entry[f"{channel}_variants"] = variants
-            normal_rules = draw.get("normal_map_variants") or []
+            normal_rules = draw.texture_rules("normal_map")
             normal_variants = []
             for variant in normal_rules:
                 key = _ensure_texture(
@@ -696,9 +690,9 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             # The literal `drawindexed = count, start, base` values, so the UI can
             # show a meaningful per-draw label instead of a bare "#1"/"#2" index.
             # Absent for the rare section with no drawindexed line at all (the
-            # whole index buffer is read unconditionally) — draw["count"] is None.
-            if draw.get("count") is not None:
-                entry["drawindexed"] = [draw["count"], draw["start"], draw["base"]]
+            # whole index buffer is read unconditionally) — count is None.
+            if draw.count is not None:
+                entry["drawindexed"] = [draw.count, draw.start, draw.base]
             if source:
                 entry["source"] = source
             if component:

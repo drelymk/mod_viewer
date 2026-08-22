@@ -12,6 +12,7 @@ existing `from core.ini_parser import ...` callers keep working:
 
 import re
 
+from .draw_call import AuthoredDrawCall, DrawCall
 from .mesh_builder import POSITION_STRIDE, DEFAULT_UV_OFFSET, _res_get
 from .ini_sections import (SrcLine, extract_resources, first_source,
                            line_source, merge_sections, parse_sections,
@@ -107,11 +108,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
 
     Returns {section_name: {vb0, vb1, vb2, ib, draws, diffuse, src}} — the
     same per-section shape build_draw_groups uses internally as `sec_info`.
-    `draws` entries are (count, start, base, conds, source, ib, diffuse_variants,
-    vb_snapshot) tuples, where vb_snapshot is the (vb0, vb1, vb2) most recently
-    assigned before that line -- kept for provenance only; build_draw_groups
-    re-derives the actual position/texcoord buffers for a reassigned `ib`
-    from its component instead of trusting these literal values.
+    `draws` entries are typed AuthoredDrawCall records. Their vertex_resources
+    snapshot is kept for provenance only; build_draw_groups re-derives the
+    actual position/texcoord buffers for a reassigned `ib` from its component
+    instead of trusting those literal values.
     """
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
@@ -170,21 +170,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             if low == "endif":
                 if cond_stack: cond_stack.pop()
                 continue
-            m = re.match(r"vb0\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
+            m = re.match(r"vb(\d+)\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if m:
-                value = None if m.group(1).lower() == "null" else m.group(1)
-                if value and not info["vb0"]: info["vb0"] = value
-                info["_cur_vb0"] = value
-            m = re.match(r"vb1\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
-            if m:
-                value = None if m.group(1).lower() == "null" else m.group(1)
-                if value and not info["vb1"]: info["vb1"] = value
-                info["_cur_vb1"] = value
-            m = re.match(r"vb2\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
-            if m:
-                value = None if m.group(1).lower() == "null" else m.group(1)
-                if value and not info["vb2"]: info["vb2"] = value
-                info["_cur_vb2"] = value
+                slot = int(m.group(1))
+                resource = m.group(2)
+                value = None if resource.lower() == "null" else resource
+                if slot <= 2 and value and not info[f"vb{slot}"]:
+                    info[f"vb{slot}"] = value
+                info["_cur_vertex_resources"][slot] = value
             m = re.match(r"ib\s*=\s*(\S+)", line, re.I)
             if m:
                 if not info["ib"]: info["ib"] = m.group(1)
@@ -199,14 +192,19 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 for frame in cond_stack:
                     combined = dnf_and(combined, frame["cur"])
                 conds = normalize_dnf(combined, toggle_vars, var_prefix)
-                info["draws"].append((int(m.group(1)), int(m.group(2)),
-                                      int(m.group(3)), conds, line_source(raw),
-                                      info.get("_cur_ib"),
-                                      list(info.get("_cur_diffuse_variants") or []),
-                                      list(info.get("_diffuse_history") or []),
-                                      (info.get("_cur_vb0"), info.get("_cur_vb1"),
-                                       info.get("_cur_vb2"))))
-                info["aux_draw_states"].append(_aux_snapshot(info))
+                info["draws"].append(AuthoredDrawCall(
+                    count=int(m.group(1)),
+                    start=int(m.group(2)),
+                    base=int(m.group(3)),
+                    conditions=conds,
+                    source=line_source(raw),
+                    index_resource=info.get("_cur_ib"),
+                    diffuse_variants=list(
+                        info.get("_cur_diffuse_variants") or []),
+                    diffuse_history=list(info.get("_diffuse_history") or []),
+                    vertex_resources=dict(info["_cur_vertex_resources"]),
+                    auxiliary_maps=_aux_snapshot(info),
+                ))
             # "ref" is optional -- XXMI-generated mods omit it (e.g. "Resource\GIMI\Diffuse = X").
             m_diff = re.match(r"Resource\\[^\\]+\\Diffuse\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if not m_diff:
@@ -317,12 +315,11 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         info: dict = dict(vb0=None, vb1=None, vb2=None, ib=None, draws=[],
                           diffuse=None, diffuse_pool=[], src=None, handling_skip=False,
                           _cur_diffuse_variants=[], _diffuse_chain_key=None,
-                          _diffuse_history=[], _aux_maps={}, aux_draw_states=[])
+                          _diffuse_history=[], _aux_maps={},
+                          _cur_vertex_resources={})
         _scan(lines, info, [], {name})
         info.pop("_cur_ib", None)
-        info.pop("_cur_vb0", None)
-        info.pop("_cur_vb1", None)
-        info.pop("_cur_vb2", None)
+        info.pop("_cur_vertex_resources", None)
         # Whatever diffuse was active at the end of the scan -- needed for a
         # section with NO drawindexed line at all (the game's original,
         # whole-buffer draw proceeds unmodified against this section's own
@@ -671,34 +668,89 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
         tc_stride  = tc_ri.get("stride", 20)
         pos_stride = pos_ri.get("stride", POSITION_STRIDE)
+        index_size = _ib_index_size(ib_ri.get("format"))
         uv_off     = DEFAULT_UV_OFFSET
 
-        draws_list = list(info["draws"]) or [
-            (None, 0, 0, [], info["src"], None,
-             info.get("diffuse_variants_at_end") or [],
-             info.get("diffuse_history_at_end") or [], (None, None, None))]
-        aux_draw_states = (info.get("aux_draw_states") or
-                           [info.get("aux_maps_at_end") or {}])
+        draws_list = list(info["draws"]) or [AuthoredDrawCall(
+            count=None,
+            start=0,
+            base=0,
+            source=info["src"],
+            diffuse_variants=info.get("diffuse_variants_at_end") or [],
+            diffuse_history=info.get("diffuse_history_at_end") or [],
+            auxiliary_maps=info.get("aux_maps_at_end") or {},
+        )]
         draws = []
-        for i, (c, s, b, cd, src, draw_ib, diff_variants,
-                diff_history, _vb_ov) in enumerate(draws_list, 1):
-            d = dict(label=f"{label}-{i}", count=c, start=s, base=b,
-                     conditions=cd, sources=[src] if src else [])
-            # A mid-section `ib = ...` reassignment.
-            if draw_ib and draw_ib != ib_res:
-                resolved = _resolve_ib_file(draw_ib)
-                if resolved:
-                    d["ib_file"] = resolved
-                    d["index_size"] = _ib_index_size(_res_get(resources, draw_ib).get("format"))
-                draw_buf = _lookup_comp_buf(_ib_res_to_component(draw_ib))
-                if draw_buf and draw_buf != buf:
-                    pfile, pstride = _resolve_vertex_res(draw_buf["position"])
-                    tfile, tstride = _resolve_vertex_res(draw_buf["texcoord"])
-                    if pfile and tfile:
-                        d["position_file"] = pfile
-                        d["texcoord_file"] = tfile
-                        d["position_stride"] = pstride or POSITION_STRIDE
-                        d["texcoord_stride"] = tstride or 20
+        for i, authored in enumerate(draws_list, 1):
+            d = DrawCall(
+                label=f"{label}-{i}",
+                count=authored.count,
+                start=authored.start,
+                base=authored.base,
+                conditions=authored.conditions,
+                sources=[authored.source] if authored.source else [],
+                ib_file=ib_file,
+                index_size=index_size,
+                position_file=pos_file,
+                position_stride=pos_stride,
+                texcoord_file=tc_file,
+                texcoord_stride=tc_stride,
+            )
+            # Resolve the effective buffers before deduplication. Concrete
+            # per-draw VB bindings win; runtime-only resources retain the
+            # existing IB/component heuristic, while an authored null stays
+            # unbound instead of inheriting the group's first binding.
+            effective_ib = authored.index_resource or ib_res
+            if effective_ib != ib_res:
+                resolved_ib = _resolve_ib_file(effective_ib)
+                if resolved_ib:
+                    d.ib_file = resolved_ib
+                    d.index_size = _ib_index_size(
+                        _res_get(resources, effective_ib).get("format"))
+
+            draw_buf = _lookup_comp_buf(_ib_res_to_component(effective_ib))
+            if draw_buf and draw_buf != buf:
+                pfile, pstride = _resolve_vertex_res(draw_buf["position"])
+                tfile, tstride = _resolve_vertex_res(draw_buf["texcoord"])
+                if pfile:
+                    d.position_file = pfile
+                    d.position_stride = pstride or POSITION_STRIDE
+                if tfile:
+                    d.texcoord_file = tfile
+                    d.texcoord_stride = tstride or 20
+
+            vertex_resources = authored.vertex_resources
+            if 0 in vertex_resources:
+                position_resource = vertex_resources[0]
+                if position_resource is None:
+                    d.position_file = None
+                    d.position_stride = None
+                else:
+                    pfile, pstride = _resolve_vertex_res(position_resource)
+                    if pfile:
+                        d.position_file = pfile
+                        d.position_stride = pstride or POSITION_STRIDE
+
+            authored_tc = {
+                slot: vertex_resources[slot]
+                for slot in (1, 2) if slot in vertex_resources
+            }
+            resolved_tc = None
+            for slot in (2, 1):
+                resource_name = authored_tc.get(slot)
+                if not resource_name:
+                    continue
+                tfile, tstride = _resolve_vertex_res(resource_name)
+                if tfile and (tstride or 0) != 32:
+                    resolved_tc = (tfile, tstride or 20)
+                    break
+            if resolved_tc:
+                d.texcoord_file, d.texcoord_stride = resolved_tc
+            elif authored_tc and any(
+                    resource_name is None
+                    for resource_name in authored_tc.values()):
+                d.texcoord_file = None
+                d.texcoord_stride = None
             # Whichever Resource\...\Diffuse line most recently ran before
             # this draw, in execution order -- the draw's own default
             # texture (see core.mesh_builder.build_mesh_payload). The first
@@ -706,17 +758,17 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             # bound (matches the `if` branch of an elif chain); a toggle
             # press picks a different entry via texture_variants below.
             variants = []
-            for v in diff_variants:
+            for v in authored.diffuse_variants:
                 file = _resolve_diffuse_file(v["res"])
                 if file:
                     variants.append({"conditions": v["cond"], "file": file})
             if variants:
-                d["texture_default_file"] = variants[0]["file"]
+                d.set_texture_default("diffuse", variants[0]["file"])
             # A toggle that swaps the diffuse texture rather than gating a draw.
             if len(variants) > 1:
-                d["texture_variants"] = variants
+                d.set_texture_variants("diffuse", variants)
             history = []
-            for v in diff_history:
+            for v in authored.diffuse_history:
                 file = _resolve_diffuse_file(v["res"])
                 if file:
                     history.append({"conditions": v["cond"], "file": file})
@@ -732,18 +784,17 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             if (len(history) > 1 and
                     (history_vars - legacy_vars or
                      len(history) > len(variants))):
-                d["texture_assignments"] = history
+                d.texture_assignments = history
 
             # Authored PBR companions follow the same execution-order model
             # as diffuse assignments, but remain INI-only (no manual pool).
             # A conditional single assignment has no unconditional default;
             # the frontend must be able to fall back to no map when it fails.
-            aux_state = aux_draw_states[min(i - 1, len(aux_draw_states) - 1)]
-            for channel, state in aux_state.items():
-                authored = state.get("history") or state.get("variants") or []
+            for channel, state in authored.auxiliary_maps.items():
+                assignments = state.get("history") or state.get("variants") or []
                 resolved = []
                 default_file = None
-                for assignment in authored:
+                for assignment in assignments:
                     file = _resolve_diffuse_file(assignment["res"])
                     if not file:
                         continue
@@ -752,10 +803,10 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     if not conditions:
                         default_file = file
                 if default_file:
-                    d[f"{channel}_default_file"] = default_file
+                    d.set_texture_default(channel, default_file)
                 if (len(resolved) > 1 or
                         (resolved and resolved[0]["conditions"])):
-                    d[f"{channel}_variants"] = resolved
+                    d.set_texture_variants(channel, resolved)
             draws.append(d)
         pool_files, seen_pool_files = [], set()
         for res in info["diffuse_pool"]:
@@ -772,7 +823,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             texcoord_stride=tc_stride, texcoord_uv_off=uv_off,
             ib_file=ib_file, diffuse_file=diff_ri.get("filename"),
             diffuse_pool_files=pool_files,
-            index_size=_ib_index_size(ib_ri.get("format")),
+            index_size=index_size,
             draws=draws,
         ))
 

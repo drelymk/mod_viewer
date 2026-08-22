@@ -7,7 +7,10 @@ and line after parsing and deduplication.
 import os
 import tempfile
 
+import pytest
+
 from app import mod_loader
+from core.draw_call import DrawCall
 from core.ini_parser import (SrcLine, build_draw_groups, extract_resources,
                              extract_toggle_keys, line_source, merge_sections,
                              parse_sections)
@@ -173,6 +176,45 @@ def test_deduplicate_preserves_base_index_and_material_identity():
     ]
     merged = _deduplicate_draws({"draws": draws})
     assert len(merged) == 4
+
+
+def test_draw_call_ir_normalizes_inherited_state_before_deduplication():
+    group = {
+        "ib_file": "body.ib", "index_size": 4,
+        "position_file": "body.pos", "position_stride": 40,
+        "texcoord_file": "body.tc", "texcoord_stride": 20,
+        "draws": [
+            {"label": "implicit", "count": 100, "start": 0, "base": 0,
+             "conditions": [[{"var": "swap", "value": "0"}]],
+             "sources": [{"line_no": 10}]},
+            {"label": "explicit", "count": 100, "start": 0, "base": 0,
+             "ib_file": "body.ib", "index_size": 4,
+             "position_file": "body.pos", "position_stride": 40,
+             "texcoord_file": "body.tc", "texcoord_stride": 20,
+             "conditions": [[{"var": "swap", "value": "1"}]],
+             "sources": [{"line_no": 20}]},
+        ],
+    }
+
+    merged = _deduplicate_draws(group)
+
+    assert len(merged) == 1
+    assert isinstance(merged[0], DrawCall)
+    assert [source["line_no"] for source in merged[0].sources] == [10, 20]
+    assert len(merged[0].conditions) == 2
+
+
+def test_draw_call_ir_rejects_unreviewed_fields():
+    with pytest.raises(TypeError, match="unsupported DrawCall field"):
+        _deduplicate_draws({
+            "draws": [{"count": 3, "start": 0, "base": 0,
+                       "conditions": [], "sources": [],
+                       "future_render_state": "unclassified"}],
+        })
+    draw = DrawCall(count=3, start=0, base=0)
+    with pytest.raises(AttributeError):
+        draw.future_render_state = "unclassified"
+    assert draw.to_dict()["count"] == 3
 
 
 COMPONENT0_INI = """[CommandListShared]
