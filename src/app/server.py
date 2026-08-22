@@ -19,6 +19,7 @@ import functools
 import base64
 import http.server
 import os
+import secrets
 import socketserver
 import shutil
 import threading
@@ -288,10 +289,14 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
     vendor_root = ""
     template_vars: dict = {}
+    csp_nonce = ""
 
     def end_headers(self):
+        script_src = "'self'"
+        if self.csp_nonce:
+            script_src += f" 'nonce-{self.csp_nonce}'"
         self.send_header("Content-Security-Policy",
-                         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                         f"default-src 'self'; script-src {script_src}; "
                          "style-src 'self' 'unsafe-inline'; "
                          "img-src 'self' data: blob:; connect-src 'self'; "
                          "object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
@@ -449,6 +454,7 @@ def start():
     """
     if not paths.has_vendored_three():
         raise RuntimeError("Vendored Three.js assets are required; run src/build.py to fetch them.")
+    csp_nonce = secrets.token_urlsafe(32)
     three_url = f"{_VENDOR_PREFIX}three.webgpu.js"
     tsl_url = f"{_VENDOR_PREFIX}three.tsl.js"
     addons_url = f"{_VENDOR_PREFIX}addons/"
@@ -463,19 +469,22 @@ def start():
     if not flags["modify_toggle"]:
         body_classes.append("feature-modify-toggle-off")
 
-    handler = functools.partial(
-        _Handler,
-        directory=paths.web_dir(),
-    )
-    _Handler.vendor_root = paths.vendor_dir()
-    _Handler.template_vars = {
+    template_vars = {
         "__THREE_URL__": three_url,
         "__THREE_TSL_URL__": tsl_url,
         "__ADDONS_URL__": addons_url,
         "__BODY_CLASS__": " ".join(body_classes),
         "__APP_VERSION__": paths.APP_VERSION,
         "__REPO_URL__": REPO_URL,
+        "__CSP_NONCE__": csp_nonce,
     }
+    launch_handler = type(
+        "_LaunchHandler", (_Handler,), {
+            "vendor_root": paths.vendor_dir(),
+            "template_vars": template_vars,
+            "csp_nonce": csp_nonce,
+        })
+    handler = functools.partial(launch_handler, directory=paths.web_dir())
 
     httpd = _ThreadingTCPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()

@@ -14,7 +14,7 @@ $python = $null
 foreach ($candidate in @('py', 'python', 'python3')) {
     if (Get-Command $candidate -ErrorAction SilentlyContinue) { $python = $candidate; break }
 }
-if (-not $python) { throw 'Python 3.9+ not found on PATH.' }
+if (-not $python) { throw 'Python 3.10.1+ not found on PATH.' }
 
 if ($python -eq 'py') {
     & py -3 build.py @Args
