@@ -2355,6 +2355,9 @@ def test_record_advances_read_only_vars_across_complete_cycle(
     payload = _payload("RecordCycle")
     payload["controls"]["toggles"]["KeyRecordCycle"]["vars"] = [
         {"var": "local", "default": "0", "values": ["0", "1"]},
+    ]
+    payload["controls"]["toggles"]["KeyRecordCycle"]["cycle_vars"] = [
+        {"var": "local", "default": "0", "values": ["0", "1"]},
         {"var": r"\Other\Master\Mode", "default": "0",
          "values": ["0", "1", "2"]},
     ]

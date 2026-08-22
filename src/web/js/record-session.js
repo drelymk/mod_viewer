@@ -22,11 +22,9 @@ export function isRecording() {
   return active !== null;
 }
 
-/** This section's own writable vars (a subset of info.vars). Record mode
- * requires at least one, even though every co-driven var participates in its
- * preview and each uses its own position -> value mapping. */
-function writableVars(info, rawNames) {
-  return info.vars.filter((v) => rawNames.includes(v.var.split('::').pop()));
+/** Match the API's writable raw names to the source-scoped panel variables. */
+function writableVars(vars, rawNames) {
+  return vars.filter((v) => rawNames.includes(v.var.split('::').pop()));
 }
 
 /** {mesh -> visible} exactly as currently shown — the pre-population for
@@ -75,8 +73,8 @@ export async function startRecordSession(info, ctx, ui) {
       await alertDialog('Could not start recording:\n\n' + posInfo.error);
       return;
     }
-    const writable = writableVars(info, posInfo.vars || []);
-    const vars = info.vars;
+    const vars = info.cycle_vars || info.vars;
+    const writable = writableVars(vars, posInfo.vars || []);
     if (!writable.length || !vars.length || !posInfo.positions) {
       await alertDialog('This toggle has no variable this app can record automatically.');
       return;
@@ -85,7 +83,7 @@ export async function startRecordSession(info, ctx, ui) {
     // Undo target for Cancel: every var this section drives, at whatever value
     // it had when recording started (not just the writable ones — a namespaced
     // var in the same section is read-only but still affects visibility).
-    const before = info.vars.map((v) => ({ var: v.var, value: getToggleValue(v.var) }));
+    const before = vars.map((v) => ({ var: v.var, value: getToggleValue(v.var) }));
 
     // Pre-populate every position up front from the file's own current
     // combined visibility, never a partial map — an unvisited position must
