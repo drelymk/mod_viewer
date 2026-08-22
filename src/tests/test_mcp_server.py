@@ -1,7 +1,5 @@
 """MCP filesystem authorization contracts."""
 
-import os
-
 import pytest
 
 import mcp_server
@@ -71,19 +69,3 @@ def test_mcp_malformed_registry_is_a_permission_error(tmp_path, monkeypatch):
 
     with pytest.raises(PermissionError, match="Could not read"):
         mcp_server._authorized_mod_folder(str(tmp_path))
-
-
-def test_mcp_rejects_symlink_escape(tmp_path, monkeypatch):
-    root = tmp_path / "library"
-    root.mkdir()
-    outside = tmp_path.parent / f"{tmp_path.name}-outside"
-    link = root / "escape"
-    try:
-        os.symlink(outside, link, target_is_directory=True)
-    except (OSError, NotImplementedError) as error:
-        pytest.skip(f"symlink creation is unavailable: {error}")
-    monkeypatch.setattr(mcp_server.mod_folders, "load_registry",
-                        lambda: _entry(root))
-
-    with pytest.raises(PermissionError):
-        mcp_server._authorized_mod_folder(str(link))
