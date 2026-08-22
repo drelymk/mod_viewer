@@ -2,8 +2,9 @@
 `[Key...]` toggle, and rewrite the ini's `if`/`elif`/`endif` gates to match.
 
 A cycle toggle steps through positions 0..N-1; at each position every var the
-section cycles takes its own `values[position % len(values)]` (same
-wraparound rule the Toggle panel's cycle button already uses). The caller
+section cycles uses its value at that row. If its list is shorter than the
+section's longest list, 3Dmigoto keeps its final value for the remaining rows.
+The caller
 (the frontend, which already has the mesh payload's `conditions`) decides,
 per position, which drawindexed *lines* should be visible -- this module
 only has to make the ini agree.
@@ -169,10 +170,26 @@ def _chain_content(doc, var, branches, endif_line, desired):
     return content
 
 
-def _or_expr(var, values, pos_set):
+def _cycle_value(values, position):
+    return values[min(max(position, 0), len(values) - 1)]
+
+
+def _or_expr(var, values, pos_set, all_positions):
     if not pos_set:
         return "0"   # permanently false — mirrors toggle_editor's own convention
-    return " || ".join(f"${var} == {values[p % len(values)]}" for p in sorted(pos_set))
+    by_value = {}
+    for position in all_positions:
+        by_value.setdefault(_cycle_value(values, position), set()).add(position)
+    selected = set(pos_set)
+    partial = [positions for positions in by_value.values()
+               if positions & selected and not positions <= selected]
+    if partial:
+        raise _Unsupported(
+            f"this visibility differs between cycle positions where ${var} "
+            "has the same value")
+    selected_values = [value for value, positions in by_value.items()
+                       if positions <= selected]
+    return " || ".join(f"${var} == {value}" for value in selected_values)
 
 
 def _regenerate_chain(doc, var, values, branches, endif_line, desired, all_positions):
@@ -197,7 +214,8 @@ def _regenerate_chain(doc, var, values, branches, endif_line, desired, all_posit
         if pos_set == all_positions:
             new_lines.extend(l.raw for l in lines)
         else:
-            new_lines.append(f"if {_or_expr(var, values, pos_set)}")
+            new_lines.append(
+                f"if {_or_expr(var, values, pos_set, all_positions)}")
             new_lines.extend(l.raw for l in lines)
             new_lines.append("endif")
 
@@ -208,7 +226,8 @@ def _regenerate_chain(doc, var, values, branches, endif_line, desired, all_posit
     return start, end, new_lines
 
 
-def _analyze_var(doc, var, values, desired, report, unsafe_sections):
+def _analyze_var(doc, var, values, desired, report, unsafe_sections,
+                 max_positions):
     """Everything this var's recorded data implies, without mutating `doc`.
 
     Returns (chain_edits, bare_edits, verified):
@@ -227,7 +246,7 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections):
 
     Anything refused is appended to `report["skipped"]`.
     """
-    all_positions = frozenset(range(len(values)))
+    all_positions = frozenset(range(max_positions))
     chain_leaders = {}     # leader.no -> Line
     leader_lines = {}      # leader.no -> [desired line_no, ...]
     bare_targets = []      # Lines with no ancestor referencing var
@@ -294,7 +313,13 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections):
         if line.no not in nested_bare:
             verified[line.no] = sorted(pos_set)
         if pos_set != all_positions:
-            bare_edits[line.no] = _or_expr(var, values, pos_set)
+            try:
+                bare_edits[line.no] = _or_expr(
+                    var, values, pos_set, all_positions)
+            except _Unsupported as exc:
+                verified.pop(line.no, None)
+                report["skipped"].append({
+                    "var": var, "line": line.no + 1, "reason": str(exc)})
 
     return chain_edits, bare_edits, verified
 
@@ -305,24 +330,20 @@ def writable_cycle_vars(doc, section_name):
     supply data for.
 
     Namespaced/master vars are cross-ini and read-only, so they're excluded
-    here even though `cycle_vars` still reports them — and since a section's
-    own namespaced var can carry a *different-length* values list than its
-    writable var(s), `max_positions` must come from the writable ones alone.
-    The existing Toggle-panel cycle button instead advances by its *lead*
-    var's length (which can be namespaced) — so callers preparing a Record
-    session must ask here rather than reuse that count, or they can end up
-    supplying data for the wrong number of positions.
+    from the returned write set. They still participate in the section's
+    cycle, however, so `max_positions` covers every co-driven variable. The
+    recorder must preview that complete tuple while only rewriting locals.
 
     Raises ToggleEditError if the section isn't a cycle toggle with at least
     one writable variable.
     """
     sec = te.find_cycle_section(doc, section_name)
-    cvars = te.cycle_vars(sec)
+    cvars = te.cycle_vars(sec, include_read_only=True)
     writable = {v: vals for v, vals in cvars.items() if not ic.is_namespaced(v)}
     if not writable:
         raise te.ToggleEditError(
             f"{section_name!r} is not a cycle toggle with any writable variable")
-    return writable, max(len(v) for v in writable.values())
+    return writable, max(len(v) for v in cvars.values())
 
 
 def record_toggle(doc, section_name, position_lines):
@@ -372,7 +393,8 @@ def record_toggle(doc, section_name, position_lines):
     all_bare_claims = {}   # line_no -> [(var, expr), ...]
     per_var_verify = {}    # var -> (values, {line_no: [position, ...]})
     for var, values in writable.items():
-        chain_edits, bare_edits, verified = _analyze_var(doc, var, values, desired, report, unsafe_sections)
+        chain_edits, bare_edits, verified = _analyze_var(
+            doc, var, values, desired, report, unsafe_sections, max_positions)
         all_chain_edits.extend(chain_edits)
         for line_no, expr in bare_edits.items():
             all_bare_claims.setdefault(line_no, []).append((var, expr))
@@ -457,7 +479,8 @@ def record_toggle(doc, section_name, position_lines):
 # positions. The caller (app/toggle_api.record_toggle) restores the
 # just-made backup if not.
 
-_DRAW_RE = re.compile(r"drawindexed\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", re.I)
+_DRAW_RE = re.compile(
+    r"drawindexed\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)", re.I)
 
 
 def _draw_key(doc, line_no):
@@ -527,7 +550,8 @@ def verify_recording(path, report, text=None, document=None):
                 continue
             expected = set(d["positions"])
             for p in range(len(values)):
-                actual = _dnf_satisfied(conds, {var: values[p % len(values)]})
+                actual = _dnf_satisfied(
+                    conds, {var: _cycle_value(values, p)})
                 if (p in expected) != actual:
                     mismatches.append({
                         "var": var, "section": d["section"],

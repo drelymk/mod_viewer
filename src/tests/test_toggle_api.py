@@ -31,14 +31,10 @@ record_editor.py itself is exercised in-memory (no disk I/O, no session) by
 test_record_editor.py; this file instead checks the app layer on top of it:
 resolving ini_rel to a path, staging via edit_session, and turning
 ToggleEditError into a plain {"error": ...} rather than raising across the JS
-bridge. It's also the only place that exercises get_record_positions, which
-exists specifically because a [Key...] section's writable variables can have
-a *different* (typically shorter) values list than a namespaced variable
-declared alongside them in the same section â€” ini_parser.extract_toggle_keys
-(the read path feeding the existing Toggle-panel cycle button) reports both,
-but toggle_editor.cycle_vars (the write path) can't even parse a namespaced
-declaration, so record_toggle's position count must come from
-get_record_positions rather than the panel's own lead-variable cycle length.
+bridge. It's also the only place that exercises get_record_positions. A
+[Key...] section's writable variables can have a shorter values list than a
+co-driven namespaced variable. Record therefore previews the complete cycle
+while reporting only the variables it may safely rewrite.
 """
 
 import glob, os
@@ -132,13 +128,13 @@ def wirable_mod(api_root):
     yield root, ini_path
 
 
-def test_get_record_positions_uses_writable_vars_only(toggle_mod):
+def test_get_record_positions_uses_complete_cycle_but_reports_writable_vars(toggle_mod):
     tmp, _ini_path = toggle_mod
     ini_rel = "mod.ini"
     result = toggle_api.get_record_positions(tmp, ini_rel, "KeyUpper")
     assert (result.get("ok") is True), ("get_record_positions succeeds on a real toggle")
-    assert (result.get("positions") == 2), (f"position count comes from the 2-value writable var, not the "
-          f"4-value namespaced one (got {result.get('positions')})")
+    assert (result.get("positions") == 4), (f"position count includes the 4-value co-driven namespaced var "
+          f"(got {result.get('positions')})")
     assert (result.get("vars") == ["Upper"]), (f"only the writable variable is reported (got {result.get('vars')})")
 
 
@@ -155,7 +151,9 @@ def _swap_positions(tmp, ini_rel):
     line_100 = next(i for i, l in enumerate(FIXTURE.splitlines(), 1) if "100,0,0" in l)
     line_200 = next(i for i, l in enumerate(FIXTURE.splitlines(), 1) if "200,0,0" in l)
     ini_path = os.path.join(tmp, ini_rel)
-    result = toggle_api.record_toggle(tmp, ini_rel, "KeyUpper", {0: [line_200], 1: [line_100]})
+    result = toggle_api.record_toggle(
+        tmp, ini_rel, "KeyUpper",
+        {0: [line_200], 1: [line_100], 2: [line_100], 3: [line_100]})
     return ini_path, result
 
 

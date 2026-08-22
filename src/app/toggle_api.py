@@ -190,8 +190,10 @@ def get_record_positions(mod_dir, ini_rel, section_name):
     """{"ok": True, "positions": N, "vars": [var, ...]}: how many cycle
     positions a Record-mode session for this section must supply, and which
     of its variables are actually writable (namespaced/master vars are
-    read-only and excluded). Call this before starting a session rather
-    than reusing the toggle panel's own cycle length, which can disagree.
+    read-only and excluded from ``vars``). The position count still includes
+    every co-driven variable so Record can preview the complete tuple. Call
+    this before starting a session rather than reusing the toggle panel's own
+    cycle length, which can disagree.
     Reads the pending in-memory edit if one is staged this session.
     """
     try:

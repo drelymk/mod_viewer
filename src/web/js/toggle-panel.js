@@ -13,6 +13,7 @@ import { alertDialog, confirmDialog } from './dialogs.js';
 import { registerViewSync, syncView } from './view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from './panel-utils.js';
 import { createIcon } from './ui-icons.js';
+import { cyclePositionCount, cycleValueAt } from './cycle-values.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -26,9 +27,11 @@ function displayName(variable) {
  * applied when the complete tuple itself is duplicated. */
 function findCyclePosition(vars, positions, preferred = -1) {
   const matches = (position) => vars.every(v =>
-    v.values[position % v.values.length] === getToggleValue(v.var));
+    cycleValueAt(v, position) === getToggleValue(v.var));
   if (preferred >= 0 && preferred < positions && matches(preferred)) return preferred;
-  for (let position = 0; position < positions; position++) {
+  // Duplicate complete tuples use the last position, matching the app's
+  // toggle identity invariant and Record/PRESENT tie-breaking.
+  for (let position = positions - 1; position >= 0; position--) {
     if (matches(position)) return position;
   }
   return -1;
@@ -87,7 +90,7 @@ async function handleDelete(info, ctx) {
 function buildToggleItem(info, ctx) {
   for (const v of info.vars) setToggleValue(v.var, v.default);
 
-  const positions = Math.max(...info.vars.map(v => v.values.length));
+  const positions = cyclePositionCount(info.vars);
   let cyclePosition = findCyclePosition(info.vars, positions);
 
   const item = document.createElement('div');
@@ -174,7 +177,7 @@ function buildToggleItem(info, ctx) {
     cyclePosition = findCyclePosition(info.vars, positions, cyclePosition);
     const next = (cyclePosition + 1) % positions;
     for (const v of info.vars) {
-      setToggleValue(v.var, v.values[next % v.values.length]);
+      setToggleValue(v.var, cycleValueAt(v, next));
     }
     cyclePosition = next;
     refreshAll();

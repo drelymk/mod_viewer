@@ -342,6 +342,17 @@ def build_toggle_panel(toggle_keys, toggle_defaults, gating_vars, mod_dir=None,
                 }
                 for var, values in shown_vars.items()
             ],
+            # Keep the normal Toggle UI focused on variables that visibly
+            # affect the model, but retain the Key section's complete aligned
+            # tuple for Record-mode position evaluation.
+            "cycle_vars": [
+                {
+                    "var": var,
+                    "values": values,
+                    "default": toggle_defaults.get(var, values[0]),
+                }
+                for var, values in info["vars"].items()
+            ],
         }
     return panel
 

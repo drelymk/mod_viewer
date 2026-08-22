@@ -34,13 +34,20 @@ def test_wired_toggle_shows_only_its_gating_vars():
     """Long-standing behaviour, unchanged: when a section has one var that
     gates something and a sibling var that doesn't, only the gating var is
     shown — and the whole section counts as wired."""
-    toggle_keys = {"KeyUpper": _key("Upper", {"Upper": ["0", "1"], "TT": ["0", "1"]})}
+    master = "\\Some\\Master\\State"
+    toggle_keys = {"KeyUpper": _key("Upper", {
+        "Upper": ["0", "1"], master: ["0", "1", "2"],
+    })}
     panel = build_toggle_panel(toggle_keys, {}, gating_vars={"Upper"}, mod_dir=None)
     assert ("KeyUpper" in panel), ("the section appears")
     entry = panel["KeyUpper"]
     assert (entry["wired"] is True), (f"marked wired (got {entry['wired']})")
     names = [v["var"] for v in entry["vars"]]
     assert (names == ["Upper"]), (f"only the gating var is listed (got {names})")
+    cycle_names = [v["var"] for v in entry["cycle_vars"]]
+    assert (cycle_names == ["Upper", master]), (
+        f"Record receives the complete co-driven tuple (got {cycle_names})")
+    assert entry["cycle_vars"][1]["values"] == ["0", "1", "2"]
 
 
 def test_unwired_pending_toggle_shown_with_writable_vars():

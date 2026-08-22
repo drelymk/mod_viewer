@@ -35,7 +35,7 @@ def extract_toggle_keys(sections, var_prefix=None, source=None,
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
     for name, lines in sections.items():
-        if not name.startswith("Key"): continue
+        if not name.lower().startswith("key"): continue
         key_combo, back_combo, ktype, cvars = None, None, None, {}
         src = None
         for line in lines:

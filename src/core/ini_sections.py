@@ -175,10 +175,11 @@ def sections_from_document(document):
 
 def extract_resources(sections):
     """Return {resource_name: {filename, stride, format}} from Resource sections."""
-    SKIP = ("TextureOverride", "CommandList", "ShaderOverride", "Present", "Key", "Constants")
+    skip = ("textureoverride", "commandlist", "shaderoverride", "present",
+            "key", "constants")
     resources = {}
     for name, lines in sections.items():
-        if any(name.startswith(p) for p in SKIP): continue
+        if name.lower().startswith(skip): continue
         res = {}
         for line in lines:
             if "=" not in line: continue

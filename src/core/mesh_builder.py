@@ -228,11 +228,25 @@ def _deduplicate_draws(group, max_draws=0):
     This is a distinct pipeline stage: geometry packing receives one
     deterministic draw list and does not own the condition-merging rules.
     """
+    def freeze(value):
+        """Turn nested draw metadata into a stable, hashable identity."""
+        if isinstance(value, dict):
+            return tuple(sorted((key, freeze(item))
+                                for key, item in value.items()))
+        if isinstance(value, (list, tuple)):
+            return tuple(freeze(item) for item in value)
+        return value
+
     merged = {}
     order = []
     for draw in group["draws"]:
-        key = (draw.get("ib_file"), draw.get("position_file"),
-               draw.get("texcoord_file"), draw["start"], draw["count"])
+        # TODO(DrawCall IR): replace this reflective key with an explicit,
+        # normalized render_identity once draw parsing has a typed IR.
+        # Only provenance, visibility alternatives and the generated label may
+        # differ between rows that are safe to merge. In particular, base
+        # vertex, index size and material/texture state are part of identity.
+        key = freeze({name: value for name, value in draw.items()
+                      if name not in {"label", "conditions", "sources"}})
         if key not in merged:
             merged[key] = {"draw": draw, "alts": [], "sources": []}
             order.append(key)
@@ -507,6 +521,11 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             base = draw.get("base") or 0
             if base:
                 raw = [v + base for v in raw]
+            # A negative effective DirectX vertex index is invalid.  Reject it
+            # before buffer decoding, where negative offsets can be interpreted
+            # as end-relative instead of failing safely.
+            if any(index < 0 for index in raw):
+                continue
 
             # Compact: only export vertices actually referenced
             used  = sorted(set(raw))

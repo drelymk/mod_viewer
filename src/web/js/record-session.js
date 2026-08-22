@@ -13,6 +13,7 @@ import {
 } from './visibility.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
 import { alertDialog } from './dialogs.js';
+import { cycleValueAt } from './cycle-values.js';
 
 let active = null;    // non-null while a session is in progress
 let starting = false; // true from the first click until active is set (or the attempt is abandoned)
@@ -21,13 +22,9 @@ export function isRecording() {
   return active !== null;
 }
 
-/** This section's own vars that get recorded (a subset of info.vars — a
- * namespaced var declared alongside them never comes back from
- * get_record_positions, since it's cross-ini and read-only), each still
- * carrying its own values list so its own position -> value mapping is used
- * rather than assuming every var in the section cycles in lockstep. */
-function writableVars(info, rawNames) {
-  return info.vars.filter((v) => rawNames.includes(v.var.split('::').pop()));
+/** Match the API's writable raw names to the source-scoped panel variables. */
+function writableVars(vars, rawNames) {
+  return vars.filter((v) => rawNames.includes(v.var.split('::').pop()));
 }
 
 /** {mesh -> visible} exactly as currently shown — the pre-population for
@@ -55,7 +52,7 @@ function applySnapshot(snap) {
 
 function positionLabel() {
   const { current, positions, vars } = active;
-  const values = vars.map((v) => `${v.var.split('::').pop()}=${v.values[current % v.values.length]}`).join(', ');
+  const values = vars.map((v) => `${v.var.split('::').pop()}=${cycleValueAt(v, current)}`).join(', ');
   return `Position ${current + 1} of ${positions} — ${values}`;
 }
 
@@ -76,8 +73,9 @@ export async function startRecordSession(info, ctx, ui) {
       await alertDialog('Could not start recording:\n\n' + posInfo.error);
       return;
     }
-    const vars = writableVars(info, posInfo.vars || []);
-    if (!vars.length || !posInfo.positions) {
+    const vars = info.cycle_vars || info.vars;
+    const writable = writableVars(vars, posInfo.vars || []);
+    if (!writable.length || !vars.length || !posInfo.positions) {
       await alertDialog('This toggle has no variable this app can record automatically.');
       return;
     }
@@ -85,18 +83,21 @@ export async function startRecordSession(info, ctx, ui) {
     // Undo target for Cancel: every var this section drives, at whatever value
     // it had when recording started (not just the writable ones — a namespaced
     // var in the same section is read-only but still affects visibility).
-    const before = info.vars.map((v) => ({ var: v.var, value: getToggleValue(v.var) }));
+    const before = vars.map((v) => ({ var: v.var, value: getToggleValue(v.var) }));
 
     // Pre-populate every position up front from the file's own current
     // combined visibility, never a partial map — an unvisited position must
     // still default to matching what's already on disk.
     const snapshots = [];
     for (let p = 0; p < posInfo.positions; p++) {
-      for (const v of vars) setToggleValue(v.var, v.values[p % v.values.length]);
+      for (const v of vars) setToggleValue(v.var, cycleValueAt(v, p));
       snapshots.push(snapshotVisibility());
     }
 
-    active = { info, ctx, ui, vars, positions: posInfo.positions, current: 0, snapshots, before };
+    active = {
+      info, ctx, ui, vars,
+      positions: posInfo.positions, current: 0, snapshots, before,
+    };
 
     for (const v of vars) setToggleValue(v.var, v.values[0]);
     applySnapshot(snapshots[0]);
@@ -156,7 +157,7 @@ function captureCurrent() {
 function advance() {
   captureCurrent();
   active.current = (active.current + 1) % active.positions;
-  for (const v of active.vars) setToggleValue(v.var, v.values[active.current % v.values.length]);
+  for (const v of active.vars) setToggleValue(v.var, cycleValueAt(v, active.current));
   applySnapshot(active.snapshots[active.current]);
   active.ui.valSpan.textContent = positionLabel();
 }
