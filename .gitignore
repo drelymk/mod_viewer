@@ -13,6 +13,10 @@ assets/
 src/app/_baked_features.py
 config.json
 
+# AI
+.codex/
+graphify-out/
+
 __pycache__/
 *.pyc
 .pytest_tmp/
