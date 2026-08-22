@@ -117,36 +117,20 @@ machine-specific paths or facts that are obvious from the source.
 - Geometry detection is conservative and format-specific. Do not infer a game
   or material meaning from a filename alone. Unknown, malformed or too-small
   buffers must be rejected or dropped safely rather than read beyond bounds.
-  A broader auto-detected UV offset must not displace a credible established
-  layout unless its evidence is materially stronger.
+- Geometry resolution is compatibility-first. New typed or explicit geometry
+  knowledge may improve decoding when positively identified, but failure to
+  recognize it must not by itself make previously supported geometry
+  disappear.
+- Geometry-affecting changes require representative compatibility validation in
+  addition to unit tests. New load failures or unexplained geometry loss are
+  regressions.
 - Draw deduplication uses normalized effective buffer and material state.
   Classify each new draw field explicitly as render identity, visibility or
   provenance; never derive identity reflectively from every dictionary field.
 - Authored draw state preserves vertex-buffer bindings by numeric slot and
   distinguishes an untouched slot from an explicit `null`. Resolve effective
   files per draw before deduplication; an IB change must not be required for a
-  VB change to take effect. At a conditional join, retain VB and IB state only
-  when every path agrees; divergent state that can affect a consumed geometry
-  semantic is unsupported rather than inherited from an arbitrary branch.
-  Group fallbacks require the same concrete binding at every authored draw;
-  a first-seen resource from one sibling branch must never resolve another.
-  Candidate-less null-versus-untouched ambiguity in an established geometry
-  slot must not be rebound through a component, hash or global fallback.
-  A runtime-only binding without backing bytes must not shadow the next
-  structurally validated, file-backed fallback.
-- Geometry decoding uses explicit position, texcoord and index layout
-  descriptors. Numeric non-indexed draws and safely derived whole-IB
-  `drawindexed = auto` are supported; variable, instanced and indirect calls
-  remain diagnostic-only. A non-indexed draw is geometry only when its own
-  execution path binds complete, resolvable position and texcoord streams;
-  never borrow sibling component buffers for an incomplete setup/replay pass.
-  Validate its vertex range before materializing sequential indices. Only
-  explicit unsigned `R16_UINT` and `R32_UINT` index formats are supported.
-  Reject a whole draw when its layout, stride, index range or effective vertex
-  range is invalid rather than truncating it or manufacturing zero-valued
-  vertices. Higher vertex slots require a compatible declared format; resource
-  and filename labels may rank credible bindings but never establish a
-  position or texcoord semantic by themselves.
+  VB change to take effect.
 - An `ib` section without `drawindexed` may produce one synthetic whole-buffer
   draw. A `handling=skip` section without an explicit draw produces nothing.
   Real draw rows retain authored `count,start,base`; synthetic rows are the

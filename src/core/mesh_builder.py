@@ -3,8 +3,6 @@
 import re, struct, os, base64
 from dataclasses import dataclass
 
-from .buffer_layout import (GeometryLayout, IndexLayout, LayoutError,
-                            position_layout, texcoord_layout)
 from .draw_call import DrawCall
 from .resource_paths import safe_resource_path
 from .textures import (_texture_source_uri, _begin_texture_cache,
@@ -45,8 +43,13 @@ def read_positions(buf_path, stride=POSITION_STRIDE):
     return positions
 
 
+_MIN_AXIS_SPREAD = 1e-4   # below this an axis is constant, i.e. not a real UV set
+_MIN_IN_RANGE    = 0.95   # fraction of sampled UVs that must land in [0, 2]
+
+
 def _detect_uv_best(tc_path, stride, n=4096, data=None):
-    """Compatibility projection of the typed texcoord layout detector.
+    """Try (offset 0 or 4) x (float16 or float32) and return the (uv_off, fmt)
+    with the largest UV spread where all values are within [0, 2].
 
     Candidates are sampled EVENLY ACROSS THE WHOLE BUFFER, not from the first
     n vertices: consecutive vertices are spatially adjacent, so a head-only
@@ -81,17 +84,54 @@ def _detect_uv_best(tc_path, stride, n=4096, data=None):
     merely useless (flat zero UVs) instead of misaligned.
     """
     if data is None:
-        with open(tc_path, "rb") as stream:
-            data = stream.read()
-    layout = texcoord_layout(data, stride, sample_limit=n)
-    if layout:
-        return layout.offset, layout.struct_format
-    # Compatibility callers of this legacy helper still receive a fitting
-    # tuple. The production builder requires a real typed descriptor instead.
+        with open(tc_path, 'rb') as f:
+            data = f.read()
+    size = len(data)
+    total = size // stride if stride else 0
+    if not total:
+        return (DEFAULT_UV_OFFSET, '<ee')
+    step = max(1, total // n)   # stride the sample across the entire buffer
+    # Rank every in-range candidate; prefer two live axes over a bigger total.
+    scored = []
+    for uv_off in (0, 4):
+        for fmt in ('<ee', '<ff'):
+            fmtsize = struct.calcsize(fmt)
+            if uv_off + fmtsize > stride:
+                continue
+            us, vs, sampled = [], [], 0
+            for i in range(0, total, step):
+                off = i * stride + uv_off
+                if off + fmtsize > size:
+                    break
+                u, v = struct.unpack_from(fmt, data, off)
+                sampled += 1
+                # NaN fails every comparison, so test for validity positively:
+                # a misread buffer routinely decodes to NaN/inf, which would
+                # otherwise slip through a `u < lo or u > hi` style check.
+                if -0.01 <= u <= 2.0 and -0.01 <= v <= 2.0:
+                    us.append(u); vs.append(v)
+            if not sampled or not us:
+                continue
+            in_range = len(us) / sampled
+            if in_range < _MIN_IN_RANGE:
+                continue
+            du, dv = max(us) - min(us), max(vs) - min(vs)
+            both_live = du >= _MIN_AXIS_SPREAD and dv >= _MIN_AXIS_SPREAD
+            scored.append((both_live, round(in_range, 3), round(du + dv, 3),
+                           uv_off, fmt))
+    if scored:
+        # Rank: both axes live, then cleanliness, then total spread. Cleanliness
+        # must outrank spread -- a misread float32 can post a huge spread (up to
+        # the full 0..2 window) while being 12% garbage, and swept across the
+        # corpus spread-first regressed 27 buffers where clean-first regressed
+        # none.
+        scored.sort(reverse=True)
+        return (scored[0][3], scored[0][4])
+    # Nothing decoded in range: fall back to the first offset that at least fits.
     for uv_off in (DEFAULT_UV_OFFSET, 0):
         if uv_off + 4 <= stride:
-            return uv_off, "<ee"
-    return 0, "<ee"
+            return (uv_off, '<ee')
+    return (0, '<ee')
 
 
 def read_texcoords(buf_path, stride, uv_off=DEFAULT_UV_OFFSET, uv_fmt='<ee',
@@ -110,13 +150,13 @@ def read_texcoords(buf_path, stride, uv_off=DEFAULT_UV_OFFSET, uv_fmt='<ee',
 
 
 def read_indices(ib_data, start_index=0, count=None, index_size=INDEX_SIZE):
-    """Decode one complete bounded index range.
-
-    Older code silently truncated a draw that extended beyond the IB.  That
-    changed authored geometry and could leave a non-triangle tail; callers now
-    receive ``LayoutError`` and can reject the draw as one unit.
-    """
-    return IndexLayout(index_size).read(ib_data, start_index, count)
+    total = len(ib_data) // index_size
+    if count is None: count = total - start_index
+    end = min(start_index + count, total)
+    if end <= start_index: return []
+    fmt = "H" if index_size == 2 else "I"
+    return list(struct.unpack_from(f"<{end - start_index}{fmt}", ib_data,
+                                   start_index * index_size))
 
 
 # ── Encoding helpers ───────────────────────────────────────────────────────────
@@ -369,26 +409,15 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         ib_path   = safe_resource_path(mod_dir, grp["ib_file"])
         tc_stride = grp["texcoord_stride"]
         pos_stride = grp.get("position_stride", POSITION_STRIDE)
-        position_slot = grp.get("position_slot")
-        texcoord_slot = grp.get("texcoord_slot")
-        position_format = grp.get("position_format")
-        texcoord_format = grp.get("texcoord_format")
-        position_offset = grp.get("position_offset", 0)
-        texcoord_offset = grp.get("texcoord_offset")
         index_size = grp.get("index_size", INDEX_SIZE)
         component = grp.get("display_name") or grp.get("name")
         source    = grp.get("source")
 
-        if not all(p and os.path.exists(p) for p in [pos_path, tc_path]):
-            continue
-        if ib_path and not os.path.exists(ib_path):
+        if not all(p and os.path.exists(p) for p in [pos_path, tc_path, ib_path]):
             continue
 
-        def _load_buf(pos_path, pos_stride, tc_path, tc_stride,
-                      pos_format=None, tc_format=None, pos_slot=None,
-                      tc_slot=None, pos_offset=0, tc_offset=None):
-            key = (pos_path, pos_stride, pos_format, pos_slot, pos_offset,
-                   tc_path, tc_stride, tc_format, tc_slot, tc_offset)
+        def _load_buf(pos_path, pos_stride, tc_path, tc_stride):
+            key = (pos_path, pos_stride, tc_path, tc_stride)
             if key not in buf_cache:
                 if pos_path not in raw_buf_cache:
                     raw_buf_cache[pos_path] = _read_buffer(pos_path)
@@ -396,22 +425,14 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     raw_buf_cache[tc_path] = _read_buffer(tc_path)
                 pos_data = raw_buf_cache[pos_path]
                 tc_data = raw_buf_cache[tc_path]
-                pos_layout = position_layout(
-                    pos_stride, pos_format, pos_slot, pos_offset)
-                tc_layout = texcoord_layout(
-                    tc_data, tc_stride, tc_format, tc_slot, tc_offset)
-                buf_cache[key] = (
-                    (pos_data, tc_data, GeometryLayout(pos_layout, tc_layout))
-                    if pos_layout and tc_layout else None)
+                uv_off, uv_fmt = _detect_uv_best(
+                    tc_path, tc_stride, data=tc_data)
+                buf_cache[key] = (pos_data, pos_stride, tc_data, tc_stride,
+                                  uv_off, uv_fmt)
             return buf_cache[key]
 
-        buffers = _load_buf(
-            pos_path, pos_stride, tc_path, tc_stride,
-            position_format, texcoord_format, position_slot, texcoord_slot,
-            position_offset, texcoord_offset)
-        if buffers is None:
-            continue
-        if ib_path and ib_path not in ib_cache:
+        buffers = _load_buf(pos_path, pos_stride, tc_path, tc_stride)
+        if ib_path not in ib_cache:
             ib_cache[ib_path] = _read_buffer(ib_path)
 
         unique = _deduplicate_draws(grp, max_draws=max_draws)
@@ -470,6 +491,32 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
         for draw in unique:
             lbl = draw.label
+            draw_ib_path = safe_resource_path(mod_dir, draw.ib_file)
+            if not draw_ib_path or not os.path.exists(draw_ib_path):
+                continue
+            if draw_ib_path not in ib_cache:
+                ib_cache[draw_ib_path] = _read_buffer(draw_ib_path)
+            raw = read_indices(
+                ib_cache[draw_ib_path], draw.start, draw.count,
+                draw.index_size if draw.index_size is not None else index_size)
+            if not raw:
+                continue
+            # DirectX resolves each index as index_buffer_value + BaseVertexLocation
+            # against the vertex buffer -- shared/merged buffers rely on this offset
+            # to pick out this draw's own vertex range.
+            base = draw.base
+            if base:
+                raw = [v + base for v in raw]
+            # A negative effective DirectX vertex index is invalid.  Reject it
+            # before buffer decoding, where negative offsets can be interpreted
+            # as end-relative instead of failing safely.
+            if any(index < 0 for index in raw):
+                continue
+
+            # Compact: only export vertices actually referenced
+            used  = sorted(set(raw))
+            remap = {old: new for new, old in enumerate(used)}
+
             # A mid-section `vb0/vb1/vb2 = ...` reassignment (paired with `ib`).
             draw_buffers = buffers
             draw_pos_path = safe_resource_path(mod_dir, draw.position_file)
@@ -485,90 +532,26 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             draw_texcoord_stride = (
                 draw.texcoord_stride
                 if draw.texcoord_stride is not None else tc_stride)
-            draw_position_format = draw.position_format or position_format
-            draw_texcoord_format = draw.texcoord_format or texcoord_format
-            draw_position_slot = (draw.position_slot
-                                  if draw.position_slot is not None
-                                  else position_slot)
-            draw_texcoord_slot = (draw.texcoord_slot
-                                  if draw.texcoord_slot is not None
-                                  else texcoord_slot)
-            draw_position_offset = draw.position_offset
-            draw_texcoord_offset = draw.texcoord_offset
             if (draw_pos_path != pos_path or draw_tc_path != tc_path
                     or draw_position_stride != pos_stride
-                    or draw_texcoord_stride != tc_stride
-                    or draw_position_format != position_format
-                    or draw_texcoord_format != texcoord_format
-                    or draw_position_slot != position_slot
-                    or draw_texcoord_slot != texcoord_slot
-                    or draw_position_offset != position_offset
-                    or draw_texcoord_offset != texcoord_offset):
+                    or draw_texcoord_stride != tc_stride):
                 draw_buffers = _load_buf(
                     draw_pos_path, draw_position_stride,
-                    draw_tc_path, draw_texcoord_stride,
-                    draw_position_format, draw_texcoord_format,
-                    draw_position_slot, draw_texcoord_slot,
-                    draw_position_offset, draw_texcoord_offset)
-            if draw_buffers is None:
-                continue
+                    draw_tc_path, draw_texcoord_stride)
 
-            pos_data, tc_data, layout = draw_buffers
-            if draw.operation == "draw":
-                if draw.count is None:
-                    continue
-                try:
-                    layout.validate_vertex_range(
-                        draw.start, draw.count, pos_data, tc_data)
-                except LayoutError:
-                    continue
-                raw = list(range(draw.start, draw.start + draw.count))
-            else:
-                draw_ib_path = safe_resource_path(mod_dir, draw.ib_file)
-                if not draw_ib_path or not os.path.exists(draw_ib_path):
-                    continue
-                if draw_ib_path not in ib_cache:
-                    ib_cache[draw_ib_path] = _read_buffer(draw_ib_path)
-                try:
-                    raw = read_indices(
-                        ib_cache[draw_ib_path], draw.start,
-                        None if draw.auto_count else draw.count,
-                        draw.index_size if draw.index_size is not None
-                        else index_size)
-                except LayoutError:
-                    continue
-            if not raw:
-                continue
-            # DirectX resolves each index as index_buffer_value + BaseVertexLocation
-            # against the vertex buffer -- shared/merged buffers rely on this offset
-            # to pick out this draw's own vertex range.
-            base = draw.base if draw.operation != "draw" else 0
-            if base:
-                raw = [v + base for v in raw]
-            # A negative effective DirectX vertex index is invalid.  Reject it
-            # before buffer decoding, where negative offsets can be interpreted
-            # as end-relative instead of failing safely.
-            if any(index < 0 for index in raw):
-                continue
-            try:
-                layout.validate_indices(raw, pos_data, tc_data)
-            except LayoutError:
-                continue
-
-            # Compact: only export vertices actually referenced
-            used  = sorted(set(raw))
-            remap = {old: new for new, old in enumerate(used)}
+            pos_data, draw_pos_stride, tc_data, draw_tc_stride, uv_off, uv_fmt = draw_buffers
+            uv_size = struct.calcsize(uv_fmt)
             pos_bytes = bytearray(len(used) * 12)
-            shape_buffers = (
-                _build_shape_buffers(
-                    grp.get("shape_sliders"), mod_dir, effective_pos_path, used,
-                    raw_buf_cache, sparse_shape_cache, _read_buffer)
-                if (layout.position.format == "float32x3"
-                    and layout.position.offset == POSITION_OFFSET)
-                else [])
+            shape_buffers = _build_shape_buffers(
+                grp.get("shape_sliders"), mod_dir, effective_pos_path, used,
+                raw_buf_cache, sparse_shape_cache, _read_buffer)
             uv_bytes = bytearray(len(used) * 8) if tc_data else None
             for out_i, vi in enumerate(used):
-                x, y, z = layout.position.read(pos_data, vi)[:3]
+                pos_off = vi * draw_pos_stride + POSITION_OFFSET
+                if pos_off + 12 <= len(pos_data):
+                    x, y, z = struct.unpack_from("<fff", pos_data, pos_off)
+                else:
+                    x, y, z = 0., 0., 0.
                 struct.pack_into("<fff", pos_bytes, out_i * 12, x, y, z)
                 for item in shape_buffers:
                     shape, target_data, target_bytes, sparse = item[:4]
@@ -591,7 +574,11 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                             lx, ly, lz = x, y, z
                         struct.pack_into("<fff", low_bytes, out_i * 12, lx, ly, lz)
                 if tc_data:
-                    u, v = layout.texcoord.read(tc_data, vi)[:2]
+                    tc_off = vi * draw_tc_stride + uv_off
+                    if tc_off + uv_size <= len(tc_data):
+                        u, v = struct.unpack_from(uv_fmt, tc_data, tc_off)
+                    else:
+                        u, v = 0., 0.
                     struct.pack_into("<ff", uv_bytes, out_i * 8,
                                      u, 1.0 - v)  # flip V for Three.js
 
@@ -704,11 +691,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             # show a meaningful per-draw label instead of a bare "#1"/"#2" index.
             # Absent for the rare section with no drawindexed line at all (the
             # whole index buffer is read unconditionally) — count is None.
-            if draw.operation == "draw":
-                entry["draw"] = [draw.count, draw.start]
-            elif draw.operation == "drawindexed" and draw.auto_count:
-                entry["drawindexed"] = ["auto"]
-            elif draw.operation == "drawindexed" and draw.count is not None:
+            if draw.count is not None:
                 entry["drawindexed"] = [draw.count, draw.start, draw.base]
             if source:
                 entry["source"] = source
