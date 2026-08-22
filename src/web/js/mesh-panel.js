@@ -146,8 +146,6 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
 
   const label = entry.drawindexed
     ? entry.drawindexed.join(', ')
-    : entry.draw
-      ? `draw ${entry.draw.join(', ')}`
     : '#' + name.slice(groupName.length + 1);
   const labelSpan = document.createElement('span');
   labelSpan.className = 'mesh-name';
