@@ -117,12 +117,44 @@ class IndexLayout:
             f"<{count}{code}", data, start * self.size))
 
 
+def index_layout(resource_format):
+    """Return the explicitly supported unsigned index layout, if any."""
+    normalized = _normalize_dxgi_format(resource_format)
+    if normalized == "R16_UINT":
+        return IndexLayout(2)
+    if normalized == "R32_UINT":
+        return IndexLayout(4)
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class GeometryLayout:
     """The supported semantic layout for one effective draw."""
 
     position: VertexAttributeLayout
     texcoord: VertexAttributeLayout | None = None
+
+    def validate_vertex_range(self, start, count, position_data,
+                              texcoord_data=None):
+        """Validate a non-indexed range before callers materialize it."""
+        if start < 0:
+            raise LayoutError(f"vertex start {start} is negative")
+        if count <= 0:
+            raise LayoutError(f"vertex count {count} is not positive")
+        end = start + count
+        position_count = self.position.vertex_count(position_data)
+        if end > position_count:
+            raise LayoutError(
+                f"vertex range {start}..{end} exceeds {position_count} "
+                "positions")
+        if self.texcoord is not None:
+            if texcoord_data is None:
+                raise LayoutError("draw has a texcoord layout but no buffer")
+            texcoord_count = self.texcoord.vertex_count(texcoord_data)
+            if end > texcoord_count:
+                raise LayoutError(
+                    f"vertex range {start}..{end} exceeds {texcoord_count} "
+                    "texcoords")
 
     def validate_indices(self, indices, position_data, texcoord_data=None):
         if not indices:

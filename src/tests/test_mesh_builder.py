@@ -444,6 +444,38 @@ def test_nonindexed_draw_uses_typed_layouts_and_higher_vb_slots():
         assert positions == (1, 2, 3, 4, 5, 6, 7, 8, 9)
 
 
+def test_nonindexed_range_is_bounded_before_materializing_indices():
+    ini = DRAW_CAPABILITIES_INI.replace(
+        "draw = 3, 1", "draw = 4000000000, 0")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        open(os.path.join(tmp, "position.buf"), "wb").write(
+            struct.pack("<4e", 0, 0, 0, 1))
+        open(os.path.join(tmp, "texcoord.buf"), "wb").write(
+            struct.pack("<2f", 0, 0))
+
+        sections = merge_sections([path])
+        groups = build_draw_groups(sections, extract_resources(sections))
+        meshes, _geometry = build_mesh_fixture(groups, tmp)
+
+        assert meshes == {}
+
+
+def test_higher_slots_are_not_admitted_by_resource_names_alone():
+    ini = DRAW_CAPABILITIES_INI.replace(
+        "stride = 8\nformat = DXGI_FORMAT_R16G16B16A16_FLOAT",
+        "stride = 12", 1).replace(
+        "stride = 8\nformat = DXGI_FORMAT_R32G32_FLOAT",
+        "stride = 8", 1)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+
+        groups = build_draw_groups(sections, extract_resources(sections))
+
+        assert groups == []
+
+
 def test_credible_legacy_uv_offset_wins_over_ambiguous_later_float_pairs():
     data = bytearray()
     for uv, later_pair in (
@@ -614,6 +646,23 @@ def test_drawindexed_auto_uses_the_complete_aligned_index_buffer():
         entry = next(iter(meshes.values()))
         assert entry["drawindexed"] == ["auto"]
         assert entry["idx"]["length"] == 6 * 4
+
+
+@pytest.mark.parametrize("format_line", [
+    "format = DXGI_FORMAT_R8_UINT",
+    "",
+])
+def test_unsupported_index_format_is_not_coerced_to_r32(format_line):
+    ini = AUTO_INDEXED_INI.replace(
+        "format = DXGI_FORMAT_R16_UINT", format_line)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        _write_auto_geometry(tmp, indices=(0, 1, 2, 2))
+        sections = merge_sections([path])
+
+        groups = build_draw_groups(sections, extract_resources(sections))
+
+        assert groups == []
 
 
 def test_out_of_range_vertex_or_index_range_rejects_whole_draw():

@@ -4,6 +4,8 @@ import os
 import struct
 import tempfile
 
+import pytest
+
 from _corpus import sample_mods
 from app import mod_loader
 from core.ini_parser import (_scan_sections_for_draws, build_draw_groups,
@@ -107,6 +109,65 @@ def test_same_ib_draws_keep_vb_snapshots_and_null_does_not_inherit():
         second = geometry_values(geometry, meshes["Body-2"]["pos"])
         assert sorted(first[::3]) == [0, 0, 1]
         assert sorted(second[::3]) == [10, 10, 11]
+
+
+@pytest.mark.parametrize(
+    ("conditional_assignment", "ambiguous_slots", "ambiguous_index"),
+    [
+        ("vb0 = ResourcePosB", (0,), False),
+        ("ib = ResourceBodyIBB", (), True),
+    ],
+)
+def test_divergent_conditional_resource_state_is_unsupported_after_join(
+        conditional_assignment, ambiguous_slots, ambiguous_index):
+    ini = f"""[Constants]
+global persist $swap = 0
+
+[KeySwap]
+key = x
+type = cycle
+$swap = 0, 1
+
+[TextureOverrideBody]
+vb0 = ResourcePosA
+vb1 = ResourceTc
+ib = ResourceBodyIBA
+if $swap == 1
+{conditional_assignment}
+endif
+drawindexed = 3, 0, 0
+
+[ResourceBodyIBA]
+filename = body-a.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyIBB]
+filename = body-b.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosA]
+filename = pos-a.buf
+stride = 12
+
+[ResourcePosB]
+filename = pos-b.buf
+stride = 12
+
+[ResourceTc]
+filename = tc.buf
+stride = 8
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+        draw = _scan_sections_for_draws(
+            sections)["TextureOverrideBody"]["draws"][0]
+
+        assert draw.ambiguous_vertex_slots == ambiguous_slots
+        assert draw.ambiguous_index_resource is ambiguous_index
+        assert draw.unsupported_reason == "ambiguous_resource_state"
+        assert build_draw_groups(
+            sections, extract_resources(sections)) == []
 
 
 def test_root_texture_picker_accepts_windows_case_variation():

@@ -35,11 +35,15 @@ class AuthoredDrawCall:
     conditions: list = field(default_factory=list)
     source: dict | None = None
     index_resource: str | None = None
+    index_resource_bound: bool = False
+    ambiguous_index_resource: bool = False
+    unsupported_reason: str | None = None
     diffuse_variants: list = field(default_factory=list)
     diffuse_history: list = field(default_factory=list)
     # Missing slot = no authored state in this execution path; None = an
     # explicit `vbN = null`; a string = the resource bound at this draw.
     vertex_resources: dict[int, str | None] = field(default_factory=dict)
+    ambiguous_vertex_slots: tuple[int, ...] = ()
     auxiliary_maps: dict = field(default_factory=dict)
 
 

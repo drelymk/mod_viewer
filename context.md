@@ -125,16 +125,22 @@ machine-specific paths or facts that are obvious from the source.
 - Authored draw state preserves vertex-buffer bindings by numeric slot and
   distinguishes an untouched slot from an explicit `null`. Resolve effective
   files per draw before deduplication; an IB change must not be required for a
-  VB change to take effect.
+  VB change to take effect. At a conditional join, retain VB and IB state only
+  when every path agrees; divergent state is unsupported rather than inherited
+  from an arbitrary branch.
 - Geometry decoding uses explicit position, texcoord and index layout
   descriptors. Numeric non-indexed draws and safely derived whole-IB
   `drawindexed = auto` are supported; variable, instanced and indirect calls
   remain diagnostic-only. A non-indexed draw is geometry only when its own
   execution path binds complete, resolvable position and texcoord streams;
   never borrow sibling component buffers for an incomplete setup/replay pass.
+  Validate its vertex range before materializing sequential indices. Only
+  explicit unsigned `R16_UINT` and `R32_UINT` index formats are supported.
   Reject a whole draw when its layout, stride, index range or effective vertex
   range is invalid rather than truncating it or manufacturing zero-valued
-  vertices.
+  vertices. Higher vertex slots require a compatible declared format; resource
+  and filename labels may rank credible bindings but never establish a
+  position or texcoord semantic by themselves.
 - An `ib` section without `drawindexed` may produce one synthetic whole-buffer
   draw. A `handling=skip` section without an explicit draw produces nothing.
   Real draw rows retain authored `count,start,base`; synthetic rows are the

@@ -470,42 +470,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
         for draw in unique:
             lbl = draw.label
-            if draw.operation == "draw":
-                if draw.count is None:
-                    continue
-                raw = list(range(draw.start, draw.start + draw.count))
-            else:
-                draw_ib_path = safe_resource_path(mod_dir, draw.ib_file)
-                if not draw_ib_path or not os.path.exists(draw_ib_path):
-                    continue
-                if draw_ib_path not in ib_cache:
-                    ib_cache[draw_ib_path] = _read_buffer(draw_ib_path)
-                try:
-                    raw = read_indices(
-                        ib_cache[draw_ib_path], draw.start,
-                        None if draw.auto_count else draw.count,
-                        draw.index_size if draw.index_size is not None
-                        else index_size)
-                except LayoutError:
-                    continue
-            if not raw:
-                continue
-            # DirectX resolves each index as index_buffer_value + BaseVertexLocation
-            # against the vertex buffer -- shared/merged buffers rely on this offset
-            # to pick out this draw's own vertex range.
-            base = draw.base if draw.operation != "draw" else 0
-            if base:
-                raw = [v + base for v in raw]
-            # A negative effective DirectX vertex index is invalid.  Reject it
-            # before buffer decoding, where negative offsets can be interpreted
-            # as end-relative instead of failing safely.
-            if any(index < 0 for index in raw):
-                continue
-
-            # Compact: only export vertices actually referenced
-            used  = sorted(set(raw))
-            remap = {old: new for new, old in enumerate(used)}
-
             # A mid-section `vb0/vb1/vb2 = ...` reassignment (paired with `ib`).
             draw_buffers = buffers
             draw_pos_path = safe_resource_path(mod_dir, draw.position_file)
@@ -550,10 +514,50 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 continue
 
             pos_data, tc_data, layout = draw_buffers
+            if draw.operation == "draw":
+                if draw.count is None:
+                    continue
+                try:
+                    layout.validate_vertex_range(
+                        draw.start, draw.count, pos_data, tc_data)
+                except LayoutError:
+                    continue
+                raw = list(range(draw.start, draw.start + draw.count))
+            else:
+                draw_ib_path = safe_resource_path(mod_dir, draw.ib_file)
+                if not draw_ib_path or not os.path.exists(draw_ib_path):
+                    continue
+                if draw_ib_path not in ib_cache:
+                    ib_cache[draw_ib_path] = _read_buffer(draw_ib_path)
+                try:
+                    raw = read_indices(
+                        ib_cache[draw_ib_path], draw.start,
+                        None if draw.auto_count else draw.count,
+                        draw.index_size if draw.index_size is not None
+                        else index_size)
+                except LayoutError:
+                    continue
+            if not raw:
+                continue
+            # DirectX resolves each index as index_buffer_value + BaseVertexLocation
+            # against the vertex buffer -- shared/merged buffers rely on this offset
+            # to pick out this draw's own vertex range.
+            base = draw.base if draw.operation != "draw" else 0
+            if base:
+                raw = [v + base for v in raw]
+            # A negative effective DirectX vertex index is invalid.  Reject it
+            # before buffer decoding, where negative offsets can be interpreted
+            # as end-relative instead of failing safely.
+            if any(index < 0 for index in raw):
+                continue
             try:
                 layout.validate_indices(raw, pos_data, tc_data)
             except LayoutError:
                 continue
+
+            # Compact: only export vertices actually referenced
+            used  = sorted(set(raw))
+            remap = {old: new for new, old in enumerate(used)}
             pos_bytes = bytearray(len(used) * 12)
             shape_buffers = (
                 _build_shape_buffers(
