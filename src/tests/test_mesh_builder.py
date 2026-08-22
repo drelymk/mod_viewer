@@ -4,7 +4,8 @@ import os
 import struct
 import tempfile
 
-from core.ini_parser import build_draw_groups, extract_resources, merge_sections
+from core.ini_parser import (build_draw_groups, extract_resources,
+                             extract_toggle_keys, merge_sections)
 from _provenance_support import IB_R16_INI, build_mesh_fixture, geometry_values, write
 
 IB_REASSIGN_INI = """[TextureOverrideBodyBlend]
@@ -294,3 +295,85 @@ def test_r16_index_buffer():
         pos = geometry_values(geometry, entry["pos"])
         verts = sorted(round(pos[i]) for i in range(0, len(pos), 3))
         assert (verts == [5, 6, 7]), (f"16-bit indices are decoded as 16-bit, not 32-bit (got {verts})")
+
+
+SIGNED_BASE_INI = """[TextureOverrideBodyBlend]
+ib = ResourceBodyIB
+vb0 = ResourcePos
+vb1 = ResourceTc
+drawindexed = 3, 0, -3
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePos]
+filename = pos.buf
+stride = 40
+
+[ResourceTc]
+filename = tc.buf
+stride = 20
+"""
+
+
+def test_negative_base_vertex_is_parsed_and_applied():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", SIGNED_BASE_INI)
+        open(os.path.join(tmp, "body.ib"), "wb").write(
+            struct.pack("<3I", 3, 4, 5))
+        with open(os.path.join(tmp, "pos.buf"), "wb") as file:
+            for i in range(6):
+                file.write(struct.pack("<3f", float(i), float(i), float(i))
+                           + b"\0" * 28)
+        open(os.path.join(tmp, "tc.buf"), "wb").write(b"\0" * 20 * 6)
+
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        assert groups[0]["draws"][0]["base"] == -3
+        meshes, geometry = build_mesh_fixture(groups, tmp)
+        entry = next(iter(meshes.values()))
+        positions = geometry_values(geometry, entry["pos"])
+        vertices = sorted(round(positions[i])
+                          for i in range(0, len(positions), 3))
+        assert vertices == [0, 1, 2]
+
+
+LOWERCASE_SECTIONS_INI = """[constants]
+global persist $swap = 0
+
+[keyswap]
+key = x
+type = cycle
+$swap = 0,1
+
+[textureoverridebodyblend]
+ib = resourcebodyib
+vb0 = resourcepos
+vb1 = resourcetc
+drawindexed = 3, 0, 0
+
+[resourcebodyib]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[resourcepos]
+filename = pos.buf
+stride = 40
+
+[resourcetc]
+filename = tc.buf
+stride = 20
+"""
+
+
+def test_section_classification_is_case_insensitive():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", LOWERCASE_SECTIONS_INI)
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        toggles = extract_toggle_keys(secs)
+        assert len(groups) == 1
+        assert groups[0]["position_file"] == "pos.buf"
+        assert groups[0]["texcoord_file"] == "tc.buf"
+        assert list(toggles) == ["keyswap"]

@@ -237,6 +237,20 @@ $tt = 0,1
 drawindexed = 999,0,0
 """
 
+MISMATCHED_LENGTHS = """[Constants]
+global persist $short = 0
+global persist $long = 0
+
+[KeyMulti]
+key = 1
+type = cycle
+$short = 0,1
+$long = 0,1,2
+
+[TextureOverrideBody]
+drawindexed = 999,0,-4
+"""
+
 OVERLAP = """[Constants]
 global persist $upper = 0
 global persist $tt = 0
@@ -306,6 +320,24 @@ def test_two_variables_claiming_same_bare_line_refused():
     assert (len(report["skipped"]) == 1
           and "more than one variable" in report["skipped"][0]["reason"]), (f"the ambiguity is reported ({report['skipped']})")
     assert (d.to_string() == before), ("document left completely untouched")
+
+
+def test_mismatched_cycle_lengths_hold_last_value_and_refuse_ambiguity():
+    d = doc(MISMATCHED_LENGTHS)
+    before = d.to_string()
+    line = dline(d, "999,0,-4")
+    report = re_.record_toggle(d, "KeyMulti", {
+        0: [], 1: [], 2: [line.no + 1],
+    })
+    # $short is 1 at both positions 1 and 2, so it cannot encode visibility
+    # at position 2 alone. $long can, and should own the safe wrapper.
+    assert any(item["var"] == "short" and "same value" in item["reason"]
+               for item in report["skipped"])
+    assert report["wraps_added"] == 1
+    assert "if $long == 2" in d.to_string()
+    assert "if $short" not in d.to_string()
+    assert d.to_string() != before
+    assert re_.verify_recording("<mem>", report, document=d) == []
 
 
 # â”€â”€ chain regeneration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

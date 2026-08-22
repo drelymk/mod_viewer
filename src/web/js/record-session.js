@@ -13,6 +13,7 @@ import {
 } from './visibility.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
 import { alertDialog } from './dialogs.js';
+import { cycleValueAt } from './cycle-values.js';
 
 let active = null;    // non-null while a session is in progress
 let starting = false; // true from the first click until active is set (or the attempt is abandoned)
@@ -55,7 +56,7 @@ function applySnapshot(snap) {
 
 function positionLabel() {
   const { current, positions, vars } = active;
-  const values = vars.map((v) => `${v.var.split('::').pop()}=${v.values[current % v.values.length]}`).join(', ');
+  const values = vars.map((v) => `${v.var.split('::').pop()}=${cycleValueAt(v, current)}`).join(', ');
   return `Position ${current + 1} of ${positions} — ${values}`;
 }
 
@@ -92,7 +93,7 @@ export async function startRecordSession(info, ctx, ui) {
     // still default to matching what's already on disk.
     const snapshots = [];
     for (let p = 0; p < posInfo.positions; p++) {
-      for (const v of vars) setToggleValue(v.var, v.values[p % v.values.length]);
+      for (const v of vars) setToggleValue(v.var, cycleValueAt(v, p));
       snapshots.push(snapshotVisibility());
     }
 
@@ -156,7 +157,7 @@ function captureCurrent() {
 function advance() {
   captureCurrent();
   active.current = (active.current + 1) % active.positions;
-  for (const v of active.vars) setToggleValue(v.var, v.values[active.current % v.values.length]);
+  for (const v of active.vars) setToggleValue(v.var, cycleValueAt(v, active.current));
   applySnapshot(active.snapshots[active.current]);
   active.ui.valSpan.textContent = positionLabel();
 }

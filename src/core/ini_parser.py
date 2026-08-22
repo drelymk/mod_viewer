@@ -42,8 +42,8 @@ find_inis = discover_ini_paths
 
 
 def _ib_res_to_component(ib_res):
-    s = ib_res[8:] if ib_res.startswith("Resource") else ib_res
-    if s.endswith("IB"): s = s[:-2]
+    s = re.sub(r"^Resource", "", ib_res or "", flags=re.I)
+    s = re.sub(r"IB$", "", s, flags=re.I)
     return re.sub(r"[A-Z]$", "", s)
 
 
@@ -191,7 +191,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 info["_cur_ib"] = m.group(1)
             if re.match(r"handling\s*=\s*skip\b", line, re.I):
                 info["handling_skip"] = True
-            m = re.match(r"drawindexed\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", line, re.I)
+            m = re.fullmatch(
+                r"drawindexed\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)\s*",
+                line, re.I)
             if m:
                 combined = DNF_TRUE
                 for frame in cond_stack:
@@ -308,7 +310,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     # scan BOTH TextureOverride AND CommandList sections.
     sec_info: dict = {}
     for name, lines in sections.items():
-        if not (name.startswith("TextureOverride") or name.startswith("CommandList")):
+        name_low = name.lower()
+        if not (name_low.startswith("textureoverride")
+                or name_low.startswith("commandlist")):
             continue
         info: dict = dict(vb0=None, vb1=None, vb2=None, ib=None, draws=[],
                           diffuse=None, diffuse_pool=[], src=None, handling_skip=False,
@@ -394,7 +398,7 @@ def _collect_resource_copy_sources(sections, resources):
 def _select_draw_sections(sec_info, global_ib):
     """Select TextureOverride sections that can produce viewer geometry."""
     return [(name, info) for name, info in sec_info.items()
-            if name.startswith("TextureOverride")
+            if name.lower().startswith("textureoverride")
             and (info["ib"] or global_ib)
             and (info["draws"] or (info["ib"] and not info["handling_skip"]))]
 
@@ -450,32 +454,34 @@ def _resolve_component_buffers(sec_info, resources, resource_copy_sources):
     # Texcoord sections set comp_tc first (highest priority -- must win over
     # Blend).
     for name, info in sec_info.items():
-        if not name.startswith("TextureOverride"):
+        if not name.lower().startswith("textureoverride"):
             continue
         base = name[len("TextureOverride"):]
-        if base.endswith("Texcoord"):
+        if base.lower().endswith("texcoord"):
             comp = base[:-len("Texcoord")]
             if info["vb1"]:
-                comp_tc[comp] = info["vb1"]
+                comp_tc[comp.lower()] = info["vb1"]
 
     # Blend and Position sections (lower priority for tc).
     for name, info in sec_info.items():
-        if not name.startswith("TextureOverride"):
+        if not name.lower().startswith("textureoverride"):
             continue
         base = name[len("TextureOverride"):]
-        if base.endswith("Blend"):
+        if base.lower().endswith("blend"):
             comp = base[:-len("Blend")]
-            if info["vb0"] and comp not in comp_pos:
-                comp_pos[comp] = info["vb0"]
+            comp_key = comp.lower()
+            if info["vb0"] and comp_key not in comp_pos:
+                comp_pos[comp_key] = info["vb0"]
             # GIMI: *Blend sets vb1 to the blend buffer (stride 32), not tc.
-            if info["vb1"] and comp not in comp_tc:
+            if info["vb1"] and comp_key not in comp_tc:
                 if _res_get(resources, info["vb1"]).get("stride", 0) != 32:
-                    comp_tc[comp] = info["vb1"]
-        elif base.endswith("Position"):
+                    comp_tc[comp_key] = info["vb1"]
+        elif base.lower().endswith("position"):
             # GIMI: vb0 is in a *Position section, not *Blend.
             comp = base[:-len("Position")]
-            if info["vb0"] and comp not in comp_pos:
-                comp_pos[comp] = info["vb0"]
+            comp_key = comp.lower()
+            if info["vb0"] and comp_key not in comp_pos:
+                comp_pos[comp_key] = info["vb0"]
 
         # Skip vb2 if it's a blend buffer (stride 32, ZZMI format) so it does
         # not shadow the real texcoord in vb1. WWMI uses vb2=TexCoord.
@@ -497,7 +503,7 @@ def _resolve_component_buffers(sec_info, resources, resource_copy_sources):
     # Discover global IB/position/texcoord from CommandList sections (WWMI).
     global_ib, global_pos, global_tc = None, None, None
     for name, info in sec_info.items():
-        if not name.startswith("CommandList"):
+        if not name.lower().startswith("commandlist"):
             continue
         if info["ib"] and not global_ib:
             global_ib = info["ib"]
@@ -601,15 +607,24 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         return ri.get("filename"), ri.get("stride")
 
     def _lookup_comp_value(mapping, comp):
-        value = mapping.get(comp)
-        if not value:
-            c2 = re.sub(r"[A-Za-z]+$", "", comp)
-            if c2 and c2 != comp: value = mapping.get(c2)
-        if not value:
-            # Strip last CamelCase word.
-            c2 = re.sub(r"(?<=.)[A-Z][a-z]+$", "", comp)
-            if c2 and c2 != comp: value = mapping.get(c2)
-        return value
+        candidates = [
+            comp,
+            re.sub(r"[A-Za-z]+$", "", comp),
+            re.sub(r"(?<=.)[A-Z][a-z]+$", "", comp),
+        ]
+        for candidate in candidates:
+            if candidate:
+                value = mapping.get(candidate.lower())
+                if value:
+                    return value
+        # All-lowercase templates lose the CamelCase boundary used above.
+        # Prefer the longest declared component that prefixes the IB-derived
+        # name, avoiding encounter-order dependence.
+        comp_low = comp.lower()
+        prefix = max(
+            (key for key in mapping if comp_low.startswith(key)),
+            key=len, default=None)
+        return mapping.get(prefix) if prefix else None
 
     def _lookup_comp_buf(comp):
         return _lookup_comp_value(comp_bufs, comp)

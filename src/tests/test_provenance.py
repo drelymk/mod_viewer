@@ -155,6 +155,26 @@ def test_deduplicate_preserves_buffer_identity():
     assert (len(merged) == 2), (f"different buffer bindings do not collapse by range alone (got {len(merged)})")
 
 
+def test_deduplicate_preserves_base_index_and_material_identity():
+    common = {
+        "start": 0, "count": 100, "ib_file": "body.ib",
+        "position_file": "body.pos", "texcoord_file": "body.tc",
+        "conditions": [], "sources": [],
+    }
+    draws = [
+        {**common, "label": "base-0", "base": 0, "index_size": 4,
+         "texture_default_file": "red.dds"},
+        {**common, "label": "base-1", "base": 1, "index_size": 4,
+         "texture_default_file": "red.dds"},
+        {**common, "label": "r16", "base": 0, "index_size": 2,
+         "texture_default_file": "red.dds"},
+        {**common, "label": "blue", "base": 0, "index_size": 4,
+         "texture_default_file": "blue.dds"},
+    ]
+    merged = _deduplicate_draws({"draws": draws})
+    assert len(merged) == 4
+
+
 COMPONENT0_INI = """[CommandListShared]
 ib = ResourceBodyIB
 vb0 = ResourcePos

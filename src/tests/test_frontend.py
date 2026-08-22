@@ -2325,6 +2325,31 @@ def test_mod_folder_name_selection_preserves_dock_state_across_reload(
         context.close()
 
 
+def test_mismatched_toggle_lists_hold_the_last_short_value(
+        edge_browser, frontend_url):
+    payload = _payload("Cycle")
+    payload["controls"]["toggles"]["KeyCycle"]["vars"] = [
+        {"var": "short", "default": "0", "values": ["0", "1"]},
+        {"var": "long", "default": "0", "values": ["0", "1", "2"]},
+    ]
+    payload["state"]["defaults"].update({"short": "0", "long": "0"})
+    context, page = _page(edge_browser, frontend_url, {"Cycle": payload})
+    try:
+        _open(page, "Cycle")
+        button = page.locator("#toggle-list .toggle-cycle-btn")
+        value = page.locator("#toggle-list .toggle-value")
+        button.wait_for()
+        assert value.inner_text() == "short=0, long=0"
+        button.click()
+        assert value.inner_text() == "short=1, long=1"
+        button.click()
+        assert value.inner_text() == "short=1, long=2"
+        button.click()
+        assert value.inner_text() == "short=0, long=0"
+    finally:
+        context.close()
+
+
 def test_reload_preserves_camera_but_switching_mod_resets_it(
         edge_browser, frontend_url):
     context, page = _page(
