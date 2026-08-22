@@ -170,6 +170,45 @@ stride = 8
             sections, extract_resources(sections)) == []
 
 
+@pytest.mark.parametrize("slot", [0, 1])
+def test_null_vs_untouched_geometry_slot_cannot_borrow_component_fallback(slot):
+    ini = f"""[TextureOverrideBodyPosition]
+vb0 = ResourcePosition
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceTexcoord
+
+[TextureOverrideBodyA]
+ib = ResourceBodyIB
+if $swap == 1
+vb{slot} = null
+endif
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+        draw = _scan_sections_for_draws(
+            sections)["TextureOverrideBodyA"]["draws"][0]
+
+        assert draw.ambiguous_vertex_slots == (slot,)
+        assert draw.ambiguous_vertex_resources == {}
+        assert build_draw_groups(
+            sections, extract_resources(sections)) == []
+
+
 def test_sibling_branch_does_not_inherit_first_seen_index_buffer():
     ini = """[TextureOverrideBody]
 vb0 = ResourcePosition

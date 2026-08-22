@@ -130,6 +130,8 @@ machine-specific paths or facts that are obvious from the source.
   semantic is unsupported rather than inherited from an arbitrary branch.
   Group fallbacks require the same concrete binding at every authored draw;
   a first-seen resource from one sibling branch must never resolve another.
+  Candidate-less null-versus-untouched ambiguity in an established geometry
+  slot must not be rebound through a component, hash or global fallback.
   A runtime-only binding without backing bytes must not shadow the next
   structurally validated, file-backed fallback.
 - Geometry decoding uses explicit position, texcoord and index layout

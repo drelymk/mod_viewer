@@ -911,11 +911,25 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         if (authored.operation != "draw"
                 and authored.ambiguous_index_resource):
             return True
-        for slot, candidates in authored.ambiguous_vertex_resources.items():
+        position, texcoord = _semantic_vertex_bindings(
+            authored.vertex_resources)
+        for slot in authored.ambiguous_vertex_slots:
+            candidates = authored.ambiguous_vertex_resources.get(slot, ())
             for candidate in candidates:
-                position, texcoord = _semantic_vertex_bindings(
-                    {slot: candidate})
-                if position or texcoord:
+                (candidate_position,
+                 candidate_texcoord) = _semantic_vertex_bindings({
+                     slot: candidate,
+                 })
+                if candidate_position or candidate_texcoord:
+                    return True
+            # A null-vs-untouched join has no concrete candidate to classify.
+            # Treat established slots conservatively unless another authored
+            # binding already supplies that geometry semantic.  Higher slots
+            # such as WWMI's conditional vb4 blend stream remain harmless.
+            if not candidates:
+                if slot == 0 and position is None:
+                    return True
+                if slot in (1, 2) and texcoord is None:
                     return True
         return False
 
