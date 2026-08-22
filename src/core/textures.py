@@ -8,7 +8,7 @@ import time
 import warnings
 from collections import OrderedDict
 
-from .resource_paths import safe_resource_path
+from .resource_paths import _canonical, safe_resource_path
 
 
 _TEXTURE_CACHE_LIMIT = 256 * 1024 * 1024
@@ -278,10 +278,9 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
     except ValueError:
         return {"error": "Selected file is not inside the mod folder."}
     resolved = safe_resource_path(mod_dir, rel)
-    selected = os.path.abspath(abs_path)
+    selected = _canonical(abs_path)
     if (not resolved
-            or os.path.normcase(os.path.normpath(resolved))
-            != os.path.normcase(os.path.normpath(selected))):
+            or _canonical(resolved) != selected):
         return {"error": "Selected file is not inside the mod folder."}
     if not os.path.isfile(abs_path):
         return {"error": "Selected file does not exist."}

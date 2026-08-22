@@ -22,6 +22,8 @@ Output lands in dist/.
 import argparse
 import configparser
 import glob
+import hashlib
+import ntpath
 import os
 import shutil
 import subprocess
@@ -51,12 +53,14 @@ ENTRY = "viewer_app.py"
 # Actual PyInstaller --name / dist/ output name -- version is baked into the
 # build folder and exe filename so more than one build can sit in dist/ at once.
 BUILD_NAME = f"{APP_NAME}-{APP_VERSION}"
+REQUIREMENTS_FILE = os.path.abspath(os.path.join(HERE, os.pardir,
+                                                 "requirements.txt"))
 
 # Pinned so the compiled bootloader always matches the PyInstaller doing the
 # packaging — a mismatch produces subtly broken executables.
 PYINSTALLER_VERSION = "6.21.0"
-BUILD_REQUIREMENTS = ["pywebview>=5.0", "Pillow>=10.0",
-                      f"pyinstaller=={PYINSTALLER_VERSION}"]
+PYINSTALLER_SDIST_SHA256 = (
+    "bb9fab705983e393a2d1cac77d6972513057ad800215fd861dc15ff5272e98fd")
 
 # Venv used only for --rebuild-bootloader, so patching PyInstaller's bootloader
 # never touches the user's system Python.
@@ -67,14 +71,22 @@ VENV_DIR = os.path.join(HERE, ".venv-build")
 # offline.
 THREE_VERSION = "0.185.0"
 ASSET_FILES = {
-    "three.core.js":
-        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.core.js",
-    "three.webgpu.js":
-        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.webgpu.js",
-    "three.tsl.js":
-        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.tsl.js",
-    os.path.join("addons", "controls", "ArcballControls.js"):
-        f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/ArcballControls.js",
+    "three.core.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.core.js",
+        "sha256": "78b2c4218834ca8670547ed2315bfc21a00ff4dc3403bbffc8c31493d31d14de",
+    },
+    "three.webgpu.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.webgpu.js",
+        "sha256": "eb77cbb7759853dd9cd8661c38795ff4fcd0182a8852f942f687b9954f87d5eb",
+    },
+    "three.tsl.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.tsl.js",
+        "sha256": "c3844718a7becd4d2d10fef29a503e6a8789bd1636e2e62767f2cf00fa56f8c1",
+    },
+    "addons/controls/ArcballControls.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/ArcballControls.js",
+        "sha256": "f80db7fe66685fc7f5438e3be44fed6684aed33a7b92b2442fe6958291156fb3",
+    },
 }
 
 
@@ -88,7 +100,64 @@ def run(cmd, env=None, cwd=None):
 
 
 def install_deps():
-    run([sys.executable, "-m", "pip", "install", "--upgrade", *BUILD_REQUIREMENTS])
+    run([sys.executable, "-m", "pip", "install", "--upgrade", "-r",
+         REQUIREMENTS_FILE])
+    run([sys.executable, "-m", "pip", "install",
+         f"pyinstaller=={PYINSTALLER_VERSION}"])
+
+
+def sha256_bytes(data):
+    """Return the lowercase SHA-256 digest for an in-memory artifact."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def sha256_file(path):
+    """Return the lowercase SHA-256 digest for a file."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _canonical_path(path):
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _within_path(target, root):
+    try:
+        return os.path.commonpath([target, root]) == root
+    except ValueError:
+        return False
+
+
+def safe_extract_tar(tar, destination):
+    """Extract only regular files and directories under *destination*."""
+    root = _canonical_path(destination)
+    for member in tar.getmembers():
+        name = member.name
+        if (os.path.isabs(name) or ntpath.isabs(name)
+                or os.path.splitdrive(name)[0]
+                or ntpath.splitdrive(name)[0]):
+            raise RuntimeError(f"unsafe archive member: {name!r}")
+
+        # Validate both separators so a Windows archive cannot smuggle a
+        # traversal through a POSIX build host, or vice versa.
+        normalized_name = name.replace("\\", "/")
+        target = _canonical_path(os.path.join(root, normalized_name))
+        if not _within_path(target, root):
+            raise RuntimeError(f"unsafe archive member: {name!r}")
+
+        if (member.issym() or member.islnk() or member.isdev()
+                or not (member.isfile() or member.isdir())):
+            raise RuntimeError(f"unsupported archive member: {name!r}")
+
+        # Some PyInstaller test fixtures contain names Windows cannot create.
+        # All security checks above must happen before this compatibility path.
+        try:
+            tar.extract(member, destination)
+        except (OSError, ValueError):
+            continue
 
 
 # ── Bootloader rebuild ────────────────────────────────────────────────────────
@@ -138,19 +207,23 @@ def _compile_bootloader(py, env, workdir):
     run([py, "-m", "pip", "download", "--no-binary", "pyinstaller", "--no-deps",
          "--no-cache-dir", "-d", workdir, f"pyinstaller=={PYINSTALLER_VERSION}"], env=env)
 
-    tarballs = glob.glob(os.path.join(workdir, "pyinstaller-*.tar.gz"))
-    if not tarballs:
-        raise RuntimeError("PyInstaller source tarball not found")
+    expected_tarball = os.path.join(
+        workdir, f"pyinstaller-{PYINSTALLER_VERSION}.tar.gz")
+    tarballs = [path for path in glob.glob(expected_tarball)
+                if os.path.isfile(path)]
+    if len(tarballs) != 1:
+        raise RuntimeError(
+            "expected exactly one PyInstaller source tarball: "
+            f"{expected_tarball}")
+    actual_hash = sha256_file(tarballs[0])
+    if actual_hash != PYINSTALLER_SDIST_SHA256:
+        raise RuntimeError(
+            "PyInstaller source SHA-256 mismatch: "
+            f"expected {PYINSTALLER_SDIST_SHA256}, got {actual_hash}")
 
     log("extracting source")
     with tarfile.open(tarballs[0]) as tf:
-        # The sdist contains test fixtures with names Windows rejects; skip any
-        # member that can't be written rather than aborting the whole build.
-        for member in tf.getmembers():
-            try:
-                tf.extract(member, workdir)
-            except (OSError, ValueError):
-                continue
+        safe_extract_tar(tf, workdir)
 
     src = os.path.join(workdir, f"pyinstaller-{PYINSTALLER_VERSION}")
     bootloader_src = os.path.join(src, "bootloader")
@@ -219,7 +292,9 @@ def prepare_bootloader_venv(force=False):
     py = _venv_python()
 
     run([py, "-m", "pip", "install", "--upgrade", "-q", "pip", "setuptools", "wheel"], env=env)
-    run([py, "-m", "pip", "install", "-q", *BUILD_REQUIREMENTS], env=env)
+    run([py, "-m", "pip", "install", "-q", "-r", REQUIREMENTS_FILE], env=env)
+    run([py, "-m", "pip", "install", "-q",
+         f"pyinstaller=={PYINSTALLER_VERSION}"], env=env)
 
     with tempfile.TemporaryDirectory(prefix="pyi-bootloader-") as workdir:
         built = _compile_bootloader(py, env, workdir)
@@ -239,26 +314,63 @@ def prepare_bootloader_venv(force=False):
 
 def fetch_assets(refresh=False):
     """Download Three.js so the built app runs fully offline."""
-    for rel, url in ASSET_FILES.items():
-        dest = os.path.join(ASSETS, rel)
+    for rel, spec in ASSET_FILES.items():
+        dest = os.path.join(ASSETS, *rel.split("/"))
         if os.path.isfile(dest) and not refresh:
-            log(f"asset present: {rel}")
+            actual = sha256_file(dest)
+            if actual != spec["sha256"]:
+                raise RuntimeError(
+                    f"asset {rel} SHA-256 mismatch: expected "
+                    f"{spec['sha256']}, got {actual}; use --refresh-assets "
+                    "if replacement is intentional")
+            log(f"asset verified: {rel}")
             continue
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         log(f"downloading {rel}")
-        with urllib.request.urlopen(url, timeout=60) as resp:
+        with urllib.request.urlopen(spec["url"], timeout=60) as resp:
             data = resp.read()
         if len(data) < 1024:
             raise RuntimeError(f"suspiciously small download for {rel} ({len(data)} bytes)")
-        with open(dest, "wb") as fh:
-            fh.write(data)
+        actual = sha256_bytes(data)
+        if actual != spec["sha256"]:
+            raise RuntimeError(
+                f"downloaded asset {rel} SHA-256 mismatch: expected "
+                f"{spec['sha256']}, got {actual}; existing asset was not "
+                "replaced")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    mode="wb", dir=os.path.dirname(dest),
+                    prefix=f".{os.path.basename(dest)}.",
+                    suffix=".tmp", delete=False) as fh:
+                temporary = fh.name
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(temporary, dest)
+            temporary = None
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.remove(temporary)
         log(f"  {len(data):,} bytes")
 
 
 def verify_assets():
-    missing = [rel for rel in ASSET_FILES if not os.path.isfile(os.path.join(ASSETS, rel))]
+    missing = []
+    mismatched = []
+    for rel, spec in ASSET_FILES.items():
+        path = os.path.join(ASSETS, *rel.split("/"))
+        if not os.path.isfile(path):
+            missing.append(rel)
+        else:
+            actual = sha256_file(path)
+            if actual != spec["sha256"]:
+                mismatched.append(
+                    f"{rel} (expected {spec['sha256']}, got {actual})")
     if missing:
         raise RuntimeError(f"missing vendored assets: {missing}")
+    if mismatched:
+        raise RuntimeError(f"vendored asset SHA-256 mismatch: {mismatched}")
 
 
 def verify_web():
