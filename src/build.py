@@ -55,6 +55,7 @@ ENTRY = "viewer_app.py"
 BUILD_NAME = f"{APP_NAME}-{APP_VERSION}"
 REQUIREMENTS_FILE = os.path.abspath(os.path.join(HERE, os.pardir,
                                                  "requirements.txt"))
+MIN_PYTHON = (3, 10, 1)
 
 # Pinned so the compiled bootloader always matches the PyInstaller doing the
 # packaging — a mismatch produces subtly broken executables.
@@ -574,8 +575,8 @@ def main():
                          "Reuses .venv-build if already compiled — delete it to redo.")
     args = ap.parse_args()
 
-    if sys.version_info < (3, 9):
-        sys.exit("Python 3.9+ required.")
+    if sys.version_info < MIN_PYTHON:
+        sys.exit("Python 3.10.1+ required.")
 
     os.chdir(HERE)
     python = None

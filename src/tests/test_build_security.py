@@ -8,6 +8,20 @@ import pytest
 import build
 
 
+class _Response:
+    def __init__(self, data):
+        self.data = data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return self.data
+
+
 def _archive(tmp_path, members):
     filename = tmp_path / "fixture.tar"
     with tarfile.open(filename, "w") as archive:
@@ -79,3 +93,44 @@ def test_hash_helpers_are_sha256(tmp_path):
     filename = tmp_path / "x"
     filename.write_bytes(data)
     assert build.sha256_file(filename) == build.sha256_bytes(data)
+
+
+def test_build_minimum_python_excludes_unsupported_versions():
+    assert build.MIN_PYTHON == (3, 10, 1)
+
+
+def test_fetch_assets_rejects_tampered_cached_asset(tmp_path, monkeypatch):
+    data = b"verified asset" * 100
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "asset.js").write_bytes(b"tampered")
+    monkeypatch.setattr(build, "ASSETS", str(assets))
+    monkeypatch.setattr(build, "ASSET_FILES", {
+        "asset.js": {"url": "https://example.invalid/asset.js",
+                      "sha256": build.sha256_bytes(data)},
+    })
+
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        build.fetch_assets()
+    assert (assets / "asset.js").read_bytes() == b"tampered"
+
+
+def test_fetch_assets_does_not_replace_asset_after_bad_refresh(tmp_path,
+                                                                monkeypatch):
+    good = b"verified asset" * 100
+    bad = b"untrusted asset" * 100
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    destination = assets / "asset.js"
+    destination.write_bytes(b"known good")
+    monkeypatch.setattr(build, "ASSETS", str(assets))
+    monkeypatch.setattr(build, "ASSET_FILES", {
+        "asset.js": {"url": "https://example.invalid/asset.js",
+                      "sha256": build.sha256_bytes(good)},
+    })
+    monkeypatch.setattr(build.urllib.request, "urlopen",
+                        lambda *args, **kwargs: _Response(bad))
+
+    with pytest.raises(RuntimeError, match="downloaded asset.*SHA-256 mismatch"):
+        build.fetch_assets(refresh=True)
+    assert destination.read_bytes() == b"known good"
