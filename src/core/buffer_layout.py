@@ -220,5 +220,22 @@ def texcoord_layout(data, stride, resource_format=None, slot=None, offset=None,
             ))
     if not scored:
         return None
-    scored.sort(key=lambda item: item[:-1], reverse=True)
-    return scored[0][-1]
+    # Offsets 0/4 cover the established XXMI layouts. Wider layouts can hold
+    # several later float pairs (secondary UVs, tangents or other attributes)
+    # that are just as clean and live as the primary UVs. In that ambiguous
+    # case, preferring the greatest offset silently remaps an otherwise-correct
+    # texture. A broader offset may override a credible legacy candidate only
+    # when it has materially better in-range evidence, or when the legacy pair
+    # is degenerate.
+    legacy = [item for item in scored if item[3] in (0, 4)]
+    broader = [item for item in scored if item[3] not in (0, 4)]
+    best_legacy = max(legacy, key=lambda item: item[:-1], default=None)
+    best_broader = max(broader, key=lambda item: item[:-1], default=None)
+    if best_legacy is None:
+        return best_broader[-1]
+    if best_broader is None:
+        return best_legacy[-1]
+    materially_cleaner = best_broader[1] >= best_legacy[1] + 0.02
+    if best_broader[0] and (not best_legacy[0] or materially_cleaner):
+        return best_broader[-1]
+    return best_legacy[-1]

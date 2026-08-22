@@ -139,8 +139,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     def _record_draw(raw, info, cond_stack, operation, count, start, base,
                      auto_count=False):
         combined = DNF_TRUE
+        vertex_resources = dict(info["_root_vertex_resources"])
         for frame in cond_stack:
             combined = dnf_and(combined, frame["cur"])
+            vertex_resources.update(frame["vertex_resources"])
         info["draws"].append(AuthoredDrawCall(
             count=count,
             start=start,
@@ -153,7 +155,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             diffuse_variants=list(
                 info.get("_cur_diffuse_variants") or []),
             diffuse_history=list(info.get("_diffuse_history") or []),
-            vertex_resources=dict(info["_cur_vertex_resources"]),
+            vertex_resources=vertex_resources,
             auxiliary_maps=_aux_snapshot(info),
         ))
 
@@ -181,20 +183,28 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             if m_elif:
                 if cond_stack:
                     frame = cond_stack[-1]
-                    branch = parse_condition_dnf(m_elif.group(1).strip(), alias_map)
+                    branch = parse_condition_dnf(
+                        m_elif.group(1).strip(), alias_map)
                     not_seen = dnf_not(frame["seen"])
                     frame["cur"] = dnf_and(not_seen, branch)
                     frame["seen"] = dnf_or(frame["seen"], branch)
+                    frame["vertex_resources"] = {}
                 continue
             if low.startswith("if "):
                 branch = parse_condition_dnf(line[3:].strip(), alias_map)
                 seq_counter[0] += 1
-                cond_stack.append({"cur": branch, "seen": branch, "seq": seq_counter[0]})
+                cond_stack.append({
+                    "cur": branch,
+                    "seen": branch,
+                    "seq": seq_counter[0],
+                    "vertex_resources": {},
+                })
                 continue
             if low == "else":
                 if cond_stack:
                     frame = cond_stack[-1]
                     frame["cur"] = dnf_not(frame["seen"])
+                    frame["vertex_resources"] = {}
                 continue
             if low == "endif":
                 if cond_stack: cond_stack.pop()
@@ -206,7 +216,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 value = None if resource.lower() == "null" else resource
                 if slot <= 2 and value and not info[f"vb{slot}"]:
                     info[f"vb{slot}"] = value
-                info["_cur_vertex_resources"][slot] = value
+                target = (cond_stack[-1]["vertex_resources"]
+                          if cond_stack else info["_root_vertex_resources"])
+                target[slot] = value
             m = re.match(r"ib\s*=\s*(\S+)", line, re.I)
             if m:
                 if not info["ib"]: info["ib"] = m.group(1)
@@ -347,10 +359,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                           diffuse=None, diffuse_pool=[], src=None, handling_skip=False,
                           _cur_diffuse_variants=[], _diffuse_chain_key=None,
                           _diffuse_history=[], _aux_maps={},
-                          _cur_vertex_resources={})
+                          _root_vertex_resources={})
         _scan(lines, info, [], {name}, {"steps": 0})
         info.pop("_cur_ib", None)
-        info.pop("_cur_vertex_resources", None)
+        info.pop("_root_vertex_resources", None)
         # Whatever diffuse was active at the end of the scan -- needed for a
         # section with NO drawindexed line at all (the game's original,
         # whole-buffer draw proceeds unmodified against this section's own
@@ -729,6 +741,24 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
     groups: list = []
     for sec_name, info in draw_secs:
+        # Indexed components can resolve missing streams through their IB and
+        # sibling override structure. A non-indexed draw has no such identity:
+        # require its own execution path to bind both supported vertex
+        # semantics, otherwise a Blend/upload/UI pass can be mistaken for a
+        # sequential triangle list after borrowing unrelated fallback buffers.
+        render_draws = []
+        for authored in info["draws"]:
+            if authored.operation != "draw":
+                render_draws.append(authored)
+                continue
+            position, texcoord = _semantic_vertex_bindings(
+                authored.vertex_resources)
+            if position and texcoord:
+                render_draws.append(authored)
+        if (not render_draws
+                and (not info["ib"] or info["handling_skip"])):
+            continue
+
         display_name = sec_name[len("TextureOverride"):] or sec_name
         seen[display_name] = seen.get(display_name, 0) + 1
         label = display_name
@@ -738,10 +768,10 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         comp   = (_ib_res_to_component(ib_res) if ib_res else display_name)
         buf    = _lookup_comp_buf(comp)
         authored_position = authored_texcoord = None
-        if info["draws"]:
+        if render_draws:
             authored_position, authored_texcoord = _semantic_vertex_bindings(
-                info["draws"][0].vertex_resources)
-        if not buf and info["draws"]:
+                render_draws[0].vertex_resources)
+        if not buf and render_draws:
             if authored_position and authored_texcoord:
                 buf = {
                     "position": authored_position["resource"],
@@ -775,8 +805,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         pos_file = pos_ri.get("filename")
         tc_file  = tc_ri.get("filename")
         ib_file  = ib_ri.get("filename")
-        requires_ib = (not info["draws"] or any(
-            draw.operation != "draw" for draw in info["draws"]))
+        requires_ib = (not render_draws or any(
+            draw.operation != "draw" for draw in render_draws))
         if not (pos_file and tc_file) or (requires_ib and not ib_file):
             continue
 
@@ -792,7 +822,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                       if ib_file else None)
         uv_off     = DEFAULT_UV_OFFSET
 
-        draws_list = list(info["draws"]) or [AuthoredDrawCall(
+        draws_list = list(render_draws) or [AuthoredDrawCall(
             count=None,
             start=0,
             base=0,

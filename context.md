@@ -117,6 +117,8 @@ machine-specific paths or facts that are obvious from the source.
 - Geometry detection is conservative and format-specific. Do not infer a game
   or material meaning from a filename alone. Unknown, malformed or too-small
   buffers must be rejected or dropped safely rather than read beyond bounds.
+  A broader auto-detected UV offset must not displace a credible established
+  layout unless its evidence is materially stronger.
 - Draw deduplication uses normalized effective buffer and material state.
   Classify each new draw field explicitly as render identity, visibility or
   provenance; never derive identity reflectively from every dictionary field.
@@ -127,9 +129,12 @@ machine-specific paths or facts that are obvious from the source.
 - Geometry decoding uses explicit position, texcoord and index layout
   descriptors. Numeric non-indexed draws and safely derived whole-IB
   `drawindexed = auto` are supported; variable, instanced and indirect calls
-  remain diagnostic-only. Reject a whole draw when its layout, stride, index
-  range or effective vertex range is invalid rather than truncating it or
-  manufacturing zero-valued vertices.
+  remain diagnostic-only. A non-indexed draw is geometry only when its own
+  execution path binds complete, resolvable position and texcoord streams;
+  never borrow sibling component buffers for an incomplete setup/replay pass.
+  Reject a whole draw when its layout, stride, index range or effective vertex
+  range is invalid rather than truncating it or manufacturing zero-valued
+  vertices.
 - An `ib` section without `drawindexed` may produce one synthetic whole-buffer
   draw. A `handling=skip` section without an explicit draw produces nothing.
   Real draw rows retain authored `count,start,base`; synthetic rows are the

@@ -6,6 +6,7 @@ import tempfile
 
 import pytest
 
+from core.buffer_layout import texcoord_layout
 from core.ini_parser import (_scan_sections_for_draws, build_draw_groups,
                              extract_resources,
                              extract_toggle_keys, merge_sections)
@@ -441,6 +442,131 @@ def test_nonindexed_draw_uses_typed_layouts_and_higher_vb_slots():
         assert entry["draw"] == [3, 1]
         positions = geometry_values(geometry, entry["pos"])
         assert positions == (1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+
+def test_credible_legacy_uv_offset_wins_over_ambiguous_later_float_pairs():
+    data = bytearray()
+    for uv, later_pair in (
+            ((0.1, 0.2), (0.0, 0.0)),
+            ((0.9, 0.2), (1.0, 0.0)),
+            ((0.1, 0.8), (0.0, 1.0)),
+            ((0.9, 0.8), (1.0, 1.0))):
+        vertex = bytearray(28)
+        struct.pack_into("<2f", vertex, 4, *uv)
+        struct.pack_into("<2f", vertex, 20, *later_pair)
+        data.extend(vertex)
+
+    layout = texcoord_layout(data, 28)
+
+    assert (layout.offset, layout.format) == (4, "float32x2")
+
+
+def test_broader_uv_offset_remains_supported_when_legacy_offsets_are_invalid():
+    data = bytearray()
+    for uv in ((0.1, 0.2), (0.9, 0.2), (0.1, 0.8), (0.9, 0.8)):
+        vertex = bytearray(16)
+        struct.pack_into("<2I", vertex, 0, 0x7FC00000, 0x7FC00000)
+        struct.pack_into("<2f", vertex, 8, *uv)
+        data.extend(vertex)
+
+    layout = texcoord_layout(data, 16)
+
+    assert (layout.offset, layout.format) == (8, "float32x2")
+
+
+@pytest.mark.parametrize("runtime_name", ["DRAW_TYPE", "$DRAW_TYPE"])
+def test_branch_local_incomplete_draw_is_not_built_as_triangle_geometry(
+        runtime_name):
+    ini = f"""[TextureOverrideBodyBlend]
+handling = skip
+if {runtime_name} == 2 || {runtime_name} == 4
+vb1 = ResourceBodyTexcoord
+vb2 = ResourceBodyBlend
+checktextureoverride = ib
+elif {runtime_name} == 1
+vb0 = ResourceBodyPosition
+vb2 = ResourceBodyBlend
+draw = 3, 0
+endif
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideBodyA]
+handling = skip
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+
+[ResourceBodyPosition]
+filename = position.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceBodyBlend]
+filename = blend.buf
+stride = 32
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+        scanned = _scan_sections_for_draws(sections)
+        replay = scanned["TextureOverrideBodyBlend"]["draws"][0]
+        assert replay.vertex_resources == {
+            0: "ResourceBodyPosition",
+            2: "ResourceBodyBlend",
+        }
+
+        groups = build_draw_groups(sections, extract_resources(sections))
+        assert [group["display_name"] for group in groups] == ["BodyA"]
+        assert groups[0]["draws"][0].operation == "drawindexed"
+
+
+def test_unconditional_incomplete_draw_does_not_borrow_sibling_buffers():
+    ini = """[TextureOverrideBodyPosition]
+vb0 = ResourceBodyPosition
+
+[TextureOverrideBodyBlend]
+handling = skip
+vb1 = ResourceBodyBlend
+draw = 3, 0
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideBodyA]
+handling = skip
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+
+[ResourceBodyPosition]
+filename = position.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceBodyBlend]
+filename = blend.buf
+stride = 32
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        sections = merge_sections([path])
+        groups = build_draw_groups(sections, extract_resources(sections))
+
+        assert [group["display_name"] for group in groups] == ["BodyA"]
 
 
 AUTO_INDEXED_INI = """[TextureOverrideBody]
