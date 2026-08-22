@@ -117,6 +117,9 @@ machine-specific paths or facts that are obvious from the source.
 - Geometry detection is conservative and format-specific. Do not infer a game
   or material meaning from a filename alone. Unknown, malformed or too-small
   buffers must be rejected or dropped safely rather than read beyond bounds.
+- Draw deduplication uses normalized effective buffer and material state.
+  Classify each new draw field explicitly as render identity, visibility or
+  provenance; never derive identity reflectively from every dictionary field.
 - An `ib` section without `drawindexed` may produce one synthetic whole-buffer
   draw. A `handling=skip` section without an explicit draw produces nothing.
   Real draw rows retain authored `count,start,base`; synthetic rows are the

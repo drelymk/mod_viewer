@@ -532,9 +532,9 @@ def verify_recording(path, report, text=None, document=None):
 
     conds_by_draw = {}
     for section_name, info in draw_info.items():
-        for (count, start, base, conds, _src, _ib, _dv,
-             _diffuse_history, _vb) in info["draws"]:
-            conds_by_draw[(section_name, count, start, base)] = conds
+        for draw in info["draws"]:
+            key = (section_name, draw.count, draw.start, draw.base)
+            conds_by_draw[key] = draw.conditions
 
     mismatches = []
     for var, spec in verify.items():
