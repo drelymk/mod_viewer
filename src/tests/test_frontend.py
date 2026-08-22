@@ -2350,6 +2350,44 @@ def test_mismatched_toggle_lists_hold_the_last_short_value(
         context.close()
 
 
+def test_record_advances_read_only_vars_across_complete_cycle(
+        edge_browser, frontend_url):
+    payload = _payload("RecordCycle")
+    payload["controls"]["toggles"]["KeyRecordCycle"]["vars"] = [
+        {"var": "local", "default": "0", "values": ["0", "1"]},
+        {"var": r"\Other\Master\Mode", "default": "0",
+         "values": ["0", "1", "2"]},
+    ]
+    payload["state"]["defaults"].update(
+        {"local": "0", r"\Other\Master\Mode": "0"})
+    context, page = _page(
+        edge_browser, frontend_url, {"RecordCycle": payload})
+    try:
+        _open(page, "RecordCycle")
+        page.evaluate("""
+          () => {
+            window.pywebview.api.get_record_positions = async () => ({
+              positions: 3, vars: ['local'],
+            });
+          }
+        """)
+        page.locator("#toggle-list [title^='Record']").click()
+        row = page.locator("#toggle-list .toggle-row.recording")
+        row.wait_for()
+        value = page.locator("#toggle-list .toggle-value")
+        assert "local=0" in value.inner_text()
+        assert r"\Other\Master\Mode=0" in value.inner_text()
+
+        cycle = page.locator("#toggle-list .toggle-cycle-btn")
+        cycle.click()
+        cycle.click()
+        assert "Position 3 of 3" in value.inner_text()
+        assert "local=1" in value.inner_text()
+        assert r"\Other\Master\Mode=2" in value.inner_text()
+    finally:
+        context.close()
+
+
 def test_reload_preserves_camera_but_switching_mod_resets_it(
         edge_browser, frontend_url):
     context, page = _page(

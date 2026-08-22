@@ -22,11 +22,9 @@ export function isRecording() {
   return active !== null;
 }
 
-/** This section's own vars that get recorded (a subset of info.vars — a
- * namespaced var declared alongside them never comes back from
- * get_record_positions, since it's cross-ini and read-only), each still
- * carrying its own values list so its own position -> value mapping is used
- * rather than assuming every var in the section cycles in lockstep. */
+/** This section's own writable vars (a subset of info.vars). Record mode
+ * requires at least one, even though every co-driven var participates in its
+ * preview and each uses its own position -> value mapping. */
 function writableVars(info, rawNames) {
   return info.vars.filter((v) => rawNames.includes(v.var.split('::').pop()));
 }
@@ -77,8 +75,9 @@ export async function startRecordSession(info, ctx, ui) {
       await alertDialog('Could not start recording:\n\n' + posInfo.error);
       return;
     }
-    const vars = writableVars(info, posInfo.vars || []);
-    if (!vars.length || !posInfo.positions) {
+    const writable = writableVars(info, posInfo.vars || []);
+    const vars = info.vars;
+    if (!writable.length || !vars.length || !posInfo.positions) {
       await alertDialog('This toggle has no variable this app can record automatically.');
       return;
     }
@@ -97,7 +96,10 @@ export async function startRecordSession(info, ctx, ui) {
       snapshots.push(snapshotVisibility());
     }
 
-    active = { info, ctx, ui, vars, positions: posInfo.positions, current: 0, snapshots, before };
+    active = {
+      info, ctx, ui, vars,
+      positions: posInfo.positions, current: 0, snapshots, before,
+    };
 
     for (const v of vars) setToggleValue(v.var, v.values[0]);
     applySnapshot(snapshots[0]);

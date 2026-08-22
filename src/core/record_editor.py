@@ -330,24 +330,20 @@ def writable_cycle_vars(doc, section_name):
     supply data for.
 
     Namespaced/master vars are cross-ini and read-only, so they're excluded
-    here even though `cycle_vars` still reports them — and since a section's
-    own namespaced var can carry a *different-length* values list than its
-    writable var(s), `max_positions` must come from the writable ones alone.
-    The existing Toggle-panel cycle button instead advances by its *lead*
-    var's length (which can be namespaced) — so callers preparing a Record
-    session must ask here rather than reuse that count, or they can end up
-    supplying data for the wrong number of positions.
+    from the returned write set. They still participate in the section's
+    cycle, however, so `max_positions` covers every co-driven variable. The
+    recorder must preview that complete tuple while only rewriting locals.
 
     Raises ToggleEditError if the section isn't a cycle toggle with at least
     one writable variable.
     """
     sec = te.find_cycle_section(doc, section_name)
-    cvars = te.cycle_vars(sec)
+    cvars = te.cycle_vars(sec, include_read_only=True)
     writable = {v: vals for v, vals in cvars.items() if not ic.is_namespaced(v)}
     if not writable:
         raise te.ToggleEditError(
             f"{section_name!r} is not a cycle toggle with any writable variable")
-    return writable, max(len(v) for v in writable.values())
+    return writable, max(len(v) for v in cvars.values())
 
 
 def record_toggle(doc, section_name, position_lines):

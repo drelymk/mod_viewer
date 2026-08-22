@@ -32,6 +32,7 @@ from . import ini_condition as ic
 from .ini_document import IF, ELIF, ELSE, ENDIF, ASSIGN, BLANK
 
 _VAR_ASSIGN_RE = re.compile(r"^\$(\w+)\s*=\s*(.+)$")
+_ALL_VAR_ASSIGN_RE = re.compile(r"^\$([\\\w]+)\s*=\s*(.+)$")
 _CONST_VAR_RE = re.compile(r"^(?:global\s+)?(?:persist\s+)?\$(\w+)\s*=\s*([^,]+)$", re.I)
 _COND_LINE_RE = re.compile(r"^(if|else\s+if|elif)\s+(.*)$", re.I)
 
@@ -67,18 +68,21 @@ def is_cycle_section(sec):
     return any(re.match(r"^type\s*=\s*cycle$", line.text, re.I) for line in sec.lines)
 
 
-def cycle_vars(sec):
-    """{var: [values]} declared by `$var = v0,v1,...` lines in this section."""
+def cycle_vars(sec, include_read_only=False):
+    """Return cycle values, optionally including cross-file variables."""
     out = {}
     for line in sec.lines:
         if line.kind != ASSIGN:
             continue
-        m = _VAR_ASSIGN_RE.match(line.text)
+        m = _ALL_VAR_ASSIGN_RE.match(line.text)
         if not m:
+            continue
+        variable = m.group(1)
+        if ic.is_namespaced(variable) and not include_read_only:
             continue
         values = [p.strip() for p in m.group(2).split(",") if p.strip()]
         if values:
-            out[m.group(1)] = values
+            out[variable] = values
     return out
 
 

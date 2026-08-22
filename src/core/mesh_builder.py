@@ -240,6 +240,8 @@ def _deduplicate_draws(group, max_draws=0):
     merged = {}
     order = []
     for draw in group["draws"]:
+        # TODO(DrawCall IR): replace this reflective key with an explicit,
+        # normalized render_identity once draw parsing has a typed IR.
         # Only provenance, visibility alternatives and the generated label may
         # differ between rows that are safe to merge. In particular, base
         # vertex, index size and material/texture state are part of identity.
@@ -519,6 +521,11 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             base = draw.get("base") or 0
             if base:
                 raw = [v + base for v in raw]
+            # A negative effective DirectX vertex index is invalid.  Reject it
+            # before buffer decoding, where negative offsets can be interpreted
+            # as end-relative instead of failing safely.
+            if any(index < 0 for index in raw):
+                continue
 
             # Compact: only export vertices actually referenced
             used  = sorted(set(raw))

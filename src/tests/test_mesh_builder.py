@@ -339,6 +339,25 @@ def test_negative_base_vertex_is_parsed_and_applied():
         assert vertices == [0, 1, 2]
 
 
+def test_negative_effective_vertex_index_skips_invalid_draw():
+    with tempfile.TemporaryDirectory() as tmp:
+        ini = SIGNED_BASE_INI.replace(
+            "drawindexed = 3, 0, -3", "drawindexed = 3, 0, -1")
+        path = write(tmp, "mod.ini", ini)
+        open(os.path.join(tmp, "body.ib"), "wb").write(
+            struct.pack("<3I", 0, 1, 2))
+        with open(os.path.join(tmp, "pos.buf"), "wb") as file:
+            for i in range(3):
+                file.write(struct.pack("<3f", float(i), float(i), float(i))
+                           + b"\0" * 28)
+        open(os.path.join(tmp, "tc.buf"), "wb").write(b"\0" * 20 * 3)
+
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        meshes, _geometry = build_mesh_fixture(groups, tmp)
+        assert meshes == {}
+
+
 LOWERCASE_SECTIONS_INI = """[constants]
 global persist $swap = 0
 
