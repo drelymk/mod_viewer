@@ -320,7 +320,8 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "calls": {"loadMod": [], "listSubfolders": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
                    "panelOpacity": [], "presentState": [],
-                   "controlState": [], "meshSemantics": []},
+                   "controlState": [], "meshSemantics": [],
+                   "deleteToggle": [], "exportChanges": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -373,6 +374,15 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                 }])
               );
               return copy({meshes});
+            },
+            delete_toggle: async (path, ini, section) => {
+              state.calls.deleteToggle.push([path, ini, section]);
+              return copy({ok: true, result: {}});
+            },
+            export_changes: async path => {
+              state.calls.exportChanges.push(path);
+              state.pending[path] = false;
+              return copy({saved: [], failed: []});
             },
             has_pending_changes: async path => !!state.pending[path],
             discard_changes: async path => {
@@ -2424,6 +2434,68 @@ def test_mismatched_toggle_lists_hold_the_last_short_value(
         assert value.inner_text() == "short=1, long=2"
         button.click()
         assert value.inner_text() == "short=0, long=0"
+    finally:
+        context.close()
+
+
+def test_shared_control_values_reconcile_as_a_union(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Shared": _payload("Shared")})
+    try:
+        _open(page, "Shared")
+        result = page.evaluate("""async () => {
+          const controls = await import('./js/control-state.js');
+          controls.setControlValue('shared', '2');
+          controls.setControlStateRules([], {shared: '0'}, {
+            toggles: {
+              KeyA: {vars: [{var: 'shared', values: ['0', '1']}]},
+              KeyB: {vars: [{var: 'shared', values: ['0', '2']}]},
+            },
+            menu: {},
+          });
+          return controls.getControlState().shared;
+        }""")
+        assert result == "2"
+    finally:
+        context.close()
+
+
+def test_delete_reloads_model_for_geometry_safety(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Delete": _payload("Delete")},
+        pending={"Delete": True})
+    try:
+        _open(page, "Delete")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__deleteMesh = window.modViewer.activeMeshes[0]")
+        page.locator("#toggle-list [title='Delete toggle']").click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
+
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == []
+        assert page.evaluate("window.modViewer.activeMeshes[0] !== window.__deleteMesh")
+    finally:
+        context.close()
+
+
+def test_export_refreshes_status_without_reloading_model(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Export": _payload("Export")},
+        pending={"Export": True})
+    try:
+        _open(page, "Export")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__exportMesh = window.modViewer.activeMeshes[0]")
+        page.locator("#export-btn").click()
+        page.wait_for_function("window.__fakeApi.calls.exportChanges.length === 1")
+        page.wait_for_function("!window.__fakeApi.pending.Export")
+
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Export"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__exportMesh")
     finally:
         context.close()
 

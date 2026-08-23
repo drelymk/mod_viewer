@@ -522,8 +522,11 @@ async function handleToggleChange(change = {}) {
     return meshesRefreshed ? refreshControlSemantics() : false;
   }
   if (change.type === 'delete') {
-    const controlsRefreshed = await refreshControlSemantics();
-    return controlsRefreshed ? refreshMeshSemantics() : false;
+    // Deleting a toggle rewrites every safe branch that references its
+    // variable, including resource bindings before drawindexed.  The draw
+    // label can survive while its geometry identity changes, so semantic
+    // patching is not safe here; rebuild from the authoritative session.
+    return reloadCurrentMod();
   }
   return refreshControlSemantics();
 }
@@ -661,12 +664,11 @@ async function exportChanges() {
         `${result.saved.length} ini file(s) exported, but ${result.failed.length} failed ` +
         `and are still pending:\n\n${detail}`);
     }
-    // Refreshes the panel/badges from the now-partly-or-fully-exported session
-    // state either way, and re-syncs the indicator via its own call to
-    // refreshPendingState (a partial failure leaves those inis' edits
-    // pending, so it stays lit rather than clearing, and the button
-    // re-enables for a retry).
-    await reloadCurrentMod();
+    // Export writes the authoritative staged documents but does not change
+    // the current model or control semantics. Refresh only session status;
+    // partial failures leave the affected edits pending for retry.
+    await refreshPendingState();
+    void refreshHealthReport();
   } catch (e) {
     await alertDialog('Unexpected error while exporting:\n\n' + e);
     await refreshPendingState();

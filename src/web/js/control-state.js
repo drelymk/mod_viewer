@@ -35,13 +35,17 @@ export function dnfSatisfied(condGroups) {
 
 function controlValues(controls) {
   const legal = new Map();
+  const addLegalValues = (variable, values) => {
+    const existing = legal.get(variable) || [];
+    legal.set(variable, [...new Set([...existing, ...(values || [])])]);
+  };
   for (const info of Object.values(controls?.toggles || {})) {
     for (const variable of (info.cycle_vars || info.vars || [])) {
-      legal.set(variable.var, variable.values || []);
+      addLegalValues(variable.var, variable.values);
     }
   }
   for (const info of Object.values(controls?.menu || {})) {
-    if (info.values) legal.set(info.var, info.values);
+    if (info.values) addLegalValues(info.var, info.values);
   }
   return legal;
 }
