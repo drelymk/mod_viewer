@@ -10,6 +10,10 @@ Keep deterministic formatting, lint, and other mechanical checks in CI. Code rev
 
 ## Pull requests
 
+- Never commit or push directly to `main`. Create or switch to a feature
+  branch before committing; if work starts on `main`, branch from its current
+  tip without rewriting existing commits, then push the feature branch and
+  use a pull request targeting `main`.
 - Push the feature branch first, then check for an existing open PR targeting `main` before creating another one. If `gh` is unavailable, use the existing Git credential helper with GitHub's REST API through an approved elevated command; keep credentials in memory and never print them.
 - PR titles and descriptions must contain only information that is available from the repository or CI. Do not include machine-specific paths, local-only test results, private environment details, or claims that reviewers cannot reproduce from the branch or CI.
 
