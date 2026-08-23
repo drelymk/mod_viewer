@@ -249,6 +249,14 @@ class ModViewerAPI:
         self._refresh_authorized_asset_roots(entries)
         return {"folders": self._asset_folder_entries(entries)}
 
+    def set_asset_folder_enabled(self, folder_path, enabled):
+        try:
+            entries = asset_folders.set_enabled(folder_path, enabled)
+        except asset_folders.AssetFolderError as error:
+            return {"error": str(error)}
+        self._refresh_authorized_asset_roots(entries)
+        return {"folders": self._asset_folder_entries(entries)}
+
     def list_asset_subfolders(self, folder_path):
         requested = asset_folders.normalize_path(folder_path)
         try:

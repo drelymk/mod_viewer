@@ -37,6 +37,7 @@ function renderRightDock() {
   if (inspector) inspector.hidden = !inspectorActive;
   if (controls) controls.hidden = !controlsActive;
   dock?.classList.toggle('ui-visible', dockEnabled);
+  document.body?.classList.toggle('right-dock-mounted', dockEnabled);
   document.body?.classList.toggle('right-dock-visible', panelVisible);
 }
 

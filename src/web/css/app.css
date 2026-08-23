@@ -131,9 +131,8 @@ body {
 #renderer-error h2 { margin: 0; color: #f0f6fc; font-size: 18px; font-weight: 600; }
 #renderer-error p { max-width: 560px; margin: 0; color: #8b949e; font-size: 13px; line-height: 1.5; }
 
-/* Blender-style viewport navigation compass. It sits in the upper-right when
- * no right-side panel is visible and moves left to clear the dock otherwise.
- * It remains a DOM overlay so it stays crisp at every WebView scale factor. */
+/* Blender-style viewport navigation compass. It remains a crisp viewport
+ * overlay, offset below the right-dock tabs when that dock is open. */
 #view-gizmo {
   position: absolute; top: 12px; right: 12px;
   width: 104px; height: 104px;
@@ -260,6 +259,17 @@ body {
   font: inherit; font-size: 12px; cursor: pointer;
 }
 .mod-folder-path-field button:hover { background: var(--border); }
+.asset-folder-path-field { display: flex; gap: 8px; }
+.asset-folder-path-field input {
+  min-width: 0; flex: 1; color: var(--text-muted); text-overflow: ellipsis;
+}
+.asset-folder-path-field button {
+  flex: 0 0 auto; min-height: 32px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 5px 12px;
+  color: var(--text); background: var(--surface-raised); cursor: pointer;
+  font-size: 12px;
+}
+.asset-folder-path-field button:hover { background: var(--surface-hover); border-color: #485363; }
 
 /* ── right dock (toggle panel + menu panel) ──────────────────────────────── */
 #right-dock {
@@ -393,7 +403,7 @@ body {
 .environment-icon [data-environment-icon="indoor"] path:nth-child(2) { fill: #f2c879; }
 .environment-icon [data-environment-icon="outdoor"] { stroke: #79c0ff; }
 .environment-icon [data-environment-icon="outdoor"] circle { fill: #ffd866; stroke: #fff0a8; }
-body.right-dock-visible #view-gizmo { right: 338px; }
+body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .panel-hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; cursor: pointer; }
 #mesh-list.collapsed, #present-list.collapsed, #toggle-list.collapsed, #menu-list.collapsed { display: none; }
 .icon-btn {
@@ -672,6 +682,7 @@ body.right-dock-visible #view-gizmo { right: 338px; }
 .modal-actions button {
   border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; border: 1px solid var(--border);
 }
+#asset-folder-modal-backdrop .modal { width: 360px; }
 #mfm-cancel { background: var(--bg-control); color: var(--text); }
 #mfm-cancel:hover { background: var(--border); }
 #mfm-save { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
@@ -682,6 +693,11 @@ body.right-dock-visible #view-gizmo { right: 338px; }
 #tm-save { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
 #tm-save:hover:not(:disabled) { background: var(--success-hover); }
 #tm-save:disabled { opacity: .6; cursor: default; }
+#afm-cancel { background: var(--bg-control); color: var(--text); }
+#afm-cancel:hover { background: var(--border); }
+#afm-save { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
+#afm-save:hover:not(:disabled) { background: var(--success-hover); }
+#afm-save:disabled { opacity: .6; cursor: default; }
 #pm-cancel { background: var(--bg-control); color: var(--text); }
 #pm-cancel:hover { background: var(--border); }
 #pm-save { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
@@ -826,7 +842,6 @@ body.feature-modify-toggle-off .present-author-actions { display: none; }
   #menu-list.image-layout > .toggle-src-items {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  #view-gizmo { right: 272px; }
   .mod-folder-actions > .mod-folder-edit,
   .mod-folder-actions > .mod-folder-remove { display: none; }
   .mod-folder-actions > .mod-folder-more { display: flex; }
@@ -1199,9 +1214,28 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .folder-missing { display: flex; align-items: center; gap: 4px; padding: 0 4px 4px 24px;
   color: var(--text-muted); font-size: 10px; }
 .folder-missing .ui-icon { width: 13px; height: 13px; color: var(--warning); }
-.asset-folder-label { display: inline-flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.asset-folder-label {
+  display: flex; align-items: center; gap: 7px; min-width: 0; width: 100%;
+  overflow: hidden;
+}
 .asset-folder-badge { flex: 0 0 auto; padding: 2px 5px; border-radius: 4px; color: var(--accent-soft);
   background: var(--surface-active); font-size: 9px; font-weight: 800; letter-spacing: .05em; }
+.asset-folder-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.asset-folder-status { flex: 0 0 auto; color: var(--text-muted); font-size: 9px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; }
+.asset-folder-row.asset-folder-disabled .asset-folder-label { opacity: .72; }
+.asset-folder-expand, .asset-folder-actions button { min-height: 0; }
+.asset-folder-switch { flex: 0 0 auto; min-width: 38px; height: 22px; min-height: 0;
+  padding: 0 6px; line-height: 1;
+  border: 1px solid var(--border); border-radius: 11px; color: var(--text-muted);
+  background: var(--surface-active); cursor: pointer; font-size: 9px; font-weight: 800;
+  letter-spacing: .04em; }
+.asset-folder-switch[aria-checked="true"] { color: var(--text); border-color: var(--accent-soft);
+  background: rgba(31,111,235,.38); }
+.asset-folder-switch:hover { color: var(--text); border-color: var(--accent-soft); }
+.asset-folder-switch:disabled { opacity: .55; cursor: wait; }
 #sidebar.left-dock-panel { overflow-x: hidden; overflow-y: auto; }
 #sidebar[hidden], #mod-folder-panel[hidden], #asset-folder-panel[hidden] { display: none !important; }
 

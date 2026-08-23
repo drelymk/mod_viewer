@@ -10,9 +10,17 @@ function baseName(path) {
   return String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
 }
 
+function canonicalPath(path) {
+  return String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
 function setTextError(element, message) {
   element.textContent = message || '';
   element.classList.toggle('show', !!message);
+}
+
+function isAssetMatchingEnabled(entry) {
+  return entry?.enabled !== false;
 }
 
 export function initAssetFolderPanel() {
@@ -50,6 +58,41 @@ export function initAssetFolderPanel() {
     onChildSelected: path => tree.setActivePath(path),
     onEdit: entry => openEditor('edit', entry),
     onDelete: entry => removeFolder(entry),
+    renderRootExtras: entry => {
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'asset-folder-switch';
+      toggle.setAttribute('role', 'switch');
+      const enabled = isAssetMatchingEnabled(entry);
+      toggle.textContent = enabled ? 'ON' : 'OFF';
+      toggle.setAttribute('aria-checked', String(enabled));
+      toggle.setAttribute(
+        'aria-label', `Use ${baseName(entry.path)} for asset matching`);
+      toggle.title = enabled
+        ? 'Include this folder in asset matching'
+        : 'Excluded from asset matching';
+      toggle.addEventListener('click', async event => {
+        event.stopPropagation();
+        if (toggle.disabled) return;
+        toggle.disabled = true;
+        try {
+          const response = await window.pywebview.api.set_asset_folder_enabled(
+            entry.path, !isAssetMatchingEnabled(entry));
+          if (response?.error) {
+            setTextError(error, response.error);
+            return;
+          }
+          const updated = (response?.folders || []).find(candidate =>
+            canonicalPath(candidate.path) === canonicalPath(entry.path));
+          if (!updated || !tree.updateRoot(updated)) applyRegistryResponse(response);
+        } catch (caught) {
+          setTextError(error, caught.message || String(caught));
+        } finally {
+          toggle.disabled = false;
+        }
+      });
+      return toggle;
+    },
     renderLabel: (entry, isRoot) => {
       if (!isRoot) return entry.name;
       const wrapper = document.createElement('span');
@@ -57,7 +100,16 @@ export function initAssetFolderPanel() {
       const badge = document.createElement('span');
       badge.className = 'asset-folder-badge';
       badge.textContent = entry.type;
-      wrapper.append(badge, document.createTextNode(baseName(entry.path)));
+      const name = document.createElement('span');
+      name.className = 'asset-folder-name';
+      name.textContent = baseName(entry.path);
+      wrapper.append(badge, name);
+      if (entry.enabled === false) {
+        const status = document.createElement('span');
+        status.className = 'asset-folder-status';
+        status.textContent = 'Disabled';
+        wrapper.appendChild(status);
+      }
       return wrapper;
     },
     classPrefix: 'asset-folder',

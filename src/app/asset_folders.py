@@ -42,11 +42,14 @@ def _read_entries(config_file=None):
             raise AssetFolderError("Asset Folder type must be GIMI, ZZMI or WWMI.")
         if not isinstance(folder, str) or not os.path.isabs(folder):
             raise AssetFolderError("Asset Folder path must be absolute.")
+        enabled = raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise AssetFolderError("Asset Folder enabled must be a boolean.")
         normalized = normalize_path(folder)
         if normalized in seen:
             raise AssetFolderError("config.json contains duplicate Asset Folder paths.")
         seen.add(normalized)
-        entries.append({"type": asset_type, "path": normalized})
+        entries.append({"type": asset_type, "path": normalized, "enabled": enabled})
     return entries
 
 
@@ -58,6 +61,17 @@ def registered_paths(entries):
     return {entry["path"] for entry in entries}
 
 
+def enabled_entries(entries):
+    """Return roots eligible for asset matching without dropping registry state."""
+    return [entry for entry in entries if entry.get("enabled", True)]
+
+
+def enabled_entries_for_type(entries, asset_type):
+    """Return enabled roots for one game asset type."""
+    return [entry for entry in enabled_entries(entries)
+            if entry["type"] == asset_type]
+
+
 def _validated_entry(asset_type, folder, *, require_exists):
     if asset_type not in ASSET_TYPES:
         raise AssetFolderError("Asset Folder type must be GIMI, ZZMI or WWMI.")
@@ -66,7 +80,7 @@ def _validated_entry(asset_type, folder, *, require_exists):
     normalized = normalize_path(folder)
     if require_exists and not os.path.isdir(normalized):
         raise AssetFolderError("Asset Folder path must be an existing directory.")
-    return {"type": asset_type, "path": normalized}
+    return {"type": asset_type, "path": normalized, "enabled": True}
 
 
 def _write_entries(entries, config_file=None):
@@ -101,6 +115,7 @@ def edit_folder(original_folder, asset_type, folder, config_file=None):
     if any(i != index and item["path"] == entry["path"]
            for i, item in enumerate(entries)):
         raise AssetFolderError("That Asset Folder path is already registered.")
+    entry["enabled"] = entries[index].get("enabled", True)
     entries[index] = entry
     _write_entries(entries, config_file)
     return entries
@@ -114,6 +129,21 @@ def delete_folder(folder, config_file=None):
         raise AssetFolderError("That Asset Folder is not registered.")
     _write_entries(filtered, config_file)
     return filtered
+
+
+def set_enabled(folder, enabled, config_file=None):
+    """Change only a registered root's matching participation flag."""
+    if not isinstance(enabled, bool):
+        raise AssetFolderError("Asset Folder enabled must be a boolean.")
+    entries = _read_entries(config_file)
+    target = normalize_path(folder)
+    index = next((i for i, item in enumerate(entries)
+                  if item["path"] == target), None)
+    if index is None:
+        raise AssetFolderError("That Asset Folder is not registered.")
+    entries[index]["enabled"] = enabled
+    _write_entries(entries, config_file)
+    return entries
 
 
 def list_subfolders(folder, authorized_root):

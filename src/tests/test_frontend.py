@@ -425,7 +425,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             },
             get_asset_folders: async () => copy({folders: state.assetFolders}),
             add_asset_folder: async (type, path) => {
-              state.assetFolders.push({type, path, exists: true});
+              state.assetFolders.push({type, path, enabled: true, exists: true});
               return copy({folders: state.assetFolders});
             },
             edit_asset_folder: async (original, type, path) => {
@@ -435,6 +435,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             },
             delete_asset_folder: async path => {
               state.assetFolders = state.assetFolders.filter(folder => folder.path !== path);
+              return copy({folders: state.assetFolders});
+            },
+            set_asset_folder_enabled: async (path, enabled) => {
+              const item = state.assetFolders.find(folder => folder.path === path);
+              if (item) item.enabled = enabled;
               return copy({folders: state.assetFolders});
             },
             list_asset_subfolders: async path => {
@@ -568,9 +573,16 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
         page.locator("#right-dock.ui-visible").wait_for()
         assert page.locator("#controls-panel").is_visible()
         assert page.locator("body.right-dock-visible").count() == 1
+        assert page.locator("body.right-dock-mounted").count() == 1
         page.locator("#controls-tab").click()
         assert page.locator("#controls-panel").is_hidden()
         assert page.locator("body.right-dock-visible").count() == 0
+        assert page.locator("body.right-dock-mounted").count() == 1
+        assert page.evaluate("""() => {
+          const tabs = document.querySelector('#right-dock .right-dock-tabs').getBoundingClientRect();
+          const gizmo = document.querySelector('#view-gizmo').getBoundingClientRect();
+          return gizmo.top >= tabs.bottom;
+        }""")
         assert page.locator("#right-dock .right-dock-tabs").is_visible()
         page.locator("#inspector-tab").click()
         assert page.locator("#inspector-panel").is_visible()
@@ -604,8 +616,44 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
         page.locator("#asset-folder-list .asset-folder-expand").first.click()
         page.locator(".asset-folder-select", has_text="Character").wait_for()
         assert page.evaluate("window.__fakeApi.calls.listAssetSubfolders") == [root]
-        page.locator(".asset-folder-select", has_text="Character").click()
+        child_select = page.locator(".asset-folder-select", has_text="Character")
+        child_select.click()
         assert page.evaluate("window.__fakeApi.calls.loadMod") == []
+        assert page.evaluate(
+            "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
+        ) == child
+        switch = page.locator(".asset-folder-switch").first
+        assert switch.get_attribute("aria-checked") == "true"
+        switch.click()
+        page.wait_for_function("window.__fakeApi.assetFolders[0].enabled === false")
+        page.locator(".asset-folder-switch[aria-checked='false']").wait_for()
+        child_select.wait_for()
+        assert page.locator(".asset-folder-expand.expanded").count() == 1
+        assert page.evaluate(
+            "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
+        ) == child
+        page.locator(".asset-folder-switch").first.click()
+        page.wait_for_function("window.__fakeApi.assetFolders[0].enabled === true")
+        page.locator(".asset-folder-switch[aria-checked='true']").wait_for()
+        child_select.wait_for()
+        assert page.locator(".asset-folder-expand.expanded").count() == 1
+        assert page.evaluate(
+            "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
+        ) == child
+        root_select = page.locator("#asset-folder-list .asset-folder-select").first
+        root_select.click()
+        assert page.evaluate(
+            "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
+        ) == root
+        switch = page.locator(".asset-folder-switch").first
+        page.evaluate("""() => {
+          window.pywebview.api.set_asset_folder_enabled = async () => ({
+            error: 'write failed'});
+        }""")
+        page.locator(".asset-folder-switch").first.click()
+        page.locator("#asset-folder-error.show").wait_for()
+        assert page.locator(".asset-folder-switch").first.get_attribute(
+            "aria-checked") == "true"
         page.locator("#asset-folder-add").click()
         assert page.locator("#afm-type option").all_inner_texts() == ["ZZMI", "GIMI", "WWMI"]
         page.evaluate("window.__fakeApi.nextPath = 'picked-asset-folder'")
@@ -613,6 +661,11 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
         assert page.locator("#afm-path").input_value() == "picked-asset-folder"
         assert page.evaluate("window.__fakeApi.calls.selectAssetFolder") == [
             "picked-asset-folder"]
+        assert page.locator(".asset-folder-path-field").count() == 1
+        assert page.locator("#afm-save").evaluate(
+            "button => getComputedStyle(button).backgroundColor") == "rgb(35, 134, 54)"
+        assert page.locator("#afm-cancel").evaluate(
+            "button => getComputedStyle(button).backgroundColor") == "rgb(33, 38, 45)"
     finally:
         context.close()
 
@@ -3313,11 +3366,29 @@ def test_inspector_follows_component_and_mesh_selection(
         assert not page.locator("#camera-panel").is_visible()
         assert page.locator("#tool-panel").evaluate(
             "panel => getComputedStyle(panel).flexDirection") == "row"
-        assert page.evaluate("""() => {
+        layout = page.evaluate("""() => {
           const toolbar = document.querySelector('#toolbar').getBoundingClientRect();
+          const tabs = document.querySelector('#right-dock .right-dock-tabs').getBoundingClientRect();
+          const present = document.querySelector('#present-panel').getBoundingClientRect();
           const gizmo = document.querySelector('#view-gizmo').getBoundingClientRect();
-          return Math.round(gizmo.top - toolbar.bottom);
-        }""") == 12
+          return {
+            toolbarBottom: toolbar.bottom,
+            tabsBottom: tabs.bottom,
+            presentTop: present.top,
+            gizmoTop: gizmo.top,
+            gizmoWidth: gizmo.width,
+            gizmoHeight: gizmo.height,
+            inCanvas: !!document.querySelector('#view-gizmo').closest('#canvas-container'),
+          };
+        }""")
+        assert layout["inCanvas"]
+        assert layout["gizmoTop"] >= layout["toolbarBottom"]
+        assert layout["gizmoTop"] >= layout["tabsBottom"]
+        assert abs(layout["gizmoTop"] - layout["presentTop"]) < 1
+        assert layout["gizmoWidth"] == 104
+        assert layout["gizmoHeight"] == 104
+        page.locator("#view-gizmo .gizmo-axis.positive").first.click()
+        assert "collapsed" not in (page.locator("#present-list").get_attribute("class") or "")
         panel_styles = page.locator(
             "#sidebar, #mod-folder-panel, #present-panel, #toggle-panel, "
             "#menu-panel, #inspector-panel, .right-dock-tabs, "
