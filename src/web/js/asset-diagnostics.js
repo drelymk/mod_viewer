@@ -16,6 +16,9 @@ const PROVENANCE_LABELS = Object.freeze({
   asset_original_fallback: 'Asset fallback',
   unresolved: 'Not resolved',
 });
+const TEXTURE_ROLE_SOURCE_LABELS = Object.freeze({
+  mod_slot_mapping: 'Mod slot mapping',
+});
 const TEXTURE_ROLE_LABELS = Object.freeze({
   diffuse: 'Diffuse',
   normal_map: 'Normal',
@@ -167,6 +170,12 @@ export function textureRoleLabels() {
 
 export function textureRoleLabel(role) {
   return TEXTURE_ROLE_LABELS[role] || 'Unknown';
+}
+
+export function textureRoleSourceLabel(source) {
+  return TEXTURE_ROLE_SOURCE_LABELS[source]
+    || PROVENANCE_LABELS[source]
+    || 'Unknown';
 }
 
 export function provenanceLabel(value) {

@@ -46,13 +46,13 @@ def test_rabbitfx_settextures_maps_explicit_roles_case_insensitively():
 
     assert info["diffuse"] == "ResourceDiffuse"
     assert info["aux_maps_at_end"]["light_map"]["variants"] == [{
-        "res": "ResourceLightmap", "cond": [],
+        "res": "ResourceLightmap", "cond": [], "source": "semantic",
     }]
     assert info["aux_maps_at_end"]["normal_map"]["variants"] == [{
-        "res": "ResourceNormalmap", "cond": [],
+        "res": "ResourceNormalmap", "cond": [], "source": "semantic",
     }]
     assert info["aux_maps_at_end"]["material_map"]["variants"] == [{
-        "res": "ResourceMaterialmap", "cond": [],
+        "res": "ResourceMaterialmap", "cond": [], "source": "semantic",
     }]
 
 

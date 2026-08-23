@@ -1,6 +1,7 @@
 """Role recovery from explicit mod-local texture slot mappings."""
 
-from core.ini_parser import build_draw_groups, extract_resources, merge_sections
+from core.ini_parser import (build_draw_groups, extract_resources, merge_sections,
+                              _scan_sections_for_draws)
 
 
 def _draw(tmp_path, assignments, resources, prefix=""):
@@ -84,14 +85,57 @@ endif""",
 def test_explicit_semantic_assignment_beats_slotfix(tmp_path):
     draw = _draw(
         tmp_path,
-        r"""Resource\GIMI\Diffuse = ResourceExplicit
-ps-t0 = Resource\GIMI\Diffuse
-ps-t0 = ResourceOpaque""",
+        r"""ps-t0 = Resource\GIMI\Diffuse
+ps-t0 = ResourceOpaque
+Resource\GIMI\Diffuse = ResourceExplicit""",
         {"ResourceExplicit": "explicit.dds", "ResourceOpaque": "opaque.dds"},
     )
 
     assert draw.texture_default("diffuse") == "explicit.dds"
     assert draw.texture_provenance == {}
+
+
+def test_semantic_and_slot_roles_keep_disjoint_conditional_branches(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""if $style == 0
+Resource\GIMI\Diffuse = ResourceExplicit
+else
+ps-t0 = Resource\GIMI\Diffuse
+ps-t0 = ResourceOpaque
+endif""",
+        {"ResourceExplicit": "explicit.dds", "ResourceOpaque": "opaque.dds"},
+        prefix="[KeyStyle]\ntype = cycle\n$style = 0,1\n",
+    )
+
+    assert draw.texture_default("diffuse") == "explicit.dds"
+    assert {item["file"] for item in draw.texture_variants} == {
+        "explicit.dds", "opaque.dds"}
+    assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
+
+
+def test_explicit_role_in_one_path_does_not_suppress_another_path():
+    sections = {
+        "TextureOverrideBody": [
+            r"Resource\GIMI\Diffuse = ResourceBodyDiffuse",
+            "drawindexed = 3, 0, 0",
+        ],
+        "TextureOverrideHair": [
+            "ps-t0 = ResourceHairDiffuse",
+            "drawindexed = 3, 0, 0",
+        ],
+        r"CommandList\SlotMap": [
+            r"ps-t0 = Resource\GIMI\Diffuse",
+        ],
+    }
+
+    info = _scan_sections_for_draws(sections)
+    hair = info["TextureOverrideHair"]["draws"][0]
+
+    assert hair.slot_textures[0].role_hint == "diffuse"
+    assert hair.diffuse_variants == [{
+        "res": "ResourceHairDiffuse", "cond": [], "source": "slot",
+    }]
 
 
 def test_ambiguous_slot_role_does_not_guess(tmp_path):

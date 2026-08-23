@@ -118,20 +118,11 @@ def _semantic_texture_role(resource):
 def _collect_slot_role_hints(sections):
     """Collect unambiguous ``ps-tN`` roles proven by API resource bindings."""
     observations = {}
-    explicit_roles = set()
     for lines in sections.values():
         for raw in lines:
             line = raw.split(";", 1)[0].strip()
             if not line:
                 continue
-            semantic_lhs = re.match(
-                r"^Resource[\\/]"
-                r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
-                r"(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)"
-                r"\s*=", line, re.I)
-            if semantic_lhs:
-                explicit_roles.add(_SEMANTIC_TEXTURE_ROLES[
-                    semantic_lhs.group("role").casefold()])
             slot = re.match(
                 r"^ps-t(?P<slot>\d+)\s*=\s*(?:ref\s+)?(?P<resource>\S+)",
                 line, re.I)
@@ -140,8 +131,65 @@ def _collect_slot_role_hints(sections):
             role = _semantic_texture_role(slot.group("resource"))
             if role:
                 observations.setdefault(int(slot.group("slot")), set()).add(role)
-    return ({slot: next(iter(roles)) for slot, roles in observations.items()
-             if len(roles) == 1}, explicit_roles)
+    return {slot: next(iter(roles)) for slot, roles in observations.items()
+            if len(roles) == 1}
+
+
+def _condition_group_is_consistent(group):
+    """Return whether one DNF conjunction can be satisfied."""
+    equal = {}
+    not_equal = set()
+    for clause in group:
+        key = clause["var"]
+        value = clause["value"]
+        if clause["negate"]:
+            not_equal.add((key, value))
+            if equal.get(key) == value:
+                return False
+        else:
+            previous = equal.setdefault(key, value)
+            if previous != value or (key, value) in not_equal:
+                return False
+    return True
+
+
+def _condition_difference(condition, excluded):
+    """Return ``condition AND NOT excluded`` in the parser's DNF form.
+
+    An empty normalized condition means true, so ``None`` is used for an
+    empty result instead of the ambiguous empty DNF list.
+    """
+    left = condition or DNF_TRUE
+    right = excluded or DNF_TRUE
+    result = [group for group in dnf_and(left, dnf_not(right))
+              if _condition_group_is_consistent(group)]
+    if not result:
+        return None
+    if any(not group for group in result):
+        return []
+    return result
+
+
+def _effective_role_assignments(assignments):
+    """Give semantic assignments precedence over overlapping slot evidence."""
+    semantic = [item for item in assignments
+                if item.get("source") == "semantic"]
+    if not semantic:
+        return list(assignments)
+    result = []
+    for item in assignments:
+        if item.get("source") != "slot":
+            result.append(item)
+            continue
+        condition = item.get("cond") or []
+        for explicit in semantic:
+            condition = _condition_difference(
+                condition, explicit.get("cond") or [])
+            if condition is None:
+                break
+        if condition is not None:
+            result.append({**item, "cond": condition})
+    return result
 
 
 def gating_var_names(sections, var_prefix=None, *, toggle_keys=None,
@@ -197,10 +245,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
     resource_texture_hashes = _collect_texture_hashes(sections)
-    slot_role_hints, explicit_texture_roles = _collect_slot_role_hints(sections)
+    slot_role_hints = _collect_slot_role_hints(sections)
     seq_counter = [0]   # unique id per `if` block
-    bare_counter = [0]  # unique id per diffuse line reached with an empty cond_stack
-    aux_bare_counters = {channel: 0 for channel in _AUX_MAP_CHANNELS.values()}
 
     def _geometry_match(info):
         geometry_hash = info.get("_geometry_hash")
@@ -249,24 +295,24 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         if cond_stack:
             chain_key = cond_stack[-1]["seq"]
         else:
-            if role == "diffuse":
-                bare_counter[0] += 1
-                chain_key = ("bare", bare_counter[0])
-            else:
-                aux_bare_counters[role] += 1
-                chain_key = ("bare", role, aux_bare_counters[role])
+            # Keep consecutive unconditional assignments in one active
+            # stream.  Same-source writes still replace one another, while a
+            # semantic and a slot assignment remain together long enough for
+            # condition-aware precedence to choose the semantic one.
+            chain_key = ("bare", role)
         if chain_key != state["chain_key"]:
             state["variants"] = []
             state["chain_key"] = chain_key
-        elif state["last_cond"] == cond and state["variants"]:
+        elif (state["last_cond"] == cond and state["variants"]
+              and state["variants"][-1].get("source") == source):
             state["variants"].pop()
-        variant = {"res": res, "cond": cond}
+        variant = {"res": res, "cond": cond, "source": source}
         texture_hashes = resource_texture_hashes.get(res.casefold(), ())
         if texture_hashes:
             variant["texture_hashes"] = texture_hashes
         state["variants"].append(variant)
         state["last_cond"] = cond
-        history = {"res": res, "cond": cond}
+        history = {"res": res, "cond": cond, "source": source}
         if texture_hashes:
             history["texture_hashes"] = texture_hashes
         state["history"].append(history)
@@ -281,12 +327,31 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     def _aux_snapshot(info):
         return {
             channel: {
-                "variants": list(state.get("variants") or []),
-                "history": list(state.get("history") or []),
+                "variants": _effective_role_assignments(
+                    state.get("variants") or []),
+                "history": _effective_role_assignments(
+                    state.get("history") or []),
             }
             for channel, state in info.get("_aux_maps", {}).items()
             if state.get("variants") or state.get("history")
         }
+
+    def _texture_provenance_snapshot(info):
+        result = dict(info.get("_texture_provenance") or {})
+        assignments = {
+            "diffuse": info.get("_diffuse_history") or [],
+        }
+        assignments.update({
+            channel: state.get("history") or []
+            for channel, state in info.get("_aux_maps", {}).items()
+        })
+        for role, history in assignments.items():
+            effective = _effective_role_assignments(history)
+            if (result.get(role) == "mod_slot_semantic"
+                    and not any(item.get("source") == "slot"
+                                for item in effective)):
+                result.pop(role, None)
+        return result
 
     def _scan(lines, info, cond_stack, visiting):
         # cond_stack tracks the stack of active gate branches. Each frame is
@@ -342,8 +407,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 else:
                     info["_cur_slot_textures"][slot] = resource
                     role = slot_role_hints.get(slot)
-                    if (role and role not in explicit_texture_roles
-                            and _semantic_texture_role(resource) is None):
+                    if (role and _semantic_texture_role(resource) is None):
                         _record_texture_assignment(
                             info, role, resource, cond_stack, source="slot")
             m = re.match(r"vb(\d+)\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
@@ -375,13 +439,13 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     conditions=conds,
                     source=line_source(raw),
                     index_resource=info.get("_cur_ib"),
-                    diffuse_variants=list(
+                    diffuse_variants=_effective_role_assignments(
                         info.get("_cur_diffuse_variants") or []),
-                    diffuse_history=list(info.get("_diffuse_history") or []),
+                    diffuse_history=_effective_role_assignments(
+                        info.get("_diffuse_history") or []),
                     vertex_resources=dict(info["_cur_vertex_resources"]),
                     auxiliary_maps=_aux_snapshot(info),
-                    texture_provenance=dict(
-                        info.get("_texture_provenance") or {}),
+                    texture_provenance=_texture_provenance_snapshot(info),
                     geometry_match=_geometry_match(info),
                     slot_textures=_slot_snapshot(info),
                 ))
@@ -442,11 +506,12 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         # That implicit draw still runs with whichever explicit semantic or
         # proven slot-semantic assignment the section made, same as any real
         # drawindexed line would've seen at this point in execution order.
-        info["diffuse_variants_at_end"] = list(info.get("_cur_diffuse_variants") or [])
-        info["diffuse_history_at_end"] = list(info.get("_diffuse_history") or [])
+        info["diffuse_variants_at_end"] = _effective_role_assignments(
+            info.get("_cur_diffuse_variants") or [])
+        info["diffuse_history_at_end"] = _effective_role_assignments(
+            info.get("_diffuse_history") or [])
         info["aux_maps_at_end"] = _aux_snapshot(info)
-        info["texture_provenance_at_end"] = dict(
-            info.get("_texture_provenance") or {})
+        info["texture_provenance_at_end"] = _texture_provenance_snapshot(info)
         info["geometry_match_at_end"] = _geometry_match(info)
         info["slot_textures_at_end"] = _slot_snapshot(info)
         info.pop("_cur_slot_textures", None)

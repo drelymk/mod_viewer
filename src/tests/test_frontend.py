@@ -567,6 +567,10 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
     entry["asset_slot_evidence"] = [{
         "resource": "ps-t1", "texture_hash": "11111111",
         "vs_hash": "aaaaaaaa", "ps_hash": "bbbbbbbb",
+    }, {
+        "resource": "ps-t2", "texture_hash": "22222222",
+        "role": "diffuse", "role_source": "mod_slot_mapping",
+        "asset_hash_role": "normal_map", "conflict": True,
     }]
     payload["asset_resolution"] = {
         "total_draws": 1, "exact_draws": 1, "partial_draws": 0,
@@ -619,6 +623,11 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         assert "ps-t1" in inspector.locator(".inspector-slot-section").inner_text()
         assert "Role\nUnknown" in inspector.locator(
             ".inspector-slot-section").inner_text()
+        conflict = inspector.locator(
+            '.inspector-slot-evidence[data-conflict="true"]')
+        assert conflict.inner_text() == (
+            "ps-t2\nTexture\n22222222\nVS\n—\nPS\n—\nRole\nDiffuse\n"
+            "Role source\nMod slot mapping\nAsset hash role\nNormal\nConflict\nYes")
 
         page.locator(".inspector-texture-option", has_text="Asset two").click()
         assert inspector.locator(
