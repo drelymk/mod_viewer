@@ -41,15 +41,25 @@ def _values(entry, keys):
     return []
 
 
-def _merge_geometry(records, geometry_hash, ranges, metadata_path):
+def _string(value):
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _merge_geometry(records, geometry_hash, ranges, metadata_path,
+                    component_name=None):
     previous = records.get(geometry_hash)
     if previous is None:
         records[geometry_hash] = {
             "ranges": set(ranges),
             "metadata": metadata_path,
+            "component_name": component_name,
         }
         return
     previous["ranges"].update(ranges)
+    previous["component_name"] = (
+        previous.get("component_name") or component_name)
 
 
 def parse_hash_file(asset_path, root, metadata_path, normalize_hash):
@@ -76,6 +86,11 @@ def parse_hash_file(asset_path, root, metadata_path, normalize_hash):
         count_values = _values(entry, (
             "object_index_counts", "objectIndexCounts", "index_counts",
             "indexCounts", "index_count", "indexCount"))
+        classification_values = _values(entry, (
+            "object_classifications", "objectClassifications",
+            "classifications"))
+        component_name = _string(
+            entry.get("component_name") or entry.get("componentName"))
         if not first_values:
             first_values = [0]
 
@@ -89,10 +104,14 @@ def parse_hash_file(asset_path, root, metadata_path, normalize_hash):
                 index_count = _integer(count_values[position])
                 if index_count is None and count_values[position] is not None:
                     continue
-            ranges.append(DrawRange(first_index, index_count))
+            classification = None
+            if position < len(classification_values):
+                classification = _string(classification_values[position])
+            ranges.append(DrawRange(first_index, index_count, classification))
         if not ranges:
             continue
-        _merge_geometry(records, geometry_hash, ranges, metadata_path)
+        _merge_geometry(
+            records, geometry_hash, ranges, metadata_path, component_name)
 
     if not records:
         raise MetadataError("hash.json contains no valid geometry records.")
@@ -104,12 +123,16 @@ def parse_hash_file(asset_path, root, metadata_path, normalize_hash):
             item["ranges"],
             key=lambda value: (value.first_index,
                                value.index_count is None,
-                               value.index_count or 0),
+                               value.index_count or 0,
+                               value.classification or "",
+                               value.component_ordinal
+                               if value.component_ordinal is not None else -1),
         ))
         geometry.append(GeometryRecord(
             geometry_hash=geometry_hash,
             ranges=ranges,
             metadata_path=_relative(metadata_path, root),
+            component_name=item.get("component_name"),
         ))
     return AssetRecord(_relative(asset_path, root), tuple(geometry))
 

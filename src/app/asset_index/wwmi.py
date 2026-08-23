@@ -10,6 +10,12 @@ class MetadataError(ValueError):
     """A recognized metadata file that cannot produce a usable record."""
 
 
+def _string(value):
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def _integer(value, *, minimum=0):
     if isinstance(value, bool):
         return None
@@ -40,7 +46,8 @@ def parse_metadata_file(asset_path, root, metadata_path, normalize_hash):
         raise MetadataError("Metadata.json components must be a list.")
 
     ranges = []
-    for component in raw_components:
+    component_name = None
+    for ordinal, component in enumerate(raw_components):
         if not isinstance(component, dict):
             continue
         first_index = _integer(component.get("index_offset", 0))
@@ -49,10 +56,14 @@ def parse_metadata_file(asset_path, root, metadata_path, normalize_hash):
             continue
         if component.get("index_count") is not None and index_count is None:
             continue
-        ranges.append(DrawRange(first_index, index_count))
+        name = _string(
+            component.get("component_name") or component.get("componentName")
+            or component.get("name"))
+        component_name = component_name or name
+        ranges.append(DrawRange(first_index, index_count, name, ordinal))
     if not ranges:
         fallback_count = _integer(raw.get("index_count"))
-        ranges = [DrawRange(0, fallback_count)]
+        ranges = [DrawRange(0, fallback_count, None, 0)]
 
     detail_path = os.path.join(os.path.dirname(metadata_path), "TextureUsage.json")
     if not os.path.isfile(detail_path) or os.path.islink(detail_path):
@@ -63,10 +74,13 @@ def parse_metadata_file(asset_path, root, metadata_path, normalize_hash):
             geometry_hash=geometry_hash,
             ranges=tuple(sorted(set(ranges), key=lambda item: (
                 item.first_index, item.index_count is None,
-                item.index_count or 0))),
+                item.index_count or 0, item.classification or "",
+                item.component_ordinal
+                if item.component_ordinal is not None else -1))),
             metadata_path=_relative(metadata_path, root),
             detail_metadata_path=(
                 _relative(detail_path, root) if detail_path else None),
+            component_name=component_name,
         ),),
     )
 
@@ -86,13 +100,17 @@ def parse_object_asset(asset_path, root, metadata_paths, normalize_hash):
                 set(existing.ranges + item.ranges),
                 key=lambda value: (value.first_index,
                                    value.index_count is None,
-                                   value.index_count or 0),
+                                   value.index_count or 0,
+                                   value.classification or "",
+                                   value.component_ordinal
+                                   if value.component_ordinal is not None else -1),
             ))
             geometry[item.geometry_hash] = GeometryRecord(
                 existing.geometry_hash,
                 ranges,
                 existing.metadata_path,
                 existing.detail_metadata_path or item.detail_metadata_path,
+                existing.component_name or item.component_name,
             )
     if not geometry:
         raise MetadataError("No valid WWMI geometry metadata was found.")

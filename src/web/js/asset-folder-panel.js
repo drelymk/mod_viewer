@@ -97,6 +97,7 @@ export function initAssetFolderPanel() {
             setTextError(error, response.error);
             return;
           }
+          setTextError(error, '');
           const updated = (response?.folders || []).find(candidate =>
             canonicalPath(candidate.path) === canonicalPath(entry.path));
           if (!updated || !tree.updateRoot(updated)) applyRegistryResponse(response);
@@ -126,6 +127,7 @@ export function initAssetFolderPanel() {
             setTextError(error, `${response.error}${suffix}`);
             return;
           }
+          setTextError(error, '');
           const updated = (response?.folders || []).find(candidate =>
             canonicalPath(candidate.path) === canonicalPath(entry.path));
           if (!updated || !tree.updateRoot(updated)) applyRegistryResponse(response);

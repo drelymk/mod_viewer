@@ -7,12 +7,19 @@ from dataclasses import dataclass
 class DrawRange:
     first_index: int
     index_count: int | None
+    classification: str | None = None
+    component_ordinal: int | None = None
 
     def as_dict(self):
-        return {
+        value = {
             "firstIndex": self.first_index,
             "indexCount": self.index_count,
         }
+        if self.classification is not None:
+            value["classification"] = self.classification
+        if self.component_ordinal is not None:
+            value["componentOrdinal"] = self.component_ordinal
+        return value
 
 
 @dataclass(frozen=True)
@@ -21,6 +28,7 @@ class GeometryRecord:
     ranges: tuple[DrawRange, ...]
     metadata_path: str
     detail_metadata_path: str | None = None
+    component_name: str | None = None
 
     def as_dict(self):
         value = {
@@ -30,6 +38,8 @@ class GeometryRecord:
         }
         if self.detail_metadata_path is not None:
             value["detailMetadata"] = self.detail_metadata_path
+        if self.component_name is not None:
+            value["componentName"] = self.component_name
         return value
 
 

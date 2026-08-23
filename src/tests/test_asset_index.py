@@ -8,6 +8,7 @@ from app import asset_folders, paths
 from app.api import ModViewerAPI
 from app.asset_index import (
     IndividualAssetError,
+    NoValidAssetsError,
     build_index,
     index_path,
     index_status,
@@ -124,6 +125,35 @@ def test_zzmi_uses_optional_index_counts(tmp_path):
             index["assets"][0]["geometry"][0]["ranges"]] == [None, None]
 
 
+def test_gimi_accepts_known_category_and_weapon_layouts(tmp_path):
+    root = tmp_path / "full-gimi"
+    player = root / "PlayerCharacterData" / "Character"
+    weapon = root / "WeaponData" / "Bows" / "Bow"
+    unknown = root / "WeaponData" / "UnknownType" / "Hidden"
+    player.mkdir(parents=True)
+    weapon.mkdir(parents=True)
+    unknown.mkdir(parents=True)
+    payload = [{"ib": "3d7b9c89", "object_indexes": [0]}]
+    _write_json(str(player / "hash.json"), payload)
+    _write_json(str(weapon / "hash.json"), payload)
+    _write_json(str(unknown / "hash.json"), payload)
+
+    index = build_index("GIMI", str(root))
+
+    assert [item["path"] for item in index["assets"]] == [
+        "PlayerCharacterData/Character", "WeaponData/Bows/Bow"]
+
+
+def test_hash_index_rejects_arbitrary_nested_collection(tmp_path):
+    root = tmp_path / "collection"
+    asset = root / "UnrecognizedGroup" / "Character"
+    asset.mkdir(parents=True)
+    _write_json(str(asset / "hash.json"), [{"ib": "3d7b9c89"}])
+
+    with pytest.raises(NoValidAssetsError, match="No valid assets"):
+        build_index("GIMI", str(root))
+
+
 def test_wwmi_index_reads_metadata_and_records_detail_path(tmp_path):
     root = _wwmi_root(tmp_path)
 
@@ -132,10 +162,59 @@ def test_wwmi_index_reads_metadata_and_records_detail_path(tmp_path):
     geometry = index["assets"][0]["geometry"][0]
     assert geometry["hash"] == "abcdef12"
     assert geometry["ranges"] == [
-        {"firstIndex": 0, "indexCount": 12},
-        {"firstIndex": 12, "indexCount": 8},
+        {"firstIndex": 0, "indexCount": 12, "componentOrdinal": 0},
+        {"firstIndex": 12, "indexCount": 8, "componentOrdinal": 1},
     ]
     assert geometry["detailMetadata"] == "Character/TextureUsage.json"
+
+
+def test_wwmi_accepts_known_category_and_rejects_arbitrary_nested_root(
+        tmp_path):
+    root = tmp_path / "full-wwmi"
+    character = root / "PlayerCharacterData" / "Character"
+    character.mkdir(parents=True)
+    _write_json(str(character / "Metadata.json"), {
+        "vb0_hash": "abcdef12", "components": [{"index_offset": 0}]})
+    assert build_index("WWMI", str(root))["stats"]["assetCount"] == 1
+
+    invalid = tmp_path / "wwmi-collection" / "UnrecognizedGroup" / "Character"
+    invalid.mkdir(parents=True)
+    _write_json(str(invalid / "Metadata.json"), {"vb0_hash": "abcdef12"})
+    with pytest.raises(NoValidAssetsError, match="No valid assets"):
+        build_index("WWMI", str(invalid.parents[1]))
+
+
+def test_index_retains_mesh_identity_labels(tmp_path):
+    gimi_root = tmp_path / "labeled-gimi" / "PlayerCharacterData"
+    gimi_root.mkdir(parents=True)
+    _write_json(str(gimi_root / "Character" / "hash.json"), [
+        {"ib": "3d7b9c89", "component_name": "Body",
+         "object_indexes": [0, 12],
+         "object_classifications": ["body", "hair"]},
+    ])
+    gimi = build_index("GIMI", str(gimi_root.parent))
+    geometry = gimi["assets"][0]["geometry"][0]
+    assert geometry["componentName"] == "Body"
+    assert geometry["ranges"] == [
+        {"firstIndex": 0, "indexCount": None, "classification": "body"},
+        {"firstIndex": 12, "indexCount": None, "classification": "hair"},
+    ]
+
+    wwmi_root = tmp_path / "labeled-wwmi"
+    character = wwmi_root / "Character"
+    character.mkdir(parents=True)
+    _write_json(str(character / "Metadata.json"), {
+        "vb0_hash": "abcdef12", "components": [
+            {"index_offset": 0, "name": "Body"},
+            {"index_offset": 10},
+        ]})
+    wwmi = build_index("WWMI", str(wwmi_root))
+    ranges = wwmi["assets"][0]["geometry"][0]["ranges"]
+    assert ranges == [
+        {"firstIndex": 0, "indexCount": None,
+         "classification": "Body", "componentOrdinal": 0},
+        {"firstIndex": 10, "indexCount": None, "componentOrdinal": 1},
+    ]
 
 
 def test_wwmi_object_layout_is_supported(tmp_path):

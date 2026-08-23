@@ -659,6 +659,16 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
         page.locator("#asset-folder-error.show").wait_for()
         assert page.locator(".asset-folder-switch").first.get_attribute(
             "aria-checked") == "true"
+        page.evaluate("""() => {
+          window.pywebview.api.set_asset_folder_enabled = async (path, enabled) => {
+            const item = window.__fakeApi.assetFolders.find(folder => folder.path === path);
+            if (item) item.enabled = enabled;
+            return {folders: window.__fakeApi.assetFolders.map(folder => ({...folder}))};
+          };
+        }""")
+        page.locator(".asset-folder-switch").first.click()
+        page.wait_for_function(
+            "!document.querySelector('#asset-folder-error').classList.contains('show')")
         page.locator("#asset-folder-add").click()
         assert page.locator("#afm-type option").all_inner_texts() == ["ZZMI", "GIMI", "WWMI"]
         page.evaluate("window.__fakeApi.nextPath = 'picked-asset-folder'")
@@ -720,6 +730,19 @@ def test_asset_rebuild_preserves_tree_and_disables_only_one_root(
         assert page.evaluate(
             "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
         ) == child
+        page.evaluate("""() => {
+          window.pywebview.api.rebuild_asset_index = async () => ({
+            error: 'rebuild failed', indexPreserved: true});
+        }""")
+        page.locator(".asset-folder-rebuild").click()
+        page.locator("#asset-folder-error.show").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.rebuild_asset_index = async () => ({
+            folders: window.__fakeApi.assetFolders.map(folder => ({...folder}))});
+        }""")
+        page.locator(".asset-folder-rebuild").click()
+        page.wait_for_function(
+            "!document.querySelector('#asset-folder-error').classList.contains('show')")
     finally:
         context.close()
 

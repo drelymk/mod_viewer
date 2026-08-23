@@ -5,15 +5,31 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 
-from .. import asset_folders, paths
+from .. import asset_folders, config, paths
 from . import gimi, wwmi, zzmi
 from .models import AssetRecord
 
 
 INDEX_VERSION = 1
 _GEOMETRY_HASH = re.compile(r"^[0-9a-fA-F]{8}$")
+_HASH_GROUPS = frozenset({
+    "enemydata",
+    "miscellaneousdata",
+    "npcdata",
+    "playercharacterdata",
+    "skilldata",
+    "weapondata",
+})
+_WEAPON_GROUPS = frozenset({
+    "bows",
+    "catalysts",
+    "claymores",
+    "enemies",
+    "polearms",
+    "swords",
+})
+_WWMI_GROUPS = frozenset({"playercharacterdata"})
 
 
 class AssetIndexError(ValueError):
@@ -96,6 +112,29 @@ def _warning(root, path, reason):
     return {"path": _relative(path, root), "reason": str(reason)}
 
 
+def _name(path):
+    return os.path.basename(path).casefold()
+
+
+def _hash_group_candidates(group, root):
+    candidates = []
+    weapon_group = _name(group) == "weapondata"
+    for child in _safe_child_dirs(group, root):
+        marker = _safe_file(child, root, "hash.json")
+        if marker and (not weapon_group or _name(child) in _WEAPON_GROUPS):
+            candidates.append((child, marker))
+            continue
+        # GIMI's full export places weapon assets below a known weapon-type
+        # directory. Do not generalize this into arbitrary nested discovery.
+        if not weapon_group or _name(child) not in _WEAPON_GROUPS:
+            continue
+        for asset in _safe_child_dirs(child, root):
+            asset_marker = _safe_file(asset, root, "hash.json")
+            if asset_marker:
+                candidates.append((asset, asset_marker))
+    return candidates
+
+
 def _hash_candidates(root):
     candidates = []
     skipped = []
@@ -104,11 +143,8 @@ def _hash_candidates(root):
         if marker:
             candidates.append((child, marker))
             continue
-        nested = []
-        for grandchild in _safe_child_dirs(child, root):
-            nested_marker = _safe_file(grandchild, root, "hash.json")
-            if nested_marker:
-                nested.append((grandchild, nested_marker))
+        nested = (_hash_group_candidates(child, root)
+                  if _name(child) in _HASH_GROUPS else [])
         if nested:
             candidates.extend(nested)
         else:
@@ -138,11 +174,12 @@ def _wwmi_candidates(root):
             continue
 
         nested = []
-        for grandchild in _safe_child_dirs(child, root):
-            nested_direct = _safe_file(grandchild, root, "Metadata.json")
-            nested_objects = _wwmi_object_markers(grandchild, root)
-            if nested_direct or nested_objects:
-                nested.append((grandchild, nested_direct, nested_objects))
+        if _name(child) in _WWMI_GROUPS:
+            for grandchild in _safe_child_dirs(child, root):
+                nested_direct = _safe_file(grandchild, root, "Metadata.json")
+                nested_objects = _wwmi_object_markers(grandchild, root)
+                if nested_direct or nested_objects:
+                    nested.append((grandchild, nested_direct, nested_objects))
         if nested:
             candidates.extend(nested)
         else:
@@ -211,7 +248,10 @@ def _merge_asset_records(records):
                 set(previous.ranges + item.ranges),
                 key=lambda value: (value.first_index,
                                    value.index_count is None,
-                                   value.index_count or 0),
+                                   value.index_count or 0,
+                                   value.classification or "",
+                                   value.component_ordinal
+                                   if value.component_ordinal is not None else -1),
             ))
             from .models import GeometryRecord
             geometry[item.geometry_hash] = GeometryRecord(
@@ -219,6 +259,7 @@ def _merge_asset_records(records):
                 ranges,
                 previous.metadata_path,
                 previous.detail_metadata_path or item.detail_metadata_path,
+                previous.component_name or item.component_name,
             )
         merged[record.relative_path] = AssetRecord(
             record.relative_path,
@@ -358,24 +399,10 @@ def _atomic_bytes(filename, payload):
         os.makedirs(directory, exist_ok=True)
     except OSError as error:
         raise AssetIndexError(f"Could not write Asset index: {error}") from error
-    temp_name = None
     try:
-        with tempfile.NamedTemporaryFile(
-                mode="wb", prefix=os.path.basename(filename) + ".",
-                suffix=".tmp", dir=directory, delete=False) as stream:
-            temp_name = stream.name
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temp_name, filename)
+        config.write_bytes_atomic(filename, payload)
     except OSError as error:
         raise AssetIndexError(f"Could not write Asset index: {error}") from error
-    finally:
-        if temp_name and os.path.exists(temp_name):
-            try:
-                os.remove(temp_name)
-            except OSError:
-                pass
 
 
 def save_index(value):

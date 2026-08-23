@@ -56,22 +56,29 @@ def config_file_path(config_file=None):
     return os.fspath(config_file or paths.config_path())
 
 
-def write_config(value, config_file=None):
-    """Atomically replace config.json after fully writing and syncing a temp."""
-    filename = config_file_path(config_file)
+def write_bytes_atomic(filename, payload):
+    """Replace *filename* after writing and syncing its complete payload."""
     temp_name = filename + ".tmp"
     try:
-        with open(temp_name, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, indent=2, ensure_ascii=False)
-            stream.write("\n")
+        with open(temp_name, "wb") as stream:
+            stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp_name, filename)
-    except OSError as error:
-        raise ValueError(f"Could not write config.json: {error}") from error
     finally:
         if os.path.exists(temp_name):
             try:
                 os.remove(temp_name)
             except OSError:
                 pass
+
+
+def write_config(value, config_file=None):
+    """Atomically replace config.json after fully writing and syncing a temp."""
+    filename = config_file_path(config_file)
+    try:
+        payload = (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode(
+            "utf-8")
+        write_bytes_atomic(filename, payload)
+    except OSError as error:
+        raise ValueError(f"Could not write config.json: {error}") from error
