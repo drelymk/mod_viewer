@@ -171,6 +171,8 @@ function buildSlotEvidenceSection(content, entry) {
     if (item.role_source) {
       addRow(card, 'Role source', textureRoleSourceLabel(item.role_source));
     }
+    if (item.texture_class) addRow(card, 'Texture class', item.texture_class);
+    if (item.confidence) addRow(card, 'Confidence', item.confidence);
     if (item.asset_hash_role) {
       addRow(card, 'Asset hash role', textureRoleLabel(item.asset_hash_role));
     }

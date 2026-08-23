@@ -8,7 +8,7 @@ from app.asset_resolver import (AssetComponentBinding, resolve_component,
                                 resolve_groups, summarize_groups)
 from core.draw_call import DrawCall, SlotTextureBinding
 from core.geometry_identity import GeometryMatch, normalize_geometry_hash
-from core import wwmi_texture_roles
+from core import dds_classifier
 from core.ini_parser import (TextureOverrideIndex, TextureReplacement,
                               _scan_sections_for_draws, build_draw_groups,
                               extract_resources, parse_sections)
@@ -195,7 +195,7 @@ def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
     assert draw.texture_hashes["diffuse"] == ["11111111"]
 
 
-def test_shared_asset_hash_does_not_apply_another_component_replacement(
+def test_shared_asset_hash_replacement_is_not_scoped_by_resource_name(
         tmp_path):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Alice"
@@ -221,10 +221,13 @@ def test_shared_asset_hash_does_not_apply_another_component_replacement(
 
     apply([{"draws": [draw]}], [[binding]], texture_index=index)
 
-    assert draw.texture_default("diffuse") is None
-    assert draw.texture_rules("diffuse") == []
-    assert draw.asset_texture_defaults["diffuse"]["path"].endswith(
-        "AliceHairADiffuse.dds")
+    assert draw.texture_default("diffuse") == "AliceBodyDiffuse.dds"
+    assert draw.texture_rules("diffuse") == [{
+        "conditions": [],
+        "file": "AliceBodyDiffuse.dds",
+        "texture_hashes": ("11111111",),
+    }]
+    assert draw.asset_texture_defaults == {}
 
 
 def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch):
@@ -349,6 +352,33 @@ def test_range_evidence_disambiguates_same_hash_candidates(tmp_path, monkeypatch
     assert binding.range_status == "exact"
 
 
+def test_draw_count_rejects_incompatible_index_range_without_sibling_inference(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
+    index = _index(root, asset_type="ZZMI", asset="Astra", first_index=0)
+    index["assets"].append({
+        "path": "AstraChandelier",
+        "geometry": [{
+            "hash": "73c8cae2",
+            "ranges": [{"firstIndex": 0, "indexCount": 8}],
+            "metadata": "AstraChandelier/hash.json",
+        }],
+    })
+    index["byGeometryHash"]["73c8cae2"].append({
+        "asset": 1, "geometry": 0,
+    })
+    monkeypatch.setattr(asset_index, "load_index",
+                        lambda asset_type, path: index)
+
+    bindings = resolve_groups([{"draws": [DrawCall(
+        count=12, geometry_match=GeometryMatch("73c8cae2", 0))]}],
+        "zzz", entries)
+
+    assert bindings[0][0].status == "exact"
+    assert bindings[0][0].asset == "Astra"
+
+
 def test_same_hash_same_range_remains_ambiguous(tmp_path, monkeypatch):
     roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
              for name in ("one", "two")]
@@ -402,7 +432,7 @@ def test_resolve_groups_loads_each_enabled_index_once(tmp_path, monkeypatch):
     assert calls == roots
 
 
-def test_unknown_group_reuses_unique_asset_identity_for_ambiguous_draws(
+def test_unknown_group_keeps_ambiguous_asset_identity_ambiguous(
         tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
     entries = [{"type": "ZZMI", "path": root, "enabled": True}]
@@ -434,8 +464,8 @@ def test_unknown_group_reuses_unique_asset_identity_for_ambiguous_draws(
 
     bindings = resolve_groups(groups, "unknown", entries)
 
-    assert [item.status for item in bindings[0]] == ["exact", "exact"]
-    assert [item.asset for item in bindings[0]] == ["Alice", "Alice"]
+    assert [item.status for item in bindings[0]] == ["exact", "ambiguous"]
+    assert [item.asset for item in bindings[0]] == ["Alice", None]
     assert [item.asset_type for item in bindings[0]] == ["ZZMI", "ZZMI"]
 
 
@@ -553,6 +583,35 @@ def test_asset_locator_uses_component_and_classification(tmp_path):
     draw = DrawCall()
     apply([{"draws": [draw]}], [[binding]])
     assert draw.asset_texture_defaults == {}
+
+
+def test_asset_metadata_supplies_component_and_classification_for_fallback(
+        tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    texture = asset_dir / "AliceHairADiffuse.dds"
+    texture.write_bytes(b"asset")
+    metadata = asset_dir / "hash.json"
+    metadata.write_text(json.dumps([{
+        "component_name": "Hair",
+        "ib": "73c8cae2", "object_indexes": [0],
+        "object_classifications": ["A"],
+        "texture_hashes": [[
+            ["Diffuse", ".dds", "11111111"],
+        ]],
+    }]), encoding="utf-8")
+    binding = AssetComponentBinding(
+        status="exact", component_status="exact", range_status="exact",
+        asset_type="ZZMI", asset="Alice", root=root,
+        geometry_hash="73c8cae2", first_index=0,
+        metadata="Alice/hash.json")
+
+    draw = DrawCall()
+    apply([{"draws": [draw]}], [[binding]])
+
+    assert draw.asset_texture_defaults["diffuse"]["path"].casefold() == \
+        str(texture).casefold()
 
 
 def test_hash_only_geometry_resolves_component_but_not_range(tmp_path,
@@ -795,18 +854,6 @@ def test_wwmi_slot_context_is_retained_without_guessing_a_role(tmp_path):
     assert draw.asset_texture_defaults == {}
 
 
-def test_verified_wwmi_profile_resolves_diffuse_and_normal_roles():
-    assert wwmi_texture_roles.resolve_texture_role(
-        vs_hash="dc8efba6073d61bf", ps_hash="1f0d1da54f8f19c2",
-        slot=0) == "diffuse"
-    assert wwmi_texture_roles.resolve_texture_role(
-        vs_hash="f59379b10554d2ab", ps_hash="6d947d37ebbd2bae",
-        slot=0) == "normal_map"
-    assert wwmi_texture_roles.resolve_texture_role(
-        vs_hash="dc8efba6073d61bf", ps_hash="1f0d1da54f8f19c2",
-        slot=1) is None
-
-
 def test_wwmi_slot_context_preserves_mod_role_hint(tmp_path):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Alice"
@@ -869,25 +916,85 @@ def test_wwmi_hash_replacement_is_component_diagnostic_without_role_guess(
     assert draw.asset_texture_defaults == {}
 
 
-def test_verified_wwmi_shader_role_applies_hash_replacement(
+def test_dds_classification_cache_is_reused_for_semantic_refresh(
         tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    mod_dir = tmp_path / "mod"
+    texture = mod_dir / "textures" / "replacement.dds"
+    texture.parent.mkdir(parents=True)
+    texture.write_bytes(b"synthetic dds")
     asset_dir = tmp_path / "assets" / "Alice"
     asset_dir.mkdir(parents=True)
-    detail = asset_dir / "TextureUsage.json"
-    detail.write_text(json.dumps({"Component 1": {
-        "ps-t3": ["553ed32b-vs=aaaaaaaa-ps=bbbbbbbb"],
-    }}), encoding="utf-8")
+    (asset_dir / "TextureUsage.json").write_text(json.dumps({
+        "Component 1": {
+            "ps-t3": ["553ed32b-vs=aaaaaaaa-ps=bbbbbbbb"],
+        },
+    }), encoding="utf-8")
     replacement = TextureReplacement(
         "553ed32b", "ResourceTexture0", (), "TextureOverrideTexture0",
-        "textures/texture0.dds")
+        "textures/replacement.dds")
     index = TextureOverrideIndex(
         replacements_by_hash={"553ed32b": (replacement,)})
-    monkeypatch.setitem(
-        wwmi_texture_roles._PROFILES,
-        ("aaaaaaaa", "bbbbbbbb", 3), "diffuse")
-    # WWMI's generated mod uses CheckTextureOverride for these resources;
-    # there is no direct ps-t assignment in the draw section.
+    calls = []
+
+    def classify(path):
+        calls.append(path)
+        return dds_classifier.DDSClassification(
+            "diffuse", "color", "high", ("test",))
+
+    monkeypatch.setattr("app.asset_enrichment.classify_dds", classify)
+    binding = AssetComponentBinding(
+        status="exact", asset_type="WWMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_ordinal=1,
+        detail_metadata="Alice/TextureUsage.json")
+    cache = {}
+
+    first = DrawCall()
+    apply([{"draws": [first]}], [[binding]], texture_index=index,
+         mod_dir=str(mod_dir), dds_classification_cache=cache)
+    second = DrawCall()
+    apply([{"draws": [second]}], [[binding]], texture_index=index,
+         mod_dir=str(mod_dir), dds_classification_cache=cache)
+
+    assert len(calls) == 1
+    assert first.texture_default("diffuse") == "textures/replacement.dds"
+    assert second.texture_default("diffuse") == "textures/replacement.dds"
+
+
+def test_wwmi_replacements_use_component_local_dds_roles(tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    mod_dir = tmp_path / "mod"
+    diffuse_file = mod_dir / "diffuse.dds"
+    normal_file = mod_dir / "normal.dds"
+    mod_dir.mkdir()
+    diffuse_file.write_bytes(b"diffuse")
+    normal_file.write_bytes(b"normal")
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "TextureUsage.json").write_text(json.dumps({
+        "Component 1": {
+            "ps-t0": ["11111111-vs=aaaaaaaa-ps=bbbbbbbb"],
+            "ps-t1": ["22222222-vs=aaaaaaaa-ps=bbbbbbbb"],
+        },
+    }), encoding="utf-8")
+    index = TextureOverrideIndex(replacements_by_hash={
+        "11111111": (TextureReplacement(
+            "11111111", "ResourceDiffuse", (), "TextureOverrideDiffuse",
+            "diffuse.dds"),),
+        "22222222": (TextureReplacement(
+            "22222222", "ResourceNormal", (), "TextureOverrideNormal",
+            "normal.dds"),),
+    })
+
+    def classify(path):
+        role = "normal_map" if os.path.basename(path) == "normal.dds" \
+            else "diffuse"
+        return dds_classifier.DDSClassification(
+            role, "packed_normal" if role == "normal_map" else "color",
+            "high", ("synthetic",))
+
+    monkeypatch.setattr("app.asset_enrichment.classify_dds", classify)
     draw = DrawCall()
     binding = AssetComponentBinding(
         status="exact", asset_type="WWMI", asset="Alice", root=root,
@@ -895,13 +1002,13 @@ def test_verified_wwmi_shader_role_applies_hash_replacement(
         geometry_hash="73c8cae2", component_ordinal=1,
         detail_metadata="Alice/TextureUsage.json")
 
-    apply([{"draws": [draw]}], [[binding]], texture_index=index)
+    apply([{"draws": [draw]}], [[binding]], texture_index=index,
+         mod_dir=str(mod_dir))
 
-    assert draw.texture_default("diffuse") == "textures/texture0.dds"
-    assert draw.texture_provenance == {"diffuse": "mod_texture_hash"}
-    assert draw.asset_slot_evidence[0]["role"] == "diffuse"
-    assert draw.asset_slot_evidence[0]["role_source"] == \
-        "wwmi_shader_profile"
+    assert draw.texture_default("diffuse") == "diffuse.dds"
+    assert draw.texture_default("normal_map") == "normal.dds"
+    assert {item["role_source"] for item in draw.asset_slot_evidence
+            if item.get("role")} == {"dds_analysis"}
 
 
 def test_asset_fallback_uses_trusted_source_and_keeps_diagnostic(tmp_path):

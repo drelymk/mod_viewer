@@ -8,7 +8,9 @@ import re
 
 from core.geometry_identity import normalize_geometry_hash
 from core.ini_parser import TextureOverrideIndex, _condition_difference
-from core import wwmi_texture_roles
+from core.dds_classifier import (DDSClassification, classification_cache_key,
+                                 classify_dds)
+from core.resource_paths import safe_resource_path
 
 from . import asset_folders
 
@@ -32,11 +34,22 @@ _WWMI_TEXTURE_RE = re.compile(
 
 
 @dataclass(frozen=True, slots=True)
-class AssetTextureEvidence:
+class TextureSemanticEvidence:
     role: str
     texture_hash: str
     extension: str | None = None
     file: str | None = None
+    source: str = "mod_semantic"
+    texture_class: str | None = None
+    confidence: str | None = None
+    evidence: tuple[str, ...] = ()
+    component_name: str | None = None
+    classification: str | None = None
+
+
+# Compatibility for callers that imported the old evidence name. The
+# enrichment path itself uses source-independent semantic evidence.
+AssetTextureEvidence = TextureSemanticEvidence
 
 
 def _entries(value):
@@ -117,10 +130,17 @@ def _texture_records(binding, raw):
         ]
         if len(positions) != 1:
             continue
+        position = positions[0]
+        component_name = entry.get("component_name") or entry.get(
+            "componentName")
+        classification = (
+            classifications[position]
+            if position < len(classifications)
+            and isinstance(classifications[position], str) else None)
         textures = entry.get("texture_hashes")
-        if not isinstance(textures, list) or positions[0] >= len(textures):
+        if not isinstance(textures, list) or position >= len(textures):
             continue
-        for item in textures[positions[0]] or []:
+        for item in textures[position] or []:
             if not isinstance(item, list) or len(item) < 3:
                 continue
             role = _ROLE_NAMES.get(str(item[0]).replace("_", "").lower())
@@ -128,67 +148,24 @@ def _texture_records(binding, raw):
             extension = item[1] if isinstance(item[1], str) else None
             if role and texture_hash:
                 records.append(AssetTextureEvidence(
-                    role, texture_hash, extension))
+                    role, texture_hash, extension,
+                    component_name=component_name,
+                    classification=classification))
         if records:
             return records
     return records
 
 
-def _compact_label(value):
-    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
-
-
-def _draw_component_hint(draw, binding):
-    """Recover a conventional component suffix from a draw label.
-
-    Older cached indexes may not contain optional component/classification
-    fields. The draw label is used only to locate an Asset-original fallback;
-    it never participates in geometry binding.
-    """
-    asset = str(binding.asset or "")
-    label = re.sub(r"-\d+$", "", str(getattr(draw, "label", "")))
-    if not asset or not label.casefold().startswith(asset.casefold()):
-        return None
-    suffix = label[len(asset):]
-    return suffix if suffix else None
-
-
-def _binding_scope_token(binding, draw):
-    asset = str(binding.asset or "")
-    component = binding.component_name
-    classification = binding.classification
-    if component:
-        suffix = f"{component}{classification or ''}"
-    else:
-        suffix = _draw_component_hint(draw, binding)
-    if not asset or not suffix:
-        return None
-    return _compact_label(asset + suffix)
-
-
-def _replacement_is_in_scope(replacement, binding, draw):
-    """Reject a shared hash replacement authored for another component."""
-    asset = _compact_label(binding.asset)
-    if not asset:
-        return True
-    replacement_text = _compact_label(
-        " ".join((replacement.resource, replacement.source_section,
-                   replacement.file)))
-    if asset not in replacement_text:
-        return True
-    scope = _binding_scope_token(binding, draw)
-    return not scope or scope in replacement_text
-
-
-def _locate_texture(binding, evidence, component_hint=None):
+def _locate_texture(binding, evidence):
     asset_dir = _safe_asset_path(binding.root, binding.asset)
-    component = binding.component_name or component_hint
+    component = binding.component_name or evidence.component_name
+    classification = binding.classification or evidence.classification
     if (not asset_dir or not os.path.isdir(asset_dir)
             or not isinstance(component, str) or not component.strip()):
         return None
     extension = (evidence.extension or "").casefold()
     suffix = (component.strip()
-              + str(binding.classification or "").strip()
+              + str(classification or "").strip()
               + _ROLE_SUFFIXES.get(evidence.role, "")).casefold()
     if not suffix:
         return None
@@ -251,13 +228,6 @@ def _wwmi_slot_evidence(binding, cache):
     return result
 
 
-def _wwmi_role(usage):
-    role = wwmi_texture_roles.resolve_texture_role(
-        vs_hash=usage["vs_hash"], ps_hash=usage["ps_hash"],
-        slot=usage["slot"])
-    return role if role in _ROLE_SUFFIXES else None
-
-
 def _has_mod_texture(draw, role):
     return bool(draw.texture_default(role) or draw.texture_rules(role))
 
@@ -280,17 +250,13 @@ def _texture_variant_list(draw, role):
     }[role])
 
 
-def _apply_hash_replacements(draw, evidence, texture_index, *, binding=None):
+def _apply_hash_replacements(draw, evidence, texture_index):
     """Apply exact Asset hash roles to conditional mod replacements."""
     if not isinstance(texture_index, TextureOverrideIndex):
         return
     for item in evidence:
         replacements = texture_index.replacements_by_hash.get(
             item.texture_hash, ())
-        if binding is not None:
-            replacements = tuple(
-                replacement for replacement in replacements
-                if _replacement_is_in_scope(replacement, binding, draw))
         if not replacements:
             continue
         existing = _authored_texture_rules(draw, item.role)
@@ -334,6 +300,77 @@ def _apply_hash_replacements(draw, evidence, texture_index, *, binding=None):
                 draw.texture_hashes[item.role].append(
                     replacement.original_hash)
         draw.texture_provenance.setdefault(item.role, "mod_texture_hash")
+
+
+def _unique_evidence(items):
+    result = []
+    seen = set()
+    for item in items:
+        key = (item.role, item.texture_hash, item.source)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _cached_dds_classification(path, cache):
+    key = classification_cache_key(path)
+    if key is None:
+        return DDSClassification(None, "unknown", "low", ("unavailable",))
+    if key not in cache:
+        cache[key] = classify_dds(path)
+    return cache[key]
+
+
+def _classify_replacements(texture_hash, replacements, mod_dir, cache):
+    """Classify all files replacing one original hash.
+
+    A single original hash may have conditional variants. A role is accepted
+    only when every classified role agrees; unknown variants are tolerated,
+    while conflicting roles remain unresolved.
+    """
+    classifications = []
+    by_replacement = {}
+    for replacement in replacements:
+        result = DDSClassification(None, "unknown", "low", ("unavailable",))
+        if (mod_dir and replacement.file
+                and str(replacement.file).casefold().endswith(".dds")):
+            path = safe_resource_path(mod_dir, replacement.file)
+            if path:
+                result = _cached_dds_classification(path, cache)
+        classifications.append(result)
+        by_replacement[id(replacement)] = result
+    roles = {result.role for result in classifications if result.role}
+    role = next(iter(roles)) if len(roles) == 1 else None
+    return role, by_replacement, len(roles) > 1
+
+
+def _append_replacement_evidence(draw, usage, replacement, classification,
+                                 *, role=None, conflict=False):
+    item = {
+        **usage,
+        "replacement_resource": replacement.resource,
+        "replacement_file": replacement.file,
+        "replacement_conditions": replacement.dnf,
+        "source": "mod_texture_hash",
+    }
+    if role and not conflict:
+        item.update({
+            "role": role,
+            "role_source": "dds_analysis",
+            "texture_class": classification.texture_class,
+            "confidence": classification.confidence,
+            "evidence": list(classification.evidence),
+        })
+    elif classification.role and conflict:
+        item.update({
+            "texture_class": classification.texture_class,
+            "confidence": classification.confidence,
+            "evidence": list(classification.evidence),
+            "conflict": True,
+        })
+    draw.asset_slot_evidence.append(item)
 
 
 def _apply_slot_hashes(draw, evidence):
@@ -391,7 +428,7 @@ def _apply_slot_hashes(draw, evidence):
 
 
 def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
-          texture_index=None):
+          texture_index=None, mod_dir=None, dds_classification_cache=None):
     """Apply Asset diagnostics and exact-component texture evidence.
 
     A not-found binding is published only when at least one ready index was
@@ -400,6 +437,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
     matching was unavailable.
     """
     metadata_cache = metadata_cache if metadata_cache is not None else {}
+    dds_classification_cache = (
+        dds_classification_cache
+        if dds_classification_cache is not None else {})
     for group, group_bindings in zip(groups, bindings):
         index = group.get("_texture_override_index") or texture_index
         for draw, binding in zip(group.get("draws", []), group_bindings):
@@ -413,69 +453,137 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     or binding.range_status != "exact"):
                 continue
 
+            evidence = []
+            role_hint_evidence = []
+            dds_evidence = []
             for role in ("diffuse", "normal_map", "light_map", "material_map"):
                 if _has_mod_texture(draw, role):
                     draw.texture_provenance.setdefault(role, "mod_semantic")
 
-            evidence = []
-            wwmi_role_evidence = []
+            known_roles = {
+                role for role in ("diffuse", "normal_map", "light_map",
+                                  "material_map")
+                if _has_mod_texture(draw, role)
+            }
             if binding.asset_type in ("GIMI", "ZZMI"):
                 evidence = _gimi_evidence(binding, metadata_cache)
+                known_roles.update(item.role for item in evidence)
             elif binding.asset_type == "WWMI":
                 slots = _wwmi_slot_evidence(binding, metadata_cache)
                 draw.asset_slot_evidence = []
+                usage_by_hash = {}
                 for item in draw.slot_textures:
                     for usage in slots.get(item.slot, []):
+                        bucket = usage_by_hash.setdefault(
+                            usage["texture_hash"], [])
+                        if not any(existing_usage == usage
+                                   for _existing_item, existing_usage in bucket):
+                            bucket.append((item, usage))
                         slot_evidence = {"resource": item.resource, **usage}
                         if item.file:
                             slot_evidence["file"] = item.file
-                        role = _wwmi_role(usage)
-                        if role:
-                            slot_evidence.update({
-                                "role": role,
-                                "role_source": "wwmi_shader_profile",
-                            })
-                        elif item.role_hint:
+                        if item.role_hint:
                             slot_evidence.update({
                                 "role": item.role_hint,
                                 "role_source": (
                                     item.role_hint_source
                                     or "mod_slot_mapping"),
                             })
+                            known_roles.add(item.role_hint)
+                            role_hint_evidence.append(
+                                TextureSemanticEvidence(
+                                    item.role_hint, usage["texture_hash"],
+                                    source=(item.role_hint_source
+                                           or "mod_slot_mapping")))
                         draw.asset_slot_evidence.append(slot_evidence)
                 for usage_values in slots.values():
                     for usage in usage_values:
-                        for replacement in (
-                                index.replacements_by_hash.get(
-                                    usage["texture_hash"], ())
-                                if isinstance(index, TextureOverrideIndex)
-                                else ()):
-                            if not replacement.file:
-                                continue
-                            draw.asset_slot_evidence.append({
-                                **usage,
-                                "replacement_resource": replacement.resource,
-                                "replacement_file": replacement.file,
-                                "replacement_conditions": replacement.dnf,
-                                "source": "mod_texture_hash",
-                            })
-                            role = _wwmi_role(usage)
-                            if role:
-                                wwmi_role_evidence.append(
-                                    AssetTextureEvidence(
-                                        role, usage["texture_hash"]))
-                                draw.asset_slot_evidence[-1].update({
-                                    "role": role,
-                                    "role_source": "wwmi_shader_profile",
-                                })
+                        bucket = usage_by_hash.setdefault(
+                            usage["texture_hash"], [])
+                        if not any(existing_usage == usage
+                                   for _existing_item, existing_usage in bucket):
+                            bucket.append((None, usage))
+
+                # Classify each replacement variant only for hashes observed
+                # by this exact Asset component. No folder-wide scan or name
+                # matching is involved.
+                classified_by_hash = {}
+                if isinstance(index, TextureOverrideIndex):
+                    for texture_hash, usage_items in usage_by_hash.items():
+                        replacements = index.replacements_by_hash.get(
+                            texture_hash, ())
+                        if not replacements:
+                            continue
+                        explicit_roles = {
+                            item.role_hint for item, _usage in usage_items
+                            if item is not None and item.role_hint}
+                        if explicit_roles:
+                            role = (next(iter(explicit_roles))
+                                    if len(explicit_roles) == 1 else None)
+                            classified_by_hash[texture_hash] = (
+                                role, {}, len(explicit_roles) > 1)
+                            continue
+                        classified_by_hash[texture_hash] = \
+                            _classify_replacements(
+                                texture_hash, replacements, mod_dir,
+                                dds_classification_cache)
+
+                    role_hashes = {}
+                    for texture_hash, (role, _details, conflict) in \
+                            classified_by_hash.items():
+                        if role and not conflict:
+                            role_hashes.setdefault(role, set()).add(
+                                texture_hash)
+                    accepted_hashes = {
+                        (role, texture_hash)
+                        for role, hashes in role_hashes.items()
+                        if role not in known_roles and len(hashes) == 1
+                        for texture_hash in hashes
+                    }
+                    for texture_hash, usage_items in usage_by_hash.items():
+                        replacements = index.replacements_by_hash.get(
+                            texture_hash, ())
+                        role, details, conflict = classified_by_hash.get(
+                            texture_hash, (None, {}, False))
+                        accepted = ((role, texture_hash)
+                                    in accepted_hashes)
+                        for replacement in replacements:
+                            classification = details.get(id(replacement))
+                            if classification is None:
+                                classification = DDSClassification(
+                                    role if accepted else None, "unknown",
+                                    "low", ("authoritative_role",))
+                            for _item, usage in usage_items:
+                                _append_replacement_evidence(
+                                    draw, usage, replacement, classification,
+                                    role=role if accepted else None,
+                                    conflict=conflict or (
+                                        bool(classification.role)
+                                        and not accepted))
+                        if accepted:
+                            dds_evidence.append(TextureSemanticEvidence(
+                                role, texture_hash, source="dds_analysis",
+                                texture_class=(next(
+                                    (item.texture_class for item in
+                                     details.values() if item.role == role),
+                                    None)),
+                                confidence=(next(
+                                    (item.confidence for item in
+                                     details.values() if item.role == role),
+                                    None)),
+                                evidence=next(
+                                    (item.evidence for item in
+                                     details.values() if item.role == role),
+                                    ())))
 
             for item in evidence:
                 if (item.texture_hash in draw.texture_hashes.get(item.role, [])
                         and item.role not in draw.texture_provenance):
                     draw.texture_provenance[item.role] = "mod_texture_hash"
-            _apply_hash_replacements(
-                draw, evidence + wwmi_role_evidence, index, binding=binding)
-            _apply_slot_hashes(draw, evidence)
+            all_evidence = _unique_evidence(
+                evidence + role_hint_evidence + dds_evidence)
+            _apply_hash_replacements(draw, all_evidence, index)
+            _apply_slot_hashes(draw, evidence + role_hint_evidence)
             conflicting_asset_roles = {
                 item.get("asset_hash_role")
                 for item in draw.asset_slot_evidence
@@ -486,8 +594,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     continue
                 if _has_mod_texture(draw, item.role):
                     continue
-                filename = _locate_texture(
-                    binding, item, _draw_component_hint(draw, binding))
+                filename = _locate_texture(binding, item)
                 if not filename:
                     continue
                 draw.asset_texture_defaults[item.role] = {

@@ -1,6 +1,6 @@
 """Conservative component binding against enabled Asset indexes."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 
 from core.geometry_identity import GeometryMatch
@@ -117,6 +117,19 @@ def _range_matches(item, geometry_match):
     return True
 
 
+def _geometry_match_for_draw(draw):
+    """Add authored draw count when it can reject a narrower index range."""
+    geometry_match = (draw if isinstance(draw, GeometryMatch)
+                      else getattr(draw, "geometry_match", None))
+    if (not isinstance(geometry_match, GeometryMatch)
+            or geometry_match.index_count is not None):
+        return geometry_match
+    count = getattr(draw, "count", None)
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        return geometry_match
+    return replace(geometry_match, index_count=count)
+
+
 def _binding(root, index, geometry_match, lookup, geometry, item=None,
              *, range_status="unknown"):
     asset = index.get("assets", [])[lookup["asset"]]
@@ -191,18 +204,8 @@ def _ambiguous(geometry_match, asset_type, *, component_status="ambiguous",
         index_count=geometry_match.index_count)
 
 
-def _candidate_asset(candidate):
-    """Return one candidate's stable Asset path."""
-    _root, index, lookup, _geometry, _ranges = candidate
-    try:
-        return index["assets"][lookup["asset"]].get("path")
-    except (IndexError, KeyError, TypeError):
-        return None
-
-
 def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
-                                    *, require_range=False,
-                                    preferred_assets=None):
+                                    *, require_range=False):
     if not isinstance(geometry_match, GeometryMatch):
         return _not_found(asset_type)
     if asset_type is None and not indexes:
@@ -237,13 +240,6 @@ def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
         for item in candidate[4]
         if _range_matches(item, geometry_match)
     ]
-    if len(range_matches) > 1 and preferred_assets:
-        preferred = [
-            match for match in range_matches
-            if _candidate_asset(match[0]) in preferred_assets]
-        if len(preferred) == 1:
-            range_matches = preferred
-
     if len(range_matches) == 1:
         (root, index, lookup, geometry, _ranges), item = range_matches[0]
         try:
@@ -313,8 +309,7 @@ def _infer_asset_type(groups, indexes):
     scores = {}
     for group in groups or []:
         for draw in group.get("draws", []):
-            geometry_match = (draw if isinstance(draw, GeometryMatch)
-                              else getattr(draw, "geometry_match", None))
+            geometry_match = _geometry_match_for_draw(draw)
             for asset_type, typed_indexes in indexes_by_type.items():
                 binding = _resolve_component_from_indexes(
                     geometry_match, asset_type, typed_indexes,
@@ -369,25 +364,11 @@ def resolve_groups(groups, game, asset_entries, *, availability=None):
         availability.setdefault("unavailable_roots", 0)
     resolved = [[
         _resolve_component_from_indexes(
-            getattr(draw, "geometry_match", None), asset_type, indexes,
+            _geometry_match_for_draw(draw), asset_type, indexes,
             require_range=asset_type is None)
         for draw in group.get("draws", [])]
         for group in groups
     ]
-    preferred_assets = {
-        binding.asset for group in resolved for binding in group
-        if (binding.status == "exact" and binding.asset)
-    }
-    if len(preferred_assets) == 1:
-        for group_index, group in enumerate(groups):
-            for draw_index, draw in enumerate(group.get("draws", [])):
-                if resolved[group_index][draw_index].status != "ambiguous":
-                    continue
-                resolved[group_index][draw_index] = \
-                    _resolve_component_from_indexes(
-                        getattr(draw, "geometry_match", None), asset_type,
-                        indexes, require_range=asset_type is None,
-                        preferred_assets=preferred_assets)
     return resolved
 
 

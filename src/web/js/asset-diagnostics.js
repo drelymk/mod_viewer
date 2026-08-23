@@ -20,6 +20,7 @@ const PROVENANCE_LABELS = Object.freeze({
 const TEXTURE_ROLE_SOURCE_LABELS = Object.freeze({
   mod_slot_mapping: 'Mod slot mapping',
   legacy_slot_mapping: 'Legacy slot mapping',
+  dds_analysis: 'DDS analysis',
 });
 const TEXTURE_ROLE_LABELS = Object.freeze({
   diffuse: 'Diffuse',

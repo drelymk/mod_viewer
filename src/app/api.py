@@ -34,6 +34,7 @@ class ModViewerAPI:
         self._authorized_asset_folders = set()
         self._authorized_asset_roots = set()
         self._active_mesh_keys = {}
+        self._dds_classification_caches = {}
         try:
             self._authorized_roots = mod_folders.registered_paths(
                 mod_folders.load_registry())
@@ -328,6 +329,9 @@ class ModViewerAPI:
         context = mod_loader.ModLoadContext(
             folder_path, ini_paths, edit_session.documents_for(folder_path),
             metadata.load(folder_path))
+        cache_key = os.path.normcase(os.path.abspath(folder_path))
+        context.dds_classification_cache = \
+            self._dds_classification_caches.setdefault(cache_key, {})
         try:
             context.asset_folders = asset_folders.load_registry()
         except asset_folders.AssetFolderError:
