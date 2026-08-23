@@ -22,7 +22,13 @@ def _within(target, root):
 
 
 def safe_resource_path(mod_dir, relative_path):
-    """Resolve a mod-authored resource while allowing one parent level."""
+    """Resolve a mod-authored resource while allowing one parent level.
+
+    Canonical paths are used only for the sandbox containment check.  Return
+    the candidate path in the caller's original root namespace so downstream
+    relative-path identities stay stable when Windows exposes the same folder
+    through aliases/junctions with different spellings.
+    """
     if not relative_path:
         return None
     try:
@@ -36,10 +42,9 @@ def safe_resource_path(mod_dir, relative_path):
             or os.path.splitdrive(relative_path)[0]
             or ntpath.splitdrive(relative_path)[0]):
         return None
-    root_path = os.path.realpath(os.path.abspath(mod_dir))
+    root_path = os.path.abspath(mod_dir)
     root = _canonical(root_path)
-    target_path = os.path.realpath(os.path.abspath(
-        os.path.join(root_path, relative_path)))
+    target_path = os.path.abspath(os.path.join(root_path, relative_path))
     target = _canonical(target_path)
     if not _within(target, root):
         ceiling = root

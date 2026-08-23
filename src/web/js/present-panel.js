@@ -9,8 +9,13 @@ import { createIcon } from './ui-icons.js';
 const $ = (id) => document.getElementById(id);
 const MAX_PRESENTS = 10;
 let current = { modPath: null, present: null, onChange: null };
-let pendingSelection = null;
+let presentViewState = { modPath: null, selectedPosition: 0 };
 let syncCurrentValue = () => {};
+
+function clampPosition(item, position) {
+  if (!item?.count) return 0;
+  return Math.min(Math.max(Number(position) || 0, 0), item.count - 1);
+}
 
 async function removeKey() {
   const confirmed = await confirmDialog(
@@ -19,7 +24,9 @@ async function removeKey() {
   if (!confirmed) return;
   const result = await window.pywebview.api.delete_present(current.modPath);
   if (result.error) return alertDialog('Could not delete PRESENT:\n\n' + result.error);
-  if (current.onChange) await current.onChange();
+  if (current.onChange) await current.onChange({
+    type: 'delete-key', selectedPosition: null, applySelection: false,
+  });
 }
 
 function closeKeyMenu() {
@@ -84,22 +91,15 @@ async function capture(item, position, name, allowDuplicate = false) {
   return result;
 }
 
-function buildItem(item) {
-  let position = 0;
+function buildItem(item, { applySelection = false } = {}) {
+  let position = clampPosition(item, presentViewState.selectedPosition);
   const synchronized = !item.sync_error && item.count > 0;
-  const restoreSelection = pendingSelection &&
-    synchronized &&
-    pendingSelection.modPath === current.modPath &&
-    pendingSelection.position >= 0 && pendingSelection.position < item.count;
-  if (restoreSelection) position = pendingSelection.position;
-  if (synchronized) {
+  if (synchronized && applySelection) {
     for (const variable of item.vars) {
       setToggleValue(variable.var, variable.values[position]);
     }
   }
-  if (restoreSelection) {
-    pendingSelection = null;
-  }
+  presentViewState.selectedPosition = position;
 
   const wrap = document.createElement('div');
   wrap.className = 'toggle-item';
@@ -140,12 +140,14 @@ function buildItem(item) {
           .find(matches);
         if (next !== undefined) position = next;
       }
+      presentViewState.selectedPosition = position;
     }
     showName();
   };
   showName();
   cycle.onclick = () => {
     position = (position + 1) % item.count;
+    presentViewState.selectedPosition = position;
     for (const variable of item.vars) {
       setToggleValue(variable.var, variable.values[position]);
     }
@@ -176,8 +178,10 @@ function buildItem(item) {
     if (chosen === null) return;
     if (!chosen) return alertDialog('A present name is required.');
     if (!await capture(item, null, chosen)) return;
-    pendingSelection = { modPath: current.modPath, position: item.count };
-    if (current.onChange) await current.onChange();
+    if (current.onChange) await current.onChange({
+      type: 'new-position', selectedPosition: item.count,
+      applySelection: true,
+    });
   });
   const replace = document.createElement('button');
   replace.textContent = 'Update';
@@ -191,8 +195,10 @@ function buildItem(item) {
     if (chosen === null) return;
     if (!chosen) return alertDialog('A present name is required.');
     if (!await capture(item, position, chosen)) return;
-    pendingSelection = { modPath: current.modPath, position };
-    if (current.onChange) await current.onChange();
+    if (current.onChange) await current.onChange({
+      type: 'update-position', selectedPosition: position,
+      applySelection: false,
+    });
   });
   const remove = document.createElement('button');
   remove.textContent = 'Delete';
@@ -204,11 +210,11 @@ function buildItem(item) {
     const result = await window.pywebview.api.delete_present_position(
       current.modPath, position);
     if (result.error) return alertDialog('Could not delete present:\n\n' + result.error);
-    pendingSelection = {
-      modPath: current.modPath,
-      position: Math.min(position, item.count - 2),
-    };
-    if (current.onChange) await current.onChange();
+    if (current.onChange) await current.onChange({
+      type: 'delete-position',
+      selectedPosition: Math.min(position, item.count - 2),
+      applySelection: true,
+    });
   });
   actions.append(add, replace, remove);
   wrap.append(header, row, actions);
@@ -216,8 +222,17 @@ function buildItem(item) {
 }
 
 export function buildPresentPanel(present, context = {}) {
-  current = { modPath: context.modPath || null, present: present || {},
-    onChange: context.onChange || null };
+  const modPath = context.modPath || null;
+  if (presentViewState.modPath !== modPath) {
+    presentViewState = { modPath, selectedPosition: 0 };
+  }
+  if (Object.hasOwn(context, 'selectedPosition')) {
+    presentViewState.selectedPosition = context.selectedPosition === null
+      ? 0 : Number(context.selectedPosition) || 0;
+  }
+  current = { modPath, present: present || {},
+    onChange: context.onChange || null,
+    applySelection: context.applySelection === true };
   const panel = $('present-panel');
   const list = $('present-list');
   const action = $('present-action-btn');
@@ -257,8 +272,11 @@ export function buildPresentPanel(present, context = {}) {
     return;
   }
 
-  const built = buildItem(item);
+  presentViewState.selectedPosition = clampPosition(
+    item, presentViewState.selectedPosition);
+  const built = buildItem(item, { applySelection: current.applySelection });
   syncCurrentValue = built.sync;
   list.appendChild(built.wrap);
-  refreshAll();
+  if (current.applySelection) refreshAll();
+  else syncCurrentValue();
 }

@@ -174,12 +174,13 @@ async function handleSubmit(evt) {
       return;
     }
 
+    const changeType = currentMode === 'add' ? 'add' : 'edit';
     closeModal();
     // A brand-new toggle now appears in the list right away (see
     // mod_loader.build_toggle_panel's "wired" flag) with a ⚠ badge instead of
     // a one-off alert — its ⏺ Record button already works with zero prior
     // gating, so there's nothing further the user needs telling here.
-    if (onSaved) await onSaved();
+    if (onSaved) await onSaved({ type: changeType });
   } catch (e) {
     setError(String(e));
   } finally {

@@ -338,6 +338,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
         const entry = meshes[name];
         const materialProfile = materialProfiles?.[entry.material_profile_id] || null;
         const mesh = buildMesh(name, entry, materialProfile);
+        mesh.userData.semanticKey = name;
         mesh.userData.metadataKey = meshMetadataKey(name, meshes[name]);
         mesh.userData.texturePool = texturePool;
         mesh.userData.displayName = meshNames[mesh.userData.metadataKey] || null;

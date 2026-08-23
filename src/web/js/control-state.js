@@ -33,11 +33,50 @@ export function dnfSatisfied(condGroups) {
   }));
 }
 
-export function setControlStateRules(rules, defaults) {
-  stateRules = rules || [];
-  for (const [variable, value] of Object.entries(defaults || {})) {
-    if (values[variable] === undefined) values[variable] = value;
+function controlValues(controls) {
+  const legal = new Map();
+  const addLegalValues = (variable, values) => {
+    const existing = legal.get(variable) || [];
+    legal.set(variable, [...new Set([...existing, ...(values || [])])]);
+  };
+  for (const info of Object.values(controls?.toggles || {})) {
+    for (const variable of (info.cycle_vars || info.vars || [])) {
+      addLegalValues(variable.var, variable.values);
+    }
   }
+  for (const info of Object.values(controls?.menu || {})) {
+    if (info.values) addLegalValues(info.var, info.values);
+  }
+  return legal;
+}
+
+/** Reconcile authoritative control semantics without resetting live values. */
+export function reconcileControlState(rules, defaults, controls = null) {
+  stateRules = rules || [];
+  const next = controls === null ? { ...values } : {};
+  const legal = controls === null ? new Map() : controlValues(controls);
+  const configured = new Map(Object.entries(defaults || {}));
+  if (controls !== null) {
+    for (const [variable] of legal) {
+      if (!configured.has(variable)) configured.set(variable, undefined);
+    }
+  }
+  for (const [variable, defaultValue] of configured) {
+    const allowed = legal.get(variable);
+    const current = values[variable];
+    if (current !== undefined && (!allowed || allowed.includes(current))) {
+      next[variable] = current;
+    } else if (allowed?.length) {
+      next[variable] = allowed.includes(defaultValue) ? defaultValue : allowed[0];
+    } else {
+      next[variable] = defaultValue;
+    }
+  }
+  values = next;
+}
+
+export function setControlStateRules(rules, defaults, controls = null) {
+  reconcileControlState(rules, defaults, controls);
 }
 
 /** Replay safe [Present] assignments in source order. Later rules deliberately

@@ -4,6 +4,15 @@ The durable project invariants live in `context.md`. Read that file before subst
 
 Keep deterministic formatting, lint, and other mechanical checks in CI. Code review should focus on consequential regressions and repository-specific behavior.
 
+## Test environment
+
+- Run the repository test suite with `.venv-test\Scripts\python.exe -m pytest -q`. This project venv includes `mcp.server.fastmcp`; the system Python may not.
+
+## Pull requests
+
+- Push the feature branch first, then check for an existing open PR targeting `main` before creating another one. If `gh` is unavailable, use the existing Git credential helper with GitHub's REST API through an approved elevated command; keep credentials in memory and never print them.
+- PR titles and descriptions must contain only information that is available from the repository or CI. Do not include machine-specific paths, local-only test results, private environment details, or claims that reviewers cannot reproduce from the branch or CI.
+
 ## Code Review Rules
 
 ### Preserve lossless, staged INI editing

@@ -6,16 +6,19 @@ import struct
 import tempfile
 import base64
 import io
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from app import edit_session, metadata, mod_loader, server
+from app import edit_session, metadata, mod_loader, present_api, server
+from app.api import ModViewerAPI
 from core.ini_analysis import analyze_ini
 from core.ini_document import IniDocument
 from core.ini_sections import (extract_resources, sections_from_document)
 from core.mesh_builder import (GeometryBlob, MeshBuildResult,
-                               build_mesh_payload, build_mesh_result)
+                               build_mesh_payload, build_mesh_result,
+                               build_mesh_semantics)
 from core.textures import encode_texture_file
 
 
@@ -103,6 +106,82 @@ def test_geometry_blob_bypasses_base64_intermediate():
         assert set(loaded["metadata"]["material_profiles"]) == {"none"}, ("profile metadata is deduplicated at payload scope")
 
 
+def test_mesh_semantics_include_conditional_texture_roles_without_geometry(
+        tmp_path):
+    for name in ("base.png", "alt.png", "normal.png", "normal-alt.png",
+                 "light.png", "light-alt.png", "material.png",
+                 "material-alt.png"):
+        (tmp_path / name).touch()
+    condition = [{"var": "skin", "value": "1", "negate": False}]
+    groups = [{
+        "name": "Body", "draws": [{
+            "label": "Body-1", "count": 3, "start": 0, "base": 0,
+            "conditions": [],
+            "texture_default_file": "base.png",
+            "texture_assignments": [
+                {"conditions": [], "file": "base.png"},
+                {"conditions": [condition], "file": "alt.png"},
+            ],
+            "normal_map_default_file": "normal.png",
+            "normal_map_variants": [{"conditions": [condition], "file": "normal-alt.png"}],
+            "light_map_default_file": "light.png",
+            "light_map_variants": [{"conditions": [condition], "file": "light-alt.png"}],
+            "material_map_default_file": "material.png",
+            "material_map_variants": [{"conditions": [condition], "file": "material-alt.png"}],
+        }],
+        "ib_file": "i.buf", "index_size": 4,
+        "position_file": "p.buf", "position_stride": 12,
+        "texcoord_file": "t.buf", "texcoord_stride": 8,
+    }]
+
+    entry = build_mesh_semantics(groups, str(tmp_path), game_profile="wuwa")["Body-1"]
+
+    assert entry["tex_key"] == "diffuse::base.png"
+    assert {variant["tex_key"] for variant in entry["texture_variants"]} == {
+        "diffuse::base.png", "diffuse::alt.png"}
+    assert entry["normal_map_key"] is None
+    assert entry["normal_data_key"] == "normal_data::normal.png"
+    assert entry["normal_data_variants"][0]["tex_key"] == "normal_data::normal-alt.png"
+    assert entry["light_map_key"] == "light_map::light.png"
+    assert entry["material_map_key"] == "material_map::material.png"
+
+
+def test_control_semantics_filter_wired_toggles_to_displayed_meshes(
+        tmp_path):
+    def toggle_info(section, variable):
+        return {
+            "name": section, "key_display": "", "key": "",
+            "source": None, "ini_path": str(tmp_path / "mod.ini"),
+            "section": section, "vars": {variable: ["0", "1"]},
+        }
+
+    parsed = mod_loader.ParsedModAnalysis(
+        groups=[{"draws": []}],
+        toggles={
+            "KeyVisible": toggle_info("KeyVisible", "visible"),
+            "KeyPhantom": toggle_info("KeyPhantom", "phantom"),
+        },
+        menu={}, defaults={"visible": "0", "phantom": "0"},
+        state_rules=[], present={},
+        game=SimpleNamespace(game="unknown"),
+    )
+    context = mod_loader.ModLoadContext(
+        str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
+    with patch.object(mod_loader, "_parse_inis", return_value=parsed), \
+            patch.object(mod_loader, "build_mesh_semantics", return_value={
+                "Body-1": {"conditions": [[{
+                    "var": "visible", "value": "1", "negate": False,
+                }]]},
+                "Broken-1": {"conditions": [[{
+                    "var": "phantom", "value": "1", "negate": False,
+                }]]},
+            }):
+        result = mod_loader.load_control_state(
+            context, active_mesh_keys={"Body-1"})
+
+    assert set(result["controls"]["toggles"]) == {"KeyVisible"}
+
+
 def test_diagnostics_cache_tracks_authoritative_revision():
     with tempfile.TemporaryDirectory() as root:
         path = os.path.join(root, "mod.ini")
@@ -124,6 +203,42 @@ def test_diagnostics_cache_tracks_authoritative_revision():
             assert (edit_session.cached_diagnostics(root) is None), ("viewer metadata changes can invalidate diagnostics independently")
         finally:
             edit_session.discard(root)
+
+
+def test_present_state_read_uses_staged_documents_without_geometry(
+        tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path)))
+    ini_path = os.path.join(root, "mod.ini")
+    with open(ini_path, "w", encoding="utf-8") as fh:
+        fh.write(
+            "[KeyOutfit]\n"
+            "key = 1\n"
+            "type = cycle\n"
+            "$Outfit = 0,1\n"
+            "[TextureOverrideBody]\n"
+            "if $Outfit == 0\n"
+            "drawindexed = 3, 0, 0\n"
+            "endif\n")
+
+    edit_session.load_documents(root, [ini_path])
+    added = present_api.add_present(
+        root, "ctrl p", "", {"mod.ini": {"Outfit": "0"}})
+    assert added.get("ok") is True
+
+    api = ModViewerAPI()
+    api._authorized_folders.add(os.path.normcase(os.path.abspath(root)))
+    with patch.object(mod_loader, "build_mesh_result",
+                      side_effect=AssertionError("geometry must not be built")):
+        result = api.get_present_state(root)
+
+    try:
+        assert result.get("error") is None
+        present = result["present"]
+        assert present["item"]["key_raw"] == "ctrl p"
+        assert present["item"]["count"] == 1
+        assert present["item"]["names"] == ["Present 1"]
+    finally:
+        edit_session.discard(root)
 
 
 def test_wuwa_publishes_one_intact_normal_data_source():

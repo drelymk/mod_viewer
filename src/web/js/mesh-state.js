@@ -60,6 +60,43 @@ export function resetMeshVisibility() {
   requestRender();
 }
 
+/** Replace draw visibility and texture semantics on the existing meshes. */
+export function updateMeshSemantics(semantics) {
+  const next = semantics || {};
+  const keys = activeMeshes.map(mesh => mesh.userData.semanticKey);
+  if (keys.some(key => !next[key])
+      || Object.keys(next).length !== keys.length) return false;
+  activeMeshes.forEach(mesh => {
+    const semantic = next[mesh.userData.semanticKey];
+    mesh.userData.conditions = semantic.conditions || [];
+    mesh.userData.sources = semantic.sources || [];
+    const variants = [
+      ['textureVariants', 'texture_variants'],
+      ['normalMapVariants', 'normal_map_variants'],
+      ['normalDataVariants', 'normal_data_variants'],
+      ['lightMapVariants', 'light_map_variants'],
+      ['materialMapVariants', 'material_map_variants'],
+    ];
+    for (const [target, source] of variants) {
+      mesh.userData[target] = semantic[source] || [];
+    }
+    const defaults = [
+      ['defaultTexKey', 'tex_key'],
+      ['defaultNormalMapKey', 'normal_map_key'],
+      ['defaultNormalDataKey', 'normal_data_key'],
+      ['defaultLightMapKey', 'light_map_key'],
+      ['defaultMaterialMapKey', 'material_map_key'],
+    ];
+    for (const [target, source] of defaults) {
+      if (Object.hasOwn(semantic, source)) {
+        mesh.userData[target] = semantic[source] || null;
+      }
+    }
+    applyTextureVariant(mesh);
+  });
+  return true;
+}
+
 /** Pin or clear one mesh's highlighted diffuse. Ordered component propagation
  * remains the texture-state module's responsibility. */
 export function setManualTexOverride(mesh, value, { notify = true } = {}) {

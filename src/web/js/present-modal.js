@@ -58,12 +58,18 @@ async function submit(event) {
       return;
     }
     const saved = context.onSaved;
+    const change = {
+      type: context.mode === 'add' ? 'add-key'
+        : context.mode === 'complete' ? 'complete-key' : 'edit-key',
+      applySelection: false,
+    };
+    if (context.mode === 'add') change.selectedPosition = 0;
     close();
     $('present-list').classList.remove('collapsed');
     const toggle = $('present-panel').querySelector('.group-toggle');
     toggle.classList.remove('collapsed');
     toggle.setAttribute('aria-expanded', 'true');
-    if (saved) await saved();
+    if (saved) await saved(change);
   } catch (error) {
     setError(String(error));
   } finally {

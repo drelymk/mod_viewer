@@ -129,6 +129,26 @@ def _payload(label="A"):
     }
 
 
+def _present_payload(label="Present"):
+    payload = _payload(label)
+    payload["controls"]["present"] = {
+        "target_inis": [{
+            "value": f"{label}.ini", "label": f"{label}.ini",
+            "vars": ["toggle"], "has_present": True,
+        }],
+        "item": {
+            "inis": [f"{label}.ini"], "target_inis": [],
+            "key": "ctrl p", "key_raw": "ctrl p", "back": "",
+            "vars": [{"var": "toggle", "values": ["0", "1"],
+                      "default": "0"}],
+            "capture_vars": ["toggle"], "count": 2, "aligned": True,
+            "missing_inis": [], "sync_error": None,
+            "names": ["Present 1", "Present 2"],
+        },
+    }
+    return payload
+
+
 def _dxt1_vertical_gradient():
     """One DXT1 block with red top rows and blue bottom rows."""
     data = bytearray(136)
@@ -299,7 +319,9 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "panelOpacityApi": panel_opacity_api,
         "calls": {"loadMod": [], "listSubfolders": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
-                   "panelOpacity": []},
+                   "panelOpacity": [], "presentState": [],
+                   "controlState": [], "meshSemantics": [],
+                   "deleteToggle": [], "exportChanges": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -327,6 +349,40 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                 });
               }
               return copy(state.responses[path]);
+            },
+            get_present_state: async path => {
+              state.calls.presentState.push(path);
+              return copy({present: state.responses[path]?.controls?.present || {
+                target_inis: [], item: null,
+              }});
+            },
+            get_control_state: async path => {
+              state.calls.controlState.push(path);
+              const payload = state.responses[path] || {};
+              return copy({
+                controls: payload.controls || {},
+                state: payload.state || {rules: [], defaults: {}},
+              });
+            },
+            get_mesh_semantics: async path => {
+              state.calls.meshSemantics.push(path);
+              const payload = state.responses[path] || {};
+              const meshes = payload.meshSemantics || Object.fromEntries(
+                Object.entries(payload.meshes || {}).map(([name, entry]) => [name, {
+                  conditions: entry.conditions || [],
+                  sources: entry.sources || [],
+                }])
+              );
+              return copy({meshes});
+            },
+            delete_toggle: async (path, ini, section) => {
+              state.calls.deleteToggle.push([path, ini, section]);
+              return copy({ok: true, result: {}});
+            },
+            export_changes: async path => {
+              state.calls.exportChanges.push(path);
+              state.pending[path] = false;
+              return copy({saved: [], failed: []});
             },
             has_pending_changes: async path => !!state.pending[path],
             discard_changes: async path => {
@@ -2382,6 +2438,68 @@ def test_mismatched_toggle_lists_hold_the_last_short_value(
         context.close()
 
 
+def test_shared_control_values_reconcile_as_a_union(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Shared": _payload("Shared")})
+    try:
+        _open(page, "Shared")
+        result = page.evaluate("""async () => {
+          const controls = await import('./js/control-state.js');
+          controls.setControlValue('shared', '2');
+          controls.setControlStateRules([], {shared: '0'}, {
+            toggles: {
+              KeyA: {vars: [{var: 'shared', values: ['0', '1']}]},
+              KeyB: {vars: [{var: 'shared', values: ['0', '2']}]},
+            },
+            menu: {},
+          });
+          return controls.getControlState().shared;
+        }""")
+        assert result == "2"
+    finally:
+        context.close()
+
+
+def test_delete_reloads_model_for_geometry_safety(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Delete": _payload("Delete")},
+        pending={"Delete": True})
+    try:
+        _open(page, "Delete")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__deleteMesh = window.modViewer.activeMeshes[0]")
+        page.locator("#toggle-list [title='Delete toggle']").click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
+
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == []
+        assert page.evaluate("window.modViewer.activeMeshes[0] !== window.__deleteMesh")
+    finally:
+        context.close()
+
+
+def test_export_refreshes_status_without_reloading_model(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Export": _payload("Export")},
+        pending={"Export": True})
+    try:
+        _open(page, "Export")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__exportMesh = window.modViewer.activeMeshes[0]")
+        page.locator("#export-btn").click()
+        page.wait_for_function("window.__fakeApi.calls.exportChanges.length === 1")
+        page.wait_for_function("!window.__fakeApi.pending.Export")
+
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Export"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__exportMesh")
+    finally:
+        context.close()
+
+
 def test_record_advances_read_only_vars_across_complete_cycle(
         edge_browser, frontend_url):
     payload = _payload("RecordCycle")
@@ -2555,6 +2673,230 @@ def test_wuwa_models_start_with_a_180_degree_base_turn(
           return window.modViewer.activeMeshes[0].quaternion.toArray();
         }""")
         assert reloaded == pytest.approx([0, 1, 0, 0])
+    finally:
+        context.close()
+
+
+def test_present_refresh_keeps_model_identity_and_selection(
+        edge_browser, frontend_url):
+    payload = _present_payload()
+    context, page = _page(edge_browser, frontend_url, {"Present": payload})
+    try:
+        _open(page, "Present")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""async () => {
+          const {setToggleValue, refreshAll} = await import('./js/visibility.js');
+          setToggleValue('toggle', '1');
+          refreshAll();
+          window.__presentMesh = window.modViewer.activeMeshes[0];
+        }""")
+        page.evaluate("""() => {
+          window.__fakeApi.responses.Present.controls.present.item.names = ['Zero', 'One'];
+        }""")
+
+        assert page.evaluate("window.modViewer.refreshPresentState()") is True
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Present"]
+        assert page.evaluate("window.__fakeApi.calls.presentState") == ["Present"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__presentMesh")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.conditions") == []
+        assert page.locator("#present-list .toggle-value").inner_text() == "One"
+        assert page.evaluate("window.modViewer.refreshPresentState({"
+                            "selectedPosition: 0, applySelection: true})") is True
+        assert page.evaluate("window.modViewer.activeMeshes[0] === window.__presentMesh")
+        assert page.evaluate("window.modViewer.activeMeshes[0] && "
+                            "window.__fakeApi.calls.loadMod.length") == 1
+        assert page.locator("#present-list .toggle-value").inner_text() == "Zero"
+    finally:
+        context.close()
+
+
+def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
+        edge_browser, frontend_url):
+    payload = _payload("Semantic")
+    mesh_name = next(iter(payload["meshes"]))
+    payload["meshSemantics"] = {
+        mesh_name: {"conditions": [[{
+            "var": "toggle", "value": "1", "negate": False,
+        }]], "sources": payload["meshes"][mesh_name]["sources"],
+        "tex_key": "diffuse::Semantic-one.png",
+        "texture_variants": [{
+            "conditions": [[{
+                "var": "toggle", "value": "1", "negate": False,
+            }]], "tex_key": "diffuse::Semantic-two.png",
+        }],
+        "normal_map_key": "normal_map::Semantic-normal.png",
+        "normal_map_variants": [{
+            "conditions": [[{
+                "var": "toggle", "value": "1", "negate": False,
+            }]], "tex_key": "normal_map::Semantic-normal-alt.png",
+        }],
+        "normal_data_key": "normal_data::Semantic-packed.png",
+        "light_map_key": "light_map::Semantic-light.png",
+        "material_map_key": "material_map::Semantic-material.png"},
+    }
+    context, page = _page(edge_browser, frontend_url, {"Semantic": payload})
+    try:
+        _open(page, "Semantic")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""async () => {
+          const {setToggleValue, refreshAll} = await import('./js/visibility.js');
+          setToggleValue('toggle', '1');
+          refreshAll();
+          window.__semanticMesh = window.modViewer.activeMeshes[0];
+          window.__fakeApi.responses.Semantic.controls.toggles.KeySemantic.name = 'Renamed';
+        }""")
+
+        assert page.evaluate("window.modViewer.refreshControlSemantics()") is True
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Semantic"]
+        assert page.evaluate("window.__fakeApi.calls.controlState") == ["Semantic"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__semanticMesh")
+        assert page.locator("#toggle-list .toggle-name").inner_text() == "Renamed"
+        assert page.evaluate("""async () => {
+          await window.modViewer.refreshMeshSemantics();
+          return {
+            same: window.modViewer.activeMeshes[0] === window.__semanticMesh,
+            conditions: window.modViewer.activeMeshes[0].userData.conditions,
+            diffuse: window.modViewer.activeMeshes[0].userData.resolvedTexKey,
+            normal: window.modViewer.activeMeshes[0].userData.resolvedNormalMapKey,
+          };
+        }""") == {
+            "same": True,
+            "conditions": [[{"var": "toggle", "value": "1", "negate": False}]],
+            "diffuse": "diffuse::Semantic-two.png",
+            "normal": "normal_map::Semantic-normal-alt.png",
+        }
+        assert page.evaluate("window.__fakeApi.calls.loadMod.length") == 1
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == ["Semantic"]
+    finally:
+        context.close()
+
+
+def test_record_refreshes_controls_and_meshes_without_reloading_model(
+        edge_browser, frontend_url):
+    payload = _payload("Record")
+    payload["controls"]["toggles"]["KeyRecord"]["wired"] = False
+    context, page = _page(
+        edge_browser, frontend_url, {"Record": payload},
+        pending={"Record": True})
+    try:
+        _open(page, "Record")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.record_toggle = async () => {
+            window.__fakeApi.responses.Record.controls.toggles.KeyRecord.wired = true;
+            return {ok: true, result: {}};
+          };
+          window.__recordMesh = window.modViewer.activeMeshes[0];
+        }""")
+        assert page.locator("#toggle-list .toggle-unwired-badge").count() == 1
+        assert page.locator("#export-btn").is_disabled()
+
+        page.locator("#toggle-list [title^='Record']").click()
+        page.locator("#toggle-list .toggle-row.recording").wait_for()
+        page.locator("#toggle-list .toggle-record-save").click()
+        page.wait_for_function("window.__fakeApi.calls.controlState.length === 1")
+
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Record"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__recordMesh")
+        assert page.locator("#toggle-list .toggle-unwired-badge").count() == 0
+        assert not page.locator("#export-btn").is_disabled()
+    finally:
+        context.close()
+
+
+def test_stale_semantic_response_cannot_modify_new_mod(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"A": _payload("A"), "B": _payload("B")})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const original = window.pywebview.api.get_control_state;
+          window.__releaseAControls = null;
+          window.pywebview.api.get_control_state = async path => {
+            if (path === 'A') {
+              await new Promise(resolve => window.__releaseAControls = resolve);
+            }
+            return original(path);
+          };
+          window.__staleControls = window.modViewer.refreshControlSemantics();
+        }""")
+        page.wait_for_function("window.__releaseAControls !== null")
+
+        _open(page, "B")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__releaseAControls()")
+        page.evaluate("async () => await window.__staleControls")
+
+        assert page.locator("#toggle-list .toggle-name").inner_text() == "Toggle B"
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["A", "B"]
+    finally:
+        context.close()
+
+
+def test_newer_same_mod_semantic_response_wins(
+        edge_browser, frontend_url):
+    payload = _payload("Race")
+    context, page = _page(edge_browser, frontend_url, {"Race": payload})
+    try:
+        _open(page, "Race")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const original = window.pywebview.api.get_control_state;
+          let calls = 0;
+          window.__releaseOldControls = null;
+          window.pywebview.api.get_control_state = async path => {
+            calls += 1;
+            if (calls === 1) {
+              const stale = await original(path);
+              await new Promise(resolve => window.__releaseOldControls = resolve);
+              stale.controls.toggles.KeyRace.name = 'Old';
+              return stale;
+            }
+            return original(path);
+          };
+          window.__oldControls = window.modViewer.refreshControlSemantics();
+        }""")
+        page.wait_for_function("window.__releaseOldControls !== null")
+        page.evaluate("""() => {
+          window.__fakeApi.responses.Race.controls.toggles.KeyRace.name = 'Newest';
+          window.__newControls = window.modViewer.refreshControlSemantics();
+        }""")
+        page.evaluate("async () => await window.__newControls")
+        page.evaluate("window.__releaseOldControls()")
+        page.evaluate("async () => await window.__oldControls")
+
+        assert page.locator("#toggle-list .toggle-name").inner_text() == "Newest"
+    finally:
+        context.close()
+
+
+def test_failed_semantic_refresh_still_updates_pending_state(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Failure": _payload("Failure")},
+        pending={"Failure": True})
+    try:
+        _open(page, "Failure")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.get_mesh_semantics = async () => ({
+            error: 'semantic refresh failed',
+          });
+          window.__failedRefresh = window.modViewer.refreshMeshSemantics();
+        }""")
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
+        page.evaluate("async () => await window.__failedRefresh")
+
+        assert "show" in (page.locator("#pending-indicator").get_attribute("class") or "")
+        assert not page.locator("#export-btn").is_disabled()
     finally:
         context.close()
 
