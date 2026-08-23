@@ -131,12 +131,12 @@ body {
 #renderer-error h2 { margin: 0; color: #f0f6fc; font-size: 18px; font-weight: 600; }
 #renderer-error p { max-width: 560px; margin: 0; color: #8b949e; font-size: 13px; line-height: 1.5; }
 
-/* Blender-style viewport navigation compass. It lives in the PRESENT header so
- * it stays below the right-dock tabs without covering viewport input. */
+/* Blender-style viewport navigation compass. It remains a crisp viewport
+ * overlay, offset below the right-dock tabs when that dock is open. */
 #view-gizmo {
-  position: relative; flex: 0 0 56px; width: 56px; height: 56px;
-  margin: -10px -7px -10px 0; z-index: 1; border-radius: 50%;
-  cursor: grab; touch-action: none;
+  position: absolute; top: 12px; right: 12px;
+  width: 104px; height: 104px;
+  z-index: 9; border-radius: 50%; cursor: grab; touch-action: none;
   filter: drop-shadow(0 4px 10px rgba(0,0,0,.34));
   transition: opacity .16s ease, transform .16s ease;
 }
@@ -403,6 +403,7 @@ body {
 .environment-icon [data-environment-icon="indoor"] path:nth-child(2) { fill: #f2c879; }
 .environment-icon [data-environment-icon="outdoor"] { stroke: #79c0ff; }
 .environment-icon [data-environment-icon="outdoor"] circle { fill: #ffd866; stroke: #fff0a8; }
+body.right-dock-visible #view-gizmo { top: 52px; right: 338px; }
 .panel-hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; cursor: pointer; }
 #mesh-list.collapsed, #present-list.collapsed, #toggle-list.collapsed, #menu-list.collapsed { display: none; }
 .icon-btn {

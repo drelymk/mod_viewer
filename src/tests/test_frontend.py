@@ -3346,22 +3346,24 @@ def test_inspector_follows_component_and_mesh_selection(
         layout = page.evaluate("""() => {
           const toolbar = document.querySelector('#toolbar').getBoundingClientRect();
           const tabs = document.querySelector('#right-dock .right-dock-tabs').getBoundingClientRect();
-          const header = document.querySelector('#present-panel .panel-hdr').getBoundingClientRect();
+          const present = document.querySelector('#present-panel').getBoundingClientRect();
           const gizmo = document.querySelector('#view-gizmo').getBoundingClientRect();
           return {
             toolbarBottom: toolbar.bottom,
             tabsBottom: tabs.bottom,
+            presentTop: present.top,
             gizmoTop: gizmo.top,
-            gizmoCenter: gizmo.top + gizmo.height / 2,
-            headerCenter: header.top + header.height / 2,
-            inPresentHeader: !!document.querySelector('#view-gizmo')
-              .closest('#present-panel .panel-hdr'),
+            gizmoWidth: gizmo.width,
+            gizmoHeight: gizmo.height,
+            inCanvas: !!document.querySelector('#view-gizmo').closest('#canvas-container'),
           };
         }""")
-        assert layout["inPresentHeader"]
+        assert layout["inCanvas"]
         assert layout["gizmoTop"] >= layout["toolbarBottom"]
         assert layout["gizmoTop"] >= layout["tabsBottom"]
-        assert abs(layout["gizmoCenter"] - layout["headerCenter"]) < 1
+        assert abs(layout["gizmoTop"] - layout["presentTop"]) < 1
+        assert layout["gizmoWidth"] == 104
+        assert layout["gizmoHeight"] == 104
         page.locator("#view-gizmo .gizmo-axis.positive").first.click()
         assert "collapsed" not in (page.locator("#present-list").get_attribute("class") or "")
         panel_styles = page.locator(

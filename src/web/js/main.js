@@ -691,12 +691,12 @@ function initPanelCollapse(panel, contentId) {
   chevron.setAttribute('aria-controls', contentId);
   setCollapsed(initiallyCollapsed, false);
   const toggle = (e) => {
-    if (e?.target?.closest?.('.icon-btn, .panel-actions, .panel-action-menu, #view-gizmo')) return;
+    if (e?.target?.closest?.('.icon-btn, .panel-actions, .panel-action-menu')) return;
     e?.stopPropagation?.();
     setCollapsed(!content.classList.contains('collapsed'));
   };
   hdr.addEventListener('click', e => {
-    if (e.target.closest('.icon-btn, .group-toggle, .panel-actions, .panel-action-menu, #view-gizmo')) return;
+    if (e.target.closest('.icon-btn, .group-toggle, .panel-actions, .panel-action-menu')) return;
     setCollapsed(!content.classList.contains('collapsed'));
   });
   chevron.addEventListener('click', toggle);
