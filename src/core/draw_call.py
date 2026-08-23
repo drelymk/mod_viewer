@@ -12,6 +12,8 @@ from collections.abc import Iterator, Mapping, MutableMapping
 from dataclasses import dataclass, field, fields
 from typing import ClassVar
 
+from .geometry_identity import GeometryMatch
+
 
 def _freeze(value):
     """Return a deterministic, hashable projection of nested IR state."""
@@ -39,6 +41,18 @@ class AuthoredDrawCall:
     # explicit `vbN = null`; a string = the resource bound at this draw.
     vertex_resources: dict[int, str | None] = field(default_factory=dict)
     auxiliary_maps: dict = field(default_factory=dict)
+    geometry_match: GeometryMatch | None = None
+    slot_textures: list = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class SlotTextureBinding:
+    """Raw shader texture-slot evidence before semantic role resolution."""
+
+    slot: int
+    resource: str
+    file: str | None = None
+    texture_hash: str | None = None
 
 
 @dataclass(slots=True)
@@ -67,12 +81,19 @@ class DrawCall(MutableMapping):
     texture_default_file: str | None = None
     texture_variants: list = field(default_factory=list)
     texture_assignments: list = field(default_factory=list)
+    texture_hashes: dict = field(default_factory=dict)
     normal_map_default_file: str | None = None
     normal_map_variants: list = field(default_factory=list)
     light_map_default_file: str | None = None
     light_map_variants: list = field(default_factory=list)
     material_map_default_file: str | None = None
     material_map_variants: list = field(default_factory=list)
+    geometry_match: GeometryMatch | None = None
+    slot_textures: list = field(default_factory=list)
+    asset_binding: object | None = None
+    texture_provenance: dict = field(default_factory=dict)
+    asset_texture_defaults: dict = field(default_factory=dict)
+    asset_slot_evidence: list = field(default_factory=list)
 
     _ALWAYS_PRESENT: ClassVar[frozenset[str]] = frozenset({
         "count", "start", "base", "conditions", "sources",
@@ -84,7 +105,9 @@ class DrawCall(MutableMapping):
         "material_map": "material_map",
     }
     _NON_RENDER_FIELDS: ClassVar[frozenset[str]] = frozenset({
-        "label", "conditions", "sources",
+        "label", "conditions", "sources", "geometry_match",
+        "slot_textures", "asset_binding", "texture_provenance",
+        "asset_slot_evidence", "texture_hashes",
     })
     _RENDER_IDENTITY_FIELDS: ClassVar[tuple[str, ...]] = (
         "count", "start", "base",
@@ -95,6 +118,7 @@ class DrawCall(MutableMapping):
         "normal_map_default_file", "normal_map_variants",
         "light_map_default_file", "light_map_variants",
         "material_map_default_file", "material_map_variants",
+        "asset_texture_defaults",
     )
 
     @classmethod

@@ -4,15 +4,14 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
-import re
 
 from .. import asset_folders, config, paths
+from core.geometry_identity import normalize_geometry_hash
 from . import gimi, wwmi, zzmi
 from .models import AssetRecord
 
 
 INDEX_VERSION = 1
-_GEOMETRY_HASH = re.compile(r"^[0-9a-fA-F]{8}$")
 _HASH_GROUPS = frozenset({
     "enemydata",
     "miscellaneousdata",
@@ -46,18 +45,6 @@ class NoValidAssetsError(AssetIndexError):
 
 class InvalidIndexError(AssetIndexError):
     """A cache file exists but is not a supported index."""
-
-
-def normalize_geometry_hash(value):
-    """Return a canonical eight-digit geometry hash, or None if invalid."""
-    if not isinstance(value, str):
-        return None
-    value = value.strip()
-    if value.lower().startswith("0x"):
-        value = value[2:]
-    if not _GEOMETRY_HASH.fullmatch(value):
-        return None
-    return value.lower()
 
 
 def index_filename(asset_type, root):

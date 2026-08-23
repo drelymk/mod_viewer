@@ -27,6 +27,8 @@ from core.game_profile import GameDetection, resolve_game_detection
 from core.material_kind import detect_material_kind
 from core.material_profiles import material_profile_for
 
+from . import asset_enrichment, asset_resolver
+
 # Kept for scripts that still inspect the low-level mesh-builder result.  These
 # keys are no longer emitted by load_mod's public application payload.
 RESERVED_KEYS = ("__textures__", "__toggles__", "__menu__", "__mesh_names__",
@@ -490,6 +492,9 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
     """Read draw visibility semantics without building geometry."""
     parsed = _parse_inis(
         context.ini_paths, context.mod_dir, overrides, context.docs)
+    bindings = asset_resolver.resolve_groups(
+        parsed.groups, parsed.game, context.asset_folders)
+    asset_enrichment.apply(parsed.groups, bindings)
     return build_mesh_semantics(
         parsed.groups, context.mod_dir, game_profile=parsed.game.game,
         active_mesh_keys=active_mesh_keys)
@@ -672,6 +677,10 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
                 health=health,
                 error=f"No mesh geometry found across {len(ini_paths)} ini file(s).",
                 game=parsed.game)
+
+        bindings = asset_resolver.resolve_groups(
+            groups, parsed.game, context.asset_folders)
+        asset_enrichment.apply(groups, bindings)
 
         built = build_mesh_result(
             groups, folder_path, geometry=geometry,
