@@ -161,6 +161,11 @@ export function setHealthReport(report, assetResolution = undefined) {
   if ($('health-modal-backdrop').classList.contains('show')) renderReport();
 }
 
+export function setAssetResolution(assetResolution) {
+  currentAssetResolution = assetResolution || null;
+  if ($('health-modal-backdrop').classList.contains('show')) renderReport();
+}
+
 export function setHealthLoader(loader) {
   reportLoader = typeof loader === 'function' ? loader : null;
   reportGeneration += 1;

@@ -19,7 +19,8 @@ import { initAssetFolderPanel } from './asset-folder-panel.js';
 import { initLeftDock, setLeftDockTab, setMeshesAvailable } from './left-dock.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { setGeometryBlob } from './decode.js';
-import { refreshHealthReport, setHealthLoader, setHealthReport } from './health-report.js';
+import { refreshHealthReport, setAssetResolution, setHealthLoader,
+         setHealthReport } from './health-report.js';
 import { setIniEditorContext } from './ini-editor.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.js';
 import { requestRender } from './render-scheduler.js';
@@ -506,7 +507,9 @@ async function refreshMeshSemantics() {
         'The staged draw set no longer matches the displayed model.');
       return false;
     }
-    refreshMeshAssetDiagnostics();
+    const assetResolution = result.asset_resolution || null;
+    refreshMeshAssetDiagnostics(assetResolution);
+    setAssetResolution(assetResolution);
     refreshAll();
     return true;
   } finally {

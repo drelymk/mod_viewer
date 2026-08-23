@@ -467,8 +467,12 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
   return activeMeshes;
 }
 
-export function refreshMeshAssetDiagnostics() {
+export function refreshMeshAssetDiagnostics(assetResolution = undefined) {
   for (const group of groupsUI) {
+    if (assetResolution !== undefined) {
+      group.assetResolution = assetResolution;
+      group.componentDescriptor.assetResolution = assetResolution;
+    }
     const summary = summarizeAssetBindings(
       group.itemObjs.map(mesh => mesh.userData.assetEntry),
       group.assetResolution);

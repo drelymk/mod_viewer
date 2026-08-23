@@ -384,7 +384,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   sources: entry.sources || [],
                 }])
               );
-              return copy({meshes});
+              return copy({
+                meshes,
+                asset_resolution: payload.meshSemanticsAssetResolution
+                  ?? payload.asset_resolution ?? null,
+              });
             },
             delete_toggle: async (path, ini, section) => {
               state.calls.deleteToggle.push([path, ini, section]);
@@ -690,23 +694,38 @@ def test_asset_diagnostics_refresh_with_semantic_updates(
               normal_data_key: null, light_map_key: null,
               material_map_key: null,
               asset_binding: {
-                status: 'exact', component_status: 'exact',
-                range_status: 'exact', asset_type: 'GIMI',
-                asset: 'Bob', component_name: 'Body',
-                geometry_hash: 'abcdef12',
+                status: 'not_found', component_status: 'not_found',
+                range_status: 'unknown', asset_type: 'GIMI',
               },
               texture_resolution: {normal_map: 'mod_semantic'},
               asset_slot_evidence: [],
             },
           };
+          state.responses.Semantic.meshSemanticsAssetResolution = {
+            total_draws: 1, exact_draws: 0, partial_draws: 0,
+            ambiguous_draws: 0, unmatched_draws: 1,
+            index_unavailable_draws: 0, index_status: 'ready',
+            configured_roots: 1, ready_roots: 1,
+          };
         }""")
         page.evaluate("window.modViewer.refreshMeshSemantics()")
-        page.wait_for_function("document.querySelector('#inspector-content')?.innerText.includes('Bob')")
+        page.wait_for_function(
+            "document.querySelector('#inspector-content')?.innerText.includes('Not found')")
         assert "Normal (automatic)\nMod" in page.locator(
             "#inspector-content").inner_text()
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].userData.assetEntry"
-            ".asset_binding.asset === 'Bob'")
+            ".asset_binding.status === 'not_found'")
+        assert page.locator(".asset-draw-label").count() == 0
+        assert "Match\nNot found" in page.locator(
+            ".inspector-asset-section").inner_text()
+        assert page.locator(".asset-component-label").inner_text() == (
+            "Asset: Partial")
+        page.locator("#health-btn").click()
+        page.locator("#health-modal-backdrop.show").wait_for()
+        health_asset_summary = page.locator("#health-asset-summary").inner_text()
+        assert "Asset resolution: 0 / 1 draws exact" in health_asset_summary
+        assert "1 not found" in health_asset_summary
     finally:
         context.close()
 

@@ -345,8 +345,9 @@ def summarize_groups(groups, bindings, availability=None):
             identity = _component_identity(binding)
             if identity is not None:
                 identities.add(identity)
-            ranges.add((binding.classification, binding.component_ordinal,
-                        binding.first_index, binding.index_count))
+            if binding.range_status == "exact":
+                ranges.add((binding.classification, binding.component_ordinal,
+                            binding.first_index, binding.index_count))
 
         if len(identities) > 1:
             status = "mixed"

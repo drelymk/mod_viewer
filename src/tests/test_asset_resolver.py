@@ -549,7 +549,8 @@ def test_asset_resolution_summary_does_not_call_partial_coverage_unmatched():
     bindings = [[
         AssetComponentBinding(
             status="exact", component_status="exact", range_status="exact",
-            asset_type="GIMI", asset="Alice", component_name="Body"),
+            asset_type="GIMI", asset="Alice", component_name="Body",
+            first_index=10, index_count=20),
         AssetComponentBinding(
             status="not_found", component_status="not_found",
             range_status="unknown", asset_type="GIMI"),
@@ -564,6 +565,7 @@ def test_asset_resolution_summary_does_not_call_partial_coverage_unmatched():
     assert summary["exact_draws"] == 1
     assert summary["unmatched_draws"] == 0
     assert summary["index_unavailable_draws"] == 1
+    assert summary["components"][0]["ranges_vary"] is False
 
 
 def test_not_found_binding_is_published_only_after_a_ready_index_query():

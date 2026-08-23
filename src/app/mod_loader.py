@@ -502,9 +502,13 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
         == availability.get("configured_roots", 0))
     asset_enrichment.apply(
         parsed.groups, bindings, include_not_found=complete_index)
-    return build_mesh_semantics(
-        parsed.groups, context.mod_dir, game_profile=parsed.game.game,
-        active_mesh_keys=active_mesh_keys)
+    return {
+        "meshes": build_mesh_semantics(
+            parsed.groups, context.mod_dir, game_profile=parsed.game.game,
+            active_mesh_keys=active_mesh_keys),
+        "asset_resolution": asset_resolver.summarize_groups(
+            parsed.groups, bindings, availability).to_dict(),
+    }
 
 
 def _register_material_profile(table, profile):
