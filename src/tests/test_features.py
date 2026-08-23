@@ -10,20 +10,19 @@ exposes), split across two seams that this file tests separately:
     as a loose, end-user-editable file (see build.py's module docstring-ish
     comments near BAKED_FEATURES_MODULE for the full rationale).
 
-  - app/features.py's get_features(): read at RUNTIME. Always all-True when
-    not frozen (paths.is_frozen()), regardless of any baked module present --
-    a developer's own environment is never hobbled by a flag meant for a
-    distributed build. When frozen, it imports app._baked_features and reads
+  - app/features.py's get_features(): read at RUNTIME. Always all-True in a
+    source checkout (paths.is_frozen()), regardless of any baked module
+    present, so flags meant for a distributed build do not hide source
+    features. When frozen, it imports app._baked_features and reads
     its EXPORT/MODIFY_TOGGLE constants, falling back to True for a flag if the
     module or the constant is missing (a broken/skipped bake should never
     silently hide a feature nobody deliberately disabled).
 
 Frozen-mode runtime tests inject a fake app._baked_features module straight
-into sys.modules rather than actually running build.py/PyInstaller -- proven
-equivalent to importing it for real via a throwaway check before this file was
-written (from . import _baked_features resolves through sys.modules exactly
-like any other submodule import). paths.is_frozen is monkeypatched the same
-way test_toggle_api.py monkeypatches record_editor.verify_recording.
+into sys.modules rather than invoking the packaging toolchain. Importing it
+through the normal submodule path exercises the same runtime contract, and
+paths.is_frozen is monkeypatched the same way test_toggle_api.py monkeypatches
+record_editor.verify_recording.
 """
 
 import os, sys, tempfile, types
