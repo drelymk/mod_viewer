@@ -271,6 +271,16 @@ def _semantic_texture_key(mod_dir, authored_path, role):
     return texture_key(relative_path, normalize_texture_role(role))
 
 
+def _semantic_asset_key(draw, role, transport_role=None):
+    item = draw.asset_texture_defaults.get(role) or {}
+    key = item.get("key") if isinstance(item, dict) else None
+    if not key:
+        return None
+    if transport_role and transport_role != role:
+        return texture_key(key, transport_role)
+    return texture_key(key, role)
+
+
 def _semantic_texture_variants(draw, mod_dir, authored_role, transport_role=None):
     role = transport_role or authored_role
     variants = []
@@ -305,17 +315,25 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
                 continue
             entry = {
                 "conditions": draw.conditions or [],
-                "tex_key": _semantic_texture_key(
-                    mod_dir, draw.texture_default("diffuse"), "diffuse"),
+                "tex_key": (_semantic_asset_key(draw, "diffuse") or
+                            _semantic_texture_key(
+                                mod_dir, draw.texture_default("diffuse"),
+                                "diffuse")),
                 "normal_map_key": None,
                 "normal_data_key": None,
-                "light_map_key": _semantic_texture_key(
-                    mod_dir, draw.texture_default("light_map"), "light_map"),
-                "material_map_key": _semantic_texture_key(
-                    mod_dir, draw.texture_default("material_map"), "material_map"),
+                "light_map_key": (_semantic_asset_key(draw, "light_map") or
+                                  _semantic_texture_key(
+                                      mod_dir, draw.texture_default("light_map"),
+                                      "light_map")),
+                "material_map_key": (_semantic_asset_key(
+                    draw, "material_map") or _semantic_texture_key(
+                        mod_dir, draw.texture_default("material_map"),
+                        "material_map")),
             }
             normal_key = _semantic_texture_key(
                 mod_dir, draw.texture_default("normal_map"), normal_role)
+            normal_key = (_semantic_asset_key(
+                draw, "normal_map", normal_role) or normal_key)
             entry[f"{normal_role}_key"] = normal_key
             if draw.sources:
                 entry["sources"] = [_rel_source(source, mod_dir)
@@ -518,26 +536,29 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         # Resolve texture keys cheaply. Pool-only options are encoded lazily
         # when selected in the UI. Direct callers encode defaults and toggle
         # variants now; the application callback only publishes their source.
-        def _tex_key(dds_path, texture_role=None, texture_transform=None):
+        def _tex_key(dds_path, texture_role=None, texture_transform=None,
+                     texture_identity=None):
             if not dds_path or not os.path.exists(dds_path):
                 return None
             texture_role = normalize_texture_role(texture_role)
             if texture_transform is None:
                 texture_transform = texture_profile.recipe_for(texture_role)
             texture_transform = normalize_texture_transform(texture_transform)
-            cache_key = (dds_path, texture_role, texture_transform)
+            cache_key = (dds_path, texture_role, texture_transform,
+                         texture_identity)
             if cache_key not in tex_cache:
                 # Keyed by path, not basename: variant mods routinely keep
                 # same-named diffuses in per-variant folders (Texture\00..\04).
-                relative_path = os.path.relpath(dds_path, mod_dir).replace(
-                    os.sep, "/")
+                relative_path = texture_identity or os.path.relpath(
+                    dds_path, mod_dir).replace(os.sep, "/")
                 tex_cache[cache_key] = texture_key(relative_path, texture_role)
             return tex_cache[cache_key]
 
-        def _ensure_texture(dds_path, texture_role=None):
+        def _ensure_texture(dds_path, texture_role=None, texture_identity=None):
             texture_role = normalize_texture_role(texture_role)
             texture_transform = texture_profile.recipe_for(texture_role)
-            key = _tex_key(dds_path, texture_role, texture_transform)
+            key = _tex_key(dds_path, texture_role, texture_transform,
+                           texture_identity)
             if key and key not in tex_uris:
                 if texture_source is None:
                     value = encode_texture_data_uri(
@@ -692,8 +713,11 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             for out_i, value in enumerate(raw):
                 struct.pack_into("<I", idx_bytes, out_i * 4, remap[value])
 
+            asset_default = draw.asset_texture_defaults.get("diffuse") or {}
             default_key = _ensure_texture(
-                safe_resource_path(mod_dir, draw.texture_default("diffuse")))
+                asset_default.get("path") or safe_resource_path(
+                    mod_dir, draw.texture_default("diffuse")),
+                "diffuse", asset_default.get("key"))
             entry: dict = {
                 "pos": _geometry_ref(pos_bytes, geometry),
                 "idx": _geometry_ref(idx_bytes, geometry),
@@ -704,15 +728,21 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             # NormalMap is a user-facing authored role, but its transport is
             # profile-owned.  WuWa publishes the intact packed source as
             # normal_data; Genshin/ZZZ retain the derived normal_map path.
-            normal_path = safe_resource_path(
+            asset_normal = draw.asset_texture_defaults.get("normal_map") or {}
+            normal_path = asset_normal.get("path") or safe_resource_path(
                 mod_dir, draw.texture_default("normal_map"))
             normal_role = texture_profile.normal_transport_role
-            normal_key = _ensure_texture(normal_path, normal_role)
+            normal_identity = asset_normal.get("key")
+            normal_key = _ensure_texture(
+                normal_path, normal_role, normal_identity)
             if normal_key:
                 entry[f"{normal_role}_key"] = normal_key
             for channel in ("light_map", "material_map"):
-                key = _ensure_texture(safe_resource_path(
-                    mod_dir, draw.texture_default(channel)), channel)
+                asset_default = draw.asset_texture_defaults.get(channel) or {}
+                key = _ensure_texture(
+                    asset_default.get("path") or safe_resource_path(
+                        mod_dir, draw.texture_default(channel)),
+                    channel, asset_default.get("key"))
                 if key:
                     entry[f"{channel}_key"] = key
             # The manager presents one row per diffuse. Seed that row with the
@@ -803,6 +833,13 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 entry["source"] = source
             if component:
                 entry["component"] = component
+            binding = draw.asset_binding
+            if binding is not None and hasattr(binding, "to_dict"):
+                entry["asset_binding"] = binding.to_dict()
+            if draw.texture_provenance:
+                entry["texture_resolution"] = dict(draw.texture_provenance)
+            if draw.asset_slot_evidence:
+                entry["asset_slot_evidence"] = list(draw.asset_slot_evidence)
             result[lbl] = entry
 
     return MeshBuildResult(
