@@ -460,7 +460,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 /* Reserve the fixed controls' space so long component names truncate before
  * reaching the material selector or texture button. */
 .group-hdr .group-name {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding-right: 0;
 }
 .group-hdr.selected { color: var(--accent-soft); background: rgba(31,111,235,.12); border-radius: 4px; }
@@ -474,7 +474,14 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .draw-item input { width: 12px; height: 12px; cursor: pointer; accent-color: #3fb950; flex-shrink: 0; }
 .mesh-state-btn { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; font-size: 13px; line-height: 18px; cursor: pointer; flex-shrink: 0; }
 .draw-item.selected { background: rgba(88,166,255,.15); outline: 1px solid var(--accent-soft); border-radius: 4px; }
-.mesh-name { min-width: 0; flex: 1; }
+.mesh-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset-secondary-label {
+  min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: #768390; font-size: 10px; font-weight: 400;
+}
+.asset-secondary-label:hover { color: var(--accent-soft); }
+.asset-component-label { flex: 0 1 auto; }
+.asset-draw-label { flex: 0 1 auto; }
 .draw-item .mesh-name-input {
   width: 100%; min-width: 0; box-sizing: border-box; padding: 2px 4px;
   height: auto; cursor: text; flex-shrink: 1;
@@ -712,6 +719,9 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .health-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .health-title-row h4 { margin-bottom: 4px; }
 .health-summary { color: #8b949e; font-size: 11px; line-height: 1.4; }
+.health-asset-summary {
+  margin-top: 5px; color: var(--accent-soft); font-size: 11px; line-height: 1.4;
+}
 .health-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 10px; }
 .health-filters button {
   color: #c9d1d9; background: #21262d; border: 1px solid #30363d;
@@ -1023,6 +1033,12 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .inspector-texture-option:hover, .inspector-texture-option.selected {
   color: var(--accent-soft); border-color: var(--accent-soft); background: var(--surface-active);
 }
+.inspector-slot-evidence {
+  display: flex; flex-direction: column; gap: 5px; padding: 7px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+}
+.inspector-slot-name { color: var(--accent-soft); font-size: 11px; font-weight: 600; }
 
 #mod-folder-empty[hidden] { display: none; }
 #mod-folder-empty .ui-button { margin-top: 5px; }

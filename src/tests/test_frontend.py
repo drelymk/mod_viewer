@@ -384,7 +384,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   sources: entry.sources || [],
                 }])
               );
-              return copy({meshes});
+              return copy({
+                meshes,
+                asset_resolution: payload.meshSemanticsAssetResolution
+                  ?? payload.asset_resolution ?? null,
+              });
             },
             delete_toggle: async (path, ini, section) => {
               state.calls.deleteToggle.push([path, ini, section]);
@@ -544,6 +548,93 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         context.close()
 
 
+def test_asset_identity_and_texture_provenance_are_diagnostic_only(
+        edge_browser, frontend_url):
+    payload = _payload("Asset")
+    entry = payload["meshes"]["Body-Asset-0"]
+    entry["asset_binding"] = {
+        "status": "exact", "component_status": "exact",
+        "range_status": "exact", "asset_type": "GIMI",
+        "asset": "Alice", "component_name": "Body",
+        "classification": "B", "geometry_hash": "73c8cae2",
+        "first_index": 43845, "index_count": 24,
+    }
+    entry["texture_resolution"] = {
+        "diffuse": "mod_semantic",
+        "normal_map": "asset_original_fallback",
+        "light_map": "mod_texture_hash",
+    }
+    entry["asset_slot_evidence"] = [{
+        "resource": "ps-t1", "texture_hash": "11111111",
+        "vs_hash": "aaaaaaaa", "ps_hash": "bbbbbbbb",
+    }]
+    payload["asset_resolution"] = {
+        "total_draws": 1, "exact_draws": 1, "partial_draws": 0,
+        "ambiguous_draws": 0, "unmatched_draws": 0,
+        "index_unavailable_draws": 0, "index_status": "ready",
+        "components": [],
+    }
+    context, page = _page(edge_browser, frontend_url, {"Asset": payload})
+    try:
+        _open(page, "Asset")
+        page.locator(".draw-item").wait_for()
+        assert page.locator(".asset-draw-label").inner_text() == "Alice · Body B"
+        page.locator("#health-btn").click()
+        page.locator("#health-modal-backdrop.show").wait_for()
+        assert page.locator("#health-asset-summary").inner_text() == (
+            "Asset resolution: 1 / 1 draws exact")
+        page.locator("#health-close").click()
+
+        summary = page.evaluate("""async () => {
+          const {summarizeAssetBindings} = await import('./js/asset-diagnostics.js');
+          return summarizeAssetBindings([
+            {asset_binding: {
+              status: 'exact', component_status: 'exact', range_status: 'exact',
+              asset: 'Alice', component_name: 'Body', classification: 'A',
+            }},
+            {asset_binding: {
+              status: 'exact', component_status: 'exact', range_status: 'exact',
+              asset: 'Alice', component_name: 'Body', classification: 'A',
+            }},
+            {asset_binding: {
+              status: 'not_found', component_status: 'not_found',
+              range_status: 'unknown',
+            }},
+          ]);
+        }""")
+        assert summary["status"] == "partial"
+        assert summary["assets"] == ["Alice"]
+        assert summary["matchedDraws"] == 2
+        assert summary["rangesVary"] is False
+
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        inspector = page.locator("#inspector-content")
+        assert inspector.locator(".inspector-asset-section").inner_text() == (
+            "ASSET MATCH\nAsset\nAlice\nType\nGIMI\nComponent\nBody\nObject\nB\n"
+            "Geometry hash\n73c8cae2\nRange\n43845 / 24\nComponent match\nExact\n"
+            "Range match\nExact\nMatch\nExact")
+        assert "Normal (automatic)\nAsset fallback" in inspector.inner_text()
+        assert "ps-t1" in inspector.locator(".inspector-slot-section").inner_text()
+        assert "Role\nUnknown" in inspector.locator(
+            ".inspector-slot-section").inner_text()
+
+        page.locator(".inspector-texture-option", has_text="Asset two").click()
+        assert inspector.locator(
+            '[data-provenance-kind="viewer"] .inspector-value').inner_text() == (
+                "Viewer override (diffuse::Asset-two.png)")
+        page.locator("#health-btn").click()
+        page.locator("#health-modal-backdrop.show").wait_for()
+        assert page.locator("#health-asset-summary").inner_text() == (
+            "Asset resolution: 1 / 1 draws exact")
+        page.locator("#health-close").click()
+
+        page.locator(".group-hdr .group-name").first.click()
+        assert "1 of 1 matched" in inspector.inner_text()
+    finally:
+        context.close()
+
+
 def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {}, asset_folders=[])
     try:
@@ -566,6 +657,75 @@ def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
         assert all(value == "false" for value in page.locator(
             ".left-dock-tabs > button").evaluate_all(
                 "buttons => buttons.map(button => button.getAttribute('aria-selected'))"))
+    finally:
+        context.close()
+
+
+def test_asset_diagnostics_refresh_with_semantic_updates(
+        edge_browser, frontend_url):
+    payload = _payload("Semantic")
+    entry = payload["meshes"]["Body-Semantic-0"]
+    entry["asset_binding"] = {
+        "status": "exact", "component_status": "exact",
+        "range_status": "exact", "asset_type": "GIMI",
+        "asset": "Alice", "component_name": "Body",
+        "geometry_hash": "73c8cae2",
+    }
+    entry["texture_resolution"] = {"normal_map": "asset_original_fallback"}
+    payload["asset_resolution"] = {
+        "total_draws": 1, "exact_draws": 1, "index_status": "ready",
+        "configured_roots": 1, "ready_roots": 1,
+    }
+    context, page = _page(edge_browser, frontend_url, {"Semantic": payload})
+    try:
+        _open(page, "Semantic")
+        page.locator(".draw-item").wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        assert "Alice" in page.locator(".inspector-asset-section").inner_text()
+
+        page.evaluate("""() => {
+          const state = window.__fakeApi;
+          const entry = state.responses.Semantic.meshes['Body-Semantic-0'];
+          state.responses.Semantic.meshSemantics = {
+            'Body-Semantic-0': {
+              conditions: entry.conditions || [], sources: entry.sources || [],
+              tex_key: entry.tex_key, normal_map_key: null,
+              normal_data_key: null, light_map_key: null,
+              material_map_key: null,
+              asset_binding: {
+                status: 'not_found', component_status: 'not_found',
+                range_status: 'unknown', asset_type: 'GIMI',
+              },
+              texture_resolution: {normal_map: 'mod_semantic'},
+              asset_slot_evidence: [],
+            },
+          };
+          state.responses.Semantic.meshSemanticsAssetResolution = {
+            total_draws: 1, exact_draws: 0, partial_draws: 0,
+            ambiguous_draws: 0, unmatched_draws: 1,
+            index_unavailable_draws: 0, index_status: 'ready',
+            configured_roots: 1, ready_roots: 1,
+          };
+        }""")
+        page.evaluate("window.modViewer.refreshMeshSemantics()")
+        page.wait_for_function(
+            "document.querySelector('#inspector-content')?.innerText.includes('Not found')")
+        assert "Normal (automatic)\nMod" in page.locator(
+            "#inspector-content").inner_text()
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.assetEntry"
+            ".asset_binding.status === 'not_found'")
+        assert page.locator(".asset-draw-label").count() == 0
+        assert "Match\nNot found" in page.locator(
+            ".inspector-asset-section").inner_text()
+        assert page.locator(".asset-component-label").inner_text() == (
+            "Asset: Partial")
+        page.locator("#health-btn").click()
+        page.locator("#health-modal-backdrop.show").wait_for()
+        health_asset_summary = page.locator("#health-asset-summary").inner_text()
+        assert "Asset resolution: 0 / 1 draws exact" in health_asset_summary
+        assert "1 not found" in health_asset_summary
     finally:
         context.close()
 

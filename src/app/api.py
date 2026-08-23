@@ -408,8 +408,8 @@ class ModViewerAPI:
         try:
             _folder_path, overrides, _pending, context = \
                 self._authoritative_context(folder_path)
-            return {"meshes": mod_loader.load_mesh_semantics(
-                context, overrides, self._active_mesh_keys.get(_folder_path))}
+            return mod_loader.load_mesh_semantics(
+                context, overrides, self._active_mesh_keys.get(_folder_path))
         except Exception:
             return self._semantic_read_error()
 

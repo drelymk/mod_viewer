@@ -18,6 +18,9 @@ import { openTextureModal } from './texture-modal.js';
 import { registerInspectorMesh } from './inspector-panel.js';
 import { createIcon } from './ui-icons.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
+import {
+  assetSecondaryLabel, assetSummaryLabel, summarizeAssetBindings,
+} from './asset-diagnostics.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
@@ -67,7 +70,8 @@ function groupByComponent(names, meshes) {
   return grouped;
 }
 
-function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null) {
+function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
+                          assetSummary = null) {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
 
@@ -89,6 +93,14 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null) {
   nameSpan.title = groupName;
 
   hdr.append(chevron, masterCb, nameSpan);
+  const summaryLabel = assetSummaryLabel(assetSummary);
+  if (summaryLabel) {
+    const assetSpan = document.createElement('span');
+    assetSpan.className = 'asset-secondary-label asset-component-label';
+    assetSpan.textContent = summaryLabel;
+    assetSpan.title = summaryLabel;
+    hdr.appendChild(assetSpan);
+  }
   nameSpan.addEventListener('click', event => {
     event.stopPropagation();
     onComponentSelected?.();
@@ -111,6 +123,42 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null) {
   });
 
   return { hdr, masterCb };
+}
+
+function updateComponentAssetLabel(header, summary) {
+  if (!header) return;
+  let assetSpan = header.querySelector('.asset-component-label');
+  const label = assetSummaryLabel(summary);
+  if (!label) {
+    assetSpan?.remove();
+    return;
+  }
+  if (!assetSpan) {
+    assetSpan = document.createElement('span');
+    assetSpan.className = 'asset-secondary-label asset-component-label';
+    header.appendChild(assetSpan);
+  }
+  assetSpan.textContent = label;
+  assetSpan.title = label;
+}
+
+function updateDrawAssetLabel(mesh) {
+  const row = mesh?.userData?.assetRow;
+  if (!row) return;
+  let assetSpan = row.querySelector('.asset-draw-label');
+  const label = assetSecondaryLabel(
+    mesh.userData.assetEntry?.asset_binding);
+  if (!label) {
+    assetSpan?.remove();
+    return;
+  }
+  if (!assetSpan) {
+    assetSpan = document.createElement('span');
+    assetSpan.className = 'asset-secondary-label asset-draw-label';
+    row.appendChild(assetSpan);
+  }
+  assetSpan.textContent = label.replace(/^Asset:\s*/, '');
+  assetSpan.title = label;
 }
 
 /** "count, start, base" from the ini's own drawindexed line — falls back to
@@ -151,6 +199,15 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   labelSpan.className = 'mesh-name';
   labelSpan.textContent = mesh.userData.displayName || label;
   row.append(cb, labelSpan);
+  const assetLabel = assetSecondaryLabel(entry.asset_binding);
+  if (assetLabel) {
+    const assetSpan = document.createElement('span');
+    assetSpan.className = 'asset-secondary-label asset-draw-label';
+    assetSpan.textContent = assetLabel.replace(/^Asset:\s*/, '');
+    assetSpan.title = assetLabel;
+    row.appendChild(assetSpan);
+  }
+  mesh.userData.assetRow = row;
   const updateStateIndicator = (m) => {
     cb.checked = m.visible;
     cb.classList.toggle('state-hidden', !m.visible);
@@ -269,6 +326,10 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
         type: 'component', component: groupName, source: src,
         meshes: itemObjs, texturePool, modPath,
       };
+      const assetSummary = summarizeAssetBindings(
+        names.map(name => meshes[name]), options.assetResolution);
+      componentDescriptor.assetSummary = assetSummary;
+      componentDescriptor.assetResolution = options.assetResolution || null;
       let materialKind = componentKind;
       let materialKindInFlight = false;
       const setMaterialKind = async kind => {
@@ -330,7 +391,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
         groupName, itemsWrap,
         () => window.dispatchEvent(new CustomEvent('mod-viewer-component-selected', {
           detail: { component: componentDescriptor },
-        })));
+        })), assetSummary);
       componentDescriptor.header = hdr;
       container.append(hdr, itemsWrap);
 
@@ -344,6 +405,10 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
         mesh.userData.displayName = meshNames[mesh.userData.metadataKey] || null;
         mesh.userData.meshNames = meshNames;
         mesh.userData.modPath = modPath;
+        // Diagnostic-only projection. Operational identity remains the
+        // existing semantic key and component grouping.
+        mesh.userData.assetEntry = meshes[name];
+        mesh.userData.componentDescriptor = componentDescriptor;
         addMesh(mesh, meshes[name].conditions, meshes[name].sources,
           meshes[name].texture_variants, {
             normal_map: meshes[name].normal_map_variants,
@@ -391,6 +456,8 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
 
       groupsUI.push({
         masterCb, itemCbs, itemObjs,
+        componentDescriptor,
+        assetResolution: options.assetResolution || null,
         applyTextureRuns: () => recomputeTextureRuns(itemObjs),
       });
     }
@@ -398,4 +465,25 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
 
   document.getElementById('camera-panel').style.display = 'none';
   return activeMeshes;
+}
+
+export function refreshMeshAssetDiagnostics(assetResolution = undefined) {
+  for (const group of groupsUI) {
+    if (assetResolution !== undefined) {
+      group.assetResolution = assetResolution;
+      group.componentDescriptor.assetResolution = assetResolution;
+    }
+    const summary = summarizeAssetBindings(
+      group.itemObjs.map(mesh => mesh.userData.assetEntry),
+      group.assetResolution);
+    group.componentDescriptor.assetSummary = summary;
+    updateComponentAssetLabel(group.componentDescriptor.header, summary);
+    group.itemObjs.forEach(updateDrawAssetLabel);
+    window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
+      detail: {
+        component: group.componentDescriptor,
+        reason: 'asset',
+      },
+    }));
+  }
 }

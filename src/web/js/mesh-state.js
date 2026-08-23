@@ -92,6 +92,14 @@ export function updateMeshSemantics(semantics) {
         mesh.userData[target] = semantic[source] || null;
       }
     }
+    const assetEntry = mesh.userData.assetEntry || {};
+    for (const field of [
+      'asset_binding', 'texture_resolution', 'asset_slot_evidence',
+    ]) {
+      if (Object.hasOwn(semantic, field)) assetEntry[field] = semantic[field];
+      else delete assetEntry[field];
+    }
+    mesh.userData.assetEntry = assetEntry;
     applyTextureVariant(mesh);
   });
   return true;

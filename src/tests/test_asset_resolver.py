@@ -5,11 +5,12 @@ import struct
 from app import asset_index
 from app.asset_enrichment import apply
 from app.asset_resolver import (AssetComponentBinding, resolve_component,
-                                resolve_groups)
+                                resolve_groups, summarize_groups)
 from core.draw_call import DrawCall, SlotTextureBinding
 from core.geometry_identity import GeometryMatch, normalize_geometry_hash
 from core.ini_parser import _scan_sections_for_draws, parse_sections
-from core.mesh_builder import GeometryBlob, build_mesh_result
+from core.mesh_builder import (GeometryBlob, build_mesh_result,
+                               build_mesh_semantics)
 
 
 def _index(root, asset_type="GIMI", metadata=None, *, asset="Alice",
@@ -206,6 +207,49 @@ def test_resolve_groups_loads_each_enabled_index_once(tmp_path, monkeypatch):
     resolve_groups(groups, "genshin", entries)
 
     assert calls == roots
+
+
+def test_resolve_groups_reports_partial_index_coverage(tmp_path, monkeypatch):
+    roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
+             for name in ("one", "two")]
+    entries = [{"type": "GIMI", "path": root, "enabled": True}
+               for root in roots]
+
+    def load_index(asset_type, path):
+        return None if path == roots[0] else _index(path)
+
+    monkeypatch.setattr(asset_index, "load_index", load_index)
+    availability = {}
+    resolve_groups(
+        [{"draws": [DrawCall(geometry_match=GeometryMatch("73c8cae2"))]}],
+        "genshin", entries, availability=availability)
+
+    assert availability == {
+        "asset_type": "GIMI", "configured_roots": 2,
+        "ready_roots": 1, "unavailable_roots": 1,
+    }
+
+
+def test_semantic_refresh_publishes_asset_diagnostics_without_render_fields(
+        tmp_path):
+    draw = DrawCall(
+        label="Body-1",
+        asset_binding=AssetComponentBinding(
+            status="exact", component_status="exact", range_status="exact",
+            asset_type="GIMI", asset="Alice", component_name="Body"),
+        texture_provenance={"diffuse": "mod_semantic"},
+        asset_slot_evidence=[{"resource": "ps-t1"}],
+    )
+
+    result = build_mesh_semantics(
+        [{"draws": [draw]}], str(tmp_path), active_mesh_keys={"Body-1"})
+
+    assert result["Body-1"]["asset_binding"]["asset"] == "Alice"
+    assert result["Body-1"]["texture_resolution"] == {
+        "diffuse": "mod_semantic"}
+    assert result["Body-1"]["asset_slot_evidence"] == [{
+        "resource": "ps-t1"}]
+    assert result["Body-1"]["conditions"] == []
 
 
 def test_asset_original_fallback_fills_only_missing_roles(tmp_path):
@@ -450,3 +494,88 @@ def test_asset_fallback_uses_trusted_source_and_keeps_diagnostic(tmp_path):
     assert entry["asset_binding"]["status"] == "exact"
     assert entry["texture_resolution"] == {
         "diffuse": "asset_original_fallback"}
+
+
+def test_asset_resolution_summary_aggregates_draws_without_changing_identity():
+    groups = [{"name": "Body", "display_name": "Body", "draws": [None, None, None]}]
+    bindings = [[
+        AssetComponentBinding(
+            status="exact", component_status="exact", range_status="exact",
+            asset_type="GIMI", asset="Alice", component_name="Body",
+            classification="A", first_index=10, index_count=20),
+        AssetComponentBinding(
+            status="exact", component_status="exact", range_status="exact",
+            asset_type="GIMI", asset="Alice", component_name="Body",
+            classification="B", first_index=30, index_count=40),
+        AssetComponentBinding(
+            status="not_found", component_status="not_found",
+            range_status="unknown", asset_type="GIMI"),
+    ]]
+
+    summary = summarize_groups(
+        groups, bindings,
+        {"configured_roots": 1, "ready_roots": 1,
+         "unavailable_roots": 0}).to_dict()
+
+    assert summary["exact_draws"] == 2
+    assert summary["unmatched_draws"] == 1
+    assert summary["assets"] == ["Alice"]
+    assert summary["components"] == [{
+        "mod_component": "Body", "status": "partial",
+        "asset": "Alice", "component": "Body", "draws": 3,
+        "exact_draws": 2, "partial_draws": 0, "ambiguous_draws": 0,
+        "unmatched_draws": 1, "ranges_vary": True,
+    }]
+
+
+def test_asset_resolution_summary_marks_missing_indexes_informational():
+    groups = [{"name": "Body", "draws": [None]}]
+    bindings = [[AssetComponentBinding(
+        status="not_found", component_status="not_found",
+        range_status="unknown", asset_type="GIMI")]]
+
+    summary = summarize_groups(
+        groups, bindings,
+        {"configured_roots": 1, "ready_roots": 0,
+         "unavailable_roots": 1}).to_dict()
+
+    assert summary["index_status"] == "unavailable"
+    assert summary["index_unavailable_draws"] == 1
+    assert summary["unmatched_draws"] == 0
+
+
+def test_asset_resolution_summary_does_not_call_partial_coverage_unmatched():
+    groups = [{"name": "Body", "draws": [None, None]}]
+    bindings = [[
+        AssetComponentBinding(
+            status="exact", component_status="exact", range_status="exact",
+            asset_type="GIMI", asset="Alice", component_name="Body",
+            first_index=10, index_count=20),
+        AssetComponentBinding(
+            status="not_found", component_status="not_found",
+            range_status="unknown", asset_type="GIMI"),
+    ]]
+
+    summary = summarize_groups(
+        groups, bindings,
+        {"configured_roots": 2, "ready_roots": 1,
+         "unavailable_roots": 1}).to_dict()
+
+    assert summary["index_status"] == "partial"
+    assert summary["exact_draws"] == 1
+    assert summary["unmatched_draws"] == 0
+    assert summary["index_unavailable_draws"] == 1
+    assert summary["components"][0]["ranges_vary"] is False
+
+
+def test_not_found_binding_is_published_only_after_a_ready_index_query():
+    draw = DrawCall(label="Body-1")
+    groups = [{"draws": [draw]}]
+    binding = AssetComponentBinding(
+        status="not_found", component_status="not_found",
+        range_status="unknown", asset_type="GIMI")
+
+    apply(groups, [[binding]])
+    assert draw.asset_binding is None
+    apply(groups, [[binding]], include_not_found=True)
+    assert draw.asset_binding is binding

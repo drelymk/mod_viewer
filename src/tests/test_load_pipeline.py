@@ -12,10 +12,12 @@ from unittest.mock import patch
 import pytest
 
 from app import edit_session, metadata, mod_loader, present_api, server
+from app.asset_resolver import AssetComponentBinding
 from app.api import ModViewerAPI
 from core.ini_analysis import analyze_ini
 from core.ini_document import IniDocument
 from core.ini_sections import (extract_resources, sections_from_document)
+from core.draw_call import DrawCall
 from core.mesh_builder import (GeometryBlob, MeshBuildResult,
                                build_mesh_payload, build_mesh_result,
                                build_mesh_semantics)
@@ -144,6 +146,40 @@ def test_mesh_semantics_include_conditional_texture_roles_without_geometry(
     assert entry["normal_data_variants"][0]["tex_key"] == "normal_data::normal-alt.png"
     assert entry["light_map_key"] == "light_map::light.png"
     assert entry["material_map_key"] == "material_map::material.png"
+
+
+def test_mesh_semantics_returns_asset_resolution_summary(tmp_path):
+    draw = DrawCall(label="Body-1")
+    parsed = mod_loader.ParsedModAnalysis(
+        groups=[{"name": "Body", "draws": [draw]}],
+        toggles={}, menu={}, defaults={}, state_rules=[], present={},
+        game=SimpleNamespace(game="genshin"),
+    )
+    binding = AssetComponentBinding(
+        status="exact", component_status="exact", range_status="exact",
+        asset_type="GIMI", asset="Alice", component_name="Body",
+        first_index=10, index_count=20)
+
+    def resolve(_groups, _game, _entries, *, availability):
+        availability.update({
+            "asset_type": "GIMI", "configured_roots": 1,
+            "ready_roots": 1, "unavailable_roots": 0,
+        })
+        return [[binding]]
+
+    context = mod_loader.ModLoadContext(
+        str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
+    with patch.object(mod_loader, "_parse_inis", return_value=parsed), \
+            patch.object(mod_loader.asset_resolver, "resolve_groups",
+                         side_effect=resolve), \
+            patch.object(mod_loader.asset_enrichment, "apply"), \
+            patch.object(mod_loader, "build_mesh_semantics",
+                         return_value={"Body-1": {}}):
+        result = mod_loader.load_mesh_semantics(context)
+
+    assert result["meshes"] == {"Body-1": {}}
+    assert result["asset_resolution"]["index_status"] == "ready"
+    assert result["asset_resolution"]["exact_draws"] == 1
 
 
 def test_control_semantics_filter_wired_toggles_to_displayed_meshes(

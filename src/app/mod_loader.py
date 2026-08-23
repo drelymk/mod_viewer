@@ -492,12 +492,23 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
     """Read draw visibility semantics without building geometry."""
     parsed = _parse_inis(
         context.ini_paths, context.mod_dir, overrides, context.docs)
+    availability = {}
     bindings = asset_resolver.resolve_groups(
-        parsed.groups, parsed.game, context.asset_folders)
-    asset_enrichment.apply(parsed.groups, bindings)
-    return build_mesh_semantics(
-        parsed.groups, context.mod_dir, game_profile=parsed.game.game,
-        active_mesh_keys=active_mesh_keys)
+        parsed.groups, parsed.game, context.asset_folders,
+        availability=availability)
+    complete_index = (
+        availability.get("configured_roots", 0) > 0
+        and availability.get("ready_roots", 0)
+        == availability.get("configured_roots", 0))
+    asset_enrichment.apply(
+        parsed.groups, bindings, include_not_found=complete_index)
+    return {
+        "meshes": build_mesh_semantics(
+            parsed.groups, context.mod_dir, game_profile=parsed.game.game,
+            active_mesh_keys=active_mesh_keys),
+        "asset_resolution": asset_resolver.summarize_groups(
+            parsed.groups, bindings, availability).to_dict(),
+    }
 
 
 def _register_material_profile(table, profile):
@@ -589,7 +600,7 @@ def _failure_health(context, overrides):
 def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
                         present=None, state_rules=None, state_defaults=None,
                         health=None, error=None, game=None,
-                        material_profiles=None):
+                        material_profiles=None, asset_resolution=None):
     """Create the stable application-to-frontend payload shape."""
     profile_table = dict(material_profiles or {})
     if game is not None:
@@ -610,6 +621,7 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
         "geometry": None,
         "metadata": {"mesh_names": {}, "material_profiles": profile_table},
         "health": health,
+        "asset_resolution": asset_resolution,
     }
     if game is not None:
         payload["metadata"]["game"] = game.to_metadata()
@@ -678,9 +690,18 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
                 error=f"No mesh geometry found across {len(ini_paths)} ini file(s).",
                 game=parsed.game)
 
+        availability = {}
         bindings = asset_resolver.resolve_groups(
-            groups, parsed.game, context.asset_folders)
-        asset_enrichment.apply(groups, bindings)
+            groups, parsed.game, context.asset_folders,
+            availability=availability)
+        complete_index = (
+            availability.get("configured_roots", 0) > 0
+            and availability.get("ready_roots", 0)
+            == availability.get("configured_roots", 0))
+        asset_enrichment.apply(
+            groups, bindings, include_not_found=complete_index)
+        asset_resolution = asset_resolver.summarize_groups(
+            groups, bindings, availability).to_dict()
 
         built = build_mesh_result(
             groups, folder_path, geometry=geometry,
@@ -710,7 +731,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             meshes=mesh_payload, textures=textures, toggles=toggles, menu=menu,
             present=present, state_rules=state_rules,
             state_defaults=toggle_defaults, game=parsed.game,
-            material_profiles=material_profiles)
+            material_profiles=material_profiles,
+            asset_resolution=asset_resolution)
     except Exception:
         traceback.print_exc()
         health = _failure_health(context, overrides)

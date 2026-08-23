@@ -10,7 +10,7 @@ import { activeMeshes, refreshAll, reset, resetMeshState, setStateRules,
          toggleWireframe, toggleSmoothShading, toggleGlossy,
          updateMeshSemantics } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
-import { buildMeshPanel } from './mesh-panel.js';
+import { buildMeshPanel, refreshMeshAssetDiagnostics } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
 import { buildMenuPanel } from './menu-panel.js';
 import { buildPresentPanel } from './present-panel.js';
@@ -19,7 +19,8 @@ import { initAssetFolderPanel } from './asset-folder-panel.js';
 import { initLeftDock, setLeftDockTab, setMeshesAvailable } from './left-dock.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { setGeometryBlob } from './decode.js';
-import { refreshHealthReport, setHealthLoader, setHealthReport } from './health-report.js';
+import { refreshHealthReport, setAssetResolution, setHealthLoader,
+         setHealthReport } from './health-report.js';
 import { setIniEditorContext } from './ini-editor.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.js';
 import { requestRender } from './render-scheduler.js';
@@ -370,6 +371,7 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
     {
       onMaterialKindChanged: reloadCurrentMod,
       texturePools: payload.texture_pools || {},
+      assetResolution: payload.asset_resolution || null,
     });
   buildTogglePanel(controls.toggles, {
     modPath: currentModPath, onChange: handleToggleChange,
@@ -505,6 +507,9 @@ async function refreshMeshSemantics() {
         'The staged draw set no longer matches the displayed model.');
       return false;
     }
+    const assetResolution = result.asset_resolution || null;
+    refreshMeshAssetDiagnostics(assetResolution);
+    setAssetResolution(assetResolution);
     refreshAll();
     return true;
   } finally {
@@ -534,7 +539,7 @@ async function loadModAt(path) {
   });
 
   const data = await window.pywebview.api.load_mod(path);
-  setHealthReport(data?.health);
+  setHealthReport(data?.health, data?.asset_resolution);
   if (data && data.error) {
     showLoading(false);
     await refreshPendingState();
