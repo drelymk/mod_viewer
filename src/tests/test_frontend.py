@@ -322,6 +322,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "panelOpacityApi": panel_opacity_api,
         "calls": {"loadMod": [], "listSubfolders": [], "listAssetSubfolders": [],
                    "selectAssetFolder": [],
+                   "rebuildAssetIndex": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
@@ -440,6 +441,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             set_asset_folder_enabled: async (path, enabled) => {
               const item = state.assetFolders.find(folder => folder.path === path);
               if (item) item.enabled = enabled;
+              return copy({folders: state.assetFolders});
+            },
+            rebuild_asset_index: async path => {
+              state.calls.rebuildAssetIndex.push(path);
               return copy({folders: state.assetFolders});
             },
             list_asset_subfolders: async path => {
@@ -654,6 +659,16 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
         page.locator("#asset-folder-error.show").wait_for()
         assert page.locator(".asset-folder-switch").first.get_attribute(
             "aria-checked") == "true"
+        page.evaluate("""() => {
+          window.pywebview.api.set_asset_folder_enabled = async (path, enabled) => {
+            const item = window.__fakeApi.assetFolders.find(folder => folder.path === path);
+            if (item) item.enabled = enabled;
+            return {folders: window.__fakeApi.assetFolders.map(folder => ({...folder}))};
+          };
+        }""")
+        page.locator(".asset-folder-switch").first.click()
+        page.wait_for_function(
+            "!document.querySelector('#asset-folder-error').classList.contains('show')")
         page.locator("#asset-folder-add").click()
         assert page.locator("#afm-type option").all_inner_texts() == ["ZZMI", "GIMI", "WWMI"]
         page.evaluate("window.__fakeApi.nextPath = 'picked-asset-folder'")
@@ -672,6 +687,91 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
 
 
 
+
+
+def test_asset_rebuild_preserves_tree_and_disables_only_one_root(
+        edge_browser, frontend_url):
+    root = "fixture-assets"
+    child = root + r"\Character"
+    context, page = _page(
+        edge_browser, frontend_url, {},
+        asset_folders=[{
+            "type": "GIMI", "path": root, "exists": True,
+            "index": {
+                "status": "ready", "assetCount": 3,
+                "geometryHashCount": 4, "skippedCount": 1,
+            },
+        }],
+        asset_subfolders={root: [{"name": "Character", "path": child}]},
+    )
+    try:
+        page.locator("#assets-tab").click()
+        page.locator("#asset-folder-list .asset-folder-select").first.wait_for()
+        assert "3 assets" in page.locator(".asset-folder-index-status").inner_text()
+        page.locator(".asset-folder-expand").first.click()
+        page.locator(".asset-folder-select", has_text="Character").click()
+        page.evaluate("""() => {
+          const state = window.__fakeApi;
+          window.pywebview.api.rebuild_asset_index = async path => {
+            state.calls.rebuildAssetIndex.push(path);
+            return new Promise(resolve => { state.releaseRebuild = () => resolve({
+              folders: state.assetFolders}); });
+          };
+        }""")
+        page.locator(".asset-folder-rebuild").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.rebuildAssetIndex.length === 1")
+        assert page.locator(".asset-folder-rebuild").is_disabled()
+        assert page.locator(".asset-folder-switch").is_disabled()
+        assert page.locator(".asset-folder-more").is_disabled()
+        page.evaluate("window.__fakeApi.releaseRebuild()")
+        page.locator(".asset-folder-rebuild:not([disabled])").wait_for()
+        assert page.locator(".asset-folder-expand.expanded").count() == 1
+        assert page.evaluate(
+            "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
+        ) == child
+        page.evaluate("""() => {
+          window.pywebview.api.rebuild_asset_index = async () => ({
+            error: 'rebuild failed', indexPreserved: true});
+        }""")
+        page.locator(".asset-folder-rebuild").click()
+        page.locator("#asset-folder-error.show").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.rebuild_asset_index = async () => ({
+            folders: window.__fakeApi.assetFolders.map(folder => ({...folder}))});
+        }""")
+        page.locator(".asset-folder-rebuild").click()
+        page.wait_for_function(
+            "!document.querySelector('#asset-folder-error').classList.contains('show')")
+    finally:
+        context.close()
+
+
+def test_asset_save_shows_building_state_until_index_is_ready(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {}, asset_folders=[])
+    try:
+        page.locator("#assets-tab").click()
+        page.locator("#asset-folder-add").click()
+        page.evaluate("window.__fakeApi.nextPath = 'picked-asset-folder'")
+        page.locator("#afm-browse").click()
+        page.evaluate("""() => {
+          const state = window.__fakeApi;
+          window.pywebview.api.add_asset_folder = async () => new Promise(resolve => {
+            state.releaseAssetSave = () => resolve({folders: []});
+          });
+        }""")
+        page.locator("#afm-save").click()
+        page.wait_for_function(
+            "document.querySelector('#afm-save').textContent === 'Building index…'")
+        assert page.locator("#afm-save").is_disabled()
+        assert page.locator("#afm-browse").is_disabled()
+        assert page.locator("#afm-cancel").is_disabled()
+        assert page.locator("#afm-type").is_disabled()
+        page.evaluate("window.__fakeApi.releaseAssetSave()")
+        page.locator("#asset-folder-modal-backdrop").wait_for(state="hidden")
+    finally:
+        context.close()
 
 
 def test_direct_dds_matches_png_orientation_and_diffuse_color(

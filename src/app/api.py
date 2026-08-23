@@ -16,8 +16,9 @@ from core.mod_discovery import discover_ini_paths
 from core.ini_health import analyze_mod
 from core.texture_profiles import texture_profile_for
 
-from . import (asset_folders, edit_session, ini_api, metadata, mod_folders,
-               mod_loader, present_api, server, toggle_api)
+from . import (asset_catalog, asset_folders, asset_index, edit_session, ini_api,
+               metadata, mod_folders, mod_loader, present_api, server,
+               toggle_api)
 
 
 class ModViewerAPI:
@@ -208,16 +209,21 @@ class ModViewerAPI:
 
     @staticmethod
     def _asset_folder_entries(entries):
-        return [{**entry, "exists": os.path.isdir(entry["path"])}
-                for entry in entries]
+        result = []
+        for entry in entries:
+            item = {**entry, "exists": os.path.isdir(entry["path"])}
+            item["index"] = asset_index.index_status(
+                entry["type"], entry["path"])
+            result.append(item)
+        return result
 
     def add_asset_folder(self, asset_type, folder_path):
         folder_path = asset_folders.normalize_path(folder_path)
         if folder_path not in self._picker_authorized_folders:
             return {"error": "Choose the Asset Folder through the native folder picker first."}
         try:
-            entries = asset_folders.add_folder(asset_type, folder_path)
-        except asset_folders.AssetFolderError as error:
+            entries = asset_catalog.add(asset_type, folder_path)
+        except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
         self._authorized_asset_folders.add(folder_path)
@@ -226,34 +232,44 @@ class ModViewerAPI:
     def edit_asset_folder(self, original_path, asset_type, folder_path):
         original_path = asset_folders.normalize_path(original_path)
         folder_path = asset_folders.normalize_path(folder_path)
+        if (folder_path != original_path and
+                folder_path not in self._picker_authorized_folders):
+            return {"error": "Choose the new Asset Folder through the native folder picker first."}
         try:
-            entries = asset_folders.load_registry()
-            if not any(item["path"] == original_path for item in entries):
-                raise asset_folders.AssetFolderError("That Asset Folder is not registered.")
-            if (folder_path != original_path and
-                    folder_path not in self._picker_authorized_folders):
-                raise asset_folders.AssetFolderError(
-                    "Choose the new Asset Folder through the native folder picker first.")
-            entries = asset_folders.edit_folder(original_path, asset_type, folder_path)
-        except asset_folders.AssetFolderError as error:
+            entries = asset_catalog.edit(original_path, asset_type, folder_path)
+        except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
         self._authorized_asset_folders.add(folder_path)
         return {"folders": self._asset_folder_entries(entries)}
 
     def delete_asset_folder(self, folder_path):
+        folder_path = asset_folders.normalize_path(folder_path)
         try:
-            entries = asset_folders.delete_folder(folder_path)
-        except asset_folders.AssetFolderError as error:
+            entries = asset_catalog.delete(folder_path)
+        except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
         return {"folders": self._asset_folder_entries(entries)}
 
     def set_asset_folder_enabled(self, folder_path, enabled):
+        folder_path = asset_folders.normalize_path(folder_path)
         try:
-            entries = asset_folders.set_enabled(folder_path, enabled)
-        except asset_folders.AssetFolderError as error:
+            entries = asset_catalog.set_enabled(folder_path, enabled)
+        except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
+        self._refresh_authorized_asset_roots(entries)
+        return {"folders": self._asset_folder_entries(entries)}
+
+    def rebuild_asset_index(self, folder_path):
+        folder_path = asset_folders.normalize_path(folder_path)
+        try:
+            entries = asset_catalog.rebuild(folder_path)
+        except asset_catalog.AssetCatalogError as error:
+            return {
+                "error": f"Could not rebuild Asset index: {error}",
+                "indexPreserved": error.index_preserved,
+            }
         self._refresh_authorized_asset_roots(entries)
         return {"folders": self._asset_folder_entries(entries)}
 

@@ -92,6 +92,16 @@ def _write_entries(entries, config_file=None):
         raise AssetFolderError(str(error)) from error
 
 
+def validate_folder_entry(asset_type, folder, *, require_exists=True):
+    """Validate a candidate entry without changing the registry."""
+    return _validated_entry(asset_type, folder, require_exists=require_exists)
+
+
+def write_entries(entries, config_file=None):
+    """Persist a prepared registry after its other transaction steps succeed."""
+    _write_entries(entries, config_file)
+
+
 def add_folder(asset_type, folder, config_file=None):
     entries = _read_entries(config_file)
     entry = _validated_entry(asset_type, folder, require_exists=True)

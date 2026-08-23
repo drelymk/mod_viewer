@@ -23,6 +23,8 @@ export function createFolderRegistryPanel({
   onDelete,
   renderLabel,
   renderRootExtras,
+  renderRootMeta,
+  rootBusySelectors = [],
   classPrefix = 'folder',
 }) {
   const childCache = new Map();
@@ -169,6 +171,7 @@ export function createFolderRegistryPanel({
       if (onEdit) {
         const edit = document.createElement('button');
         edit.type = 'button';
+        edit.className = className('edit');
         edit.setAttribute('role', 'menuitem');
         edit.textContent = 'Edit';
         edit.addEventListener('click', event => {
@@ -182,6 +185,7 @@ export function createFolderRegistryPanel({
       if (onDelete) {
         const remove = document.createElement('button');
         remove.type = 'button';
+        remove.className = className('remove');
         remove.setAttribute('role', 'menuitem');
         remove.textContent = 'Remove';
         remove.addEventListener('click', event => {
@@ -205,7 +209,12 @@ export function createFolderRegistryPanel({
     const children = document.createElement('div');
     children.className = className('children');
     children.hidden = true;
-    node.append(row, children);
+    const meta = isRoot ? renderRootMeta?.(entry) : null;
+    if (meta instanceof Node) {
+      meta.classList.add(`${classPrefix}-meta`);
+      node.append(row, meta, children);
+    }
+    else node.append(row, children);
     if (entry.exists === false && isRoot) {
       const missing = document.createElement('div');
       missing.className = className('missing');
@@ -213,6 +222,22 @@ export function createFolderRegistryPanel({
       node.appendChild(missing);
     }
     return node;
+  }
+
+  function setRootBusy(path, busy) {
+    const key = canonicalPath(path);
+    const node = [...listElement.children].find(candidate => {
+      const row = candidate.querySelector(`:scope > ${selector('row')}`);
+      return row && canonicalPath(row.getAttribute(pathAttribute)) === key;
+    });
+    if (!node) return false;
+    node.classList.toggle(`${classPrefix}-busy`, busy);
+    rootBusySelectors.forEach(suffix => {
+      node.querySelectorAll(selector(suffix)).forEach(button => {
+        button.disabled = busy;
+      });
+    });
+    return true;
   }
 
   function render(entries) {
@@ -237,6 +262,8 @@ export function createFolderRegistryPanel({
     const currentRow = currentNode.querySelector(`:scope > ${selector('row')}`);
     const currentChildren = currentNode.querySelector(
       `:scope > ${selector('children')}`);
+    const currentMeta = currentNode.querySelector(
+      `:scope > ${selector('meta')}`);
     const currentMissing = currentNode.querySelector(
       `:scope > ${selector('missing')}`);
     const expanded = currentNode.classList.contains('expanded');
@@ -246,6 +273,8 @@ export function createFolderRegistryPanel({
       `:scope > ${selector('row')} ${selector('expand')}`);
     const replacementMissing = replacement.querySelector(
       `:scope > ${selector('missing')}`);
+    const replacementMeta = replacement.querySelector(
+      `:scope > ${selector('meta')}`);
     if (expanded) {
       replacementArrow.classList.remove('leaf');
       replacementArrow.classList.add('expanded');
@@ -254,6 +283,9 @@ export function createFolderRegistryPanel({
         'aria-label', `Collapse ${replacementArrow.dataset.folderName}`);
     }
     currentRow.replaceWith(replacementRow);
+    if (currentMeta && replacementMeta) currentMeta.replaceWith(replacementMeta);
+    else if (currentMeta) currentMeta.remove();
+    else if (replacementMeta) currentNode.insertBefore(replacementMeta, currentChildren);
     if (currentMissing && replacementMissing) currentMissing.replaceWith(replacementMissing);
     else if (currentMissing) currentMissing.remove();
     else if (replacementMissing) currentNode.insertBefore(replacementMissing, currentChildren);
@@ -279,6 +311,7 @@ export function createFolderRegistryPanel({
     render,
     applyResponse,
     updateRoot,
+    setRootBusy,
     setActivePath,
     clearCache: () => childCache.clear(),
     getRoots: () => roots.slice(),

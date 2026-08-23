@@ -35,6 +35,11 @@ def config_path():
     return os.path.join(base, "config.json")
 
 
+def asset_index_dir():
+    """Persistent Asset Folder indexes, kept beside the application config."""
+    return os.path.join(os.path.dirname(config_path()), "asset-index")
+
+
 def web_dir():
     """The HTML/CSS/JS UI served to the webview."""
     return os.path.join(app_root(), "web")
