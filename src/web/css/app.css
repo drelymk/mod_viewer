@@ -403,7 +403,7 @@ body {
 .environment-icon [data-environment-icon="indoor"] path:nth-child(2) { fill: #f2c879; }
 .environment-icon [data-environment-icon="outdoor"] { stroke: #79c0ff; }
 .environment-icon [data-environment-icon="outdoor"] circle { fill: #ffd866; stroke: #fff0a8; }
-body.right-dock-visible #view-gizmo { top: 52px; right: 338px; }
+body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .panel-hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; cursor: pointer; }
 #mesh-list.collapsed, #present-list.collapsed, #toggle-list.collapsed, #menu-list.collapsed { display: none; }
 .icon-btn {

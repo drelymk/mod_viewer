@@ -573,9 +573,16 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
         page.locator("#right-dock.ui-visible").wait_for()
         assert page.locator("#controls-panel").is_visible()
         assert page.locator("body.right-dock-visible").count() == 1
+        assert page.locator("body.right-dock-mounted").count() == 1
         page.locator("#controls-tab").click()
         assert page.locator("#controls-panel").is_hidden()
         assert page.locator("body.right-dock-visible").count() == 0
+        assert page.locator("body.right-dock-mounted").count() == 1
+        assert page.evaluate("""() => {
+          const tabs = document.querySelector('#right-dock .right-dock-tabs').getBoundingClientRect();
+          const gizmo = document.querySelector('#view-gizmo').getBoundingClientRect();
+          return gizmo.top >= tabs.bottom;
+        }""")
         assert page.locator("#right-dock .right-dock-tabs").is_visible()
         page.locator("#inspector-tab").click()
         assert page.locator("#inspector-panel").is_visible()
