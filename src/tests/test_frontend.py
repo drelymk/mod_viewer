@@ -321,6 +321,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "panelOpacity": panel_opacity,
         "panelOpacityApi": panel_opacity_api,
         "calls": {"loadMod": [], "listSubfolders": [], "listAssetSubfolders": [],
+                   "selectAssetFolder": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
@@ -342,6 +343,12 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             select_folder: async () => {
               const path = state.nextPath || null;
               state.nextPath = null;
+              return path;
+            },
+            select_asset_folder: async () => {
+              const path = state.nextPath || null;
+              state.nextPath = null;
+              state.calls.selectAssetFolder.push(path);
               return path;
             },
             load_mod: async path => {
@@ -543,6 +550,8 @@ def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
         assert page.locator("#assets-tab").get_attribute("aria-expanded") == "true"
         page.locator("#assets-tab").click()
         assert page.locator("#asset-folder-panel").is_hidden()
+        assert page.locator("#left-panel-container").is_hidden()
+        assert page.locator("#left-dock-tabs").is_visible()
         assert page.locator(".left-dock-tabs .active").count() == 0
         assert all(value == "false" for value in page.locator(
             ".left-dock-tabs > button").evaluate_all(
@@ -558,13 +567,17 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
         _open(page, path)
         page.locator("#right-dock.ui-visible").wait_for()
         assert page.locator("#controls-panel").is_visible()
+        assert page.locator("body.right-dock-visible").count() == 1
         page.locator("#controls-tab").click()
         assert page.locator("#controls-panel").is_hidden()
+        assert page.locator("body.right-dock-visible").count() == 0
         assert page.locator("#right-dock .right-dock-tabs").is_visible()
         page.locator("#inspector-tab").click()
         assert page.locator("#inspector-panel").is_visible()
+        assert page.locator("body.right-dock-visible").count() == 1
         page.locator("#inspector-tab").click()
         assert page.locator("#inspector-panel").is_hidden()
+        assert page.locator("body.right-dock-visible").count() == 0
         page.evaluate("window.modViewer.reloadCurrentMod()")
         page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
         assert page.locator("#inspector-panel").is_hidden()
@@ -595,6 +608,11 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
         assert page.evaluate("window.__fakeApi.calls.loadMod") == []
         page.locator("#asset-folder-add").click()
         assert page.locator("#afm-type option").all_inner_texts() == ["ZZMI", "GIMI", "WWMI"]
+        page.evaluate("window.__fakeApi.nextPath = 'picked-asset-folder'")
+        page.locator("#afm-browse").click()
+        assert page.locator("#afm-path").input_value() == "picked-asset-folder"
+        assert page.evaluate("window.__fakeApi.calls.selectAssetFolder") == [
+            "picked-asset-folder"]
     finally:
         context.close()
 

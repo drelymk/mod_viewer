@@ -25,7 +25,7 @@ import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.j
 import { requestRender } from './render-scheduler.js';
 import { setTextureDisplayMode } from './render-modes.js';
 import { clearInspector, initInspectorPanel } from './inspector-panel.js';
-import { initRightDock, isRightDockOpen, setRightDockEnabled } from './right-dock.js';
+import { initRightDock, setRightDockEnabled } from './right-dock.js';
 import { initPanelOpacityControl } from './appearance.js';
 import {
   getOutlineState as getMeshOutlineState,
@@ -209,8 +209,6 @@ function initToolPopovers() {
 
 function syncViewportControlPlacement() {
   setRightDockEnabled(rightDockEnabled);
-  const visible = rightDockEnabled && isRightDockOpen();
-  document.body.classList.toggle('right-dock-visible', visible);
 }
 
 function initToolbarOverflow() {

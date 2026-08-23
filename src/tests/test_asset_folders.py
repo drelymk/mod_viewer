@@ -1,5 +1,6 @@
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -93,6 +94,21 @@ def test_api_asset_authorization_is_separate_from_mod_roots(tmp_path, monkeypatc
     with pytest.raises(PermissionError):
         api._asset_folder(mod_root)
     assert api._asset_folder(asset_root) == mod_folders.normalize_path(asset_root)
+
+
+def test_asset_picker_does_not_grant_mod_folder_access(tmp_path, monkeypatch):
+    filename = _config(tmp_path)
+    asset_root = _directory(tmp_path, "assets")
+    monkeypatch.setattr(paths, "config_path", lambda: filename)
+    api = ModViewerAPI()
+    api._window = SimpleNamespace(
+        create_file_dialog=lambda *_args: [asset_root])
+
+    assert api.select_asset_folder() == mod_folders.normalize_path(asset_root)
+    assert mod_folders.normalize_path(asset_root) in api._picker_authorized_folders
+    assert mod_folders.normalize_path(asset_root) not in api._authorized_folders
+    with pytest.raises(PermissionError):
+        api._folder(asset_root)
 
 
 def test_api_asset_authorization_is_revoked_when_root_is_deleted(tmp_path, monkeypatch):

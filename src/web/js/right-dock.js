@@ -25,9 +25,9 @@ function elements() {
 
 function renderRightDock() {
   const { inspectorTab, controlsTab, inspector, controls, dock } = elements();
-  const visible = dockEnabled && validTab(openTab);
-  const inspectorActive = visible && openTab === 'inspector';
-  const controlsActive = visible && openTab === 'controls';
+  const panelVisible = dockEnabled && validTab(openTab);
+  const inspectorActive = panelVisible && openTab === 'inspector';
+  const controlsActive = panelVisible && openTab === 'controls';
   inspectorTab?.classList.toggle('active', inspectorActive);
   controlsTab?.classList.toggle('active', controlsActive);
   inspectorTab?.setAttribute('aria-selected', String(inspectorActive));
@@ -37,6 +37,7 @@ function renderRightDock() {
   if (inspector) inspector.hidden = !inspectorActive;
   if (controls) controls.hidden = !controlsActive;
   dock?.classList.toggle('ui-visible', dockEnabled);
+  document.body?.classList.toggle('right-dock-visible', panelVisible);
 }
 
 export function setRightDockTab(tab, { persist = true, userInitiated = false } = {}) {

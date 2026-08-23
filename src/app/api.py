@@ -95,6 +95,15 @@ class ModViewerAPI:
         self._picker_authorized_folders.add(folder)
         return folder
 
+    def select_asset_folder(self):
+        """Pick an Asset Folder without granting mod-folder access."""
+        result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+        if not result:
+            return None
+        folder = asset_folders.normalize_path(result[0])
+        self._picker_authorized_folders.add(folder)
+        return folder
+
     # -- persistent Mod Folders registry -----------------------------------
 
     @staticmethod

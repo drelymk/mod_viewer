@@ -104,7 +104,7 @@ export function initAssetFolderPanel() {
     if (event.target === backdrop) closeEditor();
   });
   browse.addEventListener('click', async () => {
-    const picked = await window.pywebview.api.select_folder();
+    const picked = await window.pywebview.api.select_asset_folder();
     if (!picked) return;
     selectedPath = picked;
     pathInput.value = picked;
