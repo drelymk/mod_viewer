@@ -8,6 +8,7 @@ from app.asset_resolver import (AssetComponentBinding, resolve_component,
                                 resolve_groups, summarize_groups)
 from core.draw_call import DrawCall, SlotTextureBinding
 from core.geometry_identity import GeometryMatch, normalize_geometry_hash
+from core import wwmi_texture_roles
 from core.ini_parser import (TextureOverrideIndex, TextureReplacement,
                               _scan_sections_for_draws, build_draw_groups,
                               extract_resources, parse_sections)
@@ -194,6 +195,38 @@ def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
     assert draw.texture_hashes["diffuse"] == ["11111111"]
 
 
+def test_shared_asset_hash_does_not_apply_another_component_replacement(
+        tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "AliceHairADiffuse.dds").write_bytes(b"asset diffuse")
+    (asset_dir / "hash.json").write_text(json.dumps([{
+        "ib": "73c8cae2", "object_indexes": [0],
+        "texture_hashes": [[[
+            "Diffuse", ".dds", "11111111",
+        ]]],
+    }]), encoding="utf-8")
+    replacement = TextureReplacement(
+        "11111111", "ResourceAliceBodyDiffuse", (),
+        "TextureOverrideAliceBodyDiffuse", "AliceBodyDiffuse.dds")
+    index = TextureOverrideIndex(
+        replacements_by_hash={"11111111": (replacement,)})
+    draw = DrawCall(label="AliceHairA-1")
+    binding = AssetComponentBinding(
+        status="exact", asset_type="GIMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", first_index=0,
+        metadata="Alice/hash.json")
+
+    apply([{"draws": [draw]}], [[binding]], texture_index=index)
+
+    assert draw.texture_default("diffuse") is None
+    assert draw.texture_rules("diffuse") == []
+    assert draw.asset_texture_defaults["diffuse"]["path"].endswith(
+        "AliceHairADiffuse.dds")
+
+
 def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     entries = [{"type": "GIMI", "path": root, "enabled": True}]
@@ -227,6 +260,72 @@ def test_resolver_marks_duplicate_enabled_roots_ambiguous(tmp_path, monkeypatch)
 
     assert binding.status == "ambiguous"
     assert binding.geometry_hash == "73c8cae2"
+
+
+def test_unknown_game_uses_one_exact_match_from_any_asset_type(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
+    monkeypatch.setattr(
+        asset_index, "load_index",
+        lambda asset_type, path: _index(path, asset_type=asset_type))
+
+    binding = resolve_component(
+        GeometryMatch("73c8cae2", 43845, 24), "unknown", entries)
+
+    assert binding.status == "exact"
+    assert binding.asset_type == "ZZMI"
+
+
+def test_unknown_game_cross_type_exact_matches_are_ambiguous(
+        tmp_path, monkeypatch):
+    entries = [{
+        "type": asset_type,
+        "path": os.path.normcase(os.path.abspath(str(tmp_path / asset_type))),
+        "enabled": True,
+    } for asset_type in ("GIMI", "ZZMI")]
+    monkeypatch.setattr(
+        asset_index, "load_index",
+        lambda asset_type, path: _index(path, asset_type=asset_type))
+
+    binding = resolve_component(
+        GeometryMatch("73c8cae2", 43845, 24), "unknown", entries)
+
+    assert binding.status == "ambiguous"
+    assert binding.asset_type is None
+
+
+def test_unknown_game_hash_only_match_is_not_bound_for_enrichment(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
+    monkeypatch.setattr(
+        asset_index, "load_index",
+        lambda asset_type, path: _index(path, asset_type=asset_type))
+
+    binding = resolve_component(
+        GeometryMatch("73c8cae2"), "unknown", entries)
+
+    assert binding.status == "not_found"
+
+
+def test_known_genshin_does_not_probe_matching_zzmi_index(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
+    calls = []
+
+    def load_index(asset_type, path):
+        calls.append((asset_type, path))
+        return _index(path, asset_type=asset_type)
+
+    monkeypatch.setattr(asset_index, "load_index", load_index)
+
+    binding = resolve_component(
+        GeometryMatch("73c8cae2", 43845, 24), "genshin", entries)
+
+    assert binding.status == "not_found"
+    assert calls == []
 
 
 def test_range_evidence_disambiguates_same_hash_candidates(tmp_path, monkeypatch):
@@ -301,6 +400,43 @@ def test_resolve_groups_loads_each_enabled_index_once(tmp_path, monkeypatch):
     resolve_groups(groups, "genshin", entries)
 
     assert calls == roots
+
+
+def test_unknown_group_reuses_unique_asset_identity_for_ambiguous_draws(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
+    index = _index(root, asset_type="ZZMI", first_index=43845)
+    index["assets"][0]["geometry"].append({
+        "hash": "73c8cae2",
+        "ranges": [{"firstIndex": 0, "indexCount": None}],
+        "metadata": "Alice/hash.json",
+    })
+    index["assets"].append({
+        "path": "AliceChandelier",
+        "geometry": [{
+            "hash": "73c8cae2",
+            "ranges": [{"firstIndex": 0, "indexCount": None}],
+            "metadata": "AliceChandelier/hash.json",
+        }],
+    })
+    index["byGeometryHash"]["73c8cae2"] = [
+        {"asset": 0, "geometry": 0},
+        {"asset": 0, "geometry": 1},
+        {"asset": 1, "geometry": 0},
+    ]
+    monkeypatch.setattr(asset_index, "load_index",
+                        lambda asset_type, path: index)
+    groups = [{"draws": [
+        DrawCall(geometry_match=GeometryMatch("73c8cae2", 43845, 24)),
+        DrawCall(geometry_match=GeometryMatch("73c8cae2", 0, 24)),
+    ]}]
+
+    bindings = resolve_groups(groups, "unknown", entries)
+
+    assert [item.status for item in bindings[0]] == ["exact", "exact"]
+    assert [item.asset for item in bindings[0]] == ["Alice", "Alice"]
+    assert [item.asset_type for item in bindings[0]] == ["ZZMI", "ZZMI"]
 
 
 def test_resolve_groups_reports_partial_index_coverage(tmp_path, monkeypatch):
@@ -659,6 +795,18 @@ def test_wwmi_slot_context_is_retained_without_guessing_a_role(tmp_path):
     assert draw.asset_texture_defaults == {}
 
 
+def test_verified_wwmi_profile_resolves_diffuse_and_normal_roles():
+    assert wwmi_texture_roles.resolve_texture_role(
+        vs_hash="dc8efba6073d61bf", ps_hash="1f0d1da54f8f19c2",
+        slot=0) == "diffuse"
+    assert wwmi_texture_roles.resolve_texture_role(
+        vs_hash="f59379b10554d2ab", ps_hash="6d947d37ebbd2bae",
+        slot=0) == "normal_map"
+    assert wwmi_texture_roles.resolve_texture_role(
+        vs_hash="dc8efba6073d61bf", ps_hash="1f0d1da54f8f19c2",
+        slot=1) is None
+
+
 def test_wwmi_slot_context_preserves_mod_role_hint(tmp_path):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Alice"
@@ -719,6 +867,41 @@ def test_wwmi_hash_replacement_is_component_diagnostic_without_role_guess(
     }]
     assert draw.texture_provenance == {}
     assert draw.asset_texture_defaults == {}
+
+
+def test_verified_wwmi_shader_role_applies_hash_replacement(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    detail = asset_dir / "TextureUsage.json"
+    detail.write_text(json.dumps({"Component 1": {
+        "ps-t3": ["553ed32b-vs=aaaaaaaa-ps=bbbbbbbb"],
+    }}), encoding="utf-8")
+    replacement = TextureReplacement(
+        "553ed32b", "ResourceTexture0", (), "TextureOverrideTexture0",
+        "textures/texture0.dds")
+    index = TextureOverrideIndex(
+        replacements_by_hash={"553ed32b": (replacement,)})
+    monkeypatch.setitem(
+        wwmi_texture_roles._PROFILES,
+        ("aaaaaaaa", "bbbbbbbb", 3), "diffuse")
+    # WWMI's generated mod uses CheckTextureOverride for these resources;
+    # there is no direct ps-t assignment in the draw section.
+    draw = DrawCall()
+    binding = AssetComponentBinding(
+        status="exact", asset_type="WWMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_ordinal=1,
+        detail_metadata="Alice/TextureUsage.json")
+
+    apply([{"draws": [draw]}], [[binding]], texture_index=index)
+
+    assert draw.texture_default("diffuse") == "textures/texture0.dds"
+    assert draw.texture_provenance == {"diffuse": "mod_texture_hash"}
+    assert draw.asset_slot_evidence[0]["role"] == "diffuse"
+    assert draw.asset_slot_evidence[0]["role_source"] == \
+        "wwmi_shader_profile"
 
 
 def test_asset_fallback_uses_trusted_source_and_keeps_diagnostic(tmp_path):

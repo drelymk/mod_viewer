@@ -426,8 +426,15 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
         // boundary. The ordered pass below propagates each boundary only
         // downward, stopping at the next one in this component.
         const defaultKey = mesh.userData.defaultTexKey;
-        if (defaultKey && !highlightedDefaults.has(defaultKey)) {
-          highlightedDefaults.add(defaultKey);
+        const variantKeys = mesh.userData.textureVariants || [];
+        // A draw can have only conditional texture assignments and therefore
+        // no unconditional tex_key. It is still an authored texture boundary;
+        // otherwise the later run reconciliation clears the resolved variant
+        // before it reaches the material.
+        const boundaryKey = defaultKey || mesh.userData.resolvedTexKey;
+        if ((defaultKey || variantKeys.length) && boundaryKey
+            && !highlightedDefaults.has(boundaryKey)) {
+          highlightedDefaults.add(boundaryKey);
           mesh.userData.automaticTextureBoundary = true;
         }
         const { wrap } = buildDrawRow(

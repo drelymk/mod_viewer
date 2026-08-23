@@ -3113,6 +3113,30 @@ def test_present_refresh_keeps_model_identity_and_selection(
         context.close()
 
 
+def test_conditional_only_texture_survives_component_run_reconciliation(
+        edge_browser, frontend_url):
+    payload = _payload("ConditionalOnly")
+    entry = payload["meshes"]["Body-ConditionalOnly-0"]
+    entry["tex_key"] = None
+    entry["texture_variants"] = [{
+        "conditions": [[{
+            "var": "menu", "value": "0", "negate": False,
+        }]],
+        "tex_key": "diffuse::ConditionalOnly-two.png",
+    }]
+    context, page = _page(
+        edge_browser, frontend_url, {"ConditionalOnly": payload})
+    try:
+        _open(page, "ConditionalOnly")
+        page.locator(".draw-item").wait_for()
+        assert page.evaluate("window.modViewer.activeMeshes[0].userData.resolvedTexKey") == \
+            "diffuse::ConditionalOnly-two.png"
+        assert page.evaluate("window.modViewer.activeMeshes[0].userData.texKey") == \
+            "diffuse::ConditionalOnly-two.png"
+    finally:
+        context.close()
+
+
 def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
         edge_browser, frontend_url):
     payload = _payload("Semantic")
