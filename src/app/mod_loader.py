@@ -492,9 +492,16 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
     """Read draw visibility semantics without building geometry."""
     parsed = _parse_inis(
         context.ini_paths, context.mod_dir, overrides, context.docs)
+    availability = {}
     bindings = asset_resolver.resolve_groups(
-        parsed.groups, parsed.game, context.asset_folders)
-    asset_enrichment.apply(parsed.groups, bindings)
+        parsed.groups, parsed.game, context.asset_folders,
+        availability=availability)
+    complete_index = (
+        availability.get("configured_roots", 0) > 0
+        and availability.get("ready_roots", 0)
+        == availability.get("configured_roots", 0))
+    asset_enrichment.apply(
+        parsed.groups, bindings, include_not_found=complete_index)
     return build_mesh_semantics(
         parsed.groups, context.mod_dir, game_profile=parsed.game.game,
         active_mesh_keys=active_mesh_keys)
@@ -683,9 +690,12 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         bindings = asset_resolver.resolve_groups(
             groups, parsed.game, context.asset_folders,
             availability=availability)
+        complete_index = (
+            availability.get("configured_roots", 0) > 0
+            and availability.get("ready_roots", 0)
+            == availability.get("configured_roots", 0))
         asset_enrichment.apply(
-            groups, bindings,
-            include_not_found=bool(availability.get("ready_roots")))
+            groups, bindings, include_not_found=complete_index)
         asset_resolution = asset_resolver.summarize_groups(
             groups, bindings, availability).to_dict()
 

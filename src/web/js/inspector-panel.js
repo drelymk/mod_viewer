@@ -101,7 +101,7 @@ function buildAssetSection(content, entry) {
 function buildComponentAssetSection(content, record) {
   const summary = record.assetSummary
     || summarizeAssetBindings((record.meshes || [])
-      .map(mesh => mesh.userData.assetEntry));
+      .map(mesh => mesh.userData.assetEntry), record.assetResolution);
   if (!summary || summary.status === 'unavailable') return;
   const section = document.createElement('section');
   section.className = 'inspector-section inspector-asset-section';
@@ -117,6 +117,9 @@ function buildComponentAssetSection(content, record) {
   if (summary.partial) addRow(section, 'Partial', summary.partial);
   if (summary.ambiguous) addRow(section, 'Ambiguous', summary.ambiguous);
   if (summary.unmatched) addRow(section, 'Not found', summary.unmatched);
+  if (summary.indexUnavailable) {
+    addRow(section, 'Index unavailable', summary.indexUnavailable);
+  }
   if (summary.rangesVary) addRow(section, 'Ranges', 'Vary by draw');
   content.appendChild(section);
 }

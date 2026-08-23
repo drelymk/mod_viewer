@@ -158,8 +158,12 @@ def _load_enabled_indexes(asset_type, asset_entries, *, availability=None):
                 availability["unavailable_roots"] = (
                     availability.get("unavailable_roots", 0) + 1)
             continue
-        if index:
-            indexes.append((entry["path"], index))
+        if not index:
+            if availability is not None:
+                availability["unavailable_roots"] = (
+                    availability.get("unavailable_roots", 0) + 1)
+            continue
+        indexes.append((entry["path"], index))
     if availability is not None:
         availability["ready_roots"] = len(indexes)
     return indexes
@@ -314,8 +318,10 @@ def summarize_groups(groups, bindings, availability=None):
     unavailable_roots = int(availability.get("unavailable_roots", 0) or 0)
     if not configured:
         index_status = "not_configured"
-    elif ready:
+    elif ready == configured:
         index_status = "ready"
+    elif ready:
+        index_status = "partial"
     else:
         index_status = "unavailable"
 
@@ -373,13 +379,15 @@ def summarize_groups(groups, bindings, availability=None):
             identity[1], kinds.count("exact"), kinds.count("partial"),
             kinds.count("ambiguous"), kinds.count("unmatched"))
 
-    index_unavailable_draws = total_draws if index_status == "unavailable" else 0
+    index_unavailable_draws = (
+        total_draws if index_status == "unavailable"
+        else counts["unmatched"] if index_status == "partial" else 0)
     return AssetResolutionSummary(
         total_draws=total_draws,
         exact_draws=counts["exact"],
         partial_draws=counts["partial"],
         ambiguous_draws=counts["ambiguous"],
-        unmatched_draws=(0 if index_status == "unavailable"
+        unmatched_draws=(0 if index_status in ("partial", "unavailable")
                          else counts["unmatched"]),
         index_unavailable_draws=index_unavailable_draws,
         index_status=index_status,

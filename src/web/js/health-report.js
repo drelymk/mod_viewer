@@ -38,7 +38,10 @@ function renderAssetResolution() {
   const total = Number(summary.total_draws) || 0;
   const parts = summary.index_status === 'unavailable'
     ? ['Asset resolution: index unavailable']
-    : [`Asset resolution: ${exact} / ${total} draws exact`];
+    : summary.index_status === 'partial'
+      ? [`Asset resolution: ${summary.ready_roots || 0} of `
+        `${summary.configured_roots || 0} indexes available`]
+      : [`Asset resolution: ${exact} / ${total} draws exact`];
   for (const [key, label] of [
     ['partial_draws', 'partial'],
     ['ambiguous_draws', 'ambiguous'],
@@ -141,7 +144,6 @@ export function setHealthReport(report, assetResolution = undefined) {
   currentReport = report || null;
   if (assetResolution !== undefined) currentAssetResolution = assetResolution;
   else if (report?.asset_resolution) currentAssetResolution = report.asset_resolution;
-  else if (report === null) currentAssetResolution = null;
   const button = $('health-btn');
   const count = report?.summary?.issues || 0;
   const errors = report?.summary?.errors || 0;

@@ -351,6 +351,13 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
                 draw, mod_dir, "normal_map", normal_role)
             if normal_variants:
                 entry[f"{normal_role}_variants"] = normal_variants
+            binding = draw.asset_binding
+            if binding is not None and hasattr(binding, "to_dict"):
+                entry["asset_binding"] = binding.to_dict()
+            if draw.texture_provenance:
+                entry["texture_resolution"] = dict(draw.texture_provenance)
+            if draw.asset_slot_evidence:
+                entry["asset_slot_evidence"] = list(draw.asset_slot_evidence)
             result[draw.label] = entry
     return result
 

@@ -125,6 +125,42 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
   return { hdr, masterCb };
 }
 
+function updateComponentAssetLabel(header, summary) {
+  if (!header) return;
+  let assetSpan = header.querySelector('.asset-component-label');
+  const label = assetSummaryLabel(summary);
+  if (!label) {
+    assetSpan?.remove();
+    return;
+  }
+  if (!assetSpan) {
+    assetSpan = document.createElement('span');
+    assetSpan.className = 'asset-secondary-label asset-component-label';
+    header.appendChild(assetSpan);
+  }
+  assetSpan.textContent = label;
+  assetSpan.title = label;
+}
+
+function updateDrawAssetLabel(mesh) {
+  const row = mesh?.userData?.assetRow;
+  if (!row) return;
+  let assetSpan = row.querySelector('.asset-draw-label');
+  const label = assetSecondaryLabel(
+    mesh.userData.assetEntry?.asset_binding);
+  if (!label) {
+    assetSpan?.remove();
+    return;
+  }
+  if (!assetSpan) {
+    assetSpan = document.createElement('span');
+    assetSpan.className = 'asset-secondary-label asset-draw-label';
+    row.appendChild(assetSpan);
+  }
+  assetSpan.textContent = label.replace(/^Asset:\s*/, '');
+  assetSpan.title = label;
+}
+
 /** "count, start, base" from the ini's own drawindexed line — falls back to
  * the old bare "#N" numbering for the rare draw with no such line at all
  * (whole index buffer read unconditionally; see mesh_builder.build_mesh_payload).
@@ -171,6 +207,7 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     assetSpan.title = assetLabel;
     row.appendChild(assetSpan);
   }
+  mesh.userData.assetRow = row;
   const updateStateIndicator = (m) => {
     cb.checked = m.visible;
     cb.classList.toggle('state-hidden', !m.visible);
@@ -290,8 +327,9 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
         meshes: itemObjs, texturePool, modPath,
       };
       const assetSummary = summarizeAssetBindings(
-        names.map(name => meshes[name]));
+        names.map(name => meshes[name]), options.assetResolution);
       componentDescriptor.assetSummary = assetSummary;
+      componentDescriptor.assetResolution = options.assetResolution || null;
       let materialKind = componentKind;
       let materialKindInFlight = false;
       const setMaterialKind = async kind => {
@@ -370,6 +408,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
         // Diagnostic-only projection. Operational identity remains the
         // existing semantic key and component grouping.
         mesh.userData.assetEntry = meshes[name];
+        mesh.userData.componentDescriptor = componentDescriptor;
         addMesh(mesh, meshes[name].conditions, meshes[name].sources,
           meshes[name].texture_variants, {
             normal_map: meshes[name].normal_map_variants,
@@ -417,6 +456,8 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
 
       groupsUI.push({
         masterCb, itemCbs, itemObjs,
+        componentDescriptor,
+        assetResolution: options.assetResolution || null,
         applyTextureRuns: () => recomputeTextureRuns(itemObjs),
       });
     }
@@ -424,4 +465,21 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
 
   document.getElementById('camera-panel').style.display = 'none';
   return activeMeshes;
+}
+
+export function refreshMeshAssetDiagnostics() {
+  for (const group of groupsUI) {
+    const summary = summarizeAssetBindings(
+      group.itemObjs.map(mesh => mesh.userData.assetEntry),
+      group.assetResolution);
+    group.componentDescriptor.assetSummary = summary;
+    updateComponentAssetLabel(group.componentDescriptor.header, summary);
+    group.itemObjs.forEach(updateDrawAssetLabel);
+    window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
+      detail: {
+        component: group.componentDescriptor,
+        reason: 'asset',
+      },
+    }));
+  }
 }

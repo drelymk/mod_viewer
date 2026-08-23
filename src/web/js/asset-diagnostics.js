@@ -99,20 +99,23 @@ export function assetSecondaryLabel(binding) {
 
 function identityOf(binding) {
   const normalized = normalizedBinding(binding);
-  if (!normalized) return null;
+  if (!normalized || (!normalized.asset && !normalized.component)) return null;
   return `${normalized.asset || ''}\0${normalized.component || ''}`;
 }
 
 function rangeOf(binding) {
   const normalized = normalizedBinding(binding);
-  if (!normalized) return null;
+  if (!normalized || normalized.rangeStatus !== 'exact') return null;
   return [normalized.classification, normalized.componentOrdinal,
     normalized.firstIndex, normalized.indexCount].join('\0');
 }
 
-export function summarizeAssetBindings(entries = []) {
+export function summarizeAssetBindings(entries = [], resolution = null) {
   const bindings = entries.map(normalizeAssetBinding).filter(Boolean);
   const counts = { exact: 0, partial: 0, ambiguous: 0, unmatched: 0 };
+  const indexUnavailable = resolution?.index_status === 'partial'
+    || resolution?.index_status === 'unavailable'
+    ? entries.filter(entry => !normalizeAssetBinding(entry)).length : 0;
   const identities = new Set();
   const ranges = new Set();
   const assets = new Set();
@@ -128,7 +131,7 @@ export function summarizeAssetBindings(entries = []) {
   let status = 'unavailable';
   if (identities.size > 1) status = 'mixed';
   else if (counts.ambiguous) status = 'ambiguous';
-  else if (counts.partial || counts.unmatched) status = 'partial';
+  else if (counts.partial || counts.unmatched || indexUnavailable) status = 'partial';
   else if (counts.exact) status = 'exact';
   const first = bindings.find(binding => identityOf(binding));
   return {
@@ -139,6 +142,7 @@ export function summarizeAssetBindings(entries = []) {
     assets: [...assets].sort(),
     totalDraws: entries.length,
     matchedDraws: counts.exact + counts.partial,
+    indexUnavailable,
     ...counts,
   };
 }
@@ -174,5 +178,6 @@ export function assetSummaryLabel(summary) {
   if (!summary.asset) return '';
   const component = summary.component ? ` · ${summary.component}` : '';
   const ranges = summary.rangesVary ? ' · ranges vary' : '';
-  return `Asset: ${summary.asset}${component}${ranges}`;
+  const partial = summary.status === 'partial' ? ' · partial' : '';
+  return `Asset: ${summary.asset}${component}${ranges}${partial}`;
 }

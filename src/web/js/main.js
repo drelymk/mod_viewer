@@ -10,7 +10,7 @@ import { activeMeshes, refreshAll, reset, resetMeshState, setStateRules,
          toggleWireframe, toggleSmoothShading, toggleGlossy,
          updateMeshSemantics } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
-import { buildMeshPanel } from './mesh-panel.js';
+import { buildMeshPanel, refreshMeshAssetDiagnostics } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
 import { buildMenuPanel } from './menu-panel.js';
 import { buildPresentPanel } from './present-panel.js';
@@ -370,6 +370,7 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
     {
       onMaterialKindChanged: reloadCurrentMod,
       texturePools: payload.texture_pools || {},
+      assetResolution: payload.asset_resolution || null,
     });
   buildTogglePanel(controls.toggles, {
     modPath: currentModPath, onChange: handleToggleChange,
@@ -505,6 +506,7 @@ async function refreshMeshSemantics() {
         'The staged draw set no longer matches the displayed model.');
       return false;
     }
+    refreshMeshAssetDiagnostics();
     refreshAll();
     return true;
   } finally {
