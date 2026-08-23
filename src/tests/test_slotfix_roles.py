@@ -40,6 +40,83 @@ def _draw(tmp_path, assignments, resources, prefix=""):
     return groups[0]["draws"][0]
 
 
+def _barbara_variant_groups(tmp_path):
+    components = ("Head", "Body", "Dress")
+    lines = [
+        "[KeySwap]",
+        "type = cycle",
+        "$swapvar = 0,1,2,3",
+    ]
+    for component in components:
+        lines.extend([
+            "",
+            f"[TextureOverrideBarbara{component}]",
+            f"vb0 = ResourceBarbara{component}Position",
+            f"vb1 = ResourceBarbara{component}Texcoord",
+            f"ib = ResourceBarbara{component}IB",
+            f"run = CommandListBarbara{component}",
+            "drawindexed = 3, 0, 0",
+            "",
+            f"[CommandListBarbara{component}]",
+        ])
+        for variant in range(4):
+            keyword = "if" if variant == 0 else "else if"
+            lines.extend([
+                f"{keyword} $swapvar == {variant}",
+                f"ps-t0 = ResourceBarbara{component}Diffuse.{variant}",
+                f"ps-t1 = ResourceBarbara{component}LightMap.{variant}",
+            ])
+        lines.append("endif")
+    for component in components:
+        lines.extend([
+            "",
+            f"[ResourceBarbara{component}Position]",
+            f"filename = {component.lower()}-position.buf",
+            "stride = 40",
+            "",
+            f"[ResourceBarbara{component}Texcoord]",
+            f"filename = {component.lower()}-texcoord.buf",
+            "stride = 20",
+            "",
+            f"[ResourceBarbara{component}IB]",
+            f"filename = {component.lower()}.ib",
+            "format = DXGI_FORMAT_R32_UINT",
+        ])
+        for variant in range(4):
+            lines.extend([
+                "",
+                f"[ResourceBarbara{component}Diffuse.{variant}]",
+                f"filename = {component.lower()}-diffuse-{variant}.dds",
+                "",
+                f"[ResourceBarbara{component}LightMap.{variant}]",
+                f"filename = {component.lower()}-light-{variant}.dds",
+            ])
+    path = tmp_path / "barbara-variants.ini"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    sections = merge_sections([str(path)])
+    return build_draw_groups(sections, extract_resources(sections))
+
+
+def test_barbara_style_scopes_keep_all_component_variants_independent(tmp_path):
+    groups = _barbara_variant_groups(tmp_path)
+
+    assert [group["name"] for group in groups] == ["BarbaraHead", "BarbaraBody",
+                                                    "BarbaraDress"]
+    for group in groups:
+        draw = group["draws"][0]
+        component = group["name"][len("Barbara"):].lower()
+        assert [item["file"] for item in draw.texture_rules("diffuse")] == [
+            f"{component}-diffuse-{variant}.dds"
+            for variant in range(4)]
+        assert [item["file"] for item in draw.texture_rules("light_map")] == [
+            f"{component}-light-{variant}.dds"
+            for variant in range(4)]
+        assert draw.texture_provenance == {
+            "diffuse": "mod_slot_legacy",
+            "light_map": "mod_slot_legacy",
+        }
+
+
 def test_proven_slotfix_assignment_uses_diffuse_pipeline(tmp_path):
     draw = _draw(
         tmp_path,
@@ -50,6 +127,7 @@ ps-t0 = ResourceOpaque""",
 
     assert draw.texture_default("diffuse") == "opaque.dds"
     assert draw.slot_textures[0].role_hint == "diffuse"
+    assert draw.slot_textures[0].role_hint_source == "mod_slot_mapping"
     assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
 
 
@@ -67,19 +145,22 @@ def test_resource_name_alone_does_not_imply_diffuse(tmp_path):
 def test_repeated_legacy_slot_names_recover_texture_roles(tmp_path):
     draw = _draw(
         tmp_path,
-        r"""ps-t0 = ResourceBodyDiffuse
-ps-t1 = ResourceBodyLightMap""",
-        {"ResourceBodyDiffuse": "body-diffuse.dds",
-         "ResourceBodyLightMap": "body-light-map.dds"},
+        r"""run = CommandList\LegacySlots""",
+        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
+         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
+         "ResourceBodyLightMap.0": "body-light-map-0.dds",
+         "ResourceBodyLightMap.1": "body-light-map-1.dds"},
         prefix=(r"[CommandList\LegacySlots]" "\n"
-                r"ps-t0 = ResourceBodyDiffuse" "\n"
-                r"ps-t1 = ResourceBodyLightMap" "\n"),
+                r"ps-t0 = ResourceBodyDiffuse.0" "\n"
+                r"ps-t0 = ResourceBodyDiffuse.1" "\n"
+                r"ps-t1 = ResourceBodyLightMap.0" "\n"
+                r"ps-t1 = ResourceBodyLightMap.1" "\n"),
     )
 
-    assert draw.texture_default("diffuse") == "body-diffuse.dds"
-    assert draw.texture_default("light_map") == "body-light-map.dds"
-    assert draw.texture_provenance == {"diffuse": "mod_slot_semantic",
-                                       "light_map": "mod_slot_semantic"}
+    assert draw.texture_default("diffuse") == "body-diffuse-1.dds"
+    assert draw.texture_default("light_map") == "body-light-map-1.dds"
+    assert draw.texture_provenance == {"diffuse": "mod_slot_legacy",
+                                       "light_map": "mod_slot_legacy"}
 
 
 def test_single_legacy_slot_name_does_not_imply_a_role(tmp_path):
@@ -110,6 +191,110 @@ ps-t1 = ResourceBodyLightMap.1""",
     assert draw.texture_default("light_map") == "body-light-map-1.dds"
     assert draw.slot_textures[0].role_hint == "diffuse"
     assert draw.slot_textures[1].role_hint == "light_map"
+    assert draw.slot_textures[0].role_hint_source == "legacy_slot_mapping"
+    assert draw.slot_textures[1].role_hint_source == "legacy_slot_mapping"
+    assert draw.texture_provenance == {"diffuse": "mod_slot_legacy",
+                                       "light_map": "mod_slot_legacy"}
+
+
+def test_legacy_family_does_not_classify_an_opaque_resource(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""ps-t0 = ResourceBodyDiffuse.0
+ps-t0 = ResourceBodyDiffuse.1
+ps-t0 = ResourceShadowLookup""",
+        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
+         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
+         "ResourceShadowLookup": "shadow.dds"},
+    )
+
+    assert draw.slot_textures[0].resource == "ResourceShadowLookup"
+    assert draw.slot_textures[0].role_hint is None
+    assert draw.texture_provenance == {"diffuse": "mod_slot_legacy"}
+
+
+def test_conflicting_legacy_roles_on_one_slot_are_rejected(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""ps-t0 = ResourceBodyDiffuse.0
+ps-t0 = ResourceBodyDiffuse.1
+ps-t0 = ResourceBodyNormalMap.0
+ps-t0 = ResourceBodyNormalMap.1""",
+        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
+         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
+         "ResourceBodyNormalMap.0": "body-normal-0.dds",
+         "ResourceBodyNormalMap.1": "body-normal-1.dds"},
+    )
+
+    assert draw.slot_textures[0].role_hint is None
+    assert draw.texture_default("diffuse") is None
+    assert draw.texture_default("normal_map") is None
+
+
+def test_legacy_family_cannot_move_between_slots(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""ps-t0 = ResourceBodyDiffuse.0
+ps-t2 = ResourceBodyDiffuse.1""",
+        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
+         "ResourceBodyDiffuse.1": "body-diffuse-1.dds"},
+    )
+
+    assert all(item.role_hint is None for item in draw.slot_textures)
+    assert draw.texture_default("diffuse") is None
+
+
+def test_unreachable_legacy_scope_does_not_leak_into_a_draw(tmp_path):
+    draw = _draw(
+        tmp_path,
+        "ps-t0 = ResourceOpaque",
+        {"ResourceOpaque": "opaque.dds",
+         "ResourceBodyDiffuse.0": "body-diffuse-0.dds",
+         "ResourceBodyDiffuse.1": "body-diffuse-1.dds"},
+        prefix=(r"[CommandList\Unrelated]" "\n"
+                r"ps-t0 = ResourceBodyDiffuse.0" "\n"
+                r"ps-t0 = ResourceBodyDiffuse.1" "\n"),
+    )
+
+    assert draw.slot_textures[0].role_hint is None
+    assert draw.texture_default("diffuse") is None
+
+
+def test_structural_slot_mapping_wins_over_legacy_mapping(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""ps-t0 = Resource\GIMI\Diffuse
+ps-t0 = ResourceBodyDiffuse.0
+ps-t0 = ResourceBodyDiffuse.1
+ps-t0 = ResourceOpaque""",
+        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
+         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
+         "ResourceOpaque": "opaque.dds"},
+    )
+
+    assert draw.slot_textures[0].role_hint == "diffuse"
+    assert draw.slot_textures[0].role_hint_source == "mod_slot_mapping"
+    assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
+
+
+def test_semantic_and_legacy_variants_keep_disjoint_conditions(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""if $style == 0
+Resource\GIMI\Diffuse = ResourceExplicit
+else
+ps-t0 = ResourceBodyDiffuse.0
+ps-t0 = ResourceBodyDiffuse.1
+endif""",
+        {"ResourceExplicit": "explicit.dds",
+         "ResourceBodyDiffuse.0": "body-diffuse-0.dds",
+         "ResourceBodyDiffuse.1": "body-diffuse-1.dds"},
+        prefix="[KeyStyle]\ntype = cycle\n$style = 0,1\n",
+    )
+
+    assert {item["file"] for item in draw.texture_rules("diffuse")} == {
+        "explicit.dds", "body-diffuse-0.dds", "body-diffuse-1.dds"}
+    assert draw.texture_provenance == {"diffuse": "mod_slot_legacy"}
 
 
 def test_proven_slotfix_assignment_keeps_conditional_variants(tmp_path):

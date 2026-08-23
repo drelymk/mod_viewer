@@ -232,7 +232,8 @@ def _apply_slot_hashes(draw, evidence):
                         "slot": binding.slot,
                         "texture_hash": item.texture_hash,
                         "role": binding.role_hint,
-                        "role_source": "mod_slot_mapping",
+                        "role_source": (
+                            binding.role_hint_source or "mod_slot_mapping"),
                         "asset_hash_role": item.role,
                         "conflict": True,
                     })
@@ -242,8 +243,12 @@ def _apply_slot_hashes(draw, evidence):
                 draw.set_texture_default(binding.role_hint, binding.file)
                 draw.texture_hashes.setdefault(binding.role_hint, []).append(
                     next(iter(matches)).texture_hash)
+                provenance = (
+                    "mod_slot_legacy"
+                    if binding.role_hint_source == "legacy_slot_mapping"
+                    else "mod_slot_semantic")
                 draw.texture_provenance.setdefault(
-                    binding.role_hint, "mod_slot_semantic")
+                    binding.role_hint, provenance)
             continue
         if len(roles) != 1:
             continue
@@ -295,7 +300,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False):
                         if item.role_hint:
                             slot_evidence.update({
                                 "role": item.role_hint,
-                                "role_source": "mod_slot_mapping",
+                                "role_source": (
+                                    item.role_hint_source
+                                    or "mod_slot_mapping"),
                             })
                         draw.asset_slot_evidence.append(slot_evidence)
 

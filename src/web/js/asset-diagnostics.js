@@ -12,12 +12,14 @@ const TEXTURE_ROLES = Object.freeze([
 const PROVENANCE_LABELS = Object.freeze({
   mod_semantic: 'Mod',
   mod_slot_semantic: 'Mod slot mapping',
+  mod_slot_legacy: 'Legacy slot mapping',
   mod_texture_hash: 'Mod hash match',
   asset_original_fallback: 'Asset fallback',
   unresolved: 'Not resolved',
 });
 const TEXTURE_ROLE_SOURCE_LABELS = Object.freeze({
   mod_slot_mapping: 'Mod slot mapping',
+  legacy_slot_mapping: 'Legacy slot mapping',
 });
 const TEXTURE_ROLE_LABELS = Object.freeze({
   diffuse: 'Diffuse',

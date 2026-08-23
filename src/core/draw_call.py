@@ -55,6 +55,7 @@ class SlotTextureBinding:
     file: str | None = None
     texture_hashes: tuple[str, ...] = ()
     role_hint: str | None = None
+    role_hint_source: str | None = None
 
     def __post_init__(self):
         hashes = self.texture_hashes

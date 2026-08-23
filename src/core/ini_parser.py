@@ -108,7 +108,7 @@ _SEMANTIC_TEXTURE_RESOURCE_RE = re.compile(
     r"(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)$", re.I)
 _LEGACY_TEXTURE_RESOURCE_RE = re.compile(
     r"^Resource.+(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)"
-    r"(?:\.\d+)?$", re.I)
+    r"(?P<variant>\.\d+)?$", re.I)
 
 
 def _semantic_texture_role(resource):
@@ -118,17 +118,19 @@ def _semantic_texture_role(resource):
             if match else None)
 
 
-def _legacy_texture_role(resource, sections, section_lookup):
-    """Return a role for a declared legacy texture resource name.
+def _legacy_texture_evidence(resource, sections, section_lookup):
+    """Return ``(role, family)`` for a declared legacy texture resource.
 
     Older GIMI mods commonly bind resources such as
     ``ResourceCharacterDiffuse`` directly to ``ps-t0``.  This fallback is
     deliberately narrower than the removed substring heuristic: the resource
     must be file-backed, end in one complete role token, and be observed from
-    the caller so the caller can require repeated slot evidence.
+    one execution scope so the caller can require repeated family evidence.
     """
     match = _LEGACY_TEXTURE_RESOURCE_RE.fullmatch(str(resource or ""))
     if not match:
+        return None
+    if _semantic_texture_role(resource):
         return None
     section_name = section_lookup.get(str(resource).casefold())
     if section_name is None:
@@ -136,25 +138,23 @@ def _legacy_texture_role(resource, sections, section_lookup):
     if not any(re.match(r"^filename\s*=\s*\S+", raw, re.I)
                for raw in sections[section_name]):
         return None
-    return _SEMANTIC_TEXTURE_ROLES[match.group("role").casefold()]
+    role = _SEMANTIC_TEXTURE_ROLES[match.group("role").casefold()]
+    family = str(resource)
+    if match.group("variant"):
+        family = family[:-len(match.group("variant"))]
+    return role, family.casefold()
 
 
-def _collect_slot_role_hints(sections):
-    """Collect unambiguous ``ps-tN`` roles from semantic or legacy evidence.
+def _legacy_texture_role(resource, sections, section_lookup):
+    """Compatibility view returning only the constrained legacy role."""
+    evidence = _legacy_texture_evidence(resource, sections, section_lookup)
+    return evidence[0] if evidence else None
 
-    Legacy resource-name evidence is accepted only when the same slot role is
-    repeated by at least two override/command-list sections or by at least two
-    distinct file-backed resource variants.  A single arbitrary resource name
-    therefore cannot assign a material role.
-    """
+
+def _collect_structural_slot_role_hints(sections):
+    """Collect unambiguous ``ps-tN`` roles from semantic resource markers."""
     observations = {}
-    legacy_observations = {}
-    legacy_resources = {}
-    legacy_sections = {}
-    section_lookup = {str(name).casefold(): name for name in sections}
-    for section_name, lines in sections.items():
-        is_texture_binding = str(section_name).lower().startswith(
-            ("textureoverride", "commandlist"))
+    for lines in sections.values():
         for raw in lines:
             line = raw.split(";", 1)[0].strip()
             if not line:
@@ -164,29 +164,94 @@ def _collect_slot_role_hints(sections):
                 line, re.I)
             if not slot:
                 continue
-            resource = slot.group("resource")
-            role = _semantic_texture_role(resource)
-            if role is None:
-                role = _legacy_texture_role(
-                    resource, sections, section_lookup)
-                if role:
-                    slot_number = int(slot.group("slot"))
-                    legacy_observations.setdefault(slot_number, set()).add(role)
-                    legacy_resources.setdefault(slot_number, set()).add(
-                        str(resource).casefold())
-                    if is_texture_binding:
-                        legacy_sections.setdefault(slot_number, set()).add(
-                            section_name)
-                continue
+            role = _semantic_texture_role(slot.group("resource"))
             if role:
                 observations.setdefault(int(slot.group("slot")), set()).add(role)
-    for slot, roles in legacy_observations.items():
-        repeated_sections = len(legacy_sections.get(slot, ())) >= 2
-        repeated_resources = len(legacy_resources.get(slot, ())) >= 2
-        if repeated_sections or repeated_resources:
-            observations.setdefault(slot, set()).update(roles)
     return {slot: next(iter(roles)) for slot, roles in observations.items()
             if len(roles) == 1}
+
+
+def _run_target_name(line, section_lookup):
+    """Return a traversable ``run =`` target using scanner rules."""
+    match = re.match(r"run\s*=\s*(\S+)", line, re.I)
+    if not match:
+        return None
+    target_name = section_lookup.get(match.group(1).lower())
+    target_low = target_name.lower() if target_name else ""
+    if (not target_name
+            or any(target_low.startswith(prefix.lower())
+                   for prefix in _RUN_SKIP_PREFIXES)):
+        return None
+    return target_name
+
+
+def _reachable_execution_sections(sections, root, section_lookup):
+    """Return one root section and its traversable command-list closure."""
+    reachable = []
+    visiting = {root}
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        reachable.append(current)
+        for raw in sections[current]:
+            line = raw.split(";", 1)[0].strip()
+            target_name = _run_target_name(line, section_lookup)
+            if target_name and target_name not in visiting:
+                visiting.add(target_name)
+                pending.append(target_name)
+    return reachable
+
+
+def _collect_legacy_scope_roles(sections, root, section_lookup):
+    """Infer legacy resource roles within one reachable execution scope.
+
+    A resource family is trusted only when at least two distinct, file-backed
+    members occur on the same slot in this scope.  A family that moves slots,
+    or a slot that contains conflicting legacy roles, is rejected entirely.
+    """
+    family_slots = {}
+    family_roles = {}
+    family_members = {}
+    slot_roles = {}
+    for section_name in _reachable_execution_sections(
+            sections, root, section_lookup):
+        for raw in sections[section_name]:
+            line = raw.split(";", 1)[0].strip()
+            if not line:
+                continue
+            slot = re.match(
+                r"^ps-t(?P<slot>\d+)\s*=\s*(?:ref\s+)?(?P<resource>\S+)",
+                line, re.I)
+            if not slot:
+                continue
+            resource = slot.group("resource")
+            evidence = _legacy_texture_evidence(
+                resource, sections, section_lookup)
+            if evidence is None:
+                continue
+            role, family = evidence
+            slot_number = int(slot.group("slot"))
+            family_slots.setdefault(family, set()).add(slot_number)
+            family_roles.setdefault(family, set()).add(role)
+            family_members.setdefault((slot_number, family), set()).add(
+                str(resource).casefold())
+            slot_roles.setdefault(slot_number, set()).add(role)
+
+    result = {}
+    for (slot, family), members in family_members.items():
+        if (len(members) < 2
+                or family_slots.get(family) != {slot}
+                or len(family_roles.get(family, ())) != 1
+                or len(slot_roles.get(slot, ())) != 1):
+            continue
+        role = next(iter(family_roles[family]))
+        for resource in members:
+            result[resource] = role
+    return result
+
+
+# Compatibility name retained for callers that used the private helper.
+_collect_slot_role_hints = _collect_structural_slot_role_hints
 
 
 def _condition_group_is_consistent(group):
@@ -224,21 +289,28 @@ def _condition_difference(condition, excluded):
     return result
 
 
+_TEXTURE_SOURCE_PRIORITY = {
+    "semantic": 30,
+    "slot": 20,
+    "legacy_slot": 10,
+}
+
+
 def _effective_role_assignments(assignments):
-    """Give semantic assignments precedence over overlapping slot evidence."""
-    semantic = [item for item in assignments
-                if item.get("source") == "semantic"]
-    if not semantic:
-        return list(assignments)
+    """Apply semantic, structural-slot, then legacy-slot precedence."""
     result = []
     for item in assignments:
-        if item.get("source") != "slot":
+        priority = _TEXTURE_SOURCE_PRIORITY.get(item.get("source"), 0)
+        higher = [candidate for candidate in assignments
+                  if _TEXTURE_SOURCE_PRIORITY.get(
+                      candidate.get("source"), 0) > priority]
+        if not higher:
             result.append(item)
             continue
         condition = item.get("cond") or []
-        for explicit in semantic:
-            condition = _condition_difference(
-                condition, explicit.get("cond") or [])
+        for candidate in higher:
+            condition = _condition_difference(condition,
+                                               candidate.get("cond") or [])
             if condition is None:
                 break
         if condition is not None:
@@ -299,8 +371,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
     resource_texture_hashes = _collect_texture_hashes(sections)
-    slot_role_hints = _collect_slot_role_hints(sections)
+    structural_slot_roles = _collect_structural_slot_role_hints(sections)
     seq_counter = [0]   # unique id per `if` block
+    scope_legacy_resource_roles = {}
 
     def _geometry_match(info):
         geometry_hash = info.get("_geometry_hash")
@@ -313,16 +386,24 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         )
 
     def _slot_snapshot(info):
-        return [
-            SlotTextureBinding(
+        result = []
+        for slot, resource in sorted(
+                info.get("_cur_slot_textures", {}).items()):
+            structural_role = structural_slot_roles.get(slot)
+            legacy_role = scope_legacy_resource_roles.get(
+                resource.casefold())
+            role_hint = structural_role or legacy_role
+            result.append(SlotTextureBinding(
                 slot=slot,
                 resource=resource,
                 texture_hashes=resource_texture_hashes.get(
                     resource.casefold(), ()),
-                role_hint=slot_role_hints.get(slot),
-            )
-            for slot, resource in sorted(
-                info.get("_cur_slot_textures", {}).items())]
+                role_hint=role_hint,
+                role_hint_source=(
+                    "mod_slot_mapping" if structural_role
+                    else "legacy_slot_mapping" if legacy_role else None),
+            ))
+        return result
 
     def _record_texture_assignment(info, role, res, cond_stack, *, source):
         """Record one role assignment in the shared execution-order IR."""
@@ -377,6 +458,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             info["_diffuse_history"] = state["history"]
         if source == "slot":
             info["_texture_provenance"][role] = "mod_slot_semantic"
+        elif source == "legacy_slot":
+            info["_texture_provenance"][role] = "mod_slot_legacy"
 
     def _aux_snapshot(info):
         return {
@@ -401,9 +484,13 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         })
         for role, history in assignments.items():
             effective = _effective_role_assignments(history)
-            if (result.get(role) == "mod_slot_semantic"
-                    and not any(item.get("source") == "slot"
-                                for item in effective)):
+            source_by_provenance = {
+                "mod_slot_semantic": "slot",
+                "mod_slot_legacy": "legacy_slot",
+            }
+            source = source_by_provenance.get(result.get(role))
+            if (source and not any(item.get("source") == source
+                                   for item in effective)):
                 result.pop(role, None)
         return result
 
@@ -460,10 +547,15 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     info["_cur_slot_textures"].pop(slot, None)
                 else:
                     info["_cur_slot_textures"][slot] = resource
-                    role = slot_role_hints.get(slot)
+                    structural_role = structural_slot_roles.get(slot)
+                    legacy_role = scope_legacy_resource_roles.get(
+                        resource.casefold())
+                    role = structural_role or legacy_role
                     if (role and _semantic_texture_role(resource) is None):
                         _record_texture_assignment(
-                            info, role, resource, cond_stack, source="slot")
+                            info, role, resource, cond_stack,
+                            source=("slot" if structural_role
+                                    else "legacy_slot"))
             m = re.match(r"vb(\d+)\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if m:
                 slot = int(m.group(1))
@@ -525,12 +617,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     m_aux.group(2), cond_stack, source="semantic")
             m = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if m:
-                target = m.group(1)
-                target_name = section_lookup.get(target.lower())
-                target_low = target_name.lower() if target_name else ""
-                if (target_name and target_name not in visiting
-                        and not any(target_low.startswith(p.lower())
-                                   for p in _RUN_SKIP_PREFIXES)):
+                target_name = _run_target_name(line, section_lookup)
+                if target_name and target_name not in visiting:
                     visiting.add(target_name)
                     _scan(sections[target_name], info, cond_stack, visiting)
                     visiting.discard(target_name)
@@ -542,6 +630,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         if not (name_low.startswith("textureoverride")
                 or name_low.startswith("commandlist")):
             continue
+        scope_legacy_resource_roles = _collect_legacy_scope_roles(
+            sections, name, section_lookup)
         info: dict = dict(vb0=None, vb1=None, vb2=None, ib=None, draws=[],
                           diffuse=None, diffuse_pool=[], src=None, handling_skip=False,
                           _cur_diffuse_variants=[], _diffuse_chain_key=None,
@@ -948,6 +1038,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                         file=_resolve_diffuse_file(item.resource) or item.file,
                         texture_hashes=item.texture_hashes,
                         role_hint=item.role_hint,
+                        role_hint_source=item.role_hint_source,
                     )
                     for item in authored.slot_textures],
             )
