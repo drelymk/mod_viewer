@@ -18,10 +18,10 @@ def test_resource_path_rejects_absolute_drive_and_empty_values(tmp_path):
     assert safe_resource_path(root, "") is None
     assert safe_resource_path(root, os.path.abspath(os.path.join(
         root, "absolute.dds"))) is None
-    assert safe_resource_path(root, r"C:\absolute\file.dds") is None
-    assert safe_resource_path(root, r"C:/absolute/file.dds") is None
+    assert safe_resource_path(root, r"X:\fixture\absolute\file.dds") is None
+    assert safe_resource_path(root, r"X:/fixture/absolute/file.dds") is None
     assert safe_resource_path(root, r"\\server\share\file.dds") is None
 
 
 def test_resource_path_commonpath_rejects_incompatible_drives():
-    assert not _within(r"D:\Mods\Alice", r"C:\Mods")
+    assert not _within(r"X:\fixture\mods\Alice", r"Y:\fixture\mods")

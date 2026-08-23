@@ -13,6 +13,9 @@ machine-specific paths or facts that are obvious from the source.
 
 - Never put credentials, tokens, private URLs, usernames, hostnames, absolute
   local paths or environment dumps here.
+- Keep code comments and test cases portable: do not embed developer- or
+  machine-specific paths, environment details or local-only results; use
+  generic fixtures or temporary directories instead.
 - Read-only analysis may use the lossy parser. Any user-visible edit must use
   the lossless document and shared edit session described below.
 - Preserve the existing trust boundaries and execution-order semantics even if
@@ -258,7 +261,7 @@ machine-specific paths or facts that are obvious from the source.
   regressions. Keep future coverage behavior-based and do not add a test when a
   simpler existing case already proves the same contract.
 - Frontend tests use Playwright against the real local server and vendored
-  Three.js assets with an installed Edge browser. They may skip when Edge or
+  Three.js assets with a compatible Edge browser runtime. They may skip when Edge or
   the assets are unavailable. Mock only `window.pywebview.api` for UI-state
   tests; do not import `app.api` into a bare browser fixture because it pulls in
   GUI webview state.

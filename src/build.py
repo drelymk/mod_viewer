@@ -572,7 +572,8 @@ def main():
     ap.add_argument("--rebuild-bootloader", action="store_true",
                     help="recompile PyInstaller's bootloader in an isolated venv "
                          "(clears most antivirus false positives; needs a C compiler). "
-                         "Reuses .venv-build if already compiled — delete it to redo.")
+                         "Reuses the existing build environment if already compiled; "
+                         "remove it to redo.")
     args = ap.parse_args()
 
     if sys.version_info < MIN_PYTHON:

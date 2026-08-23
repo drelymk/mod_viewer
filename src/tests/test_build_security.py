@@ -56,7 +56,7 @@ def test_safe_extract_tar_allows_regular_files_and_directories(tmp_path):
 @pytest.mark.parametrize("name", [
     "../outside.txt",
     "/absolute.txt",
-    r"C:\absolute.txt",
+    r"X:\fixture\absolute.txt",
 ])
 def test_safe_extract_tar_rejects_path_escape(tmp_path, name):
     archive = _archive(tmp_path, [_file(name)])

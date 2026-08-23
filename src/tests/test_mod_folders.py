@@ -171,11 +171,14 @@ def test_list_subfolders_is_immediate_sorted_and_non_recursive(tmp_path):
 def test_containment_rejects_prefix_parent_and_other_drive():
     assert mod_folders.normalize_path("") == ""
     assert mod_folders.normalize_path("   ") == ""
-    assert mod_folders.is_within(r"D:\Mods\Alice", r"D:\Mods")
-    assert mod_folders.is_within(r"D:\Mods", r"D:\Mods")
-    assert not mod_folders.is_within(r"D:\ModsBackup", r"D:\Mods")
-    assert not mod_folders.is_within(r"D:\Other\Mods", r"D:\Mods")
-    assert not mod_folders.is_within(r"E:\Mods\Alice", r"D:\Mods")
+    assert mod_folders.is_within(r"X:\fixture\mods\Alice", r"X:\fixture\mods")
+    assert mod_folders.is_within(r"X:\fixture\mods", r"X:\fixture\mods")
+    assert not mod_folders.is_within(
+        r"X:\fixture\mods-backup", r"X:\fixture\mods")
+    assert not mod_folders.is_within(
+        r"X:\fixture\other\mods", r"X:\fixture\mods")
+    assert not mod_folders.is_within(
+        r"Y:\fixture\mods\Alice", r"X:\fixture\mods")
 
 
 def test_api_registry_authorizes_descendants_and_keeps_active_exact_path(

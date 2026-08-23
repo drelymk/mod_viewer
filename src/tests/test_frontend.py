@@ -20,6 +20,7 @@ _PNG_URI = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
     "ScLkWQAAAABJRU5ErkJggg==")
+_MOD_LIBRARY = "fixture-mod-library"
 
 
 def _f32(*values):
@@ -294,8 +295,8 @@ def edge_browser():
     with playwright.sync_playwright() as runtime:
         try:
             browser = runtime.chromium.launch(channel="msedge", headless=True)
-        except playwright.Error as error:
-            pytest.skip(f"installed Edge is required for frontend smoke tests: {error}")
+        except playwright.Error:
+            pytest.skip("frontend smoke tests require a compatible browser runtime")
         yield browser
         browser.close()
 
@@ -2279,7 +2280,7 @@ def test_feature_flag_css_keeps_cycle_preview_and_core_invariants(
 
 def test_mod_folder_panel_overlays_sidebar_and_browses_children_lazily(
         edge_browser, frontend_url):
-    root = r"D:\Mods"
+    root = _MOD_LIBRARY
     alice = root + r"\Alice"
     astra = root + r"\Astra"
     context, page = _page(
@@ -2383,7 +2384,7 @@ def test_empty_mod_folder_panel_keeps_fixed_height_above_navigation_hint(
 
 def test_mod_folder_name_selection_preserves_dock_state_across_reload(
         edge_browser, frontend_url):
-    root = r"D:\Mods"
+    root = _MOD_LIBRARY
     alice = root + r"\Alice"
     context, page = _page(
         edge_browser, frontend_url, {alice: _payload("Alice")},
@@ -2903,7 +2904,7 @@ def test_failed_semantic_refresh_still_updates_pending_state(
 
 def test_reload_and_tree_selection_share_one_transition_guard(
         edge_browser, frontend_url):
-    root = r"D:\Mods"
+    root = _MOD_LIBRARY
     alice = root + r"\Alice"
     astra = root + r"\Astra"
     context, page = _page(
@@ -2945,8 +2946,8 @@ def test_reload_and_tree_selection_share_one_transition_guard(
 
 def test_mod_folder_failed_selection_keeps_panel_open_and_reports_error(
         edge_browser, frontend_url):
-    root = r"D:\Mods"
-    alice = r"D:\Mods\Alice"
+    root = _MOD_LIBRARY
+    alice = root + r"\Alice"
     broken = root + r"\Broken"
     context, page = _page(
         edge_browser, frontend_url,
@@ -2975,7 +2976,7 @@ def test_mod_folder_failed_selection_keeps_panel_open_and_reports_error(
 
 def test_mod_folder_tree_switch_respects_pending_change_confirmation(
         edge_browser, frontend_url):
-    root = r"D:\Mods"
+    root = _MOD_LIBRARY
     first = root + r"\First"
     second = root + r"\Second"
     context, page = _page(
@@ -3008,8 +3009,8 @@ def test_mod_folder_tree_switch_respects_pending_change_confirmation(
 
 def test_mod_folder_add_edit_delete_modal_flow(
         edge_browser, frontend_url):
-    original = r"D:\Mods\Original"
-    replacement = r"D:\Mods\Replacement"
+    original = _MOD_LIBRARY + r"\Original"
+    replacement = _MOD_LIBRARY + r"\Replacement"
     context, page = _page(
         edge_browser, frontend_url, {},
         mod_folders=[{"name": "Original", "path": original, "exists": True}],
