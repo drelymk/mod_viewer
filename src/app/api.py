@@ -6,6 +6,7 @@ belongs in mod_loader instead.
 """
 
 import os
+import traceback
 
 import webview
 
@@ -187,22 +188,28 @@ class ModViewerAPI:
             texture_source=texture_source, texture_profile=profile)
         return encoded
 
-    def load_mod(self, folder_path):
+    def _authoritative_context(self, folder_path):
+        """Load active INI documents while preserving the current session."""
         folder_path = self._folder(folder_path)
-        # Reopen the same mod from its already-owned path set.  This keeps a
-        # staged edit that changes root geometry from triggering a new disk
-        # discovery and leaves only the first open responsible for selection.
         ini_paths = (edit_session.document_paths(folder_path)
                      or discover_ini_paths(folder_path))
-        # Every active INI is loaded once into the authoritative in-memory
-        # session. Reloads, text edits and toggle edits all read these docs;
-        # only Export copies dirty versions back to physical files.
         edit_session.load_documents(folder_path, ini_paths)
         overrides = edit_session.overrides_for(folder_path)
         pending_new_sections = edit_session.new_sections_for(folder_path)
         context = mod_loader.ModLoadContext(
             folder_path, ini_paths, edit_session.documents_for(folder_path),
             metadata.load(folder_path))
+        return folder_path, overrides, pending_new_sections, context
+
+    @staticmethod
+    def _semantic_read_error():
+        traceback.print_exc()
+        return {"error": "Unexpected backend error. See the application log for details."}
+
+    def load_mod(self, folder_path):
+        folder_path, overrides, pending_new_sections, context = \
+            self._authoritative_context(folder_path)
+        ini_paths = context.ini_paths
         geometry = GeometryBlob()
         publication = server.begin_texture_publication(folder_path)
         try:
@@ -232,6 +239,39 @@ class ModViewerAPI:
         except Exception:
             publication.discard()
             raise
+
+    def get_present_state(self, folder_path):
+        """Return staged PRESENT state without loading geometry or textures."""
+        try:
+            folder_path, overrides, _pending, context = \
+                self._authoritative_context(folder_path)
+            present = mod_loader.load_present_state(context, overrides)
+            metadata.hydrate_present(folder_path, present, context.metadata)
+            return {"present": present}
+        except Exception:
+            return self._semantic_read_error()
+
+    def get_control_state(self, folder_path):
+        """Return staged control semantics without rebuilding the model."""
+        try:
+            folder_path, overrides, pending, context = \
+                self._authoritative_context(folder_path)
+            result = mod_loader.load_control_state(
+                context, overrides, pending)
+            metadata.hydrate_present(
+                folder_path, result["controls"]["present"], context.metadata)
+            return result
+        except Exception:
+            return self._semantic_read_error()
+
+    def get_mesh_semantics(self, folder_path):
+        """Return staged draw visibility semantics without rebuilding meshes."""
+        try:
+            _folder_path, overrides, _pending, context = \
+                self._authoritative_context(folder_path)
+            return {"meshes": mod_loader.load_mesh_semantics(context, overrides)}
+        except Exception:
+            return self._semantic_read_error()
 
     def get_diagnostics(self, folder_path):
         """Return the read-only health scan for the current edit revision."""

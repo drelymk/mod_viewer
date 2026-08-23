@@ -60,6 +60,19 @@ export function resetMeshVisibility() {
   requestRender();
 }
 
+/** Replace only draw visibility semantics on the existing meshes. */
+export function updateMeshSemantics(semantics) {
+  const next = semantics || {};
+  if (activeMeshes.some(mesh => !next[mesh.userData.semanticKey])) return false;
+  activeMeshes.forEach(mesh => {
+    mesh.userData.conditions = next[mesh.userData.semanticKey].conditions || [];
+    if (next[mesh.userData.semanticKey].sources) {
+      mesh.userData.sources = next[mesh.userData.semanticKey].sources;
+    }
+  });
+  return true;
+}
+
 /** Pin or clear one mesh's highlighted diffuse. Ordered component propagation
  * remains the texture-state module's responsibility. */
 export function setManualTexOverride(mesh, value, { notify = true } = {}) {

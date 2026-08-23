@@ -84,11 +84,13 @@ async function handleDelete(info, ctx) {
   }
   const summary = summarizeReport(result.result || {});
   if (summary) await alertDialog('Toggle deleted, but review these lines by hand:\n\n' + summary);
-  if (ctx.onChange) await ctx.onChange();
+  if (ctx.onChange) await ctx.onChange({ type: 'delete' });
 }
 
 function buildToggleItem(info, ctx) {
-  for (const v of info.vars) setToggleValue(v.var, v.default);
+  for (const v of info.vars) {
+    if (getToggleValue(v.var) === undefined) setToggleValue(v.var, v.default);
+  }
 
   const positions = cyclePositionCount(info.vars);
   let cyclePosition = findCyclePosition(info.vars, positions);

@@ -93,7 +93,7 @@ function buildShapeSlider(info) {
   input.min = info.min;
   input.max = info.max;
   input.step = info.step;
-  input.value = info.default;
+  input.value = getToggleValue(info.var) ?? info.default;
   const valSpan = document.createElement('span');
   valSpan.className = 'menu-value';
   valSpan.textContent = Number(input.value).toFixed(2);
@@ -147,7 +147,9 @@ export function buildMenuPanel(menu) {
   // wrong branch outputs (notably WWMI qipao combinations).
   for (const key of keys) {
     const info = menu[key];
-    setToggleValue(info.var, String(info.default));
+    if (getToggleValue(info.var) === undefined) {
+      setToggleValue(info.var, String(info.default));
+    }
   }
 
   const bySource = groupKeysBySource(menu, keys);

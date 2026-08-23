@@ -199,7 +199,7 @@ async function save() {
     const summary = summarizeSkips(result.result || {});
     exitRecordingUI();
     if (summary) await alertDialog('Recorded, but review these lines by hand:\n\n' + summary);
-    if (ctx.onChange) await ctx.onChange();
+    if (ctx.onChange) await ctx.onChange({ type: 'record' });
   } finally {
     ui.saveBtn.disabled = false;
   }

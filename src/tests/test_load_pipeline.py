@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
-from app import edit_session, metadata, mod_loader, server
+from app import edit_session, metadata, mod_loader, present_api, server
+from app.api import ModViewerAPI
 from core.ini_analysis import analyze_ini
 from core.ini_document import IniDocument
 from core.ini_sections import (extract_resources, sections_from_document)
@@ -124,6 +125,42 @@ def test_diagnostics_cache_tracks_authoritative_revision():
             assert (edit_session.cached_diagnostics(root) is None), ("viewer metadata changes can invalidate diagnostics independently")
         finally:
             edit_session.discard(root)
+
+
+def test_present_state_read_uses_staged_documents_without_geometry(
+        tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path)))
+    ini_path = os.path.join(root, "mod.ini")
+    with open(ini_path, "w", encoding="utf-8") as fh:
+        fh.write(
+            "[KeyOutfit]\n"
+            "key = 1\n"
+            "type = cycle\n"
+            "$Outfit = 0,1\n"
+            "[TextureOverrideBody]\n"
+            "if $Outfit == 0\n"
+            "drawindexed = 3, 0, 0\n"
+            "endif\n")
+
+    edit_session.load_documents(root, [ini_path])
+    added = present_api.add_present(
+        root, "ctrl p", "", {"mod.ini": {"Outfit": "0"}})
+    assert added.get("ok") is True
+
+    api = ModViewerAPI()
+    api._authorized_folders.add(os.path.normcase(os.path.abspath(root)))
+    with patch.object(mod_loader, "build_mesh_result",
+                      side_effect=AssertionError("geometry must not be built")):
+        result = api.get_present_state(root)
+
+    try:
+        assert result.get("error") is None
+        present = result["present"]
+        assert present["item"]["key_raw"] == "ctrl p"
+        assert present["item"]["count"] == 1
+        assert present["item"]["names"] == ["Present 1"]
+    finally:
+        edit_session.discard(root)
 
 
 def test_wuwa_publishes_one_intact_normal_data_source():

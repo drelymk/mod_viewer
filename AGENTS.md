@@ -4,6 +4,10 @@ The durable project invariants live in `context.md`. Read that file before subst
 
 Keep deterministic formatting, lint, and other mechanical checks in CI. Code review should focus on consequential regressions and repository-specific behavior.
 
+## Test environment
+
+- Run the repository test suite with `.venv-test\Scripts\python.exe -m pytest -q`. This project venv includes `mcp.server.fastmcp`; the system Python may not.
+
 ## Code Review Rules
 
 ### Preserve lossless, staged INI editing

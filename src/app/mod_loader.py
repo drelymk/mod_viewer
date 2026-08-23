@@ -17,7 +17,7 @@ from core.ini_condition import is_namespaced
 from core.ini_sections import extract_resources, merge_sections
 from core.ini_analysis import analyze_ini
 from core.mod_discovery import discover_ini_paths
-from core.mesh_builder import build_mesh_result
+from core.mesh_builder import build_mesh_result, build_mesh_semantics
 from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_data_uri
 from core.ini_menu import attach_menu_images
@@ -434,6 +434,40 @@ def _gating_vars_from_groups(groups):
                         for cond in cond_group:
                             found.add(cond["var"])
     return found
+
+
+def load_present_state(context, overrides=None):
+    """Read only the logical PRESENT projection from authoritative INIs."""
+    return _parse_inis(
+        context.ini_paths, context.mod_dir, overrides, context.docs).present
+
+
+def load_control_state(context, overrides=None, pending_new_sections=None):
+    """Read control semantics without constructing mesh or texture payloads."""
+    parsed = _parse_inis(
+        context.ini_paths, context.mod_dir, overrides, context.docs)
+    gating_vars = _gating_vars_from_groups(parsed.groups)
+    return {
+        "controls": {
+            "toggles": build_toggle_panel(
+                parsed.toggles, parsed.defaults, gating_vars,
+                context.mod_dir, pending_new_sections),
+            "menu": build_menu_panel(
+                parsed.menu, parsed.defaults, context.mod_dir),
+            "present": parsed.present,
+        },
+        "state": {
+            "rules": parsed.state_rules,
+            "defaults": parsed.defaults,
+        },
+    }
+
+
+def load_mesh_semantics(context, overrides=None):
+    """Read draw visibility semantics without building geometry."""
+    parsed = _parse_inis(
+        context.ini_paths, context.mod_dir, overrides, context.docs)
+    return build_mesh_semantics(parsed.groups, context.mod_dir)
 
 
 def _register_material_profile(table, profile):

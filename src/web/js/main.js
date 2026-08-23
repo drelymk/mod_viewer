@@ -6,7 +6,9 @@ import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterT
          setEnvironmentPreset, setLightMode, getRenderCount } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
 import { refreshMeshTexture, setTextures } from './mesh-factory.js';
-import { activeMeshes, reset, resetMeshState, setStateRules, toggleWireframe, toggleSmoothShading, toggleGlossy } from './visibility.js';
+import { activeMeshes, refreshAll, reset, resetMeshState, setStateRules,
+         toggleWireframe, toggleSmoothShading, toggleGlossy,
+         updateMeshSemantics } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import { buildMeshPanel } from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
@@ -360,7 +362,9 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   const state = payload.state || {};
   const meshes = payload.meshes || {};
   lastToggles = controls.toggles || {};
-  setStateRules(state.rules || [], state.defaults || {});
+  setStateRules(state.rules || [], state.defaults || {}, {
+    toggles: controls.toggles || {}, menu: controls.menu || {},
+  });
   setTextures(payload.textures);
   buildMeshPanel(
     meshes, currentModPath, payload.metadata?.mesh_names || {},
@@ -369,9 +373,13 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
       onMaterialKindChanged: reloadCurrentMod,
       texturePools: payload.texture_pools || {},
     });
-  buildTogglePanel(controls.toggles, { modPath: currentModPath, onChange: reloadCurrentMod });
+  buildTogglePanel(controls.toggles, {
+    modPath: currentModPath, onChange: handleToggleChange,
+  });
   buildMenuPanel(controls.menu);
-  buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });
+  buildPresentPanel(controls.present, {
+    modPath: currentModPath, onChange: handlePresentChange,
+  });
   rightDockEnabled = true;
   syncViewportControlPlacement();
   fitTo(activeMeshes, {
@@ -383,6 +391,104 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   });
 
   showLoading(false);
+}
+
+async function refreshPresentState(change = {}) {
+  if (!currentModPath) return false;
+  let result;
+  try {
+    result = await window.pywebview.api.get_present_state(currentModPath);
+  } catch (error) {
+    await alertDialog('Could not refresh PRESENT:\n\n' + error);
+    return false;
+  }
+  if (result?.error) {
+    await alertDialog('Could not refresh PRESENT:\n\n' + result.error);
+    return false;
+  }
+  const context = {
+    modPath: currentModPath,
+    onChange: handlePresentChange,
+  };
+  if (Object.hasOwn(change, 'selectedPosition')) {
+    context.selectedPosition = change.selectedPosition;
+    context.applySelection = change.applySelection === true;
+  }
+  buildPresentPanel(result.present, context);
+  syncViewportControlPlacement();
+  await refreshPendingState();
+  void refreshHealthReport();
+  return true;
+}
+
+async function handlePresentChange(change = {}) {
+  return refreshPresentState(change);
+}
+
+async function refreshControlSemantics() {
+  if (!currentModPath) return false;
+  let result;
+  try {
+    result = await window.pywebview.api.get_control_state(currentModPath);
+  } catch (error) {
+    await alertDialog('Could not refresh controls:\n\n' + error);
+    return false;
+  }
+  if (result?.error) {
+    await alertDialog('Could not refresh controls:\n\n' + result.error);
+    return false;
+  }
+  const controls = result.controls || {};
+  const state = result.state || {};
+  lastToggles = controls.toggles || {};
+  setStateRules(state.rules || [], state.defaults || {}, {
+    toggles: controls.toggles || {}, menu: controls.menu || {},
+  });
+  buildTogglePanel(controls.toggles, {
+    modPath: currentModPath, onChange: handleToggleChange,
+  });
+  buildMenuPanel(controls.menu);
+  buildPresentPanel(controls.present, {
+    modPath: currentModPath, onChange: handlePresentChange,
+  });
+  syncViewportControlPlacement();
+  refreshAll();
+  await refreshPendingState();
+  void refreshHealthReport();
+  return true;
+}
+
+async function refreshMeshSemantics() {
+  if (!currentModPath) return false;
+  let result;
+  try {
+    result = await window.pywebview.api.get_mesh_semantics(currentModPath);
+  } catch (error) {
+    await alertDialog('Could not refresh mesh visibility:\n\n' + error);
+    return false;
+  }
+  if (result?.error) {
+    await alertDialog('Could not refresh mesh visibility:\n\n' + result.error);
+    return false;
+  }
+  if (!updateMeshSemantics(result.meshes)) {
+    await alertDialog('Could not refresh mesh visibility:\n\n' +
+      'The staged draw set no longer matches the displayed model.');
+    return false;
+  }
+  refreshAll();
+  await refreshPendingState();
+  void refreshHealthReport();
+  return true;
+}
+
+async function handleToggleChange(change = {}) {
+  if (change.type === 'record') return refreshMeshSemantics();
+  if (change.type === 'delete') {
+    const controlsRefreshed = await refreshControlSemantics();
+    return controlsRefreshed ? refreshMeshSemantics() : false;
+  }
+  return refreshControlSemantics();
 }
 
 async function loadModAt(path) {
@@ -670,7 +776,8 @@ rendererReady.then(ready => {
     return normalized;
   };
   window.modViewer = {
-    displayMeshPayload, openMod, switchMod, reloadCurrentMod, exportChanges, activeMeshes,
+    displayMeshPayload, openMod, switchMod, reloadCurrentMod, exportChanges,
+    refreshPresentState, refreshControlSemantics, refreshMeshSemantics, activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
     getMaterialState, getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,

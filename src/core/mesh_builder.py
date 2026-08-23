@@ -262,6 +262,29 @@ def _deduplicate_draws(group, max_draws=0):
     return unique[:max_draws] if max_draws else unique
 
 
+def build_mesh_semantics(groups, mod_dir, max_draws=0):
+    """Return draw visibility semantics without resolving any geometry.
+
+    This is used after Record changes a draw's conditions.  Keep it separate
+    from :func:`build_mesh_result`: the incremental authoring path must not
+    read vertex/index buffers, publish textures, or allocate geometry storage.
+    """
+    draw_total = sum(len(group.get("draws", [])) for group in groups)
+    if draw_total > _MAX_DRAWS:
+        raise ValueError(
+            f"Mod has too many draws ({draw_total:,}; limit {_MAX_DRAWS:,}).")
+
+    result = {}
+    for group in groups:
+        for draw in _deduplicate_draws(group, max_draws=max_draws):
+            entry = {"conditions": draw.conditions or []}
+            if draw.sources:
+                entry["sources"] = [_rel_source(source, mod_dir)
+                                     for source in draw.sources]
+            result[draw.label] = entry
+    return result
+
+
 def _geometry_ref(raw, geometry):
     """Serialize one binary field into the caller-owned geometry store."""
     if geometry is not None:

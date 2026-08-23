@@ -129,6 +129,26 @@ def _payload(label="A"):
     }
 
 
+def _present_payload(label="Present"):
+    payload = _payload(label)
+    payload["controls"]["present"] = {
+        "target_inis": [{
+            "value": f"{label}.ini", "label": f"{label}.ini",
+            "vars": ["toggle"], "has_present": True,
+        }],
+        "item": {
+            "inis": [f"{label}.ini"], "target_inis": [],
+            "key": "ctrl p", "key_raw": "ctrl p", "back": "",
+            "vars": [{"var": "toggle", "values": ["0", "1"],
+                      "default": "0"}],
+            "capture_vars": ["toggle"], "count": 2, "aligned": True,
+            "missing_inis": [], "sync_error": None,
+            "names": ["Present 1", "Present 2"],
+        },
+    }
+    return payload
+
+
 def _dxt1_vertical_gradient():
     """One DXT1 block with red top rows and blue bottom rows."""
     data = bytearray(136)
@@ -299,7 +319,8 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "panelOpacityApi": panel_opacity_api,
         "calls": {"loadMod": [], "listSubfolders": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
-                   "panelOpacity": []},
+                   "panelOpacity": [], "presentState": [],
+                   "controlState": [], "meshSemantics": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -327,6 +348,31 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                 });
               }
               return copy(state.responses[path]);
+            },
+            get_present_state: async path => {
+              state.calls.presentState.push(path);
+              return copy({present: state.responses[path]?.controls?.present || {
+                target_inis: [], item: null,
+              }});
+            },
+            get_control_state: async path => {
+              state.calls.controlState.push(path);
+              const payload = state.responses[path] || {};
+              return copy({
+                controls: payload.controls || {},
+                state: payload.state || {rules: [], defaults: {}},
+              });
+            },
+            get_mesh_semantics: async path => {
+              state.calls.meshSemantics.push(path);
+              const payload = state.responses[path] || {};
+              const meshes = payload.meshSemantics || Object.fromEntries(
+                Object.entries(payload.meshes || {}).map(([name, entry]) => [name, {
+                  conditions: entry.conditions || [],
+                  sources: entry.sources || [],
+                }])
+              );
+              return copy({meshes});
             },
             has_pending_changes: async path => !!state.pending[path],
             discard_changes: async path => {
@@ -2555,6 +2601,84 @@ def test_wuwa_models_start_with_a_180_degree_base_turn(
           return window.modViewer.activeMeshes[0].quaternion.toArray();
         }""")
         assert reloaded == pytest.approx([0, 1, 0, 0])
+    finally:
+        context.close()
+
+
+def test_present_refresh_keeps_model_identity_and_selection(
+        edge_browser, frontend_url):
+    payload = _present_payload()
+    context, page = _page(edge_browser, frontend_url, {"Present": payload})
+    try:
+        _open(page, "Present")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""async () => {
+          const {setToggleValue, refreshAll} = await import('./js/visibility.js');
+          setToggleValue('toggle', '1');
+          refreshAll();
+          window.__presentMesh = window.modViewer.activeMeshes[0];
+        }""")
+        page.evaluate("""() => {
+          window.__fakeApi.responses.Present.controls.present.item.names = ['Zero', 'One'];
+        }""")
+
+        assert page.evaluate("window.modViewer.refreshPresentState()") is True
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Present"]
+        assert page.evaluate("window.__fakeApi.calls.presentState") == ["Present"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__presentMesh")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.conditions") == []
+        assert page.locator("#present-list .toggle-value").inner_text() == "One"
+        assert page.evaluate("window.modViewer.refreshPresentState({"
+                            "selectedPosition: 0, applySelection: true})") is True
+        assert page.evaluate("window.modViewer.activeMeshes[0] === window.__presentMesh")
+        assert page.evaluate("window.modViewer.activeMeshes[0] && "
+                            "window.__fakeApi.calls.loadMod.length") == 1
+        assert page.locator("#present-list .toggle-value").inner_text() == "Zero"
+    finally:
+        context.close()
+
+
+def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
+        edge_browser, frontend_url):
+    payload = _payload("Semantic")
+    mesh_name = next(iter(payload["meshes"]))
+    payload["meshSemantics"] = {
+        mesh_name: {"conditions": [[{
+            "var": "toggle", "value": "1", "negate": False,
+        }]], "sources": payload["meshes"][mesh_name]["sources"]},
+    }
+    context, page = _page(edge_browser, frontend_url, {"Semantic": payload})
+    try:
+        _open(page, "Semantic")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""async () => {
+          const {setToggleValue, refreshAll} = await import('./js/visibility.js');
+          setToggleValue('toggle', '1');
+          refreshAll();
+          window.__semanticMesh = window.modViewer.activeMeshes[0];
+          window.__fakeApi.responses.Semantic.controls.toggles.KeySemantic.name = 'Renamed';
+        }""")
+
+        assert page.evaluate("window.modViewer.refreshControlSemantics()") is True
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Semantic"]
+        assert page.evaluate("window.__fakeApi.calls.controlState") == ["Semantic"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__semanticMesh")
+        assert page.locator("#toggle-list .toggle-name").inner_text() == "Renamed"
+        assert page.evaluate("""async () => {
+          await window.modViewer.refreshMeshSemantics();
+          return {
+            same: window.modViewer.activeMeshes[0] === window.__semanticMesh,
+            conditions: window.modViewer.activeMeshes[0].userData.conditions,
+          };
+        }""") == {
+            "same": True,
+            "conditions": [[{"var": "toggle", "value": "1", "negate": False}]],
+        }
+        assert page.evaluate("window.__fakeApi.calls.loadMod.length") == 1
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == ["Semantic"]
     finally:
         context.close()
 
