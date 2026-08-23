@@ -4,7 +4,7 @@ import { confirmDialog } from './dialogs.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
 
 const $ = id => document.getElementById(id);
-const ASSET_TYPES = ['GIMI', 'ZZMI', 'WWMI'];
+const ASSET_TYPES = ['ZZMI', 'GIMI', 'WWMI'];
 
 function baseName(path) {
   return String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';

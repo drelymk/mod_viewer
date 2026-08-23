@@ -212,6 +212,7 @@ export function createFolderRegistryPanel({
   function render(entries) {
     roots = entries || [];
     listElement.innerHTML = '';
+    listElement.hidden = roots.length === 0;
     roots.forEach(entry => listElement.appendChild(createNode(entry, true)));
     if (emptyElement) emptyElement.hidden = roots.length !== 0;
     setActivePath(activePath);

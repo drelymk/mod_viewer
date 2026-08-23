@@ -93,3 +93,19 @@ def test_api_asset_authorization_is_separate_from_mod_roots(tmp_path, monkeypatc
     with pytest.raises(PermissionError):
         api._asset_folder(mod_root)
     assert api._asset_folder(asset_root) == mod_folders.normalize_path(asset_root)
+
+
+def test_api_asset_authorization_is_revoked_when_root_is_deleted(tmp_path, monkeypatch):
+    filename = _config(tmp_path)
+    asset_root = _directory(tmp_path, "assets")
+    monkeypatch.setattr(paths, "config_path", lambda: filename)
+    api = ModViewerAPI()
+    api._picker_authorized_folders.add(mod_folders.normalize_path(asset_root))
+
+    assert api.add_asset_folder("GIMI", asset_root).get("folders")
+    cached_child = os.path.join(asset_root, "Character")
+    assert api._asset_folder(cached_child) == mod_folders.normalize_path(cached_child)
+
+    assert api.delete_asset_folder(asset_root).get("folders") == []
+    with pytest.raises(PermissionError):
+        api._asset_folder(cached_child)

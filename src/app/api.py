@@ -106,7 +106,12 @@ class ModViewerAPI:
         self._authorized_roots = mod_folders.registered_paths(entries)
 
     def _refresh_authorized_asset_roots(self, entries):
-        self._authorized_asset_roots = asset_folders.registered_paths(entries)
+        roots = asset_folders.registered_paths(entries)
+        self._authorized_asset_roots = roots
+        self._authorized_asset_folders = {
+            path for path in self._authorized_asset_folders
+            if any(asset_folders.is_within(path, root) for root in roots)
+        }
 
     def get_mod_folders(self):
         try:

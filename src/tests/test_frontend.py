@@ -532,10 +532,14 @@ def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
     try:
         page.locator("#mod-library-tab").click()
         assert page.locator("#mod-folder-panel").is_visible()
+        assert page.locator("#mod-folder-list").is_hidden()
+        assert page.locator("#mod-folder-empty").is_visible()
         assert page.locator("#mod-library-tab").get_attribute("aria-selected") == "true"
         page.locator("#assets-tab").click()
         assert page.locator("#mod-folder-panel").is_hidden()
         assert page.locator("#asset-folder-panel").is_visible()
+        assert page.locator("#asset-folder-list").is_hidden()
+        assert page.locator("#asset-folder-empty").is_visible()
         assert page.locator("#assets-tab").get_attribute("aria-expanded") == "true"
         page.locator("#assets-tab").click()
         assert page.locator("#asset-folder-panel").is_hidden()
@@ -590,7 +594,7 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
         page.locator(".asset-folder-select", has_text="Character").click()
         assert page.evaluate("window.__fakeApi.calls.loadMod") == []
         page.locator("#asset-folder-add").click()
-        assert page.locator("#afm-type option").all_inner_texts() == ["GIMI", "ZZMI", "WWMI"]
+        assert page.locator("#afm-type option").all_inner_texts() == ["ZZMI", "GIMI", "WWMI"]
     finally:
         context.close()
 
