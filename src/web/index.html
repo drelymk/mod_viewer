@@ -12,6 +12,8 @@
 
 <svg id="ui-icon-sprite" aria-hidden="true" focusable="false">
   <symbol id="icon-library" viewBox="0 0 24 24"><path d="M4 6h6l2 2h8v11H4z"/><path d="M4 9h16"/></symbol>
+  <symbol id="icon-mesh" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></symbol>
+  <symbol id="icon-assets" viewBox="0 0 24 24"><path d="M4 7h5l2 2h9v11H4z"/><path d="M4 7V4h7l2 3M8 13h8M8 17h5"/></symbol>
   <symbol id="icon-inspector" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h5M8 16h8"/></symbol>
   <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></symbol>
@@ -123,35 +125,62 @@
 </div>
 
 <div id="left-dock">
-  <div id="mod-folder-dock" class="mod-folder-dock">
-    <section id="mod-folder-panel" class="mod-folder-panel" aria-label="Mod Library">
+  <nav id="left-dock-tabs" class="dock-tabs left-dock-tabs" role="tablist" aria-label="Viewer panels">
+    <button id="meshes-tab" class="dock-tab" data-left-tab="meshes" type="button" role="tab"
+            aria-selected="false" aria-expanded="false" aria-controls="sidebar" aria-disabled="true">
+      <svg class="ui-icon" aria-hidden="true"><use href="#icon-mesh"></use></svg><span>Meshes</span>
+    </button>
+    <button id="mod-library-tab" class="dock-tab" data-left-tab="mod-library" type="button" role="tab"
+            aria-selected="false" aria-expanded="false" aria-controls="mod-folder-panel">
+      <svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg><span>Mod Library</span>
+    </button>
+    <button id="assets-tab" class="dock-tab" data-left-tab="assets" type="button" role="tab"
+            aria-selected="false" aria-expanded="false" aria-controls="asset-folder-panel">
+      <svg class="ui-icon" aria-hidden="true"><use href="#icon-assets"></use></svg><span>Assets</span>
+    </button>
+  </nav>
+
+  <div id="left-panel-container">
+    <section id="mod-folder-panel" class="left-dock-panel" role="tabpanel" aria-labelledby="mod-library-tab" aria-label="Mod Library" hidden>
       <div class="panel-hdr">
         <h3>Mod Library</h3>
         <button id="mod-folder-add" class="icon-btn" type="button"
                 title="Add Mod Folder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
-        <button id="mod-folder-close" class="icon-btn mod-folder-close" type="button"
-                aria-label="Close Mod Library"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg></button>
       </div>
       <div id="mod-folder-error" class="mod-folder-error" role="alert"></div>
-      <div id="mod-folder-list" class="mod-folder-list"></div>
-      <div id="mod-folder-empty" class="mod-folder-empty" hidden>
+      <div id="mod-folder-list" class="mod-folder-list folder-registry-list"></div>
+      <div id="mod-folder-empty" class="mod-folder-empty folder-registry-empty" hidden>
         <div class="empty-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-library"></use></svg></div>
         <strong>No mod folders yet</strong>
         <span>Add frequently used mod folders here for quick access.</span>
         <button id="mod-folder-empty-add" class="ui-button ui-button-primary" type="button">Add Mod Folder</button>
       </div>
     </section>
-  </div>
 
-  <div id="sidebar">
-    <div class="panel-hdr">
-      <button type="button" class="group-toggle" aria-expanded="true" aria-controls="mesh-list"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
-      <h3>Meshes</h3>
-      <button id="reset-state-btn" class="icon-btn" title="Reset mesh visibility" aria-label="Reset mesh visibility"><svg class="ui-icon" aria-hidden="true"><use href="#icon-reset"></use></svg></button>
-      <button id="mod-folder-toggle" class="icon-btn mesh-library-btn" type="button"
-              title="Open Mod Library" aria-label="Open Mod Library" aria-expanded="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
-    </div>
-    <div id="mesh-list"></div>
+    <section id="asset-folder-panel" class="left-dock-panel" role="tabpanel" aria-labelledby="assets-tab" aria-label="Assets" hidden>
+      <div class="panel-hdr">
+        <h3>Assets</h3>
+        <button id="asset-folder-add" class="icon-btn" type="button"
+                title="Add Asset Folder" aria-label="Add Asset Folder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
+      </div>
+      <div id="asset-folder-error" class="asset-folder-error" role="alert"></div>
+      <div id="asset-folder-list" class="asset-folder-list folder-registry-list"></div>
+      <div id="asset-folder-empty" class="asset-folder-empty folder-registry-empty" hidden>
+        <div class="empty-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-assets"></use></svg></div>
+        <strong>No asset folders yet</strong>
+        <span>Add extracted asset folders for future asset-aware loading.</span>
+        <button id="asset-folder-empty-add" class="ui-button ui-button-primary" type="button">Add Asset Folder</button>
+      </div>
+    </section>
+
+    <section id="sidebar" class="left-dock-panel" role="tabpanel" aria-labelledby="meshes-tab" hidden>
+      <div class="panel-hdr">
+        <button type="button" class="group-toggle" aria-expanded="true" aria-controls="mesh-list"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
+        <h3>Meshes</h3>
+        <button id="reset-state-btn" class="icon-btn" title="Reset mesh visibility" aria-label="Reset mesh visibility"><svg class="ui-icon" aria-hidden="true"><use href="#icon-reset"></use></svg></button>
+      </div>
+      <div id="mesh-list"></div>
+    </section>
   </div>
 
   <div id="camera-panel">
@@ -197,10 +226,10 @@
 
 <div id="right-dock">
   <div class="right-dock-tabs" role="tablist" aria-label="Details panels">
-    <button id="controls-tab" class="right-dock-tab active" type="button" role="tab"
-            aria-selected="true" aria-controls="controls-panel">Controls</button>
+    <button id="controls-tab" class="right-dock-tab" type="button" role="tab"
+            aria-selected="false" aria-expanded="false" aria-controls="controls-panel">Controls</button>
     <button id="inspector-tab" class="right-dock-tab" type="button" role="tab"
-            aria-selected="false" aria-controls="inspector-panel">Inspector</button>
+            aria-selected="false" aria-expanded="false" aria-controls="inspector-panel">Inspector</button>
   </div>
   <section id="inspector-panel" class="right-dock-pane" role="tabpanel" aria-labelledby="inspector-tab" hidden>
     <div class="inspector-empty" id="inspector-empty">
@@ -250,6 +279,30 @@
   </div>
   <div id="texture-popover" class="ui-popover tool-popover" role="menu" aria-label="Texture display options" hidden></div>
   <div id="light-popover" class="ui-popover tool-popover" role="menu" aria-label="Light options" hidden></div>
+</div>
+
+<div id="asset-folder-modal-backdrop" class="modal-backdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="afm-title">
+    <h4 id="afm-title">Add Asset Folder</h4>
+    <div id="afm-error" class="modal-error"></div>
+    <form id="afm-form">
+      <label class="modal-field">
+        <span>Type</span>
+        <select id="afm-type"></select>
+      </label>
+      <label class="modal-field">
+        <span>Folder</span>
+        <div class="mod-folder-path-field">
+          <input id="afm-path" type="text" readonly />
+          <button id="afm-browse" type="button">Browse</button>
+        </div>
+      </label>
+      <div class="modal-actions">
+        <button type="button" id="afm-cancel">Cancel</button>
+        <button type="submit" id="afm-save">Add</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <div id="mod-folder-modal-backdrop" class="modal-backdrop">

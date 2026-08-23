@@ -46,6 +46,7 @@ class ModLoadContext:
     ini_paths: list[str]
     docs: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
+    asset_folders: list = field(default_factory=list)
 
 
 @dataclass

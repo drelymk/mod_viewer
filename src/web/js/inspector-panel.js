@@ -1,7 +1,7 @@
 // Selection-aware details panel.  Mesh creation remains owned by mesh-panel;
 // this module only presents the already-authoritative mesh/component state.
 
-import { setRightDockTab } from './right-dock.js';
+import { isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from './selection.js';
 
 const meshRecords = new WeakMap();
@@ -300,7 +300,9 @@ function updateInspectorState() {
 function selectComponent(record) {
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
   clearSelection();
-  if (selectionCount++ === 0) setRightDockTab('inspector', { persist: false });
+  if (selectionCount++ === 0 && isRightDockOpen()) {
+    setRightDockTab('inspector', { persist: false });
+  }
   current = { type: 'component', record };
   record.header?.classList.add('selected');
   buildComponent(record);
@@ -311,7 +313,9 @@ function selectComponent(record) {
 function selectMesh(mesh) {
   const record = meshRecords.get(mesh);
   if (!record) return;
-  if (selectionCount++ === 0) setRightDockTab('inspector', { persist: false });
+  if (selectionCount++ === 0 && isRightDockOpen()) {
+    setRightDockTab('inspector', { persist: false });
+  }
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
   current = { type: 'mesh', mesh, record };
   buildMesh(mesh, record);

@@ -1,9 +1,10 @@
-// Mod Library registry and its feature-specific editor.
+// Asset Folder registry UI. Character rows are browse-only in this phase.
 
 import { confirmDialog } from './dialogs.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
 
 const $ = id => document.getElementById(id);
+const ASSET_TYPES = ['ZZMI', 'GIMI', 'WWMI'];
 
 function baseName(path) {
   return String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
@@ -14,50 +15,56 @@ function setTextError(element, message) {
   element.classList.toggle('show', !!message);
 }
 
-export function initModFolderPanel({ switchMod, onRegistryChanged }) {
-  const list = $('mod-folder-list');
-  const error = $('mod-folder-error');
-  const add = $('mod-folder-add');
-  const empty = $('mod-folder-empty');
-  const backdrop = $('mod-folder-modal-backdrop');
-  const title = $('mfm-title');
-  const form = $('mfm-form');
-  const nameInput = $('mfm-name');
-  const pathInput = $('mfm-path');
-  const browse = $('mfm-browse');
-  const cancel = $('mfm-cancel');
-  const save = $('mfm-save');
-  const modalError = $('mfm-error');
+export function initAssetFolderPanel() {
+  const list = $('asset-folder-list');
+  const error = $('asset-folder-error');
+  const add = $('asset-folder-add');
+  const empty = $('asset-folder-empty');
+  const backdrop = $('asset-folder-modal-backdrop');
+  const title = $('afm-title');
+  const form = $('afm-form');
+  const typeInput = $('afm-type');
+  const pathInput = $('afm-path');
+  const browse = $('afm-browse');
+  const cancel = $('afm-cancel');
+  const save = $('afm-save');
+  const modalError = $('afm-error');
 
   let editorMode = 'add';
   let originalPath = null;
   let selectedPath = null;
 
+  typeInput.replaceChildren(...ASSET_TYPES.map(value => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    return option;
+  }));
+
   const tree = createFolderRegistryPanel({
     listElement: list,
     emptyElement: empty,
     errorElement: error,
-    listChildren: path => window.pywebview.api.list_subfolders(path),
-    onRootSelected: path => selectFolder(path),
-    onChildSelected: path => selectFolder(path),
+    listChildren: path => window.pywebview.api.list_asset_subfolders(path),
+    onRootSelected: path => tree.setActivePath(path),
+    onChildSelected: path => tree.setActivePath(path),
     onEdit: entry => openEditor('edit', entry),
     onDelete: entry => removeFolder(entry),
-    renderLabel: entry => entry.name,
-    classPrefix: 'mod-folder',
+    renderLabel: (entry, isRoot) => {
+      if (!isRoot) return entry.name;
+      const wrapper = document.createElement('span');
+      wrapper.className = 'asset-folder-label';
+      const badge = document.createElement('span');
+      badge.className = 'asset-folder-badge';
+      badge.textContent = entry.type;
+      wrapper.append(badge, document.createTextNode(baseName(entry.path)));
+      return wrapper;
+    },
+    classPrefix: 'asset-folder',
   });
 
-  function selectFolder(path) {
-    return Promise.resolve(switchMod(path)).then(loaded => {
-      if (loaded) tree.setActivePath(path);
-      return loaded;
-    });
-  }
-
   function applyRegistryResponse(response) {
-    const applied = tree.applyResponse(response);
-    if (applied) onRegistryChanged?.(tree.getRoots().length > 0);
-    else onRegistryChanged?.(false);
-    return applied;
+    return tree.applyResponse(response);
   }
 
   function closeEditor() {
@@ -69,13 +76,13 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     editorMode = mode;
     originalPath = entry?.path || null;
     selectedPath = entry?.path || null;
-    title.textContent = mode === 'edit' ? 'Edit Mod Folder' : 'Add Mod Folder';
+    title.textContent = mode === 'edit' ? 'Edit Asset Folder' : 'Add Asset Folder';
     save.textContent = mode === 'edit' ? 'Save' : 'Add';
-    nameInput.value = entry?.name || '';
+    typeInput.value = entry?.type || 'GIMI';
     pathInput.value = entry?.path || '';
     setTextError(modalError, '');
     backdrop.classList.add('show');
-    nameInput.focus();
+    typeInput.focus();
   }
 
   function openAddDialog() {
@@ -84,10 +91,10 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
 
   async function removeFolder(entry) {
     const confirmed = await confirmDialog(
-      `Remove "${entry.name}" from Mod Folders?\n\n` +
+      'Remove this Asset Folder?\n\n' +
       'This only removes it from Mod Viewer.\nFiles on disk will not be deleted.');
     if (!confirmed) return;
-    const response = await window.pywebview.api.delete_mod_folder(entry.path);
+    const response = await window.pywebview.api.delete_asset_folder(entry.path);
     applyRegistryResponse(response);
   }
 
@@ -97,22 +104,14 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     if (event.target === backdrop) closeEditor();
   });
   browse.addEventListener('click', async () => {
-    const picked = await window.pywebview.api.select_folder();
+    const picked = await window.pywebview.api.select_asset_folder();
     if (!picked) return;
     selectedPath = picked;
     pathInput.value = picked;
-    if (editorMode === 'add' && !nameInput.value.trim()) {
-      nameInput.value = baseName(picked);
-    }
   });
   form.addEventListener('submit', async event => {
     event.preventDefault();
-    const name = nameInput.value.trim();
     const path = selectedPath || pathInput.value.trim();
-    if (!name) {
-      setTextError(modalError, 'Enter a Mod Folder name.');
-      return;
-    }
     if (!path) {
       setTextError(modalError, 'Choose a folder with Browse.');
       return;
@@ -120,8 +119,9 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     save.disabled = true;
     try {
       const response = editorMode === 'edit'
-        ? await window.pywebview.api.edit_mod_folder(originalPath, name, path)
-        : await window.pywebview.api.add_mod_folder(name, path);
+        ? await window.pywebview.api.edit_asset_folder(
+          originalPath, typeInput.value, path)
+        : await window.pywebview.api.add_asset_folder(typeInput.value, path);
       if (response?.error) {
         setTextError(modalError, response.error);
         return;
@@ -135,20 +135,18 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     }
   });
 
-  window.addEventListener('mod-viewer-mod-loaded', event => {
-    tree.setActivePath(event.detail?.path);
-  });
-  window.addEventListener('mod-viewer-mod-load-started', () => {
-    tree.setActivePath(null);
-  });
-
-  window.pywebview.api.get_mod_folders()
-    .then(applyRegistryResponse)
-    .catch(caught => setTextError(error, caught.message || String(caught)));
+  const getAssetFolders = window.pywebview.api.get_asset_folders;
+  if (typeof getAssetFolders === 'function') {
+    getAssetFolders()
+      .then(applyRegistryResponse)
+      .catch(caught => setTextError(error, caught.message || String(caught)));
+  } else {
+    applyRegistryResponse({folders: []});
+  }
 
   return {
-    refresh: () => window.pywebview.api.get_mod_folders().then(applyRegistryResponse),
-    setActivePath: tree.setActivePath,
+    refresh: () => window.pywebview.api.get_asset_folders().then(applyRegistryResponse),
     openAddDialog,
+    setActivePath: tree.setActivePath,
   };
 }

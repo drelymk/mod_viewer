@@ -303,7 +303,7 @@ def edge_browser():
 
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
           mod_folders=None, subfolders=None, diagnostics=None, panel_opacity=58,
-          panel_opacity_api=True):
+          panel_opacity_api=True, asset_folders=None, asset_subfolders=None):
     # Playwright's wait_for_function uses eval internally. Bypass the app's
     # production CSP only in this isolated test context so behavioral waits
     # do not require weakening the served application's policy.
@@ -314,11 +314,14 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "picks": picks or [],
         "modFolders": mod_folders or [],
         "subfolders": subfolders or {},
+        "assetFolders": asset_folders or [],
+        "assetSubfolders": asset_subfolders or {},
         "diagnostics": diagnostics or {
             "summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
         "panelOpacity": panel_opacity,
         "panelOpacityApi": panel_opacity_api,
-        "calls": {"loadMod": [], "listSubfolders": [],
+        "calls": {"loadMod": [], "listSubfolders": [], "listAssetSubfolders": [],
+                   "selectAssetFolder": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
@@ -340,6 +343,12 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             select_folder: async () => {
               const path = state.nextPath || null;
               state.nextPath = null;
+              return path;
+            },
+            select_asset_folder: async () => {
+              const path = state.nextPath || null;
+              state.nextPath = null;
+              state.calls.selectAssetFolder.push(path);
               return path;
             },
             load_mod: async path => {
@@ -414,6 +423,24 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.calls.listSubfolders.push(path);
               return copy({folders: state.subfolders[path] || []});
             },
+            get_asset_folders: async () => copy({folders: state.assetFolders}),
+            add_asset_folder: async (type, path) => {
+              state.assetFolders.push({type, path, exists: true});
+              return copy({folders: state.assetFolders});
+            },
+            edit_asset_folder: async (original, type, path) => {
+              const item = state.assetFolders.find(folder => folder.path === original);
+              if (item) Object.assign(item, {type, path, exists: true});
+              return copy({folders: state.assetFolders});
+            },
+            delete_asset_folder: async path => {
+              state.assetFolders = state.assetFolders.filter(folder => folder.path !== path);
+              return copy({folders: state.assetFolders});
+            },
+            list_asset_subfolders: async path => {
+              state.calls.listAssetSubfolders.push(path);
+              return copy({folders: state.assetSubfolders[path] || []});
+            },
             get_diagnostics: async path => {
               state.calls.diagnostics.push(path);
               return copy(state.diagnostics);
@@ -447,17 +474,8 @@ def _open(page, path):
 
 
 def _open_library(page):
-    launcher = page.locator("#mod-folder-toggle")
-    if launcher.is_visible():
-        launcher.click()
-    else:
-        action = page.locator("#empty-add-folder-btn")
-        opens_dialog = action.inner_text() == "Add Mod Folder"
-        action.click()
-        page.locator("#mod-folder-dock.expanded").wait_for()
-        if opens_dialog:
-            page.locator("#mfm-cancel").click()
-    page.locator("#mod-folder-dock.expanded").wait_for()
+    page.locator("#mod-library-tab").click()
+    page.locator("#mod-folder-panel:not([hidden])").wait_for()
 
 
 def _sample_mesh_pixel(page):
@@ -512,6 +530,89 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         assert state["outputColorSpace"] == "srgb"
         assert state["toneMapping"] == 0
         assert state["clearAlpha"] == 1
+    finally:
+        context.close()
+
+
+def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {}, asset_folders=[])
+    try:
+        page.locator("#mod-library-tab").click()
+        assert page.locator("#mod-folder-panel").is_visible()
+        assert page.locator("#mod-folder-list").is_hidden()
+        assert page.locator("#mod-folder-empty").is_visible()
+        assert page.locator("#mod-library-tab").get_attribute("aria-selected") == "true"
+        page.locator("#assets-tab").click()
+        assert page.locator("#mod-folder-panel").is_hidden()
+        assert page.locator("#asset-folder-panel").is_visible()
+        assert page.locator("#asset-folder-list").is_hidden()
+        assert page.locator("#asset-folder-empty").is_visible()
+        assert page.locator("#assets-tab").get_attribute("aria-expanded") == "true"
+        page.locator("#assets-tab").click()
+        assert page.locator("#asset-folder-panel").is_hidden()
+        assert page.locator("#left-panel-container").is_hidden()
+        assert page.locator("#left-dock-tabs").is_visible()
+        assert page.locator(".left-dock-tabs .active").count() == 0
+        assert all(value == "false" for value in page.locator(
+            ".left-dock-tabs > button").evaluate_all(
+                "buttons => buttons.map(button => button.getAttribute('aria-selected'))"))
+    finally:
+        context.close()
+
+
+def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, frontend_url):
+    path = "fixture-model"
+    context, page = _page(edge_browser, frontend_url, {path: _payload()})
+    try:
+        _open(page, path)
+        page.locator("#right-dock.ui-visible").wait_for()
+        assert page.locator("#controls-panel").is_visible()
+        assert page.locator("body.right-dock-visible").count() == 1
+        page.locator("#controls-tab").click()
+        assert page.locator("#controls-panel").is_hidden()
+        assert page.locator("body.right-dock-visible").count() == 0
+        assert page.locator("#right-dock .right-dock-tabs").is_visible()
+        page.locator("#inspector-tab").click()
+        assert page.locator("#inspector-panel").is_visible()
+        assert page.locator("body.right-dock-visible").count() == 1
+        page.locator("#inspector-tab").click()
+        assert page.locator("#inspector-panel").is_hidden()
+        assert page.locator("body.right-dock-visible").count() == 0
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
+        assert page.locator("#inspector-panel").is_hidden()
+        assert page.locator("#controls-panel").is_hidden()
+        assert page.locator("#controls-tab").get_attribute("aria-selected") == "false"
+        assert page.locator("#inspector-tab").get_attribute("aria-expanded") == "false"
+    finally:
+        context.close()
+
+
+def test_assets_panel_uses_badges_and_lazy_browse_only_children(
+        edge_browser, frontend_url):
+    root = "fixture-assets"
+    child = root + r"\Character"
+    context, page = _page(
+        edge_browser, frontend_url, {},
+        asset_folders=[{"type": "GIMI", "path": root, "exists": True}],
+        asset_subfolders={root: [{"name": "Character", "path": child}]},
+    )
+    try:
+        page.locator("#assets-tab").click()
+        page.locator("#asset-folder-list .asset-folder-select").first.wait_for()
+        assert "GIMI" in page.locator("#asset-folder-list").first.inner_text()
+        page.locator("#asset-folder-list .asset-folder-expand").first.click()
+        page.locator(".asset-folder-select", has_text="Character").wait_for()
+        assert page.evaluate("window.__fakeApi.calls.listAssetSubfolders") == [root]
+        page.locator(".asset-folder-select", has_text="Character").click()
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == []
+        page.locator("#asset-folder-add").click()
+        assert page.locator("#afm-type option").all_inner_texts() == ["ZZMI", "GIMI", "WWMI"]
+        page.evaluate("window.__fakeApi.nextPath = 'picked-asset-folder'")
+        page.locator("#afm-browse").click()
+        assert page.locator("#afm-path").input_value() == "picked-asset-folder"
+        assert page.evaluate("window.__fakeApi.calls.selectAssetFolder") == [
+            "picked-asset-folder"]
     finally:
         context.close()
 
@@ -2278,7 +2379,7 @@ def test_feature_flag_css_keeps_cycle_preview_and_core_invariants(
         context.close()
 
 
-def test_mod_folder_panel_overlays_sidebar_and_browses_children_lazily(
+def test_mod_folder_panel_browses_children_lazily(
         edge_browser, frontend_url):
     root = _MOD_LIBRARY
     alice = root + r"\Alice"
@@ -2295,35 +2396,12 @@ def test_mod_folder_panel_overlays_sidebar_and_browses_children_lazily(
         },
     )
     try:
-        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
-        sidebar_before = page.locator("#sidebar").bounding_box()
-        assert "expanded" not in page.locator("#mod-folder-dock").get_attribute("class")
-
         assert page.locator("#empty-add-folder-btn").inner_text() == "Open Mod Folder"
         _open_library(page)
         assert page.locator("#mod-folder-modal-backdrop.show").count() == 0
-        assert page.locator("#mod-folder-panel > .panel-hdr > *").evaluate_all(
-            "nodes => nodes.map(node => node.id || node.tagName)") == [
-                "H3", "mod-folder-add", "mod-folder-close"]
-        header_positions = page.evaluate("""() => {
-          const rect = selector => document.querySelector(selector).getBoundingClientRect();
-          const panel = rect('#mod-folder-panel');
-          const label = rect('#mod-folder-panel > .panel-hdr h3');
-          const add = rect('#mod-folder-add');
-          const close = rect('#mod-folder-close');
-          return {
-            addBesideLabel: add.left >= label.right && add.left - label.right <= 8,
-            closeAtRight: close.right >= panel.right - 16,
-          };
-        }""")
-        assert header_positions == {"addBesideLabel": True, "closeAtRight": True}
-        sidebar_after = page.locator("#sidebar").bounding_box()
-        assert sidebar_after == sidebar_before
-        z_indices = page.evaluate("""() => ({
-          dock: getComputedStyle(document.querySelector('#mod-folder-dock')).zIndex,
-          leftDock: getComputedStyle(document.querySelector('#left-dock')).zIndex,
-        })""")
-        assert int(z_indices["dock"]) > int(z_indices["leftDock"])
+        assert page.locator("#mod-folder-panel").is_visible()
+        assert page.locator("#sidebar").is_hidden()
+        assert page.locator("#mod-library-tab").get_attribute("aria-expanded") == "true"
 
         root_node = page.locator("#mod-folder-list > .mod-folder-node").first
         arrow_style = page.evaluate("""() => {
@@ -2331,7 +2409,7 @@ def test_mod_folder_panel_overlays_sidebar_and_browses_children_lazily(
           const style = getComputedStyle(arrow);
           return {width: style.width, height: style.height, fontSize: style.fontSize};
         }""")
-        assert arrow_style == {"width": "20px", "height": "22px", "fontSize": "13px"}
+        assert arrow_style == {"width": "20px", "height": "22px", "fontSize": "18px"}
         root_node.locator(":scope > .mod-folder-row > .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="Alice").wait_for()
         assert page.evaluate("window.__fakeApi.calls.listSubfolders") == [root]
@@ -2350,33 +2428,33 @@ def test_mod_folder_panel_overlays_sidebar_and_browses_children_lazily(
         root_arrow.click()
         assert not root_children.is_hidden()
         assert page.evaluate("window.__fakeApi.calls.listSubfolders") == [root, alice]
+        page.locator("#mod-library-tab").click()
+        assert page.locator("#mod-folder-panel").is_hidden()
+        assert page.locator("#sidebar").is_hidden()
+        assert page.locator(".left-dock-tabs .active").count() == 0
     finally:
         context.close()
 
 
-def test_empty_mod_folder_panel_keeps_fixed_height_above_navigation_hint(
+def test_empty_mod_folder_panel_stays_above_navigation_hint(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {}, mod_folders=[])
     try:
         assert page.locator("#empty-add-folder-btn").inner_text() == "Add Mod Folder"
         page.locator("#empty-add-folder-btn").click()
-        page.locator("#mod-folder-dock.expanded").wait_for()
+        page.locator("#mod-folder-panel:not([hidden])").wait_for()
         page.locator("#mod-folder-modal-backdrop.show").wait_for()
         page.locator("#mfm-cancel").click()
         panel = page.locator("#mod-folder-panel").bounding_box()
         info = page.locator("#footer").bounding_box()
-        viewport_height = page.evaluate("window.innerHeight")
-        assert page.locator("#sidebar > .panel-hdr #mod-folder-toggle").count() == 1
-        assert page.locator("#mod-folder-dock > #mod-folder-toggle").count() == 0
-        assert abs(panel["height"] - (viewport_height - 112)) < 1
         assert panel["y"] + panel["height"] <= info["y"]
         assert page.locator("#mod-folder-list").inner_text() == ""
         assert page.evaluate("""() => {
           const panel = document.querySelector('#mod-folder-panel');
           return {inert: panel.inert, ariaHidden: panel.getAttribute('aria-hidden')};
         }""") == {"inert": False, "ariaHidden": "false"}
-        page.locator("#mod-folder-close").click()
-        assert "expanded" not in page.locator("#mod-folder-dock").get_attribute("class")
+        page.locator("#mod-library-tab").click()
+        assert page.locator("#mod-folder-panel").is_hidden()
         assert page.evaluate("document.querySelector('#mod-folder-panel').inert")
     finally:
         context.close()
@@ -2392,24 +2470,23 @@ def test_mod_folder_name_selection_preserves_dock_state_across_reload(
         subfolders={root: [{"name": "Alice", "path": alice}]},
     )
     try:
-        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
         _open_library(page)
         page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="Alice").click()
         page.locator(".draw-item").wait_for(state="attached")
         assert page.evaluate("window.__fakeApi.calls.loadMod") == [alice]
-        assert "expanded" in page.locator("#mod-folder-dock").get_attribute("class")
+        assert page.locator("#mod-library-tab").get_attribute("aria-expanded") == "true"
         page.locator("#mod-folder-list > .mod-folder-node > .mod-folder-row > .mod-folder-expand").click()
         assert "active-descendant" in page.locator(
             "#mod-folder-list > .mod-folder-node > .mod-folder-row").get_attribute("class")
 
         page.evaluate("window.modViewer.reloadCurrentMod()")
         page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
-        assert "expanded" in page.locator("#mod-folder-dock").get_attribute("class")
-        page.locator("#mod-folder-close").click()
+        assert page.locator("#mod-library-tab").get_attribute("aria-expanded") == "true"
+        page.locator("#mod-library-tab").click()
         page.evaluate("window.modViewer.reloadCurrentMod()")
         page.wait_for_function("window.__fakeApi.calls.loadMod.length === 3")
-        assert "expanded" not in page.locator("#mod-folder-dock").get_attribute("class")
+        assert page.locator("#mod-folder-panel").is_hidden()
     finally:
         context.close()
 
@@ -2917,7 +2994,6 @@ def test_reload_and_tree_selection_share_one_transition_guard(
         ]},
     )
     try:
-        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
         _open_library(page)
         page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="Alice").click()
@@ -2958,7 +3034,6 @@ def test_mod_folder_failed_selection_keeps_panel_open_and_reports_error(
         ],
     )
     try:
-        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
         _open_library(page)
         page.locator(".mod-folder-select", has_text="Alice").click()
         page.locator(".draw-item").wait_for(state="attached")
@@ -2966,7 +3041,8 @@ def test_mod_folder_failed_selection_keeps_panel_open_and_reports_error(
 
         page.locator(".mod-folder-select", has_text="Broken").click()
         page.locator("#dialog-backdrop.show").wait_for()
-        assert page.locator("#mod-folder-dock.expanded").count() == 1
+        assert page.locator("#mod-folder-panel").is_visible()
+        assert page.locator("#mod-library-tab").get_attribute("aria-expanded") == "true"
         assert page.locator(".mod-folder-row.active").count() == 0
         assert page.locator(".draw-item").count() == 0
         page.locator("#dialog-ok").click()
@@ -2990,7 +3066,6 @@ def test_mod_folder_tree_switch_respects_pending_change_confirmation(
         ]},
     )
     try:
-        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
         _open_library(page)
         page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="First").click()
@@ -3002,7 +3077,8 @@ def test_mod_folder_tree_switch_respects_pending_change_confirmation(
             "This mod has unsaved changes")
         page.locator("#dialog-cancel").click()
         assert page.evaluate("window.__fakeApi.calls.loadMod") == [first]
-        assert page.locator("#mod-folder-dock.expanded").count() == 1
+        assert page.locator("#mod-folder-panel").is_visible()
+        assert page.locator("#mod-library-tab").get_attribute("aria-expanded") == "true"
     finally:
         context.close()
 
@@ -3016,7 +3092,6 @@ def test_mod_folder_add_edit_delete_modal_flow(
         mod_folders=[{"name": "Original", "path": original, "exists": True}],
     )
     try:
-        page.locator("#mod-folder-list .mod-folder-select").first.wait_for()
         _open_library(page)
 
         page.locator("#mod-folder-add").click()
@@ -3065,7 +3140,7 @@ def test_mod_folder_add_edit_delete_modal_flow(
         }""")
         assert all(item["button"] >= item["menu"] - 12 for item in menu_widths)
         assert original_menu.locator("button").all_inner_texts() == [
-            "Edit", "Remove from Mod Library"]
+            "Edit", "Remove"]
         page.locator(".mod-folder-node").filter(has_text="Original").locator(
             ".mod-folder-action-menu button", has_text="Edit").click()
         assert page.locator(
@@ -3099,8 +3174,9 @@ def test_missing_opacity_bridge_does_not_block_open_or_mod_library(
         page.locator("#empty-add-folder-btn").click()
         page.locator("#mod-folder-modal-backdrop.show").wait_for()
         page.locator("#mfm-cancel").click()
-        page.locator("#mod-folder-close").click()
+        page.locator("#mod-library-tab").click()
         _open(page, "A")
+        page.locator("#meshes-tab").click()
         page.locator(".draw-item").wait_for()
     finally:
         context.close()
@@ -3257,47 +3333,27 @@ def test_inspector_follows_component_and_mesh_selection(
         assert page.locator("#interaction-help").inner_text() == "LMB Orbit · RMB Pan · Wheel Zoom"
         assert page.locator("#sidebar > .panel-hdr .group-toggle").evaluate(
             "button => button.tagName") == "BUTTON"
-        assert page.locator("#sidebar > .panel-hdr #mod-folder-toggle").count() == 1
-        assert page.locator("#mod-folder-dock > #mod-folder-toggle").count() == 0
         assert page.locator("#sidebar > .panel-hdr #reset-state-btn").count() == 1
         assert page.locator("#sidebar > .panel-hdr > *").evaluate_all(
             "nodes => nodes.map(node => node.id || node.tagName)") == [
-                "BUTTON", "H3", "reset-state-btn", "mod-folder-toggle"]
-        header_positions = page.evaluate("""() => {
-          const rect = selector => document.querySelector(selector).getBoundingClientRect();
-          const label = rect('#sidebar > .panel-hdr h3');
-          const reset = rect('#reset-state-btn');
-          const library = rect('#mod-folder-toggle');
-              return {
-                resetAfterLabel: reset.left >= label.right,
-                libraryAfterReset: library.left >= reset.right,
-                libraryAtRight: library.right >=
-                  document.querySelector('#sidebar').getBoundingClientRect().right - 16,
-              };
-            }""")
-        assert header_positions == {
-            "resetAfterLabel": True,
-            "libraryAfterReset": True,
-            "libraryAtRight": True,
-        }, header_positions
+                "BUTTON", "H3", "reset-state-btn"]
         assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
             "aria-expanded") == "true"
         assert page.locator("#sidebar").is_visible()
-        left_dock_before = page.locator("#left-dock").evaluate(
-            "dock => ({width: dock.offsetWidth, height: dock.offsetHeight})")
-        page.locator("#mod-folder-toggle").click()
+        assert page.locator("#meshes-tab").get_attribute("aria-expanded") == "true"
+        page.locator("#mod-library-tab").click()
         assert page.locator("#sidebar").is_hidden()
-        assert page.locator("#left-dock").evaluate(
-            "dock => ({width: dock.offsetWidth, height: dock.offsetHeight})") == (
-                left_dock_before)
-        assert page.locator("#mod-folder-close").evaluate(
-            "button => document.activeElement === button")
+        assert page.locator("#mod-folder-panel").is_visible()
+        assert page.locator("#mod-library-tab").get_attribute("aria-expanded") == "true"
         assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
             "aria-expanded") == "true"
-        page.locator("#mod-folder-close").click()
+        page.locator("#mod-library-tab").click()
+        assert page.locator("#sidebar").is_hidden()
+        assert page.locator("#mod-folder-panel").is_hidden()
+        assert page.locator(".left-dock-tabs .active").count() == 0
+        page.locator("#meshes-tab").click()
         assert page.locator("#sidebar").is_visible()
-        assert page.locator("#mod-folder-toggle").evaluate(
-            "button => document.activeElement === button")
+        assert page.locator("#meshes-tab").get_attribute("aria-expanded") == "true"
         page.locator("#reset-state-btn").click()
         assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
             "aria-expanded") == "true"
@@ -3516,9 +3572,9 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
           const panel = document.querySelector('#mod-folder-panel');
           return panel.inert && panel.getAttribute('aria-hidden') === 'true';
         }""")
-        page.locator("#mod-folder-toggle").click()
+        page.locator("#mod-library-tab").click()
         assert page.evaluate("document.querySelector('#mod-folder-panel').inert === false")
-        page.locator("#mod-folder-close").click()
+        page.locator("#mod-library-tab").click()
         assert page.evaluate("""() => {
           const panel = document.querySelector('#mod-folder-panel');
           return panel.inert && panel.getAttribute('aria-hidden') === 'true';

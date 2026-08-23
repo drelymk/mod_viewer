@@ -396,7 +396,6 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
     }
   }
 
-  document.getElementById('sidebar').style.display = 'block';
   document.getElementById('camera-panel').style.display = 'none';
   return activeMeshes;
 }
