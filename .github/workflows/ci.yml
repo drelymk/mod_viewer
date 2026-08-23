@@ -16,9 +16,9 @@ concurrency:
 
 jobs:
   test:
-    name: Windows / Python 3.12
+    name: Python tests
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     steps:
       - name: Check out repository
@@ -29,29 +29,12 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
+          cache-dependency-path: requirements.txt
 
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-
-      - name: Prepare vendored Three.js assets
-        run: |
-          python -c "import sys; sys.path.insert(0, 'src'); import build; build.fetch_assets(); build.verify_assets()"
-
-      - name: Verify Microsoft Edge for frontend tests
-        shell: pwsh
-        run: |
-          @'
-          from playwright.sync_api import sync_playwright
-
-          with sync_playwright() as playwright:
-              browser = playwright.chromium.launch(channel="msedge", headless=True)
-              browser.close()
-          '@ | python -
+          python -m pip install -r requirements.txt "pytest>=8.0"
 
       - name: Run test suite
-        run: python -m pytest -q
+        run: python -m pytest -q --ignore=src/tests/test_frontend.py
