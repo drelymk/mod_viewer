@@ -2,6 +2,7 @@
 
 import { confirmDialog } from './dialogs.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
+import { createIcon } from './ui-icons.js';
 
 const $ = id => document.getElementById(id);
 const ASSET_TYPES = ['ZZMI', 'GIMI', 'WWMI'];
@@ -23,6 +24,16 @@ function isAssetMatchingEnabled(entry) {
   return entry?.enabled !== false;
 }
 
+function indexSummary(entry) {
+  const index = entry?.index || {};
+  if (index.status === 'ready') {
+    const skipped = index.skippedCount ? ` · ${index.skippedCount} skipped` : '';
+    return `${index.assetCount || 0} assets · ${index.geometryHashCount || 0} hashes${skipped}`;
+  }
+  if (index.status === 'invalid') return 'Index invalid';
+  return 'Index required';
+}
+
 export function initAssetFolderPanel() {
   const list = $('asset-folder-list');
   const error = $('asset-folder-error');
@@ -41,6 +52,7 @@ export function initAssetFolderPanel() {
   let editorMode = 'add';
   let originalPath = null;
   let selectedPath = null;
+  let editorBusy = false;
 
   typeInput.replaceChildren(...ASSET_TYPES.map(value => {
     const option = document.createElement('option');
@@ -58,7 +70,10 @@ export function initAssetFolderPanel() {
     onChildSelected: path => tree.setActivePath(path),
     onEdit: entry => openEditor('edit', entry),
     onDelete: entry => removeFolder(entry),
+    rootBusySelectors: ['switch', 'rebuild', 'more', 'edit', 'remove'],
     renderRootExtras: entry => {
+      const tools = document.createElement('span');
+      tools.className = 'asset-folder-tools';
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'asset-folder-switch';
@@ -74,7 +89,7 @@ export function initAssetFolderPanel() {
       toggle.addEventListener('click', async event => {
         event.stopPropagation();
         if (toggle.disabled) return;
-        toggle.disabled = true;
+        tree.setRootBusy(entry.path, true);
         try {
           const response = await window.pywebview.api.set_asset_folder_enabled(
             entry.path, !isAssetMatchingEnabled(entry));
@@ -88,10 +103,46 @@ export function initAssetFolderPanel() {
         } catch (caught) {
           setTextError(error, caught.message || String(caught));
         } finally {
-          toggle.disabled = false;
+          tree.setRootBusy(entry.path, false);
         }
       });
-      return toggle;
+      tools.appendChild(toggle);
+
+      const rebuild = document.createElement('button');
+      rebuild.type = 'button';
+      rebuild.className = 'asset-folder-rebuild';
+      rebuild.appendChild(createIcon('rebuild'));
+      rebuild.title = 'Rebuild asset index';
+      rebuild.setAttribute('aria-label', `Rebuild asset index for ${baseName(entry.path)}`);
+      rebuild.addEventListener('click', async event => {
+        event.stopPropagation();
+        if (rebuild.disabled) return;
+        tree.setRootBusy(entry.path, true);
+        try {
+          const response = await window.pywebview.api.rebuild_asset_index(entry.path);
+          if (response?.error) {
+            const suffix = response.indexPreserved
+              ? ' Previous index is still available.' : '';
+            setTextError(error, `${response.error}${suffix}`);
+            return;
+          }
+          const updated = (response?.folders || []).find(candidate =>
+            canonicalPath(candidate.path) === canonicalPath(entry.path));
+          if (!updated || !tree.updateRoot(updated)) applyRegistryResponse(response);
+        } catch (caught) {
+          setTextError(error, caught.message || String(caught));
+        } finally {
+          tree.setRootBusy(entry.path, false);
+        }
+      });
+      tools.appendChild(rebuild);
+      return tools;
+    },
+    renderRootMeta: entry => {
+      const meta = document.createElement('div');
+      meta.className = 'asset-folder-index-status';
+      meta.textContent = indexSummary(entry);
+      return meta;
     },
     renderLabel: (entry, isRoot) => {
       if (!isRoot) return entry.name;
@@ -119,18 +170,20 @@ export function initAssetFolderPanel() {
     return tree.applyResponse(response);
   }
 
-  function closeEditor() {
+  function closeEditor(force = false) {
+    if (editorBusy && !force) return;
     backdrop.classList.remove('show');
     setTextError(modalError, '');
   }
 
   function openEditor(mode, entry = null) {
+    editorBusy = false;
     editorMode = mode;
     originalPath = entry?.path || null;
     selectedPath = entry?.path || null;
     title.textContent = mode === 'edit' ? 'Edit Asset Folder' : 'Add Asset Folder';
     save.textContent = mode === 'edit' ? 'Save' : 'Add';
-    typeInput.value = entry?.type || 'GIMI';
+    typeInput.value = entry?.type || ASSET_TYPES[0];
     pathInput.value = entry?.path || '';
     setTextError(modalError, '');
     backdrop.classList.add('show');
@@ -168,7 +221,14 @@ export function initAssetFolderPanel() {
       setTextError(modalError, 'Choose a folder with Browse.');
       return;
     }
+    const originalSaveText = editorMode === 'edit' ? 'Save' : 'Add';
+    editorBusy = true;
+    typeInput.disabled = true;
+    pathInput.disabled = true;
+    browse.disabled = true;
+    cancel.disabled = true;
     save.disabled = true;
+    save.textContent = 'Building index…';
     try {
       const response = editorMode === 'edit'
         ? await window.pywebview.api.edit_asset_folder(
@@ -179,11 +239,17 @@ export function initAssetFolderPanel() {
         return;
       }
       applyRegistryResponse(response);
-      closeEditor();
+      closeEditor(true);
     } catch (caught) {
       setTextError(modalError, caught.message || String(caught));
     } finally {
+      editorBusy = false;
+      typeInput.disabled = false;
+      pathInput.disabled = false;
+      browse.disabled = false;
+      cancel.disabled = false;
       save.disabled = false;
+      save.textContent = originalSaveText;
     }
   });
 

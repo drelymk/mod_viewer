@@ -22,6 +22,14 @@ def _directory(parent, name):
     return str(path)
 
 
+def _gimi_asset(root, name="Character"):
+    asset = os.path.join(root, name)
+    os.makedirs(asset)
+    with open(os.path.join(asset, "hash.json"), "w", encoding="utf-8") as stream:
+        json.dump([{"ib": "3d7b9c89", "object_indexes": [0]}], stream)
+    return asset
+
+
 def test_missing_asset_folders_defaults_to_empty_and_preserves_existing_config(tmp_path):
     filename = str(tmp_path / "config.json")
     with open(filename, "w", encoding="utf-8") as stream:
@@ -131,6 +139,7 @@ def test_api_asset_authorization_is_separate_from_mod_roots(tmp_path, monkeypatc
     filename = _config(tmp_path)
     mod_root = _directory(tmp_path, "mods")
     asset_root = _directory(tmp_path, "assets")
+    _gimi_asset(asset_root)
     monkeypatch.setattr(paths, "config_path", lambda: filename)
     api = ModViewerAPI()
     api._authorized_folders.add(mod_folders.normalize_path(mod_root))
@@ -149,12 +158,14 @@ def test_api_asset_authorization_is_separate_from_mod_roots(tmp_path, monkeypatc
     assert api.set_asset_folder_enabled(asset_root, False)["folders"][0]["enabled"] is False
     assert api._asset_folder(os.path.join(asset_root, "Character")) == \
         mod_folders.normalize_path(os.path.join(asset_root, "Character"))
-    assert api.list_asset_subfolders(asset_root)["folders"] == []
+    assert [item["name"] for item in
+            api.list_asset_subfolders(asset_root)["folders"]] == ["Character"]
 
 
 def test_asset_picker_does_not_grant_mod_folder_access(tmp_path, monkeypatch):
     filename = _config(tmp_path)
     asset_root = _directory(tmp_path, "assets")
+    _gimi_asset(asset_root)
     monkeypatch.setattr(paths, "config_path", lambda: filename)
     api = ModViewerAPI()
     api._window = SimpleNamespace(
@@ -170,6 +181,7 @@ def test_asset_picker_does_not_grant_mod_folder_access(tmp_path, monkeypatch):
 def test_api_asset_authorization_is_revoked_when_root_is_deleted(tmp_path, monkeypatch):
     filename = _config(tmp_path)
     asset_root = _directory(tmp_path, "assets")
+    _gimi_asset(asset_root)
     monkeypatch.setattr(paths, "config_path", lambda: filename)
     api = ModViewerAPI()
     api._picker_authorized_folders.add(mod_folders.normalize_path(asset_root))

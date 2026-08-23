@@ -16,8 +16,8 @@ from core.mod_discovery import discover_ini_paths
 from core.ini_health import analyze_mod
 from core.texture_profiles import texture_profile_for
 
-from . import (asset_folders, edit_session, ini_api, metadata, mod_folders,
-               mod_loader, present_api, server, toggle_api)
+from . import (asset_folders, asset_index, edit_session, ini_api, metadata,
+               mod_folders, mod_loader, present_api, server, toggle_api)
 
 
 class ModViewerAPI:
@@ -208,16 +208,37 @@ class ModViewerAPI:
 
     @staticmethod
     def _asset_folder_entries(entries):
-        return [{**entry, "exists": os.path.isdir(entry["path"])}
-                for entry in entries]
+        result = []
+        for entry in entries:
+            item = {**entry, "exists": os.path.isdir(entry["path"])}
+            item["index"] = asset_index.index_status(
+                entry["type"], entry["path"])
+            result.append(item)
+        return result
 
     def add_asset_folder(self, asset_type, folder_path):
         folder_path = asset_folders.normalize_path(folder_path)
         if folder_path not in self._picker_authorized_folders:
             return {"error": "Choose the Asset Folder through the native folder picker first."}
         try:
-            entries = asset_folders.add_folder(asset_type, folder_path)
-        except asset_folders.AssetFolderError as error:
+            entries = asset_folders.load_registry()
+            entry = asset_folders.validate_folder_entry(
+                asset_type, folder_path, require_exists=True)
+            if any(item["path"] == entry["path"] for item in entries):
+                raise asset_folders.AssetFolderError(
+                    "That Asset Folder path is already registered.")
+            new_entries = entries + [entry]
+            index = asset_index.build_index(asset_type, folder_path)
+            previous_index = asset_index.snapshot_index(asset_type, folder_path)
+            asset_index.save_index(index)
+            try:
+                asset_folders.write_entries(new_entries)
+            except (asset_folders.AssetFolderError, asset_index.AssetIndexError):
+                asset_index.restore_index(
+                    asset_type, folder_path, previous_index)
+                raise
+            entries = new_entries
+        except (asset_folders.AssetFolderError, asset_index.AssetIndexError) as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
         self._authorized_asset_folders.add(folder_path)
@@ -228,24 +249,61 @@ class ModViewerAPI:
         folder_path = asset_folders.normalize_path(folder_path)
         try:
             entries = asset_folders.load_registry()
-            if not any(item["path"] == original_path for item in entries):
+            original_index = next(
+                (i for i, item in enumerate(entries)
+                 if item["path"] == original_path), None)
+            if original_index is None:
                 raise asset_folders.AssetFolderError("That Asset Folder is not registered.")
+            original_type = entries[original_index]["type"]
             if (folder_path != original_path and
                     folder_path not in self._picker_authorized_folders):
                 raise asset_folders.AssetFolderError(
                     "Choose the new Asset Folder through the native folder picker first.")
-            entries = asset_folders.edit_folder(original_path, asset_type, folder_path)
-        except asset_folders.AssetFolderError as error:
+            entry = asset_folders.validate_folder_entry(
+                asset_type, folder_path,
+                require_exists=(folder_path != original_path))
+            if any(i != original_index and item["path"] == entry["path"]
+                   for i, item in enumerate(entries)):
+                raise asset_folders.AssetFolderError(
+                    "That Asset Folder path is already registered.")
+            entry["enabled"] = entries[original_index].get("enabled", True)
+            new_entries = list(entries)
+            new_entries[original_index] = entry
+            index = asset_index.build_index(asset_type, folder_path)
+            previous_index = asset_index.snapshot_index(asset_type, folder_path)
+            asset_index.save_index(index)
+            try:
+                asset_folders.write_entries(new_entries)
+            except (asset_folders.AssetFolderError, asset_index.AssetIndexError):
+                asset_index.restore_index(
+                    asset_type, folder_path, previous_index)
+                raise
+            entries = new_entries
+        except (asset_folders.AssetFolderError, asset_index.AssetIndexError) as error:
             return {"error": str(error)}
+        if original_path != folder_path or original_type != asset_type:
+            try:
+                asset_index.delete_index(original_type, original_path)
+            except asset_index.AssetIndexError:
+                pass
         self._refresh_authorized_asset_roots(entries)
         self._authorized_asset_folders.add(folder_path)
         return {"folders": self._asset_folder_entries(entries)}
 
     def delete_asset_folder(self, folder_path):
+        folder_path = asset_folders.normalize_path(folder_path)
         try:
+            entries = asset_folders.load_registry()
+            original = next(
+                (item for item in entries if item["path"] == folder_path), None)
             entries = asset_folders.delete_folder(folder_path)
         except asset_folders.AssetFolderError as error:
             return {"error": str(error)}
+        if original:
+            try:
+                asset_index.delete_index(original["type"], folder_path)
+            except asset_index.AssetIndexError:
+                pass
         self._refresh_authorized_asset_roots(entries)
         return {"folders": self._asset_folder_entries(entries)}
 
@@ -254,6 +312,28 @@ class ModViewerAPI:
             entries = asset_folders.set_enabled(folder_path, enabled)
         except asset_folders.AssetFolderError as error:
             return {"error": str(error)}
+        self._refresh_authorized_asset_roots(entries)
+        return {"folders": self._asset_folder_entries(entries)}
+
+    def rebuild_asset_index(self, folder_path):
+        folder_path = asset_folders.normalize_path(folder_path)
+        try:
+            entries = asset_folders.load_registry()
+            entry = next(
+                (item for item in entries if item["path"] == folder_path), None)
+            if entry is None:
+                raise asset_folders.AssetFolderError(
+                    "That Asset Folder is not registered.")
+            previous_index = asset_index.snapshot_index(
+                entry["type"], folder_path)
+            index = asset_index.build_index(entry["type"], folder_path)
+            asset_index.save_index(index)
+        except (asset_folders.AssetFolderError, asset_index.AssetIndexError) as error:
+            return {
+                "error": f"Could not rebuild Asset index: {error}",
+                "indexPreserved": previous_index is not None
+                if "previous_index" in locals() else False,
+            }
         self._refresh_authorized_asset_roots(entries)
         return {"folders": self._asset_folder_entries(entries)}
 
