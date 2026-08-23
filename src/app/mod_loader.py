@@ -589,7 +589,7 @@ def _failure_health(context, overrides):
 def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
                         present=None, state_rules=None, state_defaults=None,
                         health=None, error=None, game=None,
-                        material_profiles=None):
+                        material_profiles=None, asset_resolution=None):
     """Create the stable application-to-frontend payload shape."""
     profile_table = dict(material_profiles or {})
     if game is not None:
@@ -610,6 +610,7 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
         "geometry": None,
         "metadata": {"mesh_names": {}, "material_profiles": profile_table},
         "health": health,
+        "asset_resolution": asset_resolution,
     }
     if game is not None:
         payload["metadata"]["game"] = game.to_metadata()
@@ -678,9 +679,15 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
                 error=f"No mesh geometry found across {len(ini_paths)} ini file(s).",
                 game=parsed.game)
 
+        availability = {}
         bindings = asset_resolver.resolve_groups(
-            groups, parsed.game, context.asset_folders)
-        asset_enrichment.apply(groups, bindings)
+            groups, parsed.game, context.asset_folders,
+            availability=availability)
+        asset_enrichment.apply(
+            groups, bindings,
+            include_not_found=bool(availability.get("ready_roots")))
+        asset_resolution = asset_resolver.summarize_groups(
+            groups, bindings, availability).to_dict()
 
         built = build_mesh_result(
             groups, folder_path, geometry=geometry,
@@ -710,7 +717,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             meshes=mesh_payload, textures=textures, toggles=toggles, menu=menu,
             present=present, state_rules=state_rules,
             state_defaults=toggle_defaults, game=parsed.game,
-            material_profiles=material_profiles)
+            material_profiles=material_profiles,
+            asset_resolution=asset_resolution)
     except Exception:
         traceback.print_exc()
         health = _failure_health(context, overrides)

@@ -5,7 +5,7 @@ import struct
 from app import asset_index
 from app.asset_enrichment import apply
 from app.asset_resolver import (AssetComponentBinding, resolve_component,
-                                resolve_groups)
+                                resolve_groups, summarize_groups)
 from core.draw_call import DrawCall, SlotTextureBinding
 from core.geometry_identity import GeometryMatch, normalize_geometry_hash
 from core.ini_parser import _scan_sections_for_draws, parse_sections
@@ -450,3 +450,64 @@ def test_asset_fallback_uses_trusted_source_and_keeps_diagnostic(tmp_path):
     assert entry["asset_binding"]["status"] == "exact"
     assert entry["texture_resolution"] == {
         "diffuse": "asset_original_fallback"}
+
+
+def test_asset_resolution_summary_aggregates_draws_without_changing_identity():
+    groups = [{"name": "Body", "display_name": "Body", "draws": [None, None, None]}]
+    bindings = [[
+        AssetComponentBinding(
+            status="exact", component_status="exact", range_status="exact",
+            asset_type="GIMI", asset="Alice", component_name="Body",
+            classification="A", first_index=10, index_count=20),
+        AssetComponentBinding(
+            status="exact", component_status="exact", range_status="exact",
+            asset_type="GIMI", asset="Alice", component_name="Body",
+            classification="B", first_index=30, index_count=40),
+        AssetComponentBinding(
+            status="not_found", component_status="not_found",
+            range_status="unknown", asset_type="GIMI"),
+    ]]
+
+    summary = summarize_groups(
+        groups, bindings,
+        {"configured_roots": 1, "ready_roots": 1,
+         "unavailable_roots": 0}).to_dict()
+
+    assert summary["exact_draws"] == 2
+    assert summary["unmatched_draws"] == 1
+    assert summary["assets"] == ["Alice"]
+    assert summary["components"] == [{
+        "mod_component": "Body", "status": "partial",
+        "asset": "Alice", "component": "Body", "draws": 3,
+        "exact_draws": 2, "partial_draws": 0, "ambiguous_draws": 0,
+        "unmatched_draws": 1, "ranges_vary": True,
+    }]
+
+
+def test_asset_resolution_summary_marks_missing_indexes_informational():
+    groups = [{"name": "Body", "draws": [None]}]
+    bindings = [[AssetComponentBinding(
+        status="not_found", component_status="not_found",
+        range_status="unknown", asset_type="GIMI")]]
+
+    summary = summarize_groups(
+        groups, bindings,
+        {"configured_roots": 1, "ready_roots": 0,
+         "unavailable_roots": 1}).to_dict()
+
+    assert summary["index_status"] == "unavailable"
+    assert summary["index_unavailable_draws"] == 1
+    assert summary["unmatched_draws"] == 0
+
+
+def test_not_found_binding_is_published_only_after_a_ready_index_query():
+    draw = DrawCall(label="Body-1")
+    groups = [{"draws": [draw]}]
+    binding = AssetComponentBinding(
+        status="not_found", component_status="not_found",
+        range_status="unknown", asset_type="GIMI")
+
+    apply(groups, [[binding]])
+    assert draw.asset_binding is None
+    apply(groups, [[binding]], include_not_found=True)
+    assert draw.asset_binding is binding

@@ -3,6 +3,11 @@
 
 import { isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from './selection.js';
+import {
+  assetMatchLabel, componentMatchLabel, normalizeAssetBinding,
+  rangeMatchLabel, summarizeAssetBindings, textureProvenance,
+  textureRoleLabels,
+} from './asset-diagnostics.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -53,8 +58,9 @@ function addRow(parent, label, value) {
   const row = document.createElement('div');
   row.className = 'inspector-row';
   addText(row, 'inspector-label', label);
-  addText(row, 'inspector-value', value || '—');
+  addText(row, 'inspector-value', value == null || value === '' ? '—' : String(value));
   parent.appendChild(row);
+  return row;
 }
 
 function buildHeader(content, title, subtitle) {
@@ -65,6 +71,102 @@ function buildHeader(content, title, subtitle) {
   heading.textContent = title;
   header.appendChild(heading);
   content.appendChild(header);
+}
+
+function buildAssetSection(content, entry) {
+  const binding = normalizeAssetBinding(entry?.asset_binding);
+  if (!binding) return;
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-asset-section';
+  const title = document.createElement('div');
+  title.className = 'inspector-section-title';
+  title.textContent = 'Asset match';
+  section.appendChild(title);
+  addRow(section, 'Asset', binding.asset);
+  addRow(section, 'Type', binding.assetType);
+  addRow(section, 'Component', binding.component);
+  addRow(section, 'Object', binding.classification);
+  addRow(section, 'Geometry hash', binding.geometryHash);
+  if (binding.firstIndex !== null || binding.indexCount !== null) {
+    const range = [binding.firstIndex, binding.indexCount]
+      .map(value => value == null ? '?' : value).join(' / ');
+    addRow(section, 'Range', range);
+  }
+  addRow(section, 'Component match', componentMatchLabel(binding));
+  addRow(section, 'Range match', rangeMatchLabel(binding));
+  addRow(section, 'Match', assetMatchLabel(binding));
+  content.appendChild(section);
+}
+
+function buildComponentAssetSection(content, record) {
+  const summary = record.assetSummary
+    || summarizeAssetBindings((record.meshes || [])
+      .map(mesh => mesh.userData.assetEntry));
+  if (!summary || summary.status === 'unavailable') return;
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-asset-section';
+  const title = document.createElement('div');
+  title.className = 'inspector-section-title';
+  title.textContent = 'Asset resolution';
+  section.appendChild(title);
+  addRow(section, 'Match', summary.status.replace(/^./, value => value.toUpperCase()));
+  addRow(section, 'Asset', summary.asset);
+  addRow(section, 'Component', summary.component);
+  addRow(section, 'Draws', `${summary.matchedDraws} of ${summary.totalDraws} matched`);
+  if (summary.exact) addRow(section, 'Exact', summary.exact);
+  if (summary.partial) addRow(section, 'Partial', summary.partial);
+  if (summary.ambiguous) addRow(section, 'Ambiguous', summary.ambiguous);
+  if (summary.unmatched) addRow(section, 'Not found', summary.unmatched);
+  if (summary.rangesVary) addRow(section, 'Ranges', 'Vary by draw');
+  content.appendChild(section);
+}
+
+function buildTextureProvenanceSection(content, record, mesh) {
+  const entry = record.entry || {};
+  if (!entry.asset_binding && !entry.texture_resolution
+      && !(entry.asset_slot_evidence || []).length) return;
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-provenance-section';
+  const title = document.createElement('div');
+  title.className = 'inspector-section-title';
+  title.textContent = 'Texture provenance';
+  section.appendChild(title);
+  const sources = textureProvenance(entry);
+  textureRoleLabels().forEach(([role, label]) => {
+    const row = addRow(section, `${label} (automatic)`, sources[role]);
+    row.dataset.provenanceRole = role;
+    row.dataset.provenanceKind = 'automatic';
+  });
+  const override = record.component?.getTextureOverride?.(mesh);
+  const current = override?.automatic
+    ? (override.resolved ? `Automatic (${override.resolved})` : 'Automatic')
+    : override?.value === null ? 'Viewer override (None)'
+      : `Viewer override (${override?.value || 'custom'})`;
+  const currentRow = addRow(section, 'Diffuse (viewer)', current);
+  currentRow.dataset.provenanceKind = 'viewer';
+  content.appendChild(section);
+}
+
+function buildSlotEvidenceSection(content, entry) {
+  const evidence = entry?.asset_slot_evidence;
+  if (!Array.isArray(evidence) || !evidence.length) return;
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-slot-section';
+  const title = document.createElement('div');
+  title.className = 'inspector-section-title';
+  title.textContent = 'Slot evidence';
+  section.appendChild(title);
+  evidence.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'inspector-slot-evidence';
+    addText(card, 'inspector-slot-name', item.resource || 'Texture slot');
+    addRow(card, 'Texture', item.texture_hash);
+    addRow(card, 'VS', item.vs_hash);
+    addRow(card, 'PS', item.ps_hash);
+    addRow(card, 'Role', item.role || 'Unknown');
+    section.appendChild(card);
+  });
+  content.appendChild(section);
 }
 
 function buildTextureControls(content, record, mesh) {
@@ -149,6 +251,7 @@ function buildComponent(record) {
   addRow(summary, 'Draw calls', String(meshes.length));
   addRow(summary, 'Visible', `${meshes.filter(mesh => mesh.visible).length} of ${meshes.length}`);
   content.appendChild(summary);
+  buildComponentAssetSection(content, record);
 
   const material = document.createElement('section');
   material.className = 'inspector-section';
@@ -203,6 +306,9 @@ function buildMesh(mesh, record) {
   addRow(summary, 'Material kind', mesh.userData.materialKindOverride || mesh.userData.materialKind || 'Auto');
   addRow(summary, 'Diffuse', mesh.userData.resolvedTexKey || mesh.userData.texKey || 'None');
   content.appendChild(summary);
+  buildAssetSection(content, record.entry);
+  buildTextureProvenanceSection(content, record, mesh);
+  buildSlotEvidenceSection(content, record.entry);
 
   const material = document.createElement('section');
   material.className = 'inspector-section';
@@ -277,6 +383,14 @@ function updateInspectorState() {
             : !override.automatic && override.value === option.dataset.textureValue;
         option.classList.toggle('selected', selected);
       });
+      const currentProvenance = content.querySelector(
+        '[data-provenance-kind="viewer"] .inspector-value');
+      if (currentProvenance) {
+        currentProvenance.textContent = override.automatic
+          ? (override.resolved ? `Automatic (${override.resolved})` : 'Automatic')
+          : override.value === null ? 'Viewer override (None)'
+            : `Viewer override (${override.value || 'custom'})`;
+      }
     }
   } else if (current.type === 'component') {
     const meshes = current.record.meshes || [];

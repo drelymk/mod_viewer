@@ -11,6 +11,7 @@ let currentFilter = 'all';
 let reportLoader = null;
 let reportGeneration = 0;
 let activeReportLoad = null;
+let currentAssetResolution = null;
 
 function matchesFilter(issue) {
   if (currentFilter === 'all') return true;
@@ -26,6 +27,34 @@ function locationText(issue) {
   return parts.join(' · ');
 }
 
+function renderAssetResolution() {
+  const node = $('health-asset-summary');
+  const summary = currentAssetResolution;
+  if (!node || !summary || summary.index_status === 'not_configured') {
+    if (node) node.hidden = true;
+    return;
+  }
+  const exact = Number(summary.exact_draws) || 0;
+  const total = Number(summary.total_draws) || 0;
+  const parts = summary.index_status === 'unavailable'
+    ? ['Asset resolution: index unavailable']
+    : [`Asset resolution: ${exact} / ${total} draws exact`];
+  for (const [key, label] of [
+    ['partial_draws', 'partial'],
+    ['ambiguous_draws', 'ambiguous'],
+    ['unmatched_draws', 'not found'],
+  ]) {
+    const count = Number(summary[key]) || 0;
+    if (count) parts.push(`${count} ${label}`);
+  }
+  const components = Array.isArray(summary.components)
+    ? summary.components : [];
+  const mixed = components.filter(item => item.status === 'mixed').length;
+  if (mixed) parts.push(`${mixed} mixed component${mixed === 1 ? '' : 's'}`);
+  node.textContent = parts.join(' · ');
+  node.hidden = false;
+}
+
 function renderReport() {
   const report = currentReport || { summary: {}, files: {}, issues: [] };
   const summary = report.summary || {};
@@ -34,6 +63,7 @@ function renderReport() {
     `${summary.errors || 0} errors · ${summary.warnings || 0} warnings · ` +
     `${files.referenced || 0} referenced assets · ${files.inactive_only || 0} inactive-only · ` +
     `${files.viewer_only || 0} viewer-only`;
+  renderAssetResolution();
 
   const issues = (report.issues || []).filter(matchesFilter);
   const list = $('health-list');
@@ -107,8 +137,11 @@ function renderReport() {
   }
 }
 
-export function setHealthReport(report) {
+export function setHealthReport(report, assetResolution = undefined) {
   currentReport = report || null;
+  if (assetResolution !== undefined) currentAssetResolution = assetResolution;
+  else if (report?.asset_resolution) currentAssetResolution = report.asset_resolution;
+  else if (report === null) currentAssetResolution = null;
   const button = $('health-btn');
   const count = report?.summary?.issues || 0;
   const errors = report?.summary?.errors || 0;

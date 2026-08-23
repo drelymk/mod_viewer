@@ -534,7 +534,7 @@ async function loadModAt(path) {
   });
 
   const data = await window.pywebview.api.load_mod(path);
-  setHealthReport(data?.health);
+  setHealthReport(data?.health, data?.asset_resolution);
   if (data && data.error) {
     showLoading(false);
     await refreshPendingState();

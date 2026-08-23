@@ -544,6 +544,66 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         context.close()
 
 
+def test_asset_identity_and_texture_provenance_are_diagnostic_only(
+        edge_browser, frontend_url):
+    payload = _payload("Asset")
+    entry = payload["meshes"]["Body-Asset-0"]
+    entry["asset_binding"] = {
+        "status": "exact", "component_status": "exact",
+        "range_status": "exact", "asset_type": "GIMI",
+        "asset": "Alice", "component_name": "Body",
+        "classification": "B", "geometry_hash": "73c8cae2",
+        "first_index": 43845, "index_count": 24,
+    }
+    entry["texture_resolution"] = {
+        "diffuse": "mod_semantic",
+        "normal_map": "asset_original_fallback",
+        "light_map": "mod_texture_hash",
+    }
+    entry["asset_slot_evidence"] = [{
+        "resource": "ps-t1", "texture_hash": "11111111",
+        "vs_hash": "aaaaaaaa", "ps_hash": "bbbbbbbb",
+    }]
+    payload["asset_resolution"] = {
+        "total_draws": 1, "exact_draws": 1, "partial_draws": 0,
+        "ambiguous_draws": 0, "unmatched_draws": 0,
+        "index_unavailable_draws": 0, "index_status": "ready",
+        "components": [],
+    }
+    context, page = _page(edge_browser, frontend_url, {"Asset": payload})
+    try:
+        _open(page, "Asset")
+        page.locator(".draw-item").wait_for()
+        assert page.locator(".asset-draw-label").inner_text() == "Alice · Body B"
+        page.locator("#health-btn").click()
+        page.locator("#health-modal-backdrop.show").wait_for()
+        assert page.locator("#health-asset-summary").inner_text() == (
+            "Asset resolution: 1 / 1 draws exact")
+        page.locator("#health-close").click()
+
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        inspector = page.locator("#inspector-content")
+        assert inspector.locator(".inspector-asset-section").inner_text() == (
+            "ASSET MATCH\nAsset\nAlice\nType\nGIMI\nComponent\nBody\nObject\nB\n"
+            "Geometry hash\n73c8cae2\nRange\n43845 / 24\nComponent match\nExact\n"
+            "Range match\nExact\nMatch\nExact")
+        assert "Normal (automatic)\nAsset fallback" in inspector.inner_text()
+        assert "ps-t1" in inspector.locator(".inspector-slot-section").inner_text()
+        assert "Role\nUnknown" in inspector.locator(
+            ".inspector-slot-section").inner_text()
+
+        page.locator(".inspector-texture-option", has_text="Asset two").click()
+        assert inspector.locator(
+            '[data-provenance-kind="viewer"] .inspector-value').inner_text() == (
+                "Viewer override (diffuse::Asset-two.png)")
+
+        page.locator(".group-hdr .group-name").first.click()
+        assert "1 of 1 matched" in inspector.inner_text()
+    finally:
+        context.close()
+
+
 def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {}, asset_folders=[])
     try:

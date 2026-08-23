@@ -232,14 +232,22 @@ def _apply_slot_hashes(draw, evidence):
         draw.texture_provenance[item.role] = "mod_texture_hash"
 
 
-def apply(groups, bindings, metadata_cache=None):
-    """Apply only exact-component evidence, leaving unresolved roles alone."""
+def apply(groups, bindings, metadata_cache=None, *, include_not_found=False):
+    """Apply Asset diagnostics and exact-component texture evidence.
+
+    A not-found binding is published only when at least one ready index was
+    queried.  With no configured or usable index, omitting it preserves the
+    legacy no-Asset presentation while the aggregate report explains why
+    matching was unavailable.
+    """
     metadata_cache = metadata_cache if metadata_cache is not None else {}
     for group, group_bindings in zip(groups, bindings):
         for draw, binding in zip(group.get("draws", []), group_bindings):
-            if binding.status == "not_found":
+            if binding.status == "not_found" and not include_not_found:
                 continue
             draw.asset_binding = binding
+            if binding.status == "not_found":
+                continue
             if (binding.status != "exact"
                     or binding.component_status != "exact"
                     or binding.range_status != "exact"):

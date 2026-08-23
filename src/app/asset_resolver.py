@@ -1,10 +1,14 @@
 """Conservative component binding against enabled Asset indexes."""
 
 from dataclasses import dataclass
+import logging
 
 from core.geometry_identity import GeometryMatch
 
 from . import asset_folders, asset_index
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 _GAME_ASSET_TYPES = {
@@ -50,6 +54,45 @@ class AssetComponentBinding:
             if getattr(self, field) is not None:
                 value[key] = getattr(self, field)
         return value
+
+
+@dataclass(frozen=True, slots=True)
+class AssetResolutionSummary:
+    """Read-only aggregate diagnostics for one mod load.
+
+    The summary is deliberately separate from draw identity.  It describes
+    what the resolver learned without changing which meshes or textures the
+    viewer treats as operational state.
+    """
+
+    total_draws: int
+    exact_draws: int = 0
+    partial_draws: int = 0
+    ambiguous_draws: int = 0
+    unmatched_draws: int = 0
+    index_unavailable_draws: int = 0
+    index_status: str = "not_configured"
+    configured_roots: int = 0
+    ready_roots: int = 0
+    unavailable_roots: int = 0
+    assets: tuple[str, ...] = ()
+    components: tuple[dict, ...] = ()
+
+    def to_dict(self):
+        return {
+            "total_draws": self.total_draws,
+            "exact_draws": self.exact_draws,
+            "partial_draws": self.partial_draws,
+            "ambiguous_draws": self.ambiguous_draws,
+            "unmatched_draws": self.unmatched_draws,
+            "index_unavailable_draws": self.index_unavailable_draws,
+            "index_status": self.index_status,
+            "configured_roots": self.configured_roots,
+            "ready_roots": self.ready_roots,
+            "unavailable_roots": self.unavailable_roots,
+            "assets": list(self.assets),
+            "components": [dict(item) for item in self.components],
+        }
 
 
 def _game_id(game):
@@ -100,18 +143,25 @@ def _binding(root, index, geometry_match, lookup, geometry, item=None,
     )
 
 
-def _load_enabled_indexes(asset_type, asset_entries):
+def _load_enabled_indexes(asset_type, asset_entries, *, availability=None):
     """Load each enabled root's validated index at most once."""
     indexes = []
     entries = asset_folders.enabled_entries_for_type(
         asset_entries or [], asset_type)
+    if availability is not None:
+        availability["configured_roots"] = len(entries)
     for entry in entries:
         try:
             index = asset_index.load_index(asset_type, entry["path"])
         except asset_index.AssetIndexError:
+            if availability is not None:
+                availability["unavailable_roots"] = (
+                    availability.get("unavailable_roots", 0) + 1)
             continue
         if index:
             indexes.append((entry["path"], index))
+    if availability is not None:
+        availability["ready_roots"] = len(indexes)
     return indexes
 
 
@@ -209,14 +259,133 @@ def resolve_component(geometry_match, game, asset_entries):
         _load_enabled_indexes(asset_type, asset_entries))
 
 
-def resolve_groups(groups, game, asset_entries):
+def resolve_groups(groups, game, asset_entries, *, availability=None):
     """Return independent per-draw bindings in group order."""
     asset_type = _asset_type(game)
-    indexes = (_load_enabled_indexes(asset_type, asset_entries)
+    if availability is not None:
+        availability.clear()
+        availability["asset_type"] = asset_type
+    indexes = (_load_enabled_indexes(
+        asset_type, asset_entries, availability=availability)
                if asset_type is not None else [])
+    if availability is not None and asset_type is not None:
+        # Keep the normal return shape stable while allowing the caller that
+        # owns the aggregate report to distinguish missing/invalid indexes.
+        availability.setdefault("unavailable_roots", 0)
     return [
         [_resolve_component_from_indexes(
             getattr(draw, "geometry_match", None), asset_type, indexes)
          for draw in group.get("draws", [])]
         for group in groups
     ]
+
+
+def _binding_kind(binding):
+    if binding.status == "ambiguous":
+        return "ambiguous"
+    if binding.status == "exact":
+        if (binding.component_status == "exact"
+                and binding.range_status == "exact"):
+            return "exact"
+        return "partial"
+    if binding.status == "not_found":
+        return "unmatched"
+    return "partial"
+
+
+def _component_identity(binding):
+    if not isinstance(binding, AssetComponentBinding):
+        return None
+    component = binding.component_name
+    if component is None and binding.component_ordinal is not None:
+        component = f"Component {binding.component_ordinal}"
+    if binding.asset is None and component is None:
+        return None
+    return binding.asset, component
+
+
+def summarize_groups(groups, bindings, availability=None):
+    """Aggregate per-draw bindings for health/debug/UI diagnostics."""
+    if availability is None:
+        availability = {}
+    total_draws = sum(len(group.get("draws", [])) for group in groups)
+    configured = int(availability.get("configured_roots", 0) or 0)
+    ready = int(availability.get("ready_roots", 0) or 0)
+    unavailable_roots = int(availability.get("unavailable_roots", 0) or 0)
+    if not configured:
+        index_status = "not_configured"
+    elif ready:
+        index_status = "ready"
+    else:
+        index_status = "unavailable"
+
+    counts = {key: 0 for key in (
+        "exact", "partial", "ambiguous", "unmatched")}
+    assets = set()
+    component_summaries = []
+    for group, group_bindings in zip(groups, bindings):
+        draws = group.get("draws", [])
+        kinds = []
+        identities = set()
+        ranges = set()
+        for draw, binding in zip(draws, group_bindings):
+            if not isinstance(binding, AssetComponentBinding):
+                continue
+            kind = _binding_kind(binding)
+            kinds.append(kind)
+            counts[kind] += 1
+            if binding.asset:
+                assets.add(binding.asset)
+            identity = _component_identity(binding)
+            if identity is not None:
+                identities.add(identity)
+            ranges.add((binding.classification, binding.component_ordinal,
+                        binding.first_index, binding.index_count))
+
+        if len(identities) > 1:
+            status = "mixed"
+        elif "ambiguous" in kinds:
+            status = "ambiguous"
+        elif any(kind in kinds for kind in ("partial", "unmatched")):
+            status = "partial"
+        elif "exact" in kinds:
+            status = "exact"
+        else:
+            status = "unmatched"
+        identity = next(iter(identities), (None, None))
+        component_summaries.append({
+            "mod_component": (group.get("display_name") or group.get("name")
+                              or "Component"),
+            "status": status,
+            "asset": identity[0],
+            "component": identity[1],
+            "draws": len(draws),
+            "exact_draws": kinds.count("exact"),
+            "partial_draws": kinds.count("partial"),
+            "ambiguous_draws": kinds.count("ambiguous"),
+            "unmatched_draws": kinds.count("unmatched"),
+            "ranges_vary": len(ranges) > 1,
+        })
+        _LOGGER.debug(
+            "Asset resolution component %s -> %s/%s; exact=%d partial=%d "
+            "ambiguous=%d unmatched=%d",
+            component_summaries[-1]["mod_component"], identity[0],
+            identity[1], kinds.count("exact"), kinds.count("partial"),
+            kinds.count("ambiguous"), kinds.count("unmatched"))
+
+    index_unavailable_draws = total_draws if index_status == "unavailable" else 0
+    return AssetResolutionSummary(
+        total_draws=total_draws,
+        exact_draws=counts["exact"],
+        partial_draws=counts["partial"],
+        ambiguous_draws=counts["ambiguous"],
+        unmatched_draws=(0 if index_status == "unavailable"
+                         else counts["unmatched"]),
+        index_unavailable_draws=index_unavailable_draws,
+        index_status=index_status,
+        configured_roots=configured,
+        ready_roots=ready,
+        unavailable_roots=unavailable_roots,
+        assets=tuple(sorted(assets, key=lambda value: (value.casefold(), value))),
+        components=tuple(component_summaries),
+    )
