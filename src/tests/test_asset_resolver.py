@@ -4,14 +4,17 @@ import struct
 
 from app import asset_index
 from app.asset_enrichment import apply
-from app.asset_resolver import AssetComponentBinding, resolve_component
+from app.asset_resolver import (AssetComponentBinding, resolve_component,
+                                resolve_groups)
 from core.draw_call import DrawCall, SlotTextureBinding
 from core.geometry_identity import GeometryMatch, normalize_geometry_hash
 from core.ini_parser import _scan_sections_for_draws, parse_sections
 from core.mesh_builder import GeometryBlob, build_mesh_result
 
 
-def _index(root, asset_type="GIMI", metadata="Alice/hash.json"):
+def _index(root, asset_type="GIMI", metadata=None, *, asset="Alice",
+           first_index=43845, classification="B"):
+    metadata = metadata or f"{asset}/hash.json"
     return {
         "version": 1,
         "type": asset_type,
@@ -21,11 +24,11 @@ def _index(root, asset_type="GIMI", metadata="Alice/hash.json"):
             "assetCount": 1, "geometryRecordCount": 1,
             "geometryHashCount": 1, "skippedCount": 0,
         },
-        "assets": [{"path": "Alice", "geometry": [{
+        "assets": [{"path": asset, "geometry": [{
             "hash": "73c8cae2",
             "ranges": [{
-                "firstIndex": 43845, "indexCount": None,
-                "classification": "B", "componentOrdinal": 1,
+                "firstIndex": first_index, "indexCount": None,
+                "classification": classification, "componentOrdinal": 1,
             }],
             "metadata": metadata,
             "componentName": "Body",
@@ -73,6 +76,29 @@ def test_resource_name_hash_is_not_texture_evidence():
     assert "texture_hashes" not in draw.diffuse_variants[0]
 
 
+def test_texture_hash_maps_all_conditional_this_resources():
+    sections = parse_sections(
+        "fixture.ini", "[TextureOverrideBody]\n"
+        "hash = 73c8cae2\n"
+        "ps-t1 = ResourceA\n"
+        "Resource\\GIMI\\Diffuse = ResourceB\n"
+        "drawindexed = 3, 0, 0\n"
+        "[TextureOverrideOriginalTexture]\n"
+        "hash = 11111111\n"
+        "if $toggle == 0\n"
+        "this = ResourceA\n"
+        "else\n"
+        "this = ResourceB\n"
+        "endif\n")
+
+    draw = _scan_sections_for_draws(sections)["TextureOverrideBody"][
+        "draws"][0]
+
+    assert draw.slot_textures == [SlotTextureBinding(
+        1, "ResourceA", texture_hashes=("11111111",))]
+    assert draw.diffuse_variants[0]["texture_hashes"] == ("11111111",)
+
+
 def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     entries = [{"type": "GIMI", "path": root, "enabled": True}]
@@ -106,6 +132,80 @@ def test_resolver_marks_duplicate_enabled_roots_ambiguous(tmp_path, monkeypatch)
 
     assert binding.status == "ambiguous"
     assert binding.geometry_hash == "73c8cae2"
+
+
+def test_range_evidence_disambiguates_same_hash_candidates(tmp_path, monkeypatch):
+    roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
+             for name in ("one", "two")]
+    entries = [{"type": "GIMI", "path": root, "enabled": True}
+               for root in roots]
+
+    def load_index(asset_type, path):
+        return _index(
+            path, asset="AssetA" if path == roots[0] else "AssetB",
+            first_index=0 if path == roots[0] else 43845)
+
+    monkeypatch.setattr(asset_index, "load_index", load_index)
+
+    binding = resolve_component(
+        GeometryMatch("73c8cae2", 43845), "genshin", entries)
+
+    assert binding.status == "exact"
+    assert binding.asset == "AssetB"
+    assert binding.range_status == "exact"
+
+
+def test_same_hash_same_range_remains_ambiguous(tmp_path, monkeypatch):
+    roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
+             for name in ("one", "two")]
+    entries = [{"type": "GIMI", "path": root, "enabled": True}
+               for root in roots]
+    monkeypatch.setattr(
+        asset_index, "load_index", lambda asset_type, path: _index(path))
+
+    binding = resolve_component(
+        GeometryMatch("73c8cae2", 43845), "genshin", entries)
+
+    assert binding.status == "ambiguous"
+    assert binding.range_status == "ambiguous"
+
+
+def test_same_hash_without_range_evidence_remains_ambiguous(tmp_path,
+                                                            monkeypatch):
+    roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
+             for name in ("one", "two")]
+    entries = [{"type": "GIMI", "path": root, "enabled": True}
+               for root in roots]
+    monkeypatch.setattr(
+        asset_index, "load_index", lambda asset_type, path: _index(path))
+
+    binding = resolve_component(
+        GeometryMatch("73c8cae2"), "genshin", entries)
+
+    assert binding.status == "ambiguous"
+    assert binding.range_status == "unknown"
+
+
+def test_resolve_groups_loads_each_enabled_index_once(tmp_path, monkeypatch):
+    roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
+             for name in ("one", "two")]
+    entries = [{"type": "GIMI", "path": root, "enabled": True}
+               for root in roots]
+    calls = []
+
+    def load_index(asset_type, path):
+        calls.append(path)
+        return _index(path)
+
+    monkeypatch.setattr(asset_index, "load_index", load_index)
+    groups = [{"draws": [
+        DrawCall(geometry_match=GeometryMatch("73c8cae2"))
+        for _ in range(10)
+    ]}]
+
+    resolve_groups(groups, "genshin", entries)
+
+    assert calls == roots
 
 
 def test_asset_original_fallback_fills_only_missing_roles(tmp_path):

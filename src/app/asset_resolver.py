@@ -57,6 +57,10 @@ def _game_id(game):
     return value.casefold() if isinstance(value, str) else value
 
 
+def _asset_type(game):
+    return _GAME_ASSET_TYPES.get(_game_id(game))
+
+
 def _range_matches(item, geometry_match):
     if not isinstance(item, dict) or geometry_match.first_index is None:
         return False
@@ -96,27 +100,49 @@ def _binding(root, index, geometry_match, lookup, geometry, item=None,
     )
 
 
-def resolve_component(geometry_match, game, asset_entries):
-    """Resolve one draw's geometry evidence without using texture evidence."""
-    if not isinstance(geometry_match, GeometryMatch):
-        return AssetComponentBinding(status="not_found")
-    asset_type = _GAME_ASSET_TYPES.get(_game_id(game))
-    if asset_type is None:
-        return AssetComponentBinding(status="not_found")
-
-    candidates = []
-    seen = set()
-    entries = asset_folders.enabled_entries_for_type(asset_entries or [], asset_type)
+def _load_enabled_indexes(asset_type, asset_entries):
+    """Load each enabled root's validated index at most once."""
+    indexes = []
+    entries = asset_folders.enabled_entries_for_type(
+        asset_entries or [], asset_type)
     for entry in entries:
         try:
             index = asset_index.load_index(asset_type, entry["path"])
         except asset_index.AssetIndexError:
             continue
-        if not index:
-            continue
+        if index:
+            indexes.append((entry["path"], index))
+    return indexes
+
+
+def _not_found(asset_type=None):
+    return AssetComponentBinding(
+        status="not_found", component_status="not_found",
+        range_status="unknown", asset_type=asset_type)
+
+
+def _ambiguous(geometry_match, asset_type, *, component_status="ambiguous",
+               range_status="unknown"):
+    return AssetComponentBinding(
+        status="ambiguous", component_status=component_status,
+        range_status=range_status, asset_type=asset_type,
+        geometry_hash=geometry_match.hash,
+        first_index=geometry_match.first_index,
+        index_count=geometry_match.index_count)
+
+
+def _resolve_component_from_indexes(geometry_match, asset_type, indexes):
+    if not isinstance(geometry_match, GeometryMatch):
+        return _not_found(asset_type)
+    if asset_type is None:
+        return _not_found()
+
+    candidates = []
+    seen = set()
+    for root, index in indexes:
         for lookup in asset_index.lookup_geometry(index, geometry_match.hash):
             candidate_key = (
-                entry.get("path"), lookup.get("asset"),
+                root, lookup.get("asset"),
                 lookup.get("geometry"))
             if candidate_key in seen:
                 continue
@@ -129,49 +155,68 @@ def resolve_component(geometry_match, game, asset_entries):
             except (IndexError, KeyError, TypeError):
                 continue
             seen.add(candidate_key)
-            candidates.append((entry["path"], index, lookup, geometry, ranges))
+            candidates.append((root, index, lookup, geometry, ranges))
 
     if not candidates:
-        return AssetComponentBinding(
-            status="not_found", component_status="not_found",
-            range_status="unknown", asset_type=asset_type)
-    if len(candidates) != 1:
-        return AssetComponentBinding(
-            status="ambiguous", component_status="ambiguous",
-            range_status="unknown", asset_type=asset_type,
-            geometry_hash=geometry_match.hash,
-            first_index=geometry_match.first_index,
-            index_count=geometry_match.index_count)
+        return _not_found(asset_type)
 
-    root, index, lookup, geometry, ranges = candidates[0]
-    matching = [item for item in ranges
-                if _range_matches(item, geometry_match)]
-    if len(matching) == 1:
+    range_matches = [
+        (candidate, item)
+        for candidate in candidates
+        for item in candidate[4]
+        if _range_matches(item, geometry_match)
+    ]
+    if len(range_matches) == 1:
+        (root, index, lookup, geometry, _ranges), item = range_matches[0]
         try:
             return _binding(
-                root, index, geometry_match, lookup, geometry, matching[0],
+                root, index, geometry_match, lookup, geometry, item,
                 range_status="exact")
         except (IndexError, KeyError, TypeError):
-            return AssetComponentBinding(
-                status="not_found", component_status="not_found",
-                range_status="unknown", asset_type=asset_type)
+            return _not_found(asset_type)
 
-    range_status = "ambiguous" if len(matching) > 1 else "unknown"
+    if len(range_matches) > 1:
+        matched_candidates = {
+            (candidate[0], candidate[2].get("asset"),
+             candidate[2].get("geometry"))
+            for candidate, _item in range_matches
+        }
+        return _ambiguous(
+            geometry_match, asset_type,
+            component_status=("ambiguous" if len(matched_candidates) > 1
+                              else "exact"),
+            range_status="ambiguous")
+
+    if len(candidates) != 1:
+        return _ambiguous(geometry_match, asset_type)
+
+    root, index, lookup, geometry, _ranges = candidates[0]
     try:
         return _binding(
             root, index, geometry_match, lookup, geometry,
-            range_status=range_status)
+            range_status="unknown")
     except (IndexError, KeyError, TypeError):
-        return AssetComponentBinding(
-            status="not_found", component_status="not_found",
-            range_status="unknown", asset_type=asset_type)
+        return _not_found(asset_type)
+
+
+def resolve_component(geometry_match, game, asset_entries):
+    """Resolve one draw's geometry evidence without using texture evidence."""
+    asset_type = _asset_type(game)
+    if asset_type is None:
+        return _not_found()
+    return _resolve_component_from_indexes(
+        geometry_match, asset_type,
+        _load_enabled_indexes(asset_type, asset_entries))
 
 
 def resolve_groups(groups, game, asset_entries):
     """Return independent per-draw bindings in group order."""
+    asset_type = _asset_type(game)
+    indexes = (_load_enabled_indexes(asset_type, asset_entries)
+               if asset_type is not None else [])
     return [
-        [resolve_component(getattr(draw, "geometry_match", None), game,
-                           asset_entries)
+        [_resolve_component_from_indexes(
+            getattr(draw, "geometry_match", None), asset_type, indexes)
          for draw in group.get("draws", [])]
         for group in groups
     ]

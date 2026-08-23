@@ -69,7 +69,7 @@ def _collect_texture_hashes(sections):
         if not str(section).lower().startswith("textureoverride"):
             continue
         hashes = set()
-        resource = None
+        resources = set()
         for raw in lines:
             line = raw.split(";", 1)[0].strip()
             match = re.match(r"hash\s*=\s*(\S+)", line, re.I)
@@ -80,9 +80,10 @@ def _collect_texture_hashes(sections):
                 continue
             match = re.match(r"this\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if match:
-                resource = match.group(1)
-        if resource and hashes:
-            result.setdefault(resource.casefold(), set()).update(hashes)
+                resources.add(match.group(1))
+        for resource in resources:
+            if hashes:
+                result.setdefault(resource.casefold(), set()).update(hashes)
     return {
         resource: tuple(sorted(hashes))
         for resource, hashes in result.items()
