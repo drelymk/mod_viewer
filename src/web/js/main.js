@@ -15,6 +15,8 @@ import { buildTogglePanel } from './toggle-panel.js';
 import { buildMenuPanel } from './menu-panel.js';
 import { buildPresentPanel } from './present-panel.js';
 import { initModFolderPanel } from './mod-folder-panel.js';
+import { initAssetFolderPanel } from './asset-folder-panel.js';
+import { initLeftDock, setLeftDockTab, setMeshesAvailable } from './left-dock.js';
 import { alertDialog, confirmDialog } from './dialogs.js';
 import { setGeometryBlob } from './decode.js';
 import { refreshHealthReport, setHealthLoader, setHealthReport } from './health-report.js';
@@ -23,7 +25,7 @@ import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.j
 import { requestRender } from './render-scheduler.js';
 import { setTextureDisplayMode } from './render-modes.js';
 import { clearInspector, initInspectorPanel } from './inspector-panel.js';
-import { initRightDock, setRightDockVisible } from './right-dock.js';
+import { initRightDock, isRightDockOpen, setRightDockEnabled } from './right-dock.js';
 import { initPanelOpacityControl } from './appearance.js';
 import {
   getOutlineState as getMeshOutlineState,
@@ -206,14 +208,9 @@ function initToolPopovers() {
 }
 
 function syncViewportControlPlacement() {
-  const rightDock = $('right-dock');
-  const panelIds = ['inspector-panel', 'present-panel', 'toggle-panel', 'menu-panel'];
-  const hasVisiblePanel = rightDockEnabled && panelIds.some(id => {
-    const panel = $(id);
-    return panel && !panel.hidden && getComputedStyle(panel).display !== 'none';
-  });
-  setRightDockVisible(hasVisiblePanel);
-  document.body.classList.toggle('right-dock-visible', hasVisiblePanel);
+  setRightDockEnabled(rightDockEnabled);
+  const visible = rightDockEnabled && isRightDockOpen();
+  document.body.classList.toggle('right-dock-visible', visible);
 }
 
 function initToolbarOverflow() {
@@ -308,7 +305,6 @@ function clearScene({ preserveModelOrientation = false } = {}) {
   setTextures(null);
   setGeometryBlob(null);
   lastToggles = {};
-  $('sidebar').style.display = 'none';
   $('mesh-list').innerHTML = '';
   $('camera-panel').style.display = 'none';
   $('toggle-list').innerHTML = '';
@@ -317,7 +313,8 @@ function clearScene({ preserveModelOrientation = false } = {}) {
   $('present-panel').style.display = 'none';
   $('menu-list').innerHTML = '';
   $('menu-panel').style.display = 'none';
-  setRightDockVisible(false);
+  setMeshesAvailable(false);
+  setRightDockEnabled(false);
   syncViewportControlPlacement();
 }
 
@@ -383,6 +380,7 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   buildPresentPanel(controls.present, {
     modPath: currentModPath, onChange: handlePresentChange,
   });
+  setMeshesAvailable(true);
   rightDockEnabled = true;
   syncViewportControlPlacement();
   fitTo(activeMeshes, {
@@ -735,6 +733,7 @@ rendererReady.then(ready => {
   $('camera-flip-btn').addEventListener('click', () => rotateModelQuarterTurn(activeMeshes));
   $('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
   const applyEnvironmentPreset = initEnvironmentControl();
+  initLeftDock();
   initRightDock();
   initInspectorPanel();
   initSelection();
@@ -759,14 +758,16 @@ rendererReady.then(ready => {
     switchMod,
     onRegistryChanged: updateEmptyFolderAction,
   });
+  const assetFolderPanel = initAssetFolderPanel();
   $('empty-open-btn').disabled = false;
   emptyFolderAction.disabled = false;
   $('empty-open-btn').addEventListener('click', openMod);
   emptyFolderAction.addEventListener('click', () => {
-    modFolderPanel.setExpanded(true);
+    setLeftDockTab('mod-library');
     if (!hasModFolders) modFolderPanel.openAddDialog();
   });
   $('mod-folder-empty-add')?.addEventListener('click', modFolderPanel.openAddDialog);
+  $('asset-folder-empty-add')?.addEventListener('click', assetFolderPanel.openAddDialog);
 
   // Exposed for automated smoke tests and for poking at the app from the
   // devtools console; the UI itself always goes through the listeners above.

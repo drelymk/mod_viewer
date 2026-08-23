@@ -16,8 +16,8 @@ from core.mod_discovery import discover_ini_paths
 from core.ini_health import analyze_mod
 from core.texture_profiles import texture_profile_for
 
-from . import (edit_session, ini_api, metadata, mod_folders, mod_loader,
-               present_api, server, toggle_api)
+from . import (asset_folders, edit_session, ini_api, metadata, mod_folders,
+               mod_loader, present_api, server, toggle_api)
 
 
 class ModViewerAPI:
@@ -30,6 +30,8 @@ class ModViewerAPI:
         self._authorized_folders = set()
         self._picker_authorized_folders = set()
         self._authorized_roots = set()
+        self._authorized_asset_folders = set()
+        self._authorized_asset_roots = set()
         self._active_mesh_keys = {}
         try:
             self._authorized_roots = mod_folders.registered_paths(
@@ -37,6 +39,11 @@ class ModViewerAPI:
         except mod_folders.ModFolderError:
             # The UI can report the readable config error. Do not let malformed
             # optional configuration prevent the viewer from starting.
+            pass
+        try:
+            self._authorized_asset_roots = asset_folders.registered_paths(
+                asset_folders.load_registry())
+        except asset_folders.AssetFolderError:
             pass
 
     def _folder(self, folder_path):
@@ -52,6 +59,17 @@ class ModViewerAPI:
         if not requested:
             raise PermissionError("This folder was not selected through the native folder picker.")
         raise PermissionError("This folder was not selected through the native folder picker.")
+
+    def _asset_folder(self, folder_path):
+        requested = asset_folders.normalize_path(folder_path)
+        if requested in self._authorized_asset_folders:
+            return requested
+        if any(asset_folders.is_within(requested, root)
+               for root in self._authorized_asset_roots):
+            self._authorized_asset_folders.add(requested)
+            return requested
+        raise PermissionError(
+            "This folder is not inside a registered Asset Folder.")
 
     @staticmethod
     def _active_texture_source(folder_path, validate=False):
@@ -86,6 +104,9 @@ class ModViewerAPI:
 
     def _refresh_authorized_roots(self, entries):
         self._authorized_roots = mod_folders.registered_paths(entries)
+
+    def _refresh_authorized_asset_roots(self, entries):
+        self._authorized_asset_roots = asset_folders.registered_paths(entries)
 
     def get_mod_folders(self):
         try:
@@ -161,6 +182,75 @@ class ModViewerAPI:
         except mod_folders.ModFolderError as error:
             return {"error": str(error)}
 
+    # -- persistent Asset Folders registry ----------------------------------
+
+    def get_asset_folders(self):
+        try:
+            entries = asset_folders.load_registry()
+        except asset_folders.AssetFolderError as error:
+            return {"folders": [], "error": str(error)}
+        self._refresh_authorized_asset_roots(entries)
+        return {"folders": self._asset_folder_entries(entries)}
+
+    @staticmethod
+    def _asset_folder_entries(entries):
+        return [{**entry, "exists": os.path.isdir(entry["path"])}
+                for entry in entries]
+
+    def add_asset_folder(self, asset_type, folder_path):
+        folder_path = asset_folders.normalize_path(folder_path)
+        if folder_path not in self._picker_authorized_folders:
+            return {"error": "Choose the Asset Folder through the native folder picker first."}
+        try:
+            entries = asset_folders.add_folder(asset_type, folder_path)
+        except asset_folders.AssetFolderError as error:
+            return {"error": str(error)}
+        self._refresh_authorized_asset_roots(entries)
+        self._authorized_asset_folders.add(folder_path)
+        return {"folders": self._asset_folder_entries(entries)}
+
+    def edit_asset_folder(self, original_path, asset_type, folder_path):
+        original_path = asset_folders.normalize_path(original_path)
+        folder_path = asset_folders.normalize_path(folder_path)
+        try:
+            entries = asset_folders.load_registry()
+            if not any(item["path"] == original_path for item in entries):
+                raise asset_folders.AssetFolderError("That Asset Folder is not registered.")
+            if (folder_path != original_path and
+                    folder_path not in self._picker_authorized_folders):
+                raise asset_folders.AssetFolderError(
+                    "Choose the new Asset Folder through the native folder picker first.")
+            entries = asset_folders.edit_folder(original_path, asset_type, folder_path)
+        except asset_folders.AssetFolderError as error:
+            return {"error": str(error)}
+        self._refresh_authorized_asset_roots(entries)
+        self._authorized_asset_folders.add(folder_path)
+        return {"folders": self._asset_folder_entries(entries)}
+
+    def delete_asset_folder(self, folder_path):
+        try:
+            entries = asset_folders.delete_folder(folder_path)
+        except asset_folders.AssetFolderError as error:
+            return {"error": str(error)}
+        self._refresh_authorized_asset_roots(entries)
+        return {"folders": self._asset_folder_entries(entries)}
+
+    def list_asset_subfolders(self, folder_path):
+        requested = asset_folders.normalize_path(folder_path)
+        try:
+            entries = asset_folders.load_registry()
+            roots = [entry["path"] for entry in entries
+                     if asset_folders.is_within(requested, entry["path"])]
+            if not roots:
+                raise PermissionError(
+                    "That folder is not inside a registered Asset Folder.")
+            root = max(roots, key=len)
+            return {"folders": asset_folders.list_subfolders(requested, root)}
+        except PermissionError as error:
+            return {"error": str(error)}
+        except asset_folders.AssetFolderError as error:
+            return {"error": str(error)}
+
     def pick_texture_file(self, folder_path, texture_role=None):
         """Open a native file-picker rooted at the mod folder for the
         per-mesh/per-component texture picker. Returns {"tex_key", "uri"} / {"error"} on
@@ -200,6 +290,12 @@ class ModViewerAPI:
         context = mod_loader.ModLoadContext(
             folder_path, ini_paths, edit_session.documents_for(folder_path),
             metadata.load(folder_path))
+        try:
+            context.asset_folders = asset_folders.load_registry()
+        except asset_folders.AssetFolderError:
+            # Optional asset configuration must not make an otherwise valid
+            # mod unloadable; the asset UI reports the config error directly.
+            context.asset_folders = []
         return folder_path, overrides, pending_new_sections, context
 
     @staticmethod

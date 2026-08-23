@@ -7,13 +7,12 @@ supplies the native-picker authorization needed before a root can be added or
 changed.
 """
 
-import json
 import os
 
-from . import paths
+from . import config
 
 
-CONFIG_VERSION = 1
+CONFIG_VERSION = config.CONFIG_VERSION
 DEFAULT_PANEL_OPACITY = 58
 PANEL_OPACITY_KEY = "panelOpacity"
 
@@ -22,56 +21,15 @@ class ModFolderError(ValueError):
     """A readable validation, config or enumeration failure."""
 
 
-def normalize_path(value):
-    """Return the canonical comparison form for a filesystem path."""
-    if value is None:
-        return ""
-    try:
-        value = os.fspath(value)
-    except TypeError:
-        return ""
-    if not isinstance(value, str):
-        return ""
-    if not value.strip():
-        return ""
-    return os.path.normcase(os.path.realpath(os.path.abspath(value)))
-
-
-def is_within(path, root):
-    """Return whether *path* is *root* or a canonical descendant of it."""
-    path = normalize_path(path)
-    root = normalize_path(root)
-    if not path or not root:
-        return False
-    try:
-        return os.path.commonpath([path, root]) == root
-    except ValueError:
-        # Windows drives (and other incompatible path roots) have no common
-        # path and must never be treated as descendants.
-        return False
-
-
-def _config_file(config_file=None):
-    return os.fspath(config_file or paths.config_path())
+normalize_path = config.normalize_path
+is_within = config.is_within
 
 
 def _read_config(config_file=None):
-    filename = _config_file(config_file)
-    if not os.path.exists(filename):
-        return {"version": CONFIG_VERSION, "modFolders": []}
     try:
-        with open(filename, encoding="utf-8") as stream:
-            config = json.load(stream)
-    except (OSError, json.JSONDecodeError) as error:
-        raise ModFolderError(f"Could not read config.json: {error}") from error
-
-    if not isinstance(config, dict) or config.get("version") != CONFIG_VERSION:
-        raise ModFolderError(
-            f"Unsupported config.json version; expected {CONFIG_VERSION}.")
-    raw_entries = config.get("modFolders")
-    if not isinstance(raw_entries, list):
-        raise ModFolderError("config.json modFolders must be a list.")
-    return config
+        return config.read_config(config_file)
+    except ValueError as error:
+        raise ModFolderError(str(error)) from error
 
 
 def _read_entries(config_file=None):
@@ -112,24 +70,11 @@ def _validated_entry(name, folder, *, require_exists):
     return {"name": name.strip(), "path": normalized}
 
 
-def _write_config(config, config_file=None):
-    filename = _config_file(config_file)
-    temp_name = filename + ".tmp"
+def _write_config(value, config_file=None):
     try:
-        with open(temp_name, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(config, stream, indent=2, ensure_ascii=False)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temp_name, filename)
-    except OSError as error:
-        raise ModFolderError(f"Could not write config.json: {error}") from error
-    finally:
-        if os.path.exists(temp_name):
-            try:
-                os.remove(temp_name)
-            except OSError:
-                pass
+        config.write_config(value, config_file)
+    except ValueError as error:
+        raise ModFolderError(str(error)) from error
 
 
 def _write_entries(entries, config_file=None):
