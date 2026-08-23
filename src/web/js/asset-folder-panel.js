@@ -10,6 +10,10 @@ function baseName(path) {
   return String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
 }
 
+function canonicalPath(path) {
+  return String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
 function setTextError(element, message) {
   element.textContent = message || '';
   element.classList.toggle('show', !!message);
@@ -78,7 +82,9 @@ export function initAssetFolderPanel() {
             setTextError(error, response.error);
             return;
           }
-          applyRegistryResponse(response);
+          const updated = (response?.folders || []).find(candidate =>
+            canonicalPath(candidate.path) === canonicalPath(entry.path));
+          if (!updated || !tree.updateRoot(updated)) applyRegistryResponse(response);
         } catch (caught) {
           setTextError(error, caught.message || String(caught));
         } finally {

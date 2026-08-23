@@ -616,20 +616,36 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
         page.locator("#asset-folder-list .asset-folder-expand").first.click()
         page.locator(".asset-folder-select", has_text="Character").wait_for()
         assert page.evaluate("window.__fakeApi.calls.listAssetSubfolders") == [root]
-        page.locator(".asset-folder-select", has_text="Character").click()
+        child_select = page.locator(".asset-folder-select", has_text="Character")
+        child_select.click()
         assert page.evaluate("window.__fakeApi.calls.loadMod") == []
-        root_select = page.locator("#asset-folder-list .asset-folder-select").first
-        root_select.click()
-        assert page.locator(".asset-folder-row.active").count() == 1
+        assert page.evaluate(
+            "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
+        ) == child
         switch = page.locator(".asset-folder-switch").first
         assert switch.get_attribute("aria-checked") == "true"
         switch.click()
         page.wait_for_function("window.__fakeApi.assetFolders[0].enabled === false")
         page.locator(".asset-folder-switch[aria-checked='false']").wait_for()
-        assert page.locator(".asset-folder-row.active").count() == 1
+        child_select.wait_for()
+        assert page.locator(".asset-folder-expand.expanded").count() == 1
+        assert page.evaluate(
+            "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
+        ) == child
         page.locator(".asset-folder-switch").first.click()
         page.wait_for_function("window.__fakeApi.assetFolders[0].enabled === true")
         page.locator(".asset-folder-switch[aria-checked='true']").wait_for()
+        child_select.wait_for()
+        assert page.locator(".asset-folder-expand.expanded").count() == 1
+        assert page.evaluate(
+            "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
+        ) == child
+        root_select = page.locator("#asset-folder-list .asset-folder-select").first
+        root_select.click()
+        assert page.evaluate(
+            "document.querySelector('.asset-folder-row.active')?.dataset.assetFolderPath"
+        ) == root
+        switch = page.locator(".asset-folder-switch").first
         page.evaluate("""() => {
           window.pywebview.api.set_asset_folder_enabled = async () => ({
             error: 'write failed'});
