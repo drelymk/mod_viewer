@@ -117,6 +117,55 @@ def test_barbara_style_scopes_keep_all_component_variants_independent(tmp_path):
         }
 
 
+def test_beidou_style_singleton_resources_keep_each_component_role(tmp_path):
+    lines = []
+    components = ("Head", "Body", "Extra")
+    for component in components:
+        lines.extend([
+            f"[TextureOverrideBeidou{component}]",
+            f"vb0 = ResourceBeidou{component}Position",
+            f"vb1 = ResourceBeidou{component}Texcoord",
+            f"ib = ResourceBeidou{component}IB",
+            f"ps-t0 = ResourceBeidou{component}Diffuse",
+            f"ps-t1 = ResourceBeidou{component}LightMap",
+            "drawindexed = 3, 0, 0",
+            "",
+            f"[ResourceBeidou{component}Position]",
+            f"filename = {component.lower()}-position.buf",
+            "stride = 40",
+            "",
+            f"[ResourceBeidou{component}Texcoord]",
+            f"filename = {component.lower()}-texcoord.buf",
+            "stride = 20",
+            "",
+            f"[ResourceBeidou{component}IB]",
+            f"filename = {component.lower()}.ib",
+            "format = DXGI_FORMAT_R16_UINT",
+            "",
+            f"[ResourceBeidou{component}Diffuse]",
+            f"filename = {component.lower()}-diffuse.dds",
+            "",
+            f"[ResourceBeidou{component}LightMap]",
+            f"filename = {component.lower()}-light-map.dds",
+            "",
+        ])
+    path = tmp_path / "beidou-style.ini"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    sections = merge_sections([str(path)])
+    groups = build_draw_groups(sections, extract_resources(sections))
+
+    assert [group["name"] for group in groups] == [
+        "BeidouHead", "BeidouBody", "BeidouExtra"]
+    for group in groups:
+        draw = group["draws"][0]
+        assert [item.role_hint for item in draw.slot_textures] == [
+            "diffuse", "light_map"]
+        assert draw.texture_provenance == {
+            "diffuse": "mod_slot_legacy",
+            "light_map": "mod_slot_legacy",
+        }
+
+
 def test_proven_slotfix_assignment_uses_diffuse_pipeline(tmp_path):
     draw = _draw(
         tmp_path,
@@ -163,15 +212,60 @@ def test_repeated_legacy_slot_names_recover_texture_roles(tmp_path):
                                        "light_map": "mod_slot_legacy"}
 
 
-def test_single_legacy_slot_name_does_not_imply_a_role(tmp_path):
+def test_single_declared_legacy_resource_classifies_itself(tmp_path):
     draw = _draw(
         tmp_path,
         "ps-t0 = ResourceBodyDiffuse",
         {"ResourceBodyDiffuse": "body-diffuse.dds"},
     )
 
+    assert draw.slot_textures[0].role_hint == "diffuse"
+    assert draw.slot_textures[0].role_hint_source == "legacy_slot_mapping"
+    assert draw.texture_default("diffuse") == "body-diffuse.dds"
+
+
+def test_single_opaque_resource_stays_unresolved(tmp_path):
+    draw = _draw(
+        tmp_path,
+        "ps-t0 = ResourceShadowLookup",
+        {"ResourceShadowLookup": "shadow.dds"},
+    )
+
     assert draw.slot_textures[0].role_hint is None
     assert draw.texture_default("diffuse") is None
+
+
+def test_legacy_sibling_inherits_an_exact_role_anchor(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""if $style == 0
+ps-t4 = ResourceAstraLegANormalMap
+else
+ps-t4 = ResourceAstraLegANormalMapNSFW
+endif""",
+        {"ResourceAstraLegANormalMap": "leg-normal.dds",
+         "ResourceAstraLegANormalMapNSFW": "leg-normal-nsfw.dds"},
+        prefix="[KeyStyle]\ntype = cycle\n$style = 0,1\n",
+    )
+
+    assert {item.role_hint for item in draw.slot_textures} == {"normal_map"}
+    assert all(item.role_hint_source == "legacy_slot_mapping"
+               for item in draw.slot_textures)
+    assert {item["file"] for item in draw.texture_rules("normal_map")} == {
+        "leg-normal.dds", "leg-normal-nsfw.dds"}
+
+
+def test_legacy_sibling_moving_slots_rejects_the_family(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""ps-t4 = ResourceAstraLegANormalMap
+ps-t5 = ResourceAstraLegANormalMapNSFW""",
+        {"ResourceAstraLegANormalMap": "leg-normal.dds",
+         "ResourceAstraLegANormalMapNSFW": "leg-normal-nsfw.dds"},
+    )
+
+    assert all(item.role_hint is None for item in draw.slot_textures)
+    assert draw.texture_default("normal_map") is None
 
 
 def test_legacy_variant_suffixes_recover_texture_roles(tmp_path):

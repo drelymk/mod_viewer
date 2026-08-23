@@ -8,7 +8,9 @@ from app.asset_resolver import (AssetComponentBinding, resolve_component,
                                 resolve_groups, summarize_groups)
 from core.draw_call import DrawCall, SlotTextureBinding
 from core.geometry_identity import GeometryMatch, normalize_geometry_hash
-from core.ini_parser import _scan_sections_for_draws, parse_sections
+from core.ini_parser import (TextureOverrideIndex, TextureReplacement,
+                              _scan_sections_for_draws, build_draw_groups,
+                              extract_resources, parse_sections)
 from core.mesh_builder import (GeometryBlob, build_mesh_result,
                                build_mesh_semantics)
 
@@ -98,6 +100,98 @@ def test_texture_hash_maps_all_conditional_this_resources():
     assert draw.slot_textures == [SlotTextureBinding(
         1, "ResourceA", texture_hashes=("11111111",))]
     assert draw.diffuse_variants[0]["texture_hashes"] == ("11111111",)
+
+
+def test_texture_override_index_preserves_conditional_replacements():
+    sections = parse_sections(
+        "fixture.ini", "[KeyPanties]\n"
+        "type = cycle\n"
+        "$Panties = 0,1\n"
+        "[TextureOverrideAstraLegDiffuse]\n"
+        "hash = 11111111\n"
+        "if $Panties == 0\n"
+        "this = ResourceAstraLegADiffuse\n"
+        "else\n"
+        "this = ResourceAstraLegADiffuseNSFW\n"
+        "endif\n")
+
+    index = _scan_sections_for_draws(sections).texture_override_index
+    replacements = index.replacements_by_hash["11111111"]
+
+    assert [(item.resource, item.dnf) for item in replacements] == [
+        ("ResourceAstraLegADiffuse", [[{
+            "var": "Panties", "value": "0", "negate": False}]]),
+        ("ResourceAstraLegADiffuseNSFW", [[{
+            "var": "Panties", "value": "0", "negate": True}]])]
+
+
+def test_draw_group_index_resolves_replacement_resource_file():
+    sections = parse_sections(
+        "fixture.ini", "[TextureOverrideBody]\n"
+        "vb0 = ResourcePosition\n"
+        "vb1 = ResourceTexcoord\n"
+        "ib = ResourceBodyIB\n"
+        "drawindexed = 3, 0, 0\n"
+        "[TextureOverrideOriginal]\n"
+        "hash = 11111111\n"
+        "this = ResourceAstraDiffuse\n"
+        "[ResourcePosition]\n"
+        "filename = position.buf\n"
+        "stride = 40\n"
+        "[ResourceTexcoord]\n"
+        "filename = texcoord.buf\n"
+        "stride = 20\n"
+        "[ResourceBodyIB]\n"
+        "filename = body.ib\n"
+        "format = DXGI_FORMAT_R32_UINT\n"
+        "[ResourceAstraDiffuse]\n"
+        "filename = textures/astra-diffuse.dds\n")
+
+    groups = build_draw_groups(sections, extract_resources(sections))
+    index = groups[0]["_texture_override_index"]
+
+    assert index.replacements_by_hash["11111111"][0].file == \
+        "textures/astra-diffuse.dds"
+
+
+def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "hash.json").write_text(json.dumps([{
+        "ib": "73c8cae2", "object_indexes": [43845],
+        "object_classifications": ["B"],
+        "texture_hashes": [[
+            ["Diffuse", ".dds", "11111111"],
+        ]],
+    }]), encoding="utf-8")
+    replacement = TextureReplacement.from_dnf(
+        "11111111", "ResourceAstraDiffuse", [[{
+            "var": "style", "value": "1", "negate": False}]],
+        "TextureOverrideDiffuse")
+    replacement = TextureReplacement(
+        replacement.original_hash, replacement.resource, replacement.conditions,
+        replacement.source_section, "AstraDiffuse.dds")
+    index = TextureOverrideIndex(
+        replacements_by_hash={"11111111": (replacement,)})
+    draw = DrawCall()
+    binding = AssetComponentBinding(
+        status="exact", asset_type="GIMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_name="Body",
+        classification="B", first_index=43845,
+        metadata="Alice/hash.json")
+
+    apply([{"draws": [draw]}], [[binding]], texture_index=index)
+
+    assert draw.texture_rules("diffuse") == [{
+        "conditions": [[{
+            "var": "style", "value": "1", "negate": False}]],
+        "file": "AstraDiffuse.dds",
+        "texture_hashes": ("11111111",),
+    }]
+    assert draw.texture_provenance == {"diffuse": "mod_texture_hash"}
+    assert draw.texture_hashes["diffuse"] == ["11111111"]
 
 
 def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch):
@@ -590,6 +684,41 @@ def test_wwmi_slot_context_preserves_mod_role_hint(tmp_path):
         "ps_hash": "bbbbbbbb", "role": "normal_map",
         "role_source": "mod_slot_mapping",
     }]
+
+
+def test_wwmi_hash_replacement_is_component_diagnostic_without_role_guess(
+        tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    detail = asset_dir / "TextureUsage.json"
+    detail.write_text(json.dumps({"Component 1": {
+        "ps-t3": ["553ed32b-vs=aaaaaaaa-ps=bbbbbbbb"],
+    }}), encoding="utf-8")
+    replacement = TextureReplacement(
+        "553ed32b", "ResourceTexture0", (), "TextureOverrideTexture0",
+        "textures/texture0.dds")
+    index = TextureOverrideIndex(
+        replacements_by_hash={"553ed32b": (replacement,)})
+    draw = DrawCall()
+    binding = AssetComponentBinding(
+        status="exact", asset_type="WWMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_ordinal=1,
+        detail_metadata="Alice/TextureUsage.json")
+
+    apply([{"draws": [draw]}], [[binding]], texture_index=index)
+
+    assert draw.asset_slot_evidence == [{
+        "slot": 3, "texture_hash": "553ed32b",
+        "vs_hash": "aaaaaaaa", "ps_hash": "bbbbbbbb",
+        "replacement_resource": "ResourceTexture0",
+        "replacement_file": "textures/texture0.dds",
+        "replacement_conditions": [],
+        "source": "mod_texture_hash",
+    }]
+    assert draw.texture_provenance == {}
+    assert draw.asset_texture_defaults == {}
 
 
 def test_asset_fallback_uses_trusted_source_and_keeps_diagnostic(tmp_path):

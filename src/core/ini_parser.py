@@ -10,6 +10,7 @@ existing `from core.ini_parser import ...` callers keep working:
     ini_menu.py      clickable in-game menu slots
 """
 
+from dataclasses import dataclass, field, replace
 import re
 
 from .draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
@@ -37,6 +38,71 @@ __all__ = [
     "gating_var_names", "build_draw_groups",
 ]
 
+
+def _freeze_dnf(dnf):
+    return tuple(
+        tuple((clause["var"], clause["value"], bool(clause["negate"]))
+              for clause in group)
+        for group in (dnf or ())
+    )
+
+
+def _thaw_dnf(conditions):
+    return [[{"var": var, "value": value, "negate": negate}
+             for var, value, negate in group]
+            for group in (conditions or ())]
+
+
+@dataclass(frozen=True, slots=True)
+class TextureReplacement:
+    """One condition-aware original-hash to replacement-resource binding."""
+
+    original_hash: str
+    resource: str
+    conditions: tuple = ()
+    source_section: str = ""
+    file: str | None = None
+
+    @classmethod
+    def from_dnf(cls, original_hash, resource, conditions, source_section):
+        return cls(original_hash, resource, _freeze_dnf(conditions),
+                   source_section)
+
+    @property
+    def dnf(self):
+        return _thaw_dnf(self.conditions)
+
+
+@dataclass(slots=True)
+class TextureOverrideIndex:
+    """Resource/hash and reverse hash/replacement views from one INI."""
+
+    hashes_by_resource: dict = field(default_factory=dict)
+    replacements_by_hash: dict = field(default_factory=dict)
+
+    def with_resource_files(self, resources):
+        lookup = {str(name).casefold(): info
+                  for name, info in (resources or {}).items()}
+        replacements = {}
+        for texture_hash, items in self.replacements_by_hash.items():
+            resolved = []
+            for item in items:
+                info = lookup.get(item.resource.casefold(), {})
+                resolved.append(replace(
+                    item, file=info.get("filename")))
+            replacements[texture_hash] = tuple(resolved)
+        return TextureOverrideIndex(
+            hashes_by_resource=dict(self.hashes_by_resource),
+            replacements_by_hash=replacements)
+
+
+class _ScannedSections(dict):
+    """Dict-compatible scan result carrying its one texture index."""
+
+    def __init__(self, *args, texture_override_index=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.texture_override_index = texture_override_index
+
 # Compatibility name retained for tests and third-party scripts.  Internal
 # application code uses the explicitly named discovery function so loading
 # ownership is visible at the call site.
@@ -62,32 +128,72 @@ def _extract_hash(name):
     return m.group(0).lower() if m else None
 
 
-def _collect_texture_hashes(sections):
-    """Map authoritative TextureOverride hash/this assignments to resources."""
-    result = {}
+def _collect_texture_override_index(sections, toggle_vars, alias_map,
+                                    var_prefix=None):
+    """Index TextureOverride hashes and conditional ``this`` assignments."""
+    hashes_by_resource = {}
+    replacements_by_hash = {}
     for section, lines in sections.items():
         if not str(section).lower().startswith("textureoverride"):
             continue
         hashes = set()
-        resources = set()
+        cond_stack = []
         for raw in lines:
             line = raw.split(";", 1)[0].strip()
+            if not line:
+                continue
+            match = re.match(r"(?:else\s+if|elif)\s+(.*)$", line, re.I)
+            if match:
+                if cond_stack:
+                    frame = cond_stack[-1]
+                    branch = parse_condition_dnf(
+                        match.group(1).strip(), alias_map)
+                    frame["cur"] = dnf_and(
+                        dnf_not(frame["seen"]), branch)
+                    frame["seen"] = dnf_or(frame["seen"], branch)
+                continue
+            if line.lower().startswith("if "):
+                branch = parse_condition_dnf(line[3:].strip(), alias_map)
+                cond_stack.append({"cur": branch, "seen": branch})
+                continue
+            if line.lower() == "else":
+                if cond_stack:
+                    cond_stack[-1]["cur"] = dnf_not(
+                        cond_stack[-1]["seen"])
+                continue
+            if line.lower() == "endif":
+                if cond_stack:
+                    cond_stack.pop()
+                continue
             match = re.match(r"hash\s*=\s*(\S+)", line, re.I)
             if match:
-                geometry_hash = normalize_geometry_hash(match.group(1))
-                if geometry_hash:
-                    hashes.add(geometry_hash)
+                texture_hash = normalize_geometry_hash(match.group(1))
+                if texture_hash:
+                    hashes.add(texture_hash)
                 continue
-            match = re.match(r"this\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
-            if match:
-                resources.add(match.group(1))
-        for resource in resources:
-            if hashes:
-                result.setdefault(resource.casefold(), set()).update(hashes)
-    return {
-        resource: tuple(sorted(hashes))
-        for resource, hashes in result.items()
-    }
+            match = re.match(
+                r"this\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
+            if not match or not hashes:
+                continue
+            combined = DNF_TRUE
+            for frame in cond_stack:
+                combined = dnf_and(combined, frame["cur"])
+            conditions = normalize_dnf(combined, toggle_vars, var_prefix)
+            resource = match.group(1)
+            resource_key = resource.casefold()
+            hashes_by_resource.setdefault(resource_key, set()).update(hashes)
+            for texture_hash in hashes:
+                replacement = TextureReplacement.from_dnf(
+                    texture_hash, resource, conditions, str(section))
+                replacements_by_hash.setdefault(texture_hash, []).append(
+                    replacement)
+    return TextureOverrideIndex(
+        hashes_by_resource={
+            resource: tuple(sorted(hashes))
+            for resource, hashes in hashes_by_resource.items()},
+        replacements_by_hash={
+            texture_hash: tuple(items)
+            for texture_hash, items in replacements_by_hash.items()})
 
 
 _RUN_SKIP_PREFIXES = ("TextureOverride", "ShaderOverride", "Resource", "Present", "Key", "Constants")
@@ -124,8 +230,8 @@ def _legacy_texture_evidence(resource, sections, section_lookup):
     Older GIMI mods commonly bind resources such as
     ``ResourceCharacterDiffuse`` directly to ``ps-t0``.  This fallback is
     deliberately narrower than the removed substring heuristic: the resource
-    must be file-backed, end in one complete role token, and be observed from
-    one execution scope so the caller can require repeated family evidence.
+    must be file-backed and end in one complete role token.  The caller adds
+    scope-local family validation and sibling inheritance.
     """
     match = _LEGACY_TEXTURE_RESOURCE_RE.fullmatch(str(resource or ""))
     if not match:
@@ -203,15 +309,11 @@ def _reachable_execution_sections(sections, root, section_lookup):
 
 
 def _collect_legacy_scope_roles(sections, root, section_lookup):
-    """Infer legacy resource roles within one reachable execution scope.
-
-    A resource family is trusted only when at least two distinct, file-backed
-    members occur on the same slot in this scope.  A family that moves slots,
-    or a slot that contains conflicting legacy roles, is rejected entirely.
-    """
+    """Infer legacy resource roles within one reachable execution scope."""
     family_slots = {}
     family_roles = {}
-    family_members = {}
+    family_anchors = {}
+    assigned_resources = {}
     slot_roles = {}
     for section_name in _reachable_execution_sections(
             sections, root, section_lookup):
@@ -228,25 +330,49 @@ def _collect_legacy_scope_roles(sections, root, section_lookup):
             evidence = _legacy_texture_evidence(
                 resource, sections, section_lookup)
             if evidence is None:
-                continue
-            role, family = evidence
+                resource_key = str(resource).casefold()
+                section_resource = section_lookup.get(resource_key)
+                if section_resource is None:
+                    continue
+                if not any(re.match(r"^filename\s*=\s*\S+", raw, re.I)
+                           for raw in sections[section_resource]):
+                    continue
+                role = None
+                family = None
+            else:
+                role, family = evidence
             slot_number = int(slot.group("slot"))
+            resource_key = str(resource).casefold()
+            assigned_resources.setdefault(resource_key, set()).add(slot_number)
+            if role is None:
+                continue
             family_slots.setdefault(family, set()).add(slot_number)
             family_roles.setdefault(family, set()).add(role)
-            family_members.setdefault((slot_number, family), set()).add(
-                str(resource).casefold())
+            family_anchors.setdefault(family, set()).add(resource_key)
             slot_roles.setdefault(slot_number, set()).add(role)
 
     result = {}
-    for (slot, family), members in family_members.items():
-        if (len(members) < 2
-                or family_slots.get(family) != {slot}
-                or len(family_roles.get(family, ())) != 1
-                or len(slot_roles.get(slot, ())) != 1):
+    for family, anchors in family_anchors.items():
+        slots = set(family_slots.get(family, set()))
+        roles = family_roles.get(family, set())
+        for resource, resource_slots in assigned_resources.items():
+            if (resource in anchors
+                    or any(resource.startswith(anchor)
+                           for anchor in anchors)):
+                slots.update(resource_slots)
+        if len(slots) != 1 or len(roles) != 1:
             continue
-        role = next(iter(family_roles[family]))
-        for resource in members:
-            result[resource] = role
+        slot = next(iter(slots))
+        if len(slot_roles.get(slot, ())) != 1:
+            continue
+        role = next(iter(roles))
+        for resource, resource_slots in assigned_resources.items():
+            if resource_slots != {slot}:
+                continue
+            if (resource in anchors
+                    or any(resource.startswith(anchor)
+                           for anchor in anchors)):
+                result[resource] = role
     return result
 
 
@@ -370,7 +496,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     # even when a mod uses `commandlist\\rabbitfx\\settextures`.
     section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
-    resource_texture_hashes = _collect_texture_hashes(sections)
+    texture_override_index = _collect_texture_override_index(
+        sections, toggle_vars, alias_map, var_prefix)
+    resource_texture_hashes = texture_override_index.hashes_by_resource
     structural_slot_roles = _collect_structural_slot_role_hints(sections)
     seq_counter = [0]   # unique id per `if` block
     scope_legacy_resource_roles = {}
@@ -624,7 +752,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     visiting.discard(target_name)
 
     # scan BOTH TextureOverride AND CommandList sections.
-    sec_info: dict = {}
+    sec_info = _ScannedSections(
+        texture_override_index=texture_override_index)
     for name, lines in sections.items():
         name_low = name.lower()
         if not (name_low.startswith("textureoverride")
@@ -912,7 +1041,12 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     # skip` means the opposite: the original draw call itself is suppressed,
     # so with no drawindexed lines to replace it, nothing is drawn at all.
     draw_secs = _select_draw_sections(sec_info, global_ib)
-    if not draw_secs: return []
+    texture_override_index = getattr(
+        sec_info, "texture_override_index", TextureOverrideIndex())
+    texture_override_index = texture_override_index.with_resource_files(
+        resources)
+    if not draw_secs:
+        return []
 
     # pass 4: build group dicts
     ib_file_cache: dict = {}
@@ -1197,6 +1331,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             index_size=index_size,
             geometry_match=info.get("geometry_match_at_end"),
             draws=draws,
+            _texture_override_index=texture_override_index,
         ))
 
     return groups
