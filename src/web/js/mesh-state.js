@@ -60,15 +60,39 @@ export function resetMeshVisibility() {
   requestRender();
 }
 
-/** Replace only draw visibility semantics on the existing meshes. */
+/** Replace draw visibility and texture semantics on the existing meshes. */
 export function updateMeshSemantics(semantics) {
   const next = semantics || {};
-  if (activeMeshes.some(mesh => !next[mesh.userData.semanticKey])) return false;
+  const keys = activeMeshes.map(mesh => mesh.userData.semanticKey);
+  if (keys.some(key => !next[key])
+      || Object.keys(next).length !== keys.length) return false;
   activeMeshes.forEach(mesh => {
-    mesh.userData.conditions = next[mesh.userData.semanticKey].conditions || [];
-    if (next[mesh.userData.semanticKey].sources) {
-      mesh.userData.sources = next[mesh.userData.semanticKey].sources;
+    const semantic = next[mesh.userData.semanticKey];
+    mesh.userData.conditions = semantic.conditions || [];
+    mesh.userData.sources = semantic.sources || [];
+    const variants = [
+      ['textureVariants', 'texture_variants'],
+      ['normalMapVariants', 'normal_map_variants'],
+      ['normalDataVariants', 'normal_data_variants'],
+      ['lightMapVariants', 'light_map_variants'],
+      ['materialMapVariants', 'material_map_variants'],
+    ];
+    for (const [target, source] of variants) {
+      mesh.userData[target] = semantic[source] || [];
     }
+    const defaults = [
+      ['defaultTexKey', 'tex_key'],
+      ['defaultNormalMapKey', 'normal_map_key'],
+      ['defaultNormalDataKey', 'normal_data_key'],
+      ['defaultLightMapKey', 'light_map_key'],
+      ['defaultMaterialMapKey', 'material_map_key'],
+    ];
+    for (const [target, source] of defaults) {
+      if (Object.hasOwn(semantic, source)) {
+        mesh.userData[target] = semantic[source] || null;
+      }
+    }
+    applyTextureVariant(mesh);
   });
   return true;
 }

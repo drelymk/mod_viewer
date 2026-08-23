@@ -2647,7 +2647,22 @@ def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
     payload["meshSemantics"] = {
         mesh_name: {"conditions": [[{
             "var": "toggle", "value": "1", "negate": False,
-        }]], "sources": payload["meshes"][mesh_name]["sources"]},
+        }]], "sources": payload["meshes"][mesh_name]["sources"],
+        "tex_key": "diffuse::Semantic-one.png",
+        "texture_variants": [{
+            "conditions": [[{
+                "var": "toggle", "value": "1", "negate": False,
+            }]], "tex_key": "diffuse::Semantic-two.png",
+        }],
+        "normal_map_key": "normal_map::Semantic-normal.png",
+        "normal_map_variants": [{
+            "conditions": [[{
+                "var": "toggle", "value": "1", "negate": False,
+            }]], "tex_key": "normal_map::Semantic-normal-alt.png",
+        }],
+        "normal_data_key": "normal_data::Semantic-packed.png",
+        "light_map_key": "light_map::Semantic-light.png",
+        "material_map_key": "material_map::Semantic-material.png"},
     }
     context, page = _page(edge_browser, frontend_url, {"Semantic": payload})
     try:
@@ -2672,13 +2687,144 @@ def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
           return {
             same: window.modViewer.activeMeshes[0] === window.__semanticMesh,
             conditions: window.modViewer.activeMeshes[0].userData.conditions,
+            diffuse: window.modViewer.activeMeshes[0].userData.resolvedTexKey,
+            normal: window.modViewer.activeMeshes[0].userData.resolvedNormalMapKey,
           };
         }""") == {
             "same": True,
             "conditions": [[{"var": "toggle", "value": "1", "negate": False}]],
+            "diffuse": "diffuse::Semantic-two.png",
+            "normal": "normal_map::Semantic-normal-alt.png",
         }
         assert page.evaluate("window.__fakeApi.calls.loadMod.length") == 1
         assert page.evaluate("window.__fakeApi.calls.meshSemantics") == ["Semantic"]
+    finally:
+        context.close()
+
+
+def test_record_refreshes_controls_and_meshes_without_reloading_model(
+        edge_browser, frontend_url):
+    payload = _payload("Record")
+    payload["controls"]["toggles"]["KeyRecord"]["wired"] = False
+    context, page = _page(
+        edge_browser, frontend_url, {"Record": payload},
+        pending={"Record": True})
+    try:
+        _open(page, "Record")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.record_toggle = async () => {
+            window.__fakeApi.responses.Record.controls.toggles.KeyRecord.wired = true;
+            return {ok: true, result: {}};
+          };
+          window.__recordMesh = window.modViewer.activeMeshes[0];
+        }""")
+        assert page.locator("#toggle-list .toggle-unwired-badge").count() == 1
+        assert page.locator("#export-btn").is_disabled()
+
+        page.locator("#toggle-list [title^='Record']").click()
+        page.locator("#toggle-list .toggle-row.recording").wait_for()
+        page.locator("#toggle-list .toggle-record-save").click()
+        page.wait_for_function("window.__fakeApi.calls.controlState.length === 1")
+
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Record"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__recordMesh")
+        assert page.locator("#toggle-list .toggle-unwired-badge").count() == 0
+        assert not page.locator("#export-btn").is_disabled()
+    finally:
+        context.close()
+
+
+def test_stale_semantic_response_cannot_modify_new_mod(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"A": _payload("A"), "B": _payload("B")})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const original = window.pywebview.api.get_control_state;
+          window.__releaseAControls = null;
+          window.pywebview.api.get_control_state = async path => {
+            if (path === 'A') {
+              await new Promise(resolve => window.__releaseAControls = resolve);
+            }
+            return original(path);
+          };
+          window.__staleControls = window.modViewer.refreshControlSemantics();
+        }""")
+        page.wait_for_function("window.__releaseAControls !== null")
+
+        _open(page, "B")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__releaseAControls()")
+        page.evaluate("async () => await window.__staleControls")
+
+        assert page.locator("#toggle-list .toggle-name").inner_text() == "Toggle B"
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["A", "B"]
+    finally:
+        context.close()
+
+
+def test_newer_same_mod_semantic_response_wins(
+        edge_browser, frontend_url):
+    payload = _payload("Race")
+    context, page = _page(edge_browser, frontend_url, {"Race": payload})
+    try:
+        _open(page, "Race")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const original = window.pywebview.api.get_control_state;
+          let calls = 0;
+          window.__releaseOldControls = null;
+          window.pywebview.api.get_control_state = async path => {
+            calls += 1;
+            if (calls === 1) {
+              const stale = await original(path);
+              await new Promise(resolve => window.__releaseOldControls = resolve);
+              stale.controls.toggles.KeyRace.name = 'Old';
+              return stale;
+            }
+            return original(path);
+          };
+          window.__oldControls = window.modViewer.refreshControlSemantics();
+        }""")
+        page.wait_for_function("window.__releaseOldControls !== null")
+        page.evaluate("""() => {
+          window.__fakeApi.responses.Race.controls.toggles.KeyRace.name = 'Newest';
+          window.__newControls = window.modViewer.refreshControlSemantics();
+        }""")
+        page.evaluate("async () => await window.__newControls")
+        page.evaluate("window.__releaseOldControls()")
+        page.evaluate("async () => await window.__oldControls")
+
+        assert page.locator("#toggle-list .toggle-name").inner_text() == "Newest"
+    finally:
+        context.close()
+
+
+def test_failed_semantic_refresh_still_updates_pending_state(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Failure": _payload("Failure")},
+        pending={"Failure": True})
+    try:
+        _open(page, "Failure")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.get_mesh_semantics = async () => ({
+            error: 'semantic refresh failed',
+          });
+          window.__failedRefresh = window.modViewer.refreshMeshSemantics();
+        }""")
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
+        page.evaluate("async () => await window.__failedRefresh")
+
+        assert "show" in (page.locator("#pending-indicator").get_attribute("class") or "")
+        assert not page.locator("#export-btn").is_disabled()
     finally:
         context.close()
 

@@ -413,13 +413,33 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
     return panel
 
 
-def _gating_vars_from_groups(groups):
+def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
+                             active_mesh_keys=None):
     """Same notion as _gating_vars, computed directly from build_draw_groups'
     draws instead of the (buffer-file-dependent) mesh payload — matches
     _gating_vars(payload) but never needs buffer files to exist on disk.
     Used by unwired_pending_sections, which must stay cheap and reliable
     even when mesh geometry can't be resolved.
     """
+    if active_mesh_keys is not None:
+        semantics = build_mesh_semantics(
+            groups, mod_dir, game_profile=game_profile)
+        draws = (entry for label, entry in semantics.items()
+                 if label in active_mesh_keys)
+        found = set()
+        for draw in draws:
+            for cond_group in draw.get("conditions", []):
+                for cond in cond_group:
+                    found.add(cond["var"])
+            for field in ("texture_variants", "normal_map_variants",
+                          "normal_data_variants", "light_map_variants",
+                          "material_map_variants"):
+                for variant in draw.get(field, []):
+                    for cond_group in variant.get("conditions", []):
+                        for cond in cond_group:
+                            found.add(cond["var"])
+        return found
+
     found = set()
     for group in groups:
         for draw in group.get("draws", []):
@@ -442,11 +462,13 @@ def load_present_state(context, overrides=None):
         context.ini_paths, context.mod_dir, overrides, context.docs).present
 
 
-def load_control_state(context, overrides=None, pending_new_sections=None):
+def load_control_state(context, overrides=None, pending_new_sections=None,
+                       active_mesh_keys=None):
     """Read control semantics without constructing mesh or texture payloads."""
     parsed = _parse_inis(
         context.ini_paths, context.mod_dir, overrides, context.docs)
-    gating_vars = _gating_vars_from_groups(parsed.groups)
+    gating_vars = _gating_vars_from_groups(
+        parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys)
     return {
         "controls": {
             "toggles": build_toggle_panel(
@@ -463,11 +485,13 @@ def load_control_state(context, overrides=None, pending_new_sections=None):
     }
 
 
-def load_mesh_semantics(context, overrides=None):
+def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
     """Read draw visibility semantics without building geometry."""
     parsed = _parse_inis(
         context.ini_paths, context.mod_dir, overrides, context.docs)
-    return build_mesh_semantics(parsed.groups, context.mod_dir)
+    return build_mesh_semantics(
+        parsed.groups, context.mod_dir, game_profile=parsed.game.game,
+        active_mesh_keys=active_mesh_keys)
 
 
 def _register_material_profile(table, profile):

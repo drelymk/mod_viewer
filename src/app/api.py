@@ -30,6 +30,7 @@ class ModViewerAPI:
         self._authorized_folders = set()
         self._picker_authorized_folders = set()
         self._authorized_roots = set()
+        self._active_mesh_keys = {}
         try:
             self._authorized_roots = mod_folders.registered_paths(
                 mod_folders.load_registry())
@@ -219,6 +220,7 @@ class ModViewerAPI:
                 texture_source=publication.register)
             if not isinstance(result, dict) or result.get("error"):
                 publication.discard()
+                self._active_mesh_keys.pop(folder_path, None)
                 return result
 
             saved_metadata = context.metadata
@@ -235,9 +237,11 @@ class ModViewerAPI:
                                       saved_metadata)
             server.publish_payload_geometry(result, geometry)
             publication.commit()
+            self._active_mesh_keys[folder_path] = set(result.get("meshes", {}))
             return result
         except Exception:
             publication.discard()
+            self._active_mesh_keys.pop(folder_path, None)
             raise
 
     def get_present_state(self, folder_path):
@@ -257,7 +261,8 @@ class ModViewerAPI:
             folder_path, overrides, pending, context = \
                 self._authoritative_context(folder_path)
             result = mod_loader.load_control_state(
-                context, overrides, pending)
+                context, overrides, pending,
+                active_mesh_keys=self._active_mesh_keys.get(folder_path))
             metadata.hydrate_present(
                 folder_path, result["controls"]["present"], context.metadata)
             return result
@@ -269,7 +274,8 @@ class ModViewerAPI:
         try:
             _folder_path, overrides, _pending, context = \
                 self._authoritative_context(folder_path)
-            return {"meshes": mod_loader.load_mesh_semantics(context, overrides)}
+            return {"meshes": mod_loader.load_mesh_semantics(
+                context, overrides, self._active_mesh_keys.get(_folder_path))}
         except Exception:
             return self._semantic_read_error()
 

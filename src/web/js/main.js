@@ -248,6 +248,7 @@ function initToolbarOverflow() {
 // actions know which session to update and reloadCurrentMod() knows what to
 // refresh afterward.
 let currentModPath = null;
+let semanticRefreshEpoch = 0;
 // Unlike currentModPath, this changes only after a payload is displayed.
 // Camera framing follows displayed model identity so a failed switch and retry
 // still frames the replacement, while a reload of the visible mod does not.
@@ -284,8 +285,9 @@ function hasUnwiredToggle() {
 // Reflects the currently open mod's staged-but-not-yet-exported edits onto
 // the toolbar: Export only enables once there's something to export, and
 // the indicator is the persistent signal that something is unsaved.
-async function refreshPendingState() {
-  const pending = currentModPath ? await window.pywebview.api.has_pending_changes(currentModPath) : false;
+async function refreshPendingState(path = currentModPath, guard = null) {
+  const pending = path ? await window.pywebview.api.has_pending_changes(path) : false;
+  if ((guard && !guard()) || (path && !samePath(currentModPath, path))) return false;
   $('pending-indicator').classList.toggle('show', pending);
   const blocked = pending && hasUnwiredToggle();
   $('export-btn').disabled = !pending || blocked;
@@ -331,6 +333,7 @@ function clearPendingState() {
  * mod visible under the new folder's toolbar state. */
 function beginModLoad(path, message, { preserveModelOrientation = false } = {}) {
   currentModPath = path;
+  semanticRefreshEpoch += 1;
   clearScene({ preserveModelOrientation });
   clearPendingState();
   window.dispatchEvent(new CustomEvent('mod-viewer-mod-load-started', {
@@ -393,32 +396,51 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   showLoading(false);
 }
 
+function beginSemanticRefresh() {
+  return { path: currentModPath, epoch: ++semanticRefreshEpoch };
+}
+
+function semanticRefreshIsCurrent(path, epoch) {
+  return !!path && epoch === semanticRefreshEpoch
+    && samePath(currentModPath, path);
+}
+
+async function finishSemanticRefresh(path, epoch) {
+  if (!semanticRefreshIsCurrent(path, epoch)) return;
+  await refreshPendingState(
+    path, () => semanticRefreshIsCurrent(path, epoch));
+  if (semanticRefreshIsCurrent(path, epoch)) void refreshHealthReport();
+}
+
 async function refreshPresentState(change = {}) {
-  if (!currentModPath) return false;
-  let result;
+  const { path, epoch } = beginSemanticRefresh();
   try {
-    result = await window.pywebview.api.get_present_state(currentModPath);
-  } catch (error) {
-    await alertDialog('Could not refresh PRESENT:\n\n' + error);
-    return false;
+    if (!path) return false;
+    let result;
+    try {
+      result = await window.pywebview.api.get_present_state(path);
+    } catch (error) {
+      if (semanticRefreshIsCurrent(path, epoch)) {
+        await alertDialog('Could not refresh PRESENT:\n\n' + error);
+      }
+      return false;
+    }
+    if (!semanticRefreshIsCurrent(path, epoch)) return false;
+    if (result?.error) {
+      await alertDialog('Could not refresh PRESENT:\n\n' + result.error);
+      return false;
+    }
+    const context = { modPath: path, onChange: handlePresentChange };
+    if (Object.hasOwn(change, 'selectedPosition')) {
+      context.selectedPosition = change.selectedPosition;
+      context.applySelection = change.applySelection === true;
+    }
+    buildPresentPanel(result.present, context);
+    syncViewportControlPlacement();
+    return true;
+  } finally {
+    await finishSemanticRefresh(path, epoch);
   }
-  if (result?.error) {
-    await alertDialog('Could not refresh PRESENT:\n\n' + result.error);
-    return false;
-  }
-  const context = {
-    modPath: currentModPath,
-    onChange: handlePresentChange,
-  };
-  if (Object.hasOwn(change, 'selectedPosition')) {
-    context.selectedPosition = change.selectedPosition;
-    context.applySelection = change.applySelection === true;
-  }
-  buildPresentPanel(result.present, context);
-  syncViewportControlPlacement();
-  await refreshPendingState();
-  void refreshHealthReport();
-  return true;
 }
 
 async function handlePresentChange(change = {}) {
@@ -426,64 +448,79 @@ async function handlePresentChange(change = {}) {
 }
 
 async function refreshControlSemantics() {
-  if (!currentModPath) return false;
-  let result;
+  const { path, epoch } = beginSemanticRefresh();
   try {
-    result = await window.pywebview.api.get_control_state(currentModPath);
-  } catch (error) {
-    await alertDialog('Could not refresh controls:\n\n' + error);
-    return false;
+    if (!path) return false;
+    let result;
+    try {
+      result = await window.pywebview.api.get_control_state(path);
+    } catch (error) {
+      if (semanticRefreshIsCurrent(path, epoch)) {
+        await alertDialog('Could not refresh controls:\n\n' + error);
+      }
+      return false;
+    }
+    if (!semanticRefreshIsCurrent(path, epoch)) return false;
+    if (result?.error) {
+      await alertDialog('Could not refresh controls:\n\n' + result.error);
+      return false;
+    }
+    const controls = result.controls || {};
+    const state = result.state || {};
+    lastToggles = controls.toggles || {};
+    setStateRules(state.rules || [], state.defaults || {}, {
+      toggles: controls.toggles || {}, menu: controls.menu || {},
+    });
+    buildTogglePanel(controls.toggles, {
+      modPath: path, onChange: handleToggleChange,
+    });
+    buildMenuPanel(controls.menu);
+    buildPresentPanel(controls.present, {
+      modPath: path, onChange: handlePresentChange,
+    });
+    syncViewportControlPlacement();
+    refreshAll();
+    return true;
+  } finally {
+    await finishSemanticRefresh(path, epoch);
   }
-  if (result?.error) {
-    await alertDialog('Could not refresh controls:\n\n' + result.error);
-    return false;
-  }
-  const controls = result.controls || {};
-  const state = result.state || {};
-  lastToggles = controls.toggles || {};
-  setStateRules(state.rules || [], state.defaults || {}, {
-    toggles: controls.toggles || {}, menu: controls.menu || {},
-  });
-  buildTogglePanel(controls.toggles, {
-    modPath: currentModPath, onChange: handleToggleChange,
-  });
-  buildMenuPanel(controls.menu);
-  buildPresentPanel(controls.present, {
-    modPath: currentModPath, onChange: handlePresentChange,
-  });
-  syncViewportControlPlacement();
-  refreshAll();
-  await refreshPendingState();
-  void refreshHealthReport();
-  return true;
 }
 
 async function refreshMeshSemantics() {
-  if (!currentModPath) return false;
-  let result;
+  const { path, epoch } = beginSemanticRefresh();
   try {
-    result = await window.pywebview.api.get_mesh_semantics(currentModPath);
-  } catch (error) {
-    await alertDialog('Could not refresh mesh visibility:\n\n' + error);
-    return false;
+    if (!path) return false;
+    let result;
+    try {
+      result = await window.pywebview.api.get_mesh_semantics(path);
+    } catch (error) {
+      if (semanticRefreshIsCurrent(path, epoch)) {
+        await alertDialog('Could not refresh mesh render semantics:\n\n' + error);
+      }
+      return false;
+    }
+    if (!semanticRefreshIsCurrent(path, epoch)) return false;
+    if (result?.error) {
+      await alertDialog('Could not refresh mesh render semantics:\n\n' + result.error);
+      return false;
+    }
+    if (!updateMeshSemantics(result.meshes)) {
+      await alertDialog('Could not refresh mesh render semantics:\n\n' +
+        'The staged draw set no longer matches the displayed model.');
+      return false;
+    }
+    refreshAll();
+    return true;
+  } finally {
+    await finishSemanticRefresh(path, epoch);
   }
-  if (result?.error) {
-    await alertDialog('Could not refresh mesh visibility:\n\n' + result.error);
-    return false;
-  }
-  if (!updateMeshSemantics(result.meshes)) {
-    await alertDialog('Could not refresh mesh visibility:\n\n' +
-      'The staged draw set no longer matches the displayed model.');
-    return false;
-  }
-  refreshAll();
-  await refreshPendingState();
-  void refreshHealthReport();
-  return true;
 }
 
 async function handleToggleChange(change = {}) {
-  if (change.type === 'record') return refreshMeshSemantics();
+  if (change.type === 'record') {
+    const meshesRefreshed = await refreshMeshSemantics();
+    return meshesRefreshed ? refreshControlSemantics() : false;
+  }
   if (change.type === 'delete') {
     const controlsRefreshed = await refreshControlSemantics();
     return controlsRefreshed ? refreshMeshSemantics() : false;
