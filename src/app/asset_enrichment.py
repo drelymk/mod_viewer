@@ -17,11 +17,11 @@ _ROLE_NAMES = {
     "lightmap": "light_map",
     "materialmap": "material_map",
 }
-_ROLE_TOKENS = {
-    "diffuse": ("diffuse",),
-    "normal_map": ("normalmap", "normal_map"),
-    "light_map": ("lightmap", "light_map"),
-    "material_map": ("materialmap", "material_map"),
+_ROLE_SUFFIXES = {
+    "diffuse": "Diffuse",
+    "normal_map": "NormalMap",
+    "light_map": "LightMap",
+    "material_map": "MaterialMap",
 }
 _WWMI_TEXTURE_RE = re.compile(
     r"^(?P<texture>[0-9a-f]{8})-vs=(?P<vs>[0-9a-f]+)-ps=(?P<ps>[0-9a-f]+)$",
@@ -89,6 +89,8 @@ def _json(cache, filename):
 
 
 def _texture_records(binding, raw):
+    if binding.range_status != "exact":
+        return []
     records = []
     for entry in _entries(raw):
         if not isinstance(entry, dict):
@@ -132,10 +134,16 @@ def _texture_records(binding, raw):
 
 def _locate_texture(binding, evidence):
     asset_dir = _safe_asset_path(binding.root, binding.asset)
-    if not asset_dir or not os.path.isdir(asset_dir):
+    component = binding.component_name
+    if (not asset_dir or not os.path.isdir(asset_dir)
+            or not isinstance(component, str) or not component.strip()):
         return None
     extension = (evidence.extension or "").casefold()
-    tokens = _ROLE_TOKENS.get(evidence.role, ())
+    suffix = (component.strip()
+              + str(binding.classification or "").strip()
+              + _ROLE_SUFFIXES.get(evidence.role, "")).casefold()
+    if not suffix:
+        return None
     candidates = []
     try:
         with os.scandir(asset_dir) as entries:
@@ -145,16 +153,13 @@ def _locate_texture(binding, evidence):
                 name = entry.name.casefold()
                 if extension and not name.endswith(extension):
                     continue
-                if tokens and not any(token in name for token in tokens):
+                stem, _extension = os.path.splitext(name)
+                if not stem.endswith(suffix):
                     continue
                 candidates.append(os.path.abspath(entry.path))
     except OSError:
         return None
-    if len(candidates) == 1:
-        return candidates[0]
-    exact = [path for path in candidates
-             if evidence.texture_hash in os.path.basename(path).casefold()]
-    return exact[0] if len(exact) == 1 else None
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _logical_key(binding, filename):
@@ -208,19 +213,22 @@ def _apply_slot_hashes(draw, evidence):
     for item in evidence:
         by_hash.setdefault(item.texture_hash, []).append(item)
     for binding in draw.slot_textures:
-        if not binding.texture_hash:
+        if not binding.texture_hashes or not binding.file:
             continue
-        matches = by_hash.get(binding.texture_hash, [])
-        if len(matches) != 1:
+        matches = {
+            item
+            for texture_hash in binding.texture_hashes
+            for item in by_hash.get(texture_hash, [])
+        }
+        roles = {item.role for item in matches}
+        if len(roles) != 1:
             continue
-        item = matches[0]
+        item = next(iter(matches))
         if _has_mod_texture(draw, item.role):
-            continue
-        if not binding.file:
             continue
         draw.set_texture_default(item.role, binding.file)
         draw.texture_hashes.setdefault(item.role, []).append(
-            binding.texture_hash)
+            item.texture_hash)
         draw.texture_provenance[item.role] = "mod_texture_hash"
 
 
@@ -232,7 +240,9 @@ def apply(groups, bindings, metadata_cache=None):
             if binding.status == "not_found":
                 continue
             draw.asset_binding = binding
-            if binding.status != "exact":
+            if (binding.status != "exact"
+                    or binding.component_status != "exact"
+                    or binding.range_status != "exact"):
                 continue
 
             for role in ("diffuse", "normal_map", "light_map", "material_map"):

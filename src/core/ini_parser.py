@@ -62,6 +62,33 @@ def _extract_hash(name):
     return m.group(0).lower() if m else None
 
 
+def _collect_texture_hashes(sections):
+    """Map authoritative TextureOverride hash/this assignments to resources."""
+    result = {}
+    for section, lines in sections.items():
+        if not str(section).lower().startswith("textureoverride"):
+            continue
+        hashes = set()
+        resource = None
+        for raw in lines:
+            line = raw.split(";", 1)[0].strip()
+            match = re.match(r"hash\s*=\s*(\S+)", line, re.I)
+            if match:
+                geometry_hash = normalize_geometry_hash(match.group(1))
+                if geometry_hash:
+                    hashes.add(geometry_hash)
+                continue
+            match = re.match(r"this\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
+            if match:
+                resource = match.group(1)
+        if resource and hashes:
+            result.setdefault(resource.casefold(), set()).update(hashes)
+    return {
+        resource: tuple(sorted(hashes))
+        for resource, hashes in result.items()
+    }
+
+
 _RUN_SKIP_PREFIXES = ("TextureOverride", "ShaderOverride", "Resource", "Present", "Key", "Constants")
 _AUX_MAP_CHANNELS = {
     "normalmap": "normal_map",
@@ -122,6 +149,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     # even when a mod uses `commandlist\\rabbitfx\\settextures`.
     section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
+    resource_texture_hashes = _collect_texture_hashes(sections)
     seq_counter = [0]   # unique id per `if` block
     bare_counter = [0]  # unique id per diffuse line reached with an empty cond_stack
     aux_bare_counters = {channel: 0 for channel in _AUX_MAP_CHANNELS.values()}
@@ -141,7 +169,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             SlotTextureBinding(
                 slot,
                 resource,
-                texture_hash=_extract_hash(resource),
+                texture_hashes=resource_texture_hashes.get(
+                    resource.casefold(), ()),
             )
             for slot, resource in sorted(
                 info.get("_cur_slot_textures", {}).items())]
@@ -287,17 +316,18 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     # active under the exact same condition.
                     info["_cur_diffuse_variants"].pop()
                 variant = {"res": res, "cond": cond}
-                texture_hash = _extract_hash(res)
-                if texture_hash:
-                    variant["texture_hash"] = texture_hash
+                texture_hashes = resource_texture_hashes.get(
+                    res.casefold(), ())
+                if texture_hashes:
+                    variant["texture_hashes"] = texture_hashes
                 info["_cur_diffuse_variants"].append(variant)
                 info["_diffuse_last_cond"] = cond
                 # Keep the complete execution-ordered assignment stream too.
                 # Independent/nested condition chains can successively
                 # override a diffuse; the last matching assignment wins.
                 history = {"res": res, "cond": cond}
-                if texture_hash:
-                    history["texture_hash"] = texture_hash
+                if texture_hashes:
+                    history["texture_hashes"] = texture_hashes
                 info["_diffuse_history"].append(history)
             m_aux = re.match(
                 r"Resource\\[^\\]+\\(NormalMap|LightMap|MaterialMap)\s*=\s*"
@@ -339,14 +369,15 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 elif state["last_cond"] == cond and state["variants"]:
                     state["variants"].pop()
                 variant = {"res": res, "cond": cond}
-                texture_hash = _extract_hash(res)
-                if texture_hash:
-                    variant["texture_hash"] = texture_hash
+                texture_hashes = resource_texture_hashes.get(
+                    res.casefold(), ())
+                if texture_hashes:
+                    variant["texture_hashes"] = texture_hashes
                 state["variants"].append(variant)
                 state["last_cond"] = cond
                 history = {"res": res, "cond": cond}
-                if texture_hash:
-                    history["texture_hash"] = texture_hash
+                if texture_hashes:
+                    history["texture_hashes"] = texture_hashes
                 state["history"].append(history)
             m = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if m:
@@ -763,7 +794,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                         item.slot,
                         item.resource,
                         _resolve_diffuse_file(item.resource) or item.file,
-                        item.texture_hash,
+                        item.texture_hashes,
                     )
                     for item in authored.slot_textures],
             )
@@ -833,14 +864,15 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 file = _resolve_diffuse_file(v["res"])
                 if file:
                     item = {"conditions": v["cond"], "file": file}
-                    if v.get("texture_hash"):
-                        item["texture_hash"] = v["texture_hash"]
+                    if v.get("texture_hashes"):
+                        item["texture_hashes"] = tuple(v["texture_hashes"])
                     variants.append(item)
             if variants:
                 d.set_texture_default("diffuse", variants[0]["file"])
-                d.texture_hashes["diffuse"] = [
-                    item["texture_hash"] for item in variants
-                    if item.get("texture_hash")]
+                d.texture_hashes["diffuse"] = list(dict.fromkeys(
+                    texture_hash
+                    for item in variants
+                    for texture_hash in item.get("texture_hashes", ())))
             # A toggle that swaps the diffuse texture rather than gating a draw.
             if len(variants) > 1:
                 d.set_texture_variants("diffuse", variants)
@@ -849,8 +881,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 file = _resolve_diffuse_file(v["res"])
                 if file:
                     item = {"conditions": v["cond"], "file": file}
-                    if v.get("texture_hash"):
-                        item["texture_hash"] = v["texture_hash"]
+                    if v.get("texture_hashes"):
+                        item["texture_hashes"] = tuple(v["texture_hashes"])
                     history.append(item)
             legacy_vars = {c["var"] for v in variants
                            for group in v["conditions"] for c in group}
@@ -880,15 +912,18 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                         continue
                     conditions = assignment["cond"]
                     item = {"conditions": conditions, "file": file}
-                    if assignment.get("texture_hash"):
-                        item["texture_hash"] = assignment["texture_hash"]
+                    if assignment.get("texture_hashes"):
+                        item["texture_hashes"] = tuple(
+                            assignment["texture_hashes"])
                     resolved.append(item)
                     if not conditions:
                         default_file = file
                 if default_file:
                     d.set_texture_default(channel, default_file)
-                hashes = [item["texture_hash"] for item in resolved
-                          if item.get("texture_hash")]
+                hashes = list(dict.fromkeys(
+                    texture_hash
+                    for item in resolved
+                    for texture_hash in item.get("texture_hashes", ())))
                 if hashes:
                     d.texture_hashes[channel] = hashes
                 if (len(resolved) > 1 or

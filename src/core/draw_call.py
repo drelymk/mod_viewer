@@ -52,7 +52,20 @@ class SlotTextureBinding:
     slot: int
     resource: str
     file: str | None = None
-    texture_hash: str | None = None
+    texture_hashes: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        hashes = self.texture_hashes
+        if isinstance(hashes, str):
+            hashes = (hashes,)
+        else:
+            hashes = tuple(hashes or ())
+        object.__setattr__(self, "texture_hashes", hashes)
+
+    @property
+    def texture_hash(self):
+        """Compatibility view for callers that only handle one hash."""
+        return self.texture_hashes[0] if len(self.texture_hashes) == 1 else None
 
 
 @dataclass(slots=True)

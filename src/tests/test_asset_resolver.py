@@ -41,15 +41,36 @@ def test_geometry_identity_is_shared_and_draw_scan_keeps_raw_evidence():
         "hash = 0x73c8cae2\n"
         "match_first_index = 43845\n"
         "match_index_count = 24\n"
-        "Resource\\GIMI\\Diffuse = ResourceDiffuse_11111111\n"
+        "Resource\\GIMI\\Diffuse = ResourceDiffuseOpaque\n"
         "ps-t1 = ResourceMystery\n"
-        "drawindexed = 3, 0, 0\n")
+        "drawindexed = 3, 0, 0\n"
+        "[TextureOverrideDiffuse]\n"
+        "hash = 11111111\n"
+        "this = ResourceDiffuseOpaque\n"
+        "[TextureOverrideMystery]\n"
+        "hash = 22222222\n"
+        "this = ResourceMystery\n")
 
     draw = _scan_sections_for_draws(sections)["TextureOverrideBody"]["draws"][0]
 
     assert draw.geometry_match == GeometryMatch("73c8cae2", 43845, 24)
-    assert draw.slot_textures == [SlotTextureBinding(1, "ResourceMystery")]
-    assert draw.diffuse_variants[0]["texture_hash"] == "11111111"
+    assert draw.slot_textures == [SlotTextureBinding(
+        1, "ResourceMystery", texture_hashes=("22222222",))]
+    assert draw.diffuse_variants[0]["texture_hashes"] == ("11111111",)
+
+
+def test_resource_name_hash_is_not_texture_evidence():
+    sections = parse_sections(
+        "fixture.ini", "[TextureOverrideBody]\n"
+        "hash = 73c8cae2\n"
+        "Resource\\GIMI\\Diffuse = ResourceFoo_11111111\n"
+        "drawindexed = 3, 0, 0\n")
+
+    draw = _scan_sections_for_draws(sections)["TextureOverrideBody"][
+        "draws"][0]
+
+    assert draw.slot_textures == []
+    assert "texture_hashes" not in draw.diffuse_variants[0]
 
 
 def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch):
@@ -91,8 +112,8 @@ def test_asset_original_fallback_fills_only_missing_roles(tmp_path):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Alice"
     asset_dir.mkdir(parents=True)
-    (asset_dir / "AliceDiffuse.dds").write_bytes(b"diffuse")
-    (asset_dir / "AliceNormalMap.dds").write_bytes(b"normal")
+    (asset_dir / "AliceBodyBDiffuse.dds").write_bytes(b"diffuse")
+    (asset_dir / "AliceBodyBNormalMap.dds").write_bytes(b"normal")
     metadata = asset_dir / "hash.json"
     metadata.write_text(json.dumps([{
         "ib": "73c8cae2",
@@ -110,19 +131,98 @@ def test_asset_original_fallback_fills_only_missing_roles(tmp_path):
     )
     binding = AssetComponentBinding(
         status="exact", asset_type="GIMI", asset="Alice", root=root,
-        geometry_hash="73c8cae2", classification="B", first_index=43845,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_name="Body",
+        classification="B", first_index=43845,
         metadata="Alice/hash.json",
     )
 
     apply([{"draws": [draw]}], [[binding]])
 
     assert draw.asset_texture_defaults["normal_map"]["path"].endswith(
-        "AliceNormalMap.dds")
+        "AliceBodyBNormalMap.dds")
     assert "diffuse" not in draw.asset_texture_defaults
     assert draw.texture_provenance == {
         "diffuse": "mod_semantic",
         "normal_map": "asset_original_fallback",
     }
+
+
+def test_asset_locator_uses_component_and_classification(tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "AliceBodyADiffuse.dds").write_bytes(b"A")
+    (asset_dir / "AliceBodyBDiffuse.dds").write_bytes(b"B")
+    metadata = asset_dir / "hash.json"
+    metadata.write_text(json.dumps([{
+        "ib": "73c8cae2", "object_indexes": [43845],
+        "object_classifications": ["B"],
+        "texture_hashes": [[
+            ["Diffuse", ".dds", "11111111"],
+        ]],
+    }]), encoding="utf-8")
+    binding = AssetComponentBinding(
+        status="exact", component_status="exact", range_status="exact",
+        asset_type="GIMI", asset="Alice", root=root,
+        geometry_hash="73c8cae2", component_name="Body",
+        classification="B", first_index=43845,
+        metadata="Alice/hash.json")
+
+    draw = DrawCall()
+    apply([{"draws": [draw]}], [[binding]])
+    assert draw.asset_texture_defaults["diffuse"]["path"].endswith(
+        "AliceBodyBDiffuse.dds")
+
+    (asset_dir / "AliceBodyBDiffuse.dds").unlink()
+    (asset_dir / "UnrelatedDiffuse.dds").write_bytes(b"unrelated")
+    draw = DrawCall()
+    apply([{"draws": [draw]}], [[binding]])
+    assert draw.asset_texture_defaults == {}
+
+
+def test_hash_only_geometry_resolves_component_but_not_range(tmp_path,
+                                                             monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    entries = [{"type": "GIMI", "path": root, "enabled": True}]
+    monkeypatch.setattr(
+        asset_index, "load_index", lambda asset_type, path: _index(root))
+
+    binding = resolve_component(
+        GeometryMatch("73c8cae2"), "genshin", entries)
+
+    assert binding.status == "exact"
+    assert binding.component_status == "exact"
+    assert binding.range_status == "unknown"
+    assert binding.component_name == "Body"
+
+
+def test_hash_only_component_does_not_enable_object_texture_fallback(tmp_path,
+                                                                     monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "AliceBodyADiffuse.dds").write_bytes(b"A")
+    (asset_dir / "AliceBodyBDiffuse.dds").write_bytes(b"B")
+    (asset_dir / "hash.json").write_text(json.dumps([{
+        "ib": "73c8cae2", "object_indexes": [1, 43845],
+        "object_classifications": ["A", "B"],
+        "texture_hashes": [
+            [["Diffuse", ".dds", "11111111"]],
+            [["Diffuse", ".dds", "22222222"]],
+        ],
+    }]), encoding="utf-8")
+    entries = [{"type": "GIMI", "path": root, "enabled": True}]
+    monkeypatch.setattr(
+        asset_index, "load_index", lambda asset_type, path: _index(root))
+
+    binding = resolve_component(GeometryMatch("73c8cae2"), "genshin",
+                                entries)
+    draw = DrawCall()
+    apply([{"draws": [draw]}], [[binding]])
+
+    assert binding.range_status == "unknown"
+    assert draw.asset_texture_defaults == {}
 
 
 def test_explicit_mod_texture_hash_does_not_override_semantic_assignment(
@@ -133,6 +233,7 @@ def test_explicit_mod_texture_hash_does_not_override_semantic_assignment(
     (asset_dir / "AliceDiffuse.dds").write_bytes(b"diffuse")
     (asset_dir / "hash.json").write_text(json.dumps([{
         "ib": "73c8cae2", "object_indexes": [43845],
+        "object_classifications": ["B"],
         "texture_hashes": [[
             ["Diffuse", ".dds", "11111111"],
         ]],
@@ -143,7 +244,9 @@ def test_explicit_mod_texture_hash_does_not_override_semantic_assignment(
     )
     binding = AssetComponentBinding(
         status="exact", asset_type="GIMI", asset="Alice", root=root,
-        geometry_hash="73c8cae2", first_index=43845,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_name="Body",
+        classification="B", first_index=43845,
         metadata="Alice/hash.json",
     )
 
@@ -163,15 +266,18 @@ def test_component_local_slot_hash_resolves_role_without_global_slot_guess(
     (asset_dir / "AliceDiffuse.dds").write_bytes(b"original diffuse")
     (asset_dir / "hash.json").write_text(json.dumps([{
         "ib": "73c8cae2", "object_indexes": [43845],
+        "object_classifications": ["B"],
         "texture_hashes": [[
             ["Diffuse", ".dds", "11111111"],
         ]],
     }]), encoding="utf-8")
     draw = DrawCall(slot_textures=[SlotTextureBinding(
-        7, "ResourceDiffuse_11111111", str(mod_texture), "11111111")])
+        7, "ResourceMystery", str(mod_texture), ("11111111",))])
     binding = AssetComponentBinding(
         status="exact", asset_type="GIMI", asset="Alice", root=root,
-        geometry_hash="73c8cae2", first_index=43845,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_name="Body",
+        classification="B", first_index=43845,
         metadata="Alice/hash.json")
 
     apply([{"draws": [draw]}], [[binding]])
@@ -193,6 +299,7 @@ def test_wwmi_slot_context_is_retained_without_guessing_a_role(tmp_path):
         slot_textures=[SlotTextureBinding(1, "ResourceMystery")])
     binding = AssetComponentBinding(
         status="exact", asset_type="WWMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
         geometry_hash="73c8cae2", component_ordinal=1,
         detail_metadata="Alice/TextureUsage.json",
     )
