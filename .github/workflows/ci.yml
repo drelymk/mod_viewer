@@ -38,6 +38,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
+      - name: Prepare vendored Three.js assets
+        run: |
+          python -c "import sys; sys.path.insert(0, 'src'); import build; build.fetch_assets(); build.verify_assets()"
+
       - name: Verify Microsoft Edge for frontend tests
         shell: pwsh
         run: |
