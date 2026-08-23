@@ -94,7 +94,10 @@ export function initAssetFolderPanel() {
       const badge = document.createElement('span');
       badge.className = 'asset-folder-badge';
       badge.textContent = entry.type;
-      wrapper.append(badge, document.createTextNode(baseName(entry.path)));
+      const name = document.createElement('span');
+      name.className = 'asset-folder-name';
+      name.textContent = baseName(entry.path);
+      wrapper.append(badge, name);
       if (entry.enabled === false) {
         const status = document.createElement('span');
         status.className = 'asset-folder-status';

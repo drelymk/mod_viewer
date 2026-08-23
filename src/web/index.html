@@ -110,18 +110,6 @@
     <h2>WebGPU unavailable</h2>
     <p class="renderer-error-detail">WebGPU is required by this version of Mod Viewer.</p>
   </div>
-  <div id="view-gizmo" title="Drag to orbit · Click an axis to snap · Scroll to zoom">
-    <svg viewBox="0 0 104 104" aria-label="Camera navigation gizmo">
-      <circle class="gizmo-backdrop" cx="52" cy="52" r="46"/>
-      <g class="gizmo-axis axis-x" data-axis="x" data-sign="-1" role="button" tabindex="0" aria-label="View from negative X"><line/><circle r="5"/></g>
-      <g class="gizmo-axis axis-y" data-axis="y" data-sign="-1" role="button" tabindex="0" aria-label="View from negative Y"><line/><circle r="5"/></g>
-      <g class="gizmo-axis axis-z" data-axis="z" data-sign="-1" role="button" tabindex="0" aria-label="View from negative Z"><line/><circle r="5"/></g>
-      <g class="gizmo-axis axis-x positive" data-axis="x" data-sign="1" role="button" tabindex="0" aria-label="View from positive X"><line/><circle r="11"/><text>X</text></g>
-      <g class="gizmo-axis axis-y positive" data-axis="y" data-sign="1" role="button" tabindex="0" aria-label="View from positive Y"><line/><circle r="11"/><text>Y</text></g>
-      <g class="gizmo-axis axis-z positive" data-axis="z" data-sign="1" role="button" tabindex="0" aria-label="View from positive Z"><line/><circle r="11"/><text>Z</text></g>
-      <circle class="gizmo-origin" cx="52" cy="52" r="3"/>
-    </svg>
-  </div>
 </div>
 
 <div id="left-dock">
@@ -256,6 +244,18 @@
           <button id="present-key-remove" type="button" role="menuitem">Remove PRESENT key</button>
         </span>
       </span>
+      <div id="view-gizmo" title="Drag to orbit · Click an axis to snap · Scroll to zoom">
+        <svg viewBox="0 0 104 104" aria-label="Camera navigation gizmo">
+          <circle class="gizmo-backdrop" cx="52" cy="52" r="46"/>
+          <g class="gizmo-axis axis-x" data-axis="x" data-sign="-1" role="button" tabindex="0" aria-label="View from negative X"><line/><circle r="5"/></g>
+          <g class="gizmo-axis axis-y" data-axis="y" data-sign="-1" role="button" tabindex="0" aria-label="View from negative Y"><line/><circle r="5"/></g>
+          <g class="gizmo-axis axis-z" data-axis="z" data-sign="-1" role="button" tabindex="0" aria-label="View from negative Z"><line/><circle r="5"/></g>
+          <g class="gizmo-axis axis-x positive" data-axis="x" data-sign="1" role="button" tabindex="0" aria-label="View from positive X"><line/><circle r="11"/><text>X</text></g>
+          <g class="gizmo-axis axis-y positive" data-axis="y" data-sign="1" role="button" tabindex="0" aria-label="View from positive Y"><line/><circle r="11"/><text>Y</text></g>
+          <g class="gizmo-axis axis-z positive" data-axis="z" data-sign="1" role="button" tabindex="0" aria-label="View from positive Z"><line/><circle r="11"/><text>Z</text></g>
+          <circle class="gizmo-origin" cx="52" cy="52" r="3"/>
+        </svg>
+      </div>
     </div>
     <div id="present-list"></div>
   </div>
@@ -292,7 +292,7 @@
       </label>
       <label class="modal-field">
         <span>Folder</span>
-        <div class="mod-folder-path-field">
+        <div class="asset-folder-path-field">
           <input id="afm-path" type="text" readonly />
           <button id="afm-browse" type="button">Browse</button>
         </div>

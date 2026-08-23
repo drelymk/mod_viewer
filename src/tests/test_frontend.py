@@ -638,6 +638,11 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
         assert page.locator("#afm-path").input_value() == "picked-asset-folder"
         assert page.evaluate("window.__fakeApi.calls.selectAssetFolder") == [
             "picked-asset-folder"]
+        assert page.locator(".asset-folder-path-field").count() == 1
+        assert page.locator("#afm-save").evaluate(
+            "button => getComputedStyle(button).backgroundColor") == "rgb(35, 134, 54)"
+        assert page.locator("#afm-cancel").evaluate(
+            "button => getComputedStyle(button).backgroundColor") == "rgb(33, 38, 45)"
     finally:
         context.close()
 
@@ -3338,11 +3343,27 @@ def test_inspector_follows_component_and_mesh_selection(
         assert not page.locator("#camera-panel").is_visible()
         assert page.locator("#tool-panel").evaluate(
             "panel => getComputedStyle(panel).flexDirection") == "row"
-        assert page.evaluate("""() => {
+        layout = page.evaluate("""() => {
           const toolbar = document.querySelector('#toolbar').getBoundingClientRect();
+          const tabs = document.querySelector('#right-dock .right-dock-tabs').getBoundingClientRect();
+          const header = document.querySelector('#present-panel .panel-hdr').getBoundingClientRect();
           const gizmo = document.querySelector('#view-gizmo').getBoundingClientRect();
-          return Math.round(gizmo.top - toolbar.bottom);
-        }""") == 12
+          return {
+            toolbarBottom: toolbar.bottom,
+            tabsBottom: tabs.bottom,
+            gizmoTop: gizmo.top,
+            gizmoCenter: gizmo.top + gizmo.height / 2,
+            headerCenter: header.top + header.height / 2,
+            inPresentHeader: !!document.querySelector('#view-gizmo')
+              .closest('#present-panel .panel-hdr'),
+          };
+        }""")
+        assert layout["inPresentHeader"]
+        assert layout["gizmoTop"] >= layout["toolbarBottom"]
+        assert layout["gizmoTop"] >= layout["tabsBottom"]
+        assert abs(layout["gizmoCenter"] - layout["headerCenter"]) < 1
+        page.locator("#view-gizmo .gizmo-axis.positive").first.click()
+        assert "collapsed" not in (page.locator("#present-list").get_attribute("class") or "")
         panel_styles = page.locator(
             "#sidebar, #mod-folder-panel, #present-panel, #toggle-panel, "
             "#menu-panel, #inspector-panel, .right-dock-tabs, "
