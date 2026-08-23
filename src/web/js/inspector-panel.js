@@ -6,7 +6,7 @@ import { clearSelection } from './selection.js';
 import {
   assetMatchLabel, componentMatchLabel, normalizeAssetBinding,
   rangeMatchLabel, summarizeAssetBindings, textureProvenance,
-  textureRoleLabels,
+  textureRoleLabel, textureRoleLabels,
 } from './asset-diagnostics.js';
 
 const meshRecords = new WeakMap();
@@ -166,7 +166,7 @@ function buildSlotEvidenceSection(content, entry) {
     addRow(card, 'Texture', item.texture_hash);
     addRow(card, 'VS', item.vs_hash);
     addRow(card, 'PS', item.ps_hash);
-    addRow(card, 'Role', item.role || 'Unknown');
+    addRow(card, 'Role', textureRoleLabel(item.role));
     section.appendChild(card);
   });
   content.appendChild(section);

@@ -459,8 +459,9 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     suffix for uniqueness) never leaks an ugly suffix into the display.
 
     `tex_key` is this draw's own resolved default: whichever
-    Resource\\...\\Diffuse line most recently ran before it in the ini's
-    execution order (build_draw_groups' `texture_default_file`), NOT one
+    semantic or proven slot-semantic texture assignment most recently ran
+    before it in the ini's execution order
+    (build_draw_groups' `texture_default_file`), NOT one
     static value per component -- a section can reassign the diffuse several
     times (see ini_parser._scan_sections_for_draws), so two draws in the same
     TextureOverride section routinely resolve to different textures.

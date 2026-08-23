@@ -221,6 +221,30 @@ def _apply_slot_hashes(draw, evidence):
             for item in by_hash.get(texture_hash, [])
         }
         roles = {item.role for item in matches}
+        if binding.role_hint:
+            conflicting = roles - {binding.role_hint}
+            if conflicting:
+                for item in matches:
+                    if item.role not in conflicting:
+                        continue
+                    draw.asset_slot_evidence.append({
+                        "resource": binding.resource,
+                        "slot": binding.slot,
+                        "texture_hash": item.texture_hash,
+                        "role": binding.role_hint,
+                        "role_source": "mod_slot_mapping",
+                        "asset_hash_role": item.role,
+                        "conflict": True,
+                    })
+                continue
+            if (roles == {binding.role_hint} and binding.file
+                    and not _has_mod_texture(draw, binding.role_hint)):
+                draw.set_texture_default(binding.role_hint, binding.file)
+                draw.texture_hashes.setdefault(binding.role_hint, []).append(
+                    next(iter(matches)).texture_hash)
+                draw.texture_provenance.setdefault(
+                    binding.role_hint, "mod_slot_semantic")
+            continue
         if len(roles) != 1:
             continue
         item = next(iter(matches))
@@ -255,7 +279,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False):
 
             for role in ("diffuse", "normal_map", "light_map", "material_map"):
                 if _has_mod_texture(draw, role):
-                    draw.texture_provenance[role] = "mod_semantic"
+                    draw.texture_provenance.setdefault(role, "mod_semantic")
 
             evidence = []
             if binding.asset_type in ("GIMI", "ZZMI"):
@@ -268,6 +292,11 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False):
                         slot_evidence = {"resource": item.resource, **usage}
                         if item.file:
                             slot_evidence["file"] = item.file
+                        if item.role_hint:
+                            slot_evidence.update({
+                                "role": item.role_hint,
+                                "role_source": "mod_slot_mapping",
+                            })
                         draw.asset_slot_evidence.append(slot_evidence)
 
             for item in evidence:
@@ -275,7 +304,14 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False):
                         and item.role not in draw.texture_provenance):
                     draw.texture_provenance[item.role] = "mod_texture_hash"
             _apply_slot_hashes(draw, evidence)
+            conflicting_asset_roles = {
+                item.get("asset_hash_role")
+                for item in draw.asset_slot_evidence
+                if item.get("conflict") and item.get("asset_hash_role")
+            }
             for item in evidence:
+                if item.role in conflicting_asset_roles:
+                    continue
                 if _has_mod_texture(draw, item.role):
                     continue
                 filename = _locate_texture(binding, item)

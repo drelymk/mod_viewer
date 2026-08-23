@@ -96,6 +96,52 @@ _AUX_MAP_CHANNELS = {
     "lightmap": "light_map",
     "materialmap": "material_map",
 }
+_SEMANTIC_TEXTURE_ROLES = {
+    "diffuse": "diffuse",
+    "normalmap": "normal_map",
+    "lightmap": "light_map",
+    "materialmap": "material_map",
+}
+_SEMANTIC_TEXTURE_RESOURCE_RE = re.compile(
+    r"^Resource[\\/]"
+    r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
+    r"(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)$", re.I)
+
+
+def _semantic_texture_role(resource):
+    """Return a role only for a framework-owned semantic resource name."""
+    match = _SEMANTIC_TEXTURE_RESOURCE_RE.fullmatch(str(resource or ""))
+    return (_SEMANTIC_TEXTURE_ROLES[match.group("role").casefold()]
+            if match else None)
+
+
+def _collect_slot_role_hints(sections):
+    """Collect unambiguous ``ps-tN`` roles proven by API resource bindings."""
+    observations = {}
+    explicit_roles = set()
+    for lines in sections.values():
+        for raw in lines:
+            line = raw.split(";", 1)[0].strip()
+            if not line:
+                continue
+            semantic_lhs = re.match(
+                r"^Resource[\\/]"
+                r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
+                r"(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)"
+                r"\s*=", line, re.I)
+            if semantic_lhs:
+                explicit_roles.add(_SEMANTIC_TEXTURE_ROLES[
+                    semantic_lhs.group("role").casefold()])
+            slot = re.match(
+                r"^ps-t(?P<slot>\d+)\s*=\s*(?:ref\s+)?(?P<resource>\S+)",
+                line, re.I)
+            if not slot:
+                continue
+            role = _semantic_texture_role(slot.group("resource"))
+            if role:
+                observations.setdefault(int(slot.group("slot")), set()).add(role)
+    return ({slot: next(iter(roles)) for slot, roles in observations.items()
+             if len(roles) == 1}, explicit_roles)
 
 
 def gating_var_names(sections, var_prefix=None, *, toggle_keys=None,
@@ -132,8 +178,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     Each draw also remembers the `ib` most recently assigned *before* it
     within this same flattened scan (None if none yet -- see build_draw_groups) mid-section to read a completely different
     mesh's buffers for a handful of draws inside what's otherwise another
-    mesh's TextureOverride section), and the set of `Resource\\...\\Diffuse
-    = [ref] X` alternatives active for it.
+    mesh's TextureOverride section), and the set of explicit or proven
+    slot-semantic texture alternatives active for it.
 
     Returns {section_name: {vb0, vb1, vb2, ib, draws, diffuse, src}} — the
     same per-section shape build_draw_groups uses internally as `sec_info`.
@@ -151,6 +197,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
     resource_texture_hashes = _collect_texture_hashes(sections)
+    slot_role_hints, explicit_texture_roles = _collect_slot_role_hints(sections)
     seq_counter = [0]   # unique id per `if` block
     bare_counter = [0]  # unique id per diffuse line reached with an empty cond_stack
     aux_bare_counters = {channel: 0 for channel in _AUX_MAP_CHANNELS.values()}
@@ -168,13 +215,68 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
     def _slot_snapshot(info):
         return [
             SlotTextureBinding(
-                slot,
-                resource,
+                slot=slot,
+                resource=resource,
                 texture_hashes=resource_texture_hashes.get(
                     resource.casefold(), ()),
+                role_hint=slot_role_hints.get(slot),
             )
             for slot, resource in sorted(
                 info.get("_cur_slot_textures", {}).items())]
+
+    def _record_texture_assignment(info, role, res, cond_stack, *, source):
+        """Record one role assignment in the shared execution-order IR."""
+        combined = DNF_TRUE
+        for frame in cond_stack:
+            combined = dnf_and(combined, frame["cur"])
+        cond = normalize_dnf(combined, toggle_vars, var_prefix)
+        if role == "diffuse":
+            if not info["diffuse"]:
+                info["diffuse"] = res
+            if res not in info["diffuse_pool"]:
+                info["diffuse_pool"].append(res)
+            state = {
+                "variants": info.get("_cur_diffuse_variants") or [],
+                "history": info.get("_diffuse_history") or [],
+                "chain_key": info.get("_diffuse_chain_key"),
+                "last_cond": info.get("_diffuse_last_cond"),
+            }
+        else:
+            state = info["_aux_maps"].setdefault(role, {
+                "variants": [], "history": [], "chain_key": None,
+                "last_cond": None,
+            })
+        if cond_stack:
+            chain_key = cond_stack[-1]["seq"]
+        else:
+            if role == "diffuse":
+                bare_counter[0] += 1
+                chain_key = ("bare", bare_counter[0])
+            else:
+                aux_bare_counters[role] += 1
+                chain_key = ("bare", role, aux_bare_counters[role])
+        if chain_key != state["chain_key"]:
+            state["variants"] = []
+            state["chain_key"] = chain_key
+        elif state["last_cond"] == cond and state["variants"]:
+            state["variants"].pop()
+        variant = {"res": res, "cond": cond}
+        texture_hashes = resource_texture_hashes.get(res.casefold(), ())
+        if texture_hashes:
+            variant["texture_hashes"] = texture_hashes
+        state["variants"].append(variant)
+        state["last_cond"] = cond
+        history = {"res": res, "cond": cond}
+        if texture_hashes:
+            history["texture_hashes"] = texture_hashes
+        state["history"].append(history)
+        if role == "diffuse":
+            info["_cur_diffuse_variants"] = state["variants"]
+            info["_diffuse_chain_key"] = state["chain_key"]
+            info["_diffuse_last_cond"] = state["last_cond"]
+            info["_diffuse_history"] = state["history"]
+        if source == "slot":
+            info["_texture_provenance"][role] = "mod_slot_semantic"
 
     def _aux_snapshot(info):
         return {
@@ -239,6 +341,11 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     info["_cur_slot_textures"].pop(slot, None)
                 else:
                     info["_cur_slot_textures"][slot] = resource
+                    role = slot_role_hints.get(slot)
+                    if (role and role not in explicit_texture_roles
+                            and _semantic_texture_role(resource) is None):
+                        _record_texture_assignment(
+                            info, role, resource, cond_stack, source="slot")
             m = re.match(r"vb(\d+)\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if m:
                 slot = int(m.group(1))
@@ -273,113 +380,31 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     diffuse_history=list(info.get("_diffuse_history") or []),
                     vertex_resources=dict(info["_cur_vertex_resources"]),
                     auxiliary_maps=_aux_snapshot(info),
+                    texture_provenance=dict(
+                        info.get("_texture_provenance") or {}),
                     geometry_match=_geometry_match(info),
                     slot_textures=_slot_snapshot(info),
                 ))
-            # "ref" is optional -- XXMI-generated mods omit it (e.g. "Resource\GIMI\Diffuse = X").
-            m_diff = re.match(r"Resource\\[^\\]+\\Diffuse\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
-            if not m_diff:
-                # Direct ps-t slot: "ps-t1 = ResourceXxxDiffuse"
-                m2 = re.match(r"ps-t\d+\s*=\s*(\S+)", line, re.I)
-                if m2 and re.search(r"Diffuse", m2.group(1), re.I):
-                    m_diff = m2
-            if m_diff:
-                res = m_diff.group(1)
-                if not info["diffuse"]: info["diffuse"] = res
-                if res not in info["diffuse_pool"]: info["diffuse_pool"].append(res)
-                combined = DNF_TRUE
-                for frame in cond_stack:
-                    combined = dnf_and(combined, frame["cur"])
-                cond = normalize_dnf(combined, toggle_vars, var_prefix)
-                if cond_stack:
-                    chain_key = cond_stack[-1]["seq"]
-                else:
-                    # No enclosing if at all: every such line is a fresh,
-                    # unconditional reassignment of "the current diffuse" in
-                    # execution order, never a continuation of some earlier
-                    # bare line -- each needs its own always-distinct key, or
-                    # two unrelated top-level reassignments would wrongly
-                    # accumulate into one multi-entry variant list instead of
-                    # the second replacing the first.
-                    bare_counter[0] += 1
-                    chain_key = ("bare", bare_counter[0])
-                if chain_key != info.get("_diffuse_chain_key"):
-                    info["_cur_diffuse_variants"] = []
-                    info["_diffuse_chain_key"] = chain_key
-                elif info.get("_diffuse_last_cond") == cond and info["_cur_diffuse_variants"]:
-                    # A second diffuse line in the SAME if/elif branch as the
-                    # immediately preceding one (no elif/else advanced the
-                    # branch in between) -- its own condition is therefore
-                    # identical to that prior line's, so this is a plain
-                    # in-branch reassignment, not a new toggle alternative.
-                    # Replace rather than accumulate, or the branch would
-                    # wrongly end up offering two alternatives that are both
-                    # active under the exact same condition.
-                    info["_cur_diffuse_variants"].pop()
-                variant = {"res": res, "cond": cond}
-                texture_hashes = resource_texture_hashes.get(
-                    res.casefold(), ())
-                if texture_hashes:
-                    variant["texture_hashes"] = texture_hashes
-                info["_cur_diffuse_variants"].append(variant)
-                info["_diffuse_last_cond"] = cond
-                # Keep the complete execution-ordered assignment stream too.
-                # Independent/nested condition chains can successively
-                # override a diffuse; the last matching assignment wins.
-                history = {"res": res, "cond": cond}
-                if texture_hashes:
-                    history["texture_hashes"] = texture_hashes
-                info["_diffuse_history"].append(history)
-            m_aux = re.match(
-                r"Resource\\[^\\]+\\(NormalMap|LightMap|MaterialMap)\s*=\s*"
+            # "ref" is optional -- XXMI-generated mods omit it.  Only the
+            # framework-owned semantic API resource names are accepted here;
+            # arbitrary resource names must not imply a texture role.
+            m_diff = re.match(
+                r"^Resource[\\/]"
+                r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]Diffuse\s*=\s*"
                 r"(?:ref\s+)?(\S+)", line, re.I)
-            aux_assignment = m_aux.groups() if m_aux else None
-            if aux_assignment is None:
-                # Some shader-oriented INIs bind auxiliary maps directly to a
-                # ps-t slot. Infer the role from the authored resource name;
-                # unlike diffuse, the slot number alone is not stable across
-                # mod families.
-                m_direct_aux = re.match(
-                    r"ps-t\d+\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
-                if m_direct_aux:
-                    m_role = re.search(
-                        r"(NormalMap|LightMap|MaterialMap)",
-                        m_direct_aux.group(1), re.I)
-                    if m_role:
-                        aux_assignment = (m_role.group(1),
-                                           m_direct_aux.group(1))
-            if aux_assignment:
-                channel = _AUX_MAP_CHANNELS[aux_assignment[0].lower()]
-                res = aux_assignment[1]
-                state = info["_aux_maps"].setdefault(channel, {
-                    "variants": [], "history": [], "chain_key": None,
-                    "last_cond": None,
-                })
-                combined = DNF_TRUE
-                for frame in cond_stack:
-                    combined = dnf_and(combined, frame["cur"])
-                cond = normalize_dnf(combined, toggle_vars, var_prefix)
-                if cond_stack:
-                    chain_key = cond_stack[-1]["seq"]
-                else:
-                    aux_bare_counters[channel] += 1
-                    chain_key = ("bare", channel, aux_bare_counters[channel])
-                if chain_key != state["chain_key"]:
-                    state["variants"] = []
-                    state["chain_key"] = chain_key
-                elif state["last_cond"] == cond and state["variants"]:
-                    state["variants"].pop()
-                variant = {"res": res, "cond": cond}
-                texture_hashes = resource_texture_hashes.get(
-                    res.casefold(), ())
-                if texture_hashes:
-                    variant["texture_hashes"] = texture_hashes
-                state["variants"].append(variant)
-                state["last_cond"] = cond
-                history = {"res": res, "cond": cond}
-                if texture_hashes:
-                    history["texture_hashes"] = texture_hashes
-                state["history"].append(history)
+            if m_diff:
+                _record_texture_assignment(
+                    info, "diffuse", m_diff.group(1), cond_stack,
+                    source="semantic")
+            m_aux = re.match(
+                r"^Resource[\\/]"
+                r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
+                r"(NormalMap|LightMap|MaterialMap)\s*=\s*"
+                r"(?:ref\s+)?(\S+)", line, re.I)
+            if m_aux:
+                _record_texture_assignment(
+                    info, _SEMANTIC_TEXTURE_ROLES[m_aux.group(1).casefold()],
+                    m_aux.group(2), cond_stack, source="semantic")
             m = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if m:
                 target = m.group(1)
@@ -403,6 +428,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                           diffuse=None, diffuse_pool=[], src=None, handling_skip=False,
                           _cur_diffuse_variants=[], _diffuse_chain_key=None,
                           _diffuse_history=[], _aux_maps={},
+                          _texture_provenance={},
                           _cur_vertex_resources={}, _cur_slot_textures={},
                           _geometry_hash=None, _match_first_index=None,
                           _match_index_count=None)
@@ -413,12 +439,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         # section with NO drawindexed line at all (the game's original,
         # whole-buffer draw proceeds unmodified against this section's own
         # `ib =`; see build_draw_groups' synthetic placeholder draw below).
-        # That implicit draw still runs with whichever Resource\...\Diffuse
-        # (or bare ps-t0/ps-t1) assignment the section made, same as any real
+        # That implicit draw still runs with whichever explicit semantic or
+        # proven slot-semantic assignment the section made, same as any real
         # drawindexed line would've seen at this point in execution order.
         info["diffuse_variants_at_end"] = list(info.get("_cur_diffuse_variants") or [])
         info["diffuse_history_at_end"] = list(info.get("_diffuse_history") or [])
         info["aux_maps_at_end"] = _aux_snapshot(info)
+        info["texture_provenance_at_end"] = dict(
+            info.get("_texture_provenance") or {})
         info["geometry_match_at_end"] = _geometry_match(info)
         info["slot_textures_at_end"] = _slot_snapshot(info)
         info.pop("_cur_slot_textures", None)
@@ -427,6 +455,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         info.pop("_diffuse_last_cond", None)
         info.pop("_diffuse_history", None)
         info.pop("_aux_maps", None)
+        info.pop("_texture_provenance", None)
         sec_info[name] = info
     return sec_info
 
@@ -771,6 +800,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             diffuse_variants=info.get("diffuse_variants_at_end") or [],
             diffuse_history=info.get("diffuse_history_at_end") or [],
             auxiliary_maps=info.get("aux_maps_at_end") or {},
+            texture_provenance=(
+                info.get("texture_provenance_at_end") or {}),
             geometry_match=info.get("geometry_match_at_end"),
             slot_textures=info.get("slot_textures_at_end") or [],
         )]
@@ -790,12 +821,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 texcoord_file=tc_file,
                 texcoord_stride=tc_stride,
                 geometry_match=authored.geometry_match,
+                texture_provenance=dict(authored.texture_provenance),
                 slot_textures=[
                     SlotTextureBinding(
-                        item.slot,
-                        item.resource,
-                        _resolve_diffuse_file(item.resource) or item.file,
-                        item.texture_hashes,
+                        slot=item.slot,
+                        resource=item.resource,
+                        file=_resolve_diffuse_file(item.resource) or item.file,
+                        texture_hashes=item.texture_hashes,
+                        role_hint=item.role_hint,
                     )
                     for item in authored.slot_textures],
             )
@@ -930,6 +963,11 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 if (len(resolved) > 1 or
                         (resolved and resolved[0]["conditions"])):
                     d.set_texture_variants(channel, resolved)
+            d.texture_provenance = {
+                role: source
+                for role, source in d.texture_provenance.items()
+                if d.texture_default(role) or d.texture_rules(role)
+            }
             draws.append(d)
         pool_files, seen_pool_files = [], set()
         for res in info["diffuse_pool"]:

@@ -11,9 +11,16 @@ const TEXTURE_ROLES = Object.freeze([
 
 const PROVENANCE_LABELS = Object.freeze({
   mod_semantic: 'Mod',
+  mod_slot_semantic: 'Mod slot mapping',
   mod_texture_hash: 'Mod hash match',
   asset_original_fallback: 'Asset fallback',
   unresolved: 'Not resolved',
+});
+const TEXTURE_ROLE_LABELS = Object.freeze({
+  diffuse: 'Diffuse',
+  normal_map: 'Normal',
+  light_map: 'Light map',
+  material_map: 'Material map',
 });
 
 function numberOrNull(value) {
@@ -156,6 +163,10 @@ export function textureProvenance(value) {
 
 export function textureRoleLabels() {
   return TEXTURE_ROLES;
+}
+
+export function textureRoleLabel(role) {
+  return TEXTURE_ROLE_LABELS[role] || 'Unknown';
 }
 
 export function provenanceLabel(value) {

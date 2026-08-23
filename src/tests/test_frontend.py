@@ -560,7 +560,7 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         "first_index": 43845, "index_count": 24,
     }
     entry["texture_resolution"] = {
-        "diffuse": "mod_semantic",
+        "diffuse": "mod_slot_semantic",
         "normal_map": "asset_original_fallback",
         "light_map": "mod_texture_hash",
     }
@@ -615,6 +615,7 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
             "Geometry hash\n73c8cae2\nRange\n43845 / 24\nComponent match\nExact\n"
             "Range match\nExact\nMatch\nExact")
         assert "Normal (automatic)\nAsset fallback" in inspector.inner_text()
+        assert "Diffuse (automatic)\nMod slot mapping" in inspector.inner_text()
         assert "ps-t1" in inspector.locator(".inspector-slot-section").inner_text()
         assert "Role\nUnknown" in inspector.locator(
             ".inspector-slot-section").inner_text()

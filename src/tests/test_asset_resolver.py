@@ -431,6 +431,78 @@ def test_component_local_slot_hash_resolves_role_without_global_slot_guess(
     assert draw.asset_texture_defaults == {}
 
 
+def test_slot_role_and_matching_asset_hash_keep_one_role(tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    metadata = asset_dir / "hash.json"
+    metadata.write_text(json.dumps([{
+        "ib": "73c8cae2", "object_indexes": [43845],
+        "object_classifications": ["B"],
+        "texture_hashes": [[
+            ["Diffuse", ".dds", "11111111"],
+        ]],
+    }]), encoding="utf-8")
+    mod_texture = tmp_path / "mod-diffuse.dds"
+    mod_texture.write_bytes(b"mod diffuse")
+    draw = DrawCall(slot_textures=[SlotTextureBinding(
+        slot=0, resource="ResourceOpaque", file=str(mod_texture),
+        texture_hashes=("11111111",), role_hint="diffuse")])
+    binding = AssetComponentBinding(
+        status="exact", asset_type="GIMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_name="Body",
+        classification="B", first_index=43845,
+        metadata="Alice/hash.json")
+
+    apply([{"draws": [draw]}], [[binding]])
+
+    assert draw.texture_default("diffuse") == str(mod_texture)
+    assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
+    assert draw.asset_texture_defaults == {}
+    assert not [item for item in draw.asset_slot_evidence
+                 if item.get("conflict")]
+
+
+def test_slot_role_hash_conflict_does_not_assign_asset_role(tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "AliceBodyBNormalMap.dds").write_bytes(b"normal")
+    metadata = asset_dir / "hash.json"
+    metadata.write_text(json.dumps([{
+        "ib": "73c8cae2", "object_indexes": [43845],
+        "object_classifications": ["B"],
+        "texture_hashes": [[
+            ["NormalMap", ".dds", "22222222"],
+        ]],
+    }]), encoding="utf-8")
+    draw = DrawCall(
+        texture_default_file="mod-diffuse.dds",
+        texture_provenance={"diffuse": "mod_slot_semantic"},
+        slot_textures=[SlotTextureBinding(
+            slot=0, resource="ResourceOpaque", file="mod-diffuse.dds",
+            texture_hashes=("22222222",), role_hint="diffuse")])
+    binding = AssetComponentBinding(
+        status="exact", asset_type="GIMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_name="Body",
+        classification="B", first_index=43845,
+        metadata="Alice/hash.json")
+
+    apply([{"draws": [draw]}], [[binding]])
+
+    assert draw.texture_default("diffuse") == "mod-diffuse.dds"
+    assert draw.texture_default("normal_map") is None
+    assert draw.asset_texture_defaults == {}
+    assert draw.asset_slot_evidence == [{
+        "resource": "ResourceOpaque", "slot": 0,
+        "texture_hash": "22222222", "role": "diffuse",
+        "role_source": "mod_slot_mapping",
+        "asset_hash_role": "normal_map", "conflict": True,
+    }]
+
+
 def test_wwmi_slot_context_is_retained_without_guessing_a_role(tmp_path):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Alice"
@@ -456,6 +528,33 @@ def test_wwmi_slot_context_is_retained_without_guessing_a_role(tmp_path):
         "ps_hash": "bbbbbbbb",
     }]
     assert draw.asset_texture_defaults == {}
+
+
+def test_wwmi_slot_context_preserves_mod_role_hint(tmp_path):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    detail = asset_dir / "TextureUsage.json"
+    detail.write_text(json.dumps({"Component 1": {
+        "ps-t1": ["11111111-vs=aaaaaaaa-ps=bbbbbbbb"],
+    }}), encoding="utf-8")
+    draw = DrawCall(slot_textures=[SlotTextureBinding(
+        slot=1, resource="ResourceOpaque", role_hint="normal_map")])
+    binding = AssetComponentBinding(
+        status="exact", asset_type="WWMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_ordinal=1,
+        detail_metadata="Alice/TextureUsage.json",
+    )
+
+    apply([{"draws": [draw]}], [[binding]])
+
+    assert draw.asset_slot_evidence == [{
+        "resource": "ResourceOpaque", "slot": 1,
+        "texture_hash": "11111111", "vs_hash": "aaaaaaaa",
+        "ps_hash": "bbbbbbbb", "role": "normal_map",
+        "role_source": "mod_slot_mapping",
+    }]
 
 
 def test_asset_fallback_uses_trusted_source_and_keeps_diagnostic(tmp_path):
