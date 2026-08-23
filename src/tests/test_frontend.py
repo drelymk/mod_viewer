@@ -4,6 +4,7 @@ import base64
 import copy
 import io
 import json
+import math
 import struct
 import zlib
 
@@ -669,6 +670,37 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
         final_count = page.evaluate("window.modViewer.getRenderCount()")
         page.wait_for_timeout(200)
         assert page.evaluate("window.modViewer.getRenderCount()") == final_count
+    finally:
+        context.close()
+
+
+def test_nonfinite_mesh_positions_do_not_poison_camera_fit(
+        edge_browser, frontend_url):
+    payload = _payload("InvalidGeometry")
+    entry = payload["meshes"]["Body-InvalidGeometry-0"]
+    entry["pos"] = _f32(
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        float("nan"), float("nan"), float("nan"),
+    )
+    entry["idx"] = _u32(0, 1, 2)
+    context, page = _page(
+        edge_browser, frontend_url, {"InvalidGeometry": payload})
+    try:
+        _open(page, "InvalidGeometry")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        camera = page.evaluate("""async () => {
+          const {camera, controls} = await import('./js/scene.js');
+          return {
+            position: camera.position.toArray(),
+            target: controls.target.toArray(),
+            near: camera.near,
+            far: camera.far,
+          };
+        }""")
+        assert all(math.isfinite(value)
+                   for value in camera["position"] + camera["target"])
+        assert math.isfinite(camera["near"])
+        assert math.isfinite(camera["far"])
     finally:
         context.close()
 
@@ -2488,6 +2520,41 @@ def test_reload_preserves_camera_but_switching_mod_resets_it(
             baseline_model["position"])
         assert switched["modelQuaternion"] == pytest.approx(
             baseline_model["quaternion"])
+    finally:
+        context.close()
+
+
+def test_wuwa_models_start_with_a_180_degree_base_turn(
+        edge_browser, frontend_url):
+    payload = _payload("WuWa")
+    payload["metadata"]["game"] = {
+        "id": "wuwa", "runtime": "wwmi", "texture_api": "raw",
+        "confidence": "high",
+    }
+    context, page = _page(edge_browser, frontend_url, {"WuWa": payload})
+    try:
+        _open(page, "WuWa")
+        page.locator(".draw-item").wait_for()
+
+        initial = page.evaluate("""() => ({
+          position: window.modViewer.activeMeshes[0].position.toArray(),
+          quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+        })""")
+        assert initial["quaternion"] == pytest.approx([0, 1, 0, 0])
+
+        page.locator("#camera-reset-view-btn").click()
+        reset = page.evaluate("""() => ({
+          position: window.modViewer.activeMeshes[0].position.toArray(),
+          quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+        })""")
+        assert reset["position"] == pytest.approx(initial["position"])
+        assert reset["quaternion"] == pytest.approx(initial["quaternion"])
+
+        reloaded = page.evaluate("""async () => {
+          await window.modViewer.reloadCurrentMod();
+          return window.modViewer.activeMeshes[0].quaternion.toArray();
+        }""")
+        assert reloaded == pytest.approx([0, 1, 0, 0])
     finally:
         context.close()
 

@@ -7,11 +7,18 @@ const INITIAL_CAMERA_UP = new THREE.Vector3(0, 1, 0);
 
 function expandByBaseMesh(box, mesh) {
   if (!mesh?.geometry) return;
+  const positions = mesh.geometry.attributes?.position?.array;
+  if (!positions || positions.length < 3) return;
+  for (let index = 0; index < positions.length; index++) {
+    if (!Number.isFinite(positions[index])) return;
+  }
   mesh.updateWorldMatrix(true, false);
   if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-  if (mesh.geometry.boundingBox) {
-    box.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));
-  }
+  if (!mesh.geometry.boundingBox) return;
+  const worldBox = mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
+  const values = [worldBox.min.x, worldBox.min.y, worldBox.min.z,
+    worldBox.max.x, worldBox.max.y, worldBox.max.z];
+  if (values.every(Number.isFinite)) box.union(worldBox);
 }
 
 export function createCameraFrame({
@@ -173,7 +180,10 @@ export function createCameraFrame({
     controls.saveState();
   }
 
-  function fitTo(meshes, { preserveCamera = false } = {}) {
+  function fitTo(meshes, {
+    preserveCamera = false,
+    initialRotationY = 0,
+  } = {}) {
     const preservedView = preserveCamera ? {
       position: camera.position.clone(),
       quaternion: camera.quaternion.clone(),
@@ -196,6 +206,13 @@ export function createCameraFrame({
       meshes.forEach(mesh => expandByBaseMesh(uprightBox, mesh));
       if (!uprightBox.isEmpty()) {
         modelPivot = uprightBox.getCenter(new THREE.Vector3());
+        if (Number.isFinite(initialRotationY) && initialRotationY !== 0) {
+          const initialRotation = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 1, 0), initialRotationY);
+          // Capture the base game orientation in homeView.  Manual turns are
+          // tracked separately in modelRotation and can still be reset.
+          rotateMeshesAroundCenter(meshes, initialRotation);
+        }
       }
       homeMeshTransforms = meshes.map(mesh => ({
         mesh,

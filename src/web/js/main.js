@@ -374,7 +374,13 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   buildPresentPanel(controls.present, { modPath: currentModPath, onChange: reloadCurrentMod });
   rightDockEnabled = true;
   syncViewportControlPlacement();
-  fitTo(activeMeshes, { preserveCamera });
+  fitTo(activeMeshes, {
+    preserveCamera,
+    // WWMI models use the opposite horizontal facing convention from the
+    // viewer's default front view.  Keep this as a model base transform so
+    // camera controls and viewer-only orientation state remain independent.
+    initialRotationY: payload.metadata?.game?.id === 'wuwa' ? Math.PI : 0,
+  });
 
   showLoading(false);
 }

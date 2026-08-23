@@ -358,6 +358,51 @@ def test_negative_effective_vertex_index_skips_invalid_draw():
         assert meshes == {}
 
 
+def test_nonfinite_geometry_drops_only_invalid_triangles():
+    ini = """[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+drawindexed = 6, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = body.texcoord
+stride = 20
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write(tmp, "mod.ini", ini)
+        open(os.path.join(tmp, "body.ib"), "wb").write(
+            struct.pack("<6I", 0, 1, 2, 0, 3, 4))
+        with open(os.path.join(tmp, "body.buf"), "wb") as file:
+            for vertex in ((0., 0., 0.), (1., 0., 0.), (0., 1., 0.),
+                           (float("nan"), 0., 0.), (1., 1., 0.)):
+                file.write(struct.pack("<3f", *vertex) + b"\0" * 28)
+        open(os.path.join(tmp, "body.texcoord"), "wb").write(
+            b"\0" * (20 * 5))
+
+        secs = merge_sections([path])
+        groups = build_draw_groups(secs, extract_resources(secs))
+        meshes, geometry = build_mesh_fixture(groups, tmp)
+
+        assert len(meshes) == 1
+        entry = next(iter(meshes.values()))
+        positions = geometry_values(geometry, entry["pos"])
+        index_ref = entry["idx"]
+        index_raw = geometry.data[
+            index_ref["offset"]:index_ref["offset"] + index_ref["length"]]
+        indices = struct.unpack(f"<{len(index_raw) // 4}I", index_raw)
+        assert all(value == value for value in positions)
+        assert indices == (0, 1, 2)
+
+
 LOWERCASE_SECTIONS_INI = """[constants]
 global persist $swap = 0
 

@@ -1,5 +1,6 @@
 """3DMigoto binary buffer readers and in-memory mesh payload builder."""
 
+import math
 import re, struct, os, base64
 from dataclasses import dataclass
 
@@ -513,10 +514,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if any(index < 0 for index in raw):
                 continue
 
-            # Compact: only export vertices actually referenced
-            used  = sorted(set(raw))
-            remap = {old: new for new, old in enumerate(used)}
-
             # A mid-section `vb0/vb1/vb2 = ...` reassignment (paired with `ib`).
             draw_buffers = buffers
             draw_pos_path = safe_resource_path(mod_dir, draw.position_file)
@@ -541,6 +538,40 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
             pos_data, draw_pos_stride, tc_data, draw_tc_stride, uv_off, uv_fmt = draw_buffers
             uv_size = struct.calcsize(uv_fmt)
+
+            # A malformed source buffer can contain NaN/Inf vertices.  Keep
+            # those values out of both the GPU payload and the camera bounds;
+            # dropping a whole triangle preserves index topology for the
+            # remaining geometry instead of silently connecting its neighbors.
+            def _finite_vertex(index):
+                pos_off = index * draw_pos_stride + POSITION_OFFSET
+                if pos_off < 0 or pos_off + 12 > len(pos_data):
+                    return False
+                position = struct.unpack_from("<fff", pos_data, pos_off)
+                if not all(math.isfinite(value) for value in position):
+                    return False
+                if tc_data:
+                    tc_off = index * draw_tc_stride + uv_off
+                    if tc_off < 0 or tc_off + uv_size > len(tc_data):
+                        return False
+                    texcoord = struct.unpack_from(uv_fmt, tc_data, tc_off)
+                    if not all(math.isfinite(value) for value in texcoord):
+                        return False
+                return True
+
+            valid_raw = []
+            for triangle_start in range(0, len(raw) - 2, 3):
+                triangle = raw[triangle_start:triangle_start + 3]
+                if all(_finite_vertex(index) for index in triangle):
+                    valid_raw.extend(triangle)
+            if not valid_raw:
+                continue
+            raw = valid_raw
+
+            # Compact: only export vertices actually referenced
+            used  = sorted(set(raw))
+            remap = {old: new for new, old in enumerate(used)}
+
             pos_bytes = bytearray(len(used) * 12)
             shape_buffers = _build_shape_buffers(
                 grp.get("shape_sliders"), mod_dir, effective_pos_path, used,
