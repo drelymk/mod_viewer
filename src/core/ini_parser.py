@@ -106,6 +106,9 @@ _SEMANTIC_TEXTURE_RESOURCE_RE = re.compile(
     r"^Resource[\\/]"
     r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
     r"(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)$", re.I)
+_LEGACY_TEXTURE_RESOURCE_RE = re.compile(
+    r"^Resource.+(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)"
+    r"(?:\.\d+)?$", re.I)
 
 
 def _semantic_texture_role(resource):
@@ -115,10 +118,43 @@ def _semantic_texture_role(resource):
             if match else None)
 
 
+def _legacy_texture_role(resource, sections, section_lookup):
+    """Return a role for a declared legacy texture resource name.
+
+    Older GIMI mods commonly bind resources such as
+    ``ResourceCharacterDiffuse`` directly to ``ps-t0``.  This fallback is
+    deliberately narrower than the removed substring heuristic: the resource
+    must be file-backed, end in one complete role token, and be observed from
+    the caller so the caller can require repeated slot evidence.
+    """
+    match = _LEGACY_TEXTURE_RESOURCE_RE.fullmatch(str(resource or ""))
+    if not match:
+        return None
+    section_name = section_lookup.get(str(resource).casefold())
+    if section_name is None:
+        return None
+    if not any(re.match(r"^filename\s*=\s*\S+", raw, re.I)
+               for raw in sections[section_name]):
+        return None
+    return _SEMANTIC_TEXTURE_ROLES[match.group("role").casefold()]
+
+
 def _collect_slot_role_hints(sections):
-    """Collect unambiguous ``ps-tN`` roles proven by API resource bindings."""
+    """Collect unambiguous ``ps-tN`` roles from semantic or legacy evidence.
+
+    Legacy resource-name evidence is accepted only when the same slot role is
+    repeated by at least two override/command-list sections or by at least two
+    distinct file-backed resource variants.  A single arbitrary resource name
+    therefore cannot assign a material role.
+    """
     observations = {}
-    for lines in sections.values():
+    legacy_observations = {}
+    legacy_resources = {}
+    legacy_sections = {}
+    section_lookup = {str(name).casefold(): name for name in sections}
+    for section_name, lines in sections.items():
+        is_texture_binding = str(section_name).lower().startswith(
+            ("textureoverride", "commandlist"))
         for raw in lines:
             line = raw.split(";", 1)[0].strip()
             if not line:
@@ -128,9 +164,27 @@ def _collect_slot_role_hints(sections):
                 line, re.I)
             if not slot:
                 continue
-            role = _semantic_texture_role(slot.group("resource"))
+            resource = slot.group("resource")
+            role = _semantic_texture_role(resource)
+            if role is None:
+                role = _legacy_texture_role(
+                    resource, sections, section_lookup)
+                if role:
+                    slot_number = int(slot.group("slot"))
+                    legacy_observations.setdefault(slot_number, set()).add(role)
+                    legacy_resources.setdefault(slot_number, set()).add(
+                        str(resource).casefold())
+                    if is_texture_binding:
+                        legacy_sections.setdefault(slot_number, set()).add(
+                            section_name)
+                continue
             if role:
                 observations.setdefault(int(slot.group("slot")), set()).add(role)
+    for slot, roles in legacy_observations.items():
+        repeated_sections = len(legacy_sections.get(slot, ())) >= 2
+        repeated_resources = len(legacy_resources.get(slot, ())) >= 2
+        if repeated_sections or repeated_resources:
+            observations.setdefault(slot, set()).update(roles)
     return {slot: next(iter(roles)) for slot, roles in observations.items()
             if len(roles) == 1}
 

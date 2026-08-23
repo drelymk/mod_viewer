@@ -1,4 +1,4 @@
-"""Role recovery from explicit mod-local texture slot mappings."""
+"""Role recovery from explicit and legacy texture slot mappings."""
 
 from core.ini_parser import (build_draw_groups, extract_resources, merge_sections,
                               _scan_sections_for_draws)
@@ -62,6 +62,54 @@ def test_resource_name_alone_does_not_imply_diffuse(tmp_path):
 
     assert draw.texture_default("diffuse") is None
     assert draw.slot_textures[0].role_hint is None
+
+
+def test_repeated_legacy_slot_names_recover_texture_roles(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""ps-t0 = ResourceBodyDiffuse
+ps-t1 = ResourceBodyLightMap""",
+        {"ResourceBodyDiffuse": "body-diffuse.dds",
+         "ResourceBodyLightMap": "body-light-map.dds"},
+        prefix=(r"[CommandList\LegacySlots]" "\n"
+                r"ps-t0 = ResourceBodyDiffuse" "\n"
+                r"ps-t1 = ResourceBodyLightMap" "\n"),
+    )
+
+    assert draw.texture_default("diffuse") == "body-diffuse.dds"
+    assert draw.texture_default("light_map") == "body-light-map.dds"
+    assert draw.texture_provenance == {"diffuse": "mod_slot_semantic",
+                                       "light_map": "mod_slot_semantic"}
+
+
+def test_single_legacy_slot_name_does_not_imply_a_role(tmp_path):
+    draw = _draw(
+        tmp_path,
+        "ps-t0 = ResourceBodyDiffuse",
+        {"ResourceBodyDiffuse": "body-diffuse.dds"},
+    )
+
+    assert draw.slot_textures[0].role_hint is None
+    assert draw.texture_default("diffuse") is None
+
+
+def test_legacy_variant_suffixes_recover_texture_roles(tmp_path):
+    draw = _draw(
+        tmp_path,
+        r"""ps-t0 = ResourceBodyDiffuse.0
+ps-t0 = ResourceBodyDiffuse.1
+ps-t1 = ResourceBodyLightMap.0
+ps-t1 = ResourceBodyLightMap.1""",
+        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
+         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
+         "ResourceBodyLightMap.0": "body-light-map-0.dds",
+         "ResourceBodyLightMap.1": "body-light-map-1.dds"},
+    )
+
+    assert draw.texture_default("diffuse") == "body-diffuse-1.dds"
+    assert draw.texture_default("light_map") == "body-light-map-1.dds"
+    assert draw.slot_textures[0].role_hint == "diffuse"
+    assert draw.slot_textures[1].role_hint == "light_map"
 
 
 def test_proven_slotfix_assignment_keeps_conditional_variants(tmp_path):
