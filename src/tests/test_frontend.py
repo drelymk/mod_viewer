@@ -425,7 +425,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             },
             get_asset_folders: async () => copy({folders: state.assetFolders}),
             add_asset_folder: async (type, path) => {
-              state.assetFolders.push({type, path, exists: true});
+              state.assetFolders.push({type, path, enabled: true, exists: true});
               return copy({folders: state.assetFolders});
             },
             edit_asset_folder: async (original, type, path) => {
@@ -435,6 +435,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             },
             delete_asset_folder: async path => {
               state.assetFolders = state.assetFolders.filter(folder => folder.path !== path);
+              return copy({folders: state.assetFolders});
+            },
+            set_asset_folder_enabled: async (path, enabled) => {
+              const item = state.assetFolders.find(folder => folder.path === path);
+              if (item) item.enabled = enabled;
               return copy({folders: state.assetFolders});
             },
             list_asset_subfolders: async path => {
@@ -606,6 +611,26 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
         assert page.evaluate("window.__fakeApi.calls.listAssetSubfolders") == [root]
         page.locator(".asset-folder-select", has_text="Character").click()
         assert page.evaluate("window.__fakeApi.calls.loadMod") == []
+        root_select = page.locator("#asset-folder-list .asset-folder-select").first
+        root_select.click()
+        assert page.locator(".asset-folder-row.active").count() == 1
+        switch = page.locator(".asset-folder-switch").first
+        assert switch.get_attribute("aria-checked") == "true"
+        switch.click()
+        page.wait_for_function("window.__fakeApi.assetFolders[0].enabled === false")
+        page.locator(".asset-folder-switch[aria-checked='false']").wait_for()
+        assert page.locator(".asset-folder-row.active").count() == 1
+        page.locator(".asset-folder-switch").first.click()
+        page.wait_for_function("window.__fakeApi.assetFolders[0].enabled === true")
+        page.locator(".asset-folder-switch[aria-checked='true']").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.set_asset_folder_enabled = async () => ({
+            error: 'write failed'});
+        }""")
+        page.locator(".asset-folder-switch").first.click()
+        page.locator("#asset-folder-error.show").wait_for()
+        assert page.locator(".asset-folder-switch").first.get_attribute(
+            "aria-checked") == "true"
         page.locator("#asset-folder-add").click()
         assert page.locator("#afm-type option").all_inner_texts() == ["ZZMI", "GIMI", "WWMI"]
         page.evaluate("window.__fakeApi.nextPath = 'picked-asset-folder'")

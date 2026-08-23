@@ -22,6 +22,7 @@ export function createFolderRegistryPanel({
   onEdit,
   onDelete,
   renderLabel,
+  renderRootExtras,
   classPrefix = 'folder',
 }) {
   const childCache = new Map();
@@ -120,6 +121,7 @@ export function createFolderRegistryPanel({
     row.className = className('row');
     row.setAttribute(pathAttribute, entry.path);
     if (entry.exists === false) row.classList.add('missing');
+    if (isRoot && entry.enabled === false) row.classList.add(`${classPrefix}-disabled`);
 
     const arrow = document.createElement('button');
     arrow.type = 'button';
@@ -144,6 +146,10 @@ export function createFolderRegistryPanel({
       callback?.(entry.path, entry);
     });
     row.append(arrow, select);
+    if (isRoot) {
+      const extras = renderRootExtras?.(entry);
+      if (extras instanceof Node) row.appendChild(extras);
+    }
 
     if (isRoot && (onEdit || onDelete)) {
       const actions = document.createElement('span');

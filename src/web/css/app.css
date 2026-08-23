@@ -1202,6 +1202,17 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .asset-folder-label { display: inline-flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .asset-folder-badge { flex: 0 0 auto; padding: 2px 5px; border-radius: 4px; color: var(--accent-soft);
   background: var(--surface-active); font-size: 9px; font-weight: 800; letter-spacing: .05em; }
+.asset-folder-status { flex: 0 0 auto; color: var(--text-muted); font-size: 9px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; }
+.asset-folder-row.asset-folder-disabled .asset-folder-label { opacity: .72; }
+.asset-folder-switch { flex: 0 0 auto; min-width: 38px; height: 22px; padding: 0 6px;
+  border: 1px solid var(--border); border-radius: 11px; color: var(--text-muted);
+  background: var(--surface-active); cursor: pointer; font-size: 9px; font-weight: 800;
+  letter-spacing: .04em; }
+.asset-folder-switch[aria-checked="true"] { color: var(--text); border-color: var(--accent-soft);
+  background: rgba(31,111,235,.38); }
+.asset-folder-switch:hover { color: var(--text); border-color: var(--accent-soft); }
+.asset-folder-switch:disabled { opacity: .55; cursor: wait; }
 #sidebar.left-dock-panel { overflow-x: hidden; overflow-y: auto; }
 #sidebar[hidden], #mod-folder-panel[hidden], #asset-folder-panel[hidden] { display: none !important; }
 

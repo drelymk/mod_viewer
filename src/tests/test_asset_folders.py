@@ -8,10 +8,11 @@ from app import asset_folders, mod_folders, paths
 from app.api import ModViewerAPI
 
 
-def _config(tmp_path, entries=None):
+def _config(tmp_path, entries=None, asset_entries=None):
     filename = str(tmp_path / "config.json")
     with open(filename, "w", encoding="utf-8") as stream:
-        json.dump({"version": 1, "modFolders": entries or []}, stream)
+        json.dump({"version": 1, "modFolders": entries or [],
+                   "assetFolders": asset_entries or []}, stream)
     return filename
 
 
@@ -22,13 +23,35 @@ def _directory(parent, name):
 
 
 def test_missing_asset_folders_defaults_to_empty_and_preserves_existing_config(tmp_path):
-    filename = _config(tmp_path)
+    filename = str(tmp_path / "config.json")
+    with open(filename, "w", encoding="utf-8") as stream:
+        json.dump({"version": 1, "modFolders": []}, stream)
     assert asset_folders.load_registry(filename) == []
     root = _directory(tmp_path, "gimi")
     asset_folders.add_folder("GIMI", root, filename)
     saved = json.loads(open(filename, encoding="utf-8").read())
-    assert saved["assetFolders"] == [{"type": "GIMI", "path": mod_folders.normalize_path(root)}]
+    assert saved["assetFolders"] == [{
+        "type": "GIMI", "path": mod_folders.normalize_path(root), "enabled": True}]
     assert saved["modFolders"] == []
+
+
+def test_legacy_asset_entry_defaults_to_enabled(tmp_path):
+    root = _directory(tmp_path, "legacy")
+    filename = _config(tmp_path, asset_entries=[{
+        "type": "GIMI", "path": root}])
+
+    assert asset_folders.load_registry(filename) == [{
+        "type": "GIMI", "path": mod_folders.normalize_path(root), "enabled": True}]
+
+
+@pytest.mark.parametrize("enabled", [None, 0, 1, "true", []])
+def test_non_boolean_asset_enabled_is_rejected(tmp_path, enabled):
+    root = _directory(tmp_path, "invalid-enabled")
+    filename = _config(tmp_path, asset_entries=[{
+        "type": "GIMI", "path": root, "enabled": enabled}])
+
+    with pytest.raises(asset_folders.AssetFolderError, match="enabled must be a boolean"):
+        asset_folders.load_registry(filename)
 
 
 @pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI", "WWMI"])
@@ -59,10 +82,38 @@ def test_edit_type_and_delete_preserve_files(tmp_path):
     filename = _config(tmp_path)
     root = _directory(tmp_path, "root")
     asset_folders.add_folder("GIMI", root, filename)
+    asset_folders.set_enabled(root, False, filename)
     entries = asset_folders.edit_folder(root, "WWMI", root, filename)
-    assert entries == [{"type": "WWMI", "path": mod_folders.normalize_path(root)}]
+    assert entries == [{
+        "type": "WWMI", "path": mod_folders.normalize_path(root), "enabled": False}]
     assert asset_folders.delete_folder(root, filename) == []
     assert os.path.isdir(root)
+
+
+def test_set_enabled_changes_only_matching_participation(tmp_path):
+    filename = _config(tmp_path)
+    root = _directory(tmp_path, "root")
+    asset_folders.add_folder("GIMI", root, filename)
+
+    disabled = asset_folders.set_enabled(root, False, filename)
+    assert disabled == [{
+        "type": "GIMI", "path": mod_folders.normalize_path(root), "enabled": False}]
+    assert asset_folders.set_enabled(root, True, filename)[0]["enabled"] is True
+    with pytest.raises(asset_folders.AssetFolderError, match="enabled must be a boolean"):
+        asset_folders.set_enabled(root, 1, filename)
+
+
+def test_enabled_entries_filter_by_type_without_dropping_registry_state():
+    entries = [
+        {"type": "GIMI", "path": "gimi-current", "enabled": True},
+        {"type": "GIMI", "path": "gimi-old", "enabled": False},
+        {"type": "ZZMI", "path": "zzmi-current", "enabled": True},
+        {"type": "WWMI", "path": "wwmi-legacy"},
+    ]
+
+    assert asset_folders.enabled_entries(entries) == [entries[0], entries[2], entries[3]]
+    assert asset_folders.enabled_entries_for_type(entries, "GIMI") == [entries[0]]
+    assert entries[1] in entries
 
 
 def test_asset_child_listing_is_lazy_and_contained(tmp_path):
@@ -88,12 +139,17 @@ def test_api_asset_authorization_is_separate_from_mod_roots(tmp_path, monkeypatc
         mod_folders.normalize_path(asset_root),
     })
     assert api.add_mod_folder("Mods", mod_root).get("folders")
-    assert api.add_asset_folder("GIMI", asset_root).get("folders")
+    assert api.add_asset_folder("GIMI", asset_root).get("folders")[0]["enabled"] is True
     with pytest.raises(PermissionError):
         api._folder(asset_root)
     with pytest.raises(PermissionError):
         api._asset_folder(mod_root)
     assert api._asset_folder(asset_root) == mod_folders.normalize_path(asset_root)
+    api._authorized_asset_folders.clear()
+    assert api.set_asset_folder_enabled(asset_root, False)["folders"][0]["enabled"] is False
+    assert api._asset_folder(os.path.join(asset_root, "Character")) == \
+        mod_folders.normalize_path(os.path.join(asset_root, "Character"))
+    assert api.list_asset_subfolders(asset_root)["folders"] == []
 
 
 def test_asset_picker_does_not_grant_mod_folder_access(tmp_path, monkeypatch):
