@@ -94,6 +94,9 @@ UNKNOWN_FIELDS = [
 MANUAL_FIELDS = [
     "texture_sha256", "label", "notes", "reviewer", "source",
 ]
+MANUAL_LABELS = frozenset({
+    "", "unknown", "diffuse", "normal_map", "light_map", "material_map",
+})
 COMPONENT_LABEL_FIELDS = [
     "texture_sha256", "component", "label", "label_source", "label_tier",
     "mod_id", "relative_file", "role",
@@ -342,7 +345,10 @@ class CorpusBuilder:
         self.feature_extractions = 0
         self.pixel_decoded = 0
         self.pixel_skipped_budget = 0
+        self.manual_labels = []
+        self.manual_label_errors = []
         self._load_feature_cache()
+        self._load_manual_labels()
 
     def _load_feature_cache(self):
         path = self.output_dir / "feature_cache.json"
@@ -366,6 +372,35 @@ class CorpusBuilder:
                 for sha, row in sorted(self.textures.items())
             },
         })
+
+    def _load_manual_labels(self):
+        path = self.output_dir / "manual_labels.csv"
+        try:
+            with path.open(encoding="utf-8", newline="") as stream:
+                rows = csv.DictReader(stream)
+                for row in rows:
+                    normalized = {field: (row.get(field) or "")
+                                  for field in MANUAL_FIELDS}
+                    if normalized["label"] not in MANUAL_LABELS:
+                        self.manual_label_errors.append({
+                            "kind": "manual_label",
+                            "sha256": normalized["texture_sha256"],
+                            "error": f"unsupported label: {normalized['label']}",
+                        })
+                        continue
+                    if not normalized["texture_sha256"]:
+                        self.manual_label_errors.append({
+                            "kind": "manual_label",
+                            "error": "missing texture_sha256",
+                        })
+                        continue
+                    self.manual_labels.append(normalized)
+        except FileNotFoundError:
+            return
+        except (OSError, UnicodeError, csv.Error) as exc:
+            self.manual_label_errors.append({
+                "kind": "manual_label", "error": str(exc),
+            })
 
     def _ensure_texture(self, path, mod_id, relative_file):
         try:
@@ -735,7 +770,8 @@ class CorpusBuilder:
             })
         _write_csv(self.output_dir / "unknown_candidates.csv", unknown,
                    UNKNOWN_FIELDS)
-        _write_csv(self.output_dir / "manual_labels.csv", [], MANUAL_FIELDS)
+        _write_csv(self.output_dir / "manual_labels.csv", self.manual_labels,
+                   MANUAL_FIELDS)
         _write_csv(self.output_dir / "component_labels.csv",
                    sorted(self.component_labels,
                           key=lambda row: tuple(row.get(key) or ""
@@ -774,6 +810,8 @@ class CorpusBuilder:
             "trusted_labels_by_label": dict(sorted(label_counts.items())),
             "trusted_labels_by_source": dict(sorted(source_counts.items())),
             "unknown_candidates": len(unknown),
+            "manual_label_rows": len(self.manual_labels),
+            "manual_label_errors": len(self.manual_label_errors),
             "component_label_rows": len(self.component_labels),
             "format_distribution": dict(sorted(format_counts.items())),
             "archives_found": len(archive_paths),
@@ -884,15 +922,18 @@ def _safe_review_path(mods_root, mod_id, relative_file):
     return candidate
 
 
-def review_corpus(corpus_dir, mods_root, *, limit=12):
+def review_corpus(corpus_dir, mods_root, *, limit=12, offset=0):
     """Create deterministic contact sheets for a small unknown sample."""
     corpus_dir = Path(corpus_dir)
+    offset = max(0, int(offset))
     review_dir = corpus_dir / "review"
+    if offset:
+        review_dir = review_dir / f"batch-{offset:04d}"
     review_dir.mkdir(parents=True, exist_ok=True)
     with (corpus_dir / "unknown_candidates.csv").open(
             encoding="utf-8", newline="") as stream:
         unknown = list(csv.DictReader(stream))
-    selected = unknown[:max(0, int(limit))]
+    selected = unknown[offset:offset + max(0, int(limit))]
     items = []
     for row in selected:
         path = _safe_review_path(mods_root, row.get("example_mod_id", ""),
@@ -939,7 +980,13 @@ def review_corpus(corpus_dir, mods_root, *, limit=12):
         "<!doctype html><meta charset='utf-8'><title>Unknown review</title>"
         "<h1>Unknown candidates</h1><ul>" + html_rows + "</ul>",
         encoding="utf-8")
-    return {"selected": len(selected), "decoded": len(items), "sheets": sheets}
+    return {
+        "offset": offset,
+        "selected": len(selected),
+        "decoded": len(items),
+        "sheets": sheets,
+        "review_dir": str(review_dir),
+    }
 
 
 def _build_parser():
@@ -961,6 +1008,7 @@ def _build_parser():
     review.add_argument("corpus", type=Path)
     review.add_argument("--mods-root", required=True, type=Path)
     review.add_argument("--limit", default=12, type=int)
+    review.add_argument("--offset", default=0, type=int)
     return parser
 
 
@@ -974,7 +1022,8 @@ def main(argv=None):
     elif args.command == "summary":
         result = read_summary(args.corpus)
     else:
-        result = review_corpus(args.corpus, args.mods_root, limit=args.limit)
+        result = review_corpus(
+            args.corpus, args.mods_root, limit=args.limit, offset=args.offset)
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

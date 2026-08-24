@@ -1,5 +1,6 @@
 """Regression tests for the offline WuWa corpus tooling."""
 
+import csv
 from types import SimpleNamespace
 
 from tools import wuwa_texture_corpus as corpus
@@ -102,8 +103,19 @@ def test_scan_uses_parser_labels_and_keeps_unknown_separate(tmp_path, monkeypatc
     assert "exact" in occurrences
     assert "leading" in occurrences
 
+    with (output / "unknown_candidates.csv").open(
+            encoding="utf-8", newline="") as stream:
+        first_unknown = next(csv.DictReader(stream))["texture_sha256"]
+    with (output / "manual_labels.csv").open(
+            "a", encoding="utf-8", newline="") as stream:
+        stream.write(
+            f"{first_unknown},diffuse,reviewed color texture,,visual_review\n")
+
     second = corpus.scan_corpus(tmp_path / "mods", output)
     assert second["feature_extractions"] == 0
+    assert second["manual_label_rows"] == 1
+    manual_labels = (output / "manual_labels.csv").read_text(encoding="utf-8")
+    assert f"{first_unknown},diffuse,reviewed color texture" in manual_labels
     texture_rows = (output / "textures.csv").read_text(encoding="utf-8")
     assert "Character/Outfit" in texture_rows
 
