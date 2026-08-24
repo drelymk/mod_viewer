@@ -579,20 +579,62 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 tex_uris[key] = value or ""
             return key
 
-        # Every diffuse this component's ini ever references, resolved once
-        # and shared by every draw in the group -- the UI's per-mesh texture
-        # picker list (core/ini_parser.py's build_draw_groups). Uses the same
-        # _tex_key cache/registry as the draws' own textures so an option
-        # that's also someone's active default doesn't get encoded twice.
+        # Every parser-derived or enrichment-discovered diffuse this
+        # component references, resolved once and shared by every draw in the
+        # group -- the UI's per-mesh texture picker list. The parser-owned
+        # diffuse pool remains separate from WuWa discovery; both use the same
+        # role-aware registry so duplicate files produce one option.
         texture_options = []
+        texture_option_keys = set()
+
+        def _append_texture_option(key, filename, label, **metadata):
+            if not key or key in texture_option_keys:
+                return
+            texture_option_keys.add(key)
+            option = {"tex_key": key, "file": filename, "label": label}
+            option.update(metadata)
+            texture_options.append(option)
+
         for pool_entry in grp.get("diffuse_pool_files") or []:
             key = _tex_key(safe_resource_path(mod_dir, pool_entry["file"]))
             if key:
                 res_name = pool_entry["res"]
                 label = res_name[8:] if res_name.startswith("Resource") else res_name
-                texture_options.append({"tex_key": key,
-                                        "file": pool_entry["file"],
-                                        "label": label})
+                _append_texture_option(key, pool_entry["file"], label)
+
+        discovered_normals = {}
+        normal_role = texture_profile.normal_transport_role
+        for candidate in grp.get("discovered_textures") or []:
+            filename = candidate.get("file")
+            role = candidate.get("role") or candidate.get(
+                "semantic_candidate")
+            path = safe_resource_path(mod_dir, filename)
+            if path is None:
+                continue
+            if role == "diffuse":
+                key = _tex_key(path)
+                label = os.path.splitext(
+                    str(filename).replace("\\", "/").rsplit("/", 1)[-1]
+                )[0]
+                _append_texture_option(
+                    key, filename, label,
+                    candidate_source=candidate.get("source"),
+                    candidate_priority=candidate.get("priority"),
+                )
+            elif (role == "normal_map"
+                  and candidate.get("source") == "wuwa_direct_analysis"):
+                key = _tex_key(path, normal_role)
+                if key:
+                    discovered_normals[key] = key
+
+        # A unique discovered normal is safe to pair with every diffuse pool
+        # option. Ambiguous normals remain available only as analysis data;
+        # guessing a color/normal Cartesian product would create false pairs.
+        if len(discovered_normals) == 1:
+            normal_key = next(iter(discovered_normals.values()))
+            for option in texture_options:
+                if not option.get("normal_map") and not option.get("normal_data"):
+                    option[normal_role] = normal_key
 
         for draw in unique:
             lbl = draw.label

@@ -9,7 +9,7 @@ import re
 from core.geometry_identity import normalize_geometry_hash
 from core.ini_parser import TextureOverrideIndex, _condition_difference
 from core.dds_classifier import (DDSClassification, classification_cache_key,
-                                 classify_dds)
+                                 classify_dds, is_color_candidate)
 from core.resource_paths import safe_resource_path
 
 from . import asset_folders
@@ -343,11 +343,20 @@ def _classify_replacements(texture_hash, replacements, mod_dir, cache):
                 result = _cached_dds_classification(path, cache)
         classifications.append(result)
         by_replacement[id(replacement)] = result
-    role_results = [result for result in classifications if result.role]
-    roles = {result.role for result in role_results}
+    def analysis_role(result):
+        if result.role == "normal_map":
+            return ("normal_map"
+                    if result.confidence == "high" else None)
+        return "diffuse" if is_color_candidate(result) else None
+
+    role_results = [
+        (result, analysis_role(result)) for result in classifications
+    ]
+    roles = {role for _result, role in role_results if role}
     role = (next(iter(roles))
             if len(roles) == 1
-            and all(result.confidence == "high" for result in role_results)
+            and all(result_role for _result, result_role in role_results
+                    if result_role)
             else None)
     return role, by_replacement, len(roles) > 1
 
@@ -506,22 +515,27 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                                     or "mod_slot_mapping"),
                             })
                             known_roles.add(item.role_hint)
-                            role_hint_evidence.append(
-                                TextureSemanticEvidence(
-                                    item.role_hint, usage["texture_hash"],
-                                    source=(item.role_hint_source
-                                           or "mod_slot_mapping")))
+                            # The slot mapping remains diagnostic and the
+                            # parsed mod binding remains authoritative. Do
+                            # not bridge WWMI TextureUsage hashes into the
+                            # replacement/rendering evidence path.
                         draw.asset_slot_evidence.append(slot_evidence)
                 for usage_values in slots.values():
                     for usage in usage_values:
-
                         texture_hash = usage["texture_hash"]
                         contexts = diagnostic_contexts.setdefault(
                             texture_hash, [])
                         if usage not in contexts:
                             contexts.append(usage)
-                        roleless_evidence.append(TextureSemanticEvidence(
-                            None, texture_hash, source="asset_slot_usage"))
+                        if not any(
+                                item.get("texture_hash") == texture_hash
+                                and item.get("slot") == usage.get("slot")
+                                for item in draw.asset_slot_evidence):
+                            draw.asset_slot_evidence.append(dict(usage))
+                        # WWMI TextureUsage is diagnostic context only. WuWa
+                        # render-role recovery is owned by direct draw
+                        # bindings and the component filename + DDS fallback,
+                        # not Asset JSON.
 
             # Raw slot hashes provide diagnostic context for every adapter.
             # Only an Asset-proven association may trigger DDS role recovery;
@@ -608,7 +622,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     if accepted:
                         role_result = next(
                             (item for item in details.values()
-                             if item.role == role), None)
+                             if ((item.role == role)
+                                 or (role == "diffuse"
+                                     and is_color_candidate(item)))), None)
                         dds_evidence.append(TextureSemanticEvidence(
                             role, texture_hash, source="dds_analysis",
                             texture_class=(role_result.texture_class

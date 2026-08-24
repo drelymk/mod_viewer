@@ -1,13 +1,8 @@
-// Selection-aware details panel.  Mesh creation remains owned by mesh-panel;
+// Selection-aware details panel. Mesh creation remains owned by mesh-panel;
 // this module only presents the already-authoritative mesh/component state.
 
 import { isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from './selection.js';
-import {
-  assetMatchLabel, componentMatchLabel, normalizeAssetBinding,
-  rangeMatchLabel, summarizeAssetBindings, textureProvenance,
-  textureRoleLabel, textureRoleLabels, textureRoleSourceLabel,
-} from './asset-diagnostics.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -54,178 +49,42 @@ function addText(parent, className, text) {
   return node;
 }
 
-function addRow(parent, label, value) {
-  const row = document.createElement('div');
-  row.className = 'inspector-row';
-  addText(row, 'inspector-label', label);
-  addText(row, 'inspector-value', value == null || value === '' ? '—' : String(value));
-  parent.appendChild(row);
-  return row;
+function basename(value) {
+  return String(value || '').replaceAll('\\', '/').split('/').pop() || '';
 }
 
-function buildHeader(content, title, subtitle) {
+function textureOptionLabel(option) {
+  return option?.label || basename(option?.file)
+    || basename(String(option?.tex_key || '').split('::').slice(1).join('::'))
+    || 'Texture';
+}
+
+function automaticTextureLabel(resolved, pool) {
+  if (!resolved) return 'Automatic';
+  const option = pool.find(item => item.tex_key === resolved);
+  if (option) return `Automatic · ${textureOptionLabel(option)}`;
+  const file = String(resolved).split('::').slice(1).join('::');
+  return file ? `Automatic · ${basename(file)}` : 'Automatic';
+}
+
+function componentContext(record) {
+  const meshes = record.meshes || [];
+  const total = meshes.length;
+  const visible = meshes.filter(mesh => mesh.visible).length;
+  const meshWord = total === 1 ? 'mesh' : 'meshes';
+  return `${total} ${meshWord} · ${visible} visible`;
+}
+
+function buildHeader(content, title, context, titleHint = '') {
   const header = document.createElement('div');
   header.className = 'inspector-header';
-  addText(header, 'inspector-kicker', subtitle);
+  if (titleHint) header.title = titleHint;
   const heading = document.createElement('h3');
   heading.textContent = title;
   header.appendChild(heading);
+  const subtitle = addText(header, 'inspector-context', context || '');
+  subtitle.dataset.inspectorContext = 'true';
   content.appendChild(header);
-}
-
-function buildAssetSection(content, entry) {
-  const binding = normalizeAssetBinding(entry?.asset_binding);
-  if (!binding) return;
-  const section = document.createElement('section');
-  section.className = 'inspector-section inspector-asset-section';
-  const title = document.createElement('div');
-  title.className = 'inspector-section-title';
-  title.textContent = 'Asset match';
-  section.appendChild(title);
-  addRow(section, 'Asset', binding.asset);
-  addRow(section, 'Type', binding.assetType);
-  addRow(section, 'Component', binding.component);
-  addRow(section, 'Object', binding.classification);
-  addRow(section, 'Geometry hash', binding.geometryHash);
-  if (binding.firstIndex !== null || binding.indexCount !== null) {
-    const range = [binding.firstIndex, binding.indexCount]
-      .map(value => value == null ? '?' : value).join(' / ');
-    addRow(section, 'Range', range);
-  }
-  addRow(section, 'Component match', componentMatchLabel(binding));
-  addRow(section, 'Range match', rangeMatchLabel(binding));
-  addRow(section, 'Match', assetMatchLabel(binding));
-  content.appendChild(section);
-}
-
-function buildComponentAssetSection(content, record) {
-  const summary = record.assetSummary
-    || summarizeAssetBindings((record.meshes || [])
-      .map(mesh => mesh.userData.assetEntry), record.assetResolution);
-  if (!summary || summary.status === 'unavailable') return;
-  const section = document.createElement('section');
-  section.className = 'inspector-section inspector-asset-section';
-  const title = document.createElement('div');
-  title.className = 'inspector-section-title';
-  title.textContent = 'Asset resolution';
-  section.appendChild(title);
-  addRow(section, 'Match', summary.status.replace(/^./, value => value.toUpperCase()));
-  addRow(section, 'Asset', summary.asset);
-  addRow(section, 'Component', summary.component);
-  addRow(section, 'Draws', `${summary.matchedDraws} of ${summary.totalDraws} matched`);
-  if (summary.exact) addRow(section, 'Exact', summary.exact);
-  if (summary.partial) addRow(section, 'Partial', summary.partial);
-  if (summary.ambiguous) addRow(section, 'Ambiguous', summary.ambiguous);
-  if (summary.unmatched) addRow(section, 'Not found', summary.unmatched);
-  if (summary.indexUnavailable) {
-    addRow(section, 'Index unavailable', summary.indexUnavailable);
-  }
-  if (summary.rangesVary) addRow(section, 'Ranges', 'Vary by draw');
-  content.appendChild(section);
-}
-
-function buildTextureProvenanceSection(content, record, mesh) {
-  const entry = record.entry || {};
-  if (!entry.asset_binding && !entry.texture_resolution
-      && !(entry.asset_slot_evidence || []).length) return;
-  const section = document.createElement('section');
-  section.className = 'inspector-section inspector-provenance-section';
-  const title = document.createElement('div');
-  title.className = 'inspector-section-title';
-  title.textContent = 'Texture provenance';
-  section.appendChild(title);
-  const sources = textureProvenance(entry);
-  textureRoleLabels().forEach(([role, label]) => {
-    const row = addRow(section, `${label} (automatic)`, sources[role]);
-    row.dataset.provenanceRole = role;
-    row.dataset.provenanceKind = 'automatic';
-  });
-  const override = record.component?.getTextureOverride?.(mesh);
-  const current = override?.automatic
-    ? (override.resolved ? `Automatic (${override.resolved})` : 'Automatic')
-    : override?.value === null ? 'Viewer override (None)'
-      : `Viewer override (${override?.value || 'custom'})`;
-  const currentRow = addRow(section, 'Diffuse (viewer)', current);
-  currentRow.dataset.provenanceKind = 'viewer';
-  content.appendChild(section);
-}
-
-function buildSlotEvidenceSection(content, entry) {
-  const evidence = entry?.asset_slot_evidence;
-  if (!Array.isArray(evidence) || !evidence.length) return;
-  const section = document.createElement('section');
-  section.className = 'inspector-section inspector-slot-section';
-  const title = document.createElement('div');
-  title.className = 'inspector-section-title';
-  title.textContent = 'Slot evidence';
-  section.appendChild(title);
-  evidence.forEach(item => {
-    const card = document.createElement('div');
-    card.className = 'inspector-slot-evidence';
-    card.dataset.conflict = item.conflict ? 'true' : 'false';
-    addText(card, 'inspector-slot-name', item.resource || 'Texture slot');
-    addRow(card, 'Texture', item.texture_hash);
-    addRow(card, 'VS', item.vs_hash);
-    addRow(card, 'PS', item.ps_hash);
-    addRow(card, 'Role', textureRoleLabel(item.role));
-    if (item.role_source) {
-      addRow(card, 'Role source', textureRoleSourceLabel(item.role_source));
-    }
-    if (item.texture_class) addRow(card, 'Texture class', item.texture_class);
-    if (item.confidence) addRow(card, 'Confidence', item.confidence);
-    if (item.asset_hash_role) {
-      addRow(card, 'Asset hash role', textureRoleLabel(item.asset_hash_role));
-    }
-    if (item.conflict) addRow(card, 'Conflict', 'Yes');
-    section.appendChild(card);
-  });
-  content.appendChild(section);
-}
-
-function buildTextureControls(content, record, mesh) {
-  const component = record.component;
-  const section = document.createElement('section');
-  section.className = 'inspector-section';
-  const title = document.createElement('div');
-  title.className = 'inspector-section-title';
-  title.textContent = 'Texture override';
-  section.appendChild(title);
-
-  const pool = component?.texturePool || [];
-  const override = component?.getTextureOverride?.(mesh) || {
-    value: undefined, automatic: true, resolved: null,
-  };
-  const list = document.createElement('div');
-  list.className = 'inspector-texture-list';
-  const addOption = (label, value, selected, choice) => {
-    const option = document.createElement('button');
-    option.type = 'button';
-    option.className = 'inspector-texture-option';
-    option.textContent = label;
-    option.dataset.textureChoice = choice;
-    option.dataset.textureValue = value == null ? '' : value;
-    option.classList.toggle('selected', selected);
-    option.addEventListener('click', () => {
-      component?.setTextureOverride?.(mesh, value);
-    });
-    list.appendChild(option);
-  };
-  addOption(
-    override.resolved ? `Automatic (${override.resolved})` : 'Automatic',
-    undefined, override.automatic, 'automatic');
-  pool.forEach(option => addOption(
-    option.label || option.file || option.tex_key,
-    option.tex_key, !override.automatic && override.value === option.tex_key,
-    'texture'));
-  addOption('None', null, !override.automatic && override.value === null, 'none');
-  if (!pool.length) {
-    addText(section, 'inspector-muted', 'No texture variants registered.');
-  }
-  section.appendChild(list);
-  if (mesh?.userData?.resolvedTexKey) {
-    addRow(section, 'Resolved', mesh.userData.resolvedTexKey);
-  }
-  content.appendChild(section);
 }
 
 function buildMaterialControl(record) {
@@ -253,107 +112,132 @@ function buildMaterialControl(record) {
   return select;
 }
 
-function buildComponent(record) {
-  const content = showContent();
-  content.replaceChildren();
-  const meshes = record.meshes || [];
-  buildHeader(content, record.component || 'Component', record.source || 'Component');
-
-  const summary = document.createElement('section');
-  summary.className = 'inspector-section inspector-summary';
-  addRow(summary, 'Draw calls', String(meshes.length));
-  addRow(summary, 'Visible', `${meshes.filter(mesh => mesh.visible).length} of ${meshes.length}`);
-  content.appendChild(summary);
-  buildComponentAssetSection(content, record);
-
-  const material = document.createElement('section');
-  material.className = 'inspector-section';
+function buildMaterialSection(content, record) {
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-material-section';
   const title = document.createElement('div');
   title.className = 'inspector-section-title';
   title.textContent = 'Material';
-  material.appendChild(title);
-  if (record.setMaterialKind) material.appendChild(buildMaterialControl(record));
-  if (record.openTextureManager) {
-    const manage = document.createElement('button');
-    manage.type = 'button';
-    manage.className = 'ui-button inspector-manage-textures';
-    manage.textContent = 'Manage textures';
-    manage.addEventListener('click', () => record.openTextureManager());
-    material.appendChild(manage);
+  section.appendChild(title);
+  if (record.getMaterialKind || record.setMaterialKind) {
+    section.appendChild(buildMaterialControl(record));
+  } else {
+    addText(section, 'inspector-muted', 'Auto');
   }
-  content.appendChild(material);
+  content.appendChild(section);
+}
 
-  const poolSection = document.createElement('section');
-  poolSection.className = 'inspector-section';
-  const poolTitle = document.createElement('div');
-  poolTitle.className = 'inspector-section-title';
-  poolTitle.textContent = 'Texture pool';
-  poolSection.appendChild(poolTitle);
+function buildManageTexturesButton(openTextureManager) {
+  if (typeof openTextureManager !== 'function') return null;
+  const manage = document.createElement('button');
+  manage.type = 'button';
+  manage.className = 'ui-button inspector-manage-textures';
+  manage.textContent = 'Manage textures';
+  manage.addEventListener('click', () => openTextureManager());
+  return manage;
+}
+
+function buildComponentTextureSection(content, record) {
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-textures-section';
+  const title = document.createElement('div');
+  title.className = 'inspector-section-title';
+  title.textContent = 'Textures';
+  section.appendChild(title);
   const pool = record.texturePool || [];
-  if (!pool.length) addText(poolSection, 'inspector-muted', 'No texture variants registered.');
-  else pool.forEach(option => addRow(poolSection, option.label, option.file || option.tex_key));
-  content.appendChild(poolSection);
+  addText(section, 'inspector-texture-count', pool.length
+    ? `${pool.length} available`
+    : 'No textures discovered');
+  const manage = buildManageTexturesButton(record.openTextureManager);
+  if (manage) section.appendChild(manage);
+  content.appendChild(section);
+}
 
-  if (meshes.length) {
-    const meshList = document.createElement('section');
-    meshList.className = 'inspector-section';
-    const title = document.createElement('div');
-    title.className = 'inspector-section-title';
-    title.textContent = 'Meshes in component';
-    meshList.appendChild(title);
-    meshes.forEach(mesh => addRow(meshList, mesh.userData.displayName || 'Mesh',
-      mesh.visible ? 'Visible' : 'Hidden'));
-    content.appendChild(meshList);
+function buildTextureControls(content, record, mesh) {
+  const component = record.component;
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-texture-section';
+  const title = document.createElement('div');
+  title.className = 'inspector-section-title';
+  title.textContent = 'Texture';
+  section.appendChild(title);
+
+  const pool = component?.texturePool || [];
+  const override = component?.getTextureOverride?.(mesh) || {
+    value: undefined, automatic: true, resolved: null,
+  };
+  if (!pool.length) addText(section, 'inspector-muted', 'No textures discovered');
+  const list = document.createElement('div');
+  list.className = 'inspector-texture-list';
+  const addOption = (label, value, selected, choice, titleText = '') => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'inspector-texture-option';
+    option.textContent = label;
+    option.title = titleText || label;
+    option.dataset.textureChoice = choice;
+    option.dataset.textureValue = value == null ? '' : value;
+    option.classList.toggle('selected', selected);
+    option.addEventListener('click', () => {
+      component?.setTextureOverride?.(mesh, value);
+    });
+    list.appendChild(option);
+  };
+  addOption(
+    automaticTextureLabel(override.resolved, pool),
+    undefined, override.automatic, 'automatic', override.resolved || 'Automatic');
+  pool.forEach(option => addOption(
+    textureOptionLabel(option), option.tex_key,
+    !override.automatic && override.value === option.tex_key,
+    'texture', option.file || option.label || option.tex_key));
+  addOption('None', null, !override.automatic && override.value === null, 'none');
+  section.appendChild(list);
+  const manage = buildManageTexturesButton(component?.openTextureManager);
+  if (manage) section.appendChild(manage);
+  content.appendChild(section);
+}
+
+function updateTextureControlState(content, mesh, component) {
+  const pool = component?.texturePool || [];
+  const override = component?.getTextureOverride?.(mesh);
+  if (!override) return;
+  const automatic = content.querySelector(
+    '.inspector-texture-option[data-texture-choice="automatic"]');
+  if (automatic) {
+    automatic.textContent = automaticTextureLabel(override.resolved, pool);
+    automatic.title = override.resolved || 'Automatic';
   }
+  content.querySelectorAll('.inspector-texture-option').forEach(option => {
+    const selected = option.dataset.textureChoice === 'automatic'
+      ? override.automatic
+      : option.dataset.textureChoice === 'none'
+        ? !override.automatic && override.value === null
+        : !override.automatic && override.value === option.dataset.textureValue;
+    option.classList.toggle('selected', selected);
+  });
+}
+
+function buildComponent(record) {
+  const content = showContent();
+  content.replaceChildren();
+  buildHeader(
+    content,
+    record.component || 'Component',
+    componentContext(record),
+    record.source || '',
+  );
+  buildMaterialSection(content, record);
+  buildComponentTextureSection(content, record);
 }
 
 function buildMesh(mesh, record) {
   const content = showContent();
   content.replaceChildren();
   const name = mesh.userData.displayName || record.label || 'Mesh';
-  const componentName = record.component?.component || record.component || 'Mesh';
-  buildHeader(content, name, componentName);
-  const summary = document.createElement('section');
-  summary.className = 'inspector-section inspector-summary';
-  addRow(summary, 'State', mesh.visible ? 'Visible' : 'Hidden');
-  addRow(summary, 'Material kind', mesh.userData.materialKindOverride || mesh.userData.materialKind || 'Auto');
-  addRow(summary, 'Diffuse', mesh.userData.resolvedTexKey || mesh.userData.texKey || 'None');
-  content.appendChild(summary);
-  buildAssetSection(content, record.entry);
-  buildTextureProvenanceSection(content, record, mesh);
-  buildSlotEvidenceSection(content, record.entry);
-
-  const material = document.createElement('section');
-  material.className = 'inspector-section';
-  const materialTitle = document.createElement('div');
-  materialTitle.className = 'inspector-section-title';
-  materialTitle.textContent = 'Material';
-  material.appendChild(materialTitle);
   const component = record.component;
-  if (component?.setMaterialKind) material.appendChild(buildMaterialControl(component));
-  if (component?.openTextureManager) {
-    const manage = document.createElement('button');
-    manage.type = 'button';
-    manage.className = 'ui-button inspector-manage-textures';
-    manage.textContent = 'Manage textures';
-    manage.addEventListener('click', () => component.openTextureManager());
-    material.appendChild(manage);
-  }
-  content.appendChild(material);
-
-  const draw = record.entry?.drawindexed;
-  if (draw?.length) {
-    const drawInfo = document.createElement('section');
-    drawInfo.className = 'inspector-section';
-    const title = document.createElement('div');
-    title.className = 'inspector-section-title';
-    title.textContent = 'Draw';
-    drawInfo.appendChild(title);
-    addRow(drawInfo, 'Count', String(draw[0] ?? '—'));
-    addRow(drawInfo, 'Start', String(draw[1] ?? '—'));
-    addRow(drawInfo, 'Base', String(draw[2] ?? '—'));
-    content.appendChild(drawInfo);
-  }
+  const componentName = component?.component || component || 'Component';
+  buildHeader(content, name, componentName, record.entry?.source?.[0]?.ini || '');
+  buildMaterialSection(content, component || {});
   buildTextureControls(content, record, mesh);
 }
 
@@ -361,66 +245,22 @@ function updateInspectorState() {
   if (!current) return;
   const content = $('inspector-content');
   if (!content) return;
-  const values = new Map();
-  content.querySelectorAll('.inspector-row').forEach(row => {
-    const label = row.querySelector('.inspector-label')?.textContent;
-    const value = row.querySelector('.inspector-value');
-    if (label && value) values.set(label, value);
-  });
+  const material = content.querySelector('.inspector-material-kind-control');
+  if (material) {
+    const owner = current.type === 'mesh' ? current.record.component : current.record;
+    material.value = owner?.getMaterialKind?.() || 'auto';
+  }
   if (current.type === 'mesh') {
-    const mesh = current.mesh;
-    if (values.has('State')) values.get('State').textContent = mesh.visible ? 'Visible' : 'Hidden';
-    if (values.has('Material kind')) {
-      values.get('Material kind').textContent =
-        mesh.userData.materialKindOverride || mesh.userData.materialKind || 'Auto';
+    updateTextureControlState(
+      content, current.mesh, current.record.component);
+  } else {
+    const context = content.querySelector('[data-inspector-context="true"]');
+    if (context) context.textContent = componentContext(current.record);
+    const count = content.querySelector('.inspector-texture-count');
+    if (count) {
+      const total = current.record.texturePool?.length || 0;
+      count.textContent = total ? `${total} available` : 'No textures discovered';
     }
-    if (values.has('Diffuse')) {
-      values.get('Diffuse').textContent =
-        mesh.userData.resolvedTexKey || mesh.userData.texKey || 'None';
-    }
-    const resolved = [...content.querySelectorAll('.inspector-row')].find(row =>
-      row.querySelector('.inspector-label')?.textContent === 'Resolved');
-    if (resolved) {
-      resolved.querySelector('.inspector-value').textContent =
-        mesh.userData.resolvedTexKey || 'None';
-    }
-    const material = content.querySelector('.inspector-material-kind-control');
-    if (material) material.value = current.record.component.getMaterialKind?.() || 'auto';
-    const override = current.record.component.getTextureOverride?.(mesh);
-    if (override) {
-      content.querySelectorAll('.inspector-texture-option').forEach(option => {
-        const selected = option.dataset.textureChoice === 'automatic'
-          ? override.automatic
-          : option.dataset.textureChoice === 'none'
-            ? !override.automatic && override.value === null
-            : !override.automatic && override.value === option.dataset.textureValue;
-        option.classList.toggle('selected', selected);
-      });
-      const currentProvenance = content.querySelector(
-        '[data-provenance-kind="viewer"] .inspector-value');
-      if (currentProvenance) {
-        currentProvenance.textContent = override.automatic
-          ? (override.resolved ? `Automatic (${override.resolved})` : 'Automatic')
-          : override.value === null ? 'Viewer override (None)'
-            : `Viewer override (${override.value || 'custom'})`;
-      }
-    }
-  } else if (current.type === 'component') {
-    const meshes = current.record.meshes || [];
-    if (values.has('Visible')) {
-      values.get('Visible').textContent =
-        `${meshes.filter(mesh => mesh.visible).length} of ${meshes.length}`;
-    }
-    const material = content.querySelector('.inspector-material-kind-control');
-    if (material) material.value = current.record.getMaterialKind?.() || 'auto';
-    content.querySelectorAll('.inspector-row').forEach(row => {
-      const label = row.querySelector('.inspector-label')?.textContent;
-      if (!label || label === 'Visible' || label === 'Draw calls') return;
-      const mesh = meshes.find(item =>
-        (item.userData.displayName || 'Mesh') === label);
-      if (mesh) row.querySelector('.inspector-value').textContent =
-        mesh.visible ? 'Visible' : 'Hidden';
-    });
   }
 }
 

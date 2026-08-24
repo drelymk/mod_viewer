@@ -27,7 +27,7 @@ from core.game_profile import GameDetection, resolve_game_detection
 from core.material_kind import detect_material_kind
 from core.material_profiles import material_profile_for
 
-from . import asset_enrichment, asset_resolver
+from . import asset_enrichment, asset_resolver, wuwa_texture_fallback
 
 # Kept for scripts that still inspect the low-level mesh-builder result.  These
 # keys are no longer emitted by load_mod's public application payload.
@@ -501,10 +501,7 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
         availability.get("configured_roots", 0) > 0
         and availability.get("ready_roots", 0)
         == availability.get("configured_roots", 0))
-    asset_enrichment.apply(
-        parsed.groups, bindings, include_not_found=complete_index,
-        mod_dir=context.mod_dir,
-        dds_classification_cache=context.dds_classification_cache)
+    _apply_texture_enrichment(parsed, context, bindings, complete_index)
     return {
         "meshes": build_mesh_semantics(
             parsed.groups, context.mod_dir, game_profile=parsed.game.game,
@@ -521,6 +518,18 @@ def _register_material_profile(table, profile):
     if existing is not None and existing != metadata:
         raise RuntimeError(f"Material profile ID collision: {profile.id}")
     table[profile.id] = metadata
+
+
+def _apply_texture_enrichment(parsed, context, bindings, complete_index):
+    """Run all semantic texture enrichment in the shared load order."""
+    asset_enrichment.apply(
+        parsed.groups, bindings, include_not_found=complete_index,
+        mod_dir=context.mod_dir,
+        dds_classification_cache=context.dds_classification_cache)
+    if str(getattr(parsed.game, "game", "")).casefold() == "wuwa":
+        wuwa_texture_fallback.apply(
+            parsed.groups, context.mod_dir,
+            dds_classification_cache=context.dds_classification_cache)
 
 
 def _assign_material_profiles(meshes, game):
@@ -701,10 +710,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             availability.get("configured_roots", 0) > 0
             and availability.get("ready_roots", 0)
             == availability.get("configured_roots", 0))
-        asset_enrichment.apply(
-            groups, bindings, include_not_found=complete_index,
-            mod_dir=context.mod_dir,
-            dds_classification_cache=context.dds_classification_cache)
+        _apply_texture_enrichment(parsed, context, bindings, complete_index)
         asset_resolution = asset_resolver.summarize_groups(
             groups, bindings, availability).to_dict()
 

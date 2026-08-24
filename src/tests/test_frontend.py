@@ -614,25 +614,16 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
         inspector = page.locator("#inspector-content")
-        assert inspector.locator(".inspector-asset-section").inner_text() == (
-            "ASSET MATCH\nAsset\nAlice\nType\nGIMI\nComponent\nBody\nObject\nB\n"
-            "Geometry hash\n73c8cae2\nRange\n43845 / 24\nComponent match\nExact\n"
-            "Range match\nExact\nMatch\nExact")
-        assert "Normal (automatic)\nAsset fallback" in inspector.inner_text()
-        assert "Diffuse (automatic)\nMod slot mapping" in inspector.inner_text()
-        assert "ps-t1" in inspector.locator(".inspector-slot-section").inner_text()
-        assert "Role\nUnknown" in inspector.locator(
-            ".inspector-slot-section").inner_text()
-        conflict = inspector.locator(
-            '.inspector-slot-evidence[data-conflict="true"]')
-        assert conflict.inner_text() == (
-            "ps-t2\nTexture\n22222222\nVS\n—\nPS\n—\nRole\nDiffuse\n"
-            "Role source\nMod slot mapping\nAsset hash role\nNormal\nConflict\nYes")
+        assert inspector.locator(".inspector-asset-section").count() == 0
+        assert inspector.locator(".inspector-slot-section").count() == 0
+        assert "Asset resolution" not in inspector.inner_text()
+        assert "Texture provenance" not in inspector.inner_text()
+        assert "Slot evidence" not in inspector.inner_text()
 
         page.locator(".inspector-texture-option", has_text="Asset two").click()
-        assert inspector.locator(
-            '[data-provenance-kind="viewer"] .inspector-value').inner_text() == (
-                "Viewer override (diffuse::Asset-two.png)")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.manualTexOverride") == (
+                "diffuse::Asset-two.png")
         page.locator("#health-btn").click()
         page.locator("#health-modal-backdrop.show").wait_for()
         assert page.locator("#health-asset-summary").inner_text() == (
@@ -640,7 +631,7 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         page.locator("#health-close").click()
 
         page.locator(".group-hdr .group-name").first.click()
-        assert "1 of 1 matched" in inspector.inner_text()
+        assert "Asset resolution" not in inspector.inner_text()
     finally:
         context.close()
 
@@ -692,7 +683,8 @@ def test_asset_diagnostics_refresh_with_semantic_updates(
         page.locator(".draw-item").wait_for()
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
-        assert "Alice" in page.locator(".inspector-asset-section").inner_text()
+        inspector = page.locator("#inspector-content")
+        assert inspector.locator(".inspector-asset-section").count() == 0
 
         page.evaluate("""() => {
           const state = window.__fakeApi;
@@ -720,15 +712,13 @@ def test_asset_diagnostics_refresh_with_semantic_updates(
         }""")
         page.evaluate("window.modViewer.refreshMeshSemantics()")
         page.wait_for_function(
-            "document.querySelector('#inspector-content')?.innerText.includes('Not found')")
-        assert "Normal (automatic)\nMod" in page.locator(
-            "#inspector-content").inner_text()
+            "document.querySelector('#inspector-content .inspector-material-kind-control')")
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].userData.assetEntry"
             ".asset_binding.status === 'not_found'")
         assert page.locator(".asset-draw-label").count() == 0
-        assert "Match\nNot found" in page.locator(
-            ".inspector-asset-section").inner_text()
+        assert inspector.locator(".inspector-asset-section").count() == 0
+        assert "Not found" not in inspector.inner_text()
         assert page.locator(".asset-component-label").inner_text() == (
             "Asset: Partial")
         page.locator("#health-btn").click()
@@ -3725,11 +3715,27 @@ def test_inspector_follows_component_and_mesh_selection(
         page.locator("#inspector-tab").click()
         page.locator(".group-hdr .group-name").first.click()
         page.locator("#inspector-content").wait_for()
-        assert "Draw calls" in page.locator("#inspector-content").inner_text()
+        inspector = page.locator("#inspector-content")
+        assert "Draw calls" not in inspector.inner_text()
+        assert inspector.locator(".inspector-header h3").inner_text() == "Body A"
+        assert inspector.locator(".inspector-context").inner_text() == (
+            "1 mesh · 1 visible")
+        assert inspector.locator(".inspector-section-title").all_inner_texts() == [
+            "MATERIAL", "TEXTURES"]
+        assert inspector.locator(".inspector-manage-textures").count() == 1
         assert page.locator("#inspector-empty").is_hidden()
 
         page.locator(".draw-item").first.click()
-        assert page.locator("#inspector-content .inspector-header h3").inner_text()
+        assert inspector.locator(".inspector-header h3").inner_text()
+        assert inspector.locator(".inspector-context").inner_text() == "Body A"
+        assert inspector.locator(".inspector-section-title").all_inner_texts() == [
+            "MATERIAL", "TEXTURE"]
+        assert "State" not in inspector.inner_text()
+        assert "Material kind" not in inspector.inner_text()
+        assert "Texture provenance" not in inspector.inner_text()
+        assert "Slot evidence" not in inspector.inner_text()
+        assert "Draw" not in inspector.inner_text()
+        assert "Resolved" not in inspector.inner_text()
         assert "Body A >" in page.locator("#selected-mesh-status").inner_text()
         assert page.locator(".draw-item.selected").count() == 1
         page.evaluate("import('./js/selection.js').then(({clearSelection}) => clearSelection())")
@@ -3739,11 +3745,13 @@ def test_inspector_follows_component_and_mesh_selection(
         page.locator(".group-hdr .group-name").first.click()
         assert page.locator(".draw-item.selected").count() == 0
         assert "selected" in page.locator(".group-hdr").first.get_attribute("class")
-        assert page.locator("#inspector-content .inspector-row", has_text="1 of 1").count() == 1
+        assert inspector.locator(".inspector-context").inner_text() == (
+            "1 mesh · 1 visible")
         assert page.locator("#inspector-empty").is_hidden()
 
         page.locator(".draw-item .mesh-state-btn").first.click()
-        assert page.locator("#inspector-content .inspector-row", has_text="0 of 1").count() == 1
+        assert inspector.locator(".inspector-context").inner_text() == (
+            "1 mesh · 0 visible")
         eye = page.locator(".draw-item .mesh-state-btn").first
         assert eye.get_attribute("aria-pressed") == "false"
         assert "state-hidden" in eye.get_attribute("class")
@@ -3751,7 +3759,8 @@ def test_inspector_follows_component_and_mesh_selection(
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].userData.manuallyToggled") is True
         page.locator("#reset-state-btn").click()
-        assert page.locator("#inspector-content .inspector-row", has_text="1 of 1").count() == 1
+        assert inspector.locator(".inspector-context").inner_text() == (
+            "1 mesh · 1 visible")
         assert eye.get_attribute("aria-pressed") == "true"
         assert "state-hidden" not in eye.get_attribute("class")
         assert "state-manual" not in eye.get_attribute("class")

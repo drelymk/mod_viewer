@@ -1011,17 +1011,25 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 #inspector-content { min-height: 0; overflow-y: auto; }
 .inspector-header { padding-bottom: 11px; border-bottom: 1px solid var(--border); }
-.inspector-kicker, .inspector-section-title {
+.inspector-header h3 { margin: 0; color: var(--text); font-size: 15px; overflow-wrap: anywhere; }
+.inspector-context {
+  display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px;
+}
+.inspector-section-title {
   color: var(--text-muted); font-size: 9px; font-weight: 700;
   letter-spacing: .1em; text-transform: uppercase;
 }
-.inspector-header h3 { margin-top: 4px; color: var(--text); font-size: 15px; overflow-wrap: anywhere; }
-.inspector-section { display: flex; flex-direction: column; gap: 7px; padding: 12px 0; border-bottom: 1px solid rgba(48,54,61,.72); }
+.inspector-section { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-bottom: 1px solid rgba(48,54,61,.72); }
 .inspector-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 11px; }
 .inspector-label { color: var(--text-muted); }
 .inspector-value { color: var(--text); text-align: right; overflow-wrap: anywhere; }
 .inspector-muted { color: var(--text-muted); font-size: 11px; }
-.inspector-material-kind-control { width: 100%; min-height: 30px; }
+.inspector-material-section .inspector-section-title { font-size: 10px; }
+.inspector-material-kind-control {
+  width: 100%; min-height: 34px; color: var(--text); background: var(--surface-raised);
+  border: 1px solid rgba(139,148,158,.62); border-radius: var(--radius-sm);
+}
+.inspector-texture-count { color: var(--text-muted); font-size: 11px; }
 .inspector-manage-textures { width: 100%; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); }
 .inspector-manage-textures:hover { background: var(--surface-hover); }
 .inspector-texture-list { display: flex; flex-direction: column; gap: 4px; }
@@ -1033,13 +1041,6 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .inspector-texture-option:hover, .inspector-texture-option.selected {
   color: var(--accent-soft); border-color: var(--accent-soft); background: var(--surface-active);
 }
-.inspector-slot-evidence {
-  display: flex; flex-direction: column; gap: 5px; padding: 7px 8px;
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--bg-canvas);
-}
-.inspector-slot-evidence[data-conflict="true"] { border-color: var(--accent-soft); }
-.inspector-slot-name { color: var(--accent-soft); font-size: 11px; font-weight: 600; }
 
 #mod-folder-empty[hidden] { display: none; }
 #mod-folder-empty .ui-button { margin-top: 5px; }
