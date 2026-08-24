@@ -225,21 +225,25 @@ def load_expected_labels(corpus_dir):
 
 def _merge_candidate_maps(target, source):
     for key, values in source.items():
-        by_sha = {row["texture_sha256"]: row for row in target[key]}
-        for value in values:
-            existing = by_sha.get(value["texture_sha256"])
-            if existing is None:
-                target[key].append(value)
-                by_sha[value["texture_sha256"]] = value
-                continue
-            for field in ("relative_files", "association_kinds",
-                          "association_tiers", "filename_tags", "roles"):
-                existing[field].update(value[field])
-            existing["association_rank"] = min(
-                existing["association_rank"], value["association_rank"])
-            existing["association_kind"] = min(
-                existing["association_kinds"],
-                key=lambda kind: ASSOCIATION_RANKS[kind])
+        _merge_candidate_values(target[key], values)
+
+
+def _merge_candidate_values(target, values):
+    by_sha = {row["texture_sha256"]: row for row in target}
+    for value in values:
+        existing = by_sha.get(value["texture_sha256"])
+        if existing is None:
+            target.append(value)
+            by_sha[value["texture_sha256"]] = value
+            continue
+        for field in ("relative_files", "association_kinds",
+                      "association_tiers", "filename_tags", "roles"):
+            existing[field].update(value[field])
+        existing["association_rank"] = min(
+            existing["association_rank"], value["association_rank"])
+        existing["association_kind"] = min(
+            existing["association_kinds"],
+            key=lambda kind: ASSOCIATION_RANKS[kind])
 
 
 def _merge_expected_labels(target, source):
@@ -273,16 +277,25 @@ def _case_mod_ids(case):
 
 def _case_candidates(case, candidates):
     mod_ids = _case_mod_ids(case)
+    matched = []
+    merged = []
     for mod_id in mod_ids:
         key = (mod_id, case["component"])
         if key in candidates:
-            return mod_id, candidates[key]
-    return (mod_ids[0] if mod_ids else ""), []
+            matched.append(mod_id)
+            _merge_candidate_values(merged, candidates[key])
+    return matched, merged
 
 
 def _expected_for_case(case, candidates, expected_labels):
-    mod_id = case.get("resolved_mod_id") or case.get("mod_id")
-    key = (mod_id, case["component"])
+    mod_ids = case.get("resolved_mod_ids") or [
+        case.get("resolved_mod_id") or case.get("mod_id")
+    ]
+    target_labels = set()
+    for mod_id in mod_ids:
+        if mod_id:
+            target_labels.update(expected_labels.get(
+                (mod_id, case["component"]), set()))
     if case.get("expected_status") == "unresolved":
         if not candidates:
             return {"kind": "unavailable", "texture_shas": set(),
@@ -290,11 +303,16 @@ def _expected_for_case(case, candidates, expected_labels):
         return {"kind": "unresolved", "texture_shas": set(),
                 "description": "expected unresolved"}
     if case.get("expected_status") == "ambiguous":
-        target = set(expected_labels.get(key, set()))
-        if not target:
+        available = target_labels & {
+            candidate["texture_sha256"] for candidate in candidates
+        }
+        if len(target_labels) < 2:
             return {"kind": "unavailable", "texture_shas": set(),
-                    "description": "ambiguous diffuse labels not in corpus"}
-        return {"kind": "ambiguous", "texture_shas": target,
+                    "description": "fewer than two ambiguous diffuse labels"}
+        if len(available) < 2:
+            return {"kind": "unavailable", "texture_shas": target_labels,
+                    "description": "fewer than two ambiguous labels are candidates"}
+        return {"kind": "ambiguous", "texture_shas": available,
                 "description": "expected abstention for legitimate ambiguity"}
     explicit_shas = _as_set(case.get("expected_texture_sha256"))
     if explicit_shas:
@@ -313,7 +331,7 @@ def _expected_for_case(case, candidates, expected_labels):
                 return {"kind": "unavailable", "texture_shas": set(),
                         "description": description + " not in corpus"}
         elif case.get("expected_label") == "diffuse":
-            target = set(expected_labels.get(key, set()))
+            target = target_labels
             description = "trusted diffuse component label"
             if not target:
                 return {"kind": "unavailable", "texture_shas": set(),
@@ -496,9 +514,16 @@ def evaluate_corpus(corpus_dir, model_path, cases_path, *, min_score=0.5):
     baseline = []
     policy_results = {}
     for case in cases:
-        resolved_mod_id, candidates_for_case = _case_candidates(
+        resolved_mod_ids, candidates_for_case = _case_candidates(
             case, candidates)
-        resolved_case = {**case, "resolved_mod_id": resolved_mod_id}
+        resolved_mod_id = ("|".join(resolved_mod_ids)
+                           if resolved_mod_ids
+                           else (_case_mod_ids(case) or [""])[0])
+        resolved_case = {
+            **case,
+            "resolved_mod_id": resolved_mod_id,
+            "resolved_mod_ids": resolved_mod_ids,
+        }
         expected = _expected_for_case(
             resolved_case, candidates_for_case, expected_labels)
         expected = {
@@ -508,6 +533,7 @@ def evaluate_corpus(corpus_dir, model_path, cases_path, *, min_score=0.5):
         row = {
             "name": case["name"],
             "mod_id": resolved_mod_id,
+            "mod_ids": resolved_mod_ids,
             "component": case["component"],
             "expected": expected,
         }
@@ -520,17 +546,17 @@ def evaluate_corpus(corpus_dir, model_path, cases_path, *, min_score=0.5):
             results = baseline
         else:
             results = []
-            for base in baseline:
+            for case, base in zip(cases, baseline):
                 expected = {
                     "kind": base["expected"]["kind"],
                     "texture_shas": set(base["expected"]["texture_shas"]),
                     "description": base["expected"]["description"],
                 }
-                candidates_for_case = candidates.get(
-                    (base["mod_id"], base["component"]), [])
+                _resolved_mod_ids, candidates_for_case = _case_candidates(
+                    case, candidates)
                 results.append({
                     **{key: base[key] for key in
-                       ("name", "mod_id", "component", "expected")},
+                       ("name", "mod_id", "mod_ids", "component", "expected")},
                     **resolve_case(candidates_for_case, expected, policy,
                                    min_score=min_score),
                 })
