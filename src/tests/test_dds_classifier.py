@@ -157,7 +157,7 @@ def test_channel_dominant_color_data_is_not_diffuse(tmp_path, monkeypatch):
     assert result.role is None
 
 
-def test_restricted_palette_is_not_diffuse_despite_spatial_detail(
+def test_dominant_channel_palette_can_be_diffuse_with_spatial_detail(
         tmp_path, monkeypatch):
     image = Image.new("RGB", (8, 8))
     image.putdata([
@@ -172,7 +172,8 @@ def test_restricted_palette_is_not_diffuse_despite_spatial_detail(
 
     result = dds_classifier.classify_dds(tmp_path / "restricted.dds")
 
-    assert result.role is None
+    assert result.role == "diffuse"
+    assert result.confidence == "high"
     assert result.texture_class == "color"
 
 

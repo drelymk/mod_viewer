@@ -998,7 +998,7 @@ def test_wwmi_hash_replacement_is_component_diagnostic_without_role_guess(
     assert draw.asset_texture_defaults == {}
 
 
-def test_dds_classification_cache_is_reused_for_semantic_refresh(
+def test_wwmi_textureusage_does_not_trigger_dds_classification(
         tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     mod_dir = tmp_path / "mod"

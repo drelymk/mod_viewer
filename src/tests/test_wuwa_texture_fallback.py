@@ -61,6 +61,25 @@ def test_no_asset_component_fallback_prefers_exact_filename_candidate(
     assert draw.asset_binding is None
 
 
+def test_component_priority_prefers_leading_target_over_shorter_shared_list(
+        tmp_path, monkeypatch):
+    shared = _replacement(
+        tmp_path, "aaaaaaaa", "Components-0-1-2-3 t=shared.dds")
+    leading = _replacement(
+        tmp_path, "bbbbbbbb", "Components-1-2-4-5-7 t=leading.dds")
+    _classify(monkeypatch, {
+        shared.file: "diffuse", leading.file: "diffuse",
+    })
+    draw = DrawCall()
+
+    apply([_group("Component1", TextureOverrideIndex(
+        replacements_by_hash={"aaaaaaaa": (shared,),
+                              "bbbbbbbb": (leading,)}), draw)],
+        str(tmp_path))
+
+    assert draw.texture_default("diffuse") == leading.file
+
+
 def test_filename_tag_is_opaque_and_does_not_need_to_match_ini_hash(
         tmp_path, monkeypatch):
     first = _replacement(
@@ -225,6 +244,36 @@ def test_loader_runs_wuwa_fallback_without_asset_configuration(
 
     assert draw.texture_default("diffuse") == replacement.file
     assert draw.texture_provenance == {"diffuse": "wuwa_filename_dds"}
+
+
+def test_wuwa_fallback_reuses_cache_across_semantic_refresh(
+        tmp_path, monkeypatch):
+    replacement = _replacement(
+        tmp_path, "aaaaaaaa", "Components-0 t=cache.dds")
+    calls = []
+    _classify(monkeypatch, {replacement.file: "diffuse"}, calls)
+    index = TextureOverrideIndex(
+        replacements_by_hash={"aaaaaaaa": (replacement,)})
+    context = mod_loader.ModLoadContext(str(tmp_path), [], {}, {})
+
+    def parsed(draw):
+        return mod_loader.ParsedModAnalysis(
+            groups=[_group("Component0", index, draw)],
+            toggles={}, menu={}, defaults={}, state_rules=[], present={},
+            game=SimpleNamespace(game="wuwa"),
+        )
+
+    first = DrawCall()
+    second = DrawCall()
+    binding = [AssetComponentBinding(status="not_found")]
+    mod_loader._apply_texture_enrichment(
+        parsed(first), context, [binding], complete_index=False)
+    mod_loader._apply_texture_enrichment(
+        parsed(second), context, [binding], complete_index=False)
+
+    assert calls == ["Components-0 t=cache.dds"]
+    assert first.texture_default("diffuse") == replacement.file
+    assert second.texture_default("diffuse") == replacement.file
 
 
 def test_wwmi_asset_json_does_not_change_filename_texture_result(

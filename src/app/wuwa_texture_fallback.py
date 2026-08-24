@@ -28,7 +28,7 @@ _INFERRED_ROLES = frozenset(("diffuse", "normal_map"))
 @dataclass(frozen=True, slots=True)
 class _FilenameReplacement:
     replacement: object
-    components: frozenset[int]
+    components: tuple[int, ...]
     specificity: int
     filename_tag: str
 
@@ -37,7 +37,7 @@ class _FilenameReplacement:
 class _Candidate:
     original_hash: str
     role: str
-    specificity: int
+    priority: tuple[int, int]
     classification: DDSClassification
 
 
@@ -61,6 +61,18 @@ def _basename(filename):
     return str(filename).replace("\\", "/").rsplit("/", 1)[-1]
 
 
+def _component_priority(components, ordinal):
+    if ordinal not in components:
+        return None
+    if components == (ordinal,):
+        tier = 0
+    elif components[0] == ordinal:
+        tier = 1
+    else:
+        tier = 2
+    return tier, len(components)
+
+
 def _parse_filename_replacement(replacement):
     filename = replacement.file
     if not isinstance(filename, str):
@@ -68,7 +80,7 @@ def _parse_filename_replacement(replacement):
     match = _WUWA_COMPONENT_TEXTURE_RE.fullmatch(_basename(filename))
     if not match:
         return None
-    components = frozenset(
+    components = tuple(
         int(value) for value in match.group("components").split("-"))
     if not components:
         return None
@@ -100,7 +112,8 @@ def _classify_candidate_family(original_hash, items, ordinal, mod_dir, cache):
     """Return one role candidate when a hash family is unambiguous."""
     if not items or any(item is None for item in items):
         return None
-    if any(ordinal not in item.components for item in items):
+    if any(_component_priority(item.components, ordinal) is None
+           for item in items):
         return None
 
     classified = []
@@ -126,13 +139,16 @@ def _classify_candidate_family(original_hash, items, ordinal, mod_dir, cache):
         if classification.role == role
     ]
     _strongest_item, strongest_classification = min(
-        role_items, key=lambda pair: pair[0].specificity)
+        role_items,
+        key=lambda pair: _component_priority(pair[0].components, ordinal))
     return _Candidate(
         # Keep the index key as the TextureOverride identity. The filename's
         # opaque tag and replacement object cannot define that identity.
         original_hash=original_hash,
         role=role,
-        specificity=min(item.specificity for item, _ in role_items),
+        priority=min(
+            _component_priority(item.components, ordinal)
+            for item, _ in role_items),
         classification=strongest_classification,
     )
 
@@ -150,10 +166,10 @@ def _select_candidates(ordinal, mod_dir, cache, parsed_index):
         role_candidates = [item for item in candidates if item.role == role]
         if not role_candidates:
             continue
-        specificity = min(item.specificity for item in role_candidates)
+        priority = min(item.priority for item in role_candidates)
         strongest = [
             item for item in role_candidates
-            if item.specificity == specificity
+            if item.priority == priority
         ]
         hashes = {item.original_hash for item in strongest}
         if len(hashes) != 1:

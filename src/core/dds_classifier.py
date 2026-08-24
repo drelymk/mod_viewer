@@ -153,20 +153,30 @@ def _decoded_classification(info, image):
         ordered_means = sorted(normalized_means)
         strong_channel_dominance = (
             ordered_means[-1] >= 0.75 and ordered_means[-2] <= 0.25)
-        restricted_palette = (
-            stats["dominant_channel_fraction"] >= 0.95)
-        diffuse_layout = (
-            stats["black_fraction"] < 0.30
-            and stats["gray_fraction"] < 0.45
-            and min(deviations) >= 32
+        diffuse_variation = (
+            min(deviations) >= 32
             and chroma >= 40
-            and stats["color_entropy"] >= 3.5
             and stats["quantized_occupancy"] >= 32
-            and stats["spatial_detail"] >= 4
             and not strong_channel_dominance
-            and not restricted_palette
         )
-        if diffuse_layout:
+        diffuse_layout = (
+            diffuse_variation
+            and stats["black_fraction"] < 0.30
+            and stats["gray_fraction"] < 0.45
+            and stats["color_entropy"] >= 3.5
+            and stats["spatial_detail"] >= 4
+        )
+        # Some base-color atlases use a dark or grayscale background while
+        # retaining strong channel variation and spatial texture. Those
+        # properties are diffuse evidence even when palette entropy is low;
+        # dominant-channel mean encoding remains rejected above.
+        structured_atlas_layout = (
+            diffuse_variation
+            and stats["black_fraction"] < 0.60
+            and stats["gray_fraction"] < 0.60
+            and stats["spatial_detail"] >= 20
+        )
+        if diffuse_layout or structured_atlas_layout:
             return DDSClassification(
                 "diffuse", "color", "high",
                 (f"format:{info.format}", "color_complexity",
