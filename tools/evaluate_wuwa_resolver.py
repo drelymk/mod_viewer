@@ -51,7 +51,7 @@ ASSOCIATION_THRESHOLDS = {
     "direct": 0.50,
     "exact": 0.80,
     "leading": 0.70,
-    "contains": 0.85,
+    "contains": 0.999,
     "pool": 0.80,
     "inventory": 0.90,
     "unknown": 0.90,

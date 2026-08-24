@@ -7,31 +7,31 @@
   },
   {
     "name": "QingXiao Component0 reported diffuse assignment",
-    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "mod_id": ".",
     "component": "Component0",
     "expected_filename_tag": "7cfe3ff0"
   },
   {
     "name": "QingXiao Component1 reported diffuse assignment",
-    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "mod_id": ".",
     "component": "Component1",
     "expected_filename_tag": "78b458d2"
   },
   {
     "name": "QingXiao Component2 reported diffuse assignment",
-    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "mod_id": ".",
     "component": "Component2",
     "expected_filename_tag": "3b5ef0bf"
   },
   {
     "name": "QingXiao Component5 reported diffuse assignment",
-    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "mod_id": ".",
     "component": "Component5",
     "expected_filename_tag": "3fe74f13"
   },
   {
     "name": "QingXiao Component6 unresolved assignment",
-    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "mod_id": ".",
     "component": "Component6",
     "expected_status": "unresolved"
   },
