@@ -992,11 +992,8 @@ def test_wwmi_hash_replacement_is_component_diagnostic_without_role_guess(
     assert draw.asset_slot_evidence == [{
         "slot": 3, "texture_hash": "553ed32b",
         "vs_hash": "aaaaaaaa", "ps_hash": "bbbbbbbb",
-        "replacement_resource": "ResourceTexture0",
-        "replacement_file": "textures/texture0.dds",
-        "replacement_conditions": [],
-        "source": "mod_texture_hash",
     }]
+    assert draw.texture_default("diffuse") is None
     assert draw.texture_provenance == {}
     assert draw.asset_texture_defaults == {}
 
@@ -1042,9 +1039,9 @@ def test_dds_classification_cache_is_reused_for_semantic_refresh(
     apply([{"draws": [second]}], [[binding]], texture_index=index,
          mod_dir=str(mod_dir), dds_classification_cache=cache)
 
-    assert len(calls) == 1
-    assert first.texture_default("diffuse") == "textures/replacement.dds"
-    assert second.texture_default("diffuse") == "textures/replacement.dds"
+    assert calls == []
+    assert first.texture_default("diffuse") is None
+    assert second.texture_default("diffuse") is None
 
 
 def test_roleless_gimi_hash_uses_generic_dds_fallback(tmp_path, monkeypatch):
@@ -1162,10 +1159,10 @@ def test_wwmi_replacements_use_component_local_dds_roles(tmp_path, monkeypatch):
     apply([{"draws": [draw]}], [[binding]], texture_index=index,
          mod_dir=str(mod_dir))
 
-    assert draw.texture_default("diffuse") == "diffuse.dds"
-    assert draw.texture_default("normal_map") == "normal.dds"
-    assert {item["role_source"] for item in draw.asset_slot_evidence
-            if item.get("role")} == {"dds_analysis"}
+    assert draw.texture_default("diffuse") is None
+    assert draw.texture_default("normal_map") is None
+    assert {item["texture_hash"] for item in draw.asset_slot_evidence} == {
+        "11111111", "22222222"}
 
 
 def test_asset_fallback_uses_trusted_source_and_keeps_diagnostic(tmp_path):

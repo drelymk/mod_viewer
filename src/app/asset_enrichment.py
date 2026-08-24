@@ -506,22 +506,26 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                                     or "mod_slot_mapping"),
                             })
                             known_roles.add(item.role_hint)
-                            role_hint_evidence.append(
-                                TextureSemanticEvidence(
-                                    item.role_hint, usage["texture_hash"],
-                                    source=(item.role_hint_source
-                                           or "mod_slot_mapping")))
+                            # The slot mapping remains diagnostic and the
+                            # parsed mod binding remains authoritative. Do
+                            # not bridge WWMI TextureUsage hashes into the
+                            # replacement/rendering evidence path.
                         draw.asset_slot_evidence.append(slot_evidence)
                 for usage_values in slots.values():
                     for usage in usage_values:
-
                         texture_hash = usage["texture_hash"]
                         contexts = diagnostic_contexts.setdefault(
                             texture_hash, [])
                         if usage not in contexts:
                             contexts.append(usage)
-                        roleless_evidence.append(TextureSemanticEvidence(
-                            None, texture_hash, source="asset_slot_usage"))
+                        if not any(
+                                item.get("texture_hash") == texture_hash
+                                and item.get("slot") == usage.get("slot")
+                                for item in draw.asset_slot_evidence):
+                            draw.asset_slot_evidence.append(dict(usage))
+                        # WWMI TextureUsage is diagnostic context only. WuWa
+                        # render-role recovery is owned by the component
+                        # filename + DDS fallback, not Asset JSON.
 
             # Raw slot hashes provide diagnostic context for every adapter.
             # Only an Asset-proven association may trigger DDS role recovery;

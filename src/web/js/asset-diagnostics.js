@@ -14,6 +14,7 @@ const PROVENANCE_LABELS = Object.freeze({
   mod_slot_semantic: 'Mod slot mapping',
   mod_slot_legacy: 'Legacy slot mapping',
   mod_texture_hash: 'Mod hash match',
+  wuwa_filename_dds: 'WuWa filename + DDS analysis',
   asset_original_fallback: 'Asset fallback',
   unresolved: 'Not resolved',
 });
