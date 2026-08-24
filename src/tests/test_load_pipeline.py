@@ -16,6 +16,7 @@ from app.asset_resolver import AssetComponentBinding
 from app.api import ModViewerAPI
 from core.ini_analysis import analyze_ini
 from core.ini_document import IniDocument
+from core.ini_parser import TextureOverrideIndex, TextureReplacement
 from core.ini_sections import (extract_resources, sections_from_document)
 from core.draw_call import DrawCall
 from core.mesh_builder import (GeometryBlob, MeshBuildResult,
@@ -106,6 +107,62 @@ def test_geometry_blob_bypasses_base64_intermediate():
                 and loaded_entry["material_kind_reliable"] is False
                 and loaded_entry["material_profile_id"] == "none"), ("mesh material identity is assigned conservatively")
         assert set(loaded["metadata"]["material_profiles"]) == {"none"}, ("profile metadata is deduplicated at payload scope")
+
+
+def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
+        tmp_path):
+    (tmp_path / "Components-0 t=candidate.dds").write_bytes(
+        b"synthetic texture")
+    (tmp_path / "existing.dds").write_bytes(b"synthetic texture")
+    (tmp_path / "p.buf").write_bytes(struct.pack(
+        "<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
+    (tmp_path / "t.buf").write_bytes(struct.pack(
+        "<6f", 0, 0, 1, 0, 0, 0))
+    (tmp_path / "i.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
+
+    replacement = TextureReplacement(
+        "aaaaaaaa", "ResourceCandidate", (),
+        "TextureOverrideGenerated", "Components-0 t=candidate.dds")
+    draw = DrawCall(
+        label="Component0-1", count=3, start=0, base=0,
+        ib_file="i.buf", index_size=4,
+        position_file="p.buf", position_stride=12,
+        texcoord_file="t.buf", texcoord_stride=8,
+        texture_default_file="existing.dds")
+    group = {
+        "name": "Component0", "display_name": "Component0",
+        "position_file": "p.buf", "position_stride": 12,
+        "texcoord_file": "t.buf", "texcoord_stride": 8,
+        "ib_file": "i.buf", "index_size": 4,
+        "diffuse_pool_files": [{"res": "ResourceExisting",
+                                 "file": "existing.dds"}],
+        "draws": [draw],
+        "_texture_override_index": TextureOverrideIndex(
+            replacements_by_hash={"aaaaaaaa": (replacement,)}),
+    }
+    parsed = mod_loader.ParsedModAnalysis(
+        groups=[group], toggles={}, menu={}, defaults={}, state_rules=[],
+        present={}, game=SimpleNamespace(game="wuwa"))
+    context = mod_loader.ModLoadContext(str(tmp_path), [], {}, {})
+
+    mod_loader._apply_texture_enrichment(
+        parsed, context, [[]], complete_index=False)
+
+    def register(path, role, transform=None):
+        return f"/texture/{role}/{os.path.basename(path)}"
+
+    built = build_mesh_result(
+        parsed.groups, str(tmp_path), geometry=GeometryBlob(),
+        texture_source=register, game_profile="wuwa")
+    payload = {"meshes": built.meshes, "textures": built.textures}
+    metadata.hydrate_textures(
+        str(tmp_path), payload, texture_profile="wuwa")
+
+    entry = payload["meshes"]["Component0-1"]
+    pool = payload["texture_pools"][entry["texture_pool_id"]]
+    assert entry["tex_key"] == "diffuse::existing.dds"
+    assert [item["file"] for item in pool] == [
+        "existing.dds", "Components-0 t=candidate.dds"]
 
 
 def test_mesh_semantics_include_conditional_texture_roles_without_geometry(
