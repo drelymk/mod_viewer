@@ -29,7 +29,7 @@ def _group(root, *, normals=("normal.dds",)):
              "source": "wuwa_filename_analysis", "priority": (1, 1, 2)},
             *[
                 {"file": filename, "role": "normal_map",
-                 "source": "wuwa_filename_analysis", "priority": (1, 0, 1)}
+                 "source": "wuwa_direct_analysis", "priority": (0, 0, 0)}
                 for filename in normals
             ],
         ],

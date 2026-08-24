@@ -69,15 +69,24 @@ def _file_key(path):
     return os.path.normcase(os.path.normpath(path))
 
 
-def _analysis_roles(classification):
-    """Map structural analysis to roles the contextual resolver may use."""
+def _is_strong_normal_candidate(classification):
+    return (classification.role == "normal_map"
+            and classification.confidence == "high")
+
+
+def _direct_analysis_roles(classification):
+    """Map direct draw evidence to roles the contextual resolver may use."""
     roles = []
-    if (classification.role == "normal_map"
-            and classification.confidence == "high"):
+    if _is_strong_normal_candidate(classification):
         roles.append("normal_map")
     if is_color_candidate(classification):
         roles.append("diffuse")
     return tuple(roles)
+
+
+def _filename_analysis_roles(classification):
+    """Filename association is allowed to produce Diffuse candidates only."""
+    return ("diffuse",) if is_color_candidate(classification) else ()
 
 
 def _direct_dds_candidates(draw, mod_dir, cache):
@@ -94,7 +103,7 @@ def _direct_dds_candidates(draw, mod_dir, cache):
         if path is None:
             continue
         classification = _cached_dds_classification(path, cache)
-        for role in _analysis_roles(classification):
+        for role in _direct_analysis_roles(classification):
             key = (role, _file_key(path))
             candidates.setdefault(key, _Candidate(
                 original_hash=None,
@@ -182,7 +191,7 @@ def _classify_candidate_family(original_hash, items, ordinal, mod_dir, cache):
     role_items = [
         (item, classification, role)
         for item, classification in classified
-        for role in _analysis_roles(classification)
+        for role in _filename_analysis_roles(classification)
     ]
     roles = {role for _item, _classification, role in role_items}
     if len(roles) != 1:
@@ -214,7 +223,7 @@ def _filename_inventory(ordinal, mod_dir, cache, parsed_index):
             continue
         for item, classification in classified:
             priority = _filename_priority(item.components, ordinal)
-            for role in _analysis_roles(classification):
+            for role in _filename_analysis_roles(classification):
                 result.append(_Candidate(
                     original_hash=original_hash,
                     role=role,

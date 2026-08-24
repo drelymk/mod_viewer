@@ -621,7 +621,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     candidate_source=candidate.get("source"),
                     candidate_priority=candidate.get("priority"),
                 )
-            elif role == "normal_map":
+            elif (role == "normal_map"
+                  and candidate.get("source") == "wuwa_direct_analysis"):
                 key = _tex_key(path, normal_role)
                 if key:
                     discovered_normals[key] = key

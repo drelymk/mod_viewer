@@ -153,7 +153,8 @@ def test_direct_dds_binding_beats_filename_fallback(
         direct, fallback.file}
 
 
-def test_direct_and_filename_dds_roles_can_coexist(tmp_path, monkeypatch):
+def test_filename_normal_is_ignored_even_when_direct_diffuse_exists(
+        tmp_path, monkeypatch):
     direct = _direct_file(tmp_path, "direct.dds")
     normal = _replacement(
         tmp_path, "aaaaaaaa", "Components-4 t=normal.dds")
@@ -162,17 +163,30 @@ def test_direct_and_filename_dds_roles_can_coexist(tmp_path, monkeypatch):
     })
     draw = DrawCall(slot_textures=[SlotTextureBinding(
         0, "ResourceDirect", file=direct)])
+    group = _group("Component4", TextureOverrideIndex(
+        replacements_by_hash={"aaaaaaaa": (normal,)}), draw)
 
-    apply([_group("Component4", TextureOverrideIndex(
-        replacements_by_hash={"aaaaaaaa": (normal,)}), draw)],
-        str(tmp_path))
+    apply([group], str(tmp_path))
 
     assert draw.texture_default("diffuse") == direct
-    assert draw.texture_default("normal_map") == normal.file
-    assert draw.texture_provenance == {
-        "diffuse": "wuwa_direct_analysis",
-        "normal_map": "wuwa_filename_analysis",
-    }
+    assert draw.texture_default("normal_map") is None
+    assert draw.texture_provenance == {"diffuse": "wuwa_direct_analysis"}
+    assert [item["file"] for item in group["discovered_textures"]] == [direct]
+
+
+def test_direct_strong_normal_still_resolves_and_is_discovered(
+        tmp_path, monkeypatch):
+    normal = _direct_file(tmp_path, "direct-normal.dds")
+    _classify(monkeypatch, {"direct-normal.dds": "normal_map"})
+    draw = DrawCall(slot_textures=[SlotTextureBinding(
+        0, "ResourceNormal", file=normal)])
+    group = _group("Component4", None, draw)
+
+    apply([group], str(tmp_path))
+
+    assert draw.texture_default("normal_map") == normal
+    assert draw.texture_provenance == {"normal_map": "wuwa_direct_analysis"}
+    assert group["discovered_textures"][0]["file"] == normal
 
 
 def test_multiple_direct_files_with_one_role_are_ambiguous(
@@ -313,7 +327,7 @@ def test_different_roles_compete_per_role(tmp_path, monkeypatch):
         replacements_by_hash={"aaaaaaaa": (normal,), "bbbbbbbb": (diffuse,)}),
         draw)], str(tmp_path))
 
-    assert draw.texture_default("normal_map") == normal.file
+    assert draw.texture_default("normal_map") is None
     assert draw.texture_default("diffuse") == diffuse.file
 
 
@@ -369,10 +383,8 @@ def test_existing_role_is_preserved_while_missing_role_is_filled(
         draw)], str(tmp_path))
 
     assert draw.texture_default("diffuse") == existing
-    assert draw.texture_default("normal_map") == normal.file
-    assert draw.texture_provenance == {
-        "normal_map": "wuwa_filename_analysis",
-    }
+    assert draw.texture_default("normal_map") is None
+    assert draw.texture_provenance == {}
 
 
 def test_conditional_same_hash_family_keeps_all_variants(
