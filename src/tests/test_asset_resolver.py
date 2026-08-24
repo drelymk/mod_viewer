@@ -476,40 +476,55 @@ def test_unknown_group_keeps_same_root_asset_ambiguity(
     assert [item.asset_type for item in bindings[0]] == ["ZZMI", "ZZMI"]
 
 
-def test_component_name_selects_named_asset_from_same_root_ambiguity(
+def test_equivalent_hash_metadata_collapses_same_root_asset_records(
         tmp_path, monkeypatch):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
-    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
-    index = _index(root, asset_type="ZZMI", asset="Astra", first_index=0)
-    index["assets"][0]["geometry"][0].update({
-        "hash": "73c8cae2",
-        "ranges": [{"firstIndex": 0, "indexCount": None}],
-        "metadata": "Astra/hash.json",
-        "componentName": None,
-        "componentOrdinal": None,
-    })
-    index["assets"].append({
-        "path": "AstraChandelier",
-        "geometry": [{
-            "hash": "73c8cae2",
-            "ranges": [{"firstIndex": 0, "indexCount": 4368}],
-            "metadata": "AstraChandelier/hash.json",
-        }],
-    })
-    index["byGeometryHash"]["73c8cae2"] = [
-        {"asset": 0, "geometry": 0},
-        {"asset": 1, "geometry": 0},
-    ]
+    root = tmp_path / "zzmi"
+    entries = [{"type": "ZZMI", "path": str(root), "enabled": True}]
+    common = {
+        "ib": "73c8cae2",
+        "blend_vb": "blend",
+        "draw_vb": "draw",
+        "position_vb": "position",
+        "texcoord_vb": "texcoord",
+        "root_vs": "root",
+        "component_name": "Hair",
+        "object_indexes": [0, 4368],
+        "object_classifications": ["A", "B"],
+        "texture_hashes": [
+            [["Diffuse", ".dds", "11111111"]],
+            [["Diffuse", ".dds", "11111111"]],
+        ],
+    }
+    for asset, counts in (("Astra", None),
+                          ("AstraChandelier", [4368, 15783])):
+        asset_dir = root / asset
+        asset_dir.mkdir(parents=True)
+        payload = dict(common)
+        if counts is not None:
+            payload["object_index_counts"] = counts
+        (asset_dir / "hash.json").write_text(
+            json.dumps([payload]), encoding="utf-8")
+
+    index = asset_index.build_index("ZZMI", str(root))
+    fingerprints = {
+        geometry["componentFingerprint"]
+        for asset in index["assets"]
+        for geometry in asset["geometry"]
+    }
+    assert len(fingerprints) == 1
     monkeypatch.setattr(asset_index, "load_index",
                         lambda asset_type, path: index)
+    monkeypatch.setattr(
+        "builtins.open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("runtime resolution reread metadata")))
 
-    bindings = resolve_groups([{
-        "name": "AstraHairA",
-        "draws": [DrawCall(geometry_match=GeometryMatch("73c8cae2", 0))],
-    }], "zzz", entries)
+    binding = resolve_component(
+        GeometryMatch("73c8cae2", 0), "zzz", entries)
 
-    assert bindings[0][0].status == "exact"
-    assert bindings[0][0].asset == "Astra"
+    assert binding.status == "exact"
+    assert binding.asset == "Astra"
+    assert binding.metadata == "Astra/hash.json"
 
 
 def test_duplicate_records_with_same_canonical_identity_are_collapsed(

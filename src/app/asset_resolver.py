@@ -212,67 +212,54 @@ def _range_identity(candidate, item):
     )
 
 
-def _asset_name_prefix(asset_path, component_name):
-    """Return whether an Asset name is explicit in a mod component name."""
-    if not isinstance(asset_path, str) or not isinstance(component_name, str):
-        return False
-    asset_name = asset_path.replace("\\", "/").rsplit("/", 1)[-1]
-    if len(asset_name) < 3:
-        return False
-    return component_name.casefold().startswith(asset_name.casefold())
-
-
-def _named_ambiguous_binding(range_matches, geometry_match, asset_type,
-                             component_name):
-    """Resolve one same-root ambiguity only when the mod names the Asset.
-
-    A component label such as ``AstraHairA`` is positive evidence for the
-    ``Astra`` Asset, but it is not a general first-candidate rule. Keep
-    unresolved candidates ambiguous, including matches spanning roots or
-    multiple ranges within the named Asset.
-    """
-    if not isinstance(component_name, str) or not component_name:
+def _equivalent_matches(range_matches):
+    """Return a canonical match when indexed fingerprints agree."""
+    if not range_matches:
         return None
     roots = {candidate[0] for candidate, _item in range_matches}
     if len(roots) != 1:
         return None
-    named = [
-        (candidate, item)
-        for candidate, item in range_matches
-        if _asset_name_prefix(
-            candidate[1]["assets"][candidate[2]["asset"]].get("path"),
-            component_name)
-    ]
-    if not named:
+
+    fingerprints = []
+    known_counts = set()
+    for candidate, item in range_matches:
+        fingerprint = candidate[3].get("componentFingerprint")
+        if not isinstance(fingerprint, str) or not fingerprint:
+            return None
+        fingerprints.append((fingerprint, item))
+    range_shapes = {
+        (item.get("firstIndex"), item.get("classification"),
+         item.get("componentOrdinal"))
+        for _fingerprint, item in fingerprints
+    }
+    if len(range_shapes) != 1:
         return None
-    prefix_lengths = [
-        len(candidate[1]["assets"][candidate[2]["asset"]].get("path", ""))
-        for candidate, _item in named
-    ]
-    longest = max(prefix_lengths)
-    named = [
-        match for match, length in zip(named, prefix_lengths)
-        if length == longest
-    ]
-    if len(named) != 1:
+    for _fingerprint, item in fingerprints:
+        if item.get("indexCount") is not None:
+            known_counts.add(item["indexCount"])
+    if len(set(fingerprint for fingerprint, _item in fingerprints)) != 1:
         return None
-    (root, index, lookup, geometry, _ranges), item = named[0]
-    try:
-        return _binding(
-            root, index, geometry_match, lookup, geometry, item,
-            range_status="exact")
-    except (IndexError, KeyError, TypeError):
+    if len(known_counts) > 1:
         return None
+
+    return min(
+        range_matches,
+        key=lambda match: (
+            match[0][1]["assets"][match[0][2]["asset"]].get(
+                "path", "").casefold(),
+            match[0][1]["assets"][match[0][2]["asset"]].get(
+                "path", ""),
+            match[0][3].get("metadata", ""),
+        ),
+    )
 
 
 def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
-                                    *, require_range=False,
-                                    component_name=None):
+                                    *, require_range=False):
     if not isinstance(geometry_match, GeometryMatch):
         return _not_found(asset_type)
     if asset_type is None and not indexes:
         return _not_found()
-
     candidates = []
     seen = set()
     for root, index in indexes:
@@ -318,10 +305,15 @@ def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
             return _not_found(asset_type)
 
     if len(range_matches) > 1:
-        named_binding = _named_ambiguous_binding(
-            range_matches, geometry_match, asset_type, component_name)
-        if named_binding is not None:
-            return named_binding
+        equivalent = _equivalent_matches(range_matches)
+        if equivalent is not None:
+            (root, index, lookup, geometry, _ranges), item = equivalent
+            try:
+                return _binding(
+                    root, index, geometry_match, lookup, geometry, item,
+                    range_status="exact")
+            except (IndexError, KeyError, TypeError):
+                return _not_found(asset_type)
         matched_candidates = {
             (candidate[0], candidate[2].get("asset"),
              candidate[2].get("geometry"))
@@ -438,9 +430,8 @@ def resolve_groups(groups, game, asset_entries, *, availability=None):
     resolved = [[
         _resolve_component_from_indexes(
             (draw if isinstance(draw, GeometryMatch)
-             else getattr(draw, "geometry_match", None)), asset_type, indexes,
-            require_range=asset_type is None,
-            component_name=group.get("name"))
+            else getattr(draw, "geometry_match", None)), asset_type, indexes,
+            require_range=asset_type is None)
         for draw in group.get("draws", [])]
         for group in groups
     ]

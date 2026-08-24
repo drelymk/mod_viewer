@@ -11,7 +11,7 @@ from . import gimi, wwmi, zzmi
 from .models import AssetRecord
 
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 _HASH_GROUPS = frozenset({
     "enemydata",
     "miscellaneousdata",
@@ -247,6 +247,9 @@ def _merge_asset_records(records):
                 previous.metadata_path,
                 previous.detail_metadata_path or item.detail_metadata_path,
                 previous.component_name or item.component_name,
+                (previous.component_fingerprint
+                 if previous.component_fingerprint ==
+                 item.component_fingerprint else None),
             )
         merged[record.relative_path] = AssetRecord(
             record.relative_path,

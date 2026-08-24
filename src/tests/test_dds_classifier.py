@@ -157,6 +157,25 @@ def test_channel_dominant_color_data_is_not_diffuse(tmp_path, monkeypatch):
     assert result.role is None
 
 
+def test_restricted_palette_is_not_diffuse_despite_spatial_detail(
+        tmp_path, monkeypatch):
+    image = Image.new("RGB", (8, 8))
+    image.putdata([
+        ((index * 37) % 160,
+         (index * 53) % 160,
+         max((index * 37) % 160, (index * 53) % 160) + 30)
+        for index in range(64)])
+    info = DDSInfo(8, 8, 1, "bc7_srgb", True, True)
+    monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
+    monkeypatch.setattr(
+        dds_classifier, "load_texture_image", lambda _path, **_kwargs: image)
+
+    result = dds_classifier.classify_dds(tmp_path / "restricted.dds")
+
+    assert result.role is None
+    assert result.texture_class == "color"
+
+
 def test_tiny_texture_is_diagnostic_lookup_only(tmp_path, monkeypatch):
     info = DDSInfo(4, 4, 1, "bc7_srgb", True, True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)

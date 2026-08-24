@@ -46,6 +46,13 @@ def _channel_stats(image):
         for channel, mean in zip(channels, means))
     chroma = sum(max(pixel) - min(pixel) for pixel in pixels) / len(pixels)
     black_fraction = sum(max(pixel) <= 16 for pixel in pixels) / len(pixels)
+    non_black_pixels = [pixel for pixel in pixels if max(pixel) > 16]
+    dominant_counts = [0, 0, 0]
+    for pixel in non_black_pixels:
+        dominant_counts[max(range(3), key=pixel.__getitem__)] += 1
+    dominant_channel_fraction = (
+        max(dominant_counts) / len(non_black_pixels)
+        if non_black_pixels else 1.0)
     gray_fraction = sum(
         max(pixel) - min(pixel) <= 8 for pixel in pixels) / len(pixels)
     quantized = {
@@ -89,6 +96,7 @@ def _channel_stats(image):
         "deviations": deviations,
         "chroma": chroma,
         "black_fraction": black_fraction,
+        "dominant_channel_fraction": dominant_channel_fraction,
         "gray_fraction": gray_fraction,
         "quantized_occupancy": len(quantized),
         "color_entropy": color_entropy,
@@ -145,6 +153,8 @@ def _decoded_classification(info, image):
         ordered_means = sorted(normalized_means)
         strong_channel_dominance = (
             ordered_means[-1] >= 0.75 and ordered_means[-2] <= 0.25)
+        restricted_palette = (
+            stats["dominant_channel_fraction"] >= 0.95)
         diffuse_layout = (
             stats["black_fraction"] < 0.30
             and stats["gray_fraction"] < 0.45
@@ -154,6 +164,7 @@ def _decoded_classification(info, image):
             and stats["quantized_occupancy"] >= 32
             and stats["spatial_detail"] >= 4
             and not strong_channel_dominance
+            and not restricted_palette
         )
         if diffuse_layout:
             return DDSClassification(
