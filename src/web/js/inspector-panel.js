@@ -6,7 +6,7 @@ import { clearSelection } from './selection.js';
 import {
   assetMatchLabel, componentMatchLabel, normalizeAssetBinding,
   rangeMatchLabel, summarizeAssetBindings, textureProvenance,
-  textureRoleLabels,
+  textureRoleLabel, textureRoleLabels, textureRoleSourceLabel,
 } from './asset-diagnostics.js';
 
 const meshRecords = new WeakMap();
@@ -162,11 +162,21 @@ function buildSlotEvidenceSection(content, entry) {
   evidence.forEach(item => {
     const card = document.createElement('div');
     card.className = 'inspector-slot-evidence';
+    card.dataset.conflict = item.conflict ? 'true' : 'false';
     addText(card, 'inspector-slot-name', item.resource || 'Texture slot');
     addRow(card, 'Texture', item.texture_hash);
     addRow(card, 'VS', item.vs_hash);
     addRow(card, 'PS', item.ps_hash);
-    addRow(card, 'Role', item.role || 'Unknown');
+    addRow(card, 'Role', textureRoleLabel(item.role));
+    if (item.role_source) {
+      addRow(card, 'Role source', textureRoleSourceLabel(item.role_source));
+    }
+    if (item.texture_class) addRow(card, 'Texture class', item.texture_class);
+    if (item.confidence) addRow(card, 'Confidence', item.confidence);
+    if (item.asset_hash_role) {
+      addRow(card, 'Asset hash role', textureRoleLabel(item.asset_hash_role));
+    }
+    if (item.conflict) addRow(card, 'Conflict', 'Yes');
     section.appendChild(card);
   });
   content.appendChild(section);

@@ -1,6 +1,7 @@
 """WWMI Metadata.json parsing."""
 
 import json
+import hashlib
 import os
 
 from .models import AssetRecord, DrawRange, GeometryRecord
@@ -8,6 +9,18 @@ from .models import AssetRecord, DrawRange, GeometryRecord
 
 class MetadataError(ValueError):
     """A recognized metadata file that cannot produce a usable record."""
+
+
+def _component_fingerprint(geometry_hash, metadata, texture_usage):
+    payload = {
+        "geometry_hash": geometry_hash,
+        "metadata": metadata,
+        "texture_usage": texture_usage,
+    }
+    serialized = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _string(value):
@@ -68,6 +81,16 @@ def parse_metadata_file(asset_path, root, metadata_path, normalize_hash):
     detail_path = os.path.join(os.path.dirname(metadata_path), "TextureUsage.json")
     if not os.path.isfile(detail_path) or os.path.islink(detail_path):
         detail_path = None
+    texture_usage = None
+    if detail_path:
+        try:
+            with open(detail_path, encoding="utf-8") as stream:
+                texture_usage = json.load(stream)
+        except (OSError, json.JSONDecodeError):
+            texture_usage = None
+    fingerprint = (
+        None if detail_path and texture_usage is None else
+        _component_fingerprint(geometry_hash, raw, texture_usage))
     return AssetRecord(
         _relative(asset_path, root),
         (GeometryRecord(
@@ -81,6 +104,7 @@ def parse_metadata_file(asset_path, root, metadata_path, normalize_hash):
             detail_metadata_path=(
                 _relative(detail_path, root) if detail_path else None),
             component_name=component_name,
+            component_fingerprint=fingerprint,
         ),),
     )
 
@@ -111,6 +135,9 @@ def parse_object_asset(asset_path, root, metadata_paths, normalize_hash):
                 existing.metadata_path,
                 existing.detail_metadata_path or item.detail_metadata_path,
                 existing.component_name or item.component_name,
+                (existing.component_fingerprint
+                 if existing.component_fingerprint ==
+                 item.component_fingerprint else None),
             )
     if not geometry:
         raise MetadataError("No valid WWMI geometry metadata was found.")

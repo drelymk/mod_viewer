@@ -3,6 +3,7 @@
 import base64
 import io
 import os
+import struct
 import threading
 import time
 import warnings
@@ -23,6 +24,14 @@ _texture_cache_bytes = 0
 _texture_cache_mod = None
 _texture_cache_lock = threading.RLock()
 _texture_profile_hook = None
+
+
+_SRGB_DXGI_TO_UNORM = {
+    72: 71,  # BC1
+    75: 74,  # BC2
+    78: 77,  # BC3
+    99: 98,  # BC7
+}
 
 
 def normalize_texture_role(role=None):
@@ -149,6 +158,75 @@ def _apply_texture_transform(img, texture_transform):
     return img
 
 
+def _srgb_dds_as_unorm(data):
+    """Return a memory-only DDS header with a typed sRGB format normalized."""
+    if (len(data) < 148 or data[:4] != b"DDS "
+            or data[84:88] != b"DX10"):
+        return None
+    dxgi_format = struct.unpack_from("<I", data, 128)[0]
+    unorm_format = _SRGB_DXGI_TO_UNORM.get(dxgi_format)
+    if unorm_format is None:
+        return None
+    rewritten = bytearray(data)
+    struct.pack_into("<I", rewritten, 128, unorm_format)
+    return bytes(rewritten)
+
+
+def _open_texture_image(path, image_module):
+    """Open a texture, retrying typed sRGB DDS files as unorm in memory."""
+    try:
+        image = image_module.open(path)
+        image.load()
+        return image
+    except Exception:
+        try:
+            filename = os.fspath(path)
+        except TypeError:
+            return None
+        if not filename.casefold().endswith(".dds"):
+            return None
+        try:
+            with open(path, "rb") as stream:
+                header = stream.read(148)
+                rewritten_header = _srgb_dds_as_unorm(header)
+                if rewritten_header is None:
+                    return None
+                stream.seek(0)
+                data = bytearray(stream.read())
+            if len(data) < 148:
+                return None
+            data[128:132] = rewritten_header[128:132]
+            image = image_module.open(io.BytesIO(data))
+            image.load()
+            return image
+        except Exception:
+            return None
+
+
+def load_texture_image(path, max_size=2048, preserve_alpha=False):
+    """Decode a texture once and return its bounded Pillow image."""
+    try:
+        max_size = int(max_size)
+    except (TypeError, ValueError):
+        return None
+    if max_size <= 0:
+        return None
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            image = _open_texture_image(path, Image)
+            if image is None:
+                return None
+        image = image.convert("RGBA" if preserve_alpha else "RGB")
+        if max(image.size) > max_size:
+            image.thumbnail((max_size, max_size), Image.LANCZOS)
+        return image
+    except Exception:
+        return None
+
+
 def render_texture_png(path, max_size=2048, preserve_alpha=False,
                        texture_role=None, texture_transform="passthrough"):
     """Decode and explicitly transform an image into PNG bytes."""
@@ -172,35 +250,25 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
         _profile_elapsed("cache_miss", cache_started,
                          path=cache_key[0], role=texture_role,
                          transform=texture_transform)
-        from PIL import Image
-        Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
-        stage_started = _profile_started()
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            img = Image.open(path)
-            img.load()
-        _profile_elapsed("decode", stage_started,
-                         path=cache_key[0], role=texture_role,
-                         transform=texture_transform)
         packed_passthrough = (
             texture_transform == "passthrough"
             and texture_role != "diffuse")
         keep_source_alpha = preserve_alpha or packed_passthrough
         stage_started = _profile_started()
+        img = load_texture_image(
+            path, max_size=max_size, preserve_alpha=keep_source_alpha)
+        if img is None:
+            return None
+        _profile_elapsed("decode", stage_started,
+                         path=cache_key[0], role=texture_role,
+                         transform=texture_transform)
+        stage_started = _profile_started()
         try:
-            img = img.convert('RGBA' if keep_source_alpha else 'RGB')
             if preserve_alpha and img.getchannel('A').getextrema()[1] == 0:
                 return None
         finally:
             _profile_elapsed(
                 "rgb_rgba_conversion", stage_started,
-                path=cache_key[0], role=texture_role,
-                transform=texture_transform)
-        if max(img.size) > max_size:
-            stage_started = _profile_started()
-            img.thumbnail((max_size, max_size), Image.LANCZOS)
-            _profile_elapsed(
-                "resize", stage_started,
                 path=cache_key[0], role=texture_role,
                 transform=texture_transform)
         if texture_transform != "passthrough":

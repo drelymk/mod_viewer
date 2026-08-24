@@ -1038,6 +1038,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--bg-canvas);
 }
+.inspector-slot-evidence[data-conflict="true"] { border-color: var(--accent-soft); }
 .inspector-slot-name { color: var(--accent-soft); font-size: 11px; font-weight: 600; }
 
 #mod-folder-empty[hidden] { display: none; }

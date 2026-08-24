@@ -237,6 +237,7 @@ vb1 = ResourceImplicitTexcoord
 
 [TextureOverrideImplicitA]
 ib = ResourceImplicitIB
+ps-t0 = Resource\\GIMI\\Diffuse
 ps-t0 = ResourceImplicitDiffuse
 
 [ResourceImplicitIB]

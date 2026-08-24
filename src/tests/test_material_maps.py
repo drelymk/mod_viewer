@@ -95,6 +95,12 @@ def test_direct_ps_t_auxiliary_material_maps():
         r"Resource\ZZMI\LightMap = ref ", "ps-t2 = ")
     direct = direct.replace(
         r"Resource\ZZMI\MaterialMap = ref ", "ps-t3 = ")
+    direct = direct.replace(
+        "[TextureOverrideBodyA]\n",
+        "[TextureOverrideBodyA]\n"
+        "ps-t1 = Resource\\ZZMI\\NormalMap\n"
+        "ps-t2 = Resource\\ZZMI\\LightMap\n"
+        "ps-t3 = Resource\\ZZMI\\MaterialMap\n")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", direct)

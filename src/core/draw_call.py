@@ -41,6 +41,7 @@ class AuthoredDrawCall:
     # explicit `vbN = null`; a string = the resource bound at this draw.
     vertex_resources: dict[int, str | None] = field(default_factory=dict)
     auxiliary_maps: dict = field(default_factory=dict)
+    texture_provenance: dict = field(default_factory=dict)
     geometry_match: GeometryMatch | None = None
     slot_textures: list = field(default_factory=list)
 
@@ -53,6 +54,8 @@ class SlotTextureBinding:
     resource: str
     file: str | None = None
     texture_hashes: tuple[str, ...] = ()
+    role_hint: str | None = None
+    role_hint_source: str | None = None
 
     def __post_init__(self):
         hashes = self.texture_hashes

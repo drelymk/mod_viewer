@@ -560,13 +560,17 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         "first_index": 43845, "index_count": 24,
     }
     entry["texture_resolution"] = {
-        "diffuse": "mod_semantic",
+        "diffuse": "mod_slot_semantic",
         "normal_map": "asset_original_fallback",
         "light_map": "mod_texture_hash",
     }
     entry["asset_slot_evidence"] = [{
         "resource": "ps-t1", "texture_hash": "11111111",
         "vs_hash": "aaaaaaaa", "ps_hash": "bbbbbbbb",
+    }, {
+        "resource": "ps-t2", "texture_hash": "22222222",
+        "role": "diffuse", "role_source": "mod_slot_mapping",
+        "asset_hash_role": "normal_map", "conflict": True,
     }]
     payload["asset_resolution"] = {
         "total_draws": 1, "exact_draws": 1, "partial_draws": 0,
@@ -615,9 +619,15 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
             "Geometry hash\n73c8cae2\nRange\n43845 / 24\nComponent match\nExact\n"
             "Range match\nExact\nMatch\nExact")
         assert "Normal (automatic)\nAsset fallback" in inspector.inner_text()
+        assert "Diffuse (automatic)\nMod slot mapping" in inspector.inner_text()
         assert "ps-t1" in inspector.locator(".inspector-slot-section").inner_text()
         assert "Role\nUnknown" in inspector.locator(
             ".inspector-slot-section").inner_text()
+        conflict = inspector.locator(
+            '.inspector-slot-evidence[data-conflict="true"]')
+        assert conflict.inner_text() == (
+            "ps-t2\nTexture\n22222222\nVS\n—\nPS\n—\nRole\nDiffuse\n"
+            "Role source\nMod slot mapping\nAsset hash role\nNormal\nConflict\nYes")
 
         page.locator(".inspector-texture-option", has_text="Asset two").click()
         assert inspector.locator(
@@ -3099,6 +3109,30 @@ def test_present_refresh_keeps_model_identity_and_selection(
         assert page.evaluate("window.modViewer.activeMeshes[0] && "
                             "window.__fakeApi.calls.loadMod.length") == 1
         assert page.locator("#present-list .toggle-value").inner_text() == "Zero"
+    finally:
+        context.close()
+
+
+def test_conditional_only_texture_survives_component_run_reconciliation(
+        edge_browser, frontend_url):
+    payload = _payload("ConditionalOnly")
+    entry = payload["meshes"]["Body-ConditionalOnly-0"]
+    entry["tex_key"] = None
+    entry["texture_variants"] = [{
+        "conditions": [[{
+            "var": "menu", "value": "0", "negate": False,
+        }]],
+        "tex_key": "diffuse::ConditionalOnly-two.png",
+    }]
+    context, page = _page(
+        edge_browser, frontend_url, {"ConditionalOnly": payload})
+    try:
+        _open(page, "ConditionalOnly")
+        page.locator(".draw-item").wait_for()
+        assert page.evaluate("window.modViewer.activeMeshes[0].userData.resolvedTexKey") == \
+            "diffuse::ConditionalOnly-two.png"
+        assert page.evaluate("window.modViewer.activeMeshes[0].userData.texKey") == \
+            "diffuse::ConditionalOnly-two.png"
     finally:
         context.close()
 

@@ -21,3 +21,6 @@ mod-analysis/
 __pycache__/
 *.pyc
 .pytest_tmp/
+
+# Generated Asset index cache
+src/asset-index/

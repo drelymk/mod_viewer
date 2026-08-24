@@ -49,6 +49,7 @@ class ModLoadContext:
     docs: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
     asset_folders: list = field(default_factory=list)
+    dds_classification_cache: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -501,7 +502,9 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
         and availability.get("ready_roots", 0)
         == availability.get("configured_roots", 0))
     asset_enrichment.apply(
-        parsed.groups, bindings, include_not_found=complete_index)
+        parsed.groups, bindings, include_not_found=complete_index,
+        mod_dir=context.mod_dir,
+        dds_classification_cache=context.dds_classification_cache)
     return {
         "meshes": build_mesh_semantics(
             parsed.groups, context.mod_dir, game_profile=parsed.game.game,
@@ -699,7 +702,9 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             and availability.get("ready_roots", 0)
             == availability.get("configured_roots", 0))
         asset_enrichment.apply(
-            groups, bindings, include_not_found=complete_index)
+            groups, bindings, include_not_found=complete_index,
+            mod_dir=context.mod_dir,
+            dds_classification_cache=context.dds_classification_cache)
         asset_resolution = asset_resolver.summarize_groups(
             groups, bindings, availability).to_dict()
 

@@ -29,6 +29,7 @@ class GeometryRecord:
     metadata_path: str
     detail_metadata_path: str | None = None
     component_name: str | None = None
+    component_fingerprint: str | None = None
 
     def as_dict(self):
         value = {
@@ -40,6 +41,8 @@ class GeometryRecord:
             value["detailMetadata"] = self.detail_metadata_path
         if self.component_name is not None:
             value["componentName"] = self.component_name
+        if self.component_fingerprint is not None:
+            value["componentFingerprint"] = self.component_fingerprint
         return value
 
 
