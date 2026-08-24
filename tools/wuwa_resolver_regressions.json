@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Aemeath Component4 exact diffuse assignment",
+    "mod_id": "Aemeath/AllInOne/Alter",
+    "component": "Component4",
+    "expected_filename_tag": "3a5a08ac"
+  },
+  {
+    "name": "QingXiao Component0 reported diffuse assignment",
+    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "component": "Component0",
+    "expected_filename_tag": "7cfe3ff0"
+  },
+  {
+    "name": "QingXiao Component1 reported diffuse assignment",
+    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "component": "Component1",
+    "expected_filename_tag": "78b458d2"
+  },
+  {
+    "name": "QingXiao Component2 reported diffuse assignment",
+    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "component": "Component2",
+    "expected_filename_tag": "3b5ef0bf"
+  },
+  {
+    "name": "QingXiao Component5 reported diffuse assignment",
+    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "component": "Component5",
+    "expected_filename_tag": "3fe74f13"
+  },
+  {
+    "name": "QingXiao Component6 unresolved assignment",
+    "mod_id": "QingXiao/AllInOne/Simple Toggle Update",
+    "component": "Component6",
+    "expected_status": "unresolved"
+  },
+  {
+    "name": "Phoebe Component3 legitimate diffuse ambiguity",
+    "mod_id": "Phoebe/AllInOne/Bunny Shiny",
+    "component": "Component3",
+    "expected_label": "diffuse"
+  },
+  {
+    "name": "Phoebe Component4 legitimate diffuse ambiguity",
+    "mod_id": "Phoebe/AllInOne/Bunny Shiny",
+    "component": "Component4",
+    "expected_label": "diffuse"
+  }
+]
