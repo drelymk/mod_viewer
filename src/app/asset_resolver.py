@@ -191,8 +191,83 @@ def _ambiguous(geometry_match, asset_type, *, component_status="ambiguous",
         index_count=geometry_match.index_count)
 
 
+def _range_identity(candidate, item):
+    """Return the canonical identity of one Asset component range."""
+    root, index, lookup, geometry, _ranges = candidate
+    try:
+        asset = index["assets"][lookup["asset"]]
+    except (IndexError, KeyError, TypeError):
+        return None
+    return (
+        root,
+        asset.get("path"),
+        geometry.get("componentName"),
+        geometry.get("componentOrdinal"),
+        geometry.get("metadata"),
+        geometry.get("detailMetadata"),
+        item.get("firstIndex"),
+        item.get("indexCount"),
+        item.get("classification"),
+        item.get("componentOrdinal"),
+    )
+
+
+def _asset_name_prefix(asset_path, component_name):
+    """Return whether an Asset name is explicit in a mod component name."""
+    if not isinstance(asset_path, str) or not isinstance(component_name, str):
+        return False
+    asset_name = asset_path.replace("\\", "/").rsplit("/", 1)[-1]
+    if len(asset_name) < 3:
+        return False
+    return component_name.casefold().startswith(asset_name.casefold())
+
+
+def _named_ambiguous_binding(range_matches, geometry_match, asset_type,
+                             component_name):
+    """Resolve one same-root ambiguity only when the mod names the Asset.
+
+    A component label such as ``AstraHairA`` is positive evidence for the
+    ``Astra`` Asset, but it is not a general first-candidate rule. Keep
+    unresolved candidates ambiguous, including matches spanning roots or
+    multiple ranges within the named Asset.
+    """
+    if not isinstance(component_name, str) or not component_name:
+        return None
+    roots = {candidate[0] for candidate, _item in range_matches}
+    if len(roots) != 1:
+        return None
+    named = [
+        (candidate, item)
+        for candidate, item in range_matches
+        if _asset_name_prefix(
+            candidate[1]["assets"][candidate[2]["asset"]].get("path"),
+            component_name)
+    ]
+    if not named:
+        return None
+    prefix_lengths = [
+        len(candidate[1]["assets"][candidate[2]["asset"]].get("path", ""))
+        for candidate, _item in named
+    ]
+    longest = max(prefix_lengths)
+    named = [
+        match for match, length in zip(named, prefix_lengths)
+        if length == longest
+    ]
+    if len(named) != 1:
+        return None
+    (root, index, lookup, geometry, _ranges), item = named[0]
+    try:
+        return _binding(
+            root, index, geometry_match, lookup, geometry, item,
+            range_status="exact")
+    except (IndexError, KeyError, TypeError):
+        return None
+
+
 def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
-                                    *, require_range=False):
+                                    *, require_range=False,
+                                    component_name=None):
     if not isinstance(geometry_match, GeometryMatch):
         return _not_found(asset_type)
     if asset_type is None and not indexes:
@@ -227,6 +302,12 @@ def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
         for item in candidate[4]
         if _range_matches(item, geometry_match)
     ]
+    unique_matches = {}
+    for candidate, item in range_matches:
+        identity = _range_identity(candidate, item)
+        if identity is not None:
+            unique_matches.setdefault(identity, (candidate, item))
+    range_matches = list(unique_matches.values())
     if len(range_matches) == 1:
         (root, index, lookup, geometry, _ranges), item = range_matches[0]
         try:
@@ -237,24 +318,15 @@ def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
             return _not_found(asset_type)
 
     if len(range_matches) > 1:
+        named_binding = _named_ambiguous_binding(
+            range_matches, geometry_match, asset_type, component_name)
+        if named_binding is not None:
+            return named_binding
         matched_candidates = {
             (candidate[0], candidate[2].get("asset"),
              candidate[2].get("geometry"))
             for candidate, _item in range_matches
         }
-        matched_roots = {candidate[0] for candidate, _item in range_matches}
-        if len(matched_roots) == 1 and len(matched_candidates) > 1:
-            # Some Asset roots intentionally contain duplicate geometry
-            # records for equivalent exported objects. Keep separate enabled
-            # roots conservative, but use the index's stable first candidate
-            # when the ambiguity is local to one root.
-            (root, index, lookup, geometry, _ranges), item = range_matches[0]
-            try:
-                return _binding(
-                    root, index, geometry_match, lookup, geometry, item,
-                    range_status="exact")
-            except (IndexError, KeyError, TypeError):
-                return _not_found(asset_type)
         return _ambiguous(
             geometry_match, asset_type,
             component_status=("ambiguous" if len(matched_candidates) > 1
@@ -367,7 +439,8 @@ def resolve_groups(groups, game, asset_entries, *, availability=None):
         _resolve_component_from_indexes(
             (draw if isinstance(draw, GeometryMatch)
              else getattr(draw, "geometry_match", None)), asset_type, indexes,
-            require_range=asset_type is None)
+            require_range=asset_type is None,
+            component_name=group.get("name"))
         for draw in group.get("draws", [])]
         for group in groups
     ]

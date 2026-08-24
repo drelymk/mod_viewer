@@ -523,9 +523,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                         roleless_evidence.append(TextureSemanticEvidence(
                             None, texture_hash, source="asset_slot_usage"))
 
-            # Resource hashes are useful associations for every supported
-            # adapter. A role hint is authoritative; otherwise the hash is a
-            # candidate for the same conservative DDS fallback as WWMI usage.
+            # Raw slot hashes provide diagnostic context for every adapter.
+            # Only an Asset-proven association may trigger DDS role recovery;
+            # an explicit semantic slot hint remains authoritative on its own.
             for item in draw.slot_textures:
                 for texture_hash in item.texture_hashes:
                     context = {
@@ -546,9 +546,6 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                             item.role_hint, texture_hash,
                             source=(item.role_hint_source
                                     or "mod_slot_mapping")))
-                    else:
-                        roleless_evidence.append(TextureSemanticEvidence(
-                            None, texture_hash, source="mod_texture_hash"))
 
             authoritative_hashes = {
                 item.texture_hash

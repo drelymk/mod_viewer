@@ -72,6 +72,30 @@ def test_typed_srgb_dds_decode_retries_with_unorm_header(tmp_path, monkeypatch):
     assert image.size == (1, 1)
 
 
+def test_typed_srgb_retry_does_not_read_failed_non_dds(tmp_path, monkeypatch):
+    path = tmp_path / "failed.png"
+    path.write_bytes(b"not an image")
+
+    import builtins
+    from PIL import Image
+
+    def open_image(source):
+        assert source == path
+        raise OSError("invalid image")
+
+    real_open = builtins.open
+
+    def unexpected_fallback_open(source, *args, **kwargs):
+        if source == path:
+            raise AssertionError("non-DDS fallback attempted")
+        return real_open(source, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "open", open_image)
+    monkeypatch.setattr(builtins, "open", unexpected_fallback_open)
+
+    assert textures.load_texture_image(path) is None
+
+
 def test_texture_module_does_not_depend_on_mesh_builder():
     root = Path(__file__).resolve().parents[2]
     texture_result = subprocess.run(

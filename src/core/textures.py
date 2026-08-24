@@ -180,10 +180,22 @@ def _open_texture_image(path, image_module):
         return image
     except Exception:
         try:
+            filename = os.fspath(path)
+        except TypeError:
+            return None
+        if not filename.casefold().endswith(".dds"):
+            return None
+        try:
             with open(path, "rb") as stream:
-                data = _srgb_dds_as_unorm(stream.read())
-            if data is None:
+                header = stream.read(148)
+                rewritten_header = _srgb_dds_as_unorm(header)
+                if rewritten_header is None:
+                    return None
+                stream.seek(0)
+                data = bytearray(stream.read())
+            if len(data) < 148:
                 return None
+            data[128:132] = rewritten_header[128:132]
             image = image_module.open(io.BytesIO(data))
             image.load()
             return image

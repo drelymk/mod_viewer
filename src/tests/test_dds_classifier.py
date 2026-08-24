@@ -142,6 +142,21 @@ def test_effects_masks_and_grayscale_images_are_not_diffuse(
         assert result.role is None
 
 
+def test_channel_dominant_color_data_is_not_diffuse(tmp_path, monkeypatch):
+    image = Image.new("RGB", (8, 8))
+    image.putdata([
+        (0, 160, 0) if index % 2 == 0 else (100, 250, 100)
+        for index in range(64)])
+    info = DDSInfo(8, 8, 1, "bc3_srgb", True, True)
+    monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
+    monkeypatch.setattr(
+        dds_classifier, "load_texture_image", lambda _path, **_kwargs: image)
+
+    result = dds_classifier.classify_dds(tmp_path / "channel-data.dds")
+
+    assert result.role is None
+
+
 def test_tiny_texture_is_diagnostic_lookup_only(tmp_path, monkeypatch):
     info = DDSInfo(4, 4, 1, "bc7_srgb", True, True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
