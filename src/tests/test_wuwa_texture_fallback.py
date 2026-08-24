@@ -18,6 +18,13 @@ def _replacement(tmp_path, original_hash, filename, *, conditions=()):
         "TextureOverrideGenerated", filename)
 
 
+def _direct_file(tmp_path, filename):
+    path = tmp_path / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"synthetic dds")
+    return filename
+
+
 def _group(name, index, draw=None):
     return {
         "name": name,
@@ -78,6 +85,149 @@ def test_component_priority_prefers_leading_target_over_shorter_shared_list(
         str(tmp_path))
 
     assert draw.texture_default("diffuse") == leading.file
+
+
+def test_direct_dds_binding_works_without_index_or_filename_convention(
+        tmp_path, monkeypatch):
+    filename = _direct_file(tmp_path, "Textures/completely-opaque-name.dds")
+    _classify(monkeypatch, {"completely-opaque-name.dds": "diffuse"})
+    draw = DrawCall(slot_textures=[SlotTextureBinding(
+        0, "ResourceMystery", file=filename)])
+
+    apply([_group("Component4", None, draw)], str(tmp_path))
+
+    assert draw.texture_default("diffuse") == filename
+    assert draw.texture_provenance == {"diffuse": "wuwa_direct_dds"}
+
+
+def test_direct_dds_bindings_are_resolved_per_draw(tmp_path, monkeypatch):
+    first = _direct_file(tmp_path, "first.dds")
+    second = _direct_file(tmp_path, "second.dds")
+    _classify(monkeypatch, {"first.dds": "diffuse", "second.dds": "diffuse"})
+    first_draw = DrawCall(slot_textures=[SlotTextureBinding(
+        0, "ResourceFirst", file=first)])
+    second_draw = DrawCall(slot_textures=[SlotTextureBinding(
+        0, "ResourceSecond", file=second)])
+    group = _group("Component4", None, first_draw)
+    group["draws"] = [first_draw, second_draw]
+
+    apply([group], str(tmp_path))
+
+    assert first_draw.texture_default("diffuse") == first
+    assert second_draw.texture_default("diffuse") == second
+
+
+def test_direct_dds_binding_beats_filename_fallback(
+        tmp_path, monkeypatch):
+    direct = _direct_file(tmp_path, "direct.dds")
+    fallback = _replacement(
+        tmp_path, "aaaaaaaa", "Components-4 t=fallback.dds")
+    _classify(monkeypatch, {
+        "direct.dds": "diffuse", fallback.file: "diffuse",
+    })
+    draw = DrawCall(slot_textures=[SlotTextureBinding(
+        0, "ResourceDirect", file=direct)])
+
+    apply([_group("Component4", TextureOverrideIndex(
+        replacements_by_hash={"aaaaaaaa": (fallback,)}), draw)],
+        str(tmp_path))
+
+    assert draw.texture_default("diffuse") == direct
+    assert draw.texture_provenance == {"diffuse": "wuwa_direct_dds"}
+
+
+def test_direct_and_filename_dds_roles_can_coexist(tmp_path, monkeypatch):
+    direct = _direct_file(tmp_path, "direct.dds")
+    normal = _replacement(
+        tmp_path, "aaaaaaaa", "Components-4 t=normal.dds")
+    _classify(monkeypatch, {
+        "direct.dds": "diffuse", normal.file: "normal_map",
+    })
+    draw = DrawCall(slot_textures=[SlotTextureBinding(
+        0, "ResourceDirect", file=direct)])
+
+    apply([_group("Component4", TextureOverrideIndex(
+        replacements_by_hash={"aaaaaaaa": (normal,)}), draw)],
+        str(tmp_path))
+
+    assert draw.texture_default("diffuse") == direct
+    assert draw.texture_default("normal_map") == normal.file
+    assert draw.texture_provenance == {
+        "diffuse": "wuwa_direct_dds",
+        "normal_map": "wuwa_filename_dds",
+    }
+
+
+def test_multiple_direct_files_with_one_role_are_ambiguous(
+        tmp_path, monkeypatch):
+    first = _direct_file(tmp_path, "first.dds")
+    second = _direct_file(tmp_path, "second.dds")
+    _classify(monkeypatch, {"first.dds": "diffuse", "second.dds": "diffuse"})
+    draw = DrawCall(slot_textures=[
+        SlotTextureBinding(0, "ResourceFirst", file=first),
+        SlotTextureBinding(3, "ResourceSecond", file=second),
+    ])
+
+    apply([_group("Component4", None, draw)], str(tmp_path))
+
+    assert draw.texture_default("diffuse") is None
+    assert draw.texture_provenance == {}
+
+
+def test_same_direct_file_in_multiple_slots_is_one_candidate(
+        tmp_path, monkeypatch):
+    filename = _direct_file(tmp_path, "shared.dds")
+    _classify(monkeypatch, {"shared.dds": "diffuse"})
+    draw = DrawCall(slot_textures=[
+        SlotTextureBinding(0, "ResourceShared", file=filename),
+        SlotTextureBinding(3, "ResourceShared", file=filename),
+    ])
+
+    apply([_group("Component4", None, draw)], str(tmp_path))
+
+    assert draw.texture_default("diffuse") == filename
+
+
+def test_unknown_direct_dds_does_not_block_filename_fallback(
+        tmp_path, monkeypatch):
+    unknown = _direct_file(tmp_path, "unknown.dds")
+    fallback = _replacement(
+        tmp_path, "aaaaaaaa", "Components-4 t=fallback.dds")
+
+    def classify(path):
+        if os.path.basename(path) == "unknown.dds":
+            return dds_classifier.DDSClassification(
+                None, "packed_data", "medium", ("synthetic_unknown",))
+        return dds_classifier.DDSClassification(
+            "diffuse", "color", "high", ("synthetic_diffuse",))
+
+    monkeypatch.setattr("app.asset_enrichment.classify_dds", classify)
+    draw = DrawCall(slot_textures=[SlotTextureBinding(
+        0, "ResourceUnknown", file=unknown)])
+
+    apply([_group("Component4", TextureOverrideIndex(
+        replacements_by_hash={"aaaaaaaa": (fallback,)}), draw)],
+        str(tmp_path))
+
+    assert draw.texture_default("diffuse") == fallback.file
+    assert draw.texture_provenance == {"diffuse": "wuwa_filename_dds"}
+
+
+def test_non_dds_direct_binding_is_skipped(tmp_path, monkeypatch):
+    calls = []
+
+    def classify(path):
+        calls.append(path)
+        raise AssertionError("non-DDS bindings must not be classified")
+
+    monkeypatch.setattr("app.asset_enrichment.classify_dds", classify)
+    draw = DrawCall(slot_textures=[SlotTextureBinding(
+        2, "ResourceImage", file="image.jpg")])
+
+    apply([_group("Component4", None, draw)], str(tmp_path))
+
+    assert calls == []
+    assert draw.texture_provenance == {}
 
 
 def test_filename_tag_is_opaque_and_does_not_need_to_match_ini_hash(
@@ -150,12 +300,15 @@ def test_unknown_dds_does_not_create_a_render_role(tmp_path, monkeypatch):
 
 def test_slotfix_skips_filename_inference_and_dds_classification(
         tmp_path, monkeypatch):
+    direct = _direct_file(tmp_path, "slotfix-direct.dds")
     replacement = _replacement(
         tmp_path, "aaaaaaaa", "Components-0 t=slotfix.dds")
     calls = []
-    _classify(monkeypatch, {replacement.file: "diffuse"}, calls)
+    _classify(monkeypatch, {
+        "slotfix-direct.dds": "diffuse", replacement.file: "diffuse",
+    }, calls)
     draw = DrawCall(slot_textures=[SlotTextureBinding(
-        0, "ResourceSlot", role_hint="diffuse",
+        0, "ResourceSlot", file=direct, role_hint="diffuse",
         role_hint_source="mod_slot_mapping")])
 
     apply([_group("Component0", TextureOverrideIndex(

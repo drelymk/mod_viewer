@@ -1,6 +1,7 @@
-"""Conservative WuWa texture roles from generated replacement filenames."""
+"""Conservative WuWa texture roles from direct bindings and filenames."""
 
 from dataclasses import dataclass
+import os
 import re
 
 from core.dds_classifier import DDSClassification
@@ -71,6 +72,43 @@ def _component_priority(components, ordinal):
     else:
         tier = 2
     return tier, len(components)
+
+
+def _direct_dds_candidates(draw, mod_dir, cache):
+    """Return unique high-confidence roles from this draw's bound DDS files."""
+    by_role = {}
+    for binding in draw.slot_textures:
+        if binding.role_hint is not None:
+            continue
+        filename = binding.file
+        if (not isinstance(filename, str)
+                or not filename.casefold().endswith(".dds")):
+            continue
+        path = safe_resource_path(mod_dir, filename)
+        if path is None:
+            continue
+        classification = _cached_dds_classification(path, cache)
+        if (classification.role not in _INFERRED_ROLES
+                or classification.confidence != "high"):
+            continue
+        path_key = os.path.normcase(os.path.normpath(path))
+        by_role.setdefault(classification.role, {})[path_key] = (
+            binding, classification)
+    return {
+        role: next(iter(files.values()))
+        for role, files in by_role.items()
+        if len(files) == 1
+    }
+
+
+def _apply_direct_dds(draw, mod_dir, cache):
+    """Apply roles proven by unique direct resource bindings on one draw."""
+    for role, (binding, _classification) in _direct_dds_candidates(
+            draw, mod_dir, cache).items():
+        if _has_mod_texture(draw, role):
+            continue
+        draw.set_texture_default(role, binding.file)
+        draw.texture_provenance.setdefault(role, "wuwa_direct_dds")
 
 
 def _parse_filename_replacement(replacement):
@@ -181,11 +219,11 @@ def _select_candidates(ordinal, mod_dir, cache, parsed_index):
 
 
 def apply(groups, mod_dir, *, dds_classification_cache=None):
-    """Apply conservative WuWa filename/DDS semantic texture evidence.
+    """Apply conservative WuWa direct-binding and filename/DDS evidence.
 
-    The pass is intentionally independent of Asset resolution. It only reads
-    replacement files already referenced by each INI's own texture index and
-    delegates all conditional texture mutation to the shared enrichment path.
+    Direct effective draw bindings are stronger evidence than generated
+    replacement filenames. Asset and slot semantics must run before this pass;
+    this function only fills roles that remain unresolved.
     """
     cache = (dds_classification_cache
              if dds_classification_cache is not None else {})
@@ -194,6 +232,8 @@ def apply(groups, mod_dir, *, dds_classification_cache=None):
         ordinal = _component_ordinal(group)
         if ordinal is None or _uses_slotfix(group):
             continue
+        for draw in group.get("draws", []):
+            _apply_direct_dds(draw, mod_dir, cache)
         texture_index = group.get("_texture_override_index")
         if not isinstance(texture_index, TextureOverrideIndex):
             continue

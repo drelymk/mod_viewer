@@ -524,8 +524,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                                 for item in draw.asset_slot_evidence):
                             draw.asset_slot_evidence.append(dict(usage))
                         # WWMI TextureUsage is diagnostic context only. WuWa
-                        # render-role recovery is owned by the component
-                        # filename + DDS fallback, not Asset JSON.
+                        # render-role recovery is owned by direct draw
+                        # bindings and the component filename + DDS fallback,
+                        # not Asset JSON.
 
             # Raw slot hashes provide diagnostic context for every adapter.
             # Only an Asset-proven association may trigger DDS role recovery;

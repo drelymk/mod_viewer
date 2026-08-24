@@ -522,14 +522,14 @@ def _register_material_profile(table, profile):
 
 def _apply_texture_enrichment(parsed, context, bindings, complete_index):
     """Run all semantic texture enrichment in the shared load order."""
-    if str(getattr(parsed.game, "game", "")).casefold() == "wuwa":
-        wuwa_texture_fallback.apply(
-            parsed.groups, context.mod_dir,
-            dds_classification_cache=context.dds_classification_cache)
     asset_enrichment.apply(
         parsed.groups, bindings, include_not_found=complete_index,
         mod_dir=context.mod_dir,
         dds_classification_cache=context.dds_classification_cache)
+    if str(getattr(parsed.game, "game", "")).casefold() == "wuwa":
+        wuwa_texture_fallback.apply(
+            parsed.groups, context.mod_dir,
+            dds_classification_cache=context.dds_classification_cache)
 
 
 def _assign_material_profiles(meshes, game):
