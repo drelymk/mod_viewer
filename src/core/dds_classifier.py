@@ -1,4 +1,4 @@
-"""Game-agnostic, conservative semantic hints for DDS replacement files."""
+"""Game-agnostic structural analysis for DDS texture candidates."""
 
 from dataclasses import dataclass
 import math
@@ -10,12 +10,39 @@ from .textures import load_texture_image
 
 @dataclass(frozen=True, slots=True)
 class DDSClassification:
-    """The evidence available without relying on a mod or game naming scheme."""
+    """Structural evidence available without mod or game naming schemes.
+
+    ``role`` remains as a compatibility field for genuinely strong normal-map
+    evidence and older callers. Color analysis intentionally does not assign
+    ``diffuse``; a contextual resolver must combine it with association
+    evidence before choosing that semantic role.
+    """
 
     role: str | None
     texture_class: str
     confidence: str
     evidence: tuple[str, ...] = ()
+    color_score: float = 0.0
+    normal_score: float = 0.0
+    mask_score: float = 0.0
+    data_score: float = 0.0
+
+
+def is_color_candidate(classification):
+    """Return whether analysis supports using a file as a color candidate."""
+    if classification.role == "normal_map":
+        return False
+    if classification.role == "diffuse":
+        # Compatibility with older test doubles/callers. Production analysis
+        # no longer emits this role for color images.
+        return classification.confidence in {"medium", "high"}
+    if classification.texture_class not in {"color", "effect"}:
+        return False
+    # A zero score denotes a legacy four-field DDSClassification constructed
+    # by an adapter. Its class/confidence fields remain authoritative.
+    if classification.color_score == 0:
+        return classification.confidence in {"medium", "high"}
+    return classification.color_score >= 0.35
 
 
 def classification_cache_key(path):
@@ -30,6 +57,29 @@ def classification_cache_key(path):
 
 def _unknown(texture_class="unknown", *evidence):
     return DDSClassification(None, texture_class, "low", tuple(evidence))
+
+
+def _color_score(stats, is_srgb):
+    if not is_srgb:
+        return 0.0
+    deviations = stats["deviations"]
+    score = 0.35
+    score += min(min(deviations) / 64.0, 1.0) * 0.20
+    score += min(stats["chroma"] / 100.0, 1.0) * 0.15
+    score += min(stats["color_entropy"] / 5.0, 1.0) * 0.15
+    score += min(stats["spatial_detail"] / 40.0, 1.0) * 0.10
+    score -= max(0.0, stats["gray_fraction"] - 0.40) * 0.30
+    if stats["dominant_channel_fraction"] >= 0.90:
+        score -= 0.35
+    return max(0.0, min(1.0, score))
+
+
+def _score_confidence(score):
+    if score >= 0.70:
+        return "high"
+    if score >= 0.35:
+        return "medium"
+    return "low"
 
 
 def _channel_stats(image):
@@ -119,7 +169,9 @@ def _decoded_classification(info, image):
         return _unknown("lookup", "tiny_dimensions")
     if (sum(deviations) < 9 and chroma < 8
             or stats["black_fraction"] >= 0.75):
-        return _unknown("packed_mask", "low_variation", "low_chroma")
+        return DDSClassification(
+            None, "packed_mask", "low",
+            ("low_variation", "low_chroma"), mask_score=0.85)
 
     # A packed XY normal is centered around 0.5 in R/G and has an almost
     # empty blue channel.  The unit-circle test rejects arbitrary low-blue
@@ -138,57 +190,23 @@ def _decoded_classification(info, image):
         return DDSClassification(
             "normal_map", "packed_normal", "high",
             (f"format:{info.format}", "centered_xy", "low_blue",
-             "valid_xy"))
+             "valid_xy"), normal_score=0.95)
 
     if (info.format in {"bc7_unorm", "rgba8", "bgra8"}
             and means[2] / 255.0 < 0.15 and chroma > 20):
         return DDSClassification(
             None, "packed_data", "medium",
             (f"format:{info.format}", "linear_channels",
-             "invalid_normal_layout"))
+             "invalid_normal_layout"), data_score=0.85)
 
     is_srgb = info.format.endswith("_srgb")
     if is_srgb and info.width >= 2 and info.height >= 2:
-        normalized_means = [mean / 255.0 for mean in means]
-        ordered_means = sorted(normalized_means)
-        strong_channel_dominance = (
-            ordered_means[-1] >= 0.75 and ordered_means[-2] <= 0.25)
-        diffuse_variation = (
-            min(deviations) >= 32
-            and chroma >= 40
-            and stats["quantized_occupancy"] >= 32
-            and not strong_channel_dominance
-        )
-        diffuse_layout = (
-            diffuse_variation
-            and stats["black_fraction"] < 0.30
-            and stats["gray_fraction"] < 0.45
-            and stats["color_entropy"] >= 3.5
-            and stats["spatial_detail"] >= 4
-        )
-        # Some base-color atlases use a dark or grayscale background while
-        # retaining strong channel variation and spatial texture. Those
-        # properties are diffuse evidence even when palette entropy is low;
-        # dominant-channel mean encoding remains rejected above.
-        structured_atlas_layout = (
-            diffuse_variation
-            and stats["black_fraction"] < 0.60
-            and stats["gray_fraction"] < 0.60
-            and stats["spatial_detail"] >= 20
-        )
-        if diffuse_layout or structured_atlas_layout:
-            return DDSClassification(
-                "diffuse", "color", "high",
-                (f"format:{info.format}", "color_complexity",
-                 "channel_variance", "spatial_detail"))
-        if (stats["color_entropy"] < 3.5
-                or stats["spatial_detail"] < 4
-                or stats["gray_fraction"] >= 0.45):
-            texture_class = "effect"
-        else:
-            texture_class = "color"
-        return _unknown(texture_class, f"format:{info.format}",
-                        "insufficient_diffuse_evidence")
+        color_score = _color_score(stats, is_srgb)
+        texture_class = "color" if color_score >= 0.55 else "effect"
+        return DDSClassification(
+            None, texture_class, _score_confidence(color_score),
+            (f"format:{info.format}", "srgb_color_space",
+             "pixel_color_evidence"), color_score=color_score)
 
     if chroma < 12:
         return _unknown("packed_mask", f"format:{info.format}",
@@ -205,13 +223,18 @@ def classify_dds(path):
     if info.format in {"bc5_unorm", "bc5_snorm"}:
         return DDSClassification(
             "normal_map", "packed_normal", "high",
-            (f"format:{info.format}", "two_channel_block_format"))
+            (f"format:{info.format}", "two_channel_block_format"),
+            normal_score=1.0)
     if info.format in {"bc4_unorm", "bc4_snorm"}:
-        return _unknown("single_channel_mask", f"format:{info.format}")
+        return DDSClassification(
+            None, "single_channel_mask", "high",
+            (f"format:{info.format}",), mask_score=0.95)
     if max(info.width, info.height) <= 4:
         return _unknown("lookup", "tiny_dimensions")
     if info.format in {"bc6h_ufloat", "bc6h_float"}:
-        return _unknown("effect", f"format:{info.format}")
+        return DDSClassification(
+            None, "effect", "high", (f"format:{info.format}",),
+            data_score=0.75)
 
     image = load_texture_image(path, max_size=128, preserve_alpha=True)
     if image is None:

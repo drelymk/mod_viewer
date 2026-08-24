@@ -49,10 +49,11 @@ def test_bc5_is_a_high_confidence_normal_without_decoding(tmp_path):
 
     assert result == dds_classifier.DDSClassification(
         "normal_map", "packed_normal", "high",
-        ("format:bc5_unorm", "two_channel_block_format"))
+        ("format:bc5_unorm", "two_channel_block_format"),
+        normal_score=1.0)
 
 
-def test_srgb_color_pixels_are_diffuse_and_filename_is_ignored(
+def test_srgb_color_pixels_are_color_candidates_and_filename_is_ignored(
         tmp_path, monkeypatch):
     image = Image.new("RGB", (8, 8))
     image.putdata([
@@ -66,9 +67,10 @@ def test_srgb_color_pixels_are_diffuse_and_filename_is_ignored(
     first = dds_classifier.classify_dds(tmp_path / "first.dds")
     second = dds_classifier.classify_dds(tmp_path / "different-name.dds")
 
-    assert first.role == "diffuse"
+    assert first.role is None
     assert first.texture_class == "color"
     assert first.confidence == "high"
+    assert first.color_score >= 0.70
     assert second == first
 
 
@@ -157,7 +159,7 @@ def test_channel_dominant_color_data_is_not_diffuse(tmp_path, monkeypatch):
     assert result.role is None
 
 
-def test_dominant_channel_palette_can_be_diffuse_with_spatial_detail(
+def test_dominant_channel_palette_exposes_structural_color_evidence(
         tmp_path, monkeypatch):
     image = Image.new("RGB", (8, 8))
     image.putdata([
@@ -172,9 +174,10 @@ def test_dominant_channel_palette_can_be_diffuse_with_spatial_detail(
 
     result = dds_classifier.classify_dds(tmp_path / "restricted.dds")
 
-    assert result.role == "diffuse"
-    assert result.confidence == "high"
-    assert result.texture_class == "color"
+    assert result.role is None
+    assert result.confidence == "medium"
+    assert result.texture_class == "effect"
+    assert result.color_score >= 0.35
 
 
 def test_tiny_texture_is_diagnostic_lookup_only(tmp_path, monkeypatch):

@@ -1066,7 +1066,8 @@ def test_roleless_gimi_hash_uses_generic_dds_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "app.asset_enrichment.classify_dds",
         lambda _path: dds_classifier.DDSClassification(
-            "diffuse", "color", "high", ("synthetic_color",)))
+            None, "effect", "medium", ("synthetic_color",),
+            color_score=0.5))
     draw = DrawCall()
     binding = AssetComponentBinding(
         status="exact", asset_type="GIMI", asset="Alice", root=root,

@@ -9,7 +9,7 @@ import re
 from core.geometry_identity import normalize_geometry_hash
 from core.ini_parser import TextureOverrideIndex, _condition_difference
 from core.dds_classifier import (DDSClassification, classification_cache_key,
-                                 classify_dds)
+                                 classify_dds, is_color_candidate)
 from core.resource_paths import safe_resource_path
 
 from . import asset_folders
@@ -343,11 +343,20 @@ def _classify_replacements(texture_hash, replacements, mod_dir, cache):
                 result = _cached_dds_classification(path, cache)
         classifications.append(result)
         by_replacement[id(replacement)] = result
-    role_results = [result for result in classifications if result.role]
-    roles = {result.role for result in role_results}
+    def analysis_role(result):
+        if result.role == "normal_map":
+            return ("normal_map"
+                    if result.confidence == "high" else None)
+        return "diffuse" if is_color_candidate(result) else None
+
+    role_results = [
+        (result, analysis_role(result)) for result in classifications
+    ]
+    roles = {role for _result, role in role_results if role}
     role = (next(iter(roles))
             if len(roles) == 1
-            and all(result.confidence == "high" for result in role_results)
+            and all(result_role for _result, result_role in role_results
+                    if result_role)
             else None)
     return role, by_replacement, len(roles) > 1
 
@@ -613,7 +622,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     if accepted:
                         role_result = next(
                             (item for item in details.values()
-                             if item.role == role), None)
+                             if ((item.role == role)
+                                 or (role == "diffuse"
+                                     and is_color_candidate(item)))), None)
                         dds_evidence.append(TextureSemanticEvidence(
                             role, texture_hash, source="dds_analysis",
                             texture_class=(role_result.texture_class

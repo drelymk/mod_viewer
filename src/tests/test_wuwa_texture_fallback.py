@@ -64,8 +64,23 @@ def test_no_asset_component_fallback_prefers_exact_filename_candidate(
     apply([_group("Component2", index, draw)], str(tmp_path))
 
     assert draw.texture_default("diffuse") == exact.file
-    assert draw.texture_provenance == {"diffuse": "wuwa_filename_dds"}
+    assert draw.texture_provenance == {"diffuse": "wuwa_filename_analysis"}
     assert draw.asset_binding is None
+
+
+def test_color_candidate_without_diffuse_role_is_contextually_selected(
+        tmp_path, monkeypatch):
+    candidate = _replacement(
+        tmp_path, "aaaaaaaa", "Components-1-2 t=color-candidate.dds")
+    _classify(monkeypatch, {candidate.file: "color"})
+    draw = DrawCall()
+
+    apply([_group("Component1", TextureOverrideIndex(
+        replacements_by_hash={"aaaaaaaa": (candidate,)}), draw)],
+        str(tmp_path))
+
+    assert draw.texture_default("diffuse") == candidate.file
+    assert draw.texture_provenance == {"diffuse": "wuwa_filename_analysis"}
 
 
 def test_component_priority_prefers_leading_target_over_shorter_shared_list(
@@ -97,7 +112,7 @@ def test_direct_dds_binding_works_without_index_or_filename_convention(
     apply([_group("Component4", None, draw)], str(tmp_path))
 
     assert draw.texture_default("diffuse") == filename
-    assert draw.texture_provenance == {"diffuse": "wuwa_direct_dds"}
+    assert draw.texture_provenance == {"diffuse": "wuwa_direct_analysis"}
 
 
 def test_direct_dds_bindings_are_resolved_per_draw(tmp_path, monkeypatch):
@@ -127,13 +142,15 @@ def test_direct_dds_binding_beats_filename_fallback(
     })
     draw = DrawCall(slot_textures=[SlotTextureBinding(
         0, "ResourceDirect", file=direct)])
+    group = _group("Component4", TextureOverrideIndex(
+        replacements_by_hash={"aaaaaaaa": (fallback,)}), draw)
 
-    apply([_group("Component4", TextureOverrideIndex(
-        replacements_by_hash={"aaaaaaaa": (fallback,)}), draw)],
-        str(tmp_path))
+    apply([group], str(tmp_path))
 
     assert draw.texture_default("diffuse") == direct
-    assert draw.texture_provenance == {"diffuse": "wuwa_direct_dds"}
+    assert draw.texture_provenance == {"diffuse": "wuwa_direct_analysis"}
+    assert {item["file"] for item in group["discovered_textures"]} == {
+        direct, fallback.file}
 
 
 def test_direct_and_filename_dds_roles_can_coexist(tmp_path, monkeypatch):
@@ -153,8 +170,8 @@ def test_direct_and_filename_dds_roles_can_coexist(tmp_path, monkeypatch):
     assert draw.texture_default("diffuse") == direct
     assert draw.texture_default("normal_map") == normal.file
     assert draw.texture_provenance == {
-        "diffuse": "wuwa_direct_dds",
-        "normal_map": "wuwa_filename_dds",
+        "diffuse": "wuwa_direct_analysis",
+        "normal_map": "wuwa_filename_analysis",
     }
 
 
@@ -210,7 +227,7 @@ def test_unknown_direct_dds_does_not_block_filename_fallback(
         str(tmp_path))
 
     assert draw.texture_default("diffuse") == fallback.file
-    assert draw.texture_provenance == {"diffuse": "wuwa_filename_dds"}
+    assert draw.texture_provenance == {"diffuse": "wuwa_filename_analysis"}
 
 
 def test_non_dds_direct_binding_is_skipped(tmp_path, monkeypatch):
@@ -263,6 +280,24 @@ def test_equal_specificity_distinct_hashes_are_ambiguous(tmp_path, monkeypatch):
         draw)], str(tmp_path))
 
     assert draw.texture_default("diffuse") is None
+
+
+def test_ambiguous_filename_candidates_remain_discovered(tmp_path, monkeypatch):
+    first = _replacement(tmp_path, "aaaaaaaa", "Components-0 t=A.dds")
+    second = _replacement(tmp_path, "bbbbbbbb", "Components-0 t=B.dds")
+    _classify(monkeypatch, {first.file: "diffuse", second.file: "diffuse"})
+    draw = DrawCall()
+    group = _group("Component0", TextureOverrideIndex(
+        replacements_by_hash={"aaaaaaaa": (first,), "bbbbbbbb": (second,)}),
+        draw)
+    group["diffuse_pool_files"] = []
+
+    apply([group], str(tmp_path))
+
+    assert draw.texture_default("diffuse") is None
+    assert {item["file"] for item in group["discovered_textures"]} == {
+        first.file, second.file}
+    assert group["diffuse_pool_files"] == []
 
 
 def test_different_roles_compete_per_role(tmp_path, monkeypatch):
@@ -336,7 +371,7 @@ def test_existing_role_is_preserved_while_missing_role_is_filled(
     assert draw.texture_default("diffuse") == existing
     assert draw.texture_default("normal_map") == normal.file
     assert draw.texture_provenance == {
-        "normal_map": "wuwa_filename_dds",
+        "normal_map": "wuwa_filename_analysis",
     }
 
 
@@ -396,7 +431,7 @@ def test_loader_runs_wuwa_fallback_without_asset_configuration(
         parsed, context, [[binding]], complete_index=False)
 
     assert draw.texture_default("diffuse") == replacement.file
-    assert draw.texture_provenance == {"diffuse": "wuwa_filename_dds"}
+    assert draw.texture_provenance == {"diffuse": "wuwa_filename_analysis"}
 
 
 def test_wuwa_fallback_reuses_cache_across_semantic_refresh(
