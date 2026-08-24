@@ -1,5 +1,7 @@
 """Focused contracts for the shared texture subsystem."""
 
+import io
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +25,51 @@ def test_texture_keys_normalize_legacy_paths_and_unknown_roles():
     assert textures.normalize_texture_transform("not-a-transform") == (
         "passthrough")
     assert textures.normalize_texture_key("") is None
+
+
+def test_typed_srgb_dds_fallback_rewrites_only_the_decoded_copy():
+    data = bytearray(148)
+    data[:4] = b"DDS "
+    data[84:88] = b"DX10"
+    struct.pack_into("<I", data, 128, 78)
+
+    converted = textures._srgb_dds_as_unorm(data)
+
+    assert struct.unpack_from("<I", data, 128)[0] == 78
+    assert struct.unpack_from("<I", converted, 128)[0] == 77
+
+
+def test_typed_srgb_dds_decode_retries_with_unorm_header(tmp_path, monkeypatch):
+    path = tmp_path / "typed-srgb.dds"
+    data = bytearray(148)
+    data[:4] = b"DDS "
+    data[84:88] = b"DX10"
+    struct.pack_into("<I", data, 128, 78)
+    path.write_bytes(data)
+
+    from PIL import Image
+
+    class Decoded:
+        size = (1, 1)
+
+        def load(self):
+            return None
+
+        def convert(self, mode):
+            return Image.new(mode, self.size)
+
+    def open_image(source):
+        if source == path:
+            raise OSError("typed sRGB unsupported")
+        assert isinstance(source, io.BytesIO)
+        assert struct.unpack_from("<I", source.getvalue(), 128)[0] == 77
+        return Decoded()
+
+    monkeypatch.setattr(Image, "open", open_image)
+
+    image = textures.load_texture_image(path)
+
+    assert image.size == (1, 1)
 
 
 def test_texture_module_does_not_depend_on_mesh_builder():

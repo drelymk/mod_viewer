@@ -75,8 +75,8 @@ def test_srgb_color_pixels_are_diffuse_and_filename_is_ignored(
 def test_linear_packed_pixels_are_normal(tmp_path, monkeypatch):
     image = Image.new("RGB", (8, 8))
     image.putdata([
-        (value, 255 - value, value // 8)
-        for value in range(0, 256, 4)])
+        (112 + (index % 8) * 4, 112 + (index // 8) * 4, 0)
+        for index in range(64)])
     info = DDSInfo(8, 8, 1, "bc7_unorm", True, True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
     monkeypatch.setattr(
@@ -87,6 +87,59 @@ def test_linear_packed_pixels_are_normal(tmp_path, monkeypatch):
     assert result.role == "normal_map"
     assert result.texture_class == "packed_normal"
     assert result.confidence == "high"
+
+
+def test_flat_and_gently_varying_centered_normals_are_accepted(
+        tmp_path, monkeypatch):
+    images = [
+        Image.new("RGB", (8, 8), (128, 128, 0)),
+        Image.new("RGB", (8, 8), (128, 128, 0)),
+    ]
+    images[1].putdata([
+        (120 + index % 9, 122 + (index // 8) * 2, 0)
+        for index in range(64)])
+    info = DDSInfo(8, 8, 1, "bc7_unorm", True, True)
+    monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
+
+    for image in images:
+        monkeypatch.setattr(
+            dds_classifier, "load_texture_image",
+            lambda _path, image=image, **_kwargs: image)
+        result = dds_classifier.classify_dds(tmp_path / "normal.dds")
+        assert result.role == "normal_map"
+
+
+def test_off_center_packed_data_is_not_promoted_to_normal(
+        tmp_path, monkeypatch):
+    image = Image.new("RGB", (8, 8), (32, 128, 0))
+    info = DDSInfo(8, 8, 1, "bc7_unorm", True, True)
+    monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
+    monkeypatch.setattr(
+        dds_classifier, "load_texture_image", lambda _path, **_kwargs: image)
+
+    result = dds_classifier.classify_dds(tmp_path / "packed.dds")
+
+    assert result.role is None
+    assert result.texture_class == "packed_data"
+
+
+def test_effects_masks_and_grayscale_images_are_not_diffuse(
+        tmp_path, monkeypatch):
+    info = DDSInfo(8, 8, 1, "bc7_srgb", True, True)
+    monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
+    images = [
+        Image.new("RGB", (8, 8), (80, 160, 220)),
+        Image.new("RGB", (8, 8), (0, 0, 0)),
+        Image.new("RGB", (8, 8), (128, 128, 128)),
+    ]
+    images[1].putpixel((0, 0), (255, 0, 0))
+    for index, image in enumerate(images):
+        monkeypatch.setattr(
+            dds_classifier, "load_texture_image",
+            lambda _path, image=image, **_kwargs: image)
+        result = dds_classifier.classify_dds(
+            tmp_path / f"effect-{index}.dds")
+        assert result.role is None
 
 
 def test_tiny_texture_is_diagnostic_lookup_only(tmp_path, monkeypatch):

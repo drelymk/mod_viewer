@@ -3,6 +3,7 @@
 import base64
 import io
 import os
+import struct
 import threading
 import time
 import warnings
@@ -23,6 +24,14 @@ _texture_cache_bytes = 0
 _texture_cache_mod = None
 _texture_cache_lock = threading.RLock()
 _texture_profile_hook = None
+
+
+_SRGB_DXGI_TO_UNORM = {
+    72: 71,  # BC1
+    75: 74,  # BC2
+    78: 77,  # BC3
+    99: 98,  # BC7
+}
 
 
 def normalize_texture_role(role=None):
@@ -149,6 +158,39 @@ def _apply_texture_transform(img, texture_transform):
     return img
 
 
+def _srgb_dds_as_unorm(data):
+    """Return a memory-only DDS header with a typed sRGB format normalized."""
+    if (len(data) < 148 or data[:4] != b"DDS "
+            or data[84:88] != b"DX10"):
+        return None
+    dxgi_format = struct.unpack_from("<I", data, 128)[0]
+    unorm_format = _SRGB_DXGI_TO_UNORM.get(dxgi_format)
+    if unorm_format is None:
+        return None
+    rewritten = bytearray(data)
+    struct.pack_into("<I", rewritten, 128, unorm_format)
+    return bytes(rewritten)
+
+
+def _open_texture_image(path, image_module):
+    """Open a texture, retrying typed sRGB DDS files as unorm in memory."""
+    try:
+        image = image_module.open(path)
+        image.load()
+        return image
+    except Exception:
+        try:
+            with open(path, "rb") as stream:
+                data = _srgb_dds_as_unorm(stream.read())
+            if data is None:
+                return None
+            image = image_module.open(io.BytesIO(data))
+            image.load()
+            return image
+        except Exception:
+            return None
+
+
 def load_texture_image(path, max_size=2048, preserve_alpha=False):
     """Decode a texture once and return its bounded Pillow image."""
     try:
@@ -162,8 +204,9 @@ def load_texture_image(path, max_size=2048, preserve_alpha=False):
         Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            image = Image.open(path)
-            image.load()
+            image = _open_texture_image(path, Image)
+            if image is None:
+                return None
         image = image.convert("RGBA" if preserve_alpha else "RGB")
         if max(image.size) > max_size:
             image.thumbnail((max_size, max_size), Image.LANCZOS)

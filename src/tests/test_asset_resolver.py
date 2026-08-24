@@ -352,11 +352,13 @@ def test_range_evidence_disambiguates_same_hash_candidates(tmp_path, monkeypatch
     assert binding.range_status == "exact"
 
 
-def test_draw_count_rejects_incompatible_index_range_without_sibling_inference(
+def test_draw_count_does_not_become_asset_range_evidence(
         tmp_path, monkeypatch):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
-    index = _index(root, asset_type="ZZMI", asset="Astra", first_index=0)
+    roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
+             for name in ("assets-one", "assets-two")]
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}
+               for root in roots]
+    index = _index(roots[0], asset_type="ZZMI", asset="Astra", first_index=0)
     index["assets"].append({
         "path": "AstraChandelier",
         "geometry": [{
@@ -368,15 +370,17 @@ def test_draw_count_rejects_incompatible_index_range_without_sibling_inference(
     index["byGeometryHash"]["73c8cae2"].append({
         "asset": 1, "geometry": 0,
     })
-    monkeypatch.setattr(asset_index, "load_index",
-                        lambda asset_type, path: index)
+    second = _index(roots[1], asset_type="ZZMI", asset="Other",
+                    first_index=0)
+    monkeypatch.setattr(
+        asset_index, "load_index",
+        lambda asset_type, path: index if path == roots[0] else second)
 
     bindings = resolve_groups([{"draws": [DrawCall(
         count=12, geometry_match=GeometryMatch("73c8cae2", 0))]}],
         "zzz", entries)
 
-    assert bindings[0][0].status == "exact"
-    assert bindings[0][0].asset == "Astra"
+    assert bindings[0][0].status == "ambiguous"
 
 
 def test_same_hash_same_range_remains_ambiguous(tmp_path, monkeypatch):
@@ -432,7 +436,7 @@ def test_resolve_groups_loads_each_enabled_index_once(tmp_path, monkeypatch):
     assert calls == roots
 
 
-def test_unknown_group_keeps_ambiguous_asset_identity_ambiguous(
+def test_unknown_group_uses_first_same_root_asset_for_ambiguous_geometry(
         tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
     entries = [{"type": "ZZMI", "path": root, "enabled": True}]
@@ -464,8 +468,8 @@ def test_unknown_group_keeps_ambiguous_asset_identity_ambiguous(
 
     bindings = resolve_groups(groups, "unknown", entries)
 
-    assert [item.status for item in bindings[0]] == ["exact", "ambiguous"]
-    assert [item.asset for item in bindings[0]] == ["Alice", None]
+    assert [item.status for item in bindings[0]] == ["exact", "exact"]
+    assert [item.asset for item in bindings[0]] == ["Alice", "Alice"]
     assert [item.asset_type for item in bindings[0]] == ["ZZMI", "ZZMI"]
 
 
@@ -960,6 +964,43 @@ def test_dds_classification_cache_is_reused_for_semantic_refresh(
     assert len(calls) == 1
     assert first.texture_default("diffuse") == "textures/replacement.dds"
     assert second.texture_default("diffuse") == "textures/replacement.dds"
+
+
+def test_roleless_gimi_hash_uses_generic_dds_fallback(tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    mod_dir = tmp_path / "mod"
+    replacement_file = mod_dir / "textures" / "replacement.dds"
+    replacement_file.parent.mkdir(parents=True)
+    replacement_file.write_bytes(b"replacement")
+    asset_dir = tmp_path / "assets" / "Alice"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "hash.json").write_text(json.dumps([{
+        "ib": "73c8cae2", "object_indexes": [43845],
+        "texture_hashes": [[
+            ["UnknownUsage", ".dds", "11111111"],
+        ]],
+    }]), encoding="utf-8")
+    replacement = TextureReplacement(
+        "11111111", "ResourceTexture0", (), "TextureOverrideTexture0",
+        "textures/replacement.dds")
+    index = TextureOverrideIndex(
+        replacements_by_hash={"11111111": (replacement,)})
+    monkeypatch.setattr(
+        "app.asset_enrichment.classify_dds",
+        lambda _path: dds_classifier.DDSClassification(
+            "diffuse", "color", "high", ("synthetic_color",)))
+    draw = DrawCall()
+    binding = AssetComponentBinding(
+        status="exact", asset_type="GIMI", asset="Alice", root=root,
+        component_status="exact", range_status="exact",
+        geometry_hash="73c8cae2", component_name="Body",
+        first_index=43845, metadata="Alice/hash.json")
+
+    apply([{"draws": [draw]}], [[binding]], texture_index=index,
+         mod_dir=str(mod_dir))
+
+    assert draw.texture_default("diffuse") == "textures/replacement.dds"
+    assert draw.asset_slot_evidence[0]["role_source"] == "dds_analysis"
 
 
 def test_wwmi_replacements_use_component_local_dds_roles(tmp_path, monkeypatch):

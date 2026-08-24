@@ -45,38 +45,124 @@ def _channel_stats(image):
                    len(channel))
         for channel, mean in zip(channels, means))
     chroma = sum(max(pixel) - min(pixel) for pixel in pixels) / len(pixels)
-    return means, deviations, chroma
+    black_fraction = sum(max(pixel) <= 16 for pixel in pixels) / len(pixels)
+    gray_fraction = sum(
+        max(pixel) - min(pixel) <= 8 for pixel in pixels) / len(pixels)
+    quantized = {
+        (pixel[0] // 16, pixel[1] // 16, pixel[2] // 16)
+        for pixel in pixels
+    }
+    histogram = {}
+    for pixel in pixels:
+        key = (pixel[0] // 16, pixel[1] // 16, pixel[2] // 16)
+        histogram[key] = histogram.get(key, 0) + 1
+    color_entropy = 0.0
+    for count in histogram.values():
+        probability = count / len(pixels)
+        color_entropy -= probability * math.log2(probability)
+
+    width, height = image.size
+    adjacent_differences = []
+    for y in range(height):
+        for x in range(width):
+            pixel = pixels[y * width + x]
+            if x + 1 < width:
+                neighbor = pixels[y * width + x + 1]
+                adjacent_differences.append(
+                    sum(abs(pixel[index] - neighbor[index])
+                        for index in range(3)) / 3)
+            if y + 1 < height:
+                neighbor = pixels[(y + 1) * width + x]
+                adjacent_differences.append(
+                    sum(abs(pixel[index] - neighbor[index])
+                        for index in range(3)) / 3)
+
+    normalized = [tuple(channel / 255.0 for channel in pixel)
+                  for pixel in pixels]
+    valid_xy_fraction = sum(
+        (2 * red - 1) ** 2 + (2 * green - 1) ** 2 <= 1.0
+        for red, green, _blue in normalized) / len(normalized)
+    blue_low_fraction = sum(
+        blue <= 0.05 for _red, _green, blue in normalized) / len(normalized)
+    return {
+        "means": means,
+        "deviations": deviations,
+        "chroma": chroma,
+        "black_fraction": black_fraction,
+        "gray_fraction": gray_fraction,
+        "quantized_occupancy": len(quantized),
+        "color_entropy": color_entropy,
+        "spatial_detail": (
+            sum(adjacent_differences) / len(adjacent_differences)
+            if adjacent_differences else 0.0),
+        "valid_xy_fraction": valid_xy_fraction,
+        "blue_low_fraction": blue_low_fraction,
+    }
 
 
 def _decoded_classification(info, image):
     stats = _channel_stats(image)
     if stats is None:
         return _unknown("unknown", "empty_image")
-    means, deviations, chroma = stats
-    variation = sum(deviations)
+    means = stats["means"]
+    deviations = stats["deviations"]
+    chroma = stats["chroma"]
     if max(info.width, info.height) <= 4:
         return _unknown("lookup", "tiny_dimensions")
-    if variation < 9 and chroma < 8:
+    if (sum(deviations) < 9 and chroma < 8
+            or stats["black_fraction"] >= 0.75):
         return _unknown("packed_mask", "low_variation", "low_chroma")
 
-    # Linear two-channel-style data is the common packed normal layout. The
-    # blue channel is deliberately required to be low so arbitrary masks and
-    # colorful material maps are not promoted to a render role.
-    if (info.format in {"bc7_unorm", "rgba8", "bgra8"}
-            and means[2] < 112 and deviations[0] > 16
-            and deviations[1] > 16 and chroma > 20):
+    # A packed XY normal is centered around 0.5 in R/G and has an almost
+    # empty blue channel.  The unit-circle test rejects arbitrary low-blue
+    # packed data; variation is intentionally not required because a valid
+    # normal can be flat or only gently varying.
+    normal_layout = (
+        info.format in {"bc7_unorm", "rgba8", "bgra8"}
+        and means[2] / 255.0 <= 0.03
+        and deviations[2] / 255.0 <= 0.02
+        and 0.35 <= means[0] / 255.0 <= 0.65
+        and 0.35 <= means[1] / 255.0 <= 0.65
+        and stats["valid_xy_fraction"] >= 0.80
+        and stats["blue_low_fraction"] >= 0.98
+    )
+    if normal_layout:
         return DDSClassification(
             "normal_map", "packed_normal", "high",
-            (f"format:{info.format}", "linear_channels", "low_blue"))
+            (f"format:{info.format}", "centered_xy", "low_blue",
+             "valid_xy"))
+
+    if (info.format in {"bc7_unorm", "rgba8", "bgra8"}
+            and means[2] / 255.0 < 0.15 and chroma > 20):
+        return DDSClassification(
+            None, "packed_data", "medium",
+            (f"format:{info.format}", "linear_channels",
+             "invalid_normal_layout"))
 
     is_srgb = info.format.endswith("_srgb")
     if is_srgb and info.width >= 2 and info.height >= 2:
-        if chroma >= 12 and variation >= 18:
+        diffuse_layout = (
+            stats["black_fraction"] < 0.30
+            and stats["gray_fraction"] < 0.45
+            and min(deviations) >= 32
+            and chroma >= 40
+            and stats["color_entropy"] >= 3.5
+            and stats["quantized_occupancy"] >= 32
+            and stats["spatial_detail"] >= 4
+        )
+        if diffuse_layout:
             return DDSClassification(
                 "diffuse", "color", "high",
-                (f"format:{info.format}", "chroma_variation"))
-        return _unknown("packed_mask", f"format:{info.format}",
-                        "weak_color_evidence")
+                (f"format:{info.format}", "color_complexity",
+                 "channel_variance", "spatial_detail"))
+        if (stats["color_entropy"] < 3.5
+                or stats["spatial_detail"] < 4
+                or stats["gray_fraction"] >= 0.45):
+            texture_class = "effect"
+        else:
+            texture_class = "color"
+        return _unknown(texture_class, f"format:{info.format}",
+                        "insufficient_diffuse_evidence")
 
     if chroma < 12:
         return _unknown("packed_mask", f"format:{info.format}",

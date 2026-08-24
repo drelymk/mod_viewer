@@ -1,6 +1,6 @@
 """Conservative component binding against enabled Asset indexes."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import logging
 
 from core.geometry_identity import GeometryMatch
@@ -115,19 +115,6 @@ def _range_matches(item, geometry_match):
             asset_count != geometry_match.index_count):
         return False
     return True
-
-
-def _geometry_match_for_draw(draw):
-    """Add authored draw count when it can reject a narrower index range."""
-    geometry_match = (draw if isinstance(draw, GeometryMatch)
-                      else getattr(draw, "geometry_match", None))
-    if (not isinstance(geometry_match, GeometryMatch)
-            or geometry_match.index_count is not None):
-        return geometry_match
-    count = getattr(draw, "count", None)
-    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-        return geometry_match
-    return replace(geometry_match, index_count=count)
 
 
 def _binding(root, index, geometry_match, lookup, geometry, item=None,
@@ -255,6 +242,19 @@ def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
              candidate[2].get("geometry"))
             for candidate, _item in range_matches
         }
+        matched_roots = {candidate[0] for candidate, _item in range_matches}
+        if len(matched_roots) == 1 and len(matched_candidates) > 1:
+            # Some Asset roots intentionally contain duplicate geometry
+            # records for equivalent exported objects. Keep separate enabled
+            # roots conservative, but use the index's stable first candidate
+            # when the ambiguity is local to one root.
+            (root, index, lookup, geometry, _ranges), item = range_matches[0]
+            try:
+                return _binding(
+                    root, index, geometry_match, lookup, geometry, item,
+                    range_status="exact")
+            except (IndexError, KeyError, TypeError):
+                return _not_found(asset_type)
         return _ambiguous(
             geometry_match, asset_type,
             component_status=("ambiguous" if len(matched_candidates) > 1
@@ -309,7 +309,8 @@ def _infer_asset_type(groups, indexes):
     scores = {}
     for group in groups or []:
         for draw in group.get("draws", []):
-            geometry_match = _geometry_match_for_draw(draw)
+            geometry_match = (draw if isinstance(draw, GeometryMatch)
+                              else getattr(draw, "geometry_match", None))
             for asset_type, typed_indexes in indexes_by_type.items():
                 binding = _resolve_component_from_indexes(
                     geometry_match, asset_type, typed_indexes,
@@ -364,7 +365,8 @@ def resolve_groups(groups, game, asset_entries, *, availability=None):
         availability.setdefault("unavailable_roots", 0)
     resolved = [[
         _resolve_component_from_indexes(
-            _geometry_match_for_draw(draw), asset_type, indexes,
+            (draw if isinstance(draw, GeometryMatch)
+             else getattr(draw, "geometry_match", None)), asset_type, indexes,
             require_range=asset_type is None)
         for draw in group.get("draws", [])]
         for group in groups
