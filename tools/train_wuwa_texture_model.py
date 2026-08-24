@@ -21,12 +21,10 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from tools.wuwa_texture_labels import (IGNORED_LABELS, NEGATIVE_LABELS,
+                                       POSITIVE_LABELS, canonical_label)
 
-POSITIVE_LABELS = frozenset({"diffuse"})
-NEGATIVE_LABELS = frozenset({
-    "light_map", "material_map", "normal_map", "not_diffuse",
-})
-IGNORED_LABELS = frozenset({"", "skip", "unknown"})
+
 MODEL_EXCLUDED_PREFIXES = ("baseline_",)
 TRAINING_LABEL_FIELDS = [
     "texture_sha256", "label", "target", "label_sources", "source_labels",
@@ -56,14 +54,7 @@ def _write_json(path, value):
 
 
 def _canonical_label(label):
-    label = (label or "").strip().lower()
-    if label in POSITIVE_LABELS:
-        return "diffuse", 1
-    if label in NEGATIVE_LABELS:
-        return "not_diffuse", 0
-    if label in IGNORED_LABELS:
-        return None
-    raise ValueError(f"unsupported training label: {label}")
+    return canonical_label(label)
 
 
 def _signature_for_mod(row):

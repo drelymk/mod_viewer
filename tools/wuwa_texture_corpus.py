@@ -43,6 +43,7 @@ from core.texture_features import (  # noqa: E402
     model_feature_columns,
 )
 from core.textures import load_texture_image  # noqa: E402
+from tools.wuwa_texture_labels import MANUAL_LABELS, NEGATIVE_LABELS  # noqa: E402
 
 
 SCHEMA_VERSION = "wuwa-texture-corpus-v1"
@@ -94,11 +95,8 @@ UNKNOWN_FIELDS = [
 MANUAL_FIELDS = [
     "texture_sha256", "label", "notes", "reviewer", "source",
 ]
-MANUAL_LABELS = frozenset({
-    "", "unknown", "diffuse", "normal_map", "light_map", "material_map",
-})
 DECODE_TARGET_LABELS = frozenset({
-    "diffuse", "normal_map", "light_map", "material_map", "not_diffuse",
+    "diffuse", *NEGATIVE_LABELS,
 })
 COMPONENT_LABEL_FIELDS = [
     "texture_sha256", "component", "label", "label_source", "label_tier",
@@ -389,6 +387,7 @@ class CorpusBuilder:
                 for row in rows:
                     normalized = {field: (row.get(field) or "")
                                   for field in MANUAL_FIELDS}
+                    normalized["label"] = normalized["label"].strip().lower()
                     if normalized["label"] not in MANUAL_LABELS:
                         self.manual_label_errors.append({
                             "kind": "manual_label",

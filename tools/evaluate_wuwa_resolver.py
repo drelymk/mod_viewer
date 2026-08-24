@@ -6,7 +6,8 @@ benchmark artifacts only.
 
 Usage::
 
-    python -m tools.evaluate_wuwa_resolver <corpus> --model <model.joblib> \
+    python -m tools.evaluate_wuwa_resolver <corpus> [<corpus> ...] \
+        --model <model.joblib> \
         --output <directory>
 """
 
@@ -42,8 +43,9 @@ DIRECT_CONTEXTS = frozenset({
 FILENAME_TIERS = frozenset({"exact", "leading", "contains"})
 POLICIES = (
     "current_heuristic",
-    "association_first",
+    "association_then_model",
     "association_thresholds",
+    "membership_then_model",
     "model_first",
     "combined",
 )
@@ -55,6 +57,15 @@ ASSOCIATION_THRESHOLDS = {
     "pool": 0.80,
     "inventory": 0.90,
     "unknown": 0.90,
+}
+ASSOCIATION_MARGINS = {
+    "direct": 0.00005,
+    "exact": 0.00005,
+    "leading": 0.00005,
+    "contains": 0.00005,
+    "pool": 0.00005,
+    "inventory": 0.00005,
+    "unknown": 0.00005,
 }
 COMBINED_BONUS = {
     0: 0.25,
@@ -77,6 +88,11 @@ def _write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2,
                                sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _model_file(model_path):
+    model_path = Path(model_path)
+    return model_path / "model.joblib" if model_path.is_dir() else model_path
 
 
 def _as_set(value):
@@ -170,9 +186,7 @@ def score_candidates(corpus_dir, model_path, candidates):
     import joblib
 
     corpus_dir = Path(corpus_dir)
-    model_path = Path(model_path)
-    if model_path.is_dir():
-        model_path = model_path / "model.joblib"
+    model_path = _model_file(model_path)
     model = joblib.load(model_path)
     feature_columns, _schema_version = trainer._load_model_features(corpus_dir)
     texture_rows = [
@@ -209,6 +223,30 @@ def load_expected_labels(corpus_dir):
     return expected
 
 
+def _merge_candidate_maps(target, source):
+    for key, values in source.items():
+        by_sha = {row["texture_sha256"]: row for row in target[key]}
+        for value in values:
+            existing = by_sha.get(value["texture_sha256"])
+            if existing is None:
+                target[key].append(value)
+                by_sha[value["texture_sha256"]] = value
+                continue
+            for field in ("relative_files", "association_kinds",
+                          "association_tiers", "filename_tags", "roles"):
+                existing[field].update(value[field])
+            existing["association_rank"] = min(
+                existing["association_rank"], value["association_rank"])
+            existing["association_kind"] = min(
+                existing["association_kinds"],
+                key=lambda kind: ASSOCIATION_RANKS[kind])
+
+
+def _merge_expected_labels(target, source):
+    for key, values in source.items():
+        target[key].update(values)
+
+
 def load_cases(path):
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(value, list):
@@ -216,20 +254,48 @@ def load_cases(path):
     for index, case in enumerate(value):
         if not isinstance(case, dict):
             raise ValueError(f"resolver case {index} is not an object")
-        for field in ("name", "mod_id", "component"):
+        for field in ("name", "component"):
             if not case.get(field):
                 raise ValueError(f"resolver case {index} lacks {field}")
+        if not case.get("mod_id") and not case.get("mod_id_aliases"):
+            raise ValueError(
+                f"resolver case {index} lacks mod_id or mod_id_aliases")
     return value
 
 
+def _case_mod_ids(case):
+    values = []
+    if case.get("mod_id"):
+        values.append(case["mod_id"])
+    values.extend(case.get("mod_id_aliases") or [])
+    return list(dict.fromkeys(str(value) for value in values if str(value)))
+
+
+def _case_candidates(case, candidates):
+    mod_ids = _case_mod_ids(case)
+    for mod_id in mod_ids:
+        key = (mod_id, case["component"])
+        if key in candidates:
+            return mod_id, candidates[key]
+    return (mod_ids[0] if mod_ids else ""), []
+
+
 def _expected_for_case(case, candidates, expected_labels):
-    key = (case["mod_id"], case["component"])
+    mod_id = case.get("resolved_mod_id") or case.get("mod_id")
+    key = (mod_id, case["component"])
     if case.get("expected_status") == "unresolved":
         if not candidates:
             return {"kind": "unavailable", "texture_shas": set(),
                     "description": "expected unresolved case not in corpus"}
         return {"kind": "unresolved", "texture_shas": set(),
                 "description": "expected unresolved"}
+    if case.get("expected_status") == "ambiguous":
+        target = set(expected_labels.get(key, set()))
+        if not target:
+            return {"kind": "unavailable", "texture_shas": set(),
+                    "description": "ambiguous diffuse labels not in corpus"}
+        return {"kind": "ambiguous", "texture_shas": target,
+                "description": "expected abstention for legitimate ambiguity"}
     explicit_shas = _as_set(case.get("expected_texture_sha256"))
     if explicit_shas:
         target = explicit_shas
@@ -265,15 +331,19 @@ def _expected_for_case(case, candidates, expected_labels):
 
 def _sort_key(candidate, policy):
     rank = candidate["association_rank"]
+    membership_rank = 0 if rank <= 1 else rank
     model_score = (candidate["model_score"]
                    if candidate["model_score"] is not None else -1.0)
     baseline = candidate["baseline_color_score"]
     if policy == "current_heuristic":
         return (-baseline, rank, -model_score, candidate["texture_sha256"])
-    if policy == "association_first":
+    if policy == "association_then_model":
         return (rank, -model_score, -baseline, candidate["texture_sha256"])
     if policy == "association_thresholds":
         return (rank, -model_score, -baseline, candidate["texture_sha256"])
+    if policy == "membership_then_model":
+        return (membership_rank, -model_score, -baseline,
+                candidate["texture_sha256"])
     if policy == "model_first":
         return (-model_score, rank, -baseline, candidate["texture_sha256"])
     if policy == "combined":
@@ -302,6 +372,39 @@ def _candidate_report(row):
     }
 
 
+def _passes_model_gate(ordered, policy, min_score):
+    if not ordered:
+        return None
+    top = ordered[0]
+    if top["model_score"] is None:
+        return None
+    threshold = min_score
+    if policy == "association_thresholds":
+        threshold = ASSOCIATION_THRESHOLDS.get(
+            top["association_kind"], min_score)
+    if top["model_score"] < threshold:
+        return None
+    if policy in {"association_then_model", "association_thresholds",
+                  "membership_then_model", "combined"}:
+        top_rank = (0 if policy == "membership_then_model"
+                    and top["association_rank"] <= 1
+                    else top["association_rank"])
+        same_tier = [row for row in ordered
+                     if ((0 if policy == "membership_then_model"
+                          and row["association_rank"] <= 1
+                          else row["association_rank"]) == top_rank)]
+        if len(same_tier) > 1:
+            second = same_tier[1]
+            second_score = (second["model_score"]
+                            if second["model_score"] is not None else -1.0)
+            margin = top["model_score"] - second_score
+            required = ASSOCIATION_MARGINS.get(
+                top["association_kind"], 0.0)
+            if margin < required:
+                return None
+    return top["texture_sha256"]
+
+
 def resolve_case(candidates, expected, policy, min_score=0.5):
     ordered = rank_candidates(candidates, policy)
     predicted = None
@@ -310,23 +413,19 @@ def resolve_case(candidates, expected, policy, min_score=0.5):
         if policy == "current_heuristic":
             predicted = top["texture_sha256"]
         else:
-            threshold = min_score
-            if policy == "association_thresholds":
-                threshold = ASSOCIATION_THRESHOLDS.get(
-                    top["association_kind"], min_score)
-            if ((top["model_score"] is not None)
-                    and top["model_score"] >= threshold):
-                predicted = top["texture_sha256"]
+            predicted = _passes_model_gate(ordered, policy, min_score)
 
     if expected["kind"] == "unavailable":
         status = "unavailable"
-    elif expected["kind"] == "unresolved":
-        status = "correct" if predicted is None else "wrong"
+    elif expected["kind"] in {"unresolved", "ambiguous"}:
+        status = ("correct_abstention" if predicted is None
+                  else "wrong_selection")
     elif predicted is None:
-        status = "unresolved"
+        status = "unnecessary_abstention"
     else:
-        status = ("correct" if predicted in expected["texture_shas"]
-                  else "wrong")
+        status = ("correct_selection"
+                  if predicted in expected["texture_shas"]
+                  else "wrong_selection")
     return {
         "status": status,
         "predicted_texture_sha256": predicted,
@@ -340,17 +439,18 @@ def resolve_case(candidates, expected, policy, min_score=0.5):
 
 def _summary(results):
     counts = {status: 0 for status in
-              ("correct", "wrong", "unresolved", "unavailable")}
+              ("correct_selection", "correct_abstention",
+               "wrong_selection", "unnecessary_abstention", "unavailable")}
     for result in results:
         counts[result["status"]] += 1
-    automatic = counts["correct"] + counts["wrong"]
+    automatic = counts["correct_selection"] + counts["wrong_selection"]
     return {
         **counts,
         "total_cases": len(results),
         "eligible_cases": len(results) - counts["unavailable"],
         "automatic_cases": automatic,
         "false_positive_rate": (
-            counts["wrong"] / automatic if automatic else None),
+            counts["wrong_selection"] / automatic if automatic else None),
     }
 
 
@@ -362,39 +462,57 @@ def _compare_to_baseline(results, baseline_results):
     regressed = 0
     for row in results:
         previous = baseline_by_name.get(row["name"], {})
-        if previous.get("status") in {"wrong", "unresolved"} \
-                and row["status"] == "correct":
+        if previous.get("status") in {
+                "wrong_selection", "unnecessary_abstention"} \
+                and row["status"] in {"correct_selection",
+                                       "correct_abstention"}:
             fixed += 1
-        if previous.get("status") == "correct" \
-                and row["status"] in {"wrong", "unresolved"}:
+        if previous.get("status") in {"correct_selection",
+                                       "correct_abstention"} \
+                and row["status"] in {
+                    "wrong_selection", "unnecessary_abstention"}:
             regressed += 1
     return {"fixed": fixed, "regressed": regressed}
 
 
+def _corpus_list(corpus_dir):
+    if isinstance(corpus_dir, (str, Path)):
+        return [Path(corpus_dir)]
+    return [Path(value) for value in corpus_dir]
+
+
 def evaluate_corpus(corpus_dir, model_path, cases_path, *, min_score=0.5):
-    """Run all resolver policies against the supplied case set."""
-    candidates = load_candidates(corpus_dir)
-    score_candidates(corpus_dir, model_path, candidates)
-    expected_labels = load_expected_labels(corpus_dir)
+    """Run all resolver policies against one or more corpus directories."""
+    corpus_dirs = _corpus_list(corpus_dir)
+    candidates = defaultdict(list)
+    expected_labels = defaultdict(set)
+    for current_corpus in corpus_dirs:
+        local_candidates = load_candidates(current_corpus)
+        score_candidates(current_corpus, model_path, local_candidates)
+        _merge_candidate_maps(candidates, local_candidates)
+        _merge_expected_labels(
+            expected_labels, load_expected_labels(current_corpus))
     cases = load_cases(cases_path)
     baseline = []
     policy_results = {}
     for case in cases:
+        resolved_mod_id, candidates_for_case = _case_candidates(
+            case, candidates)
+        resolved_case = {**case, "resolved_mod_id": resolved_mod_id}
         expected = _expected_for_case(
-            case, candidates.get((case["mod_id"], case["component"]), []),
-            expected_labels)
+            resolved_case, candidates_for_case, expected_labels)
         expected = {
             **expected,
             "texture_shas": sorted(expected["texture_shas"]),
         }
         row = {
             "name": case["name"],
-            "mod_id": case["mod_id"],
+            "mod_id": resolved_mod_id,
             "component": case["component"],
             "expected": expected,
         }
         result = resolve_case(
-            candidates.get((case["mod_id"], case["component"]), []),
+            candidates_for_case,
             expected, "current_heuristic", min_score=min_score)
         baseline.append({**row, **result})
     for policy in POLICIES:
@@ -420,15 +538,32 @@ def evaluate_corpus(corpus_dir, model_path, cases_path, *, min_score=0.5):
         if policy != "current_heuristic":
             summary.update(_compare_to_baseline(results, baseline))
         policy_results[policy] = {"summary": summary, "cases": results}
+    model_file = _model_file(model_path)
+    training_report = model_file.parent / "training_report.json"
     return {
         "schema_version": "wuwa-resolver-evaluation-v1",
-        "corpus": str(Path(corpus_dir).resolve()),
-        "model": str(Path(model_path).resolve()),
+        "corpora": [str(path.resolve()) for path in corpus_dirs],
+        "model": str(model_file.resolve()),
+        "training_report": (str(training_report.resolve())
+                             if training_report.exists() else None),
         "cases_file": str(Path(cases_path).resolve()),
         "min_score": min_score,
         "association_ranks": ASSOCIATION_RANKS,
         "association_thresholds": ASSOCIATION_THRESHOLDS,
+        "association_margins": ASSOCIATION_MARGINS,
         "combined_bonus": COMBINED_BONUS,
+        "policy_notes": {
+            "current_heuristic": "baseline color score, then association evidence",
+            "association_then_model": (
+                "strongest association tier, then model score"),
+            "association_thresholds": (
+                "association_then_model with tier-specific score thresholds"),
+            "membership_then_model": (
+                "direct and exact membership share one tier, then model score"),
+            "model_first": "model score before association evidence",
+            "combined": "model score plus association bonus",
+            "model_scores": "ranking probabilities; not calibrated runtime confidence",
+        },
         "policies": policy_results,
     }
 
@@ -439,9 +574,10 @@ def _write_html_report(path, report):
         summary = value["summary"]
         rows.append(
             "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>"
-            "<td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                html.escape(policy), summary["correct"], summary["wrong"],
-                summary["unresolved"], summary["unavailable"],
+            "<td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                html.escape(policy), summary["correct_selection"],
+                summary["correct_abstention"], summary["wrong_selection"],
+                summary["unnecessary_abstention"], summary["unavailable"],
                 summary["false_positive_rate"],
                 summary.get("fixed", "-")))
     page = """<!doctype html><meta charset='utf-8'>
@@ -449,9 +585,10 @@ def _write_html_report(path, report):
 <h1>WuWa resolver evaluation</h1>
 <p>Offline benchmark only. Runtime behavior is unchanged.</p>
 <pre>{summary}</pre>
-<table><tr><th>Policy</th><th>Correct</th><th>Wrong</th>
-<th>Unresolved</th><th>Unavailable</th><th>False-positive rate</th>
-<th>Fixed</th></tr>{rows}</table>
+<table><tr><th>Policy</th><th>Correct selection</th>
+<th>Correct abstention</th><th>Wrong selection</th>
+<th>Unnecessary abstention</th><th>Unavailable</th>
+<th>False-positive rate</th><th>Fixed</th></tr>{rows}</table>
 """.format(
         summary=html.escape(json.dumps({
             "min_score": report["min_score"],
@@ -478,7 +615,7 @@ def evaluate_and_write(corpus_dir, model_path, cases_path, output_dir,
 
 def _build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("corpus", type=Path)
+    parser.add_argument("corpus", nargs="+", type=Path)
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--cases", default=Path(__file__).with_name(
         "wuwa_resolver_regressions.json"), type=Path)

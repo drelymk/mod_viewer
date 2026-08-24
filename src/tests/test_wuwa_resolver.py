@@ -26,26 +26,28 @@ def test_policies_have_distinct_association_and_model_orders():
         _candidate("direct", 0, 0.70),
     ]
 
-    assert resolver.rank_candidates(candidates, "association_first")[0][
+    assert resolver.rank_candidates(candidates, "association_then_model")[0][
         "texture_sha256"] == "direct"
     assert resolver.rank_candidates(candidates, "model_first")[0][
         "texture_sha256"] == "model"
 
 
-def test_resolver_accepts_any_member_of_legitimate_ambiguity():
+def test_resolver_abstains_for_legitimate_ambiguity():
     candidates = [
         _candidate("diffuse-a", 0, 0.91),
-        _candidate("diffuse-b", 0, 0.89),
+        _candidate("diffuse-b", 0, 0.90999),
     ]
     expected = {
-        "kind": "diffuse",
+        "kind": "ambiguous",
         "texture_shas": {"diffuse-a", "diffuse-b"},
-        "description": "trusted diffuse component label",
+        "description": "expected abstention for legitimate ambiguity",
     }
 
-    result = resolver.resolve_case(candidates, expected, "model_first")
+    result = resolver.resolve_case(
+        candidates, expected, "association_then_model")
 
-    assert result["status"] == "correct"
+    assert result["status"] == "correct_abstention"
+    assert result["predicted_texture_sha256"] is None
     assert result["ambiguous_expected"] is True
 
 
@@ -75,5 +77,17 @@ def test_association_threshold_can_abstain_on_weak_exact_evidence():
     result = resolver.resolve_case(
         candidates, expected, "association_thresholds")
 
-    assert result["status"] == "correct"
+    assert result["status"] == "correct_abstention"
     assert result["predicted_texture_sha256"] is None
+
+
+def test_membership_policy_compares_direct_and_exact_together():
+    candidates = [
+        _candidate("exact", 1, 0.99),
+        _candidate("direct", 0, 0.70),
+    ]
+
+    assert resolver.rank_candidates(
+        candidates, "association_then_model")[0]["texture_sha256"] == "direct"
+    assert resolver.rank_candidates(
+        candidates, "membership_then_model")[0]["texture_sha256"] == "exact"
