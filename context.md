@@ -147,6 +147,8 @@ machine-specific paths or facts that are obvious from the source.
   `normal_map`, `normal_data`, `light_map` and `material_map`. Diffuse is sRGB;
   auxiliary roles are non-color data. A legacy path-only key is normalized
   using the caller's known role, never guessed in the browser.
+- Heuristic texture candidate discovery populates viewer choices only; it must
+  not infer or mutate semantic texture bindings.
 - `core.resource_paths.safe_resource_path()` is the single sandbox for
   mod-authored geometry, manual texture selection and diagnostics. Reject
   absolute/drive paths and excessive parent traversal. The server's separate
