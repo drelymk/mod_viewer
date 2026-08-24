@@ -97,6 +97,9 @@ MANUAL_FIELDS = [
 MANUAL_LABELS = frozenset({
     "", "unknown", "diffuse", "normal_map", "light_map", "material_map",
 })
+DECODE_TARGET_LABELS = frozenset({
+    "diffuse", "normal_map", "light_map", "material_map", "not_diffuse",
+})
 COMPONENT_LABEL_FIELDS = [
     "texture_sha256", "component", "label", "label_source", "label_tier",
     "mod_id", "relative_file", "role",
@@ -347,8 +350,11 @@ class CorpusBuilder:
         self.pixel_skipped_budget = 0
         self.manual_labels = []
         self.manual_label_errors = []
+        self._feature_cache_pixel_limit = None
+        self.decode_target_shas = set()
         self._load_feature_cache()
         self._load_manual_labels()
+        self._load_decode_targets()
 
     def _load_feature_cache(self):
         path = self.output_dir / "feature_cache.json"
@@ -358,6 +364,7 @@ class CorpusBuilder:
             return
         if payload.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
             return
+        self._feature_cache_pixel_limit = payload.get("pixel_decode_limit")
         for sha, row in (payload.get("entries") or {}).items():
             if isinstance(sha, str) and isinstance(row, dict):
                 self.textures[sha] = dict(row)
@@ -365,6 +372,7 @@ class CorpusBuilder:
     def _flush_feature_cache(self):
         _write_json(self.output_dir / "feature_cache.json", {
             "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "pixel_decode_limit": self.pixel_limit,
             "entries": {
                 sha: {key: value for key, value in row.items()
                       if key not in {"example_mod_id", "example_relative_file",
@@ -402,6 +410,23 @@ class CorpusBuilder:
                 "kind": "manual_label", "error": str(exc),
             })
 
+    def _load_decode_targets(self):
+        """Prioritize visual features for already-known training labels."""
+        for filename, label_field in (
+                ("trusted_labels.csv", "label"),
+                ("manual_labels.csv", "label")):
+            try:
+                with (self.output_dir / filename).open(
+                        encoding="utf-8", newline="") as stream:
+                    rows = csv.DictReader(stream)
+                    for row in rows:
+                        if ((row.get(label_field) or "").strip().lower()
+                                in DECODE_TARGET_LABELS
+                                and row.get("texture_sha256")):
+                            self.decode_target_shas.add(row["texture_sha256"])
+            except (OSError, UnicodeError, csv.Error):
+                continue
+
     def _ensure_texture(self, path, mod_id, relative_file):
         try:
             data = Path(path).read_bytes()
@@ -412,19 +437,30 @@ class CorpusBuilder:
         sha = hashlib.sha256(data).hexdigest()
         self.texture_occurrence_counts[sha] += 1
         if sha in self.textures:
-            self.feature_cache_hits += 1
             row = self.textures[sha]
             row.setdefault("sha256", sha)
             row["example_mod_id"] = row.get("example_mod_id") or mod_id
             row["example_relative_file"] = (
                 row.get("example_relative_file") or relative_file)
             self.texture_examples.setdefault(sha, (mod_id, relative_file, path))
-            return sha
+            refresh_pixels = row.get("decode_status") == "skipped_budget" \
+                and (
+                    sha in self.decode_target_shas
+                    or
+                    self.pixel_limit is None
+                    or self._feature_cache_pixel_limit is None
+                    or self.pixel_limit > self._feature_cache_pixel_limit
+                )
+            if not refresh_pixels:
+                self.feature_cache_hits += 1
+                return sha
 
         info = inspect_dds(path)
         decode_allowed = (
             bool(info)
-            and (self.pixel_limit is None or self.pixel_decoded < self.pixel_limit))
+            and (self.pixel_limit is None
+                 or self.pixel_decoded < self.pixel_limit
+                 or sha in self.decode_target_shas))
         image = load_texture_image(path, max_size=128, preserve_alpha=True) \
             if decode_allowed else None
         if image is not None:
@@ -823,6 +859,7 @@ class CorpusBuilder:
             "pixel_skipped_budget": pixel_skipped_total,
             "pixel_skipped_budget_this_run": self.pixel_skipped_budget,
             "pixel_decode_limit": self.pixel_limit,
+            "pixel_decode_target_count": len(self.decode_target_shas),
             "errors": len(self.errors),
             "error_details": self.errors[:100],
         }
@@ -862,6 +899,7 @@ class CorpusBuilder:
         _write_json(self.output_dir / "summary.json", summary)
         _write_json(self.output_dir / "feature_cache.json", {
             "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "pixel_decode_limit": self.pixel_limit,
             "entries": {
                 sha: {key: value for key, value in row.items()
                       if key not in {"example_mod_id", "example_relative_file"}}

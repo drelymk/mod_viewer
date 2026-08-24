@@ -1,6 +1,7 @@
 """Regression tests for the offline WuWa corpus tooling."""
 
 import csv
+import hashlib
 from types import SimpleNamespace
 
 from tools import wuwa_texture_corpus as corpus
@@ -153,3 +154,42 @@ def test_nested_ini_directories_are_independent_texture_boundaries(tmp_path):
     assert str(child) in directories
     assert str(parent / "parent.dds") in parent_files
     assert str(child / "child.dds") not in parent_files
+
+
+def test_known_labels_bypass_pixel_preview_budget(tmp_path, monkeypatch):
+    output = tmp_path / "corpus"
+    output.mkdir()
+    texture = tmp_path / "sample.dds"
+    texture.write_bytes(b"sample")
+    sha = hashlib.sha256(b"sample").hexdigest()
+    (output / "trusted_labels.csv").write_text(
+        "texture_sha256,label,label_source\n"
+        f"{sha},diffuse,explicit_semantic_binding\n",
+        encoding="utf-8")
+    (output / "feature_cache.json").write_text(
+        "{\"feature_schema_version\": \"wuwa-texture-features-v1.1\","
+        " \"pixel_decode_limit\": 1, \"entries\": {"
+        f"\"{sha}\": {{\"sha256\": \"{sha}\", "
+        "\"decode_status\": \"skipped_budget\"}}}}",
+        encoding="utf-8")
+
+    monkeypatch.setattr(corpus, "inspect_dds", lambda _path: object())
+    monkeypatch.setattr(corpus, "load_texture_image",
+                        lambda _path, **_kwargs: object())
+    monkeypatch.setattr(corpus, "_diagnostic_baseline",
+                        lambda *_args: None)
+    monkeypatch.setattr(
+        corpus, "extract_texture_features",
+        lambda _path, **_kwargs: {
+            "feature_version": "wuwa-texture-features-v1.1",
+            "decode_status": "decoded",
+        },
+    )
+
+    builder = corpus.CorpusBuilder(
+        tmp_path / "mods", output, pixel_limit=0)
+    builder._ensure_texture(texture, "Mod", "sample.dds")
+
+    assert builder.feature_extractions == 1
+    assert builder.pixel_decoded == 1
+    assert builder.feature_cache_hits == 0
