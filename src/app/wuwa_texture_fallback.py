@@ -18,18 +18,9 @@ _SLOT_SOURCE = "wuwa_ps_slot"
 
 
 @dataclass(frozen=True, slots=True)
-class _FilenameReplacement:
-    replacement: object
-    components: tuple[int, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class _Candidate:
     file: str
     source: str
-    association: str | None = None
-    slot: int | None = None
-    resource: str | None = None
 
 
 def _component_ordinal(group):
@@ -48,48 +39,28 @@ def _file_key(path):
     return os.path.normcase(os.path.normpath(path))
 
 
-def _parse_filename_replacement(replacement):
+def _filename_matches_component(replacement, ordinal):
     filename = replacement.file
     if not isinstance(filename, str):
-        return None
+        return False
     match = _WUWA_COMPONENT_TEXTURE_RE.fullmatch(_basename(filename))
     if not match:
-        return None
-    components = tuple(
-        int(value) for value in match.group("components").split("-"))
-    if not components:
-        return None
-    return _FilenameReplacement(
-        replacement=replacement,
-        components=components,
-    )
-
-
-def _component_association(components, ordinal):
-    if ordinal not in components:
-        return None
-    if components == (ordinal,):
-        return "exact"
-    if components[0] == ordinal:
-        return "leading"
-    return "contains"
+        return False
+    return ordinal in {
+        int(value) for value in match.group("components").split("-")
+    }
 
 
 def _filename_candidates(ordinal, texture_index):
     result = []
     for replacements in (texture_index.replacements_by_hash or {}).values():
         for replacement in replacements:
-            parsed = _parse_filename_replacement(replacement)
-            if parsed is None:
-                continue
-            association = _component_association(
-                parsed.components, ordinal)
-            if association is None or not parsed.replacement.file:
+            if (not replacement.file
+                    or not _filename_matches_component(replacement, ordinal)):
                 continue
             result.append(_Candidate(
-                file=parsed.replacement.file,
+                file=replacement.file,
                 source=_FILENAME_SOURCE,
-                association=association,
             ))
     return result
 
@@ -104,8 +75,6 @@ def _slot_candidates(group):
             result.append(_Candidate(
                 file=filename,
                 source=_SLOT_SOURCE,
-                slot=binding.slot,
-                resource=binding.resource,
             ))
     return result
 
@@ -118,24 +87,10 @@ def _record_discovered(group, candidates, mod_dir):
         if path is None or not os.path.isfile(path):
             continue
         key = _file_key(path)
-        record = discovered.get(key)
-        if record is None:
-            record = {
-                "file": candidate.file,
-                "source": candidate.source,
-            }
-            if candidate.association is not None:
-                record["association"] = candidate.association
-            if candidate.slot is not None:
-                record["slot"] = candidate.slot
-            if candidate.resource is not None:
-                record["resource"] = candidate.resource
-            discovered[key] = record
-            continue
-
-        sources = record.setdefault("sources", [record["source"]])
-        if candidate.source not in sources:
-            sources.append(candidate.source)
+        discovered.setdefault(key, {
+            "file": candidate.file,
+            "source": candidate.source,
+        })
 
     group["discovered_textures"] = list(discovered.values())
 

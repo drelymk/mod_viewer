@@ -36,7 +36,6 @@ def test_filename_exact_association_discovers_without_mutating_draw(tmp_path):
     apply([group], str(tmp_path))
 
     assert _files(group) == [replacement.file]
-    assert group["discovered_textures"][0]["association"] == "exact"
     assert draw.texture_default("diffuse") is None
     assert draw.texture_provenance == {}
 
@@ -50,7 +49,6 @@ def test_filename_shared_association_is_included(tmp_path):
     apply([group], str(tmp_path))
 
     assert _files(group) == [replacement.file]
-    assert group["discovered_textures"][0]["association"] == "contains"
 
 
 def test_all_matching_filenames_are_retained(tmp_path):
@@ -155,9 +153,10 @@ def test_filename_and_slot_duplicate_is_recorded_once(tmp_path):
 
     apply([group], str(tmp_path))
 
-    assert _files(group) == [replacement.file]
-    assert group["discovered_textures"][0]["sources"] == [
-        "wuwa_ps_slot", "wuwa_filename"]
+    assert group["discovered_textures"] == [{
+        "file": replacement.file,
+        "source": "wuwa_ps_slot",
+    }]
 
 
 def test_slotfix_bindings_are_discovered_without_role_assignment(tmp_path):
