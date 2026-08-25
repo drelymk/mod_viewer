@@ -187,7 +187,9 @@ machine-specific paths or facts that are obvious from the source.
   missing authored count uses the resolved IB header count.
 - WWMI metadata files are independently recoverable components, and candidate
   texture identity is rooted at the registered Asset Folder rather than an
-  object subdirectory.
+  object subdirectory. Direct WWMI candidate pools use only the filename's
+  `Components-N...` ordinal association; unknown filenames are excluded and
+  the association remains candidate-only without assigning material roles.
 - Recoverable Asset part failures are reported as Asset warnings and do not
   discard otherwise renderable components; a load fails only when no parts
   survive.

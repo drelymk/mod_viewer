@@ -1,6 +1,7 @@
 """Focused direct Asset loading regressions."""
 
 import json
+import os
 import struct
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from app import asset_folders, asset_textures, paths, server
 from app.asset_index import build_index
 from app.asset_loader import hash_asset, load_asset
+from app.asset_loader.wwmi import _component_texture_candidates
 from app.asset_loader.models import AssetLoadResult, AssetMeshPart
 from app.api import ModViewerAPI
 from core.geometry_transport import GeometryBlob
@@ -70,7 +72,8 @@ def _wwmi_triangle(folder, *, component_name="Body", vb_hash="11111111",
     (folder / "Component 0.vb").write_bytes(data)
     (folder / "Component 0.ib").write_bytes(struct.pack("<3H", 0, 2, 1))
     if image:
-        (folder / "candidate.dds").write_bytes(b"not decoded during load")
+        (folder / "Components-0 t=candidate.dds").write_bytes(
+            b"not decoded during load")
 
 
 def test_migoto_dump_uses_declared_semantics_and_streams_layouts(tmp_path):
@@ -471,9 +474,52 @@ def test_wwmi_texture_candidates_use_registered_asset_root(tmp_path):
     candidate = result.parts[0].texture_candidates[0]
 
     assert candidate.key == asset_textures.asset_texture_key(
-        str(root), str(object_dir / "candidate.dds"), "diffuse")
+        str(root), str(object_dir / "Components-0 t=candidate.dds"),
+        "diffuse")
     assert candidate.key != asset_textures.asset_texture_key(
-        str(object_dir), str(object_dir / "candidate.dds"), "diffuse")
+        str(object_dir), str(object_dir / "Components-0 t=candidate.dds"),
+        "diffuse")
+
+
+def test_wwmi_texture_candidates_are_filtered_by_component_filename(tmp_path):
+    names = [
+        "Components-2 t=A.dds",
+        "Components-0-1-4 t=B.dds",
+        "Components-0-2 t=C.dds",
+        "Components-2-3 t=D.dds",
+        "Components-3 t=E.dds",
+        "SomeTexture.dds",
+    ]
+    files = []
+    for name in names:
+        path = tmp_path / name
+        path.write_bytes(b"not decoded during load")
+        files.append(str(path))
+    files.append(files[0])
+
+    def texture_source(path, role):
+        return f"uri:{role}:{path}"
+
+    def candidate_names(ordinal):
+        return {os.path.basename(item.path)
+                for item in _component_texture_candidates(
+                    files, str(tmp_path), ordinal, texture_source)}
+
+    assert candidate_names(0) == {"Components-0-1-4 t=B.dds",
+                                  "Components-0-2 t=C.dds"}
+    assert candidate_names(1) == {"Components-0-1-4 t=B.dds"}
+    assert candidate_names(2) == {"Components-2 t=A.dds",
+                                  "Components-0-2 t=C.dds",
+                                  "Components-2-3 t=D.dds"}
+    assert candidate_names(3) == {"Components-2-3 t=D.dds",
+                                  "Components-3 t=E.dds"}
+    assert candidate_names(4) == {"Components-0-1-4 t=B.dds"}
+    assert candidate_names(5) == set()
+
+    candidates = _component_texture_candidates(
+        files, str(tmp_path), 2, texture_source)
+    assert all(item.role is None and item.source == "candidate"
+               for item in candidates)
 
 
 def test_wwmi_reverses_winding_without_rewriting_authored_normals(tmp_path):
@@ -501,7 +547,8 @@ def test_wwmi_reverses_winding_without_rewriting_authored_normals(tmp_path):
     (asset / "Component 0.vb").write_bytes(data)
     (asset / "Component 0.ib").write_bytes(
         struct.pack("<III", 0, 2, 1))
-    (asset / "candidate.dds").write_bytes(b"not decoded during load")
+    (asset / "Components-0 t=candidate.dds").write_bytes(
+        b"not decoded during load")
 
     index = build_index("WWMI", str(root))
     result = load_asset("WWMI", str(root), index["assets"][0],

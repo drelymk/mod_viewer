@@ -6,13 +6,11 @@ import re
 
 from core.ini_parser import TextureOverrideIndex
 from core.resource_paths import safe_resource_path
+from .wuwa_texture_names import texture_component_ordinals
 
 
 _COMPONENT_RE = re.compile(
     r"^Component(?P<ordinal>\d+)(?:_\d+)?$", re.I)
-_WUWA_COMPONENT_TEXTURE_RE = re.compile(
-    r"^Components-(?P<components>\d+(?:-\d+)*)"
-    r"\s+t=(?P<tag>.+?)\.dds$", re.I)
 _FILENAME_SOURCE = "wuwa_filename"
 _SLOT_SOURCE = "wuwa_ps_slot"
 
@@ -29,12 +27,6 @@ def _component_ordinal(group):
     return int(match.group("ordinal")) if match else None
 
 
-def _basename(filename):
-    # Resource paths are normally POSIX-like even on Windows. Splitting both
-    # separators keeps the filename parser independent of the host platform.
-    return str(filename).replace("\\", "/").rsplit("/", 1)[-1]
-
-
 def _file_key(path):
     return os.path.normcase(os.path.normpath(path))
 
@@ -43,12 +35,8 @@ def _filename_matches_component(replacement, ordinal):
     filename = replacement.file
     if not isinstance(filename, str):
         return False
-    match = _WUWA_COMPONENT_TEXTURE_RE.fullmatch(_basename(filename))
-    if not match:
-        return False
-    return ordinal in {
-        int(value) for value in match.group("components").split("-")
-    }
+    components = texture_component_ordinals(filename)
+    return components is not None and ordinal in components
 
 
 def _filename_candidates(ordinal, texture_index):

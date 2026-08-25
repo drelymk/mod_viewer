@@ -11,6 +11,7 @@ from core.migoto_format import MigotoFormatError, parse_fmt
 from core.vertex_attributes import VertexAttributeSource, decode_normals
 
 from .. import asset_paths, asset_textures
+from ..wuwa_texture_names import texture_component_ordinals
 from .hash_asset import _file_list
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      AssetTexture)
@@ -202,15 +203,22 @@ def _remap(positions, normals, uvs, indices, vertex_count):
         pack_indices(remapped)
 
 
-def _candidates(files, root, texture_source):
+def _component_texture_candidates(files, root, ordinal, texture_source):
     result = []
+    seen = set()
     for path in files:
         if not path.casefold().endswith(_IMAGE_EXTENSIONS):
             continue
+        components = texture_component_ordinals(path)
+        if components is None or ordinal not in components:
+            continue
         # Candidate-only associations deliberately carry no semantic role.
         key = asset_textures.asset_texture_key(root, path, "diffuse")
+        if key in seen:
+            continue
         uri = texture_source(path, "diffuse") if texture_source else key
         if uri:
+            seen.add(key)
             result.append(AssetTexture(
                 None, path, key, os.path.splitext(os.path.basename(path))[0],
                 "candidate", uri))
@@ -255,8 +263,6 @@ def load_wwmi_asset(root, record, *, texture_source=None):
 
         metadata_directory = os.path.dirname(metadata_file)
         component_files = _file_list(metadata_directory)
-        candidates = _candidates(
-            component_files, root, texture_source)
         geometry = _metadata_geometry(record, metadata_relative)
         geometry_hash = geometry.get("hash") or raw.get("vb0_hash")
         for ordinal, component in enumerate(components):
@@ -324,6 +330,8 @@ def load_wwmi_asset(root, record, *, texture_source=None):
             label = name or f"Part {ordinal + 1}"
             source_path = record.get("path")
             key = f"{source_path}::{label}::{geometry_hash or 'unknown'}::{ordinal}"
+            candidates = _component_texture_candidates(
+                component_files, root, ordinal, texture_source)
             parts.append(AssetMeshPart(
                 key=key, label=label, asset_type="WWMI", asset_path=source_path,
                 geometry_hash=geometry_hash, component_name=name,
