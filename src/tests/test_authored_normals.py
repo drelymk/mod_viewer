@@ -132,6 +132,65 @@ def test_packed_vector_normals_are_detected_and_decoded(tmp_path):
     assert normals[6:9] == (0., 0., 1.)
 
 
+def _packed_normals(values):
+    return b"".join(bytes((0, 0, 0, 0, *normal, 0))
+                     for normal in values)
+
+
+def _write_packed_triangle(tmp_path, normal_values, draw_text=PACKED_INI):
+    groups = _parse_groups(tmp_path, draw_text)
+    _write(tmp_path, "position.buf", struct.pack(
+        "<9f", 0., 0., 0., 1., 0., 0., 0., 1., 0.))
+    _write(tmp_path, "texcoord.buf", b"\0" * 60)
+    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 1, 2))
+    _write(tmp_path, "vector.buf", _packed_normals(normal_values))
+    return _build(groups, tmp_path)
+
+
+def test_reversed_authored_normals_follow_indexed_geometry_orientation(tmp_path):
+    meshes, geometry = _write_packed_triangle(
+        tmp_path, [(0, 0, 128), (0, 0, 128), (0, 0, 128)])
+    entry = next(iter(meshes.values()))
+    assert _values(geometry, entry["normal"]) == (
+        0., 0., 1., 0., 0., 1., 0., 0., 1.)
+
+
+def test_aligned_authored_normals_keep_their_declared_orientation(tmp_path):
+    meshes, geometry = _write_packed_triangle(
+        tmp_path, [(0, 0, 127), (0, 0, 127), (0, 0, 127)])
+    entry = next(iter(meshes.values()))
+    assert _values(geometry, entry["normal"]) == (
+        0., 0., 1., 0., 0., 1., 0., 0., 1.)
+
+
+def test_shared_normal_source_uses_one_orientation_for_all_draws(tmp_path):
+    draw_text = PACKED_INI.replace(
+        "drawindexed = 3, 0, 0",
+        "drawindexed = 3, 0, 0\n"
+        "drawindexed = 3, 3, 0\n"
+        "drawindexed = 3, 6, 0")
+    groups = _parse_groups(tmp_path, draw_text)
+    points = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)] * 3
+    _write(tmp_path, "position.buf", b"".join(
+        struct.pack("<3f", *point) for point in points))
+    _write(tmp_path, "texcoord.buf", b"\0" * (20 * len(points)))
+    _write(tmp_path, "body.ib", struct.pack("<9I", *range(9)))
+    # The first draw is perpendicular/noisy; the other two clearly reverse
+    # the same source. The source-wide decision must still flip every draw.
+    _write(tmp_path, "vector.buf", _packed_normals(
+        [(127, 0, 0)] * 3 +
+        [(0, 0, 128)] * 6))
+
+    meshes, geometry = _build(groups, tmp_path)
+    assert len(meshes) == 3
+    first = _values(geometry, meshes["Body-1"]["normal"])
+    second = _values(geometry, meshes["Body-2"]["normal"])
+    third = _values(geometry, meshes["Body-3"]["normal"])
+    assert first == (-1., 0., 0., -1., 0., 0., -1., 0., 0.)
+    assert second == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
+    assert third == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
+
+
 def test_unrelated_vb1_layout_is_not_treated_as_authored_normals(tmp_path):
     layouts = (
         ("ResourceColor", "8", "DXGI_FORMAT_R8G8B8A8_UNORM"),
