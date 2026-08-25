@@ -85,6 +85,7 @@ class AssetLoadResult:
         meshes = {}
         textures = {}
         pools = {}
+        pool_ids = {}
         for ordinal, part in enumerate(parts):
             for candidate in part.texture_candidates:
                 # Candidate textures are published and selectable, but their
@@ -133,8 +134,19 @@ class AssetLoadResult:
             pool.extend(texture.as_candidate() for texture in part.textures.values()
                         if texture.role == "diffuse")
             if pool:
-                pool_id = f"asset-pool-{ordinal}"
-                pools[pool_id] = pool
+                component = entry["component"]
+                pool_id = pool_ids.get(component)
+                if pool_id is None:
+                    pool_id = f"asset-pool-{len(pool_ids)}"
+                    pool_ids[component] = pool_id
+                    pools[pool_id] = []
+                seen = {item.get("tex_key") for item in pools[pool_id]}
+                for item in pool:
+                    key = item.get("tex_key")
+                    if key in seen:
+                        continue
+                    pools[pool_id].append(item)
+                    seen.add(key)
                 entry["texture_pool_id"] = pool_id
             meshes[part.key] = entry
 

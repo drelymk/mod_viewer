@@ -143,6 +143,48 @@ def test_hash_asset_preserves_duplicate_position_vertices_and_authored_normals(
                for value in result.payload["textures"].values())
 
 
+def test_asset_parts_with_same_component_share_one_texture_pool(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    asset.mkdir(parents=True)
+    _write_json(asset / "hash.json", [{
+        "ib": "87654321", "vb0": "12345678", "component_name": "Hair",
+        "object_indexes": [0, 3], "object_index_counts": [3, 3],
+        "object_classifications": ["A", "B"],
+        "texture_hashes": [
+            [["Diffuse", "dds", "aaaa1111"]],
+            [["Diffuse", "dds", "bbbb2222"]],
+        ],
+    }])
+    _text_vb(asset / "Hair-vb0=12345678.txt", 92, [
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+    ])
+    (asset / "HairA-ib=87654321.txt").write_text(
+        "first index: 0\nindex count: 3\ntopology: trianglelist\n"
+        "0 1 2\n", encoding="utf-8")
+    (asset / "HairB-ib=87654321.txt").write_text(
+        "first index: 3\nindex count: 3\ntopology: trianglelist\n"
+        "3 4 5\n", encoding="utf-8")
+    (asset / "HairA-Diffuse-aaaa1111.dds").write_bytes(b"a")
+    (asset / "HairB-Diffuse-bbbb2222.dds").write_bytes(b"b")
+
+    index = build_index("ZZMI", str(root))
+    result = load_asset("ZZMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    entries = list(result.payload["meshes"].values())
+    pool_ids = {entry["texture_pool_id"] for entry in entries}
+    assert len(pool_ids) == 1
+    pool = result.payload["texture_pools"][next(iter(pool_ids))]
+    assert {item["tex_key"] for item in pool} == {
+        entries[0]["tex_key"], entries[1]["tex_key"]}
+
+
 def test_wwmi_reverses_winding_without_rewriting_authored_normals(tmp_path):
     root = tmp_path / "assets"
     asset = root / "Character"
