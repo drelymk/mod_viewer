@@ -251,6 +251,39 @@ def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
     assert entries[1]["tex_key"].endswith("/HeadPieceBDiffuse.dds")
 
 
+def test_hash_asset_loads_immediate_nested_hash_metadata(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Columbina"
+    nested = asset / "ColumbinaFace"
+    nested.mkdir(parents=True)
+    _write_json(asset / "hash.json", [{
+        "ib": "87654321", "vb0": "12345678", "component_name": "Body",
+        "object_indexes": [0], "object_classifications": ["Head"],
+    }])
+    _write_json(nested / "hash.json", [{
+        "ib": "abcdef12", "vb0": "fedcba98", "component_name": "Eye",
+        "object_indexes": [0], "object_classifications": ["Head"],
+    }])
+    rows = [((0, 0, 0), (0, 0, 1), (0, 0)),
+            ((1, 0, 0), (0, 0, 1), (1, 0)),
+            ((0, 1, 0), (0, 0, 1), (0, 1))]
+    _text_vb(asset / "Body-vb0=12345678.txt", 92, rows)
+    _text_vb(nested / "Eye-vb0=fedcba98.txt", 92, rows)
+    for folder, name, geometry_hash in (
+            (asset, "Body", "87654321"),
+            (nested, "Eye", "abcdef12")):
+        (folder / f"{name}-ib={geometry_hash}.txt").write_text(
+            "first index: 0\nindex count: 3\ntopology: trianglelist\n"
+            "0 1 2\n", encoding="utf-8")
+
+    index = build_index("GIMI", str(root))
+    result = load_asset("GIMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    assert {part.component_name for part in result.parts} == {"Body", "Eye"}
+    assert {part.label for part in result.parts} == {"Body Head", "Eye Head"}
+
+
 def test_wwmi_reverses_winding_without_rewriting_authored_normals(tmp_path):
     root = tmp_path / "assets"
     asset = root / "Character"

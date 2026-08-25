@@ -178,6 +178,9 @@ machine-specific paths or facts that are obvious from the source.
 - GIMI/ZZMI may recover missing texture records only from a unique
   range-matched IB dump family; authored texture-hash records remain
   authoritative and ambiguous families stay unbound.
+- GIMI/ZZMI parent Asset records may include validated `hash.json` metadata
+  from immediate component subfolders; each nested record remains rooted at
+  the selected Asset path and keeps its own metadata provenance.
 - Recoverable Asset part failures are reported as Asset warnings and do not
   discard otherwise renderable components; a load fails only when no parts
   survive.

@@ -144,6 +144,32 @@ def test_gimi_accepts_known_category_and_weapon_layouts(tmp_path):
         "PlayerCharacterData/Character", "WeaponData/Bows/Bow"]
 
 
+def test_gimi_merges_immediate_nested_hash_metadata_into_parent_asset(tmp_path):
+    root = tmp_path / "full-gimi"
+    asset = root / "PlayerCharacterData" / "Columbina"
+    nested = asset / "ColumbinaFace"
+    nested.mkdir(parents=True)
+    _write_json(str(asset / "hash.json"), [{
+        "ib": "3d7b9c89", "component_name": "Body",
+        "object_indexes": [0],
+    }])
+    _write_json(str(nested / "hash.json"), [{
+        "ib": "abcdef12", "component_name": "Eye",
+        "object_indexes": [0],
+    }])
+
+    index = build_index("GIMI", str(root))
+
+    assert index["stats"]["assetCount"] == 1
+    record = index["assets"][0]
+    assert record["path"] == "PlayerCharacterData/Columbina"
+    assert {(item["hash"], item["metadata"]) for item in record["geometry"]} == {
+        ("3d7b9c89", "PlayerCharacterData/Columbina/hash.json"),
+        ("abcdef12",
+         "PlayerCharacterData/Columbina/ColumbinaFace/hash.json"),
+    }
+
+
 def test_hash_index_rejects_arbitrary_nested_collection(tmp_path):
     root = tmp_path / "collection"
     asset = root / "UnrecognizedGroup" / "Character"

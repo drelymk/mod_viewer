@@ -11,7 +11,7 @@ from . import gimi, wwmi, zzmi
 from .models import AssetRecord
 
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 _HASH_GROUPS = frozenset({
     "enemydata",
     "miscellaneousdata",
@@ -175,8 +175,23 @@ def _wwmi_candidates(root):
 
 
 def _parse_hash_asset(asset_path, root, metadata_path, parser):
-    return parser.parse_hash_file(
-        asset_path, root, metadata_path, normalize_geometry_hash)
+    metadata_paths = [metadata_path]
+    for child in _safe_child_dirs(asset_path, root):
+        nested = _safe_file(child, root, "hash.json")
+        if nested:
+            metadata_paths.append(nested)
+
+    records = [parser.parse_hash_file(
+        asset_path, root, metadata_paths[0], normalize_geometry_hash)]
+    for nested in metadata_paths[1:]:
+        try:
+            records.append(parser.parse_hash_file(
+                asset_path, root, nested, normalize_geometry_hash))
+        except (OSError, ValueError, UnicodeError):
+            # A malformed optional component folder must not discard the
+            # parent Asset's otherwise usable geometry.
+            continue
+    return _merge_asset_records(records)[0]
 
 
 def _parse_wwmi_asset(asset_path, root, direct, objects):
