@@ -39,9 +39,14 @@ def _format(value):
 def _metadata_paths(record):
     paths = []
     for geometry in record.get("geometry", ()):
-        path = geometry.get("metadata") if isinstance(geometry, dict) else None
-        if path and path not in paths:
-            paths.append(path)
+        if not isinstance(geometry, dict):
+            continue
+        candidates = geometry.get("metadataPaths")
+        if not isinstance(candidates, list):
+            candidates = []
+        for path in [*candidates, geometry.get("metadata")]:
+            if path and path not in paths:
+                paths.append(path)
     return paths
 
 
@@ -226,26 +231,32 @@ def load_wwmi_asset(root, record, *, texture_source=None):
         raise AssetLoadError("WWMI Asset has no indexed Metadata.json.")
 
     for metadata_relative in metadata_paths:
-        metadata_file = asset_paths.safe_asset_path(root, metadata_relative)
-        if not metadata_file:
-            raise AssetLoadError("WWMI Metadata.json is missing from this Asset.")
         try:
+            metadata_file = asset_paths.safe_asset_path(root, metadata_relative)
+            if not metadata_file:
+                raise AssetLoadError(
+                    "WWMI Metadata.json is missing from this Asset.")
             with open(metadata_file, encoding="utf-8") as stream:
                 raw = json.load(stream)
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise AssetLoadError(f"Metadata.json could not be parsed: {error}") from error
-        if not isinstance(raw, dict):
-            raise AssetLoadError("WWMI Metadata.json must contain an object.")
-        components = raw.get("components")
-        if components is None:
-            components = [{}]
-        if not isinstance(components, list):
-            raise AssetLoadError("WWMI Metadata.json components must be a list.")
+            if not isinstance(raw, dict):
+                raise AssetLoadError("WWMI Metadata.json must contain an object.")
+            components = raw.get("components")
+            if components is None:
+                components = [{}]
+            if not isinstance(components, list):
+                raise AssetLoadError(
+                    "WWMI Metadata.json components must be a list.")
+        except (AssetLoadError, OSError, UnicodeError,
+                json.JSONDecodeError) as error:
+            warnings.append(_warning(
+                None, None, "metadata_invalid",
+                f"{metadata_relative} skipped: {error}"))
+            continue
 
         metadata_directory = os.path.dirname(metadata_file)
         component_files = _file_list(metadata_directory)
         candidates = _candidates(
-            component_files, metadata_directory, texture_source)
+            component_files, root, texture_source)
         geometry = _metadata_geometry(record, metadata_relative)
         geometry_hash = geometry.get("hash") or raw.get("vb0_hash")
         for ordinal, component in enumerate(components):

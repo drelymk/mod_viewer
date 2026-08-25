@@ -103,6 +103,8 @@ def _dump_prefix(path):
 def _find_dumps(files, kind, hash_value=None, label=None):
     kind = kind.casefold()
     hash_value = normalize_geometry_hash(hash_value)
+    if not hash_value:
+        return []
     matching = []
     for path in files:
         if not path.casefold().endswith(".txt"):
@@ -112,19 +114,9 @@ def _find_dumps(files, kind, hash_value=None, label=None):
             file_kind = "vb"
         if file_kind != kind:
             continue
-        if hash_value and file_hash == hash_value:
+        if file_hash == hash_value:
             matching.append(path)
-    if matching:
-        return matching
-    fallback = []
-    lowered = (label or "").casefold()
-    for path in files:
-        name = os.path.basename(path).casefold()
-        if not name.endswith(".txt") or f"-{kind}" not in name:
-            continue
-        if not lowered or lowered in name:
-            fallback.append(path)
-    return fallback
+    return matching
 
 
 def _find_dump(files, kind, hash_value=None, label=None):
@@ -191,9 +183,10 @@ def _range_texture_records(files, ib_candidates, first, count, vertex_count,
                            ib_cache, root, texture_source):
     families = {}
     for path in ib_candidates:
-        if path not in ib_cache:
-            ib_cache[path] = parse_index_dump(path, vertex_count=vertex_count)
-        dump = ib_cache[path]
+        dump, _error = _cached_index_dump(
+            path, vertex_count, ib_cache)
+        if dump is None:
+            continue
         if (dump.first_index != first
                 or (count is not None and dump.index_count != count)):
             continue
@@ -330,16 +323,26 @@ def _warning(component, classification, reason, message):
 def _resolve_ib_dump(candidates, first, count, vertex_count, cache):
     """Choose a range-local IB by its parsed header, not only its hash."""
     parsed = []
+    invalid = False
     for path in candidates:
-        if path not in cache:
-            cache[path] = parse_index_dump(path, vertex_count=vertex_count)
-        dump = cache[path]
+        dump, error = _cached_index_dump(path, vertex_count, cache)
+        if dump is None:
+            invalid = invalid or error is not None
+            continue
         parsed.append((path, dump))
     matching = [item for item in parsed if item[1].first_index == first
                 and (count is None or item[1].index_count == count)]
-    if not matching:
-        return None
-    return matching[0]
+    return (matching[0] if matching else None, invalid, bool(parsed))
+
+
+def _cached_index_dump(path, vertex_count, cache):
+    if path not in cache:
+        try:
+            cache[path] = (
+                parse_index_dump(path, vertex_count=vertex_count), None)
+        except MigotoDumpError as error:
+            cache[path] = (None, error)
+    return cache[path]
 
 
 def load_hash_asset(asset_type, root, record, *, texture_source=None):
@@ -350,9 +353,14 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
         raise AssetLoadError("The indexed hash.json is missing from this Asset.")
     metadata_paths = []
     for geometry in geometries:
-        metadata_path = geometry.get("metadata") if isinstance(geometry, dict) else None
-        if metadata_path and metadata_path not in metadata_paths:
-            metadata_paths.append(metadata_path)
+        if not isinstance(geometry, dict):
+            continue
+        candidates = geometry.get("metadataPaths")
+        if not isinstance(candidates, list):
+            candidates = []
+        for metadata_path in [*candidates, geometry.get("metadata")]:
+            if metadata_path and metadata_path not in metadata_paths:
+                metadata_paths.append(metadata_path)
     if not metadata_paths:
         raise AssetLoadError("The indexed hash.json is missing from this Asset.")
     metadata_paths.sort(key=lambda value: (
@@ -422,19 +430,18 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
                 continue
             ranges = _ranges(entry)
             for ordinal, first, count, classification in ranges:
-                try:
-                    resolved = _resolve_ib_dump(
-                        ib_files, first, count, vertex_dump.layout.vertex_count,
-                        ib_cache)
-                except MigotoDumpError as error:
-                    warnings.append(_warning(
-                        component, classification, "index_dump_invalid",
-                        f"{component or geometry_hash} index dump skipped: {error}"))
-                    continue
+                resolved, had_invalid, had_valid = _resolve_ib_dump(
+                    ib_files, first, count, vertex_dump.layout.vertex_count,
+                    ib_cache)
                 if resolved is None:
+                    reason = "index_dump_invalid" if had_invalid and not had_valid \
+                        else "index_range_missing"
+                    message = (f"{component or geometry_hash} index dump skipped"
+                               if reason == "index_dump_invalid" else
+                               f"{component or geometry_hash} range {first} has "
+                               "no matching index dump.")
                     warnings.append(_warning(
-                        component, classification, "index_range_missing",
-                        f"{component or geometry_hash} range {first} has no matching index dump."))
+                        component, classification, reason, message))
                     continue
                 _ib_file, ib_dump = resolved
                 selected = ib_dump.indices
@@ -450,10 +457,14 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
                         component, classification, "part_invalid",
                         f"{component or geometry_hash} part skipped: {error}"))
                     continue
+                effective_count = (
+                    count if count is not None
+                    else ib_dump.index_count or len(ib_dump.indices))
                 textures = _texture_records(
                     entry, ordinal, files, root, component, classification,
                     texture_source, ib_candidates=ib_files, first=first,
-                    count=count, vertex_count=vertex_dump.layout.vertex_count,
+                    count=effective_count,
+                    vertex_count=vertex_dump.layout.vertex_count,
                     ib_cache=ib_cache)
                 label = component or os.path.basename(asset_path)
                 if classification:
@@ -467,7 +478,8 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
                     asset_path=asset_path, geometry_hash=geometry_hash,
                     component_name=component, classification=classification,
                     component_ordinal=ordinal, first_index=first,
-                    index_count=count, positions=positions, indices=indices,
+                    index_count=effective_count, positions=positions,
+                    indices=indices,
                     uvs=uvs, normals=normals, textures=textures))
     if not parts:
         raise AssetLoadError("Asset contains no complete renderable parts.")

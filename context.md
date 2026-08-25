@@ -181,6 +181,13 @@ machine-specific paths or facts that are obvious from the source.
 - GIMI/ZZMI parent Asset records may include validated `hash.json` metadata
   from immediate component subfolders; each nested record remains rooted at
   the selected Asset path and keeps its own metadata provenance.
+- GIMI/ZZMI geometry dumps require their authored buffer hash; a same-label
+  filename is never a geometry fallback. Same-hash IB candidates are parsed
+  independently, so malformed siblings cannot discard valid ranges, and a
+  missing authored count uses the resolved IB header count.
+- WWMI metadata files are independently recoverable components, and candidate
+  texture identity is rooted at the registered Asset Folder rather than an
+  object subdirectory.
 - Recoverable Asset part failures are reported as Asset warnings and do not
   discard otherwise renderable components; a load fails only when no parts
   survive.

@@ -170,6 +170,29 @@ def test_gimi_merges_immediate_nested_hash_metadata_into_parent_asset(tmp_path):
     }
 
 
+def test_gimi_preserves_nested_metadata_for_shared_geometry_hash(tmp_path):
+    root = tmp_path / "full-gimi"
+    asset = root / "PlayerCharacterData" / "Character"
+    nested = asset / "Face"
+    nested.mkdir(parents=True)
+    _write_json(str(asset / "hash.json"), [{
+        "ib": "abcdef12", "component_name": "Body",
+        "object_indexes": [0],
+    }])
+    _write_json(str(nested / "hash.json"), [{
+        "ib": "abcdef12", "component_name": "Face",
+        "object_indexes": [0],
+    }])
+
+    index = build_index("GIMI", str(root))
+    geometry = index["assets"][0]["geometry"][0]
+
+    assert geometry["metadataPaths"] == [
+        "PlayerCharacterData/Character/hash.json",
+        "PlayerCharacterData/Character/Face/hash.json",
+    ]
+
+
 def test_hash_index_rejects_arbitrary_nested_collection(tmp_path):
     root = tmp_path / "collection"
     asset = root / "UnrecognizedGroup" / "Character"

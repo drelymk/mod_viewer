@@ -5,7 +5,7 @@ import struct
 
 import pytest
 
-from app import asset_folders, paths, server
+from app import asset_folders, asset_textures, paths, server
 from app.asset_index import build_index
 from app.asset_loader import hash_asset, load_asset
 from app.asset_loader.models import AssetLoadResult, AssetMeshPart
@@ -48,6 +48,31 @@ def _fmt(path, stride, index_format, elements):
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _wwmi_triangle(folder, *, component_name="Body", vb_hash="11111111",
+                   image=False):
+    _write_json(folder / "Metadata.json", {
+        "vb0_hash": vb_hash,
+        "components": [{"vertex_count": 3, "index_offset": 0,
+                         "index_count": 3, "name": component_name}],
+    })
+    _fmt(folder / "Component 0.fmt", 32, "DXGI_FORMAT_R16_UINT", [
+        ("POSITION", 0, "R32G32B32_FLOAT", 0),
+        ("TEXCOORD", 0, "R32G32_FLOAT", 12),
+        ("NORMAL", 0, "R32G32B32_FLOAT", 20),
+    ])
+    data = bytearray()
+    for position, uv in [((0, 0, 0), (0, 0)),
+                         ((1, 0, 0), (1, 0)),
+                         ((0, 1, 0), (0, 1))]:
+        data.extend(struct.pack("<fff", *position))
+        data.extend(struct.pack("<ff", *uv))
+        data.extend(struct.pack("<fff", 0, 0, 1))
+    (folder / "Component 0.vb").write_bytes(data)
+    (folder / "Component 0.ib").write_bytes(struct.pack("<3H", 0, 2, 1))
+    if image:
+        (folder / "candidate.dds").write_bytes(b"not decoded during load")
+
+
 def test_migoto_dump_uses_declared_semantics_and_streams_layouts(tmp_path):
     rows = [((0, 0, 0), (0, 0, 1), (0, 0)),
             ((1, 0, 0), (0, 1, 0), (1, 0)),
@@ -82,6 +107,97 @@ def test_migoto_index_dump_separates_headers_from_index_rows(tmp_path):
     assert parsed.first_index == 43845
     assert parsed.index_count == 6
     assert parsed.index_format == "DXGI_FORMAT_R16_UINT"
+
+
+def test_hash_asset_does_not_use_same_label_wrong_hash_vertex_dump(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    asset.mkdir(parents=True)
+    _write_json(asset / "hash.json", [{
+        "ib": "87654321", "vb0": "12345678", "component_name": "Body",
+        "object_indexes": [0], "object_index_counts": [3],
+    }, {
+        "ib": "abcdef12", "vb0": "fedcba98", "component_name": "Face",
+        "object_indexes": [0], "object_index_counts": [3],
+    }])
+    rows = [((0, 0, 0), (0, 0, 1), (0, 0)),
+            ((1, 0, 0), (0, 0, 1), (1, 0)),
+            ((0, 1, 0), (0, 0, 1), (0, 1))]
+    _text_vb(asset / "Body-vb0=deadbeef.txt", 92, rows)
+    _text_vb(asset / "Face-vb0=fedcba98.txt", 92, rows)
+    (asset / "Body-ib=87654321.txt").write_text(
+        "first index: 0\nindex count: 3\ntopology: trianglelist\n"
+        "0 1 2\n", encoding="utf-8")
+    (asset / "Face-ib=abcdef12.txt").write_text(
+        "first index: 0\nindex count: 3\ntopology: trianglelist\n"
+        "0 1 2\n", encoding="utf-8")
+
+    index = build_index("ZZMI", str(root))
+    result = load_asset("ZZMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    assert len(result.parts) == 1
+    assert result.parts[0].component_name == "Face"
+    assert any(item["component"] == "Body"
+               and item["reason"] == "vertex_dump_missing"
+               for item in result.payload["metadata"]["asset"]["warnings"])
+
+
+def test_hash_asset_skips_corrupt_same_hash_ib_and_keeps_valid_ranges(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    asset.mkdir(parents=True)
+    _write_json(asset / "hash.json", [{
+        "ib": "87654321", "vb0": "12345678", "component_name": "Body",
+        "object_indexes": [0, 3], "object_index_counts": [3, 3],
+        "object_classifications": ["A", "B"],
+    }])
+    _text_vb(asset / "Body-vb0=12345678.txt", 92, [
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+    ])
+    (asset / "BodyA-ib=87654321.txt").write_text(
+        "this index dump is corrupt", encoding="utf-8")
+    (asset / "BodyB-ib=87654321.txt").write_text(
+        "first index: 3\nindex count: 3\ntopology: trianglelist\n"
+        "3 4 5\n", encoding="utf-8")
+
+    index = build_index("GIMI", str(root))
+    result = load_asset("GIMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    assert len(result.parts) == 1
+    assert result.parts[0].label == "Body B 2"
+
+
+def test_hash_asset_uses_resolved_ib_count_when_metadata_omits_count(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    asset.mkdir(parents=True)
+    _write_json(asset / "hash.json", [{
+        "ib": "87654321", "vb0": "12345678", "component_name": "Hair",
+        "object_indexes": [0],
+    }])
+    _text_vb(asset / "Hair-vb0=12345678.txt", 92, [
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+    ])
+    (asset / "Hair-ib=87654321.txt").write_text(
+        "first index: 0\nindex count: 3\ntopology: trianglelist\n"
+        "0 1 2\n", encoding="utf-8")
+
+    index = build_index("ZZMI", str(root))
+    result = load_asset("ZZMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+    part = result.parts[0]
+
+    assert part.index_count == 3
+    assert result.payload["meshes"][part.key]["drawindexed"][0] == 3
 
 
 def test_hash_asset_preserves_duplicate_position_vertices_and_authored_normals(
@@ -282,6 +398,82 @@ def test_hash_asset_loads_immediate_nested_hash_metadata(tmp_path):
 
     assert {part.component_name for part in result.parts} == {"Body", "Eye"}
     assert {part.label for part in result.parts} == {"Body Head", "Eye Head"}
+
+
+def test_hash_asset_loads_both_metadata_sources_for_shared_geometry_hash(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    nested = asset / "Face"
+    nested.mkdir(parents=True)
+    _write_json(asset / "hash.json", [{
+        "ib": "87654321", "vb0": "12345678", "component_name": "Body",
+        "object_indexes": [0], "object_classifications": ["Head"],
+    }])
+    _write_json(nested / "hash.json", [{
+        "ib": "87654321", "vb0": "fedcba98", "component_name": "Face",
+        "object_indexes": [0], "object_classifications": ["Head"],
+    }])
+    rows = [((0, 0, 0), (0, 0, 1), (0, 0)),
+            ((1, 0, 0), (0, 0, 1), (1, 0)),
+            ((0, 1, 0), (0, 0, 1), (0, 1))]
+    _text_vb(asset / "Body-vb0=12345678.txt", 92, rows)
+    _text_vb(nested / "Face-vb0=fedcba98.txt", 92, rows)
+    (asset / "Body-ib=87654321.txt").write_text(
+        "first index: 0\nindex count: 3\ntopology: trianglelist\n"
+        "0 1 2\n", encoding="utf-8")
+    (nested / "Face-ib=87654321.txt").write_text(
+        "first index: 0\nindex count: 3\ntopology: trianglelist\n"
+        "0 1 2\n", encoding="utf-8")
+
+    index = build_index("GIMI", str(root))
+    result = load_asset("GIMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    assert {part.component_name for part in result.parts} == {"Body", "Face"}
+    assert {part.key.split("::")[1] for part in result.parts} == {
+        "Character/hash.json", "Character/Face/hash.json"}
+
+
+def test_wwmi_skips_corrupt_metadata_and_loads_valid_sibling(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    valid = asset / "ObjectA"
+    invalid = asset / "ObjectB"
+    valid.mkdir(parents=True)
+    invalid.mkdir(parents=True)
+    _wwmi_triangle(valid)
+    (invalid / "Metadata.json").write_text("{", encoding="utf-8")
+    record = {"path": "Character", "geometry": [
+        {"hash": "11111111", "metadata": "Character/ObjectA/Metadata.json"},
+        {"hash": "22222222", "metadata": "Character/ObjectB/Metadata.json"},
+    ]}
+
+    result = load_asset("WWMI", str(root), record, geometry=GeometryBlob())
+
+    assert len(result.parts) == 1
+    assert result.parts[0].component_name == "Body"
+    assert any(item["reason"] == "metadata_invalid"
+               and "ObjectB/Metadata.json" in item["message"]
+               for item in result.payload["metadata"]["asset"]["warnings"])
+
+
+def test_wwmi_texture_candidates_use_registered_asset_root(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    object_dir = asset / "ObjectA"
+    object_dir.mkdir(parents=True)
+    _wwmi_triangle(object_dir, image=True)
+    record = {"path": "Character", "geometry": [{
+        "hash": "11111111", "metadata": "Character/ObjectA/Metadata.json",
+    }]}
+
+    result = load_asset("WWMI", str(root), record, geometry=GeometryBlob())
+    candidate = result.parts[0].texture_candidates[0]
+
+    assert candidate.key == asset_textures.asset_texture_key(
+        str(root), str(object_dir / "candidate.dds"), "diffuse")
+    assert candidate.key != asset_textures.asset_texture_key(
+        str(object_dir), str(object_dir / "candidate.dds"), "diffuse")
 
 
 def test_wwmi_reverses_winding_without_rewriting_authored_normals(tmp_path):

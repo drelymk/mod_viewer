@@ -129,6 +129,9 @@ def parse_object_asset(asset_path, root, metadata_paths, normalize_hash):
                                    value.component_ordinal
                                    if value.component_ordinal is not None else -1),
             ))
+            metadata_paths = tuple(dict.fromkeys(
+                (existing.metadata_paths or (existing.metadata_path,)) +
+                (item.metadata_paths or (item.metadata_path,))))
             geometry[item.geometry_hash] = GeometryRecord(
                 existing.geometry_hash,
                 ranges,
@@ -138,6 +141,7 @@ def parse_object_asset(asset_path, root, metadata_paths, normalize_hash):
                 (existing.component_fingerprint
                  if existing.component_fingerprint ==
                  item.component_fingerprint else None),
+                metadata_paths,
             )
     if not geometry:
         raise MetadataError("No valid WWMI geometry metadata was found.")

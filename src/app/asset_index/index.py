@@ -11,7 +11,7 @@ from . import gimi, wwmi, zzmi
 from .models import AssetRecord
 
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 _HASH_GROUPS = frozenset({
     "enemydata",
     "miscellaneousdata",
@@ -256,6 +256,9 @@ def _merge_asset_records(records):
                                    if value.component_ordinal is not None else -1),
             ))
             from .models import GeometryRecord
+            metadata_paths = tuple(dict.fromkeys(
+                (previous.metadata_paths or (previous.metadata_path,)) +
+                (item.metadata_paths or (item.metadata_path,))))
             geometry[item.geometry_hash] = GeometryRecord(
                 item.geometry_hash,
                 ranges,
@@ -265,6 +268,7 @@ def _merge_asset_records(records):
                 (previous.component_fingerprint
                  if previous.component_fingerprint ==
                  item.component_fingerprint else None),
+                metadata_paths,
             )
         merged[record.relative_path] = AssetRecord(
             record.relative_path,
