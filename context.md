@@ -160,6 +160,17 @@ machine-specific paths or facts that are obvious from the source.
   absolute/drive paths and excessive parent traversal. The server's separate
   static-web-root join protects a different boundary and must not be merged
   with this rule.
+- Asset indexing remains metadata-only. Heavy Asset geometry and texture files
+  are read only after an explicitly selected, indexed Asset is loaded.
+- Direct Asset loading never synthesizes a mod or INI. GIMI, ZZMI and WWMI
+  adapters normalize source geometry into the shared viewer payload, and
+  Asset source paths remain confined to their registered root.
+- Direct Asset preview never modifies source files or creates
+  `.mod_viewer.json` inside an Asset folder. Asset texture choices are
+  session-only, and ambiguous texture discovery may populate candidates but
+  must not create semantic role bindings.
+- Direct Asset geometry retains Asset/component/range provenance so later
+  mod/Asset composition can compare coverage without reparsing viewer labels.
 - `core.textures` owns role-aware keys, PNG fallback, transforms, caching and
   texture profiling. `core.mesh_builder` owns geometry/payload assembly.
   Keep texture processing independent from game/material interpretation.

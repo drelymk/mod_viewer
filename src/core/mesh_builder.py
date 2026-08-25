@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from .draw_call import DrawCall
 from .geometry_conventions import geometry_convention_for
+from .geometry_transport import GeometryBlob
 from .resource_paths import safe_resource_path
 from .vertex_attributes import decode_normals
 from .textures import (_texture_source_uri, _begin_texture_cache,
@@ -171,27 +172,6 @@ def _b64f(arr):
 def _b64u(arr):
     """Pack int list as little-endian Uint32 and base64-encode."""
     return base64.b64encode(struct.pack(f"<{len(arr)}I", *arr)).decode()
-
-
-class GeometryBlob:
-    """Append-only binary geometry storage shared by one mod load."""
-
-    __slots__ = ("data",)
-
-    def __init__(self):
-        self.data = bytearray()
-
-    def add(self, value):
-        raw = bytes(value)
-        offset = len(self.data)
-        self.data.extend(raw)
-        return {"offset": offset, "length": len(raw)}
-
-    def __len__(self):
-        return len(self.data)
-
-    def to_bytes(self):
-        return bytes(self.data)
 
 
 @dataclass

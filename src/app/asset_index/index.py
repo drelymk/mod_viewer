@@ -468,3 +468,20 @@ def lookup_geometry(index, geometry_hash):
         return []
     values = index.get("byGeometryHash", {}).get(geometry_hash, [])
     return [dict(value) for value in values if isinstance(value, dict)]
+
+
+def find_asset_by_path(index, relative_path):
+    """Return the exact indexed Asset record for a root-relative folder."""
+    if not isinstance(index, dict) or not isinstance(relative_path, str):
+        return None
+    requested = relative_path.replace("\\", "/").strip("/")
+    if not requested or requested in (".", ".."):
+        return None
+    requested = "/".join(part for part in requested.split("/") if part)
+    for item in index.get("assets", ()):
+        if not isinstance(item, dict):
+            continue
+        candidate = str(item.get("path", "")).replace("\\", "/").strip("/")
+        if candidate.casefold() == requested.casefold():
+            return dict(item)
+    return None

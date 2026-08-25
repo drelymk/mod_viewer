@@ -13,6 +13,7 @@ const $ = (id) => document.getElementById(id);
 let currentPool = null;   // the shared array for the open component
 let currentTitle = '';
 let currentModPath = '';
+let currentTexturePicker = null;
 let onChange = null;      // re-render callback for every open per-mesh list
 
 const mapColumns = [
@@ -29,7 +30,9 @@ function showError(message) {
 }
 
 async function pickInto(opt, field) {
-  const result = await window.pywebview.api.pick_texture_file(currentModPath, field);
+  const result = currentTexturePicker
+    ? await currentTexturePicker(field)
+    : await window.pywebview.api.pick_texture_file(currentModPath, field);
   if (!result) return;
   if (result.error) return showError(result.error);
   addTexture(result.tex_key, result.uri);
@@ -143,16 +146,20 @@ function render() {
  * mutated in place so add/remove is instantly reflected everywhere.
  * `onPoolChange` re-renders every open per-mesh texture list for this
  * component. */
-export function openTextureModal(componentName, pool, modPath, onPoolChange) {
+export function openTextureModal(componentName, pool, modPath, onPoolChange,
+                                 texturePicker = null) {
   currentPool = pool;
   currentTitle = componentName;
   currentModPath = modPath;
+  currentTexturePicker = texturePicker;
   onChange = onPoolChange;
   render();
   $('texture-modal-backdrop').classList.add('show');
 
   $('texm-add').onclick = async () => {
-    const result = await window.pywebview.api.pick_texture_file(modPath);
+    const result = texturePicker
+      ? await texturePicker(null)
+      : await window.pywebview.api.pick_texture_file(modPath);
     if (!result) return;
     if (result.error) {
       // Reuses the modal's own list area for feedback -- no separate error
@@ -173,6 +180,7 @@ function close() {
   $('texture-modal-backdrop').classList.remove('show');
   currentPool = null;
   currentModPath = '';
+  currentTexturePicker = null;
   onChange = null;
 }
 

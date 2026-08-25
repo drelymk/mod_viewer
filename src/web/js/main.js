@@ -1,4 +1,4 @@
-// Entry point: wires the toolbar and orchestrates loading a mod.
+// Entry point: wires the toolbar and orchestrates model loading.
 
 import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
          toggleGrid, toggleTrackballGizmo,
@@ -244,11 +244,13 @@ function initToolbarOverflow() {
 // actions know which session to update and reloadCurrentMod() knows what to
 // refresh afterward.
 let currentModPath = null;
+let currentSource = null;
 let semanticRefreshEpoch = 0;
 // Unlike currentModPath, this changes only after a payload is displayed.
 // Camera framing follows displayed model identity so a failed switch and retry
 // still frames the replacement, while a reload of the visible mod does not.
 let displayedModPath = null;
+let displayedSource = null;
 let modTransitionInFlight = false;
 let rightDockEnabled = false;
 
@@ -323,12 +325,27 @@ function clearPendingState() {
   $('export-btn').title = '';
 }
 
+function setSourceUi(kind) {
+  const asset = kind === 'asset';
+  document.body.classList.toggle('asset-preview-mode', asset);
+  if (asset) {
+    setHealthLoader(null);
+    setHealthReport(null, null);
+    setIniEditorContext(null, null);
+  }
+  $('pending-indicator').classList.toggle('show', false);
+  $('pending-indicator').setAttribute('aria-hidden', String(asset));
+  if (asset) $('export-btn').disabled = true;
+}
+
 /** Commit the UI to a new folder before asking the backend to load it. This
  * makes the folder path, editor/diagnostic context, model, panels and pending
  * state one transition: a failed replacement can never leave the previous
  * mod visible under the new folder's toolbar state. */
 function beginModLoad(path, message, { preserveModelOrientation = false } = {}) {
   currentModPath = path;
+  currentSource = { kind: 'mod', path };
+  setSourceUi('mod');
   semanticRefreshEpoch += 1;
   clearScene({ preserveModelOrientation });
   clearPendingState();
@@ -342,6 +359,27 @@ function beginModLoad(path, message, { preserveModelOrientation = false } = {}) 
   setHealthReport(null);
   setHealthLoader(() => window.pywebview.api.get_diagnostics(path));
   setIniEditorContext(path, reloadCurrentMod);
+  showLoading(true, message);
+}
+
+function beginAssetLoad(path, entry, message = 'Loading Asset…',
+                        { preserveModelOrientation = false } = {}) {
+  currentModPath = null;
+  currentSource = {
+    kind: 'asset', path, assetType: entry?.asset_type || null,
+  };
+  semanticRefreshEpoch += 1;
+  clearScene({ preserveModelOrientation });
+  clearPendingState();
+  setSourceUi('asset');
+  window.dispatchEvent(new CustomEvent('mod-viewer-asset-load-started', {
+    detail: { path, entry },
+  }));
+  $('hint').style.display = 'none';
+  $('empty-actions').style.display = 'none';
+  $('mod-path').textContent = `Asset Preview  —  ${path}`;
+  $('mod-path').title = path;
+  setAssetResolution(null);
   showLoading(true, message);
 }
 
@@ -360,18 +398,32 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   const controls = payload.controls || {};
   const state = payload.state || {};
   const meshes = payload.meshes || {};
+  const assetMode = currentSource?.kind === 'asset'
+    || payload.metadata?.source_kind === 'asset';
+  if (assetMode && currentSource?.kind !== 'asset') {
+    currentSource = {
+      kind: 'asset', path: payload.metadata?.asset?.path || '',
+      assetType: payload.metadata?.asset?.type || null,
+    };
+    setSourceUi('asset');
+  }
+  const modelPath = assetMode ? null : currentModPath;
   lastToggles = controls.toggles || {};
   setStateRules(state.rules || [], state.defaults || {}, {
     toggles: controls.toggles || {}, menu: controls.menu || {},
   });
   setTextures(payload.textures);
   buildMeshPanel(
-    meshes, currentModPath, payload.metadata?.mesh_names || {},
+    meshes, modelPath, payload.metadata?.mesh_names || {},
     payload.metadata?.material_profiles || {},
     {
-      onMaterialKindChanged: reloadCurrentMod,
+      onMaterialKindChanged: assetMode ? null : reloadCurrentMod,
       texturePools: payload.texture_pools || {},
       assetResolution: payload.asset_resolution || null,
+      readOnlySource: assetMode,
+      texturePicker: assetMode
+        ? (role => window.pywebview.api.pick_asset_texture_file(
+          currentSource.path, role)) : null,
     });
   buildTogglePanel(controls.toggles, {
     modPath: currentModPath, onChange: handleToggleChange,
@@ -564,6 +616,7 @@ async function loadModAt(path) {
   $('mod-path').textContent = folderName;
   $('mod-path').title = path;
   displayedModPath = path;
+  displayedSource = { kind: 'mod', path };
   window.dispatchEvent(new CustomEvent('mod-viewer-mod-loaded', {
     detail: { path },
   }));
@@ -574,12 +627,44 @@ async function loadModAt(path) {
   return true;
 }
 
+async function loadAssetAt(path, entry = {}) {
+  const preserveViewerPose = displayedSource?.kind === 'asset'
+    && samePath(displayedSource.path, path);
+  beginAssetLoad(path, entry, 'Loading Asset…', {
+    preserveModelOrientation: preserveViewerPose,
+  });
+  const data = await window.pywebview.api.load_asset(path);
+  if (data && data.error) {
+    showLoading(false);
+    await alertDialog('Could not load Asset:\n\n' + data.error);
+    return false;
+  }
+  try {
+    await displayMeshPayload(data, { preserveCamera: preserveViewerPose });
+  } catch (error) {
+    clearScene({ preserveModelOrientation: preserveViewerPose });
+    clearPendingState();
+    showLoading(false);
+    await alertDialog('Could not load Asset geometry:\n\n' + error.message);
+    return false;
+  }
+  const folderName = path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1);
+  $('mod-path').textContent = `Asset Preview  —  ${folderName}`;
+  $('mod-path').title = path;
+  displayedModPath = null;
+  displayedSource = { ...currentSource };
+  window.dispatchEvent(new CustomEvent('mod-viewer-asset-loaded', {
+    detail: { path, entry, source: displayedSource },
+  }));
+  return true;
+}
+
 async function performModSwitch(path) {
   // Switching to a different folder while the current one has staged,
   // not-yet-exported edits would silently strand them in memory, so ask
   // first. Reopening the same folder, or one with nothing pending, needs
   // no confirmation.
-  if (currentModPath && !samePath(currentModPath, path) &&
+  if (currentSource?.kind === 'mod' && currentModPath && !samePath(currentModPath, path) &&
       await window.pywebview.api.has_pending_changes(currentModPath)) {
     const proceed = await confirmDialog(
       'This mod has unsaved changes that haven\'t been exported.\n\n' +
@@ -589,6 +674,31 @@ async function performModSwitch(path) {
   }
 
   return await loadModAt(path);
+}
+
+async function confirmLeaveCurrentModIfDirty() {
+  if (currentSource?.kind !== 'mod' || !currentModPath) return true;
+  if (!await window.pywebview.api.has_pending_changes(currentModPath)) return true;
+  const proceed = await confirmDialog(
+    'This mod has unsaved changes that haven\'t been exported.\n\n' +
+    'Opening an Asset preview will discard them. Continue?');
+  if (!proceed) return false;
+  await window.pywebview.api.discard_changes(currentModPath);
+  return true;
+}
+
+async function switchAsset(path, entry = {}) {
+  if (!path || !entry?.asset) return false;
+  return await runModTransition(async () => {
+    try {
+      if (!await confirmLeaveCurrentModIfDirty()) return false;
+      return await loadAssetAt(path, entry);
+    } catch (e) {
+      showLoading(false);
+      await alertDialog('Unexpected error while loading Asset:\n\n' + e);
+      return false;
+    }
+  });
 }
 
 async function runModTransition(operation) {
@@ -761,7 +871,7 @@ rendererReady.then(ready => {
     switchMod,
     onRegistryChanged: updateEmptyFolderAction,
   });
-  const assetFolderPanel = initAssetFolderPanel();
+  const assetFolderPanel = initAssetFolderPanel({ switchAsset });
   $('empty-open-btn').disabled = false;
   emptyFolderAction.disabled = false;
   $('empty-open-btn').addEventListener('click', openMod);
@@ -819,7 +929,8 @@ rendererReady.then(ready => {
     return normalized;
   };
   window.modViewer = {
-    displayMeshPayload, openMod, switchMod, reloadCurrentMod, exportChanges,
+    displayMeshPayload, openMod, switchMod, switchAsset, reloadCurrentMod,
+    exportChanges,
     refreshPresentState, refreshControlSemantics, refreshMeshSemantics, activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset, getEnvironmentPreset,
     getMaterialState, getRenderCount,
@@ -833,5 +944,6 @@ rendererReady.then(ready => {
       return enabled;
     },
     getOutlineState: index => getMeshOutlineState(activeMeshes[index]),
+    getCurrentSource: () => currentSource ? { ...currentSource } : null,
   };
 });

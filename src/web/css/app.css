@@ -71,6 +71,19 @@ body {
   border: 1px solid #4d3a14; border-radius: 6px; padding: 4px 8px; white-space: nowrap;
 }
 .pending-indicator.show { display: inline-block; }
+/* Direct Assets are immutable preview sources: authoring and INI diagnostics
+   stay out of the active toolbar while mesh/camera/render controls remain. */
+body.asset-preview-mode #pending-indicator,
+body.asset-preview-mode .ini-view-wrap,
+body.asset-preview-mode #health-btn,
+body.asset-preview-mode #export-btn,
+body.asset-preview-mode #controls-tab,
+body.asset-preview-mode #controls-panel,
+body.asset-preview-mode #toolbar-overflow [data-toolbar-target="ini-view-btn"],
+body.asset-preview-mode #toolbar-overflow [data-toolbar-target="health-btn"],
+body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
+  display: none !important;
+}
 #export-btn {
   background: #9e6a03; color: #fff; border: 1px solid rgba(240,246,252,.15);
   border-radius: 6px; padding: 5px 14px; font-size: 13px; cursor: pointer; white-space: nowrap;

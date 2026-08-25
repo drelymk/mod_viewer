@@ -17,7 +17,7 @@ from core.ini_health import analyze_mod
 from core.texture_profiles import texture_profile_for
 
 from . import (asset_catalog, asset_folders, asset_index, edit_session, ini_api,
-               metadata, mod_folders, mod_loader, present_api, server,
+               asset_loader, asset_paths, metadata, mod_folders, mod_loader, present_api, server,
                toggle_api)
 
 
@@ -278,16 +278,110 @@ class ModViewerAPI:
         requested = asset_folders.normalize_path(folder_path)
         try:
             entries = asset_folders.load_registry()
-            roots = [entry["path"] for entry in entries
+            roots = [entry for entry in entries
                      if asset_folders.is_within(requested, entry["path"])]
             if not roots:
                 raise PermissionError(
                     "That folder is not inside a registered Asset Folder.")
-            root = max(roots, key=len)
-            return {"folders": asset_folders.list_subfolders(requested, root)}
+            entry = max(roots, key=lambda item: len(item["path"]))
+            index = None
+            try:
+                index = asset_index.load_index(entry["type"], entry["path"])
+            except asset_index.AssetIndexError:
+                # The tree remains browseable while the registry panel reports
+                # an invalid cache. The index is still the only asset authority.
+                index = None
+            return {"folders": asset_folders.list_subfolders(
+                requested, entry["path"], index=index,
+                asset_type=entry["type"])}
         except PermissionError as error:
             return {"error": str(error)}
         except asset_folders.AssetFolderError as error:
+            return {"error": str(error)}
+
+    def _asset_selection(self, folder_path):
+        requested = self._asset_folder(folder_path)
+        entries = asset_folders.load_registry()
+        roots = [entry for entry in entries
+                 if asset_folders.is_within(requested, entry["path"])]
+        if not roots:
+            raise PermissionError("This folder is not inside a registered Asset Folder.")
+        entry = max(roots, key=lambda item: len(item["path"]))
+        relative = asset_paths.relative_asset_path(entry["path"], requested)
+        if not relative or relative == ".":
+            raise asset_loader.AssetLoadError(
+                "Select an indexed Asset folder, not the Asset Folder root.")
+        asset_dir = asset_paths.safe_asset_dir(entry["path"], relative)
+        if not asset_dir:
+            raise asset_loader.AssetLoadError(
+                "The selected Asset folder is missing or escapes its registered root.")
+        index = asset_index.load_index(entry["type"], entry["path"])
+        if index is None:
+            raise asset_loader.AssetLoadError(
+                "Asset index is missing. Rebuild the registered Asset Folder first.")
+        record = asset_index.find_asset_by_path(index, relative)
+        if record is None:
+            raise asset_loader.AssetLoadError(
+                "The selected folder is a category or is not present in the Asset index.")
+        return requested, entry, index, record
+
+    def load_asset(self, folder_path):
+        """Load one exact indexed Asset without creating or editing an INI."""
+        try:
+            selected, entry, _index, record = self._asset_selection(folder_path)
+            geometry = GeometryBlob()
+            publication = server.begin_texture_publication(selected)
+            publication.set_game_profile({
+                "GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa",
+            }[entry["type"]])
+            try:
+                loaded = asset_loader.load_asset(
+                    entry["type"], entry["path"], record, geometry=geometry,
+                    texture_source=publication.register)
+                payload = loaded.payload
+                server.publish_payload_geometry(payload, geometry)
+                publication.commit()
+                return payload
+            except Exception:
+                publication.discard()
+                raise
+        except (PermissionError, asset_folders.AssetFolderError,
+                asset_index.AssetIndexError, asset_loader.AssetLoadError) as error:
+            return {"error": str(error)}
+        except Exception:
+            traceback.print_exc()
+            return {"error": "Could not load Asset. See the application log for details."}
+
+    def pick_asset_texture_file(self, folder_path, texture_role=None):
+        """Register a manually chosen Asset texture for the current preview only."""
+        try:
+            selected, entry, _index, _record = self._asset_selection(folder_path)
+            if texture_role not in (None, "normal_map", "light_map", "material_map"):
+                return {"error": "Unknown texture role."}
+            result = self._window.create_file_dialog(
+                webview.FileDialog.OPEN, directory=selected,
+                file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg;*.tga)",))
+            if not result:
+                return None
+            chosen = asset_folders.normalize_path(result[0])
+            relative = asset_paths.relative_asset_path(entry["path"], chosen)
+            safe = asset_paths.safe_asset_path(entry["path"], relative)
+            if not safe:
+                return {"error": "Choose a texture inside the registered Asset root."}
+            publication = server.active_texture_publication(selected)
+            if publication is None:
+                return {"error": "The Asset preview is no longer active."}
+            role = texture_role or "diffuse"
+            from .asset_loader.models import make_texture
+            texture = make_texture(
+                entry["path"], safe, role,
+                texture_source=publication.register, source="session")
+            if not texture:
+                return {"error": "The selected texture could not be published."}
+            return {"tex_key": texture.key, "uri": texture.uri,
+                    "file": relative, "role": role}
+        except (PermissionError, asset_folders.AssetFolderError,
+                asset_index.AssetIndexError, asset_loader.AssetLoadError) as error:
             return {"error": str(error)}
 
     def pick_texture_file(self, folder_path, texture_role=None):

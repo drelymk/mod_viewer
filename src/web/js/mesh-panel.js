@@ -290,6 +290,8 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
   groupsUI = [];
   registerViewSync('mesh-panel', syncMeshPanel);
   const texturePools = options.texturePools || {};
+  const readOnlySource = options.readOnlySource === true;
+  const texturePicker = options.texturePicker || null;
 
   const validNames = Object.keys(meshes).filter(name => !meshes[name]?.error);
   const bySource = groupKeysBySource(meshes, validNames);
@@ -332,8 +334,9 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
       componentDescriptor.assetResolution = options.assetResolution || null;
       let materialKind = componentKind;
       let materialKindInFlight = false;
+      const canPersist = !readOnlySource && !!modPath;
       const setMaterialKind = async kind => {
-        if (!componentIdentity || materialKindInFlight) return false;
+        if (!canPersist || !componentIdentity || materialKindInFlight) return false;
         materialKindInFlight = true;
         try {
           const result = await saveComponentMaterialKind(
@@ -380,9 +383,9 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
       };
       Object.assign(componentDescriptor, {
         getMaterialKind: () => materialKind,
-        setMaterialKind,
+        setMaterialKind: canPersist ? setMaterialKind : undefined,
         openTextureManager: () => openTextureModal(
-          groupName, texturePool, modPath, onPoolChange),
+          groupName, texturePool, modPath, onPoolChange, texturePicker),
         getTextureOverride,
         setTextureOverride,
       });
@@ -402,7 +405,8 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
         mesh.userData.semanticKey = name;
         mesh.userData.metadataKey = meshMetadataKey(name, meshes[name]);
         mesh.userData.texturePool = texturePool;
-        mesh.userData.displayName = meshNames[mesh.userData.metadataKey] || null;
+        mesh.userData.displayName = meshNames[mesh.userData.metadataKey]
+          || entry.display_name || null;
         mesh.userData.meshNames = meshNames;
         mesh.userData.modPath = modPath;
         // Diagnostic-only projection. Operational identity remains the
