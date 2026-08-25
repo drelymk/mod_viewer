@@ -1,6 +1,7 @@
 // Entry point: wires the toolbar and orchestrates model loading.
 
-import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
+import { adoptModelMeshes, fitTo, forgetModelMeshes, resetView,
+         rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
          toggleGrid, toggleTrackballGizmo,
          getEnvironmentPreset, getLightMode, isRendererAvailable, rendererReady,
          setEnvironmentPreset, setLightMode, getRenderCount } from './scene.js';
@@ -508,6 +509,7 @@ async function loadMissingAssetParts() {
     for (const [key, uri] of Object.entries(payload.textures || {})) {
       if (addTexture(key, uri)) assetFillTextureKeys.add(key);
     }
+    const before = new Set(activeMeshes);
     appendMeshPanel(
       payload.meshes || {}, null,
       {}, payload.metadata?.material_profiles || {}, {
@@ -515,8 +517,13 @@ async function loadMissingAssetParts() {
         texturePools: payload.texture_pools || {},
         readOnlySource: true,
       });
+    const addedMeshes = activeMeshes.filter(mesh => !before.has(mesh));
+    adoptModelMeshes(addedMeshes);
     assetFillLoaded = true;
-    fitTo(activeMeshes, { preserveCamera: true });
+    fitTo(activeMeshes, {
+      preserveCamera: true,
+      preserveHomeView: true,
+    });
     requestRender();
     return true;
   } catch (error) {
@@ -535,7 +542,8 @@ async function removeMissingAssetParts() {
   try {
     const result = await window.pywebview.api.remove_missing_asset_parts(currentModPath);
     if (result?.status === 'error') throw new Error(result.error);
-    removeAssetFillMeshPanel();
+    const removedMeshes = removeAssetFillMeshPanel();
+    forgetModelMeshes(removedMeshes);
     removeTextures(assetFillTextureKeys);
     assetFillTextureKeys = new Set();
     assetFillLoaded = false;

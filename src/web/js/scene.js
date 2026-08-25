@@ -233,8 +233,19 @@ export function resetView() {
   requestRender();
 }
 
+export function adoptModelMeshes(meshes = []) {
+  const adopted = cameraFrame.adoptModelMeshes(meshes);
+  requestRender();
+  return adopted;
+}
+
 export function fitTo(meshes, options) {
   cameraFrame.fitTo(meshes, options);
+  requestRender();
+}
+
+export function forgetModelMeshes(meshes = []) {
+  cameraFrame.forgetModelMeshes(meshes);
   requestRender();
 }
 

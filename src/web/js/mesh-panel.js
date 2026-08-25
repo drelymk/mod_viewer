@@ -497,12 +497,12 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
 
 export function removeAssetFillMeshPanel() {
   const groups = groupsUI.filter(group => group.assetFill);
-  if (!groups.length) return 0;
+  if (!groups.length) return [];
   clearSelection();
-  let removed = 0;
+  const removed = [];
   for (const group of groups) {
     group.itemObjs.forEach(mesh => {
-      if (removeMesh(mesh)) removed += 1;
+      if (removeMesh(mesh)) removed.push(mesh);
     });
     group.header?.remove();
     group.itemsWrap?.remove();

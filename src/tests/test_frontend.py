@@ -935,6 +935,12 @@ def test_missing_asset_parts_append_and_remove_without_reloading_mod(
             "window.__fakeApi.calls.loadMissingAssetParts.length === 1")
         page.locator("#asset-fill-btn", has_text="Remove Missing Parts").wait_for()
         assert page.evaluate("window.modViewer.activeMeshes.length") == 2
+        appended = page.evaluate("""() => window.modViewer.activeMeshes.map(mesh => ({
+          position: mesh.position.toArray(), quaternion: mesh.quaternion.toArray(),
+        }))""")
+        assert appended[1]["position"] == pytest.approx(appended[0]["position"])
+        assert appended[1]["quaternion"] == pytest.approx(
+            appended[0]["quaternion"])
         assert page.locator(".mesh-src-hdr", has_text="ORIGINAL ASSET").count() == 1
         assert page.evaluate("window.__fakeApi.calls.loadMod") == ["FillMod"]
 
@@ -946,6 +952,22 @@ def test_missing_asset_parts_append_and_remove_without_reloading_mod(
         assert page.locator(".mesh-src-hdr", has_text="ORIGINAL ASSET").count() == 0
         assert page.evaluate("window.__fakeApi.calls.loadMod") == ["FillMod"]
 
+        page.locator("#camera-flip-btn").click()
+        page.locator("#camera-flip-horizontal-btn").click()
+        page.locator("#asset-fill-btn", has_text="Load Missing Parts").click()
+        page.locator("#asset-fill-btn", has_text="Remove Missing Parts").wait_for()
+        turned = page.evaluate("""() => window.modViewer.activeMeshes.map(mesh => ({
+          position: mesh.position.toArray(), quaternion: mesh.quaternion.toArray(),
+        }))""")
+        assert turned[1]["position"] == pytest.approx(turned[0]["position"])
+        assert turned[1]["quaternion"] == pytest.approx(turned[0]["quaternion"])
+        page.locator("#camera-reset-view-btn").click()
+        reset = page.evaluate("""() => window.modViewer.activeMeshes.map(mesh => ({
+          position: mesh.position.toArray(), quaternion: mesh.quaternion.toArray(),
+        }))""")
+        assert reset[1]["position"] == pytest.approx(reset[0]["position"])
+        assert reset[1]["quaternion"] == pytest.approx(reset[0]["quaternion"])
+
         page.evaluate("window.modViewer.reloadCurrentMod()")
         page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
         assert page.locator("#asset-fill-btn").inner_text() == "Load Missing Parts"
@@ -956,6 +978,80 @@ def test_missing_asset_parts_append_and_remove_without_reloading_mod(
 
 
 
+
+
+def _add_asset_fill_response(payload, label, position=None):
+    payload["asset_resolution"] = {"configured_roots": 1}
+    fill_payload = _payload(label)
+    fill_entry = next(iter(fill_payload["meshes"].values()))
+    if position is not None:
+        fill_entry["pos"] = position
+    fill_entry.update({
+        "source": "ORIGINAL ASSET",
+        "component": "Original Hair",
+        "asset_fill": True,
+        "fill_reason": "missing_mod_coverage",
+        "sources": [{"asset": {
+            "type": "ZZMI", "asset": "Character", "geometry_hash": "bbbbbbbb",
+            "component_name": "Hair", "first_index": 0, "index_count": 3,
+        }}],
+    })
+    fill_payload["metadata"] = {
+        "source_kind": "asset-fill", "material_profiles": {},
+    }
+    payload["assetFillResponse"] = {
+        "status": "loaded",
+        "coverage": {
+            "asset_parts": 2, "handled_parts": 1,
+            "missing_parts": 1, "skipped_parts": 0,
+        },
+        "payload": fill_payload,
+    }
+
+
+def test_missing_asset_parts_inherit_auto_upright_and_wuwa_facing(
+        edge_browser, frontend_url):
+    upright = _payload("Upright")
+    upright_position = _f32(0, 0, 0, 1, 0, 0, 0, 0, 2)
+    upright["meshes"]["Body-Upright-0"]["pos"] = upright_position
+    _add_asset_fill_response(upright, "UprightAsset", upright_position)
+
+    wuwa = _payload("WuWaFill")
+    wuwa["metadata"]["game"] = {
+        "id": "wuwa", "runtime": "wwmi", "texture_api": "raw",
+        "confidence": "high",
+    }
+    _add_asset_fill_response(wuwa, "WuWaAsset")
+
+    context, page = _page(
+        edge_browser, frontend_url, {"Upright": upright, "WuWa": wuwa})
+    try:
+        _open(page, "Upright")
+        page.locator(".draw-item").wait_for()
+        initial = page.evaluate(
+            "window.modViewer.activeMeshes[0].quaternion.toArray()")
+        assert initial == pytest.approx(
+            [-2 ** -0.5, 0, 0, 2 ** -0.5])
+        page.locator("#asset-fill-btn").click()
+        page.locator("#asset-fill-btn", has_text="Remove Missing Parts").wait_for()
+        upright_states = page.evaluate("""() => window.modViewer.activeMeshes.map(
+          mesh => mesh.quaternion.toArray())""")
+        assert upright_states[1] == pytest.approx(upright_states[0])
+
+        page.evaluate("async () => await window.modViewer.switchMod('WuWa')")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadMod.length === 2"
+            " && window.modViewer.activeMeshes.length === 1")
+        wuwa_initial = page.evaluate(
+            "window.modViewer.activeMeshes[0].quaternion.toArray()")
+        assert wuwa_initial == pytest.approx([0, 1, 0, 0])
+        page.locator("#asset-fill-btn").click()
+        page.locator("#asset-fill-btn", has_text="Remove Missing Parts").wait_for()
+        wuwa_states = page.evaluate("""() => window.modViewer.activeMeshes.map(
+          mesh => mesh.quaternion.toArray())""")
+        assert wuwa_states[1] == pytest.approx(wuwa_states[0])
+    finally:
+        context.close()
 
 
 def test_asset_rebuild_preserves_tree_and_disables_only_one_root(

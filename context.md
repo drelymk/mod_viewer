@@ -297,6 +297,10 @@ machine-specific paths or facts that are obvious from the source.
 - Viewport camera actions (Reset, Turn and Tilt) belong in the compact viewport
   toolbar with the render and navigation tools. Do not restore a separate
   Orientation panel when changing camera behavior.
+- Model orientation is persistent display state: auto-upright, game/base-facing
+  rotation and manual Turn/Tilt are applied in that order to late-adopted
+  meshes. Reset View retains the original base transform, and removed meshes
+  must be removed from that reset baseline.
 
 ## Feature flags and test strategy
 
