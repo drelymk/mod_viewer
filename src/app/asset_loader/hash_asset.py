@@ -10,7 +10,8 @@ from core.migoto_dump import (MigotoDumpError, pack_indices,
 from core.textures import normalize_texture_role
 
 from .. import asset_paths
-from .models import AssetLoadError, AssetMeshPart, make_texture
+from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
+                     make_texture)
 
 
 _ROLE_NAMES = {
@@ -87,7 +88,7 @@ def _dump_hash(path):
             normalize_geometry_hash(match.group("hash"))) if match else (None, None)
 
 
-def _find_dump(files, kind, hash_value=None, label=None):
+def _find_dumps(files, kind, hash_value=None, label=None):
     kind = kind.casefold()
     hash_value = normalize_geometry_hash(hash_value)
     matching = []
@@ -102,15 +103,21 @@ def _find_dump(files, kind, hash_value=None, label=None):
         if hash_value and file_hash == hash_value:
             matching.append(path)
     if matching:
-        return matching[0]
+        return matching
+    fallback = []
     lowered = (label or "").casefold()
     for path in files:
         name = os.path.basename(path).casefold()
         if not name.endswith(".txt") or f"-{kind}" not in name:
             continue
         if not lowered or lowered in name:
-            return path
-    return None
+            fallback.append(path)
+    return fallback
+
+
+def _find_dump(files, kind, hash_value=None, label=None):
+    matches = _find_dumps(files, kind, hash_value, label)
+    return matches[0] if matches else None
 
 
 def _entry_hash(entry, keys):
@@ -239,6 +246,26 @@ def _remap(vertex_dump, indices):
             pack_indices(valid_indices))
 
 
+def _warning(component, classification, reason, message):
+    return {"component": component, "classification": classification,
+            "reason": reason, "message": message}
+
+
+def _resolve_ib_dump(candidates, first, count, vertex_count, cache):
+    """Choose a range-local IB by its parsed header, not only its hash."""
+    parsed = []
+    for path in candidates:
+        if path not in cache:
+            cache[path] = parse_index_dump(path, vertex_count=vertex_count)
+        dump = cache[path]
+        parsed.append((path, dump))
+    matching = [item for item in parsed if item[1].first_index == first
+                and (count is None or item[1].index_count == count)]
+    if not matching:
+        return None
+    return matching[0]
+
+
 def load_hash_asset(asset_type, root, record, *, texture_source=None):
     asset_path = record.get("path") if isinstance(record, dict) else None
     metadata_path = None
@@ -258,6 +285,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
     vb_cache = {}
     ib_cache = {}
     parts = []
+    warnings = []
     entries = _entries(raw)
     if not entries:
         raise AssetLoadError("hash.json contains no renderable component records.")
@@ -266,43 +294,73 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
             continue
         geometry_hash = _entry_hash(
             entry, ("ib", "ib_hash", "geometry_hash", "geometryHash"))
-        if not geometry_hash:
-            continue
         component = _string(entry.get("component_name") or entry.get("componentName"))
+        if not geometry_hash:
+            warnings.append(_warning(
+                component, None, "geometry_hash_missing",
+                f"{component or 'Component'} has no usable index-buffer hash."))
+            continue
         vb_hash = _entry_hash(entry, (
             "vb0", "vb0_hash", "vertex_buffer", "vertexBuffer",
             "position_vb", "positionVB", "draw_vb", "drawVB"))
         vb_file = _find_dump(files, "vb", vb_hash, component)
-        ib_file = _find_dump(files, "ib", geometry_hash, component)
         if not vb_file:
-            raise AssetLoadError(f"{component or geometry_hash} vertex dump is missing.")
-        if not ib_file:
-            raise AssetLoadError(f"{component or geometry_hash} index dump is missing.")
+            warnings.append(_warning(
+                component, None, "vertex_dump_missing",
+                f"{component or geometry_hash} has no source vertex dump."))
+            continue
+        ib_files = _find_dumps(files, "ib", geometry_hash, component)
+        if not ib_files:
+            warnings.append(_warning(
+                component, None, "index_dump_missing",
+                f"{component or geometry_hash} has no source index dump."))
+            continue
         try:
             if vb_file not in vb_cache:
                 vb_cache[vb_file] = parse_vertex_dump(vb_file)
             vertex_dump = vb_cache[vb_file]
-            if ib_file not in ib_cache:
-                ib_cache[ib_file] = parse_index_dump(
-                    ib_file, vertex_count=vertex_dump.layout.vertex_count)
-            all_indices = ib_cache[ib_file]
         except MigotoDumpError as error:
-            raise AssetLoadError(f"{component or geometry_hash}: {error}") from error
-        for ordinal, first, count, classification in _ranges(entry):
-            end = len(all_indices) if count is None else first + count
-            if first >= len(all_indices):
+            warnings.append(_warning(
+                component, None, "vertex_dump_invalid",
+                f"{component or geometry_hash} vertex dump skipped: {error}"))
+            continue
+        ranges = _ranges(entry)
+        for ordinal, first, count, classification in ranges:
+            try:
+                resolved = _resolve_ib_dump(
+                    ib_files, first, count, vertex_dump.layout.vertex_count,
+                    ib_cache)
+            except MigotoDumpError as error:
+                warnings.append(_warning(
+                    component, classification, "index_dump_invalid",
+                    f"{component or geometry_hash} index dump skipped: {error}"))
                 continue
-            selected = all_indices[first:min(end, len(all_indices))]
+            if resolved is None:
+                warnings.append(_warning(
+                    component, classification, "index_range_missing",
+                    f"{component or geometry_hash} range {first} has no matching index dump."))
+                continue
+            _ib_file, ib_dump = resolved
+            selected = ib_dump.indices
             if len(selected) < 3:
+                warnings.append(_warning(
+                    component, classification, "index_range_empty",
+                    f"{component or geometry_hash} range {first} has no complete triangles."))
                 continue
-            positions, normals, uvs, indices = _remap(vertex_dump, selected)
+            try:
+                positions, normals, uvs, indices = _remap(vertex_dump, selected)
+            except (AssetLoadError, MigotoDumpError) as error:
+                warnings.append(_warning(
+                    component, classification, "part_invalid",
+                    f"{component or geometry_hash} part skipped: {error}"))
+                continue
             textures = _texture_records(
                 entry, ordinal, files, root, component, classification,
                 texture_source)
             label = component or os.path.basename(asset_path)
             if classification:
                 label = f"{label} {classification}"
-            if len(_ranges(entry)) > 1:
+            if len(ranges) > 1:
                 label = f"{label} {ordinal + 1}"
             key = f"{asset_path}::{component or 'part'}::{geometry_hash}::{ordinal}"
             parts.append(AssetMeshPart(
@@ -314,7 +372,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
                 uvs=uvs, normals=normals, textures=textures))
     if not parts:
         raise AssetLoadError("Asset contains no complete renderable parts.")
-    return tuple(parts)
+    return AssetAdapterResult(tuple(parts), tuple(warnings))
 
 
 __all__ = ["load_hash_asset"]

@@ -5,11 +5,13 @@ semantic names and the values themselves are the stable contract, so this
 parser keys off those declarations instead of a hard-coded vertex stride.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import math
 import os
 import re
 import struct
+
+from .geometry_transport import canonicalize_uvs
 
 
 MAX_TEXT_FILE_BYTES = 512 * 1024 * 1024
@@ -47,6 +49,24 @@ class ParsedVertexDump:
     uvs: bytes | None
 
 
+@dataclass(frozen=True, slots=True)
+class ParsedIndexDump:
+    indices: tuple[int, ...]
+    first_index: int
+    index_count: int | None
+    index_format: str | None
+    topology: str | None
+
+    def __iter__(self):
+        return iter(self.indices)
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, item):
+        return self.indices[item]
+
+
 _SEMANTIC_RE = re.compile(
     r"\b(POSITION|NORMAL|TEXCOORD)(\d*)\b", re.I)
 _INDEX_RE = re.compile(r"(?:vb\d+\s*\[\s*(\d+)\s*\]|vertex\s*(\d+)|"
@@ -61,6 +81,14 @@ _OFFSET_RE = re.compile(
     r"(?:aligned[_ ]byte[_ ]offset|byte[_ ]offset|offset)\s*[:=]\s*(\d+)",
     re.I)
 _FORMAT_RE = re.compile(r"\bformat\s*[:=]\s*([A-Za-z0-9_]+)", re.I)
+_INDEX_HEADER_RE = re.compile(
+    r"^\s*(byte\s+offset|first\s+index|index\s+count)\s*[:=]\s*(\d+)\b",
+    re.I)
+_TOPOLOGY_RE = re.compile(r"^\s*topology\s*[:=]\s*(\S+)", re.I)
+_FORMAT_HEADER_RE = re.compile(r"^\s*format\s*[:=]\s*(\S+)", re.I)
+_INDEX_ROW_PREFIX_RE = re.compile(
+    r"^(?:\d+|index\s*\d+|ib\d*\s*\[\s*\d+\s*\]"
+    r"(?:\s*\+\s*\d+)?)\s*$", re.I)
 
 
 def _readable_path(path):
@@ -195,7 +223,8 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT):
         for index in range(vertex_count):
             struct.pack_into(f"<{width}f", result, index * width * 4,
                              *source[index])
-        return bytes(result)
+        packed = bytes(result)
+        return canonicalize_uvs(packed) if name == "TEXCOORD" else packed
 
     semantic_items = tuple(declarations.values())
     layout = DumpVertexLayout(
@@ -204,11 +233,31 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT):
                              pack("NORMAL", 3), pack("TEXCOORD", 2))
 
 
+def _index_row_values(line):
+    if ":" in line:
+        prefix, values = line.split(":", 1)
+        return values if _INDEX_ROW_PREFIX_RE.match(prefix) else None
+    if "=" in line:
+        prefix, values = line.split("=", 1)
+        return values if _INDEX_ROW_PREFIX_RE.match(prefix) else None
+    marker = re.match(
+        r"^\s*ib\d*\s*\[\s*\d+\s*\]\s*\+\s*\d+\s+(.*)$",
+        line, re.I)
+    if marker:
+        return marker.group(1)
+    if re.fullmatch(r"\s*[-+]?\d+(?:\s+[-+]?\d+)*\s*", line):
+        return line
+    return None
+
+
 def parse_index_dump(path, *, vertex_count=None, max_indices=MAX_INDEX_COUNT):
     """Stream a text IB dump, keeping complete valid triangles only."""
     path = _readable_path(path)
     values = []
     topology = None
+    first_index = 0
+    declared_count = None
+    index_format = None
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as stream:
             for line_number, raw_line in enumerate(stream, 1):
@@ -218,23 +267,33 @@ def parse_index_dump(path, *, vertex_count=None, max_indices=MAX_INDEX_COUNT):
                 line = raw_line.strip()
                 if not line or line.startswith(("#", ";", "//")):
                     continue
-                topology_match = re.search(r"topology\s*[:=]\s*([^\s]+)", line, re.I)
+                topology_match = _TOPOLOGY_RE.match(line)
                 if topology_match:
-                    topology = topology_match.group(1).casefold()
+                    topology = re.sub(
+                        r"[\s_-]", "", topology_match.group(1).casefold())
                     continue
-                if "index count" in line.casefold() or "format" in line.casefold():
+                header_match = _INDEX_HEADER_RE.match(line)
+                if header_match:
+                    key = re.sub(r"\s+", " ", header_match.group(1).casefold())
+                    value = int(header_match.group(2))
+                    if key == "byte offset":
+                        continue
+                    if key == "first index":
+                        first_index = value
+                    else:
+                        declared_count = value
+                        if value > max_indices:
+                            raise MigotoDumpError(
+                                "Index count exceeds the safety limit.")
                     continue
-                if ":" in line:
-                    line = line.split(":", 1)[1]
-                elif "=" in line:
-                    line = line.split("=", 1)[1]
-                else:
-                    marker = re.search(r"\]\s*\+\d+\s+", line)
-                    if marker:
-                        line = line[marker.end():]
-                numbers = re.findall(r"[-+]?\d+", line)
-                if not numbers:
+                format_match = _FORMAT_HEADER_RE.match(line)
+                if format_match:
+                    index_format = format_match.group(1).upper()
                     continue
+                row = _index_row_values(line)
+                if row is None:
+                    continue
+                numbers = re.findall(r"[-+]?\d+", row)
                 for raw_value in numbers:
                     value = int(raw_value)
                     if value < 0:
@@ -244,7 +303,7 @@ def parse_index_dump(path, *, vertex_count=None, max_indices=MAX_INDEX_COUNT):
                         raise MigotoDumpError("Index count exceeds the safety limit.")
     except OSError as error:
         raise MigotoDumpError(f"Could not read index dump: {error}") from error
-    if topology and topology not in {"trianglelist", "triangle_list", "triangles"}:
+    if topology and topology not in {"trianglelist", "triangles"}:
         raise MigotoDumpError("Index dump is not triangle-list topology.")
     usable = len(values) - (len(values) % 3)
     values = values[:usable]
@@ -254,9 +313,14 @@ def parse_index_dump(path, *, vertex_count=None, max_indices=MAX_INDEX_COUNT):
         if vertex_count is not None and any(index >= vertex_count for index in triangle):
             continue
         valid.extend(triangle)
+    if declared_count is not None and declared_count < len(valid):
+        valid = valid[:declared_count - declared_count % 3]
     if not valid:
         raise MigotoDumpError("Index dump contains no complete valid triangles.")
-    return list(valid)
+    return ParsedIndexDump(
+        tuple(valid), first_index,
+        declared_count if declared_count is not None else len(valid),
+        index_format, topology)
 
 
 def pack_indices(indices):
@@ -274,6 +338,6 @@ parse_ib_dump = parse_index_dump
 
 __all__ = [
     "DumpSemantic", "DumpVertexLayout", "MigotoDumpError",
-    "ParsedVertexDump", "pack_indices", "parse_index_dump",
+    "ParsedIndexDump", "ParsedVertexDump", "pack_indices", "parse_index_dump",
     "parse_ib_dump", "parse_vb_dump", "parse_vertex_dump",
 ]

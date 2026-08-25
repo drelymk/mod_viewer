@@ -1,6 +1,7 @@
 """Direct loading of already-indexed extracted Assets."""
 
-from .models import AssetLoadError, AssetLoadResult, AssetMeshPart, AssetTexture
+from .models import (AssetAdapterResult, AssetLoadError, AssetLoadResult,
+                     AssetMeshPart, AssetTexture)
 import logging
 import time
 
@@ -13,28 +14,31 @@ def load_asset(asset_type, root, record, *, geometry, texture_source=None):
     started = time.perf_counter()
     if asset_type in ("GIMI", "ZZMI"):
         from .hash_asset import load_hash_asset
-        parts = load_hash_asset(
+        adapted = load_hash_asset(
             asset_type, root, record, texture_source=texture_source)
     elif asset_type == "WWMI":
         from .wwmi import load_wwmi_asset
-        parts = load_wwmi_asset(
+        adapted = load_wwmi_asset(
             root, record, texture_source=texture_source)
     else:
         raise AssetLoadError(f"Unsupported Asset type: {asset_type}.")
-    if not parts:
+    if not isinstance(adapted, AssetAdapterResult):
+        adapted = AssetAdapterResult(tuple(adapted))
+    if not adapted.parts:
         raise AssetLoadError("Asset contains no renderable geometry parts.")
     result = AssetLoadResult.from_parts(
-        asset_type, root, record, parts, geometry=geometry)
+        asset_type, root, record, adapted.parts, geometry=geometry,
+        warnings=adapted.warnings)
     _LOGGER.info(
         "Asset type: %s; Asset: %s; Mesh parts: %d; Textures resolved: %d; "
         "Load time: %.3fs",
-        asset_type, record.get("path"), len(parts),
-        sum(len(part.textures) for part in parts),
+        asset_type, record.get("path"), len(adapted.parts),
+        sum(len(part.textures) for part in adapted.parts),
         time.perf_counter() - started)
     return result
 
 
 __all__ = [
-    "AssetLoadError", "AssetLoadResult", "AssetMeshPart", "AssetTexture",
-    "load_asset",
+    "AssetAdapterResult", "AssetLoadError", "AssetLoadResult",
+    "AssetMeshPart", "AssetTexture", "load_asset",
 ]

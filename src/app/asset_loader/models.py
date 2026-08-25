@@ -54,12 +54,19 @@ class AssetMeshPart:
         }
 
 
-@dataclass(frozen=True, slots=True)
 class AssetLoadError(ValueError):
-    message: str
+    def __init__(self, message):
+        self.message = str(message)
+        super().__init__(self.message)
 
     def __str__(self):
         return self.message
+
+
+@dataclass(frozen=True, slots=True)
+class AssetAdapterResult:
+    parts: tuple["AssetMeshPart", ...]
+    warnings: tuple[dict, ...] = ()
 
 
 @dataclass(slots=True)
@@ -68,7 +75,8 @@ class AssetLoadResult:
     parts: tuple[AssetMeshPart, ...]
 
     @classmethod
-    def from_parts(cls, asset_type, root, record, parts, *, geometry):
+    def from_parts(cls, asset_type, root, record, parts, *, geometry,
+                   warnings=()):
         game = {"GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa"}[asset_type]
         root_id = os.path.normcase(os.path.abspath(root))
         source = record.get("path", "") if isinstance(record, dict) else ""
@@ -144,7 +152,7 @@ class AssetLoadResult:
                          "texture_api": asset_type.lower(),
                          "confidence": "authoritative"},
                 "asset": {"type": asset_type, "path": source,
-                          "root": root_id},
+                          "root": root_id, "warnings": list(warnings)},
                 "mesh_names": {},
                 "material_profiles": profiles,
             },
@@ -168,6 +176,6 @@ def make_texture(root, path, role, *, texture_source=None, source="explicit"):
 
 
 __all__ = [
-    "AssetLoadError", "AssetLoadResult", "AssetMeshPart", "AssetTexture",
-    "make_texture",
+    "AssetAdapterResult", "AssetLoadError", "AssetLoadResult",
+    "AssetMeshPart", "AssetTexture", "make_texture",
 ]

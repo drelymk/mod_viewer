@@ -171,6 +171,13 @@ machine-specific paths or facts that are obvious from the source.
   must not create semantic role bindings.
 - Direct Asset geometry retains Asset/component/range provenance so later
   mod/Asset composition can compare coverage without reparsing viewer labels.
+- Direct Asset UVs are canonical viewer-space Float32 UVs (V is flipped exactly
+  once). GIMI/ZZMI index ranges resolve against parsed IB header identity;
+  WWMI metadata offsets remain provenance while `Component N.fmt/.vb/.ib`
+  provide component-local geometry.
+- Recoverable Asset part failures are reported as Asset warnings and do not
+  discard otherwise renderable components; a load fails only when no parts
+  survive.
 - `core.textures` owns role-aware keys, PNG fallback, transforms, caching and
   texture profiling. `core.mesh_builder` owns geometry/payload assembly.
   Keep texture processing independent from game/material interpretation.
