@@ -32,6 +32,7 @@ import { setTextureDisplayMode } from './render-modes.js';
 import { clearInspector, initInspectorPanel } from './inspector-panel.js';
 import { initRightDock, setRightDockEnabled } from './right-dock.js';
 import { initPanelOpacityControl } from './appearance.js';
+import { createIcon } from './ui-icons.js';
 import {
   getOutlineState as getMeshOutlineState,
   setOutlineSuppressedByDebug,
@@ -277,9 +278,17 @@ function updateAssetFillButton() {
   if (!button) return;
   const available = assetFillAvailable
     && currentSource?.kind === 'mod' && !!currentModPath;
+  const state = assetFillLoading ? 'loading' : assetFillLoaded ? 'remove' : 'load';
+  const label = state === 'remove'
+    ? 'Remove missing parts'
+    : state === 'loading'
+      ? assetFillLoaded ? 'Removing missing parts' : 'Loading missing parts'
+      : 'Load missing parts';
   button.disabled = !available || assetFillLoading;
-  button.textContent = assetFillLoading ? 'Loading…'
-    : assetFillLoaded ? 'Remove Missing Parts' : 'Load Missing Parts';
+  button.dataset.state = state;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', String(assetFillLoaded));
+  button.replaceChildren(createIcon(state === 'remove' ? 'close' : 'mesh-add'));
   button.title = assetFillLoaded
     ? 'Remove original Asset components added for this session.'
     : 'Add original Asset components not handled by this mod.';
@@ -923,12 +932,12 @@ function initPanelCollapse(panel, contentId) {
   chevron.setAttribute('aria-controls', contentId);
   setCollapsed(initiallyCollapsed, false);
   const toggle = (e) => {
-    if (e?.target?.closest?.('.icon-btn, .panel-actions, .panel-action-menu')) return;
+    if (e?.target?.closest?.('.icon-btn, .panel-hdr-actions, .panel-actions, .panel-action-menu')) return;
     e?.stopPropagation?.();
     setCollapsed(!content.classList.contains('collapsed'));
   };
   hdr.addEventListener('click', e => {
-    if (e.target.closest('.icon-btn, .group-toggle, .panel-actions, .panel-action-menu')) return;
+    if (e.target.closest('.icon-btn, .group-toggle, .panel-hdr-actions, .panel-actions, .panel-action-menu')) return;
     setCollapsed(!content.classList.contains('collapsed'));
   });
   chevron.addEventListener('click', toggle);

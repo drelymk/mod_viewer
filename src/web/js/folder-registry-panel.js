@@ -259,36 +259,28 @@ export function createFolderRegistryPanel({
     });
     if (!currentNode) return false;
 
-    const currentRow = currentNode.querySelector(`:scope > ${selector('row')}`);
     const currentChildren = currentNode.querySelector(
       `:scope > ${selector('children')}`);
-    const currentMeta = currentNode.querySelector(
-      `:scope > ${selector('meta')}`);
-    const currentMissing = currentNode.querySelector(
-      `:scope > ${selector('missing')}`);
     const expanded = currentNode.classList.contains('expanded');
     const replacement = createNode(entry, true);
-    const replacementRow = replacement.querySelector(`:scope > ${selector('row')}`);
     const replacementArrow = replacement.querySelector(
       `:scope > ${selector('row')} ${selector('expand')}`);
-    const replacementMissing = replacement.querySelector(
-      `:scope > ${selector('missing')}`);
-    const replacementMeta = replacement.querySelector(
-      `:scope > ${selector('meta')}`);
+    const replacementChildren = replacement.querySelector(
+      `:scope > ${selector('children')}`);
+    if (currentChildren && replacementChildren) {
+      replacementChildren.replaceWith(currentChildren);
+    }
+    const preservedChildren = currentChildren || replacementChildren;
     if (expanded) {
+      replacement.classList.add('expanded');
+      preservedChildren.hidden = false;
       replacementArrow.classList.remove('leaf');
       replacementArrow.classList.add('expanded');
       replacementArrow.setAttribute('aria-expanded', 'true');
       replacementArrow.setAttribute(
         'aria-label', `Collapse ${replacementArrow.dataset.folderName}`);
     }
-    currentRow.replaceWith(replacementRow);
-    if (currentMeta && replacementMeta) currentMeta.replaceWith(replacementMeta);
-    else if (currentMeta) currentMeta.remove();
-    else if (replacementMeta) currentNode.insertBefore(replacementMeta, currentChildren);
-    if (currentMissing && replacementMissing) currentMissing.replaceWith(replacementMissing);
-    else if (currentMissing) currentMissing.remove();
-    else if (replacementMissing) currentNode.insertBefore(replacementMissing, currentChildren);
+    currentNode.replaceWith(replacement);
     roots[index] = entry;
     setActivePath(activePath);
     return true;
