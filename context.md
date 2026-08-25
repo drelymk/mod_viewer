@@ -174,8 +174,9 @@ machine-specific paths or facts that are obvious from the source.
   composition.
 - Mod/Asset coverage is determined from authored geometry override identities
   across every discovered INI, including staged documents and
-  `handling=skip`, not from rendered draw output. A hash-only override
-  conservatively covers every Asset range under that hash.
+  `handling=skip`, not from rendered draw output. A hash-only geometry-bearing
+  override conservatively covers every Asset range under that hash; a
+  texture-only hash binding identifies an Asset but does not claim geometry.
 - Automatic original-part filling requires one uniquely resolved original
   Asset. Ambiguous identity never triggers composition. Filled geometry is
   viewer-session state, retains Asset provenance, and is removed on mod reload

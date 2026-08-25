@@ -23,7 +23,7 @@ class ComponentCoverageKey:
 
 @dataclass(frozen=True, slots=True)
 class AuthoredComponentOverride:
-    """One authored TextureOverride claim, including its source section."""
+    """One authored TextureOverride claim, including geometry evidence."""
 
     geometry_hash: str
     first_index: int | None
@@ -31,6 +31,7 @@ class AuthoredComponentOverride:
     ini: str
     section: str
     handling_skip: bool
+    geometry_evidence: bool = False
 
     @property
     def key(self):
@@ -42,15 +43,18 @@ _HASH_RE = re.compile(r"^hash\s*=\s*(\S+)$", re.I)
 _FIRST_RE = re.compile(r"^match_first_index\s*=\s*(\d+)$", re.I)
 _COUNT_RE = re.compile(r"^match_index_count\s*=\s*(\d+)$", re.I)
 _SKIP_RE = re.compile(r"^handling\s*=\s*skip\b", re.I)
+_GEOMETRY_RE = re.compile(
+    r"^(?:drawindexed|draw|ib|vb\d+)\s*=\s*(?!null\b)\S+", re.I)
 
 
 def collect_component_overrides(sections, ini_path):
     """Return geometry ownership declared by TextureOverride sections.
 
-    This extractor intentionally does not inspect draw rows or conditions.
-    A hash-only or skipped override is still an authored claim, and the
-    composition planner later decides whether the hash belongs to the
-    resolved Asset.
+    Hashes remain available as Asset identity evidence even when a section
+    only binds textures. The composition planner uses ``geometry_evidence``
+    to avoid treating those texture-only bindings as rendered geometry.
+    Explicit ``handling = skip`` remains a coverage claim because it suppresses
+    the corresponding original draw.
     """
     result = []
     for section, lines in (sections or {}).items():
@@ -60,6 +64,7 @@ def collect_component_overrides(sections, ini_path):
         first_index = None
         index_count = None
         handling_skip = False
+        geometry_evidence = False
         for raw in lines or ():
             line = str(raw).split(";", 1)[0].strip()
             if not line:
@@ -80,6 +85,8 @@ def collect_component_overrides(sections, ini_path):
                 continue
             if _SKIP_RE.match(line):
                 handling_skip = True
+            if _GEOMETRY_RE.match(line):
+                geometry_evidence = True
         for geometry_hash in dict.fromkeys(hashes):
             result.append(AuthoredComponentOverride(
                 geometry_hash=geometry_hash,
@@ -88,6 +95,7 @@ def collect_component_overrides(sections, ini_path):
                 ini=ini_path,
                 section=str(section),
                 handling_skip=handling_skip,
+                geometry_evidence=geometry_evidence,
             ))
     return tuple(result)
 

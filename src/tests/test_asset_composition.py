@@ -48,6 +48,7 @@ def _zzmi(hash_value, extra=""):
     return (
         "[TextureOverrideBody]\n"
         f"hash = {hash_value}\n"
+        "drawindexed = 3, 0, 0\n"
         "run = CommandList\\ZZMI\\SetTextures\n"
         f"{extra}"
     )
@@ -68,6 +69,29 @@ def test_collect_component_overrides_includes_skip_and_range():
     assert result[0].first_index == 300
     assert result[0].index_count == 12
     assert result[0].handling_skip is True
+    assert result[0].geometry_evidence is False
+
+
+def test_texture_only_hash_identifies_asset_without_covering_geometry(
+        tmp_path, monkeypatch):
+    index = _index(_geometry("aaaaaaaa", (0, 12)))
+    monkeypatch.setattr(asset_index, "load_index",
+                        lambda _type, _root: index)
+    context = _context(tmp_path, {
+        "mod.ini": (
+            "[TextureOverrideFaceIB]\n"
+            "hash = aaaaaaaa\n"
+            "run = CommandList\\ZZMI\\SetTextures\n"),
+    })
+
+    plan = asset_composition.plan_missing_asset_parts(context)
+
+    assert plan.status == "ready"
+    assert plan.asset == {"path": "Character", "geometry": [
+        _geometry("aaaaaaaa", (0, 12))]}
+    assert plan.evidence[0].geometry_evidence is False
+    assert not plan.covered_parts
+    assert [part.first_index for part in plan.missing_parts] == [0]
 
 
 def test_plan_unions_nested_inis_and_ignores_non_asset_hashes(

@@ -785,6 +785,7 @@ def test_api_load_missing_asset_parts_is_incremental_and_reversible(
     (mod / "mod.ini").write_text(
         "[TextureOverrideBody]\n"
         "hash = aaaaaaaa\n"
+        "drawindexed = 3, 0, 0\n"
         "run = CommandList\\ZZMI\\SetTextures\n", encoding="utf-8")
     config = tmp_path / "config.json"
     config.write_text(json.dumps({
