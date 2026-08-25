@@ -170,18 +170,28 @@ def _candidate_assets(asset_type, evidence, asset_entries):
 
     A mod can contain auxiliary vertex-buffer hashes and optional components
     from a related variant. Those hashes must not veto the Asset supported by
-    the main indexed geometry. Equal support remains ambiguous.
+    the main indexed geometry. When game detection is unknown, all enabled
+    Asset types are searched and the same equal-support ambiguity rule applies.
     """
     candidates = {}
     support = {}
+    if asset_type is None:
+        entries = [
+            entry
+            for candidate_type in _GAME_ASSET_TYPES.values()
+            for entry in asset_folders.enabled_entries_for_type(
+                asset_entries, candidate_type)
+        ]
+    else:
+        entries = asset_folders.enabled_entries_for_type(
+            asset_entries, asset_type)
     for item in evidence:
         if not item.asset_identity_evidence:
             continue
         matches = {}
-        for entry in asset_folders.enabled_entries_for_type(
-                asset_entries, asset_type):
+        for entry in entries:
             try:
-                index = asset_index.load_index(asset_type, entry["path"])
+                index = asset_index.load_index(entry["type"], entry["path"])
             except asset_index.AssetIndexError:
                 continue
             for lookup in asset_index.lookup_geometry(index, item.geometry_hash):
@@ -189,7 +199,7 @@ def _candidate_assets(asset_type, evidence, asset_entries):
                     asset = index["assets"][lookup["asset"]]
                 except (KeyError, IndexError, TypeError):
                     continue
-                identity = (asset_type, entry["path"], asset.get("path"))
+                identity = (entry["type"], entry["path"], asset.get("path"))
                 matches[identity] = (entry["path"], index, asset)
         if not matches:
             continue
@@ -232,11 +242,17 @@ def plan_missing_asset_parts(context, overrides=None):
     detection = resolve_game_detection(
         game_evidence, runtime_evidence, texture_api_evidence)
     asset_type = _asset_type(detection)
-    if asset_type is None:
-        return AssetFillPlan("asset_not_found", evidence=tuple(authored))
 
-    roots = asset_folders.enabled_entries_for_type(
-        context.asset_folders, asset_type)
+    if asset_type is None:
+        roots = [
+            entry
+            for candidate_type in _GAME_ASSET_TYPES.values()
+            for entry in asset_folders.enabled_entries_for_type(
+                context.asset_folders, candidate_type)
+        ]
+    else:
+        roots = asset_folders.enabled_entries_for_type(
+            context.asset_folders, asset_type)
     if not roots:
         return AssetFillPlan(
             "asset_not_found", asset_type=asset_type,
@@ -254,11 +270,12 @@ def plan_missing_asset_parts(context, overrides=None):
 
     identity = identities[0]
     root, _index, asset = candidates[identity]
-    parts = _asset_parts(asset_type, root, asset)
+    resolved_asset_type = identity[0]
+    parts = _asset_parts(resolved_asset_type, root, asset)
     covered, missing = _coverage_for_asset(parts, authored)
     status = "nothing_missing" if not missing else "ready"
     return AssetFillPlan(
-        status=status, asset_type=asset_type, root=root, asset=asset,
+        status=status, asset_type=resolved_asset_type, root=root, asset=asset,
         asset_parts=parts, covered_parts=covered, missing_parts=missing,
         evidence=tuple(authored), index_status="ready")
 

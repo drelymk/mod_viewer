@@ -162,6 +162,65 @@ def test_plan_ignores_auxiliary_hash_that_matches_another_asset(
     assert plan.asset["path"] == "Remielle"
 
 
+def test_unknown_game_fallback_searches_all_asset_types(
+        tmp_path, monkeypatch):
+    indexes = {
+        "GIMI": _index(_geometry("bbbbbbbb", (0, 12)),
+                        asset_path="Other"),
+        "ZZMI": _index(_geometry("aaaaaaaa", (0, 12)),
+                        asset_path="Evelyn"),
+    }
+    monkeypatch.setattr(
+        asset_index, "load_index",
+        lambda asset_type, _root: indexes[asset_type])
+    context = _context(tmp_path, {
+        "mod.ini": (
+            "[TextureOverrideBody]\n"
+            "hash = aaaaaaaa\n"
+            "drawindexed = 3, 0, 0\n"
+        ),
+    })
+    context.asset_folders = [
+        {"type": "GIMI", "path": "gimi-root", "enabled": True},
+        {"type": "ZZMI", "path": "zzmi-root", "enabled": True},
+    ]
+
+    plan = asset_composition.plan_missing_asset_parts(context)
+
+    assert plan.status == "nothing_missing"
+    assert plan.asset_type == "ZZMI"
+    assert plan.asset["path"] == "Evelyn"
+
+
+def test_unknown_game_fallback_keeps_cross_type_asset_ambiguity(
+        tmp_path, monkeypatch):
+    indexes = {
+        "GIMI": _index(_geometry("aaaaaaaa", (0, 12)),
+                        asset_path="GenshinAsset"),
+        "ZZMI": _index(_geometry("aaaaaaaa", (0, 12)),
+                        asset_path="ZZZAsset"),
+    }
+    monkeypatch.setattr(
+        asset_index, "load_index",
+        lambda asset_type, _root: indexes[asset_type])
+    context = _context(tmp_path, {
+        "mod.ini": (
+            "[TextureOverrideBody]\n"
+            "hash = aaaaaaaa\n"
+            "drawindexed = 3, 0, 0\n"
+        ),
+    })
+    context.asset_folders = [
+        {"type": "GIMI", "path": "gimi-root", "enabled": True},
+        {"type": "ZZMI", "path": "zzmi-root", "enabled": True},
+    ]
+
+    plan = asset_composition.plan_missing_asset_parts(context)
+
+    assert plan.status == "asset_ambiguous"
+    assert not plan.missing_parts
+
+
 def test_plan_matches_requested_range_only(tmp_path, monkeypatch):
     index = _index(_geometry(
         "aaaaaaaa", (0, 12), (300, 24), (600, 18)))
