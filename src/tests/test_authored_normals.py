@@ -191,6 +191,54 @@ def test_shared_normal_source_uses_one_orientation_for_all_draws(tmp_path):
     assert third == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
 
 
+def test_shared_buffers_do_not_share_orientation_across_components(tmp_path):
+    draw_text = """[TextureOverrideComponent0]
+ib = ResourceIB
+vb0 = ResourcePosition
+vb1 = ResourceVector
+vb2 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[TextureOverrideComponent1]
+ib = ResourceIB
+vb0 = ResourcePosition
+vb1 = ResourceVector
+vb2 = ResourceTexcoord
+drawindexed = 3, 3, 0
+
+[ResourceIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+
+[ResourceVector]
+filename = vector.buf
+stride = 8
+format = DXGI_FORMAT_R8G8B8A8_SNORM
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+"""
+    groups = _parse_groups(tmp_path, draw_text)
+    points = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)] * 2
+    _write(tmp_path, "position.buf", b"".join(
+        struct.pack("<3f", *point) for point in points))
+    _write(tmp_path, "texcoord.buf", b"\0" * 120)
+    _write(tmp_path, "body.ib", struct.pack("<6I", *range(6)))
+    _write(tmp_path, "vector.buf", _packed_normals(
+        [(0, 0, 127)] * 3 + [(0, 0, 128)] * 3))
+
+    meshes, geometry = _build(groups, tmp_path)
+    first = _values(geometry, meshes["Component0-1"]["normal"])
+    second = _values(geometry, meshes["Component1-1"]["normal"])
+    assert first == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
+    assert second == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
+
+
 def test_ambiguous_orientation_samples_do_not_consume_shared_source_budget(
         tmp_path):
     triangles_per_draw = 4096

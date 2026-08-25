@@ -25,10 +25,12 @@ _MAX_DRAWS = 10_000
 _MAX_ORIENTATION_SAMPLES_PER_SOURCE = 16_384
 
 
-def _normal_orientation_key(draw, source, position_stride, index_size):
-    """Identify one authored source/geometry/index stream across draws."""
+def _normal_orientation_key(draw, source, position_stride, index_size,
+                            orientation_scope):
+    """Identify one authored source within a component's draw scope."""
     return (source.file, source.stride, source.offset, source.encoding,
-            draw.position_file, position_stride, draw.ib_file, index_size)
+            draw.position_file, position_stride, draw.ib_file, index_size,
+            orientation_scope)
 
 
 def _res_get(resources, name):
@@ -728,7 +730,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if normal_bytes is not None:
                 orientation_key = _normal_orientation_key(
                     draw, normal_source, draw_pos_stride,
-                    draw.index_size if draw.index_size is not None else index_size)
+                    draw.index_size if draw.index_size is not None else index_size,
+                    (source, grp.get("name"), component))
                 evidence = normal_orientation_evidence(
                     pos_data, draw_pos_stride, normal_bytes, raw, remap)
                 if evidence:
