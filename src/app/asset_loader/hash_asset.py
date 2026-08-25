@@ -22,6 +22,12 @@ _ROLE_NAMES = {
 }
 _DUMP_RE = re.compile(
     r"(?:^|[-_])(?P<kind>vb\d*|ib)=(?P<hash>[0-9a-f]+)", re.I)
+_TEXTURE_SUFFIXES = (
+    ("diffuse", "diffuse"),
+    ("normal_map", "normalmap"),
+    ("light_map", "lightmap"),
+    ("material_map", "materialmap"),
+)
 
 
 def _entries(value):
@@ -86,6 +92,12 @@ def _dump_hash(path):
     match = _DUMP_RE.search(os.path.splitext(os.path.basename(path))[0])
     return (match.group("kind").casefold(),
             normalize_geometry_hash(match.group("hash"))) if match else (None, None)
+
+
+def _dump_prefix(path):
+    stem = os.path.splitext(os.path.basename(path))[0]
+    match = _DUMP_RE.search(stem)
+    return stem[:match.start()] if match else None
 
 
 def _find_dumps(files, kind, hash_value=None, label=None):
@@ -175,15 +187,61 @@ def _texture_file(files, texture_hash, extension, component, classification, rol
     return preferred[0] if len(preferred) == 1 else None
 
 
+def _range_texture_records(files, ib_candidates, first, count, vertex_count,
+                           ib_cache, root, texture_source):
+    families = {}
+    for path in ib_candidates:
+        if path not in ib_cache:
+            ib_cache[path] = parse_index_dump(path, vertex_count=vertex_count)
+        dump = ib_cache[path]
+        if (dump.first_index != first
+                or (count is not None and dump.index_count != count)):
+            continue
+        prefix = _dump_prefix(path)
+        if not prefix:
+            continue
+        prefix_folded = prefix.casefold()
+        family = {}
+        for candidate in files:
+            extension = os.path.splitext(candidate)[1].casefold()
+            if extension not in {".dds", ".png", ".jpg", ".jpeg", ".tga"}:
+                continue
+            texture_stem = os.path.splitext(
+                os.path.basename(candidate))[0].casefold()
+            if not texture_stem.startswith(prefix_folded):
+                continue
+            suffix = texture_stem[len(prefix_folded):]
+            for role, expected in _TEXTURE_SUFFIXES:
+                if suffix == expected:
+                    family.setdefault(role, []).append(candidate)
+                    break
+        if family:
+            families[prefix] = family
+    if len(families) != 1:
+        return {}
+    family = next(iter(families.values()))
+    result = {}
+    for role, candidates in family.items():
+        if len(candidates) != 1:
+            continue
+        texture = make_texture(
+            root, candidates[0], role, texture_source=texture_source,
+            source="asset_geometry_family")
+        if texture:
+            result[role] = texture
+    return result
+
+
 def _texture_records(entry, position, files, root, component, classification,
-                     texture_source):
+                     texture_source, *, ib_candidates=(), first=0, count=None,
+                     vertex_count=0, ib_cache=None):
     textures = entry.get("texture_hashes")
     if not isinstance(textures, list) or position >= len(textures):
         textures = entry.get("textureHashes")
-    if not isinstance(textures, list) or position >= len(textures):
-        return {}
+    items = (textures[position] if isinstance(textures, list)
+             and position < len(textures) else ()) or ()
     result = {}
-    for item in textures[position] or []:
+    for item in items:
         if not isinstance(item, (list, tuple)) or len(item) < 3:
             continue
         role = _ROLE_NAMES.get(str(item[0]).replace(" ", "").casefold())
@@ -198,6 +256,10 @@ def _texture_records(entry, position, files, root, component, classification,
             texture_source=texture_source)
         if texture:
             result[role] = texture
+    if not items and ib_candidates and ib_cache is not None:
+        result.update(_range_texture_records(
+            files, ib_candidates, first, count, vertex_count, ib_cache,
+            root, texture_source))
     return result
 
 
@@ -370,7 +432,9 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
                 continue
             textures = _texture_records(
                 entry, ordinal, files, root, component, classification,
-                texture_source)
+                texture_source, ib_candidates=ib_files, first=first,
+                count=count, vertex_count=vertex_dump.layout.vertex_count,
+                ib_cache=ib_cache)
             label = component or os.path.basename(asset_path)
             if classification:
                 label = f"{label} {classification}"

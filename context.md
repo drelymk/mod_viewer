@@ -175,6 +175,9 @@ machine-specific paths or facts that are obvious from the source.
   once). GIMI/ZZMI index ranges resolve against parsed IB header identity;
   WWMI metadata offsets remain provenance while `Component N.fmt/.vb/.ib`
   provide component-local geometry.
+- GIMI/ZZMI may recover missing texture records only from a unique
+  range-matched IB dump family; authored texture-hash records remain
+  authoritative and ambiguous families stay unbound.
 - Recoverable Asset part failures are reported as Asset warnings and do not
   discard otherwise renderable components; a load fails only when no parts
   survive.

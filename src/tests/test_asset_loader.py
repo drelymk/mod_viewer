@@ -8,6 +8,7 @@ import pytest
 from app import asset_folders, paths, server
 from app.asset_index import build_index
 from app.asset_loader import hash_asset, load_asset
+from app.asset_loader.models import AssetLoadResult, AssetMeshPart
 from app.api import ModViewerAPI
 from core.geometry_transport import GeometryBlob
 from core.migoto_dump import parse_index_dump, parse_vertex_dump
@@ -214,6 +215,42 @@ def test_hash_asset_prefers_generic_texture_over_more_specific_suffix_match(
     assert entry["tex_key"].endswith("/Amber/AmberHeadDiffuse.dds")
 
 
+def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    asset.mkdir(parents=True)
+    _write_json(asset / "hash.json", [{
+        "ib": "87654321", "vb0": "12345678", "component_name": "HairWings",
+        "object_indexes": [0, 3], "object_index_counts": [3, 3],
+        "object_classifications": ["Head", "Body"],
+        "texture_hashes": [[], []],
+    }])
+    _text_vb(asset / "HairWings-vb0=12345678.txt", 92, [
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+    ])
+    for name, first in (
+            ("HairWingsHead", 0), ("HeadPieceA", 0),
+            ("HairWingsBody", 3), ("HeadPieceB", 3)):
+        (asset / f"{name}-ib=87654321.txt").write_text(
+            f"first index: {first}\nindex count: 3\ntopology: trianglelist\n"
+            f"{first} {first + 1} {first + 2}\n", encoding="utf-8")
+    (asset / "HeadPieceADiffuse.dds").write_bytes(b"head")
+    (asset / "HeadPieceBDiffuse.dds").write_bytes(b"body")
+
+    index = build_index("GIMI", str(root))
+    result = load_asset("GIMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    entries = list(result.payload["meshes"].values())
+    assert entries[0]["tex_key"].endswith("/HeadPieceADiffuse.dds")
+    assert entries[1]["tex_key"].endswith("/HeadPieceBDiffuse.dds")
+
+
 def test_wwmi_reverses_winding_without_rewriting_authored_normals(tmp_path):
     root = tmp_path / "assets"
     asset = root / "Character"
@@ -287,6 +324,54 @@ def test_wwmi_decodes_variable_stride_and_packed_normals(tmp_path):
     assert struct.unpack("<9f", part.normals) == (1, 0, 0) * 3
     assert struct.unpack("<6f", part.uvs) == pytest.approx(
         (0.25, 0.80) * 3, abs=1e-4)
+
+
+def test_wwmi_keeps_component_with_invalid_authored_normal_stream(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    asset.mkdir(parents=True)
+    _write_json(asset / "Metadata.json", {
+        "vb0_hash": "44444444",
+        "components": [{"vertex_count": 3, "index_offset": 0,
+                         "index_count": 3, "name": "Body"}],
+    })
+    _fmt(asset / "Component 0.fmt", 32, "DXGI_FORMAT_R16_UINT", [
+        ("POSITION", 0, "R32G32B32_FLOAT", 0),
+        ("NORMAL", 0, "R8G8B8A8_SNORM", 16),
+    ])
+    data = bytearray(3 * 32)
+    for index, position in enumerate(((0, 0, 0), (1, 0, 0), (0, 1, 0))):
+        offset = index * 32
+        struct.pack_into("<fff", data, offset, *position)
+    data[16:20] = bytes((127, 0, 0, 0))
+    data[48:52] = bytes((0, 0, 0, 127))
+    data[80:84] = bytes((0, 127, 0, 0))
+    (asset / "Component 0.vb").write_bytes(data)
+    (asset / "Component 0.ib").write_bytes(struct.pack("<3H", 0, 2, 1))
+
+    index = build_index("WWMI", str(root))
+    result = load_asset("WWMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    assert len(result.parts) == 1
+    assert result.parts[0].normals is None
+
+
+def test_asset_components_with_duplicate_hash_folders_get_distinct_identity():
+    geometry = GeometryBlob()
+    parts = tuple(AssetMeshPart(
+        key=f"part-{geometry_hash}", label="Part 1", asset_type="WWMI",
+        asset_path="Character", geometry_hash=geometry_hash,
+        component_name=None, classification=None, component_ordinal=0,
+        first_index=0, index_count=3, positions=b"\0" * 36,
+        indices=b"\0" * 12)
+        for geometry_hash in ("aaaabbbb", "ccccdddd"))
+
+    result = AssetLoadResult.from_parts(
+        "WWMI", "assets", {"path": "Character"}, parts, geometry=geometry)
+
+    assert {entry["component"] for entry in result.payload["meshes"].values()} == {
+        "Part 1 [aaaabbbb]", "Part 1 [ccccdddd]"}
 
 
 def test_hash_asset_skips_missing_components_and_reports_warning(tmp_path):

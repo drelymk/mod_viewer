@@ -127,9 +127,10 @@ def _decode_normals(data, count, stride, element, path):
         raise AssetLoadError("NORMAL lies outside the declared vertex stride.")
     source = VertexAttributeSource(path, stride, element.offset, "snorm8x3")
     decoded = decode_normals(source, data, range(count))
-    if decoded is None:
-        raise AssetLoadError("WWMI authored normals could not be decoded.")
-    return bytes(decoded)
+    # A small number of exported vertices can contain zero SNORM normals.
+    # Keep the component renderable and let the viewer reconstruct geometric
+    # normals for the invalid stream rather than dropping the whole component.
+    return bytes(decoded) if decoded is not None else None
 
 
 def _decode_uvs(data, count, stride, element):

@@ -86,17 +86,31 @@ class AssetLoadResult:
         textures = {}
         pools = {}
         pool_ids = {}
+        component_hashes = {}
+        for part in parts:
+            base = part.component_name or part.label
+            component_hashes.setdefault(base, set()).add(part.geometry_hash)
+        component_labels = {}
+        for base, hashes in component_hashes.items():
+            if len(hashes) <= 1:
+                continue
+            for geometry_hash in hashes:
+                component_labels[(base, geometry_hash)] = (
+                    f"{base} [{geometry_hash or 'unknown'}]")
         for ordinal, part in enumerate(parts):
             for candidate in part.texture_candidates:
                 # Candidate textures are published and selectable, but their
                 # presence must not infer a semantic material role.
                 textures[candidate.key] = candidate.uri or candidate.key
+            base_component = part.component_name or part.label
+            component = component_labels.get(
+                (base_component, part.geometry_hash), base_component)
             entry = {
                 "pos": geometry.add(part.positions),
                 "idx": geometry.add(part.indices),
                 "uv": geometry.add(part.uvs) if part.uvs else None,
                 "normal": geometry.add(part.normals) if part.normals else None,
-                "component": part.component_name or part.label,
+                "component": component,
                 "display_name": part.label,
                 "source": source,
                 "conditions": [],
