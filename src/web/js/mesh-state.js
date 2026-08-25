@@ -50,6 +50,31 @@ export function addMesh(mesh, conditions, sources, textureVariants, materialVari
   applyTextureVariant(mesh);
 }
 
+export function removeMesh(mesh) {
+  if (!mesh) return false;
+  const index = activeMeshes.indexOf(mesh);
+  if (index < 0) return false;
+  detachOutline(mesh);
+  scene.remove(mesh);
+  mesh.geometry?.dispose?.();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  materials.forEach(material => {
+    disposeGameMaterial(material);
+    material?.dispose?.();
+  });
+  activeMeshes.splice(index, 1);
+  return true;
+}
+
+export function removeAssetFillMeshes() {
+  const removed = activeMeshes
+    .filter(mesh => mesh.userData.assetFill === true)
+    .slice();
+  removed.forEach(removeMesh);
+  if (removed.length) requestRender();
+  return removed.length;
+}
+
 export function resetMeshVisibility() {
   activeMeshes.forEach(mesh => {
     mesh.userData.manualVisible = mesh.userData.loadedVisible !== false;

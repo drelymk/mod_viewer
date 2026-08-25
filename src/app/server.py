@@ -138,16 +138,30 @@ class TexturePublication:
                 self._sources[source_id] = source
             return _texture_url(self.token, source_id, source)
 
-    def commit(self):
-        """Make this publication active and retire every older publication."""
+    def commit(self, *, replace=True):
+        """Commit a publication, optionally retaining the active one."""
         global _active_texture_publication
         with _texture_lock:
             if self._state == "discarded":
                 return False
-            _texture_publications.clear()
+            if replace:
+                _texture_publications.clear()
             _texture_publications[self.token] = self
-            _active_texture_publication = self
+            if replace:
+                _active_texture_publication = self
             self._state = "committed"
+            return True
+
+    def release(self):
+        """Retire a committed auxiliary publication after session removal."""
+        global _active_texture_publication
+        with _texture_lock:
+            _texture_publications.pop(self.token, None)
+            if _active_texture_publication is self:
+                _active_texture_publication = None
+            self._sources.clear()
+            self._dedupe.clear()
+            self._state = "discarded"
             return True
 
     def discard(self):
@@ -222,18 +236,19 @@ def _render_texture_request(token, source_id, source):
         )
 
 
-def publish_geometry(blob):
-    """Publish one load's packed geometry and discard every older load."""
+def publish_geometry(blob, *, replace=True):
+    """Publish packed geometry, optionally retaining prior load blobs."""
     if len(blob) > _MAX_GEOMETRY_BYTES:
         raise ValueError("Generated geometry exceeds the 512 MiB safety limit.")
     token = uuid.uuid4().hex
     with _geometry_lock:
-        _geometry_blobs.clear()
+        if replace:
+            _geometry_blobs.clear()
         _geometry_blobs[token] = bytes(blob)
     return f"{_GEOMETRY_PREFIX}{token}"
 
 
-def publish_payload_geometry(payload, geometry=None):
+def publish_payload_geometry(payload, geometry=None, *, replace=True):
     """Publish the structured payload's packed geometry and its references.
 
     Normal loads pass the builder's append-only blob, so no encoded geometry
@@ -247,7 +262,7 @@ def publish_payload_geometry(payload, geometry=None):
                 else bytes(geometry))
         if blob:
             payload["geometry"] = {
-                "url": publish_geometry(blob),
+                "url": publish_geometry(blob, replace=replace),
                 "length": len(blob),
             }
         else:
@@ -277,11 +292,29 @@ def publish_payload_geometry(payload, geometry=None):
                 target[field] = {"offset": offset, "length": len(raw)}
     if blob:
         payload["geometry"] = {
-            "url": publish_geometry(blob),
+            "url": publish_geometry(blob, replace=replace),
             "length": len(blob),
         }
     else:
         payload["geometry"] = None
+
+
+def release_texture_publication(publication):
+    """Retire one auxiliary texture publication without touching the active one."""
+    if publication is None:
+        return False
+    return publication.release()
+
+
+def release_geometry(url):
+    """Release an unpublished geometry blob by its opaque URL."""
+    if not isinstance(url, str) or not url.startswith(_GEOMETRY_PREFIX):
+        return False
+    token = url[len(_GEOMETRY_PREFIX):]
+    if not token or "/" in token:
+        return False
+    with _geometry_lock:
+        return _geometry_blobs.pop(token, None) is not None
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):

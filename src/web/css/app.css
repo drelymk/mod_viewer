@@ -344,6 +344,7 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
   letter-spacing: .1em; margin: 0; flex: 1;
 }
 #sidebar > .panel-hdr h3 { flex: 0 0 auto; }
+.asset-fill-btn { min-height: 24px; padding: 3px 7px; font-size: 10px; }
 
 /* ── toolbox (wireframe / grid) ───────────────────────────────────────────── */
 #tool-panel {

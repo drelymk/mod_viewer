@@ -6,12 +6,13 @@ import struct
 
 import pytest
 
-from app import asset_folders, asset_textures, paths, server
+from app import asset_folders, asset_index, asset_textures, paths, server
 from app.asset_index import build_index
 from app.asset_loader import hash_asset, load_asset
 from app.asset_loader.wwmi import _component_texture_candidates
 from app.asset_loader.models import AssetLoadResult, AssetMeshPart
 from app.api import ModViewerAPI
+from core.component_coverage import ComponentCoverageKey
 from core.geometry_transport import GeometryBlob
 from core.migoto_dump import parse_index_dump, parse_vertex_dump
 
@@ -261,6 +262,45 @@ def test_hash_asset_preserves_duplicate_position_vertices_and_authored_normals(
     assert result.payload["textures"]
     assert all(value.startswith("uri:diffuse:")
                for value in result.payload["textures"].values())
+
+
+def test_hash_asset_part_filter_skips_unrequested_ranges(tmp_path, monkeypatch):
+    root = tmp_path / "assets"
+    asset = root / "Character"
+    asset.mkdir(parents=True)
+    _write_json(asset / "hash.json", [{
+        "ib": "87654321", "vb0": "12345678", "component_name": "Body",
+        "object_indexes": [0, 3], "object_index_counts": [3, 3],
+    }])
+    _text_vb(asset / "Body-vb0=12345678.txt", 92, [
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+    ])
+    for name, first in (("BodyA", 0), ("BodyB", 3)):
+        (asset / f"{name}-ib=87654321.txt").write_text(
+            f"first index: {first}\nindex count: 3\n"
+            "topology: trianglelist\n0 1 2\n", encoding="utf-8")
+
+    index = build_index("ZZMI", str(root))
+    parsed_vbs = []
+    original_parse = hash_asset.parse_vertex_dump
+
+    def count_vertex_dump(path):
+        parsed_vbs.append(path)
+        return original_parse(path)
+
+    monkeypatch.setattr(hash_asset, "parse_vertex_dump", count_vertex_dump)
+    result = load_asset(
+        "ZZMI", str(root), index["assets"][0], geometry=GeometryBlob(),
+        part_filter={ComponentCoverageKey("87654321", 3, 3)})
+
+    assert len(result.parts) == 1
+    assert result.parts[0].first_index == 3
+    assert len(parsed_vbs) == 1
 
 
 def test_asset_parts_with_same_component_share_one_texture_pool(tmp_path):
@@ -713,6 +753,62 @@ def test_api_load_asset_publishes_shared_payload_without_ini(tmp_path, monkeypat
         "toggles": {}, "menu": {}, "present": {"target_inis": [], "item": None}}
     assert result["geometry"]["url"].startswith("/geometry/")
     assert server.active_texture_publication(str(asset)) is not None
+
+
+def test_api_load_missing_asset_parts_is_incremental_and_reversible(
+        tmp_path, monkeypatch):
+    asset_root = tmp_path / "assets"
+    asset = asset_root / "Character"
+    asset.mkdir(parents=True)
+    _write_json(asset / "hash.json", [
+        {"ib": "aaaaaaaa", "vb0": "11111111", "component_name": "Body",
+         "object_indexes": [0], "object_index_counts": [3]},
+        {"ib": "bbbbbbbb", "vb0": "22222222", "component_name": "Hair",
+         "object_indexes": [0], "object_index_counts": [3]},
+    ])
+    rows = [
+        ((0, 0, 0), (0, 0, 1), (0, 0)),
+        ((1, 0, 0), (0, 0, 1), (1, 0)),
+        ((0, 1, 0), (0, 0, 1), (0, 1)),
+    ]
+    _text_vb(asset / "Body-vb0=11111111.txt", 92, rows)
+    _text_vb(asset / "Hair-vb0=22222222.txt", 92, rows)
+    for name, hash_value in (("Body", "aaaaaaaa"), ("Hair", "bbbbbbbb")):
+        (asset / f"{name}-ib={hash_value}.txt").write_text(
+            "first index: 0\nindex count: 3\ntopology: trianglelist\n"
+            "0 1 2\n", encoding="utf-8")
+    index = build_index("ZZMI", str(asset_root))
+    monkeypatch.setattr(asset_index, "load_index", lambda _type, _root: index)
+
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    (mod / "mod.ini").write_text(
+        "[TextureOverrideBody]\n"
+        "hash = aaaaaaaa\n"
+        "run = CommandList\\ZZMI\\SetTextures\n", encoding="utf-8")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "version": 1,
+        "modFolders": [{"name": "Test", "path": str(mod)}],
+        "assetFolders": [{"type": "ZZMI", "path": str(asset_root),
+                           "enabled": True}],
+    }), encoding="utf-8")
+    monkeypatch.setattr(paths, "config_path", lambda: str(config))
+
+    api = ModViewerAPI()
+    result = api.load_missing_asset_parts(str(mod))
+
+    assert result["status"] == "loaded"
+    assert result["coverage"]["handled_parts"] == 1
+    assert result["coverage"]["missing_parts"] == 1
+    assert len(result["payload"]["meshes"]) == 1
+    entry = next(iter(result["payload"]["meshes"].values()))
+    assert entry["asset_fill"] is True
+    assert entry["conditions"] == []
+    assert result["payload"]["metadata"]["source_kind"] == "asset-fill"
+
+    removed = api.remove_missing_asset_parts(str(mod))
+    assert removed == {"status": "removed", "removed": True}
 
 
 def test_api_rejects_category_and_keeps_disabled_root_browsable(tmp_path, monkeypatch):

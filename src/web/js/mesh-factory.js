@@ -58,6 +58,22 @@ export function addTexture(key, uri) {
   return true;
 }
 
+export function removeTextures(keys) {
+  let removed = 0;
+  for (const key of keys || []) {
+    if (!Object.hasOwn(registry, key)) continue;
+    delete registry[key];
+    disposeTexture(loaders[key]);
+    delete loaders[key];
+    readyTextures.delete(key);
+    failedTextures.delete(key);
+    nativeDDSFallbacks.delete(key);
+    textureUsers.delete(key);
+    removed += 1;
+  }
+  return removed;
+}
+
 export function hasTexture(key) {
   return !!(splitTextureKey(key) && registry[key]
     && !failedTextures.has(key));

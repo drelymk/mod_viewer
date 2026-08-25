@@ -5,12 +5,15 @@ import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterT
          getEnvironmentPreset, getLightMode, isRendererAvailable, rendererReady,
          setEnvironmentPreset, setLightMode, getRenderCount } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
-import { refreshMeshTexture, setTextures } from './mesh-factory.js';
+import { addTexture, refreshMeshTexture, removeTextures, setTextures } from './mesh-factory.js';
 import { activeMeshes, refreshAll, reset, resetMeshState, setStateRules,
          toggleWireframe, toggleSmoothShading, toggleGlossy,
          updateMeshSemantics } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
-import { buildMeshPanel, refreshMeshAssetDiagnostics } from './mesh-panel.js';
+import {
+  appendMeshPanel, buildMeshPanel, refreshMeshAssetDiagnostics,
+  removeAssetFillMeshPanel,
+} from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
 import { buildMenuPanel } from './menu-panel.js';
 import { buildPresentPanel } from './present-panel.js';
@@ -253,6 +256,10 @@ let displayedModPath = null;
 let displayedSource = null;
 let modTransitionInFlight = false;
 let rightDockEnabled = false;
+let assetFillAvailable = false;
+let assetFillLoaded = false;
+let assetFillLoading = false;
+let assetFillTextureKeys = new Set();
 
 // The last-loaded payload's controls.toggles model, kept
 // around purely so refreshPendingState() can check for a still-unwired
@@ -262,6 +269,19 @@ let lastToggles = {};
 function showLoading(on, message) {
   if (message) $('status-text').textContent = message;
   $('loading').classList.toggle('show', on);
+}
+
+function updateAssetFillButton() {
+  const button = $('asset-fill-btn');
+  if (!button) return;
+  const available = assetFillAvailable
+    && currentSource?.kind === 'mod' && !!currentModPath;
+  button.disabled = !available || assetFillLoading;
+  button.textContent = assetFillLoading ? 'Loading…'
+    : assetFillLoaded ? 'Remove Missing Parts' : 'Load Missing Parts';
+  button.title = assetFillLoaded
+    ? 'Remove original Asset components added for this session.'
+    : 'Add original Asset components not handled by this mod.';
 }
 
 /** Normalizes a Windows path for a same-folder comparison: slash direction,
@@ -304,6 +324,11 @@ function clearScene({ preserveModelOrientation = false } = {}) {
   // the next mod's normal materials.
   setOutlineSuppressedByDebug(false);
   setTextures(null);
+  removeTextures(assetFillTextureKeys);
+  assetFillTextureKeys = new Set();
+  assetFillAvailable = false;
+  assetFillLoaded = false;
+  assetFillLoading = false;
   setGeometryBlob(null);
   lastToggles = {};
   $('mesh-list').innerHTML = '';
@@ -317,6 +342,7 @@ function clearScene({ preserveModelOrientation = false } = {}) {
   setMeshesAvailable(false);
   setRightDockEnabled(false);
   syncViewportControlPlacement();
+  updateAssetFillButton();
 }
 
 function clearPendingState() {
@@ -336,6 +362,7 @@ function setSourceUi(kind) {
   $('pending-indicator').classList.toggle('show', false);
   $('pending-indicator').setAttribute('aria-hidden', String(asset));
   if (asset) $('export-btn').disabled = true;
+  updateAssetFillButton();
 }
 
 /** Commit the UI to a new folder before asking the backend to load it. This
@@ -400,6 +427,8 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   const meshes = payload.meshes || {};
   const assetMode = currentSource?.kind === 'asset'
     || payload.metadata?.source_kind === 'asset';
+  assetFillAvailable = !assetMode
+    && Number(payload.asset_resolution?.configured_roots || 0) > 0;
   if (assetMode && currentSource?.kind !== 'asset') {
     currentSource = {
       kind: 'asset', path: payload.metadata?.asset?.path || '',
@@ -443,7 +472,87 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
     initialRotationY: payload.metadata?.game?.id === 'wuwa' ? Math.PI : 0,
   });
 
+  updateAssetFillButton();
   showLoading(false);
+}
+
+async function loadMissingAssetParts() {
+  if (!currentModPath || currentSource?.kind !== 'mod' || assetFillLoading) {
+    return false;
+  }
+  assetFillLoading = true;
+  updateAssetFillButton();
+  try {
+    const result = await window.pywebview.api.load_missing_asset_parts(currentModPath);
+    if (result?.status !== 'loaded') {
+      const messages = {
+        nothing_missing: 'No missing original Asset parts found.',
+        asset_ambiguous: 'Could not uniquely determine the original Asset.',
+        asset_not_found: 'No matching original Asset was found.',
+      };
+      if (result?.error) throw new Error(result.error);
+      await alertDialog(messages[result?.status] || 'No original Asset parts were loaded.');
+      return false;
+    }
+    const payload = result.payload || {};
+    const geometry = payload.geometry;
+    if (geometry) {
+      const response = await fetch(geometry.url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`Geometry download failed (${response.status}).`);
+      const blob = await response.arrayBuffer();
+      if (blob.byteLength !== geometry.length) {
+        throw new Error('Geometry download was incomplete.');
+      }
+      setGeometryBlob(blob);
+    }
+    for (const [key, uri] of Object.entries(payload.textures || {})) {
+      if (addTexture(key, uri)) assetFillTextureKeys.add(key);
+    }
+    appendMeshPanel(
+      payload.meshes || {}, null,
+      {}, payload.metadata?.material_profiles || {}, {
+        replace: false,
+        texturePools: payload.texture_pools || {},
+        readOnlySource: true,
+      });
+    assetFillLoaded = true;
+    fitTo(activeMeshes, { preserveCamera: true });
+    requestRender();
+    return true;
+  } catch (error) {
+    await alertDialog('Could not load missing Asset parts:\n\n' + error.message);
+    return false;
+  } finally {
+    assetFillLoading = false;
+    updateAssetFillButton();
+  }
+}
+
+async function removeMissingAssetParts() {
+  if (!currentModPath || !assetFillLoaded || assetFillLoading) return false;
+  assetFillLoading = true;
+  updateAssetFillButton();
+  try {
+    const result = await window.pywebview.api.remove_missing_asset_parts(currentModPath);
+    if (result?.status === 'error') throw new Error(result.error);
+    removeAssetFillMeshPanel();
+    removeTextures(assetFillTextureKeys);
+    assetFillTextureKeys = new Set();
+    assetFillLoaded = false;
+    requestRender();
+    return true;
+  } catch (error) {
+    await alertDialog('Could not remove missing Asset parts:\n\n' + error.message);
+    return false;
+  } finally {
+    assetFillLoading = false;
+    updateAssetFillButton();
+  }
+}
+
+async function toggleMissingAssetParts() {
+  return assetFillLoaded
+    ? removeMissingAssetParts() : loadMissingAssetParts();
 }
 
 function beginSemanticRefresh() {
@@ -825,6 +934,10 @@ rendererReady.then(ready => {
 
   $('open-btn').addEventListener('click', openMod);
   $('export-btn').addEventListener('click', exportChanges);
+  $('asset-fill-btn').addEventListener('click', event => {
+    event.stopPropagation();
+    void toggleMissingAssetParts();
+  });
   $('wire-btn').addEventListener('click', toggleWireframe);
   $('outline-btn').addEventListener('click', () => {
     const enabled = setOutlinesEnabled();
@@ -855,6 +968,7 @@ rendererReady.then(ready => {
   if (viewportCameraButtons && cameraButtons) viewportCameraButtons.append(cameraButtons);
   syncViewportControlPlacement();
   initPanelCollapse($('sidebar'), 'mesh-list');
+  updateAssetFillButton();
   initPanelCollapse($('present-panel'), 'present-list');
   initPanelCollapse($('toggle-panel'), 'toggle-list');
   initPanelCollapse($('menu-panel'), 'menu-list');

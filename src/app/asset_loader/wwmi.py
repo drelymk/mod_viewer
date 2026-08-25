@@ -230,7 +230,28 @@ def _warning(component, ordinal, reason, message):
             "reason": reason, "message": message}
 
 
-def load_wwmi_asset(root, record, *, texture_source=None):
+def _filter_matches(part_filter, geometry_hash, first, count, ordinal=None):
+    if part_filter is None:
+        return True
+    for item in part_filter:
+        if getattr(item, "geometry_hash", None) != geometry_hash:
+            continue
+        expected_first = getattr(item, "first_index", None)
+        expected_count = getattr(item, "index_count", None)
+        expected_ordinal = getattr(item, "component_ordinal", None)
+        if expected_first is not None and expected_first != first:
+            continue
+        if (expected_count is not None and count is not None
+                and expected_count != count):
+            continue
+        if (expected_ordinal is not None and ordinal is not None
+                and expected_ordinal != ordinal):
+            continue
+        return True
+    return False
+
+
+def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
     parts = []
     warnings = []
     convention = geometry_convention_for("wuwa")
@@ -274,6 +295,12 @@ def load_wwmi_asset(root, record, *, texture_source=None):
             name = component.get("component_name") or component.get(
                 "componentName") or component.get("name")
             name = str(name) if name else None
+            first_index = _integer(component.get("index_offset"), 0)
+            declared_index_count = _integer(component.get("index_count"))
+            if not _filter_matches(
+                    part_filter, geometry_hash, first_index,
+                    declared_index_count, ordinal):
+                continue
             files = _component_files(root, metadata_directory, ordinal)
             missing = next((key for key, path in files.items() if not path), None)
             if missing:
@@ -325,7 +352,6 @@ def load_wwmi_asset(root, record, *, texture_source=None):
                     f"{name or f'Component {ordinal}'} skipped: {error}"))
                 continue
 
-            first_index = _integer(component.get("index_offset"), 0)
             index_count = _integer(component.get("index_count"), len(indices))
             label = name or f"Part {ordinal + 1}"
             source_path = record.get("path")

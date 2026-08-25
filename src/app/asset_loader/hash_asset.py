@@ -345,7 +345,29 @@ def _cached_index_dump(path, vertex_count, cache):
     return cache[path]
 
 
-def load_hash_asset(asset_type, root, record, *, texture_source=None):
+def _filter_matches(part_filter, geometry_hash, first, count, ordinal=None):
+    if part_filter is None:
+        return True
+    for item in part_filter:
+        if getattr(item, "geometry_hash", None) != geometry_hash:
+            continue
+        expected_first = getattr(item, "first_index", None)
+        expected_count = getattr(item, "index_count", None)
+        expected_ordinal = getattr(item, "component_ordinal", None)
+        if expected_first is not None and expected_first != first:
+            continue
+        if (expected_count is not None and count is not None
+                and expected_count != count):
+            continue
+        if (expected_ordinal is not None and ordinal is not None
+                and expected_ordinal != ordinal):
+            continue
+        return True
+    return False
+
+
+def load_hash_asset(asset_type, root, record, *, texture_source=None,
+                    part_filter=None):
     asset_path = record.get("path") if isinstance(record, dict) else None
     geometries = record.get("geometry", ()) if isinstance(record, dict) else ()
     asset_dir = asset_paths.safe_asset_dir(root, asset_path)
@@ -404,6 +426,13 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
                     component, None, "geometry_hash_missing",
                     f"{component or 'Component'} has no usable index-buffer hash."))
                 continue
+            ranges = _ranges(entry)
+            selected_ranges = [
+                item for item in ranges
+                if _filter_matches(part_filter, geometry_hash,
+                                   item[1], item[2], item[0])]
+            if not selected_ranges:
+                continue
             vb_hash = _entry_hash(entry, (
                 "vb0", "vb0_hash", "vertex_buffer", "vertexBuffer",
                 "position_vb", "positionVB", "draw_vb", "drawVB"))
@@ -428,8 +457,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None):
                     component, None, "vertex_dump_invalid",
                     f"{component or geometry_hash} vertex dump skipped: {error}"))
                 continue
-            ranges = _ranges(entry)
-            for ordinal, first, count, classification in ranges:
+            for ordinal, first, count, classification in selected_ranges:
                 resolved, had_invalid, had_valid = _resolve_ib_dump(
                     ib_files, first, count, vertex_dump.layout.vertex_count,
                     ib_cache)

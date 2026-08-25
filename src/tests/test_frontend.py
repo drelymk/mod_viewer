@@ -324,6 +324,8 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "listAssetSubfolders": [],
                    "selectAssetFolder": [],
                    "rebuildAssetIndex": [],
+                   "loadMissingAssetParts": [],
+                   "removeMissingAssetParts": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
@@ -365,6 +367,16 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             load_asset: async path => {
               state.calls.loadAsset.push(path);
               return copy(state.responses[path]);
+            },
+            load_missing_asset_parts: async path => {
+              state.calls.loadMissingAssetParts.push(path);
+              return copy(state.responses[path]?.assetFillResponse || {
+                status: 'nothing_missing',
+              });
+            },
+            remove_missing_asset_parts: async path => {
+              state.calls.removeMissingAssetParts.push(path);
+              return {status: 'removed', removed: true};
             },
             get_present_state: async path => {
               state.calls.presentState.push(path);
@@ -879,6 +891,65 @@ def test_indexed_asset_row_loads_read_only_preview(edge_browser, frontend_url):
         assert page.locator("#export-btn").is_hidden()
         assert page.evaluate("window.__fakeApi.calls.loadMod") == []
         assert page.evaluate("window.modViewer.getCurrentSource().kind") == "asset"
+    finally:
+        context.close()
+
+
+def test_missing_asset_parts_append_and_remove_without_reloading_mod(
+        edge_browser, frontend_url):
+    mod_payload = _payload("FillMod")
+    mod_payload["asset_resolution"] = {"configured_roots": 1}
+    fill_payload = _payload("FillAsset")
+    fill_entry = next(iter(fill_payload["meshes"].values()))
+    fill_entry["source"] = "ORIGINAL ASSET"
+    fill_entry["component"] = "Original Hair"
+    fill_entry["asset_fill"] = True
+    fill_entry["fill_reason"] = "missing_mod_coverage"
+    fill_entry["sources"] = [{"asset": {
+        "type": "ZZMI", "asset": "Character", "geometry_hash": "bbbbbbbb",
+        "component_name": "Hair", "first_index": 0, "index_count": 3,
+    }}]
+    fill_payload["metadata"] = {
+        "source_kind": "asset-fill",
+        "material_profiles": {},
+    }
+    mod_payload["assetFillResponse"] = {
+        "status": "loaded",
+        "coverage": {
+            "asset_parts": 2, "handled_parts": 1,
+            "missing_parts": 1, "skipped_parts": 0,
+        },
+        "payload": fill_payload,
+    }
+    context, page = _page(
+        edge_browser, frontend_url, {"FillMod": mod_payload})
+    try:
+        _open(page, "FillMod")
+        page.locator(".draw-item").wait_for()
+        button = page.locator("#asset-fill-btn")
+        assert not button.is_disabled()
+        assert button.inner_text() == "Load Missing Parts"
+
+        button.click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadMissingAssetParts.length === 1")
+        page.locator("#asset-fill-btn", has_text="Remove Missing Parts").wait_for()
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 2
+        assert page.locator(".mesh-src-hdr", has_text="ORIGINAL ASSET").count() == 1
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["FillMod"]
+
+        button.click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.removeMissingAssetParts.length === 1")
+        page.locator("#asset-fill-btn", has_text="Load Missing Parts").wait_for()
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 1
+        assert page.locator(".mesh-src-hdr", has_text="ORIGINAL ASSET").count() == 0
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["FillMod"]
+
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
+        assert page.locator("#asset-fill-btn").inner_text() == "Load Missing Parts"
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 1
     finally:
         context.close()
 
@@ -3789,7 +3860,7 @@ def test_inspector_follows_component_and_mesh_selection(
         assert page.locator("#sidebar > .panel-hdr #reset-state-btn").count() == 1
         assert page.locator("#sidebar > .panel-hdr > *").evaluate_all(
             "nodes => nodes.map(node => node.id || node.tagName)") == [
-                "BUTTON", "H3", "reset-state-btn"]
+                "BUTTON", "H3", "asset-fill-btn", "reset-state-btn"]
         assert page.locator("#sidebar > .panel-hdr .group-toggle").get_attribute(
             "aria-expanded") == "true"
         assert page.locator("#sidebar").is_visible()
