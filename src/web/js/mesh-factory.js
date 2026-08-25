@@ -228,6 +228,20 @@ export function setTextureMode(mode) {
   textureMode = mode;
 }
 
+/** Keep authored normals at the neutral shape and derive normals only for a
+ * shape whose positions have actually changed. */
+export function updateGeometryNormals(mesh, deformed) {
+  const normal = mesh.geometry.attributes.normal;
+  const baseNormals = mesh.userData.baseNormals;
+  if (!deformed && baseNormals && normal
+      && normal.array.length === baseNormals.length) {
+    normal.array.set(baseNormals);
+    normal.needsUpdate = true;
+    return;
+  }
+  mesh.geometry.computeVertexNormals();
+}
+
 /** Update the complete resolved texture state with one material refresh. */
 export function setMeshTextureState(mesh, state) {
   mesh.userData.texKey = state.diffuse || null;
@@ -261,9 +275,12 @@ export function buildMesh(name, data, materialProfile = null) {
   }
   geo.setIndex(new THREE.BufferAttribute(decodeU32(data.idx), 1));
 
-  // We only have vertex positions, no authored normals, so smooth shading
-  // needs computeVertexNormals() to average one normal per shared vertex
-  geo.computeVertexNormals();
+  if (data.normal) {
+    geo.setAttribute('normal', new THREE.BufferAttribute(
+      decodeF32(data.normal), 3));
+  } else {
+    geo.computeVertexNormals();
+  }
 
   const fallback = fallbackColor(name);
   const mat = createGameMaterial(materialProfile, fallback,
@@ -271,6 +288,9 @@ export function buildMesh(name, data, materialProfile = null) {
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData.basePositions = new Float32Array(geo.attributes.position.array);
+  mesh.userData.baseNormals = data.normal
+    ? new Float32Array(geo.attributes.normal.array) : null;
+  mesh.userData.hasAuthoredNormals = !!data.normal;
   mesh.userData.shapeTargets = (data.shape_targets || []).map(target => ({
     var: target.var,
     mode: target.mode,

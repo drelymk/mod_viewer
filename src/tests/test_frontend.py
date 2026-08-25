@@ -2463,6 +2463,66 @@ def test_record_handler_is_replaced_and_restored(edge_browser, frontend_url):
         context.close()
 
 
+def test_authored_normals_survive_render_modes_and_neutral_shape(
+        edge_browser, frontend_url):
+    payload = _payload("Normals")
+    entry = payload["meshes"]["Body-Normals-0"]
+    entry["normal"] = _f32(1, 0, 0, 0, 1, 0, 0, 0, 1)
+    entry["shape_targets"] = [{
+        "var": "shape",
+        "pos": _f32(0, 0, 0, 1, 0, 1, 0, 1, 0),
+    }]
+    context, page = _page(edge_browser, frontend_url, {"Normals": payload})
+    try:
+        _open(page, "Normals")
+        page.locator(".draw-item").wait_for()
+        initial = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return {
+            normals: [...mesh.geometry.attributes.normal.array],
+            authored: mesh.userData.hasAuthoredNormals,
+            base: [...mesh.userData.baseNormals],
+            flat: mesh.material.flatShading,
+          };
+        }""")
+        assert initial["authored"]
+        assert initial["normals"] == initial["base"]
+        assert not initial["flat"]
+
+        page.locator("#shading-btn").click()
+        shaded = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return {
+            normals: [...mesh.geometry.attributes.normal.array],
+            flat: mesh.material.flatShading,
+          };
+        }""")
+        assert shaded["flat"]
+        assert shaded["normals"] == initial["normals"]
+
+        page.evaluate("""async () => {
+          const {setControlValue} = await import('./js/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh-state.js');
+          setControlValue('shape', '1');
+          refreshMeshes();
+        }""")
+        deformed = page.evaluate(
+            "() => [...window.modViewer.activeMeshes[0].geometry.attributes.normal.array]")
+        assert deformed != initial["normals"]
+
+        page.evaluate("""async () => {
+          const {setControlValue} = await import('./js/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh-state.js');
+          setControlValue('shape', '0');
+          refreshMeshes();
+        }""")
+        restored = page.evaluate(
+            "() => [...window.modViewer.activeMeshes[0].geometry.attributes.normal.array]")
+        assert restored == initial["normals"]
+    finally:
+        context.close()
+
+
 
 
 def test_glossy_tool_applies_to_all_mesh_materials(

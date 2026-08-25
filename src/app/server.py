@@ -258,7 +258,7 @@ def publish_payload_geometry(payload, geometry=None):
     for _name, entry in meshes.items():
         if not isinstance(entry, dict) or entry.get("error"):
             continue
-        for field in ("pos", "uv", "idx"):
+        for field in ("pos", "uv", "idx", "normal"):
             encoded = entry.get(field)
             if not isinstance(encoded, str):
                 continue

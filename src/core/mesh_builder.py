@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from .draw_call import DrawCall
 from .resource_paths import safe_resource_path
+from .vertex_attributes import decode_normals
 from .textures import (_texture_source_uri, _begin_texture_cache,
                        encode_texture_data_uri, normalize_texture_role,
                        normalize_texture_transform, texture_key)
@@ -699,6 +700,19 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             remap = {old: new for new, old in enumerate(used)}
 
             pos_bytes = bytearray(len(used) * 12)
+            normal_bytes = None
+            normal_source = draw.normal_source
+            if normal_source is not None:
+                normal_path = safe_resource_path(mod_dir, normal_source.file)
+                if normal_path and os.path.exists(normal_path):
+                    if normal_path == draw_pos_path:
+                        normal_data = pos_data
+                    else:
+                        if normal_path not in raw_buf_cache:
+                            raw_buf_cache[normal_path] = _read_buffer(normal_path)
+                        normal_data = raw_buf_cache[normal_path]
+                    normal_bytes = decode_normals(
+                        normal_source, normal_data, used)
             shape_buffers = _build_shape_buffers(
                 grp.get("shape_sliders"), mod_dir, effective_pos_path, used,
                 raw_buf_cache, sparse_shape_cache, _read_buffer)
@@ -792,6 +806,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             _seed_option_maps(default_key)
             if uv_bytes:
                 entry["uv"] = _geometry_ref(uv_bytes, geometry)
+            if normal_bytes is not None:
+                entry["normal"] = _geometry_ref(normal_bytes, geometry)
             if shape_buffers:
                 entry["shape_targets"] = []
                 for item in shape_buffers:

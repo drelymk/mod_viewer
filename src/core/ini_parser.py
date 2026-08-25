@@ -16,6 +16,7 @@ import re
 from .draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
 from .geometry_identity import GeometryMatch, normalize_geometry_hash
 from .mesh_builder import POSITION_STRIDE, DEFAULT_UV_OFFSET, _res_get
+from .vertex_attributes import VertexAttributeSource
 from .ini_sections import (SrcLine, extract_resources, first_source,
                            line_source, merge_sections, parse_sections,
                            sections_from_document)
@@ -851,6 +852,40 @@ def _collect_resource_copy_sources(sections, resources):
     return resource_copy_sources
 
 
+def _resolve_normal_source(effective_vertex_resources, resources,
+                           position_file, position_stride,
+                           resolve_vertex_info=None):
+    """Recognize a supported authored-normal layout from effective bindings.
+
+    This function only identifies a structural source.  Filesystem safety and
+    byte-level validation happen in ``mesh_builder`` immediately before the
+    source is published as geometry.
+    """
+    effective_vertex_resources = effective_vertex_resources or {}
+    vector_resource = effective_vertex_resources.get(1)
+    if vector_resource:
+        vector_info = (resolve_vertex_info(vector_resource)
+                       if resolve_vertex_info is not None
+                       else _res_get(resources, vector_resource))
+        vector_format = str(vector_info.get("format") or "").upper()
+        if (vector_info.get("filename")
+                and vector_info.get("stride") == 8
+                and vector_format == "DXGI_FORMAT_R8G8B8A8_SNORM"):
+            return VertexAttributeSource(
+                file=vector_info["filename"],
+                stride=8,
+                offset=4,
+                encoding="snorm8x3")
+
+    if position_file and position_stride == 40:
+        return VertexAttributeSource(
+            file=position_file,
+            stride=40,
+            offset=12,
+            encoding="f32x3")
+    return None
+
+
 def _select_draw_sections(sec_info, global_ib):
     """Select TextureOverride sections that can produce viewer geometry."""
     return [(name, info) for name, info in sec_info.items()
@@ -1134,6 +1169,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         pos_stride = pos_ri.get("stride", POSITION_STRIDE)
         index_size = _ib_index_size(ib_ri.get("format"))
         uv_off     = DEFAULT_UV_OFFSET
+        group_vertex_resources = {
+            slot: info[f"vb{slot}"]
+            for slot in (0, 1, 2)
+            if info[f"vb{slot}"]
+        }
+        group_normal_source = _resolve_normal_source(
+            group_vertex_resources, resources, pos_file, pos_stride,
+            resolve_vertex_info)
 
         draws_list = list(info["draws"]) or [AuthoredDrawCall(
             count=None,
@@ -1163,6 +1206,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 position_stride=pos_stride,
                 texcoord_file=tc_file,
                 texcoord_stride=tc_stride,
+                normal_source=group_normal_source,
                 geometry_match=authored.geometry_match,
                 texture_provenance=dict(authored.texture_provenance),
                 slot_textures=[
@@ -1231,6 +1275,11 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     for resource_name in authored_tc.values()):
                 d.texcoord_file = None
                 d.texcoord_stride = None
+            effective_vertex_resources = dict(group_vertex_resources)
+            effective_vertex_resources.update(vertex_resources)
+            d.normal_source = _resolve_normal_source(
+                effective_vertex_resources, resources, d.position_file,
+                d.position_stride, resolve_vertex_info)
             # Whichever Resource\...\Diffuse line most recently ran before
             # this draw, in execution order -- the draw's own default
             # texture (see core.mesh_builder.build_mesh_payload). The first
@@ -1326,6 +1375,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             position_file=pos_file, texcoord_file=tc_file,
             position_stride=pos_stride,
             texcoord_stride=tc_stride, texcoord_uv_off=uv_off,
+            normal_source=group_normal_source,
             ib_file=ib_file, diffuse_file=diff_ri.get("filename"),
             diffuse_pool_files=pool_files,
             index_size=index_size,
