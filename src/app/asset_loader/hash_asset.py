@@ -158,7 +158,21 @@ def _texture_file(files, texture_hash, extension, component, classification, rol
             continue
         if stem and os.path.splitext(name)[0].endswith(stem):
             candidates.append(path)
-    return candidates[0] if len(candidates) == 1 else None
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        return None
+    # Some GIMI exports omit the texture hash from filenames.  When a
+    # component name is empty, a more specific component (for example
+    # FaceHeadDiffuse) can also match the generic HeadDiffuse suffix.  Prefer
+    # the shortest unique suffix match; equal-length candidates remain
+    # ambiguous and are intentionally left unresolved.
+    stem_lengths = [len(os.path.splitext(os.path.basename(path))[0])
+                    for path in candidates]
+    shortest = min(stem_lengths)
+    preferred = [path for path, length in zip(candidates, stem_lengths)
+                 if length == shortest]
+    return preferred[0] if len(preferred) == 1 else None
 
 
 def _texture_records(entry, position, files, root, component, classification,
