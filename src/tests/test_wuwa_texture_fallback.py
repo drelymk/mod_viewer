@@ -1,6 +1,19 @@
+import pytest
+
 from app.wuwa_texture_fallback import apply
+from app.wuwa_texture_names import texture_component_ordinals
 from core.draw_call import DrawCall, SlotTextureBinding
 from core.ini_parser import TextureOverrideIndex, TextureReplacement
+
+
+@pytest.mark.parametrize("filename, expected", [
+    ("Components-2 t=abc.dds", frozenset({2})),
+    ("folder\\Components-0-1-4 t=abc.dds", frozenset({0, 1, 4})),
+    ("SomeTexture.dds", None),
+    ("Components-2 t=abc.png", None),
+])
+def test_texture_component_ordinals(filename, expected):
+    assert texture_component_ordinals(filename) == expected
 
 
 def _replacement(tmp_path, original_hash, filename, *, create=True):

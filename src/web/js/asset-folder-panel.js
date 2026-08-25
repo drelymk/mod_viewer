@@ -1,4 +1,4 @@
-// Asset Folder registry UI. Character rows are browse-only in this phase.
+// Asset Folder registry UI. Category rows browse; indexed Asset rows load.
 
 import { confirmDialog } from './dialogs.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
@@ -34,7 +34,7 @@ function indexSummary(entry) {
   return 'Index required';
 }
 
-export function initAssetFolderPanel() {
+export function initAssetFolderPanel({ switchAsset = null } = {}) {
   const list = $('asset-folder-list');
   const error = $('asset-folder-error');
   const add = $('asset-folder-add');
@@ -67,7 +67,16 @@ export function initAssetFolderPanel() {
     errorElement: error,
     listChildren: path => window.pywebview.api.list_asset_subfolders(path),
     onRootSelected: path => tree.setActivePath(path),
-    onChildSelected: path => tree.setActivePath(path),
+    onChildSelected: (path, entry) => {
+      if (!entry?.asset) {
+        tree.setActivePath(path);
+        return;
+      }
+      if (typeof switchAsset !== 'function') return;
+      void Promise.resolve(switchAsset(path, entry)).then(loaded => {
+        if (loaded) tree.setActivePath(path);
+      });
+    },
     onEdit: entry => openEditor('edit', entry),
     onDelete: entry => removeFolder(entry),
     rootBusySelectors: ['switch', 'rebuild', 'more', 'edit', 'remove'],

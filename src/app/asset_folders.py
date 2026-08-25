@@ -156,7 +156,7 @@ def set_enabled(folder, enabled, config_file=None):
     return entries
 
 
-def list_subfolders(folder, authorized_root):
+def list_subfolders(folder, authorized_root, *, index=None, asset_type=None):
     """Return immediate directory children without following root escapes."""
     folder = normalize_path(folder)
     authorized_root = normalize_path(authorized_root)
@@ -169,11 +169,21 @@ def list_subfolders(folder, authorized_root):
         with os.scandir(folder) as entries:
             for entry in entries:
                 try:
-                    if not entry.is_dir(follow_symlinks=True):
+                    if not entry.is_dir(follow_symlinks=False):
                         continue
                     child = normalize_path(entry.path)
-                    if is_within(child, authorized_root):
-                        children.append({"name": entry.name, "path": child})
+                    if not is_within(child, authorized_root):
+                        continue
+                    item = {"name": entry.name, "path": child, "asset": False}
+                    if index is not None:
+                        relative = os.path.relpath(child, authorized_root).replace(
+                            os.sep, "/")
+                        from .asset_index import find_asset_by_path
+                        if find_asset_by_path(index, relative) is not None:
+                            item["asset"] = True
+                            if asset_type:
+                                item["asset_type"] = asset_type
+                    children.append(item)
                 except OSError:
                     continue
     except OSError as error:

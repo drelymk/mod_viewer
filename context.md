@@ -160,6 +160,39 @@ machine-specific paths or facts that are obvious from the source.
   absolute/drive paths and excessive parent traversal. The server's separate
   static-web-root join protects a different boundary and must not be merged
   with this rule.
+- Asset indexing remains metadata-only. Heavy Asset geometry and texture files
+  are read only after an explicitly selected, indexed Asset is loaded.
+- Direct Asset loading never synthesizes a mod or INI. GIMI, ZZMI and WWMI
+  adapters normalize source geometry into the shared viewer payload, and
+  Asset source paths remain confined to their registered root.
+- Direct Asset preview never modifies source files or creates
+  `.mod_viewer.json` inside an Asset folder. Asset texture choices are
+  session-only, and ambiguous texture discovery may populate candidates but
+  must not create semantic role bindings.
+- Direct Asset geometry retains Asset/component/range provenance so later
+  mod/Asset composition can compare coverage without reparsing viewer labels.
+- Direct Asset UVs are canonical viewer-space Float32 UVs (V is flipped exactly
+  once). GIMI/ZZMI index ranges resolve against parsed IB header identity;
+  WWMI metadata offsets remain provenance while `Component N.fmt/.vb/.ib`
+  provide component-local geometry.
+- GIMI/ZZMI may recover missing texture records only from a unique
+  range-matched IB dump family; authored texture-hash records remain
+  authoritative and ambiguous families stay unbound.
+- GIMI/ZZMI parent Asset records may include validated `hash.json` metadata
+  from immediate component subfolders; each nested record remains rooted at
+  the selected Asset path and keeps its own metadata provenance.
+- GIMI/ZZMI geometry dumps require their authored buffer hash; a same-label
+  filename is never a geometry fallback. Same-hash IB candidates are parsed
+  independently, so malformed siblings cannot discard valid ranges, and a
+  missing authored count uses the resolved IB header count.
+- WWMI metadata files are independently recoverable components, and candidate
+  texture identity is rooted at the registered Asset Folder rather than an
+  object subdirectory. Direct WWMI candidate pools use only the filename's
+  `Components-N...` ordinal association; unknown filenames are excluded and
+  the association remains candidate-only without assigning material roles.
+- Recoverable Asset part failures are reported as Asset warnings and do not
+  discard otherwise renderable components; a load fails only when no parts
+  survive.
 - `core.textures` owns role-aware keys, PNG fallback, transforms, caching and
   texture profiling. `core.mesh_builder` owns geometry/payload assembly.
   Keep texture processing independent from game/material interpretation.

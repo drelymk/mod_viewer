@@ -320,7 +320,8 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             "summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
         "panelOpacity": panel_opacity,
         "panelOpacityApi": panel_opacity_api,
-        "calls": {"loadMod": [], "listSubfolders": [], "listAssetSubfolders": [],
+        "calls": {"loadMod": [], "loadAsset": [], "listSubfolders": [],
+                   "listAssetSubfolders": [],
                    "selectAssetFolder": [],
                    "rebuildAssetIndex": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
@@ -359,6 +360,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   (loadWaiters[path] ||= []).push(resolve);
                 });
               }
+              return copy(state.responses[path]);
+            },
+            load_asset: async path => {
+              state.calls.loadAsset.push(path);
               return copy(state.responses[path]);
             },
             get_present_state: async path => {
@@ -841,6 +846,39 @@ def test_assets_panel_uses_badges_and_lazy_browse_only_children(
             "button => getComputedStyle(button).backgroundColor") == "rgb(35, 134, 54)"
         assert page.locator("#afm-cancel").evaluate(
             "button => getComputedStyle(button).backgroundColor") == "rgb(33, 38, 45)"
+    finally:
+        context.close()
+
+
+def test_indexed_asset_row_loads_read_only_preview(edge_browser, frontend_url):
+    root = "fixture-assets"
+    child = root + r"\Character"
+    payload = _payload("Asset")
+    payload["metadata"].update({
+        "source_kind": "asset",
+        "asset": {"type": "ZZMI", "path": child},
+    })
+    context, page = _page(
+        edge_browser, frontend_url, {child: payload},
+        asset_folders=[{"type": "ZZMI", "path": root, "exists": True}],
+        asset_subfolders={root: [{
+            "name": "Character", "path": child, "asset": True, "asset_type": "ZZMI",
+        }]},
+    )
+    try:
+        page.locator("#assets-tab").click()
+        page.locator("#asset-folder-list .asset-folder-expand").first.click()
+        child_select = page.locator(".asset-folder-select", has_text="Character")
+        child_select.wait_for()
+        child_select.click()
+        page.wait_for_function("window.__fakeApi.calls.loadAsset.length === 1")
+        assert page.evaluate("window.__fakeApi.calls.loadAsset") == [child]
+        assert page.locator(".draw-item").count() == 1
+        assert page.locator("body.asset-preview-mode").count() == 1
+        assert page.locator("#controls-tab").is_hidden()
+        assert page.locator("#export-btn").is_hidden()
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == []
+        assert page.evaluate("window.modViewer.getCurrentSource().kind") == "asset"
     finally:
         context.close()
 

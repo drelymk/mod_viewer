@@ -11,7 +11,7 @@ from . import gimi, wwmi, zzmi
 from .models import AssetRecord
 
 
-INDEX_VERSION = 2
+INDEX_VERSION = 4
 _HASH_GROUPS = frozenset({
     "enemydata",
     "miscellaneousdata",
@@ -175,8 +175,23 @@ def _wwmi_candidates(root):
 
 
 def _parse_hash_asset(asset_path, root, metadata_path, parser):
-    return parser.parse_hash_file(
-        asset_path, root, metadata_path, normalize_geometry_hash)
+    metadata_paths = [metadata_path]
+    for child in _safe_child_dirs(asset_path, root):
+        nested = _safe_file(child, root, "hash.json")
+        if nested:
+            metadata_paths.append(nested)
+
+    records = [parser.parse_hash_file(
+        asset_path, root, metadata_paths[0], normalize_geometry_hash)]
+    for nested in metadata_paths[1:]:
+        try:
+            records.append(parser.parse_hash_file(
+                asset_path, root, nested, normalize_geometry_hash))
+        except (OSError, ValueError, UnicodeError):
+            # A malformed optional component folder must not discard the
+            # parent Asset's otherwise usable geometry.
+            continue
+    return _merge_asset_records(records)[0]
 
 
 def _parse_wwmi_asset(asset_path, root, direct, objects):
@@ -241,6 +256,9 @@ def _merge_asset_records(records):
                                    if value.component_ordinal is not None else -1),
             ))
             from .models import GeometryRecord
+            metadata_paths = tuple(dict.fromkeys(
+                (previous.metadata_paths or (previous.metadata_path,)) +
+                (item.metadata_paths or (item.metadata_path,))))
             geometry[item.geometry_hash] = GeometryRecord(
                 item.geometry_hash,
                 ranges,
@@ -250,6 +268,7 @@ def _merge_asset_records(records):
                 (previous.component_fingerprint
                  if previous.component_fingerprint ==
                  item.component_fingerprint else None),
+                metadata_paths,
             )
         merged[record.relative_path] = AssetRecord(
             record.relative_path,
@@ -468,3 +487,20 @@ def lookup_geometry(index, geometry_hash):
         return []
     values = index.get("byGeometryHash", {}).get(geometry_hash, [])
     return [dict(value) for value in values if isinstance(value, dict)]
+
+
+def find_asset_by_path(index, relative_path):
+    """Return the exact indexed Asset record for a root-relative folder."""
+    if not isinstance(index, dict) or not isinstance(relative_path, str):
+        return None
+    requested = relative_path.replace("\\", "/").strip("/")
+    if not requested or requested in (".", ".."):
+        return None
+    requested = "/".join(part for part in requested.split("/") if part)
+    for item in index.get("assets", ()):
+        if not isinstance(item, dict):
+            continue
+        candidate = str(item.get("path", "")).replace("\\", "/").strip("/")
+        if candidate.casefold() == requested.casefold():
+            return dict(item)
+    return None

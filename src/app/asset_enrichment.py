@@ -1,7 +1,6 @@
 """Lazy, conservative texture evidence for exact Asset component matches."""
 
 from dataclasses import dataclass
-import hashlib
 import json
 import os
 import re
@@ -12,7 +11,7 @@ from core.dds_classifier import (DDSClassification, classification_cache_key,
                                  classify_dds, is_color_candidate)
 from core.resource_paths import safe_resource_path
 
-from . import asset_folders
+from . import asset_folders, asset_paths, asset_textures
 
 
 _ROLE_NAMES = {
@@ -83,12 +82,8 @@ def _integer(value):
 
 
 def _safe_asset_path(root, relative):
-    if not isinstance(root, str) or not isinstance(relative, str):
-        return None
-    candidate = asset_folders.normalize_path(os.path.join(root, relative))
-    if not candidate or not asset_folders.is_within(candidate, root):
-        return None
-    return candidate
+    return asset_paths.safe_asset_path(root, relative) or \
+        asset_paths.safe_asset_dir(root, relative)
 
 
 def _json(cache, filename):
@@ -188,10 +183,7 @@ def _locate_texture(binding, evidence):
 
 
 def _logical_key(binding, filename):
-    root_key = hashlib.sha256(
-        asset_folders.normalize_path(binding.root).encode("utf-8")).hexdigest()[:16]
-    relative = os.path.relpath(filename, binding.root).replace(os.sep, "/")
-    return f"asset/{root_key}/{relative}"
+    return asset_textures.asset_logical_key(binding.root, filename)
 
 
 def _gimi_evidence(binding, cache):

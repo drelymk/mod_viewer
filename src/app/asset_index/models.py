@@ -30,6 +30,7 @@ class GeometryRecord:
     detail_metadata_path: str | None = None
     component_name: str | None = None
     component_fingerprint: str | None = None
+    metadata_paths: tuple[str, ...] = ()
 
     def as_dict(self):
         value = {
@@ -43,6 +44,9 @@ class GeometryRecord:
             value["componentName"] = self.component_name
         if self.component_fingerprint is not None:
             value["componentFingerprint"] = self.component_fingerprint
+        metadata_paths = self.metadata_paths or (self.metadata_path,)
+        if len(metadata_paths) > 1:
+            value["metadataPaths"] = list(metadata_paths)
         return value
 
 
