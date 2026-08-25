@@ -143,7 +143,7 @@ def normal_orientation_evidence(position_data, position_stride,
         if authored is None:
             continue
         dot = sum(face[index] * authored[index] for index in range(3)) / area
-        if math.isfinite(dot):
+        if math.isfinite(dot) and abs(dot) >= 0.25:
             evidence.append((dot, area))
     return tuple(evidence)
 

@@ -191,6 +191,39 @@ def test_shared_normal_source_uses_one_orientation_for_all_draws(tmp_path):
     assert third == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
 
 
+def test_ambiguous_orientation_samples_do_not_consume_shared_source_budget(
+        tmp_path):
+    triangles_per_draw = 4096
+    vertices_per_draw = triangles_per_draw * 3
+    draw_text = PACKED_INI.replace(
+        "drawindexed = 3, 0, 0",
+        "\n".join(
+            f"drawindexed = {vertices_per_draw}, "
+            f"{draw_index * vertices_per_draw}, 0"
+            for draw_index in range(5)))
+    groups = _parse_groups(tmp_path, draw_text)
+    triangle = (struct.pack("<3f", 0., 0., 0.) +
+                struct.pack("<3f", 1., 0., 0.) +
+                struct.pack("<3f", 0., 1., 0.))
+    _write(tmp_path, "position.buf", triangle * (triangles_per_draw * 5))
+    _write(tmp_path, "texcoord.buf", b"\0" * (20 * vertices_per_draw * 5))
+    _write(tmp_path, "body.ib", struct.pack(
+        f"<{vertices_per_draw * 5}I", *range(vertices_per_draw * 5)))
+    # Four draws contain only perpendicular evidence. The fifth draw is
+    # decisively reversed and must still reach the source-wide decision.
+    _write(tmp_path, "vector.buf", _packed_normals(
+        [(127, 0, 0)] * (vertices_per_draw * 4) +
+        [(0, 0, 128)] * vertices_per_draw))
+
+    meshes, geometry = _build(groups, tmp_path)
+    assert len(meshes) == 5
+    for draw_index in range(5):
+        values = _values(geometry, meshes[f"Body-{draw_index + 1}"]["normal"])
+        expected = ((-1., 0., 0.) if draw_index < 4
+                    else (0., 0., 1.)) * 3
+        assert values[:9] == expected
+
+
 def test_unrelated_vb1_layout_is_not_treated_as_authored_normals(tmp_path):
     layouts = (
         ("ResourceColor", "8", "DXGI_FORMAT_R8G8B8A8_UNORM"),
