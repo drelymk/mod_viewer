@@ -32,6 +32,7 @@ class AuthoredComponentOverride:
     section: str
     handling_skip: bool
     geometry_evidence: bool = False
+    asset_identity_evidence: bool = True
 
     @property
     def key(self):
@@ -45,6 +46,12 @@ _COUNT_RE = re.compile(r"^match_index_count\s*=\s*(\d+)$", re.I)
 _SKIP_RE = re.compile(r"^handling\s*=\s*skip\b", re.I)
 _GEOMETRY_RE = re.compile(
     r"^(?:drawindexed|draw|ib|vb\d+)\s*=\s*(?!null\b)\S+", re.I)
+_IB_RE = re.compile(r"^ib\s*=\s*(?!null\b)\S+", re.I)
+_DRAW_INDEXED_RE = re.compile(r"^drawindexed\s*=\s*\S+", re.I)
+_AUXILIARY_RE = re.compile(
+    r"^(?:draw|vb\d+|override_vertex_count|override_byte_stride)\s*=\s*\S+",
+    re.I,
+)
 
 
 def collect_component_overrides(sections, ini_path):
@@ -65,6 +72,8 @@ def collect_component_overrides(sections, ini_path):
         index_count = None
         handling_skip = False
         geometry_evidence = False
+        explicit_asset_identity = False
+        auxiliary_geometry = False
         for raw in lines or ():
             line = str(raw).split(";", 1)[0].strip()
             if not line:
@@ -85,8 +94,14 @@ def collect_component_overrides(sections, ini_path):
                 continue
             if _SKIP_RE.match(line):
                 handling_skip = True
+            if _IB_RE.match(line) or _DRAW_INDEXED_RE.match(line):
+                explicit_asset_identity = True
+            if _AUXILIARY_RE.match(line):
+                auxiliary_geometry = True
             if _GEOMETRY_RE.match(line):
                 geometry_evidence = True
+        asset_identity_evidence = (
+            explicit_asset_identity or not auxiliary_geometry)
         for geometry_hash in dict.fromkeys(hashes):
             result.append(AuthoredComponentOverride(
                 geometry_hash=geometry_hash,
@@ -96,6 +111,7 @@ def collect_component_overrides(sections, ini_path):
                 section=str(section),
                 handling_skip=handling_skip,
                 geometry_evidence=geometry_evidence,
+                asset_identity_evidence=asset_identity_evidence,
             ))
     return tuple(result)
 

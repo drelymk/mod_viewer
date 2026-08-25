@@ -70,6 +70,21 @@ def test_collect_component_overrides_includes_skip_and_range():
     assert result[0].index_count == 12
     assert result[0].handling_skip is True
     assert result[0].geometry_evidence is False
+    assert result[0].asset_identity_evidence is True
+
+
+def test_auxiliary_buffer_hash_does_not_identify_another_asset():
+    result = collect_component_overrides({
+        "TextureOverrideBodyBlend": [
+            "hash = 0xAAAAAAAA",
+            "handling = skip",
+            "vb1 = ResourceBodyTexcoord",
+            "Draw = 3, 0",
+        ],
+    }, "mod.ini")
+
+    assert result[0].geometry_evidence is True
+    assert result[0].asset_identity_evidence is False
 
 
 def test_texture_only_hash_identifies_asset_without_covering_geometry(
@@ -115,6 +130,36 @@ def test_plan_unions_nested_inis_and_ignores_non_asset_hashes(
     assert len(plan.covered_parts) == 2
     assert not plan.missing_parts
     assert len(plan.skipped_parts) == 1
+
+
+def test_plan_ignores_auxiliary_hash_that_matches_another_asset(
+        tmp_path, monkeypatch):
+    index = _index(_geometry("aaaaaaaa", (0, 12)), asset_path="Remielle")
+    index["assets"].append({
+        "path": "Other",
+        "geometry": [_geometry("bbbbbbbb", (0, 6))],
+    })
+    index["byGeometryHash"]["bbbbbbbb"] = [{"asset": 1, "geometry": 0}]
+    monkeypatch.setattr(asset_index, "load_index",
+                        lambda _type, _root: index)
+    context = _context(tmp_path, {
+        "mod.ini": (
+            "[TextureOverrideBodyBlend]\n"
+            "hash = bbbbbbbb\n"
+            "handling = skip\n"
+            "vb1 = ResourceBodyTexcoord\n"
+            "Draw = 3, 0\n"
+            "[TextureOverrideBody]\n"
+            "hash = aaaaaaaa\n"
+            "drawindexed = 3, 0, 0\n"
+            "run = CommandList\\ZZMI\\SetTextures\n"
+        ),
+    })
+
+    plan = asset_composition.plan_missing_asset_parts(context)
+
+    assert plan.status == "nothing_missing"
+    assert plan.asset["path"] == "Remielle"
 
 
 def test_plan_matches_requested_range_only(tmp_path, monkeypatch):
@@ -181,3 +226,30 @@ def test_plan_refuses_duplicate_original_assets(tmp_path, monkeypatch):
 
     assert plan.status == "asset_ambiguous"
     assert not plan.missing_parts
+
+
+def test_plan_refuses_equal_support_for_different_original_assets(
+        tmp_path, monkeypatch):
+    indexes = {
+        "one": _index(_geometry("aaaaaaaa", (0, 12)), asset_path="One"),
+        "two": _index(_geometry("bbbbbbbb", (0, 12)), asset_path="Two"),
+    }
+    monkeypatch.setattr(
+        asset_index, "load_index",
+        lambda _type, root: indexes[root])
+    context = _context(tmp_path, {
+        "mod.ini": (
+            "[TextureOverrideBody]\n"
+            "hash = aaaaaaaa\n"
+            "drawindexed = 3, 0, 0\n"
+            "run = CommandList\\ZZMI\\SetTextures\n"
+            "[TextureOverrideFace]\n"
+            "hash = bbbbbbbb\n"
+            "drawindexed = 3, 0, 0\n"
+            "run = CommandList\\ZZMI\\SetTextures\n"
+        ),
+    }, roots=("one", "two"))
+
+    plan = asset_composition.plan_missing_asset_parts(context)
+
+    assert plan.status == "asset_ambiguous"

@@ -166,9 +166,17 @@ def _coverage_for_asset(parts, evidence):
 
 
 def _candidate_assets(asset_type, evidence, asset_entries):
+    """Return the Asset identities with the strongest authored support.
+
+    A mod can contain auxiliary vertex-buffer hashes and optional components
+    from a related variant. Those hashes must not veto the Asset supported by
+    the main indexed geometry. Equal support remains ambiguous.
+    """
     candidates = {}
-    relevant = []
+    support = {}
     for item in evidence:
+        if not item.asset_identity_evidence:
+            continue
         matches = {}
         for entry in asset_folders.enabled_entries_for_type(
                 asset_entries, asset_type):
@@ -183,13 +191,17 @@ def _candidate_assets(asset_type, evidence, asset_entries):
                     continue
                 identity = (asset_type, entry["path"], asset.get("path"))
                 matches[identity] = (entry["path"], index, asset)
-        if matches:
-            relevant.append(set(matches))
-            candidates.update(matches)
-    if not relevant:
+        if not matches:
+            continue
+        for identity, value in matches.items():
+            candidates[identity] = value
+            support[identity] = support.get(identity, 0) + 1
+    if not support:
         return (), candidates
-    common = set.intersection(*relevant)
-    return tuple(sorted(common, key=lambda value: (
+    best_score = max(support.values())
+    best = [identity for identity, score in support.items()
+            if score == best_score]
+    return tuple(sorted(best, key=lambda value: (
         value[1].casefold(), value[1], value[2].casefold(), value[2]))), candidates
 
 
