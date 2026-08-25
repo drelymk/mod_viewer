@@ -2,8 +2,10 @@
 
 import os
 import struct
+import math
 
 from core.draw_call import DrawCall
+from core.geometry_conventions import geometry_convention_for
 from core.ini_parser import (build_draw_groups, extract_resources,
                              merge_sections)
 from core.mesh_builder import GeometryBlob, build_mesh_result
@@ -25,9 +27,11 @@ def _parse_groups(tmp_path, text):
     return build_draw_groups(sections, extract_resources(sections))
 
 
-def _build(groups, tmp_path):
+def _build(groups, tmp_path, game_profile=None):
     geometry = GeometryBlob()
-    result = build_mesh_result(groups, str(tmp_path), geometry=geometry)
+    result = build_mesh_result(
+        groups, str(tmp_path), geometry=geometry,
+        game_profile=game_profile)
     return result.meshes, geometry
 
 
@@ -35,6 +39,12 @@ def _values(geometry, reference):
     raw = geometry.data[reference["offset"]:
                        reference["offset"] + reference["length"]]
     return struct.unpack(f"<{len(raw) // 4}f", raw)
+
+
+def _indices(geometry, reference):
+    raw = geometry.data[reference["offset"]:
+                       reference["offset"] + reference["length"]]
+    return struct.unpack(f"<{len(raw) // 4}I", raw)
 
 
 INTERLEAVED_INI = """[TextureOverrideBody]
@@ -137,139 +147,98 @@ def _packed_normals(values):
                      for normal in values)
 
 
-def _write_packed_triangle(tmp_path, normal_values, draw_text=PACKED_INI):
+def _write_packed_fixture(tmp_path, points, indices, normal_values,
+                          game_profile=None, draw_text=PACKED_INI):
     groups = _parse_groups(tmp_path, draw_text)
-    _write(tmp_path, "position.buf", struct.pack(
-        "<9f", 0., 0., 0., 1., 0., 0., 0., 1., 0.))
-    _write(tmp_path, "texcoord.buf", b"\0" * 60)
-    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 1, 2))
-    _write(tmp_path, "vector.buf", _packed_normals(normal_values))
-    return _build(groups, tmp_path)
-
-
-def test_reversed_authored_normals_follow_indexed_geometry_orientation(tmp_path):
-    meshes, geometry = _write_packed_triangle(
-        tmp_path, [(0, 0, 128), (0, 0, 128), (0, 0, 128)])
-    entry = next(iter(meshes.values()))
-    assert _values(geometry, entry["normal"]) == (
-        0., 0., 1., 0., 0., 1., 0., 0., 1.)
-
-
-def test_aligned_authored_normals_keep_their_declared_orientation(tmp_path):
-    meshes, geometry = _write_packed_triangle(
-        tmp_path, [(0, 0, 127), (0, 0, 127), (0, 0, 127)])
-    entry = next(iter(meshes.values()))
-    assert _values(geometry, entry["normal"]) == (
-        0., 0., 1., 0., 0., 1., 0., 0., 1.)
-
-
-def test_shared_normal_source_uses_one_orientation_for_all_draws(tmp_path):
-    draw_text = PACKED_INI.replace(
-        "drawindexed = 3, 0, 0",
-        "drawindexed = 3, 0, 0\n"
-        "drawindexed = 3, 3, 0\n"
-        "drawindexed = 3, 6, 0")
-    groups = _parse_groups(tmp_path, draw_text)
-    points = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)] * 3
     _write(tmp_path, "position.buf", b"".join(
         struct.pack("<3f", *point) for point in points))
     _write(tmp_path, "texcoord.buf", b"\0" * (20 * len(points)))
-    _write(tmp_path, "body.ib", struct.pack("<9I", *range(9)))
-    # The first draw is perpendicular/noisy; the other two clearly reverse
-    # the same source. The source-wide decision must still flip every draw.
-    _write(tmp_path, "vector.buf", _packed_normals(
-        [(127, 0, 0)] * 3 +
-        [(0, 0, 128)] * 6))
-
-    meshes, geometry = _build(groups, tmp_path)
-    assert len(meshes) == 3
-    first = _values(geometry, meshes["Body-1"]["normal"])
-    second = _values(geometry, meshes["Body-2"]["normal"])
-    third = _values(geometry, meshes["Body-3"]["normal"])
-    assert first == (-1., 0., 0., -1., 0., 0., -1., 0., 0.)
-    assert second == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
-    assert third == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
+    _write(tmp_path, "body.ib", struct.pack(
+        f"<{len(indices)}I", *indices))
+    _write(tmp_path, "vector.buf", _packed_normals(normal_values))
+    return _build(groups, tmp_path, game_profile=game_profile)
 
 
-def test_shared_buffers_do_not_share_orientation_across_components(tmp_path):
-    draw_text = """[TextureOverrideComponent0]
-ib = ResourceIB
-vb0 = ResourcePosition
-vb1 = ResourceVector
-vb2 = ResourceTexcoord
-drawindexed = 3, 0, 0
+def test_wuwa_normalizes_winding_without_rewriting_authored_normals(tmp_path):
+    points = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)]
+    meshes, geometry = _write_packed_fixture(
+        tmp_path, points, (0, 2, 1), [(0, 0, 127)] * 3, "wuwa")
+    entry = next(iter(meshes.values()))
+    assert _indices(geometry, entry["idx"]) == (0, 1, 2)
+    assert _values(geometry, entry["normal"]) == (
+        0., 0., 1., 0., 0., 1., 0., 0., 1.)
 
-[TextureOverrideComponent1]
-ib = ResourceIB
-vb0 = ResourcePosition
-vb1 = ResourceVector
-vb2 = ResourceTexcoord
-drawindexed = 3, 3, 0
 
-[ResourceIB]
-filename = body.ib
-format = DXGI_FORMAT_R32_UINT
+def test_non_wuwa_keeps_authored_index_order(tmp_path):
+    points = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)]
+    meshes, geometry = _write_packed_fixture(
+        tmp_path, points, (0, 2, 1), [(0, 0, 127)] * 3, "unknown")
+    entry = next(iter(meshes.values()))
+    assert _indices(geometry, entry["idx"]) == (0, 2, 1)
+    assert _values(geometry, entry["normal"]) == (
+        0., 0., 1., 0., 0., 1., 0., 0., 1.)
 
-[ResourcePosition]
-filename = position.buf
-stride = 12
 
-[ResourceVector]
-filename = vector.buf
-stride = 8
-format = DXGI_FORMAT_R8G8B8A8_SNORM
+def test_wuwa_preserves_mixed_authored_normals_in_one_draw(tmp_path):
+    points = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)] * 2
+    meshes, geometry = _write_packed_fixture(
+        tmp_path, points, (0, 2, 1, 3, 5, 4),
+        [(0, 0, 127)] * 3 + [(0, 0, 128)] * 3, "wuwa",
+        PACKED_INI.replace("drawindexed = 3, 0, 0",
+                           "drawindexed = 6, 0, 0"))
+    entry = next(iter(meshes.values()))
+    assert _indices(geometry, entry["idx"]) == (0, 1, 2, 3, 4, 5)
+    assert _values(geometry, entry["normal"]) == (
+        0., 0., 1., 0., 0., 1., 0., 0., 1.,
+        0., 0., -1., 0., 0., -1., 0., 0., -1.)
 
-[ResourceTexcoord]
-filename = texcoord.buf
-stride = 20
-"""
-    groups = _parse_groups(tmp_path, draw_text)
+
+def test_wuwa_preserves_custom_interleaved_normal_direction(tmp_path):
+    groups = _parse_groups(tmp_path, INTERLEAVED_INI)
+    normal = (0.8, -0.3, 0.4)
+    length = math.sqrt(sum(value * value for value in normal))
+    expected = tuple(value / length for value in normal)
+    position = bytearray()
+    for point in ((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)):
+        position.extend(struct.pack("<3f3f4f", *point, *normal,
+                                    1., 0., 0., 1.))
+    _write(tmp_path, "position.buf", position)
+    _write(tmp_path, "texcoord.buf", b"\0" * 60)
+    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 2, 1))
+
+    meshes, geometry = _build(groups, tmp_path, game_profile="wuwa")
+    entry = next(iter(meshes.values()))
+    assert _indices(geometry, entry["idx"]) == (0, 1, 2)
+    actual = _values(geometry, entry["normal"])
+    assert all(math.isclose(actual[index], expected[index % 3],
+                            rel_tol=1e-6, abs_tol=1e-6)
+               for index in range(len(actual)))
+
+
+def test_wuwa_winding_applies_without_authored_normals(tmp_path):
+    text = PACKED_INI.replace("vb1 = ResourceVector", "vb1 = ResourceColor")
+    text = text.replace(
+        "[ResourceVector]\nfilename = vector.buf\nstride = 8\n"
+        "format = DXGI_FORMAT_R8G8B8A8_SNORM",
+        "[ResourceColor]\nfilename = color.buf\nstride = 8\n"
+        "format = DXGI_FORMAT_R8G8B8A8_UNORM")
+    groups = _parse_groups(tmp_path, text)
     points = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)] * 2
     _write(tmp_path, "position.buf", b"".join(
-        struct.pack("<3f", *point) for point in points))
-    _write(tmp_path, "texcoord.buf", b"\0" * 120)
-    _write(tmp_path, "body.ib", struct.pack("<6I", *range(6)))
-    _write(tmp_path, "vector.buf", _packed_normals(
-        [(0, 0, 127)] * 3 + [(0, 0, 128)] * 3))
+        struct.pack("<3f", *point) for point in points[:3]))
+    _write(tmp_path, "texcoord.buf", b"\0" * 60)
+    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 2, 1))
+    _write(tmp_path, "color.buf", b"\0" * 24)
 
-    meshes, geometry = _build(groups, tmp_path)
-    first = _values(geometry, meshes["Component0-1"]["normal"])
-    second = _values(geometry, meshes["Component1-1"]["normal"])
-    assert first == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
-    assert second == (0., 0., 1., 0., 0., 1., 0., 0., 1.)
+    meshes, geometry = _build(groups, tmp_path, game_profile="wuwa")
+    entry = next(iter(meshes.values()))
+    assert _indices(geometry, entry["idx"]) == (0, 1, 2)
+    assert "normal" not in entry
 
 
-def test_ambiguous_orientation_samples_do_not_consume_shared_source_budget(
-        tmp_path):
-    triangles_per_draw = 4096
-    vertices_per_draw = triangles_per_draw * 3
-    draw_text = PACKED_INI.replace(
-        "drawindexed = 3, 0, 0",
-        "\n".join(
-            f"drawindexed = {vertices_per_draw}, "
-            f"{draw_index * vertices_per_draw}, 0"
-            for draw_index in range(5)))
-    groups = _parse_groups(tmp_path, draw_text)
-    triangle = (struct.pack("<3f", 0., 0., 0.) +
-                struct.pack("<3f", 1., 0., 0.) +
-                struct.pack("<3f", 0., 1., 0.))
-    _write(tmp_path, "position.buf", triangle * (triangles_per_draw * 5))
-    _write(tmp_path, "texcoord.buf", b"\0" * (20 * vertices_per_draw * 5))
-    _write(tmp_path, "body.ib", struct.pack(
-        f"<{vertices_per_draw * 5}I", *range(vertices_per_draw * 5)))
-    # Four draws contain only perpendicular evidence. The fifth draw is
-    # decisively reversed and must still reach the source-wide decision.
-    _write(tmp_path, "vector.buf", _packed_normals(
-        [(127, 0, 0)] * (vertices_per_draw * 4) +
-        [(0, 0, 128)] * vertices_per_draw))
-
-    meshes, geometry = _build(groups, tmp_path)
-    assert len(meshes) == 5
-    for draw_index in range(5):
-        values = _values(geometry, meshes[f"Body-{draw_index + 1}"]["normal"])
-        expected = ((-1., 0., 0.) if draw_index < 4
-                    else (0., 0., 1.)) * 3
-        assert values[:9] == expected
+def test_geometry_conventions_are_conservative_for_unknown_games():
+    assert geometry_convention_for("wuwa").reverse_winding
+    assert not geometry_convention_for("unknown").reverse_winding
 
 
 def test_unrelated_vb1_layout_is_not_treated_as_authored_normals(tmp_path):

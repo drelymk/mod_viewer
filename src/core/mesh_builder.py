@@ -5,10 +5,9 @@ import re, struct, os, base64
 from dataclasses import dataclass
 
 from .draw_call import DrawCall
+from .geometry_conventions import geometry_convention_for
 from .resource_paths import safe_resource_path
-from .vertex_attributes import (apply_normal_orientation,
-                                 choose_normal_orientation, decode_normals,
-                                 normal_orientation_evidence)
+from .vertex_attributes import decode_normals
 from .textures import (_texture_source_uri, _begin_texture_cache,
                        encode_texture_data_uri, normalize_texture_role,
                        normalize_texture_transform, texture_key)
@@ -22,15 +21,6 @@ INDEX_SIZE        = 4
 _MAX_BUFFER_FILE_BYTES = 512 * 1024 * 1024
 _MAX_TOTAL_BUFFER_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_DRAWS = 10_000
-_MAX_ORIENTATION_SAMPLES_PER_SOURCE = 16_384
-
-
-def _normal_orientation_key(draw, source, position_stride, index_size,
-                            orientation_scope):
-    """Identify one authored source within a component's draw scope."""
-    return (source.file, source.stride, source.offset, source.encoding,
-            draw.position_file, position_stride, draw.ib_file, index_size,
-            orientation_scope)
 
 
 def _res_get(resources, name):
@@ -490,6 +480,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     _begin_texture_cache(mod_dir)
     from .texture_profiles import texture_profile_for
     texture_profile = texture_profile_for(game_profile)
+    geometry_convention = geometry_convention_for(game_profile)
 
     result:    dict = {}
     tex_uris:  dict = {}  # role-aware key -> data URI or lazy source URL
@@ -499,8 +490,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
     raw_buf_cache = {}
     sparse_shape_cache = {}
-    orientation_evidence = {}
-    pending_normals = []
     total_buffer_bytes = 0
 
     def _read_buffer(path):
@@ -707,6 +696,10 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if not valid_raw:
                 continue
             raw = valid_raw
+            if geometry_convention.reverse_winding:
+                for triangle_start in range(0, len(raw) - 2, 3):
+                    raw[triangle_start + 1], raw[triangle_start + 2] = (
+                        raw[triangle_start + 2], raw[triangle_start + 1])
 
             # Compact: only export vertices actually referenced
             used  = sorted(set(raw))
@@ -714,7 +707,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
             pos_bytes = bytearray(len(used) * 12)
             normal_bytes = None
-            normal_record = None
             normal_source = draw.normal_source
             if normal_source is not None:
                 normal_path = safe_resource_path(mod_dir, normal_source.file)
@@ -727,21 +719,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                         normal_data = raw_buf_cache[normal_path]
                     normal_bytes = decode_normals(
                         normal_source, normal_data, used)
-            if normal_bytes is not None:
-                orientation_key = _normal_orientation_key(
-                    draw, normal_source, draw_pos_stride,
-                    draw.index_size if draw.index_size is not None else index_size,
-                    (source, grp.get("name"), component))
-                evidence = normal_orientation_evidence(
-                    pos_data, draw_pos_stride, normal_bytes, raw, remap)
-                if evidence:
-                    source_evidence = orientation_evidence.setdefault(
-                        orientation_key, [])
-                    remaining = (_MAX_ORIENTATION_SAMPLES_PER_SOURCE
-                                 - len(source_evidence))
-                    if remaining > 0:
-                        source_evidence.extend(evidence[:remaining])
-                normal_record = (orientation_key, normal_bytes)
             shape_buffers = _build_shape_buffers(
                 grp.get("shape_sliders"), mod_dir, effective_pos_path, used,
                 raw_buf_cache, sparse_shape_cache, _read_buffer)
@@ -798,8 +775,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 "normal_map_y_sign": texture_profile.normal_y_sign,
                 "normal_map_enabled": texture_profile.bind_normal_map,
             }
-            if normal_record is not None:
-                pending_normals.append((entry, *normal_record))
             # NormalMap is a user-facing authored role, but its transport is
             # profile-owned.  WuWa publishes the intact packed source as
             # normal_data; Genshin/ZZZ retain the derived normal_map path.
@@ -837,6 +812,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             _seed_option_maps(default_key)
             if uv_bytes:
                 entry["uv"] = _geometry_ref(uv_bytes, geometry)
+            if normal_bytes is not None:
+                entry["normal"] = _geometry_ref(normal_bytes, geometry)
             if shape_buffers:
                 entry["shape_targets"] = []
                 for item in shape_buffers:
@@ -916,15 +893,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if draw.asset_slot_evidence:
                 entry["asset_slot_evidence"] = list(draw.asset_slot_evidence)
             result[lbl] = entry
-
-    orientations = {
-        key: choose_normal_orientation(evidence)
-        for key, evidence in orientation_evidence.items()
-    }
-    for entry, key, normal_bytes in pending_normals:
-        entry["normal"] = _geometry_ref(
-            apply_normal_orientation(normal_bytes, orientations.get(key, 1)),
-            geometry)
 
     return MeshBuildResult(
         meshes=result,

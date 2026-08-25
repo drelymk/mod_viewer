@@ -129,10 +129,10 @@ machine-specific paths or facts that are obvious from the source.
   regressions.
 - Authored vertex normals are render geometry and must be preserved when a
   supported source is available. Geometric normal reconstruction is a fallback
-  only; never weld vertices solely to improve smoothing. Validate authored
-  orientation against indexed geometry once per shared source within a
-  component's draw scope, reverse only on strong aggregate evidence, and
-  preserve the declared orientation when the evidence is ambiguous.
+  only; never weld vertices solely to improve smoothing. Normalize the
+  source/game triangle winding to the viewer convention independently of
+  authored normals. Face-normal agreement must not rewrite authored normal
+  direction.
 - Draw deduplication uses normalized effective buffer and material state.
   Classify each new draw field explicitly as render identity, visibility or
   provenance; never derive identity reflectively from every dictionary field.
