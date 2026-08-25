@@ -112,12 +112,11 @@ class ModViewerAPI:
         index_versions = []
         for asset_type, root, _enabled in entries:
             try:
-                index = asset_index.load_index(asset_type, root)
-            except asset_index.AssetIndexError:
-                index = None
-            index_versions.append((asset_type, root,
-                                   index.get("version") if index else None,
-                                   index.get("builtAt") if index else None))
+                stat = os.stat(asset_index.index_path(asset_type, root))
+                stamp = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                stamp = None
+            index_versions.append((asset_type, root, stamp))
         key = (os.path.normcase(os.path.abspath(folder_path)), revision,
                entries, tuple(index_versions))
         cached = self._asset_fill_plan_cache.get(key)
@@ -126,6 +125,10 @@ class ModViewerAPI:
         plan = plan_missing_asset_parts(context, overrides)
         self._asset_fill_plan_cache[key] = plan
         return plan
+
+    def _invalidate_asset_fill_plan_cache(self):
+        """Drop plans whose Asset index or enabled-root state may have changed."""
+        self._asset_fill_plan_cache.clear()
 
     def select_folder(self):
         """Open a native folder-picker dialog. Returns None if cancelled."""
@@ -267,6 +270,7 @@ class ModViewerAPI:
         except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         self._authorized_asset_folders.add(folder_path)
         return {"folders": self._asset_folder_entries(entries)}
 
@@ -281,6 +285,7 @@ class ModViewerAPI:
         except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         self._authorized_asset_folders.add(folder_path)
         return {"folders": self._asset_folder_entries(entries)}
 
@@ -291,6 +296,7 @@ class ModViewerAPI:
         except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         return {"folders": self._asset_folder_entries(entries)}
 
     def set_asset_folder_enabled(self, folder_path, enabled):
@@ -300,6 +306,7 @@ class ModViewerAPI:
         except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         return {"folders": self._asset_folder_entries(entries)}
 
     def rebuild_asset_index(self, folder_path):
@@ -312,6 +319,7 @@ class ModViewerAPI:
                 "indexPreserved": error.index_preserved,
             }
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         return {"folders": self._asset_folder_entries(entries)}
 
     def list_asset_subfolders(self, folder_path):
@@ -538,15 +546,13 @@ class ModViewerAPI:
                 "GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa",
             }[plan.asset_type])
             try:
-                loaded = asset_loader.load_asset(
+                loaded = asset_loader.load_asset_parts(
                     plan.asset_type, plan.root, plan.asset,
-                    geometry=geometry,
                     texture_source=publication.register,
                     part_filter=set(plan.missing_parts))
                 payload = build_asset_fill_payload(
                     plan.asset_type, plan.root, plan.asset, loaded.parts,
-                    geometry=geometry, warnings=loaded.payload[
-                        "metadata"]["asset"].get("warnings", ()))
+                    geometry=geometry, warnings=loaded.warnings)
                 server.publish_payload_geometry(
                     payload, geometry, replace=False)
                 publication.commit(replace=False)

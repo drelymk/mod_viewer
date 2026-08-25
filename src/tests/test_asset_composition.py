@@ -87,6 +87,31 @@ def test_auxiliary_buffer_hash_does_not_identify_another_asset():
     assert result[0].asset_identity_evidence is False
 
 
+def test_collect_component_overrides_follows_nested_command_lists():
+    result = collect_component_overrides({
+        "TextureOverrideBody": [
+            "hash = 0xAAAAAAAA",
+            "match_first_index = 300",
+            "run = CommandListBody",
+        ],
+        "CommandListBody": [
+            "handling = skip",
+            "run = CommandListBodyDraw",
+        ],
+        "CommandListBodyDraw": [
+            "ib = ResourceBodyIB",
+            "drawindexed = 12000, 300, 0",
+        ],
+    }, "mod.ini")
+
+    assert len(result) == 1
+    assert result[0].geometry_hash == "aaaaaaaa"
+    assert result[0].first_index == 300
+    assert result[0].handling_skip is True
+    assert result[0].geometry_evidence is True
+    assert result[0].asset_identity_evidence is True
+
+
 def test_texture_only_hash_identifies_asset_without_covering_geometry(
         tmp_path, monkeypatch):
     index = _index(_geometry("aaaaaaaa", (0, 12)))
@@ -221,6 +246,37 @@ def test_unknown_game_fallback_keeps_cross_type_asset_ambiguity(
     assert not plan.missing_parts
 
 
+def test_candidate_matching_reuses_indexes_and_unique_hash_support(
+        tmp_path, monkeypatch):
+    index = _index(_geometry("aaaaaaaa", (0, 12)), asset_path="AssetA")
+    index["assets"].append({
+        "path": "AssetB",
+        "geometry": [_geometry("bbbbbbbb", (0, 12))],
+    })
+    index["byGeometryHash"]["bbbbbbbb"] = [{"asset": 1, "geometry": 0}]
+    calls = []
+
+    def load_index(asset_type, root):
+        calls.append((asset_type, root))
+        return index
+
+    monkeypatch.setattr(asset_index, "load_index", load_index)
+    context = _context(tmp_path, {
+        "mod.ini": (
+            _zzmi("aaaaaaaa")
+            + _zzmi("aaaaaaaa").replace(
+                "TextureOverrideBody", "TextureOverrideFace")
+            + _zzmi("bbbbbbbb").replace(
+                "TextureOverrideBody", "TextureOverrideHair")
+        ),
+    })
+
+    plan = asset_composition.plan_missing_asset_parts(context)
+
+    assert plan.status == "asset_ambiguous"
+    assert calls == [("ZZMI", "asset-root")]
+
+
 def test_plan_matches_requested_range_only(tmp_path, monkeypatch):
     index = _index(_geometry(
         "aaaaaaaa", (0, 12), (300, 24), (600, 18)))
@@ -236,6 +292,25 @@ def test_plan_matches_requested_range_only(tmp_path, monkeypatch):
     assert plan.status == "ready"
     assert [part.first_index for part in plan.covered_parts] == [300]
     assert [part.first_index for part in plan.missing_parts] == [0, 600]
+
+
+def test_plan_matches_range_start_when_index_count_differs(
+        tmp_path, monkeypatch):
+    index = _index(_geometry(
+        "aaaaaaaa", (0, 12), (300, 24)))
+    monkeypatch.setattr(asset_index, "load_index",
+                        lambda _type, _root: index)
+    context = _context(tmp_path, {
+        "mod.ini": _zzmi(
+            "aaaaaaaa",
+            "match_first_index = 300\n"
+            "match_index_count = 12\n"),
+    })
+
+    plan = asset_composition.plan_missing_asset_parts(context)
+
+    assert [part.first_index for part in plan.covered_parts] == [300]
+    assert [part.first_index for part in plan.missing_parts] == [0]
 
 
 def test_hash_only_skip_covers_all_ranges(tmp_path, monkeypatch):

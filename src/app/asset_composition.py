@@ -143,11 +143,10 @@ def _part_is_covered(part, override, hash_range_count):
         # A hash-only override is intentionally conservative, including when
         # it also contains a count but no match_first_index.
         return True
-    if part.first_index != override.first_index:
-        return False
-    return (override.index_count is None
-            or part.index_count is None
-            or part.index_count == override.index_count)
+    # The range start is the stable component identity. Authored
+    # match_index_count values can differ from the indexed count after a mod
+    # changes the draw while retaining the same original range.
+    return part.first_index == override.first_index
 
 
 def _coverage_for_asset(parts, evidence):
@@ -165,6 +164,18 @@ def _coverage_for_asset(parts, evidence):
     return covered, missing
 
 
+def _enabled_asset_entries(asset_type, asset_entries):
+    if asset_type is not None:
+        return asset_folders.enabled_entries_for_type(
+            asset_entries, asset_type)
+    return [
+        entry
+        for candidate_type in _GAME_ASSET_TYPES.values()
+        for entry in asset_folders.enabled_entries_for_type(
+            asset_entries, candidate_type)
+    ]
+
+
 def _candidate_assets(asset_type, evidence, asset_entries):
     """Return the Asset identities with the strongest authored support.
 
@@ -175,25 +186,23 @@ def _candidate_assets(asset_type, evidence, asset_entries):
     """
     candidates = {}
     support = {}
-    if asset_type is None:
-        entries = [
-            entry
-            for candidate_type in _GAME_ASSET_TYPES.values()
-            for entry in asset_folders.enabled_entries_for_type(
-                asset_entries, candidate_type)
-        ]
-    else:
-        entries = asset_folders.enabled_entries_for_type(
-            asset_entries, asset_type)
-    for item in evidence:
-        if not item.asset_identity_evidence:
+    entries = _enabled_asset_entries(asset_type, asset_entries)
+    indexes = []
+    for entry in entries:
+        try:
+            index = asset_index.load_index(entry["type"], entry["path"])
+        except asset_index.AssetIndexError:
             continue
+        if index:
+            indexes.append((entry, index))
+
+    unique_evidence = {}
+    for item in evidence:
+        if item.asset_identity_evidence:
+            unique_evidence.setdefault(item.geometry_hash, item)
+    for item in unique_evidence.values():
         matches = {}
-        for entry in entries:
-            try:
-                index = asset_index.load_index(entry["type"], entry["path"])
-            except asset_index.AssetIndexError:
-                continue
+        for entry, index in indexes:
             for lookup in asset_index.lookup_geometry(index, item.geometry_hash):
                 try:
                     asset = index["assets"][lookup["asset"]]
@@ -243,16 +252,7 @@ def plan_missing_asset_parts(context, overrides=None):
         game_evidence, runtime_evidence, texture_api_evidence)
     asset_type = _asset_type(detection)
 
-    if asset_type is None:
-        roots = [
-            entry
-            for candidate_type in _GAME_ASSET_TYPES.values()
-            for entry in asset_folders.enabled_entries_for_type(
-                context.asset_folders, candidate_type)
-        ]
-    else:
-        roots = asset_folders.enabled_entries_for_type(
-            context.asset_folders, asset_type)
+    roots = _enabled_asset_entries(asset_type, context.asset_folders)
     if not roots:
         return AssetFillPlan(
             "asset_not_found", asset_type=asset_type,

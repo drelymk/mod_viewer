@@ -956,6 +956,8 @@ def test_missing_asset_parts_append_and_remove_without_reloading_mod(
         assert button.get_attribute("aria-pressed") == "true"
         assert button.locator("use").get_attribute("href") == "#icon-close"
         assert page.evaluate("window.modViewer.activeMeshes.length") == 2
+        assert page.evaluate("window.modViewer.refreshMeshSemantics()") is True
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 2
         appended = page.evaluate("""() => window.modViewer.activeMeshes.map(mesh => ({
           position: mesh.position.toArray(), quaternion: mesh.quaternion.toArray(),
         }))""")
@@ -999,6 +1001,41 @@ def test_missing_asset_parts_append_and_remove_without_reloading_mod(
 
 
 
+
+
+def test_stale_missing_asset_response_is_rolled_back_after_mod_switch(
+        edge_browser, frontend_url):
+    first = _payload("FillRaceA")
+    first["asset_resolution"] = {"configured_roots": 1}
+    _add_asset_fill_response(first, "FillRaceAsset")
+    second = _payload("FillRaceB")
+    context, page = _page(
+        edge_browser, frontend_url, {"FillRaceA": first, "FillRaceB": second})
+    try:
+        _open(page, "FillRaceA")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const original = window.pywebview.api.load_missing_asset_parts;
+          window.__releaseFill = null;
+          window.pywebview.api.load_missing_asset_parts = async path => {
+            const result = await original(path);
+            await new Promise(resolve => window.__releaseFill = resolve);
+            return result;
+          };
+          document.getElementById('asset-fill-btn').click();
+        }""")
+        page.wait_for_function("window.__releaseFill !== null")
+
+        _open(page, "FillRaceB")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__releaseFill()")
+
+        page.wait_for_function(
+            "window.__fakeApi.calls.removeMissingAssetParts.length === 1")
+        assert page.evaluate("window.modViewer.getCurrentSource().path") == "FillRaceB"
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 1
+    finally:
+        context.close()
 
 
 def _add_asset_fill_response(payload, label, position=None):

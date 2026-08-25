@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import re
 
 from .geometry_identity import normalize_geometry_hash
+from .ini_parser import (_reachable_execution_sections,
+                          _scan_sections_for_draws)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,20 +63,29 @@ def collect_component_overrides(sections, ini_path):
     only binds textures. The composition planner uses ``geometry_evidence``
     to avoid treating those texture-only bindings as rendered geometry.
     Explicit ``handling = skip`` remains a coverage claim because it suppresses
-    the corresponding original draw.
+    the corresponding original draw. Execution follows the same command-list
+    closure as the normal INI scanner so declarations in nested ``run``
+    sections retain their component coverage semantics.
     """
+    sections = sections or {}
+    section_lookup = {str(name).casefold(): name for name in sections}
+    scanned = _scan_sections_for_draws(sections)
     result = []
-    for section, lines in (sections or {}).items():
+    for section in sections:
         if not str(section).casefold().startswith("textureoverride"):
             continue
+        scope_sections = _reachable_execution_sections(
+            sections, section, section_lookup)
+        scope_lines = [raw for name in scope_sections
+                       for raw in sections[name]]
         hashes = []
-        first_index = None
-        index_count = None
         handling_skip = False
         geometry_evidence = False
         explicit_asset_identity = False
         auxiliary_geometry = False
-        for raw in lines or ():
+        last_first_index = None
+        last_index_count = None
+        for raw in scope_lines:
             line = str(raw).split(";", 1)[0].strip()
             if not line:
                 continue
@@ -86,11 +97,11 @@ def collect_component_overrides(sections, ini_path):
                 continue
             match = _FIRST_RE.match(line)
             if match:
-                first_index = int(match.group(1))
+                last_first_index = int(match.group(1))
                 continue
             match = _COUNT_RE.match(line)
             if match:
-                index_count = int(match.group(1))
+                last_index_count = int(match.group(1))
                 continue
             if _SKIP_RE.match(line):
                 handling_skip = True
@@ -100,9 +111,59 @@ def collect_component_overrides(sections, ini_path):
                 auxiliary_geometry = True
             if _GEOMETRY_RE.match(line):
                 geometry_evidence = True
-        asset_identity_evidence = (
-            explicit_asset_identity or not auxiliary_geometry)
+        info = scanned.get(section, {})
+        draw_matches = [
+            item.geometry_match
+            for item in info.get("draws", ())
+            if item.geometry_match is not None
+        ]
+        end_match = info.get("geometry_match_at_end")
+        if end_match is not None and end_match.first_index is not None:
+            # A few generated INIs place match_first_index after their
+            # drawindexed line. The scanner records the draw's state before
+            # that assignment; the section's final match is the authoritative
+            # range for the coverage declaration in that shape.
+            draw_matches = [
+                match for match in draw_matches
+                if not (match.hash == end_match.hash
+                        and match.first_index is None)
+            ]
+
+        declarations = []
+        seen_declarations = set()
+        for match in draw_matches:
+            key = (match.hash, match.first_index, match.index_count)
+            if key in seen_declarations:
+                continue
+            seen_declarations.add(key)
+            declarations.append((match.hash, match.first_index,
+                                 match.index_count, True, True))
+
+        if end_match is not None:
+            key = (end_match.hash, end_match.first_index,
+                   end_match.index_count)
+            if key not in seen_declarations:
+                declarations.append((
+                    end_match.hash, end_match.first_index,
+                    end_match.index_count, geometry_evidence,
+                    explicit_asset_identity or not auxiliary_geometry))
+                seen_declarations.add(key)
+
+        fallback_first = (end_match.first_index if end_match is not None
+                          else last_first_index)
+        fallback_count = (end_match.index_count if end_match is not None
+                          else last_index_count)
+        explicit_scope_geometry = explicit_asset_identity
         for geometry_hash in dict.fromkeys(hashes):
+            if any(item[0] == geometry_hash for item in declarations):
+                continue
+            declarations.append((
+                geometry_hash, fallback_first, fallback_count,
+                geometry_evidence, explicit_scope_geometry
+                or not auxiliary_geometry))
+
+        for (geometry_hash, first_index, index_count, item_geometry,
+             item_identity) in declarations:
             result.append(AuthoredComponentOverride(
                 geometry_hash=geometry_hash,
                 first_index=first_index,
@@ -110,8 +171,8 @@ def collect_component_overrides(sections, ini_path):
                 ini=ini_path,
                 section=str(section),
                 handling_skip=handling_skip,
-                geometry_evidence=geometry_evidence,
-                asset_identity_evidence=asset_identity_evidence,
+                geometry_evidence=item_geometry,
+                asset_identity_evidence=item_identity,
             ))
     return tuple(result)
 

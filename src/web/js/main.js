@@ -9,7 +9,7 @@ import { ENVIRONMENT_PRESETS } from './environment.js';
 import { addTexture, refreshMeshTexture, removeTextures, setTextures } from './mesh-factory.js';
 import { activeMeshes, refreshAll, reset, resetMeshState, setStateRules,
          toggleWireframe, toggleSmoothShading, toggleGlossy,
-         updateMeshSemantics } from './visibility.js';
+         updateMeshSemantics, removeAssetFillMeshes } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
 import {
   appendMeshPanel, buildMeshPanel, refreshMeshAssetDiagnostics,
@@ -262,6 +262,7 @@ let assetFillAvailable = false;
 let assetFillLoaded = false;
 let assetFillLoading = false;
 let assetFillTextureKeys = new Set();
+let assetFillEpoch = 0;
 
 // The last-loaded payload's controls.toggles model, kept
 // around purely so refreshPendingState() can check for a still-unwired
@@ -380,6 +381,7 @@ function setSourceUi(kind) {
  * state one transition: a failed replacement can never leave the previous
  * mod visible under the new folder's toolbar state. */
 function beginModLoad(path, message, { preserveModelOrientation = false } = {}) {
+  assetFillEpoch += 1;
   currentModPath = path;
   currentSource = { kind: 'mod', path };
   setSourceUi('mod');
@@ -401,6 +403,7 @@ function beginModLoad(path, message, { preserveModelOrientation = false } = {}) 
 
 function beginAssetLoad(path, entry, message = 'Loading Asset…',
                         { preserveModelOrientation = false } = {}) {
+  assetFillEpoch += 1;
   currentModPath = null;
   currentSource = {
     kind: 'asset', path, assetType: entry?.asset_type || null,
@@ -486,14 +489,61 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   showLoading(false);
 }
 
+function assetFillOperationIsCurrent(operation, path) {
+  return operation === assetFillEpoch
+    && currentSource?.kind === 'mod'
+    && samePath(currentModPath, path);
+}
+
+async function rollbackAssetFill(path, textureKeys) {
+  const fillMeshes = activeMeshes.filter(
+    mesh => mesh.userData.assetFill === true);
+  const removedFromPanel = removeAssetFillMeshPanel();
+  const remaining = activeMeshes.filter(
+    mesh => mesh.userData.assetFill === true);
+  removeAssetFillMeshes();
+  const removed = [...new Set([
+    ...fillMeshes, ...removedFromPanel, ...remaining,
+  ])];
+  forgetModelMeshes(removed);
+
+  const keys = new Set(textureKeys || []);
+  removeTextures(keys);
+  keys.forEach(key => assetFillTextureKeys.delete(key));
+  assetFillLoaded = false;
+  try {
+    const result = await window.pywebview.api.remove_missing_asset_parts(path);
+    if (result?.status === 'error') {
+      console.warn('Could not roll back missing Asset parts:', result.error);
+    }
+  } catch (error) {
+    console.warn('Could not roll back missing Asset parts:', error);
+  }
+}
+
 async function loadMissingAssetParts() {
   if (!currentModPath || currentSource?.kind !== 'mod' || assetFillLoading) {
     return false;
   }
+  const path = currentModPath;
+  const operation = ++assetFillEpoch;
+  let backendLoaded = false;
+  let rolledBack = false;
+  const transactionTextureKeys = new Set();
+  const rollback = async () => {
+    if (rolledBack) return;
+    rolledBack = true;
+    if (backendLoaded) await rollbackAssetFill(path, transactionTextureKeys);
+  };
   assetFillLoading = true;
   updateAssetFillButton();
   try {
-    const result = await window.pywebview.api.load_missing_asset_parts(currentModPath);
+    const result = await window.pywebview.api.load_missing_asset_parts(path);
+    if (!assetFillOperationIsCurrent(operation, path)) {
+      if (result?.status === 'loaded') backendLoaded = true;
+      await rollback();
+      return false;
+    }
     if (result?.status !== 'loaded') {
       const messages = {
         nothing_missing: 'No missing original Asset parts found.',
@@ -502,6 +552,11 @@ async function loadMissingAssetParts() {
       };
       if (result?.error) throw new Error(result.error);
       await alertDialog(messages[result?.status] || 'No original Asset parts were loaded.');
+      return false;
+    }
+    backendLoaded = true;
+    if (!assetFillOperationIsCurrent(operation, path)) {
+      await rollback();
       return false;
     }
     const payload = result.payload || {};
@@ -513,10 +568,21 @@ async function loadMissingAssetParts() {
       if (blob.byteLength !== geometry.length) {
         throw new Error('Geometry download was incomplete.');
       }
+      if (!assetFillOperationIsCurrent(operation, path)) {
+        await rollback();
+        return false;
+      }
       setGeometryBlob(blob);
     }
     for (const [key, uri] of Object.entries(payload.textures || {})) {
-      if (addTexture(key, uri)) assetFillTextureKeys.add(key);
+      if (addTexture(key, uri)) {
+        assetFillTextureKeys.add(key);
+        transactionTextureKeys.add(key);
+      }
+    }
+    if (!assetFillOperationIsCurrent(operation, path)) {
+      await rollback();
+      return false;
     }
     const before = new Set(activeMeshes);
     appendMeshPanel(
@@ -528,6 +594,10 @@ async function loadMissingAssetParts() {
       });
     const addedMeshes = activeMeshes.filter(mesh => !before.has(mesh));
     adoptModelMeshes(addedMeshes);
+    if (!assetFillOperationIsCurrent(operation, path)) {
+      await rollback();
+      return false;
+    }
     assetFillLoaded = true;
     fitTo(activeMeshes, {
       preserveCamera: true,
@@ -536,11 +606,15 @@ async function loadMissingAssetParts() {
     requestRender();
     return true;
   } catch (error) {
+    await rollback();
+    if (!assetFillOperationIsCurrent(operation, path)) return false;
     await alertDialog('Could not load missing Asset parts:\n\n' + error.message);
     return false;
   } finally {
-    assetFillLoading = false;
-    updateAssetFillButton();
+    if (operation === assetFillEpoch) {
+      assetFillLoading = false;
+      updateAssetFillButton();
+    }
   }
 }
 

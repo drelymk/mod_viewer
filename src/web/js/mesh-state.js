@@ -88,10 +88,12 @@ export function resetMeshVisibility() {
 /** Replace draw visibility and texture semantics on the existing meshes. */
 export function updateMeshSemantics(semantics) {
   const next = semantics || {};
-  const keys = activeMeshes.map(mesh => mesh.userData.semanticKey);
+  const semanticMeshes = activeMeshes.filter(
+    mesh => mesh.userData.assetFill !== true);
+  const keys = semanticMeshes.map(mesh => mesh.userData.semanticKey);
   if (keys.some(key => !next[key])
       || Object.keys(next).length !== keys.length) return false;
-  activeMeshes.forEach(mesh => {
+  semanticMeshes.forEach(mesh => {
     const semantic = next[mesh.userData.semanticKey];
     mesh.userData.conditions = semantic.conditions || [];
     mesh.userData.sources = semantic.sources || [];

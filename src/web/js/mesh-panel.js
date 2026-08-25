@@ -522,6 +522,7 @@ export function removeAssetFillMeshPanel() {
 
 export function refreshMeshAssetDiagnostics(assetResolution = undefined) {
   for (const group of groupsUI) {
+    if (group.assetFill) continue;
     if (assetResolution !== undefined) {
       group.assetResolution = assetResolution;
       group.componentDescriptor.assetResolution = assetResolution;
