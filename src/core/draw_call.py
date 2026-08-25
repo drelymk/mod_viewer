@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, fields
 from typing import ClassVar
 
 from .geometry_identity import GeometryMatch
+from .vertex_attributes import VertexAttributeSource
 
 
 def _freeze(value):
@@ -93,6 +94,7 @@ class DrawCall(MutableMapping):
     texcoord_file: str | None = None
     position_stride: int | None = None
     texcoord_stride: int | None = None
+    normal_source: VertexAttributeSource | None = None
 
     texture_default_file: str | None = None
     texture_variants: list = field(default_factory=list)
@@ -130,6 +132,7 @@ class DrawCall(MutableMapping):
         "ib_file", "index_size",
         "position_file", "position_stride",
         "texcoord_file", "texcoord_stride",
+        "normal_source",
         "texture_default_file", "texture_variants", "texture_assignments",
         "normal_map_default_file", "normal_map_variants",
         "light_map_default_file", "light_map_variants",
@@ -154,7 +157,8 @@ class DrawCall(MutableMapping):
             raise TypeError(f"unsupported DrawCall field(s): {names}")
         values = dict(value)
         for name in ("ib_file", "index_size", "position_file",
-                     "position_stride", "texcoord_file", "texcoord_stride"):
+                     "position_stride", "texcoord_file", "texcoord_stride",
+                     "normal_source"):
             if name not in values and group is not None:
                 values[name] = group.get(name)
         return cls(**values)

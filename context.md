@@ -127,6 +127,12 @@ machine-specific paths or facts that are obvious from the source.
 - Geometry-affecting changes require representative compatibility validation in
   addition to unit tests. New load failures or unexplained geometry loss are
   regressions.
+- Authored vertex normals are render geometry and must be preserved when a
+  supported source is available. Geometric normal reconstruction is a fallback
+  only; never weld vertices solely to improve smoothing. Normalize the
+  source/game triangle winding to the viewer convention independently of
+  authored normals. Face-normal agreement must not rewrite authored normal
+  direction.
 - Draw deduplication uses normalized effective buffer and material state.
   Classify each new draw field explicitly as render identity, visibility or
   provenance; never derive identity reflectively from every dictionary field.

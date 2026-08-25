@@ -3,7 +3,7 @@
 import { scene, resetModelOrientation } from './scene.js';
 import { dnfSatisfied, getControlValue } from './control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
-import { setMeshTextureState } from './mesh-factory.js';
+import { setMeshTextureState, updateGeometryNormals } from './mesh-factory.js';
 import { attachOutline, detachOutline } from './outline-renderer.js';
 import { initializeMeshRenderModes } from './render-modes.js';
 import { requestRender } from './render-scheduler.js';
@@ -188,8 +188,9 @@ function applyShapeTargets(mesh) {
       attr.array[index] += (target.positions[index] - base[index]) * weight;
     }
   }
+  const deformed = attr.array.some((value, index) => value !== base[index]);
   attr.needsUpdate = true;
-  mesh.geometry.computeVertexNormals();
+  updateGeometryNormals(mesh, deformed);
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
 }
