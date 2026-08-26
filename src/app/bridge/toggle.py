@@ -17,8 +17,8 @@ import os
 import traceback
 
 from core.mod_discovery import discover_ini_paths
-from core import record_editor
-from core import toggle_editor as te
+from core.editing import record as record_editor
+from core.editing import toggle as te
 from app.mods import loader as mod_loader
 from app.session import edit as edit_session
 

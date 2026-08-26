@@ -3,12 +3,12 @@
 from dataclasses import dataclass
 import os
 
-from core.component_coverage import (
+from core.geometry.component_coverage import (
     AuthoredComponentOverride, ComponentCoverageKey,
     collect_component_overrides,
 )
-from core.game_profile import collect_game_evidence, resolve_game_detection
-from core.ini_sections import extract_resources, merge_sections
+from core.materials.game_profile import collect_game_evidence, resolve_game_detection
+from core.ini.sections import extract_resources, merge_sections
 
 from . import folders as asset_folders
 from . import index as asset_index

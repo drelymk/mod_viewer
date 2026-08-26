@@ -11,11 +11,11 @@ import uuid
 
 import webview
 
-from core.mesh_builder import GeometryBlob
+from core.geometry.mesh_builder import GeometryBlob
 from core.textures import encode_texture_file
 from core.mod_discovery import discover_ini_paths
-from core.ini_health import analyze_mod
-from core.texture_profiles import texture_profile_for
+from core.ini.health import analyze_mod
+from core.textures.profiles import texture_profile_for
 
 from app.assets import catalog as asset_catalog
 from app.assets import composition as asset_composition

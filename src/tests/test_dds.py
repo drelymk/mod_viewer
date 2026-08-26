@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from core.dds import inspect_dds, native_dds_info
+from core.textures.dds import inspect_dds, native_dds_info
 
 
 _DXGI = {

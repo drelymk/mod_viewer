@@ -1,10 +1,10 @@
 """Structural game/runtime/texture-API detection regressions."""
 
-from core.game_profile import detect_game
-from core.ini_analysis import analyze_ini
-from core.ini_parser import _scan_sections_for_draws
-from core.ini_sections import parse_sections
-from core.texture_profiles import texture_profile_for
+from core.materials.game_profile import detect_game
+from core.ini.analysis import analyze_ini
+from core.ini.parser import _scan_sections_for_draws
+from core.ini.sections import parse_sections
+from core.textures.profiles import texture_profile_for
 
 
 def test_wuwa_runtime_and_rabbitfx_api_are_separate():
@@ -95,7 +95,7 @@ def test_srmi_markers_do_not_resolve_ambiguous_draw_type_as_zzz():
 
 
 def test_resolved_texcoord_binding_does_not_inherit_blend_parent():
-    from core.game_profile import _binding_is_blend
+    from core.materials.game_profile import _binding_is_blend
 
     sections = {
         "TextureOverrideBodyBlend": [

@@ -197,5 +197,5 @@ def extract_resources(sections):
 
 def find_inis(mod_dir):
     """Compatibility wrapper; new code should use mod_discovery directly."""
-    from .mod_discovery import discover_ini_paths
+    from ..mod_discovery import discover_ini_paths
     return discover_ini_paths(mod_dir)

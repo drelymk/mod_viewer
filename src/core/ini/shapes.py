@@ -8,7 +8,7 @@ attempt to execute arbitrary HLSL.
 
 import re
 
-from .ini_sections import canonical_var_names, first_source
+from .sections import canonical_var_names, first_source
 
 _VALUE_RE = re.compile(r"^x\d+\s*=\s*\$(\w+)\s*$", re.I)
 _BUFFER_RE = re.compile(r"^cs-t\d+\s*=\s*copy\s+(\S+)\s*$", re.I)

@@ -9,9 +9,9 @@ always satisfied) and the viewer shows every variant at once.
 import base64, io, os, tempfile
 
 
-from core.ini_menu import (attach_menu_images, extract_menu_toggles,
+from core.ini.menu import (attach_menu_images, extract_menu_toggles,
                            extract_menu_var_names)
-from core.ini_parser import (build_draw_groups, extract_resources,
+from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, find_inis, gating_var_names,
                              merge_sections, parse_sections)
 from app.mods.loader import build_menu_panel

@@ -5,7 +5,7 @@ import math
 import os
 
 from .dds import inspect_dds
-from .textures import load_texture_image
+from .pipeline import load_texture_image
 
 
 @dataclass(frozen=True, slots=True)

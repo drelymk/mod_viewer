@@ -38,7 +38,7 @@ mod_loader.build_toggle_panel/unwired_pending_sections.
 import os
 from copy import deepcopy
 
-from core.ini_document import IniDocument
+from core.ini.document import IniDocument
 
 
 class _Session:

@@ -17,8 +17,8 @@ from app.mods import metadata as metadata
 from app.mods import loader as mod_loader
 from app.runtime import server as server
 from app.bridge.api import ModViewerAPI
-from core.ini_document import IniDocument
-from core.mesh_builder import GeometryBlob, build_mesh_result
+from core.ini.document import IniDocument
+from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.textures import (encode_texture_data_uri, render_texture_png,
                            set_texture_profile_hook)
 

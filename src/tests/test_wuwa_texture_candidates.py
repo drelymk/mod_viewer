@@ -2,7 +2,7 @@ import os
 import struct
 
 from app.mods import metadata as metadata
-from core.mesh_builder import GeometryBlob, build_mesh_result
+from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 
 
 def _write_geometry(root):

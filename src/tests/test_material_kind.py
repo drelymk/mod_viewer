@@ -1,6 +1,6 @@
 """Conservative material-kind classification regressions."""
 
-from core.material_kind import (MaterialKindDetection, detect_material_kind,
+from core.materials.kind import (MaterialKindDetection, detect_material_kind,
                                 MATERIAL_KIND_UNKNOWN)
 
 

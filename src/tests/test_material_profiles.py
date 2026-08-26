@@ -4,8 +4,8 @@ from dataclasses import replace
 
 import pytest
 
-from core.game_profile import GameDetection
-from core.material_profiles import (ChannelRef, MaterialInterpretation,
+from core.materials.game_profile import GameDetection
+from core.materials.profiles import (ChannelRef, MaterialInterpretation,
                                     material_profile_for)
 
 

@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 from app.assets import composition as asset_composition
 from app.assets import index as asset_index
-from core.component_coverage import collect_component_overrides
-from core.ini_document import IniDocument
+from core.geometry.component_coverage import collect_component_overrides
+from core.ini.document import IniDocument
 
 
 def _index(*geometries, asset_path="Character"):

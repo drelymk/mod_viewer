@@ -9,7 +9,7 @@ import time
 import warnings
 from collections import OrderedDict
 
-from .resource_paths import _canonical, safe_resource_path
+from ..resource_paths import _canonical, safe_resource_path
 
 
 _TEXTURE_CACHE_LIMIT = 256 * 1024 * 1024
@@ -335,7 +335,7 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
     texture_role = normalize_texture_role(texture_role)
     if texture_transform is None and (texture_source is None
                                       or texture_profile is not None):
-        from .texture_profiles import texture_profile_for
+        from .profiles import texture_profile_for
         texture_transform = texture_profile_for(texture_profile).recipe_for(
             texture_role)
     if texture_transform is not None:

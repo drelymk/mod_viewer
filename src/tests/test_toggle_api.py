@@ -254,7 +254,7 @@ def test_record_toggle_rolls_back_pending_on_verify_mismatch(toggle_mod):
     verify_recording doesn't false-positive on a genuine rewrite, so this
     test only needs to prove the *plumbing* in toggle_api.record_toggle
     reacts correctly when it does fire."""
-    from core import record_editor
+    from core.editing import record as record_editor
     forced = [{"var": "fake", "reason": "forced mismatch for this test"}]
     real_verify = record_editor.verify_recording
     # verify_recording now takes an optional text= kwarg (in-memory preview);

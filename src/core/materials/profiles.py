@@ -9,7 +9,7 @@ from silently becoming a rendering assumption.
 
 from dataclasses import dataclass, replace
 
-from .material_kind import MATERIAL_KINDS
+from .kind import MATERIAL_KINDS
 
 
 _SOURCES = frozenset(("normal_data", "light_map", "material_map"))
@@ -96,7 +96,8 @@ class MaterialInterpretation:
 
     def __post_init__(self):
         if self.material_kind not in MATERIAL_KINDS:
-            raise ValueError(f"Unknown material kind: {self.material_kind}")
+            raise ValueError(
+                f"Unknown material kind: {self.material_kind}")
         if self.normal_xy is not None:
             if (not isinstance(self.normal_xy, (tuple, list))
                     or len(self.normal_xy) != 2

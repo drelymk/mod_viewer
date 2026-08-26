@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 import os
 
-from core.material_profiles import material_profile_for
+from core.materials.profiles import material_profile_for
 from app.assets.textures import asset_texture_key
 
 

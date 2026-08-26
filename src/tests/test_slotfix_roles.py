@@ -1,6 +1,6 @@
 """Role recovery from explicit and legacy texture slot mappings."""
 
-from core.ini_parser import (build_draw_groups, extract_resources, merge_sections,
+from core.ini.parser import (build_draw_groups, extract_resources, merge_sections,
                               _scan_sections_for_draws)
 
 

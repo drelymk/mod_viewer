@@ -17,9 +17,9 @@ from app.assets.loader import hash_asset, load_asset
 from app.assets.loader.wwmi import _component_texture_candidates
 from app.assets.loader.models import AssetLoadResult, AssetMeshPart
 from app.bridge.api import ModViewerAPI
-from core.component_coverage import ComponentCoverageKey
-from core.geometry_transport import GeometryBlob
-from core.migoto_dump import parse_index_dump, parse_vertex_dump
+from core.geometry.component_coverage import ComponentCoverageKey
+from core.geometry.transport import GeometryBlob
+from core.geometry.migoto_dump import parse_index_dump, parse_vertex_dump
 
 
 def _write_json(path, value):

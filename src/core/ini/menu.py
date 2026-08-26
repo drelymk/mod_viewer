@@ -7,7 +7,7 @@ layout is a convention — `$clickedSlot` is not.
 
 import re
 
-from .ini_sections import canonical_var_names, first_source
+from .sections import canonical_var_names, first_source
 
 # A branch head that dispatches on an integer slot: `$clickedSlot == 3`.
 _SLOT_RE = re.compile(r'\$(\w+)\s*={2,3}\s*(\d+)$')

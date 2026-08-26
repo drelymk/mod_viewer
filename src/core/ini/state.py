@@ -2,9 +2,9 @@
 
 import re
 
-from .ini_dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not,
+from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not,
                       dnf_or, normalize_dnf, parse_condition_dnf)
-from .ini_sections import canonical_var_names
+from .sections import canonical_var_names
 
 _ASSIGN_RE = re.compile(r"^\$(\w+)\s*=\s*(-?\d+(?:\.\d+)?)\s*$")
 _ELIF_RE = re.compile(r"(?:else\s+if|elif)\s+(.*)$", re.I)

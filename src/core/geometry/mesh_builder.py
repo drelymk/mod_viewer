@@ -5,11 +5,11 @@ import re, struct, os, base64
 from dataclasses import dataclass
 
 from .draw_call import DrawCall
-from .geometry_conventions import geometry_convention_for
-from .geometry_transport import GeometryBlob
-from .resource_paths import safe_resource_path
+from .conventions import geometry_convention_for
+from .transport import GeometryBlob
+from ..resource_paths import safe_resource_path
 from .vertex_attributes import decode_normals
-from .textures import (_texture_source_uri, _begin_texture_cache,
+from ..textures.pipeline import (_texture_source_uri, _begin_texture_cache,
                        encode_texture_data_uri, normalize_texture_role,
                        normalize_texture_transform, texture_key)
 
@@ -286,7 +286,7 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
         raise ValueError(
             f"Mod has too many draws ({draw_total:,}; limit {_MAX_DRAWS:,}).")
 
-    from .texture_profiles import texture_profile_for
+    from ..textures.profiles import texture_profile_for
 
     texture_profile = texture_profile_for(game_profile)
     normal_role = texture_profile.normal_transport_role
@@ -458,7 +458,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     component-level "manage textures" pool.
     """
     _begin_texture_cache(mod_dir)
-    from .texture_profiles import texture_profile_for
+    from ..textures.profiles import texture_profile_for
     texture_profile = texture_profile_for(game_profile)
     geometry_convention = geometry_convention_for(game_profile)
 

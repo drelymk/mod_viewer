@@ -6,7 +6,7 @@ import tempfile
 
 
 from app.mods import loader as mod_loader
-from core.ini_health import analyze_mod
+from core.ini.health import analyze_mod
 
 
 def _write(path, value, binary=False):

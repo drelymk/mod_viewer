@@ -5,9 +5,9 @@ import json
 import os
 import re
 
-from core.geometry_identity import normalize_geometry_hash
-from core.ini_parser import TextureOverrideIndex, _condition_difference
-from core.dds_classifier import (DDSClassification, classification_cache_key,
+from core.geometry.identity import normalize_geometry_hash
+from core.ini.parser import TextureOverrideIndex, _condition_difference
+from core.textures.classifier import (DDSClassification, classification_cache_key,
                                  classify_dds, is_color_candidate)
 from core.resource_paths import safe_resource_path
 

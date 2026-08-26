@@ -10,8 +10,8 @@ from app.session import edit as edit_session
 from app.mods import metadata as metadata
 from app.bridge import present as present_api
 from app.mods.loader import _parse_inis
-from core import present_editor
-from core.present_editor import MAX_PRESENTS, SECTION_NAME
+from core.editing import present as present_editor
+from core.editing.present import MAX_PRESENTS, SECTION_NAME
 
 
 INI = """[Constants]

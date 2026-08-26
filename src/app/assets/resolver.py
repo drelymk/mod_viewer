@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 import logging
 
-from core.geometry_identity import GeometryMatch
+from core.geometry.identity import GeometryMatch
 
 from . import folders as asset_folders
 from . import index as asset_index

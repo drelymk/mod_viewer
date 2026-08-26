@@ -11,7 +11,7 @@ import os
 import re
 import struct
 
-from .geometry_transport import canonicalize_uvs
+from .transport import canonicalize_uvs
 
 
 MAX_TEXT_FILE_BYTES = 512 * 1024 * 1024

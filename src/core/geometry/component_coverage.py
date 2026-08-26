@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 import re
 
-from .geometry_identity import normalize_geometry_hash
-from .ini_parser import (_reachable_execution_sections,
+from .identity import normalize_geometry_hash
+from ..ini.parser import (_reachable_execution_sections,
                           _scan_sections_for_draws)
 
 

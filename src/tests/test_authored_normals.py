@@ -4,12 +4,12 @@ import os
 import struct
 import math
 
-from core.draw_call import DrawCall
-from core.geometry_conventions import geometry_convention_for
-from core.ini_parser import (build_draw_groups, extract_resources,
+from core.geometry.draw_call import DrawCall
+from core.geometry.conventions import geometry_convention_for
+from core.ini.parser import (build_draw_groups, extract_resources,
                              merge_sections)
-from core.mesh_builder import GeometryBlob, build_mesh_result
-from core.vertex_attributes import (VertexAttributeSource, decode_normal,
+from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from core.geometry.vertex_attributes import (VertexAttributeSource, decode_normal,
                                     decode_normals, decode_snorm8)
 
 

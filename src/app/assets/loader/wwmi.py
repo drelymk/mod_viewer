@@ -5,10 +5,10 @@ import math
 import os
 import struct
 
-from core.geometry_conventions import geometry_convention_for
-from core.geometry_transport import canonicalize_uvs
-from core.migoto_format import MigotoFormatError, parse_fmt
-from core.vertex_attributes import VertexAttributeSource, decode_normals
+from core.geometry.conventions import geometry_convention_for
+from core.geometry.transport import canonicalize_uvs
+from core.geometry.migoto_format import MigotoFormatError, parse_fmt
+from core.geometry.vertex_attributes import VertexAttributeSource, decode_normals
 
 from app.assets import paths as asset_paths
 from app.assets import textures as asset_textures
@@ -199,7 +199,7 @@ def _remap(positions, normals, uvs, indices, vertex_count):
             return None
         return b"".join(data[item * width:(item + 1) * width] for item in unique)
 
-    from core.migoto_dump import pack_indices
+    from core.geometry.migoto_dump import pack_indices
     return select(positions, 12), select(normals, 12), select(uvs, 8), \
         pack_indices(remapped)
 

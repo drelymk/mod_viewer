@@ -37,12 +37,12 @@ guess and reports it instead.
 
 import re
 
-from . import ini_condition as ic
-from .ini_parser import _scan_sections_for_draws
-from . import toggle_editor as te
-from .ini_document import (IniDocument, IF, ELIF, ELSE, ENDIF, DRAW, BLANK,
+from ..ini import condition as ic
+from ..ini.parser import _scan_sections_for_draws
+from . import toggle as te
+from ..ini.document import (IniDocument, IF, ELIF, ELSE, ENDIF, DRAW, BLANK,
                            COMMENT)
-from .ini_sections import sections_from_document
+from ..ini.sections import sections_from_document
 
 _COND_RE = re.compile(r"^(if|else\s+if|elif)\s+(.*)$", re.I)
 

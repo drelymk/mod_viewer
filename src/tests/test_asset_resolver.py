@@ -6,13 +6,13 @@ from app.assets import index as asset_index
 from app.assets.enrichment import apply
 from app.assets.resolver import (AssetComponentBinding, resolve_component,
                                 resolve_groups, summarize_groups)
-from core.draw_call import DrawCall, SlotTextureBinding
-from core.geometry_identity import GeometryMatch, normalize_geometry_hash
-from core import dds_classifier
-from core.ini_parser import (TextureOverrideIndex, TextureReplacement,
+from core.geometry.draw_call import DrawCall, SlotTextureBinding
+from core.geometry.identity import GeometryMatch, normalize_geometry_hash
+from core.textures import classifier as dds_classifier
+from core.ini.parser import (TextureOverrideIndex, TextureReplacement,
                               _scan_sections_for_draws, build_draw_groups,
                               extract_resources, parse_sections)
-from core.mesh_builder import (GeometryBlob, build_mesh_result,
+from core.geometry.mesh_builder import (GeometryBlob, build_mesh_result,
                                build_mesh_semantics)
 
 

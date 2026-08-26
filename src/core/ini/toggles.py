@@ -2,7 +2,7 @@
 
 import re
 
-from .ini_sections import canonical_var_names, line_source
+from .sections import canonical_var_names, line_source
 
 
 def _format_key_combo(combo):

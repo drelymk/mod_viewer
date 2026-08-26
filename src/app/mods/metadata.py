@@ -6,8 +6,8 @@ from copy import deepcopy
 
 from core.textures import (encode_texture_key, split_texture_key,
                            texture_key_for_role)
-from core.material_kind import normalize_material_kind
-from core.texture_profiles import texture_profile_for
+from core.materials.kind import normalize_material_kind
+from core.textures.profiles import texture_profile_for
 
 METADATA_NAME = ".mod_viewer.json"
 PRESENT_NAMES_KEY = "__all__"

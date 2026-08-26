@@ -2,12 +2,12 @@
 
 import re
 
-from .ini_document import ASSIGN, BLANK
-from .ini_menu import extract_menu_toggles
-from .ini_sections import extract_resources, sections_from_document
-from .ini_shapes import extract_shape_sliders
-from .ini_toggles import extract_toggle_keys
-from .toggle_editor import ToggleEditError, cycle_vars, is_cycle_section
+from ..ini.document import ASSIGN, BLANK
+from ..ini.menu import extract_menu_toggles
+from ..ini.sections import extract_resources, sections_from_document
+from ..ini.shapes import extract_shape_sliders
+from ..ini.toggles import extract_toggle_keys
+from .toggle import ToggleEditError, cycle_vars, is_cycle_section
 
 
 SECTION_NAME = "KeyModViewerPresent"

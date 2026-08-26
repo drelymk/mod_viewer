@@ -12,7 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import re
 
-from .ini_sections import line_source
+from ..ini.sections import line_source
 
 
 @dataclass(frozen=True)

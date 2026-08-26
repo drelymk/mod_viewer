@@ -7,7 +7,7 @@ import os
 
 from app.assets import folders as asset_folders
 from app.settings import config, paths
-from core.geometry_identity import normalize_geometry_hash
+from core.geometry.identity import normalize_geometry_hash
 from . import gimi, wwmi, zzmi
 from .models import AssetRecord
 

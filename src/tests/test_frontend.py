@@ -13,7 +13,7 @@ from PIL import Image
 
 from app.settings import paths as paths
 from app.runtime import server as server
-from core.material_profiles import material_profile_for
+from core.materials.profiles import material_profile_for
 
 playwright = pytest.importorskip("playwright.sync_api")
 

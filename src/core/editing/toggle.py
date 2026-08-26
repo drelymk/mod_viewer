@@ -28,8 +28,8 @@ UI warning.
 
 import re
 
-from . import ini_condition as ic
-from .ini_document import IF, ELIF, ELSE, ENDIF, ASSIGN, BLANK
+from ..ini import condition as ic
+from ..ini.document import IF, ELIF, ELSE, ENDIF, ASSIGN, BLANK
 
 _VAR_ASSIGN_RE = re.compile(r"^\$(\w+)\s*=\s*(.+)$")
 _ALL_VAR_ASSIGN_RE = re.compile(r"^\$([\\\w]+)\s*=\s*(.+)$")

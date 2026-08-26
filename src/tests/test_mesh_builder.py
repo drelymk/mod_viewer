@@ -4,7 +4,7 @@ import os
 import struct
 import tempfile
 
-from core.ini_parser import (build_draw_groups, extract_resources,
+from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, merge_sections)
 from _provenance_support import IB_R16_INI, build_mesh_fixture, geometry_values, write
 

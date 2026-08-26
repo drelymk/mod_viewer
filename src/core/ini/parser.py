@@ -2,7 +2,7 @@
 and what gates it.
 
 The rest of the READ path lives in siblings and is re-exported here so
-existing `from core.ini_parser import ...` callers keep working:
+existing `from core.ini.parser import ...` callers keep working:
     ini_sections.py  section parsing, resource records
     mod_discovery.py bounded mod-folder INI discovery
     ini_dnf.py       condition -> DNF
@@ -13,19 +13,19 @@ existing `from core.ini_parser import ...` callers keep working:
 from dataclasses import dataclass, field, replace
 import re
 
-from .draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
-from .geometry_identity import GeometryMatch, normalize_geometry_hash
-from .mesh_builder import POSITION_STRIDE, DEFAULT_UV_OFFSET, _res_get
-from .vertex_attributes import VertexAttributeSource
-from .ini_sections import (SrcLine, extract_resources, first_source,
+from ..geometry.draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
+from ..geometry.identity import GeometryMatch, normalize_geometry_hash
+from ..geometry.mesh_builder import POSITION_STRIDE, DEFAULT_UV_OFFSET, _res_get
+from ..geometry.vertex_attributes import VertexAttributeSource
+from .sections import (SrcLine, extract_resources, first_source,
                            line_source, merge_sections, parse_sections,
                            sections_from_document)
-from .mod_discovery import discover_ini_paths
-from .ini_dnf import (DNF_FALSE, DNF_TRUE, build_bool_alias_map, dnf_and,
+from ..mod_discovery import discover_ini_paths
+from .dnf import (DNF_FALSE, DNF_TRUE, build_bool_alias_map, dnf_and,
                       dnf_not, dnf_or, normalize_dnf, parse_condition_dnf)
-from .ini_menu import extract_menu_toggles, extract_menu_var_names
-from .ini_state import extract_state_rules
-from .ini_toggles import (extract_toggle_keys, extract_toggle_var_names,
+from .menu import extract_menu_toggles, extract_menu_var_names
+from .state import extract_state_rules
+from .toggles import (extract_toggle_keys, extract_toggle_var_names,
                           extract_variable_defaults)
 
 __all__ = [
@@ -1282,7 +1282,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 d.position_stride, resolve_vertex_info)
             # Whichever Resource\...\Diffuse line most recently ran before
             # this draw, in execution order -- the draw's own default
-            # texture (see core.mesh_builder.build_mesh_payload). The first
+            # texture (see core.geometry.mesh_builder.build_mesh_payload). The first
             # entry is the resolution at this point when no toggle var is
             # bound (matches the `if` branch of an elif chain); a toggle
             # press picks a different entry via texture_variants below.

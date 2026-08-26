@@ -12,7 +12,7 @@ from collections.abc import Iterator, Mapping, MutableMapping
 from dataclasses import dataclass, field, fields
 from typing import ClassVar
 
-from .geometry_identity import GeometryMatch
+from .identity import GeometryMatch
 from .vertex_attributes import VertexAttributeSource
 
 

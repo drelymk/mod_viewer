@@ -5,8 +5,8 @@ import os
 import re
 from dataclasses import dataclass
 
-from core.geometry_identity import normalize_geometry_hash
-from core.migoto_dump import (MigotoDumpError, pack_indices,
+from core.geometry.identity import normalize_geometry_hash
+from core.geometry.migoto_dump import (MigotoDumpError, pack_indices,
                                parse_index_dump, parse_vertex_dump)
 from core.textures import normalize_texture_role
 

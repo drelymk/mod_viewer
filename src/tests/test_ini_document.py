@@ -11,7 +11,7 @@ import tempfile
 
 
 from _corpus import active_ini_files
-from core.ini_document import (ASSIGN, BLANK, COMMENT, DRAW, ELIF, ELSE, ENDIF, IF,
+from core.ini.document import (ASSIGN, BLANK, COMMENT, DRAW, ELIF, ELSE, ENDIF, IF,
                           SECTION, IniDocument)
 
 
@@ -124,12 +124,12 @@ def test_save_atomic_and_backup():
     assert (os.path.exists(path + ".tmp")) == (False), ("no temp file left")
 
     # A backup must never be picked up as a loadable mod ini.
-    from core.ini_parser import find_inis
+    from core.ini.parser import find_inis
     assert (find_inis(d)) == ([path]), ("find_inis ignores backups")
 
 
 def test_find_inis_bounded_recursion():
-    from core.ini_parser import find_inis
+    from core.ini.parser import find_inis
 
     geometry = (
         "[TextureOverrideBodyPosition]\n"

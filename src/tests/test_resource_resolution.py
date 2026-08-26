@@ -6,7 +6,7 @@ import tempfile
 
 from _corpus import sample_mods
 from app.mods import loader as mod_loader
-from core.ini_parser import (_scan_sections_for_draws, build_draw_groups,
+from core.ini.parser import (_scan_sections_for_draws, build_draw_groups,
                              extract_resources, merge_sections, parse_sections)
 from core.textures import encode_texture_file
 from _provenance_support import (build_mesh_fixture, geometry_values, visible,

@@ -3,7 +3,7 @@
 import os
 import re
 
-from .ini_sections import parse_sections
+from .ini.sections import parse_sections
 
 _MAX_INI_FILES = 10
 _MAX_INI_DEPTH = 2

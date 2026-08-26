@@ -4,8 +4,8 @@ import struct
 
 from PIL import Image
 
-from core import dds_classifier
-from core.dds import DDSInfo
+from core.textures import classifier as dds_classifier
+from core.textures.dds import DDSInfo
 
 
 def _write_rgba_dds(path, pixels, width, height):

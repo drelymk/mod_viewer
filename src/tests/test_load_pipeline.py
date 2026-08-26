@@ -18,12 +18,12 @@ from app.bridge import present as present_api
 from app.runtime import server as server
 from app.assets.resolver import AssetComponentBinding
 from app.bridge.api import ModViewerAPI
-from core.ini_analysis import analyze_ini
-from core.ini_document import IniDocument
-from core.ini_parser import TextureOverrideIndex, TextureReplacement
-from core.ini_sections import (extract_resources, sections_from_document)
-from core.draw_call import DrawCall
-from core.mesh_builder import (GeometryBlob, MeshBuildResult,
+from core.ini.analysis import analyze_ini
+from core.ini.document import IniDocument
+from core.ini.parser import TextureOverrideIndex, TextureReplacement
+from core.ini.sections import (extract_resources, sections_from_document)
+from core.geometry.draw_call import DrawCall
+from core.geometry.mesh_builder import (GeometryBlob, MeshBuildResult,
                                build_mesh_payload, build_mesh_result,
                                build_mesh_semantics)
 from core.textures import encode_texture_file
@@ -43,7 +43,7 @@ def test_document_projection_keeps_authoritative_text_and_source():
 
 def test_semantic_analysis_shares_one_canonical_scan():
     sections = {"Constants": ["global $Body = 0"]}
-    with patch("core.ini_analysis.canonical_var_names",
+    with patch("core.ini.analysis.canonical_var_names",
                wraps=lambda value: {"body": "Body"}) as canonical:
         analysis = analyze_ini(sections, resources=extract_resources(sections))
     assert (canonical.call_count == 1), ("one semantic analysis computes canonical variables once")
@@ -479,7 +479,7 @@ def test_component_material_kind_overrides_apply_to_every_draw_and_auto_removes(
         }
         assert payload["meshes"][name]["material_kind_override"] == "body"
     assert payload["meshes"]["Other-0"]["material_kind_override"] is None
-    from core.game_profile import GameDetection
+    from core.materials.game_profile import GameDetection
     from app.mods.loader import _assign_material_profiles
     _assign_material_profiles(payload["meshes"], GameDetection(
         game="wuwa", runtime="rabbitfx", texture_api="rabbitfx",

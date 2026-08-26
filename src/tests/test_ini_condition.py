@@ -9,8 +9,8 @@ evaluation must only fold away the parts it was explicitly given values for.
 import re
 
 
-from core import ini_condition as ic
-from core.ini_condition import ConditionError, TRUE, FALSE
+from core.ini import condition as ic
+from core.ini.condition import ConditionError, TRUE, FALSE
 
 
 def norm(s):

@@ -3,7 +3,7 @@
 import os
 import struct
 
-from core.mesh_builder import GeometryBlob, build_mesh_result
+from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.textures import split_texture_key
 
 

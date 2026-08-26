@@ -2,8 +2,8 @@ import pytest
 
 from app.assets.wuwa_texture_fallback import apply
 from app.assets.wuwa_texture_names import texture_component_ordinals
-from core.draw_call import DrawCall, SlotTextureBinding
-from core.ini_parser import TextureOverrideIndex, TextureReplacement
+from core.geometry.draw_call import DrawCall, SlotTextureBinding
+from core.ini.parser import TextureOverrideIndex, TextureReplacement
 
 
 @pytest.mark.parametrize("filename, expected", [

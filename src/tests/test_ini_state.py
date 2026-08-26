@@ -1,9 +1,9 @@
 """State-rule extraction cases adjacent to, but distinct from, menus."""
 
 from test_ini_menu import _by_slot, sections
-from core.ini_menu import extract_menu_toggles
-from core.ini_state import extract_state_rules
-from core.ini_parser import gating_var_names
+from core.ini.menu import extract_menu_toggles
+from core.ini.state import extract_state_rules
+from core.ini.parser import gating_var_names
 
 def test_modulo_cycle_and_present_derived_rules():
     text = r"""

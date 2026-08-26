@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import os
 import re
 
-from core.ini_parser import TextureOverrideIndex
+from core.ini.parser import TextureOverrideIndex
 from core.resource_paths import safe_resource_path
 from .wuwa_texture_names import texture_component_ordinals
 

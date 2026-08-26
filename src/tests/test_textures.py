@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from core import textures
+from core.textures.pipeline import _srgb_dds_as_unorm
 
 
 def test_texture_keys_keep_generic_and_field_owned_roles_distinct():
@@ -33,7 +34,7 @@ def test_typed_srgb_dds_fallback_rewrites_only_the_decoded_copy():
     data[84:88] = b"DX10"
     struct.pack_into("<I", data, 128, 78)
 
-    converted = textures._srgb_dds_as_unorm(data)
+    converted = _srgb_dds_as_unorm(data)
 
     assert struct.unpack_from("<I", data, 128)[0] == 78
     assert struct.unpack_from("<I", converted, 128)[0] == 77
@@ -102,14 +103,14 @@ def test_texture_module_does_not_depend_on_mesh_builder():
         [sys.executable, "-c", (
             "import sys; sys.path.insert(0, 'src'); "
             "import core.textures; "
-            "assert 'core.mesh_builder' not in sys.modules"
+            "assert 'core.geometry.mesh_builder' not in sys.modules"
         )],
         cwd=root, check=False, capture_output=True, text=True)
     resource_result = subprocess.run(
         [sys.executable, "-c", (
             "import sys; sys.path.insert(0, 'src'); "
             "import core.resource_paths; "
-            "assert 'core.mesh_builder' not in sys.modules; "
+            "assert 'core.geometry.mesh_builder' not in sys.modules; "
             "assert 'core.textures' not in sys.modules"
         )],
         cwd=root, check=False, capture_output=True, text=True)

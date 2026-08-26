@@ -21,11 +21,11 @@ import pytest
 
 
 from _corpus import sample_mods
-from core.ini_sections import sections_from_document
-from core.ini_document import IniDocument, IF, ENDIF, DRAW
-from core import ini_condition as ic
-from core import toggle_editor as te
-from core import record_editor as re_
+from core.ini.sections import sections_from_document
+from core.ini.document import IniDocument, IF, ENDIF, DRAW
+from core.ini import condition as ic
+from core.editing import toggle as te
+from core.editing import record as re_
 
 
 def doc(text):

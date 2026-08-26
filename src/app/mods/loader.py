@@ -13,19 +13,19 @@ import os
 import traceback
 from dataclasses import dataclass, field
 
-from core.ini_condition import is_namespaced
-from core.ini_sections import extract_resources, merge_sections
-from core.ini_analysis import analyze_ini
+from core.ini.condition import is_namespaced
+from core.ini.sections import extract_resources, merge_sections
+from core.ini.analysis import analyze_ini
 from core.mod_discovery import discover_ini_paths
-from core.mesh_builder import build_mesh_result, build_mesh_semantics
+from core.geometry.mesh_builder import build_mesh_result, build_mesh_semantics
 from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_data_uri
-from core.ini_menu import attach_menu_images
-from core.ini_health import analyze_mod
-from core.present_editor import SECTION_NAME as PRESENT_SECTION
-from core.game_profile import GameDetection, resolve_game_detection
-from core.material_kind import detect_material_kind
-from core.material_profiles import material_profile_for
+from core.ini.menu import attach_menu_images
+from core.ini.health import analyze_mod
+from core.editing.present import SECTION_NAME as PRESENT_SECTION
+from core.materials.game_profile import GameDetection, resolve_game_detection
+from core.materials.kind import detect_material_kind
+from core.materials.profiles import material_profile_for
 
 from app.assets import enrichment as asset_enrichment
 from app.assets import resolver as asset_resolver
