@@ -8,12 +8,12 @@ in-memory versions over disk, including versions that are currently clean.
 The app has exactly one window and one mod open at a time, so a single
 module-level slot is enough: opening a different mod folder just doesn't
 match the existing session's `mod_dir`, and is treated as empty (see
-`has_pending`/`overrides_for`). The caller (app/api.py, driven by the
+`has_pending`/`overrides_for`). The caller (app.bridge.api, driven by the
 frontend's confirm-before-switching-mods flow) decides when to drop a
 mismatched session, via `discard()`.
 
 Typical flow, one edit action (add/edit/delete/record_toggle in
-app/toggle_api.py):
+app/bridge/toggle.py):
 
     sess, key, doc, was_pending, snapshot = begin(mod_dir, ini_path)
     try:

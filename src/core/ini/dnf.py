@@ -8,7 +8,7 @@ A condition is a list of OR'd alternatives, each alternative a list of AND'd
 `[]` doubles as "no tracked constraint" once untracked vars are filtered out,
 which is why normalize_dnf() collapses an always-true result back to [].
 
-core/ini_condition.py is the complementary WRITE-path view: a syntax tree
+core/ini/condition.py is the complementary WRITE-path view: a syntax tree
 that renders back to the original text.
 """
 

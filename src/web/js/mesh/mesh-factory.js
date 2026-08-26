@@ -45,7 +45,7 @@ export function setTextures(textures) {
 
 /** Merge one texture into the shared registry without touching the rest --
  * used when the user adds a texture via the per-component picker (see
- * web/js/mesh-panel.js). View-only/session-scoped: never reaches the ini. */
+ * web/js/panels/mesh-panel.js). View-only/session-scoped: never reaches the ini. */
 export function addTexture(key, uri) {
   if (!splitTextureKey(key)) return false;
   registry[key] = uri;
@@ -314,7 +314,7 @@ export function buildMesh(name, data, materialProfile = null) {
     lowPositions: target.low_pos ? new Float32Array(decodeF32(target.low_pos)) : null,
   }));
   mesh.userData.texKey = data.tex_key || null;
-  // The draw's own resolved default (core/mesh_builder.py's per-draw
+  // The draw's own resolved default (core/geometry/mesh_builder.py's per-draw
   // tex_key) -- what an unselected mesh falls back to once no toggle-driven
   // texture_variants condition matches (see visibility.js's
   // applyTextureVariant). Immutable; setMeshTextureState updates the stable

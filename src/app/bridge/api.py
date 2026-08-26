@@ -702,7 +702,7 @@ class ModViewerAPI:
 
     # -- toggle authoring -----------------------------------------------------
     #
-    # Each call stages its change in memory only (app/edit_session.py) --
+    # Each call stages its change in memory only (app/session/edit.py) --
     # nothing reaches the real ini file until export_changes() is called.
 
     def list_toggle_source_inis(self, folder_path):

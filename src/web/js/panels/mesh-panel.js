@@ -50,11 +50,11 @@ function syncMeshPanel() {
 }
 
 /** Group mesh names by their clean, never-disambiguated component name
- * (see core/mesh_builder.py's `component` field) — falls back to parsing the
+ * (see core/geometry/mesh_builder.py's `component` field) — falls back to parsing the
  * dict key itself (stripping a trailing "-N" draw index) for the rare case
  * a payload entry lacks it. Using the explicit field (rather than the key)
  * means a cross-ini name collision's internal "_2" uniqueness suffix (see
- * core/ini_parser.py's build_draw_groups) never leaks into the displayed
+ * core/ini/parser.py's build_draw_groups) never leaks into the displayed
  * group header — the per-source section above it already disambiguates. */
 function groupByComponent(names, meshes) {
   const grouped = {};

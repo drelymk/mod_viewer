@@ -17,14 +17,14 @@ def app_root():
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         return meipass
-    # app/paths.py -> app/ -> repository root
+    # app/settings/paths.py -> app/settings/ -> app directory
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def is_frozen():
     """True when running as a PyInstaller-built exe, False when running
     directly from a source checkout (`python viewer_app.py`). Same
-    ``sys._MEIPASS`` marker app_root() already relies on -- see app/features.py,
+    ``sys._MEIPASS`` marker app_root() already relies on -- see app/settings/features.py,
     the one place this currently gates behaviour."""
     return bool(getattr(sys, "_MEIPASS", None))
 

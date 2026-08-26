@@ -1,10 +1,10 @@
 """Toggle authoring: add/edit/delete a cycle toggle, staged in memory until
 the user clicks Export.
 
-Thin orchestration over edit_session (pending-edits cache), ini_document
-(load/save-with-backup) and toggle_editor (the actual CRUD, which only ever
-mutates an in-memory IniDocument). api.py is just the pywebview bridge,
-mod_loader.py is the read-only payload builder, and this module is the write
+Thin orchestration over app.session.edit (pending-edits cache),
+core.ini.document (load/save-with-backup) and core.editing.toggle (the actual CRUD, which only ever
+mutates an in-memory IniDocument). app.bridge.api is just the pywebview bridge,
+app.mods.loader is the read-only payload builder, and this module is the write
 path.
 
 Every public function here returns a plain dict, never raises, so it's safe
@@ -140,7 +140,7 @@ def delete_toggle(mod_dir, ini_rel, section_name):
 # -- export / discard (Phase 6) --------------------------------------------
 #
 # Every add/edit/delete/record_toggle call above only ever mutates the
-# pending in-memory session (app/edit_session.py) -- nothing reaches disk
+# pending in-memory session (app/session/edit.py) -- nothing reaches disk
 # until one of these is called.
 
 def has_pending_changes(mod_dir):

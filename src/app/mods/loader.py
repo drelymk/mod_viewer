@@ -365,7 +365,7 @@ def build_toggle_panel(toggle_keys, toggle_defaults, gating_vars, mod_dir=None,
 
 def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
     """Model for the Menu panel: the slots of a mod's in-game clickable menu
-    (see core/ini_menu.py), ordered as they appear in the menu.
+    (see core/ini/menu.py), ordered as they appear in the menu.
 
     Read-only, and deliberately unfiltered — unlike the Toggle panel, a slot
     that gates no mesh is still shown, since the menu is the mod's own
@@ -650,7 +650,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
 
     `overrides`, if given, is {ini_path: text} — read that ini from this
     in-memory text instead of disk, to preview a pending edit (see
-    app/edit_session.py) without writing anything. Defaults to reading
+    app/session/edit.py) without writing anything. Defaults to reading
     everything from disk.
 
     `pending_new_sections`, if given, is {ini basename: {section name, ...}}

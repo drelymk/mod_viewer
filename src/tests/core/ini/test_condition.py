@@ -1,4 +1,4 @@
-"""Tests for the condition syntax tree (ini_condition.py).
+"""Tests for the condition syntax tree (core.ini.condition.py).
 
 Deleting or editing a toggle has to rewrite `if` lines that also mention
 variables this app never models ($DRAW_TYPE, master swap vars, cursor maths).

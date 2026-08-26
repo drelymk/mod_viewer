@@ -1,6 +1,6 @@
 """Ini file discovery and section parsing — the lowest layer of the READ path.
 
-Everything above (ini_toggles, ini_menu, ini_parser) consumes the
+Everything above (core.ini.toggles, core.ini.menu, core.ini.parser) consumes the
 {section name: [SrcLine, ...]} dicts produced here.
 """
 
@@ -60,7 +60,7 @@ def merge_sections(ini_paths, overrides=None, documents=None):
 
     `overrides`, if given, is {ini_path: text} — parse that ini from this
     in-memory text instead of reading it from disk. Used to preview pending,
-    not-yet-exported edits (see app/edit_session.py) without writing
+    not-yet-exported edits (see app/session/edit.py) without writing
     anything to the real file first; an ini not present in `overrides` is
     read from disk exactly as before.
     """
@@ -121,7 +121,7 @@ def first_source(lines):
 def parse_sections(ini_path, text=None):
     """Parse one ini file's sections, either from disk (the default) or from
     `text` directly. The in-memory path lets a caller preview a pending,
-    not-yet-exported edit (see app/edit_session.py) — `ini_path` still tags
+    not-yet-exported edit (see app/session/edit.py) — `ini_path` still tags
     every SrcLine's provenance either way, it's just not opened when `text`
     is supplied.
     """

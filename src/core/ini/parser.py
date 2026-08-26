@@ -3,11 +3,11 @@ and what gates it.
 
 The rest of the READ path lives in siblings and is re-exported here so
 existing `from core.ini.parser import ...` callers keep working:
-    ini_sections.py  section parsing, resource records
+    core/ini/sections.py  section parsing, resource records
     mod_discovery.py bounded mod-folder INI discovery
-    ini_dnf.py       condition -> DNF
-    ini_toggles.py   [Key...] cycle toggles, variable defaults
-    ini_menu.py      clickable in-game menu slots
+    core/ini/dnf.py       condition -> DNF
+    core/ini/toggles.py   [Key...] cycle toggles, variable defaults
+    core/ini/menu.py      clickable in-game menu slots
 """
 
 from dataclasses import dataclass, field, replace

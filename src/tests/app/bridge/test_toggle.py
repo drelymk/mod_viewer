@@ -1,11 +1,11 @@
-"""app/toggle_api.py's app-layer wiring: record mode (get_record_positions/
+"""app/bridge/toggle.py's app-layer wiring: record mode (get_record_positions/
 record_toggle) plus the staged-edit session it now shares with add/edit/
-delete_toggle (app/edit_session.py) and export_changes/discard_changes/
+delete_toggle (app/session/edit.py) and export_changes/discard_changes/
 has_pending_changes.
 
 Since the "make changes in app not affect the ini file until Export" feature,
 every mutating call here only ever touches an in-memory IniDocument cached in
-app/edit_session.py â€” nothing reaches a real ini file until export_changes()
+app/session/edit.py â€” nothing reaches a real ini file until export_changes()
 is called, which is also the one place a timestamped backup is made (once per
 changed ini, however many edits accumulated into it). This file's tests
 therefore check, for every mutation:
@@ -24,11 +24,11 @@ therefore check, for every mutation:
 Also covered: export_changes refuses outright (no backup, nothing written)
 while a toggle added via add_toggle this session still doesn't gate any
 mesh â€” and proceeds normally again once that toggle is either wired via
-record_toggle or removed via delete_toggle (see mod_loader.
-unwired_pending_sections / edit_session.new_sections_for).
+record_toggle or removed via delete_toggle (see app.mods.loader.
+unwired_pending_sections / app.session.edit.new_sections_for).
 
-record_editor.py itself is exercised in-memory (no disk I/O, no session) by
-test_record_editor.py; this file instead checks the app layer on top of it:
+core.editing.record is exercised in-memory (no disk I/O, no session) by
+tests.core.editing.test_record; this file instead checks the app layer on top of it:
 resolving ini_rel to a path, staging via edit_session, and turning
 ToggleEditError into a plain {"error": ...} rather than raising across the JS
 bridge. It's also the only place that exercises get_record_positions. A

@@ -68,7 +68,7 @@ PYINSTALLER_SDIST_SHA256 = (
 # never touches the user's system Python.
 VENV_DIR = os.path.join(HERE, ".venv-build")
 
-# Kept in sync with THREE_VERSION in app/server.py. The layout below mirrors the
+# Kept in sync with THREE_VERSION in app/runtime/server.py. The layout below mirrors the
 # CDN so the import map can resolve the WebGPU and TSL entry points entirely
 # offline.
 THREE_VERSION = "0.185.0"

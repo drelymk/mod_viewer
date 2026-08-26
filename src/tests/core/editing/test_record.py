@@ -1,5 +1,5 @@
 """Tests for record mode: rewrite if/elif/endif gates from recorded
-per-position visibility (see record_editor's module docstring for the exact
+per-position visibility (see core.editing.record's module docstring for the exact
 safe-pattern rules these tests exercise).
 
 Every refusal case here is a *designed* boundary of the conservative
@@ -559,9 +559,9 @@ def test_verify_recording_detects_a_genuine_mismatch():
 # real toggle's *existing* gating: for every position, every other toggle var
 # is pinned at its declared default (as if only this one toggle were being
 # cycled, matching a real recording session) and each drawindexed line's
-# current DNF condition (via ini_parser._scan_sections_for_draws â€” the same
+# current DNF condition (via core.ini.parser._scan_sections_for_draws â€” the same
 # condition-tracking pass build_draw_groups itself uses, proven across the
-# whole corpus by test_ini_condition.test_corpus) decides whether it counts
+# whole corpus by tests.core.ini.test_condition.test_corpus) decides whether it counts
 # as visible there. Feeding that back into record_toggle exercises the real
 # distribution of real ini shapes, not just the fixtures above.
 

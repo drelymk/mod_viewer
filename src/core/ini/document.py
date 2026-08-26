@@ -1,6 +1,6 @@
 """Lossless, line-preserving model of a 3DMigoto ini file.
 
-`ini_parser` is the read/analysis path: it strips comments, blank lines and
+`core.ini.parser` is the read/analysis path: it strips comments, blank lines and
 indentation, merges sections across files, and discards line numbers — good
 for analysis, useless for writing.
 
@@ -28,7 +28,7 @@ from datetime import datetime
 BOM = "\ufeff"
 
 # Line kinds. Deliberately coarse: this module reports structure, and leaves
-# meaning (which resource, which condition) to ini_parser.
+# meaning (which resource, which condition) to the parser.
 BLANK = "blank"
 COMMENT = "comment"
 SECTION = "section"
@@ -40,7 +40,7 @@ DRAW = "draw"
 ASSIGN = "assign"
 OTHER = "other"
 
-# Kept in step with build_draw_groups in ini_parser.py — `elif` is a real
+# Kept in step with build_draw_groups in core/ini/parser.py — `elif` is a real
 # 3DMigoto spelling and missing it silently collapses branch conditions.
 _RE_IF = re.compile(r"^if\s+(.*)$", re.I)
 _RE_ELIF = re.compile(r"^(?:else\s+if|elif)\s+(.*)$", re.I)
@@ -55,7 +55,7 @@ def strip_inline_comment(text):
 
     `;` is a legitimate 3DMigoto key binding, so it must not be treated as an
     inline comment on key/back lines — e.g. `key = no_ctrl no_Shift no_alt ;`
-    binds the semicolon key. Mirrors the rule in ini_parser.parse_sections.
+    binds the semicolon key. Mirrors the rule in core.ini.sections.parse_sections.
     """
     lhs = text.split("=", 1)[0].strip().lower()
     if lhs in ("key", "back"):

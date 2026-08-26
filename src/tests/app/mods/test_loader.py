@@ -1,4 +1,4 @@
-"""app/mod_loader.py's build_toggle_panel: which [Key...] cycle sections show
+"""app/mods/loader.py's build_toggle_panel: which [Key...] cycle sections show
 up in the Toggle panel, and which of their vars.
 
 A section that already gates a visible mesh only ever shows its gating

@@ -474,9 +474,9 @@ def record_toggle(doc, section_name, position_lines):
 # the recorded positions correctly -- the actual bytes on disk go through a
 # separate path (IniDocument.save). verify_recording closes that gap: it
 # re-parses the saved file through the same trusted DNF machinery
-# (ini_parser/build_draw_groups) used everywhere else, and confirms every
+# (core.ini.parser/build_draw_groups) used everywhere else, and confirms every
 # draw record_toggle touched is still visible at exactly its recorded
-# positions. The caller (app/toggle_api.record_toggle) restores the
+# positions. The caller (app.bridge.toggle.record_toggle) restores the
 # just-made backup if not.
 
 _DRAW_RE = re.compile(

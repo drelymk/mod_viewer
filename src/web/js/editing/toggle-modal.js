@@ -1,6 +1,6 @@
 // Add/Edit toggle modal — the only authoring UI for cycle toggles.
 //
-// Talks to the write-path API in app/toggle_api.py (exposed as
+// Talks to the write-path API in app/bridge/toggle.py (exposed as
 // window.pywebview.api.*). Only supports the "cycle" toggle type, matching
 // the backend: adding a toggle always creates exactly one variable, and
 // editing can only change an *existing* var's value list, never add or

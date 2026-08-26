@@ -492,7 +492,7 @@ def start():
     tsl_url = f"{_VENDOR_PREFIX}three.tsl.js"
     addons_url = f"{_VENDOR_PREFIX}addons/"
 
-    # Feature flags only ever hide a button (app/features.py) -- baked into
+    # Feature flags only ever hide a button (app/settings/features.py) -- baked into
     # a <body> class server-side so there's no flash of a button appearing
     # then disappearing after load.
     flags = features.get_features()

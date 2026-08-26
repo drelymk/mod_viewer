@@ -1,6 +1,6 @@
 """Parse, partially evaluate and re-render 3DMigoto `if` conditions.
 
-Unlike ini_parser's DNF form (good for "is this mesh visible?" but lossy for
+Unlike core.ini.parser's DNF form (good for "is this mesh visible?" but lossy for
 writing), this keeps a condition as a syntax tree that renders back to text,
 so removing one variable leaves the rest of the expression exactly as
 written. Deleting a toggle needs that: `if $swapvar == 1 && $DRAW_TYPE == 1`

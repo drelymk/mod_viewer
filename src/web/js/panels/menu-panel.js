@@ -1,6 +1,6 @@
 // The Menu panel (right, under Toggle): the slots of a mod's own in-game
 // clickable menu — mods that drive their meshes from an on-screen menu
-// instead of [Key...] bindings (see core/ini_menu.py).
+// instead of [Key...] bindings (see core/ini/menu.py).
 //
 // Read-only: slots can be cycled to preview what they show, but nothing here
 // edits, records or exports.

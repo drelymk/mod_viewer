@@ -4,7 +4,7 @@ The round-trip test is the important one: it asserts that loading and saving
 5,000+ real mod inis reproduces every file byte-for-byte. That is the guarantee
 the whole write-back feature rests on.
 
-    py -3 tests\test_ini_document.py
+    python -m pytest src/tests/core/ini/test_document.py
 """
 import os
 import tempfile

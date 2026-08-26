@@ -840,10 +840,10 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 #dialog-ok { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
 #dialog-ok:hover { background: var(--success-hover); }
 
-/* ── build-time feature flags (app/features.py) ──────────────────────────── */
+/* ── build-time feature flags (app/settings/features.py) ────────────────── */
 /* Only hides the button; the frontend/backend behind it is unaffected -- see
- * app/features.py's docstring. Classes are baked server-side into <body> (see
- * app/server.py), so a hidden feature never flashes visible on load. Always
+ * app/settings/features.py's docstring. Classes are baked server-side into <body> (see
+ * app/runtime/server.py), so a hidden feature never flashes visible on load. Always
  * absent when running from source (python viewer_app.py shows everything). */
 body.feature-export-off #export-btn { display: none; }
 body.feature-modify-toggle-off #toggle-add-btn { display: none; }
