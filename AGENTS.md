@@ -8,6 +8,14 @@ Keep deterministic formatting, lint, and other mechanical checks in CI. Code rev
 
 - Run the repository test suite with `.venv-test\Scripts\python.exe -m pytest -q`. This project venv includes `mcp.server.fastmcp`; the system Python may not.
 
+## Test design
+
+- Prefer one scenario test for consecutive states of the same user or system
+  lifecycle, and parametrized tables for pure input/output matrices. Do not add
+  separate micro-tests that merely repeat setup or intermediate assertions
+  already covered by that lifecycle; keep distinct security, atomicity, race,
+  public-contract, corpus, and rendering regressions independently testable.
+
 ## Pull requests
 
 - Never commit or push directly to `main`. Create or switch to a feature

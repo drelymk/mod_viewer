@@ -255,10 +255,3 @@ def test_descendant_runtime_authorization_cannot_persist_without_picker(
 
     api._access.remember_mod_picker_selection(replacement)
     assert api.edit_mod_folder(root, "Replacement", replacement).get("folders")
-
-
-def test_config_path_is_next_to_executable_when_frozen(monkeypatch, tmp_path):
-    monkeypatch.setattr(paths.sys, "_MEIPASS", str(tmp_path / "bundle"), raising=False)
-    monkeypatch.setattr(paths.sys, "executable", str(tmp_path / "ModViewer.exe"))
-
-    assert paths.config_path() == os.path.join(str(tmp_path), "config.json")

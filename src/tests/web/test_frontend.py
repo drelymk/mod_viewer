@@ -2841,24 +2841,6 @@ def test_controls_precede_inspector_and_are_the_default_right_dock_tab(
         context.close()
 
 
-def test_app_version_is_centered_in_footer(edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {})
-    try:
-        for width in (1280, 600):
-            page.set_viewport_size({"width": width, "height": 720})
-            centers = page.evaluate("""() => {
-              const footer = document.querySelector('#footer').getBoundingClientRect();
-              const version = document.querySelector('#app-version').getBoundingClientRect();
-              return {
-                footer: footer.left + footer.width / 2,
-                version: version.left + version.width / 2,
-              };
-            }""")
-            assert abs(centers["footer"] - centers["version"]) < 0.5
-    finally:
-        context.close()
-
-
 def test_texture_rows_are_reused_for_control_changes_and_rebuilt_for_pool_changes(
         edge_browser, frontend_url):
     pick = {

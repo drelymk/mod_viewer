@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.mods.analysis import ParsedModAnalysis
 from app.mods.controls import (
     _gating_vars, _gating_vars_from_groups, load_control_state,
@@ -60,51 +62,34 @@ def test_wired_toggle_shows_only_its_gating_vars():
     assert entry["cycle_vars"][1]["values"] == ["0", "1", "2"]
 
 
-def test_unwired_pending_toggle_shown_with_writable_vars():
-    toggle_keys = {"KeyNew": _key("New", {"Fresh": ["0", "1", "2"]})}
+@pytest.mark.parametrize(
+    "ini_path, variables, pending, expected_vars",
+    [
+        ("mod.ini", {"Fresh": ["0", "1", "2"]},
+         {"mod.ini": {"KeyNew"}}, ["Fresh"]),
+        ("mod.ini", {"Fresh": ["0", "1"]}, None, None),
+        ("other.ini", {"Fresh": ["0", "1"]},
+         {"mod.ini": {"KeyNew"}}, None),
+        ("mod.ini", {
+            "Local": ["0", "1"],
+            "\\Mod\\Master\\swapvar": ["0", "1", "2"],
+        }, {"mod.ini": {"KeyNew"}}, ["Local"]),
+    ],
+    ids=("pending-same-ini", "not-pending", "pending-other-ini",
+         "namespaced-vars-excluded"),
+)
+def test_unwired_toggle_visibility_policy(
+        ini_path, variables, pending, expected_vars):
+    toggle_keys = {"KeyNew": _key("New", variables, ini_path=ini_path)}
     panel = build_toggle_panel(
         toggle_keys, {}, gating_vars=set(), mod_dir=None,
-        pending_new_sections={"mod.ini": {"KeyNew"}},
+        pending_new_sections=pending,
     )
-    assert "KeyNew" in panel
-    entry = panel["KeyNew"]
-    assert entry["wired"] is False
-    assert [v["var"] for v in entry["vars"]] == ["Fresh"]
-
-
-def test_unwired_non_pending_toggle_is_hidden():
-    toggle_keys = {"KeyMenu": _key("Menu", {"menu": ["0", "1"]})}
-    panel = build_toggle_panel(toggle_keys, {}, gating_vars=set(), mod_dir=None)
-    assert "KeyMenu" not in panel
-
-    panel2 = build_toggle_panel(
-        toggle_keys, {}, gating_vars=set(), mod_dir=None,
-        pending_new_sections={"mod.ini": {"KeyOther"}},
-    )
-    assert "KeyMenu" not in panel2
-
-
-def test_pending_new_sections_scoped_by_ini():
-    toggle_keys = {
-        "KeyNew": _key("New", {"Fresh": ["0", "1"]}, ini_path="other.ini")
-    }
-    panel = build_toggle_panel(
-        toggle_keys, {}, gating_vars=set(), mod_dir=None,
-        pending_new_sections={"mod.ini": {"KeyNew"}},
-    )
-    assert "KeyNew" not in panel
-
-
-def test_unwired_toggle_excludes_namespaced_vars():
-    toggle_keys = {"KeyMixed": _key("Mixed", {
-        "Local": ["0", "1"], "\\Mod\\Master\\swapvar": ["0", "1", "2"],
-    })}
-    panel = build_toggle_panel(
-        toggle_keys, {}, gating_vars=set(), mod_dir=None,
-        pending_new_sections={"mod.ini": {"KeyMixed"}},
-    )
-    assert "KeyMixed" in panel
-    assert [v["var"] for v in panel["KeyMixed"]["vars"]] == ["Local"]
+    if expected_vars is None:
+        assert panel == {}
+    else:
+        assert panel["KeyNew"]["wired"] is False
+        assert [item["var"] for item in panel["KeyNew"]["vars"]] == expected_vars
 
 
 def test_present_state_does_not_build_geometry(

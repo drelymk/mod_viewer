@@ -8,6 +8,8 @@ evaluation must only fold away the parts it was explicitly given values for.
 
 import re
 
+import pytest
+
 
 from core.ini import condition as ic
 from core.ini.condition import ConditionError, TRUE, FALSE
@@ -42,29 +44,17 @@ ROUND_TRIP = [
 ]
 
 
-def test_round_trip():
-    bad = 0
-    for src in ROUND_TRIP:
-        try:
-            rendered = ic.parse(src).render()
-        except ConditionError as e:
-            assert (False), (f"parse failed: {src!r} ({e})")
-            bad += 1
-            continue
-        if norm(rendered) != norm(src):
-            assert (False), (f"render changed {src!r} -> {rendered!r}")
-            bad += 1
-    assert (bad == 0), (f"all {len(ROUND_TRIP)} sample conditions round-trip verbatim")
+@pytest.mark.parametrize("source", ROUND_TRIP)
+def test_condition_round_trips(source):
+    assert norm(ic.parse(source).render()) == norm(source)
 
 
-def test_rejects_malformed():
-    for src in ["$Cloth = 1", "$", "$cap ==", "$color == 0=", "", "$a &&"]:
-        try:
-            ic.parse(src)
-            assert (False), (f"should have rejected {src!r}")
-        except ConditionError:
-            pass
-    assert (True), ("malformed conditions raise ConditionError")
+@pytest.mark.parametrize(
+    "source", ["$Cloth = 1", "$", "$cap ==", "$color == 0=", "", "$a &&"],
+)
+def test_condition_rejects_malformed(source):
+    with pytest.raises(ConditionError):
+        ic.parse(source)
 
 
 # â”€â”€ partial evaluation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
