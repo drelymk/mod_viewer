@@ -1,6 +1,7 @@
 """Focused direct Asset loading regressions."""
 
 import json
+import math
 import os
 import struct
 
@@ -49,6 +50,80 @@ def _fmt(path, stride, index_format, elements):
             "",
         ])
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _index_text(indices):
+    return ("first index: 0\n"
+            f"index count: {len(indices)}\n"
+            "topology: trianglelist\n"
+            + "\n".join(" ".join(str(value) for value in indices[index:index + 3])
+                         for index in range(0, len(indices), 3)) + "\n")
+
+
+def _gimi_face_asset(root, *, include_eyes=True):
+    asset = root / "Character"
+    asset.mkdir(parents=True)
+    entries = []
+    body_rows = []
+    if include_eyes:
+        body_rows = [
+            ((-0.79, 2, 3), (0, 0, 1), (0, 0)),
+            ((-0.75, 2, 3), (0, 0, 1), (1, 0)),
+            ((-0.75, 2.04, 3), (0, 0, 1), (0, 1)),
+            ((-0.71, 1.96, 3), (0, 0, 1), (1, 1)),
+            ((0.71, 2, 3), (0, 0, 1), (0, 0)),
+            ((0.75, 2, 3), (0, 0, 1), (1, 0)),
+            ((0.75, 2.04, 3), (0, 0, 1), (0, 1)),
+            ((0.79, 1.96, 3), (0, 0, 1), (1, 1)),
+        ]
+        body_indices = (0, 1, 2, 4, 5, 6)
+        _text_vb(asset / "CharacterEyesA-vb0=11111111.txt", 92, body_rows)
+        (asset / "CharacterEyesA-ib=aaaaaaaa.txt").write_text(
+            _index_text(body_indices), encoding="utf-8")
+        entries.append({
+            "ib": "aaaaaaaa", "vb0": "11111111", "component_name": "Eyes",
+            "object_indexes": [0], "object_index_counts": [len(body_indices)],
+        })
+
+    face_centers = ((4, -2, 6.25), (4, -2, 7.75))
+    face_rows = []
+    face_indices = []
+    for center in face_centers:
+        center_index = len(face_rows)
+        face_rows.append((center, (-1, 0, 0), (0, 0)))
+        ring = []
+        for ordinal in range(8):
+            angle = 2 * 3.141592653589793 * ordinal / 8
+            ring.append(len(face_rows))
+            face_rows.append((
+                (center[0], center[1] + 0.15 * math.sin(angle),
+                 center[2] + 0.15 * math.cos(angle)),
+                (-1, 0, 0), (0, 0)))
+        for ordinal, first in enumerate(ring):
+            face_indices.extend((center_index, first, ring[(ordinal + 1) % 8]))
+    _text_vb(asset / "CharacterFaceEyeA-vb0=22222222.txt", 92, face_rows)
+    (asset / "CharacterFaceEyeA-ib=bbbbbbbb.txt").write_text(
+        _index_text(face_indices), encoding="utf-8")
+    entries.append({
+        "ib": "bbbbbbbb", "vb0": "22222222", "component_name": "FaceEye",
+        "object_indexes": [0], "object_index_counts": [len(face_indices)],
+    })
+
+    mouth_rows = [
+        ((4, -2.4, 7.1), (-1, 0, 0), (0, 0)),
+        ((4, -2.3, 7), (-1, 0, 0), (1, 0)),
+        ((4, -2.4, 6.9), (-1, 0, 0), (0, 1)),
+    ]
+    mouth_indices = (0, 1, 2)
+    _text_vb(asset / "CharacterFaceMouthA-vb0=33333333.txt", 92, mouth_rows)
+    (asset / "CharacterFaceMouthA-ib=cccccccc.txt").write_text(
+        _index_text(mouth_indices), encoding="utf-8")
+    entries.append({
+        "ib": "cccccccc", "vb0": "33333333", "component_name": "Mouth",
+        "object_indexes": [0], "object_index_counts": [3],
+    })
+    _write_json(asset / "hash.json", entries)
+    return asset, body_rows, face_centers, mouth_rows
 
 
 def _wwmi_triangle(folder, *, component_name="Body", vb_hash="11111111",
@@ -111,6 +186,75 @@ def test_migoto_index_dump_separates_headers_from_index_rows(tmp_path):
     assert parsed.first_index == 43845
     assert parsed.index_count == 6
     assert parsed.index_format == "DXGI_FORMAT_R16_UINT"
+
+
+def test_gimi_face_parts_align_to_native_eyes_and_keep_eyes_unchanged(tmp_path):
+    root = tmp_path / "assets"
+    asset, body_rows, face_centers, mouth_rows = _gimi_face_asset(root)
+    index = build_index("GIMI", str(root))
+
+    result = load_asset("GIMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    parts = {part.component_name: part for part in result.parts}
+    assert set(parts) == {"Eyes", "FaceEye", "Mouth"}
+    assert struct.unpack("<18f", parts["Eyes"].positions) == pytest.approx(
+        tuple(value for index in (0, 1, 2, 4, 5, 6)
+              for value in body_rows[index][0]))
+    face_positions = struct.unpack("<3f", parts["FaceEye"].positions[:12])
+    assert face_positions == pytest.approx((-0.75, 2, 3))
+    mouth_positions = struct.unpack("<3f", parts["Mouth"].positions[:12])
+    assert mouth_positions == pytest.approx((0.1, 1.6, 3), abs=1e-5)
+    assert struct.unpack("<3f", parts["Mouth"].normals[:12]) == pytest.approx(
+        (0, 0, 1))
+    assert not any(item["reason"] == "face_alignment_unavailable"
+                   for item in result.payload["metadata"]["asset"]["warnings"])
+
+
+def test_gimi_mouth_only_filter_uses_alignment_dependencies_without_emitting_them(
+        tmp_path):
+    root = tmp_path / "assets"
+    asset, _body_rows, _face_centers, _mouth_rows = _gimi_face_asset(root)
+    index = build_index("GIMI", str(root))
+
+    result = load_asset(
+        "GIMI", str(root), index["assets"][0], geometry=GeometryBlob(),
+        part_filter={ComponentCoverageKey("cccccccc", 0, 3)})
+
+    assert len(result.parts) == 1
+    assert result.parts[0].component_name == "Mouth"
+    assert struct.unpack("<3f", result.parts[0].positions[:12]) == \
+        pytest.approx((0.1, 1.6, 3), abs=1e-5)
+
+
+def test_gimi_face_alignment_failure_keeps_raw_geometry_and_warns(tmp_path):
+    root = tmp_path / "assets"
+    asset, _body_rows, face_centers, _mouth_rows = _gimi_face_asset(
+        root, include_eyes=False)
+    index = build_index("GIMI", str(root))
+
+    result = load_asset("GIMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    face = next(part for part in result.parts
+                if part.component_name == "FaceEye")
+    assert struct.unpack("<3f", face.positions[:12]) == pytest.approx(face_centers[0])
+    assert any(item["reason"] == "face_alignment_unavailable"
+               for item in result.payload["metadata"]["asset"]["warnings"])
+
+
+def test_zzmi_face_named_parts_are_not_gimi_aligned(tmp_path):
+    root = tmp_path / "assets"
+    _asset, _body_rows, _face_centers, mouth_rows = _gimi_face_asset(root)
+    index = build_index("ZZMI", str(root))
+
+    result = load_asset("ZZMI", str(root), index["assets"][0],
+                        geometry=GeometryBlob())
+
+    mouth = next(part for part in result.parts
+                 if part.component_name == "Mouth")
+    assert struct.unpack("<3f", mouth.positions[:12]) == pytest.approx(
+        mouth_rows[0][0])
 
 
 def test_hash_asset_does_not_use_same_label_wrong_hash_vertex_dump(tmp_path):

@@ -183,6 +183,14 @@ machine-specific paths or facts that are obvious from the source.
   or switch without modifying the mod or Asset.
 - Direct Asset geometry retains Asset/component/range provenance so later
   mod/Asset composition can compare coverage without reparsing viewer labels.
+- GIMI face geometry may be head-local. When native full-body Eyes and a
+  usable Face/FaceEye anchor are available, the Asset adapter may derive one
+  geometry-based rigid face-to-character transform and apply it to local face
+  components before payload construction; native Eyes remain untransformed.
+  Alignment transforms positions and authored normals together, preserve UVs
+  and triangle winding, and use no character-specific offsets. Selective Asset
+  loading may read Eyes and FaceEye as alignment dependencies without emitting
+  them unless independently selected.
 - Direct Asset UVs are canonical viewer-space Float32 UVs (V is flipped exactly
   once). GIMI/ZZMI index ranges resolve against parsed IB header identity;
   WWMI metadata offsets remain provenance while `Component N.fmt/.vb/.ib`
