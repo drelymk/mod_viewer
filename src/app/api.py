@@ -7,6 +7,7 @@ belongs in mod_loader instead.
 
 import os
 import traceback
+import uuid
 
 import webview
 
@@ -535,7 +536,8 @@ class ModViewerAPI:
             existing = self._asset_fill_sessions.get(key)
             if existing is not None:
                 return {**existing["summary"], "status": "loaded",
-                        "already_loaded": True}
+                        "already_loaded": True,
+                        "fill_id": existing.get("fill_id")}
             plan = self._asset_fill_plan(folder_path, context, overrides)
             summary = plan.to_dict()
             if plan.status != "ready":
@@ -561,13 +563,15 @@ class ModViewerAPI:
                 publication.discard()
                 raise
             summary["payload"] = payload
+            fill_id = uuid.uuid4().hex
             self._asset_fill_sessions[key] = {
+                "fill_id": fill_id,
                 "publication": publication,
                 "geometry_url": payload.get("geometry", {}).get("url")
                 if payload.get("geometry") else None,
                 "summary": summary,
             }
-            return {**summary, "status": "loaded"}
+            return {**summary, "status": "loaded", "fill_id": fill_id}
         except (PermissionError, asset_folders.AssetFolderError,
                 asset_index.AssetIndexError, asset_loader.AssetLoadError) as error:
             return {"status": "error", "error": str(error)}
@@ -576,14 +580,17 @@ class ModViewerAPI:
             return {"status": "error",
                     "error": "Could not load missing Asset parts. See the application log for details."}
 
-    def remove_missing_asset_parts(self, folder_path):
+    def remove_missing_asset_parts(self, folder_path, fill_id=None):
         """Remove the current session-only original Asset fill."""
         try:
             folder_path = self._folder(folder_path)
             key = os.path.normcase(os.path.abspath(folder_path))
-            state = self._asset_fill_sessions.pop(key, None)
+            state = self._asset_fill_sessions.get(key)
             if state is None:
                 return {"status": "removed", "removed": False}
+            if fill_id is not None and state.get("fill_id") != fill_id:
+                return {"status": "removed", "removed": False, "stale": True}
+            self._asset_fill_sessions.pop(key, None)
             server.release_texture_publication(state.get("publication"))
             server.release_geometry(state.get("geometry_url"))
             return {"status": "removed", "removed": True}

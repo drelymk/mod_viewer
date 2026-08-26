@@ -929,6 +929,7 @@ def test_missing_asset_parts_append_and_remove_without_reloading_mod(
     }
     mod_payload["assetFillResponse"] = {
         "status": "loaded",
+        "fill_id": "fill-FillAsset",
         "coverage": {
             "asset_parts": 2, "handled_parts": 1,
             "missing_parts": 1, "skipped_parts": 0,
@@ -1079,6 +1080,77 @@ def test_stale_missing_asset_response_preserves_new_mod_fill(
         context.close()
 
 
+def test_stale_same_path_fill_response_preserves_replacement_session(
+        edge_browser, frontend_url):
+    payload = _payload("FillSamePath")
+    _add_asset_fill_response(payload, "FillSamePathAsset")
+    context, page = _page(
+        edge_browser, frontend_url, {"FillSamePath": payload})
+    try:
+        _open(page, "FillSamePath")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const api = window.pywebview.api;
+          const originalLoadMod = api.load_mod;
+          const originalLoadFill = api.load_missing_asset_parts;
+          const originalRemove = api.remove_missing_asset_parts;
+          let loadCount = 0;
+          window.__backendFillId = null;
+          window.__removeFillIds = [];
+          window.__releaseFill = null;
+          api.load_mod = async path => {
+            window.__backendFillId = null;
+            return originalLoadMod(path);
+          };
+          api.load_missing_asset_parts = async path => {
+            const result = await originalLoadFill(path);
+            const fillId = `same-path-fill-${++loadCount}`;
+            window.__backendFillId = fillId;
+            const enriched = {...result, fill_id: fillId};
+            if (loadCount === 1) {
+              await new Promise(resolve => window.__releaseFill = resolve);
+            }
+            return enriched;
+          };
+          api.remove_missing_asset_parts = async (path, fillId) => {
+            window.__removeFillIds.push(fillId);
+            const result = await originalRemove(path, fillId);
+            if (fillId !== window.__backendFillId) {
+              return {status: 'removed', removed: false, stale: true};
+            }
+            window.__backendFillId = null;
+            return result;
+          };
+          document.getElementById('asset-fill-btn').click();
+        }""")
+        page.wait_for_function("window.__releaseFill !== null")
+
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadMod.length === 2"
+            " && window.modViewer.activeMeshes.length === 1")
+        page.locator("#asset-fill-btn").click()
+        page.locator("#asset-fill-btn[data-state='remove']").wait_for()
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 2
+        assert page.evaluate("window.__backendFillId") == "same-path-fill-2"
+
+        page.evaluate("window.__releaseFill()")
+        page.wait_for_function(
+            "window.__fakeApi.calls.removeMissingAssetParts.length === 1")
+        assert page.evaluate("window.__backendFillId") == "same-path-fill-2"
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 2
+        assert page.locator("#asset-fill-btn").get_attribute("data-state") == "remove"
+
+        page.locator("#asset-fill-btn").click()
+        page.locator("#asset-fill-btn[data-state='load']").wait_for()
+        assert page.evaluate("window.__removeFillIds") == [
+            "same-path-fill-1", "same-path-fill-2"]
+        assert page.evaluate("window.__backendFillId") is None
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 1
+    finally:
+        context.close()
+
+
 def test_stale_missing_asset_remove_preserves_new_mod_fill(
         edge_browser, frontend_url):
     first = _payload("FillRemoveA")
@@ -1145,6 +1217,7 @@ def _add_asset_fill_response(payload, label, position=None):
     }
     payload["assetFillResponse"] = {
         "status": "loaded",
+        "fill_id": f"fill-{label}",
         "coverage": {
             "asset_parts": 2, "handled_parts": 1,
             "missing_parts": 1, "skipped_parts": 0,

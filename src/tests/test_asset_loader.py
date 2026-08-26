@@ -800,6 +800,7 @@ def test_api_load_missing_asset_parts_is_incremental_and_reversible(
     result = api.load_missing_asset_parts(str(mod))
 
     assert result["status"] == "loaded"
+    old_fill_id = result["fill_id"]
     assert result["coverage"]["handled_parts"] == 1
     assert result["coverage"]["missing_parts"] == 1
     assert len(result["payload"]["meshes"]) == 1
@@ -807,6 +808,19 @@ def test_api_load_missing_asset_parts_is_incremental_and_reversible(
     assert entry["asset_fill"] is True
     assert entry["conditions"] == []
     assert result["payload"]["metadata"]["source_kind"] == "asset-fill"
+
+    preview = api.load_asset(str(asset))
+    assert preview["metadata"]["source_kind"] == "asset"
+
+    replacement = api.load_missing_asset_parts(str(mod))
+    assert replacement["status"] == "loaded"
+    new_fill_id = replacement["fill_id"]
+    assert new_fill_id != old_fill_id
+
+    stale = api.remove_missing_asset_parts(str(mod), old_fill_id)
+    assert stale == {"status": "removed", "removed": False, "stale": True}
+    key = os.path.normcase(os.path.abspath(str(mod)))
+    assert api._asset_fill_sessions[key]["fill_id"] == new_fill_id
 
     preview = api.load_asset(str(asset))
     assert preview["metadata"]["source_kind"] == "asset"

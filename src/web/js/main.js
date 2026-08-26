@@ -262,6 +262,7 @@ let assetFillAvailable = false;
 let assetFillLoaded = false;
 let assetFillLoading = false;
 let assetFillTextureKeys = new Set();
+let assetFillId = null;
 let assetFillEpoch = 0;
 
 // The last-loaded payload's controls.toggles model, kept
@@ -337,6 +338,7 @@ function clearScene({ preserveModelOrientation = false } = {}) {
   setTextures(null);
   removeTextures(assetFillTextureKeys);
   assetFillTextureKeys = new Set();
+  assetFillId = null;
   assetFillAvailable = false;
   assetFillLoaded = false;
   assetFillLoading = false;
@@ -510,11 +512,13 @@ function rollbackAssetFillFrontend(addedMeshes, textureKeys) {
   removeTextures(keys);
   keys.forEach(key => assetFillTextureKeys.delete(key));
   assetFillLoaded = false;
+  assetFillId = null;
 }
 
-async function releaseBackendAssetFill(path) {
+async function releaseBackendAssetFill(path, fillId = null) {
   try {
-    const result = await window.pywebview.api.remove_missing_asset_parts(path);
+    const result = await window.pywebview.api.remove_missing_asset_parts(
+      path, fillId);
     if (result?.status === 'error') {
       console.warn('Could not roll back missing Asset parts:', result.error);
     }
@@ -523,7 +527,8 @@ async function releaseBackendAssetFill(path) {
   }
 }
 
-async function rollbackAssetFill(path, operation, addedMeshes, textureKeys) {
+async function rollbackAssetFill(
+    path, operation, fillId, addedMeshes, textureKeys) {
   if (assetFillOperationIsCurrent(operation, path)) {
     rollbackAssetFillFrontend(addedMeshes, textureKeys);
   } else {
@@ -533,7 +538,7 @@ async function rollbackAssetFill(path, operation, addedMeshes, textureKeys) {
     removeTextures(keys);
     keys.forEach(key => assetFillTextureKeys.delete(key));
   }
-  await releaseBackendAssetFill(path);
+  await releaseBackendAssetFill(path, fillId);
 }
 
 async function loadMissingAssetParts() {
@@ -544,6 +549,7 @@ async function loadMissingAssetParts() {
   const operation = ++assetFillEpoch;
   let backendLoaded = false;
   let rolledBack = false;
+  let transactionFillId = null;
   let addedMeshes = [];
   const transactionTextureKeys = new Set();
   const rollback = async () => {
@@ -551,7 +557,8 @@ async function loadMissingAssetParts() {
     rolledBack = true;
     if (backendLoaded) {
       await rollbackAssetFill(
-        path, operation, addedMeshes, transactionTextureKeys);
+        path, operation, transactionFillId,
+        addedMeshes, transactionTextureKeys);
     }
   };
   assetFillLoading = true;
@@ -559,7 +566,10 @@ async function loadMissingAssetParts() {
   try {
     const result = await window.pywebview.api.load_missing_asset_parts(path);
     if (!assetFillOperationIsCurrent(operation, path)) {
-      if (result?.status === 'loaded') backendLoaded = true;
+      if (result?.status === 'loaded') {
+        backendLoaded = true;
+        transactionFillId = result.fill_id || null;
+      }
       await rollback();
       return false;
     }
@@ -574,6 +584,7 @@ async function loadMissingAssetParts() {
       return false;
     }
     backendLoaded = true;
+    transactionFillId = result.fill_id || null;
     if (!assetFillOperationIsCurrent(operation, path)) {
       await rollback();
       return false;
@@ -621,6 +632,7 @@ async function loadMissingAssetParts() {
       return false;
     }
     assetFillLoaded = true;
+    assetFillId = transactionFillId;
     fitTo(activeMeshes, {
       preserveCamera: true,
       preserveHomeView: true,
@@ -647,14 +659,17 @@ async function removeMissingAssetParts() {
   assetFillLoading = true;
   updateAssetFillButton();
   try {
-    const result = await window.pywebview.api.remove_missing_asset_parts(path);
+    const result = await window.pywebview.api.remove_missing_asset_parts(
+      path, assetFillId);
     if (!assetFillOperationIsCurrent(operation, path)) return false;
     if (result?.status === 'error') throw new Error(result.error);
+    if (result?.stale) return false;
     const removedMeshes = removeAssetFillMeshPanel();
     forgetModelMeshes(removedMeshes);
     removeTextures(assetFillTextureKeys);
     assetFillTextureKeys = new Set();
     assetFillLoaded = false;
+    assetFillId = null;
     requestRender();
     return true;
   } catch (error) {
