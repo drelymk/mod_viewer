@@ -26,14 +26,16 @@ machine-specific paths or facts that are obvious from the source.
 - `src/core/` contains GUI-free parsing, analysis, geometry, texture and
   editing logic. `src/app/` owns the pywebview bridge, sessions and payload
   orchestration. `src/web/` contains the localhost-served frontend.
-- `ini_parser` is the read/analysis path. `IniDocument` and `edit_session` are
-  the authoritative staged write path. Never write through `ini_parser`.
-- `app.api` loads the active INIs through `mod_loader.load_mod()`. The loader
+- `core.ini.parser` is the read/analysis path. `core.ini.document.IniDocument`
+  and `app.session.edit` are the authoritative staged write path. Never write
+  through the parser.
+- `app.bridge.api` loads the active INIs through `app.mods.loader.load_mod()`.
+  The loader
   parses each INI independently, consumes staged text when present, and returns
   named payload fields for meshes, textures, texture pools, controls, state,
   geometry, metadata and health.
-- `app.mod_folders` owns the optional versioned app config, including the Mod
-  Folder registry and global panel opacity. A missing config uses defaults;
+- `app.settings.mod_folders` owns the optional versioned app config, including
+  the Mod Folder registry and global panel opacity. A missing config uses defaults;
   valid writes use an atomic replace, while malformed or unsupported config
   must remain untouched. Untouched panel opacity is omitted from the file;
   once changed, its explicit value remains persisted even when it equals the
@@ -214,7 +216,7 @@ machine-specific paths or facts that are obvious from the source.
   discard otherwise renderable components; a load fails only when no parts
   survive.
 - `core.textures` owns role-aware keys, PNG fallback, transforms, caching and
-  texture profiling. `core.mesh_builder` owns geometry/payload assembly.
+  texture profiling. `core.geometry.mesh_builder` owns geometry/payload assembly.
   Keep texture processing independent from game/material interpretation.
 - Load texture sources lazily. Publishing or hydrating a texture pool must not
   decode/render every source, and backend model loading must not eagerly render
@@ -328,7 +330,7 @@ machine-specific paths or facts that are obvious from the source.
 - Frontend tests use Playwright against the real local server and vendored
   Three.js assets with a compatible Edge browser runtime. They may skip when Edge or
   the assets are unavailable. Mock only `window.pywebview.api` for UI-state
-  tests; do not import `app.api` into a bare browser fixture because it pulls in
+  tests; do not import `app.bridge.api` into a bare browser fixture because it pulls in
   GUI webview state.
 - Real-mod corpus checks, if added again, must be explicitly opt-in through
   `MOD_VIEWER_TEST_CORPUS`; the default suite must remain self-contained.

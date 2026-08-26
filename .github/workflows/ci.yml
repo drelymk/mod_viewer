@@ -37,4 +37,4 @@ jobs:
           python -m pip install -r requirements.txt "pytest>=8.0"
 
       - name: Run test suite
-        run: python -m pytest -q --ignore=src/tests/test_frontend.py
+        run: python -m pytest -q --ignore=src/tests/web/test_frontend.py

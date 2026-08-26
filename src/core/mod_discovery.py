@@ -3,7 +3,7 @@
 import os
 import re
 
-from .ini_sections import parse_sections
+from .ini.sections import parse_sections
 
 _MAX_INI_FILES = 10
 _MAX_INI_DEPTH = 2
@@ -28,7 +28,7 @@ def _has_geometry_sections(path):
     Discovery must not call the full draw/mesh analyzer.  The root anchor only
     decides whether bounded nested INIs belong to this selection, so a
     conservative command-shape check is sufficient and avoids the old
-    ``ini_sections -> ini_parser`` dependency.  Missing buffers are allowed;
+    ``core.ini.sections -> core.ini.parser`` dependency.  Missing buffers are allowed;
     geometry loading reports those later.
     """
     try:

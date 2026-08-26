@@ -1,0 +1,1 @@
+"""Application edit-session state."""

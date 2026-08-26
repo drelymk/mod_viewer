@@ -453,9 +453,11 @@ def _run_browser(base_url, payload, profiler, sampler, concurrency,
 
 
 def _run_once(mod_path, concurrency, browser_channel):
-    from app import api as api_module
-    from app import edit_session, metadata, mod_loader, server
-    from app.api import ModViewerAPI
+    from app.bridge import api as api_module
+    from app.session import edit as edit_session
+    from app.mods import metadata, loader as mod_loader
+    from app.runtime import server
+    from app.bridge.api import ModViewerAPI
     from core import textures
 
     timings = defaultdict(list)

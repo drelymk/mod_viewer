@@ -6,8 +6,8 @@
 <link rel="stylesheet" href="css/app.css"/>
 </head>
 <!-- __BODY_CLASS__ is rewritten at serve time to a feature-flag-off class per
-     app/features.py (e.g. "feature-export-off"), empty when every feature is
-     shown -- see app/server.py and the matching CSS rules in app.css. -->
+     app/settings/features.py (e.g. "feature-export-off"), empty when every feature is
+     shown -- see app/runtime/server.py and the matching CSS rules in app.css. -->
 <body class="__BODY_CLASS__">
 
 <svg id="ui-icon-sprite" aria-hidden="true" focusable="false">
@@ -505,7 +505,7 @@
 </div>
 
 <!-- Rewritten at serve time to point at the vendored Three.js copy
-     (see app/server.py). -->
+     (see app/runtime/server.py). -->
 <script type="importmap" nonce="__CSP_NONCE__">
 {
   "imports": {

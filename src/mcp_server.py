@@ -7,7 +7,10 @@ until ``export_mod_changes`` is explicitly called.
 
 from mcp.server.fastmcp import FastMCP
 
-from app import edit_session, mod_folders, mod_loader, toggle_api
+from app.bridge import toggle as toggle_api
+from app.mods import loader as mod_loader
+from app.session import edit as edit_session
+from app.settings import mod_folders
 
 mcp = FastMCP("3DMigoto Mod Viewer")
 
