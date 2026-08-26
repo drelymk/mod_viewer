@@ -51,7 +51,7 @@ export async function refreshPendingState(
   const blocked = pending && hasUnwiredToggle();
   $('export-btn').disabled = !pending || blocked;
   $('export-btn').title = blocked
-    ? 'A newly-added toggle isn\'t wired to any mesh yet — Record (➤) or delete it before exporting.'
+    ? 'A newly-added toggle isn\'t wired to any mesh yet — Record (⏺) or delete it before exporting.'
     : '';
 }
 

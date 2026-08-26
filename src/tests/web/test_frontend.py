@@ -3739,6 +3739,7 @@ def test_record_refreshes_controls_and_meshes_without_reloading_model(
         }""")
         assert page.locator("#toggle-list .toggle-unwired-badge").count() == 1
         assert page.locator("#export-btn").is_disabled()
+        assert "Record (⏺)" in page.locator("#export-btn").get_attribute("title")
 
         page.locator("#toggle-list [title^='Record']").click()
         page.locator("#toggle-list .toggle-row.recording").wait_for()
