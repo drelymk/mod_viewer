@@ -491,12 +491,13 @@ def test_mod_folder_add_edit_delete_modal_flow(
     finally:
         context.close()
 
-def test_missing_opacity_bridge_does_not_block_open_or_mod_library(
+def test_panel_opacity_bridge_fallback_and_late_ready(
         edge_browser, frontend_url):
     context, page = _page(
         edge_browser, frontend_url, {"A": _payload("A")},
-        panel_opacity_api=False)
+        panel_opacity=27, panel_opacity_api=False)
     try:
+        assert page.locator("#panel-opacity").input_value() == "58"
         assert page.locator("#open-btn").is_enabled()
         assert page.locator("#empty-add-folder-btn").is_enabled()
         page.locator("#empty-add-folder-btn").click()
@@ -506,6 +507,20 @@ def test_missing_opacity_bridge_does_not_block_open_or_mod_library(
         _open(page, "A")
         page.locator("#meshes-tab").click()
         page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const state = window.__fakeApi;
+          window.pywebview.api.get_panel_opacity = async () => ({value: state.panelOpacity});
+          window.pywebview.api.set_panel_opacity = async value => {
+            state.panelOpacity = value;
+            state.calls.panelOpacity.push(value);
+            return {value};
+          };
+          window.dispatchEvent(new Event('pywebviewready'));
+        }""")
+        page.wait_for_function("document.querySelector('#panel-opacity').value === '27'")
+        assert page.locator("#appearance-btn").get_attribute("aria-label") == (
+            "Panel opacity: 27%")
+        assert page.evaluate("window.__fakeApi.calls.panelOpacity") == []
     finally:
         context.close()
 
@@ -601,30 +616,6 @@ def test_panel_opacity_control_applies_and_saves_whole_percent(
         page.keyboard.press("Escape")
         assert page.locator("#appearance-popover").is_hidden()
         assert page.locator("#appearance-btn").get_attribute("aria-expanded") == "false"
-    finally:
-        context.close()
-
-def test_panel_opacity_loads_when_native_bridge_becomes_ready(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"A": _payload("A")},
-        panel_opacity=27, panel_opacity_api=False)
-    try:
-        assert page.locator("#panel-opacity").input_value() == "58"
-        page.evaluate("""() => {
-          const state = window.__fakeApi;
-          window.pywebview.api.get_panel_opacity = async () => ({value: state.panelOpacity});
-          window.pywebview.api.set_panel_opacity = async value => {
-            state.panelOpacity = value;
-            state.calls.panelOpacity.push(value);
-            return {value};
-          };
-          window.dispatchEvent(new Event('pywebviewready'));
-        }""")
-        page.wait_for_function("document.querySelector('#panel-opacity').value === '27'")
-        assert page.locator("#appearance-btn").get_attribute("aria-label") == (
-            "Panel opacity: 27%")
-        assert page.evaluate("window.__fakeApi.calls.panelOpacity") == []
     finally:
         context.close()
 
