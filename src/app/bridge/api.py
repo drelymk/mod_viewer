@@ -18,7 +18,6 @@ from core.ini.health import analyze_mod
 from core.textures.profiles import texture_profile_for
 
 from app.assets import catalog as asset_catalog
-from app.assets import composition as asset_composition
 from app.assets import folders as asset_folders
 from app.assets import index as asset_index
 from app.assets import loader as asset_loader
