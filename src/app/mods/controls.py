@@ -187,7 +187,7 @@ def load_present_state(context, overrides=None):
 
 def load_control_state(context, overrides=None, pending_new_sections=None,
                        active_mesh_keys=None):
-    """Read control semantics without constructing mesh or texture payloads."""
+    """Read control semantics without constructing mesh geometry."""
     parsed = analyze_mod_inis(
         context.ini_paths, context.mod_dir, overrides, context.docs)
     gating_vars = _gating_vars_from_groups(

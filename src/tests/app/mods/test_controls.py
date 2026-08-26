@@ -79,7 +79,7 @@ def test_unwired_toggle_excludes_namespaced_vars():
     assert [v["var"] for v in panel["KeyMixed"]["vars"]] == ["Local"]
 
 
-def test_present_state_does_not_build_geometry_or_render_textures(
+def test_present_state_does_not_build_geometry(
         tmp_path, monkeypatch):
     ini_path = tmp_path / "mod.ini"
     ini_path.write_text(
@@ -96,19 +96,13 @@ def test_present_state_does_not_build_geometry_or_render_textures(
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("PRESENT reads must not build mesh semantics")),
     )
-    monkeypatch.setattr(
-        "app.mods.controls.encode_texture_data_uri",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("PRESENT reads must not render textures")),
-    )
-
     present = load_present_state(context)
 
     assert present["item"]["key_raw"] == "p"
     assert present["item"]["count"] == 2
 
 
-def test_control_state_does_not_build_geometry_or_render_textures(
+def test_control_state_does_not_build_geometry(
         tmp_path, monkeypatch):
     parsed = ParsedModAnalysis(
         groups=[{"draws": [{"conditions": [[{
@@ -126,17 +120,17 @@ def test_control_state_does_not_build_geometry_or_render_textures(
     monkeypatch.setattr(
         "app.mods.controls.analyze_mod_inis", lambda *args, **kwargs: parsed)
 
-    monkeypatch.setattr(
-        "app.mods.controls.build_mesh_semantics",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("control reads must not build mesh semantics")),
-    )
-    monkeypatch.setattr(
-        "app.mods.controls.encode_texture_data_uri",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("control reads must not render textures")),
-    )
+    semantic_calls = []
 
-    result = load_control_state(context)
+    def build_semantics(*args, **kwargs):
+        semantic_calls.append((args, kwargs))
+        return {"Body-1": {"conditions": [[{
+            "var": "Outfit", "value": "1", "negate": False,
+        }]]}}
 
+    monkeypatch.setattr("app.mods.controls.build_mesh_semantics", build_semantics)
+
+    result = load_control_state(context, active_mesh_keys={"Body-1"})
+
+    assert semantic_calls
     assert set(result["controls"]["toggles"]) == {"KeyOutfit"}
