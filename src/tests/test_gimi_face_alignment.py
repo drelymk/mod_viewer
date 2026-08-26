@@ -4,8 +4,8 @@ import struct
 import pytest
 
 from app.asset_loader.gimi_face_alignment import (
-    AlignmentMesh, solve, transform_normal_bytes, transform_point,
-    transform_position_bytes)
+    AlignmentMesh, _fit_eye_surface_offset, solve, transform_normal_bytes,
+    transform_point, transform_position_bytes)
 
 
 def _face_mesh(centers, *, name="FaceEye", h=(0, 0, 1), v=(0, 1, 0),
@@ -61,8 +61,8 @@ def test_brow_and_mouth_landmarks_resolve_roll_without_mirroring():
     face = _face_mesh(
         ((4, -2, 6.25), (4, -2, 7.75)), v=(0, -1, 0))
 
-    brow = AlignmentMesh("Brow", ((4, -1.5, 7),), ())
-    brow_alignment = solve(body, face, brow, refine=False)
+    brow = AlignmentMesh("Marker", ((4, -1.5, 7),), ())
+    brow_alignment = solve(body, face, brow, landmark_kind="brow", refine=False)
     brow_mapped = transform_point(brow_alignment.matrix, brow.positions[0])
     assert brow_mapped[1] > 2
 
@@ -77,7 +77,7 @@ def test_already_aligned_face_stays_aligned_and_bad_spacing_is_rejected():
     body = _body_eyes((-0.75, 2, 3), (0.75, 2, 3))
     aligned = _face_mesh(((-0.75, 2, 3), (0.75, 2, 3)), h=(1, 0, 0),
                          v=(0, 1, 0))
-    result = solve(body, aligned, refine=False)
+    result = solve(body, aligned)
     assert result is not None
     assert result.matrix[0][0] == pytest.approx(1)
     assert result.matrix[1][1] == pytest.approx(1)
@@ -87,6 +87,43 @@ def test_already_aligned_face_stays_aligned_and_bad_spacing_is_rejected():
     too_wide = _face_mesh(((-1.25, 2, 3), (1.25, 2, 3)), h=(1, 0, 0),
                           v=(0, 1, 0))
     assert solve(body, too_wide, refine=False) is None
+
+
+def test_target_eye_axis_is_horizontal_even_when_centers_have_uneven_height():
+    body = _body_eyes((-0.75, 1.8, 3), (0.75, 2.2, 3))
+    face = _face_mesh(((4, -2, 6.25), (4, -2, 7.75)))
+
+    alignment = solve(body, face, refine=False)
+
+    assert alignment is not None
+    mapped = [transform_point(alignment.matrix, point)
+              for point in (face.positions[0], face.positions[9])]
+    assert mapped[0][1] == pytest.approx(2.0, abs=1e-5)
+    assert mapped[1][1] == pytest.approx(2.0, abs=1e-5)
+
+
+def test_surface_refinement_uses_corresponding_eye_surfaces():
+    identity = ((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0),
+                (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    body_centers = ((-1.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+    body_groups = (
+        ((-1.0, -0.04, 0.0), (-1.0, 0.04, 0.0),
+         (-1.0, 0.0, -0.04), (-1.0, 0.0, 0.04)),
+        ((1.0, -0.04, 0.0), (1.0, 0.04, 0.0),
+         (1.0, 0.0, -0.04), (1.0, 0.0, 0.04)),
+    )
+    face_points = tuple(
+        (center[0], 0.2, center[2] + offset)
+        for center in body_centers for offset in (-0.04, 0.04))
+
+    fitted, improvement = _fit_eye_surface_offset(
+        face_points, tuple(point for group in body_groups for point in group),
+        identity, (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), 2.0,
+        face_centers=body_centers, body_centers=body_centers,
+        body_groups=body_groups)
+
+    assert improvement >= 0.02
+    assert fitted[1][3] == pytest.approx(-0.2, abs=0.03)
 
 
 def test_packed_helpers_transform_positions_and_authored_normals_only():

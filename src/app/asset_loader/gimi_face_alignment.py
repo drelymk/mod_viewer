@@ -115,19 +115,14 @@ def _initial_eye_centers(points):
     return points[pair[0]], points[pair[1]]
 
 
-def find_two_eye_centers(positions):
-    """Return the consistently ordered centers of two point clusters.
-
-    The largest geometric span seeds a deterministic two-means fit.  Centers
-    are ordered along their dominant separation axis, which gives callers a
-    stable left-to-right bilateral axis without relying on vertex order.
-    """
+def _cluster_two_means(positions):
+    """Return ordered two-means centers and their point groups."""
     points = _clean_points(positions)
     if len(points) < 4:
-        return None
+        return None, None
     centers = _initial_eye_centers(points)
     if centers is None:
-        return None
+        return None, None
     centers = [centers[0], centers[1]]
     groups = ((), ())
     for _ in range(32):
@@ -137,7 +132,7 @@ def find_two_eye_centers(positions):
                          for center in centers]
             grouped[0 if distances[0] <= distances[1] else 1].append(point)
         if not all(grouped):
-            return None
+            return None, None
         updated = [_mean(group) for group in grouped]
         if updated == centers:
             groups = (tuple(grouped[0]), tuple(grouped[1]))
@@ -147,13 +142,25 @@ def find_two_eye_centers(positions):
     else:
         groups = (tuple(grouped[0]), tuple(grouped[1]))
     if min(len(group) for group in groups) < 2:
-        return None
+        return None, None
     separation = _sub(centers[1], centers[0])
     if _length(separation) <= _EPSILON:
-        return None
+        return None, None
     axis = max(range(3), key=lambda index: abs(separation[index]))
-    ordered = sorted(centers, key=lambda value: value[axis])
-    return tuple(ordered)
+    order = sorted(range(2), key=lambda index: centers[index][axis])
+    return (tuple(centers[index] for index in order),
+            tuple(groups[index] for index in order))
+
+
+def find_two_eye_centers(positions):
+    """Return the consistently ordered centers of two point clusters.
+
+    The largest geometric span seeds a deterministic two-means fit.  Centers
+    are ordered along their dominant separation axis, which gives callers a
+    stable left-to-right bilateral axis without relying on vertex order.
+    """
+    centers, _groups = _cluster_two_means(positions)
+    return centers
 
 
 def _boundary_components(mesh):
@@ -224,12 +231,18 @@ def _select_eye_loop_pair(mesh, body_separation=None):
                      if body_separation and body_separation > _EPSILON else 0.0)
             if body_separation and error > _MAX_SEPARATION_ERROR:
                 continue
-            candidates.append((error, -distance, left_component,
+            topology_penalty = (abs(len(left_component) - len(right_component))
+                                / max(len(left_component),
+                                      len(right_component)))
+            if topology_penalty > 0.05:
+                continue
+            candidates.append((error + topology_penalty, topology_penalty,
+                               -distance, left_component,
                                right_component, left_center, right_center))
     if not candidates:
         return None
-    _, _, first_component, second_component, first_center, second_center = min(
-        candidates, key=lambda item: item[:2])
+    _, _, _, first_component, second_component, first_center, second_center = min(
+        candidates, key=lambda item: item[:3])
     axis, _ = _dominant_axis(_sub(second_center, first_center))
     if first_center[axis] <= second_center[axis]:
         return ((first_component, first_center),
@@ -305,49 +318,116 @@ def _with_translation(matrix, translation):
             matrix[3])
 
 
-def _trimmed_surface_error(face_points, body_points, matrix):
+def _sample_points(points, limit=256):
+    if len(points) <= limit:
+        return tuple(points)
+    return tuple(points[round(index * (len(points) - 1) / (limit - 1))]
+                 for index in range(limit))
+
+
+def _split_near_eye(points, centers, radius):
+    groups = [[], []]
+    for point in points:
+        distances = [_length(_sub(point, center)) for center in centers]
+        side = 0 if distances[0] <= distances[1] else 1
+        if distances[side] <= radius:
+            groups[side].append(point)
+    return tuple(_sample_points(group) for group in groups)
+
+
+def _cluster_extent(groups, centers):
+    return max((_length(_sub(point, centers[index]))
+                for index, group in enumerate(groups) for point in group),
+               default=0.0)
+
+
+def _trimmed_surface_error(face_groups, body_groups, matrix):
     distances = []
-    for point in face_points:
-        transformed = transform_point(matrix, point)
-        nearest = min((_length(_sub(transformed, candidate))
-                       for candidate in body_points), default=None)
-        if nearest is not None and math.isfinite(nearest):
-            distances.append(nearest * nearest)
+    for face_points, body_points in zip(face_groups, body_groups):
+        for point in face_points:
+            transformed = transform_point(matrix, point)
+            nearest = min((_length(_sub(transformed, candidate))
+                           for candidate in body_points), default=None)
+            if nearest is not None and math.isfinite(nearest):
+                distances.append(nearest * nearest)
     if not distances:
         return None
     distances.sort()
-    keep = max(1, int(math.ceil(len(distances) * 0.8)))
+    keep = max(1, int(math.ceil(len(distances) * 0.7)))
     return sum(distances[:keep]) / keep
 
 
 def _fit_eye_surface_offset(face_points, body_points, matrix,
-                            target_v, target_f, separation):
-    """Try a bounded up/forward-only refinement and return its diagnostics."""
-    if not face_points or len(body_points) < 2 or separation <= _EPSILON:
+                            target_v, target_f, separation, *,
+                            face_centers=None, body_centers=None,
+                            body_groups=None):
+    """Fit corresponding eye surfaces with bounded up/forward translations."""
+    if (not face_points or len(body_points) < 2
+            or separation <= _EPSILON):
         return matrix, 0.0
-    baseline = _trimmed_surface_error(face_points, body_points, matrix)
+    if face_centers is None or body_centers is None or body_groups is None:
+        face_groups = (tuple(face_points),)
+        reference_groups = (tuple(body_points),)
+    else:
+        face_radius = max(separation * 0.45, _EPSILON)
+        face_groups = _split_near_eye(
+            face_points, face_centers, face_radius)
+        reference_groups = tuple(_sample_points(group) for group in body_groups)
+        if any(not group for group in face_groups + reference_groups):
+            return matrix, 0.0
+    baseline = _trimmed_surface_error(face_groups, reference_groups, matrix)
     if baseline is None or baseline <= _EPSILON:
         return matrix, 0.0
-    extent = max(separation * 0.15, 1e-5)
-    candidates = []
-    for up_step in (-1.0, -0.5, 0.0, 0.5, 1.0):
-        for forward_step in (-1.0, -0.5, 0.0, 0.5, 1.0):
-            offset = _add(_scale(target_v, up_step * extent),
-                          _scale(target_f, forward_step * extent))
-            candidate = _with_translation(
-                matrix, _add((matrix[0][3], matrix[1][3], matrix[2][3]),
-                             offset))
-            error = _trimmed_surface_error(face_points, body_points, candidate)
-            if error is not None:
-                candidates.append((error, candidate))
-    if not candidates:
-        return matrix, 0.0
-    best_error, best_matrix = min(candidates, key=lambda item: item[0])
+    if face_centers is None or body_centers is None:
+        eye_scale = separation * 0.05
+    else:
+        eye_scale = max(
+            _cluster_extent(face_groups, face_centers),
+            _cluster_extent(reference_groups, body_centers),
+            separation * 0.04)
+    up_range = min(max(eye_scale * 1.5, separation * 0.05),
+                   separation * 0.30)
+    forward_range = min(max(eye_scale, separation * 0.05),
+                         separation * 0.30)
+    base_translation = (matrix[0][3], matrix[1][3], matrix[2][3])
+    best_error = baseline
+    best_matrix = matrix
+    best_up = 0.0
+    best_forward = 0.0
+
+    def evaluate(up, forward):
+        nonlocal best_error, best_matrix, best_up, best_forward
+        offset = _add(_scale(target_v, up), _scale(target_f, forward))
+        candidate = _with_translation(matrix, _add(base_translation, offset))
+        error = _trimmed_surface_error(face_groups, reference_groups, candidate)
+        if error is not None and error < best_error:
+            best_error = error
+            best_matrix = candidate
+            best_up = up
+            best_forward = forward
+
+    for up_step in range(9):
+        up = (up_step / 4.0 - 1.0) * up_range
+        for forward_step in range(9):
+            forward = (forward_step / 4.0 - 1.0) * forward_range
+            evaluate(up, forward)
+    local_up_range = up_range / 4.0
+    local_forward_range = forward_range / 4.0
+    for _ in range(4):
+        local_up_range /= 2.0
+        local_forward_range /= 2.0
+        for up_step in range(5):
+            up = best_up + (up_step / 2.0 - 1.0) * local_up_range
+            for forward_step in range(5):
+                forward = (best_forward
+                           + (forward_step / 2.0 - 1.0) * local_forward_range)
+                evaluate(up, forward)
     improvement = (baseline - best_error) / baseline
     return (best_matrix if improvement >= 0.02 else matrix), improvement
 
 
-def solve(body_eyes, face_anchor, landmark=None, *, refine=True):
+def solve(body_eyes, face_anchor, landmark=None, *, landmark_kind=None,
+          refine=True):
     """Derive one conservative rigid face-to-character alignment.
 
     ``body_eyes`` supplies the target eye centers and ``face_anchor`` supplies
@@ -360,7 +440,7 @@ def solve(body_eyes, face_anchor, landmark=None, *, refine=True):
         return None
     if not all(_finite_vec(point) for point in face_anchor.positions):
         return None
-    body_centers = find_two_eye_centers(body_points)
+    body_centers, body_groups = _cluster_two_means(body_points)
     if body_centers is None:
         return None
     body_separation_vector = _sub(body_centers[1], body_centers[0])
@@ -390,14 +470,22 @@ def solve(body_eyes, face_anchor, landmark=None, *, refine=True):
     if landmark_points:
         landmark_relative = _sub(_mean(landmark_points), eye_midpoint)
         landmark_height = _dot(landmark_relative, source_v)
-        is_brow = "brow" in str(getattr(landmark, "name", "")).casefold()
+        is_brow = (landmark_kind == "brow" or
+                   (landmark_kind is None and
+                    "brow" in str(getattr(landmark, "name", "")).casefold()))
         if ((is_brow and landmark_height < -_EPSILON)
                 or (not is_brow and landmark_height > _EPSILON)):
             source_h = _scale(source_h, -1.0)
             source_v = _scale(source_v, -1.0)
 
-    target_h = _normalize(body_separation_vector)
     target_v = (0.0, 1.0, 0.0)
+    target_h = _normalize(body_separation_vector)
+    if target_h is None:
+        return None
+    target_h = _normalize(_sub(
+        target_h, _scale(target_v, _dot(target_h, target_v))))
+    if target_h is None:
+        return None
     target_f = _normalize(_cross(target_h, target_v))
     if target_f is None:
         return None
@@ -412,12 +500,12 @@ def solve(body_eyes, face_anchor, landmark=None, *, refine=True):
     matrix = _matrix(rotation, _sub(body_midpoint, rotated_midpoint))
 
     refinement = 0.0
-    loop_points = [face_anchor.positions[index]
-                   for index in (*left_loop, *right_loop)]
+    face_points = _clean_points(face_anchor.positions)
     if refine:
         matrix, refinement = _fit_eye_surface_offset(
-            loop_points, body_points, matrix, target_v, target_f,
-            body_separation)
+            face_points, body_points, matrix, target_v, target_f,
+            body_separation, face_centers=(left_center, right_center),
+            body_centers=body_centers, body_groups=body_groups)
     return GimiFaceAlignment(matrix, {
         "body_eye_separation": body_separation,
         "face_eye_separation": _length(_sub(right_center, left_center)),
@@ -426,9 +514,11 @@ def solve(body_eyes, face_anchor, landmark=None, *, refine=True):
     })
 
 
-def solve_face_alignment(body_eyes, face_anchor, landmark=None, *, refine=True):
+def solve_face_alignment(body_eyes, face_anchor, landmark=None, *,
+                         landmark_kind=None, refine=True):
     """Descriptive alias for callers outside the geometry module."""
-    return solve(body_eyes, face_anchor, landmark, refine=refine)
+    return solve(body_eyes, face_anchor, landmark,
+                 landmark_kind=landmark_kind, refine=refine)
 
 
 def unpack_f32x3(data):

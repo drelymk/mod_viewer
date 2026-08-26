@@ -30,9 +30,6 @@ _TEXTURE_SUFFIXES = (
     ("light_map", "lightmap"),
     ("material_map", "materialmap"),
 )
-_FACE_COMPONENT_NAMES = frozenset({
-    "face", "eye", "mouth", "nose", "brow", "eyebrows",
-})
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,44 +393,65 @@ def _record_name(record):
         f"{record.component_name or ''}{_record_prefix(record)}")
 
 
+def _component_face_kind(value):
+    component = _compact_name(value)
+    exact = {
+        "face": "face", "facemesh": "face", "facehead": "face",
+        "eye": "eye", "eyes": "eyes", "mouth": "mouth",
+        "nose": "nose", "brow": "brow", "eyebrows": "brow",
+    }
+    if component in exact:
+        return exact[component]
+    for prefix, kind in (
+        ("faceeyebrow", "brow"), ("facebrow", "brow"),
+        ("faceeye", "eye"), ("facemouth", "mouth"),
+        ("facenose", "nose"),
+    ):
+        if component.startswith(prefix):
+            return kind
+    return None
+
+
+def _filename_face_kind(record):
+    prefix = _record_prefix(record)
+    for token, kind in (
+        ("faceeyebrow", "brow"), ("facebrow", "brow"),
+        ("faceeye", "eye"), ("facemouth", "mouth"),
+        ("facenose", "nose"),
+    ):
+        if token in prefix:
+            return kind
+    return "face" if "face" in prefix else None
+
+
 def _is_native_eyes_record(record):
-    name = _record_name(record)
-    if "face" in name:
-        return False
     component = _compact_name(record.component_name)
-    return "eyes" in name or component == "eyes"
+    if component:
+        return component == "eyes"
+    return "eyes" in _record_prefix(record)
 
 
 def _is_face_local_record(record):
-    if _is_native_eyes_record(record):
-        return False
     component = _compact_name(record.component_name)
-    name = _record_name(record)
-    return (component in _FACE_COMPONENT_NAMES
-            or any(token in component for token in _FACE_COMPONENT_NAMES)
-            or any(token in name for token in _FACE_COMPONENT_NAMES))
+    if component:
+        return _component_face_kind(component) in {
+            "face", "eye", "mouth", "nose", "brow"
+        }
+    return _filename_face_kind(record) is not None
 
 
 def _is_face_anchor_record(record):
     component = _compact_name(record.component_name)
-    prefix = _record_prefix(record)
-    return ("faceeye" in component or "faceeye" in prefix
-            or component in {"face", "facemesh"}
-            or ("face" in prefix
-                and not any(token in prefix
-                            for token in ("mouth", "brow", "eyebrow", "nose"))))
+    if component:
+        return _component_face_kind(component) in {"face", "eye"}
+    return _filename_face_kind(record) in {"face", "eye"}
 
 
 def _landmark_kind(record):
     component = _compact_name(record.component_name)
-    name = _record_name(record)
-    if "brow" in component or "eyebrow" in component:
-        return "brow"
-    if "brow" in name or "eyebrow" in name:
-        return "brow"
-    if "mouth" in component or "mouth" in name:
-        return "mouth"
-    return None
+    kind = (_component_face_kind(component) if component
+            else _filename_face_kind(record))
+    return kind if kind in {"brow", "mouth"} else None
 
 
 def _reference_score(record):
@@ -462,7 +480,8 @@ def _alignment_vertex(record, vertex_cache):
     return vertex_cache[record.vb_file]
 
 
-def _alignment_mesh(record, vertex_cache, ib_cache, *, with_indices):
+def _alignment_mesh(record, vertex_cache, ib_cache, *, with_indices,
+                    name_override=None):
     vertex_dump = _alignment_vertex(record, vertex_cache)
     if vertex_dump is None:
         return None
@@ -481,7 +500,7 @@ def _alignment_mesh(record, vertex_cache, ib_cache, *, with_indices):
     except ValueError:
         return None
     return gimi_face_alignment.AlignmentMesh(
-        record.component_name or "GIMI alignment", positions,
+        name_override or record.component_name or "GIMI alignment", positions,
         tuple(indices))
 
 
@@ -513,16 +532,19 @@ def _solve_face_alignment(records, vertex_cache, ib_cache):
             if face_mesh is None:
                 continue
             landmark_mesh = None
+            landmark_kind = None
             for kind in ("brow", "mouth"):
                 if not landmarks[kind]:
                     continue
                 landmark_mesh = _alignment_mesh(
                     landmarks[kind][0], vertex_cache, ib_cache,
-                    with_indices=False)
+                    with_indices=False, name_override=kind)
                 if landmark_mesh is not None:
+                    landmark_kind = kind
                     break
             alignment = gimi_face_alignment.solve(
-                body_mesh, face_mesh, landmark_mesh)
+                body_mesh, face_mesh, landmark_mesh,
+                landmark_kind=landmark_kind)
             if alignment is not None:
                 return alignment
     return None
