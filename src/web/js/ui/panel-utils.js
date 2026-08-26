@@ -49,3 +49,34 @@ export function buildSourceSection(source, container, {
   container.append(header, items);
   return items;
 }
+
+// Collapse a panel body while preserving the shared local preference.
+export function initPanelCollapse(panel, contentId) {
+  const hdr = panel.querySelector('.panel-hdr');
+  const chevron = hdr.querySelector('.group-toggle');
+  const content = document.getElementById(contentId);
+  const storageKey = `mod-viewer.panel.${panel.id}.collapsed`;
+  const setCollapsed = (collapsed, persist = true) => {
+    chevron.classList.toggle('collapsed', collapsed);
+    content.classList.toggle('collapsed', collapsed);
+    chevron.setAttribute('aria-expanded', String(!collapsed));
+    chevron.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${panel.querySelector('h3')?.textContent || 'panel'}`);
+    if (persist) {
+      try { localStorage.setItem(storageKey, String(collapsed)); } catch (_) { /* private mode */ }
+    }
+  };
+  let initiallyCollapsed = false;
+  try { initiallyCollapsed = localStorage.getItem(storageKey) === 'true'; } catch (_) { /* private mode */ }
+  chevron.setAttribute('aria-controls', contentId);
+  setCollapsed(initiallyCollapsed, false);
+  const toggle = (event) => {
+    if (event?.target?.closest?.('.icon-btn, .panel-hdr-actions, .panel-actions, .panel-action-menu')) return;
+    event?.stopPropagation?.();
+    setCollapsed(!content.classList.contains('collapsed'));
+  };
+  hdr.addEventListener('click', event => {
+    if (event.target.closest('.icon-btn, .group-toggle, .panel-hdr-actions, .panel-actions, .panel-action-menu')) return;
+    setCollapsed(!content.classList.contains('collapsed'));
+  });
+  chevron.addEventListener('click', toggle);
+}
