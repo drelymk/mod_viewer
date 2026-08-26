@@ -11,23 +11,31 @@ from core.textures import encode_texture_data_uri
 from app.mods.analysis import _ini_rel, analyze_mod_inis
 
 
-def _gating_vars(payload):
-    """Variables that decide some mesh's visibility or its texture."""
+_VARIANT_FIELDS = (
+    "texture_variants", "normal_map_variants", "normal_data_variants",
+    "light_map_variants", "material_map_variants",
+)
+
+
+def _gating_vars_from_entries(entries):
+    """Collect variables that decide entries' visibility or textures."""
     found = set()
-    for entry in payload.values():
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         for group in entry.get("conditions", []):
             for cond in group:
                 found.add(cond["var"])
-        for field in ("texture_variants", "normal_map_variants",
-                      "normal_data_variants", "light_map_variants",
-                      "material_map_variants"):
+        for field in _VARIANT_FIELDS:
             for variant in entry.get(field, []):
                 for group in variant.get("conditions", []):
                     for cond in group:
                         found.add(cond["var"])
     return found
+
+
+def _gating_vars(payload):
+    """Variables that decide some mesh's visibility or its texture."""
+    return _gating_vars_from_entries(
+        entry for entry in payload.values() if isinstance(entry, dict))
 
 
 def build_toggle_panel(toggle_keys, toggle_defaults, gating_vars, mod_dir=None,
@@ -149,34 +157,10 @@ def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
             groups, mod_dir, game_profile=game_profile)
         draws = (entry for label, entry in semantics.items()
                  if label in active_mesh_keys)
-        found = set()
-        for draw in draws:
-            for cond_group in draw.get("conditions", []):
-                for cond in cond_group:
-                    found.add(cond["var"])
-            for field in ("texture_variants", "normal_map_variants",
-                          "normal_data_variants", "light_map_variants",
-                          "material_map_variants"):
-                for variant in draw.get(field, []):
-                    for cond_group in variant.get("conditions", []):
-                        for cond in cond_group:
-                            found.add(cond["var"])
-        return found
+        return _gating_vars_from_entries(draws)
 
-    found = set()
-    for group in groups:
-        for draw in group.get("draws", []):
-            for cond_group in draw.get("conditions", []):
-                for cond in cond_group:
-                    found.add(cond["var"])
-            for field in ("texture_variants", "normal_map_variants",
-                          "normal_data_variants", "light_map_variants",
-                          "material_map_variants"):
-                for variant in draw.get(field, []):
-                    for cond_group in variant.get("conditions", []):
-                        for cond in cond_group:
-                            found.add(cond["var"])
-    return found
+    return _gating_vars_from_entries(
+        draw for group in groups for draw in group.get("draws", []))
 
 
 def load_present_state(context, overrides=None):

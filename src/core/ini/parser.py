@@ -27,7 +27,7 @@ from .sections import (SrcLine, extract_resources, first_source, line_source,
                        merge_sections, parse_sections, sections_from_document)
 from .state import extract_state_rules
 from .texture_roles import (
-    TextureOverrideIndex, TextureReplacement, _AUX_MAP_CHANNELS,
+    TextureOverrideIndex, TextureReplacement,
     _LEGACY_TEXTURE_RESOURCE_RE, _SEMANTIC_TEXTURE_RESOURCE_RE,
     _SEMANTIC_TEXTURE_ROLES, _TEXTURE_SOURCE_PRIORITY,
     _collect_slot_role_hints, _collect_structural_slot_role_hints,

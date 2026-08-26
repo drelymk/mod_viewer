@@ -63,11 +63,6 @@ class TextureOverrideIndex:
             replacements_by_hash=replacements)
 
 
-_AUX_MAP_CHANNELS = {
-    "normalmap": "normal_map",
-    "lightmap": "light_map",
-    "materialmap": "material_map",
-}
 _SEMANTIC_TEXTURE_ROLES = {
     "diffuse": "diffuse",
     "normalmap": "normal_map",
