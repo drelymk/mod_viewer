@@ -97,3 +97,22 @@ filename = body-light-map.dds
     assert (draws[0].geometry_match.hash,
             draws[0].geometry_match.first_index,
             draws[0].geometry_match.index_count) == ("0123abcd", 9, 3)
+
+
+def test_draw_groups_preserve_inline_run_snapshots_without_buffer_files():
+    sections = parse_sections("sample.ini", text="""[TextureOverrideBody]
+ib = ResourceMissingIB
+vb0 = ResourceMissingPosition
+run = CommandListBody
+drawindexed = 3, 3, 0
+
+[CommandListBody]
+vb1 = ResourceMissingTexcoord
+drawindexed = 3, 0, 0
+""")
+
+    body = _scan_sections_for_draws(sections)["TextureOverrideBody"]
+    assert [(draw.start, draw.index_resource) for draw in body["draws"]] == [
+        (0, "ResourceMissingIB"), (3, "ResourceMissingIB")]
+    assert body["draws"][0].vertex_resources == {
+        0: "ResourceMissingPosition", 1: "ResourceMissingTexcoord"}

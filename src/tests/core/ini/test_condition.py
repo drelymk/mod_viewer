@@ -63,29 +63,31 @@ def red(src, bindings):
     return ic.render(ic.reduce(ic.parse(src), bindings))
 
 
-def test_reduce_decides():
-    assert (red("$v == 1", {"v": "1"}) == TRUE), ("matching == folds to TRUE")
-    assert (red("$v == 1", {"v": "0"}) == FALSE), ("non-matching == folds to FALSE")
-    assert (red("$v != 1", {"v": "0"}) == TRUE), ("!= folds")
-    assert (red("$v == 1", {"v": "1.0"}) == TRUE), ("1 and 1.0 compare numerically")
-    assert (red("$v", {"v": "0"}) == FALSE), ("bare $v is false at 0")
-    assert (red("$v", {"v": "3"}) == TRUE), ("bare $v is true when non-zero")
-    assert (red("!$v", {"v": "0"}) == TRUE), ("! inverts")
-
-
-def test_reduce_preserves_unknowns():
-    """The reason this module exists: untouched variables survive verbatim."""
-    assert (red("$v == 1 && $DRAW_TYPE == 1", {"v": "1"}) == "$DRAW_TYPE == 1"), ("true conjunct drops out, unknown survives")
-    assert (red("$v == 1 && $DRAW_TYPE == 1", {"v": "0"}) == FALSE), ("false conjunct kills the whole AND")
-    assert (red("$v == 1 || $DRAW_TYPE == 1", {"v": "0"}) == "$DRAW_TYPE == 1"), ("false disjunct drops out")
-    assert (red("$v == 1 || $DRAW_TYPE == 1", {"v": "1"}) == TRUE), ("true disjunct satisfies the whole OR")
-    assert (red("$other == 1", {"v": "1"}) == "$other == 1"), ("an unbound condition is returned untouched")
-    assert (red("$a == 1 && $b == 2 && $c == 3", {"b": "2"}) == "$a == 1 && $c == 3"), ("middle conjunct removed, order preserved")
-    assert (red("$v == 1 && ($a == 1 || $b == 2)", {"v": "1"}) == "($a == 1 || $b == 2)"), ("parentheses preserved when the other side folds")
-    assert (red("$cpx > $mx + 0.0125", {"v": "1"}) == "$cpx > $mx + 0.0125"), ("arithmetic is carried through untouched")
-    assert (red("$v == 1 && vs-cb3 == 3381.7777", {"v": "1"}) == "vs-cb3 == 3381.7777"), ("slot-name operands survive")
-    assert (red("vs-cb3 == 3381.7777", {}) == "vs-cb3 == 3381.7777"), ("a bare word is a runtime value, never folded as a string")
-    assert (red("ResourceMergedSkeleton !== null", {}) == "ResourceMergedSkeleton !== null"), ("resource-vs-null comparison survives")
+@pytest.mark.parametrize("source, bindings, expected", [
+    ("$v == 1", {"v": "1"}, TRUE),
+    ("$v == 1", {"v": "0"}, FALSE),
+    ("$v != 1", {"v": "0"}, TRUE),
+    ("$v == 1", {"v": "1.0"}, TRUE),
+    ("$v", {"v": "0"}, FALSE),
+    ("$v", {"v": "3"}, TRUE),
+    ("!$v", {"v": "0"}, TRUE),
+    ("$v == 1 && $DRAW_TYPE == 1", {"v": "1"}, "$DRAW_TYPE == 1"),
+    ("$v == 1 && $DRAW_TYPE == 1", {"v": "0"}, FALSE),
+    ("$v == 1 || $DRAW_TYPE == 1", {"v": "0"}, "$DRAW_TYPE == 1"),
+    ("$v == 1 || $DRAW_TYPE == 1", {"v": "1"}, TRUE),
+    ("$other == 1", {"v": "1"}, "$other == 1"),
+    ("$a == 1 && $b == 2 && $c == 3", {"b": "2"}, "$a == 1 && $c == 3"),
+    ("$v == 1 && ($a == 1 || $b == 2)", {"v": "1"}, "($a == 1 || $b == 2)"),
+    ("$cpx > $mx + 0.0125", {"v": "1"}, "$cpx > $mx + 0.0125"),
+    ("$v == 1 && vs-cb3 == 3381.7777", {"v": "1"}, "vs-cb3 == 3381.7777"),
+    ("vs-cb3 == 3381.7777", {}, "vs-cb3 == 3381.7777"),
+    ("ResourceMergedSkeleton !== null", {}, "ResourceMergedSkeleton !== null"),
+], ids=["equal", "not-equal", "not-equal-operator", "numeric", "bare-false",
+        "bare-true", "negation", "and-unknown", "and-false", "or-unknown",
+        "or-true", "unbound", "middle-conjunct", "parentheses", "arithmetic",
+        "slot-operand", "runtime-value", "resource-null"])
+def test_condition_reduce(source, bindings, expected):
+    assert red(source, bindings) == expected
 
 
 
@@ -96,37 +98,25 @@ def elim(src, dead_vars):
     return ic.render(ic.eliminate(ic.parse(src), dead_vars))
 
 
-def test_eliminate_decides():
-    assert (elim("$v == 1", ["v"]) == TRUE), ("bare comparison on a dead var folds to TRUE")
-    assert (elim("$v != 1", ["v"]) == TRUE), ("!= on a dead var also folds to TRUE (never FALSE)")
-    assert (elim("$v", ["v"]) == TRUE), ("bare truthiness check on a dead var folds to TRUE")
-    assert (elim("$v < 3", ["v"]) == TRUE), ("ordering comparison on a dead var folds to TRUE")
-    assert (elim("1 == $v", ["v"]) == TRUE), ("dead var on the right-hand side also folds")
-
-
-def test_eliminate_preserves_survivors():
-    assert (elim("$v == 1 && $DRAW_TYPE == 1", ["v"]) == "$DRAW_TYPE == 1"), ("ANDed survivor kept when the dead var drops out")
-    assert (elim("$v == 1 || $DRAW_TYPE == 1", ["v"]) == TRUE), ("OR containing a dead var folds the whole OR to TRUE")
-    assert (elim("$a == 1 && $b == 2 && $c == 3", ["b"]) == "$a == 1 && $c == 3"), ("middle conjunct removed, order preserved")
-    assert (elim("$v == 1 && ($a == 1 || $b == 2)", ["v"]) == "($a == 1 || $b == 2)"), ("parentheses preserved when the dead var's side folds")
-    assert (elim("($v == 1 || $a == 2) && $DRAW_TYPE == 1", ["v"]) == "$DRAW_TYPE == 1"), ("nested parens: dead var anywhere inside an OR folds the whole OR to TRUE")
-    assert (elim("!($v == 1 && $a == 2)", ["v"]) == "!($a == 2)"), ("NOT keeps its parens around a surviving AND, same as reduce()")
-
-
-
-
-def test_eliminate_negation_can_legitimately_produce_false():
-    """Not a bug: eliminate() substitutes TRUE for a dead var's clauses and
-    then applies ordinary boolean algebra, same as reduce() â€” so a `!` wholly
-    wrapping an all-dead-vars subtree inverts that TRUE to FALSE, exactly like
-    negating any other known-true condition would. `if !$v` becoming `if 0`
-    once `$v` is deleted is the expected, deterministic outcome, not an
-    unreachable corner case (delete_toggle() surfaces these as
-    `always_false_gates` precisely because it's a real, common shape)."""
-    assert (elim("!$v", ["v"]) == FALSE), ("bare negated dead var folds to FALSE")
-    assert (elim("!($v == 1)", ["v"]) == FALSE), ("negated == comparison on a dead var folds to FALSE")
-    assert (elim("!($v == 1 && $w == 2)", ["v", "w"]) == FALSE), ("negated AND of two dead vars folds to FALSE")
-    assert (elim("!($v == 1 || $a == 2)", ["v"]) == FALSE), ("negated OR short-circuits to TRUE internally, then NOT inverts to FALSE")
+@pytest.mark.parametrize("source, dead_vars, expected", [
+    ("$v == 1", ["v"], TRUE), ("$v != 1", ["v"], TRUE),
+    ("$v", ["v"], TRUE), ("$v < 3", ["v"], TRUE),
+    ("1 == $v", ["v"], TRUE),
+    ("$v == 1 && $DRAW_TYPE == 1", ["v"], "$DRAW_TYPE == 1"),
+    ("$v == 1 || $DRAW_TYPE == 1", ["v"], TRUE),
+    ("$a == 1 && $b == 2 && $c == 3", ["b"], "$a == 1 && $c == 3"),
+    ("$v == 1 && ($a == 1 || $b == 2)", ["v"], "($a == 1 || $b == 2)"),
+    ("($v == 1 || $a == 2) && $DRAW_TYPE == 1", ["v"], "$DRAW_TYPE == 1"),
+    ("!($v == 1 && $a == 2)", ["v"], "!($a == 2)"),
+    ("!$v", ["v"], FALSE), ("!($v == 1)", ["v"], FALSE),
+    ("!($v == 1 && $w == 2)", ["v", "w"], FALSE),
+    ("!($v == 1 || $a == 2)", ["v"], FALSE),
+], ids=["comparison", "not-equal", "bare", "ordering", "right-hand",
+        "and-survivor", "or-short-circuit", "middle-survivor", "parentheses",
+        "nested-or", "not-survivor", "negated-bare", "negated-comparison",
+        "negated-all-dead", "negated-or"])
+def test_condition_eliminate(source, dead_vars, expected):
+    assert elim(source, dead_vars) == expected
 
 
 def test_eliminate_dead_var_inside_arithmetic():

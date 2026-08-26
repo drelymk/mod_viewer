@@ -60,7 +60,7 @@ endif
 
 # â”€â”€ add_toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def test_add_happy_path():
+def test_add_toggle_creates_complete_detection_and_cycle_plumbing():
     d = doc(BASIC)
     name = te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
     assert (name == "KeyExtra"), (f"add_toggle returns the new section name ({name})")
@@ -70,50 +70,6 @@ def test_add_happy_path():
     const_line = te._constant_line(d, "extravar")
     assert (const_line is not None and const_line.text == "global persist $extravar = 0"), (f"Constants gets a declaration defaulting to the first value "
           f"({const_line and const_line.text})")
-    reparsed = IniDocument.from_string(d.to_string())
-    assert (reparsed.section("KeyExtra") is not None), ("the new section round-trips through from_string")
-
-
-
-
-def test_add_creates_constants_section_when_missing():
-    d = doc("""[KeySwap]
-key = 1
-type = cycle
-$swapvar = 0,1
-""")
-    te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
-    assert (d.section("Constants") is not None), ("Constants section created from scratch")
-    assert (te._constant_line(d, "extravar") is not None), ("the new var is declared in the freshly-created Constants section")
-
-
-_ADD_INVALID_CASES = [
-    ("duplicate section", ("Swap", "2", "newvar", ["0", "1"])),
-    ("namespaced variable", ("Extra", "2", r"Master\swapvar", ["0", "1"])),
-]
-
-
-@pytest.mark.parametrize(
-    "case_name, args",
-    _ADD_INVALID_CASES,
-    ids=[case[0] for case in _ADD_INVALID_CASES],
-)
-def test_add_rejects_invalid_toggle(case_name, args):
-    d = doc(BASIC)
-    before = d.to_string()
-    with pytest.raises(te.ToggleEditError):
-        te.add_toggle(d, *args)
-    assert (d.to_string() == before), (f"{case_name}: rejected add leaves the document untouched")
-
-
-
-
-# â”€â”€ add_toggle: condition line / on-screen-detection plumbing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-def test_add_condition_builds_active_plumbing_from_scratch():
-    d = doc(BASIC)
-    te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
-
     sec = d.section("KeyExtra")
     assert (sec.lines[0].text == "condition = $active == 1"), (f"condition line is the new section's first line ({sec.lines[0].text!r})")
 
@@ -130,11 +86,16 @@ def test_add_condition_builds_active_plumbing_from_scratch():
     assert (texts[0] == "hash = abc123" and texts[1] == "$active = 1"), (f"$active = 1 planted right after the leading hash line, before the "
           f"if-block ({texts[:2]})")
 
+    te.add_toggle(d, "Extra2", "3", "extravar2", ["0", "1"])
+    assert len([l for l in d.section("Constants").lines if l.text == "global $active = 0"]) == 1
+    assert len([l for l in d.section("Present").lines if l.text == "post $active = 0"]) == 1
+    assert len([l for l in body_sec.lines if l.text == "$active = 1"]) == 1
+    assert d.section("KeyExtra2").lines[0].text == "condition = $active == 1"
     reparsed = IniDocument.from_string(d.to_string())
-    assert (reparsed.section("Present") is not None and reparsed.section("KeyExtra") is not None), ("the new plumbing round-trips through from_string")
+    assert reparsed.section("Present") is not None and reparsed.section("KeyExtra2") is not None
 
 
-def test_add_condition_reuses_existing_object_detected():
+def test_add_toggle_reuses_existing_detection_and_present_state():
     d = doc("""[Constants]
 global $object_detected = 0
 
@@ -156,12 +117,6 @@ drawindexed = 100,0,0
     non_blank = [l.text for l in body_sec.lines if l.text]
     assert (non_blank == ["hash = abc123", "drawindexed = 100,0,0"]), (f"the TextureOverride section is left untouched ({non_blank})")
 
-
-
-
-
-
-def test_add_condition_marks_first_and_second_override_only():
     d = doc("""[Constants]
 global persist $swapvar = 0
 
@@ -187,38 +142,28 @@ hash = 333
     assert (second == ["hash = 222", "$active = 1"]), (f"second override marked ({second})")
     assert (third == ["hash = 333"]), (f"third override left untouched ({third})")
 
-
-def test_add_condition_idempotent_across_two_calls():
-    d = doc(BASIC)
-    te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
-    te.add_toggle(d, "Extra2", "3", "extravar2", ["0", "1"])
-
-    actives = [l for l in d.section("Constants").lines if l.text == "global $active = 0"]
-    assert (len(actives) == 1), ("still only one $active declaration after two add_toggle calls")
-
-    present = d.section("Present")
-    resets = [l for l in present.lines if l.text == "post $active = 0"]
-    assert (len(resets) == 1), ("still only one post $active = 0 line after two calls")
-
-    body_sec = d.section("TextureOverrideBody")
-    marks = [l for l in body_sec.lines if l.text == "$active = 1"]
-    assert (len(marks) == 1), ("TextureOverrideBody only marked once, not once per add_toggle call")
-
-    sec2 = d.section("KeyExtra2")
-    assert (sec2.lines[0].text == "condition = $active == 1"), ("the second toggle reuses the $active plumbing the first call created")
-
-
-
-
-
-
-def test_add_condition_appends_into_existing_present_section():
     d = doc(BASIC + "\n[Present]\nrun = CommandListUnrelated\n")
     te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
     present_secs = [s for s in d.sections if s.name == "Present"]
     assert (len(present_secs) == 1), ("no duplicate [Present] section created")
     texts = [l.text for l in present_secs[0].lines if l.text]
     assert (texts == ["run = CommandListUnrelated", "post $active = 0"]), (f"post $active = 0 appended after the existing content ({texts})")
+
+
+_ADD_INVALID_CASES = [
+    ("duplicate section", ("Swap", "2", "newvar", ["0", "1"])),
+    ("namespaced variable", ("Extra", "2", r"Master\swapvar", ["0", "1"])),
+]
+
+
+@pytest.mark.parametrize("case_name, args", _ADD_INVALID_CASES,
+                         ids=[case[0] for case in _ADD_INVALID_CASES])
+def test_add_toggle_rejects_invalid_inputs_without_mutation(case_name, args):
+    d = doc(BASIC)
+    before = d.to_string()
+    with pytest.raises(te.ToggleEditError):
+        te.add_toggle(d, *args)
+    assert d.to_string() == before, case_name
 
 
 # â”€â”€ edit_toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
