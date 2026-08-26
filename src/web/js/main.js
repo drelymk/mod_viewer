@@ -4,40 +4,40 @@ import { adoptModelMeshes, fitTo, forgetModelMeshes, resetView,
          rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
          toggleGrid, toggleTrackballGizmo,
          getEnvironmentPreset, getLightMode, isRendererAvailable, rendererReady,
-         setEnvironmentPreset, setLightMode, getRenderCount } from './scene.js';
-import { ENVIRONMENT_PRESETS } from './environment.js';
-import { addTexture, refreshMeshTexture, removeTextures, setTextures } from './mesh-factory.js';
+         setEnvironmentPreset, setLightMode, getRenderCount } from './scene/scene.js';
+import { ENVIRONMENT_PRESETS } from './scene/environment.js';
+import { addTexture, refreshMeshTexture, removeTextures, setTextures } from './mesh/mesh-factory.js';
 import { activeMeshes, refreshAll, reset, resetMeshState, setStateRules,
          toggleWireframe, toggleSmoothShading, toggleGlossy, removeMesh,
-         updateMeshSemantics } from './visibility.js';
-import { initSelection, clearSelection } from './selection.js';
+         updateMeshSemantics } from './mesh/visibility.js';
+import { initSelection, clearSelection } from './scene/selection.js';
 import {
   appendMeshPanel, buildMeshPanel, refreshMeshAssetDiagnostics,
   removeAssetFillMeshPanel,
-} from './mesh-panel.js';
-import { buildTogglePanel } from './toggle-panel.js';
-import { buildMenuPanel } from './menu-panel.js';
-import { buildPresentPanel } from './present-panel.js';
-import { initModFolderPanel } from './mod-folder-panel.js';
-import { initAssetFolderPanel } from './asset-folder-panel.js';
-import { initLeftDock, setLeftDockTab, setMeshesAvailable } from './left-dock.js';
-import { alertDialog, confirmDialog } from './dialogs.js';
-import { setGeometryBlob } from './decode.js';
+} from './panels/mesh-panel.js';
+import { buildTogglePanel } from './panels/toggle-panel.js';
+import { buildMenuPanel } from './panels/menu-panel.js';
+import { buildPresentPanel } from './panels/present-panel.js';
+import { initModFolderPanel } from './panels/mod-folder-panel.js';
+import { initAssetFolderPanel } from './panels/asset-folder-panel.js';
+import { initLeftDock, setLeftDockTab, setMeshesAvailable } from './panels/left-dock.js';
+import { alertDialog, confirmDialog } from './ui/dialogs.js';
+import { setGeometryBlob } from './textures/decode.js';
 import { refreshHealthReport, setAssetResolution, setHealthLoader,
-         setHealthReport } from './health-report.js';
-import { setIniEditorContext } from './ini-editor.js';
-import { getMaterialDebugMode, setMaterialDebugMode } from './material-profile.js';
-import { requestRender } from './render-scheduler.js';
-import { setTextureDisplayMode } from './render-modes.js';
-import { clearInspector, initInspectorPanel } from './inspector-panel.js';
-import { initRightDock, setRightDockEnabled } from './right-dock.js';
-import { initPanelOpacityControl } from './appearance.js';
-import { createIcon } from './ui-icons.js';
+         setHealthReport } from './panels/health-report.js';
+import { setIniEditorContext } from './editing/ini-editor.js';
+import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-profile.js';
+import { requestRender } from './scene/render-scheduler.js';
+import { setTextureDisplayMode } from './scene/render-modes.js';
+import { clearInspector, initInspectorPanel } from './panels/inspector-panel.js';
+import { initRightDock, setRightDockEnabled } from './panels/right-dock.js';
+import { initPanelOpacityControl } from './ui/appearance.js';
+import { createIcon } from './ui/ui-icons.js';
 import {
   getOutlineState as getMeshOutlineState,
   setOutlineSuppressedByDebug,
   setOutlinesEnabled,
-} from './outline-renderer.js';
+} from './scene/outline-renderer.js';
 
 const $ = (id) => document.getElementById(id);
 
