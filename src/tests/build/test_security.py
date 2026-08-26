@@ -99,6 +99,27 @@ def test_build_minimum_python_excludes_unsupported_versions():
     assert build.MIN_PYTHON == (3, 10, 1)
 
 
+def test_verify_web_uses_refactored_frontend_paths(tmp_path, monkeypatch):
+    for relative_path in (
+        "index.html",
+        "css/app.css",
+        "js/main.js",
+        "js/scene/environment.js",
+        "lib/ace/ace.js",
+        "lib/ace/mode-ini.js",
+        "lib/ace/theme-tomorrow_night.js",
+        "lib/ace/ext-searchbox.js",
+        "lib/ace/LICENSE",
+    ):
+        target = tmp_path / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch()
+
+    monkeypatch.setattr(build, "WEB", str(tmp_path))
+
+    build.verify_web()
+
+
 def test_fetch_assets_rejects_tampered_cached_asset(tmp_path, monkeypatch):
     data = b"verified asset" * 100
     assets = tmp_path / "assets"
