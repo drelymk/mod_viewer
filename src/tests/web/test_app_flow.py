@@ -1,0 +1,633 @@
+from .support import *
+
+def test_frontend_public_surface_and_lifecycle_events(edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"ContractMod": _payload("ContractMod"),
+         "ContractAsset": _payload("ContractAsset")})
+    try:
+        assert page.evaluate("Object.keys(window.modViewer).sort()") == sorted([
+            "activeMeshes", "displayMeshPayload", "exportChanges",
+            "getCurrentSource", "getEnvironmentPreset", "getMaterialState",
+            "getOutlineState", "getRenderCount", "openMod",
+            "refreshControlSemantics", "refreshMeshSemantics",
+            "refreshPresentState", "reloadCurrentMod", "setEnvironmentPreset",
+            "setMaterialDebugMode", "setOutlineEnabled", "switchAsset",
+            "switchMod",
+        ])
+        page.evaluate("""() => {
+          window.__lifecycleEvents = [];
+          for (const name of [
+            'mod-viewer-mod-load-started', 'mod-viewer-mod-loaded',
+            'mod-viewer-asset-load-started', 'mod-viewer-asset-loaded',
+          ]) {
+            window.addEventListener(name, () => window.__lifecycleEvents.push(name));
+          }
+        }""")
+
+        _open(page, "ContractMod")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""async () => await window.modViewer.switchAsset(
+          'ContractAsset', {asset: 'ContractAsset', asset_type: 'GIMI'})""")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadAsset.length === 1"
+            " && window.modViewer.getCurrentSource().kind === 'asset'")
+        assert page.evaluate("window.__lifecycleEvents") == [
+            "mod-viewer-mod-load-started", "mod-viewer-mod-loaded",
+            "mod-viewer-asset-load-started", "mod-viewer-asset-loaded",
+        ]
+    finally:
+        context.close()
+
+def test_diagnostics_badge_populates_after_mod_load(
+        edge_browser, frontend_url):
+    diagnostics = {
+        "summary": {"issues": 2, "errors": 1, "warnings": 1},
+        "files": {"referenced": 1},
+        "issues": [{"severity": "error", "category": "ini",
+                     "message": "Missing resource"}],
+    }
+    context, page = _page(
+        edge_browser, frontend_url, {"A": _payload("A")},
+        diagnostics=diagnostics,
+    )
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "document.querySelector('#health-count').textContent === '2'")
+        assert page.locator("#health-btn").get_attribute("title") == (
+            "2 INI diagnostic issues")
+        assert page.locator("#health-modal-backdrop.show").count() == 0
+        assert page.evaluate("window.__fakeApi.calls.diagnostics") == ["A"]
+    finally:
+        context.close()
+
+def test_failed_mod_switch_clears_previous_ui_and_pending_state(
+        edge_browser, frontend_url):
+    failed_payload = {
+        "error": "loader failed", "health": {"summary": {"issues": 1, "errors": 1}},
+    }
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"A": _payload("A"), "B": failed_payload},
+        pending={"A": True, "B": False},
+    )
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.locator("#pending-indicator.show").wait_for()
+        # Keep the visible indicator stale while allowing the switch itself
+        # to proceed without the discard-confirmation dialog.
+        page.evaluate("window.__fakeApi.pending.A = false")
+
+        _open(page, "B")
+        page.locator("#dialog-backdrop.show").wait_for()
+        assert page.locator(".draw-item").count() == 0
+        assert page.locator("#toggle-list .toggle-item").count() == 0
+        assert page.locator("#menu-list .menu-item").count() == 0
+        assert page.locator("#present-list .toggle-item").count() == 0
+        assert not page.locator("#sidebar").is_visible()
+        assert not page.locator("#camera-panel").is_visible()
+        assert page.locator("#pending-indicator.show").count() == 0
+        assert page.locator("#export-btn").is_disabled()
+        assert page.locator("#mod-path").inner_text() == "B"
+        assert not page.locator("#ini-view-btn").is_disabled()
+        page.locator("#dialog-ok").click()
+    finally:
+        context.close()
+
+def test_frontend_construction_failure_rolls_back_partial_scene(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"A": _payload("A"), "B": _construction_failure_payload()},
+        pending={"A": True, "B": False},
+    )
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__fakeApi.pending.A = false")
+
+        _open(page, "B")
+        page.locator("#dialog-backdrop.show").wait_for()
+        assert page.locator(".draw-item").count() == 0
+        assert page.locator("#mesh-list").inner_text() == ""
+        assert not page.locator("#sidebar").is_visible()
+        assert not page.locator("#camera-panel").is_visible()
+        assert not page.locator("#toggle-panel").is_visible()
+        assert not page.locator("#menu-panel").is_visible()
+        assert not page.locator("#present-panel").is_visible()
+        assert page.locator("#mod-path").inner_text() == "B"
+        assert not page.locator("#ini-view-btn").is_disabled()
+        page.locator("#dialog-ok").click()
+    finally:
+        context.close()
+
+def test_record_handler_is_replaced_and_restored(edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
+    try:
+        _open(page, "A")
+        cycle = page.locator("#toggle-list .toggle-cycle-btn")
+        cycle.wait_for()
+        original_label = page.locator("#toggle-list .toggle-value").inner_text()
+        original_state = page.evaluate(
+            "import('./js/mesh/visibility.js').then(module => module.getToggleState())")
+        page.evaluate("""
+          () => { window.__cycleHandler = document.querySelector('#toggle-list .toggle-cycle-btn').onclick; }
+        """)
+        page.locator("#toggle-list [title^='Record']").click()
+        page.locator("#toggle-list .toggle-row.recording").wait_for()
+        recording_state = page.evaluate(
+            "import('./js/mesh/visibility.js').then(module => module.getToggleState())")
+        assert page.evaluate("window.__cycleHandler !== document.querySelector('#toggle-list .toggle-cycle-btn').onclick")
+        page.locator("#toggle-list .toggle-record-cancel").click()
+        assert page.evaluate("window.__cycleHandler === document.querySelector('#toggle-list .toggle-cycle-btn').onclick")
+        restored_state = page.evaluate(
+            "import('./js/mesh/visibility.js').then(module => module.getToggleState())")
+        assert page.locator("#toggle-list .toggle-value").inner_text() == original_label, (
+            original_state, recording_state, restored_state)
+    finally:
+        context.close()
+
+def test_mismatched_toggle_lists_hold_the_last_short_value(
+        edge_browser, frontend_url):
+    payload = _payload("Cycle")
+    payload["controls"]["toggles"]["KeyCycle"]["vars"] = [
+        {"var": "short", "default": "0", "values": ["0", "1"]},
+        {"var": "long", "default": "0", "values": ["0", "1", "2"]},
+    ]
+    payload["state"]["defaults"].update({"short": "0", "long": "0"})
+    context, page = _page(edge_browser, frontend_url, {"Cycle": payload})
+    try:
+        _open(page, "Cycle")
+        button = page.locator("#toggle-list .toggle-cycle-btn")
+        value = page.locator("#toggle-list .toggle-value")
+        button.wait_for()
+        assert value.inner_text() == "short=0, long=0"
+        button.click()
+        assert value.inner_text() == "short=1, long=1"
+        button.click()
+        assert value.inner_text() == "short=1, long=2"
+        button.click()
+        assert value.inner_text() == "short=0, long=0"
+    finally:
+        context.close()
+
+def test_shared_control_values_reconcile_as_a_union(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Shared": _payload("Shared")})
+    try:
+        _open(page, "Shared")
+        result = page.evaluate("""async () => {
+          const controls = await import('./js/editing/control-state.js');
+          controls.setControlValue('shared', '2');
+          controls.setControlStateRules([], {shared: '0'}, {
+            toggles: {
+              KeyA: {vars: [{var: 'shared', values: ['0', '1']}]},
+              KeyB: {vars: [{var: 'shared', values: ['0', '2']}]},
+            },
+            menu: {},
+          });
+          return controls.getControlState().shared;
+        }""")
+        assert result == "2"
+    finally:
+        context.close()
+
+def test_delete_reloads_model_for_geometry_safety(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Delete": _payload("Delete")},
+        pending={"Delete": True})
+    try:
+        _open(page, "Delete")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__deleteMesh = window.modViewer.activeMeshes[0]")
+        page.locator("#toggle-list [title='Delete toggle']").click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
+
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == []
+        assert page.evaluate("window.modViewer.activeMeshes[0] !== window.__deleteMesh")
+    finally:
+        context.close()
+
+def test_export_refreshes_status_without_reloading_model(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Export": _payload("Export")},
+        pending={"Export": True})
+    try:
+        _open(page, "Export")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__exportMesh = window.modViewer.activeMeshes[0]")
+        page.locator("#export-btn").click()
+        page.wait_for_function("window.__fakeApi.calls.exportChanges.length === 1")
+        page.wait_for_function("!window.__fakeApi.pending.Export")
+
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Export"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__exportMesh")
+    finally:
+        context.close()
+
+def test_record_advances_read_only_vars_across_complete_cycle(
+        edge_browser, frontend_url):
+    payload = _payload("RecordCycle")
+    payload["controls"]["toggles"]["KeyRecordCycle"]["vars"] = [
+        {"var": "local", "default": "0", "values": ["0", "1"]},
+    ]
+    payload["controls"]["toggles"]["KeyRecordCycle"]["cycle_vars"] = [
+        {"var": "local", "default": "0", "values": ["0", "1"]},
+        {"var": r"\Other\Master\Mode", "default": "0",
+         "values": ["0", "1", "2"]},
+    ]
+    payload["state"]["defaults"].update(
+        {"local": "0", r"\Other\Master\Mode": "0"})
+    context, page = _page(
+        edge_browser, frontend_url, {"RecordCycle": payload})
+    try:
+        _open(page, "RecordCycle")
+        page.evaluate("""
+          () => {
+            window.pywebview.api.get_record_positions = async () => ({
+              positions: 3, vars: ['local'],
+            });
+          }
+        """)
+        page.locator("#toggle-list [title^='Record']").click()
+        row = page.locator("#toggle-list .toggle-row.recording")
+        row.wait_for()
+        value = page.locator("#toggle-list .toggle-value")
+        assert "local=0" in value.inner_text()
+        assert r"\Other\Master\Mode=0" in value.inner_text()
+
+        cycle = page.locator("#toggle-list .toggle-cycle-btn")
+        cycle.click()
+        cycle.click()
+        assert "Position 3 of 3" in value.inner_text()
+        assert "local=1" in value.inner_text()
+        assert r"\Other\Master\Mode=2" in value.inner_text()
+    finally:
+        context.close()
+
+def test_reload_preserves_camera_but_switching_mod_resets_it(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"First": _payload("First"), "Second": _payload("Second")},
+    )
+    try:
+        _open(page, "First")
+        page.locator(".draw-item").wait_for()
+        baseline_model = page.evaluate("""() => ({
+          position: window.modViewer.activeMeshes[0].position.toArray(),
+          quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+        })""")
+        page.locator("#camera-flip-btn").click()
+        page.locator("#camera-flip-horizontal-btn").click()
+        expected = page.evaluate("""async () => {
+          const {camera, controls} = await import('./js/scene/scene.js');
+          camera.position.set(7, 8, 9);
+          camera.up.set(0.2, 0.9, 0.3).normalize();
+          camera.zoom = 1.7;
+          controls.target.set(1, 2, 3);
+          camera.updateProjectionMatrix();
+          controls.update();
+          // Arcball orientation can include roll that position/target/up do
+          // not reconstruct after the model fitting pass.
+          camera.rotateZ(0.17);
+          camera.updateMatrix();
+          return {
+            position: camera.position.toArray(),
+            quaternion: camera.quaternion.toArray(),
+            up: camera.up.toArray(),
+            target: controls.target.toArray(),
+            zoom: camera.zoom,
+            modelPosition: window.modViewer.activeMeshes[0].position.toArray(),
+            modelQuaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+          };
+        }""")
+
+        reloaded = page.evaluate("""async () => {
+          await window.modViewer.reloadCurrentMod();
+          const {camera, controls} = await import('./js/scene/scene.js');
+          return {
+            position: camera.position.toArray(),
+            quaternion: camera.quaternion.toArray(),
+            up: camera.up.toArray(),
+            target: controls.target.toArray(),
+            zoom: camera.zoom,
+            modelPosition: window.modViewer.activeMeshes[0].position.toArray(),
+            modelQuaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+          };
+        }""")
+        assert reloaded["position"] == pytest.approx(expected["position"])
+        assert reloaded["quaternion"] == pytest.approx(expected["quaternion"])
+        assert reloaded["up"] == pytest.approx(expected["up"])
+        assert reloaded["target"] == pytest.approx(expected["target"])
+        assert reloaded["zoom"] == pytest.approx(expected["zoom"])
+        assert reloaded["modelPosition"] == pytest.approx(expected["modelPosition"])
+        assert reloaded["modelQuaternion"] == pytest.approx(
+            expected["modelQuaternion"])
+
+        page.locator("#camera-reset-view-btn").click()
+        reset_model = page.evaluate("""() => ({
+          position: window.modViewer.activeMeshes[0].position.toArray(),
+          quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+        })""")
+        assert reset_model["position"] == pytest.approx(
+            baseline_model["position"])
+        assert reset_model["quaternion"] == pytest.approx(
+            baseline_model["quaternion"])
+        reset_reloaded = page.evaluate("""async () => {
+          await window.modViewer.reloadCurrentMod();
+          return {
+            position: window.modViewer.activeMeshes[0].position.toArray(),
+            quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+          };
+        }""")
+        assert reset_reloaded["position"] == pytest.approx(
+            baseline_model["position"])
+        assert reset_reloaded["quaternion"] == pytest.approx(
+            baseline_model["quaternion"])
+
+        switched = page.evaluate("""async () => {
+          await window.modViewer.switchMod('Second');
+          const {camera, controls} = await import('./js/scene/scene.js');
+          return {
+            position: camera.position.toArray(),
+            target: controls.target.toArray(),
+            modelPosition: window.modViewer.activeMeshes[0].position.toArray(),
+            modelQuaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
+          };
+        }""")
+        assert switched["position"] != pytest.approx(expected["position"])
+        assert switched["target"] != pytest.approx(expected["target"])
+        assert switched["modelPosition"] == pytest.approx(
+            baseline_model["position"])
+        assert switched["modelQuaternion"] == pytest.approx(
+            baseline_model["quaternion"])
+    finally:
+        context.close()
+
+def test_present_refresh_keeps_model_identity_and_selection(
+        edge_browser, frontend_url):
+    payload = _present_payload()
+    context, page = _page(edge_browser, frontend_url, {"Present": payload})
+    try:
+        _open(page, "Present")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""async () => {
+          const {setToggleValue, refreshAll} = await import('./js/mesh/visibility.js');
+          setToggleValue('toggle', '1');
+          refreshAll();
+          window.__presentMesh = window.modViewer.activeMeshes[0];
+        }""")
+        page.evaluate("""() => {
+          window.__fakeApi.responses.Present.controls.present.item.names = ['Zero', 'One'];
+        }""")
+
+        assert page.evaluate("window.modViewer.refreshPresentState()") is True
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Present"]
+        assert page.evaluate("window.__fakeApi.calls.presentState") == ["Present"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__presentMesh")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.conditions") == []
+        assert page.locator("#present-list .toggle-value").inner_text() == "One"
+        assert page.evaluate("window.modViewer.refreshPresentState({"
+                            "selectedPosition: 0, applySelection: true})") is True
+        assert page.evaluate("window.modViewer.activeMeshes[0] === window.__presentMesh")
+        assert page.evaluate("window.modViewer.activeMeshes[0] && "
+                            "window.__fakeApi.calls.loadMod.length") == 1
+        assert page.locator("#present-list .toggle-value").inner_text() == "Zero"
+    finally:
+        context.close()
+
+def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
+        edge_browser, frontend_url):
+    payload = _payload("Semantic")
+    mesh_name = next(iter(payload["meshes"]))
+    payload["meshSemantics"] = {
+        mesh_name: {"conditions": [[{
+            "var": "toggle", "value": "1", "negate": False,
+        }]], "sources": payload["meshes"][mesh_name]["sources"],
+        "tex_key": "diffuse::Semantic-one.png",
+        "texture_variants": [{
+            "conditions": [[{
+                "var": "toggle", "value": "1", "negate": False,
+            }]], "tex_key": "diffuse::Semantic-two.png",
+        }],
+        "normal_map_key": "normal_map::Semantic-normal.png",
+        "normal_map_variants": [{
+            "conditions": [[{
+                "var": "toggle", "value": "1", "negate": False,
+            }]], "tex_key": "normal_map::Semantic-normal-alt.png",
+        }],
+        "normal_data_key": "normal_data::Semantic-packed.png",
+        "light_map_key": "light_map::Semantic-light.png",
+        "material_map_key": "material_map::Semantic-material.png"},
+    }
+    context, page = _page(edge_browser, frontend_url, {"Semantic": payload})
+    try:
+        _open(page, "Semantic")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""async () => {
+          const {setToggleValue, refreshAll} = await import('./js/mesh/visibility.js');
+          setToggleValue('toggle', '1');
+          refreshAll();
+          window.__semanticMesh = window.modViewer.activeMeshes[0];
+          window.__fakeApi.responses.Semantic.controls.toggles.KeySemantic.name = 'Renamed';
+        }""")
+
+        assert page.evaluate("window.modViewer.refreshControlSemantics()") is True
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Semantic"]
+        assert page.evaluate("window.__fakeApi.calls.controlState") == ["Semantic"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__semanticMesh")
+        assert page.locator("#toggle-list .toggle-name").inner_text() == "Renamed"
+        assert page.evaluate("""async () => {
+          await window.modViewer.refreshMeshSemantics();
+          return {
+            same: window.modViewer.activeMeshes[0] === window.__semanticMesh,
+            conditions: window.modViewer.activeMeshes[0].userData.conditions,
+            diffuse: window.modViewer.activeMeshes[0].userData.resolvedTexKey,
+            normal: window.modViewer.activeMeshes[0].userData.resolvedNormalMapKey,
+          };
+        }""") == {
+            "same": True,
+            "conditions": [[{"var": "toggle", "value": "1", "negate": False}]],
+            "diffuse": "diffuse::Semantic-two.png",
+            "normal": "normal_map::Semantic-normal-alt.png",
+        }
+        assert page.evaluate("window.__fakeApi.calls.loadMod.length") == 1
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == ["Semantic"]
+    finally:
+        context.close()
+
+def test_record_refreshes_controls_and_meshes_without_reloading_model(
+        edge_browser, frontend_url):
+    payload = _payload("Record")
+    payload["controls"]["toggles"]["KeyRecord"]["wired"] = False
+    context, page = _page(
+        edge_browser, frontend_url, {"Record": payload},
+        pending={"Record": True})
+    try:
+        _open(page, "Record")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.record_toggle = async () => {
+            window.__fakeApi.responses.Record.controls.toggles.KeyRecord.wired = true;
+            return {ok: true, result: {}};
+          };
+          window.__recordMesh = window.modViewer.activeMeshes[0];
+        }""")
+        assert page.locator("#toggle-list .toggle-unwired-badge").count() == 1
+        assert page.locator("#export-btn").is_disabled()
+        assert "Record (⏺)" in page.locator("#export-btn").get_attribute("title")
+
+        page.locator("#toggle-list [title^='Record']").click()
+        page.locator("#toggle-list .toggle-row.recording").wait_for()
+        page.locator("#toggle-list .toggle-record-save").click()
+        page.wait_for_function("window.__fakeApi.calls.controlState.length === 1")
+
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Record"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__recordMesh")
+        assert page.locator("#toggle-list .toggle-unwired-badge").count() == 0
+        assert not page.locator("#export-btn").is_disabled()
+    finally:
+        context.close()
+
+def test_stale_semantic_response_cannot_modify_new_mod(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"A": _payload("A"), "B": _payload("B")})
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const original = window.pywebview.api.get_control_state;
+          window.__releaseAControls = null;
+          window.pywebview.api.get_control_state = async path => {
+            if (path === 'A') {
+              await new Promise(resolve => window.__releaseAControls = resolve);
+            }
+            return original(path);
+          };
+          window.__staleControls = window.modViewer.refreshControlSemantics();
+        }""")
+        page.wait_for_function("window.__releaseAControls !== null")
+
+        _open(page, "B")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__releaseAControls()")
+        page.evaluate("async () => await window.__staleControls")
+
+        assert page.locator("#toggle-list .toggle-name").inner_text() == "Toggle B"
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["A", "B"]
+    finally:
+        context.close()
+
+def test_newer_same_mod_semantic_response_wins(
+        edge_browser, frontend_url):
+    payload = _payload("Race")
+    context, page = _page(edge_browser, frontend_url, {"Race": payload})
+    try:
+        _open(page, "Race")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const original = window.pywebview.api.get_control_state;
+          let calls = 0;
+          window.__releaseOldControls = null;
+          window.pywebview.api.get_control_state = async path => {
+            calls += 1;
+            if (calls === 1) {
+              const stale = await original(path);
+              await new Promise(resolve => window.__releaseOldControls = resolve);
+              stale.controls.toggles.KeyRace.name = 'Old';
+              return stale;
+            }
+            return original(path);
+          };
+          window.__oldControls = window.modViewer.refreshControlSemantics();
+        }""")
+        page.wait_for_function("window.__releaseOldControls !== null")
+        page.evaluate("""() => {
+          window.__fakeApi.responses.Race.controls.toggles.KeyRace.name = 'Newest';
+          window.__newControls = window.modViewer.refreshControlSemantics();
+        }""")
+        page.evaluate("async () => await window.__newControls")
+        page.evaluate("window.__releaseOldControls()")
+        page.evaluate("async () => await window.__oldControls")
+
+        assert page.locator("#toggle-list .toggle-name").inner_text() == "Newest"
+    finally:
+        context.close()
+
+def test_failed_semantic_refresh_still_updates_pending_state(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Failure": _payload("Failure")},
+        pending={"Failure": True})
+    try:
+        _open(page, "Failure")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.get_mesh_semantics = async () => ({
+            error: 'semantic refresh failed',
+          });
+          window.__failedRefresh = window.modViewer.refreshMeshSemantics();
+        }""")
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
+        page.evaluate("async () => await window.__failedRefresh")
+
+        assert "show" in (page.locator("#pending-indicator").get_attribute("class") or "")
+        assert not page.locator("#export-btn").is_disabled()
+    finally:
+        context.close()
+
+def test_reload_and_tree_selection_share_one_transition_guard(
+        edge_browser, frontend_url):
+    root = _MOD_LIBRARY
+    alice = root + r"\Alice"
+    astra = root + r"\Astra"
+    context, page = _page(
+        edge_browser, frontend_url,
+        {alice: _payload("Alice"), astra: _payload("Astra")},
+        mod_folders=[{"name": "Library", "path": root, "exists": True}],
+        subfolders={root: [
+            {"name": "Alice", "path": alice},
+            {"name": "Astra", "path": astra},
+        ]},
+    )
+    try:
+        _open_library(page)
+        page.locator("#mod-folder-list > .mod-folder-node .mod-folder-expand").click()
+        page.locator(".mod-folder-select", has_text="Alice").click()
+        page.locator(".draw-item").wait_for(state="attached")
+
+        page.evaluate("""path => {
+          window.__fakeApi.blockLoads = {[path]: true};
+        }""", alice)
+        page.evaluate("""() => {
+          window.__reloadPromise = window.modViewer.reloadCurrentMod();
+        }""")
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
+
+        # The loading veil normally blocks pointer input; force the tree event
+        # here to exercise the shared transition guard at the API boundary.
+        page.locator(".mod-folder-select", has_text="Astra").click(force=True)
+        page.wait_for_timeout(100)
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == [alice, alice]
+
+        page.evaluate("path => window.__fakeApi.releaseLoad(path)", alice)
+        page.evaluate("window.__reloadPromise")
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == [alice, alice]
+    finally:
+        context.close()

@@ -158,88 +158,78 @@ def _swap_positions(tmp, ini_rel):
     return ini_path, result
 
 
-def test_record_toggle_stages_without_writing_to_disk(toggle_mod):
+def test_record_staged_edit_lifecycle(toggle_mod):
     tmp, ini_path = toggle_mod
     ini_rel = "mod.ini"
+
+    positions = toggle_api.get_record_positions(tmp, ini_rel, "KeyUpper")
+    assert positions == {"ok": True, "positions": 4, "vars": ["Upper"]}
+
     ini_path, result = _swap_positions(tmp, ini_rel)
 
-    assert (result.get("ok") is True), (f"a valid recording session succeeds (got {result})")
-    assert (result.get("pending") is True), ("the result flags this as a staged, not-yet-exported change")
+    assert result["ok"] is True
+    assert result["pending"] is True
     report = result.get("result") or {}
-    assert (report.get("chains_rewritten", 0) >= 1), (f"the swapped visibility actually rewrites a chain (got {report})")
+    assert report["chains_rewritten"] >= 1
 
     with open(ini_path, encoding="utf-8") as fh:
-        assert (fh.read() == FIXTURE), ("the real ini file is untouched -- the rewrite only exists in the pending session")
-    assert (not glob.glob(ini_path + "_*.BAK")), ("no backup is written until Export")
-    assert (toggle_api.has_pending_changes(tmp) is True), ("the mod now has a pending, not-yet-exported change")
+        assert fh.read() == FIXTURE
+    assert not glob.glob(ini_path + "_*.BAK")
+    assert toggle_api.has_pending_changes(tmp)
 
     pending_text = edit_session.peek(tmp, ini_path).to_string()
     branch = pending_text.split("$Upper == 0", 1)[1].split("endif", 1)[0]
-    assert ("200,0,0" in branch), ("the pending in-memory doc already shows the swapped gating, previewable before Export")
+    assert "200,0,0" in branch
 
+    assert toggle_api.discard_changes(tmp) == {"ok": True}
+    assert not toggle_api.has_pending_changes(tmp)
+    assert "100,0,0" in edit_session.peek(tmp, ini_path).to_string()
 
-def test_export_changes_writes_backup_and_rewritten_gates(toggle_mod):
-    tmp, ini_path = toggle_mod
-    ini_rel = "mod.ini"
     _swap_positions(tmp, ini_rel)
-
     export_result = toggle_api.export_changes(tmp)
-    assert (export_result.get("saved") == [ini_rel] and not export_result.get("failed")), (f"export saves the one pending ini cleanly (got {export_result})")
+    assert export_result["saved"] == [ini_rel]
+    assert not export_result["failed"]
 
     backups = glob.glob(ini_path + "_*.BAK")
-    assert (len(backups) == 1), (f"export writes exactly one timestamped backup (got {backups})")
-    if backups:
-        with open(backups[0], encoding="utf-8") as fh:
-            assert (fh.read() == FIXTURE), ("the backup holds the original, pre-rewrite content")
+    assert len(backups) == 1
+    with open(backups[0], encoding="utf-8") as fh:
+        assert fh.read() == FIXTURE
 
     with open(ini_path, encoding="utf-8") as fh:
         after = fh.read()
     branch = after.split("$Upper == 0", 1)[1].split("endif", 1)[0]
-    assert ("200,0,0" in branch), ("position 0's branch now gates the line that used to be position 1's, on disk after export")
-    assert (toggle_api.has_pending_changes(tmp) is False), ("export clears the pending state once written")
+    assert "200,0,0" in branch
+    assert not toggle_api.has_pending_changes(tmp)
 
 
 
 
-def test_export_blocked_while_added_toggle_is_unwired(wirable_mod):
-    """The core of this feature: Export must refuse to write anything while
-    a toggle added via add_toggle this session doesn't gate any mesh yet."""
+def test_new_toggle_blocks_export_until_recorded(wirable_mod):
     tmp, ini_path = wirable_mod
     ini_rel = "mod.ini"
     add_result = toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
-    assert (add_result.get("ok") is True), (f"staging a new toggle succeeds (got {add_result})")
-
-    export_result = toggle_api.export_changes(tmp)
-    assert ("error" in export_result), (f"export is refused while the new toggle is unwired (got {export_result})")
-    assert (export_result.get("unwired") == {"mod.ini": ["KeyExtra"]}), (f"the still-unwired section is named in the response (got {export_result.get('unwired')})")
-    assert (not glob.glob(ini_path + "_*.BAK")), ("nothing is written to disk when export is refused")
-    assert (toggle_api.has_pending_changes(tmp) is True), ("the pending add survives a refused export")
-
-    with open(ini_path, encoding="utf-8") as fh:
-        assert (fh.read() == WIRABLE_FIXTURE), ("the real ini file is untouched by the refused export")
-
-
-def test_export_succeeds_once_added_toggle_is_recorded(wirable_mod):
-    """Once the freshly-added toggle actually gates something (Record mode),
-    it's no longer "unwired" and Export proceeds normally."""
-    tmp, ini_path = wirable_mod
-    ini_rel = "mod.ini"
-    toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
+    assert add_result["ok"] is True
 
     blocked = toggle_api.export_changes(tmp)
-    assert ("unwired" in blocked), (f"export is still refused before recording (got {blocked})")
+    assert blocked["unwired"] == {"mod.ini": ["KeyExtra"]}
+    assert not glob.glob(ini_path + "_*.BAK")
+    assert toggle_api.has_pending_changes(tmp)
+
+    with open(ini_path, encoding="utf-8") as fh:
+        assert fh.read() == WIRABLE_FIXTURE
 
     pending_text = edit_session.peek(tmp, ini_path).to_string()
     line_100 = next(i for i, l in enumerate(pending_text.splitlines(), 1) if "100,0,0" in l)
     record_result = toggle_api.record_toggle(tmp, ini_rel, "KeyExtra", {0: [line_100], 1: []})
-    assert (record_result.get("ok") is True), (f"recording the new toggle succeeds (got {record_result})")
+    assert record_result["ok"] is True
 
     export_result = toggle_api.export_changes(tmp)
-    assert (export_result.get("saved") == [ini_rel] and not export_result.get("failed")), (f"export succeeds once the new toggle is wired (got {export_result})")
-    assert (toggle_api.has_pending_changes(tmp) is False), ("export cleared the pending state")
+    assert export_result["saved"] == [ini_rel]
+    assert not export_result["failed"]
+    assert not toggle_api.has_pending_changes(tmp)
 
     with open(ini_path, encoding="utf-8") as fh:
-        assert ("$Extra == 0" in fh.read()), ("the new toggle's gate actually landed on disk")
+        assert "$Extra == 0" in fh.read()
 
 
 

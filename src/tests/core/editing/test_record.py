@@ -457,7 +457,7 @@ def _draws_by_key(draws):
     return {(d["count"], d["start"], d["base"]): d["positions"] for d in draws}
 
 
-def test_verify_report_reflects_chain_rewrites():
+def test_record_rewrite_produces_verifiable_contract():
     d = doc(CHAIN3)
     l600, l700, l800 = dline(d, "600,0,0"), dline(d, "700,0,0"), dline(d, "800,0,0")
     report = re_.record_toggle(d, "KeySwap", {
@@ -472,8 +472,26 @@ def test_verify_report_reflects_chain_rewrites():
           f"by its own (count, start, base) identity rather than a line number that "
           f"chain regeneration can shift ({draws})")
 
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".ini", delete=False) as fh:
+        fh.write(d.to_string().encode("utf-8"))
+        path = fh.name
+    try:
+        assert re_.verify_recording(path, report) == []
 
-
+        wrong_report = {"verify": {"swap": {"values": ["0", "1", "2"], "draws": [
+            {"section": "TextureOverrideBody2", "count": 600, "start": 0, "base": 0,
+             "positions": [0, 1]},
+            {"section": "TextureOverrideBody2", "count": 700, "start": 0, "base": 0,
+             "positions": [0]},
+            {"section": "TextureOverrideBody2", "count": 800, "start": 0, "base": 0,
+             "positions": [2]},
+        ]}}}
+        mismatches = re_.verify_recording(path, wrong_report)
+    finally:
+        os.remove(path)
+    assert (len(mismatches) == 1 and mismatches[0]["draw"] == [600, 0, 0]
+            and mismatches[0]["position"] == 0 and mismatches[0]["expected"] is True)
 
 def test_verify_report_excludes_lines_refused_for_any_reason():
     cases = [
@@ -499,56 +517,6 @@ def test_verify_report_excludes_lines_refused_for_any_reason():
           f"wrap is excluded, not just silently omitted from a wrong var ({report['verify']})")
     assert (_draws_by_key(report["verify"]["upper"]["draws"]) == {(100, 0, 0): [1], (200, 0, 0): [0]}), (f"upper's own rewritten draws are both still verified despite tt's "
           f"refusal on the same lines ({report['verify']})")
-
-
-def test_verify_recording_confirms_a_genuine_match():
-    import tempfile
-    d = doc(CHAIN3)
-    l600, l700, l800 = dline(d, "600,0,0"), dline(d, "700,0,0"), dline(d, "800,0,0")
-    report = re_.record_toggle(d, "KeySwap", {
-        0: [l700.no + 1], 1: [l600.no + 1], 2: [l800.no + 1],
-    })
-    with tempfile.NamedTemporaryFile(mode="wb", suffix=".ini", delete=False) as fh:
-        fh.write(d.to_string().encode("utf-8"))
-        path = fh.name
-    try:
-        mismatches = re_.verify_recording(path, report)
-    finally:
-        os.remove(path)
-    assert (mismatches == []), (f"a genuine, correctly-saved rewrite verifies clean ({mismatches})")
-
-
-def test_verify_recording_detects_a_genuine_mismatch():
-    """Simulates the failure verify_recording exists to catch: `report` (the
-    "what we meant to write") disagrees with what's actually on disk. Rather
-    than trying to engineer a real record_toggle bug, hand-craft a `report`
-    that falsely claims an *extra* position for one draw beyond what CHAIN3's
-    real rewrite actually produced â€” proving the check has teeth, not just
-    always returning []."""
-    import tempfile
-    d = doc(CHAIN3)
-    l600, l700, l800 = dline(d, "600,0,0"), dline(d, "700,0,0"), dline(d, "800,0,0")
-    re_.record_toggle(d, "KeySwap", {
-        0: [l700.no + 1], 1: [l600.no + 1], 2: [l800.no + 1],
-    })
-    wrong_report = {"verify": {"swap": {"values": ["0", "1", "2"], "draws": [
-        {"section": "TextureOverrideBody2", "count": 600, "start": 0, "base": 0,
-         "positions": [0, 1]},  # falsely also claims position 0; really only 1
-        {"section": "TextureOverrideBody2", "count": 700, "start": 0, "base": 0,
-         "positions": [0]},     # actually correct
-        {"section": "TextureOverrideBody2", "count": 800, "start": 0, "base": 0,
-         "positions": [2]},     # actually correct
-    ]}}}
-    with tempfile.NamedTemporaryFile(mode="wb", suffix=".ini", delete=False) as fh:
-        fh.write(d.to_string().encode("utf-8"))
-        path = fh.name
-    try:
-        mismatches = re_.verify_recording(path, wrong_report)
-    finally:
-        os.remove(path)
-    assert (len(mismatches) == 1 and mismatches[0]["draw"] == [600, 0, 0]
-          and mismatches[0]["position"] == 0 and mismatches[0]["expected"] is True), (f"a deliberately-wrong recorded position is caught, not silently accepted "
-          f"({mismatches})")
 
 
 
