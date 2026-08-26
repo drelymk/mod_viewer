@@ -808,8 +808,11 @@ def test_api_load_missing_asset_parts_is_incremental_and_reversible(
     assert entry["conditions"] == []
     assert result["payload"]["metadata"]["source_kind"] == "asset-fill"
 
+    preview = api.load_asset(str(asset))
+    assert preview["metadata"]["source_kind"] == "asset"
+
     removed = api.remove_missing_asset_parts(str(mod))
-    assert removed == {"status": "removed", "removed": True}
+    assert removed == {"status": "removed", "removed": False}
 
 
 def test_api_rejects_category_and_keeps_disabled_root_browsable(tmp_path, monkeypatch):

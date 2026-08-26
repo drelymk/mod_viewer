@@ -1038,6 +1038,92 @@ def test_stale_missing_asset_response_is_rolled_back_after_mod_switch(
         context.close()
 
 
+def test_stale_missing_asset_response_preserves_new_mod_fill(
+        edge_browser, frontend_url):
+    first = _payload("FillRaceA")
+    _add_asset_fill_response(first, "FillRaceAssetA")
+    second = _payload("FillRaceB")
+    _add_asset_fill_response(second, "FillRaceAssetB")
+    context, page = _page(
+        edge_browser, frontend_url, {"FillRaceA": first, "FillRaceB": second})
+    try:
+        _open(page, "FillRaceA")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const original = window.pywebview.api.load_missing_asset_parts;
+          window.__releaseFill = null;
+          window.pywebview.api.load_missing_asset_parts = async path => {
+            const result = await original(path);
+            if (path === 'FillRaceA') {
+              await new Promise(resolve => window.__releaseFill = resolve);
+            }
+            return result;
+          };
+          document.getElementById('asset-fill-btn').click();
+        }""")
+        page.wait_for_function("window.__releaseFill !== null")
+
+        _open(page, "FillRaceB")
+        page.locator(".draw-item").wait_for()
+        page.locator("#asset-fill-btn").click()
+        page.locator("#asset-fill-btn[data-state='remove']").wait_for()
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 2
+
+        page.evaluate("window.__releaseFill()")
+        page.wait_for_function(
+            "window.__fakeApi.calls.removeMissingAssetParts.includes('FillRaceA')")
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 2
+        assert page.locator("#asset-fill-btn").get_attribute("data-state") == "remove"
+        assert page.locator("#asset-fill-btn").get_attribute("aria-pressed") == "true"
+    finally:
+        context.close()
+
+
+def test_stale_missing_asset_remove_preserves_new_mod_fill(
+        edge_browser, frontend_url):
+    first = _payload("FillRemoveA")
+    _add_asset_fill_response(first, "FillRemoveAssetA")
+    second = _payload("FillRemoveB")
+    _add_asset_fill_response(second, "FillRemoveAssetB")
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"FillRemoveA": first, "FillRemoveB": second})
+    try:
+        _open(page, "FillRemoveA")
+        page.locator(".draw-item").wait_for()
+        page.locator("#asset-fill-btn").click()
+        page.locator("#asset-fill-btn[data-state='remove']").wait_for()
+
+        page.evaluate("""() => {
+          const original = window.pywebview.api.remove_missing_asset_parts;
+          window.__releaseRemove = null;
+          window.pywebview.api.remove_missing_asset_parts = async path => {
+            const result = await original(path);
+            if (path === 'FillRemoveA') {
+              await new Promise(resolve => window.__releaseRemove = resolve);
+            }
+            return result;
+          };
+          document.getElementById('asset-fill-btn').click();
+        }""")
+        page.wait_for_function("window.__releaseRemove !== null")
+
+        _open(page, "FillRemoveB")
+        page.locator(".draw-item").wait_for()
+        page.locator("#asset-fill-btn").click()
+        page.locator("#asset-fill-btn[data-state='remove']").wait_for()
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 2
+
+        page.evaluate("window.__releaseRemove()")
+        page.wait_for_function(
+            "window.__fakeApi.calls.removeMissingAssetParts.includes('FillRemoveA')")
+        assert page.evaluate("window.modViewer.activeMeshes.length") == 2
+        assert page.locator("#asset-fill-btn").get_attribute("data-state") == "remove"
+        assert page.locator("#asset-fill-btn").get_attribute("aria-pressed") == "true"
+    finally:
+        context.close()
+
+
 def _add_asset_fill_response(payload, label, position=None):
     payload["asset_resolution"] = {"configured_roots": 1}
     fill_payload = _payload(label)

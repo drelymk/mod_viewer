@@ -495,19 +495,34 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
   return activeMeshes;
 }
 
-export function removeAssetFillMeshPanel() {
-  const groups = groupsUI.filter(group => group.assetFill);
+export function removeAssetFillMeshPanel(targetMeshes = null) {
+  const target = targetMeshes === null ? null : new Set(targetMeshes);
+  const groups = groupsUI.filter(group => group.assetFill
+    && (!target || group.itemObjs.some(mesh => target.has(mesh))));
   if (!groups.length) return [];
   clearSelection();
   const removed = [];
   for (const group of groups) {
-    group.itemObjs.forEach(mesh => {
+    const members = target
+      ? group.itemObjs.filter(mesh => target.has(mesh))
+      : [...group.itemObjs];
+    members.forEach(mesh => {
+      mesh.userData.assetRow?.closest('.draw-item-wrap')?.remove();
       if (removeMesh(mesh)) removed.push(mesh);
+      const index = group.itemObjs.indexOf(mesh);
+      if (index >= 0) {
+        group.itemObjs.splice(index, 1);
+        group.itemCbs.splice(index, 1);
+      }
     });
-    group.header?.remove();
-    group.itemsWrap?.remove();
+    if (!group.itemObjs.length) {
+      group.header?.remove();
+      group.itemsWrap?.remove();
+    } else {
+      group.applyTextureRuns?.();
+    }
   }
-  groupsUI = groupsUI.filter(group => !group.assetFill);
+  groupsUI = groupsUI.filter(group => !group.assetFill || group.itemObjs.length);
   for (const source of new Set(groups.map(group => group.sourceContainer).filter(Boolean))) {
     if (!source.children.length) {
       source.previousElementSibling?.remove();

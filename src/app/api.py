@@ -375,6 +375,7 @@ class ModViewerAPI:
 
     def load_asset(self, folder_path):
         """Load one exact indexed Asset without creating or editing an INI."""
+        self._clear_asset_fill()
         try:
             selected, entry, _index, record = self._asset_selection(folder_path)
             geometry = GeometryBlob()
