@@ -6,6 +6,8 @@ import tempfile
 
 from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, merge_sections)
+from core.geometry.draw_call import DrawCall
+from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from tests.support.provenance import IB_R16_INI, build_mesh_fixture, geometry_values, write
 
 IB_REASSIGN_INI = """[TextureOverrideBodyBlend]
@@ -64,6 +66,54 @@ def test_mid_section_ib_reassignment_mesh_builder():
 
         vert_sets = sorted(_verts(e) for e in meshes.values())
         assert (vert_sets == [[10, 11, 12], [20, 21, 22]]), (f"each mesh's own vertices come from its own reassigned ib (got {vert_sets})")
+
+
+def test_sparse_shape_boundary_packs_buffer_key_128(tmp_path):
+    """Shape id 127 uses the WWMI-aligned sparse buffer entry 128."""
+    (tmp_path / "position.buf").write_bytes(struct.pack(
+        "<9f", 0., 0., 0., 1., 0., 0., 0., 1., 0.))
+    (tmp_path / "texcoord.buf").write_bytes(b"\0" * 24)
+    (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
+
+    offsets = bytearray(130 * 4)
+    struct.pack_into("<II", offsets, 127 * 4, 0, 0)
+    struct.pack_into("<II", offsets, 128 * 4, 0, 1)
+    (tmp_path / "shape-offsets.buf").write_bytes(offsets)
+    (tmp_path / "shape-vertex-ids.buf").write_bytes(struct.pack("<I", 1))
+    (tmp_path / "shape-deltas.buf").write_bytes(
+        struct.pack("<eee", 1., 2., 3.) + b"\0" * 6)
+
+    draw = DrawCall(
+        label="Body-1", count=3, ib_file="body.ib",
+        index_size=4, position_file="position.buf",
+        position_stride=12, texcoord_file="texcoord.buf",
+        texcoord_stride=8)
+    groups = [{
+        "position_file": "position.buf",
+        "position_stride": 12,
+        "texcoord_file": "texcoord.buf",
+        "texcoord_stride": 8,
+        "ib_file": "body.ib",
+        "index_size": 4,
+        "draws": [draw],
+        "shape_sliders": [{
+            "var": "BodyShape",
+            "base_file": "position.buf",
+            "shape_id": 127,
+            "offset_file": "shape-offsets.buf",
+            "vertex_id_file": "shape-vertex-ids.buf",
+            "vertex_offset_file": "shape-deltas.buf",
+        }],
+    }]
+
+    geometry = GeometryBlob()
+    result = build_mesh_result(groups, str(tmp_path), geometry=geometry)
+    entry = result.meshes["Body-1"]
+    target = entry["shape_targets"][0]["pos"]
+    raw = geometry.data[target["offset"]:
+                       target["offset"] + target["length"]]
+    assert struct.unpack("<9f", raw) == (
+        0., 0., 0., 2., 2., 3., 0., 1., 0.)
 
 
 CROSS_IB_VB_INI = """[TextureOverrideSBSBlend]
