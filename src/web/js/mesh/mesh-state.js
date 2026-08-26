@@ -1,6 +1,9 @@
 // Active meshes and the mod control state resolved onto their rendering data.
 
-import { scene, resetModelOrientation } from '../scene/scene.js';
+import {
+  invalidateCharacterShadowGeometry, invalidateCharacterShadowVisibility,
+  resetCharacterShadows, scene, resetModelOrientation,
+} from '../scene/scene.js';
 import { dnfSatisfied, getControlValue } from '../editing/control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
 import { setMeshTextureState, updateGeometryNormals } from './mesh-factory.js';
@@ -24,6 +27,7 @@ export function resetMeshes({ preserveModelOrientation = false } = {}) {
   });
   activeMeshes.length = 0;
   resetModelOrientation({ preserveRotation: preserveModelOrientation });
+  resetCharacterShadows();
   requestRender();
 }
 
@@ -177,7 +181,9 @@ export function applyTextureVariant(mesh) {
 // The MESHES control is the direct visibility source. Automatic refreshes
 // re-baseline visibility and clear any transient manual eye-click marker.
 export function applyMeshVisibility(mesh, { notify = true } = {}) {
+  const previous = mesh.visible;
   mesh.visible = mesh.userData.manualVisible !== false;
+  if (previous !== mesh.visible) invalidateCharacterShadowVisibility();
   if (notify) notifyMeshStateChanged([mesh]);
   requestRender();
 }
@@ -220,6 +226,7 @@ function applyShapeTargets(mesh) {
   updateGeometryNormals(mesh, deformed);
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
+  invalidateCharacterShadowGeometry();
 }
 
 export function refreshMeshes() {

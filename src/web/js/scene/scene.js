@@ -3,6 +3,7 @@
 import * as THREE from 'three/webgpu';
 import { ArcballControls } from 'three/addons/controls/ArcballControls.js';
 import { createCameraFrame } from './camera-frame.js';
+import { createCharacterShadowController } from './character-shadow-controller.js';
 import { createEnvironmentController } from './environment.js';
 import { createKeyLightController } from './key-light-controller.js';
 import { updateOutlineCameraScale } from './outline-renderer.js';
@@ -148,6 +149,9 @@ const environmentController = createEnvironmentController({
 const keyLightController = createKeyLightController({
   scene, camera, renderer, controls, light: keyLight, onChange: requestRender,
 });
+const characterShadowController = createCharacterShadowController({
+  renderer, scene, light: keyLight,
+});
 const viewGizmoController = createViewGizmoController({
   camera, controls, element: document.getElementById('view-gizmo'),
   onChange: requestRender,
@@ -172,6 +176,7 @@ function renderFrame() {
   if (rendererStopped || renderer.backend?.isWebGPUBackend !== true) return;
   const snapActive = viewGizmoController.updateSnap();
   keyLightController.update();
+  characterShadowController.update();
   cameraFrame.updateViewport();
   cameraFrame.updateClipping();
   updateOutlineCameraScale(camera, controls.target,
@@ -230,22 +235,26 @@ export function frameView(meshes = [], direction = null, targetYOffset = 0) {
 
 export function resetView() {
   cameraFrame.resetView();
+  characterShadowController.invalidateGeometry();
   requestRender();
 }
 
 export function adoptModelMeshes(meshes = []) {
   const adopted = cameraFrame.adoptModelMeshes(meshes);
+  characterShadowController.adoptMeshes(meshes);
   requestRender();
   return adopted;
 }
 
 export function fitTo(meshes, options) {
   cameraFrame.fitTo(meshes, options);
+  characterShadowController.setMeshes(meshes);
   requestRender();
 }
 
 export function forgetModelMeshes(meshes = []) {
   cameraFrame.forgetModelMeshes(meshes);
+  characterShadowController.forgetMeshes(meshes);
   requestRender();
 }
 
@@ -253,13 +262,33 @@ export function resetModelOrientation(options) {
   cameraFrame.resetModelOrientation(options);
 }
 
+export function resetCharacterShadows() {
+  characterShadowController.reset();
+}
+
+export function invalidateCharacterShadowGeometry() {
+  characterShadowController.invalidateGeometry();
+  requestRender();
+}
+
+export function invalidateCharacterShadowVisibility() {
+  characterShadowController.invalidateVisibility();
+  requestRender();
+}
+
+export function getCharacterShadowDebugState() {
+  return characterShadowController.getDebugState();
+}
+
 export function rotateModelQuarterTurn(meshes = []) {
   cameraFrame.rotateModelQuarterTurn(meshes);
+  characterShadowController.invalidateGeometry();
   requestRender();
 }
 
 export function rotateModelHorizontalQuarterTurn(meshes = []) {
   cameraFrame.rotateModelHorizontalQuarterTurn(meshes);
+  characterShadowController.invalidateGeometry();
   requestRender();
 }
 

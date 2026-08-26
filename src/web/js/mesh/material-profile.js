@@ -17,6 +17,7 @@ import {
   Vector2,
 } from 'three/webgpu';
 import {
+  abs,
   clamp,
   color,
   diffuseColor,
@@ -324,6 +325,29 @@ function setStableMaterialNodes(material, state, fallbackColor) {
 
 }
 
+function applyDebugOverride(state, result) {
+  if (!state?.debugOutputNode || !state?.debugActiveNode) return result;
+  return state.debugActiveNode.lessThan(0.5).select(
+    result, vec4(state.debugOutputNode, result.a));
+}
+
+function applyViewerRim(state, result) {
+  if (!state?.rimEnabledNode || !state?.rimStrengthNode || !state?.rimPowerNode) {
+    return result;
+  }
+  const facing = abs(normalView.dot(positionViewDirection)).clamp(0, 1);
+  const edge = float(1).sub(facing);
+  const amount = edge.pow(state.rimPowerNode)
+    .mul(state.rimStrengthNode)
+    .mul(state.rimEnabledNode);
+  const tint = mix(diffuseColor.rgb, vec3(1), float(0.2));
+  return vec4(result.rgb.add(tint.mul(amount)), result.a);
+}
+
+function applyViewerOutput(state, result) {
+  return applyDebugOverride(state, applyViewerRim(state, result));
+}
+
 function physicalLightingFlags(material) {
   return [
     material.useClearcoat,
@@ -605,22 +629,14 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
 
   setupOutput(builder, outputNode) {
     const result = super.setupOutput(builder, outputNode);
-    const state = this.userData.gameMaterial;
-    if (!state?.debugOutputNode || !state?.debugActiveNode) return result;
-    // Keep diagnostics out of the lighting, environment and fog result while
-    // leaving the normal graph and pipeline selected by the same uniform.
-    return state.debugActiveNode.lessThan(0.5).select(
-      result, vec4(state.debugOutputNode, result.a));
+    return applyViewerOutput(this.userData.gameMaterial, result);
   }
 }
 
 class GameStandardNodeMaterial extends MeshStandardNodeMaterial {
   setupOutput(builder, outputNode) {
     const result = super.setupOutput(builder, outputNode);
-    const state = this.userData.gameMaterial;
-    if (!state?.debugOutputNode || !state?.debugActiveNode) return result;
-    return state.debugActiveNode.lessThan(0.5).select(
-      result, vec4(state.debugOutputNode, result.a));
+    return applyViewerOutput(this.userData.gameMaterial, result);
   }
 }
 
@@ -715,6 +731,9 @@ export function configureGameMaterial(material, profile, options = {}) {
     toonSpecularMetalCutoffNode: hasNumericValue(profile?.toon_specular_metal_cutoff)
       ? uniform(Number(profile.toon_specular_metal_cutoff)) : null,
     debugModeNode: uniform(0),
+    rimEnabledNode: uniform(true),
+    rimStrengthNode: uniform(0.075),
+    rimPowerNode: uniform(4.0),
     hasMaterialId,
     hasSpecularArea,
     hasShadowMask,
@@ -847,4 +866,12 @@ export function getMaterialDebugMode(material) {
   const value = material?.userData?.gameMaterial?.debugModeNode?.value;
   return Object.entries(DEBUG_MODE_VALUES).find(([, id]) => id === value)?.[0]
     || 'off';
+}
+
+/** Toggle viewer rim lighting without rebuilding the material node graph. */
+export function setGameMaterialRimEnabled(material, enabled) {
+  const node = material?.userData?.gameMaterial?.rimEnabledNode;
+  if (!node) return false;
+  node.value = enabled === true;
+  return true;
 }

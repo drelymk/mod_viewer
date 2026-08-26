@@ -9,7 +9,8 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         page.wait_for_function(
             "import('./js/scene/scene.js').then(({renderer}) => renderer.currentSamples === 4)")
         state = page.evaluate("""async () => {
-          const {renderer} = await import('./js/scene/scene.js');
+          const {renderer, scene} = await import('./js/scene/scene.js');
+          const keyLight = scene.children.find(object => object.isDirectionalLight);
           return {
             isWebGPURenderer: renderer.isWebGPURenderer === true,
             isWebGPUBackend: renderer.backend?.isWebGPUBackend === true,
@@ -19,6 +20,10 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
             outputColorSpace: renderer.outputColorSpace,
             toneMapping: renderer.toneMapping,
             clearAlpha: renderer.getClearAlpha(),
+            shadowsEnabled: renderer.shadowMap.enabled,
+            keyCastsShadow: keyLight?.castShadow,
+            shadowAutoUpdate: keyLight?.shadow?.autoUpdate,
+            shadowMapSize: [keyLight?.shadow?.mapSize?.x, keyLight?.shadow?.mapSize?.y],
           };
         }""")
         assert state["isWebGPURenderer"]
@@ -29,6 +34,10 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         assert state["outputColorSpace"] == "srgb"
         assert state["toneMapping"] == 0
         assert state["clearAlpha"] == 1
+        assert state["shadowsEnabled"]
+        assert state["keyCastsShadow"]
+        assert state["shadowAutoUpdate"] is False
+        assert state["shadowMapSize"] == [2048, 2048]
     finally:
         context.close()
 
@@ -1510,5 +1519,95 @@ def test_conditional_only_texture_survives_component_run_reconciliation(
             "diffuse::ConditionalOnly-two.png"
         assert page.evaluate("window.modViewer.activeMeshes[0].userData.texKey") == \
             "diffuse::ConditionalOnly-two.png"
+    finally:
+        context.close()
+
+def test_character_shadows_are_on_demand_and_visibility_keeps_stable_ground(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Shadow": _payload("Shadow")})
+    try:
+        _open(page, "Shadow")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().shadowUpdateCount > 0;
+        }""")
+        initial = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState, renderer, scene} =
+            await import('./js/scene/scene.js');
+          const ground = [];
+          scene.traverse(object => { if (object.userData.isViewerGround) ground.push(object); });
+          return {
+            enabled: renderer.shadowMap.enabled,
+            ground: ground.map(object => ({
+              receive: object.receiveShadow, cast: object.castShadow,
+              shadowMaterial: object.material.isShadowMaterial,
+              y: object.position.y,
+            })),
+            debug: getCharacterShadowDebugState(),
+          };
+        }""")
+        assert initial["enabled"]
+        assert initial["ground"] == [{
+            "receive": True, "cast": False, "shadowMaterial": True,
+            "y": initial["ground"][0]["y"],
+        }]
+        assert initial["debug"]["modelBounds"] is not None
+        assert initial["debug"]["casterBounds"] is not None
+
+        updated = page.evaluate("""async () => {
+          const {applyMeshVisibility} = await import('./js/mesh/mesh-state.js');
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          mesh.userData.manualVisible = false;
+          applyMeshVisibility(mesh);
+          return getCharacterShadowDebugState();
+        }""")
+        page.wait_for_function(
+            "previous => window.modViewer.getRenderCount() > previous",
+            arg=page.evaluate("window.modViewer.getRenderCount()"))
+        after = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState, scene} = await import('./js/scene/scene.js');
+          let ground = null;
+          scene.traverse(object => { if (object.userData.isViewerGround) ground = object; });
+          return {debug: getCharacterShadowDebugState(), groundY: ground.position.y};
+        }""")
+        assert after["debug"]["fitCount"] > updated["fitCount"]
+        assert after["debug"]["shadowUpdateCount"] > updated["shadowUpdateCount"]
+        assert after["groundY"] == pytest.approx(initial["ground"][0]["y"])
+    finally:
+        context.close()
+
+
+def test_wireframe_toggles_rim_uniform_without_rebuilding_material(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Rim": _payload("Rim")})
+    try:
+        _open(page, "Rim")
+        page.locator(".draw-item").wait_for()
+        initial = page.evaluate("""() => {
+          const material = window.modViewer.activeMeshes[0].material;
+          window.__rimMaterial = material;
+          const state = material.userData.gameMaterial;
+          return {
+            version: material.version,
+            enabled: state.rimEnabledNode.value,
+            strength: state.rimStrengthNode.value,
+            power: state.rimPowerNode.value,
+          };
+        }""")
+        assert initial["enabled"] is True
+        assert initial["strength"] > 0
+        assert initial["power"] > 0
+        page.locator("#wire-btn").click()
+        disabled = page.evaluate("""() => {
+          const material = window.modViewer.activeMeshes[0].material;
+          return {same: material === window.__rimMaterial, version: material.version,
+            enabled: material.userData.gameMaterial.rimEnabledNode.value};
+        }""")
+        assert disabled == {"same": True, "version": initial["version"], "enabled": False}
+        page.locator("#wire-btn").click()
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial.rimEnabledNode.value")
     finally:
         context.close()

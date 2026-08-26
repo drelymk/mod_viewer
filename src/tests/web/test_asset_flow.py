@@ -369,6 +369,45 @@ def test_missing_asset_parts_append_and_remove_without_reloading_mod(
     finally:
         context.close()
 
+
+def test_asset_fill_refits_character_shadows_without_moving_camera(
+        edge_browser, frontend_url):
+    payload = _payload("ShadowFill")
+    payload["asset_resolution"] = {"configured_roots": 1}
+    _add_asset_fill_response(payload, "ShadowFillAsset")
+    fill_entry = next(iter(payload["assetFillResponse"]["payload"]["meshes"].values()))
+    fill_entry["pos"] = _f32(5, 0, 0, 6, 0, 0, 5, 1, 0)
+    context, page = _page(edge_browser, frontend_url, {"ShadowFill": payload})
+    try:
+        _open(page, "ShadowFill")
+        page.locator(".draw-item").wait_for()
+        before = page.evaluate("""async () => {
+          const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
+        }""")
+        page.locator("#asset-fill-btn").click()
+        page.locator("#asset-fill-btn[data-state='remove']").wait_for()
+        expanded = page.evaluate("""async () => {
+          const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
+        }""")
+        assert expanded["camera"] == pytest.approx(before["camera"])
+        assert expanded["shadow"]["fitCount"] > before["shadow"]["fitCount"]
+        assert expanded["shadow"]["shadowUpdateCount"] > before["shadow"]["shadowUpdateCount"]
+        assert expanded["shadow"]["modelBounds"]["max"][0] > before["shadow"]["modelBounds"]["max"][0]
+        page.locator("#asset-fill-btn").click()
+        page.locator("#asset-fill-btn[data-state='load']").wait_for()
+        contracted = page.evaluate("""async () => {
+          const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
+        }""")
+        assert contracted["camera"] == pytest.approx(before["camera"])
+        assert contracted["shadow"]["fitCount"] > expanded["shadow"]["fitCount"]
+        assert contracted["shadow"]["modelBounds"]["max"][0] < expanded["shadow"]["modelBounds"]["max"][0]
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["ShadowFill"]
+    finally:
+        context.close()
+
 def test_stale_missing_asset_response_is_rolled_back_after_mod_switch(
         edge_browser, frontend_url):
     first = _payload("FillRaceA")
