@@ -14,6 +14,9 @@ import pytest
 from app.session import edit as edit_session
 from app.mods import metadata as metadata
 from app.mods import loader as mod_loader
+from app.mods import analysis as mod_analysis
+from app.mods import controls as mod_controls
+from app.mods import enrichment as mod_enrichment
 from app.bridge import present as present_api
 from app.runtime import server as server
 from app.assets.resolver import AssetComponentBinding
@@ -144,12 +147,12 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
         "_texture_override_index": TextureOverrideIndex(
             replacements_by_hash={"aaaaaaaa": (replacement,)}),
     }
-    parsed = mod_loader.ParsedModAnalysis(
+    parsed = mod_analysis.ParsedModAnalysis(
         groups=[group], toggles={}, menu={}, defaults={}, state_rules=[],
         present={}, game=SimpleNamespace(game="wuwa"))
     context = mod_loader.ModLoadContext(str(tmp_path), [], {}, {})
 
-    mod_loader._apply_texture_enrichment(
+    mod_enrichment._apply_texture_enrichment(
         parsed, context, [[]], complete_index=False)
 
     def register(path, role, transform=None):
@@ -211,7 +214,7 @@ def test_mesh_semantics_include_conditional_texture_roles_without_geometry(
 
 def test_mesh_semantics_returns_asset_resolution_summary(tmp_path):
     draw = DrawCall(label="Body-1")
-    parsed = mod_loader.ParsedModAnalysis(
+    parsed = mod_analysis.ParsedModAnalysis(
         groups=[{"name": "Body", "draws": [draw]}],
         toggles={}, menu={}, defaults={}, state_rules=[], present={},
         game=SimpleNamespace(game="genshin"),
@@ -230,10 +233,10 @@ def test_mesh_semantics_returns_asset_resolution_summary(tmp_path):
 
     context = mod_loader.ModLoadContext(
         str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
-    with patch.object(mod_loader, "_parse_inis", return_value=parsed), \
-            patch.object(mod_loader.asset_resolver, "resolve_groups",
+    with patch.object(mod_loader, "analyze_mod_inis", return_value=parsed), \
+            patch.object(mod_enrichment.asset_resolver, "resolve_groups",
                          side_effect=resolve), \
-            patch.object(mod_loader.asset_enrichment, "apply"), \
+            patch.object(mod_enrichment.asset_enrichment, "apply"), \
             patch.object(mod_loader, "build_mesh_semantics",
                          return_value={"Body-1": {}}):
         result = mod_loader.load_mesh_semantics(context)
@@ -252,7 +255,7 @@ def test_control_semantics_filter_wired_toggles_to_displayed_meshes(
             "section": section, "vars": {variable: ["0", "1"]},
         }
 
-    parsed = mod_loader.ParsedModAnalysis(
+    parsed = mod_analysis.ParsedModAnalysis(
         groups=[{"draws": []}],
         toggles={
             "KeyVisible": toggle_info("KeyVisible", "visible"),
@@ -264,8 +267,8 @@ def test_control_semantics_filter_wired_toggles_to_displayed_meshes(
     )
     context = mod_loader.ModLoadContext(
         str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
-    with patch.object(mod_loader, "_parse_inis", return_value=parsed), \
-            patch.object(mod_loader, "build_mesh_semantics", return_value={
+    with patch.object(mod_controls, "analyze_mod_inis", return_value=parsed), \
+            patch.object(mod_controls, "build_mesh_semantics", return_value={
                 "Body-1": {"conditions": [[{
                     "var": "visible", "value": "1", "negate": False,
                 }]]},
@@ -480,7 +483,7 @@ def test_component_material_kind_overrides_apply_to_every_draw_and_auto_removes(
         assert payload["meshes"][name]["material_kind_override"] == "body"
     assert payload["meshes"]["Other-0"]["material_kind_override"] is None
     from core.materials.game_profile import GameDetection
-    from app.mods.loader import _assign_material_profiles
+    from app.mods.enrichment import _assign_material_profiles
     _assign_material_profiles(payload["meshes"], GameDetection(
         game="wuwa", runtime="rabbitfx", texture_api="rabbitfx",
         confidence="high", scores={}))

@@ -9,7 +9,7 @@ import pytest
 from app.session import edit as edit_session
 from app.mods import metadata as metadata
 from app.bridge import present as present_api
-from app.mods.loader import _parse_inis
+from app.mods.analysis import analyze_mod_inis
 from core.editing import present as present_editor
 from core.editing.present import MAX_PRESENTS, SECTION_NAME
 
@@ -116,7 +116,7 @@ def test_present_lifecycle():
         edit_session.discard(folder)
         edit_session.load_documents(folder, paths)
 
-        _groups, _toggles, _menu, _defaults, _rules, before = _parse_inis(
+        _groups, _toggles, _menu, _defaults, _rules, before = analyze_mod_inis(
             paths, folder, edit_session.overrides_for(folder))
         assert (before.get("item") is None and
               [target["value"] for target in before["target_inis"]] == ["a.ini", "b.ini"]), ("one Add action targets every eligible INI")
@@ -130,7 +130,7 @@ def test_present_lifecycle():
               "$Hat = 1" in b_text and "$Coat = 1" in b_text), ("each section captures only the values supplied for its own INI")
         assert (all(open(path, encoding="utf-8").read() == INI for path in paths)), ("batch Add remains memory-only before Export")
 
-        _groups, toggles, _menu, _defaults, _rules, present = _parse_inis(
+        _groups, toggles, _menu, _defaults, _rules, present = analyze_mod_inis(
             paths, folder, edit_session.overrides_for(folder))
         item = present.get("item")
         assert (item and item["inis"] == ["a.ini", "b.ini"] and
@@ -205,7 +205,7 @@ def test_partial_present_is_completed_and_mismatches_are_reported(present_pair):
     metadata.save_present_name(
         folder, metadata.PRESENT_NAMES_KEY, 1, "Alternate")
 
-    _groups, _toggles, _menu, _defaults, _rules, partial = _parse_inis(
+    _groups, _toggles, _menu, _defaults, _rules, partial = analyze_mod_inis(
         paths, folder, edit_session.overrides_for(folder))
     assert (partial["item"]["missing_inis"] == ["b.ini"]), ("a partial logical PRESENT identifies the eligible INIs still missing it")
 
@@ -222,7 +222,7 @@ def test_partial_present_is_completed_and_mismatches_are_reported(present_pair):
     present_editor.capture(
         doc, {"Hat": "0", "Coat": "1"}, allow_duplicate=True)
     edit_session.commit(sess, key, doc)
-    _groups, _toggles, _menu, _defaults, _rules, mismatched = _parse_inis(
+    _groups, _toggles, _menu, _defaults, _rules, mismatched = analyze_mod_inis(
         paths, folder, edit_session.overrides_for(folder))
     assert (mismatched["item"]["count"] == 0 and
           "different position counts" in mismatched["item"]["sync_error"]), ("mismatched existing PRESENT sections load as an explicit error state")
