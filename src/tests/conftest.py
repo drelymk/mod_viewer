@@ -2,7 +2,7 @@
 
 import pytest
 
-from app import edit_session
+from app.session import edit as edit_session
 
 
 @pytest.fixture

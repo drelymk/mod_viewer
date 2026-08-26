@@ -7,7 +7,8 @@ from core.mod_discovery import discover_ini_paths
 from core import present_editor
 from core.toggle_editor import ToggleEditError
 
-from . import edit_session, metadata
+from app.mods import metadata
+from app.session import edit as edit_session
 
 
 def _ini_rel(mod_dir, path):

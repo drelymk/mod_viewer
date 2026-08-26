@@ -13,8 +13,10 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
-from app import metadata, mod_loader, server
-from app.api import ModViewerAPI
+from app.mods import metadata as metadata
+from app.mods import loader as mod_loader
+from app.runtime import server as server
+from app.bridge.api import ModViewerAPI
 from core.ini_document import IniDocument
 from core.mesh_builder import GeometryBlob, build_mesh_result
 from core.textures import (encode_texture_data_uri, render_texture_png,
@@ -309,7 +311,7 @@ def test_native_dds_endpoint_streams_original_bytes_and_png_alias_is_valid(tmp_p
                             dds.stat().st_size)
                     assert response.read() == dds.read_bytes()
 
-        with patch("app.server.render_texture_png", return_value=b"PNG"):
+        with patch("app.runtime.server.render_texture_png", return_value=b"PNG"):
             with urlopen(base_url + native_url[:-4] + ".png") as response:
                 assert response.headers["Content-Type"].startswith("image/png")
                 assert response.read() == b"PNG"
@@ -386,7 +388,7 @@ def test_texture_requests_are_threaded_but_rendering_is_bounded(tmp_path):
 
     reached_two = False
     try:
-        with patch("app.server.render_texture_png", side_effect=blocked_render):
+        with patch("app.runtime.server.render_texture_png", side_effect=blocked_render):
             with ThreadPoolExecutor(max_workers=3) as executor:
                 futures = [executor.submit(fetch, texture_url)
                            for texture_url in texture_urls]
@@ -455,7 +457,7 @@ def test_retired_texture_request_skips_render_after_waiting_for_slot(tmp_path):
         return b"PNG"
 
     with patch.object(server, "_texture_encode_semaphore", semaphore), \
-            patch("app.server.render_texture_png", side_effect=blocked_render):
+            patch("app.runtime.server.render_texture_png", side_effect=blocked_render):
         try:
             with ThreadPoolExecutor(max_workers=2) as executor:
                 first_future = executor.submit(

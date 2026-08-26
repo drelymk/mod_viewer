@@ -34,7 +34,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from app.paths import APP_VERSION
+from app.settings.paths import APP_VERSION
 
 ASSETS = os.path.join(HERE, "assets")
 WEB = os.path.join(HERE, "web")
@@ -45,7 +45,8 @@ FEATURES_FILE = os.path.join(HERE, "features.ini")
 # compiled into the exe as ordinary Python code instead of shipping
 # features.ini itself, so there's no plain, end-user-editable config file
 # sitting next to a distributed build.
-BAKED_FEATURES_MODULE = os.path.join(HERE, "app", "_baked_features.py")
+BAKED_FEATURES_MODULE = os.path.join(
+    HERE, "app", "settings", "_baked_features.py")
 APP_NAME = "3DMigotoModViewer"
 APP_PUBLISHER = "3DMigoto Mod Viewer"
 APP_DESCRIPTION = "3DMigoto Mod Viewer - preview mod meshes in 3D"
@@ -392,7 +393,7 @@ def verify_web():
 
 def verify_features():
     """features.ini controls which optional actions this specific build
-    exposes (app/features.py); a silently-missing file would ship a build
+    exposes (app/settings/features.py); a silently-missing file would ship a build
     that shows everything, which may not be what whoever configured it
     intended — fail loudly instead."""
     if not os.path.isfile(FEATURES_FILE):
@@ -407,7 +408,7 @@ def resolve_features(ini_path):
 
     This is the one place that ini gets read — the resolved booleans are
     baked into the exe at build time (write_baked_features()) instead of
-    shipping the file itself, so app/features.py no longer parses it at
+    shipping the file itself, so app/settings/features.py no longer parses it at
     runtime. A missing file, missing section, missing key, or malformed value
     each independently fall back to True (shown) — a broken config should
     never silently hide a feature nobody deliberately disabled.
@@ -432,8 +433,8 @@ def resolve_features(ini_path):
 def write_baked_features(flags, path=BAKED_FEATURES_MODULE):
     """Generate a tiny module holding the resolved flags as plain constants.
 
-    Written into app/ right before invoking PyInstaller so its normal static
-    import analysis picks up app/features.py's `from . import _baked_features`
+    Written into app/settings/ right before invoking PyInstaller so its normal static
+    import analysis picks up app/settings/features.py's `from . import _baked_features`
     and compiles this module into the exe like any other app code — the
     flags end up in the same bytecode archive as the rest of the app's logic,
     not as a loose file an end user could open in a text editor.
@@ -506,7 +507,7 @@ def clean():
 
 
 def build(onedir=False, console=False, python=None):
-    # Baked into app/_baked_features.py (compiled into the exe as ordinary
+    # Baked into app/settings/_baked_features.py (compiled into the exe as ordinary
     # Python code) rather than bundled as a data file — see
     # resolve_features()/write_baked_features(); cleaned up in the finally
     # below regardless of whether PyInstaller succeeds.

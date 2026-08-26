@@ -1,7 +1,7 @@
 import pytest
 
-from app.wuwa_texture_fallback import apply
-from app.wuwa_texture_names import texture_component_ordinals
+from app.assets.wuwa_texture_fallback import apply
+from app.assets.wuwa_texture_names import texture_component_ordinals
 from core.draw_call import DrawCall, SlotTextureBinding
 from core.ini_parser import TextureOverrideIndex, TextureReplacement
 
@@ -113,7 +113,7 @@ def test_dds_classifier_is_not_called_by_discovery(tmp_path, monkeypatch):
     def classify(_path):
         raise AssertionError("classifier must not be called")
 
-    monkeypatch.setattr("app.asset_enrichment.classify_dds", classify)
+    monkeypatch.setattr("app.assets.enrichment.classify_dds", classify)
     group = _group("Component2", TextureOverrideIndex(
         replacements_by_hash={"aaaaaaaa": (replacement,)}))
 

@@ -3,7 +3,7 @@
 import pytest
 
 import mcp_server
-from app import mod_folders
+from app.settings import mod_folders as mod_folders
 
 
 def _entry(path):

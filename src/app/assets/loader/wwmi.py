@@ -10,8 +10,9 @@ from core.geometry_transport import canonicalize_uvs
 from core.migoto_format import MigotoFormatError, parse_fmt
 from core.vertex_attributes import VertexAttributeSource, decode_normals
 
-from .. import asset_paths, asset_textures
-from ..wuwa_texture_names import texture_component_ordinals
+from app.assets import paths as asset_paths
+from app.assets import textures as asset_textures
+from app.assets.wuwa_texture_names import texture_component_ordinals
 from .hash_asset import _file_list
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      AssetTexture)

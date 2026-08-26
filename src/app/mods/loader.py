@@ -27,7 +27,9 @@ from core.game_profile import GameDetection, resolve_game_detection
 from core.material_kind import detect_material_kind
 from core.material_profiles import material_profile_for
 
-from . import asset_enrichment, asset_resolver, wuwa_texture_fallback
+from app.assets import enrichment as asset_enrichment
+from app.assets import resolver as asset_resolver
+from app.assets import wuwa_texture_fallback
 
 # Kept for scripts that still inspect the low-level mesh-builder result.  These
 # keys are no longer emitted by load_mod's public application payload.

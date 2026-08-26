@@ -5,7 +5,8 @@ import logging
 
 from core.geometry_identity import GeometryMatch
 
-from . import asset_folders, asset_index
+from . import folders as asset_folders
+from . import index as asset_index
 
 
 _LOGGER = logging.getLogger(__name__)

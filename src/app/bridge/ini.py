@@ -6,7 +6,7 @@ boundary and supplies the existing backup/atomic-save guarantees.
 
 import traceback
 
-from . import edit_session
+from app.session import edit as edit_session
 
 
 def _unexpected_error():

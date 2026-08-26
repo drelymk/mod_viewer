@@ -1,6 +1,7 @@
 """Transactional Asset Folder registry and index orchestration."""
 
-from . import asset_folders, asset_index
+from . import folders as asset_folders
+from . import index as asset_index
 
 
 class AssetCatalogError(ValueError):

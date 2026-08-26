@@ -2,7 +2,7 @@
 
 import os
 
-from . import config
+from app.settings import config
 
 
 ASSET_TYPES = frozenset({"GIMI", "ZZMI", "WWMI"})
@@ -178,7 +178,7 @@ def list_subfolders(folder, authorized_root, *, index=None, asset_type=None):
                     if index is not None:
                         relative = os.path.relpath(child, authorized_root).replace(
                             os.sep, "/")
-                        from .asset_index import find_asset_by_path
+                        from .index import find_asset_by_path
                         if find_asset_by_path(index, relative) is not None:
                             item["asset"] = True
                             if asset_type:

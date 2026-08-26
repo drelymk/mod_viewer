@@ -19,8 +19,8 @@ except ImportError:
     print("Missing dependency.  Run:  pip install pywebview")
     raise
 
-from app import server, webview2
-from app.api import ModViewerAPI
+from app.bridge.api import ModViewerAPI
+from app.runtime import server, webview2
 
 __all__ = ["ModViewerAPI", "main"]
 

@@ -7,12 +7,16 @@ import struct
 
 import pytest
 
-from app import asset_folders, asset_index, asset_textures, paths, server
-from app.asset_index import build_index
-from app.asset_loader import hash_asset, load_asset
-from app.asset_loader.wwmi import _component_texture_candidates
-from app.asset_loader.models import AssetLoadResult, AssetMeshPart
-from app.api import ModViewerAPI
+from app.assets import folders as asset_folders
+from app.assets import index as asset_index
+from app.assets import textures as asset_textures
+from app.settings import paths as paths
+from app.runtime import server as server
+from app.assets.index import build_index
+from app.assets.loader import hash_asset, load_asset
+from app.assets.loader.wwmi import _component_texture_candidates
+from app.assets.loader.models import AssetLoadResult, AssetMeshPart
+from app.bridge.api import ModViewerAPI
 from core.component_coverage import ComponentCoverageKey
 from core.geometry_transport import GeometryBlob
 from core.migoto_dump import parse_index_dump, parse_vertex_dump
@@ -901,7 +905,7 @@ def test_api_load_asset_publishes_shared_payload_without_ini(tmp_path, monkeypat
     }), encoding="utf-8")
     monkeypatch.setattr(paths, "config_path", lambda: str(config))
     index = build_index("ZZMI", str(root))
-    from app.asset_index import save_index
+    from app.assets.index import save_index
     save_index(index)
 
     api = ModViewerAPI()
@@ -1003,7 +1007,7 @@ def test_api_rejects_category_and_keeps_disabled_root_browsable(tmp_path, monkey
     }), encoding="utf-8")
     monkeypatch.setattr(paths, "config_path", lambda: str(config))
     index = build_index("GIMI", str(root))
-    from app.asset_index import save_index
+    from app.assets.index import save_index
     save_index(index)
     api = ModViewerAPI()
 

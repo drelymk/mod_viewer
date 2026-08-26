@@ -18,7 +18,7 @@ the app has no business loading or touching it at all (see
 import os, struct, tempfile
 
 
-from app.mod_loader import (_attach_shape_sliders, build_toggle_panel,
+from app.mods.loader import (_attach_shape_sliders, build_toggle_panel,
                             load_mod, _parse_inis)
 
 

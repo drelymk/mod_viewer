@@ -1034,10 +1034,10 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     key) starts identical but gets a "_2"/"_3"... suffix when it repeats,
     since payload keys must be unique even though the UI never shows that.
     `source` tags each group with its originating ini (see
-    app.mod_loader._ini_scope), same as it already does for Toggle keys.
+    app.mods.loader._ini_scope), same as it already does for Toggle keys.
 
     `seen`, if given, is a dict shared across multiple calls (one per ini in
-    an "AllInOne" mod folder — see app.mod_loader._parse_inis) so two inis
+    an "AllInOne" mod folder — see app.mods.loader._parse_inis) so two inis
     reusing a generic name like "Component0" get distinct payload keys
     instead of the second silently overwriting the first's mesh entry; both
     still *display* as "Component0" since the per-ini source header already

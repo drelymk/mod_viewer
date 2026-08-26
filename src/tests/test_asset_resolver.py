@@ -2,9 +2,9 @@ import json
 import os
 import struct
 
-from app import asset_index
-from app.asset_enrichment import apply
-from app.asset_resolver import (AssetComponentBinding, resolve_component,
+from app.assets import index as asset_index
+from app.assets.enrichment import apply
+from app.assets.resolver import (AssetComponentBinding, resolve_component,
                                 resolve_groups, summarize_groups)
 from core.draw_call import DrawCall, SlotTextureBinding
 from core.geometry_identity import GeometryMatch, normalize_geometry_hash
@@ -1180,7 +1180,7 @@ def test_wwmi_textureusage_does_not_trigger_dds_classification(
         return dds_classifier.DDSClassification(
             "diffuse", "color", "high", ("test",))
 
-    monkeypatch.setattr("app.asset_enrichment.classify_dds", classify)
+    monkeypatch.setattr("app.assets.enrichment.classify_dds", classify)
     binding = AssetComponentBinding(
         status="exact", asset_type="WWMI", asset="Alice", root=root,
         component_status="exact", range_status="exact",
@@ -1220,7 +1220,7 @@ def test_roleless_gimi_hash_uses_generic_dds_fallback(tmp_path, monkeypatch):
     index = TextureOverrideIndex(
         replacements_by_hash={"11111111": (replacement,)})
     monkeypatch.setattr(
-        "app.asset_enrichment.classify_dds",
+        "app.assets.enrichment.classify_dds",
         lambda _path: dds_classifier.DDSClassification(
             None, "effect", "medium", ("synthetic_color",),
             color_score=0.5))
@@ -1257,7 +1257,7 @@ def test_raw_slot_hash_without_asset_association_is_not_classified(
         return dds_classifier.DDSClassification(
             "diffuse", "color", "high", ("synthetic_color",))
 
-    monkeypatch.setattr("app.asset_enrichment.classify_dds", classify)
+    monkeypatch.setattr("app.assets.enrichment.classify_dds", classify)
     draw = DrawCall(slot_textures=[SlotTextureBinding(
         0, "ResourceUnknown", texture_hashes=("11111111",))])
     binding = AssetComponentBinding(
@@ -1305,7 +1305,7 @@ def test_wwmi_replacements_use_component_local_dds_roles(tmp_path, monkeypatch):
             role, "packed_normal" if role == "normal_map" else "color",
             "high", ("synthetic",))
 
-    monkeypatch.setattr("app.asset_enrichment.classify_dds", classify)
+    monkeypatch.setattr("app.assets.enrichment.classify_dds", classify)
     draw = DrawCall()
     binding = AssetComponentBinding(
         status="exact", asset_type="WWMI", asset="Alice", root=root,

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import os
 
 from core.material_profiles import material_profile_for
-from ..asset_textures import asset_texture_key
+from app.assets.textures import asset_texture_key
 
 
 @dataclass(frozen=True, slots=True)

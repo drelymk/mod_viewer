@@ -5,7 +5,7 @@ import os
 
 from core.textures import texture_key
 
-from . import asset_folders
+from . import folders as asset_folders
 
 
 def asset_root_id(root):

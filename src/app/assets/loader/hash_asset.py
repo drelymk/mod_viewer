@@ -10,7 +10,7 @@ from core.migoto_dump import (MigotoDumpError, pack_indices,
                                parse_index_dump, parse_vertex_dump)
 from core.textures import normalize_texture_role
 
-from .. import asset_paths
+from app.assets import paths as asset_paths
 from . import gimi_face_alignment
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      make_texture)

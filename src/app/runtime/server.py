@@ -30,7 +30,7 @@ from core.dds import DDSInfo, native_dds_info
 from core.textures import (render_texture_png, normalize_texture_role,
                            normalize_texture_transform)
 from core.texture_profiles import texture_profile_for
-from . import features, paths
+from app.settings import features, paths
 
 THREE_VERSION = "0.185.0"
 REPO_URL = "https://github.com/drelymk/mod_viewer"

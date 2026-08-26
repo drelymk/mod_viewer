@@ -5,7 +5,7 @@ import os
 import tempfile
 
 
-from app import mod_loader
+from app.mods import loader as mod_loader
 from core.ini_health import analyze_mod
 
 

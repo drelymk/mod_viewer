@@ -10,7 +10,8 @@ from core.component_coverage import (
 from core.game_profile import collect_game_evidence, resolve_game_detection
 from core.ini_sections import extract_resources, merge_sections
 
-from . import asset_folders, asset_index
+from . import folders as asset_folders
+from . import index as asset_index
 
 
 _GAME_ASSET_TYPES = {

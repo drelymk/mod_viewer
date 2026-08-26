@@ -2,7 +2,7 @@
 
 The two flags (Export / Modify_Toggle) are configured via features.ini at the
 repo root, a build-time-only input never bundled into the exe. build.py reads
-it and bakes the resolved booleans into app/_baked_features.py, a generated
+it and bakes the resolved booleans into app/settings/_baked_features.py, a generated
 module compiled into the exe like any other app code, then deletes it again
 after PyInstaller has run — so there's no plain config file for an end user
 to flip back on.

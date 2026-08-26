@@ -17,11 +17,22 @@ from core.mod_discovery import discover_ini_paths
 from core.ini_health import analyze_mod
 from core.texture_profiles import texture_profile_for
 
-from . import (asset_catalog, asset_folders, asset_index, edit_session, ini_api,
-               asset_loader, asset_paths, metadata, mod_folders, mod_loader, present_api, server,
-               toggle_api)
-from .asset_composition import plan_missing_asset_parts
-from .asset_loader.models import build_asset_fill_payload
+from app.assets import catalog as asset_catalog
+from app.assets import composition as asset_composition
+from app.assets import folders as asset_folders
+from app.assets import index as asset_index
+from app.assets import loader as asset_loader
+from app.assets import paths as asset_paths
+from app.assets.composition import plan_missing_asset_parts
+from app.bridge import ini as ini_api
+from app.bridge import present as present_api
+from app.bridge import toggle as toggle_api
+from app.mods import loader as mod_loader
+from app.mods import metadata
+from app.runtime import server
+from app.session import edit as edit_session
+from app.settings import mod_folders
+from app.assets.loader.models import build_asset_fill_payload
 
 
 class ModViewerAPI:
@@ -422,7 +433,7 @@ class ModViewerAPI:
             if publication is None:
                 return {"error": "The Asset preview is no longer active."}
             role = texture_role or "diffuse"
-            from .asset_loader.models import make_texture
+            from app.assets.loader.models import make_texture
             texture = make_texture(
                 entry["path"], safe, role,
                 texture_source=publication.register, source="session")

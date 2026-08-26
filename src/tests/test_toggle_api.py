@@ -42,7 +42,8 @@ import glob, os
 import pytest
 
 
-from app import edit_session, toggle_api
+from app.session import edit as edit_session
+from app.bridge import toggle as toggle_api
 
 
 # A section with one writable var (2 values) and one namespaced var declared

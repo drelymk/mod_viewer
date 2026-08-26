@@ -4,8 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import asset_folders, mod_folders, paths
-from app.api import ModViewerAPI
+from app.assets import folders as asset_folders
+from app.settings import mod_folders as mod_folders
+from app.settings import paths as paths
+from app.bridge.api import ModViewerAPI
 
 
 def _config(tmp_path, entries=None, asset_entries=None):

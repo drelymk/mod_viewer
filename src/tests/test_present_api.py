@@ -6,8 +6,10 @@ import tempfile
 import pytest
 
 
-from app import edit_session, metadata, present_api
-from app.mod_loader import _parse_inis
+from app.session import edit as edit_session
+from app.mods import metadata as metadata
+from app.bridge import present as present_api
+from app.mods.loader import _parse_inis
 from core import present_editor
 from core.present_editor import MAX_PRESENTS, SECTION_NAME
 

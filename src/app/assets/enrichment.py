@@ -11,7 +11,9 @@ from core.dds_classifier import (DDSClassification, classification_cache_key,
                                  classify_dds, is_color_candidate)
 from core.resource_paths import safe_resource_path
 
-from . import asset_folders, asset_paths, asset_textures
+from . import folders as asset_folders
+from . import paths as asset_paths
+from . import textures as asset_textures
 
 
 _ROLE_NAMES = {

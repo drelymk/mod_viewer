@@ -19,8 +19,8 @@ import traceback
 from core.mod_discovery import discover_ini_paths
 from core import record_editor
 from core import toggle_editor as te
-from . import edit_session
-from . import mod_loader
+from app.mods import loader as mod_loader
+from app.session import edit as edit_session
 
 
 def _unexpected_error():

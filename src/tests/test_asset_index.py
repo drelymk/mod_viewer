@@ -4,9 +4,10 @@ import os
 
 import pytest
 
-from app import asset_folders, paths
-from app.api import ModViewerAPI
-from app.asset_index import (
+from app.assets import folders as asset_folders
+from app.settings import paths as paths
+from app.bridge.api import ModViewerAPI
+from app.assets.index import (
     IndividualAssetError,
     NoValidAssetsError,
     build_index,
@@ -104,7 +105,7 @@ def test_gimi_index_merges_ranges_and_builds_reverse_lookup(tmp_path, monkeypatc
 
     config = _config(tmp_path)
     monkeypatch.setattr(paths, "config_path", lambda: config)
-    from app.asset_index import save_index
+    from app.assets.index import save_index
     save_index(index)
     assert load_index("GIMI", str(root))["stats"] == index["stats"]
     assert index_status("GIMI", str(root))["status"] == "ready"

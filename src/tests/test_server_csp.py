@@ -3,7 +3,7 @@
 import re
 import urllib.request
 
-from app import server
+from app.runtime import server as server
 
 
 def _read_index(tmp_path, monkeypatch):

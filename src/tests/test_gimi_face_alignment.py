@@ -3,7 +3,7 @@ import struct
 
 import pytest
 
-from app.asset_loader.gimi_face_alignment import (
+from app.assets.loader.gimi_face_alignment import (
     AlignmentMesh, _fit_eye_surface_offset, solve, transform_normal_bytes,
     transform_point, transform_position_bytes)
 

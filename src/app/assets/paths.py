@@ -2,7 +2,7 @@
 
 import os
 
-from . import asset_folders
+from . import folders as asset_folders
 
 
 def _real_within(path, root):

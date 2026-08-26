@@ -5,20 +5,20 @@ exposes), split across two seams that this file tests separately:
     and resolves it to {"export": bool, "modify_toggle": bool}. This is now
     the only place that ever parses the ini file. write_baked_features()/
     clean_baked_features() round-trip those booleans through a tiny
-    generated module (app/_baked_features.py) so PyInstaller compiles them
+    generated module (app/settings/_baked_features.py) so PyInstaller compiles them
     into the exe like ordinary code, instead of bundling features.ini itself
     as a loose, end-user-editable file (see build.py's module docstring-ish
     comments near BAKED_FEATURES_MODULE for the full rationale).
 
-  - app/features.py's get_features(): read at RUNTIME. Always all-True in a
+  - app/settings/features.py's get_features(): read at RUNTIME. Always all-True in a
     source checkout (paths.is_frozen()), regardless of any baked module
     present, so flags meant for a distributed build do not hide source
-    features. When frozen, it imports app._baked_features and reads
+    features. When frozen, it imports app.settings._baked_features and reads
     its EXPORT/MODIFY_TOGGLE constants, falling back to True for a flag if the
     module or the constant is missing (a broken/skipped bake should never
     silently hide a feature nobody deliberately disabled).
 
-Frozen-mode runtime tests inject a fake app._baked_features module straight
+Frozen-mode runtime tests inject a fake app.settings._baked_features module straight
 into sys.modules rather than invoking the packaging toolchain. Importing it
 through the normal submodule path exercises the same runtime contract, and
 paths.is_frozen is monkeypatched the same way test_toggle_api.py monkeypatches
@@ -31,7 +31,8 @@ import pytest
 
 
 import build
-from app import features, paths
+from app.settings import features as features
+from app.settings import paths as paths
 
 
 def _fixture(tmp, text, name="features.ini"):
@@ -100,7 +101,7 @@ def test_write_baked_features_round_trips_through_import():
     assert not os.path.isfile(path), "clean_baked_features removes the generated module"
 
 
-# ── app/features.py: get_features() ──────────────────────────────────────────
+# ── app/settings/features.py: get_features() ──────────────────────────────────────────
 
 class _frozen:
     """Swaps paths.is_frozen for the duration of a `with` block, restoring the
@@ -120,14 +121,14 @@ class _frozen:
 
 
 class _baked_module:
-    """Injects (or removes) a fake app._baked_features module in sys.modules
+    """Injects (or removes) a fake app.settings._baked_features module in sys.modules
     for the duration of a `with` block, so get_features()'s own
     `from . import _baked_features` resolves to exactly the module under
     test -- without ever running build.py/PyInstaller for real. Restores
     whatever was previously in sys.modules afterwards (there normally isn't
     anything, since this module only exists in a real frozen build)."""
 
-    _KEY = "app._baked_features"
+    _KEY = "app.settings._baked_features"
 
     def __init__(self, present=True, export=None, modify_toggle=None):
         self.present = present

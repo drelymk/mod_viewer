@@ -5,7 +5,7 @@ import struct
 import tempfile
 
 from _corpus import sample_mods
-from app import mod_loader
+from app.mods import loader as mod_loader
 from core.ini_parser import (_scan_sections_for_draws, build_draw_groups,
                              extract_resources, merge_sections, parse_sections)
 from core.textures import encode_texture_file

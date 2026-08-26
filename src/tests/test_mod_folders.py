@@ -5,8 +5,9 @@ import os
 
 import pytest
 
-from app import mod_folders, paths
-from app.api import ModViewerAPI
+from app.settings import mod_folders as mod_folders
+from app.settings import paths as paths
+from app.bridge.api import ModViewerAPI
 
 
 def _config(tmp_path):
@@ -187,7 +188,7 @@ def test_api_registry_authorizes_descendants_and_keeps_active_exact_path(
     root = _directory(tmp_path, "root")
     child = _directory(tmp_path / "root", "child")
     sibling = _directory(tmp_path, "sibling")
-    monkeypatch.setattr("app.paths.config_path", lambda: filename)
+    monkeypatch.setattr("app.settings.paths.config_path", lambda: filename)
     api = ModViewerAPI()
     normalized_root = mod_folders.normalize_path(root)
     api._authorized_folders.add(normalized_root)
@@ -208,7 +209,7 @@ def test_api_listing_requires_registered_root(tmp_path, monkeypatch):
     root = _directory(tmp_path, "root")
     child = _directory(tmp_path / "root", "child")
     outside = _directory(tmp_path, "outside")
-    monkeypatch.setattr("app.paths.config_path", lambda: filename)
+    monkeypatch.setattr("app.settings.paths.config_path", lambda: filename)
     api = ModViewerAPI()
     normalized_root = mod_folders.normalize_path(root)
     api._authorized_folders.add(normalized_root)
@@ -225,7 +226,7 @@ def test_api_add_and_edit_require_native_picker_for_new_paths(tmp_path, monkeypa
     first = _directory(tmp_path, "first")
     second = _directory(tmp_path, "second")
     invented = _directory(tmp_path, "invented")
-    monkeypatch.setattr("app.paths.config_path", lambda: filename)
+    monkeypatch.setattr("app.settings.paths.config_path", lambda: filename)
     api = ModViewerAPI()
     normalized_first = mod_folders.normalize_path(first)
     normalized_second = mod_folders.normalize_path(second)
@@ -245,7 +246,7 @@ def test_descendant_runtime_authorization_cannot_persist_without_picker(
     root = _directory(tmp_path, "root")
     child = _directory(tmp_path / "root", "child")
     replacement = _directory(tmp_path, "replacement")
-    monkeypatch.setattr("app.paths.config_path", lambda: filename)
+    monkeypatch.setattr("app.settings.paths.config_path", lambda: filename)
     api = ModViewerAPI()
     normalized_root = mod_folders.normalize_path(root)
     api._authorized_folders.add(normalized_root)

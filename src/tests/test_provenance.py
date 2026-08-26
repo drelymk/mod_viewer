@@ -9,7 +9,7 @@ import tempfile
 
 import pytest
 
-from app import mod_loader
+from app.mods import loader as mod_loader
 from core.draw_call import DrawCall
 from core.ini_parser import (SrcLine, build_draw_groups, extract_resources,
                              extract_toggle_keys, line_source, merge_sections,

@@ -1,4 +1,4 @@
-"""core/ini_menu.py + app.mod_loader.build_menu_panel: mods whose meshes are
+"""core/ini_menu.py + app.mods.loader.build_menu_panel: mods whose meshes are
 driven by an in-game clickable menu instead of [Key...] bindings.
 
 Such a mod has no cycle-type Key section for any of its outfit variables, so
@@ -14,7 +14,7 @@ from core.ini_menu import (attach_menu_images, extract_menu_toggles,
 from core.ini_parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, find_inis, gating_var_names,
                              merge_sections, parse_sections)
-from app.mod_loader import build_menu_panel
+from app.mods.loader import build_menu_panel
 from PIL import Image
 
 

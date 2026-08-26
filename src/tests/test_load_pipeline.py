@@ -11,9 +11,13 @@ from unittest.mock import patch
 
 import pytest
 
-from app import edit_session, metadata, mod_loader, present_api, server
-from app.asset_resolver import AssetComponentBinding
-from app.api import ModViewerAPI
+from app.session import edit as edit_session
+from app.mods import metadata as metadata
+from app.mods import loader as mod_loader
+from app.bridge import present as present_api
+from app.runtime import server as server
+from app.assets.resolver import AssetComponentBinding
+from app.bridge.api import ModViewerAPI
 from core.ini_analysis import analyze_ini
 from core.ini_document import IniDocument
 from core.ini_parser import TextureOverrideIndex, TextureReplacement
@@ -476,7 +480,7 @@ def test_component_material_kind_overrides_apply_to_every_draw_and_auto_removes(
         assert payload["meshes"][name]["material_kind_override"] == "body"
     assert payload["meshes"]["Other-0"]["material_kind_override"] is None
     from core.game_profile import GameDetection
-    from app.mod_loader import _assign_material_profiles
+    from app.mods.loader import _assign_material_profiles
     _assign_material_profiles(payload["meshes"], GameDetection(
         game="wuwa", runtime="rabbitfx", texture_api="rabbitfx",
         confidence="high", scores={}))

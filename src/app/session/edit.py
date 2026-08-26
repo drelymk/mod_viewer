@@ -307,7 +307,7 @@ def overrides_for(mod_dir):
 
 def stage_present_metadata(mod_dir):
     """Remember PRESENT names before their first staged authoring change."""
-    from . import metadata
+    from app.mods import metadata
     sess = _get_or_create(mod_dir)
     if sess.present_names_baseline is _NO_METADATA_BASELINE:
         sess.present_names_baseline = metadata.all_present_names(mod_dir)
@@ -316,7 +316,7 @@ def stage_present_metadata(mod_dir):
 def _restore_present_metadata(sess):
     if sess.present_names_baseline is _NO_METADATA_BASELINE:
         return
-    from . import metadata
+    from app.mods import metadata
     metadata.restore_present_names(sess.mod_dir, sess.present_names_baseline)
 
 

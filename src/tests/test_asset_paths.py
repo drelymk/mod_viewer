@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from app.asset_paths import safe_asset_dir, safe_asset_path
+from app.assets.paths import safe_asset_dir, safe_asset_path
 
 
 def test_safe_asset_path_rejects_parent_escape_and_missing_files(tmp_path):

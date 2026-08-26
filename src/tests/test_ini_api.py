@@ -6,7 +6,9 @@ import tempfile
 from contextlib import nullcontext
 
 
-from app import edit_session, ini_api, toggle_api
+from app.session import edit as edit_session
+from app.bridge import ini as ini_api
+from app.bridge import toggle as toggle_api
 
 
 INI = """[Constants]
