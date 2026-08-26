@@ -6,8 +6,7 @@ from dataclasses import dataclass
 
 from .buffers import (
     DEFAULT_UV_OFFSET, INDEX_SIZE, POSITION_OFFSET, POSITION_STRIDE,
-    BufferStore, _MAX_BUFFER_FILE_BYTES, _MAX_TOTAL_BUFFER_BYTES,
-    _detect_uv_best, _res_get, read_indices, read_positions, read_texcoords,
+    BufferStore, _res_get, read_indices, read_positions, read_texcoords,
 )
 from .conventions import geometry_convention_for
 from .packing import pack_draw_geometry
@@ -20,9 +19,6 @@ from .texture_bindings import (
 )
 from .transport import GeometryBlob
 from ..resource_paths import safe_resource_path
-
-
-_MAX_DRAWS = 10_000
 
 
 @dataclass

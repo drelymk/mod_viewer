@@ -3,7 +3,10 @@
 from types import SimpleNamespace
 
 from app.mods.analysis import ParsedModAnalysis
-from app.mods.controls import load_control_state, load_present_state
+from app.mods.controls import (
+    _gating_vars, _gating_vars_from_groups, load_control_state,
+    load_present_state,
+)
 from app.mods.loader import ModLoadContext
 
 from app.mods.controls import build_toggle_panel
@@ -15,6 +18,31 @@ def _key(name, varvals, key="", key_display="", source=None, ini_path="mod.ini")
         "vars": dict(varvals), "source": source,
         "ini_path": ini_path, "section": f"Key{name}",
     }
+
+
+def test_gating_variable_collection_covers_draw_and_variant_conditions():
+    draw = {
+        "conditions": [[{"var": "draw", "value": "1", "negate": False}]],
+        "texture_variants": [{"conditions": [[{
+            "var": "texture", "value": "1", "negate": False,
+        }]]}],
+        "normal_map_variants": [{"conditions": [[{
+            "var": "normal", "value": "1", "negate": False,
+        }]]}],
+        "normal_data_variants": [{"conditions": [[{
+            "var": "normal_data", "value": "1", "negate": False,
+        }]]}],
+        "light_map_variants": [{"conditions": [[{
+            "var": "light", "value": "1", "negate": False,
+        }]]}],
+        "material_map_variants": [{"conditions": [[{
+            "var": "material", "value": "1", "negate": False,
+        }]]}],
+    }
+    expected = {"draw", "texture", "normal", "normal_data", "light", "material"}
+
+    assert _gating_vars({"Body-1": draw}) == expected
+    assert _gating_vars_from_groups([{"draws": [draw]}]) == expected
 
 
 def test_wired_toggle_shows_only_its_gating_vars():
