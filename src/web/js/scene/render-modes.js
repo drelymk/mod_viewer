@@ -1,6 +1,7 @@
 // Viewer-only material display modes and their toolbar state.
 
 import { refreshMeshTexture, setTextureMode } from '../mesh/mesh-factory.js';
+import { setGameMaterialRimEnabled } from '../mesh/material-profile.js';
 import { setOutlineSuppressedByWireframe } from './outline-renderer.js';
 import { requestRender } from './render-scheduler.js';
 
@@ -23,6 +24,8 @@ export function initializeMeshRenderModes(mesh) {
   mesh.material.wireframe = wireframe;
   mesh.material.flatShading = !smoothShading;
   setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  materials.forEach(material => setGameMaterialRimEnabled(material, !wireframe));
 }
 
 export function toggleWireframeMode(meshes) {
@@ -34,7 +37,10 @@ export function toggleWireframeMode(meshes) {
   button.setAttribute('aria-label', `Wireframe rendering: ${wireframe ? 'on' : 'off'}`);
   meshes.forEach(mesh => {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach(material => { material.wireframe = wireframe; });
+    materials.forEach(material => {
+      material.wireframe = wireframe;
+      setGameMaterialRimEnabled(material, !wireframe);
+    });
   });
   requestRender();
 }

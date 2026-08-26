@@ -9,7 +9,8 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         page.wait_for_function(
             "import('./js/scene/scene.js').then(({renderer}) => renderer.currentSamples === 4)")
         state = page.evaluate("""async () => {
-          const {renderer} = await import('./js/scene/scene.js');
+          const {renderer, scene} = await import('./js/scene/scene.js');
+          const keyLight = scene.children.find(object => object.isDirectionalLight);
           return {
             isWebGPURenderer: renderer.isWebGPURenderer === true,
             isWebGPUBackend: renderer.backend?.isWebGPUBackend === true,
@@ -19,6 +20,10 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
             outputColorSpace: renderer.outputColorSpace,
             toneMapping: renderer.toneMapping,
             clearAlpha: renderer.getClearAlpha(),
+            shadowsEnabled: renderer.shadowMap.enabled,
+            keyCastsShadow: keyLight?.castShadow,
+            shadowAutoUpdate: keyLight?.shadow?.autoUpdate,
+            shadowMapSize: [keyLight?.shadow?.mapSize?.x, keyLight?.shadow?.mapSize?.y],
           };
         }""")
         assert state["isWebGPURenderer"]
@@ -29,6 +34,10 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         assert state["outputColorSpace"] == "srgb"
         assert state["toneMapping"] == 0
         assert state["clearAlpha"] == 1
+        assert state["shadowsEnabled"]
+        assert state["keyCastsShadow"]
+        assert state["shadowAutoUpdate"] is False
+        assert state["shadowMapSize"] == [2048, 2048]
     finally:
         context.close()
 
@@ -1510,5 +1519,311 @@ def test_conditional_only_texture_survives_component_run_reconciliation(
             "diffuse::ConditionalOnly-two.png"
         assert page.evaluate("window.modViewer.activeMeshes[0].userData.texKey") == \
             "diffuse::ConditionalOnly-two.png"
+    finally:
+        context.close()
+
+
+def test_cached_model_bounds_do_not_rescan_positions(edge_browser, frontend_url):
+    context = edge_browser.new_context(bypass_csp=True)
+    page = context.new_page()
+    try:
+        page.goto(frontend_url)
+        page.locator("#open-btn:not([disabled])").wait_for(timeout=10000)
+        state = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const {expandByModelMesh} = await import('./js/scene/model-bounds.js');
+          const geometry = new THREE.BufferGeometry();
+          const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+          geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+          const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+          const initial = new THREE.Box3();
+          expandByModelMesh(initial, mesh);
+          positions[0] = Infinity;
+          const cached = new THREE.Box3();
+          expandByModelMesh(cached, mesh);
+          return {
+            initialEmpty: initial.isEmpty(),
+            cachedEmpty: cached.isEmpty(),
+            boundsShared: cached.equals(initial),
+          };
+        }""")
+        assert state == {
+            "initialEmpty": False, "cachedEmpty": False, "boundsShared": True,
+        }
+    finally:
+        context.close()
+
+def test_character_shadows_are_on_demand_and_visibility_keeps_stable_ground(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Shadow": _payload("Shadow")})
+    try:
+        _open(page, "Shadow")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().shadowUpdateCount > 0;
+        }""")
+        initial = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState, renderer, scene} =
+            await import('./js/scene/scene.js');
+          const ground = [];
+          scene.traverse(object => { if (object.userData.isViewerGround) ground.push(object); });
+          return {
+            enabled: renderer.shadowMap.enabled,
+            ground: ground.map(object => ({
+              receive: object.receiveShadow, cast: object.castShadow,
+              shadowMaterial: object.material.isShadowMaterial,
+              y: object.position.y,
+            })),
+            debug: getCharacterShadowDebugState(),
+          };
+        }""")
+        assert initial["enabled"]
+        assert initial["ground"] == [{
+            "receive": True, "cast": False, "shadowMaterial": True,
+            "y": initial["ground"][0]["y"],
+        }]
+        assert initial["debug"]["modelBounds"] is not None
+        assert initial["debug"]["casterBounds"] is not None
+
+        updated = page.evaluate("""async () => {
+          const {applyMeshVisibility} = await import('./js/mesh/mesh-state.js');
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          mesh.userData.manualVisible = false;
+          applyMeshVisibility(mesh);
+          return getCharacterShadowDebugState();
+        }""")
+        page.wait_for_function(
+            "previous => window.modViewer.getRenderCount() > previous",
+            arg=page.evaluate("window.modViewer.getRenderCount()"))
+        after = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState, scene} = await import('./js/scene/scene.js');
+          let ground = null;
+          scene.traverse(object => { if (object.userData.isViewerGround) ground = object; });
+          return {debug: getCharacterShadowDebugState(), groundY: ground.position.y};
+        }""")
+        assert after["debug"]["fitCount"] > updated["fitCount"]
+        assert after["debug"]["shadowUpdateCount"] > updated["shadowUpdateCount"]
+        assert after["groundY"] == pytest.approx(initial["ground"][0]["y"])
+    finally:
+        context.close()
+
+
+def test_wireframe_toggles_rim_uniform_without_rebuilding_material(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Rim": _payload("Rim")})
+    try:
+        _open(page, "Rim")
+        page.locator(".draw-item").wait_for()
+        initial = page.evaluate("""() => {
+          const material = window.modViewer.activeMeshes[0].material;
+          window.__rimMaterial = material;
+          const state = material.userData.gameMaterial;
+          return {
+            version: material.version,
+            enabled: state.rimEnabledNode.value,
+            strength: state.rimStrengthNode.value,
+            power: state.rimPowerNode.value,
+          };
+        }""")
+        assert initial["enabled"] is True
+        assert initial["strength"] > 0
+        assert initial["power"] > 0
+        page.locator("#wire-btn").click()
+        disabled = page.evaluate("""() => {
+          const material = window.modViewer.activeMeshes[0].material;
+          return {same: material === window.__rimMaterial, version: material.version,
+            enabled: material.userData.gameMaterial.rimEnabledNode.value};
+        }""")
+        assert disabled == {"same": True, "version": initial["version"], "enabled": False}
+        page.locator("#wire-btn").click()
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial.rimEnabledNode.value")
+    finally:
+        context.close()
+
+
+def test_key_light_mode_changes_restore_ground_without_refitting_shadows(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"LightMode": _payload("LightMode")})
+    try:
+        _open(page, "LightMode")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().groundVisible;
+        }""")
+        before = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState, setLightMode} = await import('./js/scene/scene.js');
+          setLightMode('off');
+          return getCharacterShadowDebugState();
+        }""")
+        page.wait_for_function("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return !getCharacterShadowDebugState().groundVisible;
+        }""")
+        off = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState, setLightMode} = await import('./js/scene/scene.js');
+          setLightMode('current');
+          return getCharacterShadowDebugState();
+        }""")
+        page.wait_for_function("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().groundVisible;
+        }""")
+        restored = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState();
+        }""")
+        assert off["fitCount"] == before["fitCount"]
+        assert off["shadowUpdateCount"] == before["shadowUpdateCount"]
+        assert restored["fitCount"] == before["fitCount"]
+        assert restored["shadowUpdateCount"] == before["shadowUpdateCount"]
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("scale", [0.01, 1, 100])
+def test_shadow_fit_and_bias_scale_with_model_size(edge_browser, frontend_url, scale):
+    label = f"ShadowScale{scale}"
+    payload = _payload(label)
+    entry = payload["meshes"][f"Body-{label}-0"]
+    entry["pos"] = _f32(0, 0, 0, scale, 0, 0, 0, scale, scale * 0.25)
+    context, page = _page(edge_browser, frontend_url, {label: payload})
+    try:
+        _open(page, label)
+        page.locator(".draw-item").wait_for()
+        state = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState, scene} = await import('./js/scene/scene.js');
+          const light = scene.children.find(object => object.isDirectionalLight);
+          const camera = light.shadow.camera;
+          return {
+            debug: getCharacterShadowDebugState(),
+            camera: [camera.left, camera.right, camera.bottom, camera.top,
+              camera.near, camera.far],
+          };
+        }""")
+        assert all(math.isfinite(value) for value in state["camera"])
+        left, right, bottom, top, near, far = state["camera"]
+        assert left < right and bottom < top and near < far
+        bounds = state["debug"]["modelBounds"]
+        diagonal = math.dist(bounds["min"], bounds["max"])
+        assert state["debug"]["normalBias"] == pytest.approx(
+            max(diagonal, 0.001) * 0.0015)
+    finally:
+        context.close()
+
+
+def test_shape_and_view_changes_refit_character_shadows(edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"ShadowShape": _payload("ShadowShape")})
+    try:
+        _open(page, "ShadowShape")
+        page.locator(".draw-item").wait_for()
+        initial = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().fitCount;
+        }""")
+        page.evaluate("""async () => {
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
+          setControlValue('shape', '1');
+          refreshMeshes();
+        }""")
+        page.wait_for_function("""async count => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().fitCount > count;
+        }""", arg=initial)
+        after_shape = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().fitCount;
+        }""")
+        for button_id in ("#camera-flip-btn", "#camera-flip-horizontal-btn", "#camera-reset-view-btn"):
+            page.locator(button_id).click()
+            page.wait_for_function("""async count => {
+              const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+              return getCharacterShadowDebugState().fitCount > count;
+            }""", arg=after_shape)
+            after_shape = page.evaluate("""async () => {
+              const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+              return getCharacterShadowDebugState().fitCount;
+            }""")
+    finally:
+        context.close()
+
+
+def test_camera_motion_reuses_shadow_map_but_light_motion_updates_it(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"ShadowMotion": _payload("ShadowMotion")})
+    try:
+        _open(page, "ShadowMotion")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().groundVisible;
+        }""")
+        baseline = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState();
+        }""")
+        render_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.evaluate("""async () => {
+          const {camera} = await import('./js/scene/scene.js');
+          const {requestRender} = await import('./js/scene/render-scheduler.js');
+          camera.position.x += 0.2;
+          requestRender();
+        }""")
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count", arg=render_count)
+        after_camera = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState();
+        }""")
+        assert after_camera["fitCount"] == baseline["fitCount"]
+        assert after_camera["shadowUpdateCount"] == baseline["shadowUpdateCount"]
+
+        page.evaluate("""async () => {
+          const THREE = await import('three');
+          const {scene} = await import('./js/scene/scene.js');
+          const {requestRender} = await import('./js/scene/render-scheduler.js');
+          scene.children.find(object => object.isDirectionalLight)
+            .position.add(new THREE.Vector3(0.25, 0, 0));
+          requestRender();
+        }""")
+        page.wait_for_function("""async state => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          const next = getCharacterShadowDebugState();
+          return next.fitCount > state.fitCount
+            && next.shadowUpdateCount > state.shadowUpdateCount;
+        }""", arg=after_camera)
+    finally:
+        context.close()
+
+
+def test_debug_output_bypasses_viewer_rim_lighting(edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx")
+    context, page = _page(edge_browser, frontend_url, {"DebugRim": payload})
+    try:
+        _open(page, "DebugRim")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
+        page.evaluate("""async () => {
+          const {requestRender} = await import('./js/scene/render-scheduler.js');
+          const game = window.modViewer.activeMeshes[0].material.userData.gameMaterial;
+          game.rimStrengthNode.value = 0;
+          window.modViewer.setMaterialDebugMode('normal-data-b');
+          requestRender();
+        }""")
+        page.wait_for_timeout(250)
+        without_rim = _sample_mesh_pixel(page)
+        page.evaluate("""async () => {
+          const {requestRender} = await import('./js/scene/render-scheduler.js');
+          window.modViewer.activeMeshes[0].material.userData.gameMaterial
+            .rimStrengthNode.value = 20;
+          requestRender();
+        }""")
+        page.wait_for_timeout(250)
+        with_rim = _sample_mesh_pixel(page)
+        assert with_rim == pytest.approx(without_rim, abs=2)
     finally:
         context.close()

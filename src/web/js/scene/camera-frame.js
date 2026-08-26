@@ -1,25 +1,10 @@
 // Camera/model framing, clipping, orientation and unobstructed viewport math.
 
 import * as THREE from 'three';
+import { computeModelBounds } from './model-bounds.js';
 
 const INITIAL_CAMERA_DIRECTION = new THREE.Vector3(0, 0, 1);
 const INITIAL_CAMERA_UP = new THREE.Vector3(0, 1, 0);
-
-function expandByBaseMesh(box, mesh) {
-  if (!mesh?.geometry) return;
-  const positions = mesh.geometry.attributes?.position?.array;
-  if (!positions || positions.length < 3) return;
-  for (let index = 0; index < positions.length; index++) {
-    if (!Number.isFinite(positions[index])) return;
-  }
-  mesh.updateWorldMatrix(true, false);
-  if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-  if (!mesh.geometry.boundingBox) return;
-  const worldBox = mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
-  const values = [worldBox.min.x, worldBox.min.y, worldBox.min.z,
-    worldBox.max.x, worldBox.max.y, worldBox.max.z];
-  if (values.every(Number.isFinite)) box.union(worldBox);
-}
 
 export function createCameraFrame({
   camera, renderer, controls, grid, cancelViewSnap, onModelFit,
@@ -97,8 +82,7 @@ export function createCameraFrame({
   }
 
   function frameView(meshes = [], direction = null, targetYOffset = 0) {
-    const box = new THREE.Box3();
-    meshes.forEach(mesh => expandByBaseMesh(box, mesh));
+    const box = computeModelBounds(meshes);
     if (box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
@@ -128,8 +112,7 @@ export function createCameraFrame({
     // turn makes asymmetric models drift.
     let center = modelPivot && modelPivot.clone();
     if (!center) {
-      const box = new THREE.Box3();
-      meshes.forEach(mesh => expandByBaseMesh(box, mesh));
+      const box = computeModelBounds(meshes);
       if (box.isEmpty()) return;
       center = box.getCenter(new THREE.Vector3());
     }
@@ -201,8 +184,7 @@ export function createCameraFrame({
       mesh.position.copy(position);
     });
     modelRotation.identity();
-    const box = new THREE.Box3();
-    homeView.meshes.forEach(({ mesh }) => expandByBaseMesh(box, mesh));
+    const box = computeModelBounds(homeView.meshes.map(({ mesh }) => mesh));
     if (box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3());
     camera.up.copy(INITIAL_CAMERA_UP);
@@ -227,8 +209,7 @@ export function createCameraFrame({
     } : null;
     let homeMeshTransforms = null;
     if (!orientationInitialized && meshes.length) {
-      const rawBox = new THREE.Box3();
-      meshes.forEach(mesh => expandByBaseMesh(rawBox, mesh));
+      const rawBox = computeModelBounds(meshes);
       const rawSize = rawBox.getSize(new THREE.Vector3());
       uprightRotation.identity();
       if (rawSize.z > rawSize.y * 1.5 && rawSize.z > rawSize.x * 1.15) {
@@ -236,8 +217,7 @@ export function createCameraFrame({
           new THREE.Vector3(1, 0, 0), -Math.PI / 2);
       }
       meshes.forEach(mesh => mesh.quaternion.copy(uprightRotation));
-      const uprightBox = new THREE.Box3();
-      meshes.forEach(mesh => expandByBaseMesh(uprightBox, mesh));
+      const uprightBox = computeModelBounds(meshes);
       baseFacingRotation.identity();
       if (!uprightBox.isEmpty()) {
         modelPivot = uprightBox.getCenter(new THREE.Vector3());
@@ -257,8 +237,7 @@ export function createCameraFrame({
       rotateMeshesAroundCenter(meshes, modelRotation);
       orientationInitialized = true;
     }
-    const box = new THREE.Box3();
-    meshes.forEach(mesh => expandByBaseMesh(box, mesh));
+    const box = computeModelBounds(meshes);
     if (box.isEmpty()) return;
 
     const boxSize = box.getSize(new THREE.Vector3());
