@@ -1,4 +1,8 @@
+from types import SimpleNamespace
+
 from app.bridge.api import ModViewerAPI
+from app.session import edit as edit_session
+from app.settings import paths
 
 
 EXPECTED_API_METHODS = {
@@ -62,3 +66,29 @@ def test_mod_viewer_api_surface_is_explicit_and_private_state_stays_private():
 
     assert public == EXPECTED_API_METHODS
     assert all(name.startswith("_") for name in vars(api))
+
+
+def test_facade_composes_picker_registry_preview_and_editing(tmp_path, monkeypatch):
+    root = tmp_path / "mods"
+    root.mkdir()
+    ini = root / "mod.ini"
+    ini.write_text("[Constants]\n$Value = 0\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+
+    api = ModViewerAPI()
+    api._window = SimpleNamespace(
+        create_file_dialog=lambda *_args, **_kwargs: [str(root)])
+
+    try:
+        selected = api.select_folder()
+        assert api.add_mod_folder("Mods", selected)["folders"]
+        assert api.get_present_state(selected).get("error") is None
+
+        changed = api.update_ini_text(selected, "mod.ini",
+                                      "[Constants]\n$Value = 1\n")
+
+        assert changed["ok"] is True
+        assert "$Value = 1" in api.get_ini_text(selected, "mod.ini")["text"]
+        assert "$Value = 0" in ini.read_text(encoding="utf-8")
+    finally:
+        edit_session.discard(selected)

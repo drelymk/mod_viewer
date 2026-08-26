@@ -191,17 +191,16 @@ def test_api_registry_authorizes_descendants_and_keeps_active_exact_path(
     monkeypatch.setattr("app.settings.paths.config_path", lambda: filename)
     api = ModViewerAPI()
     normalized_root = mod_folders.normalize_path(root)
-    api._authorized_folders.add(normalized_root)
-    api._picker_authorized_folders.add(normalized_root)
+    api._access.remember_mod_picker_selection(normalized_root)
     assert api.add_mod_folder("Root", root)["folders"][0]["name"] == "Root"
 
-    assert api._folder(child) == mod_folders.normalize_path(child)
+    assert api._access.mod_folder(child) == mod_folders.normalize_path(child)
     with pytest.raises(PermissionError):
-        api._folder(sibling)
+        api._access.mod_folder(sibling)
     assert api.delete_mod_folder(root)["folders"] == []
     # The descendant was promoted to an exact session authorization before the
     # root was removed, so existing open-mod operations remain usable.
-    assert api._folder(child) == mod_folders.normalize_path(child)
+    assert api._access.mod_folder(child) == mod_folders.normalize_path(child)
 
 
 def test_api_listing_requires_registered_root(tmp_path, monkeypatch):
@@ -212,8 +211,7 @@ def test_api_listing_requires_registered_root(tmp_path, monkeypatch):
     monkeypatch.setattr("app.settings.paths.config_path", lambda: filename)
     api = ModViewerAPI()
     normalized_root = mod_folders.normalize_path(root)
-    api._authorized_folders.add(normalized_root)
-    api._picker_authorized_folders.add(normalized_root)
+    api._access.remember_mod_picker_selection(normalized_root)
     api.add_mod_folder("Root", root)
 
     assert [item["path"] for item in api.list_subfolders(root)["folders"]] == [
@@ -230,13 +228,11 @@ def test_api_add_and_edit_require_native_picker_for_new_paths(tmp_path, monkeypa
     api = ModViewerAPI()
     normalized_first = mod_folders.normalize_path(first)
     normalized_second = mod_folders.normalize_path(second)
-    api._authorized_folders.add(normalized_first)
-    api._picker_authorized_folders.add(normalized_first)
+    api._access.remember_mod_picker_selection(normalized_first)
     assert api.add_mod_folder("First", first).get("folders")
     assert "error" in api.add_mod_folder("Invented", invented)
     assert "error" in api.edit_mod_folder(first, "Second", second)
-    api._authorized_folders.add(normalized_second)
-    api._picker_authorized_folders.add(normalized_second)
+    api._access.remember_mod_picker_selection(normalized_second)
     assert api.edit_mod_folder(first, "Second", second).get("folders")
 
 
@@ -249,17 +245,15 @@ def test_descendant_runtime_authorization_cannot_persist_without_picker(
     monkeypatch.setattr("app.settings.paths.config_path", lambda: filename)
     api = ModViewerAPI()
     normalized_root = mod_folders.normalize_path(root)
-    api._authorized_folders.add(normalized_root)
-    api._picker_authorized_folders.add(normalized_root)
+    api._access.remember_mod_picker_selection(normalized_root)
     assert api.add_mod_folder("Root", root).get("folders")
 
     # Browsing the child grants runtime access only; it is not picker proof.
-    assert api._folder(child) == mod_folders.normalize_path(child)
+    assert api._access.mod_folder(child) == mod_folders.normalize_path(child)
     assert "error" in api.add_mod_folder("Child", child)
     assert "error" in api.edit_mod_folder(root, "Child", child)
 
-    api._authorized_folders.add(mod_folders.normalize_path(replacement))
-    api._picker_authorized_folders.add(mod_folders.normalize_path(replacement))
+    api._access.remember_mod_picker_selection(replacement)
     assert api.edit_mod_folder(root, "Replacement", replacement).get("folders")
 
 

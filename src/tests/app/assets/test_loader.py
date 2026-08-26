@@ -984,7 +984,7 @@ def test_api_load_missing_asset_parts_is_incremental_and_reversible(
     stale = api.remove_missing_asset_parts(str(mod), old_fill_id)
     assert stale == {"status": "removed", "removed": False, "stale": True}
     key = os.path.normcase(os.path.abspath(str(mod)))
-    assert api._asset_fill_sessions[key]["fill_id"] == new_fill_id
+    assert api._asset_preview._asset_fill_sessions[key]["fill_id"] == new_fill_id
 
     preview = api.load_asset(str(asset))
     assert preview["metadata"]["source_kind"] == "asset"

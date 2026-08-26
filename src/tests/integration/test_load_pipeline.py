@@ -326,7 +326,7 @@ def test_present_state_read_uses_staged_documents_without_geometry(
     assert added.get("ok") is True
 
     api = ModViewerAPI()
-    api._authorized_folders.add(os.path.normcase(os.path.abspath(root)))
+    api._access.remember_mod_picker_selection(root)
     with patch.object(mod_loader, "build_mesh_result",
                       side_effect=AssertionError("geometry must not be built")):
         result = api.get_present_state(root)

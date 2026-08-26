@@ -144,21 +144,17 @@ def test_api_asset_authorization_is_separate_from_mod_roots(tmp_path, monkeypatc
     _gimi_asset(asset_root)
     monkeypatch.setattr(paths, "config_path", lambda: filename)
     api = ModViewerAPI()
-    api._authorized_folders.add(mod_folders.normalize_path(mod_root))
-    api._picker_authorized_folders.update({
-        mod_folders.normalize_path(mod_root),
-        mod_folders.normalize_path(asset_root),
-    })
+    api._access.remember_mod_picker_selection(mod_root)
+    api._access.remember_asset_picker_selection(asset_root)
     assert api.add_mod_folder("Mods", mod_root).get("folders")
     assert api.add_asset_folder("GIMI", asset_root).get("folders")[0]["enabled"] is True
     with pytest.raises(PermissionError):
-        api._folder(asset_root)
+        api._access.mod_folder(asset_root)
     with pytest.raises(PermissionError):
-        api._asset_folder(mod_root)
-    assert api._asset_folder(asset_root) == mod_folders.normalize_path(asset_root)
-    api._authorized_asset_folders.clear()
+        api._access.asset_folder(mod_root)
+    assert api._access.asset_folder(asset_root) == mod_folders.normalize_path(asset_root)
     assert api.set_asset_folder_enabled(asset_root, False)["folders"][0]["enabled"] is False
-    assert api._asset_folder(os.path.join(asset_root, "Character")) == \
+    assert api._access.asset_folder(os.path.join(asset_root, "Character")) == \
         mod_folders.normalize_path(os.path.join(asset_root, "Character"))
     assert [item["name"] for item in
             api.list_asset_subfolders(asset_root)["folders"]] == ["Character"]
@@ -174,10 +170,9 @@ def test_asset_picker_does_not_grant_mod_folder_access(tmp_path, monkeypatch):
         create_file_dialog=lambda *_args: [asset_root])
 
     assert api.select_asset_folder() == mod_folders.normalize_path(asset_root)
-    assert mod_folders.normalize_path(asset_root) in api._picker_authorized_folders
-    assert mod_folders.normalize_path(asset_root) not in api._authorized_folders
+    assert api._access.was_picker_selected(asset_root)
     with pytest.raises(PermissionError):
-        api._folder(asset_root)
+        api._access.mod_folder(asset_root)
 
 
 def test_api_asset_authorization_is_revoked_when_root_is_deleted(tmp_path, monkeypatch):
@@ -186,12 +181,12 @@ def test_api_asset_authorization_is_revoked_when_root_is_deleted(tmp_path, monke
     _gimi_asset(asset_root)
     monkeypatch.setattr(paths, "config_path", lambda: filename)
     api = ModViewerAPI()
-    api._picker_authorized_folders.add(mod_folders.normalize_path(asset_root))
+    api._access.remember_asset_picker_selection(asset_root)
 
     assert api.add_asset_folder("GIMI", asset_root).get("folders")
     cached_child = os.path.join(asset_root, "Character")
-    assert api._asset_folder(cached_child) == mod_folders.normalize_path(cached_child)
+    assert api._access.asset_folder(cached_child) == mod_folders.normalize_path(cached_child)
 
     assert api.delete_asset_folder(asset_root).get("folders") == []
     with pytest.raises(PermissionError):
-        api._asset_folder(cached_child)
+        api._access.asset_folder(cached_child)

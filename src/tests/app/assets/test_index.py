@@ -320,7 +320,7 @@ def test_api_add_rebuild_and_delete_manage_index_transactionally(
     root = _gimi_root(tmp_path)
     monkeypatch.setattr(paths, "config_path", lambda: config)
     api = ModViewerAPI()
-    api._picker_authorized_folders.add(asset_folders.normalize_path(str(root)))
+    api._access.remember_asset_picker_selection(str(root))
 
     added = api.add_asset_folder("GIMI", str(root))
     assert added["folders"][0]["index"]["status"] == "ready"
@@ -350,7 +350,7 @@ def test_api_add_failure_leaves_config_and_index_unchanged(tmp_path, monkeypatch
     root.mkdir()
     monkeypatch.setattr(paths, "config_path", lambda: config)
     api = ModViewerAPI()
-    api._picker_authorized_folders.add(asset_folders.normalize_path(str(root)))
+    api._access.remember_asset_picker_selection(str(root))
 
     result = api.add_asset_folder("GIMI", str(root))
 
@@ -365,7 +365,7 @@ def test_api_config_failure_restores_new_index(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "config_path", lambda: config)
     api = ModViewerAPI()
     normalized = asset_folders.normalize_path(str(root))
-    api._picker_authorized_folders.add(normalized)
+    api._access.remember_asset_picker_selection(normalized)
 
     def fail_write(_entries):
         raise asset_folders.AssetFolderError("config write failed")
@@ -385,7 +385,7 @@ def test_api_edit_reindexes_same_root_without_changing_enabled_state(
     monkeypatch.setattr(paths, "config_path", lambda: config)
     api = ModViewerAPI()
     normalized = asset_folders.normalize_path(str(root))
-    api._picker_authorized_folders.add(normalized)
+    api._access.remember_asset_picker_selection(normalized)
 
     assert api.add_asset_folder("GIMI", str(root))["folders"]
     assert api.set_asset_folder_enabled(str(root), False)["folders"][0]["enabled"] is False
