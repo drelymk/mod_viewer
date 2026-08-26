@@ -1976,11 +1976,11 @@ def test_diagnostics_badge_populates_after_mod_load(
         context.close()
 
 
-@pytest.mark.parametrize("failed_payload", [
-    {"error": "loader failed", "health": {"summary": {"issues": 1, "errors": 1}}},
-], ids=["loader-error"])
 def test_failed_mod_switch_clears_previous_ui_and_pending_state(
-        edge_browser, frontend_url, failed_payload):
+        edge_browser, frontend_url):
+    failed_payload = {
+        "error": "loader failed", "health": {"summary": {"issues": 1, "errors": 1}},
+    }
     context, page = _page(
         edge_browser, frontend_url,
         {"A": _payload("A"), "B": failed_payload},
@@ -2039,9 +2039,9 @@ def test_frontend_construction_failure_rolls_back_partial_scene(
         context.close()
 
 
-@pytest.mark.parametrize("profile_id", ["zzz:zzmi"])
 def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
-        edge_browser, frontend_url, profile_id):
+        edge_browser, frontend_url):
+    profile_id = "zzz:zzmi"
     context, page = _page(
         edge_browser, frontend_url,
         {"Packed": _packed_material_payload(profile_id)},
