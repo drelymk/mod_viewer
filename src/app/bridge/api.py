@@ -113,6 +113,8 @@ class ModViewerAPI:
                 self._mod_preview.authoritative_context(folder_path)
             return self._asset_preview.load_missing_asset_parts(
                 folder_path, context, overrides)
+        except PermissionError as error:
+            return {"status": "error", "error": str(error)}
         except Exception:
             traceback.print_exc()
             return {

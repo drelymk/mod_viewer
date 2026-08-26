@@ -92,3 +92,16 @@ def test_facade_composes_picker_registry_preview_and_editing(tmp_path, monkeypat
         assert "$Value = 0" in ini.read_text(encoding="utf-8")
     finally:
         edit_session.discard(selected)
+
+
+def test_missing_asset_parts_preserves_unauthorized_folder_error(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+    api = ModViewerAPI()
+
+    result = api.load_missing_asset_parts(str(tmp_path / "unselected"))
+
+    assert result == {
+        "status": "error",
+        "error": "This folder was not selected through the native folder picker.",
+    }
