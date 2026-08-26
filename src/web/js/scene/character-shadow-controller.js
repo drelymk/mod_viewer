@@ -54,6 +54,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
   let casterBounds = new THREE.Box3();
   let lastLightPosition = null;
   let lastLightTarget = null;
+  let groundAvailable = false;
   let fitCount = 0;
   let shadowUpdateCount = 0;
 
@@ -110,6 +111,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     }
     casterBounds = computeModelBounds(meshes, { visibleOnly: true });
     if (!finiteBox(modelBounds) || !finiteBox(casterBounds)) {
+      groundAvailable = false;
       ground.visible = false;
       shadowFitDirty = false;
       fitCount += 1;
@@ -147,6 +149,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     const lightSpace = footprint.map(point => point.clone().applyMatrix4(shadowCamera.matrixWorldInverse));
     const lightBox = new THREE.Box3().setFromPoints(lightSpace);
     if (!finiteBox(lightBox)) {
+      groundAvailable = false;
       ground.visible = false;
       shadowFitDirty = false;
       return false;
@@ -164,6 +167,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     shadowCamera.updateProjectionMatrix();
     light.shadow.bias = -0.00002;
     light.shadow.normalBias = modelSize * NORMAL_BIAS_SCALE;
+    groundAvailable = true;
     ground.visible = light.intensity > 0;
     shadowFitDirty = false;
     fitCount += 1;
@@ -184,6 +188,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
       return;
     }
     if (shadowFitDirty) fitShadow();
+    else ground.visible = groundAvailable;
     if (shadowMapDirty) {
       light.shadow.needsUpdate = true;
       renderer.shadowMap.needsUpdate = true;
@@ -201,6 +206,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     shadowMapDirty = false;
     lastLightPosition = null;
     lastLightTarget = null;
+    groundAvailable = false;
     ground.visible = false;
   }
 

@@ -60,7 +60,9 @@ export function createKeyLightController({
     if (!handleHit) return false;
     const visibleMeshes = [];
     scene.traverseVisible(object => {
-      if (object.isMesh && !object.userData.isViewerOutline) {
+      if (object.isMesh
+          && !object.userData.isViewerOutline
+          && !object.userData.isViewerGround) {
         visibleMeshes.push(object);
       }
     });
