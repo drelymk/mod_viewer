@@ -255,7 +255,8 @@ def _equivalent_matches(range_matches):
 
 
 def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
-                                    *, require_range=False):
+                                    *, require_range=False,
+                                    asset_identity=None):
     if not isinstance(geometry_match, GeometryMatch):
         return _not_found(asset_type)
     if asset_type is None and not indexes:
@@ -270,13 +271,18 @@ def _resolve_component_from_indexes(geometry_match, asset_type, indexes,
             if candidate_key in seen:
                 continue
             try:
-                geometry = index["assets"][lookup["asset"]]["geometry"][
-                    lookup["geometry"]]
+                asset = index["assets"][lookup["asset"]]
+                geometry = asset["geometry"][lookup["geometry"]]
                 ranges = geometry.get("ranges", [])
                 if not isinstance(ranges, list):
                     continue
             except (IndexError, KeyError, TypeError):
                 continue
+            if asset_identity is not None:
+                candidate_identity = (
+                    index.get("type"), root, asset.get("path"))
+                if candidate_identity != asset_identity:
+                    continue
             seen.add(candidate_key)
             candidates.append((root, index, lookup, geometry, ranges))
 
@@ -396,6 +402,17 @@ def _indexes_of_type(indexes, asset_type):
             if index.get("type") == asset_type]
 
 
+def _exact_asset_identity(binding):
+    if not isinstance(binding, AssetComponentBinding):
+        return None
+    if not (binding.status == "exact"
+            and binding.component_status == "exact"
+            and binding.range_status == "exact"
+            and binding.asset_type and binding.root and binding.asset):
+        return None
+    return binding.asset_type, binding.root, binding.asset
+
+
 def resolve_component(geometry_match, game, asset_entries):
     """Resolve one draw's geometry evidence without using texture evidence."""
     asset_type, indexes = _indexes_for_game(game, asset_entries)
@@ -411,9 +428,10 @@ def resolve_component(geometry_match, game, asset_entries):
 
 
 def resolve_groups(groups, game, asset_entries, *, availability=None):
-    """Return independent per-draw bindings in group order."""
+    """Return per-draw bindings with conservative shared-Asset narrowing."""
     if availability is not None:
         availability.clear()
+    detected_asset_type = _asset_type(game)
     asset_type, indexes = _indexes_for_game(
         game, asset_entries, availability=availability)
     if asset_type is None:
@@ -427,14 +445,40 @@ def resolve_groups(groups, game, asset_entries, *, availability=None):
         # Keep the normal return shape stable while allowing the caller that
         # owns the aggregate report to distinguish missing/invalid indexes.
         availability.setdefault("unavailable_roots", 0)
-    resolved = [[
-        _resolve_component_from_indexes(
-            (draw if isinstance(draw, GeometryMatch)
-            else getattr(draw, "geometry_match", None)), asset_type, indexes,
-            require_range=asset_type is None)
-        for draw in group.get("draws", [])]
-        for group in groups
-    ]
+    resolved = []
+    for group in groups:
+        group_bindings = []
+        for draw in group.get("draws", []):
+            geometry_match = (
+                draw if isinstance(draw, GeometryMatch)
+                else getattr(draw, "geometry_match", None))
+            group_bindings.append(_resolve_component_from_indexes(
+                geometry_match, asset_type, indexes,
+                require_range=asset_type is None))
+        resolved.append(group_bindings)
+    exact_identities = {
+        identity
+        for group_bindings in resolved
+        for identity in (_exact_asset_identity(binding)
+                         for binding in group_bindings)
+        if identity is not None
+    }
+    if detected_asset_type is not None and len(exact_identities) == 1:
+        preferred_identity = next(iter(exact_identities))
+        for group_index, group in enumerate(groups):
+            for draw_index, draw in enumerate(group.get("draws", [])):
+                if resolved[group_index][draw_index].status != "ambiguous":
+                    continue
+                geometry_match = (
+                    draw if isinstance(draw, GeometryMatch)
+                    else getattr(draw, "geometry_match", None))
+                narrowed = _resolve_component_from_indexes(
+                    geometry_match, asset_type, indexes,
+                    require_range=asset_type is None,
+                    asset_identity=preferred_identity)
+                if (_exact_asset_identity(narrowed)
+                        == preferred_identity):
+                    resolved[group_index][draw_index] = narrowed
     return resolved
 
 
