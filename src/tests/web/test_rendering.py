@@ -1522,6 +1522,37 @@ def test_conditional_only_texture_survives_component_run_reconciliation(
     finally:
         context.close()
 
+
+def test_cached_model_bounds_do_not_rescan_positions(edge_browser, frontend_url):
+    context = edge_browser.new_context(bypass_csp=True)
+    page = context.new_page()
+    try:
+        page.goto(frontend_url)
+        page.locator("#open-btn:not([disabled])").wait_for(timeout=10000)
+        state = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const {expandByModelMesh} = await import('./js/scene/model-bounds.js');
+          const geometry = new THREE.BufferGeometry();
+          const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+          geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+          const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+          const initial = new THREE.Box3();
+          expandByModelMesh(initial, mesh);
+          positions[0] = Infinity;
+          const cached = new THREE.Box3();
+          expandByModelMesh(cached, mesh);
+          return {
+            initialEmpty: initial.isEmpty(),
+            cachedEmpty: cached.isEmpty(),
+            boundsShared: cached.equals(initial),
+          };
+        }""")
+        assert state == {
+            "initialEmpty": False, "cachedEmpty": False, "boundsShared": True,
+        }
+    finally:
+        context.close()
+
 def test_character_shadows_are_on_demand_and_visibility_keeps_stable_ground(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"Shadow": _payload("Shadow")})
