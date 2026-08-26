@@ -453,7 +453,7 @@ def _run_browser(base_url, payload, profiler, sampler, concurrency,
 
 
 def _run_once(mod_path, concurrency, browser_channel):
-    from app.bridge import api as api_module
+    from app.bridge import mod_preview
     from app.session import edit as edit_session
     from app.mods import metadata, loader as mod_loader
     from app.runtime import server
@@ -467,7 +467,7 @@ def _run_once(mod_path, concurrency, browser_channel):
     old_hook = textures.set_texture_profile_hook(profiler)
     textures.reset_texture_cache()
     for module, name, label in (
-        (api_module, "discover_ini_paths", "ini_discovery"),
+        (mod_preview, "discover_ini_paths", "ini_discovery"),
         (edit_session, "load_documents", "session_load"),
         (metadata, "load", "metadata_load"),
         (mod_loader, "load_mod", "mod_loader_load_mod"),
@@ -477,7 +477,7 @@ def _run_once(mod_path, concurrency, browser_channel):
         _install_timing(module, name, label, timings)
 
     api = ModViewerAPI()
-    api._authorized_folders.add(os.path.normcase(os.path.abspath(mod_path)))
+    api._access.remember_mod_picker_selection(mod_path)
     backend_started = time.perf_counter()
     payload = api.load_mod(mod_path)
     backend_seconds = time.perf_counter() - backend_started

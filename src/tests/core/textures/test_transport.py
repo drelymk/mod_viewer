@@ -213,7 +213,7 @@ def test_wuwa_manual_normal_pick_publishes_only_raw_source(tmp_path):
 
     api = ModViewerAPI()
     api._window = Dialog()
-    api._authorized_folders.add(os.path.normcase(os.path.abspath(tmp_path)))
+    api._access.remember_mod_picker_selection(tmp_path)
 
     result = api.pick_texture_file(str(tmp_path), "normal_map")
 
