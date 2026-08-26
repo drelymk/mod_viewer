@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from dataclasses import dataclass
 
 from core.geometry_identity import normalize_geometry_hash
 from core.migoto_dump import (MigotoDumpError, pack_indices,
@@ -10,6 +11,7 @@ from core.migoto_dump import (MigotoDumpError, pack_indices,
 from core.textures import normalize_texture_role
 
 from .. import asset_paths
+from . import gimi_face_alignment
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      make_texture)
 
@@ -28,6 +30,18 @@ _TEXTURE_SUFFIXES = (
     ("light_map", "lightmap"),
     ("material_map", "materialmap"),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _HashAssetRecord:
+    metadata_path: str
+    entry: dict
+    component_name: str | None
+    geometry_hash: str
+    vb_hash: str | None
+    ranges: tuple
+    vb_file: str | None
+    ib_files: tuple[str, ...]
 
 
 def _entries(value):
@@ -366,6 +380,176 @@ def _filter_matches(part_filter, geometry_hash, first, count, ordinal=None):
     return False
 
 
+def _compact_name(value):
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _record_prefix(record):
+    return _compact_name(_dump_prefix(record.vb_file) if record.vb_file else "")
+
+
+def _record_name(record):
+    return _compact_name(
+        f"{record.component_name or ''}{_record_prefix(record)}")
+
+
+def _component_face_kind(value):
+    component = _compact_name(value)
+    exact = {
+        "face": "face", "facemesh": "face", "facehead": "face",
+        "eye": "eye", "eyes": "eyes", "mouth": "mouth",
+        "nose": "nose", "brow": "brow", "eyebrows": "brow",
+    }
+    if component in exact:
+        return exact[component]
+    for prefix, kind in (
+        ("faceeyebrow", "brow"), ("facebrow", "brow"),
+        ("faceeye", "eye"), ("facemouth", "mouth"),
+        ("facenose", "nose"),
+    ):
+        if component.startswith(prefix):
+            return kind
+    return None
+
+
+def _filename_face_kind(record):
+    prefix = _record_prefix(record)
+    for token, kind in (
+        ("faceeyebrow", "brow"), ("facebrow", "brow"),
+        ("faceeye", "eye"), ("facemouth", "mouth"),
+        ("facenose", "nose"),
+    ):
+        if token in prefix:
+            return kind
+    return "face" if "face" in prefix else None
+
+
+def _is_native_eyes_record(record):
+    component = _compact_name(record.component_name)
+    if component:
+        return component == "eyes"
+    return "eyes" in _record_prefix(record)
+
+
+def _is_face_local_record(record):
+    component = _compact_name(record.component_name)
+    if component:
+        return _component_face_kind(component) in {
+            "face", "eye", "mouth", "nose", "brow"
+        }
+    return _filename_face_kind(record) is not None
+
+
+def _is_face_anchor_record(record):
+    component = _compact_name(record.component_name)
+    if component:
+        return _component_face_kind(component) in {"face", "eye"}
+    return _filename_face_kind(record) in {"face", "eye"}
+
+
+def _landmark_kind(record):
+    component = _compact_name(record.component_name)
+    kind = (_component_face_kind(component) if component
+            else _filename_face_kind(record))
+    return kind if kind in {"brow", "mouth"} else None
+
+
+def _reference_score(record):
+    name = _record_name(record)
+    component = _compact_name(record.component_name)
+    return (0 if "eyesa" in name else 1,
+            0 if component in {"eye", "eyes"} else 1,
+            name)
+
+
+def _anchor_score(record):
+    name = _record_name(record)
+    component = _compact_name(record.component_name)
+    return (0 if "faceeye" in name else 1 if component == "face" else 2,
+            name)
+
+
+def _alignment_vertex(record, vertex_cache):
+    if not record.vb_file:
+        return None
+    if record.vb_file not in vertex_cache:
+        try:
+            vertex_cache[record.vb_file] = parse_vertex_dump(record.vb_file)
+        except MigotoDumpError:
+            vertex_cache[record.vb_file] = None
+    return vertex_cache[record.vb_file]
+
+
+def _alignment_mesh(record, vertex_cache, ib_cache, *, with_indices,
+                    name_override=None):
+    vertex_dump = _alignment_vertex(record, vertex_cache)
+    if vertex_dump is None:
+        return None
+    indices = []
+    if with_indices:
+        for _ordinal, first, count, _classification in record.ranges:
+            resolved, _had_invalid, _had_valid = _resolve_ib_dump(
+                record.ib_files, first, count,
+                vertex_dump.layout.vertex_count, ib_cache)
+            if resolved is not None:
+                indices.extend(resolved[1].indices)
+        if len(indices) < 3:
+            return None
+    try:
+        positions = gimi_face_alignment.unpack_f32x3(vertex_dump.positions)
+    except ValueError:
+        return None
+    return gimi_face_alignment.AlignmentMesh(
+        name_override or record.component_name or "GIMI alignment", positions,
+        tuple(indices))
+
+
+def _solve_face_alignment(records, vertex_cache, ib_cache):
+    references = sorted(
+        (record for record in records if _is_native_eyes_record(record)),
+        key=_reference_score)
+    anchors = sorted(
+        (record for record in records if _is_face_anchor_record(record)),
+        key=_anchor_score)
+    if not references or not anchors:
+        return None
+    landmarks = {"brow": [], "mouth": []}
+    for record in records:
+        kind = _landmark_kind(record)
+        if kind:
+            landmarks[kind].append(record)
+    for kind in landmarks:
+        landmarks[kind].sort(key=_anchor_score)
+
+    for reference in references:
+        body_mesh = _alignment_mesh(
+            reference, vertex_cache, ib_cache, with_indices=False)
+        if body_mesh is None:
+            continue
+        for anchor in anchors:
+            face_mesh = _alignment_mesh(
+                anchor, vertex_cache, ib_cache, with_indices=True)
+            if face_mesh is None:
+                continue
+            landmark_mesh = None
+            landmark_kind = None
+            for kind in ("brow", "mouth"):
+                if not landmarks[kind]:
+                    continue
+                landmark_mesh = _alignment_mesh(
+                    landmarks[kind][0], vertex_cache, ib_cache,
+                    with_indices=False, name_override=kind)
+                if landmark_mesh is not None:
+                    landmark_kind = kind
+                    break
+            alignment = gimi_face_alignment.solve(
+                body_mesh, face_mesh, landmark_mesh,
+                landmark_kind=landmark_kind)
+            if alignment is not None:
+                return alignment
+    return None
+
+
 def load_hash_asset(asset_type, root, record, *, texture_source=None,
                     part_filter=None):
     asset_path = record.get("path") if isinstance(record, dict) else None
@@ -386,13 +570,13 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
     if not metadata_paths:
         raise AssetLoadError("The indexed hash.json is missing from this Asset.")
     metadata_paths.sort(key=lambda value: (
-        os.path.dirname(value).casefold() != asset_path.casefold(),
+        os.path.dirname(value).casefold() != str(asset_path or "").casefold(),
         value.casefold(), value))
     files = _file_list(asset_dir)
     vb_cache = {}
     ib_cache = {}
-    parts = []
     warnings = []
+    records = []
     for metadata_path in metadata_paths:
         metadata_file = asset_paths.safe_asset_path(root, metadata_path)
         if not metadata_file:
@@ -427,88 +611,138 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                     f"{component or 'Component'} has no usable index-buffer hash."))
                 continue
             ranges = _ranges(entry)
-            selected_ranges = [
-                item for item in ranges
-                if _filter_matches(part_filter, geometry_hash,
-                                   item[1], item[2], item[0])]
-            if not selected_ranges:
-                continue
             vb_hash = _entry_hash(entry, (
                 "vb0", "vb0_hash", "vertex_buffer", "vertexBuffer",
                 "position_vb", "positionVB", "draw_vb", "drawVB"))
-            vb_file = _find_dump(files, "vb", vb_hash, component)
-            if not vb_file:
+            records.append(_HashAssetRecord(
+                metadata_path=metadata_path, entry=entry,
+                component_name=component, geometry_hash=geometry_hash,
+                vb_hash=vb_hash, ranges=tuple(ranges),
+                vb_file=_find_dump(files, "vb", vb_hash, component),
+                ib_files=tuple(_find_dumps(
+                    files, "ib", geometry_hash, component))))
+
+    selected_records = []
+    for item in records:
+        selected_ranges = tuple(
+            value for value in item.ranges
+            if _filter_matches(part_filter, item.geometry_hash,
+                               value[1], value[2], value[0]))
+        if selected_ranges:
+            selected_records.append((item, selected_ranges))
+
+    face_alignment = None
+    face_alignment_warning = False
+    if (asset_type == "GIMI"
+            and any(_is_face_local_record(item)
+                    for item, _ranges_for_output in selected_records)):
+        try:
+            face_alignment = _solve_face_alignment(
+                records, vb_cache, ib_cache)
+        except Exception:
+            # Alignment is an optional compatibility improvement.  A malformed
+            # dependency must not make an otherwise renderable Asset unloadable.
+            face_alignment = None
+        if face_alignment is None:
+            warnings.append(_warning(
+                "Face", None, "face_alignment_unavailable",
+                "GIMI face geometry could not be aligned to the native Eyes component."))
+            face_alignment_warning = True
+
+    parts = []
+    for item, selected_ranges in selected_records:
+        component = item.component_name
+        geometry_hash = item.geometry_hash
+        vb_file = item.vb_file
+        ib_files = item.ib_files
+        if not vb_file:
+            warnings.append(_warning(
+                component, None, "vertex_dump_missing",
+                f"{component or geometry_hash} has no source vertex dump."))
+            continue
+        if not ib_files:
+            warnings.append(_warning(
+                component, None, "index_dump_missing",
+                f"{component or geometry_hash} has no source index dump."))
+            continue
+        try:
+            if vb_file not in vb_cache or vb_cache[vb_file] is None:
+                vb_cache[vb_file] = parse_vertex_dump(vb_file)
+            vertex_dump = vb_cache[vb_file]
+        except MigotoDumpError as error:
+            warnings.append(_warning(
+                component, None, "vertex_dump_invalid",
+                f"{component or geometry_hash} vertex dump skipped: {error}"))
+            continue
+        for ordinal, first, count, classification in selected_ranges:
+            resolved, had_invalid, had_valid = _resolve_ib_dump(
+                ib_files, first, count, vertex_dump.layout.vertex_count,
+                ib_cache)
+            if resolved is None:
+                reason = "index_dump_invalid" if had_invalid and not had_valid \
+                    else "index_range_missing"
+                message = (f"{component or geometry_hash} index dump skipped"
+                           if reason == "index_dump_invalid" else
+                           f"{component or geometry_hash} range {first} has "
+                           "no matching index dump.")
                 warnings.append(_warning(
-                    component, None, "vertex_dump_missing",
-                    f"{component or geometry_hash} has no source vertex dump."))
+                    component, classification, reason, message))
                 continue
-            ib_files = _find_dumps(files, "ib", geometry_hash, component)
-            if not ib_files:
+            _ib_file, ib_dump = resolved
+            selected = ib_dump.indices
+            if len(selected) < 3:
                 warnings.append(_warning(
-                    component, None, "index_dump_missing",
-                    f"{component or geometry_hash} has no source index dump."))
+                    component, classification, "index_range_empty",
+                    f"{component or geometry_hash} range {first} has no complete triangles."))
                 continue
             try:
-                if vb_file not in vb_cache:
-                    vb_cache[vb_file] = parse_vertex_dump(vb_file)
-                vertex_dump = vb_cache[vb_file]
-            except MigotoDumpError as error:
+                positions, normals, uvs, indices = _remap(vertex_dump, selected)
+            except (AssetLoadError, MigotoDumpError) as error:
                 warnings.append(_warning(
-                    component, None, "vertex_dump_invalid",
-                    f"{component or geometry_hash} vertex dump skipped: {error}"))
+                    component, classification, "part_invalid",
+                    f"{component or geometry_hash} part skipped: {error}"))
                 continue
-            for ordinal, first, count, classification in selected_ranges:
-                resolved, had_invalid, had_valid = _resolve_ib_dump(
-                    ib_files, first, count, vertex_dump.layout.vertex_count,
-                    ib_cache)
-                if resolved is None:
-                    reason = "index_dump_invalid" if had_invalid and not had_valid \
-                        else "index_range_missing"
-                    message = (f"{component or geometry_hash} index dump skipped"
-                               if reason == "index_dump_invalid" else
-                               f"{component or geometry_hash} range {first} has "
-                               "no matching index dump.")
-                    warnings.append(_warning(
-                        component, classification, reason, message))
-                    continue
-                _ib_file, ib_dump = resolved
-                selected = ib_dump.indices
-                if len(selected) < 3:
-                    warnings.append(_warning(
-                        component, classification, "index_range_empty",
-                        f"{component or geometry_hash} range {first} has no complete triangles."))
-                    continue
+            if (face_alignment is not None
+                    and _is_face_local_record(item)):
                 try:
-                    positions, normals, uvs, indices = _remap(vertex_dump, selected)
-                except (AssetLoadError, MigotoDumpError) as error:
-                    warnings.append(_warning(
-                        component, classification, "part_invalid",
-                        f"{component or geometry_hash} part skipped: {error}"))
-                    continue
-                effective_count = (
-                    count if count is not None
-                    else ib_dump.index_count or len(ib_dump.indices))
-                textures = _texture_records(
-                    entry, ordinal, files, root, component, classification,
-                    texture_source, ib_candidates=ib_files, first=first,
-                    count=effective_count,
-                    vertex_count=vertex_dump.layout.vertex_count,
-                    ib_cache=ib_cache)
-                label = component or os.path.basename(asset_path)
-                if classification:
-                    label = f"{label} {classification}"
-                if len(ranges) > 1:
-                    label = f"{label} {ordinal + 1}"
-                key = (f"{asset_path}::{metadata_path}::"
-                       f"{component or 'part'}::{geometry_hash}::{ordinal}")
-                parts.append(AssetMeshPart(
-                    key=key, label=label, asset_type=asset_type,
-                    asset_path=asset_path, geometry_hash=geometry_hash,
-                    component_name=component, classification=classification,
-                    component_ordinal=ordinal, first_index=first,
-                    index_count=effective_count, positions=positions,
-                    indices=indices,
-                    uvs=uvs, normals=normals, textures=textures))
+                    aligned_positions = (
+                        gimi_face_alignment.transform_position_bytes(
+                            positions, face_alignment.matrix))
+                    aligned_normals = (
+                        gimi_face_alignment.transform_normal_bytes(
+                            normals, face_alignment.matrix))
+                    positions, normals = aligned_positions, aligned_normals
+                except Exception as error:
+                    if not face_alignment_warning:
+                        warnings.append(_warning(
+                            component, classification,
+                            "face_alignment_failed",
+                            f"GIMI face alignment was skipped: {error}"))
+                        face_alignment_warning = True
+            effective_count = (
+                count if count is not None
+                else ib_dump.index_count or len(ib_dump.indices))
+            textures = _texture_records(
+                item.entry, ordinal, files, root, component, classification,
+                texture_source, ib_candidates=ib_files, first=first,
+                count=effective_count,
+                vertex_count=vertex_dump.layout.vertex_count,
+                ib_cache=ib_cache)
+            label = component or os.path.basename(asset_path)
+            if classification:
+                label = f"{label} {classification}"
+            if len(item.ranges) > 1:
+                label = f"{label} {ordinal + 1}"
+            key = (f"{asset_path}::{item.metadata_path}::"
+                   f"{component or 'part'}::{geometry_hash}::{ordinal}")
+            parts.append(AssetMeshPart(
+                key=key, label=label, asset_type=asset_type,
+                asset_path=asset_path, geometry_hash=geometry_hash,
+                component_name=component, classification=classification,
+                component_ordinal=ordinal, first_index=first,
+                index_count=effective_count, positions=positions,
+                indices=indices,
+                uvs=uvs, normals=normals, textures=textures))
     if not parts:
         raise AssetLoadError("Asset contains no complete renderable parts.")
     return AssetAdapterResult(tuple(parts), tuple(warnings))

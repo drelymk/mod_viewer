@@ -386,6 +386,162 @@ def test_draw_count_does_not_become_asset_range_evidence(
     assert bindings[0][0].status == "ambiguous"
 
 
+def test_resolve_groups_narrows_shared_hash_to_unique_exact_asset(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
+    asset_dir = tmp_path / "zzmi" / "Remielle"
+    asset_dir.mkdir(parents=True)
+    texture = asset_dir / "RemielleHairDiffuse.dds"
+    texture.write_bytes(b"remielle")
+    (asset_dir / "hash.json").write_text(json.dumps([{
+        "component_name": "Hair",
+        "ib": "aabbccdd",
+        "object_indexes": [100],
+        "texture_hashes": [[[
+            "Diffuse", ".dds", "11111111",
+        ]]],
+    }]), encoding="utf-8")
+    index = _index(root, asset_type="ZZMI", asset="Remielle",
+                   first_index=0)
+    shared_geometry = {
+        "hash": "aabbccdd",
+        "ranges": [{"firstIndex": 100, "indexCount": 12}],
+        "metadata": "Remielle/hash.json",
+        "componentName": "Hair",
+    }
+    index["assets"][0]["geometry"].append(shared_geometry)
+    index["byGeometryHash"]["aabbccdd"] = [{"asset": 0, "geometry": 1}]
+    for asset_name in ("RemielleMoonlight", "RemielleSummer"):
+        geometry = dict(shared_geometry)
+        geometry["metadata"] = f"{asset_name}/hash.json"
+        asset_index_entry = {
+            "path": asset_name, "geometry": [geometry],
+        }
+        asset_number = len(index["assets"])
+        index["assets"].append(asset_index_entry)
+        index["byGeometryHash"]["aabbccdd"].append({
+            "asset": asset_number, "geometry": 0,
+        })
+    monkeypatch.setattr(asset_index, "load_index",
+                        lambda asset_type, path: index)
+
+    body_draw = DrawCall(geometry_match=GeometryMatch("73c8cae2", 0, 24))
+    hair_draw = DrawCall(geometry_match=GeometryMatch("aabbccdd", 100, 12))
+    groups = [{"draws": [body_draw, hair_draw]}]
+    bindings = resolve_groups(groups, "zzz", entries)
+
+    assert [item.status for item in bindings[0]] == ["exact", "exact"]
+    assert [item.asset for item in bindings[0]] == ["Remielle", "Remielle"]
+    assert bindings[0][1].component_name == "Hair"
+    apply(groups, bindings)
+    assert hair_draw.asset_texture_defaults["diffuse"]["path"].casefold() == \
+        str(texture).casefold()
+    assert hair_draw.texture_provenance["diffuse"] == \
+        "asset_original_fallback"
+    assert "RemielleMoonlight" not in hair_draw.asset_texture_defaults[
+        "diffuse"]["path"]
+
+
+def test_resolve_groups_scopes_narrowing_to_shared_ini_provenance(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
+    index = _index(root, asset_type="ZZMI", asset="AssetA",
+                   first_index=0)
+    shared_a = {
+        "hash": "aabbccdd",
+        "ranges": [{"firstIndex": 100, "indexCount": 12}],
+        "metadata": "AssetA/hash.json",
+        "componentName": "Hair",
+    }
+    index["assets"][0]["geometry"].append(shared_a)
+    index["assets"].append({
+        "path": "AssetB",
+        "geometry": [{
+            "hash": "bbbbcccc",
+            "ranges": [{"firstIndex": 50, "indexCount": 8}],
+            "metadata": "AssetB/hash.json",
+            "componentName": "Legs",
+        }, {
+            "hash": "aabbccdd",
+            "ranges": [{"firstIndex": 100, "indexCount": 12}],
+            "metadata": "AssetB/hash.json",
+            "componentName": "Hair",
+        }],
+    })
+    index["byGeometryHash"]["aabbccdd"] = [
+        {"asset": 0, "geometry": 1},
+        {"asset": 1, "geometry": 1},
+    ]
+    index["byGeometryHash"]["bbbbcccc"] = [{"asset": 1, "geometry": 0}]
+    monkeypatch.setattr(asset_index, "load_index",
+                        lambda asset_type, path: index)
+
+    bindings = resolve_groups([
+        {"draws": [DrawCall(
+            sources=[{"ini_path": "ini-a.ini"}],
+            geometry_match=GeometryMatch("73c8cae2", 0, 24))]},
+        {"draws": [DrawCall(
+            sources=[{"ini_path": "ini-c.ini"}],
+            geometry_match=GeometryMatch("aabbccdd", 100, 12))]},
+        {"draws": [
+            DrawCall(
+                sources=[{"ini_path": "ini-b.ini"}],
+                geometry_match=GeometryMatch("bbbbcccc", 50, 8)),
+        ]},
+        {"draws": [DrawCall(
+            sources=[{"ini_path": "ini-b.ini"}],
+            geometry_match=GeometryMatch("aabbccdd", 100, 12))]},
+    ], "zzz", entries)
+
+    assert bindings[0][0].asset == "AssetA"
+    assert bindings[1][0].status == "ambiguous"
+    assert bindings[2][0].asset == "AssetB"
+    assert bindings[3][0].status == "exact"
+    assert bindings[3][0].asset == "AssetB"
+
+
+def test_resolve_groups_keeps_conflicting_exact_assets_ambiguous(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
+    index = _index(root, asset_type="ZZMI", asset="AssetA",
+                   first_index=0)
+    index["assets"].append({
+        "path": "AssetB",
+        "geometry": [{
+            "hash": "bbbbcccc",
+            "ranges": [{"firstIndex": 50, "indexCount": 8}],
+            "metadata": "AssetB/hash.json",
+            "componentName": "Legs",
+        }],
+    })
+    index["byGeometryHash"]["bbbbcccc"] = [{"asset": 1, "geometry": 0}]
+    for asset_number, asset_name in enumerate(("AssetA", "AssetB")):
+        geometry = {
+            "hash": "aabbccdd",
+            "ranges": [{"firstIndex": 100, "indexCount": 12}],
+            "metadata": f"{asset_name}/hash.json",
+            "componentName": "Hair",
+        }
+        index["assets"][asset_number]["geometry"].append(geometry)
+        index["byGeometryHash"].setdefault("aabbccdd", []).append({
+            "asset": asset_number, "geometry": 1,
+        })
+    monkeypatch.setattr(asset_index, "load_index",
+                        lambda asset_type, path: index)
+
+    bindings = resolve_groups([{"draws": [
+        DrawCall(geometry_match=GeometryMatch("73c8cae2", 0, 24)),
+        DrawCall(geometry_match=GeometryMatch("bbbbcccc", 50, 8)),
+        DrawCall(geometry_match=GeometryMatch("aabbccdd", 100, 12)),
+    ]}], "zzz", entries)
+
+    assert [item.status for item in bindings[0]] == [
+        "exact", "exact", "ambiguous"]
+
+
 def test_same_hash_same_range_remains_ambiguous(tmp_path, monkeypatch):
     roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
              for name in ("one", "two")]
