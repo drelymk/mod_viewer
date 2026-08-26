@@ -17,8 +17,9 @@ def app_root():
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         return meipass
-    # app/settings/paths.py -> app/settings/ -> app directory
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # app/settings/paths.py -> app/settings/ -> app/ -> source root
+    return os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
 
 
 def is_frozen():

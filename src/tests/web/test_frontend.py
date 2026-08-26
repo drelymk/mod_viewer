@@ -518,7 +518,7 @@ def _sample_mesh_pixel_at(page, x, y):
     point = page.evaluate("""
       async ({x, y}) => {
         const THREE = await import('three');
-        const {camera, renderer} = await import('./js/scene.js');
+        const {camera, renderer} = await import('./js/scene/scene.js');
         const mesh = window.modViewer.activeMeshes[0];
         const projected = new THREE.Vector3(x, y, 0)
           .applyMatrix4(mesh.matrixWorld).project(camera);
@@ -540,9 +540,9 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         page.goto(frontend_url)
         page.locator("#open-btn:not([disabled])").wait_for(timeout=10000)
         page.wait_for_function(
-            "import('./js/scene.js').then(({renderer}) => renderer.currentSamples === 4)")
+            "import('./js/scene/scene.js').then(({renderer}) => renderer.currentSamples === 4)")
         state = page.evaluate("""async () => {
-          const {renderer} = await import('./js/scene.js');
+          const {renderer} = await import('./js/scene/scene.js');
           return {
             isWebGPURenderer: renderer.isWebGPURenderer === true,
             isWebGPUBackend: renderer.backend?.isWebGPUBackend === true,
@@ -608,7 +608,7 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         page.locator("#health-close").click()
 
         summary = page.evaluate("""async () => {
-          const {summarizeAssetBindings} = await import('./js/asset-diagnostics.js');
+          const {summarizeAssetBindings} = await import('./js/panels/asset-diagnostics.js');
           return summarizeAssetBindings([
             {asset_binding: {
               status: 'exact', component_status: 'exact', range_status: 'exact',
@@ -1387,7 +1387,7 @@ def test_direct_dds_matches_png_orientation_and_diffuse_color(
         ]
 
         page.evaluate("""async ({key, uri}) => {
-          const {refreshMeshTexture, setTextures} = await import('./js/mesh-factory.js');
+          const {refreshMeshTexture, setTextures} = await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
           setTextures({[key]: uri});
           refreshMeshTexture(mesh);
@@ -1591,7 +1591,7 @@ def test_nonfinite_mesh_positions_do_not_poison_camera_fit(
         _open(page, "InvalidGeometry")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
         camera = page.evaluate("""async () => {
-          const {camera, controls} = await import('./js/scene.js');
+          const {camera, controls} = await import('./js/scene/scene.js');
           return {
             position: camera.position.toArray(),
             target: controls.target.toArray(),
@@ -1729,7 +1729,7 @@ def test_failed_texture_stays_fallback_without_retrying(
         pending["route"].abort()
         page.wait_for_function(
             """async key => {
-              const {hasTexture} = await import('./js/mesh-factory.js');
+              const {hasTexture} = await import('./js/mesh/mesh-factory.js');
               return hasTexture(key) === false;
             }""",
             arg=key,
@@ -1764,7 +1764,7 @@ def test_native_dds_failure_falls_back_without_black_frame(
         supported = page.evaluate("""
           async () => {
             const {supportsBCTextureCompression} =
-              await import('./js/renderer-capabilities.js');
+              await import('./js/scene/renderer-capabilities.js');
             return supportsBCTextureCompression();
           }
         """)
@@ -1844,7 +1844,7 @@ def test_replaced_pending_texture_ignores_stale_completion(
 
         page.evaluate("""async ({key, uri}) => {
           const {addTexture, refreshMeshTexture} =
-            await import('./js/mesh-factory.js');
+            await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
           addTexture(key, uri);
           refreshMeshTexture(mesh);
@@ -2074,7 +2074,7 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
             if profile_id == "zzz:zzmi" else state["lightMap"]
 
         after = page.evaluate("""async () => {
-          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
           const material = mesh.material;
           const game = material.userData.gameMaterial;
@@ -2255,7 +2255,7 @@ def test_wuwa_debug_modes_are_capability_gated_and_uniform_only(
         page.wait_for_timeout(300)
         low_pixel = _sample_mesh_pixel(page)
         page.evaluate("""async key => {
-          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
           window.__normalLowTexture = mesh.material.userData.gameMaterial
             .bindings.normal_data.textureNode.value;
@@ -2370,7 +2370,7 @@ def test_wuwa_body_profile_binds_normal_data_without_stock_pbr_mapping(
           return window.__bodyMaterial.version;
         }""")
         page.evaluate("""async () => {
-          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
           setMeshTextureState(mesh, {
             diffuse: mesh.userData.texKey,
@@ -2422,8 +2422,8 @@ def test_wuwa_body_b_threshold_controls_toon_classification(
         page.evaluate("""
           async () => {
             const THREE = await import('three');
-            const {scene, controls} = await import('./js/scene.js');
-            const {requestRender} = await import('./js/render-scheduler.js');
+            const {scene, controls} = await import('./js/scene/scene.js');
+            const {requestRender} = await import('./js/scene/render-scheduler.js');
             scene.traverse(object => {
               if (object.isAmbientLight || object.isHemisphereLight) object.intensity = 0;
               if (object.isSprite || object.isGridHelper) object.visible = false;
@@ -2439,7 +2439,7 @@ def test_wuwa_body_b_threshold_controls_toon_classification(
         low_pixels = [_sample_mesh_pixel_at(page, x, 0.1)
                       for x in (0.1, 0.3, 0.5, 0.7, 0.9)]
         page.evaluate("""async key => {
-          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
           setMeshTextureState(mesh, {
             diffuse: mesh.userData.texKey,
@@ -2495,8 +2495,8 @@ def test_wuwa_body_missing_toon_mask_keeps_physical_direct_specular(
             page.evaluate("""
               async () => {
                 const THREE = await import('three');
-                const {scene, controls} = await import('./js/scene.js');
-                const {requestRender} = await import('./js/render-scheduler.js');
+                const {scene, controls} = await import('./js/scene/scene.js');
+                const {requestRender} = await import('./js/scene/render-scheduler.js');
                 scene.traverse(object => {
                   if (object.isAmbientLight || object.isHemisphereLight) {
                     object.intensity = 0;
@@ -2545,8 +2545,8 @@ def test_wuwa_packed_rg_normal_matches_derived_reference_and_y_sign(
         page.evaluate("""
           async () => {
                 const THREE = await import('three');
-                const {scene, controls} = await import('./js/scene.js');
-                const {requestRender} = await import('./js/render-scheduler.js');
+                const {scene, controls} = await import('./js/scene/scene.js');
+                const {requestRender} = await import('./js/scene/render-scheduler.js');
             let key = null;
             scene.traverse(object => {
               if (object.isAmbientLight || object.isHemisphereLight) {
@@ -2622,7 +2622,7 @@ def test_wuwa_packed_rg_normal_matches_derived_reference_and_y_sign(
 
         packed_page.evaluate("""
           async () => {
-            const {setMeshTextureState} = await import('./js/mesh-factory.js');
+            const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
             const mesh = window.modViewer.activeMeshes[0];
             setMeshTextureState(mesh, {
               diffuse: mesh.userData.texKey,
@@ -2643,7 +2643,7 @@ def test_wuwa_packed_rg_normal_matches_derived_reference_and_y_sign(
 
         packed_page.evaluate("""
           async key => {
-            const {setMeshTextureState} = await import('./js/mesh-factory.js');
+            const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
             const mesh = window.modViewer.activeMeshes[0];
             mesh.userData.normalMapYSign = 1;
             setMeshTextureState(mesh, {
@@ -2704,8 +2704,8 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
         page.evaluate("""
           async () => {
             const THREE = await import('three');
-            const {scene, controls} = await import('./js/scene.js');
-            const {requestRender} = await import('./js/render-scheduler.js');
+            const {scene, controls} = await import('./js/scene/scene.js');
+            const {requestRender} = await import('./js/scene/render-scheduler.js');
             scene.traverse(object => {
               if (object.isAmbientLight || object.isHemisphereLight) {
                 object.intensity = 0;
@@ -2728,7 +2728,7 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
           return mesh.material.version;
         }""")
         page.evaluate("""async () => {
-          const {setMeshTextureState} = await import('./js/mesh-factory.js');
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
           setMeshTextureState(mesh, {
             diffuse: mesh.userData.texKey,
@@ -2875,19 +2875,19 @@ def test_record_handler_is_replaced_and_restored(edge_browser, frontend_url):
         cycle.wait_for()
         original_label = page.locator("#toggle-list .toggle-value").inner_text()
         original_state = page.evaluate(
-            "import('./js/visibility.js').then(module => module.getToggleState())")
+            "import('./js/mesh/visibility.js').then(module => module.getToggleState())")
         page.evaluate("""
           () => { window.__cycleHandler = document.querySelector('#toggle-list .toggle-cycle-btn').onclick; }
         """)
         page.locator("#toggle-list [title^='Record']").click()
         page.locator("#toggle-list .toggle-row.recording").wait_for()
         recording_state = page.evaluate(
-            "import('./js/visibility.js').then(module => module.getToggleState())")
+            "import('./js/mesh/visibility.js').then(module => module.getToggleState())")
         assert page.evaluate("window.__cycleHandler !== document.querySelector('#toggle-list .toggle-cycle-btn').onclick")
         page.locator("#toggle-list .toggle-record-cancel").click()
         assert page.evaluate("window.__cycleHandler === document.querySelector('#toggle-list .toggle-cycle-btn').onclick")
         restored_state = page.evaluate(
-            "import('./js/visibility.js').then(module => module.getToggleState())")
+            "import('./js/mesh/visibility.js').then(module => module.getToggleState())")
         assert page.locator("#toggle-list .toggle-value").inner_text() == original_label, (
             original_state, recording_state, restored_state)
     finally:
@@ -2932,8 +2932,8 @@ def test_authored_normals_survive_render_modes_and_neutral_shape(
         assert shaded["normals"] == initial["normals"]
 
         page.evaluate("""async () => {
-          const {setControlValue} = await import('./js/control-state.js');
-          const {refreshMeshes} = await import('./js/mesh-state.js');
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
           setControlValue('shape', '1');
           refreshMeshes();
         }""")
@@ -2942,8 +2942,8 @@ def test_authored_normals_survive_render_modes_and_neutral_shape(
         assert deformed != initial["normals"]
 
         page.evaluate("""async () => {
-          const {setControlValue} = await import('./js/control-state.js');
-          const {refreshMeshes} = await import('./js/mesh-state.js');
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
           setControlValue('shape', '0');
           refreshMeshes();
         }""")
@@ -3326,7 +3326,7 @@ def test_shared_control_values_reconcile_as_a_union(
     try:
         _open(page, "Shared")
         result = page.evaluate("""async () => {
-          const controls = await import('./js/control-state.js');
+          const controls = await import('./js/editing/control-state.js');
           controls.setControlValue('shared', '2');
           controls.setControlStateRules([], {shared: '0'}, {
             toggles: {
@@ -3439,7 +3439,7 @@ def test_reload_preserves_camera_but_switching_mod_resets_it(
         page.locator("#camera-flip-btn").click()
         page.locator("#camera-flip-horizontal-btn").click()
         expected = page.evaluate("""async () => {
-          const {camera, controls} = await import('./js/scene.js');
+          const {camera, controls} = await import('./js/scene/scene.js');
           camera.position.set(7, 8, 9);
           camera.up.set(0.2, 0.9, 0.3).normalize();
           camera.zoom = 1.7;
@@ -3463,7 +3463,7 @@ def test_reload_preserves_camera_but_switching_mod_resets_it(
 
         reloaded = page.evaluate("""async () => {
           await window.modViewer.reloadCurrentMod();
-          const {camera, controls} = await import('./js/scene.js');
+          const {camera, controls} = await import('./js/scene/scene.js');
           return {
             position: camera.position.toArray(),
             quaternion: camera.quaternion.toArray(),
@@ -3506,7 +3506,7 @@ def test_reload_preserves_camera_but_switching_mod_resets_it(
 
         switched = page.evaluate("""async () => {
           await window.modViewer.switchMod('Second');
-          const {camera, controls} = await import('./js/scene.js');
+          const {camera, controls} = await import('./js/scene/scene.js');
           return {
             position: camera.position.toArray(),
             target: controls.target.toArray(),
@@ -3567,7 +3567,7 @@ def test_present_refresh_keeps_model_identity_and_selection(
         _open(page, "Present")
         page.locator(".draw-item").wait_for()
         page.evaluate("""async () => {
-          const {setToggleValue, refreshAll} = await import('./js/visibility.js');
+          const {setToggleValue, refreshAll} = await import('./js/mesh/visibility.js');
           setToggleValue('toggle', '1');
           refreshAll();
           window.__presentMesh = window.modViewer.activeMeshes[0];
@@ -3647,7 +3647,7 @@ def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
         _open(page, "Semantic")
         page.locator(".draw-item").wait_for()
         page.evaluate("""async () => {
-          const {setToggleValue, refreshAll} = await import('./js/visibility.js');
+          const {setToggleValue, refreshAll} = await import('./js/mesh/visibility.js');
           setToggleValue('toggle', '1');
           refreshAll();
           window.__semanticMesh = window.modViewer.activeMeshes[0];
@@ -4243,7 +4243,7 @@ def test_inspector_follows_component_and_mesh_selection(
         assert "Resolved" not in inspector.inner_text()
         assert "Body A >" in page.locator("#selected-mesh-status").inner_text()
         assert page.locator(".draw-item.selected").count() == 1
-        page.evaluate("import('./js/selection.js').then(({clearSelection}) => clearSelection())")
+        page.evaluate("import('./js/scene/selection.js').then(({clearSelection}) => clearSelection())")
         assert page.locator("#inspector-empty").is_visible()
         assert page.locator("#inspector-content").is_hidden()
 
@@ -4278,7 +4278,7 @@ def test_inspector_follows_component_and_mesh_selection(
         assert "state-manual" not in eye.get_attribute("class")
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].userData.manuallyToggled") is False
-        page.evaluate("import('./js/visibility.js').then(({refreshAll}) => refreshAll())")
+        page.evaluate("import('./js/mesh/visibility.js').then(({refreshAll}) => refreshAll())")
         assert eye.get_attribute("aria-pressed") == "true"
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].userData.manuallyToggled") is False
