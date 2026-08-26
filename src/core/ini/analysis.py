@@ -7,7 +7,7 @@ from .toggles import (extract_toggle_keys, extract_variable_defaults)
 from .menu import extract_menu_toggles
 from .state import extract_state_rules
 from .shapes import extract_shape_sliders
-from .parser import build_draw_groups
+from .draw_groups import build_draw_groups
 from ..materials.game_profile import collect_game_evidence
 
 
