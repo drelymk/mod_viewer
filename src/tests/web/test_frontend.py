@@ -566,6 +566,46 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         context.close()
 
 
+def test_frontend_public_surface_and_lifecycle_events(edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"ContractMod": _payload("ContractMod"),
+         "ContractAsset": _payload("ContractAsset")})
+    try:
+        assert page.evaluate("Object.keys(window.modViewer).sort()") == sorted([
+            "activeMeshes", "displayMeshPayload", "exportChanges",
+            "getCurrentSource", "getEnvironmentPreset", "getMaterialState",
+            "getOutlineState", "getRenderCount", "openMod",
+            "refreshControlSemantics", "refreshMeshSemantics",
+            "refreshPresentState", "reloadCurrentMod", "setEnvironmentPreset",
+            "setMaterialDebugMode", "setOutlineEnabled", "switchAsset",
+            "switchMod",
+        ])
+        page.evaluate("""() => {
+          window.__lifecycleEvents = [];
+          for (const name of [
+            'mod-viewer-mod-load-started', 'mod-viewer-mod-loaded',
+            'mod-viewer-asset-load-started', 'mod-viewer-asset-loaded',
+          ]) {
+            window.addEventListener(name, () => window.__lifecycleEvents.push(name));
+          }
+        }""")
+
+        _open(page, "ContractMod")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""async () => await window.modViewer.switchAsset(
+          'ContractAsset', {asset: 'ContractAsset', asset_type: 'GIMI'})""")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadAsset.length === 1"
+            " && window.modViewer.getCurrentSource().kind === 'asset'")
+        assert page.evaluate("window.__lifecycleEvents") == [
+            "mod-viewer-mod-load-started", "mod-viewer-mod-loaded",
+            "mod-viewer-asset-load-started", "mod-viewer-asset-loaded",
+        ]
+    finally:
+        context.close()
+
+
 def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         edge_browser, frontend_url):
     payload = _payload("Asset")
@@ -3699,6 +3739,7 @@ def test_record_refreshes_controls_and_meshes_without_reloading_model(
         }""")
         assert page.locator("#toggle-list .toggle-unwired-badge").count() == 1
         assert page.locator("#export-btn").is_disabled()
+        assert "Record (⏺)" in page.locator("#export-btn").get_attribute("title")
 
         page.locator("#toggle-list [title^='Record']").click()
         page.locator("#toggle-list .toggle-row.recording").wait_for()
