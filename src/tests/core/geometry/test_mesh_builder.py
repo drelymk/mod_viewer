@@ -6,7 +6,7 @@ import tempfile
 
 from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, merge_sections)
-from _provenance_support import IB_R16_INI, build_mesh_fixture, geometry_values, write
+from tests.support.provenance import IB_R16_INI, build_mesh_fixture, geometry_values, write
 
 IB_REASSIGN_INI = """[TextureOverrideBodyBlend]
 ib = ResourceBodyHeadIB

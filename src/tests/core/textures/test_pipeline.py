@@ -98,7 +98,7 @@ def test_typed_srgb_retry_does_not_read_failed_non_dds(tmp_path, monkeypatch):
 
 
 def test_texture_module_does_not_depend_on_mesh_builder():
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[4]
     texture_result = subprocess.run(
         [sys.executable, "-c", (
             "import sys; sys.path.insert(0, 'src'); "

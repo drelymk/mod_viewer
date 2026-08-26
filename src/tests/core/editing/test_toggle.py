@@ -23,7 +23,7 @@ import os
 import pytest
 
 
-from _corpus import sample_mods
+from tests.support.corpus import sample_mods
 
 from core.ini.document import IniDocument, IF, ELIF
 from core.ini import condition as ic

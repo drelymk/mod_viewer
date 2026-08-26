@@ -15,7 +15,7 @@ from core.ini.parser import (SrcLine, build_draw_groups, extract_resources,
                              extract_toggle_keys, line_source, merge_sections,
                              parse_sections)
 from core.geometry.mesh_builder import _deduplicate_draws
-from _provenance_support import write
+from tests.support.provenance import write
 
 
 

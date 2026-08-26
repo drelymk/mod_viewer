@@ -4,12 +4,12 @@ import os
 import struct
 import tempfile
 
-from _corpus import sample_mods
+from tests.support.corpus import sample_mods
 from app.mods import loader as mod_loader
 from core.ini.parser import (_scan_sections_for_draws, build_draw_groups,
                              extract_resources, merge_sections, parse_sections)
 from core.textures import encode_texture_file
-from _provenance_support import (build_mesh_fixture, geometry_values, visible,
+from tests.support.provenance import (build_mesh_fixture, geometry_values, visible,
                                  write)
 
 def _traversal_mod(tmp, pos_filename):

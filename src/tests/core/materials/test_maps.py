@@ -9,7 +9,7 @@ from core.ini import parser as ini_parser
 from core.ini.parser import build_draw_groups, extract_resources, merge_sections, parse_sections
 from core.textures import TEXTURE_TRANSFORMS, encode_texture_file, render_texture_png
 from core.textures.pipeline import _reconstruct_normal_z
-from _provenance_support import (DIFFUSE_NO_REF_INI, build_mesh_fixture,
+from tests.support.provenance import (DIFFUSE_NO_REF_INI, build_mesh_fixture,
                                  geometry_values, texture_file, visible, write)
 
 AUXILIARY_MAPS_INI = """[Constants]
