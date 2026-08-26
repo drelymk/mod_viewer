@@ -50,6 +50,31 @@ export function addMesh(mesh, conditions, sources, textureVariants, materialVari
   applyTextureVariant(mesh);
 }
 
+export function removeMesh(mesh) {
+  if (!mesh) return false;
+  const index = activeMeshes.indexOf(mesh);
+  if (index < 0) return false;
+  detachOutline(mesh);
+  scene.remove(mesh);
+  mesh.geometry?.dispose?.();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  materials.forEach(material => {
+    disposeGameMaterial(material);
+    material?.dispose?.();
+  });
+  activeMeshes.splice(index, 1);
+  return true;
+}
+
+export function removeAssetFillMeshes() {
+  const removed = activeMeshes
+    .filter(mesh => mesh.userData.assetFill === true)
+    .slice();
+  removed.forEach(removeMesh);
+  if (removed.length) requestRender();
+  return removed.length;
+}
+
 export function resetMeshVisibility() {
   activeMeshes.forEach(mesh => {
     mesh.userData.manualVisible = mesh.userData.loadedVisible !== false;
@@ -63,10 +88,12 @@ export function resetMeshVisibility() {
 /** Replace draw visibility and texture semantics on the existing meshes. */
 export function updateMeshSemantics(semantics) {
   const next = semantics || {};
-  const keys = activeMeshes.map(mesh => mesh.userData.semanticKey);
+  const semanticMeshes = activeMeshes.filter(
+    mesh => mesh.userData.assetFill !== true);
+  const keys = semanticMeshes.map(mesh => mesh.userData.semanticKey);
   if (keys.some(key => !next[key])
       || Object.keys(next).length !== keys.length) return false;
-  activeMeshes.forEach(mesh => {
+  semanticMeshes.forEach(mesh => {
     const semantic = next[mesh.userData.semanticKey];
     mesh.userData.conditions = semantic.conditions || [];
     mesh.userData.sources = semantic.sources || [];

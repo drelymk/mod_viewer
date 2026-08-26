@@ -13,6 +13,7 @@
 <svg id="ui-icon-sprite" aria-hidden="true" focusable="false">
   <symbol id="icon-library" viewBox="0 0 24 24"><path d="M4 6h6l2 2h8v11H4z"/><path d="M4 9h16"/></symbol>
   <symbol id="icon-mesh" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></symbol>
+  <symbol id="icon-mesh-add" viewBox="0 0 24 24"><path d="m8 3 6 3.5v7L8 17l-6-3.5v-7L8 3Z"/><path d="m2 6.5 6 3.5 6-3.5M8 10v7M18 14v7M14.5 17.5h7"/></symbol>
   <symbol id="icon-assets" viewBox="0 0 24 24"><path d="M4 7h5l2 2h9v11H4z"/><path d="M4 7V4h7l2 3M8 13h8M8 17h5"/></symbol>
   <symbol id="icon-inspector" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h5M8 16h8"/></symbol>
   <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -145,8 +146,10 @@
     <section id="mod-folder-panel" class="left-dock-panel" role="tabpanel" aria-labelledby="mod-library-tab" aria-label="Mod Library" hidden>
       <div class="panel-hdr">
         <h3>Mod Library</h3>
-        <button id="mod-folder-add" class="icon-btn" type="button"
-                title="Add Mod Folder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
+        <div class="panel-hdr-actions">
+          <button id="mod-folder-add" class="icon-btn" type="button"
+                  title="Add Mod Folder" aria-label="Add Mod Folder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
+        </div>
       </div>
       <div id="mod-folder-error" class="mod-folder-error" role="alert"></div>
       <div id="mod-folder-list" class="mod-folder-list folder-registry-list"></div>
@@ -161,8 +164,10 @@
     <section id="asset-folder-panel" class="left-dock-panel" role="tabpanel" aria-labelledby="assets-tab" aria-label="Assets" hidden>
       <div class="panel-hdr">
         <h3>Assets</h3>
-        <button id="asset-folder-add" class="icon-btn" type="button"
-                title="Add Asset Folder" aria-label="Add Asset Folder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
+        <div class="panel-hdr-actions">
+          <button id="asset-folder-add" class="icon-btn" type="button"
+                  title="Add Asset Folder" aria-label="Add Asset Folder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
+        </div>
       </div>
       <div id="asset-folder-error" class="asset-folder-error" role="alert"></div>
       <div id="asset-folder-list" class="asset-folder-list folder-registry-list"></div>
@@ -178,7 +183,12 @@
       <div class="panel-hdr">
         <button type="button" class="group-toggle" aria-expanded="true" aria-controls="mesh-list"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
         <h3>Meshes</h3>
-        <button id="reset-state-btn" class="icon-btn" title="Reset mesh visibility" aria-label="Reset mesh visibility"><svg class="ui-icon" aria-hidden="true"><use href="#icon-reset"></use></svg></button>
+        <div class="panel-hdr-actions">
+          <button id="asset-fill-btn" class="icon-btn asset-fill-btn" type="button" disabled
+                  title="Add original Asset components not handled by this mod."
+                  aria-label="Load missing parts" aria-pressed="false" data-state="load"><svg class="ui-icon" aria-hidden="true"><use href="#icon-mesh-add"></use></svg></button>
+          <button id="reset-state-btn" class="icon-btn" title="Reset mesh visibility" aria-label="Reset mesh visibility"><svg class="ui-icon" aria-hidden="true"><use href="#icon-reset"></use></svg></button>
+        </div>
       </div>
       <div id="mesh-list"></div>
     </section>

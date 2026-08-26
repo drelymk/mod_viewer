@@ -15,7 +15,8 @@ import { clearViewSyncs, syncView, syncViews } from './view-sync.js';
 
 export {
   activeMeshes, addMesh, applyMeshVisibility, conditionsSatisfied,
-  setManualTexOverride, updateMeshSemantics,
+  removeAssetFillMeshes, removeMesh, setManualTexOverride,
+  updateMeshSemantics,
 } from './mesh-state.js';
 
 export const setToggleValue = setControlValue;

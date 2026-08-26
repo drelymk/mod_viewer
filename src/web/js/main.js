@@ -1,16 +1,20 @@
 // Entry point: wires the toolbar and orchestrates model loading.
 
-import { fitTo, resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
+import { adoptModelMeshes, fitTo, forgetModelMeshes, resetView,
+         rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
          toggleGrid, toggleTrackballGizmo,
          getEnvironmentPreset, getLightMode, isRendererAvailable, rendererReady,
          setEnvironmentPreset, setLightMode, getRenderCount } from './scene.js';
 import { ENVIRONMENT_PRESETS } from './environment.js';
-import { refreshMeshTexture, setTextures } from './mesh-factory.js';
+import { addTexture, refreshMeshTexture, removeTextures, setTextures } from './mesh-factory.js';
 import { activeMeshes, refreshAll, reset, resetMeshState, setStateRules,
-         toggleWireframe, toggleSmoothShading, toggleGlossy,
+         toggleWireframe, toggleSmoothShading, toggleGlossy, removeMesh,
          updateMeshSemantics } from './visibility.js';
 import { initSelection, clearSelection } from './selection.js';
-import { buildMeshPanel, refreshMeshAssetDiagnostics } from './mesh-panel.js';
+import {
+  appendMeshPanel, buildMeshPanel, refreshMeshAssetDiagnostics,
+  removeAssetFillMeshPanel,
+} from './mesh-panel.js';
 import { buildTogglePanel } from './toggle-panel.js';
 import { buildMenuPanel } from './menu-panel.js';
 import { buildPresentPanel } from './present-panel.js';
@@ -28,6 +32,7 @@ import { setTextureDisplayMode } from './render-modes.js';
 import { clearInspector, initInspectorPanel } from './inspector-panel.js';
 import { initRightDock, setRightDockEnabled } from './right-dock.js';
 import { initPanelOpacityControl } from './appearance.js';
+import { createIcon } from './ui-icons.js';
 import {
   getOutlineState as getMeshOutlineState,
   setOutlineSuppressedByDebug,
@@ -253,6 +258,12 @@ let displayedModPath = null;
 let displayedSource = null;
 let modTransitionInFlight = false;
 let rightDockEnabled = false;
+let assetFillAvailable = false;
+let assetFillLoaded = false;
+let assetFillLoading = false;
+let assetFillTextureKeys = new Set();
+let assetFillId = null;
+let assetFillEpoch = 0;
 
 // The last-loaded payload's controls.toggles model, kept
 // around purely so refreshPendingState() can check for a still-unwired
@@ -262,6 +273,27 @@ let lastToggles = {};
 function showLoading(on, message) {
   if (message) $('status-text').textContent = message;
   $('loading').classList.toggle('show', on);
+}
+
+function updateAssetFillButton() {
+  const button = $('asset-fill-btn');
+  if (!button) return;
+  const available = assetFillAvailable
+    && currentSource?.kind === 'mod' && !!currentModPath;
+  const state = assetFillLoading ? 'loading' : assetFillLoaded ? 'remove' : 'load';
+  const label = state === 'remove'
+    ? 'Remove missing parts'
+    : state === 'loading'
+      ? assetFillLoaded ? 'Removing missing parts' : 'Loading missing parts'
+      : 'Load missing parts';
+  button.disabled = !available || assetFillLoading;
+  button.dataset.state = state;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', String(assetFillLoaded));
+  button.replaceChildren(createIcon(state === 'remove' ? 'close' : 'mesh-add'));
+  button.title = assetFillLoaded
+    ? 'Remove original Asset components added for this session.'
+    : 'Add original Asset components not handled by this mod.';
 }
 
 /** Normalizes a Windows path for a same-folder comparison: slash direction,
@@ -304,6 +336,12 @@ function clearScene({ preserveModelOrientation = false } = {}) {
   // the next mod's normal materials.
   setOutlineSuppressedByDebug(false);
   setTextures(null);
+  removeTextures(assetFillTextureKeys);
+  assetFillTextureKeys = new Set();
+  assetFillId = null;
+  assetFillAvailable = false;
+  assetFillLoaded = false;
+  assetFillLoading = false;
   setGeometryBlob(null);
   lastToggles = {};
   $('mesh-list').innerHTML = '';
@@ -317,6 +355,7 @@ function clearScene({ preserveModelOrientation = false } = {}) {
   setMeshesAvailable(false);
   setRightDockEnabled(false);
   syncViewportControlPlacement();
+  updateAssetFillButton();
 }
 
 function clearPendingState() {
@@ -336,6 +375,7 @@ function setSourceUi(kind) {
   $('pending-indicator').classList.toggle('show', false);
   $('pending-indicator').setAttribute('aria-hidden', String(asset));
   if (asset) $('export-btn').disabled = true;
+  updateAssetFillButton();
 }
 
 /** Commit the UI to a new folder before asking the backend to load it. This
@@ -343,6 +383,7 @@ function setSourceUi(kind) {
  * state one transition: a failed replacement can never leave the previous
  * mod visible under the new folder's toolbar state. */
 function beginModLoad(path, message, { preserveModelOrientation = false } = {}) {
+  assetFillEpoch += 1;
   currentModPath = path;
   currentSource = { kind: 'mod', path };
   setSourceUi('mod');
@@ -364,6 +405,7 @@ function beginModLoad(path, message, { preserveModelOrientation = false } = {}) 
 
 function beginAssetLoad(path, entry, message = 'Loading Asset…',
                         { preserveModelOrientation = false } = {}) {
+  assetFillEpoch += 1;
   currentModPath = null;
   currentSource = {
     kind: 'asset', path, assetType: entry?.asset_type || null,
@@ -400,6 +442,8 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
   const meshes = payload.meshes || {};
   const assetMode = currentSource?.kind === 'asset'
     || payload.metadata?.source_kind === 'asset';
+  assetFillAvailable = !assetMode
+    && Number(payload.asset_resolution?.configured_roots || 0) > 0;
   if (assetMode && currentSource?.kind !== 'asset') {
     currentSource = {
       kind: 'asset', path: payload.metadata?.asset?.path || '',
@@ -443,7 +487,206 @@ async function displayMeshPayload(payload, { preserveCamera = false } = {}) {
     initialRotationY: payload.metadata?.game?.id === 'wuwa' ? Math.PI : 0,
   });
 
+  updateAssetFillButton();
   showLoading(false);
+}
+
+function assetFillOperationIsCurrent(operation, path) {
+  return operation === assetFillEpoch
+    && currentSource?.kind === 'mod'
+    && samePath(currentModPath, path);
+}
+
+function rollbackAssetFillFrontend(addedMeshes, textureKeys) {
+  const targetMeshes = [...new Set(addedMeshes || [])];
+  const removedFromPanel = removeAssetFillMeshPanel(targetMeshes);
+  const remaining = targetMeshes.filter(mesh => activeMeshes.includes(mesh));
+  remaining.forEach(removeMesh);
+  const removed = [...new Set([...removedFromPanel, ...remaining])];
+  if (removed.length) {
+    forgetModelMeshes(removed);
+    requestRender();
+  }
+
+  const keys = new Set(textureKeys || []);
+  removeTextures(keys);
+  keys.forEach(key => assetFillTextureKeys.delete(key));
+  assetFillLoaded = false;
+  assetFillId = null;
+}
+
+async function releaseBackendAssetFill(path, fillId = null) {
+  try {
+    const result = await window.pywebview.api.remove_missing_asset_parts(
+      path, fillId);
+    if (result?.status === 'error') {
+      console.warn('Could not roll back missing Asset parts:', result.error);
+    }
+  } catch (error) {
+    console.warn('Could not roll back missing Asset parts:', error);
+  }
+}
+
+async function rollbackAssetFill(
+    path, operation, fillId, addedMeshes, textureKeys) {
+  if (assetFillOperationIsCurrent(operation, path)) {
+    rollbackAssetFillFrontend(addedMeshes, textureKeys);
+  } else {
+    // A stale operation must not touch the scene or global fill state. Texture
+    // entries are still owned by this transaction, so release only those.
+    const keys = new Set(textureKeys || []);
+    removeTextures(keys);
+    keys.forEach(key => assetFillTextureKeys.delete(key));
+  }
+  await releaseBackendAssetFill(path, fillId);
+}
+
+async function loadMissingAssetParts() {
+  if (!currentModPath || currentSource?.kind !== 'mod' || assetFillLoading) {
+    return false;
+  }
+  const path = currentModPath;
+  const operation = ++assetFillEpoch;
+  let backendLoaded = false;
+  let rolledBack = false;
+  let transactionFillId = null;
+  let addedMeshes = [];
+  const transactionTextureKeys = new Set();
+  const rollback = async () => {
+    if (rolledBack) return;
+    rolledBack = true;
+    if (backendLoaded) {
+      await rollbackAssetFill(
+        path, operation, transactionFillId,
+        addedMeshes, transactionTextureKeys);
+    }
+  };
+  assetFillLoading = true;
+  updateAssetFillButton();
+  try {
+    const result = await window.pywebview.api.load_missing_asset_parts(path);
+    if (!assetFillOperationIsCurrent(operation, path)) {
+      if (result?.status === 'loaded') {
+        backendLoaded = true;
+        transactionFillId = result.fill_id || null;
+      }
+      await rollback();
+      return false;
+    }
+    if (result?.status !== 'loaded') {
+      const messages = {
+        nothing_missing: 'No missing original Asset parts found.',
+        asset_ambiguous: 'Could not uniquely determine the original Asset.',
+        asset_not_found: 'No matching original Asset was found.',
+      };
+      if (result?.error) throw new Error(result.error);
+      await alertDialog(messages[result?.status] || 'No original Asset parts were loaded.');
+      return false;
+    }
+    backendLoaded = true;
+    transactionFillId = result.fill_id || null;
+    if (!assetFillOperationIsCurrent(operation, path)) {
+      await rollback();
+      return false;
+    }
+    const payload = result.payload || {};
+    const geometry = payload.geometry;
+    if (geometry) {
+      const response = await fetch(geometry.url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`Geometry download failed (${response.status}).`);
+      const blob = await response.arrayBuffer();
+      if (blob.byteLength !== geometry.length) {
+        throw new Error('Geometry download was incomplete.');
+      }
+      if (!assetFillOperationIsCurrent(operation, path)) {
+        await rollback();
+        return false;
+      }
+      setGeometryBlob(blob);
+    }
+    for (const [key, uri] of Object.entries(payload.textures || {})) {
+      if (addTexture(key, uri)) {
+        assetFillTextureKeys.add(key);
+        transactionTextureKeys.add(key);
+      }
+    }
+    if (!assetFillOperationIsCurrent(operation, path)) {
+      await rollback();
+      return false;
+    }
+    const before = new Set(activeMeshes);
+    try {
+      appendMeshPanel(
+        payload.meshes || {}, null,
+        {}, payload.metadata?.material_profiles || {}, {
+          replace: false,
+          texturePools: payload.texture_pools || {},
+          readOnlySource: true,
+        });
+    } finally {
+      addedMeshes = activeMeshes.filter(mesh => !before.has(mesh));
+    }
+    adoptModelMeshes(addedMeshes);
+    if (!assetFillOperationIsCurrent(operation, path)) {
+      await rollback();
+      return false;
+    }
+    assetFillLoaded = true;
+    assetFillId = transactionFillId;
+    fitTo(activeMeshes, {
+      preserveCamera: true,
+      preserveHomeView: true,
+    });
+    requestRender();
+    return true;
+  } catch (error) {
+    await rollback();
+    if (!assetFillOperationIsCurrent(operation, path)) return false;
+    await alertDialog('Could not load missing Asset parts:\n\n' + error.message);
+    return false;
+  } finally {
+    if (operation === assetFillEpoch) {
+      assetFillLoading = false;
+      updateAssetFillButton();
+    }
+  }
+}
+
+async function removeMissingAssetParts() {
+  if (!currentModPath || !assetFillLoaded || assetFillLoading) return false;
+  const path = currentModPath;
+  const operation = ++assetFillEpoch;
+  assetFillLoading = true;
+  updateAssetFillButton();
+  try {
+    const result = await window.pywebview.api.remove_missing_asset_parts(
+      path, assetFillId);
+    if (!assetFillOperationIsCurrent(operation, path)) return false;
+    if (result?.status === 'error') throw new Error(result.error);
+    if (result?.stale) return false;
+    const removedMeshes = removeAssetFillMeshPanel();
+    forgetModelMeshes(removedMeshes);
+    removeTextures(assetFillTextureKeys);
+    assetFillTextureKeys = new Set();
+    assetFillLoaded = false;
+    assetFillId = null;
+    requestRender();
+    return true;
+  } catch (error) {
+    if (!assetFillOperationIsCurrent(operation, path)) return false;
+    await alertDialog('Could not remove missing Asset parts:\n\n' + error.message);
+    return false;
+  } finally {
+    if (operation === assetFillEpoch) {
+      assetFillLoading = false;
+      updateAssetFillButton();
+    }
+  }
+}
+
+async function toggleMissingAssetParts() {
+  return assetFillLoaded
+    ? removeMissingAssetParts() : loadMissingAssetParts();
 }
 
 function beginSemanticRefresh() {
@@ -806,12 +1049,12 @@ function initPanelCollapse(panel, contentId) {
   chevron.setAttribute('aria-controls', contentId);
   setCollapsed(initiallyCollapsed, false);
   const toggle = (e) => {
-    if (e?.target?.closest?.('.icon-btn, .panel-actions, .panel-action-menu')) return;
+    if (e?.target?.closest?.('.icon-btn, .panel-hdr-actions, .panel-actions, .panel-action-menu')) return;
     e?.stopPropagation?.();
     setCollapsed(!content.classList.contains('collapsed'));
   };
   hdr.addEventListener('click', e => {
-    if (e.target.closest('.icon-btn, .group-toggle, .panel-actions, .panel-action-menu')) return;
+    if (e.target.closest('.icon-btn, .group-toggle, .panel-hdr-actions, .panel-actions, .panel-action-menu')) return;
     setCollapsed(!content.classList.contains('collapsed'));
   });
   chevron.addEventListener('click', toggle);
@@ -825,6 +1068,10 @@ rendererReady.then(ready => {
 
   $('open-btn').addEventListener('click', openMod);
   $('export-btn').addEventListener('click', exportChanges);
+  $('asset-fill-btn').addEventListener('click', event => {
+    event.stopPropagation();
+    void toggleMissingAssetParts();
+  });
   $('wire-btn').addEventListener('click', toggleWireframe);
   $('outline-btn').addEventListener('click', () => {
     const enabled = setOutlinesEnabled();
@@ -855,6 +1102,7 @@ rendererReady.then(ready => {
   if (viewportCameraButtons && cameraButtons) viewportCameraButtons.append(cameraButtons);
   syncViewportControlPlacement();
   initPanelCollapse($('sidebar'), 'mesh-list');
+  updateAssetFillButton();
   initPanelCollapse($('present-panel'), 'present-list');
   initPanelCollapse($('toggle-panel'), 'toggle-list');
   initPanelCollapse($('menu-panel'), 'menu-list');

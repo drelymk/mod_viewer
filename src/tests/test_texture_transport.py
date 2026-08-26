@@ -173,6 +173,27 @@ def test_publication_deduplicates_by_role_and_invalidates_old_load(tmp_path):
     assert server._lookup_texture(replacement.token, "0").path == str(path)
 
 
+def test_auxiliary_publication_retains_active_mod_publication(tmp_path):
+    path = tmp_path / "shared.png"
+    Image.new("RGB", (1, 1), (128, 128, 32)).save(path)
+
+    mod = server.begin_texture_publication(str(tmp_path))
+    mod.register(str(path), "diffuse")
+    mod.commit()
+    fill = server.begin_texture_publication(str(tmp_path))
+    fill.register(str(path), "normal_map")
+    fill.commit(replace=False)
+
+    assert server.active_texture_publication(str(tmp_path)) is mod
+    assert server._lookup_texture(mod.token, "0") is not None
+    assert server._lookup_texture(fill.token, "0") is not None
+
+    fill.release()
+    assert server.active_texture_publication(str(tmp_path)) is mod
+    assert server._lookup_texture(mod.token, "0") is not None
+    assert server._lookup_texture(fill.token, "0") is None
+
+
 
 
 

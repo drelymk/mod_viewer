@@ -166,12 +166,6 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
       name.className = 'asset-folder-name';
       name.textContent = baseName(entry.path);
       wrapper.append(badge, name);
-      if (entry.enabled === false) {
-        const status = document.createElement('span');
-        status.className = 'asset-folder-status';
-        status.textContent = 'Disabled';
-        wrapper.appendChild(status);
-      }
       return wrapper;
     },
     classPrefix: 'asset-folder',

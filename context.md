@@ -169,6 +169,18 @@ machine-specific paths or facts that are obvious from the source.
   `.mod_viewer.json` inside an Asset folder. Asset texture choices are
   session-only, and ambiguous texture discovery may populate candidates but
   must not create semantic role bindings.
+- Missing original Asset parts are loaded only through an explicit viewer
+  action; normal mod loading must not read heavy Asset geometry solely for
+  composition.
+- Mod/Asset coverage is determined from authored geometry override identities
+  across every discovered INI, including staged documents and
+  `handling=skip`, not from rendered draw output. A hash-only geometry-bearing
+  override conservatively covers every Asset range under that hash; a
+  texture-only hash binding identifies an Asset but does not claim geometry.
+- Automatic original-part filling requires one uniquely resolved original
+  Asset. Ambiguous identity never triggers composition. Filled geometry is
+  viewer-session state, retains Asset provenance, and is removed on mod reload
+  or switch without modifying the mod or Asset.
 - Direct Asset geometry retains Asset/component/range provenance so later
   mod/Asset composition can compare coverage without reparsing viewer labels.
 - Direct Asset UVs are canonical viewer-space Float32 UVs (V is flipped exactly
@@ -286,6 +298,10 @@ machine-specific paths or facts that are obvious from the source.
 - Viewport camera actions (Reset, Turn and Tilt) belong in the compact viewport
   toolbar with the render and navigation tools. Do not restore a separate
   Orientation panel when changing camera behavior.
+- Model orientation is persistent display state: auto-upright, game/base-facing
+  rotation and manual Turn/Tilt are applied in that order to late-adopted
+  meshes. Reset View retains the original base transform, and removed meshes
+  must be removed from that reset baseline.
 
 ## Feature flags and test strategy
 

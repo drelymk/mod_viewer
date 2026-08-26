@@ -77,118 +77,142 @@ class AssetLoadResult:
     @classmethod
     def from_parts(cls, asset_type, root, record, parts, *, geometry,
                    warnings=()):
-        game = {"GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa"}[asset_type]
-        root_id = os.path.normcase(os.path.abspath(root))
-        source = record.get("path", "") if isinstance(record, dict) else ""
-        profile = material_profile_for(game)
-        profiles = {profile.id: profile.to_metadata()}
-        meshes = {}
-        textures = {}
-        pools = {}
-        pool_ids = {}
-        component_hashes = {}
-        for part in parts:
-            base = part.component_name or part.label
-            component_hashes.setdefault(base, set()).add(part.geometry_hash)
-        component_labels = {}
-        for base, hashes in component_hashes.items():
-            if len(hashes) <= 1:
-                continue
-            for geometry_hash in hashes:
-                component_labels[(base, geometry_hash)] = (
-                    f"{base} [{geometry_hash or 'unknown'}]")
-        for ordinal, part in enumerate(parts):
-            for candidate in part.texture_candidates:
-                # Candidate textures are published and selectable, but their
-                # presence must not infer a semantic material role.
-                textures[candidate.key] = candidate.uri or candidate.key
-            base_component = part.component_name or part.label
-            component = component_labels.get(
-                (base_component, part.geometry_hash), base_component)
-            entry = {
-                "pos": geometry.add(part.positions),
-                "idx": geometry.add(part.indices),
-                "uv": geometry.add(part.uvs) if part.uvs else None,
-                "normal": geometry.add(part.normals) if part.normals else None,
-                "component": component,
-                "display_name": part.label,
-                "source": source,
-                "conditions": [],
-                "sources": [{"asset": part.asset_source}],
-                "drawindexed": [part.index_count or 0, part.first_index or 0, 0],
-                "tex_key": None,
-                "normal_map_key": None,
-                "normal_data_key": None,
-                "light_map_key": None,
-                "material_map_key": None,
-                "texture_variants": [],
-                "normal_map_variants": [],
-                "normal_data_variants": [],
-                "light_map_variants": [],
-                "material_map_variants": [],
-                "material_kind": "unknown",
-                "material_kind_reliable": False,
-                "material_kind_reason": "Asset preview has no mod material override.",
-                "material_profile_id": profile.id,
-                "asset_source": part.asset_source,
-            }
-            for role, texture in part.textures.items():
-                textures[texture.key] = texture.uri or texture.key
-                field = {
-                    "diffuse": "tex_key", "normal_map": "normal_map_key",
-                    "normal_data": "normal_data_key", "light_map": "light_map_key",
-                    "material_map": "material_map_key",
-                }.get(role)
-                if field:
-                    entry[field] = texture.key
-            pool = []
-            if part.texture_candidates:
-                pool = [candidate.as_candidate()
-                        for candidate in part.texture_candidates]
-            pool.extend(texture.as_candidate() for texture in part.textures.values()
-                        if texture.role == "diffuse")
-            if pool:
-                component = entry["component"]
-                pool_id = pool_ids.get(component)
-                if pool_id is None:
-                    pool_id = f"asset-pool-{len(pool_ids)}"
-                    pool_ids[component] = pool_id
-                    pools[pool_id] = []
-                seen = {item.get("tex_key") for item in pools[pool_id]}
-                for item in pool:
-                    key = item.get("tex_key")
-                    if key in seen:
-                        continue
-                    pools[pool_id].append(item)
-                    seen.add(key)
-                entry["texture_pool_id"] = pool_id
-            meshes[part.key] = entry
+        payload = _build_asset_payload(
+            asset_type, root, record, parts, geometry=geometry,
+            warnings=warnings, asset_fill=False)
+        return cls(payload, tuple(parts))
 
-        payload = {
+
+def _build_asset_payload(asset_type, root, record, parts, *, geometry,
+                         warnings=(), asset_fill=False):
+    game = {"GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa"}[asset_type]
+    root_id = os.path.normcase(os.path.abspath(root))
+    source = record.get("path", "") if isinstance(record, dict) else ""
+    profile = material_profile_for(game)
+    profiles = {profile.id: profile.to_metadata()}
+    meshes = {}
+    textures = {}
+    pools = {}
+    pool_ids = {}
+    component_hashes = {}
+    for part in parts:
+        base = part.component_name or part.label
+        component_hashes.setdefault(base, set()).add(part.geometry_hash)
+    component_labels = {}
+    for base, hashes in component_hashes.items():
+        if len(hashes) <= 1:
+            continue
+        for geometry_hash in hashes:
+            component_labels[(base, geometry_hash)] = (
+                f"{base} [{geometry_hash or 'unknown'}]")
+    for ordinal, part in enumerate(parts):
+        mesh_key = (f"asset-fill::{part.key}" if asset_fill else part.key)
+        for candidate in part.texture_candidates:
+            # Candidate textures are published and selectable, but their
+            # presence must not infer a semantic material role.
+            textures[candidate.key] = candidate.uri or candidate.key
+        base_component = part.component_name or part.label
+        component = component_labels.get(
+            (base_component, part.geometry_hash), base_component)
+        entry = {
+            "pos": geometry.add(part.positions),
+            "idx": geometry.add(part.indices),
+            "uv": geometry.add(part.uvs) if part.uvs else None,
+            "normal": geometry.add(part.normals) if part.normals else None,
+            "component": component,
+            "display_name": part.label,
+            "source": "ORIGINAL ASSET" if asset_fill else source,
+            "conditions": [],
+            "sources": [{"asset": part.asset_source}],
+            "drawindexed": [part.index_count or 0, part.first_index or 0, 0],
+            "tex_key": None,
+            "normal_map_key": None,
+            "normal_data_key": None,
+            "light_map_key": None,
+            "material_map_key": None,
+            "texture_variants": [],
+            "normal_map_variants": [],
+            "normal_data_variants": [],
+            "light_map_variants": [],
+            "material_map_variants": [],
+            "material_kind": "unknown",
+            "material_kind_reliable": False,
+            "material_kind_reason": "Asset preview has no mod material override.",
+            "material_profile_id": profile.id,
+            "asset_source": part.asset_source,
+            "asset_fill": asset_fill,
+            "fill_reason": ("missing_mod_coverage" if asset_fill
+                            else None),
+        }
+        for role, texture in part.textures.items():
+            textures[texture.key] = texture.uri or texture.key
+            field = {
+                "diffuse": "tex_key", "normal_map": "normal_map_key",
+                "normal_data": "normal_data_key", "light_map": "light_map_key",
+                "material_map": "material_map_key",
+            }.get(role)
+            if field:
+                entry[field] = texture.key
+        pool = []
+        if part.texture_candidates:
+            pool = [candidate.as_candidate()
+                    for candidate in part.texture_candidates]
+        pool.extend(texture.as_candidate() for texture in part.textures.values()
+                    if texture.role == "diffuse")
+        if pool:
+            component = entry["component"]
+            pool_id = pool_ids.get(component)
+            if pool_id is None:
+                pool_id = f"asset-pool-{len(pool_ids)}"
+                pool_ids[component] = pool_id
+                pools[pool_id] = []
+            seen = {item.get("tex_key") for item in pools[pool_id]}
+            for item in pool:
+                key = item.get("tex_key")
+                if key in seen:
+                    continue
+                pools[pool_id].append(item)
+                seen.add(key)
+            entry["texture_pool_id"] = pool_id
+        meshes[mesh_key] = entry
+
+    asset_metadata = {
+        "source_kind": "asset-fill" if asset_fill else "asset",
+        "game": {"id": game, "runtime": "asset",
+                 "texture_api": asset_type.lower(),
+                 "confidence": "authoritative"},
+        "asset": {"type": asset_type, "path": source,
+                  "root": root_id, "warnings": list(warnings)},
+        "material_profiles": profiles,
+    }
+    if asset_fill:
+        return {
             "meshes": meshes,
             "textures": textures,
             "texture_pools": pools,
-            "controls": {"toggles": {}, "menu": {},
-                         "present": {"target_inis": [], "item": None}},
-            "state": {"rules": [], "defaults": {}},
             "geometry": None,
-            "metadata": {
-                "source_kind": "asset",
-                "game": {"id": game, "runtime": "asset",
-                         "texture_api": asset_type.lower(),
-                         "confidence": "authoritative"},
-                "asset": {"type": asset_type, "path": source,
-                          "root": root_id, "warnings": list(warnings)},
-                "mesh_names": {},
-                "material_profiles": profiles,
-            },
-            "health": None,
-            "asset_resolution": None,
+            "metadata": asset_metadata,
         }
-        # TexturePublication returns opaque URLs.  Resolve the registry after
-        # the mesh map has been assembled so the payload never contains a
-        # filesystem path as a browser texture source.
-        return cls(payload, tuple(parts))
+    return {
+        "meshes": meshes,
+        "textures": textures,
+        "texture_pools": pools,
+        "controls": {"toggles": {}, "menu": {},
+                     "present": {"target_inis": [], "item": None}},
+        "state": {"rules": [], "defaults": {}},
+        "geometry": None,
+        "metadata": {**asset_metadata, "mesh_names": {}},
+        "health": None,
+        "asset_resolution": None,
+    }
+
+
+def build_asset_fill_payload(asset_type, root, record, parts, *, geometry,
+                             warnings=()):
+    """Build only the mesh data needed to append missing Asset parts."""
+    return _build_asset_payload(
+        asset_type, root, record, parts, geometry=geometry,
+        warnings=warnings, asset_fill=True)
 
 
 def make_texture(root, path, role, *, texture_source=None, source="explicit"):
@@ -203,5 +227,6 @@ def make_texture(root, path, role, *, texture_source=None, source="explicit"):
 
 __all__ = [
     "AssetAdapterResult", "AssetLoadError", "AssetLoadResult",
-    "AssetMeshPart", "AssetTexture", "make_texture",
+    "AssetMeshPart", "AssetTexture", "build_asset_fill_payload",
+    "make_texture",
 ]

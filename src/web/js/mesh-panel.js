@@ -4,7 +4,7 @@
 
 import { buildMesh, hasTexture } from './mesh-factory.js';
 import {
-  activeMeshes, addMesh, applyMeshVisibility, conditionsSatisfied,
+  activeMeshes, addMesh, applyMeshVisibility, conditionsSatisfied, removeMesh,
   setManualTexOverride,
 } from './mesh-state.js';
 import {
@@ -13,7 +13,7 @@ import {
 import { bindMeshView, getMeshView } from './mesh-view-bindings.js';
 import { registerViewSync } from './view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from './panel-utils.js';
-import { selectMesh } from './selection.js';
+import { clearSelection, selectMesh } from './selection.js';
 import { openTextureModal } from './texture-modal.js';
 import { registerInspectorMesh } from './inspector-panel.js';
 import { createIcon } from './ui-icons.js';
@@ -285,9 +285,18 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
  * open the native file picker rooted at the mod folder. */
 export function buildMeshPanel(meshes, modPath, meshNames = {},
                                materialProfiles = {}, options = {}) {
+  return appendMeshPanel(meshes, modPath, meshNames, materialProfiles,
+    {...options, replace: true});
+}
+
+export function appendMeshPanel(meshes, modPath, meshNames = {},
+                                materialProfiles = {}, options = {}) {
   const list = document.getElementById('mesh-list');
-  list.innerHTML = '';
-  groupsUI = [];
+  const replace = options.replace !== false;
+  if (replace) {
+    list.innerHTML = '';
+    groupsUI = [];
+  }
   registerViewSync('mesh-panel', syncMeshPanel);
   const texturePools = options.texturePools || {};
   const readOnlySource = options.readOnlySource === true;
@@ -302,6 +311,8 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
     const container = (multiSource && src) ? buildSourceSection(src, list, {
       headerClass: 'mesh-src-hdr', itemsClass: 'mesh-src-items',
     }) : list;
+    const sourceHeader = container === list
+      ? null : container.previousElementSibling;
 
     for (const [groupName, names] of Object.entries(groupByComponent(bySource[src], meshes))) {
       const itemsWrap = document.createElement('div');
@@ -409,6 +420,7 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
           || entry.display_name || null;
         mesh.userData.meshNames = meshNames;
         mesh.userData.modPath = modPath;
+        mesh.userData.assetFill = entry.asset_fill === true;
         // Diagnostic-only projection. Operational identity remains the
         // existing semantic key and component grouping.
         mesh.userData.assetEntry = meshes[name];
@@ -468,6 +480,11 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
       groupsUI.push({
         masterCb, itemCbs, itemObjs,
         componentDescriptor,
+        header: componentDescriptor.header,
+        itemsWrap,
+        sourceContainer: container === list ? null : container,
+        sourceHeader,
+        assetFill: names.every(name => meshes[name]?.asset_fill === true),
         assetResolution: options.assetResolution || null,
         applyTextureRuns: () => recomputeTextureRuns(itemObjs),
       });
@@ -478,8 +495,49 @@ export function buildMeshPanel(meshes, modPath, meshNames = {},
   return activeMeshes;
 }
 
+export function removeAssetFillMeshPanel(targetMeshes = null) {
+  const target = targetMeshes === null ? null : new Set(targetMeshes);
+  const groups = groupsUI.filter(group => group.assetFill
+    && (!target || group.itemObjs.some(mesh => target.has(mesh))));
+  if (!groups.length) return [];
+  clearSelection();
+  const removed = [];
+  for (const group of groups) {
+    const members = target
+      ? group.itemObjs.filter(mesh => target.has(mesh))
+      : [...group.itemObjs];
+    members.forEach(mesh => {
+      mesh.userData.assetRow?.closest('.draw-item-wrap')?.remove();
+      if (removeMesh(mesh)) removed.push(mesh);
+      const index = group.itemObjs.indexOf(mesh);
+      if (index >= 0) {
+        group.itemObjs.splice(index, 1);
+        group.itemCbs.splice(index, 1);
+      }
+    });
+    if (!group.itemObjs.length) {
+      group.header?.remove();
+      group.itemsWrap?.remove();
+    } else {
+      group.applyTextureRuns?.();
+    }
+  }
+  groupsUI = groupsUI.filter(group => !group.assetFill || group.itemObjs.length);
+  for (const source of new Set(groups.map(group => group.sourceContainer).filter(Boolean))) {
+    if (!source.children.length) {
+      source.previousElementSibling?.remove();
+      source.remove();
+    }
+  }
+  window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
+    detail: { component: null, reason: 'asset-fill-removed' },
+  }));
+  return removed;
+}
+
 export function refreshMeshAssetDiagnostics(assetResolution = undefined) {
   for (const group of groupsUI) {
+    if (group.assetFill) continue;
     if (assetResolution !== undefined) {
       group.assetResolution = assetResolution;
       group.componentDescriptor.assetResolution = assetResolution;

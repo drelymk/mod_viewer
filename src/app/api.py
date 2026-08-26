@@ -7,6 +7,7 @@ belongs in mod_loader instead.
 
 import os
 import traceback
+import uuid
 
 import webview
 
@@ -19,6 +20,8 @@ from core.texture_profiles import texture_profile_for
 from . import (asset_catalog, asset_folders, asset_index, edit_session, ini_api,
                asset_loader, asset_paths, metadata, mod_folders, mod_loader, present_api, server,
                toggle_api)
+from .asset_composition import plan_missing_asset_parts
+from .asset_loader.models import build_asset_fill_payload
 
 
 class ModViewerAPI:
@@ -35,6 +38,8 @@ class ModViewerAPI:
         self._authorized_asset_roots = set()
         self._active_mesh_keys = {}
         self._dds_classification_caches = {}
+        self._asset_fill_sessions = {}
+        self._asset_fill_plan_cache = {}
         try:
             self._authorized_roots = mod_folders.registered_paths(
                 mod_folders.load_registry())
@@ -86,6 +91,45 @@ class ModViewerAPI:
                 path, role, validate=True, transform=transform)
 
         return register
+
+    def _clear_asset_fill(self, folder_path=None):
+        """Release session-only Asset-fill resources before a model change."""
+        keys = list(self._asset_fill_sessions)
+        if folder_path is not None:
+            requested = os.path.normcase(os.path.abspath(folder_path))
+            keys = [key for key in keys if key == requested]
+        for key in keys:
+            state = self._asset_fill_sessions.pop(key, None) or {}
+            server.release_texture_publication(state.get("publication"))
+            server.release_geometry(state.get("geometry_url"))
+
+    def _asset_fill_plan(self, folder_path, context, overrides):
+        revision = edit_session.current_revision(folder_path)
+        entries = tuple(sorted(
+            (item.get("type"), item.get("path"),
+             bool(item.get("enabled", True)))
+            for item in context.asset_folders
+            if isinstance(item, dict)))
+        index_versions = []
+        for asset_type, root, _enabled in entries:
+            try:
+                stat = os.stat(asset_index.index_path(asset_type, root))
+                stamp = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                stamp = None
+            index_versions.append((asset_type, root, stamp))
+        key = (os.path.normcase(os.path.abspath(folder_path)), revision,
+               entries, tuple(index_versions))
+        cached = self._asset_fill_plan_cache.get(key)
+        if cached is not None:
+            return cached
+        plan = plan_missing_asset_parts(context, overrides)
+        self._asset_fill_plan_cache[key] = plan
+        return plan
+
+    def _invalidate_asset_fill_plan_cache(self):
+        """Drop plans whose Asset index or enabled-root state may have changed."""
+        self._asset_fill_plan_cache.clear()
 
     def select_folder(self):
         """Open a native folder-picker dialog. Returns None if cancelled."""
@@ -227,6 +271,7 @@ class ModViewerAPI:
         except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         self._authorized_asset_folders.add(folder_path)
         return {"folders": self._asset_folder_entries(entries)}
 
@@ -241,6 +286,7 @@ class ModViewerAPI:
         except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         self._authorized_asset_folders.add(folder_path)
         return {"folders": self._asset_folder_entries(entries)}
 
@@ -251,6 +297,7 @@ class ModViewerAPI:
         except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         return {"folders": self._asset_folder_entries(entries)}
 
     def set_asset_folder_enabled(self, folder_path, enabled):
@@ -260,6 +307,7 @@ class ModViewerAPI:
         except asset_catalog.AssetCatalogError as error:
             return {"error": str(error)}
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         return {"folders": self._asset_folder_entries(entries)}
 
     def rebuild_asset_index(self, folder_path):
@@ -272,6 +320,7 @@ class ModViewerAPI:
                 "indexPreserved": error.index_preserved,
             }
         self._refresh_authorized_asset_roots(entries)
+        self._invalidate_asset_fill_plan_cache()
         return {"folders": self._asset_folder_entries(entries)}
 
     def list_asset_subfolders(self, folder_path):
@@ -327,6 +376,7 @@ class ModViewerAPI:
 
     def load_asset(self, folder_path):
         """Load one exact indexed Asset without creating or editing an INI."""
+        self._clear_asset_fill()
         try:
             selected, entry, _index, record = self._asset_selection(folder_path)
             geometry = GeometryBlob()
@@ -440,6 +490,7 @@ class ModViewerAPI:
         return {"error": "Unexpected backend error. See the application log for details."}
 
     def load_mod(self, folder_path):
+        self._clear_asset_fill()
         folder_path, overrides, pending_new_sections, context = \
             self._authoritative_context(folder_path)
         ini_paths = context.ini_paths
@@ -475,6 +526,76 @@ class ModViewerAPI:
             publication.discard()
             self._active_mesh_keys.pop(folder_path, None)
             raise
+
+    def load_missing_asset_parts(self, folder_path):
+        """Append original Asset parts not covered by the current mod INIs."""
+        try:
+            folder_path, overrides, _pending, context = \
+                self._authoritative_context(folder_path)
+            key = os.path.normcase(os.path.abspath(folder_path))
+            existing = self._asset_fill_sessions.get(key)
+            if existing is not None:
+                return {**existing["summary"], "status": "loaded",
+                        "already_loaded": True,
+                        "fill_id": existing.get("fill_id")}
+            plan = self._asset_fill_plan(folder_path, context, overrides)
+            summary = plan.to_dict()
+            if plan.status != "ready":
+                return summary
+
+            geometry = GeometryBlob()
+            publication = server.begin_texture_publication(folder_path)
+            publication.set_game_profile({
+                "GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa",
+            }[plan.asset_type])
+            try:
+                loaded = asset_loader.load_asset_parts(
+                    plan.asset_type, plan.root, plan.asset,
+                    texture_source=publication.register,
+                    part_filter=set(plan.missing_parts))
+                payload = build_asset_fill_payload(
+                    plan.asset_type, plan.root, plan.asset, loaded.parts,
+                    geometry=geometry, warnings=loaded.warnings)
+                server.publish_payload_geometry(
+                    payload, geometry, replace=False)
+                publication.commit(replace=False)
+            except Exception:
+                publication.discard()
+                raise
+            summary["payload"] = payload
+            fill_id = uuid.uuid4().hex
+            self._asset_fill_sessions[key] = {
+                "fill_id": fill_id,
+                "publication": publication,
+                "geometry_url": payload.get("geometry", {}).get("url")
+                if payload.get("geometry") else None,
+                "summary": summary,
+            }
+            return {**summary, "status": "loaded", "fill_id": fill_id}
+        except (PermissionError, asset_folders.AssetFolderError,
+                asset_index.AssetIndexError, asset_loader.AssetLoadError) as error:
+            return {"status": "error", "error": str(error)}
+        except Exception:
+            traceback.print_exc()
+            return {"status": "error",
+                    "error": "Could not load missing Asset parts. See the application log for details."}
+
+    def remove_missing_asset_parts(self, folder_path, fill_id=None):
+        """Remove the current session-only original Asset fill."""
+        try:
+            folder_path = self._folder(folder_path)
+            key = os.path.normcase(os.path.abspath(folder_path))
+            state = self._asset_fill_sessions.get(key)
+            if state is None:
+                return {"status": "removed", "removed": False}
+            if fill_id is not None and state.get("fill_id") != fill_id:
+                return {"status": "removed", "removed": False, "stale": True}
+            self._asset_fill_sessions.pop(key, None)
+            server.release_texture_publication(state.get("publication"))
+            server.release_geometry(state.get("geometry_url"))
+            return {"status": "removed", "removed": True}
+        except (PermissionError, mod_folders.ModFolderError) as error:
+            return {"status": "error", "error": str(error)}
 
     def get_present_state(self, folder_path):
         """Return staged PRESENT state without loading geometry or textures."""
