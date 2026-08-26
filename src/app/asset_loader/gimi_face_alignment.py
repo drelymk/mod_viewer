@@ -325,20 +325,9 @@ def _sample_points(points, limit=256):
                  for index in range(limit))
 
 
-def _split_near_eye(points, centers, radius):
-    groups = [[], []]
-    for point in points:
-        distances = [_length(_sub(point, center)) for center in centers]
-        side = 0 if distances[0] <= distances[1] else 1
-        if distances[side] <= radius:
-            groups[side].append(point)
-    return tuple(_sample_points(group) for group in groups)
-
-
-def _cluster_extent(groups, centers):
-    return max((_length(_sub(point, centers[index]))
-                for index, group in enumerate(groups) for point in group),
-               default=0.0)
+def _projected_half_span(points, center, axis):
+    values = [_dot(_sub(point, center), axis) for point in points]
+    return ((max(values) - min(values)) * 0.5) if values else 0.0
 
 
 def _trimmed_surface_error(face_groups, body_groups, matrix):
@@ -358,37 +347,46 @@ def _trimmed_surface_error(face_groups, body_groups, matrix):
 
 
 def _fit_eye_surface_offset(face_points, body_points, matrix,
-                            target_v, target_f, separation, *,
-                            face_centers=None, body_centers=None,
-                            body_groups=None):
+                            target_h, target_v, target_f, separation, *,
+                            body_centers=None, body_groups=None):
     """Fit corresponding eye surfaces with bounded up/forward translations."""
     if (not face_points or len(body_points) < 2
             or separation <= _EPSILON):
         return matrix, 0.0
-    if face_centers is None or body_centers is None or body_groups is None:
-        face_groups = (tuple(face_points),)
-        reference_groups = (tuple(body_points),)
-    else:
-        face_radius = max(separation * 0.45, _EPSILON)
-        face_groups = _split_near_eye(
-            face_points, face_centers, face_radius)
-        reference_groups = tuple(_sample_points(group) for group in body_groups)
-        if any(not group for group in face_groups + reference_groups):
+    if body_centers is None or body_groups is None:
+        return matrix, 0.0
+    scales = []
+    for center, group in zip(body_centers, body_groups):
+        if not group:
             return matrix, 0.0
+        half_h = _projected_half_span(group, center, target_h)
+        half_v = _projected_half_span(group, center, target_v)
+        scales.append((half_h + half_v) * 0.5)
+    if not scales:
+        return matrix, 0.0
+    eye_scale = sum(scales) / len(scales)
+    if eye_scale <= _EPSILON:
+        return matrix, 0.0
+
+    selection_radius = eye_scale * 2.0
+    selected = [[], []]
+    for point in face_points:
+        aligned = transform_point(matrix, point)
+        distances = [_length(_sub(aligned, center))
+                     for center in body_centers]
+        side = 0 if distances[0] <= distances[1] else 1
+        if distances[side] <= selection_radius:
+            selected[side].append(point)
+    if min(len(group) for group in selected) < 24:
+        return matrix, 0.0
+
+    face_groups = tuple(_sample_points(group) for group in selected)
+    reference_groups = tuple(_sample_points(group) for group in body_groups)
     baseline = _trimmed_surface_error(face_groups, reference_groups, matrix)
     if baseline is None or baseline <= _EPSILON:
         return matrix, 0.0
-    if face_centers is None or body_centers is None:
-        eye_scale = separation * 0.05
-    else:
-        eye_scale = max(
-            _cluster_extent(face_groups, face_centers),
-            _cluster_extent(reference_groups, body_centers),
-            separation * 0.04)
-    up_range = min(max(eye_scale * 1.5, separation * 0.05),
-                   separation * 0.30)
-    forward_range = min(max(eye_scale, separation * 0.05),
-                         separation * 0.30)
+    up_range = 1.5 * eye_scale
+    forward_range = 0.75 * eye_scale
     base_translation = (matrix[0][3], matrix[1][3], matrix[2][3])
     best_error = baseline
     best_matrix = matrix
@@ -503,9 +501,9 @@ def solve(body_eyes, face_anchor, landmark=None, *, landmark_kind=None,
     face_points = _clean_points(face_anchor.positions)
     if refine:
         matrix, refinement = _fit_eye_surface_offset(
-            face_points, body_points, matrix, target_v, target_f,
-            body_separation, face_centers=(left_center, right_center),
-            body_centers=body_centers, body_groups=body_groups)
+            face_points, body_points, matrix, target_h, target_v, target_f,
+            body_separation, body_centers=body_centers,
+            body_groups=body_groups)
     return GimiFaceAlignment(matrix, {
         "body_eye_separation": body_separation,
         "face_eye_separation": _length(_sub(right_center, left_center)),

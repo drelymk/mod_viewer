@@ -9,22 +9,23 @@ from app.asset_loader.gimi_face_alignment import (
 
 
 def _face_mesh(centers, *, name="FaceEye", h=(0, 0, 1), v=(0, 1, 0),
-               radius=0.15):
+               radius=0.15, ring_vertices=8):
     positions = []
     indices = []
     for center in centers:
         center_index = len(positions)
         positions.append(center)
         ring = []
-        for ordinal in range(8):
-            angle = 2 * math.pi * ordinal / 8
+        for ordinal in range(ring_vertices):
+            angle = 2 * math.pi * ordinal / ring_vertices
             ring.append(len(positions))
             positions.append(tuple(
                 center[axis] + radius * (
                     h[axis] * math.cos(angle) + v[axis] * math.sin(angle))
                 for axis in range(3)))
         for ordinal, first in enumerate(ring):
-            indices.extend((center_index, first, ring[(ordinal + 1) % 8]))
+            indices.extend((center_index, first,
+                            ring[(ordinal + 1) % ring_vertices]))
     return AlignmentMesh(name, tuple(positions), tuple(indices))
 
 
@@ -35,6 +36,27 @@ def _body_eyes(left, right):
         "EyesA", tuple(tuple(center[axis] + offset[axis]
                               for axis in range(3))
                        for center in (left, right) for offset in offsets), ())
+
+
+def _dense_body_eyes(left, right):
+    offsets = (-0.04, -0.02, 0.0, 0.02, 0.04)
+    points = tuple(
+        (center[0] + offset_x, center[1], center[2])
+        for center in (left, right)
+        for offset_x in offsets for _ in offsets)
+    return AlignmentMesh("EyesA", points, ())
+
+
+def _face_mesh_with_offset_surface(centers):
+    base = _face_mesh(centers, radius=0.05)
+    positions = list(base.positions)
+    for center in centers:
+        for ordinal in range(32):
+            angle = 2 * math.pi * ordinal / 32
+            positions.append((
+                center[0], center[1] + 0.03,
+                center[2] + 0.01 * math.cos(angle)))
+    return AlignmentMesh(base.name, tuple(positions), base.indices)
 
 
 def test_solver_recovers_rotation_translation_and_positive_determinant():
@@ -106,24 +128,39 @@ def test_surface_refinement_uses_corresponding_eye_surfaces():
     identity = ((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0),
                 (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     body_centers = ((-1.0, 0.0, 0.0), (1.0, 0.0, 0.0))
-    body_groups = (
-        ((-1.0, -0.04, 0.0), (-1.0, 0.04, 0.0),
-         (-1.0, 0.0, -0.04), (-1.0, 0.0, 0.04)),
-        ((1.0, -0.04, 0.0), (1.0, 0.04, 0.0),
-         (1.0, 0.0, -0.04), (1.0, 0.0, 0.04)),
-    )
+    offsets = (-0.04, -0.02, 0.0, 0.02, 0.04)
+    body_groups = tuple(
+        tuple((center[0] + offset_x, center[1] + offset_y, center[2])
+              for offset_x in offsets for offset_y in offsets)
+        for center in body_centers)
     face_points = tuple(
-        (center[0], 0.2, center[2] + offset)
-        for center in body_centers for offset in (-0.04, 0.04))
+        (center[0] + offset_x, 0.03, center[2] + offset_z)
+        for center in body_centers
+        for offset_x in (-0.03, -0.015, 0.0, 0.015, 0.03)
+        for offset_z in (-0.03, -0.015, 0.0, 0.015, 0.03))
 
     fitted, improvement = _fit_eye_surface_offset(
         face_points, tuple(point for group in body_groups for point in group),
-        identity, (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), 2.0,
-        face_centers=body_centers, body_centers=body_centers,
-        body_groups=body_groups)
+        identity, (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0),
+        2.0, body_centers=body_centers, body_groups=body_groups)
 
     assert improvement >= 0.02
-    assert fitted[1][3] == pytest.approx(-0.2, abs=0.03)
+    assert fitted[1][3] == pytest.approx(-0.03, abs=0.01)
+
+
+def test_surface_refinement_runs_through_solver_with_enough_eye_surface_points():
+    body = _dense_body_eyes((-0.75, 2, 3), (0.75, 2, 3))
+    face = _face_mesh_with_offset_surface(
+        ((4, -2, 6.25), (4, -2, 7.75)))
+
+    alignment = solve(body, face)
+
+    assert alignment is not None
+    assert alignment.diagnostics["surface_fit_improvement"] >= 0.02
+    mapped = [transform_point(alignment.matrix, point)
+              for point in (face.positions[18], face.positions[50])]
+    assert mapped[0][1] == pytest.approx(2.0, abs=0.01)
+    assert mapped[1][1] == pytest.approx(2.0, abs=0.01)
 
 
 def test_packed_helpers_transform_positions_and_authored_normals_only():

@@ -202,9 +202,9 @@ def test_gimi_face_parts_align_to_native_eyes_and_keep_eyes_unchanged(tmp_path):
         tuple(value for index in (0, 1, 2, 4, 5, 6)
               for value in body_rows[index][0]))
     face_positions = struct.unpack("<3f", parts["FaceEye"].positions[:12])
-    assert face_positions == pytest.approx((-0.75, 1.95, 3), abs=0.002)
+    assert face_positions == pytest.approx((-0.75, 2, 3))
     mouth_positions = struct.unpack("<3f", parts["Mouth"].positions[:12])
-    assert mouth_positions == pytest.approx((0.1, 1.55, 3), abs=0.002)
+    assert mouth_positions == pytest.approx((0.1, 1.6, 3), abs=1e-5)
     assert struct.unpack("<3f", parts["Mouth"].normals[:12]) == pytest.approx(
         (0, 0, 1))
     assert not any(item["reason"] == "face_alignment_unavailable"
@@ -224,7 +224,7 @@ def test_gimi_mouth_only_filter_uses_alignment_dependencies_without_emitting_the
     assert len(result.parts) == 1
     assert result.parts[0].component_name == "Mouth"
     assert struct.unpack("<3f", result.parts[0].positions[:12]) == \
-        pytest.approx((0.1, 1.55, 3), abs=0.002)
+        pytest.approx((0.1, 1.6, 3), abs=1e-5)
 
 
 def test_gimi_face_detection_uses_component_metadata_over_filename_heuristics():
