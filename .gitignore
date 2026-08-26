@@ -1,6 +1,9 @@
 # Build output
 /build/
 /dist/
+/src/assets/
+/src/build/
+/src/dist/
 *.spec
 
 # Isolated venv created by build.py --rebuild-bootloader
