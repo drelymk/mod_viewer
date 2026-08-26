@@ -131,7 +131,7 @@ def test_wuwa_shadow_tuning_is_serialized_without_genshin_reuse():
 
 
 def test_explicit_kind_evidence_selects_body_but_weak_hint_does_not():
-    from app.mods.loader import _assign_material_profiles
+    from app.mods.enrichment import _assign_material_profiles
 
     detection = GameDetection(
         game="wuwa", runtime="rabbitfx", texture_api="rabbitfx",

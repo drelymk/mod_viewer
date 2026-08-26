@@ -244,7 +244,7 @@ def test_cross_ini_component_collision_recovered():
     an unrelated draw. Before the fix, build_draw_groups' `seen` dict was
     reset per ini call, so both produced the identical label "Component0" and
     the second ini's mesh silently overwrote the first's in the final flat
-    payload -- total, silent geometry loss with no error. _parse_inis now
+    payload -- total, silent geometry loss with no error. analyze_mod_inis now
     threads one shared `seen` dict across the whole folder, so both survive
     under distinct payload keys."""
     with tempfile.TemporaryDirectory() as tmp:

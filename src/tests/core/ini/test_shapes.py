@@ -6,7 +6,7 @@ from core.ini.shapes import extract_shape_sliders
 from core.ini.state import extract_state_rules
 from core.ini.parser import (build_draw_groups, extract_resources,
                              gating_var_names)
-from app.mods.loader import build_menu_panel
+from app.mods.controls import build_menu_panel
 
 
 
