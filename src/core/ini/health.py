@@ -333,7 +333,7 @@ def _viewer_texture_paths(mod_dir):
             if not isinstance(state, dict):
                 continue
             for field in ("tex_key", "normal_map", "normal_data",
-                          "light_map", "material_map"):
+                          "light_map", "material_map", "emission_map"):
                 key = state.get(field)
                 _role, relative_path = split_texture_key(key)
                 resolved = safe_resource_path(mod_dir, relative_path)

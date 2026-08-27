@@ -94,6 +94,9 @@ class MaterialInterpretation:
     wuwa_specular_power: float = 1.0
     wuwa_toon_specular_cutoff: float = 0.1
     wuwa_specular_mask_cutoff: float = 0.5
+    # Emission is only enabled by an explicit, game-owned colour binding.
+    emission_source: str | None = None
+    emission_strength: float = 1.0
 
     def __post_init__(self):
         if self.material_kind not in MATERIAL_KINDS:
@@ -113,6 +116,8 @@ class MaterialInterpretation:
         if self.direct_specular_model not in (None, "wuwa_body"):
             raise ValueError(
                 f"Unknown direct specular model: {self.direct_specular_model}")
+        if self.emission_source not in (None, "emission_map_rgb"):
+            raise ValueError(f"Unknown emission source: {self.emission_source}")
 
     def to_metadata(self):
         result = {
@@ -164,6 +169,8 @@ class MaterialInterpretation:
             "wuwa_specular_power": self.wuwa_specular_power,
             "wuwa_toon_specular_cutoff": self.wuwa_toon_specular_cutoff,
             "wuwa_specular_mask_cutoff": self.wuwa_specular_mask_cutoff,
+            "emission_source": self.emission_source,
+            "emission_strength": self.emission_strength,
         }
         return result
 
@@ -225,6 +232,7 @@ def _base_profile_for(game, texture_api):
             kwargs.update(
                 shadow_mask=ChannelRef("light_map", "g"),
                 direct_shadow_model="wuwa_base",
+                emission_source="emission_map_rgb",
             )
         return MaterialInterpretation(
             id=f"wuwa:{texture_api}", game=game, texture_api=texture_api,

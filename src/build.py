@@ -93,6 +93,10 @@ ASSET_FILES = {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/tsl/display/GTAONode.js",
         "sha256": "516e86dc398b8e2d93f693a168144fdd7420f261a72aaa7da6eb7f110cc8e3ef",
     },
+    "addons/tsl/display/BloomNode.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/tsl/display/BloomNode.js",
+        "sha256": "f80f40d013f4d94aa089c68c673cae6a8ab45fb290970a696bc1dded312e3fc8",
+    },
 }
 
 

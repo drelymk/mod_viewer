@@ -6,6 +6,7 @@ export const TEXTURE_ROLES = new Set([
   'normal_data',
   'light_map',
   'material_map',
+  'emission_map',
 ]);
 
 export function splitTextureKey(key) {

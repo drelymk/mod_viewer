@@ -230,10 +230,13 @@ export function refreshMeshTexture(mesh) {
     ? getTexture(mesh, mesh.userData.lightMapKey) : null;
   const materialMap = usePackedSource('material_map')
     ? getTexture(mesh, mesh.userData.materialMapKey) : null;
+  const emissionMap = usePackedSource('emission_map')
+    ? getTexture(mesh, mesh.userData.emissionMapKey) : null;
   const changed = updateGameMaterialTextures(mesh, {
     diffuse: map,
     normal_map: normalMap,
     normal_data: normalData, light_map: lightMap, material_map: materialMap,
+    emission_map: emissionMap,
     normal_map_y_sign: mesh.userData.normalMapYSign ?? -1,
   });
   if (!changed) return;
@@ -269,6 +272,7 @@ export function setMeshTextureState(mesh, state) {
   }
   mesh.userData.lightMapKey = state.light_map || null;
   mesh.userData.materialMapKey = state.material_map || null;
+  mesh.userData.emissionMapKey = state.emission_map || null;
   refreshMeshTexture(mesh);
 }
 
@@ -327,6 +331,7 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.normalDataKey = data.normal_data_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
   mesh.userData.materialMapKey = data.material_map_key || null;
+  mesh.userData.emissionMapKey = data.emission_map_key || null;
   mesh.userData.materialKind = data.material_kind || 'unknown';
   mesh.userData.materialKindReliable = data.material_kind_reliable === true;
   mesh.userData.materialKindReason = data.material_kind_reason || '';
@@ -341,6 +346,7 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.defaultNormalDataKey = mesh.userData.normalDataKey;
   mesh.userData.defaultLightMapKey = mesh.userData.lightMapKey;
   mesh.userData.defaultMaterialMapKey = mesh.userData.materialMapKey;
+  mesh.userData.defaultEmissionMapKey = mesh.userData.emissionMapKey;
   mesh.userData.fallbackColor = fallback;
   refreshMeshTexture(mesh);
   mesh.castShadow = mesh.receiveShadow = true;

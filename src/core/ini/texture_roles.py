@@ -68,11 +68,12 @@ _SEMANTIC_TEXTURE_ROLES = {
     "normalmap": "normal_map",
     "lightmap": "light_map",
     "materialmap": "material_map",
+    "glowmap": "emission_map",
 }
 _SEMANTIC_TEXTURE_RESOURCE_RE = re.compile(
     r"^Resource[\\/]"
-    r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
-    r"(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)$", re.I)
+    r"(?P<namespace>GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
+    r"(?P<role>Diffuse|NormalMap|LightMap|MaterialMap|GlowMap)$", re.I)
 _LEGACY_TEXTURE_RESOURCE_RE = re.compile(
     r"^Resource.+(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)"
     r"(?P<variant>\.\d+)?$", re.I)
@@ -148,8 +149,12 @@ def _collect_texture_override_index(sections, toggle_vars, alias_map,
 def _semantic_texture_role(resource):
     """Return a role only for a framework-owned semantic resource name."""
     match = _SEMANTIC_TEXTURE_RESOURCE_RE.fullmatch(str(resource or ""))
-    return (_SEMANTIC_TEXTURE_ROLES[match.group("role").casefold()]
-            if match else None)
+    if not match:
+        return None
+    if (match.group("role").casefold() == "glowmap"
+            and match.group("namespace").casefold() != "rabbitfx"):
+        return None
+    return _SEMANTIC_TEXTURE_ROLES[match.group("role").casefold()]
 
 
 def _legacy_texture_evidence(resource, sections, section_lookup):

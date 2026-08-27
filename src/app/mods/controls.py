@@ -13,7 +13,7 @@ from app.mods.analysis import _ini_rel, analyze_mod_inis
 
 _VARIANT_FIELDS = (
     "texture_variants", "normal_map_variants", "normal_data_variants",
-    "light_map_variants", "material_map_variants",
+    "light_map_variants", "material_map_variants", "emission_map_variants",
 )
 
 

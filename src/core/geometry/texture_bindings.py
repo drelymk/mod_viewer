@@ -113,7 +113,7 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
         normal_path, normal_role, identity=asset_normal.get("key"))
     if normal_key:
         entry[f"{normal_role}_key"] = normal_key
-    for channel in ("light_map", "material_map"):
+    for channel in ("light_map", "material_map", "emission_map"):
         asset_default = draw.asset_texture_defaults.get(channel) or {}
         key = registry.ensure(
             asset_default.get("path") or safe_resource_path(
@@ -132,7 +132,7 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
                        if item["tex_key"] == diffuse_key), None)
         if option:
             for channel in ("normal_map", "light_map", "normal_data",
-                            "material_map"):
+                            "material_map", "emission_map"):
                 key = entry.get(f"{channel}_key")
                 if key and not option.get(channel):
                     option[channel] = key
@@ -154,7 +154,7 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
         if len(variants) > 1:
             entry["texture_variants"] = variants
 
-    for channel in ("light_map", "material_map"):
+    for channel in ("light_map", "material_map", "emission_map"):
         rules = draw.texture_rules(channel)
         variants = []
         for variant in rules:

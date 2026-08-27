@@ -43,6 +43,7 @@ export function addMesh(mesh, conditions, sources, textureVariants, materialVari
   mesh.userData.normalDataVariants = materialVariants.normal_data || [];
   mesh.userData.lightMapVariants = materialVariants.light_map || [];
   mesh.userData.materialMapVariants = materialVariants.material_map || [];
+  mesh.userData.emissionMapVariants = materialVariants.emission_map || [];
   // The texture selected by the INI under the current control state. Ordered
   // component texture runs may still make a following mesh inherit it.
   mesh.userData.resolvedTexKey = mesh.userData.defaultTexKey;
@@ -109,6 +110,7 @@ export function updateMeshSemantics(semantics) {
       ['normalDataVariants', 'normal_data_variants'],
       ['lightMapVariants', 'light_map_variants'],
       ['materialMapVariants', 'material_map_variants'],
+      ['emissionMapVariants', 'emission_map_variants'],
     ];
     for (const [target, source] of variants) {
       mesh.userData[target] = semantic[source] || [];
@@ -119,6 +121,7 @@ export function updateMeshSemantics(semantics) {
       ['defaultNormalDataKey', 'normal_data_key'],
       ['defaultLightMapKey', 'light_map_key'],
       ['defaultMaterialMapKey', 'material_map_key'],
+      ['defaultEmissionMapKey', 'emission_map_key'],
     ];
     for (const [target, source] of defaults) {
       if (Object.hasOwn(semantic, source)) {
@@ -169,6 +172,8 @@ export function applyTextureVariant(mesh) {
     mesh.userData.lightMapVariants, mesh.userData.defaultLightMapKey);
   mesh.userData.resolvedMaterialMapKey = resolve(
     mesh.userData.materialMapVariants, mesh.userData.defaultMaterialMapKey);
+  mesh.userData.resolvedEmissionMapKey = resolve(
+    mesh.userData.emissionMapVariants, mesh.userData.defaultEmissionMapKey);
   setMeshTextureState(mesh, {
     diffuse: mesh.userData.manualTexOverride !== undefined
       ? mesh.userData.manualTexOverride
@@ -177,6 +182,7 @@ export function applyTextureVariant(mesh) {
     normal_data: mesh.userData.resolvedNormalDataKey,
     light_map: mesh.userData.resolvedLightMapKey,
     material_map: mesh.userData.resolvedMaterialMapKey,
+    emission_map: mesh.userData.resolvedEmissionMapKey,
   });
 }
 

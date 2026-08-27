@@ -105,6 +105,14 @@ def test_wuwa_rabbitfx_alone_enables_validated_shadow_semantics():
 
     assert profile.shadow_mask == ChannelRef("light_map", "g")
     assert profile.direct_shadow_model == "wuwa_base"
+    assert profile.emission_source == "emission_map_rgb"
+    assert profile.emission_strength == 1.0
+    assert profile.to_metadata()["emission_source"] == "emission_map_rgb"
+
+
+def test_other_profiles_do_not_infer_emission_from_packed_channels():
+    assert material_profile_for("genshin", "gimi").emission_source is None
+    assert material_profile_for("zzz", "zzmi").emission_source is None
 
 
 def test_wuwa_rabbitfx_body_is_the_only_first_specialized_profile():

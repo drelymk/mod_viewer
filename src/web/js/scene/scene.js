@@ -319,6 +319,26 @@ export function setAmbientOcclusionSuppressedByWireframe(value) {
   requestRender();
 }
 
+export function setBloomEnabled(value) {
+  const changed = viewportRenderPipeline.setBloomEnabled(value);
+  if (changed) requestRender();
+  return changed;
+}
+
+export function getBloomEnabled() {
+  return viewportRenderPipeline.getBloomEnabled();
+}
+
+export function setBloomSuppressedByWireframe(value) {
+  viewportRenderPipeline.setBloomSuppressedByWireframe(value);
+  requestRender();
+}
+
+export function setBloomSuppressedByDebug(value) {
+  viewportRenderPipeline.setBloomSuppressedByDebug(value);
+  requestRender();
+}
+
 export function rotateModelQuarterTurn(meshes = []) {
   cameraFrame.rotateModelQuarterTurn(meshes);
   characterShadowController.invalidateGeometry();

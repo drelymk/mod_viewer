@@ -6,7 +6,10 @@ import {
 } from '../mesh/material-profile.js';
 import { setOutlineSuppressedByWireframe } from './outline-renderer.js';
 import { requestRender } from './render-scheduler.js';
-import { setAmbientOcclusionSuppressedByWireframe } from './scene.js';
+import {
+  setAmbientOcclusionSuppressedByWireframe,
+  setBloomSuppressedByWireframe,
+} from './scene.js';
 
 let wireframe = false;
 let smoothShading = true;
@@ -39,6 +42,7 @@ export function toggleWireframeMode(meshes) {
   wireframe = !wireframe;
   setOutlineSuppressedByWireframe(wireframe);
   setAmbientOcclusionSuppressedByWireframe(wireframe);
+  setBloomSuppressedByWireframe(wireframe);
   const button = document.getElementById('wire-btn');
   button.classList.toggle('active', wireframe);
   button.setAttribute('aria-pressed', String(wireframe));

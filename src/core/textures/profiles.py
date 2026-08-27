@@ -4,7 +4,8 @@ from dataclasses import dataclass
 
 
 TEXTURE_ROLES = (
-    "diffuse", "normal_map", "normal_data", "light_map", "material_map")
+    "diffuse", "normal_map", "normal_data", "light_map", "material_map",
+    "emission_map")
 
 
 @dataclass(frozen=True)

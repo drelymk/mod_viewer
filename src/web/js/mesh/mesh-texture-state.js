@@ -30,6 +30,7 @@ export function recomputeTextureRuns(groupMeshes) {
         ...normalMapsFor(mesh, option),
         light_map: option.light_map || null,
         material_map: option.material_map || null,
+        emission_map: option.emission_map || null,
       } : null;
     } else if (mesh.userData.automaticTextureBoundary
                && !mesh.userData.textureHighlightDisabled) {
@@ -50,6 +51,7 @@ export function recomputeTextureRuns(groupMeshes) {
           }),
           light_map: mesh.userData.resolvedLightMapKey,
           material_map: mesh.userData.resolvedMaterialMapKey,
+          emission_map: mesh.userData.resolvedEmissionMapKey,
         };
         for (const [field, key] of Object.entries(resolvedMaps)) {
           if (option[`${field}_manual`]) continue;
@@ -66,6 +68,7 @@ export function recomputeTextureRuns(groupMeshes) {
       }),
       light_map: mesh.userData.resolvedLightMapKey,
       material_map: mesh.userData.resolvedMaterialMapKey,
+      emission_map: mesh.userData.resolvedEmissionMapKey,
     };
     setMeshTextureState(mesh, { diffuse: activeKey, ...maps });
   }
@@ -102,9 +105,11 @@ export function saveTextureState(modPath) {
       normal_data: option.normal_data || null,
       light_map: option.light_map || null,
       material_map: option.material_map || null,
+      emission_map: option.emission_map || null,
       normal_data_manual: !!option.normal_data_manual,
       light_map_manual: !!option.light_map_manual,
       material_map_manual: !!option.material_map_manual,
+      emission_map_manual: !!option.emission_map_manual,
     };
     if (!usesPackedNormal(mesh.material)) {
       savedState.normal_map = option.normal_map || null;

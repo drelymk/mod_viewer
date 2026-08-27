@@ -49,10 +49,10 @@ class GameDetection:
 
 _RESOURCE_ROLE_RE = re.compile(
     r"^resource[\\/]([^\\/]+)[\\/]"
-    r"(diffuse|normalmap|lightmap|materialmap)\b", re.I)
+    r"(diffuse|normalmap|lightmap|materialmap|glowmap)\b", re.I)
 _RESOURCE_ASSIGN_RE = re.compile(
     r"^resource[\\/]([^\\/]+)[\\/]"
-    r"(diffuse|normalmap|lightmap|materialmap)\b\s*=", re.I)
+    r"(diffuse|normalmap|lightmap|materialmap|glowmap)\b\s*=", re.I)
 _COMMAND_TEXTURE_RE = re.compile(r"settextures", re.I)
 _SET_TEXTURES_RUN_RE = re.compile(
     r"^run\s*=\s*commandlist[\\/]([^\\/]+)[\\/]settextures\b", re.I)
@@ -144,7 +144,13 @@ def _command_texture_namespace(section):
 
 def _resource_namespace(value, pattern=_RESOURCE_ROLE_RE):
     match = pattern.match(str(value))
-    return match.group(1).lower() if match else None
+    if not match:
+        return None
+    namespace, role = match.groups()
+    # Only RabbitFX owns GlowMap as a semantic texture binding.
+    if role.lower() == "glowmap" and namespace.lower() != "rabbitfx":
+        return None
+    return namespace.lower()
 
 
 def _legacy_direct_texture_item(items, sections):

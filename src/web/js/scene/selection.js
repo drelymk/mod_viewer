@@ -7,18 +7,16 @@ import * as THREE from 'three';
 import { camera, renderer } from './scene.js';
 import { activeMeshes } from '../mesh/visibility.js';
 import { getMeshView } from '../mesh/mesh-view-bindings.js';
+import { setGameMaterialSelectionEnabled } from '../mesh/material-profile.js';
 import { requestRender } from './render-scheduler.js';
 
-const HIGHLIGHT_COLOR = 0xffd60a; // selection yellow
-const HIGHLIGHT_INTENSITY = 0.22;  // kept low so the mesh's own texture reads through
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
 let selected = null; // currently selected mesh, or null
 
 function setHighlight(mesh, on) {
-  mesh.material.emissive.setHex(on ? HIGHLIGHT_COLOR : 0x000000);
-  mesh.material.emissiveIntensity = on ? HIGHLIGHT_INTENSITY : 1;
+  setGameMaterialSelectionEnabled(mesh.material, on);
 }
 
 function setRowSelected(mesh, on) {
