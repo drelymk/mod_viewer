@@ -1,9 +1,10 @@
 // Entry point: composes frontend application flows and initializes the UI.
 
 import {
-  getEnvironmentPreset, getRenderCount, isRendererAvailable, rendererReady,
+  getAmbientOcclusionStrength, getEnvironmentPreset, getRenderCount,
+  isRendererAvailable, rendererReady,
   resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
-  toggleGrid, toggleTrackballGizmo,
+  setAmbientOcclusionStrength, toggleGrid, toggleTrackballGizmo,
 } from './scene/scene.js';
 import {
   activeMeshes, resetMeshState,
@@ -135,7 +136,7 @@ rendererReady.then(ready => {
   $('grid-btn').addEventListener('click', toggleGrid);
   $('shading-btn').addEventListener('click', toggleSmoothShading);
   $('glossy-btn').addEventListener('click', toggleGlossy);
-  initToolPopovers();
+  const syncAmbientOcclusionControl = initToolPopovers();
   $('reset-state-btn').addEventListener('click', event => {
     event.stopPropagation();
     resetMeshState();
@@ -237,6 +238,12 @@ rendererReady.then(ready => {
     activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset,
     getEnvironmentPreset,
+    getAmbientOcclusionStrength,
+    setAmbientOcclusionStrength: value => {
+      const changed = setAmbientOcclusionStrength(value);
+      syncAmbientOcclusionControl?.();
+      return changed;
+    },
     getMaterialState,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,

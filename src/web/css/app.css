@@ -392,6 +392,9 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
 #texture-btn.diffuse-normal, #texture-btn.diffuse-only, #light-btn.current {
   background: rgba(227,179,65,.18); border-color: var(--warning); color: #f2cc72;
 }
+#ao-btn.partial {
+  background: rgba(227,179,65,.18); border-color: var(--warning); color: #f2cc72;
+}
 .nav-gizmo-icon { width: 24px; height: 24px; overflow: visible; }
 .nav-gizmo-icon path { fill: none; stroke-width: 1.7; stroke-linecap: round; }
 .nav-gizmo-icon circle { stroke: none; }
@@ -958,12 +961,15 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   border-radius: var(--radius-md); box-shadow: 0 10px 28px rgba(0,0,0,.45);
 }
 .appearance-popover[hidden] { display: none; }
-.appearance-row {
+.range-control-row {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; margin-bottom: 10px; font-size: 11px; font-weight: 600;
 }
-#panel-opacity-value { color: var(--accent-soft); font-variant-numeric: tabular-nums; }
-#panel-opacity { width: 100%; accent-color: var(--accent); cursor: pointer; }
+.range-control-value { color: var(--accent-soft); font-variant-numeric: tabular-nums; }
+.range-control-slider {
+  width: 100%; accent-color: var(--accent); cursor: pointer;
+}
+.ui-popover.range-popover { width: 190px; padding: 12px; }
 
 #right-dock {
   display: none; width: 316px; max-width: min(316px, calc(50vw - 24px));

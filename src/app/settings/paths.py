@@ -61,5 +61,6 @@ def has_vendored_three():
         "three.webgpu.js",
         "three.tsl.js",
         os.path.join("addons", "controls", "ArcballControls.js"),
+        os.path.join("addons", "tsl", "display", "GTAONode.js"),
     )
     return all(os.path.isfile(os.path.join(vendor_dir(), rel)) for rel in required)

@@ -9,6 +9,7 @@ import { createKeyLightController } from './key-light-controller.js';
 import { updateOutlineCameraScale } from './outline-renderer.js';
 import { setBCTextureCompression } from './renderer-capabilities.js';
 import { requestRender, setRenderCallback } from './render-scheduler.js';
+import { createViewportRenderPipeline } from './viewport-render-pipeline.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 
 const container = document.getElementById('canvas-container');
@@ -136,6 +137,8 @@ camera.position.set(0, 1, 3);
 export const controls = new ArcballControls(camera, renderer.domElement, scene);
 controls.target.set(0, 0, 0);
 controls.enableAnimations = true;
+// Keep wheel zoom anchored to the point under the cursor for model inspection.
+controls.cursorZoom = true;
 // Model-scaled clipping belongs to cameraFrame; Arcball must not overwrite it.
 controls.adjustNearFar = false;
 controls.setGizmosVisible(false);
@@ -151,6 +154,9 @@ const keyLightController = createKeyLightController({
 });
 const characterShadowController = createCharacterShadowController({
   renderer, scene, light: keyLight,
+});
+const viewportRenderPipeline = createViewportRenderPipeline({
+  renderer, scene, camera,
 });
 const viewGizmoController = createViewGizmoController({
   camera, controls, element: document.getElementById('view-gizmo'),
@@ -182,7 +188,7 @@ function renderFrame() {
   updateOutlineCameraScale(camera, controls.target,
     renderer.domElement.clientHeight);
   viewGizmoController.updateAxes();
-  renderer.render(scene, camera);
+  viewportRenderPipeline.render();
   renderCount += 1;
   if (snapActive) requestRender();
 }
@@ -236,12 +242,14 @@ export function frameView(meshes = [], direction = null, targetYOffset = 0) {
 export function resetView() {
   cameraFrame.resetView();
   characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
   requestRender();
 }
 
 export function adoptModelMeshes(meshes = []) {
   const adopted = cameraFrame.adoptModelMeshes(meshes);
   characterShadowController.adoptMeshes(meshes);
+  viewportRenderPipeline.adoptMeshes(meshes);
   requestRender();
   return adopted;
 }
@@ -249,12 +257,14 @@ export function adoptModelMeshes(meshes = []) {
 export function fitTo(meshes, options) {
   cameraFrame.fitTo(meshes, options);
   characterShadowController.setMeshes(meshes);
+  viewportRenderPipeline.setMeshes(meshes);
   requestRender();
 }
 
 export function forgetModelMeshes(meshes = []) {
   cameraFrame.forgetModelMeshes(meshes);
   characterShadowController.forgetMeshes(meshes);
+  viewportRenderPipeline.forgetMeshes(meshes);
   requestRender();
 }
 
@@ -264,10 +274,12 @@ export function resetModelOrientation(options) {
 
 export function resetCharacterShadows() {
   characterShadowController.reset();
+  viewportRenderPipeline.reset();
 }
 
 export function invalidateCharacterShadowGeometry() {
   characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
   requestRender();
 }
 
@@ -280,15 +292,36 @@ export function getCharacterShadowDebugState() {
   return characterShadowController.getDebugState();
 }
 
+export function getViewportRenderPipelineDebugState() {
+  return viewportRenderPipeline.getDebugState();
+}
+
+export function setAmbientOcclusionStrength(value) {
+  const changed = viewportRenderPipeline.setAmbientOcclusionStrength(value);
+  if (changed) requestRender();
+  return changed;
+}
+
+export function getAmbientOcclusionStrength() {
+  return viewportRenderPipeline.getAmbientOcclusionStrength();
+}
+
+export function setAmbientOcclusionSuppressedByWireframe(value) {
+  viewportRenderPipeline.setAmbientOcclusionSuppressedByWireframe(value);
+  requestRender();
+}
+
 export function rotateModelQuarterTurn(meshes = []) {
   cameraFrame.rotateModelQuarterTurn(meshes);
   characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
   requestRender();
 }
 
 export function rotateModelHorizontalQuarterTurn(meshes = []) {
   cameraFrame.rotateModelHorizontalQuarterTurn(meshes);
   characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
   requestRender();
 }
 

@@ -3,11 +3,24 @@
 import { activeMeshes } from '../mesh/visibility.js';
 import { ENVIRONMENT_PRESETS } from '../scene/environment.js';
 import {
-  getEnvironmentPreset, getLightMode, setEnvironmentPreset, setLightMode,
+  getAmbientOcclusionStrength, getEnvironmentPreset, getLightMode,
+  setAmbientOcclusionStrength, setEnvironmentPreset, setLightMode,
 } from '../scene/scene.js';
 import { setTextureDisplayMode } from '../scene/render-modes.js';
 
 const $ = (id) => document.getElementById(id);
+const AO_MAX_STRENGTH = 1;
+
+function normalizeAmbientOcclusionLevel(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.min(100, Math.max(0, Math.round(number)));
+}
+
+function strengthToAmbientOcclusionLevel(value) {
+  return normalizeAmbientOcclusionLevel(
+    Number(value) / AO_MAX_STRENGTH * 100);
+}
 
 export function initEnvironmentControl() {
   const button = $('environment-btn');
@@ -79,8 +92,12 @@ export function initEnvironmentControl() {
 export function initToolPopovers() {
   const textureButton = $('texture-btn');
   const lightButton = $('light-btn');
+  const aoButton = $('ao-btn');
   const texturePopover = $('texture-popover');
   const lightPopover = $('light-popover');
+  const aoPopover = $('ao-popover');
+  const aoSlider = $('ao-slider');
+  const aoValue = $('ao-value');
   const close = popover => {
     if (!popover) return;
     popover.hidden = true;
@@ -102,9 +119,33 @@ export function initToolPopovers() {
   const closeAll = () => {
     close(texturePopover);
     close(lightPopover);
+    close(aoPopover);
     textureButton?.setAttribute('aria-expanded', 'false');
     lightButton?.setAttribute('aria-expanded', 'false');
+    aoButton?.setAttribute('aria-expanded', 'false');
     activeToolPopover = null;
+  };
+
+  const updateAmbientOcclusionControl = value => {
+    const level = normalizeAmbientOcclusionLevel(value);
+    if (aoSlider) aoSlider.value = String(level);
+    if (aoValue) {
+      aoValue.value = `${level}%`;
+      aoValue.textContent = `${level}%`;
+    }
+    aoButton?.classList.toggle('active', level === 100);
+    aoButton?.classList.toggle('partial', level > 0 && level < 100);
+    const label = `Ambient occlusion: ${level}%`;
+    aoButton?.setAttribute('aria-label', label);
+    if (aoButton) aoButton.title = label;
+    return level;
+  };
+
+  const applyAmbientOcclusionLevel = value => {
+    const level = normalizeAmbientOcclusionLevel(value);
+    setAmbientOcclusionStrength(level / 100 * AO_MAX_STRENGTH);
+    return updateAmbientOcclusionControl(
+      strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
   };
 
   function toggleTexturePopover() {
@@ -161,14 +202,37 @@ export function initToolPopovers() {
     positionPopover(lightPopover, lightButton);
   }
 
+  function toggleAmbientOcclusionPopover() {
+    if (!aoPopover) return;
+    const wasOpen = !aoPopover.hidden;
+    closeAll();
+    if (wasOpen) return;
+    updateAmbientOcclusionControl(
+      strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+    aoPopover.hidden = false;
+    aoButton?.setAttribute('aria-expanded', 'true');
+    activeToolPopover = { popover: aoPopover, button: aoButton };
+    positionPopover(aoPopover, aoButton);
+    aoSlider?.focus();
+  }
+
   textureButton?.setAttribute('aria-haspopup', 'menu');
   lightButton?.setAttribute('aria-haspopup', 'menu');
+  aoButton?.setAttribute('aria-haspopup', 'dialog');
   textureButton?.setAttribute('aria-expanded', 'false');
   lightButton?.setAttribute('aria-expanded', 'false');
+  aoButton?.setAttribute('aria-expanded', 'false');
+  updateAmbientOcclusionControl(
+    strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
   textureButton?.addEventListener('click', toggleTexturePopover);
   lightButton?.addEventListener('click', toggleLightPopover);
+  aoButton?.addEventListener('click', toggleAmbientOcclusionPopover);
+  aoSlider?.addEventListener('input', () => applyAmbientOcclusionLevel(aoSlider.value));
   document.addEventListener('click', event => {
-    if (event.target.closest('#texture-btn, #texture-popover, #light-btn, #light-popover')) return;
+    if (event.target.closest(
+      '#texture-btn, #texture-popover, #light-btn, #light-popover, #ao-btn, #ao-popover')) {
+      return;
+    }
     closeAll();
   });
   document.addEventListener('keydown', event => {
@@ -179,6 +243,9 @@ export function initToolPopovers() {
       positionPopover(activeToolPopover.popover, activeToolPopover.button);
     }
   });
+
+  return () => updateAmbientOcclusionControl(
+    strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
 }
 
 export function initToolbarOverflow() {
