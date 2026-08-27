@@ -20,7 +20,7 @@ import { CHARACTER_AO_LAYER } from './viewer-layers.js';
 
 const AO_DEFAULT_STRENGTH = 0.22;
 const AO_RESOLUTION_SCALE = 0.5;
-const AO_SAMPLES = 16;
+const AO_SAMPLES = 8;
 const AO_RADIUS_FACTOR = 0.15;
 const MIN_MODEL_SIZE = 0.001;
 const MIN_AO_RADIUS = 0.001;
@@ -48,19 +48,21 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
 
   const renderPipeline = new THREE.RenderPipeline(renderer);
   // RenderPipeline evaluates scene passes from inside the fullscreen quad.
-  // Separate camera identities keep Three's scene/camera render-list cache
-  // from being re-entered by the normal pass and the character pre-pass.
+  // Keep the beauty pass on the camera owned by ArcballControls. Only the
+  // character pre-pass needs an isolated camera because it changes layers.
   const prePassCamera = camera.clone();
-  const scenePassCamera = camera.clone();
 
-  function syncPassCameras() {
-    prePassCamera.copy(camera);
-    scenePassCamera.copy(camera);
+  function syncPrePassCamera() {
+    if (camera.coordinateSystem !== renderer.coordinateSystem) {
+      camera.coordinateSystem = renderer.coordinateSystem;
+      camera.updateProjectionMatrix();
+    }
+    prePassCamera.copy(camera, false);
   }
 
   // The pre-pass renders only character meshes. Its packed normal attachment
   // is deliberately 8-bit; depth remains the pass's depth texture.
-  const prePass = pass(scene, prePassCamera);
+  const prePass = pass(scene, prePassCamera, { samples: 1 });
   prePass.name = 'Character AO pre-pass';
   prePass.transparent = false;
   prePass.setLayers(aoLayers);
@@ -83,7 +85,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   // The beauty pass retains the whole presentation scene. AO enters through
   // the lighting context so direct light, shadows, rim and debug outputs are
   // not multiplied as a final screen-space color operation.
-  const scenePass = pass(scene, scenePassCamera);
+  const scenePass = pass(scene, camera);
   scenePass.name = 'Viewport beauty pass';
   scenePass.contextNode = builtinAOContext(effectiveAO);
   renderPipeline.outputNode = scenePass;
@@ -170,7 +172,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
 
   function render() {
     updateModelSize();
-    syncPassCameras();
+    syncPrePassCamera();
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.NoToneMapping;
     try {
@@ -203,6 +205,11 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
       hasGTAO: !!aoPass,
       temporalFiltering: aoPass.useTemporalFiltering === true,
       prePassLayerMask: prePass.getLayers()?.mask ?? 0,
+      prePassSamples: prePass.renderTarget?.samples ?? 0,
+      beautyCameraIsSource: scenePass.camera === camera,
+      prePassCameraIsClone: prePass.camera !== camera,
+      cameraCoordinateSystem: camera.coordinateSystem,
+      rendererCoordinateSystem: renderer.coordinateSystem,
       characterAOLayer: CHARACTER_AO_LAYER,
     };
   }

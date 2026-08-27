@@ -85,7 +85,12 @@ def test_viewport_pipeline_uses_character_layers_and_stable_ao_settings(
         assert state["pipeline"]["hasGTAO"]
         assert state["pipeline"]["prePassLayerMask"] == 1 << 1
         assert state["pipeline"]["characterAOLayer"] == 1
-        assert state["pipeline"]["samples"] == 16
+        assert state["pipeline"]["samples"] == 8
+        assert state["pipeline"]["prePassSamples"] == 1
+        assert state["pipeline"]["beautyCameraIsSource"]
+        assert state["pipeline"]["prePassCameraIsClone"]
+        assert state["pipeline"]["cameraCoordinateSystem"] == (
+            state["pipeline"]["rendererCoordinateSystem"])
         assert state["pipeline"]["resolutionScale"] == pytest.approx(0.5)
         assert state["pipeline"]["temporalFiltering"] is False
         assert state["pipeline"]["strength"] == pytest.approx(0.22)
@@ -94,6 +99,54 @@ def test_viewport_pipeline_uses_character_layers_and_stable_ao_settings(
         assert state["meshHasCharacterLayer"]
         assert all(not helper["hasCharacterLayer"] for helper in state["helpers"])
         assert not errors, "\n".join(str(error) for error in errors)
+    finally:
+        context.close()
+
+def test_camera_zoom_is_cursor_centered(edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"CursorZoom": _payload("CursorZoom")})
+    try:
+        _open(page, "CursorZoom")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        state = page.evaluate("""async () => {
+          const {camera, controls} = await import('./js/scene/scene.js');
+          return {
+            cursorZoom: controls.cursorZoom,
+            target: controls.target.toArray(),
+            cameraPosition: camera.position.toArray(),
+          };
+        }""")
+        assert state["cursorZoom"] is True
+
+        canvas = page.locator("canvas").bounding_box()
+        render_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.mouse.move(
+            canvas["x"] + canvas["width"] * 0.25,
+            canvas["y"] + canvas["height"] * 0.35)
+        page.mouse.wheel(0, 100)
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count",
+            arg=render_count)
+        zoomed = page.evaluate("""async () => {
+          const {camera, controls} = await import('./js/scene/scene.js');
+          return {
+            target: controls.target.toArray(),
+            cameraPosition: camera.position.toArray(),
+          };
+        }""")
+        assert zoomed["target"] == pytest.approx(state["target"])
+        movement = [zoomed["cameraPosition"][i] - state["cameraPosition"][i]
+                    for i in range(3)]
+        direction = [state["cameraPosition"][i] - state["target"][i]
+                     for i in range(3)]
+        cross = (
+            movement[1] * direction[2] - movement[2] * direction[1],
+            movement[2] * direction[0] - movement[0] * direction[2],
+            movement[0] * direction[1] - movement[1] * direction[0],
+        )
+        assert math.sqrt(sum(value * value for value in movement)) > 0
+        assert math.sqrt(sum(value * value for value in cross)) > 1e-5
     finally:
         context.close()
 

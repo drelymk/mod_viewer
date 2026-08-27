@@ -1,7 +1,7 @@
 // Session-scoped Asset-fill transaction and its toolbar state.
 
 import { viewerState, samePath } from './state.js';
-import { adoptModelMeshes, fitTo, forgetModelMeshes } from '../scene/scene.js';
+import { adoptModelMeshes, fitTo } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { addTexture, removeTextures } from '../mesh/mesh-factory.js';
 import { activeMeshes, removeMesh } from '../mesh/visibility.js';
@@ -56,10 +56,7 @@ function rollbackAssetFillFrontend(addedMeshes, textureKeys) {
   const remaining = targetMeshes.filter(mesh => activeMeshes.includes(mesh));
   remaining.forEach(removeMesh);
   const removed = [...new Set([...removedFromPanel, ...remaining])];
-  if (removed.length) {
-    forgetModelMeshes(removed);
-    requestRender();
-  }
+  if (removed.length) requestRender();
 
   const keys = new Set(textureKeys || []);
   removeTextures(keys);
@@ -222,8 +219,7 @@ export async function removeMissingAssetParts() {
     if (!assetFillOperationIsCurrent(operation, path)) return false;
     if (result?.status === 'error') throw new Error(result.error);
     if (result?.stale) return false;
-    const removedMeshes = removeAssetFillMeshPanel();
-    forgetModelMeshes(removedMeshes);
+    removeAssetFillMeshPanel();
     removeTextures(state.assetFill.textureKeys);
     state.assetFill.textureKeys = new Set();
     state.assetFill.loaded = false;
