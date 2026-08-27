@@ -3,6 +3,10 @@
 
 import { isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';
+import {
+  getSkinningState, loadSkinningWeights, resetSkinningExperiment,
+  setSelectedBone, setSkinningAngle, setSkinningAxis, setSkinningHeatmap,
+} from '../mesh/weight-experiment.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -217,6 +221,172 @@ function updateTextureControlState(content, mesh, component) {
   });
 }
 
+function skinningNumber(value) {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(4) : 'n/a';
+}
+
+function buildSkinningDiagnostics(parent, state, vertexCount) {
+  const diagnostics = state.diagnostics || {};
+  const rows = [
+    `${Number(diagnostics.vertex_count ?? vertexCount).toLocaleString()} vertices`,
+    `weight sums ${skinningNumber(diagnostics.min_weight_sum)}–${skinningNumber(diagnostics.max_weight_sum)}`,
+    `${Number(diagnostics.invalid_weight_vertices || 0).toLocaleString()} invalid`,
+  ];
+  rows.forEach(text => addText(parent, 'inspector-skinning-diagnostic', text));
+}
+
+function renderSkinningControls(section, mesh, state) {
+  const load = section.querySelector('.inspector-skinning-load');
+  const status = section.querySelector('.inspector-skinning-status');
+  const controls = section.querySelector('.inspector-skinning-controls');
+  if (!load || !status || !controls) return;
+  if (!state?.loaded) {
+    controls.hidden = true;
+    load.disabled = !!state?.loading;
+    load.textContent = state?.loading ? 'Loading…' : 'Load Weights';
+    status.textContent = state?.error || '';
+    status.hidden = !status.textContent;
+    return;
+  }
+
+  load.disabled = true;
+  load.textContent = 'Weights loaded';
+  status.hidden = true;
+  controls.hidden = false;
+  controls.replaceChildren();
+
+  const summary = document.createElement('div');
+  summary.className = 'inspector-skinning-summary';
+  summary.textContent = `${state.influenceCount} influences / vertex · ${state.boneIds.length} bone IDs`;
+  controls.appendChild(summary);
+
+  const boneLabel = document.createElement('label');
+  boneLabel.className = 'inspector-skinning-field';
+  addText(boneLabel, 'inspector-label', 'Bone ID');
+  const boneSelect = document.createElement('select');
+  boneSelect.className = 'inspector-skinning-bone';
+  state.boneIds.forEach(id => {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = id;
+    option.selected = id === state.selectedBone;
+    boneSelect.appendChild(option);
+  });
+  boneSelect.disabled = !state.boneIds.length;
+  boneSelect.addEventListener('change', () => {
+    setSelectedBone(mesh, Number(boneSelect.value));
+  });
+  boneLabel.appendChild(boneSelect);
+  controls.appendChild(boneLabel);
+
+  const axisRow = document.createElement('div');
+  axisRow.className = 'inspector-skinning-axis';
+  addText(axisRow, 'inspector-label', 'Axis');
+  const axisButtons = document.createElement('span');
+  ['X', 'Y', 'Z'].forEach(axis => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inspector-skinning-axis-button';
+    button.textContent = axis;
+    button.classList.toggle('selected', axis === state.axis);
+    button.addEventListener('click', () => {
+      setSkinningAxis(mesh, axis);
+      axisButtons.querySelectorAll('button').forEach(item => {
+        item.classList.toggle('selected', item === button);
+      });
+    });
+    axisButtons.appendChild(button);
+  });
+  axisRow.appendChild(axisButtons);
+  controls.appendChild(axisRow);
+
+  const rotationRow = document.createElement('div');
+  rotationRow.className = 'inspector-skinning-rotation';
+  const rotationHeader = document.createElement('div');
+  rotationHeader.className = 'inspector-skinning-rotation-header';
+  addText(rotationHeader, 'inspector-label', 'Rotation');
+  const rotationValue = addText(rotationHeader, 'inspector-value', `${state.angle}°`);
+  rotationRow.appendChild(rotationHeader);
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.className = 'inspector-skinning-angle';
+  slider.min = '-45';
+  slider.max = '45';
+  slider.step = '1';
+  slider.value = state.angle;
+  slider.addEventListener('input', () => {
+    setSkinningAngle(mesh, slider.value);
+    rotationValue.textContent = `${getSkinningState(mesh).angle}°`;
+  });
+  rotationRow.appendChild(slider);
+  controls.appendChild(rotationRow);
+
+  const heatmap = document.createElement('button');
+  heatmap.type = 'button';
+  heatmap.className = 'ui-button inspector-skinning-heatmap';
+  heatmap.textContent = 'Show Weight Heatmap';
+  heatmap.setAttribute('aria-pressed', String(state.heatmapEnabled));
+  heatmap.addEventListener('click', () => {
+    const enabled = setSkinningHeatmap(mesh, !getSkinningState(mesh).heatmapEnabled);
+    heatmap.setAttribute('aria-pressed', String(enabled));
+    heatmap.classList.toggle('active', enabled);
+    heatmap.textContent = enabled ? 'Hide Weight Heatmap' : 'Show Weight Heatmap';
+  });
+  controls.appendChild(heatmap);
+
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'ui-button inspector-skinning-reset';
+  reset.textContent = 'Reset';
+  reset.addEventListener('click', () => {
+    resetSkinningExperiment(mesh);
+    slider.value = 0;
+    rotationValue.textContent = '0°';
+    heatmap.setAttribute('aria-pressed', 'false');
+    heatmap.classList.remove('active');
+    heatmap.textContent = 'Show Weight Heatmap';
+  });
+  controls.appendChild(reset);
+
+  buildSkinningDiagnostics(
+    controls, state, mesh.geometry.attributes.position.count);
+}
+
+function buildSkinningSection(content, mesh) {
+  if (!mesh?.userData?.modPath || !mesh.userData.semanticKey
+      || mesh.userData.assetFill === true) return;
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-skinning-section';
+  const title = document.createElement('div');
+  title.className = 'inspector-skinning-title';
+  title.textContent = 'Experimental — Skin Weights';
+  section.appendChild(title);
+  const load = document.createElement('button');
+  load.type = 'button';
+  load.className = 'ui-button inspector-skinning-load';
+  load.textContent = 'Load Weights';
+  section.appendChild(load);
+  const status = addText(section, 'inspector-skinning-status', '');
+  status.hidden = true;
+  const controls = document.createElement('div');
+  controls.className = 'inspector-skinning-controls';
+  controls.hidden = true;
+  section.appendChild(controls);
+  renderSkinningControls(section, mesh, getSkinningState(mesh));
+  load.addEventListener('click', async () => {
+    load.disabled = true;
+    status.hidden = true;
+    status.textContent = '';
+    try {
+      await loadSkinningWeights(mesh);
+    } catch (error) {
+      console.error('Could not load skin weights', error);
+    }
+    renderSkinningControls(section, mesh, getSkinningState(mesh));
+  });
+  content.appendChild(section);
+}
+
 function buildComponent(record) {
   const content = showContent();
   content.replaceChildren();
@@ -239,6 +409,7 @@ function buildMesh(mesh, record) {
   buildHeader(content, name, componentName, record.entry?.source?.[0]?.ini || '');
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, mesh);
+  buildSkinningSection(content, mesh);
 }
 
 function updateInspectorState() {

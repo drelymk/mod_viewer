@@ -5,10 +5,18 @@ import traceback
 
 import webview
 
+from core.geometry.buffers import BufferStore
+from core.geometry.conventions import geometry_convention_for
 from core.geometry.mesh_builder import GeometryBlob
+from core.geometry.semantics import deduplicate_draws
+from core.geometry.skinning import (
+    SkinningPreviewError, build_skinning_preview,
+)
+from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_file
 from core.mod_discovery import discover_ini_paths
 from core.ini.health import analyze_mod
+from app.mods.analysis import analyze_mod_inis
 from core.textures.profiles import texture_profile_for
 
 from app.assets import folders as asset_folders
@@ -133,6 +141,80 @@ class ModPreview:
                 self.authoritative_context(folder_path)
             return mod_loader.load_mesh_semantics(
                 context, overrides, self._active_mesh_keys.get(folder_path))
+        except Exception:
+            return self._semantic_read_error()
+
+    def get_skinning_preview(self, folder_path, mesh_key):
+        """Decode one selected mod draw's weights on explicit user request."""
+        try:
+            folder_path, overrides, _pending, context = \
+                self.authoritative_context(folder_path)
+            if not isinstance(mesh_key, str) or not mesh_key:
+                return {"status": "error", "code": "mesh_not_found",
+                        "error": "The selected mesh could not be found."}
+            active_mesh_keys = self._active_mesh_keys.get(folder_path)
+            if (active_mesh_keys is not None
+                    and mesh_key not in active_mesh_keys):
+                return {"status": "error", "code": "mesh_not_found",
+                        "error": "The selected mesh could not be found."}
+
+            parsed = analyze_mod_inis(
+                context.ini_paths, context.mod_dir, overrides, context.docs)
+            selected = None
+            for group in parsed.groups:
+                for draw in deduplicate_draws(group):
+                    if draw.label == mesh_key:
+                        selected = (draw, group)
+                        break
+                if selected:
+                    break
+            if selected is None:
+                return {"status": "error", "code": "mesh_not_found",
+                        "error": "The selected mesh could not be found."}
+
+            draw, group = selected
+            paths = [
+                safe_resource_path(context.mod_dir, group["position_file"]),
+                safe_resource_path(context.mod_dir, group["texcoord_file"]),
+                safe_resource_path(context.mod_dir, group["ib_file"]),
+            ]
+            if not all(path and os.path.exists(path) for path in paths):
+                return {"status": "error", "code": "geometry_not_available",
+                        "error": "The rendered draw geometry could not be prepared."}
+            buffers = BufferStore()
+            default_streams = buffers.vertex_streams(
+                paths[0], group.get("position_stride"), paths[1],
+                group.get("texcoord_stride"))
+            buffers.raw(paths[2])
+            decoded = build_skinning_preview(
+                draw, group, context.mod_dir, buffers=buffers,
+                default_streams=default_streams,
+                default_index_size=group.get("index_size", 4),
+                geometry_convention=geometry_convention_for(parsed.game.game))
+            blob = decoded.indices + decoded.weights
+            url = server.publish_geometry(blob, replace=False)
+            index_length = len(decoded.indices)
+            return {
+                "status": "ok",
+                "format_version": 1,
+                "vertex_count": decoded.vertex_count,
+                "influence_count": decoded.influence_count,
+                "bone_ids": list(decoded.bone_ids),
+                "encoding": draw.skinning_source.encoding,
+                "data": {
+                    "url": url,
+                    "length": len(blob),
+                    "indices": {"offset": 0, "length": index_length,
+                                "type": "u32"},
+                    "weights": {"offset": index_length,
+                                "length": len(decoded.weights),
+                                "type": "f32"},
+                },
+                "diagnostics": dict(decoded.diagnostics),
+            }
+        except SkinningPreviewError as error:
+            return {"status": "error", "code": error.code,
+                    "error": error.message}
         except Exception:
             return self._semantic_read_error()
 

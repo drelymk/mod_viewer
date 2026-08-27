@@ -400,7 +400,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         }
         scan(lines, info, [], {name})
         info.pop("_cur_ib", None)
-        info.pop("_cur_vertex_resources", None)
         info["diffuse_variants_at_end"] = _effective_role_assignments(
             info.get("_cur_diffuse_variants") or [])
         info["diffuse_history_at_end"] = _effective_role_assignments(
@@ -408,6 +407,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         info["aux_maps_at_end"] = aux_snapshot(info)
         info["texture_provenance_at_end"] = texture_provenance_snapshot(info)
         info["geometry_match_at_end"] = geometry_match(info)
+        info["vertex_resources_at_end"] = dict(
+            info.get("_cur_vertex_resources") or {})
+        info.pop("_cur_vertex_resources", None)
         info["slot_textures_at_end"] = slot_snapshot(info)
         for key in (
                 "_cur_slot_textures", "_cur_diffuse_variants",

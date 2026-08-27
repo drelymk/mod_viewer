@@ -181,3 +181,43 @@ drawindexed = 3, 0, 0
         (0, "ResourceMissingIB"), (3, "ResourceMissingIB")]
     assert body["draws"][0].vertex_resources == {
         0: "ResourceMissingPosition", 1: "ResourceMissingTexcoord"}
+
+
+def test_draw_groups_resolve_blend_from_sibling_component_snapshot():
+    sections = parse_sections("sample.ini", text="""[TextureOverrideBodyPosition]
+vb0 = ResourceBodyPosition
+
+[TextureOverrideBodyBlend]
+handling = skip
+vb1 = ResourceBodyBlend
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideBody]
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 40
+
+[ResourceBodyBlend]
+filename = body-blend.buf
+stride = 32
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 20
+""")
+
+    groups = build_draw_groups(sections, extract_resources(sections))
+
+    draw = groups[0]["draws"][0]
+    assert draw.skinning_error is None
+    assert draw.skinning_source.file == "body-blend.buf"
+    assert draw.skinning_source.encoding == "gimi_f32_u32_4"

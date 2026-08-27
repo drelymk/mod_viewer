@@ -14,6 +14,7 @@ from typing import ClassVar
 
 from .identity import GeometryMatch
 from .vertex_attributes import VertexAttributeSource
+from .skinning import SkinningSource
 
 
 def _freeze(value):
@@ -114,6 +115,11 @@ class DrawCall(MutableMapping):
     texture_provenance: dict = field(default_factory=dict)
     asset_texture_defaults: dict = field(default_factory=dict)
     asset_slot_evidence: list = field(default_factory=list)
+    # Experimental, non-render metadata.  This is resolved from the active
+    # vertex-resource bindings but is intentionally excluded from geometry and
+    # material identity.
+    skinning_source: SkinningSource | None = None
+    skinning_error: str | None = None
 
     _ALWAYS_PRESENT: ClassVar[frozenset[str]] = frozenset({
         "count", "start", "base", "conditions", "sources",
@@ -129,6 +135,7 @@ class DrawCall(MutableMapping):
         "label", "conditions", "sources", "geometry_match",
         "slot_textures", "asset_binding", "texture_provenance",
         "asset_slot_evidence", "texture_hashes",
+        "skinning_source", "skinning_error",
     })
     _RENDER_IDENTITY_FIELDS: ClassVar[tuple[str, ...]] = (
         "count", "start", "base",

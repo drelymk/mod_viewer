@@ -143,12 +143,25 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
         return {}
 
     component_positions, component_texcoords = {}, {}
+    component_vertex_resources = {}
     hash_positions, hash_texcoords = {}, {}
 
     for name, info in section_info.items():
         if not name.lower().startswith("textureoverride"):
             continue
         base = name[len("TextureOverride"):]
+        component_name = None
+        for suffix in ("Blend", "Position", "Texcoord"):
+            if base.lower().endswith(suffix.lower()):
+                component_name = base[:-len(suffix)]
+                break
+        if component_name is not None:
+            resources_for_component = component_vertex_resources.setdefault(
+                component_name.lower(), {})
+            for slot, resource in (
+                    info.get("vertex_resources_at_end") or {}).items():
+                if resource is not None:
+                    resources_for_component.setdefault(slot, resource)
         if base.lower().endswith("texcoord"):
             component = base[:-len("Texcoord")]
             if info["vb1"]:
@@ -216,6 +229,7 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
         "component_buffers": component_buffers,
         "component_positions": component_positions,
         "component_texcoords": component_texcoords,
+        "component_vertex_resources": component_vertex_resources,
         "hash_positions": hash_positions,
         "hash_texcoords": hash_texcoords,
         "global_ib": global_ib,
