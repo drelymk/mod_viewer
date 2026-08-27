@@ -2419,16 +2419,24 @@ def test_outline_child_shares_geometry_and_render_modes_suppress_it(
         assert structure["depthWrite"] is False
         assert structure["renderOrder"] > structure["baseRenderOrder"]
         assert structure["map"] is None
+        assert structure["state"]["referenceProjectionSpan"] > 0
         base_outline_state = {
             "attached": True, "visible": False, "globalEnabled": False,
-            "widthPixels": 1.5, "scaleMode": "view-depth",
+            "widthPixels": 1.5, "effectiveWidthPixels": 1.5,
+            "scaleMode": "view-depth-adaptive",
             "scalePerDepth": pytest.approx(
                 2 * math.tan(math.radians(45 / 2)) * 1.5
                 / structure["state"]["viewportHeight"]),
             "viewportHeight": structure["state"]["viewportHeight"],
             "effectiveFov": 45,
+            "projectionSpan": structure["state"]["projectionSpan"],
+            "referenceProjectionSpan": structure["state"][
+                "referenceProjectionSpan"],
+            "projectionRatio": pytest.approx(1),
             "suppressedByWireframe": False, "suppressedByDebug": False,
         }
+        assert structure["state"]["projectionSpan"] == pytest.approx(
+            structure["state"]["referenceProjectionSpan"])
         assert structure["state"] == base_outline_state
 
         page.locator("#outline-btn").click()
@@ -2467,6 +2475,8 @@ def test_outline_width_is_perspective_correct_and_material_stable(
         page.wait_for_function("window.modViewer.activeMeshes.length === 2")
         page.evaluate("""async () => {
           const {camera, controls, scene} = await import('./js/scene/scene.js');
+          const {resetOutlineProjectionReference} =
+            await import('./js/scene/outline-renderer.js');
           const {requestRender} = await import('./js/scene/render-scheduler.js');
           scene.traverse(object => {
             if (object.isGridHelper || object.isSprite) object.visible = false;
@@ -2483,6 +2493,7 @@ def test_outline_width_is_perspective_correct_and_material_stable(
           camera.lookAt(controls.target);
           camera.updateMatrixWorld();
           controls.update();
+          resetOutlineProjectionReference(camera, controls.target);
           const outlines = window.modViewer.activeMeshes.map(
             mesh => mesh.userData.viewerOutline);
           window.__outlineRefs = {
@@ -2536,28 +2547,42 @@ def test_outline_width_is_perspective_correct_and_material_stable(
         scale_widths = _outline_widths(page)
 
         distance_widths = []
-        distance_scales = []
-        for camera_z in (4.5, 8, 12):
+        distance_states = []
+        distance_cases = (
+            (4, 1.5),
+            (8, 1.5),
+            (16, 1.5 * math.sqrt(0.5)),
+            (32, 0.75),
+            (48, 0.75),
+        )
+        for camera_z, expected_width in distance_cases:
             configure(
                 positions=((0, 0, 0), (0, 0, 0)), scales=(1, 1),
                 camera_z=camera_z, visible=(True, False))
             distance_widths.extend(_outline_widths(page))
-            distance_scales.append(
-                page.evaluate("window.modViewer.getOutlineState(0).scalePerDepth"))
+            state = page.evaluate("window.modViewer.getOutlineState(0)")
+            assert state["effectiveWidthPixels"] == pytest.approx(expected_width)
+            distance_states.append(state)
 
         fov_widths = []
+        fov_states = []
         for fov in (30, 60):
             configure(
                 positions=((0, 0, 0), (0, 0, 0)), scales=(1, 1),
                 fov=fov, visible=(True, False))
             fov_widths.extend(_outline_widths(page))
+            fov_states.append(page.evaluate(
+                "window.modViewer.getOutlineState(0)"))
 
         zoom_widths = []
+        zoom_states = []
         for camera_zoom in (0.75, 1.5):
             configure(
                 positions=((0, 0, 0), (0, 0, 0)), scales=(1, 1),
                 camera_zoom=camera_zoom, visible=(True, False))
             zoom_widths.extend(_outline_widths(page))
+            zoom_states.append(page.evaluate(
+                "window.modViewer.getOutlineState(0)"))
 
         initial_viewport_height = page.evaluate(
             "window.modViewer.getOutlineState(0).viewportHeight")
@@ -2581,9 +2606,13 @@ def test_outline_width_is_perspective_correct_and_material_stable(
         assert all(1 <= width <= 3 for width in all_widths), all_widths
         assert max(depth_widths) - min(depth_widths) <= 1, depth_widths
         assert max(scale_widths) - min(scale_widths) <= 1, scale_widths
-        assert max(distance_widths) - min(distance_widths) <= 1, distance_widths
-        assert max(fov_widths) - min(fov_widths) <= 1, fov_widths
-        assert max(zoom_widths) - min(zoom_widths) <= 1, zoom_widths
+        assert [state["projectionRatio"] for state in distance_states] == (
+            pytest.approx([2, 1, 0.5, 0.25, 1 / 6]))
+        for state in fov_states + zoom_states:
+            expected_factor = max(
+                0.5, min(1, math.sqrt(state["projectionRatio"])))
+            assert state["effectiveWidthPixels"] == pytest.approx(
+                1.5 * expected_factor)
         resized_canvas_height = page.evaluate("""async () => {
           const {renderer} = await import('./js/scene/scene.js');
           return renderer.domElement.clientHeight;
@@ -2591,7 +2620,20 @@ def test_outline_width_is_perspective_correct_and_material_stable(
         assert resized_state["viewportHeight"] == resized_canvas_height
         assert resized_state["viewportHeight"] != initial_viewport_height
         assert resized_state["effectiveFov"] == 45
-        assert max(distance_scales) == pytest.approx(min(distance_scales))
+        assert resized_state["effectiveWidthPixels"] == pytest.approx(1.5)
+
+        configure(
+            positions=((0, 0, 0), (0, 0, 0)), scales=(1, 1),
+            camera_z=16, visible=(True, False))
+        assert page.evaluate(
+            "window.modViewer.getOutlineState(0).effectiveWidthPixels") < 1.5
+        before_reset = page.evaluate("window.modViewer.getRenderCount()")
+        page.locator("#camera-reset-view-btn").click()
+        page.wait_for_function(
+            "before => window.modViewer.getRenderCount() > before", arg=before_reset)
+        reset_state = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert reset_state["projectionRatio"] == pytest.approx(1)
+        assert reset_state["effectiveWidthPixels"] == pytest.approx(1.5)
 
         stability = page.evaluate("""() => {
           const current = window.modViewer.activeMeshes.map(
