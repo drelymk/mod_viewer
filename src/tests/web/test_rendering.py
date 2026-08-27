@@ -1,4 +1,5 @@
 from .support import *
+from PIL import ImageChops
 
 def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
     context = edge_browser.new_context(bypass_csp=True)
@@ -38,6 +39,207 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         assert state["keyCastsShadow"]
         assert state["shadowAutoUpdate"] is False
         assert state["shadowMapSize"] == [2048, 2048]
+    finally:
+        context.close()
+
+def test_viewport_pipeline_uses_character_layers_and_stable_ao_settings(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Pipeline": _payload("Pipeline")})
+    errors = []
+    page.on("pageerror", lambda error: errors.append(error))
+    try:
+        _open(page, "Pipeline")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        state = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const {getViewportRenderPipelineDebugState, scene} =
+            await import('./js/scene/scene.js');
+          const {CHARACTER_AO_LAYER} =
+            await import('./js/scene/viewer-layers.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const layer = new THREE.Layers();
+          layer.set(CHARACTER_AO_LAYER);
+          const helpers = [];
+          scene.traverse(object => {
+            if (object.userData.isViewerGround || object.isGridHelper
+                || object.isSprite || object.userData.isViewerOutline) {
+              helpers.push({
+                ground: object.userData.isViewerGround === true,
+                grid: object.isGridHelper === true,
+                sprite: object.isSprite === true,
+                outline: object.userData.isViewerOutline === true,
+                hasCharacterLayer: object.layers.test(layer),
+              });
+            }
+          });
+          return {
+            pipeline: getViewportRenderPipelineDebugState(),
+            meshHasCharacterLayer: mesh.layers.test(layer),
+            helpers,
+            viewerRenderCount: window.modViewer.getRenderCount(),
+          };
+        }""")
+        assert state["pipeline"]["hasRenderPipeline"]
+        assert state["pipeline"]["hasPrePass"]
+        assert state["pipeline"]["hasGTAO"]
+        assert state["pipeline"]["prePassLayerMask"] == 1 << 1
+        assert state["pipeline"]["characterAOLayer"] == 1
+        assert state["pipeline"]["samples"] == 16
+        assert state["pipeline"]["resolutionScale"] == pytest.approx(0.5)
+        assert state["pipeline"]["temporalFiltering"] is False
+        assert state["pipeline"]["strength"] == pytest.approx(0.22)
+        assert not state["pipeline"]["pipelineNeedsUpdate"]
+        assert state["pipeline"]["renderCount"] == state["viewerRenderCount"]
+        assert state["meshHasCharacterLayer"]
+        assert all(not helper["hasCharacterLayer"] for helper in state["helpers"])
+        assert not errors, "\n".join(str(error) for error in errors)
+    finally:
+        context.close()
+
+def test_viewport_pipeline_uses_model_scale_and_wireframe_bypass(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Pipeline": _payload("Pipeline")})
+    try:
+        _open(page, "Pipeline")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        initial = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert initial["modelSize"] > 0
+        assert initial["radius"] == pytest.approx(initial["modelSize"] * 0.15)
+        assert initial["effectiveStrength"] == pytest.approx(initial["strength"])
+
+        page.locator("#wire-btn").click()
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState().effectiveStrength === 0;
+        }""")
+        suppressed = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert suppressed["enabled"]
+        assert suppressed["strength"] == pytest.approx(initial["strength"])
+        assert suppressed["effectiveStrength"] == 0
+        assert not suppressed["pipelineNeedsUpdate"]
+
+        page.locator("#wire-btn").click()
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState().effectiveStrength > 0;
+        }""")
+        restored = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert restored["effectiveStrength"] == pytest.approx(initial["strength"])
+        assert restored["modelSize"] == pytest.approx(initial["modelSize"])
+        assert restored["radius"] == pytest.approx(initial["radius"])
+    finally:
+        context.close()
+
+@pytest.mark.parametrize("scale", [0.01, 1, 100])
+def test_viewport_gtao_radius_scales_with_model_bounds(edge_browser, frontend_url, scale):
+    label = f"PipelineScale{scale}"
+    payload = _payload(label)
+    entry = payload["meshes"][f"Body-{label}-0"]
+    entry["pos"] = _f32(0, 0, 0, scale, 0, 0, 0, scale, scale * 0.25)
+    context, page = _page(edge_browser, frontend_url, {label: payload})
+    try:
+        _open(page, label)
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        state = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert math.isfinite(state["modelSize"])
+        assert math.isfinite(state["radius"])
+        assert state["modelSize"] > 0
+        assert state["radius"] == pytest.approx(state["modelSize"] * 0.15)
+    finally:
+        context.close()
+
+def test_viewport_pipeline_resizes_pass_targets_without_rebuilding(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Resize": _payload("Resize")})
+    try:
+        _open(page, "Resize")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        initial = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert initial["resolution"][0] > 0
+        assert initial["resolution"][1] > 0
+        render_count = page.evaluate("window.modViewer.getRenderCount()")
+
+        page.evaluate("""async () => {
+          const {renderer} = await import('./js/scene/scene.js');
+          const {requestRender} = await import('./js/scene/render-scheduler.js');
+          renderer.setSize(900, 640);
+          requestRender();
+        }""")
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count", arg=render_count)
+        resized = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert resized["resolution"][0] > 0
+        assert resized["resolution"][1] > 0
+        assert resized["resolutionScale"] == initial["resolutionScale"]
+        assert not resized["pipelineNeedsUpdate"]
+    finally:
+        context.close()
+
+def test_viewport_gtao_is_visible_and_does_not_add_continuous_frames(
+        edge_browser, frontend_url):
+    payload = _payload("AO")
+    entry = payload["meshes"]["Body-AO-0"]
+    entry["drawindexed"] = [12, 0, 0]
+    entry["pos"] = _f32(
+        -0.7, 0, -0.5, 0.7, 0, -0.5, 0.7, 0, 0.5, -0.7, 0, 0.5,
+        -0.7, 0, -0.5, 0.7, 0, -0.5, 0.7, 0.9, -0.5, -0.7, 0.9, -0.5,
+    )
+    entry["idx"] = _u32(0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7)
+    context, page = _page(edge_browser, frontend_url, {"AO": payload})
+    try:
+        _open(page, "AO")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        page.evaluate("""async () => {
+          const {setAmbientOcclusionStrength} =
+            await import('./js/scene/scene.js');
+          setAmbientOcclusionStrength(1);
+        }""")
+        page.wait_for_timeout(250)
+        with_ao = Image.open(io.BytesIO(page.screenshot())).convert("RGB")
+        render_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.wait_for_timeout(200)
+        assert page.evaluate("window.modViewer.getRenderCount()") == render_count
+
+        page.evaluate("""async () => {
+          const {setAmbientOcclusionEnabled} =
+            await import('./js/scene/scene.js');
+          setAmbientOcclusionEnabled(false);
+        }""")
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count", arg=render_count)
+        without_ao = Image.open(io.BytesIO(page.screenshot())).convert("RGB")
+        assert ImageChops.difference(with_ao, without_ao).getbbox()
     finally:
         context.close()
 

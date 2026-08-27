@@ -89,6 +89,10 @@ ASSET_FILES = {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/ArcballControls.js",
         "sha256": "f80db7fe66685fc7f5438e3be44fed6684aed33a7b92b2442fe6958291156fb3",
     },
+    "addons/tsl/display/GTAONode.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/tsl/display/GTAONode.js",
+        "sha256": "516e86dc398b8e2d93f693a168144fdd7420f261a72aaa7da6eb7f110cc8e3ef",
+    },
 }
 
 

@@ -11,6 +11,7 @@ import { loadDDSTexture } from '../textures/dds-loader.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { supportsBCTextureCompression } from '../scene/renderer-capabilities.js';
 import { splitTextureKey } from '../textures/texture-key.js';
+import { CHARACTER_AO_LAYER } from '../scene/viewer-layers.js';
 
 // Textures arrive as data URIs or same-origin localhost URLs keyed by name;
 // loaders are cached so several meshes sharing a texture share one GPU upload.
@@ -303,6 +304,7 @@ export function buildMesh(name, data, materialProfile = null) {
     { hasUv: !!data.uv });
 
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.layers.enable(CHARACTER_AO_LAYER);
   mesh.userData.basePositions = new Float32Array(geo.attributes.position.array);
   mesh.userData.baseNormals = data.normal
     ? new Float32Array(geo.attributes.normal.array) : null;

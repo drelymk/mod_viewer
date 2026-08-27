@@ -9,6 +9,7 @@ import { createKeyLightController } from './key-light-controller.js';
 import { updateOutlineCameraScale } from './outline-renderer.js';
 import { setBCTextureCompression } from './renderer-capabilities.js';
 import { requestRender, setRenderCallback } from './render-scheduler.js';
+import { createViewportRenderPipeline } from './viewport-render-pipeline.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 
 const container = document.getElementById('canvas-container');
@@ -152,6 +153,9 @@ const keyLightController = createKeyLightController({
 const characterShadowController = createCharacterShadowController({
   renderer, scene, light: keyLight,
 });
+const viewportRenderPipeline = createViewportRenderPipeline({
+  renderer, scene, camera,
+});
 const viewGizmoController = createViewGizmoController({
   camera, controls, element: document.getElementById('view-gizmo'),
   onChange: requestRender,
@@ -182,7 +186,7 @@ function renderFrame() {
   updateOutlineCameraScale(camera, controls.target,
     renderer.domElement.clientHeight);
   viewGizmoController.updateAxes();
-  renderer.render(scene, camera);
+  viewportRenderPipeline.render();
   renderCount += 1;
   if (snapActive) requestRender();
 }
@@ -236,12 +240,14 @@ export function frameView(meshes = [], direction = null, targetYOffset = 0) {
 export function resetView() {
   cameraFrame.resetView();
   characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
   requestRender();
 }
 
 export function adoptModelMeshes(meshes = []) {
   const adopted = cameraFrame.adoptModelMeshes(meshes);
   characterShadowController.adoptMeshes(meshes);
+  viewportRenderPipeline.adoptMeshes(meshes);
   requestRender();
   return adopted;
 }
@@ -249,12 +255,14 @@ export function adoptModelMeshes(meshes = []) {
 export function fitTo(meshes, options) {
   cameraFrame.fitTo(meshes, options);
   characterShadowController.setMeshes(meshes);
+  viewportRenderPipeline.setMeshes(meshes);
   requestRender();
 }
 
 export function forgetModelMeshes(meshes = []) {
   cameraFrame.forgetModelMeshes(meshes);
   characterShadowController.forgetMeshes(meshes);
+  viewportRenderPipeline.forgetMeshes(meshes);
   requestRender();
 }
 
@@ -264,10 +272,12 @@ export function resetModelOrientation(options) {
 
 export function resetCharacterShadows() {
   characterShadowController.reset();
+  viewportRenderPipeline.reset();
 }
 
 export function invalidateCharacterShadowGeometry() {
   characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
   requestRender();
 }
 
@@ -280,15 +290,37 @@ export function getCharacterShadowDebugState() {
   return characterShadowController.getDebugState();
 }
 
+export function getViewportRenderPipelineDebugState() {
+  return viewportRenderPipeline.getDebugState();
+}
+
+export function setAmbientOcclusionEnabled(enabled) {
+  viewportRenderPipeline.setAmbientOcclusionEnabled(enabled);
+  requestRender();
+}
+
+export function setAmbientOcclusionStrength(strength) {
+  const changed = viewportRenderPipeline.setAmbientOcclusionStrength(strength);
+  if (changed) requestRender();
+  return changed;
+}
+
+export function setAmbientOcclusionSuppressedByWireframe(value) {
+  viewportRenderPipeline.setAmbientOcclusionSuppressedByWireframe(value);
+  requestRender();
+}
+
 export function rotateModelQuarterTurn(meshes = []) {
   cameraFrame.rotateModelQuarterTurn(meshes);
   characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
   requestRender();
 }
 
 export function rotateModelHorizontalQuarterTurn(meshes = []) {
   cameraFrame.rotateModelHorizontalQuarterTurn(meshes);
   characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
   requestRender();
 }
 

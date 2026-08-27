@@ -2,6 +2,7 @@
 
 import {
   invalidateCharacterShadowGeometry, invalidateCharacterShadowVisibility,
+  forgetModelMeshes as forgetSceneModelMeshes,
   resetCharacterShadows, scene, resetModelOrientation,
 } from '../scene/scene.js';
 import { dnfSatisfied, getControlValue } from '../editing/control-state.js';
@@ -67,6 +68,7 @@ export function removeMesh(mesh) {
     material?.dispose?.();
   });
   activeMeshes.splice(index, 1);
+  forgetSceneModelMeshes([mesh]);
   return true;
 }
 
