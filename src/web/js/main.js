@@ -1,10 +1,10 @@
 // Entry point: composes frontend application flows and initializes the UI.
 
 import {
-  getAmbientOcclusionEnabled, getEnvironmentPreset, getRenderCount,
+  getAmbientOcclusionRadiusFactor, getEnvironmentPreset, getRenderCount,
   isRendererAvailable, rendererReady,
   resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
-  toggleAmbientOcclusion, toggleGrid, toggleTrackballGizmo,
+  setAmbientOcclusionRadiusFactor, toggleGrid, toggleTrackballGizmo,
 } from './scene/scene.js';
 import {
   activeMeshes, resetMeshState,
@@ -113,17 +113,6 @@ function exportChanges() {
   return exportChangesFlow();
 }
 
-function updateAmbientOcclusionButton(enabled) {
-  const button = $('ao-btn');
-  if (!button) return enabled;
-  const label = `Ambient occlusion: ${enabled ? 'on' : 'off'}`;
-  button.classList.toggle('active', enabled);
-  button.setAttribute('aria-pressed', String(enabled));
-  button.setAttribute('aria-label', label);
-  button.title = label;
-  return enabled;
-}
-
 initToolbarOverflow();
 initPanelOpacityControl();
 
@@ -137,10 +126,6 @@ rendererReady.then(ready => {
     void toggleMissingAssetParts();
   });
   $('wire-btn').addEventListener('click', toggleWireframe);
-  updateAmbientOcclusionButton(getAmbientOcclusionEnabled());
-  $('ao-btn').addEventListener('click', () => {
-    updateAmbientOcclusionButton(toggleAmbientOcclusion());
-  });
   $('outline-btn').addEventListener('click', () => {
     const enabled = setOutlinesEnabled();
     const button = $('outline-btn');
@@ -151,7 +136,7 @@ rendererReady.then(ready => {
   $('grid-btn').addEventListener('click', toggleGrid);
   $('shading-btn').addEventListener('click', toggleSmoothShading);
   $('glossy-btn').addEventListener('click', toggleGlossy);
-  initToolPopovers();
+  const syncAmbientOcclusionControl = initToolPopovers();
   $('reset-state-btn').addEventListener('click', event => {
     event.stopPropagation();
     resetMeshState();
@@ -253,9 +238,12 @@ rendererReady.then(ready => {
     activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset,
     getEnvironmentPreset,
-    getAmbientOcclusionEnabled,
-    toggleAmbientOcclusion: () => updateAmbientOcclusionButton(
-      toggleAmbientOcclusion()),
+    getAmbientOcclusionRadiusFactor,
+    setAmbientOcclusionRadiusFactor: value => {
+      const changed = setAmbientOcclusionRadiusFactor(value);
+      syncAmbientOcclusionControl?.();
+      return changed;
+    },
     getMaterialState,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,

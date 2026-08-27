@@ -916,6 +916,60 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
         page.locator("#light-btn").click()
         assert page.locator("#light-popover").is_hidden()
 
+        ao_button = page.locator("#ao-btn")
+        assert ao_button.get_attribute("aria-pressed") is None
+        assert ao_button.get_attribute("aria-expanded") == "false"
+        assert ao_button.get_attribute("aria-controls") == "ao-popover"
+        assert ao_button.get_attribute("aria-label") == "Ambient occlusion: 0%"
+        assert not ao_button.evaluate("button => button.classList.contains('active')")
+        assert not ao_button.evaluate("button => button.classList.contains('partial')")
+
+        ao_button.click()
+        page.locator("#ao-popover:not([hidden])").wait_for()
+        assert ao_button.get_attribute("aria-expanded") == "true"
+        assert page.evaluate("document.activeElement.id") == "ao-slider"
+        slider = page.locator("#ao-slider")
+        assert slider.get_attribute("min") == "0"
+        assert slider.get_attribute("max") == "100"
+        assert slider.get_attribute("step") == "1"
+        assert slider.input_value() == "0"
+        ao_position = page.evaluate("""() => {
+          const button = document.querySelector('#ao-btn').getBoundingClientRect();
+          const popover = document.querySelector('#ao-popover').getBoundingClientRect();
+          return {
+            above: popover.bottom <= button.top,
+            within: popover.left >= 0 && popover.right <= window.innerWidth
+              && popover.top >= 0 && popover.bottom <= window.innerHeight,
+          };
+        }""")
+        assert ao_position == {"above": True, "within": True}
+
+        for level, class_name in ((1, "partial"), (50, "partial"),
+                                  (99, "partial"), (100, "active"), (0, None)):
+            page.evaluate("""value => {
+              const slider = document.querySelector('#ao-slider');
+              slider.value = String(value);
+              slider.dispatchEvent(new Event('input', {bubbles: true}));
+            }""", level)
+            assert slider.input_value() == str(level)
+            assert page.locator("#ao-value").inner_text() == f"{level}%"
+            assert ao_button.get_attribute("aria-label") == (
+                f"Ambient occlusion: {level}%")
+            assert ao_button.get_attribute("title") == f"Ambient occlusion: {level}%"
+            assert ao_button.evaluate(
+                "button => button.classList.contains('active')") is (level == 100)
+            assert ao_button.evaluate(
+                "button => button.classList.contains('partial')") is (class_name == "partial")
+
+        page.keyboard.press("Escape")
+        assert page.locator("#ao-popover").is_hidden()
+        assert ao_button.get_attribute("aria-expanded") == "false"
+        ao_button.click()
+        page.locator("#ao-popover:not([hidden])").wait_for()
+        page.locator("#footer").click(position={"x": 5, "y": 5})
+        assert page.locator("#ao-popover").is_hidden()
+        assert ao_button.get_attribute("aria-expanded") == "false"
+
         page.locator("#environment-btn").click()
         page.locator("#environment-popover:not([hidden])").wait_for()
         assert page.locator("#environment-btn").get_attribute("aria-expanded") == "true"

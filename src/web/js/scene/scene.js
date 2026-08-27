@@ -296,24 +296,14 @@ export function getViewportRenderPipelineDebugState() {
   return viewportRenderPipeline.getDebugState();
 }
 
-export function setAmbientOcclusionEnabled(enabled) {
-  const value = viewportRenderPipeline.setAmbientOcclusionEnabled(enabled);
-  requestRender();
-  return value;
-}
-
-export function getAmbientOcclusionEnabled() {
-  return viewportRenderPipeline.isAmbientOcclusionEnabled();
-}
-
-export function toggleAmbientOcclusion() {
-  return setAmbientOcclusionEnabled(!getAmbientOcclusionEnabled());
-}
-
-export function setAmbientOcclusionStrength(strength) {
-  const changed = viewportRenderPipeline.setAmbientOcclusionStrength(strength);
+export function setAmbientOcclusionRadiusFactor(value) {
+  const changed = viewportRenderPipeline.setAmbientOcclusionRadiusFactor(value);
   if (changed) requestRender();
   return changed;
+}
+
+export function getAmbientOcclusionRadiusFactor() {
+  return viewportRenderPipeline.getAmbientOcclusionRadiusFactor();
 }
 
 export function setAmbientOcclusionSuppressedByWireframe(value) {

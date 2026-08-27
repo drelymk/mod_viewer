@@ -191,7 +191,8 @@ export function createCameraFrame({
     frameView(homeView.meshes.map(({ mesh }) => mesh),
       INITIAL_CAMERA_DIRECTION, size.y * 0.08);
     camera.updateMatrix();
-    controls.update();
+    camera.updateMatrixWorld();
+    controls.setCamera(camera);
     controls.saveState();
   }
 

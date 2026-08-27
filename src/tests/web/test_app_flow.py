@@ -8,13 +8,13 @@ def test_frontend_public_surface_and_lifecycle_events(edge_browser, frontend_url
     try:
         assert page.evaluate("Object.keys(window.modViewer).sort()") == sorted([
             "activeMeshes", "displayMeshPayload", "exportChanges",
-            "getAmbientOcclusionEnabled", "getCurrentSource",
+            "getAmbientOcclusionRadiusFactor", "getCurrentSource",
             "getEnvironmentPreset", "getMaterialState",
             "getOutlineState", "getRenderCount", "openMod",
             "refreshControlSemantics", "refreshMeshSemantics",
             "refreshPresentState", "reloadCurrentMod", "setEnvironmentPreset",
             "setMaterialDebugMode", "setOutlineEnabled", "switchAsset",
-            "switchMod", "toggleAmbientOcclusion",
+            "setAmbientOcclusionRadiusFactor", "switchMod",
         ])
         page.evaluate("""() => {
           window.__lifecycleEvents = [];

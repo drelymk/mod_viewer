@@ -99,11 +99,11 @@
     </button>
     <div id="appearance-popover" class="appearance-popover" role="dialog"
          aria-label="Appearance" hidden>
-      <div class="appearance-row">
+      <div class="range-control-row appearance-row">
         <label for="panel-opacity">Panel opacity</label>
-        <output id="panel-opacity-value" for="panel-opacity">58%</output>
+        <output id="panel-opacity-value" class="range-control-value" for="panel-opacity">58%</output>
       </div>
-      <input id="panel-opacity" type="range" min="0" max="100" step="1" value="58"/>
+      <input id="panel-opacity" class="range-control-slider" type="range" min="0" max="100" step="1" value="58"/>
     </div>
   </div>
 </div>
@@ -221,7 +221,8 @@
     <div id="tool-buttons">
       <button id="wire-btn" class="tool-btn" title="Wireframe rendering: off" aria-label="Wireframe rendering: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-wireframe"></use></svg></button>
       <button id="outline-btn" class="tool-btn" title="Silhouette outlines: off" aria-label="Silhouette outlines: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-outline"></use></svg></button>
-      <button id="ao-btn" class="tool-btn" title="Ambient occlusion: off" aria-label="Ambient occlusion: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-ao"></use></svg></button>
+      <button id="ao-btn" class="tool-btn" title="Ambient occlusion: 0%" aria-label="Ambient occlusion: 0%"
+              aria-expanded="false" aria-controls="ao-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-ao"></use></svg></button>
       <button id="glossy-btn" class="tool-btn off" title="Glossy materials: off" aria-label="Glossy materials: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-glossy"></use></svg></button>
       <button id="grid-btn" class="tool-btn" title="Grid visibility: on" aria-label="Grid visibility: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-grid"></use></svg></button>
       <button id="shading-btn" class="tool-btn" title="Smooth shading: on" aria-label="Smooth shading: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shading"></use></svg></button>
@@ -292,6 +293,15 @@
   </div>
   <div id="texture-popover" class="ui-popover tool-popover" role="menu" aria-label="Texture display options" hidden></div>
   <div id="light-popover" class="ui-popover tool-popover" role="menu" aria-label="Light options" hidden></div>
+  <div id="ao-popover" class="ui-popover tool-popover range-popover" role="dialog"
+       aria-label="Ambient occlusion" hidden>
+    <div class="range-control-row">
+      <label for="ao-slider">Ambient occlusion</label>
+      <output id="ao-value" class="range-control-value" for="ao-slider">0%</output>
+    </div>
+    <input id="ao-slider" class="range-control-slider" type="range"
+           min="0" max="100" step="1" value="0"/>
+  </div>
 </div>
 
 <div id="asset-folder-modal-backdrop" class="modal-backdrop">
