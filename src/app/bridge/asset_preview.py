@@ -122,7 +122,8 @@ class AssetPreview:
         """Register a chosen Asset texture using the facade-owned window."""
         try:
             selected, entry, _index, _record = self._asset_selection(folder_path)
-            if texture_role not in (None, "normal_map", "light_map", "material_map"):
+            if texture_role not in (
+                    None, "normal_map", "light_map", "material_map", "emission_map"):
                 return {"error": "Unknown texture role."}
             result = window.create_file_dialog(
                 webview.FileDialog.OPEN, directory=selected,

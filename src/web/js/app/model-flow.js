@@ -2,7 +2,9 @@
 
 import { viewerState, samePath } from './state.js';
 import { resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
-import { fitTo, isRendererAvailable } from '../scene/scene.js';
+import {
+  fitTo, isRendererAvailable, setBloomSuppressedByDebug,
+} from '../scene/scene.js';
 import { setRightDockEnabled } from '../panels/right-dock.js';
 import { clearSelection } from '../scene/selection.js';
 import { clearInspector } from '../panels/inspector-panel.js';
@@ -64,6 +66,7 @@ export function clearScene({ preserveModelOrientation = false } = {}) {
   // suppression in the same lifecycle rather than carrying stale state onto
   // the next mod's normal materials.
   setOutlineSuppressedByDebug(false);
+  setBloomSuppressedByDebug(false);
   resetAssetFillState();
   setTextures(null);
   setGeometryBlob(null);

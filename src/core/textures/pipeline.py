@@ -15,7 +15,8 @@ from ..resource_paths import _canonical, safe_resource_path
 _TEXTURE_CACHE_LIMIT = 256 * 1024 * 1024
 _MAX_IMAGE_PIXELS = 100_000_000
 TEXTURE_ROLES = (
-    "diffuse", "normal_map", "normal_data", "light_map", "material_map")
+    "diffuse", "normal_map", "normal_data", "light_map", "material_map",
+    "emission_map")
 TEXTURE_TRANSFORMS = (
     "passthrough", "normal_xy_reconstruct",
 )

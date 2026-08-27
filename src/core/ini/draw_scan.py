@@ -10,7 +10,7 @@ from .menu import extract_menu_var_names
 from .state import extract_state_rules
 from .toggles import extract_toggle_var_names
 from .texture_roles import (
-    TextureOverrideIndex, _SEMANTIC_TEXTURE_ROLES,
+    TextureOverrideIndex,
     _collect_structural_slot_role_hints, _collect_texture_override_index,
     _effective_role_assignments, _legacy_texture_evidence,
     _semantic_texture_role,
@@ -362,24 +362,17 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     geometry_match=geometry_match(info),
                     slot_textures=slot_snapshot(info),
                 ))
-            semantic_diffuse = re.match(
-                r"^Resource[\\/]"
-                r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]Diffuse\s*=\s*"
-                r"(?:ref\s+)?(\S+)", line, re.I)
-            if semantic_diffuse:
-                record_texture_assignment(
-                    info, "diffuse", semantic_diffuse.group(1), cond_stack,
-                    source="semantic")
-            semantic_aux = re.match(
-                r"^Resource[\\/]"
+            semantic = re.match(
+                r"^(Resource[\\/]"
                 r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
-                r"(NormalMap|LightMap|MaterialMap)\s*=\s*"
-                r"(?:ref\s+)?(\S+)", line, re.I)
-            if semantic_aux:
-                record_texture_assignment(
-                    info,
-                    _SEMANTIC_TEXTURE_ROLES[semantic_aux.group(1).casefold()],
-                    semantic_aux.group(2), cond_stack, source="semantic")
+                r"(?:Diffuse|NormalMap|LightMap|MaterialMap|GlowMap))"
+                r"\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
+            if semantic:
+                role = _semantic_texture_role(semantic.group(1))
+                if role:
+                    record_texture_assignment(
+                        info, role, semantic.group(2), cond_stack,
+                        source="semantic")
             if re.match(r"run\s*=\s*(\S+)", line, re.I):
                 target_name = _run_target_name(line, section_lookup)
                 if target_name and target_name not in visiting:

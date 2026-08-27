@@ -92,6 +92,7 @@ const PLACEHOLDERS = Object.freeze({
   normal_data: PACKED_PLACEHOLDER,
   light_map: PACKED_PLACEHOLDER,
   material_map: PACKED_PLACEHOLDER,
+  emission_map: PACKED_PLACEHOLDER,
 });
 
 function validRef(ref) {
@@ -184,6 +185,7 @@ function createBindings(hasUv) {
     normal_data: createBinding('normal_data', primaryUv),
     light_map: createBinding('light_map', primaryUv),
     material_map: createBinding('material_map', primaryUv),
+    emission_map: createBinding('emission_map', primaryUv),
   };
 }
 
@@ -310,6 +312,7 @@ function setStableMaterialNodes(material, state, fallbackColor) {
     material.normalNode = fallbackNormal;
   }
   material.colorNode = createDebugOutputNode(state, baseColor);
+  material.emissiveNode = state.emissionNode;
 
   if (!state.packedResponse) return;
 
@@ -346,8 +349,25 @@ function applyViewerRim(state, result) {
   return vec4(result.rgb.add(tint.mul(amount)), result.a);
 }
 
+function applyViewerSelection(state, result) {
+  if (!state?.selectionEnabledNode || !state?.selectionStrengthNode) {
+    return result;
+  }
+  const highlighted = mix(result.rgb, color(0xffd60a), state.selectionStrengthNode);
+  return vec4(
+    mix(result.rgb, highlighted, state.selectionEnabledNode), result.a);
+}
+
 function applyViewerOutput(state, result) {
-  return applyDebugOverride(state, applyViewerRim(state, result));
+  return applyDebugOverride(
+    state, applyViewerSelection(state, applyViewerRim(state, result)));
+}
+
+function createEmissionNode(profile, bindings, hasUv) {
+  if (!hasUv || profile?.emission_source !== 'emission_map_rgb') return vec3(0);
+  const strength = clamp(float(numericOr(profile.emission_strength, 1)), 0, 1);
+  return bindings.emission_map.enabledNode.select(
+    bindings.emission_map.textureNode.rgb.mul(strength), vec3(0));
 }
 
 function physicalLightingFlags(material) {
@@ -801,6 +821,8 @@ export function configureGameMaterial(material, profile, options = {}) {
     rimEnabledNode: uniform(true),
     rimStrengthNode: uniform(0.075),
     rimPowerNode: uniform(4.0),
+    selectionEnabledNode: uniform(false),
+    selectionStrengthNode: uniform(0.22),
     hasMaterialId,
     hasSpecularArea,
     hasShadowMask,
@@ -831,6 +853,8 @@ export function configureGameMaterial(material, profile, options = {}) {
   state.metalRouteNode = validRef(resolvedProfile.metal_route)
     ? createRawChannelNode(resolvedProfile.metal_route, state.bindings)
     : float(0);
+  state.emissionNode = createEmissionNode(
+    resolvedProfile, state.bindings, hasUv);
   state.sources = state.bindings;
   state.nodes = {
     diffuse: state.bindings.diffuse,
@@ -838,6 +862,7 @@ export function configureGameMaterial(material, profile, options = {}) {
     normalData: state.bindings.normal_data,
     lightMap: state.bindings.light_map,
     materialMap: state.bindings.material_map,
+    emissionMap: state.bindings.emission_map,
   };
   material.userData.gameMaterial = state;
   setStableMaterialNodes(material, state, options.fallbackColor ?? material.color);
@@ -865,6 +890,7 @@ export function updateGameMaterialTextures(mesh, maps = {}, options = {}) {
     normal_data: maps.normal_data,
     light_map: maps.light_map,
     material_map: maps.material_map,
+    emission_map: maps.emission_map,
   };
   for (const [role, value] of Object.entries(values)) {
     if (!Object.hasOwn(maps, role)) continue;
@@ -899,6 +925,9 @@ export function getGameMaterialSources(material) {
   const sources = new Set(profileRenderSources(state.profile));
   for (const source of profileNormalSources(state.profile)) {
     sources.add(source);
+  }
+  if (state.profile?.emission_source === 'emission_map_rgb') {
+    sources.add('emission_map');
   }
   const debugSource = profileDebugSource(
     state.profile, getMaterialDebugMode(material));
@@ -946,6 +975,14 @@ export function setGameMaterialRimEnabled(material, enabled) {
 /** Toggle profile-driven toon direct diffuse without rebuilding the material. */
 export function setGameMaterialToonEnabled(material, enabled) {
   const node = material?.userData?.gameMaterial?.toonEnabledNode;
+  if (!node) return false;
+  node.value = enabled === true;
+  return true;
+}
+
+/** Keep selection out of material emissive so MRT bloom sees authored light only. */
+export function setGameMaterialSelectionEnabled(material, enabled) {
+  const node = material?.userData?.gameMaterial?.selectionEnabledNode;
   if (!node) return false;
   node.value = enabled === true;
   return true;

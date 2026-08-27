@@ -106,6 +106,8 @@ class DrawCall(MutableMapping):
     light_map_variants: list = field(default_factory=list)
     material_map_default_file: str | None = None
     material_map_variants: list = field(default_factory=list)
+    emission_map_default_file: str | None = None
+    emission_map_variants: list = field(default_factory=list)
     geometry_match: GeometryMatch | None = None
     slot_textures: list = field(default_factory=list)
     asset_binding: object | None = None
@@ -121,6 +123,7 @@ class DrawCall(MutableMapping):
         "normal_map": "normal_map",
         "light_map": "light_map",
         "material_map": "material_map",
+        "emission_map": "emission_map",
     }
     _NON_RENDER_FIELDS: ClassVar[frozenset[str]] = frozenset({
         "label", "conditions", "sources", "geometry_match",
@@ -137,6 +140,7 @@ class DrawCall(MutableMapping):
         "normal_map_default_file", "normal_map_variants",
         "light_map_default_file", "light_map_variants",
         "material_map_default_file", "material_map_variants",
+        "emission_map_default_file", "emission_map_variants",
         "asset_texture_defaults",
     )
 
@@ -230,7 +234,7 @@ class DrawCall(MutableMapping):
             raise KeyError(f"cannot delete required DrawCall field: {key}")
         if key in {"texture_variants", "texture_assignments",
                    "normal_map_variants", "light_map_variants",
-                   "material_map_variants"}:
+                   "material_map_variants", "emission_map_variants"}:
             setattr(self, key, [])
         elif key == "label":
             setattr(self, key, "")

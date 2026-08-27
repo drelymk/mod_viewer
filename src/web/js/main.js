@@ -1,10 +1,12 @@
 // Entry point: composes frontend application flows and initializes the UI.
 
 import {
-  getAmbientOcclusionStrength, getEnvironmentPreset, getRenderCount,
+  getAmbientOcclusionStrength, getBloomEnabled, getEnvironmentPreset, getRenderCount,
   isRendererAvailable, rendererReady,
   resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
-  setAmbientOcclusionStrength, toggleGrid, toggleTrackballGizmo,
+  setAmbientOcclusionStrength, setBloomAvailable, setBloomEnabled,
+  setBloomSuppressedByDebug,
+  toggleGrid, toggleTrackballGizmo,
 } from './scene/scene.js';
 import {
   activeMeshes, resetMeshState,
@@ -113,6 +115,35 @@ function exportChanges() {
   return exportChangesFlow();
 }
 
+function hasEmissionCapability() {
+  return activeMeshes.some(mesh => {
+    const game = mesh.material?.userData?.gameMaterial;
+    if (game?.profile?.emission_source !== 'emission_map_rgb') return false;
+    return !!mesh.userData.emissionMapKey
+      || !!mesh.userData.defaultEmissionMapKey
+      || !!mesh.userData.resolvedEmissionMapKey
+      || (mesh.userData.emissionMapVariants?.length ?? 0) > 0;
+  });
+}
+
+function syncBloomControl() {
+  const button = $('bloom-btn');
+  const available = hasEmissionCapability();
+  setBloomAvailable(available);
+  const enabled = available && getBloomEnabled();
+  button.hidden = !available;
+  button.disabled = !available;
+  button.classList.toggle('off', !enabled);
+  button.classList.toggle('active', enabled);
+  button.setAttribute('aria-pressed', String(enabled));
+  const label = available
+    ? `Emission bloom: ${enabled ? 'on' : 'off'}`
+    : 'Emission bloom unavailable: no GlowMap detected';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  return enabled;
+}
+
 initToolbarOverflow();
 initPanelOpacityControl();
 
@@ -133,11 +164,23 @@ rendererReady.then(ready => {
     button.setAttribute('aria-pressed', String(enabled));
     button.setAttribute('aria-label', `Silhouette outlines: ${enabled ? 'on' : 'off'}`);
   });
+  $('bloom-btn').addEventListener('click', () => {
+    setBloomEnabled(!getBloomEnabled());
+    syncBloomControl();
+  });
   $('grid-btn').addEventListener('click', toggleGrid);
   $('shading-btn').addEventListener('click', toggleSmoothShading);
   $('toon-btn').addEventListener('click', toggleToonShading);
   $('glossy-btn').addEventListener('click', toggleGlossy);
   const syncAmbientOcclusionControl = initToolPopovers();
+  syncBloomControl();
+  for (const eventName of [
+    'mod-viewer-mod-load-started', 'mod-viewer-mod-loaded',
+    'mod-viewer-asset-load-started', 'mod-viewer-asset-loaded',
+    'mod-viewer-mesh-state-changed',
+  ]) {
+    window.addEventListener(eventName, syncBloomControl);
+  }
   $('reset-state-btn').addEventListener('click', event => {
     event.stopPropagation();
     resetMeshState();
@@ -216,6 +259,8 @@ rendererReady.then(ready => {
       normalDataBound: !!game?.bindings?.normal_data?.enabledNode?.value,
       lightMapBound: !!game?.bindings?.light_map?.enabledNode?.value,
       materialMapBound: !!game?.bindings?.material_map?.enabledNode?.value,
+      emissionMapBound: !!game?.bindings?.emission_map?.enabledNode?.value,
+      emissionSource: game?.profile?.emission_source || null,
       supportedDebugModes: game?.supportedDebugModes || [],
       debugMode: getMaterialDebugMode(mesh?.material),
     };
@@ -223,6 +268,7 @@ rendererReady.then(ready => {
   const setMaterialDebugModeForMeshes = mode => {
     const normalized = setMaterialDebugMode(activeMeshes, mode);
     setOutlineSuppressedByDebug(normalized !== 'off');
+    setBloomSuppressedByDebug(normalized !== 'off');
     // Diagnostics use the same stable packed bindings as normal rendering.
     // WuWa's packed normal is already resident when debug mode changes, so a
     // B/A view only changes the diagnostic uniform and binding selection.
@@ -243,6 +289,12 @@ rendererReady.then(ready => {
     setAmbientOcclusionStrength: value => {
       const changed = setAmbientOcclusionStrength(value);
       syncAmbientOcclusionControl?.();
+      return changed;
+    },
+    getBloomEnabled,
+    setBloomEnabled: value => {
+      const changed = setBloomEnabled(value);
+      syncBloomControl();
       return changed;
     },
     getMaterialState,

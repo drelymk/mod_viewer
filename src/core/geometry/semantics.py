@@ -124,6 +124,10 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
                     draw, "material_map") or _semantic_texture_key(
                         mod_dir, draw.texture_default("material_map"),
                         "material_map")),
+                "emission_map_key": (_semantic_asset_key(
+                    draw, "emission_map") or _semantic_texture_key(
+                        mod_dir, draw.texture_default("emission_map"),
+                        "emission_map")),
             }
             normal_key = _semantic_texture_key(
                 mod_dir, draw.texture_default("normal_map"), normal_role)
@@ -138,7 +142,7 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
                 draw, mod_dir, "diffuse")
             if len(texture_variants) > 1:
                 entry["texture_variants"] = texture_variants
-            for channel in ("light_map", "material_map"):
+            for channel in ("light_map", "material_map", "emission_map"):
                 variants = _semantic_texture_variants(draw, mod_dir, channel)
                 if variants:
                     entry[f"{channel}_variants"] = variants

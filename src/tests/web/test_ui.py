@@ -83,11 +83,12 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
           return window.modViewer.activeMeshes.map(mesh => ({
             emissive: mesh.material.emissive.getHex(),
             intensity: mesh.material.emissiveIntensity,
+            selected: mesh.material.userData.gameMaterial.selectionEnabledNode.value,
           }));
         }""")
         assert first_state == [
-            {"emissive": 0xffd60a, "intensity": 0.22},
-            {"emissive": 0x000000, "intensity": 1},
+            {"emissive": 0x000000, "intensity": 1, "selected": True},
+            {"emissive": 0x000000, "intensity": 1, "selected": False},
         ]
 
         selected_count = page.evaluate("window.modViewer.getRenderCount()")
@@ -101,11 +102,12 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
           return window.modViewer.activeMeshes.map(mesh => ({
             emissive: mesh.material.emissive.getHex(),
             intensity: mesh.material.emissiveIntensity,
+            selected: mesh.material.userData.gameMaterial.selectionEnabledNode.value,
           }));
         }""")
         assert second_state == [
-            {"emissive": 0x000000, "intensity": 1},
-            {"emissive": 0xffd60a, "intensity": 0.22},
+            {"emissive": 0x000000, "intensity": 1, "selected": False},
+            {"emissive": 0x000000, "intensity": 1, "selected": True},
         ]
 
         final_count = page.evaluate("window.modViewer.getRenderCount()")

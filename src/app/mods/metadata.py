@@ -295,7 +295,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         option["tex_key"] = key
         option["file"] = relative_path
         for field in ("normal_map", "normal_data", "light_map",
-                      "material_map"):
+                      "material_map", "emission_map"):
             if field in option:
                 option[field] = _role_key(option[field], field)
         return option
@@ -313,7 +313,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         _role, relative_path = split_texture_key(key)
         item = {"tex_key": key, "file": relative_path,
                 "label": label, "manual": manual}
-        fields = ("light_map", "material_map")
+        fields = ("light_map", "material_map", "emission_map")
         if not packed_normal_transport:
             fields = ("normal_map", "normal_data", *fields)
         for field in fields:
@@ -375,7 +375,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
                 pool.append(opt)
             else:
                 for field in ("normal_map", "normal_data", "light_map",
-                              "material_map"):
+                              "material_map", "emission_map"):
                     manual_key = f"{field}_manual"
                     if opt.get(manual_key):
                         old[manual_key] = True
@@ -412,6 +412,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         ("normal_data", "normal_data"),
         ("light_map", "light_map"),
         ("material_map", "material_map"),
+        ("emission_map", "emission_map"),
     )
     for pool in texture_pools.values():
         for option in pool:
