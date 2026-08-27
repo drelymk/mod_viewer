@@ -296,14 +296,14 @@ export function getViewportRenderPipelineDebugState() {
   return viewportRenderPipeline.getDebugState();
 }
 
-export function setAmbientOcclusionRadiusFactor(value) {
-  const changed = viewportRenderPipeline.setAmbientOcclusionRadiusFactor(value);
+export function setAmbientOcclusionStrength(value) {
+  const changed = viewportRenderPipeline.setAmbientOcclusionStrength(value);
   if (changed) requestRender();
   return changed;
 }
 
-export function getAmbientOcclusionRadiusFactor() {
-  return viewportRenderPipeline.getAmbientOcclusionRadiusFactor();
+export function getAmbientOcclusionStrength() {
+  return viewportRenderPipeline.getAmbientOcclusionStrength();
 }
 
 export function setAmbientOcclusionSuppressedByWireframe(value) {

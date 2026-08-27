@@ -3,13 +3,13 @@
 import { activeMeshes } from '../mesh/visibility.js';
 import { ENVIRONMENT_PRESETS } from '../scene/environment.js';
 import {
-  getAmbientOcclusionRadiusFactor, getEnvironmentPreset, getLightMode,
-  setAmbientOcclusionRadiusFactor, setEnvironmentPreset, setLightMode,
+  getAmbientOcclusionStrength, getEnvironmentPreset, getLightMode,
+  setAmbientOcclusionStrength, setEnvironmentPreset, setLightMode,
 } from '../scene/scene.js';
 import { setTextureDisplayMode } from '../scene/render-modes.js';
 
 const $ = (id) => document.getElementById(id);
-const AO_MAX_RADIUS_FACTOR = 0.10;
+const AO_MAX_STRENGTH = 1;
 
 function normalizeAmbientOcclusionLevel(value) {
   const number = Number(value);
@@ -17,9 +17,9 @@ function normalizeAmbientOcclusionLevel(value) {
   return Math.min(100, Math.max(0, Math.round(number)));
 }
 
-function radiusFactorToAmbientOcclusionLevel(value) {
+function strengthToAmbientOcclusionLevel(value) {
   return normalizeAmbientOcclusionLevel(
-    Number(value) / AO_MAX_RADIUS_FACTOR * 100);
+    Number(value) / AO_MAX_STRENGTH * 100);
 }
 
 export function initEnvironmentControl() {
@@ -143,9 +143,9 @@ export function initToolPopovers() {
 
   const applyAmbientOcclusionLevel = value => {
     const level = normalizeAmbientOcclusionLevel(value);
-    setAmbientOcclusionRadiusFactor(level / 100 * AO_MAX_RADIUS_FACTOR);
+    setAmbientOcclusionStrength(level / 100 * AO_MAX_STRENGTH);
     return updateAmbientOcclusionControl(
-      radiusFactorToAmbientOcclusionLevel(getAmbientOcclusionRadiusFactor()));
+      strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
   };
 
   function toggleTexturePopover() {
@@ -208,7 +208,7 @@ export function initToolPopovers() {
     closeAll();
     if (wasOpen) return;
     updateAmbientOcclusionControl(
-      radiusFactorToAmbientOcclusionLevel(getAmbientOcclusionRadiusFactor()));
+      strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
     aoPopover.hidden = false;
     aoButton?.setAttribute('aria-expanded', 'true');
     activeToolPopover = { popover: aoPopover, button: aoButton };
@@ -223,7 +223,7 @@ export function initToolPopovers() {
   lightButton?.setAttribute('aria-expanded', 'false');
   aoButton?.setAttribute('aria-expanded', 'false');
   updateAmbientOcclusionControl(
-    radiusFactorToAmbientOcclusionLevel(getAmbientOcclusionRadiusFactor()));
+    strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
   textureButton?.addEventListener('click', toggleTexturePopover);
   lightButton?.addEventListener('click', toggleLightPopover);
   aoButton?.addEventListener('click', toggleAmbientOcclusionPopover);
@@ -245,7 +245,7 @@ export function initToolPopovers() {
   });
 
   return () => updateAmbientOcclusionControl(
-    radiusFactorToAmbientOcclusionLevel(getAmbientOcclusionRadiusFactor()));
+    strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
 }
 
 export function initToolbarOverflow() {

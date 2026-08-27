@@ -6,7 +6,7 @@ def _set_ao_level(page, level):
       const {getViewportRenderPipelineDebugState} =
         await import('./js/scene/scene.js');
       const state = getViewportRenderPipelineDebugState();
-      return {level: Math.round(state.radiusFactor * 1000),
+      return {level: Math.round(state.strength * 100),
               renderCount: window.modViewer.getRenderCount()};
     }""")
     if page.locator("#ao-popover").is_hidden():
@@ -18,10 +18,10 @@ def _set_ao_level(page, level):
     }""", level)
     page.wait_for_function("""state => {
       const slider = document.querySelector('#ao-slider');
-      const expectedFactor = state.level / 1000;
-      const current = window.modViewer.getAmbientOcclusionRadiusFactor();
+      const expectedStrength = state.level / 100;
+      const current = window.modViewer.getAmbientOcclusionStrength();
       return Number(slider.value) === state.level
-        && Math.abs(current - expectedFactor) < 1e-9
+        && Math.abs(current - expectedStrength) < 1e-9
         && (state.level === state.previousLevel
           || window.modViewer.getRenderCount() > state.renderCount);
     }""", arg={
@@ -81,6 +81,12 @@ def test_viewport_pipeline_uses_character_layers_and_stable_ao_settings(
         page.locator(".draw-item").wait_for()
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
         _set_ao_level(page, 100)
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getViewportRenderPipelineDebugState();
+          return state.strength === 1 && !state.pipelineNeedsUpdate;
+        }""")
         state = page.evaluate("""async () => {
           const THREE = await import('three');
           const {getViewportRenderPipelineDebugState, scene} =
@@ -124,7 +130,7 @@ def test_viewport_pipeline_uses_character_layers_and_stable_ao_settings(
             state["pipeline"]["rendererCoordinateSystem"])
         assert state["pipeline"]["resolutionScale"] == pytest.approx(0.5)
         assert state["pipeline"]["temporalFiltering"] is False
-        assert state["pipeline"]["strength"] == pytest.approx(0.55)
+        assert state["pipeline"]["strength"] == pytest.approx(1)
         assert not state["pipeline"]["pipelineNeedsUpdate"]
         assert state["pipeline"]["renderCount"] == state["viewerRenderCount"]
         assert state["meshHasCharacterLayer"]
@@ -298,7 +304,7 @@ def test_viewport_pipeline_uses_model_scale_and_wireframe_bypass(
           return getViewportRenderPipelineDebugState();
         }""")
         assert initial["modelSize"] > 0
-        assert initial["radius"] == pytest.approx(initial["modelSize"] * 0.10)
+        assert initial["radius"] == pytest.approx(initial["modelSize"] * 0.005)
         assert initial["effectiveStrength"] == pytest.approx(initial["strength"])
         assert initial["directRenderCount"] > 0
         assert initial["aoRenderCount"] > 0
@@ -307,22 +313,24 @@ def test_viewport_pipeline_uses_model_scale_and_wireframe_bypass(
 
         before_wireframe = initial["renderCount"]
         page.locator("#wire-btn").click()
-        page.wait_for_function("""async stateBefore => {
+        suppressed = page.evaluate("""async stateBefore => {
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
-          const state = getViewportRenderPipelineDebugState();
-          return state.effectiveStrength === 0
-            && state.renderCount > stateBefore.renderCount
-            && state.directRenderCount > stateBefore.directRenderCount;
+          const deadline = performance.now() + 5000;
+          while (performance.now() < deadline) {
+            const state = getViewportRenderPipelineDebugState();
+            if (state.effectiveStrength === 0
+                && state.renderCount > stateBefore.renderCount
+                && state.directRenderCount > stateBefore.directRenderCount) {
+              return state;
+            }
+            await new Promise(resolve => setTimeout(resolve, 16));
+          }
+          throw new Error('wireframe did not produce a direct render');
         }""", arg={
             "renderCount": before_wireframe,
             "directRenderCount": initial["directRenderCount"],
         })
-        suppressed = page.evaluate("""async () => {
-          const {getViewportRenderPipelineDebugState} =
-            await import('./js/scene/scene.js');
-          return getViewportRenderPipelineDebugState();
-        }""")
         assert suppressed["enabled"]
         assert suppressed["strength"] == pytest.approx(initial["strength"])
         assert suppressed["effectiveStrength"] == 0
@@ -364,12 +372,12 @@ def test_viewport_ambient_occlusion_slider_selects_direct_or_gtao_path(
           return getViewportRenderPipelineDebugState();
         }""")
         assert not startup["enabled"]
-        assert startup["radiusFactor"] == 0
+        assert startup["radiusFactor"] == pytest.approx(0.005)
         assert startup["directRenderCount"] > 0
         assert startup["aoRenderCount"] == 0
         pipeline_id = startup["pipelineId"]
 
-        for level, factor in ((1, 0.001), (50, 0.05), (99, 0.099), (100, 0.1)):
+        for level, strength in ((1, 0.01), (50, 0.5), (99, 0.99), (100, 1)):
             _set_ao_level(page, level)
             state = page.evaluate("""async () => {
               const {getViewportRenderPipelineDebugState} =
@@ -377,10 +385,11 @@ def test_viewport_ambient_occlusion_slider_selects_direct_or_gtao_path(
               return getViewportRenderPipelineDebugState();
             }""")
             assert state["enabled"]
-            assert state["radiusFactor"] == pytest.approx(factor)
-            assert state["effectiveStrength"] == pytest.approx(state["strength"])
+            assert state["radiusFactor"] == pytest.approx(0.005)
+            assert state["strength"] == pytest.approx(strength)
+            assert state["effectiveStrength"] == pytest.approx(strength)
             assert state["radius"] == pytest.approx(
-                max(state["modelSize"] * factor, 0.001))
+                max(state["modelSize"] * 0.005, 0.001))
             assert state["aoRenderCount"] > 0
             assert state["pipelineId"] == pipeline_id
 
@@ -389,7 +398,7 @@ def test_viewport_ambient_occlusion_slider_selects_direct_or_gtao_path(
             await import('./js/scene/scene.js');
           return getViewportRenderPipelineDebugState();
         }""")
-        assert initial["radiusFactor"] == pytest.approx(0.1)
+        assert initial["radiusFactor"] == pytest.approx(0.005)
         direct_before = initial["directRenderCount"]
         ao_before = initial["aoRenderCount"]
         _set_ao_level(page, 0)
@@ -397,7 +406,7 @@ def test_viewport_ambient_occlusion_slider_selects_direct_or_gtao_path(
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
           const state = getViewportRenderPipelineDebugState();
-          return state.radiusFactor === 0 && state.effectiveStrength === 0
+          return state.radiusFactor === 0.005 && state.effectiveStrength === 0
             && state.directRenderCount > count;
         }""", arg=direct_before)
         disabled = page.evaluate("""async () => {
@@ -406,7 +415,7 @@ def test_viewport_ambient_occlusion_slider_selects_direct_or_gtao_path(
           return getViewportRenderPipelineDebugState();
         }""")
         assert not disabled["enabled"]
-        assert disabled["radiusFactor"] == 0
+        assert disabled["radiusFactor"] == pytest.approx(0.005)
         assert disabled["effectiveStrength"] == 0
         assert disabled["aoRenderCount"] == ao_before
         assert disabled["pipelineId"] == pipeline_id
@@ -433,7 +442,8 @@ def test_viewport_gtao_radius_scales_with_model_bounds(edge_browser, frontend_ur
         assert math.isfinite(state["modelSize"])
         assert math.isfinite(state["radius"])
         assert state["modelSize"] > 0
-        assert state["radius"] == pytest.approx(state["modelSize"] * 0.10)
+        assert state["radius"] == pytest.approx(
+            max(state["modelSize"] * 0.005, 0.001))
     finally:
         context.close()
 

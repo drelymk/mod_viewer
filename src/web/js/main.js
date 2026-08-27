@@ -1,10 +1,10 @@
 // Entry point: composes frontend application flows and initializes the UI.
 
 import {
-  getAmbientOcclusionRadiusFactor, getEnvironmentPreset, getRenderCount,
+  getAmbientOcclusionStrength, getEnvironmentPreset, getRenderCount,
   isRendererAvailable, rendererReady,
   resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
-  setAmbientOcclusionRadiusFactor, toggleGrid, toggleTrackballGizmo,
+  setAmbientOcclusionStrength, toggleGrid, toggleTrackballGizmo,
 } from './scene/scene.js';
 import {
   activeMeshes, resetMeshState,
@@ -238,9 +238,9 @@ rendererReady.then(ready => {
     activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset,
     getEnvironmentPreset,
-    getAmbientOcclusionRadiusFactor,
-    setAmbientOcclusionRadiusFactor: value => {
-      const changed = setAmbientOcclusionRadiusFactor(value);
+    getAmbientOcclusionStrength,
+    setAmbientOcclusionStrength: value => {
+      const changed = setAmbientOcclusionStrength(value);
       syncAmbientOcclusionControl?.();
       return changed;
     },

@@ -18,10 +18,9 @@ import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { computeModelBounds } from './model-bounds.js';
 import { CHARACTER_AO_LAYER } from './viewer-layers.js';
 
-const AO_STRENGTH = 0.55;
 const AO_RESOLUTION_SCALE = 0.5;
 const AO_SAMPLES = 8;
-const AO_MAX_RADIUS_FACTOR = 0.10;
+const AO_RADIUS_FACTOR = 0.005;
 const MIN_MODEL_SIZE = 0.001;
 const MIN_AO_RADIUS = 0.001;
 let nextPipelineId = 0;
@@ -85,7 +84,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   aoPass.samples.value = AO_SAMPLES;
   aoPass.useTemporalFiltering = false;
 
-  const aoStrengthNode = uniform(AO_STRENGTH);
+  const aoStrengthNode = uniform(0);
   const aoSample = aoPass.getTextureNode().sample(screenUV).r;
   const effectiveAO = mix(float(1), aoSample, aoStrengthNode);
 
@@ -100,14 +99,14 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   let meshes = [];
   let modelSizeDirty = true;
   let modelSize = MIN_MODEL_SIZE;
-  let radiusFactor = 0;
+  let configuredStrength = 0;
   let suppressedByWireframe = false;
   let renderCount = 0;
   let directRenderCount = 0;
   let aoRenderCount = 0;
 
   function isAmbientOcclusionEnabled() {
-    return radiusFactor > 0;
+    return configuredStrength > 0;
   }
 
   function shouldRenderAO() {
@@ -115,7 +114,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   }
 
   function effectiveStrength() {
-    return shouldRenderAO() ? AO_STRENGTH : 0;
+    return shouldRenderAO() ? configuredStrength : 0;
   }
 
   function applyStrength() {
@@ -141,7 +140,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
       return;
     }
     updateModelSize();
-    aoPass.radius.value = Math.max(modelSize * radiusFactor, MIN_AO_RADIUS);
+    aoPass.radius.value = Math.max(modelSize * AO_RADIUS_FACTOR, MIN_AO_RADIUS);
   }
 
   function invalidateGeometry() {
@@ -177,11 +176,11 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     aoPass.radius.value = MIN_AO_RADIUS;
   }
 
-  function setAmbientOcclusionRadiusFactor(value) {
+  function setAmbientOcclusionStrength(value) {
     if (!Number.isFinite(value)) return false;
-    const next = THREE.MathUtils.clamp(value, 0, AO_MAX_RADIUS_FACTOR);
-    const changed = next !== radiusFactor;
-    radiusFactor = next;
+    const next = THREE.MathUtils.clamp(value, 0, 1);
+    const changed = next !== configuredStrength;
+    configuredStrength = next;
     updateRadius();
     applyStrength();
     return changed;
@@ -223,8 +222,8 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   function getDebugState() {
     return {
       enabled: isAmbientOcclusionEnabled(),
-      radiusFactor,
-      strength: AO_STRENGTH,
+      radiusFactor: AO_RADIUS_FACTOR,
+      strength: configuredStrength,
       effectiveStrength: effectiveStrength(),
       suppressedByWireframe,
       pipelineId,
@@ -268,9 +267,9 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     forgetMeshes,
     invalidateGeometry,
     reset,
-    getAmbientOcclusionRadiusFactor: () => radiusFactor,
+    getAmbientOcclusionStrength: () => configuredStrength,
     isAmbientOcclusionEnabled,
-    setAmbientOcclusionRadiusFactor,
+    setAmbientOcclusionStrength,
     setAmbientOcclusionSuppressedByWireframe,
     getDebugState,
     dispose,
