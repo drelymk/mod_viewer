@@ -63,6 +63,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   // The pre-pass renders only character meshes. Its packed normal attachment
   // is deliberately 8-bit; depth remains the pass's depth texture.
   const prePass = pass(scene, prePassCamera, { samples: 1 });
+  prePass.setResolutionScale(AO_RESOLUTION_SCALE);
   prePass.name = 'Character AO pre-pass';
   prePass.transparent = false;
   prePass.setLayers(aoLayers);
@@ -206,6 +207,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
       temporalFiltering: aoPass.useTemporalFiltering === true,
       prePassLayerMask: prePass.getLayers()?.mask ?? 0,
       prePassSamples: prePass.renderTarget?.samples ?? 0,
+      prePassResolutionScale: prePass.getResolutionScale(),
       beautyCameraIsSource: scenePass.camera === camera,
       prePassCameraIsClone: prePass.camera !== camera,
       cameraCoordinateSystem: camera.coordinateSystem,

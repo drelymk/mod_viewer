@@ -87,6 +87,7 @@ def test_viewport_pipeline_uses_character_layers_and_stable_ao_settings(
         assert state["pipeline"]["characterAOLayer"] == 1
         assert state["pipeline"]["samples"] == 8
         assert state["pipeline"]["prePassSamples"] == 1
+        assert state["pipeline"]["prePassResolutionScale"] == pytest.approx(0.5)
         assert state["pipeline"]["beautyCameraIsSource"]
         assert state["pipeline"]["prePassCameraIsClone"]
         assert state["pipeline"]["cameraCoordinateSystem"] == (
