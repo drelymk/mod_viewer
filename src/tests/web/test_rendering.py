@@ -585,6 +585,9 @@ def test_viewport_bloom_selects_only_its_required_render_graph(
             await import('./js/scene/scene.js');
           return getViewportRenderPipelineDebugState();
         }""")
+        bloom_button = page.locator("#bloom-btn")
+        assert not bloom_button.is_hidden()
+        assert not bloom_button.is_disabled()
         assert initial["activeRenderMode"] == "direct"
         assert not initial["bloomEnabled"]
         assert initial["hasBloom"]
@@ -660,13 +663,14 @@ def test_viewport_bloom_selects_only_its_required_render_graph(
         context.close()
 
 
-def test_bloom_control_is_disabled_without_supported_emission(
+def test_bloom_control_is_hidden_without_supported_emission(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"Plain": _payload("Plain")})
     try:
         _open(page, "Plain")
         page.locator(".draw-item").wait_for()
         button = page.locator("#bloom-btn")
+        assert button.is_hidden()
         assert button.is_disabled()
         assert button.get_attribute("aria-label") == (
             "Emission bloom unavailable: no GlowMap detected")

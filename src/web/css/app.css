@@ -362,6 +362,7 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
   font-size: 20px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
 }
+.tool-btn[hidden] { display: none !important; }
 .mesh-state-btn { width: 22px; height: 22px; min-height: 22px; padding: 0; border: 0; background: transparent; color: var(--text); cursor: pointer; flex-shrink: 0; }
 .mesh-state-btn .ui-icon { width: 16px; height: 16px; }
 .mesh-state-btn.state-hidden { color: var(--text-muted); opacity: .7; }

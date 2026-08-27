@@ -126,6 +126,7 @@ function syncBloomControl() {
   const button = $('bloom-btn');
   const available = hasUsableEmission();
   const enabled = available && getBloomEnabled();
+  button.hidden = !available;
   button.disabled = !available;
   button.classList.toggle('off', !enabled);
   button.classList.toggle('active', enabled);
