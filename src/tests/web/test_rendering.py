@@ -1218,7 +1218,7 @@ def test_zzz_toon_lighting_works_without_light_or_material_maps(
         "diffuse::Packed-one.png": _flat_png_uri((96, 96, 96, 255)),
     }
 
-    def render(test_payload):
+    def render(test_payload, enable_toon):
         context, page = _page(edge_browser, frontend_url,
                                {"Packed": test_payload})
         try:
@@ -1227,6 +1227,11 @@ def test_zzz_toon_lighting_works_without_light_or_material_maps(
                 "window.modViewer.activeMeshes[0]?.material?.userData"
                 "?.gameMaterial")
             _set_test_key_light(page)
+            if enable_toon:
+                page.locator("#toon-btn").click()
+                page.wait_for_function(
+                    "window.modViewer.activeMeshes[0].material.userData"
+                    ".gameMaterial.toonEnabledNode.value === true")
             state = page.evaluate("""() => {
               const mesh = window.modViewer.activeMeshes[0];
               const material = mesh.material;
@@ -1242,7 +1247,7 @@ def test_zzz_toon_lighting_works_without_light_or_material_maps(
         finally:
             context.close()
 
-    toon_state, toon_pixel = render(payload)
+    toon_state, toon_pixel = render(payload, True)
     physical_payload = copy.deepcopy(payload)
     physical_payload["metadata"]["material_profiles"]["zzz:zzmi"] = (
         material_profile_for("zzz", "zzmi").to_metadata())
@@ -1250,7 +1255,7 @@ def test_zzz_toon_lighting_works_without_light_or_material_maps(
         **physical_payload["metadata"]["material_profiles"]["zzz:zzmi"],
         "direct_shadow_model": None,
     }
-    physical_state, physical_pixel = render(physical_payload)
+    physical_state, physical_pixel = render(physical_payload, False)
 
     assert toon_state == {
         "model": "ZzzLightingModel", "lightMap": False,
@@ -1290,6 +1295,10 @@ def test_genshin_toon_uses_n_dot_l_when_light_map_is_missing(
                 "window.modViewer.activeMeshes[0]?.material?.userData"
                 "?.gameMaterial")
             _set_test_key_light(page)
+            page.locator("#toon-btn").click()
+            page.wait_for_function(
+                "window.modViewer.activeMeshes[0].material.userData"
+                ".gameMaterial.toonEnabledNode.value === true")
             state = page.evaluate("""() => {
               const mesh = window.modViewer.activeMeshes[0];
               const material = mesh.material;
@@ -1356,21 +1365,22 @@ def test_toon_shadow_toggle_uses_stable_uniform_and_inherits_to_new_meshes(
           };
         }""")
         before_pixel = _sample_mesh_pixel(page)
-        assert before["enabled"] is True
+        assert before["enabled"] is False
         assert page.locator("#toon-btn").get_attribute("aria-label") == (
-            "Toon shadows: on")
-        assert page.locator("#toon-btn").get_attribute("aria-pressed") == "true"
+            "Toon shadows: off")
+        assert page.locator("#toon-btn").get_attribute("aria-pressed") == "false"
+        assert "off" in (page.locator("#toon-btn").get_attribute("class") or "")
 
         render_count = page.evaluate("window.modViewer.getRenderCount()")
         page.locator("#toon-btn").click()
         page.wait_for_function(
             "window.modViewer.activeMeshes[0].material.userData.gameMaterial"
-            ".toonEnabledNode.value === false")
+            ".toonEnabledNode.value === true")
         page.wait_for_function(
             "count => window.modViewer.getRenderCount() > count", arg=render_count)
         page.wait_for_timeout(250)
-        off_pixel = _sample_mesh_pixel(page)
-        off = page.evaluate("""version => {
+        toon_pixel = _sample_mesh_pixel(page)
+        toon = page.evaluate("""version => {
           const mesh = window.modViewer.activeMeshes[0];
           const material = mesh.material;
           const game = material.userData.gameMaterial;
@@ -1381,15 +1391,23 @@ def test_toon_shadow_toggle_uses_stable_uniform_and_inherits_to_new_meshes(
             enabled: game.toonEnabledNode.value,
           };
         }""", before["version"])
-        assert off == {
+        assert toon == {
             "sameMaterial": True, "sameNode": True, "sameVersion": True,
-            "enabled": False,
+            "enabled": True,
         }
         assert page.locator("#toon-btn").get_attribute("aria-label") == (
-            "Toon shadows: off")
-        assert page.locator("#toon-btn").get_attribute("aria-pressed") == "false"
-        assert "off" in (page.locator("#toon-btn").get_attribute("class") or "")
-        assert sum(before_pixel) != sum(off_pixel), (before_pixel, off_pixel)
+            "Toon shadows: on")
+        assert page.locator("#toon-btn").get_attribute("aria-pressed") == "true"
+        assert "active" in (page.locator("#toon-btn").get_attribute("class") or "")
+        assert sum(before_pixel) != sum(toon_pixel), (before_pixel, toon_pixel)
+
+        page.locator("#toon-btn").click()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial"
+            ".toonEnabledNode.value === false")
+        page.wait_for_timeout(250)
+        off_again_pixel = _sample_mesh_pixel(page)
+        assert off_again_pixel == pytest.approx(before_pixel, abs=2)
 
         _open(page, "B")
         page.wait_for_function(
@@ -1424,7 +1442,6 @@ def test_toon_shadow_off_ignores_genshin_light_map_boundary_refinement(
             ?.gameMaterial?.bindings?.light_map?.enabledNode?.value === true
         """)
         _set_test_key_light(page)
-        page.locator("#toon-btn").click()
         page.wait_for_function("""
           () => window.modViewer.activeMeshes[0]?.material?.userData
             ?.gameMaterial?.toonEnabledNode?.value === false
@@ -1494,16 +1511,16 @@ def test_wuwa_toon_shadow_toggle_uses_stable_uniform(
             enabled: game.toonEnabledNode.value,
           };
         }""")
-        toon_pixel = _sample_mesh_pixel(page)
+        off_pixel = _sample_mesh_pixel(page)
 
         page.locator("#toon-btn").click()
         page.wait_for_function("""
           () => window.modViewer.activeMeshes[0].material.userData
-            .gameMaterial.toonEnabledNode.value === false
+            .gameMaterial.toonEnabledNode.value === true
         """)
         page.wait_for_timeout(250)
-        off_pixel = _sample_mesh_pixel(page)
-        off = page.evaluate("""version => {
+        toon_pixel = _sample_mesh_pixel(page)
+        toon = page.evaluate("""version => {
           const mesh = window.modViewer.activeMeshes[0];
           const material = mesh.material;
           const game = material.userData.gameMaterial;
@@ -1518,23 +1535,22 @@ def test_wuwa_toon_shadow_toggle_uses_stable_uniform(
         page.locator("#toon-btn").click()
         page.wait_for_function("""
           () => window.modViewer.activeMeshes[0].material.userData
-            .gameMaterial.toonEnabledNode.value === true
+            .gameMaterial.toonEnabledNode.value === false
         """)
         page.wait_for_timeout(250)
-        toon_again_pixel = _sample_mesh_pixel(page)
+        off_again_pixel = _sample_mesh_pixel(page)
 
         assert before["profile"] == profile_id
         assert before["model"] == (
             "WuwaBodyLightingModel"
             if profile_id.endswith(":body") else "WuwaLightingModel")
-        assert before["enabled"] is True
-        assert off == {
+        assert before["enabled"] is False
+        assert toon == {
             "sameMaterial": True, "sameNode": True,
-            "sameVersion": True, "enabled": False,
+            "sameVersion": True, "enabled": True,
         }
-        assert sum(off_pixel) > sum(toon_pixel) + 5, (
-            toon_pixel, off_pixel)
-        assert toon_again_pixel == pytest.approx(toon_pixel, abs=2)
+        assert sum(off_pixel) > sum(toon_pixel) + 5, (off_pixel, toon_pixel)
+        assert off_again_pixel == pytest.approx(off_pixel, abs=2)
     finally:
         context.close()
 
@@ -2064,6 +2080,12 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
           }
         """)
         page.wait_for_timeout(400)
+        page.locator("#toon-btn").click()
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.toonEnabledNode?.value === true
+        """)
+        page.wait_for_timeout(250)
         shadowed_pixel = _sample_mesh_pixel(page)
         before_version = page.evaluate("""() => {
           const mesh = window.modViewer.activeMeshes[0];

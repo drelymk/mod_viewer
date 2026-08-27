@@ -11,7 +11,7 @@ import { setAmbientOcclusionSuppressedByWireframe } from './scene.js';
 let wireframe = false;
 let smoothShading = true;
 let glossy = false;
-let toonShading = true;
+let toonShading = false;
 const DEFAULT_ROUGHNESS = 1.0;
 const GLOSSY_ROUGHNESS = 0.2;
 const textureModes = ['all', 'diffuse-normal', 'diffuse', 'none'];
