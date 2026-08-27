@@ -90,6 +90,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   let modelSize = MIN_MODEL_SIZE;
   let configuredStrength = 0;
   let bloomEnabled = false;
+  let bloomAvailable = false;
   let suppressedByWireframe = false;
   let bloomSuppressedByWireframe = false;
   let bloomSuppressedByDebug = false;
@@ -103,8 +104,8 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
 
   const isAmbientOcclusionEnabled = () => configuredStrength > 0;
   const shouldRenderAO = () => isAmbientOcclusionEnabled() && !suppressedByWireframe;
-  const shouldRenderBloom = () => bloomEnabled && !bloomSuppressedByWireframe
-    && !bloomSuppressedByDebug;
+  const shouldRenderBloom = () => bloomEnabled && bloomAvailable
+    && !bloomSuppressedByWireframe && !bloomSuppressedByDebug;
   const renderMode = () => shouldRenderAO()
     ? (shouldRenderBloom() ? 'ao-bloom' : 'ao')
     : (shouldRenderBloom() ? 'bloom' : 'direct');
@@ -162,8 +163,10 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     meshes = [];
     modelSize = MIN_MODEL_SIZE;
     modelSizeDirty = false;
+    bloomAvailable = false;
     aoPass.radius.value = MIN_AO_RADIUS;
     aoPass.thickness.value = MIN_AO_RADIUS * AO_THICKNESS_RADIUS_RATIO;
+    configureRenderGraph();
   }
   function setAmbientOcclusionStrength(value) {
     if (!Number.isFinite(value)) return false;
@@ -184,6 +187,13 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     const next = value === true;
     const changed = next !== bloomEnabled;
     bloomEnabled = next;
+    configureRenderGraph();
+    return changed;
+  }
+  function setBloomAvailable(value) {
+    const next = value === true;
+    const changed = next !== bloomAvailable;
+    bloomAvailable = next;
     configureRenderGraph();
     return changed;
   }
@@ -223,7 +233,8 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     return {
       enabled: isAmbientOcclusionEnabled(), radiusFactor: AO_RADIUS_FACTOR,
       strength: configuredStrength, effectiveStrength: effectiveStrength(),
-      suppressedByWireframe, bloomEnabled, bloomEffective: shouldRenderBloom(),
+      suppressedByWireframe, bloomEnabled, bloomAvailable,
+      bloomEffective: shouldRenderBloom(),
       bloomSuppressedByWireframe, bloomSuppressedByDebug,
       bloomStrength: BLOOM_STRENGTH, bloomRadius: BLOOM_RADIUS,
       bloomThreshold: BLOOM_THRESHOLD, bloomResolutionScale: bloomPass.getResolutionScale(),
@@ -259,7 +270,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     render, setMeshes, adoptMeshes, forgetMeshes, invalidateGeometry, reset,
     getAmbientOcclusionStrength: () => configuredStrength, isAmbientOcclusionEnabled,
     setAmbientOcclusionStrength, setAmbientOcclusionSuppressedByWireframe,
-    getBloomEnabled: () => bloomEnabled, setBloomEnabled,
+    getBloomEnabled: () => bloomEnabled, setBloomEnabled, setBloomAvailable,
     setBloomSuppressedByWireframe, setBloomSuppressedByDebug, getDebugState, dispose,
   };
 }

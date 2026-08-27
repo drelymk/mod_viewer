@@ -4,7 +4,8 @@ import {
   getAmbientOcclusionStrength, getBloomEnabled, getEnvironmentPreset, getRenderCount,
   isRendererAvailable, rendererReady,
   resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
-  setAmbientOcclusionStrength, setBloomEnabled, setBloomSuppressedByDebug,
+  setAmbientOcclusionStrength, setBloomAvailable, setBloomEnabled,
+  setBloomSuppressedByDebug,
   toggleGrid, toggleTrackballGizmo,
 } from './scene/scene.js';
 import {
@@ -114,17 +115,21 @@ function exportChanges() {
   return exportChangesFlow();
 }
 
-function hasUsableEmission() {
+function hasEmissionCapability() {
   return activeMeshes.some(mesh => {
     const game = mesh.material?.userData?.gameMaterial;
-    return game?.profile?.emission_source === 'emission_map_rgb'
-      && !!mesh.userData.emissionMapKey;
+    if (game?.profile?.emission_source !== 'emission_map_rgb') return false;
+    return !!mesh.userData.emissionMapKey
+      || !!mesh.userData.defaultEmissionMapKey
+      || !!mesh.userData.resolvedEmissionMapKey
+      || (mesh.userData.emissionMapVariants?.length ?? 0) > 0;
   });
 }
 
 function syncBloomControl() {
   const button = $('bloom-btn');
-  const available = hasUsableEmission();
+  const available = hasEmissionCapability();
+  setBloomAvailable(available);
   const enabled = available && getBloomEnabled();
   button.hidden = !available;
   button.disabled = !available;
@@ -172,6 +177,7 @@ rendererReady.then(ready => {
   for (const eventName of [
     'mod-viewer-mod-load-started', 'mod-viewer-mod-loaded',
     'mod-viewer-asset-load-started', 'mod-viewer-asset-loaded',
+    'mod-viewer-mesh-state-changed',
   ]) {
     window.addEventListener(eventName, syncBloomControl);
   }

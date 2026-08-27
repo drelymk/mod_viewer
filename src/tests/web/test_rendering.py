@@ -590,6 +590,7 @@ def test_viewport_bloom_selects_only_its_required_render_graph(
         assert not bloom_button.is_disabled()
         assert initial["activeRenderMode"] == "direct"
         assert not initial["bloomEnabled"]
+        assert initial["bloomAvailable"]
         assert initial["hasBloom"]
 
         page.locator("#bloom-btn").click()
@@ -605,6 +606,7 @@ def test_viewport_bloom_selects_only_its_required_render_graph(
           return getViewportRenderPipelineDebugState();
         }""")
         assert bloom_only["bloomEffective"]
+        assert bloom_only["bloomAvailable"]
         assert bloom_only["aoOnlyRenderCount"] == 0
         assert page.locator("#bloom-btn").get_attribute("aria-pressed") == "true"
 
@@ -672,8 +674,116 @@ def test_bloom_control_is_hidden_without_supported_emission(
         button = page.locator("#bloom-btn")
         assert button.is_hidden()
         assert button.is_disabled()
+        state = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert not state["bloomAvailable"]
+        assert not state["bloomEffective"]
         assert button.get_attribute("aria-label") == (
             "Emission bloom unavailable: no GlowMap detected")
+    finally:
+        context.close()
+
+
+def test_bloom_availability_suppresses_pipeline_and_restores_preference(
+        edge_browser, frontend_url):
+    supported = _packed_material_payload("wuwa:rabbitfx")
+    supported["meshes"]["Body-Packed-0"]["emission_map_key"] = (
+        "emission_map::Packed-glow.png")
+    supported["textures"]["emission_map::Packed-glow.png"] = _PNG_URI
+    context, page = _page(edge_browser, frontend_url, {
+        "Bloom": supported, "Plain": _payload("Plain"),
+    })
+    try:
+        _open(page, "Bloom")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("window.modViewer.setBloomEnabled(true)")
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getViewportRenderPipelineDebugState();
+          return state.activeRenderMode === 'bloom'
+            && state.bloomAvailable && state.bloomEffective;
+        }""")
+        _set_ao_level(page, 100)
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState().activeRenderMode
+            === 'ao-bloom';
+        }""")
+
+        _open(page, "Plain")
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getViewportRenderPipelineDebugState();
+          return window.modViewer.activeMeshes.length === 1
+            && !state.bloomAvailable
+            && !state.bloomEffective
+            && state.activeRenderMode === 'ao'
+            && state.aoOnlyRenderCount > 0;
+        }""")
+        unsupported = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert unsupported["bloomEnabled"]
+        assert not unsupported["bloomAvailable"]
+        assert not unsupported["bloomEffective"]
+        assert page.locator("#bloom-btn").is_hidden()
+
+        _open(page, "Bloom")
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getViewportRenderPipelineDebugState();
+          return window.modViewer.activeMeshes.length === 1
+            && state.bloomAvailable
+            && state.bloomEffective
+            && state.activeRenderMode === 'ao-bloom';
+        }""")
+        button = page.locator("#bloom-btn")
+        assert not button.is_hidden()
+        assert not button.is_disabled()
+    finally:
+        context.close()
+
+
+def test_emission_variants_keep_bloom_available_without_active_map(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry["emission_map_variants"] = [{
+        "conditions": [[{"var": "menu", "value": "1", "negate": False}]],
+        "tex_key": "emission_map::Packed-conditional-glow.png",
+    }]
+    payload["textures"]["emission_map::Packed-conditional-glow.png"] = _PNG_URI
+    context, page = _page(edge_browser, frontend_url, {"Conditional": payload})
+    try:
+        _open(page, "Conditional")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        state = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const pipeline = getViewportRenderPipelineDebugState();
+          return {
+            variantCount: mesh.userData.emissionMapVariants.length,
+            resolvedEmissionMapKey: mesh.userData.resolvedEmissionMapKey,
+            bloomAvailable: pipeline.bloomAvailable,
+          };
+        }""")
+        assert state == {
+            "variantCount": 1,
+            "resolvedEmissionMapKey": None,
+            "bloomAvailable": True,
+        }
+        assert not page.locator("#bloom-btn").is_hidden()
+        assert not page.locator("#bloom-btn").is_disabled()
     finally:
         context.close()
 

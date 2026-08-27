@@ -431,6 +431,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
             normal_data: meshes[name].normal_data_variants,
             light_map: meshes[name].light_map_variants,
             material_map: meshes[name].material_map_variants,
+            emission_map: meshes[name].emission_map_variants,
           });
         // addMesh establishes the automatic defaults; restore persisted
         // viewer choices only after that initialization has completed.

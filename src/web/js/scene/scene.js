@@ -325,6 +325,12 @@ export function setBloomEnabled(value) {
   return changed;
 }
 
+export function setBloomAvailable(value) {
+  const changed = viewportRenderPipeline.setBloomAvailable(value);
+  if (changed) requestRender();
+  return changed;
+}
+
 export function getBloomEnabled() {
   return viewportRenderPipeline.getBloomEnabled();
 }
