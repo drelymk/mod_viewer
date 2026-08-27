@@ -114,6 +114,30 @@ function exportChanges() {
   return exportChangesFlow();
 }
 
+function hasUsableEmission() {
+  return activeMeshes.some(mesh => {
+    const game = mesh.material?.userData?.gameMaterial;
+    return game?.profile?.emission_source === 'emission_map_rgb'
+      && !!mesh.userData.emissionMapKey;
+  });
+}
+
+function syncBloomControl() {
+  const button = $('bloom-btn');
+  const available = hasUsableEmission();
+  const enabled = available && getBloomEnabled();
+  button.disabled = !available;
+  button.classList.toggle('off', !enabled);
+  button.classList.toggle('active', enabled);
+  button.setAttribute('aria-pressed', String(enabled));
+  const label = available
+    ? `Emission bloom: ${enabled ? 'on' : 'off'}`
+    : 'Emission bloom unavailable: no GlowMap detected';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  return enabled;
+}
+
 initToolbarOverflow();
 initPanelOpacityControl();
 
@@ -134,17 +158,6 @@ rendererReady.then(ready => {
     button.setAttribute('aria-pressed', String(enabled));
     button.setAttribute('aria-label', `Silhouette outlines: ${enabled ? 'on' : 'off'}`);
   });
-  const syncBloomControl = () => {
-    const enabled = getBloomEnabled();
-    const button = $('bloom-btn');
-    button.classList.toggle('off', !enabled);
-    button.classList.toggle('active', enabled);
-    button.setAttribute('aria-pressed', String(enabled));
-    const label = `Emission bloom: ${enabled ? 'on' : 'off'}`;
-    button.title = label;
-    button.setAttribute('aria-label', label);
-    return enabled;
-  };
   $('bloom-btn').addEventListener('click', () => {
     setBloomEnabled(!getBloomEnabled());
     syncBloomControl();
@@ -155,6 +168,12 @@ rendererReady.then(ready => {
   $('glossy-btn').addEventListener('click', toggleGlossy);
   const syncAmbientOcclusionControl = initToolPopovers();
   syncBloomControl();
+  for (const eventName of [
+    'mod-viewer-mod-load-started', 'mod-viewer-mod-loaded',
+    'mod-viewer-asset-load-started', 'mod-viewer-asset-loaded',
+  ]) {
+    window.addEventListener(eventName, syncBloomControl);
+  }
   $('reset-state-btn').addEventListener('click', event => {
     event.stopPropagation();
     resetMeshState();

@@ -571,7 +571,11 @@ def test_viewport_ambient_occlusion_slider_selects_direct_or_gtao_path(
 
 def test_viewport_bloom_selects_only_its_required_render_graph(
         edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {"Bloom": _payload("Bloom")})
+    payload = _packed_material_payload("wuwa:rabbitfx")
+    payload["meshes"]["Body-Packed-0"]["emission_map_key"] = (
+        "emission_map::Packed-glow.png")
+    payload["textures"]["emission_map::Packed-glow.png"] = _PNG_URI
+    context, page = _page(edge_browser, frontend_url, {"Bloom": payload})
     try:
         _open(page, "Bloom")
         page.locator(".draw-item").wait_for()
@@ -652,6 +656,20 @@ def test_viewport_bloom_selects_only_its_required_render_graph(
             await import('./js/scene/scene.js');
           return getViewportRenderPipelineDebugState().activeRenderMode === 'bloom';
         }""")
+    finally:
+        context.close()
+
+
+def test_bloom_control_is_disabled_without_supported_emission(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Plain": _payload("Plain")})
+    try:
+        _open(page, "Plain")
+        page.locator(".draw-item").wait_for()
+        button = page.locator("#bloom-btn")
+        assert button.is_disabled()
+        assert button.get_attribute("aria-label") == (
+            "Emission bloom unavailable: no GlowMap detected")
     finally:
         context.close()
 

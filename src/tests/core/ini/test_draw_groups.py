@@ -99,6 +99,71 @@ filename = body-light-map.dds
             draws[0].geometry_match.index_count) == ("0123abcd", 9, 3)
 
 
+def test_rabbitfx_glow_map_flows_through_the_draw_scanner():
+    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+Resource\RabbitFX\Diffuse = ref ResourceBodyDiffuse
+Resource\RabbitFX\GlowMap = ref ResourceBodyGlow
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 12
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 8
+
+[ResourceBodyDiffuse]
+filename = body-diffuse.dds
+
+[ResourceBodyGlow]
+filename = body-glow.dds
+""")
+    groups = build_draw_groups(sections, extract_resources(sections))
+
+    assert groups[0]["draws"][0].texture_default("emission_map") == (
+        "body-glow.dds")
+
+
+def test_non_rabbitfx_glow_map_is_not_recorded_as_emission():
+    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+Resource\GIMI\Diffuse = ref ResourceBodyDiffuse
+Resource\GIMI\GlowMap = ref ResourceBodyGlow
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 12
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 8
+
+[ResourceBodyDiffuse]
+filename = body-diffuse.dds
+
+[ResourceBodyGlow]
+filename = body-glow.dds
+""")
+    groups = build_draw_groups(sections, extract_resources(sections))
+
+    assert groups[0]["draws"][0].texture_default("emission_map") is None
+
+
 def test_draw_groups_preserve_inline_run_snapshots_without_buffer_files():
     sections = parse_sections("sample.ini", text="""[TextureOverrideBody]
 ib = ResourceMissingIB
