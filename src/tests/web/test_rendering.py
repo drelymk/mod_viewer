@@ -1206,11 +1206,13 @@ def test_genshin_no_uv_keeps_a_and_b_out_of_conservative_material_graph(
         context.close()
 
 
+@pytest.mark.parametrize("has_uv", [True, False])
 def test_zzz_toon_lighting_works_without_light_or_material_maps(
-        edge_browser, frontend_url):
+        edge_browser, frontend_url, has_uv):
     payload = _packed_material_payload("zzz:zzmi")
     entry = payload["meshes"]["Body-Packed-0"]
-    entry.pop("uv")
+    if not has_uv:
+        entry.pop("uv")
     entry["light_map_key"] = None
     entry["material_map_key"] = None
     entry["normal_data_key"] = None

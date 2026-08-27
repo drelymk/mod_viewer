@@ -436,10 +436,7 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
     const {
       profile,
       bindings,
-      shadowThresholdNode,
-      shadowSoftnessNode,
       shadowMaskStrengthNode,
-      shadowInfluenceNode,
       specularAreaNode,
       toonSpecularShininessNode,
       toonSpecularThresholdBiasNode,
@@ -764,7 +761,7 @@ export function configureGameMaterial(material, profile, options = {}) {
       numericOr(profile?.shadow_softness, 0.08)),
     shadowLevelNode: uniform(
       numericOr(resolvedProfile?.shadow_level, 0)),
-    toonEnabledNode: uniform(true),
+    toonEnabledNode: uniform(false),
     shadowMaskStrengthNode: uniform(
       numericOr(profile?.shadow_mask_strength, 0.5)),
     shadowInfluenceNode: uniform(
