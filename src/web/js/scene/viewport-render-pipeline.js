@@ -18,7 +18,7 @@ import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { computeModelBounds } from './model-bounds.js';
 import { CHARACTER_AO_LAYER } from './viewer-layers.js';
 
-const AO_DEFAULT_STRENGTH = 0.22;
+const AO_DEFAULT_STRENGTH = 0.55;
 const AO_RESOLUTION_SCALE = 0.5;
 const AO_SAMPLES = 8;
 const AO_RADIUS_FACTOR = 0.15;

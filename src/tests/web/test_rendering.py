@@ -106,7 +106,7 @@ def test_viewport_pipeline_uses_character_layers_and_stable_ao_settings(
             state["pipeline"]["rendererCoordinateSystem"])
         assert state["pipeline"]["resolutionScale"] == pytest.approx(0.5)
         assert state["pipeline"]["temporalFiltering"] is False
-        assert state["pipeline"]["strength"] == pytest.approx(0.22)
+        assert state["pipeline"]["strength"] == pytest.approx(0.55)
         assert not state["pipeline"]["pipelineNeedsUpdate"]
         assert state["pipeline"]["renderCount"] == state["viewerRenderCount"]
         assert state["meshHasCharacterLayer"]
@@ -405,6 +405,31 @@ def test_viewport_gtao_is_visible_and_does_not_add_continuous_frames(
         page.locator(".draw-item").wait_for()
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
         _enable_ao(page)
+        page.wait_for_timeout(250)
+        default_ao = Image.open(io.BytesIO(page.screenshot())).convert("RGB")
+        default_render_count = page.evaluate("window.modViewer.getRenderCount()")
+
+        page.evaluate("""async () => {
+          const {setAmbientOcclusionEnabled} =
+            await import('./js/scene/scene.js');
+          setAmbientOcclusionEnabled(false);
+        }""")
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count",
+            arg=default_render_count)
+        without_default_ao = Image.open(
+            io.BytesIO(page.screenshot())).convert("RGB")
+        assert ImageChops.difference(default_ao, without_default_ao).getbbox()
+
+        before_enable = page.evaluate("window.modViewer.getRenderCount()")
+        page.evaluate("""async () => {
+          const {setAmbientOcclusionEnabled} =
+            await import('./js/scene/scene.js');
+          setAmbientOcclusionEnabled(true);
+        }""")
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count",
+            arg=before_enable)
         page.evaluate("""async () => {
           const {setAmbientOcclusionStrength} =
             await import('./js/scene/scene.js');
