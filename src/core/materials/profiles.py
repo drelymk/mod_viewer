@@ -76,6 +76,7 @@ class MaterialInterpretation:
     toon_specular_metal_cutoff: float | None = None
     shadow_threshold: float = 0.5
     shadow_softness: float = 0.08
+    shadow_level: float = 0.0
     shadow_mask_strength: float = 0.5
     shadow_influence: float = 1.0
     direct_shadow_model: str | None = None
@@ -105,7 +106,8 @@ class MaterialInterpretation:
                            for channel in self.normal_xy)):
                 raise ValueError(
                     "normal_xy must contain exactly two RGBA channels")
-        if self.direct_shadow_model not in (None, "genshin_toon", "wuwa_base"):
+        if self.direct_shadow_model not in (
+                None, "zzz_toon", "genshin_toon", "wuwa_base"):
             raise ValueError(
                 f"Unknown direct shadow model: {self.direct_shadow_model}")
         if self.direct_specular_model not in (None, "wuwa_body"):
@@ -148,6 +150,7 @@ class MaterialInterpretation:
             "toon_specular_metal_cutoff": self.toon_specular_metal_cutoff,
             "shadow_threshold": self.shadow_threshold,
             "shadow_softness": self.shadow_softness,
+            "shadow_level": self.shadow_level,
             "shadow_mask_strength": self.shadow_mask_strength,
             "shadow_influence": self.shadow_influence,
             "direct_shadow_model": self.direct_shadow_model,
@@ -170,11 +173,16 @@ def _base_profile_for(game, texture_api):
         return MaterialInterpretation(
             id=f"zzz:{texture_api}", game=game, texture_api=texture_api,
             material_id=ChannelRef("material_map", "r"),
-            # ZZZ's LightMap.G is the conservative metallic input.  The
-            # similarly named MaterialMap.G varies between characters and is
-            # not safe to treat as a full-range PBR metalness map.
+            # ZZZ toon diffuse currently uses N·L only. LightMap.G remains
+            # the validated metallic input and must not be reused as a shadow
+            # mask without new evidence.
             metalness=ChannelRef("light_map", "g"),
             specular=ChannelRef("material_map", "b"),
+            shadow_threshold=0.5,
+            shadow_softness=0.08,
+            shadow_level=0.35,
+            shadow_influence=1.0,
+            direct_shadow_model="zzz_toon",
         )
     if game == "genshin" and texture_api in ("gimi", "rabbitfx"):
         return MaterialInterpretation(
@@ -198,6 +206,7 @@ def _base_profile_for(game, texture_api):
             toon_specular_threshold_bias=1.015,
             toon_specular_softness=0.0,
             toon_specular_metal_cutoff=0.90,
+            shadow_level=0.35,
             direct_shadow_model="genshin_toon",
         )
     if game == "wuwa":

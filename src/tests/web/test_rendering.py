@@ -30,6 +30,31 @@ def _set_ao_level(page, level):
         "renderCount": before["renderCount"],
     })
 
+
+def _set_test_key_light(page, x=1.0, z=0.25):
+    page.evaluate("""async ({x, z}) => {
+      const THREE = await import('three');
+      const {scene, controls} = await import('./js/scene/scene.js');
+      const {requestRender} = await import('./js/scene/render-scheduler.js');
+      let key = null;
+      scene.traverse(object => {
+        if (object.isAmbientLight || object.isHemisphereLight) {
+          object.intensity = 0;
+        } else if (object.isSprite || object.isGridHelper) {
+          object.visible = false;
+        } else if (object.isDirectionalLight) {
+          if (!key) key = object;
+          else object.intensity = 0;
+        }
+      });
+      key.target.position.copy(controls.target);
+      key.position.copy(controls.target).add(new THREE.Vector3(x, 0, z));
+      key.intensity = 1;
+      requestRender();
+    }""", {"x": x, "z": z})
+    page.wait_for_timeout(400)
+
+
 def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
     context = edge_browser.new_context(bypass_csp=True)
     page = context.new_page()
@@ -1017,9 +1042,11 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
           const mesh = window.modViewer.activeMeshes[0];
           const material = mesh.material;
           const game = material.userData.gameMaterial;
-          const packedRole = game.profile.id.startsWith('zzz') ? 'material_map' : 'light_map';
-          const lightingModel = material.setupLightingModel();
-          return {
+              const packedRole = game.profile.id.startsWith('zzz') ? 'material_map' : 'light_map';
+              const lightingModel = material.setupLightingModel();
+              window.__shadowLevelNode = game.shadowLevelNode;
+              window.__shadowThresholdNode = game.shadowThresholdNode;
+              return {
             physical: material.isMeshPhysicalNodeMaterial,
             profile: game.profile.id,
             hasGeneratedShaderState: Object.hasOwn(game, 'shader'),
@@ -1036,6 +1063,7 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
             specularInfluence: game.profile.specular_influence,
             shadowThreshold: game.shadowThresholdNode.value,
             shadowSoftness: game.shadowSoftnessNode.value,
+            shadowLevel: game.shadowLevelNode.value,
             shadowMaskStrength: game.shadowMaskStrengthNode.value,
             shadowInfluence: game.shadowInfluenceNode.value,
             materialKind: mesh.userData.materialKind,
@@ -1052,13 +1080,13 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
         assert state["specularScale"] == 1
         assert state["specularInfluence"] == (None if profile_id == "zzz:zzmi" else 0.15)
         assert (state["shadowThreshold"], state["shadowSoftness"],
-                state["shadowMaskStrength"], state["shadowInfluence"]) == (
-                    0.5, 0.08, 0.5, 1)
+                state["shadowLevel"], state["shadowMaskStrength"],
+                state["shadowInfluence"]) == (0.5, 0.08, 0.35, 0.5, 1)
         assert (state["materialKind"], state["materialKindReliable"],
                 state["materialProfileId"]) == ("body", False, profile_id)
         assert state["lightingModel"] == (
             "GenshinLightingModel" if profile_id == "genshin:gimi"
-            else "PhysicalLightingModel")
+            else "ZzzLightingModel")
         assert state["hasSpecularResponseNode"]
         assert state["sampledRole"]
         assert not runtime_errors, "\n".join(runtime_errors)
@@ -1084,6 +1112,8 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
           return {
             sameTextureNode: game.bindings[packedRole].textureNode === packedNode,
             sameEnabledNode: game.bindings[packedRole].enabledNode === packedEnabled,
+            sameShadowLevelNode: game.shadowLevelNode === window.__shadowLevelNode,
+            sameShadowThresholdNode: game.shadowThresholdNode === window.__shadowThresholdNode,
             sameVersion: material.version === version,
             mapEnabled: packedEnabled.value,
             usesPlaceholder: game.bindings[packedRole].textureNode.value
@@ -1091,6 +1121,8 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
           };
         }""")
         assert after == {"sameTextureNode": True, "sameEnabledNode": True,
+                         "sameShadowLevelNode": True,
+                         "sameShadowThresholdNode": True,
                          "sameVersion": True, "mapEnabled": False,
                          "usesPlaceholder": True}
     finally:
@@ -1157,18 +1189,137 @@ def test_genshin_no_uv_keeps_a_and_b_out_of_conservative_material_graph(
             packedResponse: game.packedResponse,
             hasMaterialId: game.hasMaterialId,
             hasSpecularArea: game.hasSpecularArea,
+            hasShadowMask: game.hasShadowMask,
             lightMap: game.bindings.light_map.enabledNode.value,
+            lightingModel: material.setupLightingModel().constructor.name,
           };
         }""")
         assert state == {
             "standard": True, "physical": False,
             "packedResponse": False,
             "hasMaterialId": False, "hasSpecularArea": False,
-            "lightMap": False,
+            "hasShadowMask": False, "lightMap": False,
+            "lightingModel": "GenshinLightingModel",
         }
         assert not uv_messages, uv_messages
     finally:
         context.close()
+
+
+def test_zzz_toon_lighting_works_without_light_or_material_maps(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("zzz:zzmi")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry.pop("uv")
+    entry["light_map_key"] = None
+    entry["material_map_key"] = None
+    entry["normal_data_key"] = None
+    payload["textures"] = {
+        "diffuse::Packed-one.png": _flat_png_uri((96, 96, 96, 255)),
+    }
+
+    def render(test_payload):
+        context, page = _page(edge_browser, frontend_url,
+                               {"Packed": test_payload})
+        try:
+            _open(page, "Packed")
+            page.wait_for_function(
+                "window.modViewer.activeMeshes[0]?.material?.userData"
+                "?.gameMaterial")
+            _set_test_key_light(page)
+            state = page.evaluate("""() => {
+              const mesh = window.modViewer.activeMeshes[0];
+              const material = mesh.material;
+              const game = material.userData.gameMaterial;
+              return {
+                model: material.setupLightingModel().constructor.name,
+                lightMap: game.bindings.light_map.enabledNode.value,
+                materialMap: game.bindings.material_map.enabledNode.value,
+                shadowLevel: game.shadowLevelNode.value,
+              };
+            }""")
+            return state, _sample_mesh_pixel(page)
+        finally:
+            context.close()
+
+    toon_state, toon_pixel = render(payload)
+    physical_payload = copy.deepcopy(payload)
+    physical_payload["metadata"]["material_profiles"]["zzz:zzmi"] = (
+        material_profile_for("zzz", "zzmi").to_metadata())
+    physical_payload["metadata"]["material_profiles"]["zzz:zzmi"] = {
+        **physical_payload["metadata"]["material_profiles"]["zzz:zzmi"],
+        "direct_shadow_model": None,
+    }
+    physical_state, physical_pixel = render(physical_payload)
+
+    assert toon_state == {
+        "model": "ZzzLightingModel", "lightMap": False,
+        "materialMap": False, "shadowLevel": 0.35,
+    }
+    assert physical_state["model"] == "PhysicalLightingModel"
+    assert sum(toon_pixel) > sum(physical_pixel) + 8, (
+        toon_pixel, physical_pixel)
+
+
+def test_genshin_toon_uses_n_dot_l_when_light_map_is_missing(
+        edge_browser, frontend_url):
+    base = _packed_material_payload("genshin:gimi")
+    base_entry = base["meshes"]["Body-Packed-0"]
+    light_key = base_entry["light_map_key"]
+    base["textures"] = {
+        "diffuse::Packed-one.png": _flat_png_uri((96, 96, 96, 255)),
+    }
+
+    def make_payload(green):
+        payload = copy.deepcopy(base)
+        entry = payload["meshes"]["Body-Packed-0"]
+        if green is None:
+            entry["light_map_key"] = None
+        else:
+            entry["light_map_key"] = light_key
+            payload["textures"][light_key] = _flat_png_uri(
+                (0, green, 0, 255))
+        return payload
+
+    def render(test_payload):
+        context, page = _page(edge_browser, frontend_url,
+                               {"Packed": test_payload})
+        try:
+            _open(page, "Packed")
+            page.wait_for_function(
+                "window.modViewer.activeMeshes[0]?.material?.userData"
+                "?.gameMaterial")
+            _set_test_key_light(page)
+            state = page.evaluate("""() => {
+              const mesh = window.modViewer.activeMeshes[0];
+              const material = mesh.material;
+              const game = material.userData.gameMaterial;
+              return {
+                model: material.setupLightingModel().constructor.name,
+                lightMap: game.bindings.light_map.enabledNode.value,
+                hasShadowMask: game.hasShadowMask,
+                shadowLevel: game.shadowLevelNode.value,
+              };
+            }""")
+            return state, _sample_mesh_pixel(page)
+        finally:
+            context.close()
+
+    missing_state, missing_pixel = render(make_payload(None))
+    neutral_state, neutral_pixel = render(make_payload(128))
+    shadow_state, shadow_pixel = render(make_payload(0))
+
+    assert missing_state == {
+        "model": "GenshinLightingModel", "lightMap": False,
+        "hasShadowMask": True, "shadowLevel": 0.35,
+    }
+    assert neutral_state["lightMap"]
+    assert neutral_state["hasShadowMask"]
+    assert max(abs(a - b) for a, b in zip(missing_pixel, neutral_pixel)) <= 3, (
+        missing_pixel, neutral_pixel)
+    assert sum(shadow_pixel) + 8 < sum(neutral_pixel), (
+        shadow_pixel, neutral_pixel)
+
 
 def test_wuwa_debug_modes_are_capability_gated_and_uniform_only(
         edge_browser, frontend_url):
