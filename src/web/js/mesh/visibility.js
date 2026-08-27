@@ -9,7 +9,7 @@ import {
 } from './mesh-state.js';
 import {
   toggleGlossyMode, toggleSmoothShadingMode, toggleTextureDisplayMode,
-  toggleWireframeMode,
+  toggleToonShadingMode, toggleWireframeMode,
 } from '../scene/render-modes.js';
 import { clearViewSyncs, syncView, syncViews } from '../scene/view-sync.js';
 
@@ -56,6 +56,10 @@ export function toggleSmoothShading() {
 
 export function toggleGlossy() {
   toggleGlossyMode(activeMeshes);
+}
+
+export function toggleToonShading() {
+  toggleToonShadingMode(activeMeshes);
 }
 
 export function toggleTextures() {

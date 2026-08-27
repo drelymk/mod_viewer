@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import re
 
 from ..ini.sections import line_source
+from ..ini.texture_roles import _legacy_texture_evidence
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,21 @@ def _command_texture_namespace(section):
 def _resource_namespace(value, pattern=_RESOURCE_ROLE_RE):
     match = pattern.match(str(value))
     return match.group(1).lower() if match else None
+
+
+def _legacy_direct_texture_item(items, sections):
+    """Return one validated classic direct texture binding, if present."""
+    section_lookup = {
+        str(name).casefold(): name for name in (sections or {})
+    }
+    for section, line, text in items:
+        match = _DIRECT_TEXTURE_RE.match(text)
+        if not match:
+            continue
+        if _legacy_texture_evidence(
+                match.group(1), sections, section_lookup):
+            return section, line
+    return None
 
 
 def _zzmi_texture_item(items):
@@ -285,11 +301,19 @@ def collect_game_evidence(sections, resources=None):
                             for section, _line, _text in items)
     has_texcoord_section = any(_section_is(section, "texcoord")
                                for section, _line, _text in items)
-    if (has_position_section and has_blend_section and has_texcoord_section
-            and has_vb1_blend):
+    classic_gimi_routing = (
+        has_position_section and has_blend_section and has_texcoord_section
+        and has_vb1_blend)
+    if classic_gimi_routing:
         section, line, _text = vb1_item
         _add(game, "genshin", 75, "gimi_position_blend_texcoord", section, line)
         _add(runtime, "gimi", 65, "gimi_position_blend_texcoord", section, line)
+
+        legacy_texture_item = _legacy_direct_texture_item(items, sections)
+        if legacy_texture_item:
+            _add(texture_api, "gimi", 32,
+                 "gimi_classic_direct_textures",
+                 legacy_texture_item[0], legacy_texture_item[1])
 
     # SetTextures sections are useful API evidence.  A command-list API is
     # stronger than a bare Resource namespace, but still does not use a

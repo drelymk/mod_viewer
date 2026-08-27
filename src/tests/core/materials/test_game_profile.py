@@ -1,10 +1,23 @@
 """Structural game/runtime/texture-API detection regressions."""
 
+import pytest
+
 from core.materials.game_profile import detect_game
 from core.ini.analysis import analyze_ini
 from core.ini.parser import _scan_sections_for_draws
+from core.materials.profiles import material_profile_for
 from core.ini.sections import parse_sections
 from core.textures.profiles import texture_profile_for
+
+
+def _classic_gimi_sections():
+    return {
+        "TextureOverrideBodyPosition": ["vb0 = ResourceBodyPosition"],
+        "TextureOverrideBodyBlend": ["vb1 = ResourceBodyBlend"],
+        "TextureOverrideBodyTexcoord": ["vb0 = ResourceBodyTexcoord"],
+        "TextureOverrideBody": ["ps-t1 = ResourceBodyDiffuse"],
+        "ResourceBodyDiffuse": ["filename = body_diffuse.dds"],
+    }
 
 
 def test_wuwa_runtime_and_rabbitfx_api_are_separate():
@@ -27,6 +40,41 @@ def test_zzz_draw_type_vb2_blend_and_zzmi_texture_namespace():
     assert (detection.game, detection.runtime, detection.texture_api) == (
         "zzz", "zzmi", "zzmi")
     assert detection.confidence == "high"
+
+
+@pytest.mark.parametrize(
+    ("sections", "expected_api"),
+    [
+        (_classic_gimi_sections(), "gimi"),
+        ({
+            "TextureOverrideBody": ["ps-t1 = ResourceBodyDiffuse"],
+            "ResourceBodyDiffuse": ["filename = body_diffuse.dds"],
+        }, "raw"),
+        ({
+            **_classic_gimi_sections(),
+            r"CommandList\RabbitFX\SetTextures": [
+                r"Resource\RabbitFX\Diffuse = ref ResourceBodyDiffuse",
+            ],
+        }, "rabbitfx"),
+        ({
+            **_classic_gimi_sections(),
+            "TextureOverrideBody": ["ps-t1 = ResourceFoo"],
+            "ResourceFoo": ["filename = body_diffuse.dds"],
+        }, "raw"),
+        ({
+            **_classic_gimi_sections(),
+            "ResourceBodyDiffuse": ["format = rgba8"],
+        }, "raw"),
+    ],
+)
+def test_classic_gimi_direct_texture_detection_is_conservative(
+        sections, expected_api):
+    detection = detect_game(sections)
+
+    assert detection.texture_api == expected_api
+    if expected_api == "gimi":
+        assert (detection.game, detection.runtime) == ("genshin", "gimi")
+        assert material_profile_for(detection).id == "genshin:gimi"
 
 
 

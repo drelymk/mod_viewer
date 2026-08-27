@@ -48,6 +48,8 @@ import {
 } from 'three/tsl';
 
 const specularColorBlended = TSL.specularColorBlended;
+const BRDF_Lambert = TSL.BRDF_Lambert;
+const diffuseContribution = TSL.diffuseContribution;
 
 const SOURCE_INFO = Object.freeze({
   normal_data: true,
@@ -359,6 +361,61 @@ function physicalLightingFlags(material) {
   ].map(value => value === true);
 }
 
+function toonLightCoordinate(lightDirection) {
+  return normalView
+    .dot(lightDirection)
+    .clamp(-1, 1)
+    .mul(0.5)
+    .add(0.5);
+}
+
+function toonDiffuseFactor(state, lightDirection, boundary) {
+  const physicalFactor = normalView
+    .dot(lightDirection)
+    .clamp(0, 1);
+  const band = smoothstep(
+    state.shadowThresholdNode.sub(state.shadowSoftnessNode),
+    state.shadowThresholdNode.add(state.shadowSoftnessNode),
+    boundary,
+  );
+  const toonFactor = mix(state.shadowLevelNode, float(1), band);
+  const effectiveInfluence = state.shadowInfluenceNode
+    .mul(state.toonEnabledNode);
+  return mix(physicalFactor, toonFactor, effectiveInfluence);
+}
+
+function replaceDirectDiffuse(
+    reflectedLight, diffuseBefore, lightColor, irradianceFactor) {
+  const irradiance = lightColor.mul(irradianceFactor);
+  const toonDiffuse = irradiance.mul(
+    BRDF_Lambert({ diffuseColor: diffuseContribution }),
+  );
+  reflectedLight.directDiffuse.assign(
+    diffuseBefore.add(toonDiffuse),
+  );
+}
+
+class ZzzLightingModel extends ThreePhysicalLightingModel {
+  constructor(material, state) {
+    super(...physicalLightingFlags(material));
+    this.gameMaterialState = state;
+  }
+
+  direct(lightData, builder) {
+    const { lightDirection, lightColor, reflectedLight } = lightData;
+    const diffuseBefore = reflectedLight.directDiffuse.toVar(
+      'zzzDirectDiffuseBefore');
+    super.direct(lightData, builder);
+
+    const factor = toonDiffuseFactor(
+      this.gameMaterialState,
+      lightDirection,
+      toonLightCoordinate(lightDirection),
+    );
+    replaceDirectDiffuse(reflectedLight, diffuseBefore, lightColor, factor);
+  }
+}
+
 /**
  * Genshin's LightMap.G is a per-light toon-shadow mask. The lighting model
  * captures only the direct diffuse contribution produced by the current
@@ -371,7 +428,7 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
   }
 
   direct(lightData, builder) {
-    const { lightDirection, reflectedLight } = lightData;
+    const { lightDirection, lightColor, reflectedLight } = lightData;
     const diffuseBefore = reflectedLight.directDiffuse.toVar('gameDirectDiffuseBefore');
     const specularBefore = reflectedLight.directSpecular.toVar('gameDirectSpecularBefore');
     super.direct(lightData, builder);
@@ -379,10 +436,7 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
     const {
       profile,
       bindings,
-      shadowThresholdNode,
-      shadowSoftnessNode,
       shadowMaskStrengthNode,
-      shadowInfluenceNode,
       specularAreaNode,
       toonSpecularShininessNode,
       toonSpecularThresholdBiasNode,
@@ -390,27 +444,19 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
       toonSpecularMetalCutoffNode,
     } = this.gameMaterialState;
     const maskRef = profile.shadow_mask;
-    const maskBinding = bindings[maskRef.source];
-    const authoredMask = maskBinding.enabledNode.select(
-      channelNode(maskRef, bindings), float(0.5));
-    const lightValue = lightDirection.dot(normalView).clamp()
-      .mul(0.5).add(0.5);
-    const boundary = lightValue.add(
-      authoredMask.sub(0.5).mul(shadowMaskStrengthNode));
-    const factor = smoothstep(
-      shadowThresholdNode.sub(shadowSoftnessNode),
-      shadowThresholdNode.add(shadowSoftnessNode),
-      boundary);
-    const influencedFactor = mix(float(1), factor, shadowInfluenceNode);
-    const enabledFactor = maskBinding.enabledNode.select(
-      influencedFactor, float(1));
-    const diffuseContribution = reflectedLight.directDiffuse.sub(diffuseBefore);
-    reflectedLight.directDiffuse.assign(
-      diffuseBefore.add(diffuseContribution.mul(enabledFactor)));
+    let boundary = toonLightCoordinate(lightDirection);
+    if (this.gameMaterialState.hasShadowMask && validRef(maskRef)) {
+      const authoredMask = enabledChannelNode(maskRef, bindings, 0.5);
+      boundary = boundary.add(
+        authoredMask.sub(0.5).mul(shadowMaskStrengthNode));
+    }
+    const factor = toonDiffuseFactor(
+      this.gameMaterialState, lightDirection, boundary);
+    replaceDirectDiffuse(reflectedLight, diffuseBefore, lightColor, factor);
 
     const areaRef = profile.specular_area;
     let areaGate = float(1);
-    if (validRef(areaRef)) {
+    if (this.gameMaterialState.hasSpecularArea && validRef(areaRef)) {
       const areaBinding = bindings[areaRef.source];
       const threshold = toonSpecularThresholdBiasNode.sub(specularAreaNode);
       const halfDirection = lightDirection.add(positionViewDirection).normalize();
@@ -465,6 +511,7 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
       wuwaShadowMaskCutoffNode,
       wuwaShadowMaskEndpointToleranceNode,
       wuwaShadowInfluenceNode,
+      toonEnabledNode,
     } = this.gameMaterialState;
     const maskRef = profile.shadow_mask;
     const maskBinding = validRef(maskRef) ? bindings[maskRef.source] : null;
@@ -499,8 +546,10 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
     const authoredVisibility = endpointTolerance.greaterThan(0)
       .select(endpointAwareVisibility, classifiedVisibility);
     const shadowArea = lightBoundary.mul(authoredVisibility).clamp(0, 1);
+    const effectiveInfluence = wuwaShadowInfluenceNode
+      .mul(toonEnabledNode);
     const computedFactor = mix(
-      float(1), shadowArea, wuwaShadowInfluenceNode);
+      float(1), shadowArea, effectiveInfluence);
     // A missing Lightmap is an explicit no-mask case, not permission to
     // borrow Diffuse.A or a Normalmap channel.
     const factor = maskBinding
@@ -596,6 +645,25 @@ class WuwaBodyLightingModel extends WuwaLightingModel {
   }
 }
 
+function createGameLightingModel(
+    material, state, { allowPackedSpecializations = true } = {}) {
+  switch (state?.profile?.direct_shadow_model) {
+    case 'zzz_toon':
+      return new ZzzLightingModel(material, state);
+    case 'genshin_toon':
+      return new GenshinLightingModel(material, state);
+    case 'wuwa_base':
+      if (allowPackedSpecializations) {
+        if (state.profile.direct_specular_model === 'wuwa_body') {
+          return new WuwaBodyLightingModel(material, state);
+        }
+        return new WuwaLightingModel(material, state);
+      }
+      break;
+  }
+  return new ThreePhysicalLightingModel(...physicalLightingFlags(material));
+}
+
 class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
   setupSpecular() {
     const response = this.userData.gameMaterial?.specularResponseNode ?? float(1);
@@ -614,17 +682,7 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
   }
 
   setupLightingModel() {
-    const state = this.userData.gameMaterial;
-    if (state?.profile?.direct_shadow_model === 'genshin_toon') {
-      return new GenshinLightingModel(this, state);
-    }
-    if (state?.profile?.direct_shadow_model === 'wuwa_base') {
-      if (state.profile.direct_specular_model === 'wuwa_body') {
-        return new WuwaBodyLightingModel(this, state);
-      }
-      return new WuwaLightingModel(this, state);
-    }
-    return new ThreePhysicalLightingModel(...physicalLightingFlags(this));
+    return createGameLightingModel(this, this.userData.gameMaterial);
   }
 
   setupOutput(builder, outputNode) {
@@ -634,6 +692,12 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
 }
 
 class GameStandardNodeMaterial extends MeshStandardNodeMaterial {
+  setupLightingModel() {
+    return createGameLightingModel(this, this.userData.gameMaterial, {
+      allowPackedSpecializations: false,
+    });
+  }
+
   setupOutput(builder, outputNode) {
     const result = super.setupOutput(builder, outputNode);
     return applyViewerOutput(this.userData.gameMaterial, result);
@@ -695,6 +759,9 @@ export function configureGameMaterial(material, profile, options = {}) {
       numericOr(profile?.shadow_threshold, 0.5)),
     shadowSoftnessNode: uniform(
       numericOr(profile?.shadow_softness, 0.08)),
+    shadowLevelNode: uniform(
+      numericOr(resolvedProfile?.shadow_level, 0)),
+    toonEnabledNode: uniform(false),
     shadowMaskStrengthNode: uniform(
       numericOr(profile?.shadow_mask_strength, 0.5)),
     shadowInfluenceNode: uniform(
@@ -871,6 +938,14 @@ export function getMaterialDebugMode(material) {
 /** Toggle viewer rim lighting without rebuilding the material node graph. */
 export function setGameMaterialRimEnabled(material, enabled) {
   const node = material?.userData?.gameMaterial?.rimEnabledNode;
+  if (!node) return false;
+  node.value = enabled === true;
+  return true;
+}
+
+/** Toggle profile-driven toon direct diffuse without rebuilding the material. */
+export function setGameMaterialToonEnabled(material, enabled) {
+  const node = material?.userData?.gameMaterial?.toonEnabledNode;
   if (!node) return false;
   node.value = enabled === true;
   return true;

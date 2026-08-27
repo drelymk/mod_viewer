@@ -373,6 +373,8 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
 #grid-btn.off { background: var(--bg-control); }
 #shading-btn { background: var(--accent); }
 #shading-btn.off { background: var(--bg-control); }
+#toon-btn { background: var(--accent); }
+#toon-btn.off { background: var(--bg-control); }
 #glossy-btn { background: var(--accent); }
 #glossy-btn.off { background: var(--bg-control); }
 #texture-btn { background: var(--accent); }
@@ -384,7 +386,7 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
 #trackball-btn { background: var(--accent); }
 #trackball-btn.off { background: var(--bg-control); }
 .tool-btn.active,
-#grid-btn:not(.off), #shading-btn:not(.off), #glossy-btn:not(.off),
+#grid-btn:not(.off), #shading-btn:not(.off), #toon-btn:not(.off), #glossy-btn:not(.off),
 #texture-btn:not(.off), #trackball-btn:not(.off),
 #light-btn.double, #light-btn.current {
   background: rgba(31,111,235,.22); border-color: var(--accent-soft); color: var(--accent-soft);
