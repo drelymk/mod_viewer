@@ -6,7 +6,7 @@ import { createCameraFrame } from './camera-frame.js';
 import { createCharacterShadowController } from './character-shadow-controller.js';
 import { createEnvironmentController } from './environment.js';
 import { createKeyLightController } from './key-light-controller.js';
-import { updateOutlineCameraScale } from './outline-renderer.js';
+import { updateOutlineProjectionScale } from './outline-renderer.js';
 import { setBCTextureCompression } from './renderer-capabilities.js';
 import { requestRender, setRenderCallback } from './render-scheduler.js';
 import { createViewportRenderPipeline } from './viewport-render-pipeline.js';
@@ -185,8 +185,7 @@ function renderFrame() {
   characterShadowController.update();
   cameraFrame.updateViewport();
   cameraFrame.updateClipping();
-  updateOutlineCameraScale(camera, controls.target,
-    renderer.domElement.clientHeight);
+  updateOutlineProjectionScale(camera, renderer.domElement.clientHeight);
   viewGizmoController.updateAxes();
   viewportRenderPipeline.render();
   renderCount += 1;

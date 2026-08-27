@@ -1,11 +1,17 @@
 // Shared WebGPU/TSL inverted-hull silhouette outlines.
 
 import * as THREE from 'three/webgpu';
-import { normalLocal, positionLocal, uniform } from 'three/tsl';
+import {
+  cameraProjectionMatrix,
+  normalViewGeometry,
+  positionView,
+  uniform,
+  vec4,
+} from 'three/tsl';
 import { requestRender } from './render-scheduler.js';
 
 const OUTLINE_WIDTH_PIXELS = 1.5;
-const outlineWidthWorldNode = uniform(0);
+const outlineScalePerDepthNode = uniform(0);
 const outlineMaterial = new THREE.MeshBasicNodeMaterial({
   color: 0x111318,
   side: THREE.BackSide,
@@ -13,13 +19,19 @@ const outlineMaterial = new THREE.MeshBasicNodeMaterial({
   depthWrite: false,
 });
 outlineMaterial.toneMapped = false;
-outlineMaterial.positionNode = positionLocal.add(
-  normalLocal.normalize().mul(outlineWidthWorldNode));
+const outlineViewDepth = positionView.z.negate().max(0.000001);
+const outlineWidthView = outlineViewDepth.mul(outlineScalePerDepthNode);
+const displacedOutlinePositionView = positionView.add(
+  normalViewGeometry.mul(outlineWidthView));
+outlineMaterial.vertexNode = cameraProjectionMatrix.mul(
+  vec4(displacedOutlinePositionView, 1));
 
 const attachedOutlines = new Set();
 let outlinesEnabled = false;
 let suppressedByWireframe = false;
 let suppressedByDebug = false;
+let outlineViewportHeight = 0;
+let outlineEffectiveFov = 0;
 
 function outlinesVisible() {
   return outlinesEnabled && !suppressedByWireframe && !suppressedByDebug;
@@ -84,22 +96,28 @@ export function setOutlineSuppressedByDebug(value) {
   requestRender();
 }
 
-/** Update the shared world-space extrusion from the current CSS viewport. */
-export function updateOutlineCameraScale(camera, target, viewportHeight) {
+/** Update the shared view-space extrusion scale from the CSS viewport. */
+export function updateOutlineProjectionScale(camera, viewportHeight) {
   const height = Number(viewportHeight);
-  const distance = camera?.position?.distanceTo(target);
+  const effectiveFov = typeof camera?.getEffectiveFOV === 'function'
+    ? camera.getEffectiveFOV() : camera?.fov;
+  const fovDegrees = Number(effectiveFov);
   if (!camera || !Number.isFinite(height) || height <= 0
-      || !Number.isFinite(distance) || distance <= 0) {
-    outlineWidthWorldNode.value = 0;
+      || !Number.isFinite(fovDegrees)
+      || fovDegrees <= 0 || fovDegrees >= 180) {
+    outlineScalePerDepthNode.value = 0;
+    outlineViewportHeight = 0;
+    outlineEffectiveFov = 0;
     return 0;
   }
-  const effectiveFov = typeof camera.getEffectiveFOV === 'function'
-    ? camera.getEffectiveFOV() : camera.fov;
-  const fov = THREE.MathUtils.degToRad(Number(effectiveFov));
-  const worldHeight = 2 * distance * Math.tan(fov / 2);
-  const width = worldHeight / height * OUTLINE_WIDTH_PIXELS;
-  outlineWidthWorldNode.value = Number.isFinite(width) ? width : 0;
-  return outlineWidthWorldNode.value;
+  const fov = THREE.MathUtils.degToRad(fovDegrees);
+  const scalePerDepth = 2 * Math.tan(fov / 2)
+    * OUTLINE_WIDTH_PIXELS / height;
+  outlineScalePerDepthNode.value = Number.isFinite(scalePerDepth)
+    ? scalePerDepth : 0;
+  outlineViewportHeight = height;
+  outlineEffectiveFov = fovDegrees;
+  return outlineScalePerDepthNode.value;
 }
 
 export function getOutlineState(mesh) {
@@ -109,6 +127,10 @@ export function getOutlineState(mesh) {
     visible: !!outline?.visible,
     globalEnabled: outlinesEnabled,
     widthPixels: OUTLINE_WIDTH_PIXELS,
+    scaleMode: 'view-depth',
+    scalePerDepth: outlineScalePerDepthNode.value,
+    viewportHeight: outlineViewportHeight,
+    effectiveFov: outlineEffectiveFov,
     suppressedByWireframe,
     suppressedByDebug,
   };
