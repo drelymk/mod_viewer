@@ -305,6 +305,7 @@ def test_viewport_pipeline_uses_model_scale_and_wireframe_bypass(
         }""")
         assert initial["modelSize"] > 0
         assert initial["radius"] == pytest.approx(initial["modelSize"] * 0.005)
+        assert initial["thickness"] == pytest.approx(initial["radius"] * 4)
         assert initial["effectiveStrength"] == pytest.approx(initial["strength"])
         assert initial["directRenderCount"] > 0
         assert initial["aoRenderCount"] > 0
@@ -373,6 +374,8 @@ def test_viewport_ambient_occlusion_slider_selects_direct_or_gtao_path(
         }""")
         assert not startup["enabled"]
         assert startup["radiusFactor"] == pytest.approx(0.005)
+        assert startup["radius"] == pytest.approx(0.001 * 0.005)
+        assert startup["thickness"] == pytest.approx(startup["radius"] * 4)
         assert startup["directRenderCount"] > 0
         assert startup["aoRenderCount"] == 0
         pipeline_id = startup["pipelineId"]
@@ -388,8 +391,8 @@ def test_viewport_ambient_occlusion_slider_selects_direct_or_gtao_path(
             assert state["radiusFactor"] == pytest.approx(0.005)
             assert state["strength"] == pytest.approx(strength)
             assert state["effectiveStrength"] == pytest.approx(strength)
-            assert state["radius"] == pytest.approx(
-                max(state["modelSize"] * 0.005, 0.001))
+            assert state["radius"] == pytest.approx(state["modelSize"] * 0.005)
+            assert state["thickness"] == pytest.approx(state["radius"] * 4)
             assert state["aoRenderCount"] > 0
             assert state["pipelineId"] == pipeline_id
 
@@ -416,6 +419,8 @@ def test_viewport_ambient_occlusion_slider_selects_direct_or_gtao_path(
         }""")
         assert not disabled["enabled"]
         assert disabled["radiusFactor"] == pytest.approx(0.005)
+        assert disabled["radius"] == pytest.approx(0.001 * 0.005)
+        assert disabled["thickness"] == pytest.approx(disabled["radius"] * 4)
         assert disabled["effectiveStrength"] == 0
         assert disabled["aoRenderCount"] == ao_before
         assert disabled["pipelineId"] == pipeline_id
@@ -442,8 +447,8 @@ def test_viewport_gtao_radius_scales_with_model_bounds(edge_browser, frontend_ur
         assert math.isfinite(state["modelSize"])
         assert math.isfinite(state["radius"])
         assert state["modelSize"] > 0
-        assert state["radius"] == pytest.approx(
-            max(state["modelSize"] * 0.005, 0.001))
+        assert state["radius"] / state["modelSize"] == pytest.approx(0.005)
+        assert state["thickness"] == pytest.approx(state["radius"] * 4)
     finally:
         context.close()
 
@@ -2227,19 +2232,32 @@ def test_shape_and_view_changes_refit_character_shadows(edge_browser, frontend_u
         context.close()
 
 
-def test_camera_motion_reuses_shadow_map_but_light_motion_updates_it(
+def test_camera_motion_with_ao_reuses_shadow_map_but_light_motion_updates_it(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"ShadowMotion": _payload("ShadowMotion")})
     try:
         _open(page, "ShadowMotion")
         page.locator(".draw-item").wait_for()
+        _set_ao_level(page, 100)
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getViewportRenderPipelineDebugState();
+          return state.effectiveStrength === 1 && state.aoRenderCount > 0;
+        }""")
         page.wait_for_function("""async () => {
           const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return getCharacterShadowDebugState().groundVisible;
         }""")
         baseline = page.evaluate("""async () => {
-          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return getCharacterShadowDebugState();
+          const {
+            getCharacterShadowDebugState,
+            getViewportRenderPipelineDebugState,
+          } = await import('./js/scene/scene.js');
+          return {
+            shadow: getCharacterShadowDebugState(),
+            ao: getViewportRenderPipelineDebugState(),
+          };
         }""")
         render_count = page.evaluate("window.modViewer.getRenderCount()")
         page.evaluate("""async () => {
@@ -2251,11 +2269,18 @@ def test_camera_motion_reuses_shadow_map_but_light_motion_updates_it(
         page.wait_for_function(
             "count => window.modViewer.getRenderCount() > count", arg=render_count)
         after_camera = page.evaluate("""async () => {
-          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return getCharacterShadowDebugState();
+          const {
+            getCharacterShadowDebugState,
+            getViewportRenderPipelineDebugState,
+          } = await import('./js/scene/scene.js');
+          return {
+            shadow: getCharacterShadowDebugState(),
+            ao: getViewportRenderPipelineDebugState(),
+          };
         }""")
-        assert after_camera["fitCount"] == baseline["fitCount"]
-        assert after_camera["shadowUpdateCount"] == baseline["shadowUpdateCount"]
+        assert after_camera["shadow"]["fitCount"] == baseline["shadow"]["fitCount"]
+        assert after_camera["shadow"]["shadowUpdateCount"] == baseline["shadow"]["shadowUpdateCount"]
+        assert after_camera["ao"]["aoRenderCount"] > baseline["ao"]["aoRenderCount"]
 
         page.evaluate("""async () => {
           const THREE = await import('three');
@@ -2270,7 +2295,7 @@ def test_camera_motion_reuses_shadow_map_but_light_motion_updates_it(
           const next = getCharacterShadowDebugState();
           return next.fitCount > state.fitCount
             && next.shadowUpdateCount > state.shadowUpdateCount;
-        }""", arg=after_camera)
+        }""", arg=after_camera["shadow"])
     finally:
         context.close()
 
@@ -2287,6 +2312,31 @@ def test_debug_output_bypasses_viewer_rim_lighting(edge_browser, frontend_url):
           const game = window.modViewer.activeMeshes[0].material.userData.gameMaterial;
           game.rimStrengthNode.value = 0;
           window.modViewer.setMaterialDebugMode('normal-data-b');
+          window.modViewer.setAmbientOcclusionStrength(0);
+          requestRender();
+        }""")
+        page.wait_for_timeout(250)
+        without_ao = _sample_mesh_pixel(page)
+        before_ao = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        page.evaluate("window.modViewer.setAmbientOcclusionStrength(1)")
+        page.wait_for_function("""async state => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const next = getViewportRenderPipelineDebugState();
+          return next.effectiveStrength === 1
+            && next.aoRenderCount > state.aoRenderCount;
+        }""", arg=before_ao)
+        page.wait_for_timeout(250)
+        with_ao = _sample_mesh_pixel(page)
+        assert with_ao == pytest.approx(without_ao, abs=2)
+
+        page.evaluate("""async () => {
+          const {requestRender} = await import('./js/scene/render-scheduler.js');
+          window.modViewer.setAmbientOcclusionStrength(0);
           requestRender();
         }""")
         page.wait_for_timeout(250)

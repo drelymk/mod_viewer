@@ -21,8 +21,9 @@ import { CHARACTER_AO_LAYER } from './viewer-layers.js';
 const AO_RESOLUTION_SCALE = 0.5;
 const AO_SAMPLES = 8;
 const AO_RADIUS_FACTOR = 0.005;
+const AO_THICKNESS_RADIUS_RATIO = 4;
 const MIN_MODEL_SIZE = 0.001;
-const MIN_AO_RADIUS = 0.001;
+const MIN_AO_RADIUS = MIN_MODEL_SIZE * AO_RADIUS_FACTOR;
 let nextPipelineId = 0;
 
 function finitePositive(value) {
@@ -134,13 +135,16 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     modelSizeDirty = false;
   }
 
-  function updateRadius() {
+  function updateSpatialParameters() {
     if (!isAmbientOcclusionEnabled()) {
       aoPass.radius.value = MIN_AO_RADIUS;
+      aoPass.thickness.value = MIN_AO_RADIUS * AO_THICKNESS_RADIUS_RATIO;
       return;
     }
     updateModelSize();
-    aoPass.radius.value = Math.max(modelSize * AO_RADIUS_FACTOR, MIN_AO_RADIUS);
+    const radius = modelSize * AO_RADIUS_FACTOR;
+    aoPass.radius.value = radius;
+    aoPass.thickness.value = radius * AO_THICKNESS_RADIUS_RATIO;
   }
 
   function invalidateGeometry() {
@@ -174,6 +178,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     modelSize = MIN_MODEL_SIZE;
     modelSizeDirty = false;
     aoPass.radius.value = MIN_AO_RADIUS;
+    aoPass.thickness.value = MIN_AO_RADIUS * AO_THICKNESS_RADIUS_RATIO;
   }
 
   function setAmbientOcclusionStrength(value) {
@@ -181,7 +186,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     const next = THREE.MathUtils.clamp(value, 0, 1);
     const changed = next !== configuredStrength;
     configuredStrength = next;
-    updateRadius();
+    updateSpatialParameters();
     applyStrength();
     return changed;
   }
@@ -194,7 +199,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   function render() {
     const useAmbientOcclusion = shouldRenderAO();
     if (useAmbientOcclusion) {
-      updateRadius();
+      updateSpatialParameters();
       syncPrePassCamera();
     } else {
       syncCameraCoordinateSystem();
@@ -231,6 +236,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
       resolution: readResolution(aoPass.resolution),
       samples: readUniformValue(aoPass.samples),
       radius: readUniformValue(aoPass.radius),
+      thickness: readUniformValue(aoPass.thickness),
       modelSize,
       renderCount,
       directRenderCount,
@@ -258,6 +264,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     scenePass.renderTarget?.dispose?.();
   }
 
+  updateSpatialParameters();
   applyStrength();
 
   return {
