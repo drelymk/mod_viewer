@@ -6,7 +6,10 @@ import { createCameraFrame } from './camera-frame.js';
 import { createCharacterShadowController } from './character-shadow-controller.js';
 import { createEnvironmentController } from './environment.js';
 import { createKeyLightController } from './key-light-controller.js';
-import { updateOutlineCameraScale } from './outline-renderer.js';
+import {
+  resetOutlineProjectionReference,
+  updateOutlineProjectionScale,
+} from './outline-renderer.js';
 import { setBCTextureCompression } from './renderer-capabilities.js';
 import { requestRender, setRenderCallback } from './render-scheduler.js';
 import { createViewportRenderPipeline } from './viewport-render-pipeline.js';
@@ -185,8 +188,8 @@ function renderFrame() {
   characterShadowController.update();
   cameraFrame.updateViewport();
   cameraFrame.updateClipping();
-  updateOutlineCameraScale(camera, controls.target,
-    renderer.domElement.clientHeight);
+  updateOutlineProjectionScale(
+    camera, controls.target, renderer.domElement.clientHeight);
   viewGizmoController.updateAxes();
   viewportRenderPipeline.render();
   renderCount += 1;
@@ -236,11 +239,13 @@ export function getLightMode() {
 
 export function frameView(meshes = [], direction = null, targetYOffset = 0) {
   cameraFrame.frameView(meshes, direction, targetYOffset);
+  resetOutlineProjectionReference(camera, controls.target);
   requestRender();
 }
 
 export function resetView() {
   cameraFrame.resetView();
+  resetOutlineProjectionReference(camera, controls.target);
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
   requestRender();
@@ -256,6 +261,9 @@ export function adoptModelMeshes(meshes = []) {
 
 export function fitTo(meshes, options) {
   cameraFrame.fitTo(meshes, options);
+  if (!options?.preserveCamera) {
+    resetOutlineProjectionReference(camera, controls.target);
+  }
   characterShadowController.setMeshes(meshes);
   viewportRenderPipeline.setMeshes(meshes);
   requestRender();

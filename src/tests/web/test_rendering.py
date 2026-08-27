@@ -55,6 +55,123 @@ def _set_test_key_light(page, x=1.0, z=0.25):
     page.wait_for_timeout(400)
 
 
+def _outline_payload():
+    payload = _payload("Outline")
+    positions = (
+        0, 1, 0,
+        1, 0, 0,
+        0, 0, 1,
+        -1, 0, 0,
+        0, 0, -1,
+        0, -1, 0,
+    )
+    indices = (
+        0, 2, 1, 0, 3, 2, 0, 4, 3, 0, 1, 4,
+        5, 1, 2, 5, 2, 3, 5, 3, 4, 5, 4, 1,
+    )
+    template = next(iter(payload["meshes"].values()))
+    template.update({
+        "component": "Outline Near",
+        "drawindexed": [len(indices), 0, 0],
+        "pos": _f32(*positions),
+        "normal": _f32(*positions),
+        "idx": _u32(*indices),
+        "tex_key": None,
+        "texture_pool_id": None,
+        "texture_variants": [],
+        "shape_targets": [],
+    })
+    second = copy.deepcopy(template)
+    second["component"] = "Outline Far"
+    payload["meshes"] = {
+        "Outline-Near-0": template,
+        "Outline-Far-0": second,
+    }
+    payload["texture_pools"] = {}
+    payload["textures"] = {}
+    return payload
+
+
+def _outline_widths(page):
+    canvas = page.locator("#canvas-container canvas")
+
+    def set_enabled(value):
+        before = page.evaluate("window.modViewer.getRenderCount()")
+        page.evaluate("""async value => {
+          const {setOutlinesEnabled} =
+            await import('./js/scene/outline-renderer.js');
+          setOutlinesEnabled(value);
+        }""", value)
+        page.wait_for_function("""({value, before}) =>
+          window.modViewer.getOutlineState(0).visible === value
+          && window.modViewer.getRenderCount() > before
+        """, arg={"value": value, "before": before})
+
+    set_enabled(False)
+    bounds = page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {camera, renderer} = await import('./js/scene/scene.js');
+      camera.updateMatrixWorld();
+      const rect = renderer.domElement.getBoundingClientRect();
+      return window.modViewer.activeMeshes
+        .filter(mesh => mesh.visible)
+        .map(mesh => {
+          mesh.updateWorldMatrix(true, true);
+          const position = mesh.geometry.attributes.position;
+          const points = [];
+          for (let i = 0; i < position.count; i += 1) {
+            const projected = new THREE.Vector3()
+              .fromBufferAttribute(position, i)
+              .applyMatrix4(mesh.matrixWorld)
+              .project(camera);
+            points.push({
+              x: (projected.x + 1) * rect.width / 2,
+              y: (1 - projected.y) * rect.height / 2,
+            });
+          }
+          const center = new THREE.Vector3()
+            .applyMatrix4(mesh.matrixWorld)
+            .project(camera);
+          return {
+            minX: Math.min(...points.map(point => point.x)),
+            maxX: Math.max(...points.map(point => point.x)),
+            centerY: (1 - center.y) * rect.height / 2,
+          };
+        });
+    }""")
+    without_outline = Image.open(
+        io.BytesIO(canvas.screenshot())).convert("RGB")
+    set_enabled(True)
+    with_outline = Image.open(
+        io.BytesIO(canvas.screenshot())).convert("RGB")
+    difference = ImageChops.difference(without_outline, with_outline)
+
+    widths = []
+    for item in bounds:
+        row_widths = []
+        center_y = round(item["centerY"])
+        for y in range(center_y - 2, center_y + 3):
+            if not 0 <= y < difference.height:
+                continue
+            windows = (
+                (math.floor(item["minX"]) - 6,
+                 math.ceil(item["minX"]) + 2),
+                (math.floor(item["maxX"]) - 2,
+                 math.ceil(item["maxX"]) + 6),
+            )
+            for start, end in windows:
+                changed = [
+                    x for x in range(max(0, start), min(difference.width, end + 1))
+                    if max(difference.getpixel((x, y))) > 0
+                ]
+                if changed:
+                    row_widths.append(len(changed))
+        assert row_widths, (item, difference.getbbox())
+        ordered = sorted(row_widths)
+        widths.append(ordered[len(ordered) // 2])
+    return widths
+
+
 def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
     context = edge_browser.new_context(bypass_csp=True)
     page = context.new_page()
@@ -2282,6 +2399,7 @@ def test_outline_child_shares_geometry_and_render_modes_suppress_it(
             count: outline.length,
             sharedGeometry: item?.geometry === mesh.geometry,
             isMeshBasicNodeMaterial: item?.material?.isMeshBasicNodeMaterial === true,
+            hasVertexNode: item?.material?.vertexNode?.isNode === true,
             side: item?.material?.side,
             backSide: THREE.BackSide,
             depthTest: item?.material?.depthTest,
@@ -2295,34 +2413,48 @@ def test_outline_child_shares_geometry_and_render_modes_suppress_it(
         assert structure["count"] == 1
         assert structure["sharedGeometry"]
         assert structure["isMeshBasicNodeMaterial"]
+        assert structure["hasVertexNode"]
         assert structure["side"] == structure["backSide"]
         assert structure["depthTest"] is True
         assert structure["depthWrite"] is False
         assert structure["renderOrder"] > structure["baseRenderOrder"]
         assert structure["map"] is None
-        assert structure["state"] == {
+        assert structure["state"]["referenceProjectionSpan"] > 0
+        base_outline_state = {
             "attached": True, "visible": False, "globalEnabled": False,
-            "widthPixels": 1.5, "suppressedByWireframe": False,
-            "suppressedByDebug": False,
+            "referenceWidthPixels": 0.75,
+            "minWidthPixels": 0.5,
+            "maxWidthPixels": 1.5,
+            "effectiveWidthPixels": 0.75,
+            "scaleMode": "view-depth-adaptive",
+            "scalePerDepth": pytest.approx(
+                2 * math.tan(math.radians(45 / 2)) * 0.75
+                / structure["state"]["viewportHeight"]),
+            "viewportHeight": structure["state"]["viewportHeight"],
+            "effectiveFov": 45,
+            "projectionSpan": structure["state"]["projectionSpan"],
+            "referenceProjectionSpan": structure["state"][
+                "referenceProjectionSpan"],
+            "projectionRatio": pytest.approx(1),
+            "suppressedByWireframe": False, "suppressedByDebug": False,
         }
+        assert structure["state"]["projectionSpan"] == pytest.approx(
+            structure["state"]["referenceProjectionSpan"])
+        assert structure["state"] == base_outline_state
 
         page.locator("#outline-btn").click()
         assert page.evaluate("window.modViewer.getOutlineState(0)") == {
-            "attached": True, "visible": True, "globalEnabled": True,
-            "widthPixels": 1.5, "suppressedByWireframe": False,
-            "suppressedByDebug": False,
+            **base_outline_state, "visible": True, "globalEnabled": True,
         }
         page.locator("#wire-btn").click()
         assert page.evaluate("window.modViewer.getOutlineState(0)") == {
-            "attached": True, "visible": False, "globalEnabled": True,
-            "widthPixels": 1.5, "suppressedByWireframe": True,
-            "suppressedByDebug": False,
+            **base_outline_state, "globalEnabled": True,
+            "suppressedByWireframe": True,
         }
         page.locator("#wire-btn").click()
         page.evaluate("window.modViewer.setMaterialDebugMode('shadow-mask')")
         assert page.evaluate("window.modViewer.getOutlineState(0)") == {
-            "attached": True, "visible": False, "globalEnabled": True,
-            "widthPixels": 1.5, "suppressedByWireframe": False,
+            **base_outline_state, "globalEnabled": True,
             "suppressedByDebug": True,
         }
         page.evaluate("window.modViewer.setMaterialDebugMode('off')")
@@ -2331,12 +2463,210 @@ def test_outline_child_shares_geometry_and_render_modes_suppress_it(
         page.evaluate("window.modViewer.reloadCurrentMod()")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
         assert page.evaluate("window.modViewer.getOutlineState(0)") == {
-            "attached": True, "visible": True, "globalEnabled": True,
-            "widthPixels": 1.5, "suppressedByWireframe": False,
-            "suppressedByDebug": False,
+            **base_outline_state, "visible": True, "globalEnabled": True,
         }
     finally:
         context.close()
+
+
+def test_outline_width_is_perspective_correct_and_material_stable(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Outline": _outline_payload()})
+    try:
+        _open(page, "Outline")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
+        page.evaluate("""async () => {
+          const {camera, controls, scene} = await import('./js/scene/scene.js');
+          const {resetOutlineProjectionReference} =
+            await import('./js/scene/outline-renderer.js');
+          const {requestRender} = await import('./js/scene/render-scheduler.js');
+          scene.traverse(object => {
+            if (object.isGridHelper || object.isSprite) object.visible = false;
+          });
+          for (const mesh of window.modViewer.activeMeshes) {
+            mesh.material.color.setHex(0xeeeeee);
+          }
+          camera.up.set(0, 1, 0);
+          camera.zoom = 1;
+          camera.fov = 45;
+          camera.position.set(0, 0, 8);
+          controls.target.set(0, 0, 0);
+          camera.updateProjectionMatrix();
+          camera.lookAt(controls.target);
+          camera.updateMatrixWorld();
+          controls.update();
+          resetOutlineProjectionReference(camera, controls.target);
+          const outlines = window.modViewer.activeMeshes.map(
+            mesh => mesh.userData.viewerOutline);
+          window.__outlineRefs = {
+            outlines,
+            materials: outlines.map(outline => outline.material),
+            versions: outlines.map(outline => outline.material.version),
+          };
+          requestRender();
+        }""")
+
+        def configure(*, positions, scales, camera_z=8, fov=45,
+                      camera_zoom=1,
+                      visible=(True, True)):
+            before = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("""async state => {
+              const {camera, controls} = await import('./js/scene/scene.js');
+              const {requestRender} = await import('./js/scene/render-scheduler.js');
+              window.modViewer.activeMeshes.forEach((mesh, index) => {
+                mesh.position.fromArray(state.positions[index]);
+                mesh.scale.setScalar(state.scales[index]);
+                mesh.visible = state.visible[index];
+                mesh.updateMatrix();
+              });
+              camera.position.set(0, 0, state.cameraZ);
+              camera.fov = state.fov;
+              camera.zoom = state.cameraZoom;
+              controls.target.set(0, 0, 0);
+              camera.updateProjectionMatrix();
+              camera.lookAt(controls.target);
+              camera.updateMatrixWorld();
+              controls.update();
+              requestRender();
+            }""", {
+                "positions": positions, "scales": scales,
+                "cameraZ": camera_z, "fov": fov,
+                "cameraZoom": camera_zoom,
+                "visible": visible,
+            })
+            page.wait_for_function(
+                "before => window.modViewer.getRenderCount() > before",
+                arg=before)
+
+        configure(
+            positions=((-1.5, 0, 2), (1.5, 0, -2)),
+            scales=(0.85, 0.85))
+        depth_widths = _outline_widths(page)
+
+        configure(
+            positions=((-1.5, 0, 0), (1.5, 0, 0)),
+            scales=(0.5, 1.8))
+        scale_widths = _outline_widths(page)
+
+        distance_widths = []
+        distance_states = []
+        distance_cases = (
+            (2, 1.5),
+            (4, 0.75 * math.sqrt(2)),
+            (8, 0.75),
+            (16, 0.75 * math.sqrt(0.5)),
+            (32, 0.5),
+            (48, 0.5),
+        )
+        for camera_z, expected_width in distance_cases:
+            configure(
+                positions=((0, 0, 0), (0, 0, 0)), scales=(1, 1),
+                camera_z=camera_z, visible=(True, False))
+            distance_widths.extend(_outline_widths(page))
+            state = page.evaluate("window.modViewer.getOutlineState(0)")
+            assert state["effectiveWidthPixels"] == pytest.approx(expected_width)
+            distance_states.append(state)
+
+        fov_widths = []
+        fov_states = []
+        for fov in (30, 60):
+            configure(
+                positions=((0, 0, 0), (0, 0, 0)), scales=(1, 1),
+                fov=fov, visible=(True, False))
+            fov_widths.extend(_outline_widths(page))
+            fov_states.append(page.evaluate(
+                "window.modViewer.getOutlineState(0)"))
+
+        zoom_widths = []
+        zoom_states = []
+        for camera_zoom in (0.75, 1.5):
+            configure(
+                positions=((0, 0, 0), (0, 0, 0)), scales=(1, 1),
+                camera_zoom=camera_zoom, visible=(True, False))
+            zoom_widths.extend(_outline_widths(page))
+            zoom_states.append(page.evaluate(
+                "window.modViewer.getOutlineState(0)"))
+
+        initial_viewport_height = page.evaluate(
+            "window.modViewer.getOutlineState(0).viewportHeight")
+        page.set_viewport_size({"width": 900, "height": 600})
+        configure(
+            positions=((0, 0, 0), (0, 0, 0)), scales=(1, 1),
+            visible=(True, False))
+        resized_width = _outline_widths(page)[0]
+        resized_state = page.evaluate("window.modViewer.getOutlineState(0)")
+
+        before_turn = page.evaluate("window.modViewer.getRenderCount()")
+        page.locator("#camera-flip-btn").click()
+        page.wait_for_function(
+            "before => window.modViewer.getRenderCount() > before", arg=before_turn)
+        rotated_width = _outline_widths(page)[0]
+
+        all_widths = (
+            depth_widths + scale_widths + distance_widths + fov_widths
+            + zoom_widths
+            + [resized_width, rotated_width])
+        assert all(1 <= width <= 3 for width in all_widths), all_widths
+        assert max(depth_widths) - min(depth_widths) <= 1, depth_widths
+        assert max(scale_widths) - min(scale_widths) <= 1, scale_widths
+        assert [state["projectionRatio"] for state in distance_states] == (
+            pytest.approx([4, 2, 1, 0.5, 0.25, 1 / 6]))
+        for state in fov_states + zoom_states:
+            expected_width = max(
+                0.5,
+                min(1.5, 0.75 * math.sqrt(state["projectionRatio"])))
+            assert state["effectiveWidthPixels"] == pytest.approx(
+                expected_width)
+        resized_canvas_height = page.evaluate("""async () => {
+          const {renderer} = await import('./js/scene/scene.js');
+          return renderer.domElement.clientHeight;
+        }""")
+        assert resized_state["viewportHeight"] == resized_canvas_height
+        assert resized_state["viewportHeight"] != initial_viewport_height
+        assert resized_state["effectiveFov"] == 45
+        assert resized_state["effectiveWidthPixels"] == pytest.approx(0.75)
+
+        configure(
+            positions=((0, 0, 0), (0, 0, 0)), scales=(1, 1),
+            camera_z=16, visible=(True, False))
+        assert page.evaluate(
+            "window.modViewer.getOutlineState(0).effectiveWidthPixels") < 0.75
+        before_reset = page.evaluate("window.modViewer.getRenderCount()")
+        page.locator("#camera-reset-view-btn").click()
+        page.wait_for_function(
+            "before => window.modViewer.getRenderCount() > before", arg=before_reset)
+        reset_state = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert reset_state["projectionRatio"] == pytest.approx(1)
+        assert reset_state["effectiveWidthPixels"] == pytest.approx(0.75)
+
+        stability = page.evaluate("""() => {
+          const current = window.modViewer.activeMeshes.map(
+            mesh => mesh.userData.viewerOutline);
+          return {
+            sameOutlines: current.every(
+              (outline, index) => outline === window.__outlineRefs.outlines[index]),
+            sameMaterials: current.every((outline, index) =>
+              outline.material === window.__outlineRefs.materials[index]),
+            sameVersions: current.every((outline, index) =>
+              outline.material.version === window.__outlineRefs.versions[index]),
+            sharedMaterial: current[0].material === current[1].material,
+            sharedGeometry: current.every((outline, index) =>
+              outline.geometry === window.modViewer.activeMeshes[index].geometry),
+          };
+        }""")
+        assert stability == {
+            "sameOutlines": True, "sameMaterials": True,
+            "sameVersions": True, "sharedMaterial": True,
+            "sharedGeometry": True,
+        }
+
+        settled_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.wait_for_timeout(250)
+        assert page.evaluate("window.modViewer.getRenderCount()") == settled_count
+    finally:
+        context.close()
+
 
 def test_wuwa_models_start_with_a_180_degree_base_turn(
         edge_browser, frontend_url):
