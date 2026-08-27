@@ -10,8 +10,9 @@ import {
 } from 'three/tsl';
 import { requestRender } from './render-scheduler.js';
 
-const OUTLINE_WIDTH_PIXELS = 1.5;
-const MIN_OUTLINE_WIDTH_FACTOR = 0.5;
+const REFERENCE_OUTLINE_WIDTH_PIXELS = 0.75;
+const MIN_OUTLINE_WIDTH_PIXELS = 0.5;
+const MAX_OUTLINE_WIDTH_PIXELS = 1.5;
 const outlineScalePerDepthNode = uniform(0);
 const outlineMaterial = new THREE.MeshBasicNodeMaterial({
   color: 0x111318,
@@ -33,7 +34,7 @@ let suppressedByWireframe = false;
 let suppressedByDebug = false;
 let outlineViewportHeight = 0;
 let outlineEffectiveFov = 0;
-let outlineEffectiveWidthPixels = OUTLINE_WIDTH_PIXELS;
+let outlineEffectiveWidthPixels = REFERENCE_OUTLINE_WIDTH_PIXELS;
 let outlineProjectionSpan = 0;
 let outlineReferenceProjectionSpan = 0;
 let outlineProjectionRatio = 1;
@@ -147,9 +148,10 @@ export function updateOutlineProjectionScale(camera, target, viewportHeight) {
   const referenceSpan = outlineReferenceProjectionSpan > 0
     ? outlineReferenceProjectionSpan : currentSpan;
   const ratio = referenceSpan / currentSpan;
-  const widthFactor = THREE.MathUtils.clamp(
-    Math.sqrt(ratio), MIN_OUTLINE_WIDTH_FACTOR, 1);
-  const effectiveWidthPixels = OUTLINE_WIDTH_PIXELS * widthFactor;
+  const effectiveWidthPixels = THREE.MathUtils.clamp(
+    REFERENCE_OUTLINE_WIDTH_PIXELS * Math.sqrt(ratio),
+    MIN_OUTLINE_WIDTH_PIXELS,
+    MAX_OUTLINE_WIDTH_PIXELS);
   const scalePerDepth = 2 * Math.tan(fov.radians / 2)
     * effectiveWidthPixels / height;
   outlineScalePerDepthNode.value = Number.isFinite(scalePerDepth)
@@ -168,7 +170,9 @@ export function getOutlineState(mesh) {
     attached: !!outline,
     visible: !!outline?.visible,
     globalEnabled: outlinesEnabled,
-    widthPixels: OUTLINE_WIDTH_PIXELS,
+    referenceWidthPixels: REFERENCE_OUTLINE_WIDTH_PIXELS,
+    minWidthPixels: MIN_OUTLINE_WIDTH_PIXELS,
+    maxWidthPixels: MAX_OUTLINE_WIDTH_PIXELS,
     effectiveWidthPixels: outlineEffectiveWidthPixels,
     scaleMode: 'view-depth-adaptive',
     scalePerDepth: outlineScalePerDepthNode.value,
