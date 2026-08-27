@@ -10,7 +10,7 @@ import {
 } from 'three/tsl';
 import { requestRender } from './render-scheduler.js';
 
-const OUTLINE_WIDTH_PIXELS = 1.0;
+const OUTLINE_WIDTH_PIXELS = 1.5;
 const MIN_OUTLINE_WIDTH_FACTOR = 0.5;
 const outlineScalePerDepthNode = uniform(0);
 const outlineMaterial = new THREE.MeshBasicNodeMaterial({
