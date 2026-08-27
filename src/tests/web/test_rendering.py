@@ -1321,6 +1321,140 @@ def test_genshin_toon_uses_n_dot_l_when_light_map_is_missing(
         shadow_pixel, neutral_pixel)
 
 
+def test_toon_shadow_toggle_uses_stable_uniform_and_inherits_to_new_meshes(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("zzz:zzmi")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry.pop("uv")
+    entry["light_map_key"] = None
+    entry["material_map_key"] = None
+    entry["normal_data_key"] = None
+    payload["textures"] = {
+        "diffuse::Packed-one.png": _flat_png_uri((96, 96, 96, 255)),
+    }
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"A": payload, "B": copy.deepcopy(payload)},
+    )
+    try:
+        _open(page, "A")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData"
+            "?.gameMaterial?.toonEnabledNode")
+        _set_test_key_light(page)
+        before = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const game = material.userData.gameMaterial;
+          window.__toonMaterial = material;
+          window.__toonEnabledNode = game.toonEnabledNode;
+          return {
+            material,
+            version: material.version,
+            enabled: game.toonEnabledNode.value,
+            pixel: null,
+          };
+        }""")
+        before_pixel = _sample_mesh_pixel(page)
+        assert before["enabled"] is True
+        assert page.locator("#toon-btn").get_attribute("aria-label") == (
+            "Toon shadows: on")
+        assert page.locator("#toon-btn").get_attribute("aria-pressed") == "true"
+
+        render_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.locator("#toon-btn").click()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial"
+            ".toonEnabledNode.value === false")
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count", arg=render_count)
+        page.wait_for_timeout(250)
+        off_pixel = _sample_mesh_pixel(page)
+        off = page.evaluate("""version => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const game = material.userData.gameMaterial;
+          return {
+            sameMaterial: material === window.__toonMaterial,
+            sameNode: game.toonEnabledNode === window.__toonEnabledNode,
+            sameVersion: material.version === version,
+            enabled: game.toonEnabledNode.value,
+          };
+        }""", before["version"])
+        assert off == {
+            "sameMaterial": True, "sameNode": True, "sameVersion": True,
+            "enabled": False,
+        }
+        assert page.locator("#toon-btn").get_attribute("aria-label") == (
+            "Toon shadows: off")
+        assert page.locator("#toon-btn").get_attribute("aria-pressed") == "false"
+        assert "off" in (page.locator("#toon-btn").get_attribute("class") or "")
+        assert sum(before_pixel) != sum(off_pixel), (before_pixel, off_pixel)
+
+        _open(page, "B")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData"
+            "?.gameMaterial?.toonEnabledNode")
+        inherited = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return mesh.material.userData.gameMaterial.toonEnabledNode.value;
+        }""")
+        assert inherited is False
+    finally:
+        context.close()
+
+
+def test_toon_shadow_off_ignores_genshin_light_map_boundary_refinement(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("genshin:gimi")
+    entry = payload["meshes"]["Body-Packed-0"]
+    low_key = "light_map::Packed-toon-low.png"
+    high_key = "light_map::Packed-toon-high.png"
+    payload["textures"] = {
+        "diffuse::Packed-one.png": _flat_png_uri((96, 96, 96, 255)),
+        low_key: _flat_png_uri((0, 0, 0, 255)),
+        high_key: _flat_png_uri((0, 255, 0, 255)),
+    }
+    entry["light_map_key"] = low_key
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.bindings?.light_map?.enabledNode?.value === true
+        """)
+        _set_test_key_light(page)
+        page.locator("#toon-btn").click()
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.toonEnabledNode?.value === false
+        """)
+        page.wait_for_timeout(250)
+        low_pixel = _sample_mesh_pixel(page)
+        page.evaluate("""async key => {
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {
+            diffuse: mesh.userData.texKey,
+            normal_map: mesh.userData.normalMapKey,
+            normal_data: null,
+            light_map: key,
+            material_map: null,
+          });
+        }""", high_key)
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.bindings?.light_map?.textureNode?.value?.image
+            ?.width === 4
+        """)
+        page.wait_for_timeout(250)
+        high_pixel = _sample_mesh_pixel(page)
+        assert max(abs(a - b) for a, b in zip(low_pixel, high_pixel)) <= 3, (
+            low_pixel, high_pixel)
+    finally:
+        context.close()
+
+
 def test_wuwa_debug_modes_are_capability_gated_and_uniform_only(
         edge_browser, frontend_url):
     payload = _packed_material_payload("wuwa:rabbitfx")

@@ -8,7 +8,7 @@ import {
 } from './scene/scene.js';
 import {
   activeMeshes, resetMeshState,
-  toggleGlossy, toggleSmoothShading, toggleWireframe,
+  toggleGlossy, toggleSmoothShading, toggleToonShading, toggleWireframe,
 } from './mesh/visibility.js';
 import { refreshMeshTexture } from './mesh/mesh-factory.js';
 import { initSelection } from './scene/selection.js';
@@ -135,6 +135,7 @@ rendererReady.then(ready => {
   });
   $('grid-btn').addEventListener('click', toggleGrid);
   $('shading-btn').addEventListener('click', toggleSmoothShading);
+  $('toon-btn').addEventListener('click', toggleToonShading);
   $('glossy-btn').addEventListener('click', toggleGlossy);
   const syncAmbientOcclusionControl = initToolPopovers();
   $('reset-state-btn').addEventListener('click', event => {

@@ -840,6 +840,12 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
             "toolsDirection": "row",
             "cameraLabelsHidden": True,
         }
+        toon_button = page.locator("#toon-btn")
+        assert toon_button.get_attribute("title") == "Toon shadows: on"
+        assert toon_button.get_attribute("aria-label") == "Toon shadows: on"
+        assert toon_button.get_attribute("aria-pressed") == "true"
+        assert toon_button.evaluate(
+            "button => button.classList.contains('active')")
         toolbar_center = page.evaluate("""() => {
           const box = document.querySelector('#tool-panel').getBoundingClientRect();
           return box.left + box.width / 2;

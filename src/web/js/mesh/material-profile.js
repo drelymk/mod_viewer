@@ -379,7 +379,9 @@ function toonDiffuseFactor(state, lightDirection, boundary) {
     boundary,
   );
   const toonFactor = mix(state.shadowLevelNode, float(1), band);
-  return mix(physicalFactor, toonFactor, state.shadowInfluenceNode);
+  const effectiveInfluence = state.shadowInfluenceNode
+    .mul(state.toonEnabledNode);
+  return mix(physicalFactor, toonFactor, effectiveInfluence);
 }
 
 function replaceDirectDiffuse(
@@ -759,6 +761,7 @@ export function configureGameMaterial(material, profile, options = {}) {
       numericOr(profile?.shadow_softness, 0.08)),
     shadowLevelNode: uniform(
       numericOr(resolvedProfile?.shadow_level, 0)),
+    toonEnabledNode: uniform(true),
     shadowMaskStrengthNode: uniform(
       numericOr(profile?.shadow_mask_strength, 0.5)),
     shadowInfluenceNode: uniform(
@@ -935,6 +938,14 @@ export function getMaterialDebugMode(material) {
 /** Toggle viewer rim lighting without rebuilding the material node graph. */
 export function setGameMaterialRimEnabled(material, enabled) {
   const node = material?.userData?.gameMaterial?.rimEnabledNode;
+  if (!node) return false;
+  node.value = enabled === true;
+  return true;
+}
+
+/** Toggle profile-driven toon direct diffuse without rebuilding the material. */
+export function setGameMaterialToonEnabled(material, enabled) {
+  const node = material?.userData?.gameMaterial?.toonEnabledNode;
   if (!node) return false;
   node.value = enabled === true;
   return true;

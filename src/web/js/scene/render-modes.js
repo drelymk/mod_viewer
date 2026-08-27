@@ -1,7 +1,9 @@
 // Viewer-only material display modes and their toolbar state.
 
 import { refreshMeshTexture, setTextureMode } from '../mesh/mesh-factory.js';
-import { setGameMaterialRimEnabled } from '../mesh/material-profile.js';
+import {
+  setGameMaterialRimEnabled, setGameMaterialToonEnabled,
+} from '../mesh/material-profile.js';
 import { setOutlineSuppressedByWireframe } from './outline-renderer.js';
 import { requestRender } from './render-scheduler.js';
 import { setAmbientOcclusionSuppressedByWireframe } from './scene.js';
@@ -9,6 +11,7 @@ import { setAmbientOcclusionSuppressedByWireframe } from './scene.js';
 let wireframe = false;
 let smoothShading = true;
 let glossy = false;
+let toonShading = true;
 const DEFAULT_ROUGHNESS = 1.0;
 const GLOSSY_ROUGHNESS = 0.2;
 const textureModes = ['all', 'diffuse-normal', 'diffuse', 'none'];
@@ -26,7 +29,10 @@ export function initializeMeshRenderModes(mesh) {
   mesh.material.flatShading = !smoothShading;
   setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  materials.forEach(material => setGameMaterialRimEnabled(material, !wireframe));
+  materials.forEach(material => {
+    setGameMaterialRimEnabled(material, !wireframe);
+    setGameMaterialToonEnabled(material, toonShading);
+  });
 }
 
 export function toggleWireframeMode(meshes) {
@@ -77,6 +83,22 @@ export function toggleGlossyMode(meshes) {
   button.setAttribute('aria-pressed', String(glossy));
   meshes.forEach(mesh => {
     setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
+  });
+  requestRender();
+}
+
+export function toggleToonShadingMode(meshes) {
+  toonShading = !toonShading;
+  const button = document.getElementById('toon-btn');
+  button.classList.toggle('active', toonShading);
+  button.classList.toggle('off', !toonShading);
+  const label = `Toon shadows: ${toonShading ? 'on' : 'off'}`;
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', String(toonShading));
+  meshes.forEach(mesh => {
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    materials.forEach(material => setGameMaterialToonEnabled(material, toonShading));
   });
   requestRender();
 }
