@@ -297,8 +297,17 @@ export function getViewportRenderPipelineDebugState() {
 }
 
 export function setAmbientOcclusionEnabled(enabled) {
-  viewportRenderPipeline.setAmbientOcclusionEnabled(enabled);
+  const value = viewportRenderPipeline.setAmbientOcclusionEnabled(enabled);
   requestRender();
+  return value;
+}
+
+export function getAmbientOcclusionEnabled() {
+  return viewportRenderPipeline.isAmbientOcclusionEnabled();
+}
+
+export function toggleAmbientOcclusion() {
+  return setAmbientOcclusionEnabled(!getAmbientOcclusionEnabled());
 }
 
 export function setAmbientOcclusionStrength(strength) {

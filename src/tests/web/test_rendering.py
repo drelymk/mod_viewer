@@ -1,6 +1,17 @@
 from .support import *
 from PIL import ImageChops
 
+def _enable_ao(page):
+    before = page.evaluate("window.modViewer.getRenderCount()")
+    page.locator("#ao-btn").click()
+    page.wait_for_function("""async count => {
+      const {getViewportRenderPipelineDebugState} =
+        await import('./js/scene/scene.js');
+      const state = getViewportRenderPipelineDebugState();
+      return state.enabled && state.aoRenderCount > 0
+        && window.modViewer.getRenderCount() > count;
+    }""", arg=before)
+
 def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
     context = edge_browser.new_context(bypass_csp=True)
     page = context.new_page()
@@ -51,6 +62,7 @@ def test_viewport_pipeline_uses_character_layers_and_stable_ao_settings(
         _open(page, "Pipeline")
         page.locator(".draw-item").wait_for()
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        _enable_ao(page)
         state = page.evaluate("""async () => {
           const THREE = await import('three');
           const {getViewportRenderPipelineDebugState, scene} =
@@ -158,6 +170,7 @@ def test_viewport_pipeline_uses_model_scale_and_wireframe_bypass(
         _open(page, "Pipeline")
         page.locator(".draw-item").wait_for()
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        _enable_ao(page)
         initial = page.evaluate("""async () => {
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
@@ -166,13 +179,19 @@ def test_viewport_pipeline_uses_model_scale_and_wireframe_bypass(
         assert initial["modelSize"] > 0
         assert initial["radius"] == pytest.approx(initial["modelSize"] * 0.15)
         assert initial["effectiveStrength"] == pytest.approx(initial["strength"])
+        assert initial["directRenderCount"] > 0
+        assert initial["aoRenderCount"] > 0
+        assert (initial["directRenderCount"] + initial["aoRenderCount"]
+                == initial["renderCount"])
 
+        before_wireframe = initial["renderCount"]
         page.locator("#wire-btn").click()
-        page.wait_for_function("""async () => {
+        page.wait_for_function("""async count => {
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
-          return getViewportRenderPipelineDebugState().effectiveStrength === 0;
-        }""")
+          const state = getViewportRenderPipelineDebugState();
+          return state.effectiveStrength === 0 && state.renderCount > count;
+        }""", arg=before_wireframe)
         suppressed = page.evaluate("""async () => {
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
@@ -181,14 +200,18 @@ def test_viewport_pipeline_uses_model_scale_and_wireframe_bypass(
         assert suppressed["enabled"]
         assert suppressed["strength"] == pytest.approx(initial["strength"])
         assert suppressed["effectiveStrength"] == 0
+        assert suppressed["directRenderCount"] > initial["directRenderCount"]
+        assert suppressed["aoRenderCount"] == initial["aoRenderCount"]
         assert not suppressed["pipelineNeedsUpdate"]
 
+        before_restore = suppressed["renderCount"]
         page.locator("#wire-btn").click()
-        page.wait_for_function("""async () => {
+        page.wait_for_function("""async count => {
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
-          return getViewportRenderPipelineDebugState().effectiveStrength > 0;
-        }""")
+          const state = getViewportRenderPipelineDebugState();
+          return state.effectiveStrength > 0 && state.renderCount > count;
+        }""", arg=before_restore)
         restored = page.evaluate("""async () => {
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
@@ -197,6 +220,111 @@ def test_viewport_pipeline_uses_model_scale_and_wireframe_bypass(
         assert restored["effectiveStrength"] == pytest.approx(initial["strength"])
         assert restored["modelSize"] == pytest.approx(initial["modelSize"])
         assert restored["radius"] == pytest.approx(initial["radius"])
+        assert restored["aoRenderCount"] > suppressed["aoRenderCount"]
+        assert restored["pipelineId"] == initial["pipelineId"]
+    finally:
+        context.close()
+
+def test_viewport_ambient_occlusion_toolbar_toggles_direct_path(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"AO": _payload("AO")})
+    try:
+        _open(page, "AO")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        startup = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert not startup["enabled"]
+        assert startup["directRenderCount"] > 0
+        assert startup["aoRenderCount"] == 0
+        _enable_ao(page)
+        initial = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const button = document.querySelector('#ao-btn');
+          return {
+            pipeline: getViewportRenderPipelineDebugState(),
+            button: {
+              pressed: button.getAttribute('aria-pressed'),
+              active: button.classList.contains('active'),
+            },
+          };
+        }""")
+        assert initial["button"] == {"pressed": "true", "active": True}
+        assert initial["pipeline"]["enabled"]
+        assert initial["pipeline"]["directRenderCount"] > 0
+        assert initial["pipeline"]["aoRenderCount"] > 0
+
+        page.locator("#ao-btn").click()
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getViewportRenderPipelineDebugState();
+          return document.querySelector('#ao-btn').getAttribute('aria-pressed')
+            === 'false' && state.directRenderCount > 0;
+        }""")
+        disabled = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const button = document.querySelector('#ao-btn');
+          return {
+            pipeline: getViewportRenderPipelineDebugState(),
+            button: {
+              pressed: button.getAttribute('aria-pressed'),
+              active: button.classList.contains('active'),
+              label: button.getAttribute('aria-label'),
+            },
+          };
+        }""")
+        assert not disabled["pipeline"]["enabled"]
+        assert disabled["pipeline"]["effectiveStrength"] == 0
+        assert disabled["pipeline"]["aoRenderCount"] == initial["pipeline"]["aoRenderCount"]
+        assert disabled["pipeline"]["pipelineId"] == initial["pipeline"]["pipelineId"]
+        assert disabled["button"] == {
+            "pressed": "false", "active": False, "label": "Ambient occlusion: off",
+        }
+
+        page.locator("#ao-btn").click()
+        page.wait_for_function("""async count => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getViewportRenderPipelineDebugState();
+          return document.querySelector('#ao-btn').getAttribute('aria-pressed')
+            === 'true' && state.aoRenderCount > count;
+        }""", arg=disabled["pipeline"]["aoRenderCount"])
+        resumed = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert resumed["enabled"]
+        assert resumed["effectiveStrength"] == pytest.approx(resumed["strength"])
+        assert resumed["aoRenderCount"] > disabled["pipeline"]["aoRenderCount"]
+        assert resumed["pipelineId"] == initial["pipeline"]["pipelineId"]
+
+        page.evaluate("""async () => {
+          const {setAmbientOcclusionStrength} =
+            await import('./js/scene/scene.js');
+          setAmbientOcclusionStrength(0);
+        }""")
+        page.wait_for_function("""async count => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getViewportRenderPipelineDebugState();
+          return state.effectiveStrength === 0 && state.directRenderCount > count;
+        }""", arg=resumed["directRenderCount"])
+        zero_strength = page.evaluate("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState();
+        }""")
+        assert zero_strength["enabled"]
+        assert zero_strength["strength"] == 0
+        assert zero_strength["aoRenderCount"] == resumed["aoRenderCount"]
+        assert zero_strength["pipelineId"] == initial["pipeline"]["pipelineId"]
     finally:
         context.close()
 
@@ -211,6 +339,7 @@ def test_viewport_gtao_radius_scales_with_model_bounds(edge_browser, frontend_ur
         _open(page, label)
         page.locator(".draw-item").wait_for()
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        _enable_ao(page)
         state = page.evaluate("""async () => {
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
@@ -230,6 +359,7 @@ def test_viewport_pipeline_resizes_pass_targets_without_rebuilding(
         _open(page, "Resize")
         page.locator(".draw-item").wait_for()
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        _enable_ao(page)
         initial = page.evaluate("""async () => {
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
@@ -274,6 +404,7 @@ def test_viewport_gtao_is_visible_and_does_not_add_continuous_frames(
         _open(page, "AO")
         page.locator(".draw-item").wait_for()
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
+        _enable_ao(page)
         page.evaluate("""async () => {
           const {setAmbientOcclusionStrength} =
             await import('./js/scene/scene.js');

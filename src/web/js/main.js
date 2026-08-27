@@ -1,9 +1,10 @@
 // Entry point: composes frontend application flows and initializes the UI.
 
 import {
-  getEnvironmentPreset, getRenderCount, isRendererAvailable, rendererReady,
+  getAmbientOcclusionEnabled, getEnvironmentPreset, getRenderCount,
+  isRendererAvailable, rendererReady,
   resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
-  toggleGrid, toggleTrackballGizmo,
+  toggleAmbientOcclusion, toggleGrid, toggleTrackballGizmo,
 } from './scene/scene.js';
 import {
   activeMeshes, resetMeshState,
@@ -112,6 +113,17 @@ function exportChanges() {
   return exportChangesFlow();
 }
 
+function updateAmbientOcclusionButton(enabled) {
+  const button = $('ao-btn');
+  if (!button) return enabled;
+  const label = `Ambient occlusion: ${enabled ? 'on' : 'off'}`;
+  button.classList.toggle('active', enabled);
+  button.setAttribute('aria-pressed', String(enabled));
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  return enabled;
+}
+
 initToolbarOverflow();
 initPanelOpacityControl();
 
@@ -125,6 +137,10 @@ rendererReady.then(ready => {
     void toggleMissingAssetParts();
   });
   $('wire-btn').addEventListener('click', toggleWireframe);
+  updateAmbientOcclusionButton(getAmbientOcclusionEnabled());
+  $('ao-btn').addEventListener('click', () => {
+    updateAmbientOcclusionButton(toggleAmbientOcclusion());
+  });
   $('outline-btn').addEventListener('click', () => {
     const enabled = setOutlinesEnabled();
     const button = $('outline-btn');
@@ -237,6 +253,9 @@ rendererReady.then(ready => {
     activeMeshes,
     setEnvironmentPreset: applyEnvironmentPreset,
     getEnvironmentPreset,
+    getAmbientOcclusionEnabled,
+    toggleAmbientOcclusion: () => updateAmbientOcclusionButton(
+      toggleAmbientOcclusion()),
     getMaterialState,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,

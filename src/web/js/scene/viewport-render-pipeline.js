@@ -24,6 +24,7 @@ const AO_SAMPLES = 8;
 const AO_RADIUS_FACTOR = 0.15;
 const MIN_MODEL_SIZE = 0.001;
 const MIN_AO_RADIUS = 0.001;
+let nextPipelineId = 0;
 
 function finitePositive(value) {
   return Number.isFinite(value) && value > 0;
@@ -47,16 +48,21 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   aoLayers.set(CHARACTER_AO_LAYER);
 
   const renderPipeline = new THREE.RenderPipeline(renderer);
+  const pipelineId = ++nextPipelineId;
   // RenderPipeline evaluates scene passes from inside the fullscreen quad.
   // Keep the beauty pass on the camera owned by ArcballControls. Only the
   // character pre-pass needs an isolated camera because it changes layers.
   const prePassCamera = camera.clone();
 
-  function syncPrePassCamera() {
+  function syncCameraCoordinateSystem() {
     if (camera.coordinateSystem !== renderer.coordinateSystem) {
       camera.coordinateSystem = renderer.coordinateSystem;
       camera.updateProjectionMatrix();
     }
+  }
+
+  function syncPrePassCamera() {
+    syncCameraCoordinateSystem();
     prePassCamera.copy(camera, false);
   }
 
@@ -94,10 +100,12 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   let meshes = [];
   let modelSizeDirty = true;
   let modelSize = MIN_MODEL_SIZE;
-  let enabled = true;
+  let enabled = false;
   let configuredStrength = AO_DEFAULT_STRENGTH;
   let suppressedByWireframe = false;
   let renderCount = 0;
+  let directRenderCount = 0;
+  let aoRenderCount = 0;
 
   function effectiveStrength() {
     return enabled && !suppressedByWireframe ? configuredStrength : 0;
@@ -157,6 +165,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   function setAmbientOcclusionEnabled(value) {
     enabled = !!value;
     applyStrength();
+    return enabled;
   }
 
   function setAmbientOcclusionStrength(value) {
@@ -172,12 +181,23 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   }
 
   function render() {
-    updateModelSize();
-    syncPrePassCamera();
+    const useAmbientOcclusion = effectiveStrength() > 0;
+    if (useAmbientOcclusion) {
+      updateModelSize();
+      syncPrePassCamera();
+    } else {
+      syncCameraCoordinateSystem();
+    }
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.NoToneMapping;
     try {
-      renderPipeline.render();
+      if (useAmbientOcclusion) {
+        renderPipeline.render();
+        aoRenderCount += 1;
+      } else {
+        renderer.render(scene, camera);
+        directRenderCount += 1;
+      }
     } finally {
       // RenderPipeline temporarily switches to working color space while its
       // internal passes execute. Keep the renderer contract visible to the
@@ -194,12 +214,15 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
       strength: configuredStrength,
       effectiveStrength: effectiveStrength(),
       suppressedByWireframe,
+      pipelineId,
       resolutionScale: aoPass.resolutionScale,
       resolution: readResolution(aoPass.resolution),
       samples: readUniformValue(aoPass.samples),
       radius: readUniformValue(aoPass.radius),
       modelSize,
       renderCount,
+      directRenderCount,
+      aoRenderCount,
       pipelineNeedsUpdate: renderPipeline.needsUpdate,
       hasRenderPipeline: !!renderPipeline,
       hasPrePass: !!prePass,
@@ -232,6 +255,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     forgetMeshes,
     invalidateGeometry,
     reset,
+    isAmbientOcclusionEnabled: () => enabled,
     setAmbientOcclusionEnabled,
     setAmbientOcclusionStrength,
     setAmbientOcclusionSuppressedByWireframe,
