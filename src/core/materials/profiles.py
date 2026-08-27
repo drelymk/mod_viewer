@@ -179,9 +179,9 @@ def _base_profile_for(game, texture_api):
             metalness=ChannelRef("light_map", "g"),
             specular=ChannelRef("material_map", "b"),
             shadow_threshold=0.5,
-            shadow_softness=0.08,
+            shadow_softness=0.04,
             shadow_level=0.35,
-            shadow_influence=1.0,
+            shadow_influence=0.45,
             direct_shadow_model="zzz_toon",
         )
     if game == "genshin" and texture_api in ("gimi", "rabbitfx"):
@@ -206,7 +206,10 @@ def _base_profile_for(game, texture_api):
             toon_specular_threshold_bias=1.015,
             toon_specular_softness=0.0,
             toon_specular_metal_cutoff=0.90,
+            shadow_threshold=0.5,
+            shadow_softness=0.04,
             shadow_level=0.35,
+            shadow_influence=0.45,
             direct_shadow_model="genshin_toon",
         )
     if game == "wuwa":

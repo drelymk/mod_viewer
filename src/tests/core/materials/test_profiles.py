@@ -19,6 +19,8 @@ def test_zzz_uses_light_map_g_for_metalness_and_material_map_b_for_specular():
     assert profile.shadow_mask is None
     assert profile.direct_shadow_model == "zzz_toon"
     assert profile.shadow_level == pytest.approx(0.35)
+    assert (profile.shadow_threshold, profile.shadow_softness,
+            profile.shadow_influence) == (0.5, 0.04, 0.45)
     metadata = profile.to_metadata()
     assert metadata["shadow_level"] == pytest.approx(0.35)
     assert metadata["direct_shadow_model"] == "zzz_toon"
@@ -45,7 +47,7 @@ def test_genshin_uses_light_map_r_response_and_g_toon_shadow():
             profile.toon_specular_metal_cutoff) == (10.0, 1.015, 0.0, 0.90)
     assert (profile.shadow_threshold, profile.shadow_softness,
             profile.shadow_mask_strength, profile.shadow_influence) == (
-                0.5, 0.08, 0.5, 1.0)
+                0.5, 0.04, 0.5, 0.45)
     metadata = profile.to_metadata()
     assert metadata["shadow_level"] == pytest.approx(0.35)
     assert metadata["direct_shadow_model"] == "genshin_toon"

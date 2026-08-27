@@ -514,6 +514,7 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
       wuwaShadowMaskCutoffNode,
       wuwaShadowMaskEndpointToleranceNode,
       wuwaShadowInfluenceNode,
+      toonEnabledNode,
     } = this.gameMaterialState;
     const maskRef = profile.shadow_mask;
     const maskBinding = validRef(maskRef) ? bindings[maskRef.source] : null;
@@ -548,8 +549,10 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
     const authoredVisibility = endpointTolerance.greaterThan(0)
       .select(endpointAwareVisibility, classifiedVisibility);
     const shadowArea = lightBoundary.mul(authoredVisibility).clamp(0, 1);
+    const effectiveInfluence = wuwaShadowInfluenceNode
+      .mul(toonEnabledNode);
     const computedFactor = mix(
-      float(1), shadowArea, wuwaShadowInfluenceNode);
+      float(1), shadowArea, effectiveInfluence);
     // A missing Lightmap is an explicit no-mask case, not permission to
     // borrow Diffuse.A or a Normalmap channel.
     const factor = maskBinding

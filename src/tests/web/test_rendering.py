@@ -1081,7 +1081,7 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
         assert state["specularInfluence"] == (None if profile_id == "zzz:zzmi" else 0.15)
         assert (state["shadowThreshold"], state["shadowSoftness"],
                 state["shadowLevel"], state["shadowMaskStrength"],
-                state["shadowInfluence"]) == (0.5, 0.08, 0.35, 0.5, 1)
+                state["shadowInfluence"]) == (0.5, 0.04, 0.35, 0.5, 0.45)
         assert (state["materialKind"], state["materialKindReliable"],
                 state["materialProfileId"]) == ("body", False, profile_id)
         assert state["lightingModel"] == (
@@ -1451,6 +1451,90 @@ def test_toon_shadow_off_ignores_genshin_light_map_boundary_refinement(
         high_pixel = _sample_mesh_pixel(page)
         assert max(abs(a - b) for a, b in zip(low_pixel, high_pixel)) <= 3, (
             low_pixel, high_pixel)
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("profile_id", ["wuwa:rabbitfx", "wuwa:rabbitfx:body"])
+def test_wuwa_toon_shadow_toggle_uses_stable_uniform(
+        edge_browser, frontend_url, profile_id):
+    payload = _packed_material_payload(profile_id)
+    entry = payload["meshes"]["Body-Packed-0"]
+    shadow_key = "light_map::Packed-wuwa-shadow.png"
+    payload["textures"] = {
+        "diffuse::Packed-one.png": _flat_png_uri((96, 96, 96, 255)),
+        entry["normal_data_key"]: _flat_png_uri((128, 128, 255, 255)),
+        shadow_key: _flat_png_uri((0, 16, 0, 255)),
+    }
+    entry["light_map_key"] = shadow_key
+
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.bindings?.light_map?.enabledNode?.value === true
+        """)
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0]?.material?.userData
+            ?.gameMaterial?.bindings?.light_map?.textureNode?.value?.image
+            ?.width === 4
+        """)
+        _set_test_key_light(page)
+        before = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const game = material.userData.gameMaterial;
+          window.__wuwaToonMaterial = material;
+          window.__wuwaToonEnabledNode = game.toonEnabledNode;
+          return {
+            profile: game.profile.id,
+            model: material.setupLightingModel().constructor.name,
+            version: material.version,
+            enabled: game.toonEnabledNode.value,
+          };
+        }""")
+        toon_pixel = _sample_mesh_pixel(page)
+
+        page.locator("#toon-btn").click()
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0].material.userData
+            .gameMaterial.toonEnabledNode.value === false
+        """)
+        page.wait_for_timeout(250)
+        off_pixel = _sample_mesh_pixel(page)
+        off = page.evaluate("""version => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const material = mesh.material;
+          const game = material.userData.gameMaterial;
+          return {
+            sameMaterial: material === window.__wuwaToonMaterial,
+            sameNode: game.toonEnabledNode === window.__wuwaToonEnabledNode,
+            sameVersion: material.version === version,
+            enabled: game.toonEnabledNode.value,
+          };
+        }""", before["version"])
+
+        page.locator("#toon-btn").click()
+        page.wait_for_function("""
+          () => window.modViewer.activeMeshes[0].material.userData
+            .gameMaterial.toonEnabledNode.value === true
+        """)
+        page.wait_for_timeout(250)
+        toon_again_pixel = _sample_mesh_pixel(page)
+
+        assert before["profile"] == profile_id
+        assert before["model"] == (
+            "WuwaBodyLightingModel"
+            if profile_id.endswith(":body") else "WuwaLightingModel")
+        assert before["enabled"] is True
+        assert off == {
+            "sameMaterial": True, "sameNode": True,
+            "sameVersion": True, "enabled": False,
+        }
+        assert sum(off_pixel) > sum(toon_pixel) + 5, (
+            toon_pixel, off_pixel)
+        assert toon_again_pixel == pytest.approx(toon_pixel, abs=2)
     finally:
         context.close()
 
