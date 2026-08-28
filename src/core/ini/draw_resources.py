@@ -131,6 +131,15 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
             return {}
         visiting.add(cache_key)
         candidates = list(resource_copy_sources.get(cache_key, ()))
+        # WWMI binds the remapped blend buffer through a reusable runtime
+        # resource named ``ResourceBlendBufferOverride``.  The resource is
+        # intentionally empty in the INI because the command list fills it
+        # with a runtime copy, while the source descriptor remains the
+        # authored ``ResourceBlendBuffer``.  Keep this fallback limited to
+        # blend resources so unrelated override resources are not guessed.
+        if (cache_key.endswith("blendbufferoverride")
+                and not candidates):
+            candidates.append(resource_name[:-len("Override")])
         if not cache_key.endswith(".b"):
             candidates.append(resource_name + ".B")
         for candidate in candidates:
