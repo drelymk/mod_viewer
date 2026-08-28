@@ -263,24 +263,39 @@ function translationArray(delta) {
   return normalized.every(Number.isFinite) ? normalized : null;
 }
 
-function notifyModelTransformChanged(meshes, reason, translationDeltaWorld = null) {
+function kinematicsPayload(kinematics) {
+  const velocity = translationArray(kinematics?.linearVelocityWorld);
+  return velocity ? {linearVelocityWorld: velocity} : null;
+}
+
+function notifyModelTransformChanged(
+    meshes, reason, translationDeltaWorld = null, kinematics = null) {
   if (!meshes?.length || typeof window === 'undefined') return;
+  const detail = {
+    meshes,
+    reason,
+    translationDeltaWorld: translationArray(translationDeltaWorld),
+  };
+  const normalizedKinematics = kinematicsPayload(kinematics);
+  if (normalizedKinematics) detail.kinematics = normalizedKinematics;
   window.dispatchEvent(new CustomEvent('mod-viewer-model-transform-changed', {
-    detail: {
-      meshes,
-      reason,
-      translationDeltaWorld: translationArray(translationDeltaWorld),
-    },
+    detail,
   }));
 }
 
-export function translateModel(meshes = [], delta) {
+export function translateModel(meshes = [], delta, options = {}) {
   const changedMeshes = cameraFrame.translateModel(meshes, delta);
-  if (!changedMeshes.length) return [];
   const deltaWorld = translationArray(delta);
-  characterShadowController.invalidateGeometry();
-  viewportRenderPipeline.invalidateGeometry();
-  notifyModelTransformChanged(changedMeshes, 'translate', deltaWorld);
+  const kinematics = kinematicsPayload(options?.kinematics);
+  const eventMeshes = changedMeshes.length ? changedMeshes : meshes;
+  if (!deltaWorld || !Array.isArray(eventMeshes) || !eventMeshes.length
+      || (!changedMeshes.length && !kinematics)) return [];
+  if (changedMeshes.length) {
+    characterShadowController.invalidateGeometry();
+    viewportRenderPipeline.invalidateGeometry();
+  }
+  notifyModelTransformChanged(
+    eventMeshes, 'translate', deltaWorld, kinematics);
   requestRender();
   return changedMeshes;
 }

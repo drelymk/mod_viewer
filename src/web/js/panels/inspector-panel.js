@@ -6,6 +6,10 @@ import { clearSelection } from '../scene/selection.js';
 import { translateModel } from '../scene/scene.js';
 import { activeMeshes } from '../mesh/mesh-state.js';
 import {
+  getContinuousMotionState, setContinuousMotionAxis,
+  startContinuousMotion, stopContinuousMotion,
+} from '../mesh/weight-motion-test.js';
+import {
   SIGNIFICANT_RESIDUAL_RATIO, SIGNIFICANT_VERTEX_WEIGHT,
   INFLUENCE_GRAPH_TOP_K,
   getSkinningState, loadSkinningWeights, resetSkinningExperiment,
@@ -17,7 +21,8 @@ import {
   setForestAxis, setForestAngle,
   setPhysicsAxis, setPhysicsTargetAngle, setPhysicsFrequency,
   setPhysicsDamping, setPhysicsMotionStrength,
-  setPhysicsLinearMotionStrength, setPhysicsEnabled,
+  setPhysicsLinearMotionStrength, setPhysicsContinuousLinearResponse,
+  setPhysicsEnabled,
   applyPhysicsKick,
   resetPhysicsMotion,
   setVirtualChainVisible,
@@ -25,6 +30,7 @@ import {
 
 const meshRecords = new WeakMap();
 const skinningUpdates = new WeakMap();
+const physicsUpdates = new WeakMap();
 let current = null;
 let selectionCount = 0;
 const MISSING_INFLUENCE_DISPLAY_LIMIT = 8;
@@ -545,6 +551,7 @@ function forestDiagnosticsPayload(state) {
       motionResponse: state.physicsMotionStrength,
       angularResponse: state.physicsMotionStrength,
       linearResponse: state.physicsLinearMotionStrength,
+      continuousLinearResponse: state.physicsContinuousLinearResponse,
       lastRootAngularDelta: state.lastRootAngularDelta,
       lastProjectedAngularDelta: state.lastProjectedAngularDelta,
       motionEventCount: state.motionEventCount,
@@ -552,6 +559,10 @@ function forestDiagnosticsPayload(state) {
       lastRootTranslationDeltaLocal: state.lastRootTranslationDeltaLocal,
       lastTranslationLag: state.lastTranslationLag,
       translationEventCount: state.translationEventCount,
+      lastRootLinearVelocityWorld: state.lastRootLinearVelocityWorld,
+      lastRootLinearVelocityLocal: state.lastRootLinearVelocityLocal,
+      lastRootLinearVelocityDelta: state.lastRootLinearVelocityDelta,
+      continuousMotionEventCount: state.continuousMotionEventCount,
       settled: !!state.physicsSettled,
       joints: Object.fromEntries(
         [...(state.physicsState?.joints || new Map()).entries()]
@@ -1036,13 +1047,17 @@ function physicsSummary(state) {
         0, (component.nodeIds || []).length - 1), 0);
   const angularResponse = Number(state.physicsMotionStrength) || 0;
   const linearResponse = Number(state.physicsLinearMotionStrength) || 0;
+  const continuousResponse = Number(
+    state.physicsContinuousLinearResponse) || 0;
   const lastRootAngularDelta = Number(state.lastRootAngularDelta) || 0;
   const lastProjectedAngularDelta = Number(
     state.lastProjectedAngularDelta) || 0;
   const lastTranslationLag = Number(state.lastTranslationLag) || 0;
   return [
     `Angular response ${angularResponse.toFixed(2)} / `
-      + `Linear response ${linearResponse.toFixed(2)}`,
+      + `Discrete linear ${linearResponse.toFixed(2)}`,
+    `Continuous response ${continuousResponse.toFixed(2)} / `
+      + `Velocity events ${state.continuousMotionEventCount || 0}`,
     `Translation lag ${lastTranslationLag * 180 / Math.PI} deg / `
       + `Events ${state.translationEventCount || 0}`,
     `Model input ${lastRootAngularDelta * 180 / Math.PI}Â° Â· `
@@ -1184,6 +1199,29 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   linearLabel.appendChild(linearInput);
   section.appendChild(linearLabel);
 
+  const continuousResponseLabel = document.createElement('label');
+  continuousResponseLabel.className = 'inspector-skinning-field';
+  const continuousResponseHeader = document.createElement('span');
+  continuousResponseHeader.className = 'inspector-skinning-rotation-header';
+  addText(continuousResponseHeader, 'inspector-label', 'Continuous Response');
+  const continuousResponseValue = addText(continuousResponseHeader,
+    'inspector-skinning-physics-continuous-response-value', '0.35');
+  continuousResponseLabel.appendChild(continuousResponseHeader);
+  const continuousResponseInput = document.createElement('input');
+  continuousResponseInput.type = 'range';
+  continuousResponseInput.className =
+    'inspector-skinning-physics-continuous-response';
+  continuousResponseInput.min = '0';
+  continuousResponseInput.max = '1';
+  continuousResponseInput.step = '0.05';
+  continuousResponseInput.value = state.physicsContinuousLinearResponse;
+  continuousResponseInput.addEventListener('input', () => {
+    setPhysicsContinuousLinearResponse(mesh, continuousResponseInput.value);
+    update();
+  });
+  continuousResponseLabel.appendChild(continuousResponseInput);
+  section.appendChild(continuousResponseLabel);
+
   const translation = document.createElement('div');
   translation.className = 'inspector-skinning-physics-translation';
   const translationTitle = document.createElement('div');
@@ -1244,6 +1282,101 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   translationActions.appendChild(movePlus);
   translation.appendChild(translationActions);
   section.appendChild(translation);
+
+  const continuous = document.createElement('div');
+  continuous.className = 'inspector-skinning-physics-continuous';
+  const continuousTitle = document.createElement('div');
+  continuousTitle.className = 'inspector-skinning-subtitle';
+  continuousTitle.textContent = 'Continuous Translation Test';
+  continuous.appendChild(continuousTitle);
+  addText(continuous, 'inspector-skinning-hint',
+    'Ramp model velocity to test acceleration, stopping, and reversal.');
+
+  let continuousAxis = 'X';
+  const continuousAxisRow = document.createElement('div');
+  continuousAxisRow.className = 'inspector-skinning-physics-continuous-axis';
+  addText(continuousAxisRow, 'inspector-label', 'Axis');
+  const continuousAxisButtons = document.createElement('span');
+  ['X', 'Y', 'Z'].forEach(axis => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inspector-skinning-axis-button';
+    button.textContent = axis;
+    button.addEventListener('click', () => {
+      continuousAxis = axis;
+      setContinuousMotionAxis(axis);
+      update();
+    });
+    continuousAxisButtons.appendChild(button);
+  });
+  continuousAxisRow.appendChild(continuousAxisButtons);
+  continuous.appendChild(continuousAxisRow);
+
+  const continuousSpeedLabel = document.createElement('label');
+  continuousSpeedLabel.className = 'inspector-skinning-field';
+  addText(continuousSpeedLabel, 'inspector-label', 'Speed x Radius / sec');
+  const continuousSpeedValue = addText(continuousSpeedLabel,
+    'inspector-skinning-physics-continuous-speed-value', '0.50');
+  const continuousSpeedInput = document.createElement('input');
+  continuousSpeedInput.type = 'range';
+  continuousSpeedInput.className = 'inspector-skinning-physics-continuous-speed';
+  continuousSpeedInput.min = '0.05';
+  continuousSpeedInput.max = '2';
+  continuousSpeedInput.step = '0.05';
+  continuousSpeedInput.value = '0.50';
+  continuousSpeedInput.addEventListener('input', () => update());
+  continuousSpeedLabel.appendChild(continuousSpeedInput);
+  continuous.appendChild(continuousSpeedLabel);
+
+  const continuousAccelerationLabel = document.createElement('label');
+  continuousAccelerationLabel.className = 'inspector-skinning-field';
+  addText(continuousAccelerationLabel,
+    'inspector-label', 'Acceleration x Radius / sec2');
+  const continuousAccelerationValue = addText(continuousAccelerationLabel,
+    'inspector-skinning-physics-continuous-acceleration-value', '1.50');
+  const continuousAccelerationInput = document.createElement('input');
+  continuousAccelerationInput.type = 'range';
+  continuousAccelerationInput.className =
+    'inspector-skinning-physics-continuous-acceleration';
+  continuousAccelerationInput.min = '0.10';
+  continuousAccelerationInput.max = '5';
+  continuousAccelerationInput.step = '0.10';
+  continuousAccelerationInput.value = '1.50';
+  continuousAccelerationInput.addEventListener('input', () => update());
+  continuousAccelerationLabel.appendChild(continuousAccelerationInput);
+  continuous.appendChild(continuousAccelerationLabel);
+
+  const continuousActions = document.createElement('div');
+  continuousActions.className = 'inspector-skinning-chain-actions';
+  const continuousMinus = document.createElement('button');
+  continuousMinus.type = 'button';
+  continuousMinus.className =
+    'ui-button inspector-skinning-physics-continuous-minus';
+  continuousMinus.textContent = 'Move -';
+  continuousMinus.addEventListener('click', () => startContinuous(-1));
+  continuousActions.appendChild(continuousMinus);
+  const continuousStop = document.createElement('button');
+  continuousStop.type = 'button';
+  continuousStop.className =
+    'ui-button inspector-skinning-physics-continuous-stop';
+  continuousStop.textContent = 'Stop';
+  continuousStop.addEventListener('click', () => {
+    stopContinuousMotion();
+    update();
+  });
+  continuousActions.appendChild(continuousStop);
+  const continuousPlus = document.createElement('button');
+  continuousPlus.type = 'button';
+  continuousPlus.className =
+    'ui-button inspector-skinning-physics-continuous-plus';
+  continuousPlus.textContent = 'Move +';
+  continuousPlus.addEventListener('click', () => startContinuous(1));
+  continuousActions.appendChild(continuousPlus);
+  continuous.appendChild(continuousActions);
+
+  const continuousCurrent = addText(continuous,
+    'inspector-skinning-physics-continuous-current', 'Current Speed 0.00');
+  section.appendChild(continuous);
 
   const enableLabel = document.createElement('label');
   enableLabel.className = 'inspector-skinning-physics-enable-label';
@@ -1332,6 +1465,25 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     update();
   }
 
+  function startContinuous(direction) {
+    const latest = getSkinningState(mesh);
+    const radius = Number(latest?.influenceGraph?.boundingSphereRadius);
+    const speedScale = Number(continuousSpeedInput.value);
+    const accelerationScale = Number(continuousAccelerationInput.value);
+    if (!Number.isFinite(radius) || radius <= 0
+        || !Number.isFinite(speedScale) || !Number.isFinite(accelerationScale)) {
+      return;
+    }
+    startContinuousMotion(activeMeshes, {
+      axis: continuousAxis,
+      speedScale,
+      accelerationScale,
+      radius,
+      direction,
+    });
+    update();
+  }
+
   function update(latest = getSkinningState(mesh)) {
     if (!latest) return;
     const valid = !!latest.candidateForest;
@@ -1355,6 +1507,10 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     linearInput.value = latest.physicsLinearMotionStrength;
     linearValue.textContent = Number(
       latest.physicsLinearMotionStrength).toFixed(2);
+    continuousResponseInput.disabled = !valid;
+    continuousResponseInput.value = latest.physicsContinuousLinearResponse;
+    continuousResponseValue.textContent = Number(
+      latest.physicsContinuousLinearResponse).toFixed(2);
     translationAxisButtons.querySelectorAll('button').forEach(button => {
       button.disabled = !valid;
       button.classList.toggle('selected', button.textContent === translationAxis);
@@ -1365,6 +1521,28 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     const canTranslate = valid && Number.isFinite(radius) && radius > 0;
     moveMinus.disabled = !canTranslate;
     movePlus.disabled = !canTranslate;
+    continuousSpeedInput.disabled = !canTranslate;
+    continuousSpeedInput.value = Number(
+      continuousSpeedInput.value).toFixed(2);
+    continuousSpeedValue.textContent = Number(
+      continuousSpeedInput.value).toFixed(2);
+    continuousAccelerationInput.disabled = !canTranslate;
+    continuousAccelerationInput.value = Number(
+      continuousAccelerationInput.value).toFixed(2);
+    continuousAccelerationValue.textContent = Number(
+      continuousAccelerationInput.value).toFixed(2);
+    continuousAxisButtons.querySelectorAll('button').forEach(button => {
+      button.disabled = !canTranslate;
+      button.classList.toggle('selected', button.textContent === continuousAxis);
+    });
+    const continuousState = getContinuousMotionState();
+    const currentSpeed = radius > 0
+      ? continuousState.velocity / radius : 0;
+    continuousCurrent.textContent = `Current Speed ${currentSpeed >= 0 ? '+' : ''}`
+      + `${currentSpeed.toFixed(2)} x Radius / sec`;
+    continuousMinus.disabled = !canTranslate;
+    continuousPlus.disabled = !canTranslate;
+    continuousStop.disabled = !canTranslate || !continuousState.running;
     enableInput.disabled = !valid;
     enableInput.checked = !!latest.physicsEnabled;
     kickMinus.disabled = !valid || !latest.physicsEnabled;
@@ -1377,6 +1555,7 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
 
   parent.appendChild(section);
   update(state);
+  physicsUpdates.set(mesh, update);
   return {update};
 }
 
@@ -1533,6 +1712,7 @@ function renderSkinningControls(section, mesh, state) {
   status.hidden = true;
   controls.hidden = false;
   skinningUpdates.delete(mesh);
+  physicsUpdates.delete(mesh);
   controls.replaceChildren();
 
   const summary = document.createElement('div');
@@ -1781,6 +1961,12 @@ export function initInspectorPanel() {
       ? changed.includes(current.mesh)
       : (current.record.meshes || []).some(mesh => changed.includes(mesh));
     if (affected) updateInspectorState();
+  });
+  window.addEventListener('mod-viewer-model-transform-changed', event => {
+    const changed = event.detail?.meshes || [];
+    if (current?.type === 'mesh' && changed.includes(current.mesh)) {
+      physicsUpdates.get(current.mesh)?.();
+    }
   });
   clearContent();
 }

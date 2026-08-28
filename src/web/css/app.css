@@ -1171,7 +1171,10 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .inspector-skinning-physics-target-angle { width: 100%; accent-color: var(--accent-soft); }
 .inspector-skinning-physics-motion-strength,
 .inspector-skinning-physics-linear-strength,
-.inspector-skinning-physics-translation-step {
+.inspector-skinning-physics-continuous-response,
+.inspector-skinning-physics-translation-step,
+.inspector-skinning-physics-continuous-speed,
+.inspector-skinning-physics-continuous-acceleration {
   width: 100%; accent-color: var(--accent-soft);
 }
 .inspector-skinning-physics-translation {
@@ -1180,6 +1183,16 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 .inspector-skinning-physics-translation-axis {
   display: flex; align-items: center; gap: 8px;
+}
+.inspector-skinning-physics-continuous {
+  display: flex; flex-direction: column; gap: 5px; margin-top: 4px;
+  padding-top: 6px; border-top: 1px solid var(--border);
+}
+.inspector-skinning-physics-continuous-axis {
+  display: flex; align-items: center; gap: 8px;
+}
+.inspector-skinning-physics-continuous-current {
+  color: var(--text-muted); font: 10px/1.35 ui-monospace, monospace;
 }
 .inspector-skinning-physics-copy-status { min-height: 12px; }
 .inspector-skinning-relationship {

@@ -137,13 +137,12 @@ function averageVectors(vectors) {
   return vectorScale(sum, 1 / vectors.length);
 }
 
-function componentTranslationLag(
-    component, centerByBoneId, translationDeltaLocal, axis, strength) {
+export function representativeComponentLever(component, centerByBoneId) {
   const rootId = Number(component?.rootId);
   const rootCenter = centerForBone(centerByBoneId, rootId);
   const nodeIds = nodeIdsForComponent(component);
   const maxDepth = maxDepthForComponent(component);
-  if (!rootCenter || !nodeIds.length || maxDepth <= 0) return 0;
+  if (!rootCenter || !nodeIds.length || maxDepth <= 0) return null;
 
   const deepest = nodeIds
     .filter(nodeId => Number(component?.depthById?.[nodeId]) === maxDepth)
@@ -153,7 +152,7 @@ function componentTranslationLag(
   if (!distalCenter) {
     const validCenters = nodeIds.map(nodeId => centerForBone(
       centerByBoneId, nodeId)).filter(Boolean);
-    if (!validCenters.length) return 0;
+    if (!validCenters.length) return null;
     distalCenter = validCenters.reduce((farthest, candidate) => {
       const candidateDistance = vectorDot(
         vectorSubtract(candidate, rootCenter),
@@ -165,7 +164,13 @@ function componentTranslationLag(
     });
   }
 
-  const lever = vectorSubtract(distalCenter, rootCenter);
+  return vectorSubtract(distalCenter, rootCenter);
+}
+
+function componentTranslationLag(
+    component, centerByBoneId, translationDeltaLocal, axis, strength) {
+  const lever = representativeComponentLever(component, centerByBoneId);
+  if (!lever) return 0;
   const displacement = vectorScale(
     translationDeltaLocal, clamp(Number(strength) || 0, 0, 1));
   const desired = vectorSubtract(lever, displacement);
@@ -221,6 +226,64 @@ export function applyReferenceFrameTranslationDelta(
   return physicsState;
 }
 
+function addJointAngularVelocity(joint, delta) {
+  if (!joint) return;
+  const currentVelocity = Number(joint.angularVelocity);
+  const impulse = Number(delta);
+  joint.angularVelocity = clamp(
+    (Number.isFinite(currentVelocity) ? currentVelocity : 0)
+      + (Number.isFinite(impulse) ? impulse : 0),
+    -MAX_ANGULAR_VELOCITY, MAX_ANGULAR_VELOCITY);
+  if (joint.angle >= MAX_LOCAL_ANGLE && joint.angularVelocity > 0) {
+    joint.angularVelocity = 0;
+  }
+  if (joint.angle <= -MAX_LOCAL_ANGLE && joint.angularVelocity < 0) {
+    joint.angularVelocity = 0;
+  }
+}
+
+/** Apply a semantic root velocity change as an angular velocity impulse in
+ * the selected local bend plane. Unlike displacement lag, this only changes
+ * the spring's existing velocity state. */
+export function applyReferenceFrameLinearVelocityDelta(
+    physicsState, forest, centerByBoneId, deltaVelocityLocal,
+    axis, strength = 1, diagnostics = null) {
+  const delta = finiteVector(deltaVelocityLocal);
+  const response = Number(strength);
+  if (!delta || !Number.isFinite(response)) {
+    if (diagnostics) diagnostics.maxAbsDeltaOmega = 0;
+    return physicsState;
+  }
+  const unitAxis = translationAxisVector(axis);
+  const deltaPlane = vectorSubtract(delta,
+    vectorScale(unitAxis, vectorDot(delta, unitAxis)));
+  const responseScale = clamp(response, 0, 1);
+  let maxAbsDeltaOmega = 0;
+  (forest?.components || []).forEach(component => {
+    const lever = representativeComponentLever(component, centerByBoneId);
+    const maxDepth = maxDepthForComponent(component);
+    if (!lever || maxDepth <= 0) return;
+    const leverPlane = vectorSubtract(lever,
+      vectorScale(unitAxis, vectorDot(lever, unitAxis)));
+    const denominator = vectorDot(leverPlane, leverPlane);
+    if (denominator <= TRANSLATION_EPSILON) return;
+    const totalDeltaOmega = responseScale * vectorDot(
+      unitAxis, vectorCross(leverPlane, vectorScale(deltaPlane, -1)))
+      / denominator;
+    if (!Number.isFinite(totalDeltaOmega)) return;
+    maxAbsDeltaOmega = Math.max(maxAbsDeltaOmega, Math.abs(totalDeltaOmega));
+    const localDeltaOmega = totalDeltaOmega / maxDepth;
+    const rootId = Number(component.rootId);
+    nodeIdsForComponent(component).forEach(nodeId => {
+      if (nodeId === rootId) return;
+      addJointAngularVelocity(
+        physicsState?.joints?.get(nodeId), localDeltaOmega);
+    });
+  });
+  if (diagnostics) diagnostics.maxAbsDeltaOmega = maxAbsDeltaOmega;
+  return physicsState;
+}
+
 function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
@@ -228,15 +291,7 @@ function clamp(value, minimum, maximum) {
 function clampJoint(joint) {
   joint.angle = clamp(
     Number(joint.angle) || 0, -MAX_LOCAL_ANGLE, MAX_LOCAL_ANGLE);
-  joint.angularVelocity = clamp(
-    Number(joint.angularVelocity) || 0,
-    -MAX_ANGULAR_VELOCITY, MAX_ANGULAR_VELOCITY);
-  if (joint.angle === MAX_LOCAL_ANGLE && joint.angularVelocity > 0) {
-    joint.angularVelocity = 0;
-  }
-  if (joint.angle === -MAX_LOCAL_ANGLE && joint.angularVelocity < 0) {
-    joint.angularVelocity = 0;
-  }
+  addJointAngularVelocity(joint, 0);
 }
 
 export function stepSpringPhysics(
@@ -311,9 +366,7 @@ export function applyPhysicsKick(
     const depth = Number(component?.depthById?.[boneId]);
     const scale = maxDepth > 0 && Number.isFinite(depth)
       ? Math.max(0, depth / maxDepth) : 0;
-    joint.angularVelocity = clamp(
-      joint.angularVelocity + impulse * scale,
-      -MAX_ANGULAR_VELOCITY, MAX_ANGULAR_VELOCITY);
+    addJointAngularVelocity(joint, impulse * scale);
   });
   return physicsState;
 }

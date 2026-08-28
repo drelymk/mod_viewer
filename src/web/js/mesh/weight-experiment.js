@@ -12,11 +12,13 @@ import {
 import {
   DEFAULT_PHYSICS_DAMPING_RATIO, DEFAULT_PHYSICS_FREQUENCY_HZ,
   applyReferenceFrameAngularDelta,
+  applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
   applyPhysicsKick as applyPhysicsKickState, initializePhysicsState,
   isPhysicsSettled, physicsAngleMap, resetPhysicsState,
   stepSpringPhysics,
 } from './weight-physics.js';
+import { cancelContinuousMotionTest } from './weight-motion-test.js';
 
 export {
   applyWeightedRotation, buildChainTransforms, buildForestTransforms,
@@ -29,7 +31,9 @@ export {
   DEFAULT_PHYSICS_FREQUENCY_HZ, DEFAULT_VELOCITY_TOLERANCE,
   MAX_ANGULAR_VELOCITY, MAX_LOCAL_ANGLE,
   applyReferenceFrameAngularDelta,
+  applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
+  representativeComponentLever,
   buildPhysicsTargetAngles, initializePhysicsState, isPhysicsSettled,
   physicsAngleMap, resetPhysicsState, stepSpringPhysics,
 } from './weight-physics.js';
@@ -95,6 +99,8 @@ function newState() {
     physicsDampingRatio: DEFAULT_PHYSICS_DAMPING_RATIO,
     physicsMotionStrength: 0.35,
     physicsLinearMotionStrength: 0.35,
+    physicsRootLinearVelocityLocal: [0, 0, 0],
+    physicsContinuousLinearResponse: 0.35,
     physicsReferenceQuaternion: null,
     lastRootAngularDelta: 0,
     lastProjectedAngularDelta: 0,
@@ -103,6 +109,10 @@ function newState() {
     lastRootTranslationDeltaLocal: [0, 0, 0],
     lastTranslationLag: 0,
     translationEventCount: 0,
+    lastRootLinearVelocityWorld: [0, 0, 0],
+    lastRootLinearVelocityLocal: [0, 0, 0],
+    lastRootLinearVelocityDelta: [0, 0, 0],
+    continuousMotionEventCount: 0,
     physicsState: null,
     physicsTransforms: null,
     physicsAccumulator: 0,
@@ -154,6 +164,11 @@ function clearMotionDiagnostics(state) {
   state.lastRootTranslationDeltaLocal = [0, 0, 0];
   state.lastTranslationLag = 0;
   state.translationEventCount = 0;
+  state.physicsRootLinearVelocityLocal = [0, 0, 0];
+  state.lastRootLinearVelocityWorld = [0, 0, 0];
+  state.lastRootLinearVelocityLocal = [0, 0, 0];
+  state.lastRootLinearVelocityDelta = [0, 0, 0];
+  state.continuousMotionEventCount = 0;
 }
 
 function motionAxisVector(axis) {
@@ -233,6 +248,15 @@ function handleModelTransformChanged(event) {
       ? new THREE.Vector3(...translationWorld).applyQuaternion(
         previous.clone().invert()).toArray()
       : null;
+    const velocityValues = event.detail?.kinematics?.linearVelocityWorld;
+    const linearVelocityWorld = Array.isArray(velocityValues)
+      && velocityValues.length >= 3
+      ? velocityValues.slice(0, 3).map(Number) : null;
+    const hasContinuousVelocity = linearVelocityWorld?.every(Number.isFinite);
+    const linearVelocityLocal = hasContinuousVelocity
+      ? new THREE.Vector3(...linearVelocityWorld).applyQuaternion(
+        previous.clone().invert()).toArray()
+      : null;
     // Keep the reference current even when this event is not active physics
     // input, so ignored transforms cannot accumulate into a later impulse.
     state.physicsReferenceQuaternion.copy(current);
@@ -242,14 +266,34 @@ function handleModelTransformChanged(event) {
     state.lastProjectedAngularDelta = projectedDelta;
     state.motionEventCount += 1;
     let physicsChanged = false;
+    let immediateDeformation = false;
     const angularStrength = Number(state.physicsMotionStrength) || 0;
     if (Math.abs(projectedDelta) >= 1e-10 && angularStrength > 0) {
       applyReferenceFrameAngularDelta(
         state.physicsState, state.candidateForest,
         projectedDelta, angularStrength);
       physicsChanged = true;
+      immediateDeformation = true;
     }
-    if (hasTranslation) {
+    if (hasContinuousVelocity) {
+      const previousVelocity = state.physicsRootLinearVelocityLocal;
+      const deltaVelocityLocal = linearVelocityLocal.map((value, index) =>
+        value - (Number(previousVelocity[index]) || 0));
+      state.physicsRootLinearVelocityLocal = linearVelocityLocal;
+      state.lastRootLinearVelocityWorld = linearVelocityWorld;
+      state.lastRootLinearVelocityLocal = linearVelocityLocal;
+      state.lastRootLinearVelocityDelta = deltaVelocityLocal;
+      state.continuousMotionEventCount += 1;
+      const velocityDiagnostics = {};
+      applyReferenceFrameLinearVelocityDelta(
+        state.physicsState, state.candidateForest, state.centerByBoneId,
+        deltaVelocityLocal, state.physicsAxis,
+        state.physicsContinuousLinearResponse, velocityDiagnostics);
+      if (Number(velocityDiagnostics.maxAbsDeltaOmega) >= 1e-10
+          && Number(state.physicsContinuousLinearResponse) > 0) {
+        physicsChanged = true;
+      }
+    } else if (hasTranslation) {
       state.lastRootTranslationDeltaWorld = translationWorld;
       state.lastRootTranslationDeltaLocal = translationLocal;
       state.translationEventCount += 1;
@@ -263,13 +307,15 @@ function handleModelTransformChanged(event) {
       if (Math.abs(state.lastTranslationLag) >= 1e-10
           && Number(state.physicsLinearMotionStrength) > 0) {
         physicsChanged = true;
+        immediateDeformation = true;
       }
     }
     if (!physicsChanged) return;
     state.physicsSettled = false;
-    // Render the lag immediately; the fixed-step scheduler owns all recovery
-    // frames after this first response.
-    applyDeformation(mesh, state);
+    // Discrete reference-frame lag changes angles immediately. Continuous
+    // velocity impulses only change spring velocity; its first fixed step
+    // produces the visible response.
+    if (immediateDeformation) applyDeformation(mesh, state);
     wakePhysics(mesh, state);
   });
 }
@@ -300,6 +346,7 @@ export function isPhysicsScheduled(mesh) {
 }
 
 function stopPhysics(mesh, state) {
+  cancelContinuousMotionTest();
   removePhysicsMesh(mesh);
   state.physicsEnabled = false;
   state.physicsState = null;
@@ -1390,6 +1437,7 @@ function updateInfluenceVisualization(mesh, state) {
 }
 
 function refreshAfterForestTopologyChange(mesh, state) {
+  cancelContinuousMotionTest();
   if (state.physicsEnabled && state.deformationMode === 'physics') {
     state.physicsState = initializePhysicsState(state.candidateForest);
     state.physicsReferenceQuaternion = mesh.quaternion.clone();
@@ -1858,10 +1906,20 @@ export function setPhysicsLinearMotionStrength(mesh, strength) {
   return true;
 }
 
+export function setPhysicsContinuousLinearResponse(mesh, strength) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  const value = Number(strength);
+  if (!Number.isFinite(value)) return false;
+  state.physicsContinuousLinearResponse = Math.max(0, Math.min(1, value));
+  return true;
+}
+
 export function setPhysicsEnabled(mesh, enabled) {
   const state = stateFor(mesh);
   if (!state?.loaded || !state.candidateForest) return false;
   if (!enabled) {
+    cancelContinuousMotionTest();
     stopPhysics(mesh, state);
     applyDeformation(mesh, state);
     return false;
@@ -1901,6 +1959,7 @@ export function applyPhysicsKick(mesh, direction = 1) {
 }
 
 export function resetPhysicsMotion(mesh) {
+  cancelContinuousMotionTest();
   const state = stateFor(mesh);
   if (!state?.loaded || !state.physicsEnabled
       || state.deformationMode !== 'physics') return false;
@@ -1957,6 +2016,7 @@ export function setSkinningHeatmap(mesh, enabled) {
 export function resetSkinningExperiment(mesh) {
   const state = stateFor(mesh);
   if (!state?.loaded) return;
+  cancelContinuousMotionTest();
   if (state.physicsEnabled) stopPhysics(mesh, state);
   state.angle = 0;
   state.chainAngle = 0;
@@ -1976,6 +2036,7 @@ export function resetSkinningExperiment(mesh) {
 
 export function disposeSkinningExperiment(mesh) {
   const state = states.get(mesh);
+  cancelContinuousMotionTest();
   if (!state) return;
   state.disposed = true;
   removePhysicsMesh(mesh);
