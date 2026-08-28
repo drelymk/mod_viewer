@@ -1050,6 +1050,57 @@ def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
         context.close()
 
 
+def test_skinning_load_is_invalidated_by_shape_change(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"SkinningLoadRace": _payload("SkinningLoadRace")})
+    try:
+        _open(page, "SkinningLoadRace")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        result = page.evaluate("""async () => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          let releasePreview;
+          const previewPending = new Promise(resolve => {
+            releasePreview = resolve;
+          });
+          window.pywebview.api.get_skinning_preview = async () => previewPending;
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
+          const loadPromise = experiment.loadSkinningWeights(mesh);
+          const loading = experiment.getSkinningState(mesh)?.loading;
+          setControlValue('shape', '1');
+          refreshMeshes();
+          const invalidated = experiment.getSkinningState(mesh) === null;
+          releasePreview({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test',
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+          const error = await loadPromise.then(
+            () => null, failure => failure.message);
+          URL.revokeObjectURL(url);
+          return {
+            loading, invalidated, error,
+            stateAfterLoad: experiment.getSkinningState(mesh),
+          };
+        }""")
+        assert result["loading"]
+        assert result["invalidated"]
+        assert result["error"] == "The skin-weight experiment was reset."
+        assert result["stateAfterLoad"] is None
+    finally:
+        context.close()
+
+
 def test_skinning_angular_motion_follows_model_turn_and_ignores_camera(
         edge_browser, frontend_url):
     context, page = _page(

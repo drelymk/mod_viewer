@@ -24,9 +24,6 @@ const skinningUpdates = new WeakMap();
 const physicsUpdates = new WeakMap();
 let current = null;
 let selectionCount = 0;
-const MISSING_INFLUENCE_DISPLAY_LIMIT = 8;
-const INFLUENCE_NEIGHBOR_DISPLAY_LIMIT = 8;
-
 const $ = id => document.getElementById(id);
 
 const MATERIAL_KIND_OPTIONS = Object.freeze([

@@ -574,6 +574,9 @@ export function buildInfluenceNodes(
         totalWeight: 0,
         affectedVertexCount: 0,
         maxVertexWeight: 0,
+        weightedX: 0,
+        weightedY: 0,
+        weightedZ: 0,
         squaredPositionWeight: 0,
         positionWeight: 0,
       };
@@ -586,6 +589,9 @@ export function buildInfluenceNodes(
         const x = baselinePositions[offset];
         const y = baselinePositions[offset + 1];
         const z = baselinePositions[offset + 2];
+        entry.weightedX += x * weight;
+        entry.weightedY += y * weight;
+        entry.weightedZ += z * weight;
         entry.squaredPositionWeight += (x * x + y * y + z * z) * weight;
         entry.positionWeight += weight;
       }
@@ -596,8 +602,11 @@ export function buildInfluenceNodes(
   const orderedIds = requested ? [...requested] : [...entries.keys()];
   return orderedIds.filter(boneId => entries.has(boneId)).map(boneId => {
     const entry = entries.get(boneId);
-    const nodeCenter = weightedCenter(
-      baselinePositions, indices, weights, influenceCount, boneId);
+    const nodeCenter = entry.positionWeight > 0
+      ? [entry.weightedX / entry.positionWeight,
+        entry.weightedY / entry.positionWeight,
+        entry.weightedZ / entry.positionWeight]
+      : [0, 0, 0];
     const weightedRadius = entry.positionWeight > 0
       ? Math.sqrt(Math.max(0,
         entry.squaredPositionWeight / entry.positionWeight
@@ -963,30 +972,6 @@ export function orientForest(nodes, treeEdges, primaryRootId, options = {}) {
     components: forestComponents,
     componentByBoneId,
   };
-}
-
-export function weightedCenter(positions, indices, weights, influenceCount,
-                               boneId) {
-  const center = [0, 0, 0];
-  if (!positions || !indices || !weights || influenceCount <= 0) return center;
-  let total = 0;
-  const vertexCount = Math.floor(positions.length / 3);
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const weight = weightForBone(
-      indices, weights, influenceCount, vertex, boneId);
-    if (!weight) continue;
-    const offset = vertex * 3;
-    center[0] += positions[offset] * weight;
-    center[1] += positions[offset + 1] * weight;
-    center[2] += positions[offset + 2] * weight;
-    total += weight;
-  }
-  if (total > 0) {
-    center[0] /= total;
-    center[1] /= total;
-    center[2] /= total;
-  }
-  return center;
 }
 
 function previewError(result) {
@@ -1468,7 +1453,7 @@ export function setSelectedBone(mesh, boneId) {
   if (state.influenceVisualizationMode === 'center') {
     createInfluenceVisualization(mesh, state, 'center');
   }
-  applyDeformation(mesh, state);
+  requestRender();
 }
 
 export function setPhysicsAxis(mesh, axis) {

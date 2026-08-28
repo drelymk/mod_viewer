@@ -208,7 +208,10 @@ function applyShapeTargets(mesh) {
   const previous = mesh.userData.shapeControlValues;
   if (previous?.length === controlValues.length
       && controlValues.every((value, index) => value === previous[index])) return;
-  if (getSkinningState(mesh)?.loaded) disposeSkinningExperiment(mesh);
+  const skinning = getSkinningState(mesh);
+  if (skinning?.loaded || skinning?.loading || skinning?.promise) {
+    disposeSkinningExperiment(mesh);
+  }
   mesh.userData.shapeControlValues = controlValues;
 
   const attr = mesh.geometry.attributes.position;

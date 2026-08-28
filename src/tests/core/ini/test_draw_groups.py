@@ -187,12 +187,12 @@ def test_draw_groups_resolve_blend_from_sibling_component_snapshot():
     sections = parse_sections("sample.ini", text="""[TextureOverrideBodyPosition]
 vb0 = ResourceBodyPosition
 
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
 [TextureOverrideBodyBlend]
 handling = skip
 vb1 = ResourceBodyBlend
-
-[TextureOverrideBodyTexcoord]
-vb1 = ResourceBodyTexcoord
 
 [TextureOverrideBody]
 ib = ResourceBodyIB

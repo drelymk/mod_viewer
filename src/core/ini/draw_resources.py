@@ -153,6 +153,7 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
 
     component_positions, component_texcoords = {}, {}
     component_vertex_resources = {}
+    component_blend_vertex_resources = {}
     hash_positions, hash_texcoords = {}, {}
 
     for name, info in section_info.items():
@@ -160,9 +161,11 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
             continue
         base = name[len("TextureOverride"):]
         component_name = None
+        component_suffix = None
         for suffix in ("Blend", "Position", "Texcoord"):
             if base.lower().endswith(suffix.lower()):
                 component_name = base[:-len(suffix)]
+                component_suffix = suffix
                 break
         if component_name is not None:
             resources_for_component = component_vertex_resources.setdefault(
@@ -171,6 +174,13 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
                     info.get("vertex_resources_at_end") or {}).items():
                 if resource is not None:
                     resources_for_component.setdefault(slot, resource)
+            if component_suffix == "Blend":
+                blend_resources = component_blend_vertex_resources.setdefault(
+                    component_name.lower(), {})
+                for slot, resource in (
+                        info.get("vertex_resources_at_end") or {}).items():
+                    if resource is not None:
+                        blend_resources.setdefault(slot, resource)
         if base.lower().endswith("texcoord"):
             component = base[:-len("Texcoord")]
             if info["vb1"]:
@@ -239,6 +249,7 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
         "component_positions": component_positions,
         "component_texcoords": component_texcoords,
         "component_vertex_resources": component_vertex_resources,
+        "component_blend_vertex_resources": component_blend_vertex_resources,
         "hash_positions": hash_positions,
         "hash_texcoords": hash_texcoords,
         "global_ib": global_ib,
