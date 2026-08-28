@@ -839,6 +839,87 @@ def test_skinning_angular_motion_helpers_cover_projection_and_lag(
         context.close()
 
 
+def test_skinning_translation_motion_solver_uses_projected_component_levers(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"TranslationMotion": _payload("TranslationMotion")})
+    try:
+        result = page.evaluate("""async () => {
+          const physics = await import('./js/mesh/weight-physics.js');
+          const forest = {
+            components: [
+              {rootId: 0, nodeIds: [0, 1, 2], maxDepth: 2,
+                depthById: {0: 0, 1: 1, 2: 2}},
+              {rootId: 5, nodeIds: [5, 6], maxDepth: 1,
+                depthById: {5: 0, 6: 1}},
+            ],
+          };
+          const centers = new Map([
+            [0, [0, 0, 0]], [1, [0, .5, 0]], [2, [0, 1, 0]],
+            [5, [2, 0, 0]], [6, [2, 1, 0]],
+          ]);
+          const solve = (delta, response = .5) => {
+            const state = physics.initializePhysicsState(forest);
+            const diagnostics = {};
+            physics.applyReferenceFrameTranslationDelta(
+              state, forest, centers, delta, 'Z', response, diagnostics);
+            return {
+              angles: [...state.joints.values()].map(joint => joint.angle),
+              lag: diagnostics.maxAbsLag,
+            };
+          };
+          const velocityState = physics.initializePhysicsState(forest);
+          velocityState.joints.get(1).angularVelocity = 1.25;
+          physics.applyReferenceFrameTranslationDelta(
+            velocityState, forest, centers, [.1, 0, 0], 'Z', .5);
+          const degenerateCenters = new Map([
+            [0, [0, 0, 0]], [1, [0, 0, 0]], [2, [0, 0, 0]],
+          ]);
+          const degenerateState = physics.initializePhysicsState({
+            components: [{rootId: 0, nodeIds: [0, 1, 2], maxDepth: 2,
+              depthById: {0: 0, 1: 1, 2: 2}}],
+          });
+          physics.applyReferenceFrameTranslationDelta(
+            degenerateState, forest, degenerateCenters, [.1, 0, 0], 'Z', 1);
+          return {
+            plus: solve([.1, 0, 0]),
+            minus: solve([-.1, 0, 0]),
+            parallel: solve([0, .1, 0]),
+            alongAxis: solve([0, 0, .1]),
+            zero: solve([.1, 0, 0], 0),
+            half: solve([.1, 0, 0], .5),
+            full: solve([.1, 0, 0], 1),
+            velocity: velocityState.joints.get(1).angularVelocity,
+            roots: [velocityState.joints.has(0), velocityState.joints.has(5)],
+            degenerate: [...degenerateState.joints.values()].map(joint => ({
+              angle: joint.angle, angularVelocity: joint.angularVelocity,
+            })),
+          };
+        }""")
+        assert result["plus"]["lag"] > 0
+        assert result["minus"]["lag"] > 0
+        assert result["plus"]["angles"] == pytest.approx([
+            result["plus"]["angles"][0], result["plus"]["angles"][0],
+            result["plus"]["angles"][0] * 2])
+        assert result["plus"]["angles"][0] == pytest.approx(
+            result["plus"]["lag"] / 2)
+        assert result["minus"]["angles"] == pytest.approx([
+            -result["minus"]["lag"] / 2, -result["minus"]["lag"] / 2,
+            -result["minus"]["lag"]])
+        assert result["parallel"]["lag"] == pytest.approx(0)
+        assert result["alongAxis"]["lag"] == pytest.approx(0)
+        assert result["zero"]["lag"] == pytest.approx(0)
+        assert result["half"]["lag"] < result["full"]["lag"]
+        assert result["velocity"] == pytest.approx(1.25)
+        assert result["roots"] == [False, False]
+        assert result["degenerate"] == pytest.approx([
+            {"angle": 0, "angularVelocity": 0},
+            {"angle": 0, "angularVelocity": 0},
+        ])
+    finally:
+        context.close()
+
+
 def test_skinning_experiment_lifecycle_and_shape_invalidation(
         edge_browser, frontend_url):
     payload = _payload("Experiment")
@@ -1451,6 +1532,175 @@ def test_skinning_angular_motion_follows_model_turn_and_ignores_camera(
         context.close()
 
 
+def test_skinning_translation_motion_uses_scene_transform_lifecycle(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"TranslationLifecycle": _payload("TranslationLifecycle")})
+    try:
+        _open(page, "TranslationLifecycle")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        result = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const scene = await import('./js/scene/scene.js');
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          let previewCalls = 0;
+          window.pywebview.api.get_skinning_preview = async () => {
+            previewCalls += 1;
+            return {
+              status: 'ok', vertex_count: 3, influence_count: 2,
+              bone_ids: [0, 1, 2], encoding: 'test',
+              data: {
+                url, length: 48,
+                indices: {offset: 0, length: 24, type: 'u32'},
+                weights: {offset: 24, length: 24, type: 'f32'},
+              }, diagnostics: {},
+            };
+          };
+          await experiment.loadSkinningWeights(mesh);
+          experiment.buildCandidateTree(mesh, 0);
+          previewCalls = 0;
+          experiment.setPhysicsAxis(mesh, 'Z');
+          experiment.setPhysicsLinearMotionStrength(mesh, .35);
+          experiment.setPhysicsTargetAngle(mesh, 0);
+
+          const queuedFrames = [];
+          const originalRequestAnimationFrame = window.requestAnimationFrame;
+          const originalCancelAnimationFrame = window.cancelAnimationFrame;
+          window.requestAnimationFrame = callback => {
+            queuedFrames.push(callback);
+            return callback;
+          };
+          window.cancelAnimationFrame = callback => {
+            const index = queuedFrames.indexOf(callback);
+            if (index >= 0) queuedFrames.splice(index, 1);
+          };
+          const runFrame = timestamp => {
+            const callbacks = queuedFrames.splice(0);
+            if (!callbacks.length) throw new Error('Expected a queued frame.');
+            callbacks.forEach(callback => callback(timestamp));
+          };
+          const settle = timestamp => {
+            let current = timestamp;
+            let frames = 0;
+            while (queuedFrames.length && frames < 600) {
+              runFrame(current);
+              current += 16.7;
+              frames += 1;
+            }
+            return {current, frames};
+          };
+
+          experiment.setPhysicsEnabled(mesh, true);
+          runFrame(0);
+          settle(16.7);
+          const initialPositions = mesh.position.clone();
+          const initialQuaternion = mesh.quaternion.clone();
+          const initialGeometry = [...mesh.geometry.attributes.position.array];
+          const radius = mesh.geometry.boundingSphere.radius;
+          const delta = new THREE.Vector3(radius * .1, 0, 0);
+          const events = [];
+          window.addEventListener('mod-viewer-model-transform-changed', event => {
+            if (event.detail?.meshes?.includes(mesh)) {
+              events.push({
+                reason: event.detail.reason,
+                translation: event.detail.translationDeltaWorld,
+              });
+            }
+          });
+          const cameraBefore = scene.camera.position.clone();
+          scene.translateModel(window.modViewer.activeMeshes, delta);
+          const afterTranslation = experiment.getSkinningState(mesh);
+          const firstPositionDelta = mesh.position.clone().sub(initialPositions);
+          const firstTranslation = {
+            positions: firstPositionDelta.toArray(),
+            quaternionUnchanged: mesh.quaternion.equals(initialQuaternion),
+            geometryChanged: mesh.geometry.attributes.position.array.some(
+              (value, index) => Math.abs(value - initialGeometry[index]) > 1e-6),
+            eventCount: afterTranslation.translationEventCount,
+            world: afterTranslation.lastRootTranslationDeltaWorld,
+            local: afterTranslation.lastRootTranslationDeltaLocal,
+            lag: afterTranslation.lastTranslationLag,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+            previewCalls,
+            cameraUnchanged: scene.camera.position.equals(cameraBefore),
+          };
+
+          scene.translateModel(window.modViewer.activeMeshes, delta);
+          const afterRepeat = experiment.getSkinningState(mesh);
+          const repeated = {
+            eventCount: afterRepeat.translationEventCount,
+            positionDelta: mesh.position.clone().sub(initialPositions).toArray(),
+            world: afterRepeat.lastRootTranslationDeltaWorld,
+          };
+
+          scene.rotateModelHorizontalQuarterTurn(window.modViewer.activeMeshes);
+          const afterRotation = experiment.getSkinningState(mesh);
+          const rotationOnly = {
+            reason: events.at(-1)?.reason,
+            translationCount: afterRotation.translationEventCount,
+            world: afterRotation.lastRootTranslationDeltaWorld,
+            motionCount: afterRotation.motionEventCount,
+          };
+
+          scene.resetView();
+          const afterReset = experiment.getSkinningState(mesh);
+          const resetEvent = events.at(-1);
+          const resetState = {
+            reason: resetEvent?.reason,
+            reverse: resetEvent?.translation,
+            translationCount: afterReset.translationEventCount,
+            position: mesh.position.clone().toArray(),
+            referenceMatches: afterReset.physicsReferenceQuaternion
+              .equals(mesh.quaternion),
+          };
+          settle(33.4);
+          const settled = experiment.getSkinningState(mesh);
+          window.requestAnimationFrame = originalRequestAnimationFrame;
+          window.cancelAnimationFrame = originalCancelAnimationFrame;
+          URL.revokeObjectURL(url);
+          return {firstTranslation, repeated, rotationOnly, resetState,
+            settled: settled.physicsSettled,
+            eventCount: events.length,
+            initialPositions: initialPositions.toArray(),
+          };
+        }""")
+        assert result["firstTranslation"]["positions"] == pytest.approx([
+            result["firstTranslation"]["positions"][0], 0, 0])
+        assert result["firstTranslation"]["quaternionUnchanged"]
+        assert result["firstTranslation"]["geometryChanged"]
+        assert result["firstTranslation"]["eventCount"] == 1
+        assert result["firstTranslation"]["world"][0] > 0
+        assert result["firstTranslation"]["local"][0] > 0
+        assert abs(result["firstTranslation"]["lag"]) > 1e-6
+        assert result["firstTranslation"]["scheduled"]
+        assert result["firstTranslation"]["previewCalls"] == 0
+        assert result["firstTranslation"]["cameraUnchanged"]
+        assert result["repeated"]["eventCount"] == 2
+        assert result["repeated"]["positionDelta"] == pytest.approx([
+            result["firstTranslation"]["positions"][0] * 2, 0, 0])
+        assert result["repeated"]["world"] == pytest.approx(
+            result["firstTranslation"]["world"])
+        assert result["rotationOnly"] == {
+            "reason": "rotate-x", "translationCount": 2,
+            "world": result["firstTranslation"]["world"], "motionCount": 3}
+        assert result["resetState"]["reason"] == "reset-view"
+        assert result["resetState"]["reverse"] == pytest.approx([
+            -result["firstTranslation"]["world"][0] * 2, 0, 0])
+        assert result["resetState"]["translationCount"] == 3
+        assert result["resetState"]["position"] == pytest.approx(
+            result["initialPositions"])
+        assert result["resetState"]["referenceMatches"]
+        assert result["settled"]
+        assert result["eventCount"] == 4
+    finally:
+        context.close()
+
+
 def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url,
@@ -1615,6 +1865,12 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
           node.value = '0.6';
           node.dispatchEvent(new Event('input', {bubbles: true}));
         }""")
+        linear = physics.locator(
+            ".inspector-skinning-physics-linear-strength")
+        linear.evaluate("""node => {
+          node.value = '0.45';
+          node.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
         enable = physics.locator(".inspector-skinning-physics-enable")
         enable.check()
         page.wait_for_function("""async () => {
@@ -1625,8 +1881,16 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
             && state.physicsTargetAngle === 25
             && state.physicsFrequencyHz === 3
             && state.physicsDampingRatio === .5
-            && state.physicsMotionStrength === .6;
+            && state.physicsMotionStrength === .6
+            && state.physicsLinearMotionStrength === .45;
         }""")
+        translation = physics.locator(
+            ".inspector-skinning-physics-translation")
+        assert "Model Translation Test" in translation.inner_text()
+        assert translation.locator(
+            ".inspector-skinning-physics-translation-step").get_attribute("min") == "0.01"
+        translation.locator(
+            ".inspector-skinning-physics-translation-plus").click()
         physics.locator(".inspector-skinning-physics-kick-plus").click()
         physics.locator(".inspector-skinning-copy-physics").click()
         page.wait_for_function(
@@ -1637,9 +1901,11 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
         assert copied_physics["candidateForest"]["physics"]["enabled"]
         assert copied_physics["candidateForest"]["physics"]["targetAngle"] == 25
         assert copied_physics["candidateForest"]["physics"]["motionResponse"] == .6
+        assert copied_physics["candidateForest"]["physics"]["linearResponse"] == .45
         assert copied_physics["candidateForest"]["physics"]["lastRootAngularDelta"] == 0
         assert copied_physics["candidateForest"]["physics"]["lastProjectedAngularDelta"] == 0
-        assert copied_physics["candidateForest"]["physics"]["motionEventCount"] == 0
+        assert copied_physics["candidateForest"]["physics"]["motionEventCount"] == 1
+        assert copied_physics["candidateForest"]["physics"]["translationEventCount"] == 1
         physics.locator(".inspector-skinning-physics-reset").click()
         page.wait_for_function("""async () => {
           const {getSkinningState} =

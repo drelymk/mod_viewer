@@ -244,19 +244,45 @@ export function frameView(meshes = [], direction = null, targetYOffset = 0) {
 }
 
 export function resetView() {
-  const restoredMeshes = cameraFrame.resetView();
+  const reset = cameraFrame.resetView();
+  const restoredMeshes = reset?.meshes || [];
   resetOutlineProjectionReference(camera, controls.target);
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
-  notifyModelTransformChanged(restoredMeshes, 'reset-view');
+  notifyModelTransformChanged(
+    restoredMeshes, 'reset-view', reset?.translationDeltaWorld || null);
   requestRender();
 }
 
-function notifyModelTransformChanged(meshes, reason) {
+function translationArray(delta) {
+  if (!delta) return null;
+  const values = delta.isVector3 ? [delta.x, delta.y, delta.z]
+    : Array.isArray(delta) ? delta : [delta.x, delta.y, delta.z];
+  if (values.length < 3) return null;
+  const normalized = values.slice(0, 3).map(Number);
+  return normalized.every(Number.isFinite) ? normalized : null;
+}
+
+function notifyModelTransformChanged(meshes, reason, translationDeltaWorld = null) {
   if (!meshes?.length || typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('mod-viewer-model-transform-changed', {
-    detail: {meshes, reason},
+    detail: {
+      meshes,
+      reason,
+      translationDeltaWorld: translationArray(translationDeltaWorld),
+    },
   }));
+}
+
+export function translateModel(meshes = [], delta) {
+  const changedMeshes = cameraFrame.translateModel(meshes, delta);
+  if (!changedMeshes.length) return [];
+  const deltaWorld = translationArray(delta);
+  characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
+  notifyModelTransformChanged(changedMeshes, 'translate', deltaWorld);
+  requestRender();
+  return changedMeshes;
 }
 
 export function adoptModelMeshes(meshes = []) {

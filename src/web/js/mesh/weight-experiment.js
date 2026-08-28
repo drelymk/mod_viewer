@@ -12,6 +12,7 @@ import {
 import {
   DEFAULT_PHYSICS_DAMPING_RATIO, DEFAULT_PHYSICS_FREQUENCY_HZ,
   applyReferenceFrameAngularDelta,
+  applyReferenceFrameTranslationDelta,
   applyPhysicsKick as applyPhysicsKickState, initializePhysicsState,
   isPhysicsSettled, physicsAngleMap, resetPhysicsState,
   stepSpringPhysics,
@@ -28,6 +29,7 @@ export {
   DEFAULT_PHYSICS_FREQUENCY_HZ, DEFAULT_VELOCITY_TOLERANCE,
   MAX_ANGULAR_VELOCITY, MAX_LOCAL_ANGLE,
   applyReferenceFrameAngularDelta,
+  applyReferenceFrameTranslationDelta,
   buildPhysicsTargetAngles, initializePhysicsState, isPhysicsSettled,
   physicsAngleMap, resetPhysicsState, stepSpringPhysics,
 } from './weight-physics.js';
@@ -92,10 +94,15 @@ function newState() {
     physicsFrequencyHz: DEFAULT_PHYSICS_FREQUENCY_HZ,
     physicsDampingRatio: DEFAULT_PHYSICS_DAMPING_RATIO,
     physicsMotionStrength: 0.35,
+    physicsLinearMotionStrength: 0.35,
     physicsReferenceQuaternion: null,
     lastRootAngularDelta: 0,
     lastProjectedAngularDelta: 0,
     motionEventCount: 0,
+    lastRootTranslationDeltaWorld: [0, 0, 0],
+    lastRootTranslationDeltaLocal: [0, 0, 0],
+    lastTranslationLag: 0,
+    translationEventCount: 0,
     physicsState: null,
     physicsTransforms: null,
     physicsAccumulator: 0,
@@ -143,6 +150,10 @@ function clearMotionDiagnostics(state) {
   state.lastRootAngularDelta = 0;
   state.lastProjectedAngularDelta = 0;
   state.motionEventCount = 0;
+  state.lastRootTranslationDeltaWorld = [0, 0, 0];
+  state.lastRootTranslationDeltaLocal = [0, 0, 0];
+  state.lastTranslationLag = 0;
+  state.translationEventCount = 0;
 }
 
 function motionAxisVector(axis) {
@@ -206,24 +217,55 @@ function handleModelTransformChanged(event) {
   meshes.forEach(mesh => {
     const state = states.get(mesh);
     if (!state?.physicsReferenceQuaternion || !mesh?.quaternion) return;
-    const previous = state.physicsReferenceQuaternion;
+    const previous = state.physicsReferenceQuaternion.clone();
     const current = mesh.quaternion;
     const rootDelta = shortestQuaternionDelta(previous, current);
     const rootAngularDelta = signedQuaternionDeltaAngle(previous, current);
     const projectedDelta = projectQuaternionDeltaOntoAxis(
       previous, current, state.physicsAxis);
+    const translationValues = event.detail?.translationDeltaWorld;
+    const translationWorld = Array.isArray(translationValues)
+      && translationValues.length >= 3
+      ? translationValues.slice(0, 3).map(Number) : null;
+    const hasTranslation = translationWorld?.every(Number.isFinite)
+      && translationWorld.some(value => Math.abs(value) > 1e-10);
+    const translationLocal = hasTranslation
+      ? new THREE.Vector3(...translationWorld).applyQuaternion(
+        previous.clone().invert()).toArray()
+      : null;
     // Keep the reference current even when this event is not active physics
     // input, so ignored transforms cannot accumulate into a later impulse.
-    previous.copy(current);
+    state.physicsReferenceQuaternion.copy(current);
     if (!state.physicsEnabled || state.deformationMode !== 'physics'
         || !state.physicsState || !state.candidateForest) return;
     state.lastRootAngularDelta = rootDelta ? rootAngularDelta : 0;
     state.lastProjectedAngularDelta = projectedDelta;
     state.motionEventCount += 1;
-    const strength = Number(state.physicsMotionStrength) || 0;
-    if (Math.abs(projectedDelta) < 1e-10 || strength <= 0) return;
-    applyReferenceFrameAngularDelta(
-      state.physicsState, state.candidateForest, projectedDelta, strength);
+    let physicsChanged = false;
+    const angularStrength = Number(state.physicsMotionStrength) || 0;
+    if (Math.abs(projectedDelta) >= 1e-10 && angularStrength > 0) {
+      applyReferenceFrameAngularDelta(
+        state.physicsState, state.candidateForest,
+        projectedDelta, angularStrength);
+      physicsChanged = true;
+    }
+    if (hasTranslation) {
+      state.lastRootTranslationDeltaWorld = translationWorld;
+      state.lastRootTranslationDeltaLocal = translationLocal;
+      state.translationEventCount += 1;
+      const translationDiagnostics = {};
+      applyReferenceFrameTranslationDelta(
+        state.physicsState, state.candidateForest, state.centerByBoneId,
+        translationLocal, state.physicsAxis,
+        state.physicsLinearMotionStrength, translationDiagnostics);
+      state.lastTranslationLag = Number(
+        translationDiagnostics.maxAbsLag) || 0;
+      if (Math.abs(state.lastTranslationLag) >= 1e-10
+          && Number(state.physicsLinearMotionStrength) > 0) {
+        physicsChanged = true;
+      }
+    }
+    if (!physicsChanged) return;
     state.physicsSettled = false;
     // Render the lag immediately; the fixed-step scheduler owns all recovery
     // frames after this first response.
@@ -1804,6 +1846,15 @@ export function setPhysicsMotionStrength(mesh, strength) {
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
   state.physicsMotionStrength = Math.max(0, Math.min(1, value));
+  return true;
+}
+
+export function setPhysicsLinearMotionStrength(mesh, strength) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  const value = Number(strength);
+  if (!Number.isFinite(value)) return false;
+  state.physicsLinearMotionStrength = Math.max(0, Math.min(1, value));
   return true;
 }
 

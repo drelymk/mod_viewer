@@ -3,6 +3,8 @@
 
 import { isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';
+import { translateModel } from '../scene/scene.js';
+import { activeMeshes } from '../mesh/mesh-state.js';
 import {
   SIGNIFICANT_RESIDUAL_RATIO, SIGNIFICANT_VERTEX_WEIGHT,
   INFLUENCE_GRAPH_TOP_K,
@@ -14,7 +16,8 @@ import {
   setInfluenceVisualizationMode,
   setForestAxis, setForestAngle,
   setPhysicsAxis, setPhysicsTargetAngle, setPhysicsFrequency,
-  setPhysicsDamping, setPhysicsMotionStrength, setPhysicsEnabled,
+  setPhysicsDamping, setPhysicsMotionStrength,
+  setPhysicsLinearMotionStrength, setPhysicsEnabled,
   applyPhysicsKick,
   resetPhysicsMotion,
   setVirtualChainVisible,
@@ -540,9 +543,15 @@ function forestDiagnosticsPayload(state) {
       frequencyHz: state.physicsFrequencyHz,
       dampingRatio: state.physicsDampingRatio,
       motionResponse: state.physicsMotionStrength,
+      angularResponse: state.physicsMotionStrength,
+      linearResponse: state.physicsLinearMotionStrength,
       lastRootAngularDelta: state.lastRootAngularDelta,
       lastProjectedAngularDelta: state.lastProjectedAngularDelta,
       motionEventCount: state.motionEventCount,
+      lastRootTranslationDeltaWorld: state.lastRootTranslationDeltaWorld,
+      lastRootTranslationDeltaLocal: state.lastRootTranslationDeltaLocal,
+      lastTranslationLag: state.lastTranslationLag,
+      translationEventCount: state.translationEventCount,
       settled: !!state.physicsSettled,
       joints: Object.fromEntries(
         [...(state.physicsState?.joints || new Map()).entries()]
@@ -1025,12 +1034,17 @@ function physicsSummary(state) {
     ?? (state.candidateForest.components || []).reduce(
       (total, component) => total + Math.max(
         0, (component.nodeIds || []).length - 1), 0);
-  const motionResponse = Number(state.physicsMotionStrength) || 0;
+  const angularResponse = Number(state.physicsMotionStrength) || 0;
+  const linearResponse = Number(state.physicsLinearMotionStrength) || 0;
   const lastRootAngularDelta = Number(state.lastRootAngularDelta) || 0;
   const lastProjectedAngularDelta = Number(
     state.lastProjectedAngularDelta) || 0;
+  const lastTranslationLag = Number(state.lastTranslationLag) || 0;
   return [
-    `Motion response ${motionResponse.toFixed(2)}`,
+    `Angular response ${angularResponse.toFixed(2)} / `
+      + `Linear response ${linearResponse.toFixed(2)}`,
+    `Translation lag ${lastTranslationLag * 180 / Math.PI} deg / `
+      + `Events ${state.translationEventCount || 0}`,
     `Model input ${lastRootAngularDelta * 180 / Math.PI}Â° Â· `
       + `Projected ${lastProjectedAngularDelta * 180 / Math.PI}Â° Â· `
       + `Events ${state.motionEventCount || 0}`,
@@ -1130,7 +1144,7 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   motionLabel.className = 'inspector-skinning-field';
   const motionHeader = document.createElement('span');
   motionHeader.className = 'inspector-skinning-rotation-header';
-  addText(motionHeader, 'inspector-label', 'Motion Response');
+  addText(motionHeader, 'inspector-label', 'Angular Response');
   const motionValue = addText(motionHeader,
     'inspector-skinning-physics-motion-value', '0.35');
   motionLabel.appendChild(motionHeader);
@@ -1147,6 +1161,89 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   });
   motionLabel.appendChild(motionInput);
   section.appendChild(motionLabel);
+
+  const linearLabel = document.createElement('label');
+  linearLabel.className = 'inspector-skinning-field';
+  const linearHeader = document.createElement('span');
+  linearHeader.className = 'inspector-skinning-rotation-header';
+  addText(linearHeader, 'inspector-label', 'Linear Response');
+  const linearValue = addText(linearHeader,
+    'inspector-skinning-physics-linear-value', '0.35');
+  linearLabel.appendChild(linearHeader);
+  const linearInput = document.createElement('input');
+  linearInput.type = 'range';
+  linearInput.className = 'inspector-skinning-physics-linear-strength';
+  linearInput.min = '0';
+  linearInput.max = '1';
+  linearInput.step = '0.05';
+  linearInput.value = state.physicsLinearMotionStrength;
+  linearInput.addEventListener('input', () => {
+    setPhysicsLinearMotionStrength(mesh, linearInput.value);
+    update();
+  });
+  linearLabel.appendChild(linearInput);
+  section.appendChild(linearLabel);
+
+  const translation = document.createElement('div');
+  translation.className = 'inspector-skinning-physics-translation';
+  const translationTitle = document.createElement('div');
+  translationTitle.className = 'inspector-skinning-subtitle';
+  translationTitle.textContent = 'Model Translation Test';
+  translation.appendChild(translationTitle);
+  addText(translation, 'inspector-skinning-hint',
+    'Move the model by a fraction of the selected mesh radius.');
+
+  const translationAxisRow = document.createElement('div');
+  translationAxisRow.className = 'inspector-skinning-physics-translation-axis';
+  addText(translationAxisRow, 'inspector-label', 'Move Axis');
+  const translationAxisButtons = document.createElement('span');
+  let translationAxis = 'X';
+  ['X', 'Y', 'Z'].forEach(axis => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inspector-skinning-axis-button';
+    button.textContent = axis;
+    button.addEventListener('click', () => {
+      translationAxis = axis;
+      update();
+    });
+    translationAxisButtons.appendChild(button);
+  });
+  translationAxisRow.appendChild(translationAxisButtons);
+  translation.appendChild(translationAxisRow);
+
+  const translationStepRow = document.createElement('label');
+  translationStepRow.className = 'inspector-skinning-field';
+  addText(translationStepRow, 'inspector-label', 'Step × Radius');
+  const translationStepValue = addText(translationStepRow,
+    'inspector-skinning-physics-translation-step-value', '0.10');
+  const translationStepInput = document.createElement('input');
+  translationStepInput.type = 'range';
+  translationStepInput.className = 'inspector-skinning-physics-translation-step';
+  translationStepInput.min = '0.01';
+  translationStepInput.max = '0.50';
+  translationStepInput.step = '0.01';
+  translationStepInput.value = '0.10';
+  translationStepInput.addEventListener('input', updateTranslationStep);
+  translationStepRow.appendChild(translationStepInput);
+  translation.appendChild(translationStepRow);
+
+  const translationActions = document.createElement('div');
+  translationActions.className = 'inspector-skinning-chain-actions';
+  const moveMinus = document.createElement('button');
+  moveMinus.type = 'button';
+  moveMinus.className = 'ui-button inspector-skinning-physics-translation-minus';
+  moveMinus.textContent = 'Move -';
+  moveMinus.addEventListener('click', () => moveModel(-1));
+  translationActions.appendChild(moveMinus);
+  const movePlus = document.createElement('button');
+  movePlus.type = 'button';
+  movePlus.className = 'ui-button inspector-skinning-physics-translation-plus';
+  movePlus.textContent = 'Move +';
+  movePlus.addEventListener('click', () => moveModel(1));
+  translationActions.appendChild(movePlus);
+  translation.appendChild(translationActions);
+  section.appendChild(translation);
 
   const enableLabel = document.createElement('label');
   enableLabel.className = 'inspector-skinning-physics-enable-label';
@@ -1217,6 +1314,24 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   const copyStatus = addText(
     section, 'inspector-skinning-physics-copy-status', '');
 
+  function updateTranslationStep() {
+    translationStepValue.textContent = Number(
+      translationStepInput.value).toFixed(2);
+  }
+
+  function moveModel(direction) {
+    const latest = getSkinningState(mesh);
+    const radius = Number(latest?.influenceGraph?.boundingSphereRadius);
+    const step = Number(translationStepInput.value);
+    if (!Number.isFinite(radius) || radius <= 0
+        || !Number.isFinite(step)) return;
+    const delta = [0, 0, 0];
+    const axisIndex = {X: 0, Y: 1, Z: 2}[translationAxis];
+    delta[axisIndex] = direction * radius * step;
+    translateModel(activeMeshes, delta);
+    update();
+  }
+
   function update(latest = getSkinningState(mesh)) {
     if (!latest) return;
     const valid = !!latest.candidateForest;
@@ -1236,6 +1351,20 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     motionInput.disabled = !valid;
     motionInput.value = latest.physicsMotionStrength;
     motionValue.textContent = Number(latest.physicsMotionStrength).toFixed(2);
+    linearInput.disabled = !valid;
+    linearInput.value = latest.physicsLinearMotionStrength;
+    linearValue.textContent = Number(
+      latest.physicsLinearMotionStrength).toFixed(2);
+    translationAxisButtons.querySelectorAll('button').forEach(button => {
+      button.disabled = !valid;
+      button.classList.toggle('selected', button.textContent === translationAxis);
+    });
+    translationStepInput.disabled = !valid;
+    updateTranslationStep();
+    const radius = Number(latest.influenceGraph?.boundingSphereRadius);
+    const canTranslate = valid && Number.isFinite(radius) && radius > 0;
+    moveMinus.disabled = !canTranslate;
+    movePlus.disabled = !canTranslate;
     enableInput.disabled = !valid;
     enableInput.checked = !!latest.physicsEnabled;
     kickMinus.disabled = !valid || !latest.physicsEnabled;

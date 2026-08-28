@@ -82,6 +82,145 @@ export function applyReferenceFrameAngularDelta(
   return physicsState;
 }
 
+const TRANSLATION_EPSILON = 1e-8;
+
+function finiteVector(value) {
+  const values = value?.isVector3
+    ? [value.x, value.y, value.z]
+    : Array.isArray(value) ? value : [value?.x, value?.y, value?.z];
+  if (values.length < 3) return null;
+  const vector = values.slice(0, 3).map(Number);
+  return vector.every(Number.isFinite) ? vector : null;
+}
+
+function vectorAdd(left, right) {
+  return [left[0] + right[0], left[1] + right[1], left[2] + right[2]];
+}
+
+function vectorSubtract(left, right) {
+  return [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
+}
+
+function vectorScale(vector, scale) {
+  return [vector[0] * scale, vector[1] * scale, vector[2] * scale];
+}
+
+function vectorDot(left, right) {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+function vectorCross(left, right) {
+  return [
+    left[1] * right[2] - left[2] * right[1],
+    left[2] * right[0] - left[0] * right[2],
+    left[0] * right[1] - left[1] * right[0],
+  ];
+}
+
+function centerForBone(centerByBoneId, boneId) {
+  const candidate = centerByBoneId?.get?.(boneId)
+    ?? centerByBoneId?.get?.(String(boneId))
+    ?? centerByBoneId?.[boneId];
+  return finiteVector(candidate);
+}
+
+function translationAxisVector(axis) {
+  if (axis === 'X') return [1, 0, 0];
+  if (axis === 'Y') return [0, 1, 0];
+  return [0, 0, 1];
+}
+
+function averageVectors(vectors) {
+  if (!vectors.length) return null;
+  const sum = vectors.reduce((total, vector) => vectorAdd(total, vector),
+    [0, 0, 0]);
+  return vectorScale(sum, 1 / vectors.length);
+}
+
+function componentTranslationLag(
+    component, centerByBoneId, translationDeltaLocal, axis, strength) {
+  const rootId = Number(component?.rootId);
+  const rootCenter = centerForBone(centerByBoneId, rootId);
+  const nodeIds = nodeIdsForComponent(component);
+  const maxDepth = maxDepthForComponent(component);
+  if (!rootCenter || !nodeIds.length || maxDepth <= 0) return 0;
+
+  const deepest = nodeIds
+    .filter(nodeId => Number(component?.depthById?.[nodeId]) === maxDepth)
+    .map(nodeId => centerForBone(centerByBoneId, nodeId))
+    .filter(Boolean);
+  let distalCenter = averageVectors(deepest);
+  if (!distalCenter) {
+    const validCenters = nodeIds.map(nodeId => centerForBone(
+      centerByBoneId, nodeId)).filter(Boolean);
+    if (!validCenters.length) return 0;
+    distalCenter = validCenters.reduce((farthest, candidate) => {
+      const candidateDistance = vectorDot(
+        vectorSubtract(candidate, rootCenter),
+        vectorSubtract(candidate, rootCenter));
+      const farthestDistance = vectorDot(
+        vectorSubtract(farthest, rootCenter),
+        vectorSubtract(farthest, rootCenter));
+      return candidateDistance > farthestDistance ? candidate : farthest;
+    });
+  }
+
+  const lever = vectorSubtract(distalCenter, rootCenter);
+  const displacement = vectorScale(
+    translationDeltaLocal, clamp(Number(strength) || 0, 0, 1));
+  const desired = vectorSubtract(lever, displacement);
+  const unitAxis = translationAxisVector(axis);
+  const leverPlane = vectorSubtract(lever,
+    vectorScale(unitAxis, vectorDot(lever, unitAxis)));
+  const desiredPlane = vectorSubtract(desired,
+    vectorScale(unitAxis, vectorDot(desired, unitAxis)));
+  const leverLength = Math.sqrt(vectorDot(leverPlane, leverPlane));
+  const desiredLength = Math.sqrt(vectorDot(desiredPlane, desiredPlane));
+  if (leverLength <= TRANSLATION_EPSILON
+      || desiredLength <= TRANSLATION_EPSILON) return 0;
+  return Math.atan2(
+    vectorDot(unitAxis, vectorCross(leverPlane, desiredPlane)),
+    vectorDot(leverPlane, desiredPlane));
+}
+
+/** Apply semantic model translation as a geometric lag in each component's
+ * previous local reference frame. This helper is intentionally independent
+ * of meshes, rendering, and the DOM. */
+export function applyReferenceFrameTranslationDelta(
+    physicsState, forest, centerByBoneId, translationDeltaLocal,
+    axis, strength = 1, diagnostics = null) {
+  const delta = finiteVector(translationDeltaLocal);
+  const response = Number(strength);
+  if (!delta || !Number.isFinite(response)) {
+    if (diagnostics) diagnostics.maxAbsLag = 0;
+    return physicsState;
+  }
+  if (Math.sqrt(vectorDot(delta, delta)) <= TRANSLATION_EPSILON) {
+    if (diagnostics) diagnostics.maxAbsLag = 0;
+    return physicsState;
+  }
+  let diagnosticLag = 0;
+  (forest?.components || []).forEach(component => {
+    const totalLag = componentTranslationLag(
+      component, centerByBoneId, delta, axis, response);
+    if (Math.abs(totalLag) > Math.abs(diagnosticLag)) diagnosticLag = totalLag;
+    const maxDepth = maxDepthForComponent(component);
+    if (!totalLag || maxDepth <= 0) return;
+    const rootId = Number(component.rootId);
+    const localLag = totalLag / maxDepth;
+    nodeIdsForComponent(component).forEach(nodeId => {
+      if (nodeId === rootId) return;
+      const joint = physicsState?.joints?.get(nodeId);
+      if (!joint) return;
+      joint.angle = clamp(
+        (Number(joint.angle) || 0) + localLag,
+        -MAX_LOCAL_ANGLE, MAX_LOCAL_ANGLE);
+    });
+  });
+  if (diagnostics) diagnostics.maxAbsLag = Math.abs(diagnosticLag);
+  return physicsState;
+}
+
 function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
