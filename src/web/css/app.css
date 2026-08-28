@@ -1147,6 +1147,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .inspector-skinning-tree-show.active {
   color: var(--accent-soft); border-color: var(--accent-soft);
 }
+.inspector-skinning-copy-status { min-height: 12px; }
 .inspector-skinning-relationship {
   display: flex; flex-direction: column; gap: 3px; padding: 5px;
   border: 1px solid var(--border); border-radius: var(--radius-sm);

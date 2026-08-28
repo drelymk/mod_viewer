@@ -660,6 +660,13 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
           new Float32Array(bytes.buffer, 24).set([.8, .2, .6, .4, .3, .7]);
           const url = URL.createObjectURL(new Blob([bytes]));
           window.__skinPreviewRequests = 0;
+          window.__copiedGraphDiagnostics = '';
+          Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: {writeText: async text => {
+              window.__copiedGraphDiagnostics = text;
+            }},
+          });
           window.pywebview.api.get_skinning_preview = async () => {
             window.__skinPreviewRequests += 1;
             return {
@@ -690,6 +697,16 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
         graph = page.locator(".inspector-skinning-influence-graph")
         assert "Influence Graph" in graph.inner_text()
         assert page.locator(".inspector-skinning-neighbor-row").count() == 2
+        page.locator(".inspector-skinning-copy-graph").click()
+        page.wait_for_function(
+            "() => document.querySelector('.inspector-skinning-copy-status')"
+            ".textContent === 'Graph diagnostics copied.'")
+        copied = page.evaluate("window.__copiedGraphDiagnostics")
+        assert '"rootId"' in copied
+        assert '"nodes"' in copied
+        assert '"topRelationships"' in copied
+        assert '"candidateTree"' in copied
+        assert '"weightedCenter"' in copied
         graph_button = page.locator(
             ".inspector-skinning-influence-graph-show")
         graph_button.click()
@@ -708,6 +725,15 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
           return !!getSkinningState(window.modViewer.activeMeshes[0])
             .candidateTree;
         }""")
+        page.locator(".inspector-skinning-copy-graph").click()
+        page.wait_for_function(
+            "() => document.querySelector('.inspector-skinning-copy-status')"
+            ".textContent === 'Graph diagnostics copied.'")
+        copied_tree = page.evaluate(
+            "() => JSON.parse(window.__copiedGraphDiagnostics)")
+        assert copied_tree["candidateTree"]["rootId"] == 0
+        assert copied_tree["candidateTree"]["edges"]
+        assert copied_tree["candidateTree"]["orientation"]["parentById"]
         assert "Root 0" in page.locator(
             ".inspector-skinning-tree-output").inner_text()
         page.locator(".inspector-skinning-tree-show").click()

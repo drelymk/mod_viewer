@@ -5,6 +5,7 @@ import { isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';
 import {
   SIGNIFICANT_RESIDUAL_RATIO, SIGNIFICANT_VERTEX_WEIGHT,
+  INFLUENCE_GRAPH_TOP_K,
   getSkinningState, loadSkinningWeights, resetSkinningExperiment,
   setSelectedBone, setSkinningAngle, setSkinningAxis, setSkinningChainAngle,
   setSkinningChainAxis, setSkinningChainText, setSkinningHeatmap,
@@ -482,6 +483,82 @@ function candidateTreeText(tree) {
   return lines.join('\n');
 }
 
+function compareGraphRelationships(a, b) {
+  return (Number(b.containment) || 0) - (Number(a.containment) || 0)
+    || (Number(b.jaccard) || 0) - (Number(a.jaccard) || 0)
+    || (Number(a.normalizedDistance ?? Infinity)
+      - Number(b.normalizedDistance ?? Infinity))
+    || Number(a.boneA) - Number(b.boneA)
+    || Number(a.boneB) - Number(b.boneB);
+}
+
+function topGraphRelationships(graph) {
+  const selected = new Map();
+  (graph?.nodes || []).forEach(node => {
+    const candidates = (graph.relationships || [])
+      .filter(item => item.boneA === node.boneId || item.boneB === node.boneId)
+      .map(item => ({...item, _boneId: node.boneId}))
+      .sort(compareNeighborRelationships)
+      .slice(0, INFLUENCE_GRAPH_TOP_K);
+    candidates.forEach(item => {
+      const key = `${Math.min(item.boneA, item.boneB)}:${Math.max(
+        item.boneA, item.boneB)}`;
+      const {_boneId, ...relationship} = item;
+      selected.set(key, relationship);
+    });
+  });
+  return [...selected.values()].sort(compareGraphRelationships);
+}
+
+function graphDiagnosticsPayload(state) {
+  const graph = state?.influenceGraph;
+  if (!graph) return null;
+  const tree = state.candidateTree;
+  return {
+    rootId: state.candidateRootId ?? null,
+    boundingSphereRadius: graph.boundingSphereRadius ?? null,
+    nodes: (graph.nodes || []).map(node => ({
+      boneId: node.boneId,
+      totalWeight: node.totalWeight,
+      affectedVertexCount: node.affectedVertexCount,
+      maxVertexWeight: node.maxVertexWeight,
+      weightedCenter: node.weightedCenter,
+      weightedRadius: node.weightedRadius,
+    })),
+    topRelationships: topGraphRelationships(graph),
+    candidateTree: tree ? {
+      rootId: tree.rootId,
+      components: tree.components,
+      edges: tree.edges,
+      orientation: tree.orientation,
+    } : null,
+  };
+}
+
+async function copyGraphDiagnostics(state) {
+  const payload = graphDiagnosticsPayload(state);
+  if (!payload) throw new Error('Influence graph is not available.');
+  const text = JSON.stringify(payload, null, 2);
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('Clipboard access is unavailable.');
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
 function buildSkinningInfluenceGraphControls(parent, mesh, state) {
   const section = document.createElement('div');
   section.className = 'inspector-skinning-influence-graph';
@@ -532,6 +609,31 @@ function buildSkinningInfluenceGraphControls(parent, mesh, state) {
     update(latest);
   });
   section.appendChild(graphButton);
+  let copying = false;
+  const copyButton = document.createElement('button');
+  copyButton.type = 'button';
+  copyButton.className = 'ui-button inspector-skinning-copy-graph';
+  copyButton.textContent = 'Copy Graph Diagnostics';
+  copyButton.addEventListener('click', async () => {
+    const latest = getSkinningState(mesh);
+    if (!latest) return;
+    copying = true;
+    copyButton.disabled = true;
+    copyStatus.textContent = '';
+    try {
+      await copyGraphDiagnostics(latest);
+      copyStatus.textContent = 'Graph diagnostics copied.';
+    } catch (error) {
+      copyStatus.textContent = error instanceof Error
+        ? error.message : String(error);
+    } finally {
+      copying = false;
+      copyButton.disabled = !getSkinningState(mesh)?.influenceGraph;
+    }
+  });
+  section.appendChild(copyButton);
+  const copyStatus = addText(
+    section, 'inspector-skinning-copy-status', '');
 
   const treeSection = document.createElement('div');
   treeSection.className = 'inspector-skinning-candidate-tree';
@@ -608,6 +710,9 @@ function buildSkinningInfluenceGraphControls(parent, mesh, state) {
     neighbors.hidden = !valid;
     graphButton.disabled = !valid;
     graphButton.hidden = !valid;
+    copyButton.disabled = !valid || copying;
+    copyButton.hidden = !valid;
+    if (!valid) copyStatus.textContent = '';
     graphButton.textContent = latest.influenceVisualizationMode === 'graph'
       ? 'Hide Influence Graph' : 'Show Influence Graph';
     graphButton.classList.toggle(
