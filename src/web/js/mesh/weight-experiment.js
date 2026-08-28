@@ -11,10 +11,12 @@ import {
 } from './weight-deformation.js';
 import {
   DEFAULT_PHYSICS_DAMPING_RATIO, DEFAULT_PHYSICS_FREQUENCY_HZ,
+  GRAVITY_WORLD_DIRECTION, MIN_GRAVITY_LEVER_RATIO, STANDARD_GRAVITY,
   applyReferenceFrameAngularDelta,
   applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
   applyPhysicsKick as applyPhysicsKickState, initializePhysicsState,
+  buildGravityAngularAccelerations, buildPhysicsEquilibriumAngles,
   isPhysicsSettled, physicsAngleMap, resetPhysicsState,
   stepSpringPhysics,
 } from './weight-physics.js';
@@ -29,10 +31,12 @@ export {
 export {
   DEFAULT_ANGLE_TOLERANCE, DEFAULT_PHYSICS_DAMPING_RATIO,
   DEFAULT_PHYSICS_FREQUENCY_HZ, DEFAULT_VELOCITY_TOLERANCE,
+  GRAVITY_WORLD_DIRECTION, MIN_GRAVITY_LEVER_RATIO, STANDARD_GRAVITY,
   MAX_ANGULAR_VELOCITY, MAX_LOCAL_ANGLE,
   applyReferenceFrameAngularDelta,
   applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
+  buildGravityAngularAccelerations, buildPhysicsEquilibriumAngles,
   representativeComponentLever,
   buildPhysicsTargetAngles, initializePhysicsState, isPhysicsSettled,
   physicsAngleMap, resetPhysicsState, stepSpringPhysics,
@@ -101,6 +105,11 @@ function newState() {
     physicsLinearMotionStrength: 0.35,
     physicsRootLinearVelocityLocal: [0, 0, 0],
     physicsContinuousLinearResponse: 0.35,
+    physicsGravityEnabled: false,
+    physicsGravityScale: 1.0,
+    physicsGravityLocal: [...GRAVITY_WORLD_DIRECTION],
+    physicsGravityAccelerations: null,
+    physicsGravityDiagnostics: null,
     physicsReferenceQuaternion: null,
     lastRootAngularDelta: 0,
     lastProjectedAngularDelta: 0,
@@ -177,6 +186,43 @@ function motionAxisVector(axis) {
   return new THREE.Vector3(0, 0, 1);
 }
 
+export function gravityDirectionLocal(mesh) {
+  const quaternion = mesh?.quaternion;
+  if (!quaternion?.clone || quaternion.lengthSq() === 0) {
+    return [...GRAVITY_WORLD_DIRECTION];
+  }
+  return new THREE.Vector3(...GRAVITY_WORLD_DIRECTION)
+    .applyQuaternion(quaternion.clone().normalize().invert())
+    .normalize().toArray();
+}
+
+function refreshGravityState(mesh, state) {
+  if (!state.physicsGravityEnabled) {
+    state.physicsGravityAccelerations = null;
+    state.physicsGravityDiagnostics = null;
+    state.physicsGravityLocal = [...GRAVITY_WORLD_DIRECTION];
+    return;
+  }
+  const localDirection = gravityDirectionLocal(mesh);
+  const referenceRadius = Number(
+    state.influenceGraph?.boundingSphereRadius);
+  const gravity = buildGravityAngularAccelerations(
+    state.candidateForest, state.centerByBoneId, localDirection,
+    state.physicsAxis, {
+      referenceRadius,
+      gravityScale: state.physicsGravityScale,
+    });
+  state.physicsGravityLocal = localDirection;
+  state.physicsGravityAccelerations = gravity.accelerationByBoneId;
+  state.physicsGravityDiagnostics = {
+    ...gravity.diagnostics,
+    enabled: true,
+    scale: state.physicsGravityScale,
+    worldDirection: [...GRAVITY_WORLD_DIRECTION],
+    localDirection: [...localDirection],
+  };
+}
+
 function shortestQuaternionDelta(previousQuaternion, currentQuaternion) {
   if (!previousQuaternion?.clone || !currentQuaternion?.clone) return null;
   const previous = previousQuaternion.clone();
@@ -236,6 +282,7 @@ function handleModelTransformChanged(event) {
     const current = mesh.quaternion;
     const rootDelta = shortestQuaternionDelta(previous, current);
     const rootAngularDelta = signedQuaternionDeltaAngle(previous, current);
+    const orientationChanged = Math.abs(rootAngularDelta) >= 1e-10;
     const projectedDelta = projectQuaternionDeltaOntoAxis(
       previous, current, state.physicsAxis);
     const translationValues = event.detail?.translationDeltaWorld;
@@ -260,12 +307,15 @@ function handleModelTransformChanged(event) {
     // Keep the reference current even when this event is not active physics
     // input, so ignored transforms cannot accumulate into a later impulse.
     state.physicsReferenceQuaternion.copy(current);
+    if (state.physicsGravityEnabled && orientationChanged) {
+      refreshGravityState(mesh, state);
+    }
     if (!state.physicsEnabled || state.deformationMode !== 'physics'
         || !state.physicsState || !state.candidateForest) return;
     state.lastRootAngularDelta = rootDelta ? rootAngularDelta : 0;
     state.lastProjectedAngularDelta = projectedDelta;
     state.motionEventCount += 1;
-    let physicsChanged = false;
+    let physicsChanged = state.physicsGravityEnabled && orientationChanged;
     let immediateDeformation = false;
     const angularStrength = Number(state.physicsMotionStrength) || 0;
     if (Math.abs(projectedDelta) >= 1e-10 && angularStrength > 0) {
@@ -356,6 +406,10 @@ function stopPhysics(mesh, state) {
   state.physicsSettled = true;
   state.physicsTargetAngle = 0;
   state.physicsReferenceQuaternion = null;
+  state.physicsGravityEnabled = false;
+  state.physicsGravityLocal = [...GRAVITY_WORLD_DIRECTION];
+  state.physicsGravityAccelerations = null;
+  state.physicsGravityDiagnostics = null;
   clearMotionDiagnostics(state);
   if (state.deformationMode === 'physics') state.deformationMode = null;
 }
@@ -406,6 +460,9 @@ function advancePhysicsMesh(mesh, timestamp) {
         dampingRatio: state.physicsDampingRatio,
         targetAngleRadians: THREE.MathUtils.degToRad(
           state.physicsTargetAngle),
+        externalAngularAccelerationByBoneId:
+          state.physicsGravityEnabled
+            ? state.physicsGravityAccelerations : null,
         maxDt: PHYSICS_STEP,
       });
     state.physicsAccumulator -= PHYSICS_STEP;
@@ -421,7 +478,12 @@ function advancePhysicsMesh(mesh, timestamp) {
   applyDeformation(mesh, state);
   state.physicsSettled = isPhysicsSettled(
     state.physicsState, state.candidateForest,
-    THREE.MathUtils.degToRad(state.physicsTargetAngle));
+    THREE.MathUtils.degToRad(state.physicsTargetAngle), {
+      frequencyHz: state.physicsFrequencyHz,
+      externalAngularAccelerationByBoneId:
+        state.physicsGravityEnabled
+          ? state.physicsGravityAccelerations : null,
+    });
   if (state.physicsSettled) {
     state.physicsLastTimestamp = null;
     removePhysicsMesh(mesh);
@@ -1438,6 +1500,7 @@ function updateInfluenceVisualization(mesh, state) {
 
 function refreshAfterForestTopologyChange(mesh, state) {
   cancelContinuousMotionTest();
+  refreshGravityState(mesh, state);
   if (state.physicsEnabled && state.deformationMode === 'physics') {
     state.physicsState = initializePhysicsState(state.candidateForest);
     state.physicsReferenceQuaternion = mesh.quaternion.clone();
@@ -1853,7 +1916,14 @@ export function setPhysicsAxis(mesh, axis) {
   if (!state?.loaded || !state.candidateForest
       || !['X', 'Y', 'Z'].includes(axis)) return;
   state.physicsAxis = axis;
-  if (state.physicsEnabled) applyDeformation(mesh, state);
+  const gravityEnabled = state.physicsGravityEnabled;
+  refreshGravityState(mesh, state);
+  if (state.physicsEnabled && gravityEnabled) {
+    applyDeformation(mesh, state);
+    wakePhysics(mesh, state);
+  } else if (state.physicsEnabled) {
+    applyDeformation(mesh, state);
+  }
 }
 
 export function setPhysicsTargetAngle(mesh, angle) {
@@ -1915,6 +1985,32 @@ export function setPhysicsContinuousLinearResponse(mesh, strength) {
   return true;
 }
 
+export function setPhysicsGravityEnabled(mesh, enabled) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  state.physicsGravityEnabled = !!enabled;
+  refreshGravityState(mesh, state);
+  if (state.physicsEnabled && state.deformationMode === 'physics') {
+    state.physicsSettled = false;
+    wakePhysics(mesh, state);
+  }
+  return state.physicsGravityEnabled;
+}
+
+export function setPhysicsGravityScale(mesh, scale) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  const value = Number(scale);
+  if (!Number.isFinite(value)) return false;
+  state.physicsGravityScale = Math.max(0, Math.min(2, value));
+  refreshGravityState(mesh, state);
+  if (state.physicsEnabled && state.deformationMode === 'physics') {
+    state.physicsSettled = false;
+    wakePhysics(mesh, state);
+  }
+  return true;
+}
+
 export function setPhysicsEnabled(mesh, enabled) {
   const state = stateFor(mesh);
   if (!state?.loaded || !state.candidateForest) return false;
@@ -1933,6 +2029,7 @@ export function setPhysicsEnabled(mesh, enabled) {
   state.physicsReferenceQuaternion = mesh.quaternion.clone();
   clearMotionDiagnostics(state);
   state.physicsState = initializePhysicsState(state.candidateForest);
+  refreshGravityState(mesh, state);
   state.physicsTransforms = null;
   state.physicsAccumulator = 0;
   state.physicsLastTimestamp = null;
@@ -1967,12 +2064,14 @@ export function resetPhysicsMotion(mesh) {
   state.physicsTargetAngle = 0;
   state.physicsReferenceQuaternion = mesh.quaternion.clone();
   clearMotionDiagnostics(state);
+  refreshGravityState(mesh, state);
   state.physicsTransforms = null;
   state.physicsAccumulator = 0;
   state.physicsLastTimestamp = null;
-  state.physicsSettled = true;
+  state.physicsSettled = !state.physicsGravityEnabled;
   removePhysicsMesh(mesh);
   applyDeformation(mesh, state);
+  if (state.physicsGravityEnabled) wakePhysics(mesh, state);
   return true;
 }
 

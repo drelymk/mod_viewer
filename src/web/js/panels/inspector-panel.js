@@ -10,6 +10,7 @@ import {
   startContinuousMotion, stopContinuousMotion,
 } from '../mesh/weight-motion-test.js';
 import {
+  GRAVITY_WORLD_DIRECTION,
   SIGNIFICANT_RESIDUAL_RATIO, SIGNIFICANT_VERTEX_WEIGHT,
   INFLUENCE_GRAPH_TOP_K,
   getSkinningState, loadSkinningWeights, resetSkinningExperiment,
@@ -22,6 +23,7 @@ import {
   setPhysicsAxis, setPhysicsTargetAngle, setPhysicsFrequency,
   setPhysicsDamping, setPhysicsMotionStrength,
   setPhysicsLinearMotionStrength, setPhysicsContinuousLinearResponse,
+  setPhysicsGravityEnabled, setPhysicsGravityScale,
   setPhysicsEnabled,
   applyPhysicsKick,
   resetPhysicsMotion,
@@ -563,6 +565,24 @@ function forestDiagnosticsPayload(state) {
       lastRootLinearVelocityLocal: state.lastRootLinearVelocityLocal,
       lastRootLinearVelocityDelta: state.lastRootLinearVelocityDelta,
       continuousMotionEventCount: state.continuousMotionEventCount,
+      gravity: {
+        enabled: !!state.physicsGravityEnabled,
+        scale: state.physicsGravityScale,
+        worldDirection: [...GRAVITY_WORLD_DIRECTION],
+        localDirection: [...(state.physicsGravityLocal
+          || GRAVITY_WORLD_DIRECTION)],
+        referenceRadius: state.physicsGravityDiagnostics?.referenceRadius ?? 0,
+        minLeverRatio: state.physicsGravityDiagnostics?.minLeverRatio ?? 0.15,
+        activeComponentCount:
+          state.physicsGravityDiagnostics?.activeComponentCount || 0,
+        clampedComponentCount:
+          state.physicsGravityDiagnostics?.clampedComponentCount || 0,
+        maxAbsTotalAcceleration:
+          state.physicsGravityDiagnostics?.maxAbsTotalAcceleration || 0,
+        maxAbsLocalAcceleration:
+          state.physicsGravityDiagnostics?.maxAbsLocalAcceleration || 0,
+        components: state.physicsGravityDiagnostics?.components || [],
+      },
       settled: !!state.physicsSettled,
       joints: Object.fromEntries(
         [...(state.physicsState?.joints || new Map()).entries()]
@@ -1053,6 +1073,12 @@ function physicsSummary(state) {
   const lastProjectedAngularDelta = Number(
     state.lastProjectedAngularDelta) || 0;
   const lastTranslationLag = Number(state.lastTranslationLag) || 0;
+  const gravityScale = Number(state.physicsGravityScale) || 0;
+  const gravityDiagnostics = state.physicsGravityDiagnostics;
+  const gravityMaxAcceleration = Number(
+    gravityDiagnostics?.maxAbsTotalAcceleration) || 0;
+  const gravityDirection = (state.physicsGravityLocal
+    || GRAVITY_WORLD_DIRECTION).map(value => Number(value).toFixed(2));
   return [
     `Angular response ${angularResponse.toFixed(2)} / `
       + `Discrete linear ${linearResponse.toFixed(2)}`,
@@ -1067,6 +1093,10 @@ function physicsSummary(state) {
     `Target bend ${state.physicsTargetAngle}° · Axis ${state.physicsAxis}`,
     `Frequency ${Number(state.physicsFrequencyHz).toFixed(2)} Hz · `
       + `Damping ${Number(state.physicsDampingRatio).toFixed(2)}`,
+    `Gravity ${state.physicsGravityEnabled ? 'On' : 'Off'} / `
+      + `Scale ${gravityScale.toFixed(1)} / Max `
+      + `${(gravityMaxAcceleration * 180 / Math.PI).toFixed(1)} deg/s2`,
+    `Gravity local [${gravityDirection.join(', ')}]`,
   ].join('\n');
 }
 
@@ -1221,6 +1251,59 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   });
   continuousResponseLabel.appendChild(continuousResponseInput);
   section.appendChild(continuousResponseLabel);
+
+  const gravity = document.createElement('div');
+  gravity.className = 'inspector-skinning-physics-gravity';
+  const gravityTitle = document.createElement('div');
+  gravityTitle.className = 'inspector-skinning-subtitle';
+  gravityTitle.textContent = 'Gravity';
+  gravity.appendChild(gravityTitle);
+  addText(gravity, 'inspector-skinning-hint',
+    'Gravity is projected onto the selected Physics Axis.');
+
+  const gravityEnableLabel = document.createElement('label');
+  gravityEnableLabel.className = 'inspector-skinning-physics-enable-label';
+  const gravityEnableInput = document.createElement('input');
+  gravityEnableInput.type = 'checkbox';
+  gravityEnableInput.className = 'inspector-skinning-physics-gravity-enable';
+  gravityEnableInput.addEventListener('change', () => {
+    setPhysicsGravityEnabled(mesh, gravityEnableInput.checked);
+    update();
+  });
+  gravityEnableLabel.appendChild(gravityEnableInput);
+  addText(gravityEnableLabel, 'inspector-label', 'Enable Gravity');
+  gravity.appendChild(gravityEnableLabel);
+
+  const gravityScaleLabel = document.createElement('label');
+  gravityScaleLabel.className = 'inspector-skinning-field';
+  const gravityScaleHeader = document.createElement('span');
+  gravityScaleHeader.className = 'inspector-skinning-rotation-header';
+  addText(gravityScaleHeader, 'inspector-label', 'Gravity Scale');
+  const gravityScaleValue = addText(gravityScaleHeader,
+    'inspector-skinning-physics-gravity-scale-value', '1.0');
+  gravityScaleLabel.appendChild(gravityScaleHeader);
+  const gravityScaleInput = document.createElement('input');
+  gravityScaleInput.type = 'range';
+  gravityScaleInput.className = 'inspector-skinning-physics-gravity-scale';
+  gravityScaleInput.min = '0';
+  gravityScaleInput.max = '2';
+  gravityScaleInput.step = '0.1';
+  gravityScaleInput.value = state.physicsGravityScale;
+  gravityScaleInput.addEventListener('input', () => {
+    setPhysicsGravityScale(mesh, gravityScaleInput.value);
+    update();
+  });
+  gravityScaleLabel.appendChild(gravityScaleInput);
+  gravity.appendChild(gravityScaleLabel);
+
+  const gravityDirection = addText(gravity,
+    'inspector-skinning-physics-gravity-direction', 'Direction Down (-Y)');
+  const gravityDiagnostic = addText(gravity,
+    'inspector-skinning-physics-gravity-diagnostic',
+    'Max Gravity Accel 0.0 deg/s2');
+  addText(gravity, 'inspector-skinning-hint',
+    'A poorly aligned axis may produce little visible gravity motion.');
+  section.appendChild(gravity);
 
   const translation = document.createElement('div');
   translation.className = 'inspector-skinning-physics-translation';
@@ -1511,6 +1594,25 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     continuousResponseInput.value = latest.physicsContinuousLinearResponse;
     continuousResponseValue.textContent = Number(
       latest.physicsContinuousLinearResponse).toFixed(2);
+    gravityEnableInput.disabled = !valid;
+    gravityEnableInput.checked = !!latest.physicsGravityEnabled;
+    gravityScaleInput.disabled = !valid;
+    gravityScaleInput.value = Number(
+      latest.physicsGravityScale).toFixed(1);
+    gravityScaleValue.textContent = Number(
+      latest.physicsGravityScale).toFixed(1);
+    const gravityLocal = latest.physicsGravityLocal
+      || GRAVITY_WORLD_DIRECTION;
+    gravityDirection.textContent = `Direction Down (-Y) -> local [`
+      + `${gravityLocal.map(value => Number(value).toFixed(2)).join(', ')}]`;
+    const gravityDiagnostics = latest.physicsGravityDiagnostics;
+    const maxGravityAcceleration = Number(
+      gravityDiagnostics?.maxAbsTotalAcceleration) || 0;
+    const clampedGravityComponents = Number(
+      gravityDiagnostics?.clampedComponentCount) || 0;
+    gravityDiagnostic.textContent = `Max Gravity Accel ${(
+      maxGravityAcceleration * 180 / Math.PI).toFixed(1)} deg/s2`
+      + ` / Clamped ${clampedGravityComponents}`;
     translationAxisButtons.querySelectorAll('button').forEach(button => {
       button.disabled = !valid;
       button.classList.toggle('selected', button.textContent === translationAxis);

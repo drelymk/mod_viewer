@@ -1172,10 +1172,19 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .inspector-skinning-physics-motion-strength,
 .inspector-skinning-physics-linear-strength,
 .inspector-skinning-physics-continuous-response,
+.inspector-skinning-physics-gravity-scale,
 .inspector-skinning-physics-translation-step,
 .inspector-skinning-physics-continuous-speed,
 .inspector-skinning-physics-continuous-acceleration {
   width: 100%; accent-color: var(--accent-soft);
+}
+.inspector-skinning-physics-gravity {
+  display: flex; flex-direction: column; gap: 5px; margin-top: 4px;
+  padding-top: 6px; border-top: 1px solid var(--border);
+}
+.inspector-skinning-physics-gravity-direction,
+.inspector-skinning-physics-gravity-diagnostic {
+  color: var(--text-muted); font: 10px/1.35 ui-monospace, monospace;
 }
 .inspector-skinning-physics-translation {
   display: flex; flex-direction: column; gap: 5px; margin-top: 4px;

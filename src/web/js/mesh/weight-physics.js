@@ -4,6 +4,9 @@ export const DEFAULT_ANGLE_TOLERANCE = 0.001;
 export const DEFAULT_VELOCITY_TOLERANCE = 0.001;
 export const MAX_ANGULAR_VELOCITY = 720 * Math.PI / 180;
 export const MAX_LOCAL_ANGLE = 90 * Math.PI / 180;
+export const GRAVITY_WORLD_DIRECTION = Object.freeze([0, -1, 0]);
+export const STANDARD_GRAVITY = 9.81;
+export const MIN_GRAVITY_LEVER_RATIO = 0.15;
 
 function nodeIdsForComponent(component) {
   return (component?.nodeIds || []).map(value => Number(value))
@@ -167,6 +170,122 @@ export function representativeComponentLever(component, centerByBoneId) {
   return vectorSubtract(distalCenter, rootCenter);
 }
 
+function gravityDiagnostics(componentId, rootId, maxDepth) {
+  return {
+    componentId,
+    rootId,
+    maxDepth,
+    leverLength: 0,
+    projectedLeverLength: 0,
+    effectiveLeverLength: 0,
+    totalAngularAcceleration: 0,
+    localAngularAcceleration: 0,
+    clamped: false,
+  };
+}
+
+function diagnosticComponentId(component, fallback) {
+  const componentId = Number(component?.componentId);
+  return Number.isFinite(componentId) ? componentId : fallback;
+}
+
+function diagnosticRootId(component) {
+  const rootId = Number(component?.rootId);
+  return Number.isFinite(rootId) ? rootId : null;
+}
+
+/** Build one-axis gravity acceleration inputs from rest-space component
+ * levers. The returned map contains only non-root joints. */
+export function buildGravityAngularAccelerations(
+    forest, centerByBoneId, gravityLocal, axis,
+    {referenceRadius, gravityScale = 1} = {}) {
+  const direction = finiteVector(gravityLocal);
+  const radius = Number(referenceRadius);
+  const scale = Number(gravityScale);
+  const accelerations = new Map();
+  const diagnostics = {
+    componentCount: (forest?.components || []).length,
+    activeComponentCount: 0,
+    clampedComponentCount: 0,
+    maxAbsTotalAcceleration: 0,
+    maxAbsLocalAcceleration: 0,
+    referenceRadius: Number.isFinite(radius) && radius > 0 ? radius : 0,
+    minLeverRatio: MIN_GRAVITY_LEVER_RATIO,
+    components: [],
+  };
+  if (!direction || !Number.isFinite(radius) || radius <= 0
+      || !Number.isFinite(scale) || scale < 0) {
+    (forest?.components || []).forEach((component, index) => {
+      diagnostics.components.push(gravityDiagnostics(
+        diagnosticComponentId(component, index), diagnosticRootId(component),
+        maxDepthForComponent(component)));
+    });
+    return {accelerationByBoneId: accelerations, diagnostics};
+  }
+
+  const directionLength = Math.sqrt(vectorDot(direction, direction));
+  if (directionLength <= TRANSLATION_EPSILON) {
+    (forest?.components || []).forEach((component, index) => {
+      diagnostics.components.push(gravityDiagnostics(
+        diagnosticComponentId(component, index), diagnosticRootId(component),
+        maxDepthForComponent(component)));
+    });
+    return {accelerationByBoneId: accelerations, diagnostics};
+  }
+
+  const unitAxis = translationAxisVector(axis);
+  const gravityMagnitude = STANDARD_GRAVITY * radius * scale;
+  const gravity = vectorScale(direction, gravityMagnitude / directionLength);
+  const minimumLever = radius * MIN_GRAVITY_LEVER_RATIO;
+  (forest?.components || []).forEach((component, index) => {
+    const componentId = diagnosticComponentId(component, index);
+    const rootId = Number(component?.rootId);
+    const maxDepth = maxDepthForComponent(component);
+    const details = gravityDiagnostics(
+      componentId, diagnosticRootId(component), maxDepth);
+    const lever = representativeComponentLever(component, centerByBoneId);
+    if (lever && maxDepth > 0) {
+      const leverLength = Math.sqrt(vectorDot(lever, lever));
+      const leverPlane = vectorSubtract(lever,
+        vectorScale(unitAxis, vectorDot(lever, unitAxis)));
+      const projectedLeverLength = Math.sqrt(
+        vectorDot(leverPlane, leverPlane));
+      const effectiveLeverLength = Math.max(
+        projectedLeverLength, minimumLever);
+      const denominator = effectiveLeverLength * effectiveLeverLength;
+      const totalAngularAcceleration = vectorDot(
+        unitAxis, vectorCross(lever, gravity)) / denominator;
+      const localAngularAcceleration = totalAngularAcceleration / maxDepth;
+      if (Number.isFinite(totalAngularAcceleration)
+          && Number.isFinite(localAngularAcceleration)) {
+        details.leverLength = leverLength;
+        details.projectedLeverLength = projectedLeverLength;
+        details.effectiveLeverLength = effectiveLeverLength;
+        details.totalAngularAcceleration = totalAngularAcceleration;
+        details.localAngularAcceleration = localAngularAcceleration;
+        details.clamped = projectedLeverLength < minimumLever;
+        if (details.clamped) diagnostics.clampedComponentCount += 1;
+        if (Math.abs(totalAngularAcceleration) > TRANSLATION_EPSILON) {
+          diagnostics.activeComponentCount += 1;
+        }
+        diagnostics.maxAbsTotalAcceleration = Math.max(
+          diagnostics.maxAbsTotalAcceleration,
+          Math.abs(totalAngularAcceleration));
+        diagnostics.maxAbsLocalAcceleration = Math.max(
+          diagnostics.maxAbsLocalAcceleration,
+          Math.abs(localAngularAcceleration));
+        nodeIdsForComponent(component).forEach(nodeId => {
+          if (nodeId !== rootId) {
+            accelerations.set(nodeId, localAngularAcceleration);
+          }
+        });
+      }
+    }
+    diagnostics.components.push(details);
+  });
+  return {accelerationByBoneId: accelerations, diagnostics};
+}
+
 function componentTranslationLag(
     component, centerByBoneId, translationDeltaLocal, axis, strength) {
   const lever = representativeComponentLever(component, centerByBoneId);
@@ -288,6 +407,61 @@ function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
+function externalAccelerationForBone(externalAccelerations, boneId) {
+  if (!(externalAccelerations instanceof Map)) return 0;
+  const value = Number(externalAccelerations.get(Number(boneId)));
+  return Number.isFinite(value) ? value : 0;
+}
+
+function hasExternalAcceleration(externalAccelerations) {
+  if (!(externalAccelerations instanceof Map)) return false;
+  for (const value of externalAccelerations.values()) {
+    if (Number.isFinite(Number(value))
+        && Math.abs(Number(value)) > TRANSLATION_EPSILON) return true;
+  }
+  return false;
+}
+
+function applyExternalEquilibriumOffset(
+    targets, frequencyHz, externalAngularAccelerationByBoneId) {
+  if (!(externalAngularAccelerationByBoneId instanceof Map)) return targets;
+  const frequency = Number(frequencyHz);
+  const omega = 2 * Math.PI * (Number.isFinite(frequency)
+    ? Math.max(0, frequency) : DEFAULT_PHYSICS_FREQUENCY_HZ);
+  const omegaSquared = omega * omega;
+  if (omegaSquared <= TRANSLATION_EPSILON) return targets;
+  const result = new Map(targets);
+  result.forEach((target, boneId) => {
+    const external = externalAccelerationForBone(
+      externalAngularAccelerationByBoneId, boneId);
+    result.set(boneId, clamp(
+      target + external / omegaSquared, -MAX_LOCAL_ANGLE, MAX_LOCAL_ANGLE));
+  });
+  return result;
+}
+
+/** Return the spring equilibrium after adding per-joint external angular
+ * acceleration. The input maps are never mutated. */
+export function buildPhysicsEquilibriumAngles(
+    forest, targetAngleRadians, frequencyHz,
+    externalAngularAccelerationByBoneId = null) {
+  return applyExternalEquilibriumOffset(
+    buildPhysicsTargetAngles(forest, targetAngleRadians), frequencyHz,
+    externalAngularAccelerationByBoneId);
+}
+
+function jointAcceleration(
+    joint, targetAngle, externalAcceleration, frequencyHz, dampingRatio) {
+  const frequency = Number.isFinite(Number(frequencyHz))
+    ? Math.max(0, Number(frequencyHz)) : DEFAULT_PHYSICS_FREQUENCY_HZ;
+  const damping = Number.isFinite(Number(dampingRatio))
+    ? Math.max(0, Number(dampingRatio)) : DEFAULT_PHYSICS_DAMPING_RATIO;
+  const omega = 2 * Math.PI * frequency;
+  return omega * omega * (targetAngle - joint.angle)
+    - 2 * damping * omega * joint.angularVelocity
+    + externalAcceleration;
+}
+
 function clampJoint(joint) {
   joint.angle = clamp(
     Number(joint.angle) || 0, -MAX_LOCAL_ANGLE, MAX_LOCAL_ANGLE);
@@ -308,23 +482,28 @@ export function stepSpringPhysics(
   const damping = Number.isFinite(candidateDamping)
     ? Math.max(0, candidateDamping) : DEFAULT_PHYSICS_DAMPING_RATIO;
   const step = clamp(Number(dt) || 0, 0, maxDt);
-  const omega = 2 * Math.PI * frequency;
-  const omegaSquared = omega * omega;
-  const dampingTerm = 2 * damping * omega;
   const targets = options.angleByBoneId instanceof Map
     ? options.angleByBoneId
     : buildPhysicsTargetAngles(forest, options.targetAngleRadians);
+  const externalAccelerations = options
+    .externalAngularAccelerationByBoneId;
+  const equilibriumTargets = applyExternalEquilibriumOffset(
+    targets, frequency, externalAccelerations);
   let maxAngleError = 0;
   let maxAngularVelocity = 0;
   physicsState?.joints?.forEach((joint, boneId) => {
     const target = Number(targets.get(Number(boneId))) || 0;
-    const acceleration = omegaSquared * (target - joint.angle)
-      - dampingTerm * joint.angularVelocity;
+    const acceleration = jointAcceleration(
+      joint, target, externalAccelerationForBone(
+        externalAccelerations, boneId), frequency, damping);
     joint.angularVelocity += acceleration * step;
     clampJoint(joint);
     joint.angle += joint.angularVelocity * step;
     clampJoint(joint);
-    maxAngleError = Math.max(maxAngleError, Math.abs(target - joint.angle));
+    const equilibrium = Number(equilibriumTargets.get(Number(boneId)));
+    maxAngleError = Math.max(
+      maxAngleError, Math.abs((Number.isFinite(equilibrium)
+        ? equilibrium : target) - joint.angle));
     maxAngularVelocity = Math.max(
       maxAngularVelocity, Math.abs(joint.angularVelocity));
   });
@@ -341,9 +520,14 @@ export function isPhysicsSettled(
     options.velocityTolerance ?? DEFAULT_VELOCITY_TOLERANCE);
   const velocityTolerance = Number.isFinite(candidateVelocityTolerance)
     ? Math.max(0, candidateVelocityTolerance) : DEFAULT_VELOCITY_TOLERANCE;
-  const targets = options.angleByBoneId instanceof Map
-    ? options.angleByBoneId
-    : buildPhysicsTargetAngles(forest, targetAngleRadians);
+  const targets = applyExternalEquilibriumOffset(
+    options.angleByBoneId instanceof Map
+      ? options.angleByBoneId
+      : buildPhysicsTargetAngles(forest, targetAngleRadians),
+    options.frequencyHz, options.externalAngularAccelerationByBoneId);
+  const frequency = Number(options.frequencyHz ?? DEFAULT_PHYSICS_FREQUENCY_HZ);
+  if (hasExternalAcceleration(options.externalAngularAccelerationByBoneId)
+      && Number.isFinite(frequency) && frequency <= 0) return false;
   let maxAngleError = 0;
   let maxAngularVelocity = 0;
   physicsState?.joints?.forEach((joint, boneId) => {
