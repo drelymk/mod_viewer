@@ -4,15 +4,18 @@
 import { isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';
 import {
+  SIGNIFICANT_RESIDUAL_RATIO, SIGNIFICANT_VERTEX_WEIGHT,
   getSkinningState, loadSkinningWeights, resetSkinningExperiment,
   setSelectedBone, setSkinningAngle, setSkinningAxis, setSkinningChainAngle,
   setSkinningChainAxis, setSkinningChainText, setSkinningHeatmap,
+  setSkinningHeatmapMode,
   setVirtualChainVisible,
 } from '../mesh/weight-experiment.js';
 
 const meshRecords = new WeakMap();
 let current = null;
 let selectionCount = 0;
+const MISSING_INFLUENCE_DISPLAY_LIMIT = 8;
 
 const $ = id => document.getElementById(id);
 
@@ -239,7 +242,7 @@ function buildSkinningDiagnostics(parent, state, vertexCount) {
 
 function syncSkinningAngleControls(section, mesh) {
   const state = getSkinningState(mesh);
-  if (!state) return;
+  if (!state || !section) return;
   const angle = section.querySelector('.inspector-skinning-angle');
   const angleValue = section.querySelector('.inspector-skinning-angle-value');
   if (angle) angle.value = state.angle;
@@ -254,6 +257,178 @@ function syncSkinningAngleControls(section, mesh) {
       ? 'Hide Virtual Chain' : 'Show Virtual Chain';
     showHelpers.setAttribute('aria-pressed', String(state.chainHelpersVisible));
   }
+}
+
+function syncSkinningHeatmapControls(section, mesh) {
+  const state = getSkinningState(mesh);
+  if (!state || !section) return;
+  const bone = section.querySelector('.inspector-skinning-heatmap');
+  if (bone) {
+    const active = state.heatmapMode === 'bone';
+    bone.setAttribute('aria-pressed', String(active));
+    bone.classList.toggle('active', active);
+    bone.textContent = active
+      ? 'Hide Weight Heatmap' : 'Show Weight Heatmap';
+  }
+  const residual = section.querySelector('.inspector-skinning-residual');
+  if (residual) {
+    const available = !!state.chainCoverage;
+    const active = state.heatmapMode === 'chain-residual';
+    residual.disabled = !available;
+    residual.setAttribute('aria-pressed', String(active));
+    residual.classList.toggle('active', active);
+    residual.textContent = active
+      ? 'Hide Residual Heatmap' : 'Show Residual Heatmap';
+  }
+}
+
+function coveragePercent(value) {
+  return `${(Number(value || 0) * 100).toFixed(1)}%`;
+}
+
+function coverageNumber(value) {
+  return Number(value || 0).toFixed(3);
+}
+
+function significantMissingInfluences(state) {
+  const entries = state.missingInfluences || [];
+  const totalResidual = entries.reduce(
+    (total, entry) => total + entry.residualContribution, 0);
+  if (!totalResidual) return [];
+  const selected = entries.filter(entry =>
+    entry.residualContribution / totalResidual >= SIGNIFICANT_RESIDUAL_RATIO
+      || entry.maxVertexWeight >= SIGNIFICANT_VERTEX_WEIGHT);
+  return selected;
+}
+
+function buildSkinningCoverageControls(parent, mesh, state) {
+  const coverage = document.createElement('div');
+  coverage.className = 'inspector-skinning-coverage';
+  const title = document.createElement('div');
+  title.className = 'inspector-skinning-subtitle';
+  title.textContent = 'Chain Coverage';
+  coverage.appendChild(title);
+  const note = addText(coverage, 'inspector-skinning-hint',
+    'Ranked IDs describe coverage only; order is not inferred.');
+  const empty = addText(coverage, 'inspector-skinning-hint',
+    'Enter a valid chain to measure omitted influence.');
+  const stats = document.createElement('div');
+  stats.className = 'inspector-skinning-coverage-stats';
+  coverage.appendChild(stats);
+  const residual = document.createElement('button');
+  residual.type = 'button';
+  residual.className = 'ui-button inspector-skinning-residual';
+  residual.addEventListener('click', () => {
+    const latest = getSkinningState(mesh);
+    if (!latest) return;
+    setSkinningHeatmapMode(
+      mesh, latest.heatmapMode === 'chain-residual' ? null : 'chain-residual');
+    update(latest);
+  });
+  coverage.appendChild(residual);
+
+  const missingTitle = document.createElement('div');
+  missingTitle.className = 'inspector-skinning-missing-title';
+  missingTitle.textContent = 'Missing influences';
+  coverage.appendChild(missingTitle);
+  const missing = document.createElement('div');
+  missing.className = 'inspector-skinning-missing';
+  coverage.appendChild(missing);
+  const addMissing = document.createElement('button');
+  addMissing.type = 'button';
+  addMissing.className = 'ui-button inspector-skinning-add-missing';
+  addMissing.textContent = 'Add Significant Missing IDs';
+  addMissing.addEventListener('click', () => {
+    const latest = getSkinningState(mesh);
+    if (!latest) return;
+    const additions = significantMissingInfluences(latest)
+      .map(entry => entry.boneId);
+    if (!additions.length) return;
+    const nextText = [...latest.chainIds, ...additions].join(',');
+    setSkinningChainText(mesh, nextText);
+    const section = coverage.closest('.inspector-skinning-section');
+    const chainInput = section?.querySelector('.inspector-skinning-chain-ids');
+    if (chainInput) chainInput.value = nextText;
+    update(getSkinningState(mesh));
+  });
+  coverage.appendChild(addMissing);
+  parent.appendChild(coverage);
+
+  function addStat(label, value) {
+    const row = document.createElement('div');
+    row.className = 'inspector-skinning-coverage-stat';
+    addText(row, 'inspector-label', label);
+    addText(row, 'inspector-value', value);
+    stats.appendChild(row);
+  }
+
+  function update(latest = getSkinningState(mesh)) {
+    if (!latest) return;
+    const data = latest.chainCoverage;
+    stats.replaceChildren();
+    missing.replaceChildren();
+    const valid = !!data;
+    empty.hidden = valid;
+    note.hidden = !valid;
+    stats.hidden = !valid;
+    residual.hidden = !valid;
+    missingTitle.hidden = !valid;
+    missing.hidden = !valid;
+    addMissing.hidden = true;
+    if (!valid) {
+      syncSkinningHeatmapControls(
+        coverage.closest('.inspector-skinning-section'), mesh);
+      return;
+    }
+    const vertexCount = data.vertexCount || 0;
+    addStat('Average', coveragePercent(data.averageCoverage));
+    addStat('Fully covered', coveragePercent(
+      vertexCount ? data.fullyCoveredVertices / vertexCount : 0));
+    addStat('\u226599% vertices', coveragePercent(
+      vertexCount ? data.covered99Vertices / vertexCount : 0));
+    addStat('\u226595% vertices', coveragePercent(
+      vertexCount ? data.covered95Vertices / vertexCount : 0));
+    addStat('Max residual', coveragePercent(data.maxResidual));
+    if (data.overweightVertices || data.underweightVertices) {
+      addStat('Weight sanity',
+        `${data.overweightVertices} >100.1% / `
+        + `${data.underweightVertices} <99.9%`);
+    }
+
+    const entries = latest.missingInfluences || [];
+    const totalResidual = entries.reduce(
+      (total, entry) => total + entry.residualContribution, 0);
+    entries.slice(0, MISSING_INFLUENCE_DISPLAY_LIMIT).forEach(entry => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'inspector-skinning-missing-row';
+      const share = totalResidual
+        ? entry.residualContribution / totalResidual : 0;
+      row.textContent = `ID ${entry.boneId}  residual ${coveragePercent(share)}`
+        + ` · ${entry.affectedVertexCount} verts`;
+      row.title = `Total omitted weight ${coverageNumber(entry.totalWeight)}; `
+        + `maximum per-vertex weight ${coverageNumber(entry.maxVertexWeight)}`;
+      row.addEventListener('click', () => {
+        setSelectedBone(mesh, entry.boneId);
+        setSkinningHeatmapMode(mesh, 'bone');
+        const section = coverage.closest('.inspector-skinning-section');
+        const select = section?.querySelector('.inspector-skinning-bone');
+        if (select) select.value = entry.boneId;
+        syncSkinningHeatmapControls(section, mesh);
+      });
+      missing.appendChild(row);
+    });
+    if (entries.length > MISSING_INFLUENCE_DISPLAY_LIMIT) {
+      addText(missing, 'inspector-skinning-hint',
+        `+ ${entries.length - MISSING_INFLUENCE_DISPLAY_LIMIT} more`);
+    }
+    addMissing.hidden = !significantMissingInfluences(latest).length;
+    syncSkinningHeatmapControls(
+      coverage.closest('.inspector-skinning-section'), mesh);
+  }
+
+  update(state);
+  return {update};
 }
 
 function buildSkinningChainControls(parent, mesh, state) {
@@ -344,6 +519,7 @@ function buildSkinningChainControls(parent, mesh, state) {
   });
   helperRow.appendChild(resetChain);
   chain.appendChild(helperRow);
+  const coverage = buildSkinningCoverageControls(chain, mesh, state);
 
   function update() {
     const latest = getSkinningState(mesh);
@@ -362,6 +538,9 @@ function buildSkinningChainControls(parent, mesh, state) {
       ? 'Hide Virtual Chain' : 'Show Virtual Chain';
     showHelpers.setAttribute('aria-pressed', String(latest.chainHelpersVisible));
     syncSkinningAngleControls(
+      chain.closest('.inspector-skinning-section'), mesh);
+    coverage.update(latest);
+    syncSkinningHeatmapControls(
       chain.closest('.inspector-skinning-section'), mesh);
   }
 
@@ -465,12 +644,12 @@ function renderSkinningControls(section, mesh, state) {
   heatmap.type = 'button';
   heatmap.className = 'ui-button inspector-skinning-heatmap';
   heatmap.textContent = 'Show Weight Heatmap';
-  heatmap.setAttribute('aria-pressed', String(state.heatmapEnabled));
+  heatmap.setAttribute('aria-pressed', String(state.heatmapMode === 'bone'));
   heatmap.addEventListener('click', () => {
-    const enabled = setSkinningHeatmap(mesh, !getSkinningState(mesh).heatmapEnabled);
-    heatmap.setAttribute('aria-pressed', String(enabled));
-    heatmap.classList.toggle('active', enabled);
-    heatmap.textContent = enabled ? 'Hide Weight Heatmap' : 'Show Weight Heatmap';
+    const enabled = setSkinningHeatmap(
+      mesh, getSkinningState(mesh).heatmapMode !== 'bone');
+    syncSkinningHeatmapControls(section, mesh);
+    return enabled;
   });
   controls.appendChild(heatmap);
 

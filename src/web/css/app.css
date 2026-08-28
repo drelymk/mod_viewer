@@ -1109,6 +1109,26 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .inspector-skinning-chain-actions { display: flex; flex-direction: column; gap: 4px; }
 .inspector-skinning-chain-actions { flex-direction: row; flex-wrap: wrap; }
 .inspector-skinning-chain-actions .ui-button { flex: 1 1 0; min-width: 112px; }
+.inspector-skinning-coverage {
+  display: flex; flex-direction: column; gap: 5px; padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.inspector-skinning-coverage-stats { display: flex; flex-direction: column; gap: 3px; }
+.inspector-skinning-coverage-stat {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.inspector-skinning-missing-title { color: var(--text); font-size: 11px; font-weight: 700; }
+.inspector-skinning-missing { display: flex; flex-direction: column; gap: 3px; }
+.inspector-skinning-missing-row {
+  min-height: 25px; padding: 3px 6px; color: var(--text-muted);
+  background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); text-align: left; cursor: pointer; font: inherit;
+}
+.inspector-skinning-missing-row:hover {
+  color: var(--accent-soft); border-color: var(--accent-soft);
+}
+.inspector-skinning-residual.active { color: var(--accent-soft); border-color: var(--accent-soft); }
+.inspector-skinning-add-missing { margin-top: 2px; }
 
 #mod-folder-empty[hidden] { display: none; }
 #mod-folder-empty .ui-button { margin-top: 5px; }

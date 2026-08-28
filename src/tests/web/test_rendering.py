@@ -253,6 +253,38 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
             .6 * m1.y + .2 * m2.y + .2 * p.y,
             .6 * m1.z + .2 * m2.z + .2 * p.z,
           ];
+          const coverageIndices = new Uint32Array([
+            0, 1, 99, 99,
+            1, 9, 99, 99,
+            8, 9, 10, 99,
+          ]);
+          const coverageWeights = new Float32Array([
+            .7, .3, 0, 0,
+            .5, .5, 0, 0,
+            .25, .25, .5, 0,
+          ]);
+          const coveragePositions = new Float32Array([
+            0, 0, 0, 1, 0, 0, 2, 0, 0,
+          ]);
+          const coverage = helpers.computeChainCoverage(
+            coverageIndices, coverageWeights, 4, [0, 1, 8],
+            coveragePositions);
+          const missing = helpers.rankMissingInfluences(
+            coverageIndices, coverageWeights, 4, [0, 1, 8],
+            coveragePositions);
+          const partial = helpers.computeChainCoverage(
+            coverageIndices, coverageWeights, 4, [0, 1, 8]);
+          const completed = helpers.computeChainCoverage(
+            coverageIndices, coverageWeights, 4, [0, 1, 8, 9]);
+          const wideIndices = new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7]);
+          const wideWeights = new Float32Array([
+            .05, .05, .05, .05, .05, .05, .05, .65,
+          ]);
+          const wide = helpers.computeChainCoverage(
+            wideIndices, wideWeights, 8, [0, 1, 2, 3, 4, 5, 6]);
+          const sanity = helpers.computeChainCoverage(
+            new Uint32Array([0, 1, 0, 1]),
+            new Float32Array([1.002, 0, .998, 0]), 2, [0, 1]);
           const readError = text => {
             try {
               helpers.parseChainIds(text, [0, 2, 3, 4]);
@@ -271,6 +303,26 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
             c1: point(transforms[1], centers[1]),
             c2: point(transforms[2], centers[2]),
             chainResult: [...chainResult], expectedChain,
+            chainWeights: [
+              helpers.chainWeightForVertex(
+                coverageIndices, coverageWeights, 4, 0, [0, 1, 8]),
+              helpers.chainWeightForVertex(
+                coverageIndices, coverageWeights, 4, 1, [0, 1, 8]),
+              helpers.chainWeightForVertex(
+                coverageIndices, coverageWeights, 4, 2, [0, 1, 8]),
+            ],
+            residualWeights: [
+              helpers.residualWeightForVertex(
+                coverageIndices, coverageWeights, 4, 0, [0, 1, 8]),
+              helpers.residualWeightForVertex(
+                coverageIndices, coverageWeights, 4, 1, [0, 1, 8]),
+              helpers.residualWeightForVertex(
+                coverageIndices, coverageWeights, 4, 2, [0, 1, 8]),
+            ],
+            coverage, missing, sanity,
+            partialMaxResidual: partial.maxResidual,
+            completedMaxResidual: completed.maxResidual,
+            wide,
             parsed: helpers.parseChainIds('0,2,3,4', [0, 2, 3, 4]),
             duplicate: readError('0,2,2'),
             unknown: readError('0,14'),
@@ -291,6 +343,29 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
         assert result["c2"] == pytest.approx([
             math.sqrt(.5), 1 + math.sqrt(.5), 0])
         assert result["chainResult"] == pytest.approx(result["expectedChain"])
+        assert result["chainWeights"] == pytest.approx([1, .5, .25])
+        assert result["residualWeights"] == pytest.approx([0, .5, .75])
+        assert result["coverage"]["vertexCount"] == 3
+        assert result["coverage"]["averageCoverage"] == pytest.approx(7 / 12)
+        assert result["coverage"]["minCoverage"] == pytest.approx(.25)
+        assert result["coverage"]["maxResidual"] == pytest.approx(.75)
+        assert result["coverage"]["fullyCoveredVertices"] == 1
+        assert result["coverage"]["covered99Vertices"] == 1
+        assert result["coverage"]["covered95Vertices"] == 1
+        assert result["coverage"]["lowCoverageVertices"] == 2
+        assert result["coverage"]["residualCenter"] == pytest.approx([1.6, 0, 0])
+        assert [entry["boneId"] for entry in result["missing"]] == [9, 10]
+        assert [entry["totalWeight"] for entry in result["missing"]] == pytest.approx([
+            .75, .5])
+        assert result["missing"][0]["affectedVertexCount"] == 2
+        assert result["missing"][0]["maxVertexWeight"] == pytest.approx(.5)
+        assert result["missing"][0]["residualContribution"] == pytest.approx(.75)
+        assert result["partialMaxResidual"] == pytest.approx(.75)
+        assert result["completedMaxResidual"] == pytest.approx(.5)
+        assert result["wide"]["vertexCount"] == 1
+        assert result["wide"]["maxResidual"] == pytest.approx(.65)
+        assert result["sanity"]["overweightVertices"] == 1
+        assert result["sanity"]["underweightVertices"] == 1
         assert result["parsed"] == [0, 2, 3, 4]
         assert result["duplicate"] == "Duplicate Bone ID: 2"
         assert result["unknown"] == "Unknown Bone ID: 14"
@@ -343,7 +418,18 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
           experiment.setSkinningChainText(mesh, '0,1');
           experiment.setVirtualChainVisible(mesh, true);
           experiment.setSkinningHeatmap(mesh, true);
+          const boneMaterial = mesh.material;
+          const boneMode = experiment.getSkinningState(mesh).heatmapMode;
+          experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
+          const residualMaterial = mesh.material;
+          const residualMode = experiment.getSkinningState(mesh).heatmapMode;
+          const oneColorAttribute = !!mesh.geometry.attributes.color;
+          const coverageBeforeAngle =
+            experiment.getSkinningState(mesh).chainCoverage;
           experiment.setSkinningChainAngle(mesh, 20);
+          experiment.setSkinningChainAxis(mesh, 'X');
+          const coverageAfterAngle =
+            experiment.getSkinningState(mesh).chainCoverage;
           const loadedState = experiment.getSkinningState(mesh);
           const deformed = [...mesh.geometry.attributes.position.array];
           const helperBeforeShape = !!mesh.children.find(
@@ -360,7 +446,7 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
           await experiment.loadSkinningWeights(mesh);
           experiment.setSkinningChainText(mesh, '0,1');
           experiment.setVirtualChainVisible(mesh, true);
-          experiment.setSkinningHeatmap(mesh, true);
+          experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
           experiment.setSkinningChainAngle(mesh, 20);
           experiment.resetSkinningExperiment(mesh);
           const resetState = experiment.getSkinningState(mesh);
@@ -368,6 +454,9 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
           const helperAfterReset = !!mesh.children.find(
             child => child.name === 'Experimental Virtual Chain');
           const colorAfterReset = !!mesh.geometry.attributes.color;
+          const resetHeatmapMode = resetState.heatmapMode;
+          const resetChainText = resetState.chainText;
+          const resetCoverage = !!resetState.chainCoverage;
 
           experiment.setSkinningChainText(mesh, '0,1');
           experiment.setVirtualChainVisible(mesh, true);
@@ -395,10 +484,15 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
             resetChainAngle: resetState.chainAngle,
             resetPositions, shapedBaseline: shaped,
             helperAfterReset, colorAfterReset,
+            resetHeatmapMode, resetChainText, resetCoverage,
             stateAfterRemove, helperAfterRemove,
             materialAfterRemove: mesh.material === originalMaterial,
             stateAfterResetMeshes, helperAfterResetMeshes,
             materialAfterResetMeshes: secondMesh.material === secondOriginalMaterial,
+            boneMode, residualMode,
+            sharedHeatmapMaterial: boneMaterial === residualMaterial,
+            oneColorAttribute,
+            coverageCached: coverageBeforeAngle === coverageAfterAngle,
           };
         }""")
         assert result["requests"] == 3
@@ -411,6 +505,9 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
         assert result["resetLoaded"]
         assert result["resetAngle"] == 0
         assert result["resetChainAngle"] == 0
+        assert result["resetHeatmapMode"] is None
+        assert result["resetChainText"] == "0,1"
+        assert result["resetCoverage"]
         assert result["resetPositions"] == pytest.approx(result["shapedBaseline"])
         assert result["helperAfterReset"] is False
         assert result["colorAfterReset"] is False
@@ -420,6 +517,97 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
         assert result["stateAfterResetMeshes"] is None
         assert result["helperAfterResetMeshes"] is False
         assert result["materialAfterResetMeshes"]
+        assert result["boneMode"] == "bone"
+        assert result["residualMode"] == "chain-residual"
+        assert result["sharedHeatmapMaterial"]
+        assert result["oneColorAttribute"]
+        assert result["coverageCached"]
+    finally:
+        context.close()
+
+
+def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url,
+                           {"Inspector": _payload("Inspector")})
+    try:
+        _open(page, "Inspector")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(24);
+          new Uint32Array(bytes.buffer).set([0, 1, 2]);
+          new Float32Array(bytes.buffer, 12).set([1, 1, 1]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__skinPreviewRequests = 0;
+          window.pywebview.api.get_skinning_preview = async () => {
+            window.__skinPreviewRequests += 1;
+            return {
+              status: 'ok', vertex_count: 3, influence_count: 1,
+              bone_ids: [0, 1, 2], encoding: 'test',
+              data: {
+                url, length: 24,
+                indices: {offset: 0, length: 12, type: 'u32'},
+                weights: {offset: 12, length: 12, type: 'f32'},
+              }, diagnostics: {},
+            };
+          };
+          const {selectMesh} = await import('./js/scene/selection.js');
+          selectMesh(window.modViewer.activeMeshes[0]);
+        }""")
+        page.locator(".inspector-skinning-load").click()
+        page.wait_for_function("""() => {
+          const button = document.querySelector('.inspector-skinning-load');
+          return button?.textContent === 'Weights loaded';
+        }""")
+        ids = page.locator(".inspector-skinning-chain-ids")
+        ids.fill("0,1")
+        page.wait_for_function("""() => {
+          const stats = document.querySelector('.inspector-skinning-coverage-stats');
+          return stats && !stats.hidden;
+        }""")
+        assert page.locator(".inspector-skinning-coverage").inner_text()
+        assert page.locator(".inspector-skinning-missing-row").count() == 1
+        assert page.locator(".inspector-skinning-add-missing").is_visible()
+        residual = page.locator(".inspector-skinning-residual")
+        assert residual.is_enabled()
+        residual.click()
+        assert page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          return getSkinningState(window.modViewer.activeMeshes[0]).heatmapMode;
+        }""") == "chain-residual"
+        page.locator(".inspector-skinning-missing-row").click()
+        selected = page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return {bone: state.selectedBone, mode: state.heatmapMode};
+        }""")
+        assert selected == {"bone": 2, "mode": "bone"}
+        ids.fill("0,1")
+        page.locator(".inspector-skinning-add-missing").click()
+        page.wait_for_function("""() =>
+          document.querySelector('.inspector-skinning-chain-ids')?.value
+            === '0,1,2'""")
+        final_state = page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return {
+            chainText: state.chainText,
+            maxResidual: state.chainCoverage.maxResidual,
+            missingRows: document.querySelectorAll(
+              '.inspector-skinning-missing-row').length,
+            addVisible: !document.querySelector(
+              '.inspector-skinning-add-missing').hidden,
+            previewRequests: window.__skinPreviewRequests,
+          };
+        }""")
+        assert final_state["chainText"] == "0,1,2"
+        assert final_state["maxResidual"] == pytest.approx(0)
+        assert final_state["missingRows"] == 0
+        assert not final_state["addVisible"]
+        assert final_state["previewRequests"] == 1
     finally:
         context.close()
 

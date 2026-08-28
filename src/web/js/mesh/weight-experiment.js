@@ -8,6 +8,14 @@ import { requestRender } from '../scene/render-scheduler.js';
 const states = new WeakMap();
 let activeHelperMesh = null;
 
+const FULL_COVERAGE_THRESHOLD = 0.9999;
+const COVERAGE_99_THRESHOLD = 0.99;
+const COVERAGE_95_THRESHOLD = 0.95;
+const AUTHOR_WEIGHT_HIGH_THRESHOLD = 1.001;
+const AUTHOR_WEIGHT_LOW_THRESHOLD = 0.999;
+export const SIGNIFICANT_RESIDUAL_RATIO = 0.02;
+export const SIGNIFICANT_VERTEX_WEIGHT = 0.25;
+
 const ERROR_MESSAGES = Object.freeze({
   mesh_not_found: 'The selected mesh could not be found.',
   skinning_not_available: 'No skin-weight stream was found for this draw.',
@@ -40,11 +48,13 @@ function newState() {
     chainError: null,
     chainHelpersVisible: false,
     chainHelpers: null,
+    chainCoverage: null,
+    missingInfluences: [],
     baselinePositions: null,
     baselineNormals: null,
     originalMaterial: null,
     debugMaterial: null,
-    heatmapEnabled: false,
+    heatmapMode: null,
     diagnostics: null,
     encoding: null,
     centers: new Map(),
@@ -114,6 +124,177 @@ export function parseChainIds(text, validBoneIds) {
     throw new Error('A chain requires at least 2 unique bone IDs.');
   }
   return ids;
+}
+
+function chainMembership(chainIds) {
+  return chainIds instanceof Set
+    ? chainIds
+    : new Set([...chainIds || []].map(Number));
+}
+
+function compactVertexCount(indices, weights, influenceCount) {
+  if (!indices || !weights || !Number.isInteger(influenceCount)
+      || influenceCount <= 0) return 0;
+  return Math.floor(Math.min(indices.length, weights.length) / influenceCount);
+}
+
+function authoredWeightForVertex(indices, weights, influenceCount, vertexIndex) {
+  const start = vertexIndex * influenceCount;
+  let total = 0;
+  for (let influence = 0; influence < influenceCount; influence += 1) {
+    const weight = weights[start + influence];
+    if (Number.isFinite(weight) && weight > 0) total += weight;
+  }
+  return total;
+}
+
+function chainWeightForVertexWithMembership(
+    indices, weights, influenceCount, vertexIndex, membership) {
+  const start = vertexIndex * influenceCount;
+  let total = 0;
+  for (let influence = 0; influence < influenceCount; influence += 1) {
+    const weight = weights[start + influence];
+    if (membership.has(Number(indices[start + influence]))
+        && Number.isFinite(weight) && weight > 0) total += weight;
+  }
+  return total;
+}
+
+export function chainWeightForVertex(
+    indices, weights, influenceCount, vertexIndex, chainIds) {
+  if (!indices || !weights || !Number.isInteger(influenceCount)
+      || influenceCount <= 0 || !Number.isInteger(vertexIndex)
+      || vertexIndex < 0) return 0;
+  return chainWeightForVertexWithMembership(
+    indices, weights, influenceCount, vertexIndex, chainMembership(chainIds));
+}
+
+export function residualWeightForVertex(
+    indices, weights, influenceCount, vertexIndex, chainIds) {
+  return Math.max(0, 1 - chainWeightForVertex(
+    indices, weights, influenceCount, vertexIndex, chainIds));
+}
+
+export function computeChainCoverage(
+    indices, weights, influenceCount, chainIds, positions = null) {
+  const vertexCount = compactVertexCount(indices, weights, influenceCount);
+  const membership = chainMembership(chainIds);
+  let coverageTotal = 0;
+  let minCoverage = vertexCount ? Infinity : 0;
+  let maxResidual = 0;
+  let totalResidual = 0;
+  let residualWeightTotal = 0;
+  let residualX = 0;
+  let residualY = 0;
+  let residualZ = 0;
+  let fullyCoveredVertices = 0;
+  let covered99Vertices = 0;
+  let covered95Vertices = 0;
+  let lowCoverageVertices = 0;
+  let overweightVertices = 0;
+  let underweightVertices = 0;
+
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const coverage = chainWeightForVertexWithMembership(
+      indices, weights, influenceCount, vertex, membership);
+    const residual = Math.max(0, 1 - coverage);
+    const authoredWeight = authoredWeightForVertex(
+      indices, weights, influenceCount, vertex);
+    coverageTotal += coverage;
+    minCoverage = Math.min(minCoverage, coverage);
+    maxResidual = Math.max(maxResidual, residual);
+    totalResidual += residual;
+    if (coverage >= FULL_COVERAGE_THRESHOLD) fullyCoveredVertices += 1;
+    if (coverage >= COVERAGE_99_THRESHOLD) covered99Vertices += 1;
+    if (coverage >= COVERAGE_95_THRESHOLD) covered95Vertices += 1;
+    if (coverage < COVERAGE_95_THRESHOLD) lowCoverageVertices += 1;
+    if (authoredWeight > AUTHOR_WEIGHT_HIGH_THRESHOLD) overweightVertices += 1;
+    if (authoredWeight < AUTHOR_WEIGHT_LOW_THRESHOLD) underweightVertices += 1;
+    if (positions && positions.length >= vertex * 3 + 3 && residual > 0) {
+      const offset = vertex * 3;
+      residualX += positions[offset] * residual;
+      residualY += positions[offset + 1] * residual;
+      residualZ += positions[offset + 2] * residual;
+      residualWeightTotal += residual;
+    }
+  }
+
+  if (residualWeightTotal > 0) {
+    residualX /= residualWeightTotal;
+    residualY /= residualWeightTotal;
+    residualZ /= residualWeightTotal;
+  }
+  return {
+    vertexCount,
+    averageCoverage: vertexCount ? coverageTotal / vertexCount : 0,
+    minCoverage,
+    maxResidual,
+    totalResidual,
+    fullyCoveredVertices,
+    covered99Vertices,
+    covered95Vertices,
+    lowCoverageVertices,
+    overweightVertices,
+    underweightVertices,
+    residualCenter: [residualX, residualY, residualZ],
+  };
+}
+
+export function rankMissingInfluences(
+    indices, weights, influenceCount, chainIds, positions = null) {
+  const vertexCount = compactVertexCount(indices, weights, influenceCount);
+  const membership = chainMembership(chainIds);
+  const entries = new Map();
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const chainWeight = chainWeightForVertexWithMembership(
+      indices, weights, influenceCount, vertex, membership);
+    const residualRegion = chainWeight < COVERAGE_95_THRESHOLD;
+    const start = vertex * influenceCount;
+    const vertexWeights = new Map();
+    for (let influence = 0; influence < influenceCount; influence += 1) {
+      const boneId = Number(indices[start + influence]);
+      const weight = weights[start + influence];
+      if (membership.has(boneId) || !Number.isFinite(weight) || weight <= 0) {
+        continue;
+      }
+      vertexWeights.set(boneId, (vertexWeights.get(boneId) || 0) + weight);
+    }
+    vertexWeights.forEach((weight, boneId) => {
+      const entry = entries.get(boneId) || {
+        boneId,
+        totalWeight: 0,
+        residualContribution: 0,
+        affectedVertexCount: 0,
+        maxVertexWeight: 0,
+      };
+      entry.totalWeight += weight;
+      entry.affectedVertexCount += 1;
+      entry.maxVertexWeight = Math.max(entry.maxVertexWeight, weight);
+      if (residualRegion) entry.residualContribution += weight;
+      if (positions && positions.length >= vertex * 3 + 3) {
+        const offset = vertex * 3;
+        entry.centerX = (entry.centerX || 0) + positions[offset] * weight;
+        entry.centerY = (entry.centerY || 0) + positions[offset + 1] * weight;
+        entry.centerZ = (entry.centerZ || 0) + positions[offset + 2] * weight;
+        entry.centerWeight = (entry.centerWeight || 0) + weight;
+      }
+      entries.set(boneId, entry);
+    });
+  }
+  return [...entries.values()]
+    .map(entry => {
+      const weightedCenter = entry.centerWeight > 0
+        ? [entry.centerX / entry.centerWeight,
+          entry.centerY / entry.centerWeight,
+          entry.centerZ / entry.centerWeight]
+        : [0, 0, 0];
+      const {
+        centerX, centerY, centerZ, centerWeight, ...publicEntry
+      } = entry;
+      return {...publicEntry, weightedCenter};
+    })
+    .sort((a, b) => b.residualContribution - a.residualContribution
+      || b.totalWeight - a.totalWeight || a.boneId - b.boneId);
 }
 
 export function weightedCenter(positions, indices, weights, influenceCount,
@@ -330,6 +511,20 @@ function chainCentersFor(mesh, state) {
   return state.chainIds.map(boneId => centerForBone(mesh, state, boneId));
 }
 
+function refreshChainCoverage(state) {
+  if (state.chainIds.length < 2) {
+    state.chainCoverage = null;
+    state.missingInfluences = [];
+    return;
+  }
+  state.chainCoverage = computeChainCoverage(
+    state.indices, state.weights, state.influenceCount, state.chainIds,
+    state.baselinePositions);
+  state.missingInfluences = rankMissingInfluences(
+    state.indices, state.weights, state.influenceCount, state.chainIds,
+    state.baselinePositions);
+}
+
 function removeVirtualChainHelpers(mesh, state) {
   const helpers = state?.chainHelpers;
   if (!helpers) {
@@ -440,18 +635,29 @@ function applyDeformation(mesh, state) {
 }
 
 function updateHeatmap(mesh, state) {
-  if (!state.heatmapEnabled) return;
+  if (!state.heatmapMode) return;
   const count = Math.floor(state.indices.length / state.influenceCount);
   const colors = new Float32Array(count * 3);
   for (let vertex = 0; vertex < count; vertex += 1) {
-    const value = Math.max(0, Math.min(1, weightForBone(
-      state.indices, state.weights, state.influenceCount,
-      vertex, state.selectedBone)));
+    const value = state.heatmapMode === 'chain-residual'
+      ? residualWeightForVertex(
+        state.indices, state.weights, state.influenceCount, vertex,
+        state.chainIds)
+      : Math.max(0, Math.min(1, weightForBone(
+        state.indices, state.weights, state.influenceCount,
+        vertex, state.selectedBone)));
     const offset = vertex * 3;
-    // Blue at zero, yellow/red at high influence for quick spatial reading.
-    colors[offset] = value;
-    colors[offset + 1] = Math.min(1, value * 2);
-    colors[offset + 2] = 1 - value;
+    if (state.heatmapMode === 'chain-residual') {
+      // Keep covered vertices dark while making omitted influence obvious.
+      colors[offset] = value;
+      colors[offset + 1] = value * 0.25;
+      colors[offset + 2] = 0.02;
+    } else {
+      // Blue at zero, yellow/red at high influence for quick spatial reading.
+      colors[offset] = value;
+      colors[offset + 1] = Math.min(1, value * 2);
+      colors[offset + 2] = 1 - value;
+    }
   }
   mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   mesh.geometry.attributes.color.needsUpdate = true;
@@ -465,7 +671,7 @@ function updateHeatmap(mesh, state) {
 }
 
 function disableHeatmap(mesh, state) {
-  state.heatmapEnabled = false;
+  state.heatmapMode = null;
   mesh.material = state.originalMaterial;
   mesh.geometry.deleteAttribute('color');
   if (state.debugMaterial) {
@@ -528,6 +734,7 @@ export async function loadSkinningWeights(mesh) {
     state.encoding = preview.encoding || null;
     state.diagnostics = preview.diagnostics || null;
     state.loaded = true;
+    refreshChainCoverage(state);
     return state;
   })();
   try {
@@ -545,7 +752,7 @@ export function setSelectedBone(mesh, boneId) {
   const state = stateFor(mesh);
   if (!state?.loaded) return;
   state.selectedBone = Number(boneId);
-  if (state.heatmapEnabled) updateHeatmap(mesh, state);
+  if (state.heatmapMode === 'bone') updateHeatmap(mesh, state);
   applyDeformation(mesh, state);
 }
 
@@ -578,10 +785,13 @@ export function setSkinningChainText(mesh, text) {
     state.chainIds = [];
     state.chainAngle = 0;
     state.chainError = error instanceof Error ? error.message : String(error);
+    refreshChainCoverage(state);
+    if (state.heatmapMode === 'chain-residual') disableHeatmap(mesh, state);
     removeVirtualChainHelpers(mesh, state);
     applyDeformation(mesh, state);
     return false;
   }
+  refreshChainCoverage(state);
   if (state.chainHelpers) {
     removeVirtualChainHelpers(mesh, state);
     if (wasVisible) {
@@ -592,6 +802,7 @@ export function setSkinningChainText(mesh, text) {
     }
   }
   applyDeformation(mesh, state);
+  if (state.heatmapMode) updateHeatmap(mesh, state);
   return true;
 }
 
@@ -628,14 +839,25 @@ export function setVirtualChainVisible(mesh, visible) {
   return state.chainHelpersVisible;
 }
 
-export function setSkinningHeatmap(mesh, enabled) {
+export function setSkinningHeatmapMode(mesh, mode) {
   const state = stateFor(mesh);
   if (!state?.loaded) return false;
-  state.heatmapEnabled = !!enabled;
-  if (state.heatmapEnabled) updateHeatmap(mesh, state);
+  if (mode !== null && mode !== 'bone' && mode !== 'chain-residual') {
+    return state.heatmapMode;
+  }
+  if (mode === 'chain-residual'
+      && (!state.chainCoverage || state.chainIds.length < 2)) {
+    return state.heatmapMode;
+  }
+  state.heatmapMode = mode;
+  if (state.heatmapMode) updateHeatmap(mesh, state);
   else disableHeatmap(mesh, state);
   requestRender();
-  return state.heatmapEnabled;
+  return state.heatmapMode;
+}
+
+export function setSkinningHeatmap(mesh, enabled) {
+  return setSkinningHeatmapMode(mesh, enabled ? 'bone' : null) === 'bone';
 }
 
 export function resetSkinningExperiment(mesh) {
@@ -645,7 +867,7 @@ export function resetSkinningExperiment(mesh) {
   state.chainAngle = 0;
   removeVirtualChainHelpers(mesh, state);
   applyDeformation(mesh, state);
-  if (state.heatmapEnabled || state.debugMaterial) disableHeatmap(mesh, state);
+  if (state.heatmapMode || state.debugMaterial) disableHeatmap(mesh, state);
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
   invalidateCharacterShadowGeometry();
