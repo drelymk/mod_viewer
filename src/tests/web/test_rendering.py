@@ -251,6 +251,88 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
               new THREE.Matrix4().makeScale(0, 0, 0),
               new THREE.Matrix4().makeScale(0, 0, 0),
             ]);
+          const genericChainResult = helpers.applyWeightedTransformDeformation(
+            new Float32Array([2, 0, 0]),
+            new Uint32Array([1, 2, 11]),
+            new Float32Array([.6, .2, .2]), 3,
+            new Map([[0, transforms[0]], [1, transforms[1]],
+              [2, transforms[2]]]));
+          const forestNodes = [
+            {boneId: 0, weightedCenter: [0, 0, 0]},
+            {boneId: 1, weightedCenter: [1, 0, 0]},
+            {boneId: 2, weightedCenter: [2, 0, 0]},
+            {boneId: 5, weightedCenter: [2.1, 0, 0]},
+            {boneId: 6, weightedCenter: [3.1, 0, 0]},
+          ];
+          const forestEdges = [
+            {boneA: 0, boneB: 1, score: .9},
+            {boneA: 1, boneB: 2, score: .8},
+            {boneA: 5, boneB: 6, score: .7},
+          ];
+          const forestTree = helpers.buildMaximumSpanningTree(
+            forestNodes, forestEdges);
+          const forest = helpers.orientForest(
+            forestNodes, forestTree.edges, 0,
+            {components: forestTree.components});
+          const forestRootSix = helpers.orientForest(
+            forestNodes, forestTree.edges, 6,
+            {components: forestTree.components});
+          const forestRootTwo = helpers.orientForest(
+            forestNodes, forestTree.edges, 2,
+            {components: forestTree.components});
+          const forestCenters = new Map(forestNodes.map(node => [
+            node.boneId, node.weightedCenter]));
+          const forestTransforms = helpers.buildForestTransforms(
+            forest, forestCenters,
+            {axis: 'Z', totalAngle: 90});
+          const forestResult = helpers.applyWeightedTransformDeformation(
+            new Float32Array([1, 0, 0]),
+            new Uint32Array([1, 6, 99, 99]),
+            new Float32Array([.25, .25, .25, .25]), 4, forestTransforms);
+          const eightTransform = new Map([
+            [7, new THREE.Matrix4().makeTranslation(7, 0, 0)],
+          ]);
+          const genericEight = helpers.applyWeightedTransformDeformation(
+            new Float32Array([1, 0, 0]),
+            new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7]),
+            new Float32Array([.05, .05, .05, .05, .05, .05, .05, .65]),
+            8, eightTransform);
+          const allEightTransforms = new Map(
+            Array.from({length: 8}, (_, id) => [
+              id, new THREE.Matrix4().makeTranslation(id, 0, 0),
+            ]));
+          const allEight = helpers.applyWeightedTransformDeformation(
+            new Float32Array([1, 0, 0]),
+            new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7]),
+            new Float32Array([.125, .125, .125, .125, .125, .125, .125, .125]),
+            8, allEightTransforms);
+          const branchNodes = [
+            {boneId: 0, weightedCenter: [0, 0, 0]},
+            {boneId: 1, weightedCenter: [1, 0, 0]},
+            {boneId: 2, weightedCenter: [2, 0, 0]},
+            {boneId: 3, weightedCenter: [1, 1, 0]},
+          ];
+          const branchForest = helpers.orientForest(branchNodes, [
+            {boneA: 0, boneB: 1, score: .9},
+            {boneA: 1, boneB: 2, score: .8},
+            {boneA: 1, boneB: 3, score: .7},
+          ], 0);
+          const branchTransforms = helpers.buildForestTransforms(
+            branchForest,
+            new Map(branchNodes.map(node => [node.boneId, node.weightedCenter])),
+            {axis: 'Z', totalAngle: 60});
+          const siblingBlend = helpers.applyWeightedTransformDeformation(
+            new Float32Array([1, 0, 0]), new Uint32Array([2, 3]),
+            new Float32Array([.5, .5]), 2, new Map([
+              [2, new THREE.Matrix4().makeTranslation(2, 0, 0)],
+              [3, new THREE.Matrix4().makeTranslation(0, 2, 0)],
+            ]));
+          const rootChildBlend = helpers.applyWeightedTransformDeformation(
+            new Float32Array([1, 0, 0]), new Uint32Array([0, 1]),
+            new Float32Array([.7, .3]), 2, new Map([
+              [0, new THREE.Matrix4()],
+              [1, new THREE.Matrix4().makeTranslation(0, 2, 0)],
+            ]));
           const p = new THREE.Vector3(2, 0, 0);
           const m1 = p.clone().applyMatrix4(transforms[1]);
           const m2 = p.clone().applyMatrix4(transforms[2]);
@@ -354,8 +436,25 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
             c0: point(transforms[0], centers[0]),
             c1: point(transforms[1], centers[1]),
             c2: point(transforms[2], centers[2]),
-            chainResult: [...chainResult], expectedChain,
+            chainResult: [...chainResult],
+            genericChainResult: [...genericChainResult],
+            expectedChain,
             overweightChain: [...overweightChain],
+            forest, forestRootSix, forestRootTwo,
+            forestTransforms: [...forestTransforms.entries()].map(([id, matrix]) => ({
+              id, origin: point(matrix, forestCenters.get(id)),
+            })),
+            forestRootsIdentity: forestTransforms.get(0)
+              .equals(new THREE.Matrix4())
+              && forestTransforms.get(5).equals(new THREE.Matrix4()),
+            forestResult: [...forestResult], genericEight: [...genericEight],
+            allEight: [...allEight],
+            siblingBlend: [...siblingBlend],
+            rootChildBlend: [...rootChildBlend],
+            branchRoots: branchForest.components[0].rootId,
+            branchChildren: branchForest.components[0].childrenById,
+            branchTransformsSame: branchTransforms.get(2).equals(
+              branchTransforms.get(3)),
             chainWeights: [
               helpers.chainWeightForVertex(
                 coverageIndices, coverageWeights, 4, 0, [0, 1, 8]),
@@ -399,8 +498,33 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
         assert result["c2"] == pytest.approx([
             math.sqrt(.5), 1 + math.sqrt(.5), 0])
         assert result["chainResult"] == pytest.approx(result["expectedChain"])
+        assert result["genericChainResult"] == pytest.approx(result["expectedChain"])
         assert result["overweightChain"][0] >= 0
         assert result["overweightChain"] == pytest.approx([0, 0, 0])
+        assert len(result["forest"]["components"]) == 2
+        assert result["forest"]["primaryRootId"] == 0
+        assert result["forest"]["components"][0]["rootId"] == 0
+        assert result["forest"]["components"][1]["rootId"] == 5
+        assert result["forest"]["components"][0]["maxDepth"] == 2
+        assert result["forest"]["components"][1]["maxDepth"] == 1
+        assert result["forestRootSix"]["primaryRootId"] == 6
+        assert result["forestRootSix"]["components"][1]["primary"]
+        assert result["forestRootTwo"]["primaryRootId"] == 2
+        assert result["forestRootTwo"]["components"][1]["parentById"] == \
+            result["forest"]["components"][1]["parentById"]
+        assert result["forestRootsIdentity"]
+        assert result["forestResult"] == pytest.approx([
+            .5 + .25 * math.sqrt(.5) + .25 * 2.1,
+            .25 * math.sqrt(.5) - .25 * 1.1,
+            0,
+        ])
+        assert result["genericEight"] == pytest.approx([5.55, 0, 0])
+        assert result["allEight"] == pytest.approx([4.5, 0, 0])
+        assert result["siblingBlend"] == pytest.approx([2, 1, 0])
+        assert result["rootChildBlend"] == pytest.approx([1, .6, 0])
+        assert result["branchRoots"] == 0
+        assert result["branchChildren"]["1"] == [2, 3]
+        assert result["branchTransformsSame"]
         assert result["chainWeights"] == pytest.approx([1, .5, .25])
         assert result["residualWeights"] == pytest.approx([0, .5, .75])
         assert result["coverage"]["vertexCount"] == 3
@@ -520,6 +644,17 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
           experiment.setInfluenceVisualizationMode(mesh, 'graph');
           const graphHelperBeforeShape = !!mesh.children.find(
             child => child.name === 'Experimental Influence Graph');
+          const {selectMesh} = await import('./js/scene/selection.js');
+          selectMesh(secondMesh);
+          const helpersAfterSelection = {
+            chain: !!mesh.children.find(
+              child => child.name === 'Experimental Virtual Chain'),
+            graph: !!mesh.children.find(
+              child => child.name === 'Experimental Influence Graph'),
+          };
+          selectMesh(mesh);
+          experiment.setVirtualChainVisible(mesh, true);
+          experiment.setInfluenceVisualizationMode(mesh, 'graph');
           const boneMaterial = mesh.material;
           const boneMode = experiment.getSkinningState(mesh).heatmapMode;
           experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
@@ -550,6 +685,21 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
           const materialAfterShape = mesh.material;
 
           await experiment.loadSkinningWeights(mesh);
+          experiment.setSkinningChainText(mesh, '0,1');
+          experiment.setVirtualChainVisible(mesh, true);
+          experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
+          experiment.buildCandidateTree(mesh, 0);
+          experiment.setCandidateTreeVisible(mesh, true);
+          experiment.setForestAngle(mesh, 20);
+          const forestState = experiment.getSkinningState(mesh);
+          const forestMode = forestState.deformationMode;
+          const forestTransforms = forestState.forestTransforms?.size || 0;
+          setControlValue('shape', '2');
+          refreshMeshes();
+          const forestAfterShapeState = experiment.getSkinningState(mesh);
+          const forestHelperAfterShape = !!mesh.children.find(
+            child => child.name === 'Experimental Candidate Tree');
+          await experiment.loadSkinningWeights(mesh);
           const graphBeforeReset =
             experiment.getSkinningState(mesh).influenceGraph;
           experiment.setSkinningChainText(mesh, '0,1');
@@ -557,10 +707,14 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
           experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
           experiment.buildCandidateTree(mesh, 0);
           experiment.setCandidateTreeVisible(mesh, true);
+          const resetBaseline = [...mesh.geometry.attributes.position.array];
+          const resetNormalBaseline = [...mesh.geometry.attributes.normal.array];
+          experiment.setForestAngle(mesh, 20);
           experiment.setSkinningChainAngle(mesh, 20);
           experiment.resetSkinningExperiment(mesh);
           const resetState = experiment.getSkinningState(mesh);
           const resetPositions = [...mesh.geometry.attributes.position.array];
+          const resetNormals = [...mesh.geometry.attributes.normal.array];
           const helperAfterReset = !!mesh.children.find(
             child => child.name === 'Experimental Virtual Chain');
           const colorAfterReset = !!mesh.geometry.attributes.color;
@@ -591,12 +745,18 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
             requests, loaded: loadedState.loaded,
             deformed, shaped, afterShapeState,
             helperBeforeShape, helperAfterShape,
-            graphHelperBeforeShape, graphHelperAfterShape,
-            materialAfterShape: materialAfterShape === originalMaterial,
+             graphHelperBeforeShape, graphHelperAfterShape,
+             helpersAfterSelection,
+             materialAfterShape: materialAfterShape === originalMaterial,
             resetLoaded: resetState.loaded,
             resetAngle: resetState.angle,
-            resetChainAngle: resetState.chainAngle,
-            resetPositions, shapedBaseline: shaped,
+             resetChainAngle: resetState.chainAngle,
+             resetForestAngle: resetState.forestAngle,
+             forestMode, forestTransforms,
+             forestAfterShapeState, forestHelperAfterShape,
+             resetPositions, shapedBaseline: shaped, resetBaseline,
+             resetNormals, resetNormalBaseline,
+             candidateForestAfterReset: !!resetState.candidateForest,
             helperAfterReset, colorAfterReset,
             resetHeatmapMode, resetChainText, resetCoverage,
             resetGraphCached, graphHelperAfterReset,
@@ -611,7 +771,7 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
             graphCached: graphBeforeChain === graphAfterControls,
           };
         }""")
-        assert result["requests"] == 3
+        assert result["requests"] == 4
         assert result["loaded"]
         assert result["deformed"] != pytest.approx(result["shaped"])
         assert result["helperBeforeShape"]
@@ -619,16 +779,24 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
         assert result["helperAfterShape"] is False
         assert result["graphHelperBeforeShape"]
         assert result["graphHelperAfterShape"] is False
+        assert result["helpersAfterSelection"] == {"chain": False, "graph": False}
         assert result["materialAfterShape"]
         assert result["resetLoaded"]
         assert result["resetAngle"] == 0
         assert result["resetChainAngle"] == 0
+        assert result["resetForestAngle"] == 0
+        assert result["candidateForestAfterReset"]
+        assert result["forestMode"] == "forest"
+        assert result["forestTransforms"] == 3
+        assert result["forestAfterShapeState"] is None
+        assert result["forestHelperAfterShape"] is False
         assert result["resetHeatmapMode"] is None
         assert result["resetChainText"] == "0,1"
         assert result["resetCoverage"]
         assert result["resetGraphCached"]
         assert result["graphHelperAfterReset"] is False
-        assert result["resetPositions"] == pytest.approx(result["shapedBaseline"])
+        assert result["resetPositions"] == pytest.approx(result["resetBaseline"])
+        assert result["resetNormals"] == pytest.approx(result["resetNormalBaseline"])
         assert result["helperAfterReset"] is False
         assert result["colorAfterReset"] is False
         assert result["stateAfterRemove"] is None
@@ -736,6 +904,31 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
         assert copied_tree["candidateTree"]["orientation"]["parentById"]
         assert "Root 0" in page.locator(
             ".inspector-skinning-tree-output").inner_text()
+        forest = page.locator(".inspector-skinning-forest")
+        assert "1 component" in forest.locator(
+            ".inspector-skinning-forest-summary").inner_text()
+        forest_angle = forest.locator(".inspector-skinning-forest-angle")
+        forest_angle.evaluate("""node => {
+          node.value = '20';
+          node.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
+        page.wait_for_function("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return state.deformationMode === 'forest'
+            && state.forestAngle === 20
+            && state.forestTransforms?.size === 3;
+        }""")
+        forest.locator(".inspector-skinning-copy-forest").click()
+        page.wait_for_function(
+            "() => document.querySelector('.inspector-skinning-forest-copy-status')"
+            ".textContent === 'Forest diagnostics copied.'")
+        copied_forest = page.evaluate(
+            "() => JSON.parse(window.__copiedGraphDiagnostics)")
+        assert copied_forest["candidateForest"]["primaryRootId"] == 0
+        assert copied_forest["candidateForest"]["components"]
+        assert copied_forest["candidateForest"]["angle"] == 20
         page.locator(".inspector-skinning-tree-show").click()
         assert page.evaluate("""async () => {
           const {getSkinningState} =

@@ -12,6 +12,7 @@ import {
   setSkinningHeatmapMode,
   buildCandidateTree, setCandidateTreeRoot,
   setInfluenceVisualizationMode,
+  setForestAxis, setForestAngle,
   setVirtualChainVisible,
 } from '../mesh/weight-experiment.js';
 
@@ -455,25 +456,39 @@ function compareNeighborRelationships(a, b) {
 
 function candidateTreeText(tree) {
   if (!tree) return '';
-  const orientation = tree.orientation;
   const lines = [`Root ${tree.rootId}`];
-  const append = (boneId, prefix, last, root = false) => {
+  const append = (orientation, boneId, prefix, last, root = false) => {
     if (!root) {
       lines.push(`${prefix}${last ? '\u2514\u2500 ' : '\u251c\u2500 '}${boneId}`);
     }
     const children = orientation?.childrenById?.[boneId] || [];
     children.forEach((child, index) => append(
+      orientation,
       child,
       root ? '' : `${prefix}${last ? '   ' : '\u2502  '}`,
       index === children.length - 1));
   };
+  const forest = tree.forest;
+  const primary = forest?.components?.[forest.primaryComponentId];
+  const primaryOrientation = primary || tree.orientation;
   if (Number.isFinite(Number(tree.rootId))) {
-    append(Number(tree.rootId), '', true, true);
+    append(primaryOrientation, Number(tree.rootId), '', true, true);
   }
-  if ((tree.components || []).length > 1) {
+  if (forest?.components?.length > 1) {
+    lines.push(`Candidate forest has ${forest.components.length} components`);
+    forest.components.forEach(component => {
+      if (component.primary) return;
+      const rootLabel = component.rootId == null
+        ? 'no root' : `Root ${component.rootId}`;
+      lines.push(`Component ${component.componentId} \u00b7 ${rootLabel} (auto)`);
+      if (component.rootId != null) {
+        append(component, Number(component.rootId), '', true, true);
+      }
+    });
+  } else if ((tree.components || []).length > 1) {
     lines.push(`Candidate graph has ${tree.components.length} components`);
-    const rooted = new Set(Object.keys(orientation?.depthById || {})
-      .filter(id => orientation.depthById[id] !== null).map(Number));
+    const rooted = new Set(Object.keys(tree.orientation?.depthById || {})
+      .filter(id => tree.orientation.depthById[id] !== null).map(Number));
     tree.components.forEach(component => {
       if (!component.some(id => rooted.has(Number(id)))) {
         lines.push(`[component: ${component.join(', ')}]`);
@@ -510,11 +525,25 @@ function topGraphRelationships(graph) {
   return [...selected.values()].sort(compareGraphRelationships);
 }
 
-function graphDiagnosticsPayload(state) {
+function forestDiagnosticsPayload(state) {
+  const forest = state?.candidateForest;
+  if (!forest) return null;
+  return {
+    primaryRootId: forest.primaryRootId,
+    primaryComponentId: forest.primaryComponentId,
+    componentByBoneId: forest.componentByBoneId,
+    components: forest.components,
+    axis: state.forestAxis,
+    angle: state.forestAngle,
+    deformationMode: state.deformationMode,
+  };
+}
+
+function graphDiagnosticsPayload(state, includeForest = false) {
   const graph = state?.influenceGraph;
   if (!graph) return null;
   const tree = state.candidateTree;
-  return {
+  const payload = {
     rootId: state.candidateRootId ?? null,
     boundingSphereRadius: graph.boundingSphereRadius ?? null,
     nodes: (graph.nodes || []).map(node => ({
@@ -533,10 +562,12 @@ function graphDiagnosticsPayload(state) {
       orientation: tree.orientation,
     } : null,
   };
+  if (includeForest) payload.candidateForest = forestDiagnosticsPayload(state);
+  return payload;
 }
 
-async function copyGraphDiagnostics(state) {
-  const payload = graphDiagnosticsPayload(state);
+async function copyGraphDiagnostics(state, includeForest = false) {
+  const payload = graphDiagnosticsPayload(state, includeForest);
   if (!payload) throw new Error('Influence graph is not available.');
   const text = JSON.stringify(payload, null, 2);
   if (navigator.clipboard?.writeText) {
@@ -559,7 +590,8 @@ async function copyGraphDiagnostics(state) {
   }
 }
 
-function buildSkinningInfluenceGraphControls(parent, mesh, state) {
+function buildSkinningInfluenceGraphControls(
+    parent, mesh, state, onStateChange = null) {
   const section = document.createElement('div');
   section.className = 'inspector-skinning-influence-graph';
   const title = document.createElement('div');
@@ -665,7 +697,9 @@ function buildSkinningInfluenceGraphControls(parent, mesh, state) {
   buildTree.textContent = 'Build Candidate Tree';
   buildTree.addEventListener('click', () => {
     buildCandidateTree(mesh, Number(rootSelect.value));
-    update(getSkinningState(mesh));
+    const latest = getSkinningState(mesh);
+    update(latest);
+    onStateChange?.(latest);
   });
   treeActions.appendChild(buildTree);
   const showTree = document.createElement('button');
@@ -817,11 +851,140 @@ function buildSkinningInfluenceGraphControls(parent, mesh, state) {
     update();
   });
   rootSelect.addEventListener('change', () => {
-    setCandidateTreeRoot(mesh, Number(rootSelect.value));
-    update();
+    const latestRoot = setCandidateTreeRoot(mesh, Number(rootSelect.value));
+    const latest = getSkinningState(mesh);
+    if (latestRoot !== false) update(latest);
+    onStateChange?.(latest);
   });
   update(state);
   skinningUpdates.set(mesh, update);
+  return {update};
+}
+
+function forestSummary(forest) {
+  if (!forest) return 'Build a candidate tree to create a rooted candidate forest.';
+  const components = forest.components || [];
+  const nodeCount = components.reduce(
+    (total, component) => total + (component.nodeIds || []).length, 0);
+  const edgeCount = components.reduce(
+    (total, component) => total + Number(component.edgeCount || 0), 0);
+  const maxDepth = Math.max(0, ...components.map(
+    component => Number(component.maxDepth || 0)));
+  const roots = components.map(component => {
+    const kind = component.primary ? 'primary' : 'auto';
+    return `${component.componentId}: ${component.rootId} (${kind})`;
+  }).join('  ');
+  return [
+    `${components.length} component${components.length === 1 ? '' : 's'}`
+      + ` \u00b7 ${nodeCount} nodes \u00b7 ${edgeCount} edges`,
+    `Max depth ${maxDepth} \u00b7 Primary root ${forest.primaryRootId}`,
+    `Roots ${roots}`,
+  ].join('\n');
+}
+
+function buildSkinningForestControls(parent, mesh, state) {
+  const section = document.createElement('div');
+  section.className = 'inspector-skinning-forest';
+  const title = document.createElement('div');
+  title.className = 'inspector-skinning-subtitle';
+  title.textContent = 'Candidate Forest Deformation';
+  section.appendChild(title);
+  addText(section, 'inspector-skinning-hint',
+    'Experimental deformation across every candidate-tree component.'
+      + ' Roots stay fixed; secondary roots are spatially selected.');
+
+  const summary = document.createElement('pre');
+  summary.className = 'inspector-skinning-forest-summary';
+  section.appendChild(summary);
+
+  const axisRow = document.createElement('div');
+  axisRow.className = 'inspector-skinning-forest-axis';
+  addText(axisRow, 'inspector-label', 'Axis');
+  const axisButtons = document.createElement('span');
+  ['X', 'Y', 'Z'].forEach(axis => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inspector-skinning-axis-button';
+    button.textContent = axis;
+    button.addEventListener('click', () => {
+      setForestAxis(mesh, axis);
+      update();
+    });
+    axisButtons.appendChild(button);
+  });
+  axisRow.appendChild(axisButtons);
+  section.appendChild(axisRow);
+
+  const angleRow = document.createElement('div');
+  angleRow.className = 'inspector-skinning-forest-bend';
+  const angleHeader = document.createElement('div');
+  angleHeader.className = 'inspector-skinning-rotation-header';
+  addText(angleHeader, 'inspector-label', 'Forest Angle');
+  const angleValue = addText(
+    angleHeader, 'inspector-skinning-forest-angle-value', `${state.forestAngle}°`);
+  angleRow.appendChild(angleHeader);
+  const angleSlider = document.createElement('input');
+  angleSlider.type = 'range';
+  angleSlider.className = 'inspector-skinning-forest-angle';
+  angleSlider.min = '-60';
+  angleSlider.max = '60';
+  angleSlider.step = '1';
+  angleSlider.value = state.forestAngle;
+  angleSlider.addEventListener('input', () => {
+    setForestAngle(mesh, angleSlider.value);
+    update();
+  });
+  angleRow.appendChild(angleSlider);
+  section.appendChild(angleRow);
+
+  let copying = false;
+  const actions = document.createElement('div');
+  actions.className = 'inspector-skinning-chain-actions';
+  const copyButton = document.createElement('button');
+  copyButton.type = 'button';
+  copyButton.className = 'ui-button inspector-skinning-copy-forest';
+  copyButton.textContent = 'Copy Forest Diagnostics';
+  copyButton.addEventListener('click', async () => {
+    const latest = getSkinningState(mesh);
+    if (!latest) return;
+    copying = true;
+    copyButton.disabled = true;
+    copyStatus.textContent = '';
+    try {
+      await copyGraphDiagnostics(latest, true);
+      copyStatus.textContent = 'Forest diagnostics copied.';
+    } catch (error) {
+      copyStatus.textContent = error instanceof Error
+        ? error.message : String(error);
+    } finally {
+      copying = false;
+      update();
+    }
+  });
+  actions.appendChild(copyButton);
+  section.appendChild(actions);
+  const copyStatus = addText(
+    section, 'inspector-skinning-forest-copy-status', '');
+
+  function update(latest = getSkinningState(mesh)) {
+    if (!latest) return;
+    const forest = latest.candidateForest;
+    const valid = !!forest;
+    summary.textContent = forestSummary(forest);
+    axisButtons.querySelectorAll('button').forEach(button => {
+      button.disabled = !valid;
+      button.classList.toggle('selected', button.textContent === latest.forestAxis);
+    });
+    angleSlider.disabled = !valid;
+    angleSlider.value = latest.forestAngle;
+    angleValue.textContent = `${latest.forestAngle}°`;
+    copyButton.disabled = !valid || copying;
+    copyButton.hidden = !valid;
+    if (!valid) copyStatus.textContent = '';
+  }
+
+  parent.appendChild(section);
+  update(state);
   return {update};
 }
 
@@ -914,8 +1077,10 @@ function buildSkinningChainControls(parent, mesh, state) {
   helperRow.appendChild(resetChain);
   chain.appendChild(helperRow);
   const coverage = buildSkinningCoverageControls(chain, mesh, state);
+  let forest = null;
   const influenceGraph = buildSkinningInfluenceGraphControls(
-    chain, mesh, state);
+    chain, mesh, state, latest => forest?.update(latest));
+  forest = buildSkinningForestControls(chain, mesh, state);
 
   function update() {
     const latest = getSkinningState(mesh);
@@ -937,6 +1102,7 @@ function buildSkinningChainControls(parent, mesh, state) {
       chain.closest('.inspector-skinning-section'), mesh);
     coverage.update(latest);
     influenceGraph.update(latest);
+    forest.update(latest);
     syncSkinningHeatmapControls(
       chain.closest('.inspector-skinning-section'), mesh);
   }

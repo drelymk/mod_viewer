@@ -6,7 +6,7 @@ import { invalidateCharacterShadowGeometry } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 
 const states = new WeakMap();
-let activeHelperMesh = null;
+let activeExperimentHelperMesh = null;
 
 const FULL_COVERAGE_THRESHOLD = 0.9999;
 const COVERAGE_99_THRESHOLD = 0.99;
@@ -49,6 +49,9 @@ function newState() {
     chainIds: [],
     chainAxis: 'Z',
     chainAngle: 0,
+    deformationMode: null,
+    forestAxis: 'Z',
+    forestAngle: 0,
     chainError: null,
     chainHelpersVisible: false,
     chainHelpers: null,
@@ -57,6 +60,8 @@ function newState() {
     influenceGraph: null,
     candidateRootId: null,
     candidateTree: null,
+    candidateForest: null,
+    forestTransforms: null,
     influenceVisualizationMode: null,
     influenceVisualization: null,
     baselinePositions: null,
@@ -66,6 +71,7 @@ function newState() {
     heatmapMode: null,
     diagnostics: null,
     encoding: null,
+    centerByBoneId: null,
     centers: new Map(),
   };
 }
@@ -577,6 +583,155 @@ export function orientTree(treeEdges, rootId) {
   return {rootId: root, parentById, childrenById, depthById};
 }
 
+function normalizedNodeIds(nodes) {
+  return [...new Set((nodes || []).map(node => Number(
+    node?.boneId ?? node)).filter(Number.isFinite))];
+}
+
+function connectedNodeComponents(nodes, edges) {
+  const nodeIds = normalizedNodeIds(nodes);
+  const nodeSet = new Set(nodeIds);
+  const adjacency = new Map(nodeIds.map(id => [id, []]));
+  (edges || []).forEach(edge => {
+    const boneA = Number(edge.boneA);
+    const boneB = Number(edge.boneB);
+    if (!nodeSet.has(boneA) || !nodeSet.has(boneB) || boneA === boneB) {
+      return;
+    }
+    adjacency.get(boneA).push(boneB);
+    adjacency.get(boneB).push(boneA);
+  });
+  const seen = new Set();
+  const components = [];
+  nodeIds.forEach(start => {
+    if (seen.has(start)) return;
+    const component = [];
+    const queue = [start];
+    seen.add(start);
+    while (queue.length) {
+      const current = queue.shift();
+      component.push(current);
+      adjacency.get(current).forEach(neighbor => {
+        if (seen.has(neighbor)) return;
+        seen.add(neighbor);
+        queue.push(neighbor);
+      });
+    }
+    components.push(component);
+  });
+  return components;
+}
+
+function graphNodeList(graph) {
+  return Array.isArray(graph) ? graph : graph?.nodes || [];
+}
+
+export function chooseSecondaryComponentRoot(
+    component, graph, primaryComponent, primaryRootId) {
+  const componentIds = normalizedNodeIds(component?.nodeIds || component);
+  if (!componentIds.length) return null;
+  const nodes = graphNodeList(graph);
+  const nodeById = new Map(nodes.map(node => [Number(node.boneId), node]));
+  const primaryIds = normalizedNodeIds(
+    primaryComponent?.nodeIds || primaryComponent);
+  const primaryNodes = primaryIds.map(id => nodeById.get(id)).filter(Boolean);
+  if (!primaryNodes.length && nodeById.has(Number(primaryRootId))) {
+    primaryNodes.push(nodeById.get(Number(primaryRootId)));
+  }
+  if (!primaryNodes.length) return componentIds[0];
+
+  let bestId = componentIds[0];
+  let bestDistance = Infinity;
+  componentIds.forEach((id, index) => {
+    const node = nodeById.get(id);
+    let nearest = Infinity;
+    primaryNodes.forEach(primary => {
+      const distance = centerDistance(
+        node?.weightedCenter, primary?.weightedCenter);
+      if (distance !== null) nearest = Math.min(nearest, distance);
+    });
+    // Preserve component input order for an exact-distance tie.  The
+    // distance, rather than the numeric ID, chooses the attachment side.
+    if (nearest < bestDistance || (nearest === bestDistance && index === 0)) {
+      bestId = id;
+      bestDistance = nearest;
+    }
+  });
+  return bestId;
+}
+
+function completeOrientation(nodeIds, orientation) {
+  nodeIds.forEach(id => {
+    if (!Object.prototype.hasOwnProperty.call(orientation.parentById, id)) {
+      orientation.parentById[id] = null;
+      orientation.childrenById[id] = [];
+      orientation.depthById[id] = null;
+    }
+  });
+  return orientation;
+}
+
+export function orientForest(nodes, treeEdges, primaryRootId, options = {}) {
+  const supplied = options.components;
+  const rawComponents = supplied?.length
+    ? supplied.map(component => component.nodeIds || component)
+    : connectedNodeComponents(nodes, treeEdges);
+  const components = rawComponents.map(component => normalizedNodeIds(component));
+  const requestedRoot = Number(primaryRootId);
+  let primaryComponentId = components.findIndex(component =>
+    component.includes(requestedRoot));
+  if (primaryComponentId < 0 && components.length) primaryComponentId = 0;
+
+  const componentByBoneId = {};
+  components.forEach((nodeIds, componentId) => {
+    nodeIds.forEach(id => { componentByBoneId[id] = componentId; });
+  });
+
+  const rootOverrides = options.secondaryRootByComponent;
+  const forestComponents = components.map((nodeIds, componentId) => {
+    const primary = componentId === primaryComponentId;
+    let rootId = primary && nodeIds.includes(requestedRoot)
+      ? requestedRoot : null;
+    if (rootId === null && primary) rootId = nodeIds[0] ?? null;
+    if (rootId === null) {
+      const override = rootOverrides instanceof Map
+        ? Number(rootOverrides.get(componentId))
+        : Number(rootOverrides?.[componentId]);
+      rootId = nodeIds.includes(override) ? override
+        : chooseSecondaryComponentRoot(
+          nodeIds,
+          nodes,
+          components[primaryComponentId] || [],
+          requestedRoot);
+    }
+    const nodeSet = new Set(nodeIds);
+    const componentEdges = (treeEdges || []).filter(edge =>
+      nodeSet.has(Number(edge.boneA)) && nodeSet.has(Number(edge.boneB)));
+    const orientation = completeOrientation(
+      nodeIds, orientTree(componentEdges, rootId));
+    const depths = Object.values(orientation.depthById)
+      .filter(depth => depth !== null).map(Number);
+    return {
+      componentId,
+      nodeIds,
+      rootId,
+      parentById: orientation.parentById,
+      childrenById: orientation.childrenById,
+      depthById: orientation.depthById,
+      edgeCount: componentEdges.length,
+      maxDepth: Math.max(0, ...depths),
+      primary,
+    };
+  });
+  const primary = forestComponents[primaryComponentId];
+  return {
+    primaryRootId: primary?.rootId ?? null,
+    primaryComponentId: primaryComponentId < 0 ? null : primaryComponentId,
+    components: forestComponents,
+    componentByBoneId,
+  };
+}
+
 export function weightedCenter(positions, indices, weights, influenceCount,
                                boneId) {
   const center = [0, 0, 0];
@@ -664,6 +819,15 @@ function axisVector(axis) {
   return new THREE.Vector3(0, 0, 1);
 }
 
+function rotationAroundPivot(pivot, rotationAxis, radians) {
+  return new THREE.Matrix4()
+    .makeTranslation(pivot.x, pivot.y, pivot.z)
+    .multiply(new THREE.Matrix4().makeRotationAxis(
+      rotationAxis, radians))
+    .multiply(new THREE.Matrix4().makeTranslation(
+      -pivot.x, -pivot.y, -pivot.z));
+}
+
 export function buildChainTransforms(centers, axis = 'Z', totalAngle = 0) {
   const source = Array.isArray(centers) ? centers : [];
   const transforms = source.map(() => new THREE.Matrix4());
@@ -677,15 +841,110 @@ export function buildChainTransforms(centers, axis = 'Z', totalAngle = 0) {
     const parent = transforms[index - 1];
     const pivot = vectorFromCenter(source[index - 1])
       .applyMatrix4(parent);
-    const aroundPivot = new THREE.Matrix4()
-      .makeTranslation(pivot.x, pivot.y, pivot.z)
-      .multiply(new THREE.Matrix4().makeRotationAxis(
-        rotationAxis, jointAngle))
-      .multiply(new THREE.Matrix4().makeTranslation(
-        -pivot.x, -pivot.y, -pivot.z));
+    const aroundPivot = rotationAroundPivot(
+      pivot, rotationAxis, jointAngle);
     transforms[index] = aroundPivot.multiply(parent.clone());
   }
   return transforms;
+}
+
+function centerFromCollection(nodeCenters, boneId) {
+  if (nodeCenters instanceof Map) {
+    return nodeCenters.get(boneId) ?? nodeCenters.get(String(boneId));
+  }
+  return nodeCenters?.[boneId];
+}
+
+export function buildForestTransforms(forest, nodeCenters, options = {}) {
+  const transforms = new Map();
+  const axis = options.axis || 'Z';
+  const totalAngle = Number(options.totalAngle ?? options.angleDegrees ?? 0);
+  const rotationAxis = axisVector(axis);
+  if (!Number.isFinite(totalAngle)) return transforms;
+
+  (forest?.components || []).forEach(component => {
+    const rootId = Number(component.rootId);
+    const depthById = component.depthById || {};
+    const maxDepth = Number(component.maxDepth ?? Math.max(
+      0, ...Object.values(depthById)
+        .filter(depth => depth !== null).map(Number)));
+    const edgeAngle = maxDepth > 0
+      ? THREE.MathUtils.degToRad(totalAngle) / maxDepth : 0;
+    const rootTransform = new THREE.Matrix4();
+    if (!Number.isFinite(rootId)) return;
+    transforms.set(rootId, rootTransform);
+    const queue = [rootId];
+    const visited = new Set([rootId]);
+    while (queue.length) {
+      const parentId = queue.shift();
+      const parentTransform = transforms.get(parentId);
+      const parentCenter = vectorFromCenter(
+        centerFromCollection(nodeCenters, parentId));
+      const pivot = parentCenter.clone().applyMatrix4(parentTransform);
+      const aroundPivot = rotationAroundPivot(
+        pivot, rotationAxis, edgeAngle);
+      const children = component.childrenById?.[parentId] || [];
+      children.forEach(childValue => {
+        const childId = Number(childValue);
+        if (!Number.isFinite(childId) || visited.has(childId)) return;
+        visited.add(childId);
+        transforms.set(childId,
+          aroundPivot.clone().multiply(parentTransform.clone()));
+        queue.push(childId);
+      });
+    }
+    // A malformed or partially oriented component still receives safe
+    // identity transforms for every participating node.
+    (component.nodeIds || []).forEach(nodeValue => {
+      const nodeId = Number(nodeValue);
+      if (Number.isFinite(nodeId) && !transforms.has(nodeId)) {
+        transforms.set(nodeId, new THREE.Matrix4());
+      }
+    });
+  });
+  return transforms;
+}
+
+function transformForBone(transformByBoneId, boneId) {
+  if (transformByBoneId instanceof Map) {
+    return transformByBoneId.get(Number(boneId));
+  }
+  return transformByBoneId?.[boneId];
+}
+
+export function applyWeightedTransformDeformation(
+    baselinePositions, indices, weights, influenceCount, transformByBoneId) {
+  const result = new Float32Array(baselinePositions || 0);
+  if (!baselinePositions || !indices || !weights || influenceCount <= 0
+      || !transformByBoneId) return result;
+  const vertexCount = Math.floor(baselinePositions.length / 3);
+  const baseline = new THREE.Vector3();
+  const transformed = new THREE.Vector3();
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const offset = vertex * 3;
+    baseline.set(
+      baselinePositions[offset], baselinePositions[offset + 1],
+      baselinePositions[offset + 2]);
+    const start = vertex * influenceCount;
+    let transformedWeight = 0;
+    let x = 0, y = 0, z = 0;
+    for (let influence = 0; influence < influenceCount; influence += 1) {
+      const weight = weights[start + influence];
+      const transform = transformForBone(
+        transformByBoneId, indices[start + influence]);
+      if (!transform || !Number.isFinite(weight) || weight <= 0) continue;
+      transformedWeight += weight;
+      transformed.copy(baseline).applyMatrix4(transform);
+      x += transformed.x * weight;
+      y += transformed.y * weight;
+      z += transformed.z * weight;
+    }
+    const unchanged = Math.max(0, 1 - transformedWeight);
+    result[offset] = baseline.x * unchanged + x;
+    result[offset + 1] = baseline.y * unchanged + y;
+    result[offset + 2] = baseline.z * unchanged + z;
+  }
+  return result;
 }
 
 export function applyWeightedChainDeformation(
@@ -697,35 +956,14 @@ export function applyWeightedChainDeformation(
       || !Array.isArray(transforms) || transforms.length < chainIds.length) {
     return result;
   }
-  const chainIndex = new Map(chainIds.map((id, index) => [Number(id), index]));
-  const vertexCount = Math.floor(baselinePositions.length / 3);
-  const baseline = new THREE.Vector3();
-  const transformed = new THREE.Vector3();
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const offset = vertex * 3;
-    baseline.set(
-      baselinePositions[offset], baselinePositions[offset + 1],
-      baselinePositions[offset + 2]);
-    const start = vertex * influenceCount;
-    let chainWeight = 0;
-    let x = 0, y = 0, z = 0;
-    for (let influence = 0; influence < influenceCount; influence += 1) {
-      const weight = weights[start + influence];
-      const transformIndex = chainIndex.get(indices[start + influence]);
-      if (transformIndex === undefined || !Number.isFinite(weight)
-          || weight <= 0 || !transforms[transformIndex]) continue;
-      chainWeight += weight;
-      transformed.copy(baseline).applyMatrix4(transforms[transformIndex]);
-      x += transformed.x * weight;
-      y += transformed.y * weight;
-      z += transformed.z * weight;
+  const transformByBoneId = new Map();
+  chainIds.forEach((boneId, index) => {
+    if (transforms[index]) {
+      transformByBoneId.set(Number(boneId), transforms[index]);
     }
-    const unchanged = Math.max(0, 1 - chainWeight);
-    result[offset] = baseline.x * unchanged + x;
-    result[offset + 1] = baseline.y * unchanged + y;
-    result[offset + 2] = baseline.z * unchanged + z;
-  }
-  return result;
+  });
+  return applyWeightedTransformDeformation(
+    baselinePositions, indices, weights, influenceCount, transformByBoneId);
 }
 
 function previewError(result) {
@@ -808,7 +1046,10 @@ function refreshChainCoverage(state) {
 function removeVirtualChainHelpers(mesh, state) {
   const helpers = state?.chainHelpers;
   if (!helpers) {
-    if (activeHelperMesh === mesh) activeHelperMesh = null;
+    if (activeExperimentHelperMesh === mesh
+        && !state?.influenceVisualization) {
+      activeExperimentHelperMesh = null;
+    }
     if (state) state.chainHelpersVisible = false;
     return;
   }
@@ -819,14 +1060,31 @@ function removeVirtualChainHelpers(mesh, state) {
   helpers.lineMaterial.dispose();
   state.chainHelpers = null;
   state.chainHelpersVisible = false;
-  if (activeHelperMesh === mesh) activeHelperMesh = null;
+  if (activeExperimentHelperMesh === mesh
+      && !state.influenceVisualization) {
+    activeExperimentHelperMesh = null;
+  }
+}
+
+function removeExperimentHelpers(mesh, state) {
+  if (!state) return;
+  removeVirtualChainHelpers(mesh, state);
+  removeInfluenceVisualization(state);
+  if (activeExperimentHelperMesh === mesh) {
+    activeExperimentHelperMesh = null;
+  }
+}
+
+function activateExperimentHelpers(mesh) {
+  if (activeExperimentHelperMesh && activeExperimentHelperMesh !== mesh) {
+    const activeState = states.get(activeExperimentHelperMesh);
+    removeExperimentHelpers(activeExperimentHelperMesh, activeState);
+  }
+  activeExperimentHelperMesh = mesh;
 }
 
 function activateVirtualChain(mesh) {
-  if (activeHelperMesh && activeHelperMesh !== mesh) {
-    removeVirtualChainHelpers(activeHelperMesh, states.get(activeHelperMesh));
-  }
-  activeHelperMesh = mesh;
+  activateExperimentHelpers(mesh);
 }
 
 function createVirtualChainHelpers(mesh, state) {
@@ -871,6 +1129,15 @@ function updateVirtualChainHelpers(mesh, state) {
   });
   linePositions.needsUpdate = true;
   helpers.line.geometry.computeBoundingSphere();
+}
+
+function transformedInfluenceCenter(node, state, mode) {
+  const point = vectorFromCenter(node.weightedCenter);
+  if (mode === 'tree' && state.deformationMode === 'forest') {
+    const transform = state.forestTransforms?.get(node.boneId);
+    if (transform) point.applyMatrix4(transform);
+  }
+  return point;
 }
 
 function buildInfluenceGraph(mesh, state) {
@@ -931,13 +1198,20 @@ function removeInfluenceVisualization(state) {
   visualization.lineMaterials.forEach(material => material.dispose());
   state.influenceVisualization = null;
   state.influenceVisualizationMode = null;
+  if (activeExperimentHelperMesh === visualization.mesh
+      && !state.chainHelpers) {
+    activeExperimentHelperMesh = null;
+  }
 }
 
 function createInfluenceVisualization(mesh, state, mode) {
   removeInfluenceVisualization(state);
+  activateExperimentHelpers(mesh);
   const graph = state.influenceGraph;
   if (!graph || (mode !== 'graph' && mode !== 'tree')) return null;
   const nodeById = new Map(graph.nodes.map(node => [node.boneId, node]));
+  const componentRoots = new Set((state.candidateForest?.components || [])
+    .map(component => component.rootId));
   const radius = Math.max(
     (mesh.geometry.boundingSphere?.radius || 1) * 0.012, 0.001);
   const group = new THREE.Group();
@@ -945,12 +1219,15 @@ function createInfluenceVisualization(mesh, state, mode) {
     ? 'Experimental Influence Graph' : 'Experimental Candidate Tree';
   const nodeGeometry = new THREE.SphereGeometry(1, 8, 6);
   const nodeMaterial = new THREE.MeshBasicMaterial({color: 0xffb86c});
+  const nodeMarkers = new Map();
   graph.nodes.forEach(node => {
     const marker = new THREE.Mesh(nodeGeometry, nodeMaterial);
-    marker.scale.setScalar(radius);
-    marker.position.copy(vectorFromCenter(node.weightedCenter));
+    marker.scale.setScalar(radius * (componentRoots.has(node.boneId) ? 1.35 : 1));
+    marker.position.copy(transformedInfluenceCenter(node, state, mode));
     marker.userData.influenceBoneId = node.boneId;
+    marker.userData.influenceComponentRoot = componentRoots.has(node.boneId);
     group.add(marker);
+    nodeMarkers.set(node.boneId, marker);
   });
 
   const relationships = mode === 'graph'
@@ -958,12 +1235,14 @@ function createInfluenceVisualization(mesh, state, mode) {
     : state.candidateTree?.edges || [];
   const lineGeometries = [];
   const lineMaterials = [];
+  const lineEntries = [];
   relationships.forEach(relationship => {
     const nodeA = nodeById.get(Number(relationship.boneA));
     const nodeB = nodeById.get(Number(relationship.boneB));
     if (!nodeA || !nodeB) return;
     const position = new Float32Array([
-      ...nodeA.weightedCenter, ...nodeB.weightedCenter,
+      ...transformedInfluenceCenter(nodeA, state, mode).toArray(),
+      ...transformedInfluenceCenter(nodeB, state, mode).toArray(),
     ]);
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
@@ -979,20 +1258,41 @@ function createInfluenceVisualization(mesh, state, mode) {
     group.add(line);
     lineGeometries.push(geometry);
     lineMaterials.push(material);
+    lineEntries.push({line, relationship});
   });
   mesh.add(group);
   state.influenceVisualization = {
-    group, nodeGeometry, nodeMaterial, lineGeometries, lineMaterials,
+    mesh, group, nodeGeometry, nodeMaterial, nodeMarkers,
+    lineGeometries, lineMaterials, lineEntries,
   };
   state.influenceVisualizationMode = mode;
   return state.influenceVisualization;
 }
 
 function updateInfluenceVisualization(mesh, state) {
-  if (state.influenceVisualizationMode) {
-    createInfluenceVisualization(
-      mesh, state, state.influenceVisualizationMode);
-  }
+  const visualization = state.influenceVisualization;
+  if (!visualization || !state.influenceVisualizationMode) return;
+  const mode = state.influenceVisualizationMode;
+  const graph = state.influenceGraph;
+  const nodeById = new Map((graph?.nodes || [])
+    .map(node => [node.boneId, node]));
+  visualization.nodeMarkers?.forEach((marker, boneId) => {
+    const node = nodeById.get(boneId);
+    if (node) marker.position.copy(
+      transformedInfluenceCenter(node, state, mode));
+  });
+  visualization.lineEntries?.forEach(({line, relationship}) => {
+    const nodeA = nodeById.get(Number(relationship.boneA));
+    const nodeB = nodeById.get(Number(relationship.boneB));
+    if (!nodeA || !nodeB) return;
+    const positions = line.geometry.attributes.position;
+    const centerA = transformedInfluenceCenter(nodeA, state, mode);
+    const centerB = transformedInfluenceCenter(nodeB, state, mode);
+    positions.setXYZ(0, centerA.x, centerA.y, centerA.z);
+    positions.setXYZ(1, centerB.x, centerB.y, centerB.z);
+    positions.needsUpdate = true;
+    line.geometry.computeBoundingSphere();
+  });
 }
 
 export function buildCandidateTree(mesh, rootId = null) {
@@ -1007,13 +1307,27 @@ export function buildCandidateTree(mesh, rootId = null) {
   const tree = buildMaximumSpanningTree(
     state.influenceGraph.nodes, candidateEdges);
   state.candidateRootId = root ?? null;
+  const forest = orientForest(
+    state.influenceGraph.nodes, tree.edges, state.candidateRootId,
+    {components: tree.components});
+  state.candidateForest = forest;
+  const primaryComponent = forest.components[forest.primaryComponentId];
   state.candidateTree = {
     ...tree,
     rootId: state.candidateRootId,
     candidateEdges,
-    orientation: orientTree(tree.edges, state.candidateRootId),
+    orientation: primaryComponent ? {
+      rootId: primaryComponent.rootId,
+      parentById: primaryComponent.parentById,
+      childrenById: primaryComponent.childrenById,
+      depthById: primaryComponent.depthById,
+    } : orientTree(tree.edges, state.candidateRootId),
+    forest,
   };
-  updateInfluenceVisualization(mesh, state);
+  if (state.influenceVisualizationMode) {
+    createInfluenceVisualization(
+      mesh, state, state.influenceVisualizationMode);
+  }
   requestRender();
   return state.candidateTree;
 }
@@ -1026,11 +1340,22 @@ export function setCandidateTreeRoot(mesh, rootId) {
   state.candidateRootId = id;
   if (state.candidateTree) {
     state.candidateTree.rootId = id;
-    state.candidateTree.orientation = orientTree(
-      state.candidateTree.edges, id);
+    const forest = orientForest(
+      state.influenceGraph.nodes, state.candidateTree.edges, id,
+      {components: state.candidateTree.components});
+    state.candidateForest = forest;
+    state.candidateTree.forest = forest;
+    const primaryComponent = forest.components[forest.primaryComponentId];
+    state.candidateTree.orientation = primaryComponent ? {
+      rootId: primaryComponent.rootId,
+      parentById: primaryComponent.parentById,
+      childrenById: primaryComponent.childrenById,
+      depthById: primaryComponent.depthById,
+    } : orientTree(state.candidateTree.edges, id);
   }
-  if (state.influenceVisualizationMode === 'tree') {
-    updateInfluenceVisualization(mesh, state);
+  if (state.influenceVisualizationMode) {
+    createInfluenceVisualization(
+      mesh, state, state.influenceVisualizationMode);
   }
   requestRender();
   return id;
@@ -1064,38 +1389,55 @@ export function setCandidateTreeVisible(mesh, visible) {
 if (typeof window !== 'undefined') {
   window.addEventListener('mod-viewer-mesh-selected', event => {
     const mesh = event.detail?.mesh || null;
-    if (activeHelperMesh && activeHelperMesh !== mesh) {
-      removeVirtualChainHelpers(activeHelperMesh, states.get(activeHelperMesh));
+    if (activeExperimentHelperMesh && activeExperimentHelperMesh !== mesh) {
+      const previous = activeExperimentHelperMesh;
+      removeExperimentHelpers(previous, states.get(previous));
     }
-    activeHelperMesh = mesh;
   });
 }
 
 function applyDeformation(mesh, state) {
   if (!state.loaded || !state.baselinePositions) return;
   const position = mesh.geometry.attributes.position;
-  const chainActive = state.chainAngle !== 0
-    && state.chainIds.length >= 2;
-  const result = chainActive
-    ? applyWeightedChainDeformation(
+  const chainActive = state.deformationMode === 'chain'
+    && state.chainAngle !== 0 && state.chainIds.length >= 2;
+  const forestActive = state.deformationMode === 'forest'
+    && state.forestAngle !== 0 && state.candidateForest;
+  let result;
+  if (forestActive) {
+    state.forestTransforms = buildForestTransforms(
+      state.candidateForest,
+      state.centerByBoneId,
+      {axis: state.forestAxis, totalAngle: state.forestAngle});
+    result = applyWeightedTransformDeformation(
+      state.baselinePositions, state.indices, state.weights,
+      state.influenceCount, state.forestTransforms);
+  } else if (chainActive) {
+    state.forestTransforms = null;
+    result = applyWeightedChainDeformation(
       state.baselinePositions, state.indices, state.weights,
       state.influenceCount, state.chainIds, buildChainTransforms(
-        chainCentersFor(mesh, state), state.chainAxis, state.chainAngle))
-    : state.angle === 0
-      ? state.baselinePositions
-      : applyWeightedRotation(
-        state.baselinePositions, state.indices, state.weights,
-        state.influenceCount, state.selectedBone, centerFor(mesh, state),
-        state.axis, state.angle);
+        chainCentersFor(mesh, state), state.chainAxis, state.chainAngle));
+  } else if (state.deformationMode === 'single' && state.angle !== 0) {
+    state.forestTransforms = null;
+    result = applyWeightedRotation(
+      state.baselinePositions, state.indices, state.weights,
+      state.influenceCount, state.selectedBone, centerFor(mesh, state),
+      state.axis, state.angle);
+  } else {
+    state.forestTransforms = null;
+    result = state.baselinePositions;
+  }
   position.array.set(result);
   position.needsUpdate = true;
-  if (!chainActive && state.angle === 0) {
+  if (!chainActive && !forestActive && state.angle === 0) {
     restoreNormals(mesh, state);
   } else {
     mesh.geometry.computeVertexNormals();
     mesh.geometry.attributes.normal.needsUpdate = true;
   }
   updateVirtualChainHelpers(mesh, state);
+  updateInfluenceVisualization(mesh, state);
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
   invalidateCharacterShadowGeometry();
@@ -1204,6 +1546,8 @@ export async function loadSkinningWeights(mesh) {
     state.loaded = true;
     refreshChainCoverage(state);
     state.influenceGraph = buildInfluenceGraph(mesh, state);
+    state.centerByBoneId = new Map(state.influenceGraph.nodes.map(node => [
+      node.boneId, node.weightedCenter]));
     state.candidateRootId = state.boneIds[0] ?? null;
     return state;
   })();
@@ -1238,6 +1582,8 @@ export function setSkinningAngle(mesh, angle) {
   if (!state?.loaded) return;
   state.angle = Math.max(-45, Math.min(45, Number(angle) || 0));
   state.chainAngle = 0;
+  state.forestAngle = 0;
+  state.deformationMode = state.angle === 0 ? null : 'single';
   if (state.chainHelpers) removeVirtualChainHelpers(mesh, state);
   applyDeformation(mesh, state);
 }
@@ -1246,6 +1592,10 @@ export function setSkinningChainText(mesh, text) {
   const state = stateFor(mesh);
   if (!state?.loaded) return false;
   state.chainText = String(text ?? '');
+  if (state.deformationMode === 'forest') {
+    state.forestAngle = 0;
+    state.deformationMode = null;
+  }
   const wasVisible = state.chainHelpersVisible;
   try {
     state.chainIds = parseChainIds(state.chainText, state.boneIds);
@@ -1281,6 +1631,8 @@ export function setSkinningChainAxis(mesh, axis) {
   if (!state?.loaded || !['X', 'Y', 'Z'].includes(axis)) return;
   state.chainAxis = axis;
   state.angle = 0;
+  state.forestAngle = 0;
+  if (state.deformationMode === 'forest') state.deformationMode = null;
   applyDeformation(mesh, state);
 }
 
@@ -1289,6 +1641,26 @@ export function setSkinningChainAngle(mesh, angle) {
   if (!state?.loaded || state.chainIds.length < 2) return false;
   state.chainAngle = Math.max(-60, Math.min(60, Number(angle) || 0));
   state.angle = 0;
+  state.forestAngle = 0;
+  state.deformationMode = state.chainAngle === 0 ? null : 'chain';
+  applyDeformation(mesh, state);
+  return true;
+}
+
+export function setForestAxis(mesh, axis) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !['X', 'Y', 'Z'].includes(axis)) return;
+  state.forestAxis = axis;
+  applyDeformation(mesh, state);
+}
+
+export function setForestAngle(mesh, angle) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  state.forestAngle = Math.max(-60, Math.min(60, Number(angle) || 0));
+  state.angle = 0;
+  state.chainAngle = 0;
+  state.deformationMode = state.forestAngle === 0 ? null : 'forest';
   applyDeformation(mesh, state);
   return true;
 }
@@ -1335,6 +1707,9 @@ export function resetSkinningExperiment(mesh) {
   if (!state?.loaded) return;
   state.angle = 0;
   state.chainAngle = 0;
+  state.forestAngle = 0;
+  state.deformationMode = null;
+  state.forestTransforms = null;
   removeVirtualChainHelpers(mesh, state);
   removeInfluenceVisualization(state);
   applyDeformation(mesh, state);

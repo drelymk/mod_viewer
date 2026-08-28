@@ -1129,7 +1129,8 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 .inspector-skinning-residual.active { color: var(--accent-soft); border-color: var(--accent-soft); }
 .inspector-skinning-add-missing { margin-top: 2px; }
-.inspector-skinning-influence-graph, .inspector-skinning-candidate-tree {
+.inspector-skinning-influence-graph, .inspector-skinning-candidate-tree,
+.inspector-skinning-forest {
   display: flex; flex-direction: column; gap: 5px; padding-top: 8px;
   border-top: 1px solid var(--border);
 }
@@ -1148,6 +1149,15 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   color: var(--accent-soft); border-color: var(--accent-soft);
 }
 .inspector-skinning-copy-status { min-height: 12px; }
+.inspector-skinning-forest-summary {
+  margin: 0; color: var(--text-muted); font: 10px/1.35 ui-monospace, monospace;
+  white-space: pre-wrap;
+}
+.inspector-skinning-forest-axis, .inspector-skinning-forest-bend {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.inspector-skinning-forest-angle { width: 100%; accent-color: var(--accent-soft); }
+.inspector-skinning-forest-copy-status { min-height: 12px; }
 .inspector-skinning-relationship {
   display: flex; flex-direction: column; gap: 3px; padding: 5px;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
