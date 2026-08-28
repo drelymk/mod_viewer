@@ -310,15 +310,13 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             skinning_source, skinning_error = resolve_skinning_source(
                 direct_skinning_resources, resolve_vertex_info)
             if skinning_source is None and skinning_error is None:
-                blocked_slots = {
-                    slot for slot, resource in vertex_resources.items()
-                    if resource is None
-                }
+                occupied_slots = (set(group_vertex_resources)
+                                  | set(vertex_resources))
                 blend_fallback = {
                     slot: resource
                     for slot, resource in lookup_component_blend_vertex_resources(
                         _ib_res_to_component(effective_ib)).items()
-                    if slot not in blocked_slots
+                    if slot not in occupied_slots
                 }
                 skinning_source, skinning_error = resolve_skinning_source(
                     blend_fallback, resolve_vertex_info)

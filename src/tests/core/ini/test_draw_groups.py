@@ -1,5 +1,7 @@
 """Resolved draw-group assembly regressions."""
 
+import pytest
+
 from core.ini.draw_groups import build_draw_groups
 from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.sections import extract_resources, parse_sections
@@ -221,3 +223,49 @@ stride = 20
     assert draw.skinning_error is None
     assert draw.skinning_source.file == "body-blend.buf"
     assert draw.skinning_source.encoding == "gimi_f32_u32_4"
+
+
+@pytest.mark.parametrize(
+    ("blend_slot", "expect_source"),
+    [(1, False), (4, True)],
+    ids=["same-slot-is-blocked", "different-slot-remains-available"],
+)
+def test_draw_groups_sibling_blend_fallback_respects_authored_slots(
+        blend_slot, expect_source):
+    sections = parse_sections("sample.ini", text=f"""[TextureOverrideBodyPosition]
+vb0 = ResourceBodyPosition
+
+[TextureOverrideBodyBlend]
+handling = skip
+vb{blend_slot} = ResourceBodyBlend
+
+[TextureOverrideBody]
+ib = ResourceBodyIB
+vb1 = ResourceBodyTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 40
+
+[ResourceBodyBlend]
+filename = body-blend.buf
+stride = 32
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 20
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    if expect_source:
+        assert draw.skinning_source.file == "body-blend.buf"
+    else:
+        assert draw.skinning_source is None
