@@ -439,8 +439,8 @@ async function copySkinningDiagnostics(mesh, state) {
 }
 
 function buildSkinningHierarchyControls(parent, mesh, state) {
-  const hierarchy = document.createElement('div');
-  hierarchy.className = 'inspector-skinning-hierarchy';
+  const hierarchy = document.createElement('section');
+  hierarchy.className = 'inspector-section inspector-skinning-hierarchy';
   const title = document.createElement('div');
   title.className = 'inspector-skinning-subtitle';
   title.textContent = 'Inferred Influence Hierarchy';
@@ -588,8 +588,8 @@ function addPhysicsRange(parent, className, label, min, max, step, value,
 }
 
 function buildSkinningPhysicsControls(parent, mesh, state) {
-  const section = document.createElement('div');
-  section.className = 'inspector-skinning-physics';
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-skinning-physics';
   const title = document.createElement('div');
   title.className = 'inspector-skinning-subtitle';
   title.textContent = 'Secondary Motion — Experimental';
@@ -797,12 +797,18 @@ function buildSkinningAdvancedControls(parent, mesh, state) {
   };
 }
 
-function renderSkinningControls(section, mesh, state) {
+function renderSkinningControls(section, mesh, state, advancedHost = null) {
   const load = section.querySelector('.inspector-skinning-load');
   const status = section.querySelector('.inspector-skinning-status');
   const controls = section.querySelector('.inspector-skinning-controls');
   if (!load || !status || !controls) return;
   if (!state?.loaded) {
+    skinningUpdates.delete(mesh);
+    physicsUpdates.delete(mesh);
+    if (advancedHost) {
+      advancedHost.replaceChildren();
+      advancedHost.hidden = true;
+    }
     controls.hidden = true;
     load.disabled = !!state?.loading;
     load.textContent = state?.loading ? 'Loading…' : 'Load Weights';
@@ -818,6 +824,10 @@ function renderSkinningControls(section, mesh, state) {
   skinningUpdates.delete(mesh);
   physicsUpdates.delete(mesh);
   controls.replaceChildren();
+  if (advancedHost) {
+    advancedHost.replaceChildren();
+    advancedHost.hidden = false;
+  }
 
   const summary = document.createElement('div');
   summary.className = 'inspector-skinning-summary';
@@ -874,13 +884,15 @@ function renderSkinningControls(section, mesh, state) {
   reset.textContent = 'Reset';
   reset.addEventListener('click', () => {
     resetSkinningExperiment(mesh);
-    renderSkinningControls(section, mesh, getSkinningState(mesh));
+    renderSkinningControls(
+      section, mesh, getSkinningState(mesh), advancedHost);
   });
   controls.appendChild(reset);
 
   buildSkinningDiagnostics(
     controls, state, mesh.geometry.attributes.position.count);
-  const advanced = buildSkinningAdvancedControls(controls, mesh, state);
+  const advanced = buildSkinningAdvancedControls(
+    advancedHost || controls, mesh, state);
 
   function update(latest = getSkinningState(mesh)) {
     if (!latest) return;
@@ -900,6 +912,8 @@ function renderSkinningControls(section, mesh, state) {
 function buildSkinningSection(content, mesh) {
   if (!mesh?.userData?.modPath || !mesh.userData.semanticKey
       || mesh.userData.assetFill === true) return;
+  const group = document.createElement('div');
+  group.className = 'inspector-skinning-group';
   const section = document.createElement('section');
   section.className = 'inspector-section inspector-skinning-section';
   const title = document.createElement('div');
@@ -917,7 +931,13 @@ function buildSkinningSection(content, mesh) {
   controls.className = 'inspector-skinning-controls';
   controls.hidden = true;
   section.appendChild(controls);
-  renderSkinningControls(section, mesh, getSkinningState(mesh));
+  const advancedHost = document.createElement('div');
+  advancedHost.className = 'inspector-skinning-advanced-host';
+  advancedHost.hidden = true;
+  group.append(section, advancedHost);
+  content.appendChild(group);
+  renderSkinningControls(
+    section, mesh, getSkinningState(mesh), advancedHost);
   load.addEventListener('click', async () => {
     load.disabled = true;
     status.hidden = true;
@@ -927,9 +947,9 @@ function buildSkinningSection(content, mesh) {
     } catch (error) {
       console.error('Could not load skin weights', error);
     }
-    renderSkinningControls(section, mesh, getSkinningState(mesh));
+    renderSkinningControls(
+      section, mesh, getSkinningState(mesh), advancedHost);
   });
-  content.appendChild(section);
 }
 
 function buildComponent(record) {

@@ -2083,12 +2083,17 @@ def test_skinning_inspector_keeps_normal_controls_and_builds_hierarchy_lazily(
         assert copied["hierarchy"]["rootId"] == 1
         assert copied["physics"]["enabled"]
 
-        labels = page.locator(".inspector-skinning-section").inner_text()
+        labels = page.locator(".inspector-skinning-group").inner_text()
         order = page.locator(
-            ".inspector-skinning-advanced > div").evaluate_all(
-                "nodes => nodes.map(node => node.className)")
+            ".inspector-skinning-advanced > section").evaluate_all(
+                "nodes => nodes.map(node => ({className: node.className, "
+                "tagName: node.tagName}))")
         assert order == [
-            "inspector-skinning-physics", "inspector-skinning-hierarchy"]
+            {"className": "inspector-section inspector-skinning-physics",
+             "tagName": "SECTION"},
+            {"className": "inspector-section inspector-skinning-hierarchy",
+             "tagName": "SECTION"},
+        ]
         assert "Inferred Influence Hierarchy" in labels
         assert "Secondary Motion" in labels
         assert "Kick" not in labels

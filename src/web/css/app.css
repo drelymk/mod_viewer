@@ -1103,10 +1103,11 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .inspector-skinning-stat {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
+.inspector-skinning-advanced { display: flex; flex-direction: column; }
 .inspector-skinning-hierarchy,
 .inspector-skinning-physics {
-  display: flex; flex-direction: column; gap: 5px; padding-top: 8px;
-  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 5px; padding: 10px 0;
+  border-bottom: 1px solid var(--border);
 }
 .inspector-skinning-hierarchy-summary,
 .inspector-skinning-hierarchy-output,
