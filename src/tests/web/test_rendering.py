@@ -213,390 +213,6 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
     finally:
         context.close()
 
-
-def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
-        edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {"Weights": _payload("Weights")})
-    try:
-        result = page.evaluate("""async () => {
-          const THREE = await import('three');
-          const helpers = await import('./js/mesh/weight-experiment.js');
-          const point = (matrix, values) => [...new THREE.Vector3(...values)
-            .applyMatrix4(matrix)];
-          const baseline = new Float32Array([1, 0, 0]);
-          const zero = helpers.applyWeightedRotation(
-            baseline, new Uint32Array([7]), new Float32Array([0]), 1,
-            7, [0, 0, 0], 'Z', 90);
-          const half = helpers.applyWeightedRotation(
-            baseline, new Uint32Array([7]), new Float32Array([.5]), 1,
-            7, [0, 0, 0], 'Z', 90);
-          const full = helpers.applyWeightedRotation(
-            baseline, new Uint32Array([7]), new Float32Array([1]), 1,
-            7, [0, 0, 0], 'Z', 90);
-          const atTen = helpers.applyWeightedRotation(
-            baseline, new Uint32Array([7]), new Float32Array([1]), 1,
-            7, [0, 0, 0], 'Z', 10);
-          const atTwenty = helpers.applyWeightedRotation(
-            baseline, new Uint32Array([7]), new Float32Array([1]), 1,
-            7, [0, 0, 0], 'Z', 20);
-          const centers = [[0, 0, 0], [1, 0, 0], [2, 0, 0]];
-          const transforms = helpers.buildChainTransforms(centers, 'Z', 90);
-          const chainResult = helpers.applyWeightedChainDeformation(
-            new Float32Array([2, 0, 0]),
-            new Uint32Array([1, 2, 11]),
-            new Float32Array([.6, .2, .2]), 3, [0, 1, 2], transforms);
-          const overweightChain = helpers.applyWeightedChainDeformation(
-            new Float32Array([1, 0, 0]), new Uint32Array([0, 1]),
-            new Float32Array([.50000006, .50000006]), 2, [0, 1], [
-              new THREE.Matrix4().makeScale(0, 0, 0),
-              new THREE.Matrix4().makeScale(0, 0, 0),
-            ]);
-          const genericChainResult = helpers.applyWeightedTransformDeformation(
-            new Float32Array([2, 0, 0]),
-            new Uint32Array([1, 2, 11]),
-            new Float32Array([.6, .2, .2]), 3,
-            new Map([[0, transforms[0]], [1, transforms[1]],
-              [2, transforms[2]]]));
-          const forestNodes = [
-            {boneId: 0, weightedCenter: [0, 0, 0]},
-            {boneId: 1, weightedCenter: [1, 0, 0]},
-            {boneId: 2, weightedCenter: [2, 0, 0]},
-            {boneId: 5, weightedCenter: [2.1, 0, 0]},
-            {boneId: 6, weightedCenter: [3.1, 0, 0]},
-          ];
-          const forestEdges = [
-            {boneA: 0, boneB: 1, score: .9},
-            {boneA: 1, boneB: 2, score: .8},
-            {boneA: 5, boneB: 6, score: .7},
-          ];
-          const forestTree = helpers.buildMaximumSpanningTree(
-            forestNodes, forestEdges);
-          const forest = helpers.orientForest(
-            forestNodes, forestTree.edges, 0,
-            {components: forestTree.components});
-          const forestRootSix = helpers.orientForest(
-            forestNodes, forestTree.edges, 6,
-            {components: forestTree.components});
-          const forestRootTwo = helpers.orientForest(
-            forestNodes, forestTree.edges, 2,
-            {components: forestTree.components});
-          const forestCenters = new Map(forestNodes.map(node => [
-            node.boneId, node.weightedCenter]));
-          const forestTransforms = helpers.buildForestTransforms(
-            forest, forestCenters,
-            {axis: 'Z', totalAngle: 90});
-          const forestResult = helpers.applyWeightedTransformDeformation(
-            new Float32Array([1, 0, 0]),
-            new Uint32Array([1, 6, 99, 99]),
-            new Float32Array([.25, .25, .25, .25]), 4, forestTransforms);
-          const eightTransform = new Map([
-            [7, new THREE.Matrix4().makeTranslation(7, 0, 0)],
-          ]);
-          const genericEight = helpers.applyWeightedTransformDeformation(
-            new Float32Array([1, 0, 0]),
-            new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7]),
-            new Float32Array([.05, .05, .05, .05, .05, .05, .05, .65]),
-            8, eightTransform);
-          const allEightTransforms = new Map(
-            Array.from({length: 8}, (_, id) => [
-              id, new THREE.Matrix4().makeTranslation(id, 0, 0),
-            ]));
-          const allEight = helpers.applyWeightedTransformDeformation(
-            new Float32Array([1, 0, 0]),
-            new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7]),
-            new Float32Array([.125, .125, .125, .125, .125, .125, .125, .125]),
-            8, allEightTransforms);
-          const branchNodes = [
-            {boneId: 0, weightedCenter: [0, 0, 0]},
-            {boneId: 1, weightedCenter: [1, 0, 0]},
-            {boneId: 2, weightedCenter: [2, 0, 0]},
-            {boneId: 3, weightedCenter: [1, 1, 0]},
-          ];
-          const branchForest = helpers.orientForest(branchNodes, [
-            {boneA: 0, boneB: 1, score: .9},
-            {boneA: 1, boneB: 2, score: .8},
-            {boneA: 1, boneB: 3, score: .7},
-          ], 0);
-          const branchTransforms = helpers.buildForestTransforms(
-            branchForest,
-            new Map(branchNodes.map(node => [node.boneId, node.weightedCenter])),
-            {axis: 'Z', totalAngle: 60});
-          const siblingBlend = helpers.applyWeightedTransformDeformation(
-            new Float32Array([1, 0, 0]), new Uint32Array([2, 3]),
-            new Float32Array([.5, .5]), 2, new Map([
-              [2, new THREE.Matrix4().makeTranslation(2, 0, 0)],
-              [3, new THREE.Matrix4().makeTranslation(0, 2, 0)],
-            ]));
-          const rootChildBlend = helpers.applyWeightedTransformDeformation(
-            new Float32Array([1, 0, 0]), new Uint32Array([0, 1]),
-            new Float32Array([.7, .3]), 2, new Map([
-              [0, new THREE.Matrix4()],
-              [1, new THREE.Matrix4().makeTranslation(0, 2, 0)],
-            ]));
-          const p = new THREE.Vector3(2, 0, 0);
-          const m1 = p.clone().applyMatrix4(transforms[1]);
-          const m2 = p.clone().applyMatrix4(transforms[2]);
-          const expectedChain = [
-            .6 * m1.x + .2 * m2.x + .2 * p.x,
-            .6 * m1.y + .2 * m2.y + .2 * p.y,
-            .6 * m1.z + .2 * m2.z + .2 * p.z,
-          ];
-          const coverageIndices = new Uint32Array([
-            0, 1, 99, 99,
-            1, 9, 99, 99,
-            8, 9, 10, 99,
-          ]);
-          const coverageWeights = new Float32Array([
-            .7, .3, 0, 0,
-            .5, .5, 0, 0,
-            .25, .25, .5, 0,
-          ]);
-          const coveragePositions = new Float32Array([
-            0, 0, 0, 1, 0, 0, 2, 0, 0,
-          ]);
-          const coverage = helpers.computeChainCoverage(
-            coverageIndices, coverageWeights, 4, [0, 1, 8],
-            coveragePositions);
-          const missing = helpers.rankMissingInfluences(
-            coverageIndices, coverageWeights, 4, [0, 1, 8],
-            coveragePositions);
-          const partial = helpers.computeChainCoverage(
-            coverageIndices, coverageWeights, 4, [0, 1, 8]);
-          const completed = helpers.computeChainCoverage(
-            coverageIndices, coverageWeights, 4, [0, 1, 8, 9]);
-          const wideIndices = new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7]);
-          const wideWeights = new Float32Array([
-            .05, .05, .05, .05, .05, .05, .05, .65,
-          ]);
-          const wide = helpers.computeChainCoverage(
-            wideIndices, wideWeights, 8, [0, 1, 2, 3, 4, 5, 6]);
-          const sanity = helpers.computeChainCoverage(
-            new Uint32Array([0, 1, 0, 1]),
-            new Float32Array([1.002, 0, .998, 0]), 2, [0, 1]);
-          const graphIndices = new Uint32Array([
-            0, 1, 0, 1, 1, 2,
-          ]);
-          const graphWeights = new Float32Array([
-            .8, .2, .4, .6, .5, .5,
-          ]);
-          const graphPositions = new Float32Array([
-            0, 0, 0, 1, 0, 0, 2, 0, 0,
-          ]);
-          const nodes = helpers.buildInfluenceNodes(
-            graphPositions, graphIndices, graphWeights, 2, [0, 1, 2]);
-          const relationships = helpers.buildInfluenceRelationships(
-            graphIndices, graphWeights, 2, nodes, 2);
-          const candidates = helpers.candidateRelationshipEdges({
-            nodes, relationships,
-          });
-          const tree = helpers.buildMaximumSpanningTree(nodes, candidates);
-          const treeRootZero = helpers.orientTree(tree.edges, 0);
-          const treeRootTwo = helpers.orientTree(tree.edges, 2);
-          const rootedAtZero = helpers.orientTree([
-            {boneA: 0, boneB: 1},
-            {boneA: 1, boneB: 2},
-            {boneA: 1, boneB: 3},
-          ], 0);
-          const rootedAtTwo = helpers.orientTree([
-            {boneA: 0, boneB: 1},
-            {boneA: 1, boneB: 2},
-            {boneA: 1, boneB: 3},
-          ], 2);
-          const disconnected = helpers.buildMaximumSpanningTree(
-            [0, 1, 2, 3].map(boneId => ({boneId})), [
-              {boneA: 0, boneB: 1, score: .9},
-              {boneA: 2, boneB: 3, score: .8},
-            ]);
-          const duplicateIndices = new Uint32Array([0, 0, 1]);
-          const duplicateWeights = new Float32Array([.3, .2, .5]);
-          const duplicateNodes = helpers.buildInfluenceNodes(
-            new Float32Array([0, 0, 0]), duplicateIndices,
-            duplicateWeights, 3, [0, 1]);
-          const duplicateRelationships = helpers.buildInfluenceRelationships(
-            duplicateIndices, duplicateWeights, 3, duplicateNodes);
-          const eightNodes = helpers.buildInfluenceNodes(
-            new Float32Array([0, 0, 0]), wideIndices, wideWeights, 8,
-            [0, 1, 2, 3, 4, 5, 6, 7]);
-          const eightRelationships = helpers.buildInfluenceRelationships(
-            wideIndices, wideWeights, 8, eightNodes);
-          const readError = text => {
-            try {
-              helpers.parseChainIds(text, [0, 2, 3, 4]);
-              return null;
-            } catch (error) {
-              return error.message;
-            }
-          };
-          return {
-            center: helpers.weightedCenter(
-              new Float32Array([0, 0, 0, 2, 0, 0]),
-              new Uint32Array([7, 8]), new Float32Array([.25, .75]), 1, 8),
-            zero: [...zero], half: [...half], full: [...full],
-            atTen: [...atTen], atTwenty: [...atTwenty],
-            c0: point(transforms[0], centers[0]),
-            c1: point(transforms[1], centers[1]),
-            c2: point(transforms[2], centers[2]),
-            chainResult: [...chainResult],
-            genericChainResult: [...genericChainResult],
-            expectedChain,
-            overweightChain: [...overweightChain],
-            forest, forestRootSix, forestRootTwo,
-            forestTransforms: [...forestTransforms.entries()].map(([id, matrix]) => ({
-              id, origin: point(matrix, forestCenters.get(id)),
-            })),
-            forestRootsIdentity: forestTransforms.get(0)
-              .equals(new THREE.Matrix4())
-              && forestTransforms.get(5).equals(new THREE.Matrix4()),
-            forestResult: [...forestResult], genericEight: [...genericEight],
-            allEight: [...allEight],
-            siblingBlend: [...siblingBlend],
-            rootChildBlend: [...rootChildBlend],
-            branchRoots: branchForest.components[0].rootId,
-            branchChildren: branchForest.components[0].childrenById,
-            branchTransformsSame: branchTransforms.get(2).equals(
-              branchTransforms.get(3)),
-            chainWeights: [
-              helpers.chainWeightForVertex(
-                coverageIndices, coverageWeights, 4, 0, [0, 1, 8]),
-              helpers.chainWeightForVertex(
-                coverageIndices, coverageWeights, 4, 1, [0, 1, 8]),
-              helpers.chainWeightForVertex(
-                coverageIndices, coverageWeights, 4, 2, [0, 1, 8]),
-            ],
-            residualWeights: [
-              helpers.residualWeightForVertex(
-                coverageIndices, coverageWeights, 4, 0, [0, 1, 8]),
-              helpers.residualWeightForVertex(
-                coverageIndices, coverageWeights, 4, 1, [0, 1, 8]),
-              helpers.residualWeightForVertex(
-                coverageIndices, coverageWeights, 4, 2, [0, 1, 8]),
-            ],
-            coverage, missing, sanity,
-            partialMaxResidual: partial.maxResidual,
-            completedMaxResidual: completed.maxResidual,
-            wide,
-            nodes, relationships, candidates, tree, treeRootZero, treeRootTwo,
-            rootedAtZero, rootedAtTwo, disconnected,
-            duplicateRelationships, eightRelationships,
-            parsed: helpers.parseChainIds('0,2,3,4', [0, 2, 3, 4]),
-            duplicate: readError('0,2,2'),
-            unknown: readError('0,14'),
-            nonInteger: readError('0,2.5'),
-            short: readError('0'),
-          };
-        }""")
-        assert result["center"] == pytest.approx([2, 0, 0])
-        assert result["zero"] == pytest.approx([1, 0, 0])
-        assert result["half"] == pytest.approx([.5, .5, 0])
-        assert result["full"] == pytest.approx([0, 1, 0])
-        assert result["atTen"] != pytest.approx(result["atTwenty"])
-        assert result["atTwenty"] == pytest.approx([
-            math.cos(math.radians(20)), math.sin(math.radians(20)), 0])
-        assert result["c0"] == pytest.approx([0, 0, 0])
-        assert result["c1"] == pytest.approx([
-            math.sqrt(.5), math.sqrt(.5), 0])
-        assert result["c2"] == pytest.approx([
-            math.sqrt(.5), 1 + math.sqrt(.5), 0])
-        assert result["chainResult"] == pytest.approx(result["expectedChain"])
-        assert result["genericChainResult"] == pytest.approx(result["expectedChain"])
-        assert result["overweightChain"][0] >= 0
-        assert result["overweightChain"] == pytest.approx([0, 0, 0])
-        assert len(result["forest"]["components"]) == 2
-        assert result["forest"]["primaryRootId"] == 0
-        assert result["forest"]["components"][0]["rootId"] == 0
-        assert result["forest"]["components"][1]["rootId"] == 5
-        assert result["forest"]["components"][0]["maxDepth"] == 2
-        assert result["forest"]["components"][1]["maxDepth"] == 1
-        assert result["forestRootSix"]["primaryRootId"] == 6
-        assert result["forestRootSix"]["components"][1]["primary"]
-        assert result["forestRootTwo"]["primaryRootId"] == 2
-        assert result["forestRootTwo"]["components"][1]["parentById"] == \
-            result["forest"]["components"][1]["parentById"]
-        assert result["forestRootsIdentity"]
-        assert result["forestResult"] == pytest.approx([
-            .5 + .25 * math.sqrt(.5) + .25 * 2.1,
-            .25 * math.sqrt(.5) - .25 * 1.1,
-            0,
-        ])
-        assert result["genericEight"] == pytest.approx([5.55, 0, 0])
-        assert result["allEight"] == pytest.approx([4.5, 0, 0])
-        assert result["siblingBlend"] == pytest.approx([2, 1, 0])
-        assert result["rootChildBlend"] == pytest.approx([1, .6, 0])
-        assert result["branchRoots"] == 0
-        assert result["branchChildren"]["1"] == [2, 3]
-        assert result["branchTransformsSame"]
-        assert result["chainWeights"] == pytest.approx([1, .5, .25])
-        assert result["residualWeights"] == pytest.approx([0, .5, .75])
-        assert result["coverage"]["vertexCount"] == 3
-        assert result["coverage"]["averageCoverage"] == pytest.approx(7 / 12)
-        assert result["coverage"]["minCoverage"] == pytest.approx(.25)
-        assert result["coverage"]["maxResidual"] == pytest.approx(.75)
-        assert result["coverage"]["fullyCoveredVertices"] == 1
-        assert result["coverage"]["covered99Vertices"] == 1
-        assert result["coverage"]["covered95Vertices"] == 1
-        assert result["coverage"]["lowCoverageVertices"] == 2
-        assert result["coverage"]["residualCenter"] == pytest.approx([1.6, 0, 0])
-        assert [entry["boneId"] for entry in result["missing"]] == [9, 10]
-        assert [entry["totalWeight"] for entry in result["missing"]] == pytest.approx([
-            .75, .5])
-        assert result["missing"][0]["affectedVertexCount"] == 2
-        assert result["missing"][0]["maxVertexWeight"] == pytest.approx(.5)
-        assert result["missing"][0]["residualContribution"] == pytest.approx(.75)
-        assert result["partialMaxResidual"] == pytest.approx(.75)
-        assert result["completedMaxResidual"] == pytest.approx(.5)
-        assert result["wide"]["vertexCount"] == 1
-        assert result["wide"]["maxResidual"] == pytest.approx(.65)
-        assert result["sanity"]["overweightVertices"] == 1
-        assert result["sanity"]["underweightVertices"] == 1
-        assert [node["boneId"] for node in result["nodes"]] == [0, 1, 2]
-        assert result["nodes"][0]["totalWeight"] == pytest.approx(1.2)
-        assert result["nodes"][0]["affectedVertexCount"] == 2
-        assert result["nodes"][0]["maxVertexWeight"] == pytest.approx(.8)
-        assert result["nodes"][0]["weightedCenter"] == pytest.approx([
-            1 / 3, 0, 0])
-        assert result["nodes"][0]["weightedRadius"] == pytest.approx(
-            math.sqrt(2 / 9))
-        assert result["nodes"][1]["weightedCenter"] == pytest.approx([
-            16 / 13, 0, 0])
-        assert len(result["relationships"]) == 2
-        relation01 = next(item for item in result["relationships"]
-                          if item["boneA"] == 0 and item["boneB"] == 1)
-        assert relation01["sharedVertexCount"] == 2
-        assert relation01["minOverlap"] == pytest.approx(.6)
-        assert relation01["productOverlap"] == pytest.approx(.4)
-        assert relation01["containment"] == pytest.approx(.5)
-        assert relation01["jaccard"] == pytest.approx(.6 / 1.9)
-        assert relation01["centerDistance"] == pytest.approx(
-            math.sqrt((16 / 13 - 1 / 3) ** 2))
-        assert relation01["normalizedDistance"] == pytest.approx(
-            relation01["centerDistance"] / 2)
-        assert [item["boneA"] for item in result["candidates"]] == [1, 0]
-        assert len(result["tree"]["edges"]) == 2
-        assert len(result["tree"]["components"]) == 1
-        assert result["treeRootZero"]["parentById"]["0"] is None
-        assert result["treeRootTwo"]["parentById"]["2"] is None
-        assert sorted((edge["boneA"], edge["boneB"])
-                      for edge in result["tree"]["edges"]) == [(0, 1), (1, 2)]
-        assert result["rootedAtZero"]["parentById"] == {
-            "0": None, "1": 0, "2": 1, "3": 1}
-        assert result["rootedAtTwo"]["parentById"] == {
-            "0": 1, "1": 2, "2": None, "3": 1}
-        assert len(result["disconnected"]["edges"]) == 2
-        assert result["disconnected"]["components"] == [[0, 1], [2, 3]]
-        assert len(result["duplicateRelationships"]) == 1
-        assert result["duplicateRelationships"][0]["minOverlap"] == pytest.approx(.5)
-        assert result["duplicateRelationships"][0]["productOverlap"] == pytest.approx(.25)
-        assert len(result["eightRelationships"]) == 28
-        assert result["parsed"] == [0, 2, 3, 4]
-        assert result["duplicate"] == "Duplicate Bone ID: 2"
-        assert result["unknown"] == "Unknown Bone ID: 14"
-        assert result["nonInteger"] == (
-            "Chain IDs must be comma-separated integer IDs.")
-        assert result["short"] == "A chain requires at least 2 unique bone IDs."
-    finally:
-        context.close()
-
-
 def test_skinning_physics_solver_covers_targets_kicks_and_equilibrium(
         edge_browser, frontend_url):
     context, page = _page(
@@ -673,8 +289,8 @@ def test_skinning_physics_solver_covers_targets_kicks_and_equilibrium(
           ]);
           const dynamicTransforms = deformation.buildForestTransformsFromLocalAngles(
             forest, centers, {axis: 'Z', angleByBoneId: targetAngles});
-          const staticTransforms = deformation.buildForestTransforms(
-            forest, centers, {axis: 'Z', totalAngle: 40});
+          const repeatedTransforms = deformation.buildForestTransformsFromLocalAngles(
+            forest, centers, {axis: 'Z', angleByBoneId: targetAngles});
           const matrixDifference = (left, right) => Math.max(...left.elements.map(
             (value, index) => Math.abs(value - right.elements[index])));
           const branchOnly = deformation.buildForestTransformsFromLocalAngles(
@@ -693,9 +309,9 @@ def test_skinning_physics_solver_covers_targets_kicks_and_equilibrium(
             }),
             rootIdentity: dynamicTransforms.get(0).equals(
               new (await import('three')).Matrix4()),
-            staticDifference: Math.max(...[1, 2, 3].map(boneId =>
+            repeatedDifference: Math.max(...[1, 2, 3].map(boneId =>
               matrixDifference(dynamicTransforms.get(boneId),
-                staticTransforms.get(boneId)))),
+                repeatedTransforms.get(boneId)))),
             branchDifference: matrixDifference(branchOnly.get(2),
               dynamicTransforms.get(2)),
             siblingUnchanged: branchOnly.get(3).equals(
@@ -718,7 +334,7 @@ def test_skinning_physics_solver_covers_targets_kicks_and_equilibrium(
             0, 0, 0])
         assert result["fixedEqual"]
         assert result["rootIdentity"]
-        assert result["staticDifference"] < .001
+        assert result["repeatedDifference"] < .001
         assert result["branchDifference"] > .01
         assert result["siblingUnchanged"]
     finally:
@@ -1294,222 +910,6 @@ def test_skinning_linear_velocity_impulse_preserves_angles_and_phase(
         context.close()
 
 
-def test_skinning_experiment_lifecycle_and_shape_invalidation(
-        edge_browser, frontend_url):
-    payload = _payload("Experiment")
-    second = copy.deepcopy(next(iter(payload["meshes"].values())))
-    second["component"] = "Accessory Experiment"
-    payload["meshes"]["Accessory-Experiment-0"] = second
-    context, page = _page(edge_browser, frontend_url,
-                           {"Experiment": payload})
-    try:
-        _open(page, "Experiment")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
-        result = page.evaluate("""async () => {
-          const mesh = window.modViewer.activeMeshes[0];
-          const secondMesh = window.modViewer.activeMeshes[1];
-          const originalMaterial = mesh.material;
-          const secondOriginalMaterial = secondMesh.material;
-          const bytes = new Uint8Array(24);
-          new Uint32Array(bytes.buffer).set([0, 1, 2]);
-          new Float32Array(bytes.buffer, 12).set([1, 1, 1]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          let requests = 0;
-          window.pywebview.api.get_skinning_preview = async () => {
-            requests += 1;
-            return {
-              status: 'ok', vertex_count: 3, influence_count: 1,
-              bone_ids: [0, 1, 2], encoding: 'test',
-              data: {
-                url, length: 24,
-                indices: {offset: 0, length: 12, type: 'u32'},
-                weights: {offset: 12, length: 12, type: 'f32'},
-              }, diagnostics: {},
-            };
-          };
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const {setControlValue} = await import('./js/editing/control-state.js');
-          const {refreshMeshes, removeMesh, resetMeshes} =
-                await import('./js/mesh/mesh-state.js');
-
-          await experiment.loadSkinningWeights(mesh);
-          const graphBeforeChain =
-            experiment.getSkinningState(mesh).influenceGraph;
-          experiment.setSkinningChainText(mesh, '0,1');
-          experiment.setVirtualChainVisible(mesh, true);
-          experiment.setSkinningHeatmap(mesh, true);
-          experiment.setInfluenceVisualizationMode(mesh, 'graph');
-          const graphHelperBeforeShape = !!mesh.children.find(
-            child => child.name === 'Experimental Influence Graph');
-          const {selectMesh} = await import('./js/scene/selection.js');
-          selectMesh(secondMesh);
-          const helpersAfterSelection = {
-            chain: !!mesh.children.find(
-              child => child.name === 'Experimental Virtual Chain'),
-            graph: !!mesh.children.find(
-              child => child.name === 'Experimental Influence Graph'),
-          };
-          selectMesh(mesh);
-          experiment.setVirtualChainVisible(mesh, true);
-          experiment.setInfluenceVisualizationMode(mesh, 'graph');
-          const boneMaterial = mesh.material;
-          const boneMode = experiment.getSkinningState(mesh).heatmapMode;
-          experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
-          const residualMaterial = mesh.material;
-          const residualMode = experiment.getSkinningState(mesh).heatmapMode;
-          const oneColorAttribute = !!mesh.geometry.attributes.color;
-          const coverageBeforeAngle =
-            experiment.getSkinningState(mesh).chainCoverage;
-          experiment.setSkinningChainAngle(mesh, 20);
-          experiment.setSkinningChainAxis(mesh, 'X');
-          const coverageAfterAngle =
-            experiment.getSkinningState(mesh).chainCoverage;
-          const graphAfterControls =
-            experiment.getSkinningState(mesh).influenceGraph;
-          const loadedState = experiment.getSkinningState(mesh);
-          const deformed = [...mesh.geometry.attributes.position.array];
-          const helperBeforeShape = !!mesh.children.find(
-            child => child.name === 'Experimental Virtual Chain');
-
-          setControlValue('shape', '1');
-          refreshMeshes();
-          const shaped = [...mesh.geometry.attributes.position.array];
-          const afterShapeState = experiment.getSkinningState(mesh);
-          const helperAfterShape = !!mesh.children.find(
-            child => child.name === 'Experimental Virtual Chain');
-          const graphHelperAfterShape = !!mesh.children.find(
-            child => child.name === 'Experimental Influence Graph');
-          const materialAfterShape = mesh.material;
-
-          await experiment.loadSkinningWeights(mesh);
-          experiment.setSkinningChainText(mesh, '0,1');
-          experiment.setVirtualChainVisible(mesh, true);
-          experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
-          experiment.buildCandidateTree(mesh, 0);
-          experiment.setCandidateTreeVisible(mesh, true);
-          experiment.setForestAngle(mesh, 20);
-          const forestState = experiment.getSkinningState(mesh);
-          const forestMode = forestState.deformationMode;
-          const forestTransforms = forestState.forestTransforms?.size || 0;
-          setControlValue('shape', '2');
-          refreshMeshes();
-          const forestAfterShapeState = experiment.getSkinningState(mesh);
-          const forestHelperAfterShape = !!mesh.children.find(
-            child => child.name === 'Experimental Candidate Tree');
-          await experiment.loadSkinningWeights(mesh);
-          const graphBeforeReset =
-            experiment.getSkinningState(mesh).influenceGraph;
-          experiment.setSkinningChainText(mesh, '0,1');
-          experiment.setVirtualChainVisible(mesh, true);
-          experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
-          experiment.buildCandidateTree(mesh, 0);
-          experiment.setCandidateTreeVisible(mesh, true);
-          const resetBaseline = [...mesh.geometry.attributes.position.array];
-          const resetNormalBaseline = [...mesh.geometry.attributes.normal.array];
-          experiment.setForestAngle(mesh, 20);
-          experiment.setSkinningChainAngle(mesh, 20);
-          experiment.resetSkinningExperiment(mesh);
-          const resetState = experiment.getSkinningState(mesh);
-          const resetPositions = [...mesh.geometry.attributes.position.array];
-          const resetNormals = [...mesh.geometry.attributes.normal.array];
-          const helperAfterReset = !!mesh.children.find(
-            child => child.name === 'Experimental Virtual Chain');
-          const colorAfterReset = !!mesh.geometry.attributes.color;
-          const resetHeatmapMode = resetState.heatmapMode;
-          const resetChainText = resetState.chainText;
-          const resetCoverage = !!resetState.chainCoverage;
-          const resetGraphCached = resetState.influenceGraph === graphBeforeReset;
-          const graphHelperAfterReset = !!mesh.children.find(
-            child => child.name === 'Experimental Candidate Tree');
-
-          experiment.setSkinningChainText(mesh, '0,1');
-          experiment.setVirtualChainVisible(mesh, true);
-          experiment.setSkinningHeatmap(mesh, true);
-          removeMesh(mesh);
-          const stateAfterRemove = experiment.getSkinningState(mesh);
-          const helperAfterRemove = !!mesh.children.find(
-            child => child.name === 'Experimental Virtual Chain');
-          await experiment.loadSkinningWeights(secondMesh);
-          experiment.setSkinningChainText(secondMesh, '0,1');
-          experiment.setVirtualChainVisible(secondMesh, true);
-          experiment.setSkinningHeatmap(secondMesh, true);
-          resetMeshes();
-          const stateAfterResetMeshes = experiment.getSkinningState(secondMesh);
-          const helperAfterResetMeshes = !!secondMesh.children.find(
-            child => child.name === 'Experimental Virtual Chain');
-          URL.revokeObjectURL(url);
-          return {
-            requests, loaded: loadedState.loaded,
-            deformed, shaped, afterShapeState,
-            helperBeforeShape, helperAfterShape,
-             graphHelperBeforeShape, graphHelperAfterShape,
-             helpersAfterSelection,
-             materialAfterShape: materialAfterShape === originalMaterial,
-            resetLoaded: resetState.loaded,
-            resetAngle: resetState.angle,
-             resetChainAngle: resetState.chainAngle,
-             resetForestAngle: resetState.forestAngle,
-             forestMode, forestTransforms,
-             forestAfterShapeState, forestHelperAfterShape,
-             resetPositions, shapedBaseline: shaped, resetBaseline,
-             resetNormals, resetNormalBaseline,
-             candidateForestAfterReset: !!resetState.candidateForest,
-            helperAfterReset, colorAfterReset,
-            resetHeatmapMode, resetChainText, resetCoverage,
-            resetGraphCached, graphHelperAfterReset,
-            stateAfterRemove, helperAfterRemove,
-            materialAfterRemove: mesh.material === originalMaterial,
-            stateAfterResetMeshes, helperAfterResetMeshes,
-            materialAfterResetMeshes: secondMesh.material === secondOriginalMaterial,
-            boneMode, residualMode,
-            sharedHeatmapMaterial: boneMaterial === residualMaterial,
-            oneColorAttribute,
-            coverageCached: coverageBeforeAngle === coverageAfterAngle,
-            graphCached: graphBeforeChain === graphAfterControls,
-          };
-        }""")
-        assert result["requests"] == 4
-        assert result["loaded"]
-        assert result["deformed"] != pytest.approx(result["shaped"])
-        assert result["helperBeforeShape"]
-        assert result["afterShapeState"] is None
-        assert result["helperAfterShape"] is False
-        assert result["graphHelperBeforeShape"]
-        assert result["graphHelperAfterShape"] is False
-        assert result["helpersAfterSelection"] == {"chain": False, "graph": False}
-        assert result["materialAfterShape"]
-        assert result["resetLoaded"]
-        assert result["resetAngle"] == 0
-        assert result["resetChainAngle"] == 0
-        assert result["resetForestAngle"] == 0
-        assert result["candidateForestAfterReset"]
-        assert result["forestMode"] == "forest"
-        assert result["forestTransforms"] == 3
-        assert result["forestAfterShapeState"] is None
-        assert result["forestHelperAfterShape"] is False
-        assert result["resetHeatmapMode"] is None
-        assert result["resetChainText"] == "0,1"
-        assert result["resetCoverage"]
-        assert result["resetGraphCached"]
-        assert result["graphHelperAfterReset"] is False
-        assert result["resetPositions"] == pytest.approx(result["resetBaseline"])
-        assert result["resetNormals"] == pytest.approx(result["resetNormalBaseline"])
-        assert result["helperAfterReset"] is False
-        assert result["colorAfterReset"] is False
-        assert result["stateAfterRemove"] is None
-        assert result["helperAfterRemove"] is False
-        assert result["materialAfterRemove"]
-        assert result["stateAfterResetMeshes"] is None
-        assert result["helperAfterResetMeshes"] is False
-        assert result["materialAfterResetMeshes"]
-        assert result["boneMode"] == "bone"
-        assert result["residualMode"] == "chain-residual"
-        assert result["sharedHeatmapMaterial"]
-        assert result["oneColorAttribute"]
-        assert result["coverageCached"]
-        assert result["graphCached"]
-    finally:
-        context.close()
 
 
 def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
@@ -1539,7 +939,7 @@ def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
           const {setControlValue} = await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
           await experiment.loadSkinningWeights(mesh);
-          experiment.buildCandidateTree(mesh, 0);
+          experiment.ensureCandidateForest(mesh);
           const queuedFrames = [];
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -1591,16 +991,7 @@ def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
               Math.abs(value - beforeTarget[index]) > 1e-5),
           };
 
-          experiment.setSkinningAngle(mesh, 10);
-          const switched = experiment.getSkinningState(mesh);
-          const switchState = {
-            mode: switched.deformationMode,
-            enabled: switched.physicsEnabled,
-            target: switched.physicsTargetAngle,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-
-          experiment.buildCandidateTree(mesh, 0);
+          experiment.ensureCandidateForest(mesh);
           experiment.setPhysicsEnabled(mesh, true);
           experiment.setPhysicsTargetAngle(mesh, 20);
           runFrame(200);
@@ -1627,7 +1018,7 @@ def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
           window.cancelAnimationFrame = originalCancelAnimationFrame;
           URL.revokeObjectURL(url);
           return {
-            enabledState, sleepingState, movingState, switchState, resetState,
+            enabledState, sleepingState, movingState, resetState,
             scheduledBeforeShape,
             afterShape: afterShape === null,
             scheduledAfterShape: experiment.isPhysicsScheduled(mesh),
@@ -1646,9 +1037,6 @@ def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
         assert result["movingState"]["scheduled"]
         assert result["movingState"]["angle"] != pytest.approx(0)
         assert result["movingState"]["changed"]
-        assert result["switchState"] == {
-            "mode": "single", "enabled": False, "target": 0,
-            "scheduled": False}
         assert result["resetState"]["enabled"]
         assert result["resetState"]["mode"] == "physics"
         assert result["resetState"]["target"] == 0
@@ -1690,7 +1078,7 @@ def test_skinning_angular_motion_follows_model_turn_and_ignores_camera(
           };
           const experiment = await import('./js/mesh/weight-experiment.js');
           await experiment.loadSkinningWeights(mesh);
-          experiment.buildCandidateTree(mesh, 0);
+          experiment.ensureCandidateForest(mesh);
           previewCalls = 0;
 
           const queuedFrames = [];
@@ -1936,7 +1324,7 @@ def test_skinning_translation_motion_uses_scene_transform_lifecycle(
             };
           };
           await experiment.loadSkinningWeights(mesh);
-          experiment.buildCandidateTree(mesh, 0);
+          experiment.ensureCandidateForest(mesh);
           previewCalls = 0;
           experiment.setPhysicsAxis(mesh, 'Z');
           experiment.setPhysicsLinearMotionStrength(mesh, .35);
@@ -2098,9 +1486,8 @@ def test_skinning_gravity_lifecycle_refreshes_and_composes_with_motion(
             }, diagnostics: {},
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
-          const motion = await import('./js/mesh/weight-motion-test.js');
           await experiment.loadSkinningWeights(mesh);
-          experiment.buildCandidateTree(mesh, 0);
+          experiment.ensureCandidateForest(mesh);
           const state = experiment.getSkinningState(mesh);
           state.centerByBoneId = new Map([
             [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
@@ -2214,24 +1601,12 @@ def test_skinning_gravity_lifecycle_refreshes_and_composes_with_motion(
               .maxAbsTotalAcceleration,
           };
 
-          motion.startContinuousMotion(window.modViewer.activeMeshes, {
-            axis: 'X', speedScale: .2, accelerationScale: 1,
-            radius: 2, direction: 1,
-          });
-          for (let index = 0; index < 12; index += 1) {
-            runFrame(timing.current);
-            timing.current += 16.7;
-          }
-          const composed = experiment.getSkinningState(mesh);
-          const motionState = motion.getContinuousMotionState();
-          const compositionSnapshot = {
-            gravityEnabled: composed.physicsGravityEnabled,
-            gravityMapPresent: composed.physicsGravityAccelerations instanceof Map,
-            gravityEvents: composed.continuousMotionEventCount,
-            velocity: motionState.velocity,
+          const gravityOnly = experiment.getSkinningState(mesh);
+          const gravitySnapshot = {
+            gravityEnabled: gravityOnly.physicsGravityEnabled,
+            gravityMapPresent: gravityOnly.physicsGravityAccelerations instanceof Map,
             physicsScheduled: experiment.isPhysicsScheduled(mesh),
           };
-          motion.cancelContinuousMotionTest();
 
           experiment.resetPhysicsMotion(mesh);
           const resetImmediate = experiment.getSkinningState(mesh);
@@ -2255,7 +1630,7 @@ def test_skinning_gravity_lifecycle_refreshes_and_composes_with_motion(
           return {
             enabledSnapshot, initialGravity, scaleSnapshot, scaleResult,
             disabledImmediate, disableResult, tiltSnapshot, axisSnapshot,
-            compositionSnapshot, resetSnapshot, resetResult,
+            gravitySnapshot, resetSnapshot, resetResult,
             disabledPhysics: {
               enabled: disabledPhysics.physicsEnabled,
               gravityEnabled: disabledPhysics.physicsGravityEnabled,
@@ -2293,11 +1668,9 @@ def test_skinning_gravity_lifecycle_refreshes_and_composes_with_motion(
         assert result["axisSnapshot"]["maxAcceleration"] > 0
         assert result["axisSnapshot"]["angle"] < 0
         assert result["axisSnapshot"]["settled"]
-        assert result["compositionSnapshot"]["gravityEnabled"]
-        assert result["compositionSnapshot"]["gravityMapPresent"]
-        assert result["compositionSnapshot"]["gravityEvents"] > 0
-        assert result["compositionSnapshot"]["velocity"] > 0
-        assert isinstance(result["compositionSnapshot"]["physicsScheduled"], bool)
+        assert result["gravitySnapshot"]["gravityEnabled"]
+        assert result["gravitySnapshot"]["gravityMapPresent"]
+        assert isinstance(result["gravitySnapshot"]["physicsScheduled"], bool)
         assert result["resetSnapshot"] == {
             "enabled": True, "angle": 0, "scheduled": True}
         assert result["resetResult"]["angle"] < 0
@@ -2309,199 +1682,6 @@ def test_skinning_gravity_lifecycle_refreshes_and_composes_with_motion(
         context.close()
 
 
-def test_skinning_continuous_motion_ramps_stops_reverses_and_cleans_up(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"ContinuousMotion": _payload("ContinuousMotion")})
-    try:
-        _open(page, "ContinuousMotion")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        result = page.evaluate("""async () => {
-          const THREE = await import('three');
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const motion = await import('./js/mesh/weight-motion-test.js');
-          const mesh = window.modViewer.activeMeshes[0];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          await experiment.loadSkinningWeights(mesh);
-          experiment.buildCandidateTree(mesh, 0);
-          experiment.setPhysicsAxis(mesh, 'Z');
-          experiment.setPhysicsContinuousLinearResponse(mesh, .35);
-          experiment.setPhysicsTargetAngle(mesh, 0);
-
-          const queuedFrames = [];
-          const originalRequestAnimationFrame = window.requestAnimationFrame;
-          const originalCancelAnimationFrame = window.cancelAnimationFrame;
-          window.requestAnimationFrame = callback => {
-            queuedFrames.push(callback);
-            return callback;
-          };
-          window.cancelAnimationFrame = callback => {
-            const index = queuedFrames.indexOf(callback);
-            if (index >= 0) queuedFrames.splice(index, 1);
-          };
-          const semanticVelocities = [];
-          window.addEventListener('mod-viewer-model-transform-changed', event => {
-            const velocity = event.detail?.kinematics?.linearVelocityWorld;
-            if (velocity) semanticVelocities.push([...velocity]);
-          });
-          const runFrame = timestamp => {
-            const callbacks = queuedFrames.splice(0);
-            if (!callbacks.length) throw new Error('Expected a queued frame.');
-            callbacks.forEach(callback => callback(timestamp));
-          };
-          const runUntilEmpty = timestamp => {
-            let current = timestamp;
-            let frames = 0;
-            while (queuedFrames.length && frames < 600) {
-              runFrame(current);
-              current += 16.7;
-              frames += 1;
-            }
-            return {current, frames};
-          };
-          const runFrames = (timestamp, count) => {
-            let current = timestamp;
-            for (let index = 0; index < count; index += 1) {
-              runFrame(current);
-              current += 16.7;
-            }
-            return current;
-          };
-
-          experiment.setPhysicsEnabled(mesh, true);
-          runUntilEmpty(0);
-          const radius = mesh.geometry.boundingSphere.radius;
-          const initialPosition = mesh.position.clone();
-          const initialGeometry = [...mesh.geometry.attributes.position.array];
-          motion.startContinuousMotion(window.modViewer.activeMeshes, {
-            axis: 'X', speedScale: .5, accelerationScale: 1.5,
-            radius, direction: 1,
-          });
-          runFrame(100);
-          const beforeImpulse = [...mesh.geometry.attributes.position.array];
-          runFrame(116.7);
-          const accelerationState = experiment.getSkinningState(mesh);
-          const accelerationDriver = motion.getContinuousMotionState();
-          const acceleration = {
-            velocity: accelerationDriver.velocity / radius,
-            target: accelerationDriver.targetVelocity / radius,
-            delta: accelerationState.lastRootLinearVelocityDelta,
-            events: accelerationState.continuousMotionEventCount,
-            discreteEvents: accelerationState.translationEventCount,
-            geometryUnchanged: mesh.geometry.attributes.position.array
-              .every((value, index) => value === beforeImpulse[index]),
-          };
-          let timestamp = runFrames(133.4, 30);
-          const constantState = experiment.getSkinningState(mesh);
-          const constantDriver = motion.getContinuousMotionState();
-          const constant = {
-            velocity: constantDriver.velocity / radius,
-            target: constantDriver.targetVelocity / radius,
-            delta: constantState.lastRootLinearVelocityDelta,
-            settled: constantState.physicsSettled,
-            events: constantState.continuousMotionEventCount,
-          };
-          const positionDuringMotion = mesh.position.clone();
-          motion.stopContinuousMotion();
-          let stopFrames = 0;
-          while (motion.isContinuousMotionRunning() && stopFrames < 100) {
-            runFrame(timestamp);
-            timestamp += 16.7;
-            stopFrames += 1;
-          }
-          const stoppedState = experiment.getSkinningState(mesh);
-          const stoppedDriver = motion.getContinuousMotionState();
-          const stopped = {
-            running: stoppedDriver.running,
-            velocity: stoppedDriver.velocity / radius,
-            target: stoppedDriver.targetVelocity / radius,
-            delta: stoppedState.lastRootLinearVelocityDelta,
-            finalVelocity: semanticVelocities.at(-1),
-            positionChanged: !mesh.position.equals(positionDuringMotion),
-          };
-          motion.startContinuousMotion(window.modViewer.activeMeshes, {
-            axis: 'X', speedScale: .5, accelerationScale: 1.5,
-            radius, direction: -1,
-          });
-          timestamp = runFrames(timestamp, 3);
-          const reverseDriver = motion.getContinuousMotionState();
-          const reverseState = experiment.getSkinningState(mesh);
-          const reverseBeforeSwitch = reverseDriver.velocity / radius;
-          const reverseDelta = [...reverseState.lastRootLinearVelocityDelta];
-          motion.startContinuousMotion(window.modViewer.activeMeshes, {
-            axis: 'X', speedScale: .5, accelerationScale: 1.5,
-            radius, direction: 1,
-          });
-          timestamp = runFrames(timestamp, 1);
-          const switchedDriver = motion.getContinuousMotionState();
-          const switched = {
-            before: reverseBeforeSwitch,
-            after: switchedDriver.velocity / radius,
-            target: switchedDriver.targetVelocity / radius,
-            reverseDelta,
-          };
-          motion.startContinuousMotion(window.modViewer.activeMeshes, {
-            axis: 'X', speedScale: .5, accelerationScale: 1.5,
-            radius, direction: 1,
-          });
-          experiment.setPhysicsEnabled(mesh, false);
-          const disabledState = experiment.getSkinningState(mesh);
-          const disabledDriver = motion.getContinuousMotionState();
-          const disabled = {
-            running: disabledDriver.running,
-            velocity: disabledDriver.velocity,
-            rootVelocity: disabledState.physicsRootLinearVelocityLocal,
-            position: mesh.position.toArray(),
-            baselineGeometry: mesh.geometry.attributes.position.array
-              .every((value, index) => value === initialGeometry[index]),
-            positionRetained: !mesh.position.equals(initialPosition),
-          };
-          motion.cancelContinuousMotionTest();
-          window.requestAnimationFrame = originalRequestAnimationFrame;
-          window.cancelAnimationFrame = originalCancelAnimationFrame;
-          URL.revokeObjectURL(url);
-          return {acceleration, constant, stopped, switched, disabled};
-        }""")
-        assert result["acceleration"]["velocity"] > 0
-        assert result["acceleration"]["target"] == pytest.approx(.5)
-        assert result["acceleration"]["delta"][0] > 0
-        assert result["acceleration"]["events"] >= 2
-        assert result["acceleration"]["discreteEvents"] == 0
-        assert result["acceleration"]["geometryUnchanged"]
-        assert result["constant"]["velocity"] == pytest.approx(.5, abs=.01)
-        assert result["constant"]["target"] == pytest.approx(.5)
-        assert result["constant"]["delta"] == pytest.approx([0, 0, 0])
-        assert result["constant"]["events"] > result["acceleration"]["events"]
-        assert result["constant"]["settled"]
-        assert not result["stopped"]["running"]
-        assert result["stopped"]["velocity"] == pytest.approx(0)
-        assert result["stopped"]["target"] == pytest.approx(0)
-        assert result["stopped"]["delta"][0] < 0
-        assert result["stopped"]["finalVelocity"] == pytest.approx([0, 0, 0])
-        assert result["stopped"]["positionChanged"]
-        assert result["switched"]["before"] < 0
-        assert result["switched"]["after"] < 0
-        assert result["switched"]["target"] == pytest.approx(.5)
-        assert result["switched"]["reverseDelta"][0] < 0
-        assert not result["disabled"]["running"]
-        assert result["disabled"]["velocity"] == pytest.approx(0)
-        assert result["disabled"]["rootVelocity"] == pytest.approx([0, 0, 0])
-        assert result["disabled"]["baselineGeometry"]
-        assert result["disabled"]["positionRetained"]
-    finally:
-        context.close()
 
 
 def test_skinning_joint_limits_lifecycle_preserves_state_and_cleanup(
@@ -2529,7 +1709,7 @@ def test_skinning_joint_limits_lifecycle_preserves_state_and_cleanup(
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
           await experiment.loadSkinningWeights(mesh);
-          experiment.buildCandidateTree(mesh, 0);
+          experiment.ensureCandidateForest(mesh);
           const state = experiment.getSkinningState(mesh);
           state.centerByBoneId = new Map([
             [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
@@ -2716,376 +1896,149 @@ def test_skinning_joint_limits_lifecycle_preserves_state_and_cleanup(
         context.close()
 
 
-def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
+
+
+def test_skinning_inspector_keeps_normal_controls_and_builds_hierarchy_lazily(
         edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url,
-                           {"Inspector": _payload("Inspector")})
+    context, page = _page(
+        edge_browser, frontend_url, {"SkinningInspector": _payload("SkinningInspector")})
     try:
-        _open(page, "Inspector")
+        _open(page, "SkinningInspector")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
         page.evaluate("""async () => {
           const bytes = new Uint8Array(48);
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .6, .4, .3, .7]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.__skinPreviewRequests = 0;
-          window.__copiedGraphDiagnostics = '';
+          window.pywebview.api.get_skinning_preview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test',
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
           Object.defineProperty(navigator, 'clipboard', {
             configurable: true,
-            value: {writeText: async text => {
-              window.__copiedGraphDiagnostics = text;
-            }},
+            value: {
+              writeText: async value => {
+                window.__copiedSkinningDiagnostics = value;
+              },
+            },
           });
-          window.pywebview.api.get_skinning_preview = async () => {
-            window.__skinPreviewRequests += 1;
-            return {
-              status: 'ok', vertex_count: 3, influence_count: 2,
-              bone_ids: [0, 1, 2], encoding: 'test',
-              data: {
-                url, length: 48,
-                indices: {offset: 0, length: 24, type: 'u32'},
-                weights: {offset: 24, length: 24, type: 'f32'},
-              }, diagnostics: {},
-            };
-          };
-          const {selectMesh} = await import('./js/scene/selection.js');
-          selectMesh(window.modViewer.activeMeshes[0]);
         }""")
+        page.locator(".draw-item").click()
+        page.locator(".inspector-skinning-load").wait_for()
         page.locator(".inspector-skinning-load").click()
-        page.wait_for_function("""() => {
-          const button = document.querySelector('.inspector-skinning-load');
-          return button?.textContent === 'Weights loaded';
-        }""")
-        ids = page.locator(".inspector-skinning-chain-ids")
-        ids.fill("0,1")
-        page.wait_for_function("""() => {
-          const stats = document.querySelector('.inspector-skinning-coverage-stats');
-          return stats && !stats.hidden;
-        }""")
-        assert page.locator(".inspector-skinning-coverage").inner_text()
-        graph = page.locator(".inspector-skinning-influence-graph")
-        assert "Influence Graph" in graph.inner_text()
-        assert page.locator(".inspector-skinning-neighbor-row").count() == 2
-        page.locator(".inspector-skinning-copy-graph").click()
-        page.wait_for_function(
-            "() => document.querySelector('.inspector-skinning-copy-status')"
-            ".textContent === 'Graph diagnostics copied.'")
-        copied = page.evaluate("window.__copiedGraphDiagnostics")
-        assert '"rootId"' in copied
-        assert '"nodes"' in copied
-        assert '"topRelationships"' in copied
-        assert '"candidateTree"' in copied
-        assert '"weightedCenter"' in copied
-        graph_button = page.locator(
-            ".inspector-skinning-influence-graph-show")
-        graph_button.click()
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          return getSkinningState(window.modViewer.activeMeshes[0])
-            .influenceVisualizationMode === 'graph';
-        }""")
-        root = page.locator(".inspector-skinning-tree-root")
-        root.select_option("0")
-        page.locator(".inspector-skinning-build-tree").click()
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          return !!getSkinningState(window.modViewer.activeMeshes[0])
-            .candidateTree;
-        }""")
-        page.locator(".inspector-skinning-copy-graph").click()
-        page.wait_for_function(
-            "() => document.querySelector('.inspector-skinning-copy-status')"
-            ".textContent === 'Graph diagnostics copied.'")
-        copied_tree = page.evaluate(
-            "() => JSON.parse(window.__copiedGraphDiagnostics)")
-        assert copied_tree["candidateTree"]["rootId"] == 0
-        assert copied_tree["candidateTree"]["edges"]
-        assert copied_tree["candidateTree"]["orientation"]["parentById"]
-        assert "Root 0" in page.locator(
-            ".inspector-skinning-tree-output").inner_text()
-        forest = page.locator(".inspector-skinning-forest")
-        assert "1 component" in forest.locator(
-            ".inspector-skinning-forest-summary").inner_text()
-        forest_angle = forest.locator(".inspector-skinning-forest-angle")
-        forest_angle.evaluate("""node => {
-          node.value = '20';
-          node.dispatchEvent(new Event('input', {bubbles: true}));
-        }""")
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return state.deformationMode === 'forest'
-            && state.forestAngle === 20
-            && state.forestTransforms?.size === 3;
-        }""")
-        forest.locator(".inspector-skinning-copy-forest").click()
-        page.wait_for_function(
-            "() => document.querySelector('.inspector-skinning-forest-copy-status')"
-            ".textContent === 'Forest diagnostics copied.'")
-        copied_forest = page.evaluate(
-            "() => JSON.parse(window.__copiedGraphDiagnostics)")
-        assert copied_forest["candidateForest"]["primaryRootId"] == 0
-        assert copied_forest["candidateForest"]["components"]
-        assert copied_forest["candidateForest"]["angle"] == 20
-        before_root_transform = page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          return [...getSkinningState(window.modViewer.activeMeshes[0])
-            .forestTransforms.get(0).elements];
-        }""")
-        root.select_option("1")
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return state.candidateRootId === 1
-            && state.deformationMode === 'forest'
-            && state.forestTransforms?.size === 3;
-        }""")
-        after_root_transform = page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          return [...getSkinningState(window.modViewer.activeMeshes[0])
-            .forestTransforms.get(0).elements];
-        }""")
-        assert before_root_transform != pytest.approx(after_root_transform)
-        page.locator(".inspector-skinning-build-tree").click()
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return state.candidateRootId === 1
-            && state.deformationMode === 'forest'
-            && state.forestTransforms?.size === 3;
-        }""")
-        physics = page.locator(".inspector-skinning-physics")
-        assert "Spring Physics Prototype" in physics.inner_text()
-        target = physics.locator(".inspector-skinning-physics-target-angle")
-        target.evaluate("""node => {
-          node.value = '25';
-          node.dispatchEvent(new Event('input', {bubbles: true}));
-        }""")
-        frequency = physics.locator(".inspector-skinning-physics-frequency")
-        frequency.fill("3")
-        frequency.dispatch_event("change")
-        damping = physics.locator(".inspector-skinning-physics-damping")
-        damping.fill("0.5")
-        damping.dispatch_event("change")
-        motion = physics.locator(
-            ".inspector-skinning-physics-motion-strength")
-        motion.evaluate("""node => {
-          node.value = '0.6';
-          node.dispatchEvent(new Event('input', {bubbles: true}));
-        }""")
-        linear = physics.locator(
-            ".inspector-skinning-physics-linear-strength")
-        linear.evaluate("""node => {
-          node.value = '0.45';
-          node.dispatchEvent(new Event('input', {bubbles: true}));
-        }""")
-        continuous_response = physics.locator(
-            ".inspector-skinning-physics-continuous-response")
-        continuous_response.evaluate("""node => {
-          node.value = '0.55';
-          node.dispatchEvent(new Event('input', {bubbles: true}));
-        }""")
-        enable = physics.locator(".inspector-skinning-physics-enable")
-        enable.check()
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return state.physicsEnabled && state.deformationMode === 'physics'
-            && state.physicsTargetAngle === 25
-            && state.physicsFrequencyHz === 3
-            && state.physicsDampingRatio === .5
-            && state.physicsMotionStrength === .6
-            && state.physicsLinearMotionStrength === .45
-            && state.physicsContinuousLinearResponse === .55;
-        }""")
-        constraints = physics.locator(
-            ".inspector-skinning-physics-constraints")
-        assert "Rest Constraints" in constraints.inner_text()
-        assert "Enable Joint Limits" in constraints.inner_text()
-        max_bend = constraints.locator(
-            ".inspector-skinning-physics-max-bend")
-        assert max_bend.get_attribute("min") == "0"
-        assert max_bend.get_attribute("max") == "90"
-        constraints_enable = constraints.locator(
-            ".inspector-skinning-physics-constraints-enable")
-        constraints_enable.check()
-        max_bend.evaluate("""node => {
-          node.value = '30';
-          node.dispatchEvent(new Event('input', {bubbles: true}));
-        }""")
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return state.physicsConstraintsEnabled
-            && state.physicsMaxBendDegrees === 30
-            && state.physicsJointLimits instanceof Map
-            && state.physicsJointLimits.size === 2;
-        }""")
-        assert "At Limit" in constraints.locator(
-            ".inspector-skinning-physics-constraints-diagnostic").inner_text()
-        gravity = physics.locator(".inspector-skinning-physics-gravity")
-        assert "Direction Down (-Y)" in gravity.inner_text()
-        gravity_scale = gravity.locator(
-            ".inspector-skinning-physics-gravity-scale")
-        gravity_scale.evaluate("""node => {
-          node.value = '0.7';
-          node.dispatchEvent(new Event('input', {bubbles: true}));
-        }""")
-        gravity_enable = gravity.locator(
-            ".inspector-skinning-physics-gravity-enable")
-        gravity_enable.check()
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return state.physicsGravityEnabled
-            && state.physicsGravityScale === .7
-            && state.physicsGravityAccelerations instanceof Map
-            && state.physicsGravityDiagnostics;
-        }""")
-        assert gravity.locator(
-            ".inspector-skinning-physics-gravity-diagnostic").inner_text()
-        gravity_enable.uncheck()
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          return !getSkinningState(window.modViewer.activeMeshes[0])
-            .physicsGravityEnabled;
-        }""")
-        translation = physics.locator(
-            ".inspector-skinning-physics-translation")
-        assert "Model Translation Test" in translation.inner_text()
-        assert translation.locator(
-            ".inspector-skinning-physics-translation-step").get_attribute("min") == "0.01"
-        continuous = physics.locator(
-            ".inspector-skinning-physics-continuous")
-        assert "Continuous Translation Test" in continuous.inner_text()
-        assert continuous.locator(
-            ".inspector-skinning-physics-continuous-speed").input_value() == "0.5"
-        assert continuous.locator(
-            ".inspector-skinning-physics-continuous-acceleration"
-        ).input_value() == "1.5"
-        assert continuous.locator(
-            ".inspector-skinning-physics-continuous-stop").is_disabled()
-        acceleration = continuous.locator(
-            ".inspector-skinning-physics-continuous-acceleration")
-        acceleration.evaluate("""node => {
-          node.value = '2.00';
-          node.dispatchEvent(new Event('input', {bubbles: true}));
-        }""")
-        assert physics.locator(
-            ".inspector-skinning-physics-target-angle").is_enabled()
-        assert continuous.locator(
-            ".inspector-skinning-physics-continuous-plus").is_enabled()
-        translation.locator(
-            ".inspector-skinning-physics-translation-plus").click()
-        physics.locator(".inspector-skinning-physics-kick-plus").click()
-        physics.locator(".inspector-skinning-copy-physics").click()
-        page.wait_for_function(
-            "() => document.querySelector('.inspector-skinning-physics-copy-status')"
-            ".textContent === 'Physics diagnostics copied.'")
-        copied_physics = page.evaluate(
-            "() => JSON.parse(window.__copiedGraphDiagnostics)")
-        assert copied_physics["candidateForest"]["physics"]["enabled"]
-        assert copied_physics["candidateForest"]["physics"]["targetAngle"] == 25
-        assert copied_physics["candidateForest"]["physics"]["motionResponse"] == .6
-        assert copied_physics["candidateForest"]["physics"]["linearResponse"] == .45
-        assert copied_physics["candidateForest"]["physics"][
-            "continuousLinearResponse"] == .55
-        copied_constraints = copied_physics["candidateForest"]["physics"][
-            "constraints"]
-        assert copied_constraints["enabled"] is True
-        assert copied_constraints["maxComponentBend"] == 30
-        assert copied_constraints["limitedJointCount"] == 2
-        assert copied_constraints["components"]
-        assert copied_physics["candidateForest"]["physics"]["gravity"][
-            "enabled"] is False
-        assert copied_physics["candidateForest"]["physics"]["gravity"][
-            "scale"] == .7
-        assert copied_physics["candidateForest"]["physics"]["lastRootAngularDelta"] == 0
-        assert copied_physics["candidateForest"]["physics"]["lastProjectedAngularDelta"] == 0
-        assert copied_physics["candidateForest"]["physics"]["motionEventCount"] == 1
-        assert copied_physics["candidateForest"]["physics"]["translationEventCount"] == 1
-        physics.locator(".inspector-skinning-physics-reset").click()
-        page.wait_for_function("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const {isPhysicsScheduled} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return state.physicsEnabled && state.physicsTargetAngle === 0
-            && state.physicsSettled
-            && !isPhysicsScheduled(window.modViewer.activeMeshes[0])
-            && [...state.physicsState.joints.values()].every(joint =>
-              joint.angle === 0 && joint.angularVelocity === 0);
-        }""")
-        enable.uncheck()
-        page.wait_for_function("""async () => {
-          const {getSkinningState, isPhysicsScheduled} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return !state.physicsEnabled && state.deformationMode === null
-            && state.physicsState === null
-            && !isPhysicsScheduled(window.modViewer.activeMeshes[0]);
-        }""")
-        page.locator(".inspector-skinning-tree-show").click()
-        assert page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          return getSkinningState(window.modViewer.activeMeshes[0])
-            .influenceVisualizationMode;
-        }""") == "tree"
-        assert page.locator(".inspector-skinning-missing-row").count() == 1
-        assert page.locator(".inspector-skinning-add-missing").is_visible()
-        residual = page.locator(".inspector-skinning-residual")
-        assert residual.is_enabled()
-        residual.click()
-        assert page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          return getSkinningState(window.modViewer.activeMeshes[0]).heatmapMode;
-        }""") == "chain-residual"
-        page.locator(".inspector-skinning-missing-row").click()
-        selected = page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return {bone: state.selectedBone, mode: state.heatmapMode};
-        }""")
-        assert selected == {"bone": 2, "mode": "bone"}
-        ids.fill("0,1")
-        page.locator(".inspector-skinning-add-missing").click()
         page.wait_for_function("""() =>
-          document.querySelector('.inspector-skinning-chain-ids')?.value
-            === '0,1,2'""")
-        final_state = page.evaluate("""async () => {
+          document.querySelector('.inspector-skinning-load')?.textContent
+            === 'Weights loaded'
+        """)
+
+        loaded = page.evaluate("""async () => {
           const {getSkinningState} =
             await import('./js/mesh/weight-experiment.js');
           const state = getSkinningState(window.modViewer.activeMeshes[0]);
           return {
-            chainText: state.chainText,
-            maxResidual: state.chainCoverage.maxResidual,
-            missingRows: document.querySelectorAll(
-              '.inspector-skinning-missing-row').length,
-            addVisible: !document.querySelector(
-              '.inspector-skinning-add-missing').hidden,
-            previewRequests: window.__skinPreviewRequests,
+            loaded: state.loaded,
+            nodes: state.influenceNodes?.length || 0,
+            graph: state.influenceGraph,
+            forest: state.candidateForest,
+            title: document.querySelector('.inspector-skinning-title')?.textContent,
+            stats: document.querySelector('.inspector-skinning-influence-stats')
+              ?.textContent || '',
+            oldControls: [...document.querySelectorAll(
+              '.inspector-skinning-chain, .inspector-skinning-translation, '
+                + '.inspector-skinning-kick')].length,
           };
         }""")
-        assert final_state["chainText"] == "0,1,2"
-        assert final_state["maxResidual"] == pytest.approx(0)
-        assert final_state["missingRows"] == 0
-        assert not final_state["addVisible"]
-        assert final_state["previewRequests"] == 1
+        assert loaded["loaded"]
+        assert loaded["nodes"] == 3
+        assert loaded["graph"] is None
+        assert loaded["forest"] is None
+        assert loaded["title"] == "Skin Weights"
+        assert "Affected vertices" in loaded["stats"]
+        assert loaded["oldControls"] == 0
+
+        page.locator(".inspector-skinning-center").click()
+        centered = page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return {
+            mode: state.influenceVisualizationMode,
+            graph: state.influenceGraph,
+            forest: state.candidateForest,
+          };
+        }""")
+        assert centered == {"mode": "center", "graph": None, "forest": None}
+
+        page.locator(".inspector-skinning-physics-enable").check()
+        physics_built = page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return {
+            enabled: state.physicsEnabled,
+            graph: !!state.influenceGraph,
+            forest: !!state.candidateForest,
+            mode: state.deformationMode,
+          };
+        }""")
+        assert physics_built == {
+            "enabled": True, "graph": True, "forest": True, "mode": "physics"}
+
+        page.locator(".inspector-skinning-hierarchy-show").click()
+        page.wait_for_function("""() =>
+          document.querySelector('.inspector-skinning-hierarchy-show')
+            ?.textContent === 'Hide Hierarchy'
+        """)
+        page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          window.__skinGraphBeforeRoot =
+            getSkinningState(window.modViewer.activeMeshes[0]).influenceGraph;
+        }""")
+        page.locator(".inspector-skinning-hierarchy-root").select_option("1")
+        page.wait_for_function("""() =>
+          document.querySelector('.inspector-skinning-hierarchy-root')?.value === '1'
+        """)
+        hierarchy = page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return {
+            root: state.candidateTree?.rootId,
+            graphReused: state.influenceGraph === window.__skinGraphBeforeRoot,
+            summary: document.querySelector(
+              '.inspector-skinning-hierarchy-summary')?.textContent || '',
+            output: document.querySelector(
+              '.inspector-skinning-hierarchy-output')?.textContent || '',
+          };
+        }""")
+        assert hierarchy["root"] == 1
+        assert hierarchy["graphReused"]
+        assert "Inferred influence hierarchy" in hierarchy["summary"]
+        assert "Root 1" in hierarchy["output"]
+
+        page.locator(".inspector-skinning-copy-skinning").click()
+        page.wait_for_function(
+            "() => document.querySelector('.inspector-skinning-copy-status')"
+            "?.textContent.includes('copied')")
+        copied = page.evaluate("""() => JSON.parse(
+          window.__copiedSkinningDiagnostics || '{}')""")
+        assert copied["skinning"]["boneIds"] == [0, 1, 2]
+        assert copied["hierarchy"]["rootId"] == 1
+        assert copied["physics"]["enabled"]
+
+        labels = page.locator(".inspector-skinning-section").inner_text()
+        assert "Inferred Influence Hierarchy" in labels
+        assert "Secondary Motion" in labels
+        assert "Kick" not in labels
+        assert "Move Axis" not in labels
+        assert "Build Candidate Tree" not in labels
+        page.locator(".inspector-skinning-physics-enable").uncheck()
     finally:
         context.close()
 

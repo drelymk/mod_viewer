@@ -5,9 +5,7 @@ import * as THREE from 'three';
 import { invalidateCharacterShadowGeometry } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import {
-  applyWeightedRotation, buildChainTransforms, buildForestTransforms,
   buildForestTransformsFromLocalAngles, applyWeightedTransformDeformation,
-  applyWeightedChainDeformation,
 } from './weight-deformation.js';
 import {
   DEFAULT_PHYSICS_DAMPING_RATIO, DEFAULT_PHYSICS_FREQUENCY_HZ,
@@ -17,19 +15,14 @@ import {
   applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
   applyJointLimitsToAngles,
-  applyPhysicsJointLimits,
-  applyPhysicsKick as applyPhysicsKickState, initializePhysicsState,
+  applyPhysicsJointLimits, initializePhysicsState,
   buildGravityAngularAccelerations, buildPhysicsConstraintDiagnostics,
   buildPhysicsEquilibriumAngles, buildPhysicsJointLimits,
   isPhysicsSettled, physicsAngleMap, resetPhysicsState,
   stepSpringPhysics,
 } from './weight-physics.js';
-import { cancelContinuousMotionTest } from './weight-motion-test.js';
-
 export {
-  applyWeightedRotation, buildChainTransforms, buildForestTransforms,
   buildForestTransformsFromLocalAngles, applyWeightedTransformDeformation,
-  applyWeightedChainDeformation,
 } from './weight-deformation.js';
 
 export {
@@ -49,26 +42,14 @@ export {
   buildPhysicsTargetAngles, initializePhysicsState, isPhysicsSettled,
   physicsAngleMap, resetPhysicsState, stepSpringPhysics,
 } from './weight-physics.js';
-export {applyPhysicsKick as applyPhysicsKickSolver} from './weight-physics.js';
-
 const states = new WeakMap();
 let activeExperimentHelperMesh = null;
 const PHYSICS_STEP = 1 / 120;
 const MAX_PHYSICS_FRAME_DELTA = 0.05;
 const MAX_PHYSICS_SUBSTEPS = 6;
-const PHYSICS_KICK_SPEED = Math.PI;
 let physicsFrameId = null;
 const activePhysicsMeshes = new Set();
 
-const FULL_COVERAGE_THRESHOLD = 0.9999;
-const COVERAGE_99_THRESHOLD = 0.99;
-const COVERAGE_95_THRESHOLD = 0.95;
-const AUTHOR_WEIGHT_HIGH_THRESHOLD = 1.001;
-const AUTHOR_WEIGHT_LOW_THRESHOLD = 0.999;
-export const SIGNIFICANT_RESIDUAL_RATIO = 0.02;
-export const SIGNIFICANT_VERTEX_WEIGHT = 0.25;
-export const INFLUENCE_GRAPH_CONTAINMENT_THRESHOLD = 0.05;
-export const INFLUENCE_GRAPH_TOP_K = 4;
 export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
 export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
 
@@ -95,15 +76,7 @@ function newState() {
     indices: null,
     weights: null,
     selectedBone: null,
-    axis: 'Z',
-    angle: 0,
-    chainText: '',
-    chainIds: [],
-    chainAxis: 'Z',
-    chainAngle: 0,
     deformationMode: null,
-    forestAxis: 'Z',
-    forestAngle: 0,
     physicsEnabled: false,
     physicsAxis: 'Z',
     physicsTargetAngle: 0,
@@ -133,22 +106,16 @@ function newState() {
     lastRootLinearVelocityWorld: [0, 0, 0],
     lastRootLinearVelocityLocal: [0, 0, 0],
     lastRootLinearVelocityDelta: [0, 0, 0],
-    continuousMotionEventCount: 0,
     physicsState: null,
     physicsTransforms: null,
     physicsAccumulator: 0,
     physicsLastTimestamp: null,
     physicsSettled: true,
-    chainError: null,
-    chainHelpersVisible: false,
-    chainHelpers: null,
-    chainCoverage: null,
-    missingInfluences: [],
+    influenceNodes: null,
     influenceGraph: null,
     candidateRootId: null,
     candidateTree: null,
     candidateForest: null,
-    forestTransforms: null,
     influenceVisualizationMode: null,
     influenceVisualization: null,
     baselinePositions: null,
@@ -159,7 +126,6 @@ function newState() {
     diagnostics: null,
     encoding: null,
     centerByBoneId: null,
-    centers: new Map(),
   };
 }
 
@@ -189,7 +155,6 @@ function clearMotionDiagnostics(state) {
   state.lastRootLinearVelocityWorld = [0, 0, 0];
   state.lastRootLinearVelocityLocal = [0, 0, 0];
   state.lastRootLinearVelocityDelta = [0, 0, 0];
-  state.continuousMotionEventCount = 0;
 }
 
 function motionAxisVector(axis) {
@@ -384,7 +349,6 @@ function handleModelTransformChanged(event) {
       state.lastRootLinearVelocityWorld = linearVelocityWorld;
       state.lastRootLinearVelocityLocal = linearVelocityLocal;
       state.lastRootLinearVelocityDelta = deltaVelocityLocal;
-      state.continuousMotionEventCount += 1;
       const velocityDiagnostics = {};
       applyReferenceFrameLinearVelocityDelta(
         state.physicsState, state.candidateForest, state.centerByBoneId,
@@ -449,7 +413,6 @@ export function isPhysicsScheduled(mesh) {
 }
 
 function stopPhysics(mesh, state) {
-  cancelContinuousMotionTest();
   removePhysicsMesh(mesh);
   state.physicsEnabled = false;
   state.physicsState = null;
@@ -576,200 +539,10 @@ export function buildBoneIds(indices, weights, influenceCount) {
   return [...result].sort((a, b) => a - b);
 }
 
-export function parseChainIds(text, validBoneIds) {
-  if (typeof text !== 'string' || !text.trim()) {
-    throw new Error('A chain requires at least 2 unique bone IDs.');
-  }
-  const valid = new Set([...validBoneIds || []].map(Number));
-  const ids = [];
-  for (const raw of text.split(',')) {
-    const token = raw.trim();
-    if (!/^\d+$/.test(token)) {
-      throw new Error('Chain IDs must be comma-separated integer IDs.');
-    }
-    const id = Number(token);
-    if (!Number.isSafeInteger(id)) {
-      throw new Error('Chain IDs must be comma-separated integer IDs.');
-    }
-    if (!valid.has(id)) throw new Error(`Unknown Bone ID: ${id}`);
-    if (ids.includes(id)) throw new Error(`Duplicate Bone ID: ${id}`);
-    ids.push(id);
-  }
-  if (ids.length < 2) {
-    throw new Error('A chain requires at least 2 unique bone IDs.');
-  }
-  return ids;
-}
-
-function chainMembership(chainIds) {
-  return chainIds instanceof Set
-    ? chainIds
-    : new Set([...chainIds || []].map(Number));
-}
-
 function compactVertexCount(indices, weights, influenceCount) {
   if (!indices || !weights || !Number.isInteger(influenceCount)
       || influenceCount <= 0) return 0;
   return Math.floor(Math.min(indices.length, weights.length) / influenceCount);
-}
-
-function authoredWeightForVertex(indices, weights, influenceCount, vertexIndex) {
-  const start = vertexIndex * influenceCount;
-  let total = 0;
-  for (let influence = 0; influence < influenceCount; influence += 1) {
-    const weight = weights[start + influence];
-    if (Number.isFinite(weight) && weight > 0) total += weight;
-  }
-  return total;
-}
-
-function chainWeightForVertexWithMembership(
-    indices, weights, influenceCount, vertexIndex, membership) {
-  const start = vertexIndex * influenceCount;
-  let total = 0;
-  for (let influence = 0; influence < influenceCount; influence += 1) {
-    const weight = weights[start + influence];
-    if (membership.has(Number(indices[start + influence]))
-        && Number.isFinite(weight) && weight > 0) total += weight;
-  }
-  return total;
-}
-
-export function chainWeightForVertex(
-    indices, weights, influenceCount, vertexIndex, chainIds) {
-  if (!indices || !weights || !Number.isInteger(influenceCount)
-      || influenceCount <= 0 || !Number.isInteger(vertexIndex)
-      || vertexIndex < 0) return 0;
-  return chainWeightForVertexWithMembership(
-    indices, weights, influenceCount, vertexIndex, chainMembership(chainIds));
-}
-
-export function residualWeightForVertex(
-    indices, weights, influenceCount, vertexIndex, chainIds) {
-  return Math.max(0, 1 - chainWeightForVertex(
-    indices, weights, influenceCount, vertexIndex, chainIds));
-}
-
-export function computeChainCoverage(
-    indices, weights, influenceCount, chainIds, positions = null) {
-  const vertexCount = compactVertexCount(indices, weights, influenceCount);
-  const membership = chainMembership(chainIds);
-  let coverageTotal = 0;
-  let minCoverage = vertexCount ? Infinity : 0;
-  let maxResidual = 0;
-  let totalResidual = 0;
-  let residualWeightTotal = 0;
-  let residualX = 0;
-  let residualY = 0;
-  let residualZ = 0;
-  let fullyCoveredVertices = 0;
-  let covered99Vertices = 0;
-  let covered95Vertices = 0;
-  let lowCoverageVertices = 0;
-  let overweightVertices = 0;
-  let underweightVertices = 0;
-
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const coverage = chainWeightForVertexWithMembership(
-      indices, weights, influenceCount, vertex, membership);
-    const residual = Math.max(0, 1 - coverage);
-    const authoredWeight = authoredWeightForVertex(
-      indices, weights, influenceCount, vertex);
-    coverageTotal += coverage;
-    minCoverage = Math.min(minCoverage, coverage);
-    maxResidual = Math.max(maxResidual, residual);
-    totalResidual += residual;
-    if (coverage >= FULL_COVERAGE_THRESHOLD) fullyCoveredVertices += 1;
-    if (coverage >= COVERAGE_99_THRESHOLD) covered99Vertices += 1;
-    if (coverage >= COVERAGE_95_THRESHOLD) covered95Vertices += 1;
-    if (coverage < COVERAGE_95_THRESHOLD) lowCoverageVertices += 1;
-    if (authoredWeight > AUTHOR_WEIGHT_HIGH_THRESHOLD) overweightVertices += 1;
-    if (authoredWeight < AUTHOR_WEIGHT_LOW_THRESHOLD) underweightVertices += 1;
-    if (positions && positions.length >= vertex * 3 + 3 && residual > 0) {
-      const offset = vertex * 3;
-      residualX += positions[offset] * residual;
-      residualY += positions[offset + 1] * residual;
-      residualZ += positions[offset + 2] * residual;
-      residualWeightTotal += residual;
-    }
-  }
-
-  if (residualWeightTotal > 0) {
-    residualX /= residualWeightTotal;
-    residualY /= residualWeightTotal;
-    residualZ /= residualWeightTotal;
-  }
-  return {
-    vertexCount,
-    averageCoverage: vertexCount ? coverageTotal / vertexCount : 0,
-    minCoverage,
-    maxResidual,
-    totalResidual,
-    fullyCoveredVertices,
-    covered99Vertices,
-    covered95Vertices,
-    lowCoverageVertices,
-    overweightVertices,
-    underweightVertices,
-    residualCenter: [residualX, residualY, residualZ],
-  };
-}
-
-export function rankMissingInfluences(
-    indices, weights, influenceCount, chainIds, positions = null) {
-  const vertexCount = compactVertexCount(indices, weights, influenceCount);
-  const membership = chainMembership(chainIds);
-  const entries = new Map();
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const chainWeight = chainWeightForVertexWithMembership(
-      indices, weights, influenceCount, vertex, membership);
-    const residualRegion = chainWeight < COVERAGE_95_THRESHOLD;
-    const start = vertex * influenceCount;
-    const vertexWeights = new Map();
-    for (let influence = 0; influence < influenceCount; influence += 1) {
-      const boneId = Number(indices[start + influence]);
-      const weight = weights[start + influence];
-      if (membership.has(boneId) || !Number.isFinite(weight) || weight <= 0) {
-        continue;
-      }
-      vertexWeights.set(boneId, (vertexWeights.get(boneId) || 0) + weight);
-    }
-    vertexWeights.forEach((weight, boneId) => {
-      const entry = entries.get(boneId) || {
-        boneId,
-        totalWeight: 0,
-        residualContribution: 0,
-        affectedVertexCount: 0,
-        maxVertexWeight: 0,
-      };
-      entry.totalWeight += weight;
-      entry.affectedVertexCount += 1;
-      entry.maxVertexWeight = Math.max(entry.maxVertexWeight, weight);
-      if (residualRegion) entry.residualContribution += weight;
-      if (positions && positions.length >= vertex * 3 + 3) {
-        const offset = vertex * 3;
-        entry.centerX = (entry.centerX || 0) + positions[offset] * weight;
-        entry.centerY = (entry.centerY || 0) + positions[offset + 1] * weight;
-        entry.centerZ = (entry.centerZ || 0) + positions[offset + 2] * weight;
-        entry.centerWeight = (entry.centerWeight || 0) + weight;
-      }
-      entries.set(boneId, entry);
-    });
-  }
-  return [...entries.values()]
-    .map(entry => {
-      const weightedCenter = entry.centerWeight > 0
-        ? [entry.centerX / entry.centerWeight,
-          entry.centerY / entry.centerWeight,
-          entry.centerZ / entry.centerWeight]
-        : [0, 0, 0];
-      const {
-        centerX, centerY, centerZ, centerWeight, ...publicEntry
-      } = entry;
-      return {...publicEntry, weightedCenter};
-    })
-    .sort((a, b) => b.residualContribution - a.residualContribution
-      || b.totalWeight - a.totalWeight || a.boneId - b.boneId);
 }
 
 function positiveInfluencesForVertex(
@@ -1244,7 +1017,6 @@ function captureBaseline(mesh, state) {
   state.baselinePositions = new Float32Array(position.array);
   state.baselineNormals = normal ? new Float32Array(normal.array) : null;
   state.originalMaterial = mesh.material;
-  state.centers.clear();
 }
 
 function restoreNormals(mesh, state) {
@@ -1271,63 +1043,8 @@ function vectorFromCenter(center) {
   );
 }
 
-function centerFor(mesh, state) {
-  return centerForBone(mesh, state, state.selectedBone);
-}
-
-function centerForBone(mesh, state, boneId) {
-  if (!state.centers.has(boneId)) {
-    state.centers.set(boneId, weightedCenter(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, boneId));
-  }
-  return state.centers.get(boneId);
-}
-
-function chainCentersFor(mesh, state) {
-  return state.chainIds.map(boneId => centerForBone(mesh, state, boneId));
-}
-
-function refreshChainCoverage(state) {
-  if (state.chainIds.length < 2) {
-    state.chainCoverage = null;
-    state.missingInfluences = [];
-    return;
-  }
-  state.chainCoverage = computeChainCoverage(
-    state.indices, state.weights, state.influenceCount, state.chainIds,
-    state.baselinePositions);
-  state.missingInfluences = rankMissingInfluences(
-    state.indices, state.weights, state.influenceCount, state.chainIds,
-    state.baselinePositions);
-}
-
-function removeVirtualChainHelpers(mesh, state) {
-  const helpers = state?.chainHelpers;
-  if (!helpers) {
-    if (activeExperimentHelperMesh === mesh
-        && !state?.influenceVisualization) {
-      activeExperimentHelperMesh = null;
-    }
-    if (state) state.chainHelpersVisible = false;
-    return;
-  }
-  helpers.group.removeFromParent();
-  helpers.markerGeometry.dispose();
-  helpers.markerMaterial.dispose();
-  helpers.lineGeometry.dispose();
-  helpers.lineMaterial.dispose();
-  state.chainHelpers = null;
-  state.chainHelpersVisible = false;
-  if (activeExperimentHelperMesh === mesh
-      && !state.influenceVisualization) {
-    activeExperimentHelperMesh = null;
-  }
-}
-
 function removeExperimentHelpers(mesh, state) {
   if (!state) return;
-  removeVirtualChainHelpers(mesh, state);
   removeInfluenceVisualization(state);
   if (activeExperimentHelperMesh === mesh) {
     activeExperimentHelperMesh = null;
@@ -1342,61 +1059,11 @@ function activateExperimentHelpers(mesh) {
   activeExperimentHelperMesh = mesh;
 }
 
-function activateVirtualChain(mesh) {
-  activateExperimentHelpers(mesh);
-}
-
-function createVirtualChainHelpers(mesh, state) {
-  const radius = Math.max(
-    (mesh.geometry.boundingSphere?.radius || 1) * 0.012, 0.001);
-  const group = new THREE.Group();
-  group.name = 'Experimental Virtual Chain';
-  const markerGeometry = new THREE.SphereGeometry(1, 8, 6);
-  const markerMaterial = new THREE.MeshBasicMaterial({color: 0xffb86c});
-  const markers = state.chainIds.map(boneId => {
-    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-    marker.scale.setScalar(radius);
-    marker.userData.virtualBoneId = boneId;
-    group.add(marker);
-    return marker;
-  });
-  const lineGeometry = new THREE.BufferGeometry();
-  lineGeometry.setAttribute('position', new THREE.BufferAttribute(
-    new Float32Array(state.chainIds.length * 3), 3));
-  const lineMaterial = new THREE.LineBasicMaterial({color: 0xff7b72});
-  const line = new THREE.Line(lineGeometry, lineMaterial);
-  group.add(line);
-  mesh.add(group);
-  state.chainHelpers = {
-    group, markers, line, markerGeometry, markerMaterial,
-    lineGeometry, lineMaterial,
-  };
-  return state.chainHelpers;
-}
-
-function updateVirtualChainHelpers(mesh, state) {
-  const helpers = state.chainHelpers;
-  if (!helpers || state.chainIds.length < 2) return;
-  const centers = chainCentersFor(mesh, state);
-  const transforms = buildChainTransforms(
-    centers, state.chainAxis, state.chainAngle);
-  const linePositions = helpers.line.geometry.attributes.position;
-  centers.forEach((center, index) => {
-    const point = vectorFromCenter(center).applyMatrix4(transforms[index]);
-    helpers.markers[index].position.copy(point);
-    linePositions.setXYZ(index, point.x, point.y, point.z);
-  });
-  linePositions.needsUpdate = true;
-  helpers.line.geometry.computeBoundingSphere();
-}
-
 function transformedInfluenceCenter(node, state, mode) {
   const point = vectorFromCenter(node.weightedCenter);
   if (mode === 'tree') {
-    const transforms = state.deformationMode === 'forest'
-      ? state.forestTransforms
-      : state.deformationMode === 'physics'
-        ? state.physicsTransforms : null;
+    const transforms = state.deformationMode === 'physics'
+      ? state.physicsTransforms : null;
     const transform = transforms?.get(node.boneId);
     if (transform) point.applyMatrix4(transform);
   }
@@ -1406,9 +1073,10 @@ function transformedInfluenceCenter(node, state, mode) {
 function buildInfluenceGraph(mesh, state) {
   if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
   const radius = Number(mesh.geometry.boundingSphere?.radius);
-  const nodes = buildInfluenceNodes(
+  const nodes = state.influenceNodes || buildInfluenceNodes(
     state.baselinePositions, state.indices, state.weights,
     state.influenceCount, state.boneIds);
+  state.influenceNodes = nodes;
   const relationships = buildInfluenceRelationships(
     state.indices, state.weights, state.influenceCount, nodes,
     Number.isFinite(radius) && radius > 0 ? radius : null);
@@ -1417,35 +1085,6 @@ function buildInfluenceGraph(mesh, state) {
     relationships,
     boundingSphereRadius: Number.isFinite(radius) && radius > 0 ? radius : null,
   };
-}
-
-function visualGraphRelationships(graph) {
-  const byNode = new Map();
-  (graph?.relationships || []).forEach(relationship => {
-    if (relationship.sharedVertexCount <= 0
-        || relationship.containment < INFLUENCE_GRAPH_CONTAINMENT_THRESHOLD) {
-      return;
-    }
-    [relationship.boneA, relationship.boneB].forEach(boneId => {
-      const relationships = byNode.get(boneId) || [];
-      relationships.push(relationship);
-      byNode.set(boneId, relationships);
-    });
-  });
-  const selected = new Map();
-  byNode.forEach(relationships => {
-    relationships.sort(relationshipSort)
-      .slice(0, INFLUENCE_GRAPH_TOP_K)
-      .forEach(relationship => {
-        selected.set(pairKey(relationship.boneA, relationship.boneB),
-          relationship);
-      });
-  });
-  return [...selected.values()].sort(relationshipSort);
-}
-
-function relationshipStrength(relationship) {
-  return Math.max(0, Math.min(1, Number(relationship?.containment) || 0));
 }
 
 function removeInfluenceVisualization(state) {
@@ -1461,8 +1100,7 @@ function removeInfluenceVisualization(state) {
   visualization.lineMaterials.forEach(material => material.dispose());
   state.influenceVisualization = null;
   state.influenceVisualizationMode = null;
-  if (activeExperimentHelperMesh === visualization.mesh
-      && !state.chainHelpers) {
+  if (activeExperimentHelperMesh === visualization.mesh) {
     activeExperimentHelperMesh = null;
   }
 }
@@ -1471,19 +1109,23 @@ function createInfluenceVisualization(mesh, state, mode) {
   removeInfluenceVisualization(state);
   activateExperimentHelpers(mesh);
   const graph = state.influenceGraph;
-  if (!graph || (mode !== 'graph' && mode !== 'tree')) return null;
-  const nodeById = new Map(graph.nodes.map(node => [node.boneId, node]));
+  const nodes = mode === 'center'
+    ? (state.influenceNodes || []).filter(node =>
+      node.boneId === state.selectedBone)
+    : (graph?.nodes || []);
+  if (!nodes.length || (mode !== 'center' && mode !== 'tree')) return null;
+  const nodeById = new Map(nodes.map(node => [node.boneId, node]));
   const componentRoots = new Set((state.candidateForest?.components || [])
     .map(component => component.rootId));
   const radius = Math.max(
     (mesh.geometry.boundingSphere?.radius || 1) * 0.012, 0.001);
   const group = new THREE.Group();
-  group.name = mode === 'graph'
-    ? 'Experimental Influence Graph' : 'Experimental Candidate Tree';
+  group.name = mode === 'center'
+    ? 'Influence Center' : 'Inferred Influence Hierarchy';
   const nodeGeometry = new THREE.SphereGeometry(1, 8, 6);
   const nodeMaterial = new THREE.MeshBasicMaterial({color: 0xffb86c});
   const nodeMarkers = new Map();
-  graph.nodes.forEach(node => {
+  nodes.forEach(node => {
     const marker = new THREE.Mesh(nodeGeometry, nodeMaterial);
     marker.scale.setScalar(radius * (componentRoots.has(node.boneId) ? 1.35 : 1));
     marker.position.copy(transformedInfluenceCenter(node, state, mode));
@@ -1493,9 +1135,7 @@ function createInfluenceVisualization(mesh, state, mode) {
     nodeMarkers.set(node.boneId, marker);
   });
 
-  const relationships = mode === 'graph'
-    ? visualGraphRelationships(graph)
-    : state.candidateTree?.edges || [];
+  const relationships = mode === 'tree' ? state.candidateTree?.edges || [] : [];
   const lineGeometries = [];
   const lineMaterials = [];
   const lineEntries = [];
@@ -1512,12 +1152,11 @@ function createInfluenceVisualization(mesh, state, mode) {
     const material = new THREE.LineBasicMaterial({
       color: 0xff7b72,
       transparent: true,
-      opacity: 0.2 + 0.7 * relationshipStrength(relationship),
+      opacity: 0.8,
     });
     const line = new THREE.Line(geometry, material);
     line.userData.influenceBoneA = relationship.boneA;
     line.userData.influenceBoneB = relationship.boneB;
-    line.userData.relationshipStrength = relationshipStrength(relationship);
     group.add(line);
     lineGeometries.push(geometry);
     lineMaterials.push(material);
@@ -1536,8 +1175,9 @@ function updateInfluenceVisualization(mesh, state) {
   const visualization = state.influenceVisualization;
   if (!visualization || !state.influenceVisualizationMode) return;
   const mode = state.influenceVisualizationMode;
-  const graph = state.influenceGraph;
-  const nodeById = new Map((graph?.nodes || [])
+  const nodes = state.influenceVisualizationMode === 'center'
+    ? (state.influenceNodes || []) : (state.influenceGraph?.nodes || []);
+  const nodeById = new Map(nodes
     .map(node => [node.boneId, node]));
   visualization.nodeMarkers?.forEach((marker, boneId) => {
     const node = nodeById.get(boneId);
@@ -1559,7 +1199,6 @@ function updateInfluenceVisualization(mesh, state) {
 }
 
 function refreshAfterForestTopologyChange(mesh, state) {
-  cancelContinuousMotionTest();
   refreshConstraintState(state);
   if (state.physicsEnabled && state.deformationMode === 'physics') {
     state.physicsState = initializePhysicsState(state.candidateForest);
@@ -1579,27 +1218,31 @@ function refreshAfterForestTopologyChange(mesh, state) {
   }
   if (state.physicsEnabled && state.deformationMode === 'physics') {
     applyDeformation(mesh, state);
-  } else if (state.deformationMode === 'forest') {
-    applyDeformation(mesh, state);
   } else {
     requestRender();
   }
 }
 
-export function buildCandidateTree(mesh, rootId = null) {
+function ensureInfluenceGraph(mesh, state) {
+  if (!state.influenceGraph) state.influenceGraph = buildInfluenceGraph(mesh, state);
+  return state.influenceGraph;
+}
+
+export function ensureCandidateForest(mesh) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.influenceGraph) return null;
+  if (!state?.loaded) return null;
+  if (state.candidateForest && state.candidateTree) return state.candidateForest;
+  const graph = ensureInfluenceGraph(mesh, state);
   const requestedRoot = Number(
-    rootId ?? state.candidateRootId ?? state.selectedBone
-      ?? state.boneIds[0]);
+    state.candidateRootId ?? state.selectedBone ?? state.boneIds[0]);
   const root = state.boneIds.includes(requestedRoot)
     ? requestedRoot : state.boneIds[0];
-  const candidateEdges = candidateRelationshipEdges(state.influenceGraph);
+  const candidateEdges = candidateRelationshipEdges(graph);
   const tree = buildMaximumSpanningTree(
-    state.influenceGraph.nodes, candidateEdges);
+    graph.nodes, candidateEdges);
   state.candidateRootId = root ?? null;
   const forest = orientForest(
-    state.influenceGraph.nodes, tree.edges, state.candidateRootId,
+    graph.nodes, tree.edges, state.candidateRootId,
     {components: tree.components});
   state.candidateForest = forest;
   const primaryComponent = forest.components[forest.primaryComponentId];
@@ -1616,52 +1259,44 @@ export function buildCandidateTree(mesh, rootId = null) {
     forest,
   };
   refreshAfterForestTopologyChange(mesh, state);
-  return state.candidateTree;
+  return state.candidateForest;
 }
 
 export function setCandidateTreeRoot(mesh, rootId) {
   const state = stateFor(mesh);
   const id = Number(rootId);
-  if (!state?.loaded || !state.influenceGraph
-      || !state.boneIds.includes(id)) return false;
+  if (!state?.loaded || !state.boneIds.includes(id)) return false;
+  ensureCandidateForest(mesh);
+  if (!state.candidateTree) return false;
   state.candidateRootId = id;
-  if (state.candidateTree) {
-    state.candidateTree.rootId = id;
-    const forest = orientForest(
-      state.influenceGraph.nodes, state.candidateTree.edges, id,
-      {components: state.candidateTree.components});
-    state.candidateForest = forest;
-    state.candidateTree.forest = forest;
-    const primaryComponent = forest.components[forest.primaryComponentId];
-    state.candidateTree.orientation = primaryComponent ? {
-      rootId: primaryComponent.rootId,
-      parentById: primaryComponent.parentById,
-      childrenById: primaryComponent.childrenById,
-      depthById: primaryComponent.depthById,
-    } : orientTree(state.candidateTree.edges, id);
-  }
+  state.candidateTree.rootId = id;
+  const forest = orientForest(
+    state.influenceGraph.nodes, state.candidateTree.edges, id,
+    {components: state.candidateTree.components});
+  state.candidateForest = forest;
+  state.candidateTree.forest = forest;
+  const primaryComponent = forest.components[forest.primaryComponentId];
+  state.candidateTree.orientation = primaryComponent ? {
+    rootId: primaryComponent.rootId,
+    parentById: primaryComponent.parentById,
+    childrenById: primaryComponent.childrenById,
+    depthById: primaryComponent.depthById,
+  } : orientTree(state.candidateTree.edges, id);
   refreshAfterForestTopologyChange(mesh, state);
   return id;
 }
 
 export function setInfluenceVisualizationMode(mesh, mode) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.influenceGraph) return null;
-  if (mode !== null && mode !== 'graph' && mode !== 'tree') {
+  if (!state?.loaded) return null;
+  if (mode !== null && mode !== 'center' && mode !== 'tree') {
     return state.influenceVisualizationMode;
   }
-  if (mode === 'tree' && !state.candidateTree) {
-    return state.influenceVisualizationMode;
-  }
+  if (mode === 'tree') ensureCandidateForest(mesh);
   if (mode === null) removeInfluenceVisualization(state);
   else createInfluenceVisualization(mesh, state, mode);
   requestRender();
   return state.influenceVisualizationMode;
-}
-
-export function setInfluenceGraphVisible(mesh, visible) {
-  return setInfluenceVisualizationMode(mesh, visible ? 'graph' : null)
-    === 'graph';
 }
 
 export function setCandidateTreeVisible(mesh, visible) {
@@ -1684,10 +1319,6 @@ if (typeof window !== 'undefined') {
 function applyDeformation(mesh, state) {
   if (!state.loaded || !state.baselinePositions) return;
   const position = mesh.geometry.attributes.position;
-  const chainActive = state.deformationMode === 'chain'
-    && state.chainAngle !== 0 && state.chainIds.length >= 2;
-  const forestActive = state.deformationMode === 'forest'
-    && state.forestAngle !== 0 && state.candidateForest;
   const physicsActive = state.deformationMode === 'physics'
     && state.physicsEnabled && state.physicsState && state.candidateForest;
   let result;
@@ -1697,46 +1328,21 @@ function applyDeformation(mesh, state) {
         axis: state.physicsAxis,
         angleByBoneId: physicsAngleMap(state.physicsState),
       });
-    state.forestTransforms = null;
     result = applyWeightedTransformDeformation(
       state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.physicsTransforms);
-  } else if (forestActive) {
-    state.forestTransforms = buildForestTransforms(
-      state.candidateForest,
-      state.centerByBoneId,
-      {axis: state.forestAxis, totalAngle: state.forestAngle});
-    result = applyWeightedTransformDeformation(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.forestTransforms);
-  } else if (chainActive) {
-    state.forestTransforms = null;
-    state.physicsTransforms = null;
-    result = applyWeightedChainDeformation(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.chainIds, buildChainTransforms(
-        chainCentersFor(mesh, state), state.chainAxis, state.chainAngle));
-  } else if (state.deformationMode === 'single' && state.angle !== 0) {
-    state.forestTransforms = null;
-    state.physicsTransforms = null;
-    result = applyWeightedRotation(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.selectedBone, centerFor(mesh, state),
-      state.axis, state.angle);
+        state.influenceCount, state.physicsTransforms);
   } else {
-    state.forestTransforms = null;
     state.physicsTransforms = null;
     result = state.baselinePositions;
   }
   position.array.set(result);
   position.needsUpdate = true;
-  if (!chainActive && !forestActive && !physicsActive && state.angle === 0) {
+  if (!physicsActive) {
     restoreNormals(mesh, state);
   } else {
     mesh.geometry.computeVertexNormals();
     mesh.geometry.attributes.normal.needsUpdate = true;
   }
-  updateVirtualChainHelpers(mesh, state);
   updateInfluenceVisualization(mesh, state);
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
@@ -1749,25 +1355,14 @@ function updateHeatmap(mesh, state) {
   const count = Math.floor(state.indices.length / state.influenceCount);
   const colors = new Float32Array(count * 3);
   for (let vertex = 0; vertex < count; vertex += 1) {
-    const value = state.heatmapMode === 'chain-residual'
-      ? residualWeightForVertex(
-        state.indices, state.weights, state.influenceCount, vertex,
-        state.chainIds)
-      : Math.max(0, Math.min(1, weightForBone(
+    const value = Math.max(0, Math.min(1, weightForBone(
         state.indices, state.weights, state.influenceCount,
         vertex, state.selectedBone)));
     const offset = vertex * 3;
-    if (state.heatmapMode === 'chain-residual') {
-      // Keep covered vertices dark while making omitted influence obvious.
-      colors[offset] = value;
-      colors[offset + 1] = value * 0.25;
-      colors[offset + 2] = 0.02;
-    } else {
-      // Blue at zero, yellow/red at high influence for quick spatial reading.
-      colors[offset] = value;
-      colors[offset + 1] = Math.min(1, value * 2);
-      colors[offset + 2] = 1 - value;
-    }
+    // Blue at zero, yellow/red at high influence for quick spatial reading.
+    colors[offset] = value;
+    colors[offset + 1] = Math.min(1, value * 2);
+    colors[offset + 2] = 1 - value;
   }
   mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   mesh.geometry.attributes.color.needsUpdate = true;
@@ -1844,9 +1439,10 @@ export async function loadSkinningWeights(mesh) {
     state.encoding = preview.encoding || null;
     state.diagnostics = preview.diagnostics || null;
     state.loaded = true;
-    refreshChainCoverage(state);
-    state.influenceGraph = buildInfluenceGraph(mesh, state);
-    state.centerByBoneId = new Map(state.influenceGraph.nodes.map(node => [
+    state.influenceNodes = buildInfluenceNodes(
+      state.baselinePositions, state.indices, state.weights,
+      state.influenceCount, state.boneIds);
+    state.centerByBoneId = new Map(state.influenceNodes.map(node => [
       node.boneId, node.weightedCenter]));
     state.candidateRootId = state.boneIds[0] ?? null;
     return state;
@@ -1865,116 +1461,19 @@ export async function loadSkinningWeights(mesh) {
 export function setSelectedBone(mesh, boneId) {
   const state = stateFor(mesh);
   if (!state?.loaded) return;
-  state.selectedBone = Number(boneId);
+  const id = Number(boneId);
+  if (!state.boneIds.includes(id)) return;
+  state.selectedBone = id;
   if (state.heatmapMode === 'bone') updateHeatmap(mesh, state);
-  applyDeformation(mesh, state);
-}
-
-export function setSkinningAxis(mesh, axis) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !['X', 'Y', 'Z'].includes(axis)) return;
-  if (state.physicsEnabled) stopPhysics(mesh, state);
-  state.axis = axis;
-  applyDeformation(mesh, state);
-}
-
-export function setSkinningAngle(mesh, angle) {
-  const state = stateFor(mesh);
-  if (!state?.loaded) return;
-  if (state.physicsEnabled) stopPhysics(mesh, state);
-  state.angle = Math.max(-45, Math.min(45, Number(angle) || 0));
-  state.chainAngle = 0;
-  state.forestAngle = 0;
-  state.deformationMode = state.angle === 0 ? null : 'single';
-  if (state.chainHelpers) removeVirtualChainHelpers(mesh, state);
-  applyDeformation(mesh, state);
-}
-
-export function setSkinningChainText(mesh, text) {
-  const state = stateFor(mesh);
-  if (!state?.loaded) return false;
-  if (state.physicsEnabled) stopPhysics(mesh, state);
-  state.chainText = String(text ?? '');
-  if (state.deformationMode === 'forest') {
-    state.forestAngle = 0;
-    state.deformationMode = null;
-  }
-  const wasVisible = state.chainHelpersVisible;
-  try {
-    state.chainIds = parseChainIds(state.chainText, state.boneIds);
-    state.chainError = null;
-    state.angle = 0;
-  } catch (error) {
-    state.chainIds = [];
-    state.chainAngle = 0;
-    state.chainError = error instanceof Error ? error.message : String(error);
-    refreshChainCoverage(state);
-    if (state.heatmapMode === 'chain-residual') disableHeatmap(mesh, state);
-    removeVirtualChainHelpers(mesh, state);
-    applyDeformation(mesh, state);
-    return false;
-  }
-  refreshChainCoverage(state);
-  if (state.chainHelpers) {
-    removeVirtualChainHelpers(mesh, state);
-    if (wasVisible) {
-      activateVirtualChain(mesh);
-      createVirtualChainHelpers(mesh, state);
-      state.chainHelpersVisible = true;
-      updateVirtualChainHelpers(mesh, state);
-    }
+  if (state.influenceVisualizationMode === 'center') {
+    createInfluenceVisualization(mesh, state, 'center');
   }
   applyDeformation(mesh, state);
-  if (state.heatmapMode) updateHeatmap(mesh, state);
-  return true;
-}
-
-export function setSkinningChainAxis(mesh, axis) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !['X', 'Y', 'Z'].includes(axis)) return;
-  if (state.physicsEnabled) stopPhysics(mesh, state);
-  state.chainAxis = axis;
-  state.angle = 0;
-  state.forestAngle = 0;
-  if (state.deformationMode === 'forest') state.deformationMode = null;
-  applyDeformation(mesh, state);
-}
-
-export function setSkinningChainAngle(mesh, angle) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || state.chainIds.length < 2) return false;
-  if (state.physicsEnabled) stopPhysics(mesh, state);
-  state.chainAngle = Math.max(-60, Math.min(60, Number(angle) || 0));
-  state.angle = 0;
-  state.forestAngle = 0;
-  state.deformationMode = state.chainAngle === 0 ? null : 'chain';
-  applyDeformation(mesh, state);
-  return true;
-}
-
-export function setForestAxis(mesh, axis) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !['X', 'Y', 'Z'].includes(axis)) return;
-  if (state.physicsEnabled) stopPhysics(mesh, state);
-  state.forestAxis = axis;
-  applyDeformation(mesh, state);
-}
-
-export function setForestAngle(mesh, angle) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
-  if (state.physicsEnabled) stopPhysics(mesh, state);
-  state.forestAngle = Math.max(-60, Math.min(60, Number(angle) || 0));
-  state.angle = 0;
-  state.chainAngle = 0;
-  state.deformationMode = state.forestAngle === 0 ? null : 'forest';
-  applyDeformation(mesh, state);
-  return true;
 }
 
 export function setPhysicsAxis(mesh, axis) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest
+  if (!state?.loaded || !ensureCandidateForest(mesh)
       || !['X', 'Y', 'Z'].includes(axis)) return;
   state.physicsAxis = axis;
   const gravityEnabled = state.physicsGravityEnabled;
@@ -1989,7 +1488,7 @@ export function setPhysicsAxis(mesh, axis) {
 
 export function setPhysicsTargetAngle(mesh, angle) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   state.physicsTargetAngle = Math.max(
     -40, Math.min(40, Number(angle) || 0));
   if (state.physicsEnabled) {
@@ -2001,7 +1500,7 @@ export function setPhysicsTargetAngle(mesh, angle) {
 
 export function setPhysicsFrequency(mesh, frequencyHz) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(frequencyHz);
   if (!Number.isFinite(value)) return false;
   state.physicsFrequencyHz = Math.max(0.1, Math.min(10, value));
@@ -2011,7 +1510,7 @@ export function setPhysicsFrequency(mesh, frequencyHz) {
 
 export function setPhysicsDamping(mesh, dampingRatio) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(dampingRatio);
   if (!Number.isFinite(value)) return false;
   state.physicsDampingRatio = Math.max(0, Math.min(2, value));
@@ -2021,7 +1520,7 @@ export function setPhysicsDamping(mesh, dampingRatio) {
 
 export function setPhysicsMotionStrength(mesh, strength) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
   state.physicsMotionStrength = Math.max(0, Math.min(1, value));
@@ -2030,7 +1529,7 @@ export function setPhysicsMotionStrength(mesh, strength) {
 
 export function setPhysicsLinearMotionStrength(mesh, strength) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
   state.physicsLinearMotionStrength = Math.max(0, Math.min(1, value));
@@ -2039,7 +1538,7 @@ export function setPhysicsLinearMotionStrength(mesh, strength) {
 
 export function setPhysicsContinuousLinearResponse(mesh, strength) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
   state.physicsContinuousLinearResponse = Math.max(0, Math.min(1, value));
@@ -2048,7 +1547,7 @@ export function setPhysicsContinuousLinearResponse(mesh, strength) {
 
 export function setPhysicsGravityEnabled(mesh, enabled) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   state.physicsGravityEnabled = !!enabled;
   refreshGravityState(mesh, state);
   if (state.physicsEnabled && state.deformationMode === 'physics') {
@@ -2060,7 +1559,7 @@ export function setPhysicsGravityEnabled(mesh, enabled) {
 
 export function setPhysicsGravityScale(mesh, scale) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(scale);
   if (!Number.isFinite(value)) return false;
   state.physicsGravityScale = Math.max(0, Math.min(2, value));
@@ -2074,7 +1573,7 @@ export function setPhysicsGravityScale(mesh, scale) {
 
 export function setPhysicsConstraintsEnabled(mesh, enabled) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   state.physicsConstraintsEnabled = !!enabled;
   refreshConstraintState(state);
   if (state.physicsEnabled && state.deformationMode === 'physics') {
@@ -2089,7 +1588,7 @@ export function setPhysicsConstraintsEnabled(mesh, enabled) {
 
 export function setPhysicsMaxBendDegrees(mesh, degrees) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(degrees);
   if (!Number.isFinite(value)) return false;
   state.physicsMaxBendDegrees = Math.max(0, Math.min(90, value));
@@ -2106,17 +1605,12 @@ export function setPhysicsMaxBendDegrees(mesh, degrees) {
 
 export function setPhysicsEnabled(mesh, enabled) {
   const state = stateFor(mesh);
-  if (!state?.loaded || !state.candidateForest) return false;
+  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   if (!enabled) {
-    cancelContinuousMotionTest();
     stopPhysics(mesh, state);
     applyDeformation(mesh, state);
     return false;
   }
-  state.angle = 0;
-  state.chainAngle = 0;
-  state.forestAngle = 0;
-  if (state.chainHelpers) removeVirtualChainHelpers(mesh, state);
   state.deformationMode = 'physics';
   state.physicsEnabled = true;
   state.physicsReferenceQuaternion = mesh.quaternion.clone();
@@ -2133,25 +1627,7 @@ export function setPhysicsEnabled(mesh, enabled) {
   return true;
 }
 
-export function applyPhysicsKick(mesh, direction = 1) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !state.physicsEnabled
-      || state.deformationMode !== 'physics' || !state.candidateForest) {
-    return false;
-  }
-  if (!state.physicsState) {
-    state.physicsState = initializePhysicsState(state.candidateForest);
-  }
-  const sign = Number(direction) < 0 ? -1 : 1;
-  applyPhysicsKickState(
-    state.physicsState, state.candidateForest, sign * PHYSICS_KICK_SPEED,
-    state.physicsConstraintsEnabled ? state.physicsJointLimits : null);
-  wakePhysics(mesh, state);
-  return true;
-}
-
 export function resetPhysicsMotion(mesh) {
-  cancelContinuousMotionTest();
   const state = stateFor(mesh);
   if (!state?.loaded || !state.physicsEnabled
       || state.deformationMode !== 'physics') return false;
@@ -2171,30 +1647,10 @@ export function resetPhysicsMotion(mesh) {
   return true;
 }
 
-export function setVirtualChainVisible(mesh, visible) {
-  const state = stateFor(mesh);
-  if (!state?.loaded) return false;
-  if (visible && state.chainIds.length < 2) return false;
-  if (!visible) {
-    removeVirtualChainHelpers(mesh, state);
-  } else {
-    activateVirtualChain(mesh);
-    if (!state.chainHelpers) createVirtualChainHelpers(mesh, state);
-    updateVirtualChainHelpers(mesh, state);
-    state.chainHelpersVisible = true;
-  }
-  requestRender();
-  return state.chainHelpersVisible;
-}
-
 export function setSkinningHeatmapMode(mesh, mode) {
   const state = stateFor(mesh);
   if (!state?.loaded) return false;
-  if (mode !== null && mode !== 'bone' && mode !== 'chain-residual') {
-    return state.heatmapMode;
-  }
-  if (mode === 'chain-residual'
-      && (!state.chainCoverage || state.chainIds.length < 2)) {
+  if (mode !== null && mode !== 'bone') {
     return state.heatmapMode;
   }
   state.heatmapMode = mode;
@@ -2211,15 +1667,9 @@ export function setSkinningHeatmap(mesh, enabled) {
 export function resetSkinningExperiment(mesh) {
   const state = stateFor(mesh);
   if (!state?.loaded) return;
-  cancelContinuousMotionTest();
   if (state.physicsEnabled) stopPhysics(mesh, state);
-  state.angle = 0;
-  state.chainAngle = 0;
-  state.forestAngle = 0;
   state.deformationMode = null;
-  state.forestTransforms = null;
   state.physicsTransforms = null;
-  removeVirtualChainHelpers(mesh, state);
   removeInfluenceVisualization(state);
   applyDeformation(mesh, state);
   if (state.heatmapMode || state.debugMaterial) disableHeatmap(mesh, state);
@@ -2231,11 +1681,9 @@ export function resetSkinningExperiment(mesh) {
 
 export function disposeSkinningExperiment(mesh) {
   const state = states.get(mesh);
-  cancelContinuousMotionTest();
   if (!state) return;
   state.disposed = true;
   removePhysicsMesh(mesh);
-  removeVirtualChainHelpers(mesh, state);
   removeInfluenceVisualization(state);
   if (state.debugMaterial) state.debugMaterial.dispose();
   mesh.geometry?.deleteAttribute?.('color');
