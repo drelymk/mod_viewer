@@ -14,7 +14,8 @@ import {
   setInfluenceVisualizationMode,
   setForestAxis, setForestAngle,
   setPhysicsAxis, setPhysicsTargetAngle, setPhysicsFrequency,
-  setPhysicsDamping, setPhysicsEnabled, applyPhysicsKick,
+  setPhysicsDamping, setPhysicsMotionStrength, setPhysicsEnabled,
+  applyPhysicsKick,
   resetPhysicsMotion,
   setVirtualChainVisible,
 } from '../mesh/weight-experiment.js';
@@ -538,6 +539,10 @@ function forestDiagnosticsPayload(state) {
       targetAngle: state.physicsTargetAngle,
       frequencyHz: state.physicsFrequencyHz,
       dampingRatio: state.physicsDampingRatio,
+      motionResponse: state.physicsMotionStrength,
+      lastRootAngularDelta: state.lastRootAngularDelta,
+      lastProjectedAngularDelta: state.lastProjectedAngularDelta,
+      motionEventCount: state.motionEventCount,
       settled: !!state.physicsSettled,
       joints: Object.fromEntries(
         [...(state.physicsState?.joints || new Map()).entries()]
@@ -1020,7 +1025,15 @@ function physicsSummary(state) {
     ?? (state.candidateForest.components || []).reduce(
       (total, component) => total + Math.max(
         0, (component.nodeIds || []).length - 1), 0);
+  const motionResponse = Number(state.physicsMotionStrength) || 0;
+  const lastRootAngularDelta = Number(state.lastRootAngularDelta) || 0;
+  const lastProjectedAngularDelta = Number(
+    state.lastProjectedAngularDelta) || 0;
   return [
+    `Motion response ${motionResponse.toFixed(2)}`,
+    `Model input ${lastRootAngularDelta * 180 / Math.PI}Â° Â· `
+      + `Projected ${lastProjectedAngularDelta * 180 / Math.PI}Â° Â· `
+      + `Events ${state.motionEventCount || 0}`,
     `Physics ${status} · ${jointCount} dynamic joints`,
     `Target bend ${state.physicsTargetAngle}° · Axis ${state.physicsAxis}`,
     `Frequency ${Number(state.physicsFrequencyHz).toFixed(2)} Hz · `
@@ -1113,6 +1126,28 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   dampingLabel.appendChild(dampingInput);
   section.appendChild(dampingLabel);
 
+  const motionLabel = document.createElement('label');
+  motionLabel.className = 'inspector-skinning-field';
+  const motionHeader = document.createElement('span');
+  motionHeader.className = 'inspector-skinning-rotation-header';
+  addText(motionHeader, 'inspector-label', 'Motion Response');
+  const motionValue = addText(motionHeader,
+    'inspector-skinning-physics-motion-value', '0.35');
+  motionLabel.appendChild(motionHeader);
+  const motionInput = document.createElement('input');
+  motionInput.type = 'range';
+  motionInput.className = 'inspector-skinning-physics-motion-strength';
+  motionInput.min = '0';
+  motionInput.max = '1';
+  motionInput.step = '0.05';
+  motionInput.value = state.physicsMotionStrength;
+  motionInput.addEventListener('input', () => {
+    setPhysicsMotionStrength(mesh, motionInput.value);
+    update();
+  });
+  motionLabel.appendChild(motionInput);
+  section.appendChild(motionLabel);
+
   const enableLabel = document.createElement('label');
   enableLabel.className = 'inspector-skinning-physics-enable-label';
   const enableInput = document.createElement('input');
@@ -1198,6 +1233,9 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     frequencyInput.value = latest.physicsFrequencyHz;
     dampingInput.disabled = !valid;
     dampingInput.value = latest.physicsDampingRatio;
+    motionInput.disabled = !valid;
+    motionInput.value = latest.physicsMotionStrength;
+    motionValue.textContent = Number(latest.physicsMotionStrength).toFixed(2);
     enableInput.disabled = !valid;
     enableInput.checked = !!latest.physicsEnabled;
     kickMinus.disabled = !valid || !latest.physicsEnabled;

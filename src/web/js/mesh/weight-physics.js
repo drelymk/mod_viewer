@@ -54,6 +54,34 @@ export function physicsAngleMap(physicsState) {
   return angles;
 }
 
+/** Apply a root-orientation change as a temporary local bend in every forest
+ * component. The solver owns velocity; this helper only changes position. */
+export function applyReferenceFrameAngularDelta(
+    physicsState, forest, angularDeltaRadians, strength = 1) {
+  const delta = Number(angularDeltaRadians);
+  const response = Number(strength);
+  if (!Number.isFinite(delta) || !Number.isFinite(response)) {
+    return physicsState;
+  }
+  const lag = -delta * clamp(response, 0, 1);
+  if (lag === 0) return physicsState;
+  (forest?.components || []).forEach(component => {
+    const rootId = Number(component.rootId);
+    const maxDepth = maxDepthForComponent(component);
+    if (maxDepth <= 0) return;
+    const localLag = lag / maxDepth;
+    nodeIdsForComponent(component).forEach(nodeId => {
+      if (nodeId === rootId) return;
+      const joint = physicsState?.joints?.get(nodeId);
+      if (!joint) return;
+      joint.angle = clamp(
+        (Number(joint.angle) || 0) + localLag,
+        -MAX_LOCAL_ANGLE, MAX_LOCAL_ANGLE);
+    });
+  });
+  return physicsState;
+}
+
 function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }

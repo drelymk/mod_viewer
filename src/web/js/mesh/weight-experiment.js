@@ -11,6 +11,7 @@ import {
 } from './weight-deformation.js';
 import {
   DEFAULT_PHYSICS_DAMPING_RATIO, DEFAULT_PHYSICS_FREQUENCY_HZ,
+  applyReferenceFrameAngularDelta,
   applyPhysicsKick as applyPhysicsKickState, initializePhysicsState,
   isPhysicsSettled, physicsAngleMap, resetPhysicsState,
   stepSpringPhysics,
@@ -26,6 +27,7 @@ export {
   DEFAULT_ANGLE_TOLERANCE, DEFAULT_PHYSICS_DAMPING_RATIO,
   DEFAULT_PHYSICS_FREQUENCY_HZ, DEFAULT_VELOCITY_TOLERANCE,
   MAX_ANGULAR_VELOCITY, MAX_LOCAL_ANGLE,
+  applyReferenceFrameAngularDelta,
   buildPhysicsTargetAngles, initializePhysicsState, isPhysicsSettled,
   physicsAngleMap, resetPhysicsState, stepSpringPhysics,
 } from './weight-physics.js';
@@ -89,6 +91,11 @@ function newState() {
     physicsTargetAngle: 0,
     physicsFrequencyHz: DEFAULT_PHYSICS_FREQUENCY_HZ,
     physicsDampingRatio: DEFAULT_PHYSICS_DAMPING_RATIO,
+    physicsMotionStrength: 0.35,
+    physicsReferenceQuaternion: null,
+    lastRootAngularDelta: 0,
+    lastProjectedAngularDelta: 0,
+    motionEventCount: 0,
     physicsState: null,
     physicsTransforms: null,
     physicsAccumulator: 0,
@@ -132,6 +139,99 @@ export function getSkinningState(mesh) {
   return states.get(mesh) || null;
 }
 
+function clearMotionDiagnostics(state) {
+  state.lastRootAngularDelta = 0;
+  state.lastProjectedAngularDelta = 0;
+  state.motionEventCount = 0;
+}
+
+function motionAxisVector(axis) {
+  if (axis === 'X') return new THREE.Vector3(1, 0, 0);
+  if (axis === 'Y') return new THREE.Vector3(0, 1, 0);
+  return new THREE.Vector3(0, 0, 1);
+}
+
+function shortestQuaternionDelta(previousQuaternion, currentQuaternion) {
+  if (!previousQuaternion?.clone || !currentQuaternion?.clone) return null;
+  const previous = previousQuaternion.clone();
+  const current = currentQuaternion.clone();
+  if (!previous.isQuaternion || !current.isQuaternion
+      || previous.lengthSq() === 0 || current.lengthSq() === 0) return null;
+  previous.normalize();
+  current.normalize();
+  const delta = previous.clone().invert().multiply(current).normalize();
+  // q and -q are equivalent orientations. Canonicalizing w selects the
+  // shortest representation and prevents a fake near-360-degree impulse.
+  if (delta.w < 0) {
+    delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
+  }
+  const vector = new THREE.Vector3(delta.x, delta.y, delta.z);
+  const vectorLength = vector.length();
+  if (vectorLength < 1e-12) {
+    return {angle: 0, rotationVector: new THREE.Vector3()};
+  }
+  const angle = 2 * Math.atan2(vectorLength,
+    Math.max(-1, Math.min(1, delta.w)));
+  return {
+    angle,
+    rotationVector: vector.multiplyScalar(angle / vectorLength),
+  };
+}
+
+function signedQuaternionDeltaAngle(previousQuaternion, currentQuaternion) {
+  const delta = shortestQuaternionDelta(previousQuaternion, currentQuaternion);
+  if (!delta?.angle) return 0;
+  const components = [
+    delta.rotationVector.x,
+    delta.rotationVector.y,
+    delta.rotationVector.z,
+  ];
+  const dominant = components.reduce((best, value) =>
+    Math.abs(value) > Math.abs(best) ? value : best, 0);
+  return delta.angle * Math.sign(dominant || 1);
+}
+
+/** Project a shortest relative quaternion rotation into the previous local
+ * frame and return its signed scalar component on the selected axis. */
+export function projectQuaternionDeltaOntoAxis(
+    previousQuaternion, currentQuaternion, axis) {
+  const delta = shortestQuaternionDelta(previousQuaternion, currentQuaternion);
+  if (!delta) return 0;
+  return delta.rotationVector.dot(motionAxisVector(axis));
+}
+
+function handleModelTransformChanged(event) {
+  const meshes = event.detail?.meshes;
+  if (!Array.isArray(meshes)) return;
+  meshes.forEach(mesh => {
+    const state = states.get(mesh);
+    if (!state?.physicsReferenceQuaternion || !mesh?.quaternion) return;
+    const previous = state.physicsReferenceQuaternion;
+    const current = mesh.quaternion;
+    const rootDelta = shortestQuaternionDelta(previous, current);
+    const rootAngularDelta = signedQuaternionDeltaAngle(previous, current);
+    const projectedDelta = projectQuaternionDeltaOntoAxis(
+      previous, current, state.physicsAxis);
+    // Keep the reference current even when this event is not active physics
+    // input, so ignored transforms cannot accumulate into a later impulse.
+    previous.copy(current);
+    if (!state.physicsEnabled || state.deformationMode !== 'physics'
+        || !state.physicsState || !state.candidateForest) return;
+    state.lastRootAngularDelta = rootDelta ? rootAngularDelta : 0;
+    state.lastProjectedAngularDelta = projectedDelta;
+    state.motionEventCount += 1;
+    const strength = Number(state.physicsMotionStrength) || 0;
+    if (Math.abs(projectedDelta) < 1e-10 || strength <= 0) return;
+    applyReferenceFrameAngularDelta(
+      state.physicsState, state.candidateForest, projectedDelta, strength);
+    state.physicsSettled = false;
+    // Render the lag immediately; the fixed-step scheduler owns all recovery
+    // frames after this first response.
+    applyDeformation(mesh, state);
+    wakePhysics(mesh, state);
+  });
+}
+
 function removePhysicsMesh(mesh) {
   activePhysicsMeshes.delete(mesh);
   if (!activePhysicsMeshes.size && physicsFrameId !== null
@@ -166,6 +266,8 @@ function stopPhysics(mesh, state) {
   state.physicsLastTimestamp = null;
   state.physicsSettled = true;
   state.physicsTargetAngle = 0;
+  state.physicsReferenceQuaternion = null;
+  clearMotionDiagnostics(state);
   if (state.deformationMode === 'physics') state.deformationMode = null;
 }
 
@@ -174,8 +276,10 @@ function wakePhysics(mesh, state) {
   if (!state.physicsState) {
     state.physicsState = initializePhysicsState(state.candidateForest);
   }
-  state.physicsAccumulator = 0;
-  state.physicsLastTimestamp = null;
+  if (!activePhysicsMeshes.has(mesh)) {
+    state.physicsAccumulator = 0;
+    state.physicsLastTimestamp = null;
+  }
   state.physicsSettled = false;
   activePhysicsMeshes.add(mesh);
   schedulePhysicsFrame();
@@ -1246,6 +1350,8 @@ function updateInfluenceVisualization(mesh, state) {
 function refreshAfterForestTopologyChange(mesh, state) {
   if (state.physicsEnabled && state.deformationMode === 'physics') {
     state.physicsState = initializePhysicsState(state.candidateForest);
+    state.physicsReferenceQuaternion = mesh.quaternion.clone();
+    clearMotionDiagnostics(state);
     state.physicsTransforms = null;
     state.physicsAccumulator = 0;
     state.physicsLastTimestamp = null;
@@ -1350,6 +1456,8 @@ export function setCandidateTreeVisible(mesh, visible) {
 }
 
 if (typeof window !== 'undefined') {
+  window.addEventListener('mod-viewer-model-transform-changed',
+    handleModelTransformChanged);
   window.addEventListener('mod-viewer-mesh-selected', event => {
     const mesh = event.detail?.mesh || null;
     if (activeExperimentHelperMesh && activeExperimentHelperMesh !== mesh) {
@@ -1690,6 +1798,15 @@ export function setPhysicsDamping(mesh, dampingRatio) {
   return true;
 }
 
+export function setPhysicsMotionStrength(mesh, strength) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  const value = Number(strength);
+  if (!Number.isFinite(value)) return false;
+  state.physicsMotionStrength = Math.max(0, Math.min(1, value));
+  return true;
+}
+
 export function setPhysicsEnabled(mesh, enabled) {
   const state = stateFor(mesh);
   if (!state?.loaded || !state.candidateForest) return false;
@@ -1704,6 +1821,8 @@ export function setPhysicsEnabled(mesh, enabled) {
   if (state.chainHelpers) removeVirtualChainHelpers(mesh, state);
   state.deformationMode = 'physics';
   state.physicsEnabled = true;
+  state.physicsReferenceQuaternion = mesh.quaternion.clone();
+  clearMotionDiagnostics(state);
   state.physicsState = initializePhysicsState(state.candidateForest);
   state.physicsTransforms = null;
   state.physicsAccumulator = 0;
@@ -1736,6 +1855,8 @@ export function resetPhysicsMotion(mesh) {
       || state.deformationMode !== 'physics') return false;
   resetPhysicsState(state.physicsState);
   state.physicsTargetAngle = 0;
+  state.physicsReferenceQuaternion = mesh.quaternion.clone();
+  clearMotionDiagnostics(state);
   state.physicsTransforms = null;
   state.physicsAccumulator = 0;
   state.physicsLastTimestamp = null;

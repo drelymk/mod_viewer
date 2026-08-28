@@ -107,35 +107,40 @@ export function createCameraFrame({
   }
 
   function rotateMeshesAroundCenter(meshes, rotation) {
-    if (!meshes.length) return;
+    if (!meshes.length) return [];
     // The post-upright pivot is stable; recomputing an AABB center after each
     // turn makes asymmetric models drift.
     let center = modelPivot && modelPivot.clone();
     if (!center) {
       const box = computeModelBounds(meshes);
-      if (box.isEmpty()) return;
+      if (box.isEmpty()) return [];
       center = box.getCenter(new THREE.Vector3());
     }
     meshes.forEach(mesh => {
       mesh.position.sub(center).applyQuaternion(rotation).add(center);
       mesh.quaternion.premultiply(rotation);
     });
+    return meshes;
   }
 
   function rotateModelQuarterTurn(meshes = []) {
-    if (!meshes.length) return;
+    if (!meshes.length) return [];
     const rotation = new THREE.Quaternion().setFromAxisAngle(
       new THREE.Vector3(0, 1, 0), Math.PI / 2);
-    rotateMeshesAroundCenter(meshes, rotation);
+    const changed = rotateMeshesAroundCenter(meshes, rotation);
+    if (!changed.length) return [];
     modelRotation.premultiply(rotation);
+    return changed;
   }
 
   function rotateModelHorizontalQuarterTurn(meshes = []) {
-    if (!meshes.length) return;
+    if (!meshes.length) return [];
     const rotation = new THREE.Quaternion().setFromAxisAngle(
       new THREE.Vector3(1, 0, 0), Math.PI / 2);
-    rotateMeshesAroundCenter(meshes, rotation);
+    const changed = rotateMeshesAroundCenter(meshes, rotation);
+    if (!changed.length) return [];
     modelRotation.premultiply(rotation);
+    return changed;
   }
 
   function applyCurrentModelOrientation(meshes = [], { includeUserRotation = true } = {}) {
@@ -177,15 +182,16 @@ export function createCameraFrame({
   }
 
   function resetView() {
-    if (!homeView) return;
+    if (!homeView) return [];
     cancelViewSnap?.();
     homeView.meshes.forEach(({ mesh, quaternion, position }) => {
       mesh.quaternion.copy(quaternion);
       mesh.position.copy(position);
     });
+    const restoredMeshes = homeView.meshes.map(({ mesh }) => mesh);
     modelRotation.identity();
     const box = computeModelBounds(homeView.meshes.map(({ mesh }) => mesh));
-    if (box.isEmpty()) return;
+    if (box.isEmpty()) return restoredMeshes;
     const size = box.getSize(new THREE.Vector3());
     camera.up.copy(INITIAL_CAMERA_UP);
     frameView(homeView.meshes.map(({ mesh }) => mesh),
@@ -194,6 +200,7 @@ export function createCameraFrame({
     camera.updateMatrixWorld();
     controls.setCamera(camera);
     controls.saveState();
+    return restoredMeshes;
   }
 
   function fitTo(meshes, {

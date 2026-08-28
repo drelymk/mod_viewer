@@ -244,11 +244,19 @@ export function frameView(meshes = [], direction = null, targetYOffset = 0) {
 }
 
 export function resetView() {
-  cameraFrame.resetView();
+  const restoredMeshes = cameraFrame.resetView();
   resetOutlineProjectionReference(camera, controls.target);
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
+  notifyModelTransformChanged(restoredMeshes, 'reset-view');
   requestRender();
+}
+
+function notifyModelTransformChanged(meshes, reason) {
+  if (!meshes?.length || typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('mod-viewer-model-transform-changed', {
+    detail: {meshes, reason},
+  }));
 }
 
 export function adoptModelMeshes(meshes = []) {
@@ -346,16 +354,18 @@ export function setBloomSuppressedByDebug(value) {
 }
 
 export function rotateModelQuarterTurn(meshes = []) {
-  cameraFrame.rotateModelQuarterTurn(meshes);
+  const changedMeshes = cameraFrame.rotateModelQuarterTurn(meshes);
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
+  notifyModelTransformChanged(changedMeshes, 'rotate-y');
   requestRender();
 }
 
 export function rotateModelHorizontalQuarterTurn(meshes = []) {
-  cameraFrame.rotateModelHorizontalQuarterTurn(meshes);
+  const changedMeshes = cameraFrame.rotateModelHorizontalQuarterTurn(meshes);
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
+  notifyModelTransformChanged(changedMeshes, 'rotate-x');
   requestRender();
 }
 

@@ -1169,6 +1169,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .inspector-skinning-physics-axis,
 .inspector-skinning-physics-enable-label { display: flex; align-items: center; gap: 8px; }
 .inspector-skinning-physics-target-angle { width: 100%; accent-color: var(--accent-soft); }
+.inspector-skinning-physics-motion-strength { width: 100%; accent-color: var(--accent-soft); }
 .inspector-skinning-physics-copy-status { min-height: 12px; }
 .inspector-skinning-relationship {
   display: flex; flex-direction: column; gap: 3px; padding: 5px;
