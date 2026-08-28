@@ -15,6 +15,10 @@ const AUTHOR_WEIGHT_HIGH_THRESHOLD = 1.001;
 const AUTHOR_WEIGHT_LOW_THRESHOLD = 0.999;
 export const SIGNIFICANT_RESIDUAL_RATIO = 0.02;
 export const SIGNIFICANT_VERTEX_WEIGHT = 0.25;
+export const INFLUENCE_GRAPH_CONTAINMENT_THRESHOLD = 0.05;
+export const INFLUENCE_GRAPH_TOP_K = 4;
+export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
+export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
 
 const ERROR_MESSAGES = Object.freeze({
   mesh_not_found: 'The selected mesh could not be found.',
@@ -50,6 +54,11 @@ function newState() {
     chainHelpers: null,
     chainCoverage: null,
     missingInfluences: [],
+    influenceGraph: null,
+    candidateRootId: null,
+    candidateTree: null,
+    influenceVisualizationMode: null,
+    influenceVisualization: null,
     baselinePositions: null,
     baselineNormals: null,
     originalMaterial: null,
@@ -297,6 +306,277 @@ export function rankMissingInfluences(
       || b.totalWeight - a.totalWeight || a.boneId - b.boneId);
 }
 
+function positiveInfluencesForVertex(
+    indices, weights, influenceCount, vertexIndex) {
+  const result = new Map();
+  const start = vertexIndex * influenceCount;
+  for (let influence = 0; influence < influenceCount; influence += 1) {
+    const boneId = Number(indices[start + influence]);
+    const weight = weights[start + influence];
+    if (!Number.isFinite(weight) || weight <= 0) continue;
+    result.set(boneId, (result.get(boneId) || 0) + weight);
+  }
+  return result;
+}
+
+export function buildInfluenceNodes(
+    baselinePositions, indices, weights, influenceCount, boneIds = null) {
+  const vertexCount = compactVertexCount(indices, weights, influenceCount);
+  const requested = boneIds === null || boneIds === undefined
+    ? null : new Set([...boneIds].map(Number));
+  const entries = new Map();
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const influences = positiveInfluencesForVertex(
+      indices, weights, influenceCount, vertex);
+    influences.forEach((weight, boneId) => {
+      if (requested && !requested.has(boneId)) return;
+      const entry = entries.get(boneId) || {
+        boneId,
+        totalWeight: 0,
+        affectedVertexCount: 0,
+        maxVertexWeight: 0,
+        squaredPositionWeight: 0,
+        positionWeight: 0,
+      };
+      entry.totalWeight += weight;
+      entry.affectedVertexCount += 1;
+      entry.maxVertexWeight = Math.max(entry.maxVertexWeight, weight);
+      if (baselinePositions
+          && baselinePositions.length >= vertex * 3 + 3) {
+        const offset = vertex * 3;
+        const x = baselinePositions[offset];
+        const y = baselinePositions[offset + 1];
+        const z = baselinePositions[offset + 2];
+        entry.squaredPositionWeight += (x * x + y * y + z * z) * weight;
+        entry.positionWeight += weight;
+      }
+      entries.set(boneId, entry);
+    });
+  }
+
+  const orderedIds = requested ? [...requested] : [...entries.keys()];
+  return orderedIds.filter(boneId => entries.has(boneId)).map(boneId => {
+    const entry = entries.get(boneId);
+    const nodeCenter = weightedCenter(
+      baselinePositions, indices, weights, influenceCount, boneId);
+    const weightedRadius = entry.positionWeight > 0
+      ? Math.sqrt(Math.max(0,
+        entry.squaredPositionWeight / entry.positionWeight
+        - (nodeCenter[0] ** 2 + nodeCenter[1] ** 2
+          + nodeCenter[2] ** 2)))
+      : null;
+    return {
+      boneId: entry.boneId,
+      totalWeight: entry.totalWeight,
+      affectedVertexCount: entry.affectedVertexCount,
+      maxVertexWeight: entry.maxVertexWeight,
+      weightedCenter: nodeCenter,
+      weightedRadius,
+    };
+  });
+}
+
+function pairKey(boneA, boneB) {
+  return boneA < boneB ? `${boneA}:${boneB}` : `${boneB}:${boneA}`;
+}
+
+function pairIds(boneA, boneB) {
+  return boneA < boneB ? [boneA, boneB] : [boneB, boneA];
+}
+
+function centerDistance(centerA, centerB) {
+  if (!centerA || !centerB
+      || centerA.length < 3 || centerB.length < 3) return null;
+  const dx = centerA[0] - centerB[0];
+  const dy = centerA[1] - centerB[1];
+  const dz = centerA[2] - centerB[2];
+  return Math.hypot(dx, dy, dz);
+}
+
+export function buildInfluenceRelationships(
+    indices, weights, influenceCount, nodes, boundingSphereRadius = null) {
+  const nodeById = new Map((nodes || []).map(node => [
+    Number(node.boneId), node]));
+  const vertexCount = compactVertexCount(indices, weights, influenceCount);
+  const relationships = new Map();
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const influences = positiveInfluencesForVertex(
+      indices, weights, influenceCount, vertex);
+    const ids = [...influences.keys()].filter(id => nodeById.has(id));
+    for (let left = 0; left < ids.length; left += 1) {
+      for (let right = left + 1; right < ids.length; right += 1) {
+        const [boneA, boneB] = pairIds(ids[left], ids[right]);
+        const key = pairKey(boneA, boneB);
+        const weightA = influences.get(boneA);
+        const weightB = influences.get(boneB);
+        const relationship = relationships.get(key) || {
+          boneA,
+          boneB,
+          sharedVertexCount: 0,
+          minOverlap: 0,
+          productOverlap: 0,
+        };
+        relationship.sharedVertexCount += 1;
+        relationship.minOverlap += Math.min(weightA, weightB);
+        relationship.productOverlap += weightA * weightB;
+        relationships.set(key, relationship);
+      }
+    }
+  }
+
+  const radius = Number(boundingSphereRadius);
+  return [...relationships.values()].map(relationship => {
+    const nodeA = nodeById.get(relationship.boneA);
+    const nodeB = nodeById.get(relationship.boneB);
+    const supportA = Number(nodeA?.totalWeight) || 0;
+    const supportB = Number(nodeB?.totalWeight) || 0;
+    const containmentDenominator = Math.min(supportA, supportB);
+    const jaccardDenominator = supportA + supportB
+      - relationship.minOverlap;
+    const distance = centerDistance(
+      nodeA?.weightedCenter, nodeB?.weightedCenter);
+    return {
+      ...relationship,
+      containment: containmentDenominator > 0
+        ? relationship.minOverlap / containmentDenominator : 0,
+      jaccard: jaccardDenominator > 0
+        ? relationship.minOverlap / jaccardDenominator : 0,
+      centerDistance: distance,
+      normalizedDistance: distance !== null && radius > 0
+        ? distance / radius : null,
+    };
+  });
+}
+
+function relationshipSort(a, b) {
+  return (Number(b.containment) || 0) - (Number(a.containment) || 0)
+    || (Number(b.jaccard) || 0) - (Number(a.jaccard) || 0)
+    || (Number(a.normalizedDistance ?? Infinity)
+      - Number(b.normalizedDistance ?? Infinity))
+    || String(a.boneA).localeCompare(String(b.boneA))
+    || String(a.boneB).localeCompare(String(b.boneB));
+}
+
+export function candidateRelationshipEdges(graph, options = {}) {
+  const minSharedVertexCount = Number(
+    options.minSharedVertexCount ?? 1);
+  const containmentThreshold = Number(
+    options.containmentThreshold ?? CANDIDATE_CONTAINMENT_THRESHOLD);
+  const jaccardThreshold = Number(
+    options.jaccardThreshold ?? CANDIDATE_JACCARD_THRESHOLD);
+  return (graph?.relationships || [])
+    .filter(relationship => relationship.sharedVertexCount
+      >= minSharedVertexCount
+      && (relationship.containment >= containmentThreshold
+        || relationship.jaccard >= jaccardThreshold))
+    .map(relationship => {
+      const normalizedDistance = Number(relationship.normalizedDistance);
+      const distancePenalty = Number.isFinite(normalizedDistance)
+        ? 1 / (1 + Math.max(0, normalizedDistance)) : 1;
+      return {
+        ...relationship,
+        treeEdgeScore: relationship.containment * distancePenalty,
+      };
+    })
+    .sort(relationshipSort);
+}
+
+function treeEdgeScore(edge) {
+  return Number(edge.treeEdgeScore ?? edge.score
+    ?? edge.containment ?? edge.jaccard ?? 0) || 0;
+}
+
+export function buildMaximumSpanningTree(nodes, edges) {
+  const nodeIds = [...new Set((nodes || []).map(node => Number(node.boneId)))];
+  const parent = new Map(nodeIds.map(id => [id, id]));
+  const rank = new Map(nodeIds.map(id => [id, 0]));
+  const find = id => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root);
+    while (parent.get(id) !== id) {
+      const next = parent.get(id);
+      parent.set(id, root);
+      id = next;
+    }
+    return root;
+  };
+  const union = (left, right) => {
+    let rootLeft = find(left);
+    let rootRight = find(right);
+    if (rootLeft === rootRight) return false;
+    if (rank.get(rootLeft) < rank.get(rootRight)) {
+      [rootLeft, rootRight] = [rootRight, rootLeft];
+    }
+    parent.set(rootRight, rootLeft);
+    if (rank.get(rootLeft) === rank.get(rootRight)) {
+      rank.set(rootLeft, rank.get(rootLeft) + 1);
+    }
+    return true;
+  };
+  const orderedEdges = [...edges || []].sort((a, b) =>
+    treeEdgeScore(b) - treeEdgeScore(a)
+      || relationshipSort(a, b));
+  const selected = [];
+  for (const edge of orderedEdges) {
+    const boneA = Number(edge.boneA);
+    const boneB = Number(edge.boneB);
+    if (!parent.has(boneA) || !parent.has(boneB) || boneA === boneB) {
+      continue;
+    }
+    if (union(boneA, boneB)) selected.push(edge);
+  }
+  const components = new Map();
+  nodeIds.forEach(id => {
+    const root = find(id);
+    const component = components.get(root) || [];
+    component.push(id);
+    components.set(root, component);
+  });
+  return {edges: selected, components: [...components.values()]};
+}
+
+export function orientTree(treeEdges, rootId) {
+  const adjacency = new Map();
+  const add = (from, to) => {
+    const neighbors = adjacency.get(from) || [];
+    neighbors.push(to);
+    adjacency.set(from, neighbors);
+  };
+  (treeEdges || []).forEach(edge => {
+    const boneA = Number(edge.boneA);
+    const boneB = Number(edge.boneB);
+    if (!Number.isFinite(boneA) || !Number.isFinite(boneB)) return;
+    add(boneA, boneB);
+    add(boneB, boneA);
+  });
+  const root = Number(rootId);
+  if (Number.isFinite(root) && !adjacency.has(root)) adjacency.set(root, []);
+  const parentById = {};
+  const childrenById = {};
+  const depthById = {};
+  adjacency.forEach((neighbors, boneId) => {
+    parentById[boneId] = null;
+    childrenById[boneId] = [];
+    depthById[boneId] = null;
+  });
+  if (Number.isFinite(root)) {
+    const queue = [root];
+    depthById[root] = 0;
+    while (queue.length) {
+      const current = queue.shift();
+      const depth = depthById[current];
+      (adjacency.get(current) || []).forEach(neighbor => {
+        if (depthById[neighbor] !== null) return;
+        parentById[neighbor] = current;
+        childrenById[current].push(neighbor);
+        depthById[neighbor] = depth + 1;
+        queue.push(neighbor);
+      });
+    }
+  }
+  return {rootId: root, parentById, childrenById, depthById};
+}
+
 export function weightedCenter(positions, indices, weights, influenceCount,
                                boneId) {
   const center = [0, 0, 0];
@@ -440,7 +720,7 @@ export function applyWeightedChainDeformation(
       y += transformed.y * weight;
       z += transformed.z * weight;
     }
-    const unchanged = 1 - chainWeight;
+    const unchanged = Math.max(0, 1 - chainWeight);
     result[offset] = baseline.x * unchanged + x;
     result[offset + 1] = baseline.y * unchanged + y;
     result[offset + 2] = baseline.z * unchanged + z;
@@ -593,6 +873,194 @@ function updateVirtualChainHelpers(mesh, state) {
   helpers.line.geometry.computeBoundingSphere();
 }
 
+function buildInfluenceGraph(mesh, state) {
+  if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+  const radius = Number(mesh.geometry.boundingSphere?.radius);
+  const nodes = buildInfluenceNodes(
+    state.baselinePositions, state.indices, state.weights,
+    state.influenceCount, state.boneIds);
+  const relationships = buildInfluenceRelationships(
+    state.indices, state.weights, state.influenceCount, nodes,
+    Number.isFinite(radius) && radius > 0 ? radius : null);
+  return {
+    nodes,
+    relationships,
+    boundingSphereRadius: Number.isFinite(radius) && radius > 0 ? radius : null,
+  };
+}
+
+function visualGraphRelationships(graph) {
+  const byNode = new Map();
+  (graph?.relationships || []).forEach(relationship => {
+    if (relationship.sharedVertexCount <= 0
+        || relationship.containment < INFLUENCE_GRAPH_CONTAINMENT_THRESHOLD) {
+      return;
+    }
+    [relationship.boneA, relationship.boneB].forEach(boneId => {
+      const relationships = byNode.get(boneId) || [];
+      relationships.push(relationship);
+      byNode.set(boneId, relationships);
+    });
+  });
+  const selected = new Map();
+  byNode.forEach(relationships => {
+    relationships.sort(relationshipSort)
+      .slice(0, INFLUENCE_GRAPH_TOP_K)
+      .forEach(relationship => {
+        selected.set(pairKey(relationship.boneA, relationship.boneB),
+          relationship);
+      });
+  });
+  return [...selected.values()].sort(relationshipSort);
+}
+
+function relationshipStrength(relationship) {
+  return Math.max(0, Math.min(1, Number(relationship?.containment) || 0));
+}
+
+function removeInfluenceVisualization(state) {
+  const visualization = state.influenceVisualization;
+  if (!visualization) {
+    state.influenceVisualizationMode = null;
+    return;
+  }
+  visualization.group.removeFromParent();
+  visualization.nodeGeometry.dispose();
+  visualization.nodeMaterial.dispose();
+  visualization.lineGeometries.forEach(geometry => geometry.dispose());
+  visualization.lineMaterials.forEach(material => material.dispose());
+  state.influenceVisualization = null;
+  state.influenceVisualizationMode = null;
+}
+
+function createInfluenceVisualization(mesh, state, mode) {
+  removeInfluenceVisualization(state);
+  const graph = state.influenceGraph;
+  if (!graph || (mode !== 'graph' && mode !== 'tree')) return null;
+  const nodeById = new Map(graph.nodes.map(node => [node.boneId, node]));
+  const radius = Math.max(
+    (mesh.geometry.boundingSphere?.radius || 1) * 0.012, 0.001);
+  const group = new THREE.Group();
+  group.name = mode === 'graph'
+    ? 'Experimental Influence Graph' : 'Experimental Candidate Tree';
+  const nodeGeometry = new THREE.SphereGeometry(1, 8, 6);
+  const nodeMaterial = new THREE.MeshBasicMaterial({color: 0xffb86c});
+  graph.nodes.forEach(node => {
+    const marker = new THREE.Mesh(nodeGeometry, nodeMaterial);
+    marker.scale.setScalar(radius);
+    marker.position.copy(vectorFromCenter(node.weightedCenter));
+    marker.userData.influenceBoneId = node.boneId;
+    group.add(marker);
+  });
+
+  const relationships = mode === 'graph'
+    ? visualGraphRelationships(graph)
+    : state.candidateTree?.edges || [];
+  const lineGeometries = [];
+  const lineMaterials = [];
+  relationships.forEach(relationship => {
+    const nodeA = nodeById.get(Number(relationship.boneA));
+    const nodeB = nodeById.get(Number(relationship.boneB));
+    if (!nodeA || !nodeB) return;
+    const position = new Float32Array([
+      ...nodeA.weightedCenter, ...nodeB.weightedCenter,
+    ]);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+    const material = new THREE.LineBasicMaterial({
+      color: 0xff7b72,
+      transparent: true,
+      opacity: 0.2 + 0.7 * relationshipStrength(relationship),
+    });
+    const line = new THREE.Line(geometry, material);
+    line.userData.influenceBoneA = relationship.boneA;
+    line.userData.influenceBoneB = relationship.boneB;
+    line.userData.relationshipStrength = relationshipStrength(relationship);
+    group.add(line);
+    lineGeometries.push(geometry);
+    lineMaterials.push(material);
+  });
+  mesh.add(group);
+  state.influenceVisualization = {
+    group, nodeGeometry, nodeMaterial, lineGeometries, lineMaterials,
+  };
+  state.influenceVisualizationMode = mode;
+  return state.influenceVisualization;
+}
+
+function updateInfluenceVisualization(mesh, state) {
+  if (state.influenceVisualizationMode) {
+    createInfluenceVisualization(
+      mesh, state, state.influenceVisualizationMode);
+  }
+}
+
+export function buildCandidateTree(mesh, rootId = null) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.influenceGraph) return null;
+  const requestedRoot = Number(
+    rootId ?? state.candidateRootId ?? state.selectedBone
+      ?? state.boneIds[0]);
+  const root = state.boneIds.includes(requestedRoot)
+    ? requestedRoot : state.boneIds[0];
+  const candidateEdges = candidateRelationshipEdges(state.influenceGraph);
+  const tree = buildMaximumSpanningTree(
+    state.influenceGraph.nodes, candidateEdges);
+  state.candidateRootId = root ?? null;
+  state.candidateTree = {
+    ...tree,
+    rootId: state.candidateRootId,
+    candidateEdges,
+    orientation: orientTree(tree.edges, state.candidateRootId),
+  };
+  updateInfluenceVisualization(mesh, state);
+  requestRender();
+  return state.candidateTree;
+}
+
+export function setCandidateTreeRoot(mesh, rootId) {
+  const state = stateFor(mesh);
+  const id = Number(rootId);
+  if (!state?.loaded || !state.influenceGraph
+      || !state.boneIds.includes(id)) return false;
+  state.candidateRootId = id;
+  if (state.candidateTree) {
+    state.candidateTree.rootId = id;
+    state.candidateTree.orientation = orientTree(
+      state.candidateTree.edges, id);
+  }
+  if (state.influenceVisualizationMode === 'tree') {
+    updateInfluenceVisualization(mesh, state);
+  }
+  requestRender();
+  return id;
+}
+
+export function setInfluenceVisualizationMode(mesh, mode) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.influenceGraph) return null;
+  if (mode !== null && mode !== 'graph' && mode !== 'tree') {
+    return state.influenceVisualizationMode;
+  }
+  if (mode === 'tree' && !state.candidateTree) {
+    return state.influenceVisualizationMode;
+  }
+  if (mode === null) removeInfluenceVisualization(state);
+  else createInfluenceVisualization(mesh, state, mode);
+  requestRender();
+  return state.influenceVisualizationMode;
+}
+
+export function setInfluenceGraphVisible(mesh, visible) {
+  return setInfluenceVisualizationMode(mesh, visible ? 'graph' : null)
+    === 'graph';
+}
+
+export function setCandidateTreeVisible(mesh, visible) {
+  return setInfluenceVisualizationMode(mesh, visible ? 'tree' : null)
+    === 'tree';
+}
+
 if (typeof window !== 'undefined') {
   window.addEventListener('mod-viewer-mesh-selected', event => {
     const mesh = event.detail?.mesh || null;
@@ -735,6 +1203,8 @@ export async function loadSkinningWeights(mesh) {
     state.diagnostics = preview.diagnostics || null;
     state.loaded = true;
     refreshChainCoverage(state);
+    state.influenceGraph = buildInfluenceGraph(mesh, state);
+    state.candidateRootId = state.boneIds[0] ?? null;
     return state;
   })();
   try {
@@ -866,6 +1336,7 @@ export function resetSkinningExperiment(mesh) {
   state.angle = 0;
   state.chainAngle = 0;
   removeVirtualChainHelpers(mesh, state);
+  removeInfluenceVisualization(state);
   applyDeformation(mesh, state);
   if (state.heatmapMode || state.debugMaterial) disableHeatmap(mesh, state);
   mesh.geometry.computeBoundingBox();
@@ -879,6 +1350,7 @@ export function disposeSkinningExperiment(mesh) {
   if (!state) return;
   state.disposed = true;
   removeVirtualChainHelpers(mesh, state);
+  removeInfluenceVisualization(state);
   if (state.debugMaterial) state.debugMaterial.dispose();
   mesh.geometry?.deleteAttribute?.('color');
   mesh.material = state.originalMaterial || mesh.material;

@@ -245,6 +245,12 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
             new Float32Array([2, 0, 0]),
             new Uint32Array([1, 2, 11]),
             new Float32Array([.6, .2, .2]), 3, [0, 1, 2], transforms);
+          const overweightChain = helpers.applyWeightedChainDeformation(
+            new Float32Array([1, 0, 0]), new Uint32Array([0, 1]),
+            new Float32Array([.50000006, .50000006]), 2, [0, 1], [
+              new THREE.Matrix4().makeScale(0, 0, 0),
+              new THREE.Matrix4().makeScale(0, 0, 0),
+            ]);
           const p = new THREE.Vector3(2, 0, 0);
           const m1 = p.clone().applyMatrix4(transforms[1]);
           const m2 = p.clone().applyMatrix4(transforms[2]);
@@ -285,6 +291,52 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
           const sanity = helpers.computeChainCoverage(
             new Uint32Array([0, 1, 0, 1]),
             new Float32Array([1.002, 0, .998, 0]), 2, [0, 1]);
+          const graphIndices = new Uint32Array([
+            0, 1, 0, 1, 1, 2,
+          ]);
+          const graphWeights = new Float32Array([
+            .8, .2, .4, .6, .5, .5,
+          ]);
+          const graphPositions = new Float32Array([
+            0, 0, 0, 1, 0, 0, 2, 0, 0,
+          ]);
+          const nodes = helpers.buildInfluenceNodes(
+            graphPositions, graphIndices, graphWeights, 2, [0, 1, 2]);
+          const relationships = helpers.buildInfluenceRelationships(
+            graphIndices, graphWeights, 2, nodes, 2);
+          const candidates = helpers.candidateRelationshipEdges({
+            nodes, relationships,
+          });
+          const tree = helpers.buildMaximumSpanningTree(nodes, candidates);
+          const treeRootZero = helpers.orientTree(tree.edges, 0);
+          const treeRootTwo = helpers.orientTree(tree.edges, 2);
+          const rootedAtZero = helpers.orientTree([
+            {boneA: 0, boneB: 1},
+            {boneA: 1, boneB: 2},
+            {boneA: 1, boneB: 3},
+          ], 0);
+          const rootedAtTwo = helpers.orientTree([
+            {boneA: 0, boneB: 1},
+            {boneA: 1, boneB: 2},
+            {boneA: 1, boneB: 3},
+          ], 2);
+          const disconnected = helpers.buildMaximumSpanningTree(
+            [0, 1, 2, 3].map(boneId => ({boneId})), [
+              {boneA: 0, boneB: 1, score: .9},
+              {boneA: 2, boneB: 3, score: .8},
+            ]);
+          const duplicateIndices = new Uint32Array([0, 0, 1]);
+          const duplicateWeights = new Float32Array([.3, .2, .5]);
+          const duplicateNodes = helpers.buildInfluenceNodes(
+            new Float32Array([0, 0, 0]), duplicateIndices,
+            duplicateWeights, 3, [0, 1]);
+          const duplicateRelationships = helpers.buildInfluenceRelationships(
+            duplicateIndices, duplicateWeights, 3, duplicateNodes);
+          const eightNodes = helpers.buildInfluenceNodes(
+            new Float32Array([0, 0, 0]), wideIndices, wideWeights, 8,
+            [0, 1, 2, 3, 4, 5, 6, 7]);
+          const eightRelationships = helpers.buildInfluenceRelationships(
+            wideIndices, wideWeights, 8, eightNodes);
           const readError = text => {
             try {
               helpers.parseChainIds(text, [0, 2, 3, 4]);
@@ -303,6 +355,7 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
             c1: point(transforms[1], centers[1]),
             c2: point(transforms[2], centers[2]),
             chainResult: [...chainResult], expectedChain,
+            overweightChain: [...overweightChain],
             chainWeights: [
               helpers.chainWeightForVertex(
                 coverageIndices, coverageWeights, 4, 0, [0, 1, 8]),
@@ -323,6 +376,9 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
             partialMaxResidual: partial.maxResidual,
             completedMaxResidual: completed.maxResidual,
             wide,
+            nodes, relationships, candidates, tree, treeRootZero, treeRootTwo,
+            rootedAtZero, rootedAtTwo, disconnected,
+            duplicateRelationships, eightRelationships,
             parsed: helpers.parseChainIds('0,2,3,4', [0, 2, 3, 4]),
             duplicate: readError('0,2,2'),
             unknown: readError('0,14'),
@@ -343,6 +399,8 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
         assert result["c2"] == pytest.approx([
             math.sqrt(.5), 1 + math.sqrt(.5), 0])
         assert result["chainResult"] == pytest.approx(result["expectedChain"])
+        assert result["overweightChain"][0] >= 0
+        assert result["overweightChain"] == pytest.approx([0, 0, 0])
         assert result["chainWeights"] == pytest.approx([1, .5, .25])
         assert result["residualWeights"] == pytest.approx([0, .5, .75])
         assert result["coverage"]["vertexCount"] == 3
@@ -366,6 +424,45 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
         assert result["wide"]["maxResidual"] == pytest.approx(.65)
         assert result["sanity"]["overweightVertices"] == 1
         assert result["sanity"]["underweightVertices"] == 1
+        assert [node["boneId"] for node in result["nodes"]] == [0, 1, 2]
+        assert result["nodes"][0]["totalWeight"] == pytest.approx(1.2)
+        assert result["nodes"][0]["affectedVertexCount"] == 2
+        assert result["nodes"][0]["maxVertexWeight"] == pytest.approx(.8)
+        assert result["nodes"][0]["weightedCenter"] == pytest.approx([
+            1 / 3, 0, 0])
+        assert result["nodes"][0]["weightedRadius"] == pytest.approx(
+            math.sqrt(2 / 9))
+        assert result["nodes"][1]["weightedCenter"] == pytest.approx([
+            16 / 13, 0, 0])
+        assert len(result["relationships"]) == 2
+        relation01 = next(item for item in result["relationships"]
+                          if item["boneA"] == 0 and item["boneB"] == 1)
+        assert relation01["sharedVertexCount"] == 2
+        assert relation01["minOverlap"] == pytest.approx(.6)
+        assert relation01["productOverlap"] == pytest.approx(.4)
+        assert relation01["containment"] == pytest.approx(.5)
+        assert relation01["jaccard"] == pytest.approx(.6 / 1.9)
+        assert relation01["centerDistance"] == pytest.approx(
+            math.sqrt((16 / 13 - 1 / 3) ** 2))
+        assert relation01["normalizedDistance"] == pytest.approx(
+            relation01["centerDistance"] / 2)
+        assert [item["boneA"] for item in result["candidates"]] == [1, 0]
+        assert len(result["tree"]["edges"]) == 2
+        assert len(result["tree"]["components"]) == 1
+        assert result["treeRootZero"]["parentById"]["0"] is None
+        assert result["treeRootTwo"]["parentById"]["2"] is None
+        assert sorted((edge["boneA"], edge["boneB"])
+                      for edge in result["tree"]["edges"]) == [(0, 1), (1, 2)]
+        assert result["rootedAtZero"]["parentById"] == {
+            "0": None, "1": 0, "2": 1, "3": 1}
+        assert result["rootedAtTwo"]["parentById"] == {
+            "0": 1, "1": 2, "2": None, "3": 1}
+        assert len(result["disconnected"]["edges"]) == 2
+        assert result["disconnected"]["components"] == [[0, 1], [2, 3]]
+        assert len(result["duplicateRelationships"]) == 1
+        assert result["duplicateRelationships"][0]["minOverlap"] == pytest.approx(.5)
+        assert result["duplicateRelationships"][0]["productOverlap"] == pytest.approx(.25)
+        assert len(result["eightRelationships"]) == 28
         assert result["parsed"] == [0, 2, 3, 4]
         assert result["duplicate"] == "Duplicate Bone ID: 2"
         assert result["unknown"] == "Unknown Bone ID: 14"
@@ -415,9 +512,14 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
                 await import('./js/mesh/mesh-state.js');
 
           await experiment.loadSkinningWeights(mesh);
+          const graphBeforeChain =
+            experiment.getSkinningState(mesh).influenceGraph;
           experiment.setSkinningChainText(mesh, '0,1');
           experiment.setVirtualChainVisible(mesh, true);
           experiment.setSkinningHeatmap(mesh, true);
+          experiment.setInfluenceVisualizationMode(mesh, 'graph');
+          const graphHelperBeforeShape = !!mesh.children.find(
+            child => child.name === 'Experimental Influence Graph');
           const boneMaterial = mesh.material;
           const boneMode = experiment.getSkinningState(mesh).heatmapMode;
           experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
@@ -430,6 +532,8 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
           experiment.setSkinningChainAxis(mesh, 'X');
           const coverageAfterAngle =
             experiment.getSkinningState(mesh).chainCoverage;
+          const graphAfterControls =
+            experiment.getSkinningState(mesh).influenceGraph;
           const loadedState = experiment.getSkinningState(mesh);
           const deformed = [...mesh.geometry.attributes.position.array];
           const helperBeforeShape = !!mesh.children.find(
@@ -441,12 +545,18 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
           const afterShapeState = experiment.getSkinningState(mesh);
           const helperAfterShape = !!mesh.children.find(
             child => child.name === 'Experimental Virtual Chain');
+          const graphHelperAfterShape = !!mesh.children.find(
+            child => child.name === 'Experimental Influence Graph');
           const materialAfterShape = mesh.material;
 
           await experiment.loadSkinningWeights(mesh);
+          const graphBeforeReset =
+            experiment.getSkinningState(mesh).influenceGraph;
           experiment.setSkinningChainText(mesh, '0,1');
           experiment.setVirtualChainVisible(mesh, true);
           experiment.setSkinningHeatmapMode(mesh, 'chain-residual');
+          experiment.buildCandidateTree(mesh, 0);
+          experiment.setCandidateTreeVisible(mesh, true);
           experiment.setSkinningChainAngle(mesh, 20);
           experiment.resetSkinningExperiment(mesh);
           const resetState = experiment.getSkinningState(mesh);
@@ -457,6 +567,9 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
           const resetHeatmapMode = resetState.heatmapMode;
           const resetChainText = resetState.chainText;
           const resetCoverage = !!resetState.chainCoverage;
+          const resetGraphCached = resetState.influenceGraph === graphBeforeReset;
+          const graphHelperAfterReset = !!mesh.children.find(
+            child => child.name === 'Experimental Candidate Tree');
 
           experiment.setSkinningChainText(mesh, '0,1');
           experiment.setVirtualChainVisible(mesh, true);
@@ -478,6 +591,7 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
             requests, loaded: loadedState.loaded,
             deformed, shaped, afterShapeState,
             helperBeforeShape, helperAfterShape,
+            graphHelperBeforeShape, graphHelperAfterShape,
             materialAfterShape: materialAfterShape === originalMaterial,
             resetLoaded: resetState.loaded,
             resetAngle: resetState.angle,
@@ -485,6 +599,7 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
             resetPositions, shapedBaseline: shaped,
             helperAfterReset, colorAfterReset,
             resetHeatmapMode, resetChainText, resetCoverage,
+            resetGraphCached, graphHelperAfterReset,
             stateAfterRemove, helperAfterRemove,
             materialAfterRemove: mesh.material === originalMaterial,
             stateAfterResetMeshes, helperAfterResetMeshes,
@@ -493,6 +608,7 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
             sharedHeatmapMaterial: boneMaterial === residualMaterial,
             oneColorAttribute,
             coverageCached: coverageBeforeAngle === coverageAfterAngle,
+            graphCached: graphBeforeChain === graphAfterControls,
           };
         }""")
         assert result["requests"] == 3
@@ -501,6 +617,8 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
         assert result["helperBeforeShape"]
         assert result["afterShapeState"] is None
         assert result["helperAfterShape"] is False
+        assert result["graphHelperBeforeShape"]
+        assert result["graphHelperAfterShape"] is False
         assert result["materialAfterShape"]
         assert result["resetLoaded"]
         assert result["resetAngle"] == 0
@@ -508,6 +626,8 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
         assert result["resetHeatmapMode"] is None
         assert result["resetChainText"] == "0,1"
         assert result["resetCoverage"]
+        assert result["resetGraphCached"]
+        assert result["graphHelperAfterReset"] is False
         assert result["resetPositions"] == pytest.approx(result["shapedBaseline"])
         assert result["helperAfterReset"] is False
         assert result["colorAfterReset"] is False
@@ -522,6 +642,7 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
         assert result["sharedHeatmapMaterial"]
         assert result["oneColorAttribute"]
         assert result["coverageCached"]
+        assert result["graphCached"]
     finally:
         context.close()
 
@@ -534,20 +655,20 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
         _open(page, "Inspector")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
         page.evaluate("""async () => {
-          const bytes = new Uint8Array(24);
-          new Uint32Array(bytes.buffer).set([0, 1, 2]);
-          new Float32Array(bytes.buffer, 12).set([1, 1, 1]);
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .6, .4, .3, .7]);
           const url = URL.createObjectURL(new Blob([bytes]));
           window.__skinPreviewRequests = 0;
           window.pywebview.api.get_skinning_preview = async () => {
             window.__skinPreviewRequests += 1;
             return {
-              status: 'ok', vertex_count: 3, influence_count: 1,
+              status: 'ok', vertex_count: 3, influence_count: 2,
               bone_ids: [0, 1, 2], encoding: 'test',
               data: {
-                url, length: 24,
-                indices: {offset: 0, length: 12, type: 'u32'},
-                weights: {offset: 12, length: 12, type: 'f32'},
+                url, length: 48,
+                indices: {offset: 0, length: 24, type: 'u32'},
+                weights: {offset: 24, length: 24, type: 'f32'},
               }, diagnostics: {},
             };
           };
@@ -566,6 +687,36 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
           return stats && !stats.hidden;
         }""")
         assert page.locator(".inspector-skinning-coverage").inner_text()
+        graph = page.locator(".inspector-skinning-influence-graph")
+        assert "Influence Graph" in graph.inner_text()
+        assert page.locator(".inspector-skinning-neighbor-row").count() == 2
+        graph_button = page.locator(
+            ".inspector-skinning-influence-graph-show")
+        graph_button.click()
+        page.wait_for_function("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          return getSkinningState(window.modViewer.activeMeshes[0])
+            .influenceVisualizationMode === 'graph';
+        }""")
+        root = page.locator(".inspector-skinning-tree-root")
+        root.select_option("0")
+        page.locator(".inspector-skinning-build-tree").click()
+        page.wait_for_function("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          return !!getSkinningState(window.modViewer.activeMeshes[0])
+            .candidateTree;
+        }""")
+        assert "Root 0" in page.locator(
+            ".inspector-skinning-tree-output").inner_text()
+        page.locator(".inspector-skinning-tree-show").click()
+        assert page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          return getSkinningState(window.modViewer.activeMeshes[0])
+            .influenceVisualizationMode;
+        }""") == "tree"
         assert page.locator(".inspector-skinning-missing-row").count() == 1
         assert page.locator(".inspector-skinning-add-missing").is_visible()
         residual = page.locator(".inspector-skinning-residual")

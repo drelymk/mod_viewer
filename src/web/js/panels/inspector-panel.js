@@ -9,13 +9,17 @@ import {
   setSelectedBone, setSkinningAngle, setSkinningAxis, setSkinningChainAngle,
   setSkinningChainAxis, setSkinningChainText, setSkinningHeatmap,
   setSkinningHeatmapMode,
+  buildCandidateTree, setCandidateTreeRoot,
+  setInfluenceVisualizationMode,
   setVirtualChainVisible,
 } from '../mesh/weight-experiment.js';
 
 const meshRecords = new WeakMap();
+const skinningUpdates = new WeakMap();
 let current = null;
 let selectionCount = 0;
 const MISSING_INFLUENCE_DISPLAY_LIMIT = 8;
+const INFLUENCE_NEIGHBOR_DISPLAY_LIMIT = 8;
 
 const $ = id => document.getElementById(id);
 
@@ -283,7 +287,7 @@ function syncSkinningHeatmapControls(section, mesh) {
 }
 
 function coveragePercent(value) {
-  return `${(Number(value || 0) * 100).toFixed(1)}%`;
+  return `${(Number(value || 0) * 100).toFixed(3)}%`;
 }
 
 function coverageNumber(value) {
@@ -431,6 +435,291 @@ function buildSkinningCoverageControls(parent, mesh, state) {
   return {update};
 }
 
+function graphMetric(value) {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(3) : 'n/a';
+}
+
+function relationshipNeighbor(relationship, boneId) {
+  return Number(relationship.boneA) === Number(boneId)
+    ? Number(relationship.boneB) : Number(relationship.boneA);
+}
+
+function compareNeighborRelationships(a, b) {
+  return (Number(b.containment) || 0) - (Number(a.containment) || 0)
+    || (Number(b.jaccard) || 0) - (Number(a.jaccard) || 0)
+    || (Number(a.normalizedDistance ?? Infinity)
+      - Number(b.normalizedDistance ?? Infinity))
+    || relationshipNeighbor(a, a._boneId) - relationshipNeighbor(b, b._boneId);
+}
+
+function candidateTreeText(tree) {
+  if (!tree) return '';
+  const orientation = tree.orientation;
+  const lines = [`Root ${tree.rootId}`];
+  const append = (boneId, prefix, last, root = false) => {
+    if (!root) {
+      lines.push(`${prefix}${last ? '\u2514\u2500 ' : '\u251c\u2500 '}${boneId}`);
+    }
+    const children = orientation?.childrenById?.[boneId] || [];
+    children.forEach((child, index) => append(
+      child,
+      root ? '' : `${prefix}${last ? '   ' : '\u2502  '}`,
+      index === children.length - 1));
+  };
+  if (Number.isFinite(Number(tree.rootId))) {
+    append(Number(tree.rootId), '', true, true);
+  }
+  if ((tree.components || []).length > 1) {
+    lines.push(`Candidate graph has ${tree.components.length} components`);
+    const rooted = new Set(Object.keys(orientation?.depthById || {})
+      .filter(id => orientation.depthById[id] !== null).map(Number));
+    tree.components.forEach(component => {
+      if (!component.some(id => rooted.has(Number(id)))) {
+        lines.push(`[component: ${component.join(', ')}]`);
+      }
+    });
+  }
+  return lines.join('\n');
+}
+
+function buildSkinningInfluenceGraphControls(parent, mesh, state) {
+  const section = document.createElement('div');
+  section.className = 'inspector-skinning-influence-graph';
+  const title = document.createElement('div');
+  title.className = 'inspector-skinning-subtitle';
+  title.textContent = 'Influence Graph';
+  section.appendChild(title);
+  addText(section, 'inspector-skinning-hint',
+    'Diagnostic relationships only; no hierarchy is inferred.');
+
+  const influenceLabel = document.createElement('label');
+  influenceLabel.className = 'inspector-skinning-field';
+  addText(influenceLabel, 'inspector-label', 'Influence ID');
+  const influenceSelect = document.createElement('select');
+  influenceSelect.className = 'inspector-skinning-influence-select';
+  influenceSelect.setAttribute('aria-label', 'Influence graph bone ID');
+  state.boneIds.forEach(id => {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = id;
+    influenceSelect.appendChild(option);
+  });
+  influenceLabel.appendChild(influenceSelect);
+  section.appendChild(influenceLabel);
+
+  const stats = document.createElement('div');
+  stats.className = 'inspector-skinning-graph-stats';
+  section.appendChild(stats);
+  const neighborsTitle = document.createElement('div');
+  neighborsTitle.className = 'inspector-skinning-missing-title';
+  neighborsTitle.textContent = 'Candidate neighbors';
+  section.appendChild(neighborsTitle);
+  const neighbors = document.createElement('div');
+  neighbors.className = 'inspector-skinning-neighbors';
+  section.appendChild(neighbors);
+  const relationship = document.createElement('div');
+  relationship.className = 'inspector-skinning-relationship';
+  section.appendChild(relationship);
+
+  const graphButton = document.createElement('button');
+  graphButton.type = 'button';
+  graphButton.className = 'ui-button inspector-skinning-influence-graph-show';
+  graphButton.addEventListener('click', () => {
+    const latest = getSkinningState(mesh);
+    if (!latest) return;
+    setInfluenceVisualizationMode(
+      mesh, latest.influenceVisualizationMode === 'graph' ? null : 'graph');
+    update(latest);
+  });
+  section.appendChild(graphButton);
+
+  const treeSection = document.createElement('div');
+  treeSection.className = 'inspector-skinning-candidate-tree';
+  const treeTitle = document.createElement('div');
+  treeTitle.className = 'inspector-skinning-subtitle';
+  treeTitle.textContent = 'Candidate Tree';
+  treeSection.appendChild(treeTitle);
+  addText(treeSection, 'inspector-skinning-hint',
+    'Manual root changes direction only; edge selection uses relationship evidence.');
+  const rootLabel = document.createElement('label');
+  rootLabel.className = 'inspector-skinning-field';
+  addText(rootLabel, 'inspector-label', 'Manual Root');
+  const rootSelect = document.createElement('select');
+  rootSelect.className = 'inspector-skinning-tree-root';
+  rootSelect.setAttribute('aria-label', 'Candidate tree root ID');
+  state.boneIds.forEach(id => {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = id;
+    rootSelect.appendChild(option);
+  });
+  rootLabel.appendChild(rootSelect);
+  treeSection.appendChild(rootLabel);
+  const treeActions = document.createElement('div');
+  treeActions.className = 'inspector-skinning-chain-actions';
+  const buildTree = document.createElement('button');
+  buildTree.type = 'button';
+  buildTree.className = 'ui-button inspector-skinning-build-tree';
+  buildTree.textContent = 'Build Candidate Tree';
+  buildTree.addEventListener('click', () => {
+    buildCandidateTree(mesh, Number(rootSelect.value));
+    update(getSkinningState(mesh));
+  });
+  treeActions.appendChild(buildTree);
+  const showTree = document.createElement('button');
+  showTree.type = 'button';
+  showTree.className = 'ui-button inspector-skinning-tree-show';
+  showTree.addEventListener('click', () => {
+    const latest = getSkinningState(mesh);
+    if (!latest) return;
+    setInfluenceVisualizationMode(
+      mesh, latest.influenceVisualizationMode === 'tree' ? null : 'tree');
+    update(latest);
+  });
+  treeActions.appendChild(showTree);
+  treeSection.appendChild(treeActions);
+  const treeStatus = addText(
+    treeSection, 'inspector-skinning-tree-status', '');
+  const treeOutput = document.createElement('pre');
+  treeOutput.className = 'inspector-skinning-tree-output';
+  treeSection.appendChild(treeOutput);
+  section.appendChild(treeSection);
+  parent.appendChild(section);
+
+  let selectedRelationship = null;
+
+  function addStat(label, value) {
+    const row = document.createElement('div');
+    row.className = 'inspector-skinning-coverage-stat';
+    addText(row, 'inspector-label', label);
+    addText(row, 'inspector-value', value);
+    stats.appendChild(row);
+  }
+
+  function update(latest = getSkinningState(mesh)) {
+    if (!latest) return;
+    const graph = latest.influenceGraph;
+    const valid = !!graph;
+    stats.replaceChildren();
+    neighbors.replaceChildren();
+    relationship.replaceChildren();
+    stats.hidden = !valid;
+    neighborsTitle.hidden = !valid;
+    neighbors.hidden = !valid;
+    graphButton.disabled = !valid;
+    graphButton.hidden = !valid;
+    graphButton.textContent = latest.influenceVisualizationMode === 'graph'
+      ? 'Hide Influence Graph' : 'Show Influence Graph';
+    graphButton.classList.toggle(
+      'active', latest.influenceVisualizationMode === 'graph');
+    buildTree.disabled = !valid;
+    rootSelect.disabled = !valid;
+    if (!valid) {
+      showTree.disabled = true;
+      showTree.textContent = 'Show Candidate Tree';
+      treeOutput.textContent = '';
+      treeStatus.textContent = '';
+      return;
+    }
+
+    const selectedId = Number(latest.selectedBone);
+    const selectedNode = graph.nodes.find(node => node.boneId === selectedId)
+      || graph.nodes[0];
+    if (!selectedNode) return;
+    influenceSelect.value = selectedNode.boneId;
+    rootSelect.value = String(
+      latest.candidateRootId ?? graph.nodes[0].boneId);
+    addStat('Total weight', graphMetric(selectedNode.totalWeight));
+    addStat('Vertices', selectedNode.affectedVertexCount.toLocaleString());
+    addStat('Max weight', graphMetric(selectedNode.maxVertexWeight));
+    addStat('Weighted radius', graphMetric(selectedNode.weightedRadius));
+    if (selectedRelationship
+        && Number(selectedRelationship.boneA) !== selectedNode.boneId
+        && Number(selectedRelationship.boneB) !== selectedNode.boneId) {
+      selectedRelationship = null;
+    }
+
+    const candidateRelationships = graph.relationships
+      .filter(item => item.boneA === selectedNode.boneId
+        || item.boneB === selectedNode.boneId)
+      .map(item => ({...item, _boneId: selectedNode.boneId}))
+      .sort(compareNeighborRelationships);
+    candidateRelationships.slice(0, INFLUENCE_NEIGHBOR_DISPLAY_LIMIT)
+      .forEach(item => {
+        const neighborId = relationshipNeighbor(item, selectedNode.boneId);
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'inspector-skinning-neighbor-row';
+        row.textContent = `ID ${neighborId}  overlap ${graphMetric(item.containment)}`
+          + ` \u00b7 distance ${graphMetric(item.normalizedDistance)}`;
+        row.title = `Shared vertices ${item.sharedVertexCount}; `
+          + `Jaccard ${graphMetric(item.jaccard)}`;
+        row.addEventListener('click', () => {
+          selectedRelationship = item;
+          setSelectedBone(mesh, neighborId);
+          const mainSelect = section.closest('.inspector-skinning-section')
+            ?.querySelector('.inspector-skinning-bone');
+          if (mainSelect) mainSelect.value = neighborId;
+          update(getSkinningState(mesh));
+        });
+        neighbors.appendChild(row);
+      });
+    if (candidateRelationships.length > INFLUENCE_NEIGHBOR_DISPLAY_LIMIT) {
+      addText(neighbors, 'inspector-skinning-hint',
+        `+ ${candidateRelationships.length - INFLUENCE_NEIGHBOR_DISPLAY_LIMIT} more`);
+    }
+
+    if (selectedRelationship) {
+      const item = selectedRelationship;
+      const heading = addText(relationship, 'inspector-skinning-subtitle',
+        `${item.boneA} \u2194 ${item.boneB}`);
+      heading.dataset.relationshipDetail = 'true';
+      [
+        ['Shared vertices', item.sharedVertexCount.toLocaleString()],
+        ['Containment', graphMetric(item.containment)],
+        ['Jaccard', graphMetric(item.jaccard)],
+        ['Min overlap', graphMetric(item.minOverlap)],
+        ['Product overlap', graphMetric(item.productOverlap)],
+        ['Center distance', graphMetric(item.centerDistance)],
+        ['Normalized distance', graphMetric(item.normalizedDistance)],
+      ].forEach(([label, value]) => addStatTo(relationship, label, value));
+    }
+
+    const tree = latest.candidateTree;
+    treeStatus.textContent = tree
+      ? `Candidate graph has ${tree.components.length} component${
+        tree.components.length === 1 ? '' : 's'}.`
+      : 'Build a candidate tree from the manually selected root.';
+    treeOutput.textContent = tree ? candidateTreeText(tree) : '';
+    showTree.disabled = !tree;
+    showTree.textContent = latest.influenceVisualizationMode === 'tree'
+      ? 'Hide Candidate Tree' : 'Show Candidate Tree';
+    showTree.classList.toggle(
+      'active', latest.influenceVisualizationMode === 'tree');
+  }
+
+  function addStatTo(parentNode, label, value) {
+    const row = document.createElement('div');
+    row.className = 'inspector-skinning-coverage-stat';
+    addText(row, 'inspector-label', label);
+    addText(row, 'inspector-value', value);
+    parentNode.appendChild(row);
+  }
+
+  influenceSelect.addEventListener('change', () => {
+    selectedRelationship = null;
+    setSelectedBone(mesh, Number(influenceSelect.value));
+    update();
+  });
+  rootSelect.addEventListener('change', () => {
+    setCandidateTreeRoot(mesh, Number(rootSelect.value));
+    update();
+  });
+  update(state);
+  skinningUpdates.set(mesh, update);
+  return {update};
+}
+
 function buildSkinningChainControls(parent, mesh, state) {
   const chain = document.createElement('div');
   chain.className = 'inspector-skinning-chain';
@@ -520,6 +809,8 @@ function buildSkinningChainControls(parent, mesh, state) {
   helperRow.appendChild(resetChain);
   chain.appendChild(helperRow);
   const coverage = buildSkinningCoverageControls(chain, mesh, state);
+  const influenceGraph = buildSkinningInfluenceGraphControls(
+    chain, mesh, state);
 
   function update() {
     const latest = getSkinningState(mesh);
@@ -540,6 +831,7 @@ function buildSkinningChainControls(parent, mesh, state) {
     syncSkinningAngleControls(
       chain.closest('.inspector-skinning-section'), mesh);
     coverage.update(latest);
+    influenceGraph.update(latest);
     syncSkinningHeatmapControls(
       chain.closest('.inspector-skinning-section'), mesh);
   }
@@ -570,6 +862,7 @@ function renderSkinningControls(section, mesh, state) {
   load.textContent = 'Weights loaded';
   status.hidden = true;
   controls.hidden = false;
+  skinningUpdates.delete(mesh);
   controls.replaceChildren();
 
   const summary = document.createElement('div');
@@ -592,6 +885,7 @@ function renderSkinningControls(section, mesh, state) {
   boneSelect.disabled = !state.boneIds.length;
   boneSelect.addEventListener('change', () => {
     setSelectedBone(mesh, Number(boneSelect.value));
+    skinningUpdates.get(mesh)?.();
   });
   boneLabel.appendChild(boneSelect);
   controls.appendChild(boneLabel);

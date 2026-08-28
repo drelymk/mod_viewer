@@ -1129,6 +1129,35 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 .inspector-skinning-residual.active { color: var(--accent-soft); border-color: var(--accent-soft); }
 .inspector-skinning-add-missing { margin-top: 2px; }
+.inspector-skinning-influence-graph, .inspector-skinning-candidate-tree {
+  display: flex; flex-direction: column; gap: 5px; padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.inspector-skinning-graph-stats { display: flex; flex-direction: column; gap: 3px; }
+.inspector-skinning-neighbors { display: flex; flex-direction: column; gap: 3px; }
+.inspector-skinning-neighbor-row {
+  min-height: 25px; padding: 3px 6px; color: var(--text-muted);
+  background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); text-align: left; cursor: pointer; font: inherit;
+}
+.inspector-skinning-neighbor-row:hover {
+  color: var(--accent-soft); border-color: var(--accent-soft);
+}
+.inspector-skinning-influence-graph-show.active,
+.inspector-skinning-tree-show.active {
+  color: var(--accent-soft); border-color: var(--accent-soft);
+}
+.inspector-skinning-relationship {
+  display: flex; flex-direction: column; gap: 3px; padding: 5px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.inspector-skinning-tree-status { color: var(--text-muted); font-size: 10px; line-height: 1.35; }
+.inspector-skinning-tree-output {
+  margin: 0; padding: 6px; color: var(--text-muted);
+  background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font: 10px/1.35 ui-monospace, monospace;
+  white-space: pre-wrap;
+}
 
 #mod-folder-empty[hidden] { display: none; }
 #mod-folder-empty .ui-button { margin-top: 5px; }
