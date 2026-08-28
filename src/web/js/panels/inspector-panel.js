@@ -23,6 +23,8 @@ import {
   setPhysicsAxis, setPhysicsTargetAngle, setPhysicsFrequency,
   setPhysicsDamping, setPhysicsMotionStrength,
   setPhysicsLinearMotionStrength, setPhysicsContinuousLinearResponse,
+  getPhysicsConstraintDiagnostics,
+  setPhysicsConstraintsEnabled, setPhysicsMaxBendDegrees,
   setPhysicsGravityEnabled, setPhysicsGravityScale,
   setPhysicsEnabled,
   applyPhysicsKick,
@@ -583,6 +585,7 @@ function forestDiagnosticsPayload(state) {
           state.physicsGravityDiagnostics?.maxAbsLocalAcceleration || 0,
         components: state.physicsGravityDiagnostics?.components || [],
       },
+      constraints: getPhysicsConstraintDiagnostics(state),
       settled: !!state.physicsSettled,
       joints: Object.fromEntries(
         [...(state.physicsState?.joints || new Map()).entries()]
@@ -1079,6 +1082,7 @@ function physicsSummary(state) {
     gravityDiagnostics?.maxAbsTotalAcceleration) || 0;
   const gravityDirection = (state.physicsGravityLocal
     || GRAVITY_WORLD_DIRECTION).map(value => Number(value).toFixed(2));
+  const constraintDiagnostics = getPhysicsConstraintDiagnostics(state);
   return [
     `Angular response ${angularResponse.toFixed(2)} / `
       + `Discrete linear ${linearResponse.toFixed(2)}`,
@@ -1097,6 +1101,10 @@ function physicsSummary(state) {
       + `Scale ${gravityScale.toFixed(1)} / Max `
       + `${(gravityMaxAcceleration * 180 / Math.PI).toFixed(1)} deg/s2`,
     `Gravity local [${gravityDirection.join(', ')}]`,
+    `Joint limits ${constraintDiagnostics.enabled ? 'On' : 'Off'} / `
+      + `Max component ${constraintDiagnostics.maxComponentBend.toFixed(0)}°`,
+    `At limit ${constraintDiagnostics.atLimitCount} / `
+      + `${constraintDiagnostics.limitedJointCount} joints`,
   ].join('\n');
 }
 
@@ -1304,6 +1312,58 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   addText(gravity, 'inspector-skinning-hint',
     'A poorly aligned axis may produce little visible gravity motion.');
   section.appendChild(gravity);
+
+  const constraints = document.createElement('div');
+  constraints.className = 'inspector-skinning-physics-constraints';
+  const constraintsTitle = document.createElement('div');
+  constraintsTitle.className = 'inspector-skinning-subtitle';
+  constraintsTitle.textContent = 'Rest Constraints';
+  constraints.appendChild(constraintsTitle);
+  addText(constraints, 'inspector-skinning-hint',
+    'Limits are measured from the inferred rest pose and distributed across '
+      + 'each component\'s depth.');
+
+  const constraintsEnableLabel = document.createElement('label');
+  constraintsEnableLabel.className =
+    'inspector-skinning-physics-enable-label';
+  const constraintsEnableInput = document.createElement('input');
+  constraintsEnableInput.type = 'checkbox';
+  constraintsEnableInput.className =
+    'inspector-skinning-physics-constraints-enable';
+  constraintsEnableInput.addEventListener('change', () => {
+    setPhysicsConstraintsEnabled(mesh, constraintsEnableInput.checked);
+    update();
+  });
+  constraintsEnableLabel.appendChild(constraintsEnableInput);
+  addText(constraintsEnableLabel, 'inspector-label', 'Enable Joint Limits');
+  constraints.appendChild(constraintsEnableLabel);
+
+  const maxBendLabel = document.createElement('label');
+  maxBendLabel.className = 'inspector-skinning-field';
+  const maxBendHeader = document.createElement('span');
+  maxBendHeader.className = 'inspector-skinning-rotation-header';
+  addText(maxBendHeader, 'inspector-label', 'Max Component Bend');
+  const maxBendValue = addText(maxBendHeader,
+    'inspector-skinning-physics-max-bend-value', '45°');
+  maxBendLabel.appendChild(maxBendHeader);
+  const maxBendInput = document.createElement('input');
+  maxBendInput.type = 'range';
+  maxBendInput.className = 'inspector-skinning-physics-max-bend';
+  maxBendInput.min = '0';
+  maxBendInput.max = '90';
+  maxBendInput.step = '1';
+  maxBendInput.value = state.physicsMaxBendDegrees;
+  maxBendInput.addEventListener('input', () => {
+    setPhysicsMaxBendDegrees(mesh, maxBendInput.value);
+    update();
+  });
+  maxBendLabel.appendChild(maxBendInput);
+  constraints.appendChild(maxBendLabel);
+
+  const constraintsDiagnostic = addText(constraints,
+    'inspector-skinning-physics-constraints-diagnostic',
+    'At Limit 0 / 0 joints');
+  section.appendChild(constraints);
 
   const translation = document.createElement('div');
   translation.className = 'inspector-skinning-physics-translation';
@@ -1613,6 +1673,15 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     gravityDiagnostic.textContent = `Max Gravity Accel ${(
       maxGravityAcceleration * 180 / Math.PI).toFixed(1)} deg/s2`
       + ` / Clamped ${clampedGravityComponents}`;
+    const constraintDiagnostics = getPhysicsConstraintDiagnostics(latest);
+    constraintsEnableInput.disabled = !valid;
+    constraintsEnableInput.checked = constraintDiagnostics.enabled;
+    maxBendInput.disabled = !valid;
+    maxBendInput.value = constraintDiagnostics.maxComponentBend;
+    maxBendValue.textContent = `${constraintDiagnostics.maxComponentBend.toFixed(0)}°`;
+    constraintsDiagnostic.textContent = `At Limit ${constraintDiagnostics.atLimitCount}`
+      + ` / ${constraintDiagnostics.limitedJointCount} joints`
+      + ` · Max Usage ${(constraintDiagnostics.maxUsage * 100).toFixed(0)}%`;
     translationAxisButtons.querySelectorAll('button').forEach(button => {
       button.disabled = !valid;
       button.classList.toggle('selected', button.textContent === translationAxis);

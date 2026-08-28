@@ -11,12 +11,16 @@ import {
 } from './weight-deformation.js';
 import {
   DEFAULT_PHYSICS_DAMPING_RATIO, DEFAULT_PHYSICS_FREQUENCY_HZ,
+  DEFAULT_PHYSICS_MAX_BEND_DEGREES,
   GRAVITY_WORLD_DIRECTION, MIN_GRAVITY_LEVER_RATIO, STANDARD_GRAVITY,
   applyReferenceFrameAngularDelta,
   applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
+  applyJointLimitsToAngles,
+  applyPhysicsJointLimits,
   applyPhysicsKick as applyPhysicsKickState, initializePhysicsState,
-  buildGravityAngularAccelerations, buildPhysicsEquilibriumAngles,
+  buildGravityAngularAccelerations, buildPhysicsConstraintDiagnostics,
+  buildPhysicsEquilibriumAngles, buildPhysicsJointLimits,
   isPhysicsSettled, physicsAngleMap, resetPhysicsState,
   stepSpringPhysics,
 } from './weight-physics.js';
@@ -30,13 +34,17 @@ export {
 
 export {
   DEFAULT_ANGLE_TOLERANCE, DEFAULT_PHYSICS_DAMPING_RATIO,
-  DEFAULT_PHYSICS_FREQUENCY_HZ, DEFAULT_VELOCITY_TOLERANCE,
+  DEFAULT_PHYSICS_FREQUENCY_HZ, DEFAULT_PHYSICS_MAX_BEND_DEGREES,
+  DEFAULT_VELOCITY_TOLERANCE,
   GRAVITY_WORLD_DIRECTION, MIN_GRAVITY_LEVER_RATIO, STANDARD_GRAVITY,
   MAX_ANGULAR_VELOCITY, MAX_LOCAL_ANGLE,
   applyReferenceFrameAngularDelta,
   applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
-  buildGravityAngularAccelerations, buildPhysicsEquilibriumAngles,
+  applyJointLimitsToAngles,
+  applyPhysicsJointLimits,
+  buildGravityAngularAccelerations, buildPhysicsConstraintDiagnostics,
+  buildPhysicsEquilibriumAngles, buildPhysicsJointLimits,
   representativeComponentLever,
   buildPhysicsTargetAngles, initializePhysicsState, isPhysicsSettled,
   physicsAngleMap, resetPhysicsState, stepSpringPhysics,
@@ -105,6 +113,10 @@ function newState() {
     physicsLinearMotionStrength: 0.35,
     physicsRootLinearVelocityLocal: [0, 0, 0],
     physicsContinuousLinearResponse: 0.35,
+    physicsConstraintsEnabled: false,
+    physicsMaxBendDegrees: DEFAULT_PHYSICS_MAX_BEND_DEGREES,
+    physicsJointLimits: null,
+    physicsConstraintDiagnostics: null,
     physicsGravityEnabled: false,
     physicsGravityScale: 1.0,
     physicsGravityLocal: [...GRAVITY_WORLD_DIRECTION],
@@ -194,6 +206,45 @@ export function gravityDirectionLocal(mesh) {
   return new THREE.Vector3(...GRAVITY_WORLD_DIRECTION)
     .applyQuaternion(quaternion.clone().normalize().invert())
     .normalize().toArray();
+}
+
+function refreshConstraintState(state) {
+  if (!state.physicsConstraintsEnabled || !state.candidateForest) {
+    state.physicsJointLimits = null;
+    state.physicsConstraintDiagnostics = null;
+    return;
+  }
+  const result = buildPhysicsJointLimits(
+    state.candidateForest,
+    THREE.MathUtils.degToRad(state.physicsMaxBendDegrees));
+  state.physicsJointLimits = result.limitByBoneId;
+  state.physicsConstraintDiagnostics = result.diagnostics;
+}
+
+export function getPhysicsConstraintDiagnostics(meshOrState) {
+  const state = states.get(meshOrState) || meshOrState;
+  const enabled = !!state?.physicsConstraintsEnabled
+    && state.physicsJointLimits instanceof Map;
+  const dynamic = buildPhysicsConstraintDiagnostics(
+    state?.physicsState, enabled ? state.physicsJointLimits : null,
+    enabled ? state.physicsConstraintDiagnostics : null);
+  return {
+    enabled,
+    maxComponentBend: Number(state?.physicsMaxBendDegrees) || 0,
+    limitedJointCount: dynamic.limitedJointCount,
+    atLimitCount: dynamic.atLimitCount,
+    positiveLimitCount: dynamic.positiveLimitCount,
+    negativeLimitCount: dynamic.negativeLimitCount,
+    maxUsage: dynamic.maxUsage,
+    components: dynamic.components.map(component => ({
+      componentId: component.componentId,
+      rootId: component.rootId,
+      maxDepth: component.maxDepth,
+      jointCount: component.jointCount,
+      localLimitDegrees: THREE.MathUtils.radToDeg(
+        component.localLimitRadians),
+    })),
+  };
 }
 
 function refreshGravityState(mesh, state) {
@@ -321,7 +372,7 @@ function handleModelTransformChanged(event) {
     if (Math.abs(projectedDelta) >= 1e-10 && angularStrength > 0) {
       applyReferenceFrameAngularDelta(
         state.physicsState, state.candidateForest,
-        projectedDelta, angularStrength);
+        projectedDelta, angularStrength, state.physicsJointLimits);
       physicsChanged = true;
       immediateDeformation = true;
     }
@@ -338,7 +389,8 @@ function handleModelTransformChanged(event) {
       applyReferenceFrameLinearVelocityDelta(
         state.physicsState, state.candidateForest, state.centerByBoneId,
         deltaVelocityLocal, state.physicsAxis,
-        state.physicsContinuousLinearResponse, velocityDiagnostics);
+        state.physicsContinuousLinearResponse, velocityDiagnostics,
+        state.physicsJointLimits);
       if (Number(velocityDiagnostics.maxAbsDeltaOmega) >= 1e-10
           && Number(state.physicsContinuousLinearResponse) > 0) {
         physicsChanged = true;
@@ -351,7 +403,8 @@ function handleModelTransformChanged(event) {
       applyReferenceFrameTranslationDelta(
         state.physicsState, state.candidateForest, state.centerByBoneId,
         translationLocal, state.physicsAxis,
-        state.physicsLinearMotionStrength, translationDiagnostics);
+        state.physicsLinearMotionStrength, translationDiagnostics,
+        state.physicsJointLimits);
       state.lastTranslationLag = Number(
         translationDiagnostics.maxAbsLag) || 0;
       if (Math.abs(state.lastTranslationLag) >= 1e-10
@@ -410,6 +463,9 @@ function stopPhysics(mesh, state) {
   state.physicsGravityLocal = [...GRAVITY_WORLD_DIRECTION];
   state.physicsGravityAccelerations = null;
   state.physicsGravityDiagnostics = null;
+  state.physicsConstraintsEnabled = false;
+  state.physicsJointLimits = null;
+  state.physicsConstraintDiagnostics = null;
   clearMotionDiagnostics(state);
   if (state.deformationMode === 'physics') state.deformationMode = null;
 }
@@ -463,6 +519,8 @@ function advancePhysicsMesh(mesh, timestamp) {
         externalAngularAccelerationByBoneId:
           state.physicsGravityEnabled
             ? state.physicsGravityAccelerations : null,
+        jointLimitByBoneId: state.physicsConstraintsEnabled
+          ? state.physicsJointLimits : null,
         maxDt: PHYSICS_STEP,
       });
     state.physicsAccumulator -= PHYSICS_STEP;
@@ -483,6 +541,8 @@ function advancePhysicsMesh(mesh, timestamp) {
       externalAngularAccelerationByBoneId:
         state.physicsGravityEnabled
           ? state.physicsGravityAccelerations : null,
+      jointLimitByBoneId: state.physicsConstraintsEnabled
+        ? state.physicsJointLimits : null,
     });
   if (state.physicsSettled) {
     state.physicsLastTimestamp = null;
@@ -1500,7 +1560,7 @@ function updateInfluenceVisualization(mesh, state) {
 
 function refreshAfterForestTopologyChange(mesh, state) {
   cancelContinuousMotionTest();
-  refreshGravityState(mesh, state);
+  refreshConstraintState(state);
   if (state.physicsEnabled && state.deformationMode === 'physics') {
     state.physicsState = initializePhysicsState(state.candidateForest);
     state.physicsReferenceQuaternion = mesh.quaternion.clone();
@@ -1512,6 +1572,7 @@ function refreshAfterForestTopologyChange(mesh, state) {
     activePhysicsMeshes.add(mesh);
     schedulePhysicsFrame();
   }
+  refreshGravityState(mesh, state);
   if (state.influenceVisualizationMode) {
     createInfluenceVisualization(
       mesh, state, state.influenceVisualizationMode);
@@ -2011,6 +2072,38 @@ export function setPhysicsGravityScale(mesh, scale) {
   return true;
 }
 
+export function setPhysicsConstraintsEnabled(mesh, enabled) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  state.physicsConstraintsEnabled = !!enabled;
+  refreshConstraintState(state);
+  if (state.physicsEnabled && state.deformationMode === 'physics') {
+    if (state.physicsConstraintsEnabled) {
+      applyPhysicsJointLimits(state.physicsState, state.physicsJointLimits);
+    }
+    applyDeformation(mesh, state);
+    wakePhysics(mesh, state);
+  }
+  return state.physicsConstraintsEnabled;
+}
+
+export function setPhysicsMaxBendDegrees(mesh, degrees) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  const value = Number(degrees);
+  if (!Number.isFinite(value)) return false;
+  state.physicsMaxBendDegrees = Math.max(0, Math.min(90, value));
+  refreshConstraintState(state);
+  if (state.physicsEnabled && state.deformationMode === 'physics') {
+    if (state.physicsConstraintsEnabled) {
+      applyPhysicsJointLimits(state.physicsState, state.physicsJointLimits);
+    }
+    applyDeformation(mesh, state);
+    wakePhysics(mesh, state);
+  }
+  return true;
+}
+
 export function setPhysicsEnabled(mesh, enabled) {
   const state = stateFor(mesh);
   if (!state?.loaded || !state.candidateForest) return false;
@@ -2028,6 +2121,7 @@ export function setPhysicsEnabled(mesh, enabled) {
   state.physicsEnabled = true;
   state.physicsReferenceQuaternion = mesh.quaternion.clone();
   clearMotionDiagnostics(state);
+  refreshConstraintState(state);
   state.physicsState = initializePhysicsState(state.candidateForest);
   refreshGravityState(mesh, state);
   state.physicsTransforms = null;
@@ -2050,7 +2144,8 @@ export function applyPhysicsKick(mesh, direction = 1) {
   }
   const sign = Number(direction) < 0 ? -1 : 1;
   applyPhysicsKickState(
-    state.physicsState, state.candidateForest, sign * PHYSICS_KICK_SPEED);
+    state.physicsState, state.candidateForest, sign * PHYSICS_KICK_SPEED,
+    state.physicsConstraintsEnabled ? state.physicsJointLimits : null);
   wakePhysics(mesh, state);
   return true;
 }
@@ -2064,6 +2159,7 @@ export function resetPhysicsMotion(mesh) {
   state.physicsTargetAngle = 0;
   state.physicsReferenceQuaternion = mesh.quaternion.clone();
   clearMotionDiagnostics(state);
+  refreshConstraintState(state);
   refreshGravityState(mesh, state);
   state.physicsTransforms = null;
   state.physicsAccumulator = 0;

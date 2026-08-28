@@ -725,6 +725,173 @@ def test_skinning_physics_solver_covers_targets_kicks_and_equilibrium(
         context.close()
 
 
+def test_skinning_joint_limits_cover_depth_safety_and_motion_paths(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"JointLimits": _payload("JointLimits")})
+    try:
+        result = page.evaluate("""async () => {
+          const physics = await import('./js/mesh/weight-physics.js');
+          const forest = {
+            components: [
+              {componentId: 4, rootId: 0, nodeIds: [0, 1, 2, 3, 4],
+                maxDepth: 4,
+                depthById: {0: 0, 1: 1, 2: 2, 3: 3, 4: 4}},
+              {componentId: 9, rootId: 10, nodeIds: [10, 11, 12],
+                maxDepth: 2,
+                depthById: {10: 0, 11: 1, 12: 2}},
+            ],
+          };
+          const totalLimit = Math.PI * 20 / 180;
+          const built = physics.buildPhysicsJointLimits(forest, totalLimit);
+          const radians = degrees => Math.PI * degrees / 180;
+          const positive = physics.initializePhysicsState(forest);
+          positive.joints.get(1).angle = radians(8);
+          positive.joints.get(1).angularVelocity = 3;
+          physics.applyPhysicsJointLimits(positive, built.limitByBoneId);
+
+          const inward = physics.initializePhysicsState(forest);
+          inward.joints.get(1).angle = radians(5);
+          inward.joints.get(1).angularVelocity = -3;
+          physics.applyPhysicsJointLimits(inward, built.limitByBoneId);
+          physics.stepSpringPhysics(inward, forest, 1 / 120, {
+            targetAngleRadians: 0, frequencyHz: 2, dampingRatio: .35,
+            jointLimitByBoneId: built.limitByBoneId,
+          });
+
+          const negative = physics.initializePhysicsState(forest);
+          negative.joints.get(1).angle = radians(-8);
+          negative.joints.get(1).angularVelocity = -3;
+          physics.applyPhysicsJointLimits(negative, built.limitByBoneId);
+
+          const locked = physics.initializePhysicsState(forest);
+          locked.joints.get(1).angle = radians(8);
+          locked.joints.get(1).angularVelocity = 3;
+          const zeroLimits = new Map(built.limitByBoneId);
+          zeroLimits.set(1, 0);
+          physics.applyPhysicsJointLimits(locked, zeroLimits);
+
+          const targetState = physics.initializePhysicsState(forest);
+          for (let index = 0; index < 1800; index += 1) {
+            physics.stepSpringPhysics(targetState, forest, 1 / 120, {
+              targetAngleRadians: radians(80), frequencyHz: 2,
+              dampingRatio: .35, jointLimitByBoneId: built.limitByBoneId,
+            });
+          }
+          const targetEquilibrium = physics.buildPhysicsEquilibriumAngles(
+            forest, radians(80), 2, null, built.limitByBoneId);
+          const targetSettled = physics.isPhysicsSettled(
+            targetState, forest, radians(80), {
+              frequencyHz: 2, jointLimitByBoneId: built.limitByBoneId,
+            });
+
+          const gravityState = physics.initializePhysicsState(forest);
+          const gravity = new Map([[1, 100], [2, 100], [3, 100], [4, 100],
+            [11, 100], [12, 100]]);
+          for (let index = 0; index < 1800; index += 1) {
+            physics.stepSpringPhysics(gravityState, forest, 1 / 120, {
+              targetAngleRadians: 0, frequencyHz: 2, dampingRatio: .35,
+              externalAngularAccelerationByBoneId: gravity,
+              jointLimitByBoneId: built.limitByBoneId,
+            });
+          }
+          const gravitySettled = physics.isPhysicsSettled(
+            gravityState, forest, 0, {
+              frequencyHz: 2,
+              externalAngularAccelerationByBoneId: gravity,
+              jointLimitByBoneId: built.limitByBoneId,
+            });
+
+          const direct = physics.initializePhysicsState(forest);
+          physics.applyReferenceFrameAngularDelta(
+            direct, forest, radians(-90), 1, built.limitByBoneId);
+          const translation = physics.initializePhysicsState(forest);
+          const centers = new Map([
+            [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
+            [3, [3, 0, 0]], [4, [4, 0, 0]],
+            [10, [0, 0, 0]], [11, [1, 0, 0]], [12, [2, 0, 0]],
+          ]);
+          physics.applyReferenceFrameTranslationDelta(
+            translation, forest, centers, [100, 0, 0], 'Z', 1, null,
+            built.limitByBoneId);
+          const kicked = physics.initializePhysicsState(forest);
+          kicked.joints.forEach((joint, boneId) => {
+            joint.angle = built.limitByBoneId.get(boneId);
+          });
+          physics.applyPhysicsKick(kicked, forest, 100, built.limitByBoneId);
+          const safe = physics.initializePhysicsState(forest);
+          safe.joints.get(1).angle = radians(120);
+          physics.applyPhysicsJointLimits(safe, null);
+          const disabled = physics.initializePhysicsState(forest);
+          const enabled = physics.initializePhysicsState(forest);
+          physics.stepSpringPhysics(disabled, forest, 1 / 120, {
+            targetAngleRadians: radians(10), frequencyHz: 2, dampingRatio: .35,
+          });
+          physics.stepSpringPhysics(enabled, forest, 1 / 120, {
+            targetAngleRadians: radians(10), frequencyHz: 2, dampingRatio: .35,
+            jointLimitByBoneId: new Map(),
+          });
+          return {
+            map: [...built.limitByBoneId.entries()],
+            diagnostics: built.diagnostics,
+            positive: [positive.joints.get(1).angle,
+              positive.joints.get(1).angularVelocity],
+            inward: [inward.joints.get(1).angle,
+              inward.joints.get(1).angularVelocity],
+            negative: [negative.joints.get(1).angle,
+              negative.joints.get(1).angularVelocity],
+            locked: [locked.joints.get(1).angle,
+              locked.joints.get(1).angularVelocity],
+            target: {
+              angles: [...targetState.joints.entries()].map(([id, joint]) =>
+                [id, joint.angle]),
+              equilibrium: [...targetEquilibrium.entries()],
+              settled: targetSettled,
+            },
+            gravity: {
+              angles: [...gravityState.joints.entries()].map(([id, joint]) =>
+                [id, joint.angle]),
+              settled: gravitySettled,
+            },
+            direct: [...direct.joints.values()].map(joint => joint.angle),
+            translation: [...translation.joints.values()].map(
+              joint => joint.angle),
+            kick: [...kicked.joints.values()].map(joint =>
+              joint.angularVelocity),
+            safe: safe.joints.get(1).angle,
+            disabled: [...disabled.joints.entries()].map(([id, joint]) =>
+              [id, joint.angle, joint.angularVelocity]),
+            enabled: [...enabled.joints.entries()].map(([id, joint]) =>
+              [id, joint.angle, joint.angularVelocity]),
+          };
+        }""")
+        assert [entry[0] for entry in result["map"]] == [1, 2, 3, 4, 11, 12]
+        assert [entry[1] for entry in result["map"]] == pytest.approx([
+            math.radians(5), math.radians(5), math.radians(5), math.radians(5),
+            math.radians(10), math.radians(10)])
+        assert result["diagnostics"]["jointCount"] == 6
+        assert result["diagnostics"]["components"][0]["maxDepth"] == 4
+        assert result["positive"] == pytest.approx([math.radians(5), 0])
+        assert result["inward"][0] < math.radians(5)
+        assert result["inward"][1] < 0
+        assert result["negative"] == pytest.approx([math.radians(-5), 0])
+        assert result["locked"] == [0, 0]
+        assert result["target"]["settled"]
+        assert [entry[1] for entry in result["target"]["equilibrium"]] == pytest.approx([
+            math.radians(5), math.radians(5), math.radians(5), math.radians(5),
+            math.radians(10), math.radians(10)])
+        assert max(abs(entry[1]) for entry in result["target"]["angles"]) <= math.radians(10) + 1e-6
+        assert result["gravity"]["settled"]
+        assert max(abs(entry[1]) for entry in result["gravity"]["angles"]) <= math.radians(10) + 1e-6
+        assert max(abs(angle) for angle in result["direct"]) <= math.radians(10) + 1e-6
+        assert max(abs(angle) for angle in result["translation"]) <= math.radians(10) + 1e-6
+        assert max(abs(velocity) for velocity in result["kick"]) <= 1e-9
+        assert result["safe"] == pytest.approx(math.radians(90))
+        assert result["disabled"] == result["enabled"]
+    finally:
+        context.close()
+
+
 def test_skinning_gravity_solver_builds_safe_component_accelerations(
         edge_browser, frontend_url):
     context, page = _page(
@@ -2337,6 +2504,218 @@ def test_skinning_continuous_motion_ramps_stops_reverses_and_cleans_up(
         context.close()
 
 
+def test_skinning_joint_limits_lifecycle_preserves_state_and_cleanup(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"JointLimitLifecycle": _payload("JointLimitLifecycle")})
+    try:
+        _open(page, "JointLimitLifecycle")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        result = page.evaluate("""async () => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.pywebview.api.get_skinning_preview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test',
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          await experiment.loadSkinningWeights(mesh);
+          experiment.buildCandidateTree(mesh, 0);
+          const state = experiment.getSkinningState(mesh);
+          state.centerByBoneId = new Map([
+            [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
+          ]);
+          state.influenceGraph.boundingSphereRadius = 2;
+
+          const queuedFrames = [];
+          const originalRequestAnimationFrame = window.requestAnimationFrame;
+          const originalCancelAnimationFrame = window.cancelAnimationFrame;
+          window.requestAnimationFrame = callback => {
+            queuedFrames.push(callback);
+            return callback;
+          };
+          window.cancelAnimationFrame = callback => {
+            const index = queuedFrames.indexOf(callback);
+            if (index >= 0) queuedFrames.splice(index, 1);
+          };
+          const runFrame = timestamp => {
+            const callbacks = queuedFrames.splice(0);
+            if (!callbacks.length) throw new Error('Expected a queued frame.');
+            callbacks.forEach(callback => callback(timestamp));
+          };
+          const settle = timestamp => {
+            let current = timestamp;
+            let frames = 0;
+            while (queuedFrames.length && frames < 900) {
+              runFrame(current);
+              current += 16.7;
+              frames += 1;
+            }
+            return {current, frames};
+          };
+          const jointAngles = () => [...state.physicsState.joints.values()]
+            .map(joint => joint.angle);
+          const maxAngle = () => Math.max(...jointAngles().map(
+            angle => Math.abs(angle)));
+          const firstState = () => state.physicsState;
+
+          experiment.setPhysicsEnabled(mesh, true);
+          let timing = settle(0);
+          experiment.setPhysicsConstraintsEnabled(mesh, true);
+          experiment.setPhysicsMaxBendDegrees(mesh, 10);
+          const enabledState = firstState();
+          experiment.setPhysicsTargetAngle(mesh, 40);
+          timing = settle(timing.current);
+          const limited = {
+            stateSame: state.physicsState === enabledState,
+            limits: [...state.physicsJointLimits.values()],
+            maxAngle: maxAngle(),
+            settled: state.physicsSettled,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+          };
+
+          const limitedAngle = state.physicsState.joints.get(1).angle;
+          experiment.setPhysicsMaxBendDegrees(mesh, 50);
+          const loosenedImmediate = {
+            stateSame: state.physicsState === enabledState,
+            angle: state.physicsState.joints.get(1).angle,
+            anglePreserved: state.physicsState.joints.get(1).angle
+              === limitedAngle,
+            limits: [...state.physicsJointLimits.values()],
+            scheduled: experiment.isPhysicsScheduled(mesh),
+          };
+          timing = settle(timing.current);
+          const loosened = {
+            maxAngle: maxAngle(), settled: state.physicsSettled,
+          };
+
+          experiment.setPhysicsMaxBendDegrees(mesh, 10);
+          const tightenedImmediate = {
+            maxAngle: maxAngle(), scheduled: experiment.isPhysicsScheduled(mesh),
+          };
+          timing = settle(timing.current);
+          const tightened = {
+            maxAngle: maxAngle(), settled: state.physicsSettled,
+          };
+
+          experiment.setPhysicsTargetAngle(mesh, -40);
+          timing = settle(timing.current);
+          const reversed = {
+            maxAngle: maxAngle(), angle: state.physicsState.joints.get(1).angle,
+            settled: state.physicsSettled,
+          };
+
+          experiment.setPhysicsTargetAngle(mesh, 0);
+          experiment.setPhysicsGravityEnabled(mesh, true);
+          timing = settle(timing.current);
+          const gravityLimit = {
+            enabled: state.physicsGravityEnabled,
+            angle: state.physicsState.joints.get(1).angle,
+            maxAngle: maxAngle(), settled: state.physicsSettled,
+            mapPresent: state.physicsGravityAccelerations instanceof Map,
+          };
+
+          experiment.setPhysicsGravityEnabled(mesh, false);
+          timing = settle(timing.current);
+          const gravityOff = {
+            angle: state.physicsState.joints.get(1).angle,
+            settled: state.physicsSettled,
+            gravityMap: state.physicsGravityAccelerations,
+          };
+
+          experiment.resetPhysicsMotion(mesh);
+          const reset = {
+            angles: jointAngles(),
+            constraintsEnabled: state.physicsConstraintsEnabled,
+            mapPresent: state.physicsJointLimits instanceof Map,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+          };
+
+          experiment.setPhysicsConstraintsEnabled(mesh, false);
+          const constraintsOff = {
+            enabled: state.physicsConstraintsEnabled,
+            map: state.physicsJointLimits,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+          };
+          timing = settle(timing.current);
+          const constraintsOffSettled = {
+            angles: jointAngles(), settled: state.physicsSettled,
+          };
+
+          experiment.setPhysicsEnabled(mesh, false);
+          const disabled = {
+            physicsEnabled: state.physicsEnabled,
+            physicsState: state.physicsState,
+            constraintsEnabled: state.physicsConstraintsEnabled,
+            limits: state.physicsJointLimits,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+          };
+          window.requestAnimationFrame = originalRequestAnimationFrame;
+          window.cancelAnimationFrame = originalCancelAnimationFrame;
+          URL.revokeObjectURL(url);
+          return {
+            limited, loosenedImmediate, loosened, tightenedImmediate, tightened,
+            reversed, gravityLimit, gravityOff, reset, constraintsOff,
+            constraintsOffSettled, disabled,
+          };
+        }""")
+        assert result["limited"]["stateSame"]
+        assert result["limited"]["limits"] == pytest.approx([
+            math.radians(5), math.radians(5)])
+        assert result["limited"]["maxAngle"] <= math.radians(5) + 1e-6
+        assert result["limited"]["settled"]
+        assert not result["limited"]["scheduled"]
+        assert result["loosenedImmediate"]["stateSame"]
+        assert result["loosenedImmediate"]["anglePreserved"]
+        assert result["loosenedImmediate"]["limits"] == pytest.approx([
+            math.radians(25), math.radians(25)])
+        assert result["loosenedImmediate"]["scheduled"]
+        assert result["loosened"]["maxAngle"] == pytest.approx(
+            math.radians(20), abs=1e-3)
+        assert result["loosened"]["settled"]
+        assert result["tightenedImmediate"]["maxAngle"] <= math.radians(5) + 1e-6
+        assert result["tightenedImmediate"]["scheduled"]
+        assert result["tightened"]["maxAngle"] <= math.radians(5) + 1e-6
+        assert result["tightened"]["settled"]
+        assert result["reversed"]["angle"] == pytest.approx(
+            math.radians(-5), abs=1e-3)
+        assert result["reversed"]["maxAngle"] <= math.radians(5) + 1e-6
+        assert result["reversed"]["settled"]
+        assert result["gravityLimit"]["enabled"]
+        assert result["gravityLimit"]["angle"] < 0
+        assert result["gravityLimit"]["maxAngle"] <= math.radians(5) + 1e-6
+        assert result["gravityLimit"]["settled"]
+        assert result["gravityLimit"]["mapPresent"]
+        assert result["gravityOff"]["angle"] == pytest.approx(0, abs=1e-3)
+        assert result["gravityOff"]["settled"]
+        assert result["gravityOff"]["gravityMap"] is None
+        assert result["reset"]["angles"] == pytest.approx([0, 0])
+        assert result["reset"]["constraintsEnabled"]
+        assert result["reset"]["mapPresent"]
+        assert not result["reset"]["scheduled"]
+        assert not result["constraintsOff"]["enabled"]
+        assert result["constraintsOff"]["map"] is None
+        assert result["constraintsOff"]["scheduled"]
+        assert result["constraintsOffSettled"]["angles"] == pytest.approx([0, 0])
+        assert result["constraintsOffSettled"]["settled"]
+        assert not result["disabled"]["physicsEnabled"]
+        assert result["disabled"]["physicsState"] is None
+        assert not result["disabled"]["constraintsEnabled"]
+        assert result["disabled"]["limits"] is None
+        assert not result["disabled"]["scheduled"]
+    finally:
+        context.close()
+
+
 def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url,
@@ -2527,6 +2906,32 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
             && state.physicsLinearMotionStrength === .45
             && state.physicsContinuousLinearResponse === .55;
         }""")
+        constraints = physics.locator(
+            ".inspector-skinning-physics-constraints")
+        assert "Rest Constraints" in constraints.inner_text()
+        assert "Enable Joint Limits" in constraints.inner_text()
+        max_bend = constraints.locator(
+            ".inspector-skinning-physics-max-bend")
+        assert max_bend.get_attribute("min") == "0"
+        assert max_bend.get_attribute("max") == "90"
+        constraints_enable = constraints.locator(
+            ".inspector-skinning-physics-constraints-enable")
+        constraints_enable.check()
+        max_bend.evaluate("""node => {
+          node.value = '30';
+          node.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
+        page.wait_for_function("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return state.physicsConstraintsEnabled
+            && state.physicsMaxBendDegrees === 30
+            && state.physicsJointLimits instanceof Map
+            && state.physicsJointLimits.size === 2;
+        }""")
+        assert "At Limit" in constraints.locator(
+            ".inspector-skinning-physics-constraints-diagnostic").inner_text()
         gravity = physics.locator(".inspector-skinning-physics-gravity")
         assert "Direction Down (-Y)" in gravity.inner_text()
         gravity_scale = gravity.locator(
@@ -2596,6 +3001,12 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
         assert copied_physics["candidateForest"]["physics"]["linearResponse"] == .45
         assert copied_physics["candidateForest"]["physics"][
             "continuousLinearResponse"] == .55
+        copied_constraints = copied_physics["candidateForest"]["physics"][
+            "constraints"]
+        assert copied_constraints["enabled"] is True
+        assert copied_constraints["maxComponentBend"] == 30
+        assert copied_constraints["limitedJointCount"] == 2
+        assert copied_constraints["components"]
         assert copied_physics["candidateForest"]["physics"]["gravity"][
             "enabled"] is False
         assert copied_physics["candidateForest"]["physics"]["gravity"][
