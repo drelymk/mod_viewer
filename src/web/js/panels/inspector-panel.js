@@ -789,8 +789,8 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
 function buildSkinningAdvancedControls(parent, mesh, state) {
   const advanced = document.createElement('div');
   advanced.className = 'inspector-skinning-advanced';
-  const hierarchy = buildSkinningHierarchyControls(advanced, mesh, state);
   const physics = buildSkinningPhysicsControls(advanced, mesh, state);
+  const hierarchy = buildSkinningHierarchyControls(advanced, mesh, state);
   parent.appendChild(advanced);
   return {
     update(latest = getSkinningState(mesh)) {

@@ -2033,6 +2033,11 @@ def test_skinning_inspector_keeps_normal_controls_and_builds_hierarchy_lazily(
         assert copied["physics"]["enabled"]
 
         labels = page.locator(".inspector-skinning-section").inner_text()
+        order = page.locator(
+            ".inspector-skinning-advanced > div").evaluate_all(
+                "nodes => nodes.map(node => node.className)")
+        assert order == [
+            "inspector-skinning-physics", "inspector-skinning-hierarchy"]
         assert "Inferred Influence Hierarchy" in labels
         assert "Secondary Motion" in labels
         assert "Kick" not in labels
