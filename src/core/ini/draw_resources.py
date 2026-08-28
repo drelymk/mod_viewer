@@ -131,6 +131,15 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
             return {}
         visiting.add(cache_key)
         candidates = list(resource_copy_sources.get(cache_key, ()))
+        # WWMI binds the remapped blend buffer through a reusable runtime
+        # resource named ``ResourceBlendBufferOverride``.  The resource is
+        # intentionally empty in the INI because the command list fills it
+        # with a runtime copy, while the source descriptor remains the
+        # authored ``ResourceBlendBuffer``.  Keep this fallback limited to
+        # blend resources so unrelated override resources are not guessed.
+        if (cache_key.endswith("blendbufferoverride")
+                and not candidates):
+            candidates.append(resource_name[:-len("Override")])
         if not cache_key.endswith(".b"):
             candidates.append(resource_name + ".B")
         for candidate in candidates:
@@ -143,12 +152,35 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
         return {}
 
     component_positions, component_texcoords = {}, {}
+    component_vertex_resources = {}
+    component_blend_vertex_resources = {}
     hash_positions, hash_texcoords = {}, {}
 
     for name, info in section_info.items():
         if not name.lower().startswith("textureoverride"):
             continue
         base = name[len("TextureOverride"):]
+        component_name = None
+        component_suffix = None
+        for suffix in ("Blend", "Position", "Texcoord"):
+            if base.lower().endswith(suffix.lower()):
+                component_name = base[:-len(suffix)]
+                component_suffix = suffix
+                break
+        if component_name is not None:
+            resources_for_component = component_vertex_resources.setdefault(
+                component_name.lower(), {})
+            for slot, resource in (
+                    info.get("vertex_resources_at_end") or {}).items():
+                if resource is not None:
+                    resources_for_component.setdefault(slot, resource)
+            if component_suffix == "Blend":
+                blend_resources = component_blend_vertex_resources.setdefault(
+                    component_name.lower(), {})
+                for slot, resource in (
+                        info.get("vertex_resources_at_end") or {}).items():
+                    if resource is not None:
+                        blend_resources.setdefault(slot, resource)
         if base.lower().endswith("texcoord"):
             component = base[:-len("Texcoord")]
             if info["vb1"]:
@@ -216,6 +248,8 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
         "component_buffers": component_buffers,
         "component_positions": component_positions,
         "component_texcoords": component_texcoords,
+        "component_vertex_resources": component_vertex_resources,
+        "component_blend_vertex_resources": component_blend_vertex_resources,
         "hash_positions": hash_positions,
         "hash_texcoords": hash_texcoords,
         "global_ib": global_ib,

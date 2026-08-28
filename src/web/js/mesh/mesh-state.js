@@ -12,11 +12,15 @@ import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
+import {
+  disposeSkinningExperiment, getSkinningState,
+} from './weight-experiment.js';
 
 export const activeMeshes = [];
 
 export function resetMeshes({ preserveModelOrientation = false } = {}) {
   activeMeshes.forEach(mesh => {
+    disposeSkinningExperiment(mesh);
     detachOutline(mesh);
     scene.remove(mesh);
     mesh.geometry.dispose();
@@ -60,6 +64,7 @@ export function removeMesh(mesh) {
   if (!mesh) return false;
   const index = activeMeshes.indexOf(mesh);
   if (index < 0) return false;
+  disposeSkinningExperiment(mesh);
   detachOutline(mesh);
   scene.remove(mesh);
   mesh.geometry?.dispose?.();
@@ -203,6 +208,10 @@ function applyShapeTargets(mesh) {
   const previous = mesh.userData.shapeControlValues;
   if (previous?.length === controlValues.length
       && controlValues.every((value, index) => value === previous[index])) return;
+  const skinning = getSkinningState(mesh);
+  if (skinning?.loaded || skinning?.loading || skinning?.promise) {
+    disposeSkinningExperiment(mesh);
+  }
   mesh.userData.shapeControlValues = controlValues;
 
   const attr = mesh.geometry.attributes.position;

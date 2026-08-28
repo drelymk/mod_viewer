@@ -5,7 +5,7 @@ import os
 import struct
 from dataclasses import dataclass
 
-from .buffers import POSITION_OFFSET, BufferStore
+from .buffers import POSITION_OFFSET, BufferStore, VertexStreams
 from .conventions import GeometryConvention
 from .draw_call import DrawCall
 from .vertex_attributes import decode_normals
@@ -27,6 +27,111 @@ class PackedDrawGeometry:
     texcoords: bytes | None
     normals: bytes | None
     shape_targets: list[PackedShapeTarget]
+
+
+@dataclass(frozen=True)
+class PreparedDrawVertices:
+    """The compact source-vertex selection shared by render and skin previews."""
+
+    raw_indices: list[int]
+    used_vertices: list[int]
+    remap: dict[int, int]
+    streams: VertexStreams
+    position_path: str
+    texcoord_path: str
+
+
+def _prepare_draw_vertices(
+    draw: DrawCall,
+    group,
+    *,
+    mod_dir,
+    default_streams,
+    default_index_size,
+    buffers: BufferStore,
+    geometry_convention: GeometryConvention,
+):
+    """Select, validate, wind, and compact the vertices used by one draw."""
+    draw_ib_path = safe_resource_path(mod_dir, draw.ib_file)
+    if not draw_ib_path or not os.path.exists(draw_ib_path):
+        return None
+    raw = buffers.indices(
+        draw_ib_path, draw.start, draw.count,
+        draw.index_size if draw.index_size is not None else default_index_size)
+    if not raw:
+        return None
+    # DirectX resolves each index as index_buffer_value + BaseVertexLocation
+    # against the vertex buffer.
+    if draw.base:
+        raw = [value + draw.base for value in raw]
+    # Reject before buffer decoding, where negative offsets could be treated as
+    # end-relative instead of failing safely.
+    if any(index < 0 for index in raw):
+        return None
+
+    draw_pos_path = safe_resource_path(mod_dir, draw.position_file)
+    draw_tc_path = safe_resource_path(mod_dir, draw.texcoord_file)
+    if not (draw_pos_path and draw_tc_path
+            and os.path.exists(draw_pos_path)
+            and os.path.exists(draw_tc_path)):
+        return None
+    draw_position_stride = (
+        draw.position_stride
+        if draw.position_stride is not None else default_streams.position_stride)
+    draw_texcoord_stride = (
+        draw.texcoord_stride
+        if draw.texcoord_stride is not None else default_streams.texcoord_stride)
+    if (draw_pos_path != safe_resource_path(mod_dir, group["position_file"])
+            or draw_tc_path != safe_resource_path(mod_dir, group["texcoord_file"])
+            or draw_position_stride != default_streams.position_stride
+            or draw_texcoord_stride != default_streams.texcoord_stride):
+        draw_streams = buffers.vertex_streams(
+            draw_pos_path, draw_position_stride,
+            draw_tc_path, draw_texcoord_stride)
+    else:
+        draw_streams = default_streams
+
+    pos_data = draw_streams.position_data
+    tc_data = draw_streams.texcoord_data
+    uv_offset = draw_streams.uv_offset
+    uv_format = draw_streams.uv_format
+    uv_size = struct.calcsize(uv_format)
+
+    def finite_vertex(index):
+        pos_offset = index * draw_streams.position_stride + POSITION_OFFSET
+        if pos_offset < 0 or pos_offset + 12 > len(pos_data):
+            return False
+        position = struct.unpack_from("<fff", pos_data, pos_offset)
+        if not all(math.isfinite(value) for value in position):
+            return False
+        if tc_data:
+            tc_offset = index * draw_streams.texcoord_stride + uv_offset
+            if tc_offset < 0 or tc_offset + uv_size > len(tc_data):
+                return False
+            texcoord = struct.unpack_from(uv_format, tc_data, tc_offset)
+            if not all(math.isfinite(value) for value in texcoord):
+                return False
+        return True
+
+    valid_raw = []
+    for triangle_start in range(0, len(raw) - 2, 3):
+        triangle = raw[triangle_start:triangle_start + 3]
+        if all(finite_vertex(index) for index in triangle):
+            valid_raw.extend(triangle)
+    if not valid_raw:
+        return None
+    raw = valid_raw
+    if geometry_convention.reverse_winding:
+        for triangle_start in range(0, len(raw) - 2, 3):
+            raw[triangle_start + 1], raw[triangle_start + 2] = (
+                raw[triangle_start + 2], raw[triangle_start + 1])
+
+    used = sorted(set(raw))
+    return PreparedDrawVertices(
+        raw_indices=raw, used_vertices=used,
+        remap={old: new for new, old in enumerate(used)},
+        streams=draw_streams, position_path=draw_pos_path,
+        texcoord_path=draw_tc_path)
 
 
 @dataclass
@@ -115,96 +220,33 @@ def pack_draw_geometry(
     authored normals, and shape targets intentionally remain one operation so
     their ordering cannot drift apart.
     """
-    draw_ib_path = safe_resource_path(mod_dir, draw.ib_file)
-    if not draw_ib_path or not os.path.exists(draw_ib_path):
+    prepared = _prepare_draw_vertices(
+        draw, group, mod_dir=mod_dir, default_streams=default_streams,
+        default_index_size=default_index_size, buffers=buffers,
+        geometry_convention=geometry_convention)
+    if prepared is None:
         return None
-    raw = buffers.indices(
-        draw_ib_path, draw.start, draw.count,
-        draw.index_size if draw.index_size is not None else default_index_size)
-    if not raw:
-        return None
-    # DirectX resolves each index as index_buffer_value + BaseVertexLocation
-    # against the vertex buffer.
-    base = draw.base
-    if base:
-        raw = [value + base for value in raw]
-    # Reject before buffer decoding, where negative offsets could be treated as
-    # end-relative instead of failing safely.
-    if any(index < 0 for index in raw):
-        return None
-
-    draw_pos_path = safe_resource_path(mod_dir, draw.position_file)
-    draw_tc_path = safe_resource_path(mod_dir, draw.texcoord_file)
-    if not (draw_pos_path and draw_tc_path
-            and os.path.exists(draw_pos_path)
-            and os.path.exists(draw_tc_path)):
-        return None
-    effective_pos_path = draw_pos_path
-    draw_position_stride = (
-        draw.position_stride
-        if draw.position_stride is not None else default_streams.position_stride)
-    draw_texcoord_stride = (
-        draw.texcoord_stride
-        if draw.texcoord_stride is not None else default_streams.texcoord_stride)
-    if (draw_pos_path != safe_resource_path(mod_dir, group["position_file"])
-            or draw_tc_path != safe_resource_path(mod_dir, group["texcoord_file"])
-            or draw_position_stride != default_streams.position_stride
-            or draw_texcoord_stride != default_streams.texcoord_stride):
-        draw_streams = buffers.vertex_streams(
-            draw_pos_path, draw_position_stride,
-            draw_tc_path, draw_texcoord_stride)
-    else:
-        draw_streams = default_streams
-
+    raw = prepared.raw_indices
+    used = prepared.used_vertices
+    remap = prepared.remap
+    draw_streams = prepared.streams
     pos_data = draw_streams.position_data
     tc_data = draw_streams.texcoord_data
     uv_offset = draw_streams.uv_offset
     uv_format = draw_streams.uv_format
     uv_size = struct.calcsize(uv_format)
-
-    def finite_vertex(index):
-        pos_offset = index * draw_streams.position_stride + POSITION_OFFSET
-        if pos_offset < 0 or pos_offset + 12 > len(pos_data):
-            return False
-        position = struct.unpack_from("<fff", pos_data, pos_offset)
-        if not all(math.isfinite(value) for value in position):
-            return False
-        if tc_data:
-            tc_offset = index * draw_streams.texcoord_stride + uv_offset
-            if tc_offset < 0 or tc_offset + uv_size > len(tc_data):
-                return False
-            texcoord = struct.unpack_from(uv_format, tc_data, tc_offset)
-            if not all(math.isfinite(value) for value in texcoord):
-                return False
-        return True
-
-    valid_raw = []
-    for triangle_start in range(0, len(raw) - 2, 3):
-        triangle = raw[triangle_start:triangle_start + 3]
-        if all(finite_vertex(index) for index in triangle):
-            valid_raw.extend(triangle)
-    if not valid_raw:
-        return None
-    raw = valid_raw
-    if geometry_convention.reverse_winding:
-        for triangle_start in range(0, len(raw) - 2, 3):
-            raw[triangle_start + 1], raw[triangle_start + 2] = (
-                raw[triangle_start + 2], raw[triangle_start + 1])
-
-    used = sorted(set(raw))
-    remap = {old: new for new, old in enumerate(used)}
     pos_bytes = bytearray(len(used) * 12)
     normal_bytes = None
     normal_source = draw.normal_source
     if normal_source is not None:
         normal_path = safe_resource_path(mod_dir, normal_source.file)
         if normal_path and os.path.exists(normal_path):
-            normal_data = (pos_data if normal_path == draw_pos_path
+            normal_data = (pos_data if normal_path == prepared.position_path
                            else buffers.raw(normal_path))
             normal_bytes = decode_normals(normal_source, normal_data, used)
 
     shape_buffers = _build_shape_buffers(
-        group.get("shape_sliders"), mod_dir, effective_pos_path, used,
+        group.get("shape_sliders"), mod_dir, prepared.position_path, used,
         buffers, sparse_shape_cache)
     uv_bytes = bytearray(len(used) * 8) if tc_data else None
     for output_index, vertex_index in enumerate(used):
@@ -266,5 +308,6 @@ def pack_draw_geometry(
 
 
 __all__ = [
-    "PackedShapeTarget", "PackedDrawGeometry", "pack_draw_geometry",
+    "PackedShapeTarget", "PackedDrawGeometry", "PreparedDrawVertices",
+    "_prepare_draw_vertices", "pack_draw_geometry",
 ]

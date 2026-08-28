@@ -1065,6 +1065,90 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .inspector-texture-option:hover, .inspector-texture-option.selected {
   color: var(--accent-soft); border-color: var(--accent-soft); background: var(--surface-active);
 }
+.inspector-skinning-title {
+  color: var(--accent-soft); font-size: 10px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.inspector-skinning-status { color: var(--danger, #f85149); font-size: 11px; line-height: 1.35; }
+.inspector-skinning-controls { display: flex; flex-direction: column; gap: 7px; }
+.inspector-skinning-summary, .inspector-skinning-diagnostic {
+  color: var(--text-muted); font-size: 11px;
+}
+.inspector-skinning-field { display: flex; flex-direction: column; gap: 4px; }
+.inspector-skinning-bone {
+  min-height: 30px; color: var(--text); background: var(--surface-raised);
+  border: 1px solid rgba(139,148,158,.62); border-radius: var(--radius-sm);
+}
+.inspector-skinning-axis, .inspector-skinning-rotation-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.inspector-skinning-axis-button {
+  min-width: 30px; min-height: 26px; margin-left: 4px; color: var(--text-muted);
+  background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.inspector-skinning-axis-button.selected {
+  color: var(--accent-soft); border-color: var(--accent-soft);
+  background: var(--surface-active);
+}
+.inspector-skinning-heatmap.active,
+.inspector-skinning-center[aria-pressed="true"] {
+  color: var(--accent-soft); border-color: var(--accent-soft);
+}
+.inspector-skinning-subtitle { color: var(--text); font-size: 11px; font-weight: 700; }
+.inspector-skinning-hint { color: var(--text-muted); font-size: 10px; line-height: 1.35; }
+.inspector-skinning-influence-stats {
+  display: flex; flex-direction: column; gap: 3px; padding: 5px 0;
+}
+.inspector-skinning-stat {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.inspector-skinning-advanced { display: flex; flex-direction: column; }
+.inspector-skinning-hierarchy,
+.inspector-skinning-physics {
+  display: flex; flex-direction: column; gap: 5px; padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.inspector-skinning-hierarchy-summary,
+.inspector-skinning-hierarchy-output,
+.inspector-skinning-physics-summary {
+  margin: 0; color: var(--text-muted); font: 10px/1.35 ui-monospace, monospace;
+  white-space: pre-wrap;
+}
+.inspector-skinning-hierarchy-output {
+  padding: 6px; background: var(--surface-raised);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.inspector-skinning-copy-status { min-height: 12px; }
+.inspector-skinning-physics-axis,
+.inspector-skinning-physics-enable-label {
+  display: flex; align-items: center; gap: 8px;
+}
+.inspector-skinning-physics-target,
+.inspector-skinning-physics-frequency,
+.inspector-skinning-physics-damping,
+.inspector-skinning-physics-motion,
+.inspector-skinning-physics-linear,
+.inspector-skinning-physics-continuous-response,
+.inspector-skinning-physics-gravity-scale,
+.inspector-skinning-physics-max-bend {
+  width: 100%; accent-color: var(--accent-soft);
+}
+.inspector-skinning-physics-gravity {
+  display: flex; flex-direction: column; gap: 5px; margin-top: 4px;
+  padding-top: 6px; border-top: 1px solid var(--border);
+}
+.inspector-skinning-physics-gravity-direction,
+.inspector-skinning-physics-gravity-diagnostic,
+.inspector-skinning-physics-constraints-diagnostic {
+  color: var(--text-muted); font: 10px/1.35 ui-monospace, monospace;
+}
+.inspector-skinning-physics-constraints {
+  display: flex; flex-direction: column; gap: 5px; margin-top: 4px;
+  padding-top: 6px; border-top: 1px solid var(--border);
+}
+.inspector-skinning-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.inspector-skinning-actions .ui-button { flex: 1 1 0; min-width: 112px; }
 
 #mod-folder-empty[hidden] { display: none; }
 #mod-folder-empty .ui-button { margin-top: 5px; }

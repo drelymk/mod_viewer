@@ -4,6 +4,7 @@ import re
 
 from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
 from ..geometry.draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
+from ..geometry.skinning import resolve_skinning_source
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
     _ib_res_to_component, _resolve_component_buffers, _resolve_normal_source,
@@ -117,6 +118,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     component_buffers = resolved_buffers["component_buffers"]
     component_positions = resolved_buffers["component_positions"]
     component_texcoords = resolved_buffers["component_texcoords"]
+    component_vertex_resources = resolved_buffers["component_vertex_resources"]
+    component_blend_vertex_resources = resolved_buffers[
+        "component_blend_vertex_resources"]
     hash_positions = resolved_buffers["hash_positions"]
     hash_texcoords = resolved_buffers["hash_texcoords"]
     global_ib = resolved_buffers["global_ib"]
@@ -150,6 +154,13 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
     def lookup_component_buffers(component):
         return _lookup_component_value(component_buffers, component)
+
+    def lookup_component_vertex_resources(component):
+        return _lookup_component_value(component_vertex_resources, component) or {}
+
+    def lookup_component_blend_vertex_resources(component):
+        return _lookup_component_value(
+            component_blend_vertex_resources, component) or {}
 
     groups = []
     for section_name, info in draw_sections:
@@ -213,6 +224,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             texture_provenance=(
                 info.get("texture_provenance_at_end") or {}),
             geometry_match=info.get("geometry_match_at_end"),
+            vertex_resources=info.get("vertex_resources_at_end") or {},
             slot_textures=info.get("slot_textures_at_end") or [],
         )]
         draws = []
@@ -285,11 +297,31 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 draw.texcoord_file = None
                 draw.texcoord_stride = None
 
-            effective_vertex_resources = dict(group_vertex_resources)
+            effective_vertex_resources = dict(
+                lookup_component_vertex_resources(
+                    _ib_res_to_component(effective_ib)))
+            effective_vertex_resources.update(group_vertex_resources)
             effective_vertex_resources.update(vertex_resources)
             draw.normal_source = _resolve_normal_source(
                 effective_vertex_resources, resources, draw.position_file,
                 draw.position_stride, resolve_vertex_info)
+            direct_skinning_resources = dict(group_vertex_resources)
+            direct_skinning_resources.update(vertex_resources)
+            skinning_source, skinning_error = resolve_skinning_source(
+                direct_skinning_resources, resolve_vertex_info)
+            if skinning_source is None and skinning_error is None:
+                occupied_slots = (set(group_vertex_resources)
+                                  | set(vertex_resources))
+                blend_fallback = {
+                    slot: resource
+                    for slot, resource in lookup_component_blend_vertex_resources(
+                        _ib_res_to_component(effective_ib)).items()
+                    if slot not in occupied_slots
+                }
+                skinning_source, skinning_error = resolve_skinning_source(
+                    blend_fallback, resolve_vertex_info)
+            draw.skinning_source = skinning_source
+            draw.skinning_error = skinning_error
             _apply_diffuse_state(draw, authored, resolve_texture_file)
             _apply_auxiliary_map_state(draw, authored, resolve_texture_file)
             draw.texture_provenance = {

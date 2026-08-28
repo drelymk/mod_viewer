@@ -244,11 +244,60 @@ export function frameView(meshes = [], direction = null, targetYOffset = 0) {
 }
 
 export function resetView() {
-  cameraFrame.resetView();
+  const reset = cameraFrame.resetView();
+  const restoredMeshes = reset?.meshes || [];
   resetOutlineProjectionReference(camera, controls.target);
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
+  notifyModelTransformChanged(
+    restoredMeshes, 'reset-view', reset?.translationDeltaWorld || null);
   requestRender();
+}
+
+function translationArray(delta) {
+  if (!delta) return null;
+  const values = delta.isVector3 ? [delta.x, delta.y, delta.z]
+    : Array.isArray(delta) ? delta : [delta.x, delta.y, delta.z];
+  if (values.length < 3) return null;
+  const normalized = values.slice(0, 3).map(Number);
+  return normalized.every(Number.isFinite) ? normalized : null;
+}
+
+function kinematicsPayload(kinematics) {
+  const velocity = translationArray(kinematics?.linearVelocityWorld);
+  return velocity ? {linearVelocityWorld: velocity} : null;
+}
+
+function notifyModelTransformChanged(
+    meshes, reason, translationDeltaWorld = null, kinematics = null) {
+  if (!meshes?.length || typeof window === 'undefined') return;
+  const detail = {
+    meshes,
+    reason,
+    translationDeltaWorld: translationArray(translationDeltaWorld),
+  };
+  const normalizedKinematics = kinematicsPayload(kinematics);
+  if (normalizedKinematics) detail.kinematics = normalizedKinematics;
+  window.dispatchEvent(new CustomEvent('mod-viewer-model-transform-changed', {
+    detail,
+  }));
+}
+
+export function translateModel(meshes = [], delta, options = {}) {
+  const changedMeshes = cameraFrame.translateModel(meshes, delta);
+  const deltaWorld = translationArray(delta);
+  const kinematics = kinematicsPayload(options?.kinematics);
+  const eventMeshes = changedMeshes.length ? changedMeshes : meshes;
+  if (!deltaWorld || !Array.isArray(eventMeshes) || !eventMeshes.length
+      || (!changedMeshes.length && !kinematics)) return [];
+  if (changedMeshes.length) {
+    characterShadowController.invalidateGeometry();
+    viewportRenderPipeline.invalidateGeometry();
+  }
+  notifyModelTransformChanged(
+    eventMeshes, 'translate', deltaWorld, kinematics);
+  requestRender();
+  return changedMeshes;
 }
 
 export function adoptModelMeshes(meshes = []) {
@@ -346,16 +395,18 @@ export function setBloomSuppressedByDebug(value) {
 }
 
 export function rotateModelQuarterTurn(meshes = []) {
-  cameraFrame.rotateModelQuarterTurn(meshes);
+  const changedMeshes = cameraFrame.rotateModelQuarterTurn(meshes);
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
+  notifyModelTransformChanged(changedMeshes, 'rotate-y');
   requestRender();
 }
 
 export function rotateModelHorizontalQuarterTurn(meshes = []) {
-  cameraFrame.rotateModelHorizontalQuarterTurn(meshes);
+  const changedMeshes = cameraFrame.rotateModelHorizontalQuarterTurn(meshes);
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
+  notifyModelTransformChanged(changedMeshes, 'rotate-x');
   requestRender();
 }
 
