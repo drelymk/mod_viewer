@@ -2,9 +2,11 @@
 // imports or invokes this module's bridge operation until the Inspector asks.
 
 import * as THREE from 'three';
+import { invalidateCharacterShadowGeometry } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 
 const states = new WeakMap();
+let activeHelperMesh = null;
 
 const ERROR_MESSAGES = Object.freeze({
   mesh_not_found: 'The selected mesh could not be found.',
@@ -31,6 +33,13 @@ function newState() {
     selectedBone: null,
     axis: 'Z',
     angle: 0,
+    chainText: '',
+    chainIds: [],
+    chainAxis: 'Z',
+    chainAngle: 0,
+    chainError: null,
+    chainHelpersVisible: false,
+    chainHelpers: null,
     baselinePositions: null,
     baselineNormals: null,
     originalMaterial: null,
@@ -80,6 +89,31 @@ export function buildBoneIds(indices, weights, influenceCount) {
     }
   }
   return [...result].sort((a, b) => a - b);
+}
+
+export function parseChainIds(text, validBoneIds) {
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new Error('A chain requires at least 2 unique bone IDs.');
+  }
+  const valid = new Set([...validBoneIds || []].map(Number));
+  const ids = [];
+  for (const raw of text.split(',')) {
+    const token = raw.trim();
+    if (!/^\d+$/.test(token)) {
+      throw new Error('Chain IDs must be comma-separated integer IDs.');
+    }
+    const id = Number(token);
+    if (!Number.isSafeInteger(id)) {
+      throw new Error('Chain IDs must be comma-separated integer IDs.');
+    }
+    if (!valid.has(id)) throw new Error(`Unknown Bone ID: ${id}`);
+    if (ids.includes(id)) throw new Error(`Duplicate Bone ID: ${id}`);
+    ids.push(id);
+  }
+  if (ids.length < 2) {
+    throw new Error('A chain requires at least 2 unique bone IDs.');
+  }
+  return ids;
 }
 
 export function weightedCenter(positions, indices, weights, influenceCount,
@@ -154,6 +188,85 @@ export function applyWeightedRotation(baselinePositions, indices, weights,
   return result;
 }
 
+function vectorFromCenter(center) {
+  if (center?.isVector3) return center.clone();
+  return new THREE.Vector3(
+    Number(center?.[0]) || 0,
+    Number(center?.[1]) || 0,
+    Number(center?.[2]) || 0,
+  );
+}
+
+function axisVector(axis) {
+  if (axis === 'X') return new THREE.Vector3(1, 0, 0);
+  if (axis === 'Y') return new THREE.Vector3(0, 1, 0);
+  return new THREE.Vector3(0, 0, 1);
+}
+
+export function buildChainTransforms(centers, axis = 'Z', totalAngle = 0) {
+  const source = Array.isArray(centers) ? centers : [];
+  const transforms = source.map(() => new THREE.Matrix4());
+  if (source.length < 2 || !Number.isFinite(Number(totalAngle))) {
+    return transforms;
+  }
+  const jointAngle = THREE.MathUtils.degToRad(Number(totalAngle))
+    / (source.length - 1);
+  const rotationAxis = axisVector(axis);
+  for (let index = 1; index < source.length; index += 1) {
+    const parent = transforms[index - 1];
+    const pivot = vectorFromCenter(source[index - 1])
+      .applyMatrix4(parent);
+    const aroundPivot = new THREE.Matrix4()
+      .makeTranslation(pivot.x, pivot.y, pivot.z)
+      .multiply(new THREE.Matrix4().makeRotationAxis(
+        rotationAxis, jointAngle))
+      .multiply(new THREE.Matrix4().makeTranslation(
+        -pivot.x, -pivot.y, -pivot.z));
+    transforms[index] = aroundPivot.multiply(parent.clone());
+  }
+  return transforms;
+}
+
+export function applyWeightedChainDeformation(
+    baselinePositions, indices, weights, influenceCount, chainIds,
+    transforms) {
+  const result = new Float32Array(baselinePositions || 0);
+  if (!baselinePositions || !indices || !weights || influenceCount <= 0
+      || !Array.isArray(chainIds) || chainIds.length < 2
+      || !Array.isArray(transforms) || transforms.length < chainIds.length) {
+    return result;
+  }
+  const chainIndex = new Map(chainIds.map((id, index) => [Number(id), index]));
+  const vertexCount = Math.floor(baselinePositions.length / 3);
+  const baseline = new THREE.Vector3();
+  const transformed = new THREE.Vector3();
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const offset = vertex * 3;
+    baseline.set(
+      baselinePositions[offset], baselinePositions[offset + 1],
+      baselinePositions[offset + 2]);
+    const start = vertex * influenceCount;
+    let chainWeight = 0;
+    let x = 0, y = 0, z = 0;
+    for (let influence = 0; influence < influenceCount; influence += 1) {
+      const weight = weights[start + influence];
+      const transformIndex = chainIndex.get(indices[start + influence]);
+      if (transformIndex === undefined || !Number.isFinite(weight)
+          || weight <= 0 || !transforms[transformIndex]) continue;
+      chainWeight += weight;
+      transformed.copy(baseline).applyMatrix4(transforms[transformIndex]);
+      x += transformed.x * weight;
+      y += transformed.y * weight;
+      z += transformed.z * weight;
+    }
+    const unchanged = 1 - chainWeight;
+    result[offset] = baseline.x * unchanged + x;
+    result[offset + 1] = baseline.y * unchanged + y;
+    result[offset + 2] = baseline.z * unchanged + z;
+  }
+  return result;
+}
+
 function previewError(result) {
   const code = result?.code;
   return new Error(ERROR_MESSAGES[code] || result?.error
@@ -186,7 +299,10 @@ function captureBaseline(mesh, state) {
 }
 
 function restoreNormals(mesh, state) {
-  if (!state.baselineNormals) return;
+  if (!state.baselineNormals) {
+    mesh.geometry.computeVertexNormals();
+    return;
+  }
   let normal = mesh.geometry.attributes.normal;
   if (!normal || normal.array.length !== state.baselineNormals.length) {
     normal = new THREE.BufferAttribute(
@@ -198,32 +314,128 @@ function restoreNormals(mesh, state) {
 }
 
 function centerFor(mesh, state) {
-  if (!state.centers.has(state.selectedBone)) {
-    state.centers.set(state.selectedBone, weightedCenter(
+  return centerForBone(mesh, state, state.selectedBone);
+}
+
+function centerForBone(mesh, state, boneId) {
+  if (!state.centers.has(boneId)) {
+    state.centers.set(boneId, weightedCenter(
       state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.selectedBone));
+      state.influenceCount, boneId));
   }
-  return state.centers.get(state.selectedBone);
+  return state.centers.get(boneId);
+}
+
+function chainCentersFor(mesh, state) {
+  return state.chainIds.map(boneId => centerForBone(mesh, state, boneId));
+}
+
+function removeVirtualChainHelpers(mesh, state) {
+  const helpers = state?.chainHelpers;
+  if (!helpers) {
+    if (activeHelperMesh === mesh) activeHelperMesh = null;
+    if (state) state.chainHelpersVisible = false;
+    return;
+  }
+  helpers.group.removeFromParent();
+  helpers.markerGeometry.dispose();
+  helpers.markerMaterial.dispose();
+  helpers.lineGeometry.dispose();
+  helpers.lineMaterial.dispose();
+  state.chainHelpers = null;
+  state.chainHelpersVisible = false;
+  if (activeHelperMesh === mesh) activeHelperMesh = null;
+}
+
+function activateVirtualChain(mesh) {
+  if (activeHelperMesh && activeHelperMesh !== mesh) {
+    removeVirtualChainHelpers(activeHelperMesh, states.get(activeHelperMesh));
+  }
+  activeHelperMesh = mesh;
+}
+
+function createVirtualChainHelpers(mesh, state) {
+  const radius = Math.max(
+    (mesh.geometry.boundingSphere?.radius || 1) * 0.012, 0.001);
+  const group = new THREE.Group();
+  group.name = 'Experimental Virtual Chain';
+  const markerGeometry = new THREE.SphereGeometry(1, 8, 6);
+  const markerMaterial = new THREE.MeshBasicMaterial({color: 0xffb86c});
+  const markers = state.chainIds.map(boneId => {
+    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+    marker.scale.setScalar(radius);
+    marker.userData.virtualBoneId = boneId;
+    group.add(marker);
+    return marker;
+  });
+  const lineGeometry = new THREE.BufferGeometry();
+  lineGeometry.setAttribute('position', new THREE.BufferAttribute(
+    new Float32Array(state.chainIds.length * 3), 3));
+  const lineMaterial = new THREE.LineBasicMaterial({color: 0xff7b72});
+  const line = new THREE.Line(lineGeometry, lineMaterial);
+  group.add(line);
+  mesh.add(group);
+  state.chainHelpers = {
+    group, markers, line, markerGeometry, markerMaterial,
+    lineGeometry, lineMaterial,
+  };
+  return state.chainHelpers;
+}
+
+function updateVirtualChainHelpers(mesh, state) {
+  const helpers = state.chainHelpers;
+  if (!helpers || state.chainIds.length < 2) return;
+  const centers = chainCentersFor(mesh, state);
+  const transforms = buildChainTransforms(
+    centers, state.chainAxis, state.chainAngle);
+  const linePositions = helpers.line.geometry.attributes.position;
+  centers.forEach((center, index) => {
+    const point = vectorFromCenter(center).applyMatrix4(transforms[index]);
+    helpers.markers[index].position.copy(point);
+    linePositions.setXYZ(index, point.x, point.y, point.z);
+  });
+  linePositions.needsUpdate = true;
+  helpers.line.geometry.computeBoundingSphere();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('mod-viewer-mesh-selected', event => {
+    const mesh = event.detail?.mesh || null;
+    if (activeHelperMesh && activeHelperMesh !== mesh) {
+      removeVirtualChainHelpers(activeHelperMesh, states.get(activeHelperMesh));
+    }
+    activeHelperMesh = mesh;
+  });
 }
 
 function applyDeformation(mesh, state) {
   if (!state.loaded || !state.baselinePositions) return;
   const position = mesh.geometry.attributes.position;
-  const result = state.angle === 0
-    ? state.baselinePositions
-    : applyWeightedRotation(
+  const chainActive = state.chainAngle !== 0
+    && state.chainIds.length >= 2;
+  const result = chainActive
+    ? applyWeightedChainDeformation(
       state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.selectedBone, centerFor(mesh, state),
-      state.axis, state.angle);
+      state.influenceCount, state.chainIds, buildChainTransforms(
+        chainCentersFor(mesh, state), state.chainAxis, state.chainAngle))
+    : state.angle === 0
+      ? state.baselinePositions
+      : applyWeightedRotation(
+        state.baselinePositions, state.indices, state.weights,
+        state.influenceCount, state.selectedBone, centerFor(mesh, state),
+        state.axis, state.angle);
   position.array.set(result);
   position.needsUpdate = true;
-  if (state.angle === 0) {
+  if (!chainActive && state.angle === 0) {
     restoreNormals(mesh, state);
   } else {
     mesh.geometry.computeVertexNormals();
     mesh.geometry.attributes.normal.needsUpdate = true;
   }
+  updateVirtualChainHelpers(mesh, state);
+  mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
+  invalidateCharacterShadowGeometry();
   requestRender();
 }
 
@@ -291,6 +503,9 @@ export async function loadSkinningWeights(mesh) {
       buffer, preview.data.indices, Uint32Array, 'u32');
     const weights = typedView(
       buffer, preview.data.weights, Float32Array, 'f32');
+    if (states.get(mesh) !== state) {
+      throw new Error('The skin-weight experiment was reset.');
+    }
     const positionCount = mesh.geometry.attributes.position.count;
     if (positionCount !== Number(preview.vertex_count)) {
       throw new Error(
@@ -345,7 +560,72 @@ export function setSkinningAngle(mesh, angle) {
   const state = stateFor(mesh);
   if (!state?.loaded) return;
   state.angle = Math.max(-45, Math.min(45, Number(angle) || 0));
+  state.chainAngle = 0;
+  if (state.chainHelpers) removeVirtualChainHelpers(mesh, state);
   applyDeformation(mesh, state);
+}
+
+export function setSkinningChainText(mesh, text) {
+  const state = stateFor(mesh);
+  if (!state?.loaded) return false;
+  state.chainText = String(text ?? '');
+  const wasVisible = state.chainHelpersVisible;
+  try {
+    state.chainIds = parseChainIds(state.chainText, state.boneIds);
+    state.chainError = null;
+    state.angle = 0;
+  } catch (error) {
+    state.chainIds = [];
+    state.chainAngle = 0;
+    state.chainError = error instanceof Error ? error.message : String(error);
+    removeVirtualChainHelpers(mesh, state);
+    applyDeformation(mesh, state);
+    return false;
+  }
+  if (state.chainHelpers) {
+    removeVirtualChainHelpers(mesh, state);
+    if (wasVisible) {
+      activateVirtualChain(mesh);
+      createVirtualChainHelpers(mesh, state);
+      state.chainHelpersVisible = true;
+      updateVirtualChainHelpers(mesh, state);
+    }
+  }
+  applyDeformation(mesh, state);
+  return true;
+}
+
+export function setSkinningChainAxis(mesh, axis) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !['X', 'Y', 'Z'].includes(axis)) return;
+  state.chainAxis = axis;
+  state.angle = 0;
+  applyDeformation(mesh, state);
+}
+
+export function setSkinningChainAngle(mesh, angle) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || state.chainIds.length < 2) return false;
+  state.chainAngle = Math.max(-60, Math.min(60, Number(angle) || 0));
+  state.angle = 0;
+  applyDeformation(mesh, state);
+  return true;
+}
+
+export function setVirtualChainVisible(mesh, visible) {
+  const state = stateFor(mesh);
+  if (!state?.loaded) return false;
+  if (visible && state.chainIds.length < 2) return false;
+  if (!visible) {
+    removeVirtualChainHelpers(mesh, state);
+  } else {
+    activateVirtualChain(mesh);
+    if (!state.chainHelpers) createVirtualChainHelpers(mesh, state);
+    updateVirtualChainHelpers(mesh, state);
+    state.chainHelpersVisible = true;
+  }
+  requestRender();
+  return state.chainHelpersVisible;
 }
 
 export function setSkinningHeatmap(mesh, enabled) {
@@ -362,14 +642,21 @@ export function resetSkinningExperiment(mesh) {
   const state = stateFor(mesh);
   if (!state?.loaded) return;
   state.angle = 0;
+  state.chainAngle = 0;
+  removeVirtualChainHelpers(mesh, state);
   applyDeformation(mesh, state);
   if (state.heatmapEnabled || state.debugMaterial) disableHeatmap(mesh, state);
+  mesh.geometry.computeBoundingBox();
+  mesh.geometry.computeBoundingSphere();
+  invalidateCharacterShadowGeometry();
   requestRender();
 }
 
 export function disposeSkinningExperiment(mesh) {
   const state = states.get(mesh);
   if (!state) return;
+  state.disposed = true;
+  removeVirtualChainHelpers(mesh, state);
   if (state.debugMaterial) state.debugMaterial.dispose();
   mesh.geometry?.deleteAttribute?.('color');
   mesh.material = state.originalMaterial || mesh.material;

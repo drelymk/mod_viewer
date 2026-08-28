@@ -213,6 +213,217 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
     finally:
         context.close()
 
+
+def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Weights": _payload("Weights")})
+    try:
+        result = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const helpers = await import('./js/mesh/weight-experiment.js');
+          const point = (matrix, values) => [...new THREE.Vector3(...values)
+            .applyMatrix4(matrix)];
+          const baseline = new Float32Array([1, 0, 0]);
+          const zero = helpers.applyWeightedRotation(
+            baseline, new Uint32Array([7]), new Float32Array([0]), 1,
+            7, [0, 0, 0], 'Z', 90);
+          const half = helpers.applyWeightedRotation(
+            baseline, new Uint32Array([7]), new Float32Array([.5]), 1,
+            7, [0, 0, 0], 'Z', 90);
+          const full = helpers.applyWeightedRotation(
+            baseline, new Uint32Array([7]), new Float32Array([1]), 1,
+            7, [0, 0, 0], 'Z', 90);
+          const atTen = helpers.applyWeightedRotation(
+            baseline, new Uint32Array([7]), new Float32Array([1]), 1,
+            7, [0, 0, 0], 'Z', 10);
+          const atTwenty = helpers.applyWeightedRotation(
+            baseline, new Uint32Array([7]), new Float32Array([1]), 1,
+            7, [0, 0, 0], 'Z', 20);
+          const centers = [[0, 0, 0], [1, 0, 0], [2, 0, 0]];
+          const transforms = helpers.buildChainTransforms(centers, 'Z', 90);
+          const chainResult = helpers.applyWeightedChainDeformation(
+            new Float32Array([2, 0, 0]),
+            new Uint32Array([1, 2, 11]),
+            new Float32Array([.6, .2, .2]), 3, [0, 1, 2], transforms);
+          const p = new THREE.Vector3(2, 0, 0);
+          const m1 = p.clone().applyMatrix4(transforms[1]);
+          const m2 = p.clone().applyMatrix4(transforms[2]);
+          const expectedChain = [
+            .6 * m1.x + .2 * m2.x + .2 * p.x,
+            .6 * m1.y + .2 * m2.y + .2 * p.y,
+            .6 * m1.z + .2 * m2.z + .2 * p.z,
+          ];
+          const readError = text => {
+            try {
+              helpers.parseChainIds(text, [0, 2, 3, 4]);
+              return null;
+            } catch (error) {
+              return error.message;
+            }
+          };
+          return {
+            center: helpers.weightedCenter(
+              new Float32Array([0, 0, 0, 2, 0, 0]),
+              new Uint32Array([7, 8]), new Float32Array([.25, .75]), 1, 8),
+            zero: [...zero], half: [...half], full: [...full],
+            atTen: [...atTen], atTwenty: [...atTwenty],
+            c0: point(transforms[0], centers[0]),
+            c1: point(transforms[1], centers[1]),
+            c2: point(transforms[2], centers[2]),
+            chainResult: [...chainResult], expectedChain,
+            parsed: helpers.parseChainIds('0,2,3,4', [0, 2, 3, 4]),
+            duplicate: readError('0,2,2'),
+            unknown: readError('0,14'),
+            nonInteger: readError('0,2.5'),
+            short: readError('0'),
+          };
+        }""")
+        assert result["center"] == pytest.approx([2, 0, 0])
+        assert result["zero"] == pytest.approx([1, 0, 0])
+        assert result["half"] == pytest.approx([.5, .5, 0])
+        assert result["full"] == pytest.approx([0, 1, 0])
+        assert result["atTen"] != pytest.approx(result["atTwenty"])
+        assert result["atTwenty"] == pytest.approx([
+            math.cos(math.radians(20)), math.sin(math.radians(20)), 0])
+        assert result["c0"] == pytest.approx([0, 0, 0])
+        assert result["c1"] == pytest.approx([
+            math.sqrt(.5), math.sqrt(.5), 0])
+        assert result["c2"] == pytest.approx([
+            math.sqrt(.5), 1 + math.sqrt(.5), 0])
+        assert result["chainResult"] == pytest.approx(result["expectedChain"])
+        assert result["parsed"] == [0, 2, 3, 4]
+        assert result["duplicate"] == "Duplicate Bone ID: 2"
+        assert result["unknown"] == "Unknown Bone ID: 14"
+        assert result["nonInteger"] == (
+            "Chain IDs must be comma-separated integer IDs.")
+        assert result["short"] == "A chain requires at least 2 unique bone IDs."
+    finally:
+        context.close()
+
+
+def test_skinning_experiment_lifecycle_and_shape_invalidation(
+        edge_browser, frontend_url):
+    payload = _payload("Experiment")
+    second = copy.deepcopy(next(iter(payload["meshes"].values())))
+    second["component"] = "Accessory Experiment"
+    payload["meshes"]["Accessory-Experiment-0"] = second
+    context, page = _page(edge_browser, frontend_url,
+                           {"Experiment": payload})
+    try:
+        _open(page, "Experiment")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
+        result = page.evaluate("""async () => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const secondMesh = window.modViewer.activeMeshes[1];
+          const originalMaterial = mesh.material;
+          const secondOriginalMaterial = secondMesh.material;
+          const bytes = new Uint8Array(24);
+          new Uint32Array(bytes.buffer).set([0, 1, 2]);
+          new Float32Array(bytes.buffer, 12).set([1, 1, 1]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          let requests = 0;
+          window.pywebview.api.get_skinning_preview = async () => {
+            requests += 1;
+            return {
+              status: 'ok', vertex_count: 3, influence_count: 1,
+              bone_ids: [0, 1, 2], encoding: 'test',
+              data: {
+                url, length: 24,
+                indices: {offset: 0, length: 12, type: 'u32'},
+                weights: {offset: 12, length: 12, type: 'f32'},
+              }, diagnostics: {},
+            };
+          };
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshMeshes, removeMesh, resetMeshes} =
+                await import('./js/mesh/mesh-state.js');
+
+          await experiment.loadSkinningWeights(mesh);
+          experiment.setSkinningChainText(mesh, '0,1');
+          experiment.setVirtualChainVisible(mesh, true);
+          experiment.setSkinningHeatmap(mesh, true);
+          experiment.setSkinningChainAngle(mesh, 20);
+          const loadedState = experiment.getSkinningState(mesh);
+          const deformed = [...mesh.geometry.attributes.position.array];
+          const helperBeforeShape = !!mesh.children.find(
+            child => child.name === 'Experimental Virtual Chain');
+
+          setControlValue('shape', '1');
+          refreshMeshes();
+          const shaped = [...mesh.geometry.attributes.position.array];
+          const afterShapeState = experiment.getSkinningState(mesh);
+          const helperAfterShape = !!mesh.children.find(
+            child => child.name === 'Experimental Virtual Chain');
+          const materialAfterShape = mesh.material;
+
+          await experiment.loadSkinningWeights(mesh);
+          experiment.setSkinningChainText(mesh, '0,1');
+          experiment.setVirtualChainVisible(mesh, true);
+          experiment.setSkinningHeatmap(mesh, true);
+          experiment.setSkinningChainAngle(mesh, 20);
+          experiment.resetSkinningExperiment(mesh);
+          const resetState = experiment.getSkinningState(mesh);
+          const resetPositions = [...mesh.geometry.attributes.position.array];
+          const helperAfterReset = !!mesh.children.find(
+            child => child.name === 'Experimental Virtual Chain');
+          const colorAfterReset = !!mesh.geometry.attributes.color;
+
+          experiment.setSkinningChainText(mesh, '0,1');
+          experiment.setVirtualChainVisible(mesh, true);
+          experiment.setSkinningHeatmap(mesh, true);
+          removeMesh(mesh);
+          const stateAfterRemove = experiment.getSkinningState(mesh);
+          const helperAfterRemove = !!mesh.children.find(
+            child => child.name === 'Experimental Virtual Chain');
+          await experiment.loadSkinningWeights(secondMesh);
+          experiment.setSkinningChainText(secondMesh, '0,1');
+          experiment.setVirtualChainVisible(secondMesh, true);
+          experiment.setSkinningHeatmap(secondMesh, true);
+          resetMeshes();
+          const stateAfterResetMeshes = experiment.getSkinningState(secondMesh);
+          const helperAfterResetMeshes = !!secondMesh.children.find(
+            child => child.name === 'Experimental Virtual Chain');
+          URL.revokeObjectURL(url);
+          return {
+            requests, loaded: loadedState.loaded,
+            deformed, shaped, afterShapeState,
+            helperBeforeShape, helperAfterShape,
+            materialAfterShape: materialAfterShape === originalMaterial,
+            resetLoaded: resetState.loaded,
+            resetAngle: resetState.angle,
+            resetChainAngle: resetState.chainAngle,
+            resetPositions, shapedBaseline: shaped,
+            helperAfterReset, colorAfterReset,
+            stateAfterRemove, helperAfterRemove,
+            materialAfterRemove: mesh.material === originalMaterial,
+            stateAfterResetMeshes, helperAfterResetMeshes,
+            materialAfterResetMeshes: secondMesh.material === secondOriginalMaterial,
+          };
+        }""")
+        assert result["requests"] == 3
+        assert result["loaded"]
+        assert result["deformed"] != pytest.approx(result["shaped"])
+        assert result["helperBeforeShape"]
+        assert result["afterShapeState"] is None
+        assert result["helperAfterShape"] is False
+        assert result["materialAfterShape"]
+        assert result["resetLoaded"]
+        assert result["resetAngle"] == 0
+        assert result["resetChainAngle"] == 0
+        assert result["resetPositions"] == pytest.approx(result["shapedBaseline"])
+        assert result["helperAfterReset"] is False
+        assert result["colorAfterReset"] is False
+        assert result["stateAfterRemove"] is None
+        assert result["helperAfterRemove"] is False
+        assert result["materialAfterRemove"]
+        assert result["stateAfterResetMeshes"] is None
+        assert result["helperAfterResetMeshes"] is False
+        assert result["materialAfterResetMeshes"]
+    finally:
+        context.close()
+
+
 def test_viewport_pipeline_uses_character_layers_and_stable_ao_settings(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"Pipeline": _payload("Pipeline")})

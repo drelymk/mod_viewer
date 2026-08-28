@@ -5,7 +5,9 @@ import { isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';
 import {
   getSkinningState, loadSkinningWeights, resetSkinningExperiment,
-  setSelectedBone, setSkinningAngle, setSkinningAxis, setSkinningHeatmap,
+  setSelectedBone, setSkinningAngle, setSkinningAxis, setSkinningChainAngle,
+  setSkinningChainAxis, setSkinningChainText, setSkinningHeatmap,
+  setVirtualChainVisible,
 } from '../mesh/weight-experiment.js';
 
 const meshRecords = new WeakMap();
@@ -235,6 +237,142 @@ function buildSkinningDiagnostics(parent, state, vertexCount) {
   rows.forEach(text => addText(parent, 'inspector-skinning-diagnostic', text));
 }
 
+function syncSkinningAngleControls(section, mesh) {
+  const state = getSkinningState(mesh);
+  if (!state) return;
+  const angle = section.querySelector('.inspector-skinning-angle');
+  const angleValue = section.querySelector('.inspector-skinning-angle-value');
+  if (angle) angle.value = state.angle;
+  if (angleValue) angleValue.textContent = `${state.angle}\u00b0`;
+  const chainAngle = section.querySelector('.inspector-skinning-chain-angle');
+  const chainValue = section.querySelector('.inspector-skinning-chain-value');
+  if (chainAngle) chainAngle.value = state.chainAngle;
+  if (chainValue) chainValue.textContent = `${state.chainAngle}\u00b0`;
+  const showHelpers = section.querySelector('.inspector-skinning-chain-show');
+  if (showHelpers) {
+    showHelpers.textContent = state.chainHelpersVisible
+      ? 'Hide Virtual Chain' : 'Show Virtual Chain';
+    showHelpers.setAttribute('aria-pressed', String(state.chainHelpersVisible));
+  }
+}
+
+function buildSkinningChainControls(parent, mesh, state) {
+  const chain = document.createElement('div');
+  chain.className = 'inspector-skinning-chain';
+  const title = document.createElement('div');
+  title.className = 'inspector-skinning-subtitle';
+  title.textContent = 'Virtual Chain Test';
+  chain.appendChild(title);
+  addText(chain, 'inspector-skinning-hint',
+    'Enter an ordered sequence of loaded Bone IDs.');
+
+  const idsLabel = document.createElement('label');
+  idsLabel.className = 'inspector-skinning-field';
+  addText(idsLabel, 'inspector-label', 'Chain IDs');
+  const idsInput = document.createElement('input');
+  idsInput.type = 'text';
+  idsInput.className = 'inspector-skinning-chain-ids';
+  idsInput.placeholder = '0,2,3,4';
+  idsInput.value = state.chainText;
+  idsInput.setAttribute('aria-label', 'Virtual chain bone IDs');
+  idsLabel.appendChild(idsInput);
+  chain.appendChild(idsLabel);
+
+  const chainStatus = addText(chain, 'inspector-skinning-chain-status', '');
+  chainStatus.setAttribute('aria-live', 'polite');
+  chainStatus.hidden = true;
+
+  const axisRow = document.createElement('div');
+  axisRow.className = 'inspector-skinning-chain-axis';
+  addText(axisRow, 'inspector-label', 'Axis');
+  const axisButtons = document.createElement('span');
+  ['X', 'Y', 'Z'].forEach(axis => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inspector-skinning-axis-button';
+    button.textContent = axis;
+    button.addEventListener('click', () => {
+      setSkinningChainAxis(mesh, axis);
+      update();
+    });
+    axisButtons.appendChild(button);
+  });
+  axisRow.appendChild(axisButtons);
+  chain.appendChild(axisRow);
+
+  const bendRow = document.createElement('div');
+  bendRow.className = 'inspector-skinning-chain-bend';
+  const bendHeader = document.createElement('div');
+  bendHeader.className = 'inspector-skinning-rotation-header';
+  addText(bendHeader, 'inspector-label', 'Total Bend');
+  const bendValue = addText(
+    bendHeader, 'inspector-skinning-chain-value', `${state.chainAngle}\u00b0`);
+  bendRow.appendChild(bendHeader);
+  const bendSlider = document.createElement('input');
+  bendSlider.type = 'range';
+  bendSlider.className = 'inspector-skinning-chain-angle';
+  bendSlider.min = '-60';
+  bendSlider.max = '60';
+  bendSlider.step = '1';
+  bendSlider.value = state.chainAngle;
+  bendSlider.addEventListener('input', () => {
+    setSkinningChainAngle(mesh, bendSlider.value);
+    syncSkinningAngleControls(chain.closest('.inspector-skinning-section'), mesh);
+  });
+  bendRow.appendChild(bendSlider);
+  chain.appendChild(bendRow);
+
+  const helperRow = document.createElement('div');
+  helperRow.className = 'inspector-skinning-chain-actions';
+  const showHelpers = document.createElement('button');
+  showHelpers.type = 'button';
+  showHelpers.className = 'ui-button inspector-skinning-chain-show';
+  showHelpers.addEventListener('click', () => {
+    setVirtualChainVisible(mesh, !getSkinningState(mesh).chainHelpersVisible);
+    update();
+  });
+  helperRow.appendChild(showHelpers);
+  const resetChain = document.createElement('button');
+  resetChain.type = 'button';
+  resetChain.className = 'ui-button inspector-skinning-chain-reset';
+  resetChain.textContent = 'Reset Chain';
+  resetChain.addEventListener('click', () => {
+    resetSkinningExperiment(mesh);
+    renderSkinningControls(
+      chain.closest('.inspector-skinning-section'), mesh,
+      getSkinningState(mesh));
+  });
+  helperRow.appendChild(resetChain);
+  chain.appendChild(helperRow);
+
+  function update() {
+    const latest = getSkinningState(mesh);
+    if (!latest) return;
+    idsInput.value = latest.chainText;
+    chainStatus.textContent = latest.chainError || '';
+    chainStatus.hidden = !chainStatus.textContent;
+    const valid = latest.chainIds.length >= 2;
+    bendSlider.disabled = !valid;
+    axisButtons.querySelectorAll('button').forEach(button => {
+      button.disabled = !valid;
+      button.classList.toggle('selected', button.textContent === latest.chainAxis);
+    });
+    showHelpers.disabled = !valid;
+    showHelpers.textContent = latest.chainHelpersVisible
+      ? 'Hide Virtual Chain' : 'Show Virtual Chain';
+    showHelpers.setAttribute('aria-pressed', String(latest.chainHelpersVisible));
+    syncSkinningAngleControls(
+      chain.closest('.inspector-skinning-section'), mesh);
+  }
+
+  idsInput.addEventListener('input', () => {
+    setSkinningChainText(mesh, idsInput.value);
+    update();
+  });
+  parent.appendChild(chain);
+  update();
+}
+
 function renderSkinningControls(section, mesh, state) {
   const load = section.querySelector('.inspector-skinning-load');
   const status = section.querySelector('.inspector-skinning-status');
@@ -307,6 +445,7 @@ function renderSkinningControls(section, mesh, state) {
   addText(rotationHeader, 'inspector-label', 'Rotation');
   const rotationValue = addText(rotationHeader, 'inspector-value', `${state.angle}°`);
   rotationRow.appendChild(rotationHeader);
+  rotationValue.classList.add('inspector-skinning-angle-value');
   const slider = document.createElement('input');
   slider.type = 'range';
   slider.className = 'inspector-skinning-angle';
@@ -316,6 +455,7 @@ function renderSkinningControls(section, mesh, state) {
   slider.value = state.angle;
   slider.addEventListener('input', () => {
     setSkinningAngle(mesh, slider.value);
+    syncSkinningAngleControls(section, mesh);
     rotationValue.textContent = `${getSkinningState(mesh).angle}°`;
   });
   rotationRow.appendChild(slider);
@@ -340,16 +480,13 @@ function renderSkinningControls(section, mesh, state) {
   reset.textContent = 'Reset';
   reset.addEventListener('click', () => {
     resetSkinningExperiment(mesh);
-    slider.value = 0;
-    rotationValue.textContent = '0°';
-    heatmap.setAttribute('aria-pressed', 'false');
-    heatmap.classList.remove('active');
-    heatmap.textContent = 'Show Weight Heatmap';
+    renderSkinningControls(section, mesh, getSkinningState(mesh));
   });
   controls.appendChild(reset);
 
   buildSkinningDiagnostics(
     controls, state, mesh.geometry.attributes.position.count);
+  buildSkinningChainControls(controls, mesh, state);
 }
 
 function buildSkinningSection(content, mesh) {
