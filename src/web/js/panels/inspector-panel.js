@@ -13,6 +13,9 @@ import {
   buildCandidateTree, setCandidateTreeRoot,
   setInfluenceVisualizationMode,
   setForestAxis, setForestAngle,
+  setPhysicsAxis, setPhysicsTargetAngle, setPhysicsFrequency,
+  setPhysicsDamping, setPhysicsEnabled, applyPhysicsKick,
+  resetPhysicsMotion,
   setVirtualChainVisible,
 } from '../mesh/weight-experiment.js';
 
@@ -528,6 +531,22 @@ function topGraphRelationships(graph) {
 function forestDiagnosticsPayload(state) {
   const forest = state?.candidateForest;
   if (!forest) return null;
+  const physics = state.physicsEnabled || state.physicsState
+    ? {
+      enabled: !!state.physicsEnabled,
+      axis: state.physicsAxis,
+      targetAngle: state.physicsTargetAngle,
+      frequencyHz: state.physicsFrequencyHz,
+      dampingRatio: state.physicsDampingRatio,
+      settled: !!state.physicsSettled,
+      joints: Object.fromEntries(
+        [...(state.physicsState?.joints || new Map()).entries()]
+          .map(([boneId, joint]) => [boneId, {
+            angle: Number(joint.angle) || 0,
+            angularVelocity: Number(joint.angularVelocity) || 0,
+          }])),
+    }
+    : null;
   return {
     primaryRootId: forest.primaryRootId,
     primaryComponentId: forest.primaryComponentId,
@@ -536,6 +555,7 @@ function forestDiagnosticsPayload(state) {
     axis: state.forestAxis,
     angle: state.forestAngle,
     deformationMode: state.deformationMode,
+    physics,
   };
 }
 
@@ -882,7 +902,7 @@ function forestSummary(forest) {
   ].join('\n');
 }
 
-function buildSkinningForestControls(parent, mesh, state) {
+function buildSkinningForestControls(parent, mesh, state, onStateChange = null) {
   const section = document.createElement('div');
   section.className = 'inspector-skinning-forest';
   const title = document.createElement('div');
@@ -909,6 +929,7 @@ function buildSkinningForestControls(parent, mesh, state) {
     button.addEventListener('click', () => {
       setForestAxis(mesh, axis);
       update();
+      onStateChange?.(getSkinningState(mesh));
     });
     axisButtons.appendChild(button);
   });
@@ -933,6 +954,7 @@ function buildSkinningForestControls(parent, mesh, state) {
   angleSlider.addEventListener('input', () => {
     setForestAngle(mesh, angleSlider.value);
     update();
+    onStateChange?.(getSkinningState(mesh));
   });
   angleRow.appendChild(angleSlider);
   section.appendChild(angleRow);
@@ -978,6 +1000,209 @@ function buildSkinningForestControls(parent, mesh, state) {
     angleSlider.disabled = !valid;
     angleSlider.value = latest.forestAngle;
     angleValue.textContent = `${latest.forestAngle}°`;
+    copyButton.disabled = !valid || copying;
+    copyButton.hidden = !valid;
+    if (!valid) copyStatus.textContent = '';
+  }
+
+  parent.appendChild(section);
+  update(state);
+  return {update};
+}
+
+function physicsSummary(state) {
+  if (!state?.candidateForest) {
+    return 'Build a candidate tree to enable spring physics.';
+  }
+  const status = state.physicsEnabled
+    ? (state.physicsSettled ? 'Settled' : 'Active') : 'Disabled';
+  const jointCount = state.physicsState?.joints?.size
+    ?? (state.candidateForest.components || []).reduce(
+      (total, component) => total + Math.max(
+        0, (component.nodeIds || []).length - 1), 0);
+  return [
+    `Physics ${status} · ${jointCount} dynamic joints`,
+    `Target bend ${state.physicsTargetAngle}° · Axis ${state.physicsAxis}`,
+    `Frequency ${Number(state.physicsFrequencyHz).toFixed(2)} Hz · `
+      + `Damping ${Number(state.physicsDampingRatio).toFixed(2)}`,
+  ].join('\n');
+}
+
+function buildSkinningPhysicsControls(parent, mesh, state) {
+  const section = document.createElement('div');
+  section.className = 'inspector-skinning-physics';
+  const title = document.createElement('div');
+  title.className = 'inspector-skinning-subtitle';
+  title.textContent = 'Spring Physics Prototype';
+  section.appendChild(title);
+  addText(section, 'inspector-skinning-hint',
+    'Dynamic local bends follow the candidate forest with fixed-step springs.');
+
+  const summary = document.createElement('pre');
+  summary.className = 'inspector-skinning-physics-summary';
+  section.appendChild(summary);
+
+  const axisRow = document.createElement('div');
+  axisRow.className = 'inspector-skinning-physics-axis';
+  addText(axisRow, 'inspector-label', 'Axis');
+  const axisButtons = document.createElement('span');
+  ['X', 'Y', 'Z'].forEach(axis => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inspector-skinning-axis-button';
+    button.textContent = axis;
+    button.addEventListener('click', () => {
+      setPhysicsAxis(mesh, axis);
+      update();
+    });
+    axisButtons.appendChild(button);
+  });
+  axisRow.appendChild(axisButtons);
+  section.appendChild(axisRow);
+
+  const targetLabel = document.createElement('label');
+  targetLabel.className = 'inspector-skinning-field';
+  addText(targetLabel, 'inspector-label', 'Target Bend');
+  const targetValue = addText(targetLabel,
+    'inspector-skinning-physics-target-value', '0°');
+  const targetSlider = document.createElement('input');
+  targetSlider.type = 'range';
+  targetSlider.className = 'inspector-skinning-physics-target-angle';
+  targetSlider.min = '-40';
+  targetSlider.max = '40';
+  targetSlider.step = '1';
+  targetSlider.value = state.physicsTargetAngle;
+  targetSlider.addEventListener('input', () => {
+    setPhysicsTargetAngle(mesh, targetSlider.value);
+    update();
+  });
+  targetLabel.appendChild(targetSlider);
+  section.appendChild(targetLabel);
+
+  const frequencyLabel = document.createElement('label');
+  frequencyLabel.className = 'inspector-skinning-field';
+  addText(frequencyLabel, 'inspector-label', 'Frequency (Hz)');
+  const frequencyInput = document.createElement('input');
+  frequencyInput.type = 'number';
+  frequencyInput.className = 'inspector-skinning-physics-frequency';
+  frequencyInput.min = '0.1';
+  frequencyInput.max = '10';
+  frequencyInput.step = '0.05';
+  frequencyInput.value = state.physicsFrequencyHz;
+  frequencyInput.addEventListener('change', () => {
+    setPhysicsFrequency(mesh, frequencyInput.value);
+    update();
+  });
+  frequencyLabel.appendChild(frequencyInput);
+  section.appendChild(frequencyLabel);
+
+  const dampingLabel = document.createElement('label');
+  dampingLabel.className = 'inspector-skinning-field';
+  addText(dampingLabel, 'inspector-label', 'Damping');
+  const dampingInput = document.createElement('input');
+  dampingInput.type = 'number';
+  dampingInput.className = 'inspector-skinning-physics-damping';
+  dampingInput.min = '0';
+  dampingInput.max = '2';
+  dampingInput.step = '0.05';
+  dampingInput.value = state.physicsDampingRatio;
+  dampingInput.addEventListener('change', () => {
+    setPhysicsDamping(mesh, dampingInput.value);
+    update();
+  });
+  dampingLabel.appendChild(dampingInput);
+  section.appendChild(dampingLabel);
+
+  const enableLabel = document.createElement('label');
+  enableLabel.className = 'inspector-skinning-physics-enable-label';
+  const enableInput = document.createElement('input');
+  enableInput.type = 'checkbox';
+  enableInput.className = 'inspector-skinning-physics-enable';
+  enableInput.addEventListener('change', () => {
+    setPhysicsEnabled(mesh, enableInput.checked);
+    update();
+  });
+  enableLabel.appendChild(enableInput);
+  addText(enableLabel, 'inspector-label', 'Enable');
+  section.appendChild(enableLabel);
+
+  const actions = document.createElement('div');
+  actions.className = 'inspector-skinning-chain-actions';
+  const kickMinus = document.createElement('button');
+  kickMinus.type = 'button';
+  kickMinus.className = 'ui-button inspector-skinning-physics-kick-minus';
+  kickMinus.textContent = 'Kick -';
+  kickMinus.addEventListener('click', () => {
+    applyPhysicsKick(mesh, -1);
+    update();
+  });
+  actions.appendChild(kickMinus);
+  const kickPlus = document.createElement('button');
+  kickPlus.type = 'button';
+  kickPlus.className = 'ui-button inspector-skinning-physics-kick-plus';
+  kickPlus.textContent = 'Kick +';
+  kickPlus.addEventListener('click', () => {
+    applyPhysicsKick(mesh, 1);
+    update();
+  });
+  actions.appendChild(kickPlus);
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'ui-button inspector-skinning-physics-reset';
+  reset.textContent = 'Reset Motion';
+  reset.addEventListener('click', () => {
+    resetPhysicsMotion(mesh);
+    update();
+  });
+  actions.appendChild(reset);
+  section.appendChild(actions);
+
+  let copying = false;
+  const copyButton = document.createElement('button');
+  copyButton.type = 'button';
+  copyButton.className = 'ui-button inspector-skinning-copy-physics';
+  copyButton.textContent = 'Copy Physics Diagnostics';
+  copyButton.addEventListener('click', async () => {
+    const latest = getSkinningState(mesh);
+    if (!latest) return;
+    copying = true;
+    update();
+    try {
+      await copyGraphDiagnostics(latest, true);
+      copyStatus.textContent = 'Physics diagnostics copied.';
+    } catch (error) {
+      copyStatus.textContent = error instanceof Error
+        ? error.message : String(error);
+    } finally {
+      copying = false;
+      update();
+    }
+  });
+  section.appendChild(copyButton);
+  const copyStatus = addText(
+    section, 'inspector-skinning-physics-copy-status', '');
+
+  function update(latest = getSkinningState(mesh)) {
+    if (!latest) return;
+    const valid = !!latest.candidateForest;
+    summary.textContent = physicsSummary(latest);
+    axisButtons.querySelectorAll('button').forEach(button => {
+      button.disabled = !valid;
+      button.classList.toggle(
+        'selected', button.textContent === latest.physicsAxis);
+    });
+    targetSlider.disabled = !valid;
+    targetSlider.value = latest.physicsTargetAngle;
+    targetValue.textContent = `${latest.physicsTargetAngle}°`;
+    frequencyInput.disabled = !valid;
+    frequencyInput.value = latest.physicsFrequencyHz;
+    dampingInput.disabled = !valid;
+    dampingInput.value = latest.physicsDampingRatio;
+    enableInput.disabled = !valid;
+    enableInput.checked = !!latest.physicsEnabled;
+    kickMinus.disabled = !valid || !latest.physicsEnabled;
+    kickPlus.disabled = !valid || !latest.physicsEnabled;
+    reset.disabled = !valid || !latest.physicsEnabled;
     copyButton.disabled = !valid || copying;
     copyButton.hidden = !valid;
     if (!valid) copyStatus.textContent = '';
@@ -1078,9 +1303,15 @@ function buildSkinningChainControls(parent, mesh, state) {
   chain.appendChild(helperRow);
   const coverage = buildSkinningCoverageControls(chain, mesh, state);
   let forest = null;
+  let physics = null;
   const influenceGraph = buildSkinningInfluenceGraphControls(
-    chain, mesh, state, latest => forest?.update(latest));
-  forest = buildSkinningForestControls(chain, mesh, state);
+    chain, mesh, state, latest => {
+      forest?.update(latest);
+      physics?.update(latest);
+    });
+  forest = buildSkinningForestControls(
+    chain, mesh, state, latest => physics?.update(latest));
+  physics = buildSkinningPhysicsControls(chain, mesh, state);
 
   function update() {
     const latest = getSkinningState(mesh);
@@ -1103,6 +1334,7 @@ function buildSkinningChainControls(parent, mesh, state) {
     coverage.update(latest);
     influenceGraph.update(latest);
     forest.update(latest);
+    physics.update(latest);
     syncSkinningHeatmapControls(
       chain.closest('.inspector-skinning-section'), mesh);
   }

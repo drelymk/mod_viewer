@@ -597,6 +597,134 @@ def test_skinning_frontend_math_helpers_cover_single_and_chain_paths(
         context.close()
 
 
+def test_skinning_physics_solver_covers_targets_kicks_and_equilibrium(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Physics": _payload("Physics")})
+    try:
+        result = page.evaluate("""async () => {
+          const physics = await import('./js/mesh/weight-physics.js');
+          const deformation = await import('./js/mesh/weight-deformation.js');
+          const forest = {
+            primaryRootId: 0,
+            components: [{
+              componentId: 0, rootId: 0, primary: true,
+              nodeIds: [0, 1, 2, 3], maxDepth: 2,
+              depthById: {0: 0, 1: 1, 2: 2, 3: 2},
+              childrenById: {0: [1], 1: [2, 3]},
+            }],
+          };
+          const dt = 1 / 120;
+          const target = Math.PI * 40 / 180;
+          const targetAngles = physics.buildPhysicsTargetAngles(forest, target);
+          const zeroState = physics.initializePhysicsState(forest);
+          physics.stepSpringPhysics(zeroState, forest, dt, {
+            targetAngleRadians: 0, frequencyHz: 2, dampingRatio: .35,
+          });
+
+          const under = physics.initializePhysicsState(forest);
+          let peak = 0;
+          for (let index = 0; index < 360; index += 1) {
+            physics.stepSpringPhysics(under, forest, dt, {
+              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
+            });
+            peak = Math.max(peak, under.joints.get(2).angle);
+          }
+          const underFinal = under.joints.get(2).angle;
+          for (let index = 0; index < 1200; index += 1) {
+            physics.stepSpringPhysics(under, forest, dt, {
+              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
+            });
+          }
+          const settled = physics.isPhysicsSettled(under, forest, target, {
+            angleTolerance: .002, velocityTolerance: .002,
+          });
+
+          const critical = physics.initializePhysicsState(forest);
+          let criticalPeak = 0;
+          for (let index = 0; index < 360; index += 1) {
+            physics.stepSpringPhysics(critical, forest, dt, {
+              targetAngleRadians: target, frequencyHz: 2, dampingRatio: 1,
+            });
+            criticalPeak = Math.max(criticalPeak, critical.joints.get(2).angle);
+          }
+
+          const kicked = physics.initializePhysicsState(forest);
+          physics.applyPhysicsKick(kicked, forest, 2);
+          const kick = [...kicked.joints.entries()].map(([boneId, joint]) =>
+            [boneId, joint.angularVelocity]);
+          const reset = physics.resetPhysicsState(kicked);
+          const fixedA = physics.initializePhysicsState(forest);
+          const fixedB = physics.initializePhysicsState(forest);
+          for (let index = 0; index < 240; index += 1) {
+            physics.stepSpringPhysics(fixedA, forest, dt, {
+              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
+            });
+          }
+          for (let index = 0; index < 240; index += 1) {
+            physics.stepSpringPhysics(fixedB, forest, dt, {
+              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
+            });
+          }
+
+          const centers = new Map([
+            [0, [0, 0, 0]], [1, [1, 0, 0]],
+            [2, [2, 0, 0]], [3, [1, 1, 0]],
+          ]);
+          const dynamicTransforms = deformation.buildForestTransformsFromLocalAngles(
+            forest, centers, {axis: 'Z', angleByBoneId: targetAngles});
+          const staticTransforms = deformation.buildForestTransforms(
+            forest, centers, {axis: 'Z', totalAngle: 40});
+          const matrixDifference = (left, right) => Math.max(...left.elements.map(
+            (value, index) => Math.abs(value - right.elements[index])));
+          const branchOnly = deformation.buildForestTransformsFromLocalAngles(
+            forest, centers, {axis: 'Z', angleByBoneId: new Map([[2, .2]])});
+          return {
+            zero: [...physics.physicsAngleMap(zeroState).values()],
+            targetAngles: [...targetAngles.entries()],
+            underPeak: peak, underFinal, target,
+            settled, criticalPeak,
+            kick,
+            reset: [...physics.physicsAngleMap(reset).entries()],
+            fixedEqual: [...fixedA.joints.entries()].every(([boneId, joint]) => {
+              const other = fixedB.joints.get(boneId);
+              return Math.abs(joint.angle - other.angle) < 1e-9
+                && Math.abs(joint.angularVelocity - other.angularVelocity) < 1e-9;
+            }),
+            rootIdentity: dynamicTransforms.get(0).equals(
+              new (await import('three')).Matrix4()),
+            staticDifference: Math.max(...[1, 2, 3].map(boneId =>
+              matrixDifference(dynamicTransforms.get(boneId),
+                staticTransforms.get(boneId)))),
+            branchDifference: matrixDifference(branchOnly.get(2),
+              dynamicTransforms.get(2)),
+            siblingUnchanged: branchOnly.get(3).equals(
+              new (await import('three')).Matrix4()),
+          };
+        }""")
+        assert result["zero"] == pytest.approx([0, 0, 0])
+        assert [entry[0] for entry in result["targetAngles"]] == [1, 2, 3]
+        assert [entry[1] for entry in result["targetAngles"]] == pytest.approx([
+            math.radians(20), math.radians(20), math.radians(20)])
+        assert result["underPeak"] > math.radians(20)
+        assert result["underFinal"] != pytest.approx(0)
+        assert result["settled"]
+        assert result["criticalPeak"] <= math.radians(20) + 1e-6
+        assert [entry[0] for entry in result["kick"]] == [1, 2, 3]
+        assert [entry[1] for entry in result["kick"]] == pytest.approx([
+            1, 2, 2])
+        assert [entry[0] for entry in result["reset"]] == [1, 2, 3]
+        assert [entry[1] for entry in result["reset"]] == pytest.approx([
+            0, 0, 0])
+        assert result["fixedEqual"]
+        assert result["rootIdentity"]
+        assert result["staticDifference"] < .001
+        assert result["branchDifference"] > .01
+        assert result["siblingUnchanged"]
+    finally:
+        context.close()
+
+
 def test_skinning_experiment_lifecycle_and_shape_invalidation(
         edge_browser, frontend_url):
     payload = _payload("Experiment")
@@ -815,6 +943,156 @@ def test_skinning_experiment_lifecycle_and_shape_invalidation(
         context.close()
 
 
+def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"PhysicsLifecycle": _payload("PhysicsLifecycle")})
+    try:
+        _open(page, "PhysicsLifecycle")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        result = page.evaluate("""async () => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.pywebview.api.get_skinning_preview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test',
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
+          await experiment.loadSkinningWeights(mesh);
+          experiment.buildCandidateTree(mesh, 0);
+          const queuedFrames = [];
+          const originalRequestAnimationFrame = window.requestAnimationFrame;
+          const originalCancelAnimationFrame = window.cancelAnimationFrame;
+          window.requestAnimationFrame = callback => {
+            queuedFrames.push(callback);
+            return callback;
+          };
+          window.cancelAnimationFrame = callback => {
+            const index = queuedFrames.indexOf(callback);
+            if (index >= 0) queuedFrames.splice(index, 1);
+          };
+          const runFrame = timestamp => {
+            const callback = queuedFrames.shift();
+            if (!callback) throw new Error('Expected a queued physics frame.');
+            callback(timestamp);
+          };
+          experiment.setPhysicsEnabled(mesh, true);
+          const enabled = experiment.getSkinningState(mesh);
+          const enabledState = {
+            mode: enabled.deformationMode,
+            enabled: enabled.physicsEnabled,
+            jointCount: enabled.physicsState.joints.size,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+          };
+          runFrame(0);
+          runFrame(16.7);
+          const sleeping = experiment.getSkinningState(mesh);
+          const sleepingState = {
+            settled: sleeping.physicsSettled,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+            target: sleeping.physicsTargetAngle,
+            joints: [...sleeping.physicsState.joints.values()].map(joint => ({
+              angle: joint.angle, angularVelocity: joint.angularVelocity,
+            })),
+          };
+
+          const beforeTarget = [...mesh.geometry.attributes.position.array];
+          experiment.setPhysicsTargetAngle(mesh, 30);
+          runFrame(100);
+          runFrame(116.7);
+          const moving = experiment.getSkinningState(mesh);
+          const movingPositions = [...mesh.geometry.attributes.position.array];
+          const movingState = {
+            target: moving.physicsTargetAngle,
+            mode: moving.deformationMode,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+            angle: moving.physicsState.joints.get(1).angle,
+            changed: movingPositions.some((value, index) =>
+              Math.abs(value - beforeTarget[index]) > 1e-5),
+          };
+
+          experiment.setSkinningAngle(mesh, 10);
+          const switched = experiment.getSkinningState(mesh);
+          const switchState = {
+            mode: switched.deformationMode,
+            enabled: switched.physicsEnabled,
+            target: switched.physicsTargetAngle,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+          };
+
+          experiment.buildCandidateTree(mesh, 0);
+          experiment.setPhysicsEnabled(mesh, true);
+          experiment.setPhysicsTargetAngle(mesh, 20);
+          runFrame(200);
+          runFrame(216.7);
+          experiment.resetPhysicsMotion(mesh);
+          const reset = experiment.getSkinningState(mesh);
+          const resetState = {
+            enabled: reset.physicsEnabled,
+            mode: reset.deformationMode,
+            target: reset.physicsTargetAngle,
+            settled: reset.physicsSettled,
+            scheduled: experiment.isPhysicsScheduled(mesh),
+            angles: [...reset.physicsState.joints.values()]
+              .map(joint => joint.angle),
+            positions: [...mesh.geometry.attributes.position.array],
+          };
+
+          experiment.setPhysicsTargetAngle(mesh, 20);
+          const scheduledBeforeShape = experiment.isPhysicsScheduled(mesh);
+          setControlValue('shape', '1');
+          refreshMeshes();
+          const afterShape = experiment.getSkinningState(mesh);
+          window.requestAnimationFrame = originalRequestAnimationFrame;
+          window.cancelAnimationFrame = originalCancelAnimationFrame;
+          URL.revokeObjectURL(url);
+          return {
+            enabledState, sleepingState, movingState, switchState, resetState,
+            scheduledBeforeShape,
+            afterShape: afterShape === null,
+            scheduledAfterShape: experiment.isPhysicsScheduled(mesh),
+          };
+        }""")
+        assert result["enabledState"] == {
+            "mode": "physics", "enabled": True, "jointCount": 2,
+            "scheduled": True}
+        assert result["sleepingState"]["settled"]
+        assert not result["sleepingState"]["scheduled"]
+        assert result["sleepingState"]["target"] == 0
+        assert [joint["angle"] for joint in result["sleepingState"]["joints"]] == pytest.approx([
+            0, 0])
+        assert result["movingState"]["target"] == 30
+        assert result["movingState"]["mode"] == "physics"
+        assert result["movingState"]["scheduled"]
+        assert result["movingState"]["angle"] != pytest.approx(0)
+        assert result["movingState"]["changed"]
+        assert result["switchState"] == {
+            "mode": "single", "enabled": False, "target": 0,
+            "scheduled": False}
+        assert result["resetState"]["enabled"]
+        assert result["resetState"]["mode"] == "physics"
+        assert result["resetState"]["target"] == 0
+        assert result["resetState"]["settled"]
+        assert not result["resetState"]["scheduled"]
+        assert result["resetState"]["angles"] == pytest.approx([0, 0])
+        assert result["scheduledBeforeShape"]
+        assert result["afterShape"]
+        assert not result["scheduledAfterShape"]
+    finally:
+        context.close()
+
+
 def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url,
@@ -929,6 +1207,92 @@ def test_skinning_inspector_exposes_coverage_diagnostics_and_actions(
         assert copied_forest["candidateForest"]["primaryRootId"] == 0
         assert copied_forest["candidateForest"]["components"]
         assert copied_forest["candidateForest"]["angle"] == 20
+        before_root_transform = page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          return [...getSkinningState(window.modViewer.activeMeshes[0])
+            .forestTransforms.get(0).elements];
+        }""")
+        root.select_option("1")
+        page.wait_for_function("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return state.candidateRootId === 1
+            && state.deformationMode === 'forest'
+            && state.forestTransforms?.size === 3;
+        }""")
+        after_root_transform = page.evaluate("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          return [...getSkinningState(window.modViewer.activeMeshes[0])
+            .forestTransforms.get(0).elements];
+        }""")
+        assert before_root_transform != pytest.approx(after_root_transform)
+        page.locator(".inspector-skinning-build-tree").click()
+        page.wait_for_function("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return state.candidateRootId === 1
+            && state.deformationMode === 'forest'
+            && state.forestTransforms?.size === 3;
+        }""")
+        physics = page.locator(".inspector-skinning-physics")
+        assert "Spring Physics Prototype" in physics.inner_text()
+        target = physics.locator(".inspector-skinning-physics-target-angle")
+        target.evaluate("""node => {
+          node.value = '25';
+          node.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
+        frequency = physics.locator(".inspector-skinning-physics-frequency")
+        frequency.fill("3")
+        frequency.dispatch_event("change")
+        damping = physics.locator(".inspector-skinning-physics-damping")
+        damping.fill("0.5")
+        damping.dispatch_event("change")
+        enable = physics.locator(".inspector-skinning-physics-enable")
+        enable.check()
+        page.wait_for_function("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return state.physicsEnabled && state.deformationMode === 'physics'
+            && state.physicsTargetAngle === 25
+            && state.physicsFrequencyHz === 3
+            && state.physicsDampingRatio === .5;
+        }""")
+        physics.locator(".inspector-skinning-physics-kick-plus").click()
+        physics.locator(".inspector-skinning-copy-physics").click()
+        page.wait_for_function(
+            "() => document.querySelector('.inspector-skinning-physics-copy-status')"
+            ".textContent === 'Physics diagnostics copied.'")
+        copied_physics = page.evaluate(
+            "() => JSON.parse(window.__copiedGraphDiagnostics)")
+        assert copied_physics["candidateForest"]["physics"]["enabled"]
+        assert copied_physics["candidateForest"]["physics"]["targetAngle"] == 25
+        physics.locator(".inspector-skinning-physics-reset").click()
+        page.wait_for_function("""async () => {
+          const {getSkinningState} =
+            await import('./js/mesh/weight-experiment.js');
+          const {isPhysicsScheduled} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return state.physicsEnabled && state.physicsTargetAngle === 0
+            && state.physicsSettled
+            && !isPhysicsScheduled(window.modViewer.activeMeshes[0])
+            && [...state.physicsState.joints.values()].every(joint =>
+              joint.angle === 0 && joint.angularVelocity === 0);
+        }""")
+        enable.uncheck()
+        page.wait_for_function("""async () => {
+          const {getSkinningState, isPhysicsScheduled} =
+            await import('./js/mesh/weight-experiment.js');
+          const state = getSkinningState(window.modViewer.activeMeshes[0]);
+          return !state.physicsEnabled && state.deformationMode === null
+            && state.physicsState === null
+            && !isPhysicsScheduled(window.modViewer.activeMeshes[0]);
+        }""")
         page.locator(".inspector-skinning-tree-show").click()
         assert page.evaluate("""async () => {
           const {getSkinningState} =

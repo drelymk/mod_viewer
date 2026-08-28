@@ -4,9 +4,41 @@
 import * as THREE from 'three';
 import { invalidateCharacterShadowGeometry } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
+import {
+  applyWeightedRotation, buildChainTransforms, buildForestTransforms,
+  buildForestTransformsFromLocalAngles, applyWeightedTransformDeformation,
+  applyWeightedChainDeformation,
+} from './weight-deformation.js';
+import {
+  DEFAULT_PHYSICS_DAMPING_RATIO, DEFAULT_PHYSICS_FREQUENCY_HZ,
+  applyPhysicsKick as applyPhysicsKickState, initializePhysicsState,
+  isPhysicsSettled, physicsAngleMap, resetPhysicsState,
+  stepSpringPhysics,
+} from './weight-physics.js';
+
+export {
+  applyWeightedRotation, buildChainTransforms, buildForestTransforms,
+  buildForestTransformsFromLocalAngles, applyWeightedTransformDeformation,
+  applyWeightedChainDeformation,
+} from './weight-deformation.js';
+
+export {
+  DEFAULT_ANGLE_TOLERANCE, DEFAULT_PHYSICS_DAMPING_RATIO,
+  DEFAULT_PHYSICS_FREQUENCY_HZ, DEFAULT_VELOCITY_TOLERANCE,
+  MAX_ANGULAR_VELOCITY, MAX_LOCAL_ANGLE,
+  buildPhysicsTargetAngles, initializePhysicsState, isPhysicsSettled,
+  physicsAngleMap, resetPhysicsState, stepSpringPhysics,
+} from './weight-physics.js';
+export {applyPhysicsKick as applyPhysicsKickSolver} from './weight-physics.js';
 
 const states = new WeakMap();
 let activeExperimentHelperMesh = null;
+const PHYSICS_STEP = 1 / 120;
+const MAX_PHYSICS_FRAME_DELTA = 0.05;
+const MAX_PHYSICS_SUBSTEPS = 6;
+const PHYSICS_KICK_SPEED = Math.PI;
+let physicsFrameId = null;
+const activePhysicsMeshes = new Set();
 
 const FULL_COVERAGE_THRESHOLD = 0.9999;
 const COVERAGE_99_THRESHOLD = 0.99;
@@ -52,6 +84,16 @@ function newState() {
     deformationMode: null,
     forestAxis: 'Z',
     forestAngle: 0,
+    physicsEnabled: false,
+    physicsAxis: 'Z',
+    physicsTargetAngle: 0,
+    physicsFrequencyHz: DEFAULT_PHYSICS_FREQUENCY_HZ,
+    physicsDampingRatio: DEFAULT_PHYSICS_DAMPING_RATIO,
+    physicsState: null,
+    physicsTransforms: null,
+    physicsAccumulator: 0,
+    physicsLastTimestamp: null,
+    physicsSettled: true,
     chainError: null,
     chainHelpersVisible: false,
     chainHelpers: null,
@@ -88,6 +130,109 @@ function stateFor(mesh) {
 
 export function getSkinningState(mesh) {
   return states.get(mesh) || null;
+}
+
+function removePhysicsMesh(mesh) {
+  activePhysicsMeshes.delete(mesh);
+  if (!activePhysicsMeshes.size && physicsFrameId !== null
+      && typeof window !== 'undefined'
+      && typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(physicsFrameId);
+    physicsFrameId = null;
+  }
+}
+
+function schedulePhysicsFrame() {
+  if (physicsFrameId !== null || !activePhysicsMeshes.size
+      || typeof window === 'undefined'
+      || typeof window.requestAnimationFrame !== 'function') return;
+  physicsFrameId = window.requestAnimationFrame(timestamp => {
+    physicsFrameId = null;
+    activePhysicsMeshes.forEach(mesh => advancePhysicsMesh(mesh, timestamp));
+    if (activePhysicsMeshes.size) schedulePhysicsFrame();
+  });
+}
+
+export function isPhysicsScheduled(mesh) {
+  return activePhysicsMeshes.has(mesh);
+}
+
+function stopPhysics(mesh, state) {
+  removePhysicsMesh(mesh);
+  state.physicsEnabled = false;
+  state.physicsState = null;
+  state.physicsTransforms = null;
+  state.physicsAccumulator = 0;
+  state.physicsLastTimestamp = null;
+  state.physicsSettled = true;
+  state.physicsTargetAngle = 0;
+  if (state.deformationMode === 'physics') state.deformationMode = null;
+}
+
+function wakePhysics(mesh, state) {
+  if (!state.physicsEnabled || !state.candidateForest) return false;
+  if (!state.physicsState) {
+    state.physicsState = initializePhysicsState(state.candidateForest);
+  }
+  state.physicsAccumulator = 0;
+  state.physicsLastTimestamp = null;
+  state.physicsSettled = false;
+  activePhysicsMeshes.add(mesh);
+  schedulePhysicsFrame();
+  return true;
+}
+
+function advancePhysicsMesh(mesh, timestamp) {
+  const state = states.get(mesh);
+  if (!state || !state.physicsEnabled
+      || state.deformationMode !== 'physics'
+      || !state.candidateForest || !state.physicsState) {
+    removePhysicsMesh(mesh);
+    return;
+  }
+  const currentTimestamp = Number(timestamp);
+  if (!Number.isFinite(currentTimestamp)) {
+    removePhysicsMesh(mesh);
+    return;
+  }
+  if (state.physicsLastTimestamp === null) {
+    state.physicsLastTimestamp = currentTimestamp;
+    return;
+  }
+  const elapsed = Math.max(0, Math.min(
+    MAX_PHYSICS_FRAME_DELTA,
+    (currentTimestamp - state.physicsLastTimestamp) / 1000));
+  state.physicsLastTimestamp = currentTimestamp;
+  state.physicsAccumulator += elapsed;
+  let steps = 0;
+  while (state.physicsAccumulator >= PHYSICS_STEP
+      && steps < MAX_PHYSICS_SUBSTEPS) {
+    stepSpringPhysics(
+      state.physicsState, state.candidateForest, PHYSICS_STEP, {
+        frequencyHz: state.physicsFrequencyHz,
+        dampingRatio: state.physicsDampingRatio,
+        targetAngleRadians: THREE.MathUtils.degToRad(
+          state.physicsTargetAngle),
+        maxDt: PHYSICS_STEP,
+      });
+    state.physicsAccumulator -= PHYSICS_STEP;
+    steps += 1;
+  }
+  if (steps === MAX_PHYSICS_SUBSTEPS
+      && state.physicsAccumulator >= PHYSICS_STEP) {
+    state.physicsAccumulator = PHYSICS_STEP;
+  }
+  if (!steps) return;
+
+  // Integrate all fixed substeps first, then update the mesh once per frame.
+  applyDeformation(mesh, state);
+  state.physicsSettled = isPhysicsSettled(
+    state.physicsState, state.candidateForest,
+    THREE.MathUtils.degToRad(state.physicsTargetAngle));
+  if (state.physicsSettled) {
+    state.physicsLastTimestamp = null;
+    removePhysicsMesh(mesh);
+  }
 }
 
 export function weightForBone(indices, weights, influenceCount,
@@ -756,216 +901,6 @@ export function weightedCenter(positions, indices, weights, influenceCount,
   return center;
 }
 
-function rotatePoint(x, y, z, center, axis, radians) {
-  const dx = x - center[0];
-  const dy = y - center[1];
-  const dz = z - center[2];
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
-  let rx = dx;
-  let ry = dy;
-  let rz = dz;
-  if (axis === 'X') {
-    ry = dy * cos - dz * sin;
-    rz = dy * sin + dz * cos;
-  } else if (axis === 'Y') {
-    rx = dx * cos + dz * sin;
-    rz = -dx * sin + dz * cos;
-  } else {
-    rx = dx * cos - dy * sin;
-    ry = dx * sin + dy * cos;
-  }
-  return [rx + center[0], ry + center[1], rz + center[2]];
-}
-
-export function applyWeightedRotation(baselinePositions, indices, weights,
-                                       influenceCount, boneId, center,
-                                       axis = 'Z', angleDegrees = 0) {
-  const result = new Float32Array(baselinePositions || 0);
-  if (!baselinePositions || !indices || !weights || influenceCount <= 0
-      || !Number.isFinite(angleDegrees)) return result;
-  const radians = angleDegrees * Math.PI / 180;
-  const vertexCount = Math.floor(baselinePositions.length / 3);
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const offset = vertex * 3;
-    const weight = Math.max(0, Math.min(1, weightForBone(
-      indices, weights, influenceCount, vertex, boneId)));
-    if (!weight || !center) continue;
-    const rotated = rotatePoint(
-      baselinePositions[offset], baselinePositions[offset + 1],
-      baselinePositions[offset + 2], center, axis, radians);
-    result[offset] = baselinePositions[offset]
-      + weight * (rotated[0] - baselinePositions[offset]);
-    result[offset + 1] = baselinePositions[offset + 1]
-      + weight * (rotated[1] - baselinePositions[offset + 1]);
-    result[offset + 2] = baselinePositions[offset + 2]
-      + weight * (rotated[2] - baselinePositions[offset + 2]);
-  }
-  return result;
-}
-
-function vectorFromCenter(center) {
-  if (center?.isVector3) return center.clone();
-  return new THREE.Vector3(
-    Number(center?.[0]) || 0,
-    Number(center?.[1]) || 0,
-    Number(center?.[2]) || 0,
-  );
-}
-
-function axisVector(axis) {
-  if (axis === 'X') return new THREE.Vector3(1, 0, 0);
-  if (axis === 'Y') return new THREE.Vector3(0, 1, 0);
-  return new THREE.Vector3(0, 0, 1);
-}
-
-function rotationAroundPivot(pivot, rotationAxis, radians) {
-  return new THREE.Matrix4()
-    .makeTranslation(pivot.x, pivot.y, pivot.z)
-    .multiply(new THREE.Matrix4().makeRotationAxis(
-      rotationAxis, radians))
-    .multiply(new THREE.Matrix4().makeTranslation(
-      -pivot.x, -pivot.y, -pivot.z));
-}
-
-export function buildChainTransforms(centers, axis = 'Z', totalAngle = 0) {
-  const source = Array.isArray(centers) ? centers : [];
-  const transforms = source.map(() => new THREE.Matrix4());
-  if (source.length < 2 || !Number.isFinite(Number(totalAngle))) {
-    return transforms;
-  }
-  const jointAngle = THREE.MathUtils.degToRad(Number(totalAngle))
-    / (source.length - 1);
-  const rotationAxis = axisVector(axis);
-  for (let index = 1; index < source.length; index += 1) {
-    const parent = transforms[index - 1];
-    const pivot = vectorFromCenter(source[index - 1])
-      .applyMatrix4(parent);
-    const aroundPivot = rotationAroundPivot(
-      pivot, rotationAxis, jointAngle);
-    transforms[index] = aroundPivot.multiply(parent.clone());
-  }
-  return transforms;
-}
-
-function centerFromCollection(nodeCenters, boneId) {
-  if (nodeCenters instanceof Map) {
-    return nodeCenters.get(boneId) ?? nodeCenters.get(String(boneId));
-  }
-  return nodeCenters?.[boneId];
-}
-
-export function buildForestTransforms(forest, nodeCenters, options = {}) {
-  const transforms = new Map();
-  const axis = options.axis || 'Z';
-  const totalAngle = Number(options.totalAngle ?? options.angleDegrees ?? 0);
-  const rotationAxis = axisVector(axis);
-  if (!Number.isFinite(totalAngle)) return transforms;
-
-  (forest?.components || []).forEach(component => {
-    const rootId = Number(component.rootId);
-    const depthById = component.depthById || {};
-    const maxDepth = Number(component.maxDepth ?? Math.max(
-      0, ...Object.values(depthById)
-        .filter(depth => depth !== null).map(Number)));
-    const edgeAngle = maxDepth > 0
-      ? THREE.MathUtils.degToRad(totalAngle) / maxDepth : 0;
-    const rootTransform = new THREE.Matrix4();
-    if (!Number.isFinite(rootId)) return;
-    transforms.set(rootId, rootTransform);
-    const queue = [rootId];
-    const visited = new Set([rootId]);
-    while (queue.length) {
-      const parentId = queue.shift();
-      const parentTransform = transforms.get(parentId);
-      const parentCenter = vectorFromCenter(
-        centerFromCollection(nodeCenters, parentId));
-      const pivot = parentCenter.clone().applyMatrix4(parentTransform);
-      const aroundPivot = rotationAroundPivot(
-        pivot, rotationAxis, edgeAngle);
-      const children = component.childrenById?.[parentId] || [];
-      children.forEach(childValue => {
-        const childId = Number(childValue);
-        if (!Number.isFinite(childId) || visited.has(childId)) return;
-        visited.add(childId);
-        transforms.set(childId,
-          aroundPivot.clone().multiply(parentTransform.clone()));
-        queue.push(childId);
-      });
-    }
-    // A malformed or partially oriented component still receives safe
-    // identity transforms for every participating node.
-    (component.nodeIds || []).forEach(nodeValue => {
-      const nodeId = Number(nodeValue);
-      if (Number.isFinite(nodeId) && !transforms.has(nodeId)) {
-        transforms.set(nodeId, new THREE.Matrix4());
-      }
-    });
-  });
-  return transforms;
-}
-
-function transformForBone(transformByBoneId, boneId) {
-  if (transformByBoneId instanceof Map) {
-    return transformByBoneId.get(Number(boneId));
-  }
-  return transformByBoneId?.[boneId];
-}
-
-export function applyWeightedTransformDeformation(
-    baselinePositions, indices, weights, influenceCount, transformByBoneId) {
-  const result = new Float32Array(baselinePositions || 0);
-  if (!baselinePositions || !indices || !weights || influenceCount <= 0
-      || !transformByBoneId) return result;
-  const vertexCount = Math.floor(baselinePositions.length / 3);
-  const baseline = new THREE.Vector3();
-  const transformed = new THREE.Vector3();
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const offset = vertex * 3;
-    baseline.set(
-      baselinePositions[offset], baselinePositions[offset + 1],
-      baselinePositions[offset + 2]);
-    const start = vertex * influenceCount;
-    let transformedWeight = 0;
-    let x = 0, y = 0, z = 0;
-    for (let influence = 0; influence < influenceCount; influence += 1) {
-      const weight = weights[start + influence];
-      const transform = transformForBone(
-        transformByBoneId, indices[start + influence]);
-      if (!transform || !Number.isFinite(weight) || weight <= 0) continue;
-      transformedWeight += weight;
-      transformed.copy(baseline).applyMatrix4(transform);
-      x += transformed.x * weight;
-      y += transformed.y * weight;
-      z += transformed.z * weight;
-    }
-    const unchanged = Math.max(0, 1 - transformedWeight);
-    result[offset] = baseline.x * unchanged + x;
-    result[offset + 1] = baseline.y * unchanged + y;
-    result[offset + 2] = baseline.z * unchanged + z;
-  }
-  return result;
-}
-
-export function applyWeightedChainDeformation(
-    baselinePositions, indices, weights, influenceCount, chainIds,
-    transforms) {
-  const result = new Float32Array(baselinePositions || 0);
-  if (!baselinePositions || !indices || !weights || influenceCount <= 0
-      || !Array.isArray(chainIds) || chainIds.length < 2
-      || !Array.isArray(transforms) || transforms.length < chainIds.length) {
-    return result;
-  }
-  const transformByBoneId = new Map();
-  chainIds.forEach((boneId, index) => {
-    if (transforms[index]) {
-      transformByBoneId.set(Number(boneId), transforms[index]);
-    }
-  });
-  return applyWeightedTransformDeformation(
-    baselinePositions, indices, weights, influenceCount, transformByBoneId);
-}
-
 function previewError(result) {
   const code = result?.code;
   return new Error(ERROR_MESSAGES[code] || result?.error
@@ -1010,6 +945,15 @@ function restoreNormals(mesh, state) {
   }
   normal.array.set(state.baselineNormals);
   normal.needsUpdate = true;
+}
+
+function vectorFromCenter(center) {
+  if (center?.isVector3) return center.clone();
+  return new THREE.Vector3(
+    Number(center?.[0]) || 0,
+    Number(center?.[1]) || 0,
+    Number(center?.[2]) || 0,
+  );
 }
 
 function centerFor(mesh, state) {
@@ -1133,8 +1077,12 @@ function updateVirtualChainHelpers(mesh, state) {
 
 function transformedInfluenceCenter(node, state, mode) {
   const point = vectorFromCenter(node.weightedCenter);
-  if (mode === 'tree' && state.deformationMode === 'forest') {
-    const transform = state.forestTransforms?.get(node.boneId);
+  if (mode === 'tree') {
+    const transforms = state.deformationMode === 'forest'
+      ? state.forestTransforms
+      : state.deformationMode === 'physics'
+        ? state.physicsTransforms : null;
+    const transform = transforms?.get(node.boneId);
     if (transform) point.applyMatrix4(transform);
   }
   return point;
@@ -1295,6 +1243,29 @@ function updateInfluenceVisualization(mesh, state) {
   });
 }
 
+function refreshAfterForestTopologyChange(mesh, state) {
+  if (state.physicsEnabled && state.deformationMode === 'physics') {
+    state.physicsState = initializePhysicsState(state.candidateForest);
+    state.physicsTransforms = null;
+    state.physicsAccumulator = 0;
+    state.physicsLastTimestamp = null;
+    state.physicsSettled = false;
+    activePhysicsMeshes.add(mesh);
+    schedulePhysicsFrame();
+  }
+  if (state.influenceVisualizationMode) {
+    createInfluenceVisualization(
+      mesh, state, state.influenceVisualizationMode);
+  }
+  if (state.physicsEnabled && state.deformationMode === 'physics') {
+    applyDeformation(mesh, state);
+  } else if (state.deformationMode === 'forest') {
+    applyDeformation(mesh, state);
+  } else {
+    requestRender();
+  }
+}
+
 export function buildCandidateTree(mesh, rootId = null) {
   const state = stateFor(mesh);
   if (!state?.loaded || !state.influenceGraph) return null;
@@ -1324,11 +1295,7 @@ export function buildCandidateTree(mesh, rootId = null) {
     } : orientTree(tree.edges, state.candidateRootId),
     forest,
   };
-  if (state.influenceVisualizationMode) {
-    createInfluenceVisualization(
-      mesh, state, state.influenceVisualizationMode);
-  }
-  requestRender();
+  refreshAfterForestTopologyChange(mesh, state);
   return state.candidateTree;
 }
 
@@ -1353,11 +1320,7 @@ export function setCandidateTreeRoot(mesh, rootId) {
       depthById: primaryComponent.depthById,
     } : orientTree(state.candidateTree.edges, id);
   }
-  if (state.influenceVisualizationMode) {
-    createInfluenceVisualization(
-      mesh, state, state.influenceVisualizationMode);
-  }
-  requestRender();
+  refreshAfterForestTopologyChange(mesh, state);
   return id;
 }
 
@@ -1403,8 +1366,20 @@ function applyDeformation(mesh, state) {
     && state.chainAngle !== 0 && state.chainIds.length >= 2;
   const forestActive = state.deformationMode === 'forest'
     && state.forestAngle !== 0 && state.candidateForest;
+  const physicsActive = state.deformationMode === 'physics'
+    && state.physicsEnabled && state.physicsState && state.candidateForest;
   let result;
-  if (forestActive) {
+  if (physicsActive) {
+    state.physicsTransforms = buildForestTransformsFromLocalAngles(
+      state.candidateForest, state.centerByBoneId, {
+        axis: state.physicsAxis,
+        angleByBoneId: physicsAngleMap(state.physicsState),
+      });
+    state.forestTransforms = null;
+    result = applyWeightedTransformDeformation(
+      state.baselinePositions, state.indices, state.weights,
+      state.influenceCount, state.physicsTransforms);
+  } else if (forestActive) {
     state.forestTransforms = buildForestTransforms(
       state.candidateForest,
       state.centerByBoneId,
@@ -1414,23 +1389,26 @@ function applyDeformation(mesh, state) {
       state.influenceCount, state.forestTransforms);
   } else if (chainActive) {
     state.forestTransforms = null;
+    state.physicsTransforms = null;
     result = applyWeightedChainDeformation(
       state.baselinePositions, state.indices, state.weights,
       state.influenceCount, state.chainIds, buildChainTransforms(
         chainCentersFor(mesh, state), state.chainAxis, state.chainAngle));
   } else if (state.deformationMode === 'single' && state.angle !== 0) {
     state.forestTransforms = null;
+    state.physicsTransforms = null;
     result = applyWeightedRotation(
       state.baselinePositions, state.indices, state.weights,
       state.influenceCount, state.selectedBone, centerFor(mesh, state),
       state.axis, state.angle);
   } else {
     state.forestTransforms = null;
+    state.physicsTransforms = null;
     result = state.baselinePositions;
   }
   position.array.set(result);
   position.needsUpdate = true;
-  if (!chainActive && !forestActive && state.angle === 0) {
+  if (!chainActive && !forestActive && !physicsActive && state.angle === 0) {
     restoreNormals(mesh, state);
   } else {
     mesh.geometry.computeVertexNormals();
@@ -1573,6 +1551,7 @@ export function setSelectedBone(mesh, boneId) {
 export function setSkinningAxis(mesh, axis) {
   const state = stateFor(mesh);
   if (!state?.loaded || !['X', 'Y', 'Z'].includes(axis)) return;
+  if (state.physicsEnabled) stopPhysics(mesh, state);
   state.axis = axis;
   applyDeformation(mesh, state);
 }
@@ -1580,6 +1559,7 @@ export function setSkinningAxis(mesh, axis) {
 export function setSkinningAngle(mesh, angle) {
   const state = stateFor(mesh);
   if (!state?.loaded) return;
+  if (state.physicsEnabled) stopPhysics(mesh, state);
   state.angle = Math.max(-45, Math.min(45, Number(angle) || 0));
   state.chainAngle = 0;
   state.forestAngle = 0;
@@ -1591,6 +1571,7 @@ export function setSkinningAngle(mesh, angle) {
 export function setSkinningChainText(mesh, text) {
   const state = stateFor(mesh);
   if (!state?.loaded) return false;
+  if (state.physicsEnabled) stopPhysics(mesh, state);
   state.chainText = String(text ?? '');
   if (state.deformationMode === 'forest') {
     state.forestAngle = 0;
@@ -1629,6 +1610,7 @@ export function setSkinningChainText(mesh, text) {
 export function setSkinningChainAxis(mesh, axis) {
   const state = stateFor(mesh);
   if (!state?.loaded || !['X', 'Y', 'Z'].includes(axis)) return;
+  if (state.physicsEnabled) stopPhysics(mesh, state);
   state.chainAxis = axis;
   state.angle = 0;
   state.forestAngle = 0;
@@ -1639,6 +1621,7 @@ export function setSkinningChainAxis(mesh, axis) {
 export function setSkinningChainAngle(mesh, angle) {
   const state = stateFor(mesh);
   if (!state?.loaded || state.chainIds.length < 2) return false;
+  if (state.physicsEnabled) stopPhysics(mesh, state);
   state.chainAngle = Math.max(-60, Math.min(60, Number(angle) || 0));
   state.angle = 0;
   state.forestAngle = 0;
@@ -1650,6 +1633,7 @@ export function setSkinningChainAngle(mesh, angle) {
 export function setForestAxis(mesh, axis) {
   const state = stateFor(mesh);
   if (!state?.loaded || !['X', 'Y', 'Z'].includes(axis)) return;
+  if (state.physicsEnabled) stopPhysics(mesh, state);
   state.forestAxis = axis;
   applyDeformation(mesh, state);
 }
@@ -1657,10 +1641,106 @@ export function setForestAxis(mesh, axis) {
 export function setForestAngle(mesh, angle) {
   const state = stateFor(mesh);
   if (!state?.loaded || !state.candidateForest) return false;
+  if (state.physicsEnabled) stopPhysics(mesh, state);
   state.forestAngle = Math.max(-60, Math.min(60, Number(angle) || 0));
   state.angle = 0;
   state.chainAngle = 0;
   state.deformationMode = state.forestAngle === 0 ? null : 'forest';
+  applyDeformation(mesh, state);
+  return true;
+}
+
+export function setPhysicsAxis(mesh, axis) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest
+      || !['X', 'Y', 'Z'].includes(axis)) return;
+  state.physicsAxis = axis;
+  if (state.physicsEnabled) applyDeformation(mesh, state);
+}
+
+export function setPhysicsTargetAngle(mesh, angle) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  state.physicsTargetAngle = Math.max(
+    -40, Math.min(40, Number(angle) || 0));
+  if (state.physicsEnabled) {
+    applyDeformation(mesh, state);
+    wakePhysics(mesh, state);
+  }
+  return true;
+}
+
+export function setPhysicsFrequency(mesh, frequencyHz) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  const value = Number(frequencyHz);
+  if (!Number.isFinite(value)) return false;
+  state.physicsFrequencyHz = Math.max(0.1, Math.min(10, value));
+  if (state.physicsEnabled) wakePhysics(mesh, state);
+  return true;
+}
+
+export function setPhysicsDamping(mesh, dampingRatio) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  const value = Number(dampingRatio);
+  if (!Number.isFinite(value)) return false;
+  state.physicsDampingRatio = Math.max(0, Math.min(2, value));
+  if (state.physicsEnabled) wakePhysics(mesh, state);
+  return true;
+}
+
+export function setPhysicsEnabled(mesh, enabled) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.candidateForest) return false;
+  if (!enabled) {
+    stopPhysics(mesh, state);
+    applyDeformation(mesh, state);
+    return false;
+  }
+  state.angle = 0;
+  state.chainAngle = 0;
+  state.forestAngle = 0;
+  if (state.chainHelpers) removeVirtualChainHelpers(mesh, state);
+  state.deformationMode = 'physics';
+  state.physicsEnabled = true;
+  state.physicsState = initializePhysicsState(state.candidateForest);
+  state.physicsTransforms = null;
+  state.physicsAccumulator = 0;
+  state.physicsLastTimestamp = null;
+  state.physicsSettled = false;
+  applyDeformation(mesh, state);
+  wakePhysics(mesh, state);
+  return true;
+}
+
+export function applyPhysicsKick(mesh, direction = 1) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.physicsEnabled
+      || state.deformationMode !== 'physics' || !state.candidateForest) {
+    return false;
+  }
+  if (!state.physicsState) {
+    state.physicsState = initializePhysicsState(state.candidateForest);
+  }
+  const sign = Number(direction) < 0 ? -1 : 1;
+  applyPhysicsKickState(
+    state.physicsState, state.candidateForest, sign * PHYSICS_KICK_SPEED);
+  wakePhysics(mesh, state);
+  return true;
+}
+
+export function resetPhysicsMotion(mesh) {
+  const state = stateFor(mesh);
+  if (!state?.loaded || !state.physicsEnabled
+      || state.deformationMode !== 'physics') return false;
+  resetPhysicsState(state.physicsState);
+  state.physicsTargetAngle = 0;
+  state.physicsTransforms = null;
+  state.physicsAccumulator = 0;
+  state.physicsLastTimestamp = null;
+  state.physicsSettled = true;
+  removePhysicsMesh(mesh);
   applyDeformation(mesh, state);
   return true;
 }
@@ -1705,11 +1785,13 @@ export function setSkinningHeatmap(mesh, enabled) {
 export function resetSkinningExperiment(mesh) {
   const state = stateFor(mesh);
   if (!state?.loaded) return;
+  if (state.physicsEnabled) stopPhysics(mesh, state);
   state.angle = 0;
   state.chainAngle = 0;
   state.forestAngle = 0;
   state.deformationMode = null;
   state.forestTransforms = null;
+  state.physicsTransforms = null;
   removeVirtualChainHelpers(mesh, state);
   removeInfluenceVisualization(state);
   applyDeformation(mesh, state);
@@ -1724,6 +1806,7 @@ export function disposeSkinningExperiment(mesh) {
   const state = states.get(mesh);
   if (!state) return;
   state.disposed = true;
+  removePhysicsMesh(mesh);
   removeVirtualChainHelpers(mesh, state);
   removeInfluenceVisualization(state);
   if (state.debugMaterial) state.debugMaterial.dispose();
