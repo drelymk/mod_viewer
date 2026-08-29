@@ -19,6 +19,20 @@ class GeometryMatch:
     index_count: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DrawOccurrence:
+    """Stable ordinal for one authored draw command in a section."""
+
+    section: str | None
+    ordinal: int | None
+
+    def key_value(self):
+        return [self.section or "", self.ordinal]
+
+    def to_dict(self):
+        return {"section": self.section, "ordinal": self.ordinal}
+
+
 def normalize_identity_source(value):
     """Normalize an authored source label without changing its spelling."""
     if value is None:
@@ -27,6 +41,25 @@ def normalize_identity_source(value):
     while source.startswith("./"):
         source = source[2:]
     return source or None
+
+
+def _draw_occurrence_value(value):
+    if isinstance(value, DrawOccurrence):
+        return value.key_value()
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        return [str(value[0]) if value[0] is not None else "", value[1]]
+    return None
+
+
+def _draw_occurrence_dict(value):
+    if isinstance(value, DrawOccurrence):
+        return value.to_dict()
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        return {
+            "section": value[0],
+            "ordinal": value[1],
+        }
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,11 +137,12 @@ class MeshIdentity:
     count: int | None
     start: int
     base: int
+    occurrence: DrawOccurrence | tuple | None = None
     geometry_state: MeshGeometryIdentity | None = None
 
     @property
     def version(self):
-        return 3
+        return 4
 
     @property
     def key(self):
@@ -123,6 +157,7 @@ class MeshIdentity:
             self.version,
             self.source or "",
             self.component or "",
+            _draw_occurrence_value(self.occurrence),
             geometry,
             [self.count, self.start, self.base],
             (self.geometry_state.key_value()
@@ -145,6 +180,7 @@ class MeshIdentity:
             "key": self.key,
             "source": self.source,
             "component": self.component,
+            "occurrence": _draw_occurrence_dict(self.occurrence),
             "geometry": geometry,
             "draw": {
                 "count": self.count,
@@ -165,6 +201,7 @@ def make_mesh_identity(draw, source=None, component=None):
         count=draw.count,
         start=draw.start,
         base=draw.base,
+        occurrence=getattr(draw, "occurrence", None),
         geometry_state=make_mesh_geometry_identity(draw),
     )
 

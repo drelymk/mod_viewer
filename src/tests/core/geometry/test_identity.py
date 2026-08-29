@@ -7,7 +7,8 @@ import pytest
 
 from core.geometry.draw_call import DrawCall
 from core.geometry.identity import (
-    GeometryMatch, make_mesh_identity, normalize_identity_source,
+    DrawOccurrence, GeometryMatch, make_mesh_identity,
+    normalize_identity_source,
 )
 from core.geometry.vertex_attributes import VertexAttributeSource
 
@@ -40,13 +41,14 @@ def test_mesh_identity_is_deterministic_and_projects_all_authored_fields():
         _draw(), source=".\\Root.ini", component="Body:Main")
 
     assert identity.key == (
-        'mesh:[3,"Root.ini","Body:Main",["1234ABCD",8,120],'
-        '[120,4,-2],[null,null,null,null,null,null,null]]')
+        'mesh:[4,"Root.ini","Body:Main",null,["1234ABCD",8,120],'
+                '[120,4,-2],[null,null,null,null,null,null,null]]')
     assert identity.to_dict() == {
-        "version": 3,
+        "version": 4,
         "key": identity.key,
         "source": "Root.ini",
         "component": "Body:Main",
+        "occurrence": None,
         "geometry": {
             "hash": "1234ABCD",
             "first_index": 8,
@@ -67,6 +69,7 @@ def test_mesh_identity_is_deterministic_and_projects_all_authored_fields():
 @pytest.mark.parametrize("field, value", [
     ("source", "Other.ini"),
     ("component", "Other"),
+    ("occurrence", DrawOccurrence("TextureOverrideBody", 1)),
     ("geometry", GeometryMatch("abcdef12", 8, 120)),
     ("geometry", GeometryMatch("1234abcd", 9, 120)),
     ("geometry", GeometryMatch("1234abcd", 8, 121)),
@@ -121,16 +124,41 @@ def test_mesh_identity_keeps_asset_binding_and_render_state_out_of_key():
     assert second.key == first.key
 
 
+def test_mesh_identity_occurrence_distinguishes_texture_only_draws():
+    first = make_mesh_identity(
+        _draw(texture_default_file="red.dds",
+              occurrence=("TextureOverrideBody", 0)),
+        source="Root.ini", component="Body")
+    second = make_mesh_identity(
+        _draw(texture_default_file="blue.dds",
+              occurrence=("TextureOverrideBody", 1)),
+        source="Root.ini", component="Body")
+
+    assert first.key != second.key
+    assert first.to_dict()["occurrence"] == {
+        "section": "TextureOverrideBody", "ordinal": 0}
+    assert second.to_dict()["occurrence"] == {
+        "section": "TextureOverrideBody", "ordinal": 1}
+
+
+def test_draw_occurrence_is_not_render_identity():
+    first = _draw(occurrence=("TextureOverrideBody", 0))
+    second = _draw(occurrence=("TextureOverrideBody", 1))
+
+    assert first.render_identity() == second.render_identity()
+
+
 def test_mesh_identity_without_geometry_evidence_is_still_present():
     identity = make_mesh_identity(
         _draw(geometry_match=None), source=None, component=None)
 
     assert identity.to_dict() == {
-        "version": 3,
-        "key": 'mesh:[3,"","",null,[120,4,-2],'
+        "version": 4,
+        "key": 'mesh:[4,"","",null,null,[120,4,-2],'
                 '[null,null,null,null,null,null,null]]',
         "source": None,
         "component": None,
+        "occurrence": None,
         "geometry": None,
         "draw": {"count": 120, "start": 4, "base": -2},
         "geometry_state": {

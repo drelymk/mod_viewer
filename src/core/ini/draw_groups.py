@@ -4,6 +4,7 @@ import re
 
 from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
 from ..geometry.draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
+from ..geometry.identity import DrawOccurrence
 from ..geometry.skinning import resolve_skinning_source
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
@@ -218,6 +219,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             resolve_vertex_info)
         authored_draws = list(info["draws"]) or [AuthoredDrawCall(
             count=None, start=0, base=0, source=info["src"],
+            occurrence=DrawOccurrence(section_name, None),
             diffuse_variants=info.get("diffuse_variants_at_end") or [],
             diffuse_history=info.get("diffuse_history_at_end") or [],
             auxiliary_maps=info.get("aux_maps_at_end") or {},
@@ -234,6 +236,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 start=authored.start, base=authored.base,
                 conditions=authored.conditions,
                 sources=[authored.source] if authored.source else [],
+                occurrence=authored.occurrence,
                 ib_file=ib_file, index_size=index_size,
                 position_file=position_file, position_stride=position_stride,
                 texcoord_file=texcoord_file, texcoord_stride=texcoord_stride,

@@ -313,6 +313,13 @@ def test_run_inlines_nested_commandlist_draws():
               f"(got {len(draws)})")
         by_count = {d["count"]: d for d in draws}
         assert (100 in by_count and 50 in by_count), (f"both the direct and run=-chained draws are present (got {sorted(by_count)})")
+        assert {
+            (draw["occurrence"].section, draw["occurrence"].ordinal)
+            for draw in draws
+        } == {
+            ("TextureOverrideBodyBlend", 0),
+            ("CommandListTransparent", 0),
+        }
 
         chained = by_count[50]
         assert (visible(chained["conditions"], {"naked": "0", "flag": "0"})), ("chained draw visible when both naked==0 and flag==0")

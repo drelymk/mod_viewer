@@ -37,12 +37,13 @@ def test_mesh_semantics_preserves_group_source_and_component_identity(tmp_path):
     assert result["Body-1"]["source"] == "Root.ini"
     assert result["Body-1"]["component"] == "Body Display"
     assert result["Body-1"]["identity"] == {
-        "version": 3,
-        "key": 'mesh:[3,"Root.ini","Body Display",'
+        "version": 4,
+        "key": 'mesh:[4,"Root.ini","Body Display",null,'
                 '["1234abcd",0,3],[3,0,0],'
                 '[null,null,null,null,null,null,null]]',
         "source": "Root.ini",
         "component": "Body Display",
+        "occurrence": None,
         "geometry": {"hash": "1234abcd", "first_index": 0,
                      "index_count": 3},
         "draw": {"count": 3, "start": 0, "base": 0},
@@ -92,7 +93,7 @@ def test_mesh_identity_survives_uncertain_asset_resolution(tmp_path, status):
     }], str(tmp_path))["Body-1"]
 
     assert result["identity"]["key"] == (
-        'mesh:[3,"Root.ini","Body",["1234abcd",0,3],[3,0,0],'
+        'mesh:[4,"Root.ini","Body",null,["1234abcd",0,3],[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     assert result["asset_binding"]["status"] == status
 
@@ -123,3 +124,38 @@ def test_distinct_geometry_resources_keep_distinct_mesh_identities(tmp_path):
 
     assert len(result) == 2
     assert len({entry["identity"]["key"] for entry in result.values()}) == 2
+
+
+def test_texture_only_draws_keep_distinct_displayed_mesh_identities(tmp_path):
+    geometry_match = GeometryMatch("1234abcd", 0, 3)
+    draws = [
+        DrawCall(
+            label="Body-1", count=3, start=0, base=0,
+            ib_file="body.ib", index_size=4,
+            position_file="body.buf", position_stride=12,
+            texcoord_file="body-uv.buf", texcoord_stride=8,
+            texture_default_file="red.dds",
+            occurrence=("TextureOverrideBody", 0),
+            geometry_match=geometry_match),
+        DrawCall(
+            label="Body-2", count=3, start=0, base=0,
+            ib_file="body.ib", index_size=4,
+            position_file="body.buf", position_stride=12,
+            texcoord_file="body-uv.buf", texcoord_stride=8,
+            texture_default_file="blue.dds",
+            occurrence=("TextureOverrideBody", 1),
+            geometry_match=geometry_match),
+    ]
+    group = [{
+        "name": "Body", "display_name": "Body", "source": "Root.ini",
+        "draws": draws,
+    }]
+
+    assert len(deduplicate_draws(group[0])) == 2
+    result = build_mesh_semantics(group, str(tmp_path))
+    keys = [entry["identity"]["key"] for entry in result.values()]
+
+    assert len(result) == 2
+    assert len(keys) == len(set(keys)) == 2
+    assert {entry["identity"]["occurrence"]["ordinal"]
+            for entry in result.values()} == {0, 1}
