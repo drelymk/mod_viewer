@@ -2,7 +2,8 @@
 
 import {
   getControlState, getControlValue, replayControlStateRules,
-  resetControlState, setControlStateRules, setControlValue,
+  changedControlVariables, resetControlState, setControlStateRules,
+  setControlValue,
 } from '../editing/control-state.js';
 import {
   activeMeshes, refreshMeshes, resetMeshes, resetMeshVisibility,
@@ -15,18 +16,23 @@ import { clearViewSyncs, syncView, syncViews } from '../scene/view-sync.js';
 
 export {
   activeMeshes, addMesh, applyMeshVisibility, conditionsSatisfied,
+  dependenciesFor, invalidateControlDependencies, variablesFromConditions,
   removeAssetFillMeshes, removeMesh, setManualTexOverride,
   updateMeshSemantics,
 } from './mesh-state.js';
+export { changedControlVariables } from '../editing/control-state.js';
 
 export const setToggleValue = setControlValue;
 export const getToggleValue = getControlValue;
 export const getToggleState = getControlState;
 export const setStateRules = setControlStateRules;
 
+let lastAppliedControlState = null;
+
 export function reset(options) {
   resetMeshes(options);
   resetControlState();
+  lastAppliedControlState = null;
   clearViewSyncs();
 }
 
@@ -40,10 +46,22 @@ export function syncCheckboxes() {
   syncView('mesh-panel');
 }
 
-export function refreshAll() {
+export function refreshAll({ force = {} } = {}) {
   replayControlStateRules();
-  refreshMeshes();
+  const next = getControlState();
+  const initialApplication = lastAppliedControlState === null;
+  const changedVariables = initialApplication
+    ? new Set(Object.keys(next))
+    : changedControlVariables(lastAppliedControlState, next);
+  const result = refreshMeshes({
+    changedVariables,
+    force: initialApplication
+      ? { visibility: true, textures: true, shapes: true }
+      : force,
+  });
+  lastAppliedControlState = next;
   syncViews();
+  return result;
 }
 
 export function toggleWireframe() {

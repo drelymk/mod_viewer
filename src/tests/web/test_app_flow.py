@@ -469,6 +469,53 @@ def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
     finally:
         context.close()
 
+
+def test_mesh_semantic_refresh_forces_changed_rules_with_unchanged_controls(
+        edge_browser, frontend_url):
+    payload = _payload("SemanticForce")
+    mesh_name = next(iter(payload["meshes"]))
+    source = payload["meshes"][mesh_name]["sources"]
+    payload["meshSemantics"] = {
+        mesh_name: {
+            "conditions": [[{
+                "var": "menu", "value": "1", "negate": False,
+            }]],
+            "sources": source,
+            "tex_key": "diffuse::SemanticForce-one.png",
+            "texture_variants": [{
+                "conditions": [[{
+                    "var": "menu", "value": "0", "negate": False,
+                }]],
+                "tex_key": "diffuse::SemanticForce-two.png",
+            }],
+        },
+    }
+    context, page = _page(
+        edge_browser, frontend_url, {"SemanticForce": payload})
+    try:
+        _open(page, "SemanticForce")
+        page.locator(".draw-item").wait_for()
+        before = page.evaluate("""() => ({
+          value: window.modViewer.activeMeshes[0].visible,
+          texture: window.modViewer.activeMeshes[0].userData.resolvedTexKey,
+        })""")
+        assert before == {
+            "value": True, "texture": "diffuse::SemanticForce-one.png",
+        }
+        assert page.evaluate("window.modViewer.refreshMeshSemantics()") is True
+        after = page.evaluate("""() => ({
+          value: window.modViewer.activeMeshes[0].visible,
+          texture: window.modViewer.activeMeshes[0].userData.resolvedTexKey,
+        })""")
+        assert after == {
+            "value": False, "texture": "diffuse::SemanticForce-two.png",
+        }
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["SemanticForce"]
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == [
+            "SemanticForce"]
+    finally:
+        context.close()
+
 def test_record_refreshes_controls_and_meshes_without_reloading_model(
         edge_browser, frontend_url):
     payload = _payload("Record")

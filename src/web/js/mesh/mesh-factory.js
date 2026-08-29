@@ -209,7 +209,7 @@ function getTexture(mesh, key) {
 /** Bind whatever diffuse map the mesh currently wants, honouring the global
  * textures on/off switch. Falls back to the name-guessed flat colour, which is
  * also what an untextured mesh has always shown. */
-export function refreshMeshTexture(mesh) {
+export function refreshMeshTexture(mesh, { render = true } = {}) {
   const showDiffuse = textureMode !== 'none';
   const showMaterialMaps = textureMode === 'all';
   const showNormal = showMaterialMaps || textureMode === 'diffuse-normal';
@@ -239,9 +239,10 @@ export function refreshMeshTexture(mesh) {
     emission_map: emissionMap,
     normal_map_y_sign: mesh.userData.normalMapYSign ?? -1,
   });
-  if (!changed) return;
+  if (!changed) return false;
   getMeshView(mesh)?.onTextureChanged?.();
-  if (mesh.visible) requestRender();
+  if (render && mesh.visible) requestRender();
+  return true;
 }
 
 export function setTextureMode(mode) {
@@ -263,7 +264,7 @@ export function updateGeometryNormals(mesh, deformed) {
 }
 
 /** Update the complete resolved texture state with one material refresh. */
-export function setMeshTextureState(mesh, state) {
+export function setMeshTextureState(mesh, state, { render = true } = {}) {
   mesh.userData.texKey = state.diffuse || null;
   mesh.userData.normalMapKey = usesPackedNormal(mesh.material)
     ? null : (state.normal_map || null);
@@ -273,7 +274,7 @@ export function setMeshTextureState(mesh, state) {
   mesh.userData.lightMapKey = state.light_map || null;
   mesh.userData.materialMapKey = state.material_map || null;
   mesh.userData.emissionMapKey = state.emission_map || null;
-  refreshMeshTexture(mesh);
+  return refreshMeshTexture(mesh, { render });
 }
 
 /** Colour for meshes with no texture, guessed from the component name. */

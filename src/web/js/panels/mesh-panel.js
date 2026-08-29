@@ -8,7 +8,8 @@ import {
   setManualTexOverride,
 } from '../mesh/mesh-state.js';
 import {
-  meshMetadataKey, recomputeTextureRuns, saveTextureState,
+  clearTextureRunGroups, meshMetadataKey, recomputeTextureRuns,
+  registerTextureRunGroup, unregisterTextureRunGroup, saveTextureState,
 } from '../mesh/mesh-texture-state.js';
 import { bindMeshView, getMeshView } from '../mesh/mesh-view-bindings.js';
 import { registerViewSync } from '../scene/view-sync.js';
@@ -35,7 +36,6 @@ function saveComponentMaterialKind(modPath, source, component, kind) {
 
 function syncMeshPanel() {
   for (const group of groupsUI) {
-    group.applyTextureRuns?.();
     group.itemObjs.forEach((mesh, index) => {
       group.itemCbs[index].checked = mesh.visible;
       const binding = getMeshView(mesh);
@@ -296,6 +296,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
   if (replace) {
     list.innerHTML = '';
     groupsUI = [];
+    clearTextureRunGroups();
   }
   registerViewSync('mesh-panel', syncMeshPanel);
   const texturePools = options.texturePools || {};
@@ -464,6 +465,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
         });
       }
       recomputeTextureRuns(itemObjs);
+      registerTextureRunGroup(itemObjs);
 
       masterCb.addEventListener('change', () => {
         masterCb.indeterminate = false;
@@ -487,7 +489,6 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
         sourceHeader,
         assetFill: names.every(name => meshes[name]?.asset_fill === true),
         assetResolution: options.assetResolution || null,
-        applyTextureRuns: () => recomputeTextureRuns(itemObjs),
       });
     }
   }
@@ -517,10 +518,11 @@ export function removeAssetFillMeshPanel(targetMeshes = null) {
       }
     });
     if (!group.itemObjs.length) {
+      unregisterTextureRunGroup(group.itemObjs);
       group.header?.remove();
       group.itemsWrap?.remove();
     } else {
-      group.applyTextureRuns?.();
+      recomputeTextureRuns(group.itemObjs);
     }
   }
   groupsUI = groupsUI.filter(group => !group.assetFill || group.itemObjs.length);

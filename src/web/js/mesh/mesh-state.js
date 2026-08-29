@@ -8,6 +8,7 @@ import {
 import { dnfSatisfied, getControlValue } from '../editing/control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
 import { setMeshTextureState, updateGeometryNormals } from './mesh-factory.js';
+import { clearTextureRunGroups, recomputeAllTextureRuns } from './mesh-texture-runs.js';
 import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
@@ -17,6 +18,49 @@ import {
 } from './weight-experiment.js';
 
 export const activeMeshes = [];
+const controlDependencies = new WeakMap();
+
+/** Add every variable referenced by an existing DNF condition structure. */
+export function variablesFromConditions(conditions, variables = new Set()) {
+  for (const group of conditions || []) {
+    for (const condition of group || []) {
+      if (condition?.var) variables.add(condition.var);
+    }
+  }
+  return variables;
+}
+
+function variablesFromVariants(variants, variables) {
+  for (const variant of variants || []) {
+    variablesFromConditions(variant?.conditions, variables);
+  }
+}
+
+/** Lazily derive the control categories that can affect one mesh. */
+export function dependenciesFor(mesh) {
+  let dependencies = controlDependencies.get(mesh);
+  if (dependencies) return dependencies;
+
+  const visibility = variablesFromConditions(mesh.userData?.conditions);
+  const textures = new Set();
+  for (const field of [
+    'textureVariants', 'normalMapVariants', 'normalDataVariants',
+    'lightMapVariants', 'materialMapVariants', 'emissionMapVariants',
+  ]) {
+    variablesFromVariants(mesh.userData?.[field], textures);
+  }
+  const shapes = new Set(
+    (mesh.userData?.shapeTargets || [])
+      .map(target => target?.var)
+      .filter(Boolean));
+  dependencies = { visibility, textures, shapes };
+  controlDependencies.set(mesh, dependencies);
+  return dependencies;
+}
+
+export function invalidateControlDependencies(mesh) {
+  controlDependencies.delete(mesh);
+}
 
 export function resetMeshes({ preserveModelOrientation = false } = {}) {
   activeMeshes.forEach(mesh => {
@@ -31,6 +75,7 @@ export function resetMeshes({ preserveModelOrientation = false } = {}) {
     });
   });
   activeMeshes.length = 0;
+  clearTextureRunGroups();
   resetModelOrientation({ preserveRotation: preserveModelOrientation });
   resetCharacterShadows();
   requestRender();
@@ -97,7 +142,7 @@ export function resetMeshVisibility() {
   requestRender();
 }
 
-/** Replace draw visibility and texture semantics on the existing meshes. */
+/** Replace draw visibility and texture semantics without applying rendering. */
 export function updateMeshSemantics(semantics) {
   const next = semantics || {};
   const semanticMeshes = activeMeshes.filter(
@@ -141,7 +186,7 @@ export function updateMeshSemantics(semantics) {
       else delete assetEntry[field];
     }
     mesh.userData.assetEntry = assetEntry;
-    applyTextureVariant(mesh);
+    invalidateControlDependencies(mesh);
   });
   return true;
 }
@@ -159,7 +204,21 @@ export function conditionsSatisfied(mesh) {
   return dnfSatisfied(mesh.userData.conditions);
 }
 
-export function applyTextureVariant(mesh) {
+export function applyTextureVariant(mesh, { render = true } = {}) {
+  const previous = [
+    mesh.userData.resolvedTexKey,
+    mesh.userData.resolvedNormalMapKey,
+    mesh.userData.resolvedNormalDataKey,
+    mesh.userData.resolvedLightMapKey,
+    mesh.userData.resolvedMaterialMapKey,
+    mesh.userData.resolvedEmissionMapKey,
+    mesh.userData.texKey,
+    mesh.userData.normalMapKey,
+    mesh.userData.normalDataKey,
+    mesh.userData.lightMapKey,
+    mesh.userData.materialMapKey,
+    mesh.userData.emissionMapKey,
+  ];
   const resolve = (variants, fallback) => {
     variants = variants || [];
     const variant = variants.findLast
@@ -179,7 +238,7 @@ export function applyTextureVariant(mesh) {
     mesh.userData.materialMapVariants, mesh.userData.defaultMaterialMapKey);
   mesh.userData.resolvedEmissionMapKey = resolve(
     mesh.userData.emissionMapVariants, mesh.userData.defaultEmissionMapKey);
-  setMeshTextureState(mesh, {
+  const materialChanged = setMeshTextureState(mesh, {
     diffuse: mesh.userData.manualTexOverride !== undefined
       ? mesh.userData.manualTexOverride
       : mesh.userData.resolvedTexKey,
@@ -188,26 +247,43 @@ export function applyTextureVariant(mesh) {
     light_map: mesh.userData.resolvedLightMapKey,
     material_map: mesh.userData.resolvedMaterialMapKey,
     emission_map: mesh.userData.resolvedEmissionMapKey,
-  });
+  }, { render });
+  const next = [
+    mesh.userData.resolvedTexKey,
+    mesh.userData.resolvedNormalMapKey,
+    mesh.userData.resolvedNormalDataKey,
+    mesh.userData.resolvedLightMapKey,
+    mesh.userData.resolvedMaterialMapKey,
+    mesh.userData.resolvedEmissionMapKey,
+    mesh.userData.texKey,
+    mesh.userData.normalMapKey,
+    mesh.userData.normalDataKey,
+    mesh.userData.lightMapKey,
+    mesh.userData.materialMapKey,
+    mesh.userData.emissionMapKey,
+  ];
+  return materialChanged || next.some((value, index) => !Object.is(value, previous[index]));
 }
 
 // The MESHES control is the direct visibility source. Automatic refreshes
 // re-baseline visibility and clear any transient manual eye-click marker.
-export function applyMeshVisibility(mesh, { notify = true } = {}) {
+export function applyMeshVisibility(mesh, { notify = true, render = true } = {}) {
   const previous = mesh.visible;
   mesh.visible = mesh.userData.manualVisible !== false;
-  if (previous !== mesh.visible) invalidateCharacterShadowVisibility();
+  const changed = previous !== mesh.visible;
+  if (changed) invalidateCharacterShadowVisibility({ request: render });
   if (notify) notifyMeshStateChanged([mesh]);
-  requestRender();
+  if (render) requestRender();
+  return changed;
 }
 
-function applyShapeTargets(mesh) {
+function applyShapeTargets(mesh, { render = true } = {}) {
   const targets = mesh.userData.shapeTargets || [];
-  if (!targets.length) return;
+  if (!targets.length) return false;
   const controlValues = targets.map(target => getControlValue(target.var) ?? 0);
   const previous = mesh.userData.shapeControlValues;
   if (previous?.length === controlValues.length
-      && controlValues.every((value, index) => value === previous[index])) return;
+      && controlValues.every((value, index) => value === previous[index])) return false;
   const skinning = getSkinningState(mesh);
   if (skinning?.loaded || skinning?.loading || skinning?.promise) {
     disposeSkinningExperiment(mesh);
@@ -243,21 +319,83 @@ function applyShapeTargets(mesh) {
   updateGeometryNormals(mesh, deformed);
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
-  invalidateCharacterShadowGeometry();
+  invalidateCharacterShadowGeometry({ request: render });
+  return true;
 }
 
-export function refreshMeshes() {
-  activeMeshes.forEach(mesh => {
-    mesh.userData.manualVisible = conditionsSatisfied(mesh);
-    mesh.userData.manuallyToggled = false;
-    applyMeshVisibility(mesh, { notify: false });
-    if (!mesh.userData.defaultCaptured) {
-      mesh.userData.loadedVisible = mesh.visible;
-      mesh.userData.defaultCaptured = true;
+function intersects(left, right) {
+  for (const value of left) if (right.has(value)) return true;
+  return false;
+}
+
+/** Apply only mesh categories affected by the final control-state diff. */
+export function refreshMeshes(options) {
+  // Keep direct low-level callers compatible with the former all-mesh API.
+  const legacyRefresh = options === undefined;
+  const {
+    changedVariables = new Set(),
+    force = {},
+  } = options || {};
+  const changed = changedVariables instanceof Set
+    ? changedVariables : new Set(changedVariables || []);
+  const effectiveForce = legacyRefresh
+    ? { visibility: true, textures: true, shapes: true } : force;
+  const visibilityForced = effectiveForce.visibility === true;
+  const texturesForced = effectiveForce.textures === true;
+  const shapesForced = effectiveForce.shapes === true;
+  const normalMeshes = activeMeshes.filter(mesh => mesh.userData.assetFill !== true);
+  const textureDirty = texturesForced || normalMeshes.some(mesh =>
+    intersects(dependenciesFor(mesh).textures, changed));
+  const changedMeshes = new Set();
+  let visibilityChanged = false;
+  let texturesChanged = false;
+  let shapesChanged = false;
+
+  for (const mesh of activeMeshes) {
+    const dependencies = dependenciesFor(mesh);
+    const needsVisibility = visibilityForced
+      || mesh.userData.manuallyToggled === true
+      || intersects(dependencies.visibility, changed);
+    if (needsVisibility) {
+      mesh.userData.manualVisible = conditionsSatisfied(mesh);
+      mesh.userData.manuallyToggled = false;
+      visibilityChanged = applyMeshVisibility(mesh, {
+        notify: false, render: false,
+      }) || visibilityChanged;
+      changedMeshes.add(mesh);
+      if (!mesh.userData.defaultCaptured) {
+        mesh.userData.loadedVisible = mesh.visible;
+        mesh.userData.defaultCaptured = true;
+      }
     }
-    applyTextureVariant(mesh);
-    applyShapeTargets(mesh);
-  });
-  notifyMeshStateChanged(activeMeshes);
-  requestRender();
+
+    if (textureDirty && mesh.userData.assetFill !== true) {
+      const changed = applyTextureVariant(mesh, { render: false });
+      texturesChanged = changed || texturesChanged;
+      if (changed) changedMeshes.add(mesh);
+    }
+
+    if (shapesForced || intersects(dependencies.shapes, changed)) {
+      if (applyShapeTargets(mesh, { render: false })) {
+        shapesChanged = true;
+        changedMeshes.add(mesh);
+      }
+    }
+  }
+
+  if (textureDirty) {
+    const runChangedMeshes = recomputeAllTextureRuns({ render: false });
+    for (const mesh of runChangedMeshes) changedMeshes.add(mesh);
+    texturesChanged = runChangedMeshes.size > 0 || texturesChanged;
+  }
+
+  const changedList = [...changedMeshes];
+  if (changedList.length) notifyMeshStateChanged(changedList);
+  if (visibilityChanged || texturesChanged || shapesChanged) requestRender();
+  return {
+    visibilityChanged,
+    texturesChanged,
+    shapesChanged,
+    changedMeshes: changedList,
+  };
 }

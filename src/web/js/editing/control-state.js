@@ -20,6 +20,21 @@ export function getControlState() {
   return { ...values };
 }
 
+/** Return variables whose final values differ between two control snapshots. */
+export function changedControlVariables(previous, current) {
+  const changed = new Set();
+  const keys = new Set([
+    ...Object.keys(previous || {}),
+    ...Object.keys(current || {}),
+  ]);
+  for (const variable of keys) {
+    if (!Object.is(previous?.[variable], current?.[variable])) {
+      changed.add(variable);
+    }
+  }
+  return changed;
+}
+
 // True if an OR'd list of AND-groups ([[{var,value,negate}, ...], ...]) is
 // satisfied by the current control state.
 export function dnfSatisfied(condGroups) {

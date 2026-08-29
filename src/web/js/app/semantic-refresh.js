@@ -138,7 +138,7 @@ export async function refreshMeshSemantics(handlers = {}) {
     const assetResolution = result.asset_resolution || null;
     refreshMeshAssetDiagnostics(assetResolution);
     setAssetResolution(assetResolution);
-    refreshAll();
+    refreshAll({force: {visibility: true, textures: true}});
     return true;
   } finally {
     await finishSemanticRefresh(path, epoch, callbacks);

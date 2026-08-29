@@ -8,7 +8,9 @@ import {
 import { setRightDockEnabled } from '../panels/right-dock.js';
 import { clearSelection } from '../scene/selection.js';
 import { clearInspector } from '../panels/inspector-panel.js';
-import { activeMeshes, reset, setStateRules } from '../mesh/visibility.js';
+import {
+  activeMeshes, refreshAll, reset, setStateRules,
+} from '../mesh/visibility.js';
 import { setTextures } from '../mesh/mesh-factory.js';
 import { buildMeshPanel } from '../panels/mesh-panel.js';
 import { setMeshesAvailable } from '../panels/left-dock.js';
@@ -208,6 +210,9 @@ export async function displayMeshPayload(payload, {
   buildMenuPanel(controls.menu);
   buildPresentPanel(controls.present, {
     modPath: viewerState.currentModPath, onChange: onPresentChange,
+  });
+  refreshAll({
+    force: { visibility: true, textures: true, shapes: true },
   });
   setMeshesAvailable(true);
   viewerState.rightDockEnabled = true;
