@@ -1066,6 +1066,21 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   background: var(--surface-raised); border: 1px solid var(--border);
   border-radius: var(--radius-sm); font-size: 12px;
 }
+.weight-mesh-filter {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
+  padding: 2px; background: var(--surface-raised);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.weight-mesh-filter-option {
+  min-height: 26px; padding: 3px 6px; color: var(--text-muted);
+  background: transparent; border: 0; border-radius: 3px; font-size: 11px;
+  cursor: pointer;
+}
+.weight-mesh-filter-option:hover:not(:disabled) { color: var(--text); }
+.weight-mesh-filter-option.active {
+  color: var(--text); background: var(--surface-active);
+}
+.weight-mesh-filter-option:disabled { opacity: .45; cursor: default; }
 .weight-bone-filter { flex: 0 0 auto; padding: 2px 5px; }
 .weight-bone-list { min-height: 0; overflow-y: auto; }
 .weight-bone-option, .weight-checkbox {
@@ -1089,6 +1104,8 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .weight-subsection { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; padding-top: 7px; border-top: 1px solid var(--border); }
 .weight-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .weight-actions .ui-button { flex: 1 1 0; min-width: 112px; }
+.weight-selection-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.weight-selection-actions .ui-button { min-width: 0; font-size: 12px; }
 .inspector-header { padding-bottom: 11px; border-bottom: 1px solid var(--border); }
 .inspector-header h3 { margin: 0; color: var(--text); font-size: 15px; overflow-wrap: anywhere; }
 .inspector-context {

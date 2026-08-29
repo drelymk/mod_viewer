@@ -251,6 +251,8 @@ class ModPreview:
         try:
             folder_path, overrides, _pending, context = \
                 self.authoritative_context(folder_path)
+            saved_bone_ids = metadata.weight_selected_bone_ids(
+                data=context.metadata)
             parsed, draws = self._skinning_draws(context, overrides)
             active_mesh_keys = self._active_mesh_keys.get(folder_path)
             eligible_draws = {
@@ -297,6 +299,7 @@ class ModPreview:
                 return {
                     "status": "error",
                     "format_version": 1,
+                    "saved_bone_ids": saved_bone_ids,
                     "meshes": meshes,
                     "error": "No active mesh has usable skin weights.",
                 }
@@ -307,6 +310,7 @@ class ModPreview:
                     entry.get("status") == "ok" for entry in meshes.values())
                     else "partial",
                 "format_version": 1,
+                "saved_bone_ids": saved_bone_ids,
                 "data": {"url": url, "length": len(blob)},
                 "meshes": meshes,
             }
@@ -350,6 +354,10 @@ class ModPreview:
         result = metadata.save_textures(folder_path, textures)
         edit_session.invalidate_diagnostics(folder_path)
         return result
+
+    def save_weight_selected_bone_ids(self, folder_path, bone_ids):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.save_weight_selected_bone_ids(folder_path, bone_ids)
 
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):

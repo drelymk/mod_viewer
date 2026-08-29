@@ -512,6 +512,61 @@ def test_model_physics_session_owns_fixed_clock_and_generation(
         context.close()
 
 
+def test_model_physics_reset_updates_numeric_defaults_once_and_keeps_toggles(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"PhysicsReset": _payload("PhysicsReset")})
+    try:
+        result = page.evaluate("""async () => {
+          const physics = await import('./js/mesh/model-physics-session.js');
+          let notifications = 0;
+          let participantSettings = null;
+          const session = physics.createModelPhysicsSession({
+            onStateChanged: () => { notifications += 1; },
+          });
+          const transform = {
+            orientation: [0, 0, 0, 1], translation: [0, 0, 0],
+          };
+          session.enable(transform);
+          session.attach({
+            mesh: {}, reset: settings => { participantSettings = {...settings}; },
+            isSettled: () => true,
+          });
+          session.setSettings({
+            frequencyHz: 7, dampingRatio: 1.2, angularResponse: .9,
+            translationResponse: .8, velocityResponse: .7,
+            gravityEnabled: true, gravityScale: 1.8,
+            constraintsEnabled: true, maxBendDegrees: 12,
+          });
+          const before = notifications;
+          const defaults = physics.DEFAULT_MODEL_PHYSICS_SETTINGS;
+          session.reset(transform, {settingsPatch: {
+            frequencyHz: defaults.frequencyHz,
+            dampingRatio: defaults.dampingRatio,
+            angularResponse: defaults.angularResponse,
+            translationResponse: defaults.translationResponse,
+            velocityResponse: defaults.velocityResponse,
+            gravityScale: defaults.gravityScale,
+            maxBendDegrees: defaults.maxBendDegrees,
+          }});
+          return {
+            notificationCount: notifications - before,
+            state: session.getState(), participantSettings, defaults,
+          };
+        }""")
+        assert result["notificationCount"] == 1
+        assert result["state"]["gravityEnabled"] is True
+        assert result["state"]["constraintsEnabled"] is True
+        for key in (
+                "frequencyHz", "dampingRatio", "angularResponse",
+                "translationResponse", "velocityResponse", "gravityScale",
+                "maxBendDegrees"):
+            assert result["state"][key] == result["defaults"][key]
+            assert result["participantSettings"][key] == result["defaults"][key]
+    finally:
+        context.close()
+
+
 def test_physics_drag_preserves_arcball_camera_and_lmb_control(
         edge_browser, frontend_url):
     context, page = _page(
@@ -1440,7 +1495,6 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         assert page.evaluate("""async () =>
           (await import('./js/mesh/weight-experiment.js'))
             .getModelBoneStatsBuildCount()""") == stats_build_count
-        page.locator(".weight-physics-enable").check()
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
         physics = page.evaluate("""async () => {
           const {getSkinningState} = await import('./js/mesh/weight-experiment.js');
@@ -1532,7 +1586,6 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
         assert page.evaluate("window.__weightSlider === document.querySelector('.weight-physics-frequency')")
         assert slider.input_value() == "3.5"
 
-        page.locator(".weight-physics-enable").check()
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
         page.evaluate("""() => {
           for (let i = 0; i < 20; i += 1) {
@@ -1546,6 +1599,126 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
         assert page.locator(".weight-bone-popover").is_hidden()
         page.locator("#weight-tab").click()
         assert page.evaluate("window.__weightPicker === document.querySelector('.weight-bone-popover')")
+    finally:
+        context.close()
+
+
+def test_weight_saved_selection_applies_once_and_controls_physics(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightSaved": _payload("WeightSaved")})
+    try:
+        _open(page, "WeightSaved")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          const key = window.modViewer.activeMeshes[0].userData.semanticKey;
+          window.__savedSelections = [];
+          window.pywebview.api.get_model_skinning_preview = async () => ({
+            status: 'ok', format_version: 1, saved_bone_ids: [99, 1],
+            data: {url, length: 48},
+            meshes: {[key]: {
+              status: 'ok', vertex_count: 3, influence_count: 2,
+              bone_ids: [0, 1, 2], encoding: 'test',
+              data: {
+                indices: {offset: 0, length: 24, type: 'u32'},
+                weights: {offset: 24, length: 24, type: 'f32'},
+              }, diagnostics: {},
+            }},
+          });
+          window.pywebview.api.save_weight_selected_bone_ids =
+            async (_path, ids) => {
+              window.__savedSelections.push([...ids]);
+              return {saved: true, selected_bone_ids: ids};
+            };
+        }""")
+        page.locator("#weight-tab").click()
+        page.wait_for_function("""() => JSON.stringify(
+          window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
+        page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
+
+        page.locator(".weight-clear-selection").click()
+        page.wait_for_function("!window.modViewer.getModelPhysicsState().enabled")
+        assert page.evaluate(
+            "window.modViewer.getModelWeightState().savedBoneIds") == [1, 99]
+        page.locator("#weight-tab").click()
+        page.locator("#weight-tab").click()
+        assert page.evaluate(
+            "window.modViewer.getModelWeightState().selectedBoneIds") == []
+
+        page.locator(".weight-load-selection").click()
+        page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
+        page.locator(".weight-save-selection").click()
+        page.wait_for_function("window.__savedSelections.length === 1")
+        assert page.evaluate("window.__savedSelections") == [[1]]
+    finally:
+        context.close()
+
+
+def test_weight_picker_current_mesh_filter_is_display_only(
+        edge_browser, frontend_url):
+    payload = _payload("WeightMeshFilter")
+    first_name, first = next(iter(payload["meshes"].items()))
+    second = copy.deepcopy(first)
+    second["component"] = "Hair"
+    payload["meshes"] = {first_name: first, "Hair-WeightMeshFilter-0": second}
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightMeshFilter": payload})
+    try:
+        _open(page, "WeightMeshFilter")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(96);
+          for (const offset of [0, 48]) {
+            new Uint32Array(bytes.buffer, offset, 6).set(
+              offset ? [1, 2, 1, 2, 1, 2] : [0, 1, 0, 1, 0, 1]);
+            new Float32Array(bytes.buffer, offset + 24, 6).set(
+              [.8, .2, .7, .3, .6, .4]);
+          }
+          const url = URL.createObjectURL(new Blob([bytes]));
+          const meshes = window.modViewer.activeMeshes;
+          const entries = Object.fromEntries(meshes.map((mesh, index) => [
+            mesh.userData.semanticKey,
+            {
+              status: 'ok', vertex_count: 3, influence_count: 2,
+              bone_ids: index ? [1, 2] : [0, 1], encoding: 'test',
+              data: {
+                indices: {offset: index * 48, length: 24, type: 'u32'},
+                weights: {offset: index * 48 + 24, length: 24, type: 'f32'},
+              }, diagnostics: {},
+            },
+          ]));
+          window.pywebview.api.get_model_skinning_preview = async () => ({
+            status: 'ok', format_version: 1, saved_bone_ids: [],
+            data: {url, length: 96}, meshes: entries,
+          });
+        }""")
+        page.locator("#weight-tab").click()
+        page.wait_for_function("window.modViewer.getModelWeightState().loaded")
+        page.locator(".weight-bone-select").click()
+        assert page.locator(".weight-bone-option").count() == 3
+        page.locator('.weight-bone-option input[value="2"]').check()
+        page.evaluate("""async () => {
+          const {selectMesh} = await import('./js/scene/selection.js');
+          selectMesh(window.modViewer.activeMeshes[0]);
+        }""")
+        page.locator(".weight-mesh-filter-option", has_text="Current mesh").click()
+        assert page.locator(".weight-bone-option").evaluate_all(
+            "nodes => nodes.map(node => node.dataset.boneId)") == ["0", "1"]
+        assert page.evaluate(
+            "window.modViewer.getModelWeightState().selectedBoneIds") == [2]
+        page.evaluate("""async () => {
+          const {clearSelection} = await import('./js/scene/selection.js');
+          clearSelection();
+        }""")
+        assert page.locator(
+            ".weight-mesh-filter-option", has_text="All meshes").get_attribute(
+                "aria-pressed") == "true"
+        assert page.locator(
+            ".weight-mesh-filter-option", has_text="Current mesh").is_disabled()
     finally:
         context.close()
 

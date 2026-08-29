@@ -33,6 +33,26 @@ def _context():
     return SimpleNamespace(metadata={}, asset_folders=[])
 
 
+def test_model_skinning_preview_includes_validated_saved_bone_ids(monkeypatch):
+    preview = ModPreview(_Access())
+    context = _context()
+    context.metadata = {
+        "weight": {"selected_bone_ids": [9, True, -1, 7, 9]},
+    }
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {}, {}, context))
+    monkeypatch.setattr(
+        preview, "_skinning_draws",
+        lambda *_args: (
+            SimpleNamespace(game=SimpleNamespace(game="genshin")), {}))
+
+    result = preview.get_model_skinning_preview("mod")
+
+    assert result["status"] == "error"
+    assert result["saved_bone_ids"] == [7, 9]
+
+
 def test_load_commits_texture_publication_after_geometry(monkeypatch):
     events = []
     publication = _Publication(events)

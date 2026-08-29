@@ -25,7 +25,8 @@ import {
   buildSelectedWeightMask, normalizeSelectedBoneIds,
 } from './weight-selection.js';
 import {
-  MODEL_PHYSICS_STEP, createModelPhysicsSession,
+  DEFAULT_MODEL_PHYSICS_SETTINGS, MODEL_PHYSICS_STEP,
+  createModelPhysicsSession,
 } from './model-physics-session.js';
 export {
   buildForestTransformsFromLocalRotations, applyWeightedTransformDeformation,
@@ -54,6 +55,7 @@ let activeExperimentHelperMesh = null;
 let modelWeightGeneration = 0;
 let selectedWeightMaskBuildCount = 0;
 let modelBoneStatsBuildCount = 0;
+let selectionSavePromise = null;
 const modelWeightState = {
   loaded: false,
   loading: false,
@@ -62,6 +64,10 @@ const modelWeightState = {
   noWeights: false,
   availableBoneIds: [],
   selectedBoneIds: new Set(),
+  savedBoneIds: [],
+  savedSelectionApplied: false,
+  savingSelection: false,
+  selectionSaveError: null,
   heatmapEnabled: false,
   loadedMeshCount: 0,
   failedMeshCount: 0,
@@ -183,6 +189,10 @@ function modelWeightSnapshot() {
     availableBoneIds: [...modelWeightState.availableBoneIds],
     selectedBoneIds: normalizeSelectedBoneIds(
       modelWeightState.selectedBoneIds),
+    savedBoneIds: [...modelWeightState.savedBoneIds],
+    savedSelectionApplied: modelWeightState.savedSelectionApplied,
+    savingSelection: modelWeightState.savingSelection,
+    selectionSaveError: modelWeightState.selectionSaveError,
     heatmapEnabled: modelWeightState.heatmapEnabled,
     loadedMeshCount: modelWeightState.loadedMeshCount,
     failedMeshCount: modelWeightState.failedMeshCount,
@@ -201,6 +211,12 @@ function notifyModelWeightChanged() {
 
 export function getModelWeightState() {
   return modelWeightSnapshot();
+}
+
+function normalizedPersistedBoneIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter(id =>
+    Number.isInteger(id) && id >= 0))].sort((left, right) => left - right);
 }
 
 function eligibleSkinningMesh(mesh) {
@@ -247,6 +263,15 @@ function refreshModelBoneStats() {
 
 export function getModelBoneStatsBuildCount() {
   return modelBoneStatsBuildCount;
+}
+
+export function getMeshWeightSummary(mesh) {
+  const state = states.get(mesh);
+  if (!state?.loaded) return {availableBoneIds: [], boneStats: {}};
+  return {
+    availableBoneIds: [...state.boneIds],
+    boneStats: aggregateModelBoneStats([state.influenceNodes]),
+  };
 }
 
 function refreshModelWeightSummary({refreshStats = false} = {}) {
@@ -310,6 +335,11 @@ function resetModelWeightState() {
   modelWeightState.noWeights = false;
   modelWeightState.availableBoneIds = [];
   modelWeightState.selectedBoneIds = new Set();
+  modelWeightState.savedBoneIds = [];
+  modelWeightState.savedSelectionApplied = false;
+  modelWeightState.savingSelection = false;
+  modelWeightState.selectionSaveError = null;
+  selectionSavePromise = null;
   modelWeightState.heatmapEnabled = false;
   modelWeightState.loadedMeshCount = 0;
   modelWeightState.failedMeshCount = 0;
@@ -457,7 +487,6 @@ function physicsReferenceRadius(mesh, state) {
 
 function refreshParticipantDerivedState(mesh, state, settings) {
   if (!state.physicsForest) return;
-  refreshSelectedWeightMask(mesh, state);
   refreshConstraintState(state, settings);
   refreshGravityState(mesh, state, settings);
 }
@@ -798,6 +827,7 @@ export function destroyModelPhysicsSession() {
 }
 
 export function disableModelPhysics() {
+  if (!modelPhysicsSession.getState().enabled) return false;
   modelPhysicsSession.disable();
   return false;
 }
@@ -845,7 +875,9 @@ export function ensureModelWeightsLoaded() {
   if (!meshes.length) {
     modelWeightState.loaded = true;
     modelWeightState.noWeights = true;
+    modelWeightState.savedSelectionApplied = true;
     refreshModelWeightSummary({refreshStats: true});
+    syncPhysicsToSelection();
     notifyModelWeightChanged();
     return Promise.resolve(modelWeightSnapshot());
   }
@@ -861,6 +893,8 @@ export function ensureModelWeightsLoaded() {
     }
     const preview = await api(folderPath);
     if (generation !== modelWeightGeneration) return modelWeightSnapshot();
+    modelWeightState.savedBoneIds = normalizedPersistedBoneIds(
+      preview?.saved_bone_ids);
     const bufferResponse = preview?.data?.url
       ? await fetch(preview.data.url, {cache: 'no-store'}) : null;
     if (bufferResponse && !bufferResponse.ok) {
@@ -889,8 +923,13 @@ export function ensureModelWeightsLoaded() {
     if (generation !== modelWeightGeneration) return modelWeightSnapshot();
     modelWeightState.loaded = true;
     refreshModelWeightSummary({refreshStats: true});
-    syncPhysicsParticipants();
-    notifyModelWeightChanged();
+    if (!modelWeightState.savedSelectionApplied) {
+      modelWeightState.savedSelectionApplied = true;
+      setSelectedBoneIds(modelWeightState.savedBoneIds);
+    } else {
+      syncPhysicsToSelection();
+      notifyModelWeightChanged();
+    }
     return modelWeightSnapshot();
   })();
   return modelWeightState.promise
@@ -951,6 +990,19 @@ function syncPhysicsParticipants() {
   }
 }
 
+function syncPhysicsToSelection() {
+  const shouldEnable = modelWeightState.loaded
+    && modelWeightState.selectedBoneIds.size > 0;
+  const enabled = modelPhysicsSession.getState().enabled;
+  if (!shouldEnable) {
+    if (enabled) disableModelPhysics();
+    return false;
+  }
+  if (!enabled) modelPhysicsSession.enable(getModelTransformState());
+  syncPhysicsParticipants();
+  return true;
+}
+
 export function enableModelPhysics() {
   if (modelPhysicsSession.getState().enabled) {
     return Promise.resolve(getModelPhysicsState());
@@ -965,6 +1017,21 @@ export function enableModelPhysics() {
 
 export function resetModelPhysicsMotion() {
   return modelPhysicsSession.reset(getModelTransformState());
+}
+
+export function resetModelPhysics() {
+  const defaults = DEFAULT_MODEL_PHYSICS_SETTINGS;
+  return modelPhysicsSession.reset(getModelTransformState(), {
+    settingsPatch: {
+      frequencyHz: defaults.frequencyHz,
+      dampingRatio: defaults.dampingRatio,
+      angularResponse: defaults.angularResponse,
+      translationResponse: defaults.translationResponse,
+      velocityResponse: defaults.velocityResponse,
+      gravityScale: defaults.gravityScale,
+      maxBendDegrees: defaults.maxBendDegrees,
+    },
+  });
 }
 
 function handleModelTransformChanged(event) {
@@ -1996,16 +2063,17 @@ export function setSelectedBoneIds(ids) {
   refreshModelWeightSummary();
   const available = new Set(modelWeightState.availableBoneIds);
   const normalized = normalizeSelectedBoneIds(ids)
-    .filter(id => !available.size || available.has(id));
+    .filter(id => !modelWeightState.loaded || available.has(id));
   const previous = normalizeSelectedBoneIds(modelWeightState.selectedBoneIds);
   if (previous.length === normalized.length
       && previous.every((id, index) => id === normalized[index])) {
+    syncPhysicsToSelection();
     return modelWeightSnapshot();
   }
   modelWeightState.selectedBoneIds = new Set(normalized);
   knownMeshes.forEach(mesh => refreshSelectedWeightMask(mesh, states.get(mesh)));
   if (modelWeightState.heatmapEnabled) updateModelWeightHeatmap();
-  if (modelPhysicsSession.getState().enabled) syncPhysicsParticipants();
+  syncPhysicsToSelection();
   notifyModelWeightChanged();
   requestRender();
   return modelWeightSnapshot();
@@ -2013,6 +2081,49 @@ export function setSelectedBoneIds(ids) {
 
 export function clearSelectedBoneIds() {
   return setSelectedBoneIds([]);
+}
+
+export function loadSavedBoneSelection() {
+  return setSelectedBoneIds(modelWeightState.savedBoneIds);
+}
+
+export function saveModelWeightSelection() {
+  if (selectionSavePromise) return selectionSavePromise;
+  const selectedBoneIds = normalizeSelectedBoneIds(
+    modelWeightState.selectedBoneIds);
+  const mesh = [...knownMeshes].find(eligibleSkinningMesh);
+  const api = window.pywebview?.api?.save_weight_selected_bone_ids;
+  if (!selectedBoneIds.length || !mesh || typeof api !== 'function') {
+    return Promise.resolve(modelWeightSnapshot());
+  }
+  const generation = modelWeightGeneration;
+  modelWeightState.savingSelection = true;
+  modelWeightState.selectionSaveError = null;
+  notifyModelWeightChanged();
+  selectionSavePromise = Promise.resolve(
+    api(mesh.userData.modPath, selectedBoneIds))
+    .then(result => {
+      if (generation !== modelWeightGeneration) return modelWeightSnapshot();
+      if (!result?.saved) throw new Error('The bone selection was not saved.');
+      modelWeightState.savedBoneIds = normalizedPersistedBoneIds(
+        result.selected_bone_ids ?? selectedBoneIds);
+      return modelWeightSnapshot();
+    })
+    .catch(error => {
+      if (generation === modelWeightGeneration) {
+        modelWeightState.selectionSaveError = error instanceof Error
+          ? error.message : String(error);
+      }
+      return modelWeightSnapshot();
+    })
+    .finally(() => {
+      if (generation === modelWeightGeneration) {
+        modelWeightState.savingSelection = false;
+        selectionSavePromise = null;
+        notifyModelWeightChanged();
+      }
+    });
+  return selectionSavePromise;
 }
 
 /** Compatibility helper for callers that previously selected one mesh bone. */

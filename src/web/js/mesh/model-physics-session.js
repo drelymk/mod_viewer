@@ -5,7 +5,7 @@ export const MODEL_PHYSICS_MAX_FRAME_DELTA = 0.05;
 export const MODEL_PHYSICS_MAX_SUBSTEPS = 6;
 
 const ZERO_VECTOR = Object.freeze([0, 0, 0]);
-const DEFAULT_SETTINGS = Object.freeze({
+export const DEFAULT_MODEL_PHYSICS_SETTINGS = Object.freeze({
   frequencyHz: 2,
   dampingRatio: 0.35,
   angularResponse: 0.35,
@@ -146,7 +146,7 @@ export function createModelPhysicsSession({
   let enabled = false;
   let loading = false;
   let generation = 0;
-  let settings = {...DEFAULT_SETTINGS};
+  let settings = {...DEFAULT_MODEL_PHYSICS_SETTINGS};
   let previousModelOrientation = null;
   let previousModelTranslation = [...ZERO_VECTOR];
   let rootLinearVelocityWorld = [...ZERO_VECTOR];
@@ -449,8 +449,9 @@ export function createModelPhysicsSession({
     return true;
   }
 
-  function reset(modelTransform) {
+  function reset(modelTransform, {settingsPatch = null} = {}) {
     if (!enabled) return false;
+    if (settingsPatch) settings = normalizedSettings(settings, settingsPatch);
     participants.forEach(participant => participant.reset?.(settings));
     accumulator = 0;
     lastTimestamp = null;

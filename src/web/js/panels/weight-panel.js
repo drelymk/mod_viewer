@@ -2,9 +2,10 @@
 // simulation and input events never interrupt an active picker or slider.
 
 import {
-  clearSelectedBoneIds, disableModelPhysics, enableModelPhysics,
-  ensureModelWeightsLoaded, getModelPhysicsState, getModelWeightState,
-  resetModelPhysicsMotion, setModelWeightHeatmap, setPhysicsConstraintsEnabled,
+  clearSelectedBoneIds, ensureModelWeightsLoaded, getMeshWeightSummary,
+  getModelPhysicsState, getModelWeightState, loadSavedBoneSelection,
+  resetModelPhysics, saveModelWeightSelection, setModelWeightHeatmap,
+  setPhysicsConstraintsEnabled,
   setPhysicsContinuousLinearResponse, setPhysicsDamping,
   setPhysicsFrequency, setPhysicsGravityEnabled, setPhysicsGravityScale,
   setPhysicsLinearMotionStrength, setPhysicsMaxBendDegrees,
@@ -14,6 +15,8 @@ import {
 let panel = null;
 let ui = null;
 let loadingPromise = null;
+let currentMesh = null;
+let meshFilterMode = 'all';
 
 const $ = id => document.getElementById(id);
 
@@ -97,13 +100,28 @@ function buildBonePicker(content) {
   search.setAttribute('aria-label', 'Find bone ID');
   popover.appendChild(search);
 
+  const meshFilter = document.createElement('div');
+  meshFilter.className = 'weight-mesh-filter';
+  meshFilter.setAttribute('role', 'group');
+  meshFilter.setAttribute('aria-label', 'Bone ID source');
+  const allMeshes = document.createElement('button');
+  allMeshes.type = 'button';
+  allMeshes.className = 'weight-mesh-filter-option';
+  allMeshes.textContent = 'All meshes';
+  const currentMeshButton = document.createElement('button');
+  currentMeshButton.type = 'button';
+  currentMeshButton.className = 'weight-mesh-filter-option';
+  currentMeshButton.textContent = 'Current mesh';
+  meshFilter.append(allMeshes, currentMeshButton);
+  popover.appendChild(meshFilter);
+
   const filter = document.createElement('label');
   filter.className = 'weight-checkbox weight-bone-filter';
   const selectedOnly = document.createElement('input');
   selectedOnly.type = 'checkbox';
   selectedOnly.className = 'weight-selected-only';
   filter.appendChild(selectedOnly);
-  addText(filter, 'weight-label', 'Selected only');
+  addText(filter, 'weight-label', 'Selected bones only');
   popover.appendChild(filter);
 
   const list = document.createElement('div');
@@ -112,21 +130,38 @@ function buildBonePicker(content) {
   picker.appendChild(popover);
   section.appendChild(picker);
 
+  const actions = document.createElement('div');
+  actions.className = 'weight-selection-actions';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'ui-button weight-save-selection';
+  save.textContent = 'Save';
+  save.addEventListener('click', () => void saveModelWeightSelection());
+  const load = document.createElement('button');
+  load.type = 'button';
+  load.className = 'ui-button weight-load-selection';
+  load.textContent = 'Load';
+  load.addEventListener('click', () => loadSavedBoneSelection());
   const clear = document.createElement('button');
   clear.type = 'button';
   clear.className = 'ui-button weight-clear-selection';
-  clear.textContent = 'Clear selection';
+  clear.textContent = 'Clear';
   clear.addEventListener('click', () => clearSelectedBoneIds());
-  section.appendChild(clear);
+  actions.append(save, load, clear);
+  section.appendChild(actions);
   content.appendChild(section);
 
   ui.picker = picker;
   ui.boneButton = button;
   ui.popover = popover;
   ui.search = search;
+  ui.allMeshes = allMeshes;
+  ui.currentMesh = currentMeshButton;
   ui.selectedOnly = selectedOnly;
   ui.boneList = list;
   ui.clearSelection = clear;
+  ui.saveSelection = save;
+  ui.loadSelection = load;
   ui.optionById = new Map();
   ui.metaById = new Map();
   ui.optionKey = null;
@@ -139,6 +174,15 @@ function buildBonePicker(content) {
   });
   search.addEventListener('input', syncBoneFilter);
   selectedOnly.addEventListener('change', syncBoneFilter);
+  allMeshes.addEventListener('click', () => {
+    meshFilterMode = 'all';
+    syncPanel();
+  });
+  currentMeshButton.addEventListener('click', () => {
+    if (!currentMesh) return;
+    meshFilterMode = 'current';
+    syncPanel();
+  });
 }
 
 function buildPhysicsControls(content) {
@@ -151,33 +195,21 @@ function buildPhysicsControls(content) {
   addText(section, 'weight-hint',
     'Only selected bone IDs receive secondary motion. Hold RMB and drag to excite the model.');
 
-  const enableLabel = document.createElement('label');
-  enableLabel.className = 'weight-checkbox';
-  const enable = document.createElement('input');
-  enable.type = 'checkbox';
-  enable.className = 'weight-physics-enable';
-  enable.addEventListener('change', () => {
-    if (enable.checked) void enableModelPhysics();
-    else disableModelPhysics();
-  });
-  enableLabel.appendChild(enable);
-  addText(enableLabel, 'weight-label', 'Enable Character Physics');
-  section.appendChild(enableLabel);
-
+  const initial = getModelPhysicsState();
   const ranges = {};
   ranges.frequency = addRange(section, 'weight-physics-frequency',
-    'Frequency (Hz)', 0.1, 10, 0.1, 2,
+    'Frequency (Hz)', 0.1, 10, 0.1, initial.frequencyHz,
     value => setPhysicsFrequency(null, value));
   ranges.damping = addRange(section, 'weight-physics-damping', 'Damping',
-    0, 2, 0.05, 0.35, value => setPhysicsDamping(null, value));
+    0, 2, 0.05, initial.dampingRatio, value => setPhysicsDamping(null, value));
   ranges.motion = addRange(section, 'weight-physics-motion',
-    'Angular response', 0, 1, 0.05, 0.35,
+    'Angular response', 0, 1, 0.05, initial.angularResponse,
     value => setPhysicsMotionStrength(null, value));
   ranges.linear = addRange(section, 'weight-physics-linear',
-    'Translation response', 0, 1, 0.05, 0.35,
+    'Translation response', 0, 1, 0.05, initial.translationResponse,
     value => setPhysicsLinearMotionStrength(null, value));
   ranges.continuous = addRange(section, 'weight-physics-continuous-response',
-    'Velocity response', 0, 1, 0.05, 0.35,
+    'Velocity response', 0, 1, 0.05, initial.velocityResponse,
     value => setPhysicsContinuousLinearResponse(null, value));
 
   const gravity = document.createElement('div');
@@ -194,7 +226,7 @@ function buildPhysicsControls(content) {
   addText(gravityLabel, 'weight-label', 'Gravity');
   gravity.appendChild(gravityLabel);
   ranges.gravity = addRange(gravity, 'weight-physics-gravity-scale',
-    'Gravity scale', 0, 2, 0.1, 1,
+    'Gravity scale', 0, 2, 0.1, initial.gravityScale,
     value => setPhysicsGravityScale(null, value));
   section.appendChild(gravity);
 
@@ -212,7 +244,7 @@ function buildPhysicsControls(content) {
   addText(constraintsLabel, 'weight-label', 'Joint limits');
   constraints.appendChild(constraintsLabel);
   ranges.maxBend = addRange(constraints, 'weight-physics-max-bend',
-    'Max bend', 0, 90, 1, 45,
+    'Max bend', 0, 90, 1, initial.maxBendDegrees,
     value => setPhysicsMaxBendDegrees(null, value));
   section.appendChild(constraints);
 
@@ -221,13 +253,12 @@ function buildPhysicsControls(content) {
   const reset = document.createElement('button');
   reset.type = 'button';
   reset.className = 'ui-button weight-physics-reset';
-  reset.textContent = 'Reset motion';
-  reset.addEventListener('click', () => resetModelPhysicsMotion());
+  reset.textContent = 'Reset';
+  reset.addEventListener('click', () => resetModelPhysics());
   actions.appendChild(reset);
   section.appendChild(actions);
   content.appendChild(section);
 
-  ui.physicsEnable = enable;
   ui.physicsGravityEnable = gravityEnable;
   ui.physicsConstraintsEnable = constraintsEnable;
   ui.physicsReset = reset;
@@ -346,16 +377,27 @@ function syncPanel() {
     ui.status.textContent = `${weightState.availableBoneIds.length} bone IDs available`;
   }
 
-  syncBoneOptions(weightState);
+  if (!currentMesh && meshFilterMode === 'current') meshFilterMode = 'all';
+  const displayState = meshFilterMode === 'current'
+    ? {...weightState, ...getMeshWeightSummary(currentMesh)} : weightState;
+  syncBoneOptions(displayState);
   ui.boneButton.textContent = selectedLabel(weightState.selectedBoneIds);
   ui.boneButton.disabled = !weightState.loaded
     && !weightState.availableBoneIds.length;
   ui.clearSelection.disabled = !weightState.selectedBoneIds.length;
+  ui.saveSelection.disabled = !weightState.selectedBoneIds.length
+    || weightState.savingSelection;
+  const available = new Set(weightState.availableBoneIds);
+  ui.loadSelection.disabled = !weightState.savedBoneIds.some(id =>
+    available.has(id));
+  ui.allMeshes.classList.toggle('active', meshFilterMode === 'all');
+  ui.allMeshes.setAttribute('aria-pressed', String(meshFilterMode === 'all'));
+  ui.currentMesh.classList.toggle('active', meshFilterMode === 'current');
+  ui.currentMesh.setAttribute(
+    'aria-pressed', String(meshFilterMode === 'current'));
+  ui.currentMesh.disabled = !currentMesh;
   ui.heatmap.checked = !!weightState.heatmapEnabled;
   ui.heatmap.disabled = !weightState.loaded;
-  ui.physicsEnable.checked = !!physicsState.enabled;
-  ui.physicsEnable.disabled = !weightState.loaded
-    || !weightState.selectedBoneIds.length;
   ui.physicsGravityEnable.checked = !!physicsState.gravityEnabled;
   ui.physicsConstraintsEnable.checked = !!physicsState.constraintsEnabled;
   ui.physicsReset.disabled = !physicsState.enabled;
@@ -389,6 +431,11 @@ export function initWeightPanel() {
   buildPanel();
   window.addEventListener('mod-viewer-model-weight-changed', syncPanel);
   window.addEventListener('mod-viewer-model-physics-changed', syncPanel);
+  window.addEventListener('mod-viewer-mesh-selected', event => {
+    currentMesh = event.detail?.mesh || null;
+    if (!currentMesh) meshFilterMode = 'all';
+    syncPanel();
+  });
   window.addEventListener('mod-viewer-right-dock-tab-changed', event => {
     const inWeight = event.detail?.tab === 'weight' && event.detail?.open;
     if (!inWeight) closePopover();

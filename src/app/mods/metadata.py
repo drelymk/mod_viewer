@@ -96,6 +96,41 @@ def save_textures(folder_path, textures):
         return _save(folder_path, data)
 
 
+def _normalized_weight_bone_ids(value):
+    if not isinstance(value, list):
+        return []
+    return sorted({item for item in value
+                   if isinstance(item, int) and not isinstance(item, bool)
+                   and item >= 0})
+
+
+def weight_selected_bone_ids(folder_path=None, data=None):
+    """Return the validated viewer-saved model-wide Bone ID selection."""
+    data = (load(folder_path) if data is None and folder_path is not None
+            else ({} if data is None else data))
+    weight = data.get("weight") if isinstance(data, dict) else None
+    return _normalized_weight_bone_ids(
+        weight.get("selected_bone_ids") if isinstance(weight, dict) else None)
+
+
+def save_weight_selected_bone_ids(folder_path, bone_ids):
+    """Persist only the normalized model-wide Bone ID selection."""
+    if not isinstance(bone_ids, list):
+        return {"saved": False, "selected_bone_ids": []}
+    normalized = _normalized_weight_bone_ids(bone_ids)
+    with _LOCK:
+        data = load(folder_path)
+        weight = data.get("weight")
+        if not isinstance(weight, dict):
+            weight = {}
+        weight["selected_bone_ids"] = normalized
+        data["weight"] = weight
+        return {
+            **_save(folder_path, data),
+            "selected_bone_ids": normalized,
+        }
+
+
 def hydrate_mesh_names(payload, data=None):
     """Project saved mesh names onto current canonical metadata keys."""
     data = data if isinstance(data, dict) else {}
