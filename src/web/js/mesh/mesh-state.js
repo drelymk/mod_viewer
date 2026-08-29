@@ -8,9 +8,11 @@ import {
 import { dnfSatisfied, getControlValue } from '../editing/control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
 import {
-  replaceMeshMaterial, setMeshTextureState, updateGeometryNormals,
-  updateMeshMaterialMetadata,
+  setMeshTextureState, updateGeometryNormals,
 } from './mesh-factory.js';
+import {
+  replaceMeshMaterial, updateMeshMaterialMetadata,
+} from './mesh-material-state.js';
 import { clearTextureRunGroups, recomputeAllTextureRuns } from './mesh-texture-runs.js';
 import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
