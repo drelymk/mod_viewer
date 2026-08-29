@@ -14,6 +14,7 @@ import { setBCTextureCompression } from './renderer-capabilities.js';
 import { requestRender, setRenderCallback } from './render-scheduler.js';
 import { createViewportRenderPipeline } from './viewport-render-pipeline.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
+import { createPhysicsDragController } from './physics-drag-controller.js';
 
 const container = document.getElementById('canvas-container');
 const openButton = document.getElementById('open-btn');
@@ -145,6 +146,19 @@ controls.cursorZoom = true;
 // Model-scaled clipping belongs to cameraFrame; Arcball must not overwrite it.
 controls.adjustNearFar = false;
 controls.setGizmosVisible(false);
+
+const physicsDragController = createPhysicsDragController({
+  canvas: renderer.domElement,
+  camera,
+  controls,
+  onMotion: detail => window.dispatchEvent(new CustomEvent(
+    'mod-viewer-virtual-model-motion', {detail})),
+  requestRender,
+});
+
+export function setPhysicsInteractionEnabled(enabled) {
+  return physicsDragController.setEnabled(enabled);
+}
 
 const environmentController = createEnvironmentController({
   scene,

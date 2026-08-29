@@ -9,17 +9,10 @@ function vectorFromCenter(center) {
   );
 }
 
-function axisVector(axis) {
-  if (axis === 'X') return new THREE.Vector3(1, 0, 0);
-  if (axis === 'Y') return new THREE.Vector3(0, 1, 0);
-  return new THREE.Vector3(0, 0, 1);
-}
-
-function rotationAroundPivot(pivot, rotationAxis, radians) {
+function rotationAroundPivot(pivot, rotation) {
   return new THREE.Matrix4()
     .makeTranslation(pivot.x, pivot.y, pivot.z)
-    .multiply(new THREE.Matrix4().makeRotationAxis(
-      rotationAxis, radians))
+    .multiply(new THREE.Matrix4().makeRotationFromQuaternion(rotation))
     .multiply(new THREE.Matrix4().makeTranslation(
       -pivot.x, -pivot.y, -pivot.z));
 }
@@ -31,31 +24,46 @@ function centerFromCollection(nodeCenters, boneId) {
   return nodeCenters?.[boneId];
 }
 
-function angleFromCollection(angleByBoneId, boneId) {
-  if (angleByBoneId instanceof Map) {
-    return Number(angleByBoneId.get(boneId)
-      ?? angleByBoneId.get(String(boneId))) || 0;
-  }
-  return Number(angleByBoneId?.[boneId]) || 0;
+function rotationFromCollection(rotationByBoneId, boneId) {
+  const value = rotationByBoneId instanceof Map
+    ? rotationByBoneId.get(boneId) ?? rotationByBoneId.get(String(boneId))
+    : rotationByBoneId?.[boneId];
+  const values = value?.isVector3
+    ? [value.x, value.y, value.z]
+    : Array.isArray(value) ? value : [value?.x, value?.y, value?.z];
+  const vector = values.slice(0, 3).map(Number);
+  return vector.length === 3 && vector.every(Number.isFinite)
+    ? new THREE.Vector3(...vector) : new THREE.Vector3();
 }
 
-export function buildForestTransformsFromLocalAngles(
+function quaternionFromRotationVector(rotationVector) {
+  const angle = rotationVector.length();
+  if (!Number.isFinite(angle) || angle < 1e-12) {
+    return new THREE.Quaternion();
+  }
+  return new THREE.Quaternion().setFromAxisAngle(
+    rotationVector.clone().multiplyScalar(1 / angle), angle);
+}
+
+export function buildForestTransformsFromLocalRotations(
     forest, nodeCenters, options = {}) {
   const transforms = new Map();
-  const axis = options.axis || 'Z';
-  const angleByBoneId = options.angleByBoneId || new Map();
-  const rotationAxis = axisVector(axis);
+  const rotations = new Map();
+  const rotationByBoneId = options.rotationByBoneId || new Map();
 
   (forest?.components || []).forEach(component => {
     const rootId = Number(component.rootId);
     if (!Number.isFinite(rootId)) return;
     const rootTransform = new THREE.Matrix4();
     transforms.set(rootId, rootTransform);
+    rotations.set(rootId, new THREE.Quaternion());
     const queue = [rootId];
     const visited = new Set([rootId]);
     while (queue.length) {
       const parentId = queue.shift();
       const parentTransform = transforms.get(parentId);
+      const parentRotation = rotations.get(parentId)
+        || new THREE.Quaternion();
       const parentCenter = vectorFromCenter(
         centerFromCollection(nodeCenters, parentId));
       const pivot = parentCenter.clone().applyMatrix4(parentTransform);
@@ -64,13 +72,19 @@ export function buildForestTransformsFromLocalAngles(
         const childId = Number(childValue);
         if (!Number.isFinite(childId) || visited.has(childId)) return;
         visited.add(childId);
-        // A joint's local angle belongs to the edge from its parent.  Apply
-        // it around the already transformed parent pivot before inheriting
-        // the parent's accumulated transform.
+        const localRotation = quaternionFromRotationVector(
+          rotationFromCollection(rotationByBoneId, childId));
+        // The local rotation vector is expressed in the parent frame. Convert
+        // it to a world-space rotation around the already transformed pivot,
+        // then inherit the parent's affine transform.
+        const worldRotation = parentRotation.clone()
+          .multiply(localRotation)
+          .multiply(parentRotation.clone().invert());
         const aroundPivot = rotationAroundPivot(
-          pivot, rotationAxis, angleFromCollection(angleByBoneId, childId));
+          pivot, worldRotation);
         transforms.set(childId,
           aroundPivot.clone().multiply(parentTransform.clone()));
+        rotations.set(childId, parentRotation.clone().multiply(localRotation));
         queue.push(childId);
       });
     }

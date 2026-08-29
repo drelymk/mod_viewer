@@ -213,712 +213,229 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
     finally:
         context.close()
 
-def test_skinning_physics_solver_covers_targets_kicks_and_equilibrium(
+def test_skinning_physics_solver_uses_true_3d_vectors_and_quaternions(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"Physics": _payload("Physics")})
+        edge_browser, frontend_url, {"Physics3D": _payload("Physics3D")})
     try:
         result = page.evaluate("""async () => {
           const physics = await import('./js/mesh/weight-physics.js');
           const deformation = await import('./js/mesh/weight-deformation.js');
+          const THREE = await import('three');
           const forest = {
-            primaryRootId: 0,
             components: [{
-              componentId: 0, rootId: 0, primary: true,
-              nodeIds: [0, 1, 2, 3], maxDepth: 2,
-              depthById: {0: 0, 1: 1, 2: 2, 3: 2},
+              componentId: 0, rootId: 0, nodeIds: [0, 1, 2, 3],
+              maxDepth: 2, depthById: {0: 0, 1: 1, 2: 2, 3: 2},
               childrenById: {0: [1], 1: [2, 3]},
             }],
           };
-          const dt = 1 / 120;
-          const target = Math.PI * 40 / 180;
-          const targetAngles = physics.buildPhysicsTargetAngles(forest, target);
-          const zeroState = physics.initializePhysicsState(forest);
-          physics.stepSpringPhysics(zeroState, forest, dt, {
-            targetAngleRadians: 0, frequencyHz: 2, dampingRatio: .35,
-          });
-
-          const under = physics.initializePhysicsState(forest);
-          let peak = 0;
-          for (let index = 0; index < 360; index += 1) {
-            physics.stepSpringPhysics(under, forest, dt, {
-              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
-            });
-            peak = Math.max(peak, under.joints.get(2).angle);
-          }
-          const underFinal = under.joints.get(2).angle;
-          for (let index = 0; index < 1200; index += 1) {
-            physics.stepSpringPhysics(under, forest, dt, {
-              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
-            });
-          }
-          const settled = physics.isPhysicsSettled(under, forest, target, {
-            angleTolerance: .002, velocityTolerance: .002,
-          });
-
-          const critical = physics.initializePhysicsState(forest);
-          let criticalPeak = 0;
-          for (let index = 0; index < 360; index += 1) {
-            physics.stepSpringPhysics(critical, forest, dt, {
-              targetAngleRadians: target, frequencyHz: 2, dampingRatio: 1,
-            });
-            criticalPeak = Math.max(criticalPeak, critical.joints.get(2).angle);
-          }
-
+          const initial = physics.initializePhysicsState(forest);
+          const initialShape = [...initial.joints.values()].map(joint => ({
+            rotationVector: joint.rotationVector,
+            angularVelocity: joint.angularVelocity,
+          }));
+          const targets = physics.buildPhysicsTargetRotations(
+            forest, [.4, .2, -.2]);
           const kicked = physics.initializePhysicsState(forest);
-          physics.applyPhysicsKick(kicked, forest, 2);
-          const kick = [...kicked.joints.entries()].map(([boneId, joint]) =>
-            [boneId, joint.angularVelocity]);
-          const reset = physics.resetPhysicsState(kicked);
-          const fixedA = physics.initializePhysicsState(forest);
-          const fixedB = physics.initializePhysicsState(forest);
-          for (let index = 0; index < 240; index += 1) {
-            physics.stepSpringPhysics(fixedA, forest, dt, {
-              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
-            });
-          }
-          for (let index = 0; index < 240; index += 1) {
-            physics.stepSpringPhysics(fixedB, forest, dt, {
-              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
-            });
-          }
-
-          const centers = new Map([
-            [0, [0, 0, 0]], [1, [1, 0, 0]],
-            [2, [2, 0, 0]], [3, [1, 1, 0]],
+          physics.applyReferenceFrameAngularDelta(
+            kicked, forest, [.3, .4, .5], 1);
+          physics.applyPhysicsKick(kicked, forest, [1, 2, 3]);
+          const spring = physics.initializePhysicsState(forest);
+          const targetRotationByBoneId = new Map([
+            [1, [.15, .1, -.05]], [2, [.15, .1, -.05]], [3, [.15, .1, -.05]],
           ]);
-          const dynamicTransforms = deformation.buildForestTransformsFromLocalAngles(
-            forest, centers, {axis: 'Z', angleByBoneId: targetAngles});
-          const repeatedTransforms = deformation.buildForestTransformsFromLocalAngles(
-            forest, centers, {axis: 'Z', angleByBoneId: targetAngles});
-          const matrixDifference = (left, right) => Math.max(...left.elements.map(
-            (value, index) => Math.abs(value - right.elements[index])));
-          const branchOnly = deformation.buildForestTransformsFromLocalAngles(
-            forest, centers, {axis: 'Z', angleByBoneId: new Map([[2, .2]])});
-          return {
-            zero: [...physics.physicsAngleMap(zeroState).values()],
-            targetAngles: [...targetAngles.entries()],
-            underPeak: peak, underFinal, target,
-            settled, criticalPeak,
-            kick,
-            reset: [...physics.physicsAngleMap(reset).entries()],
-            fixedEqual: [...fixedA.joints.entries()].every(([boneId, joint]) => {
-              const other = fixedB.joints.get(boneId);
-              return Math.abs(joint.angle - other.angle) < 1e-9
-                && Math.abs(joint.angularVelocity - other.angularVelocity) < 1e-9;
-            }),
-            rootIdentity: dynamicTransforms.get(0).equals(
-              new (await import('three')).Matrix4()),
-            repeatedDifference: Math.max(...[1, 2, 3].map(boneId =>
-              matrixDifference(dynamicTransforms.get(boneId),
-                repeatedTransforms.get(boneId)))),
-            branchDifference: matrixDifference(branchOnly.get(2),
-              dynamicTransforms.get(2)),
-            siblingUnchanged: branchOnly.get(3).equals(
-              new (await import('three')).Matrix4()),
-          };
-        }""")
-        assert result["zero"] == pytest.approx([0, 0, 0])
-        assert [entry[0] for entry in result["targetAngles"]] == [1, 2, 3]
-        assert [entry[1] for entry in result["targetAngles"]] == pytest.approx([
-            math.radians(20), math.radians(20), math.radians(20)])
-        assert result["underPeak"] > math.radians(20)
-        assert result["underFinal"] != pytest.approx(0)
-        assert result["settled"]
-        assert result["criticalPeak"] <= math.radians(20) + 1e-6
-        assert [entry[0] for entry in result["kick"]] == [1, 2, 3]
-        assert [entry[1] for entry in result["kick"]] == pytest.approx([
-            1, 2, 2])
-        assert [entry[0] for entry in result["reset"]] == [1, 2, 3]
-        assert [entry[1] for entry in result["reset"]] == pytest.approx([
-            0, 0, 0])
-        assert result["fixedEqual"]
-        assert result["rootIdentity"]
-        assert result["repeatedDifference"] < .001
-        assert result["branchDifference"] > .01
-        assert result["siblingUnchanged"]
-    finally:
-        context.close()
-
-
-def test_skinning_joint_limits_cover_depth_safety_and_motion_paths(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"JointLimits": _payload("JointLimits")})
-    try:
-        result = page.evaluate("""async () => {
-          const physics = await import('./js/mesh/weight-physics.js');
-          const forest = {
-            components: [
-              {componentId: 4, rootId: 0, nodeIds: [0, 1, 2, 3, 4],
-                maxDepth: 4,
-                depthById: {0: 0, 1: 1, 2: 2, 3: 3, 4: 4}},
-              {componentId: 9, rootId: 10, nodeIds: [10, 11, 12],
-                maxDepth: 2,
-                depthById: {10: 0, 11: 1, 12: 2}},
-            ],
-          };
-          const totalLimit = Math.PI * 20 / 180;
-          const built = physics.buildPhysicsJointLimits(forest, totalLimit);
-          const radians = degrees => Math.PI * degrees / 180;
-          const positive = physics.initializePhysicsState(forest);
-          positive.joints.get(1).angle = radians(8);
-          positive.joints.get(1).angularVelocity = 3;
-          physics.applyPhysicsJointLimits(positive, built.limitByBoneId);
-
-          const inward = physics.initializePhysicsState(forest);
-          inward.joints.get(1).angle = radians(5);
-          inward.joints.get(1).angularVelocity = -3;
-          physics.applyPhysicsJointLimits(inward, built.limitByBoneId);
-          physics.stepSpringPhysics(inward, forest, 1 / 120, {
-            targetAngleRadians: 0, frequencyHz: 2, dampingRatio: .35,
-            jointLimitByBoneId: built.limitByBoneId,
-          });
-
-          const negative = physics.initializePhysicsState(forest);
-          negative.joints.get(1).angle = radians(-8);
-          negative.joints.get(1).angularVelocity = -3;
-          physics.applyPhysicsJointLimits(negative, built.limitByBoneId);
-
-          const locked = physics.initializePhysicsState(forest);
-          locked.joints.get(1).angle = radians(8);
-          locked.joints.get(1).angularVelocity = 3;
-          const zeroLimits = new Map(built.limitByBoneId);
-          zeroLimits.set(1, 0);
-          physics.applyPhysicsJointLimits(locked, zeroLimits);
-
-          const targetState = physics.initializePhysicsState(forest);
           for (let index = 0; index < 1800; index += 1) {
-            physics.stepSpringPhysics(targetState, forest, 1 / 120, {
-              targetAngleRadians: radians(80), frequencyHz: 2,
-              dampingRatio: .35, jointLimitByBoneId: built.limitByBoneId,
+            physics.stepSpringPhysics(spring, forest, 1 / 120, {
+              targetRotationByBoneId, frequencyHz: 2, dampingRatio: 1,
             });
-          }
-          const targetEquilibrium = physics.buildPhysicsEquilibriumAngles(
-            forest, radians(80), 2, null, built.limitByBoneId);
-          const targetSettled = physics.isPhysicsSettled(
-            targetState, forest, radians(80), {
-              frequencyHz: 2, jointLimitByBoneId: built.limitByBoneId,
-            });
-
-          const gravityState = physics.initializePhysicsState(forest);
-          const gravity = new Map([[1, 100], [2, 100], [3, 100], [4, 100],
-            [11, 100], [12, 100]]);
-          for (let index = 0; index < 1800; index += 1) {
-            physics.stepSpringPhysics(gravityState, forest, 1 / 120, {
-              targetAngleRadians: 0, frequencyHz: 2, dampingRatio: .35,
-              externalAngularAccelerationByBoneId: gravity,
-              jointLimitByBoneId: built.limitByBoneId,
-            });
-          }
-          const gravitySettled = physics.isPhysicsSettled(
-            gravityState, forest, 0, {
-              frequencyHz: 2,
-              externalAngularAccelerationByBoneId: gravity,
-              jointLimitByBoneId: built.limitByBoneId,
-            });
-
-          const direct = physics.initializePhysicsState(forest);
-          physics.applyReferenceFrameAngularDelta(
-            direct, forest, radians(-90), 1, built.limitByBoneId);
-          const translation = physics.initializePhysicsState(forest);
-          const centers = new Map([
-            [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
-            [3, [3, 0, 0]], [4, [4, 0, 0]],
-            [10, [0, 0, 0]], [11, [1, 0, 0]], [12, [2, 0, 0]],
-          ]);
-          physics.applyReferenceFrameTranslationDelta(
-            translation, forest, centers, [100, 0, 0], 'Z', 1, null,
-            built.limitByBoneId);
-          const kicked = physics.initializePhysicsState(forest);
-          kicked.joints.forEach((joint, boneId) => {
-            joint.angle = built.limitByBoneId.get(boneId);
-          });
-          physics.applyPhysicsKick(kicked, forest, 100, built.limitByBoneId);
-          const safe = physics.initializePhysicsState(forest);
-          safe.joints.get(1).angle = radians(120);
-          physics.applyPhysicsJointLimits(safe, null);
-          const disabled = physics.initializePhysicsState(forest);
-          const enabled = physics.initializePhysicsState(forest);
-          physics.stepSpringPhysics(disabled, forest, 1 / 120, {
-            targetAngleRadians: radians(10), frequencyHz: 2, dampingRatio: .35,
-          });
-          physics.stepSpringPhysics(enabled, forest, 1 / 120, {
-            targetAngleRadians: radians(10), frequencyHz: 2, dampingRatio: .35,
-            jointLimitByBoneId: new Map(),
-          });
-          return {
-            map: [...built.limitByBoneId.entries()],
-            diagnostics: built.diagnostics,
-            positive: [positive.joints.get(1).angle,
-              positive.joints.get(1).angularVelocity],
-            inward: [inward.joints.get(1).angle,
-              inward.joints.get(1).angularVelocity],
-            negative: [negative.joints.get(1).angle,
-              negative.joints.get(1).angularVelocity],
-            locked: [locked.joints.get(1).angle,
-              locked.joints.get(1).angularVelocity],
-            target: {
-              angles: [...targetState.joints.entries()].map(([id, joint]) =>
-                [id, joint.angle]),
-              equilibrium: [...targetEquilibrium.entries()],
-              settled: targetSettled,
-            },
-            gravity: {
-              angles: [...gravityState.joints.entries()].map(([id, joint]) =>
-                [id, joint.angle]),
-              settled: gravitySettled,
-            },
-            direct: [...direct.joints.values()].map(joint => joint.angle),
-            translation: [...translation.joints.values()].map(
-              joint => joint.angle),
-            kick: [...kicked.joints.values()].map(joint =>
-              joint.angularVelocity),
-            safe: safe.joints.get(1).angle,
-            disabled: [...disabled.joints.entries()].map(([id, joint]) =>
-              [id, joint.angle, joint.angularVelocity]),
-            enabled: [...enabled.joints.entries()].map(([id, joint]) =>
-              [id, joint.angle, joint.angularVelocity]),
-          };
-        }""")
-        assert [entry[0] for entry in result["map"]] == [1, 2, 3, 4, 11, 12]
-        assert [entry[1] for entry in result["map"]] == pytest.approx([
-            math.radians(5), math.radians(5), math.radians(5), math.radians(5),
-            math.radians(10), math.radians(10)])
-        assert result["diagnostics"]["jointCount"] == 6
-        assert result["diagnostics"]["components"][0]["maxDepth"] == 4
-        assert result["positive"] == pytest.approx([math.radians(5), 0])
-        assert result["inward"][0] < math.radians(5)
-        assert result["inward"][1] < 0
-        assert result["negative"] == pytest.approx([math.radians(-5), 0])
-        assert result["locked"] == [0, 0]
-        assert result["target"]["settled"]
-        assert [entry[1] for entry in result["target"]["equilibrium"]] == pytest.approx([
-            math.radians(5), math.radians(5), math.radians(5), math.radians(5),
-            math.radians(10), math.radians(10)])
-        assert max(abs(entry[1]) for entry in result["target"]["angles"]) <= math.radians(10) + 1e-6
-        assert result["gravity"]["settled"]
-        assert max(abs(entry[1]) for entry in result["gravity"]["angles"]) <= math.radians(10) + 1e-6
-        assert max(abs(angle) for angle in result["direct"]) <= math.radians(10) + 1e-6
-        assert max(abs(angle) for angle in result["translation"]) <= math.radians(10) + 1e-6
-        assert max(abs(velocity) for velocity in result["kick"]) <= 1e-9
-        assert result["safe"] == pytest.approx(math.radians(90))
-        assert result["disabled"] == result["enabled"]
-    finally:
-        context.close()
-
-
-def test_skinning_gravity_solver_builds_safe_component_accelerations(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"GravitySolver": _payload("GravitySolver")})
-    try:
-        result = page.evaluate("""async () => {
-          const physics = await import('./js/mesh/weight-physics.js');
-          const forest = {
-            components: [
-              {componentId: 4, rootId: 0, nodeIds: [0, 1, 2], maxDepth: 2,
-                depthById: {0: 0, 1: 1, 2: 2}},
-              {componentId: 9, rootId: 10, nodeIds: [10, 11], maxDepth: 1,
-                depthById: {10: 0, 11: 1}},
-            ],
-          };
-          const centers = new Map([
-            [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
-            [10, [0, 0, 2]], [11, [0, 0, 3]],
-          ]);
-          const gravity = physics.buildGravityAngularAccelerations(
-            forest, centers, [0, -1, 0], 'Z',
-            {referenceRadius: 2, gravityScale: 1});
-          const reverse = physics.buildGravityAngularAccelerations(
-            {components: [{componentId: 1, rootId: 0, nodeIds: [0, 1],
-              maxDepth: 1, depthById: {0: 0, 1: 1}}]},
-            new Map([[0, [0, 0, 0]], [1, [-1, 0, 0]]]),
-            [0, -1, 0], 'Z', {referenceRadius: 1, gravityScale: 1});
-          const parallel = physics.buildGravityAngularAccelerations(
-            {components: [{rootId: 0, nodeIds: [0, 1], maxDepth: 1,
-              depthById: {0: 0, 1: 1}}]},
-            new Map([[0, [0, 0, 0]], [1, [0, 1, 0]]]),
-            [0, -1, 0], 'Z', {referenceRadius: 1, gravityScale: 1});
-          const axisParallel = physics.buildGravityAngularAccelerations(
-            {components: [{rootId: 0, nodeIds: [0, 1], maxDepth: 1,
-              depthById: {0: 0, 1: 1}}]},
-            new Map([[0, [0, 0, 0]], [1, [0, 0, 1]]]),
-            [0, -1, 0], 'Z', {referenceRadius: 1, gravityScale: 1});
-          const short = physics.buildGravityAngularAccelerations(
-            {components: [{rootId: 0, nodeIds: [0, 1], maxDepth: 1,
-              depthById: {0: 0, 1: 1}}]},
-            new Map([[0, [0, 0, 0]], [1, [.01, 0, 0]]]),
-            [0, -1, 0], 'Z', {referenceRadius: 2, gravityScale: 1});
-          const scaled = physics.buildGravityAngularAccelerations(
-            forest, new Map([
-              [0, [0, 0, 0]], [1, [100, 0, 0]], [2, [200, 0, 0]],
-              [10, [0, 0, 200]], [11, [0, 0, 300]],
-            ]), [0, -1, 0], 'Z',
-            {referenceRadius: 200, gravityScale: 1});
-
-          const external = new Map([[1, .8], [2, .8], [11, -.4]]);
-          const springState = physics.initializePhysicsState(forest);
-          for (let index = 0; index < 1800; index += 1) {
-            physics.stepSpringPhysics(springState, forest, 1 / 120, {
-              targetAngleRadians: .2, frequencyHz: 2, dampingRatio: .35,
-              externalAngularAccelerationByBoneId: external,
-            });
-          }
-          const omegaSquared = (2 * Math.PI * 2) ** 2;
-          const equilibrium = physics.buildPhysicsEquilibriumAngles(
-            forest, .2, 2, external);
-          const custom = new Map([[1, .1], [2, .1], [11, 0]]);
-          const customState = physics.initializePhysicsState(forest);
-          physics.stepSpringPhysics(customState, forest, 1 / 120, {
-            angleByBoneId: custom, frequencyHz: 2, dampingRatio: .35,
-            externalAngularAccelerationByBoneId: external,
-          });
-          return {
-            gravityMap: [...gravity.accelerationByBoneId.entries()],
-            gravityDiagnostics: gravity.diagnostics,
-            reverse: reverse.accelerationByBoneId.get(1),
-            parallel: parallel.accelerationByBoneId.get(1),
-            axisParallel: axisParallel.accelerationByBoneId.get(1),
-            short: {
-              value: short.accelerationByBoneId.get(1),
-              details: short.diagnostics.components[0],
-            },
-            scaled: [...scaled.accelerationByBoneId.entries()],
-            roots: [gravity.accelerationByBoneId.has(0),
-              gravity.accelerationByBoneId.has(10)],
-            springAngles: [...springState.joints.entries()].map(([id, joint]) =>
-              [id, joint.angle]),
-            equilibrium: [...equilibrium.entries()],
-            settled: physics.isPhysicsSettled(
-              springState, forest, .2, {frequencyHz: 2,
-                externalAngularAccelerationByBoneId: external}),
-            zeroFrequencySettled: physics.isPhysicsSettled(
-              physics.initializePhysicsState(forest), forest, 0,
-              {frequencyHz: 0, externalAngularAccelerationByBoneId:
-                new Map([[1, 1]])}),
-            customAfterStep: [...customState.joints.entries()].map(([id, joint]) =>
-              [id, joint.angle]),
-            customTarget: custom.get(1) + external.get(1) / omegaSquared,
-          };
-        }""")
-        component = result["gravityDiagnostics"]["components"][0]
-        assert result["gravityDiagnostics"]["componentCount"] == 2
-        assert result["gravityDiagnostics"]["activeComponentCount"] == 1
-        assert result["gravityDiagnostics"]["clampedComponentCount"] == 1
-        assert result["roots"] == [False, False]
-        assert [entry[0] for entry in result["gravityMap"]] == [1, 2, 11]
-        assert result["gravityMap"][0][1] < 0
-        assert result["gravityMap"][1][1] == pytest.approx(
-            result["gravityMap"][0][1])
-        assert result["reverse"] > 0
-        assert result["parallel"] == pytest.approx(0)
-        assert result["axisParallel"] == pytest.approx(0)
-        assert result["short"]["details"]["clamped"]
-        assert result["short"]["details"]["effectiveLeverLength"] == pytest.approx(.3)
-        assert math.isfinite(result["short"]["value"])
-        assert abs(result["short"]["value"]) < 10
-        assert [entry[0] for entry in result["scaled"]] == [1, 2, 11]
-        assert [entry[1] for entry in result["scaled"]] == pytest.approx(
-            [entry[1] for entry in result["gravityMap"]])
-        assert component["totalAngularAcceleration"] == pytest.approx(
-            component["localAngularAcceleration"] * 2)
-        assert [entry[0] for entry in result["equilibrium"]] == [1, 2, 11]
-        assert [entry[1] for entry in result["equilibrium"]] == pytest.approx([
-            .1 + .8 / (2 * math.pi * 2) ** 2,
-            .1 + .8 / (2 * math.pi * 2) ** 2,
-            .2 - .4 / (2 * math.pi * 2) ** 2,
-        ])
-        assert result["settled"]
-        assert not result["zeroFrequencySettled"]
-        assert result["customAfterStep"][0][0] == 1
-        assert result["customAfterStep"][0][1] != pytest.approx(
-            result["customTarget"])
-    finally:
-        context.close()
-
-
-def test_skinning_angular_motion_helpers_cover_projection_and_lag(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"AngularMotion": _payload("AngularMotion")})
-    try:
-        result = page.evaluate("""async () => {
-          const THREE = await import('three');
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const physics = await import('./js/mesh/weight-physics.js');
-          const identity = new THREE.Quaternion();
-          const y30 = new THREE.Quaternion().setFromAxisAngle(
-            new THREE.Vector3(0, 1, 0), Math.PI / 6);
-          const negativeY20 = new THREE.Quaternion().setFromAxisAngle(
-            new THREE.Vector3(0, 1, 0), -Math.PI / 9);
-          const y30Negative = new THREE.Quaternion(
-            -y30.x, -y30.y, -y30.z, -y30.w);
-          const previous = new THREE.Quaternion().setFromEuler(
-            new THREE.Euler(Math.PI / 6, 0, Math.PI / 5, 'XYZ'));
-          const worldYTurn = new THREE.Quaternion().setFromAxisAngle(
-            new THREE.Vector3(0, 1, 0), Math.PI / 6);
-          const current = worldYTurn.clone().multiply(previous);
-          const expectedLocalY = new THREE.Vector3(0, 1, 0)
-            .applyQuaternion(previous.clone().invert());
-          const forest = {
-            primaryRootId: 0,
-            components: [
-              {rootId: 0, nodeIds: [0, 1, 2], maxDepth: 2,
-                depthById: {0: 0, 1: 1, 2: 2}},
-              {rootId: 5, nodeIds: [5, 6], maxDepth: 1,
-                depthById: {5: 0, 6: 1}},
-            ],
-          };
-          const lagState = physics.initializePhysicsState(forest);
-          physics.applyReferenceFrameAngularDelta(
-            lagState, forest, Math.PI * 40 / 180, .5);
-          const zeroResponse = physics.initializePhysicsState(forest);
-          physics.applyReferenceFrameAngularDelta(
-            zeroResponse, forest, Math.PI * 40 / 180, 0);
-          const opposite = physics.initializePhysicsState(forest);
-          physics.applyReferenceFrameAngularDelta(
-            opposite, forest, Math.PI * 10 / 180, .5);
-          const firstOpposite = opposite.joints.get(1).angle;
-          physics.applyReferenceFrameAngularDelta(
-            opposite, forest, -Math.PI * 10 / 180, .5);
-          const secondOpposite = opposite.joints.get(1).angle - firstOpposite;
-
-          const recovery = physics.initializePhysicsState(forest);
-          physics.applyReferenceFrameAngularDelta(
-            recovery, forest, Math.PI * 30 / 180, 1);
-          const initialLag = recovery.joints.get(1).angle;
-          let overshoot = false;
-          for (let index = 0; index < 1200; index += 1) {
-            physics.stepSpringPhysics(recovery, forest, 1 / 120, {
-              targetAngleRadians: 0, frequencyHz: 2, dampingRatio: .35,
-            });
-            if (recovery.joints.get(1).angle > 0) overshoot = true;
           }
           const settled = physics.isPhysicsSettled(
-            recovery, forest, 0, {angleTolerance: .002, velocityTolerance: .002});
-
-          const biased = physics.initializePhysicsState(forest);
-          const target = Math.PI * 40 / 180;
-          for (let index = 0; index < 1200; index += 1) {
-            physics.stepSpringPhysics(biased, forest, 1 / 120, {
-              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
+            spring, forest, [0, 0, 0], {
+              targetRotationByBoneId, rotationTolerance: .002,
+              velocityTolerance: .002,
             });
-          }
-          physics.applyReferenceFrameAngularDelta(
-            biased, forest, Math.PI * 30 / 180, .5);
-          for (let index = 0; index < 1200; index += 1) {
-            physics.stepSpringPhysics(biased, forest, 1 / 120, {
-              targetAngleRadians: target, frequencyHz: 2, dampingRatio: .35,
-            });
-          }
-          return {
-            sameY: experiment.projectQuaternionDeltaOntoAxis(
-              identity, y30, 'Y'),
-            sameX: experiment.projectQuaternionDeltaOntoAxis(
-              identity, y30, 'X'),
-            negativeY: experiment.projectQuaternionDeltaOntoAxis(
-              identity, negativeY20, 'Y'),
-            signEquivalent: experiment.projectQuaternionDeltaOntoAxis(
-              identity, y30Negative, 'Y'),
-            localY: experiment.projectQuaternionDeltaOntoAxis(
-              previous, current, 'Y'),
-            expectedLocalY: Math.PI / 6 * expectedLocalY.y,
-            lagAngles: [...lagState.joints.entries()].map(([id, joint]) =>
-              [id, joint.angle]),
-            zeroAngles: [...zeroResponse.joints.values()].map(joint => joint.angle),
-            firstOpposite, secondOpposite,
-            initialLag, overshoot, settled,
-            biased: [...biased.joints.values()].map(joint => joint.angle),
-          };
-        }""")
-        assert result["sameY"] == pytest.approx(math.radians(30))
-        assert result["sameX"] == pytest.approx(0)
-        assert result["negativeY"] == pytest.approx(math.radians(-20))
-        assert result["signEquivalent"] == pytest.approx(math.radians(30))
-        assert result["localY"] == pytest.approx(result["expectedLocalY"])
-        assert [entry[0] for entry in result["lagAngles"]] == [1, 2, 6]
-        assert [entry[1] for entry in result["lagAngles"]] == pytest.approx([
-            math.radians(-10), math.radians(-10), math.radians(-20)])
-        assert result["zeroAngles"] == pytest.approx([0, 0, 0])
-        assert result["firstOpposite"] < 0
-        assert result["secondOpposite"] > 0
-        assert result["initialLag"] < 0
-        assert result["overshoot"]
-        assert result["settled"]
-        assert result["biased"] == pytest.approx([
-            math.radians(20), math.radians(20), math.radians(40)], abs=.002)
-    finally:
-        context.close()
 
-
-def test_skinning_translation_motion_solver_uses_projected_component_levers(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"TranslationMotion": _payload("TranslationMotion")})
-    try:
-        result = page.evaluate("""async () => {
-          const physics = await import('./js/mesh/weight-physics.js');
-          const forest = {
-            components: [
-              {rootId: 0, nodeIds: [0, 1, 2], maxDepth: 2,
-                depthById: {0: 0, 1: 1, 2: 2}},
-              {rootId: 5, nodeIds: [5, 6], maxDepth: 1,
-                depthById: {5: 0, 6: 1}},
-            ],
-          };
           const centers = new Map([
-            [0, [0, 0, 0]], [1, [0, .5, 0]], [2, [0, 1, 0]],
-            [5, [2, 0, 0]], [6, [2, 1, 0]],
+            [0, [0, 0, 0]], [1, [1, 1, 0]],
+            [2, [2, 1, 0]], [3, [1, 2, 0]],
           ]);
-          const solve = (delta, response = .5) => {
-            const state = physics.initializePhysicsState(forest);
-            const diagnostics = {};
-            physics.applyReferenceFrameTranslationDelta(
-              state, forest, centers, delta, 'Z', response, diagnostics);
-            return {
-              angles: [...state.joints.values()].map(joint => joint.angle),
-              lag: diagnostics.maxAbsLag,
-            };
-          };
-          const velocityState = physics.initializePhysicsState(forest);
-          velocityState.joints.get(1).angularVelocity = 1.25;
+          const translated = physics.initializePhysicsState(forest);
+          const translationDiagnostics = {};
           physics.applyReferenceFrameTranslationDelta(
-            velocityState, forest, centers, [.1, 0, 0], 'Z', .5);
-          const degenerateCenters = new Map([
-            [0, [0, 0, 0]], [1, [0, 0, 0]], [2, [0, 0, 0]],
-          ]);
-          const degenerateState = physics.initializePhysicsState({
-            components: [{rootId: 0, nodeIds: [0, 1, 2], maxDepth: 2,
-              depthById: {0: 0, 1: 1, 2: 2}}],
-          });
-          physics.applyReferenceFrameTranslationDelta(
-            degenerateState, forest, degenerateCenters, [.1, 0, 0], 'Z', 1);
-          return {
-            plus: solve([.1, 0, 0]),
-            minus: solve([-.1, 0, 0]),
-            parallel: solve([0, .1, 0]),
-            alongAxis: solve([0, 0, .1]),
-            zero: solve([.1, 0, 0], 0),
-            half: solve([.1, 0, 0], .5),
-            full: solve([.1, 0, 0], 1),
-            velocity: velocityState.joints.get(1).angularVelocity,
-            roots: [velocityState.joints.has(0), velocityState.joints.has(5)],
-            degenerate: [...degenerateState.joints.values()].map(joint => ({
-              angle: joint.angle, angularVelocity: joint.angularVelocity,
-            })),
-          };
-        }""")
-        assert result["plus"]["lag"] > 0
-        assert result["minus"]["lag"] > 0
-        assert result["plus"]["angles"] == pytest.approx([
-            result["plus"]["angles"][0], result["plus"]["angles"][0],
-            result["plus"]["angles"][0] * 2])
-        assert result["plus"]["angles"][0] == pytest.approx(
-            result["plus"]["lag"] / 2)
-        assert result["minus"]["angles"] == pytest.approx([
-            -result["minus"]["lag"] / 2, -result["minus"]["lag"] / 2,
-            -result["minus"]["lag"]])
-        assert result["parallel"]["lag"] == pytest.approx(0)
-        assert result["alongAxis"]["lag"] == pytest.approx(0)
-        assert result["zero"]["lag"] == pytest.approx(0)
-        assert result["half"]["lag"] < result["full"]["lag"]
-        assert result["velocity"] == pytest.approx(1.25)
-        assert result["roots"] == [False, False]
-        assert result["degenerate"] == pytest.approx([
-            {"angle": 0, "angularVelocity": 0},
-            {"angle": 0, "angularVelocity": 0},
-        ])
-    finally:
-        context.close()
-
-
-def test_skinning_linear_velocity_impulse_preserves_angles_and_phase(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"LinearVelocity": _payload("LinearVelocity")})
-    try:
-        result = page.evaluate("""async () => {
-          const physics = await import('./js/mesh/weight-physics.js');
-          const forest = {
-            components: [{rootId: 0, nodeIds: [0, 1, 2], maxDepth: 2,
-              depthById: {0: 0, 1: 1, 2: 2}}],
-          };
-          const centers = new Map([
-            [0, [0, 0, 0]], [1, [0, .5, 0]], [2, [0, 1, 0]],
-          ]);
-          const solve = (delta, response = .5) => {
-            const state = physics.initializePhysicsState(forest);
-            state.joints.get(1).angle = .3;
-            state.joints.get(1).angularVelocity = .4;
-            const diagnostics = {};
-            physics.applyReferenceFrameLinearVelocityDelta(
-              state, forest, centers, delta, 'Z', response, diagnostics);
-            return {
-              angles: [...state.joints.values()].map(joint => joint.angle),
-              velocities: [...state.joints.values()]
-                .map(joint => joint.angularVelocity),
-              impulse: diagnostics.maxAbsDeltaOmega,
-            };
-          };
-          const constant = physics.initializePhysicsState(forest);
+            translated, forest, centers, [.2, .1, .3], 1,
+            translationDiagnostics);
+          const velocity = physics.initializePhysicsState(forest);
+          const velocityDiagnostics = {};
           physics.applyReferenceFrameLinearVelocityDelta(
-            constant, forest, centers, [.2, 0, 0], 'Z', .5);
-          const afterAcceleration = [...constant.joints.values()]
-            .map(joint => joint.angularVelocity);
-          physics.applyReferenceFrameLinearVelocityDelta(
-            constant, forest, centers, [0, 0, 0], 'Z', .5);
-          const afterConstant = [...constant.joints.values()]
-            .map(joint => joint.angularVelocity);
-          const degenerateForest = {
+            velocity, forest, centers, [.2, .1, .3], 1,
+            velocityDiagnostics);
+
+          const gravityForest = {
             components: [{rootId: 0, nodeIds: [0, 1], maxDepth: 1,
               depthById: {0: 0, 1: 1}}],
           };
-          const degenerate = physics.initializePhysicsState(degenerateForest);
-          physics.applyReferenceFrameLinearVelocityDelta(
-            degenerate, degenerateForest,
-            new Map([[0, [0, 0, 0]], [1, [0, 0, 0]]]),
-            [.2, 0, 0], 'Z', 1);
+          const gravity = physics.buildGravityAngularAccelerations(
+            gravityForest,
+            new Map([[0, [0, 0, 0]], [1, [0, 1, 0]]]),
+            [1, 0, 0], {referenceRadius: 1});
+          const limits = new Map([[1, .5]]);
+          const limited = physics.initializePhysicsState(gravityForest);
+          limited.joints.get(1).rotationVector = [.4, .3, 0];
+          limited.joints.get(1).angularVelocity = [.8, .6, 1];
+          physics.applyPhysicsJointLimits(limited, limits);
+          const zeroLimited = physics.initializePhysicsState(gravityForest);
+          zeroLimited.joints.get(1).rotationVector = [.1, .2, .3];
+          zeroLimited.joints.get(1).angularVelocity = [1, 2, 3];
+          physics.applyPhysicsJointLimits(zeroLimited, new Map([[1, 0]]));
+
+          const rotations = new Map([
+            [1, [0, 0, Math.PI / 2]],
+            [2, [Math.PI / 2, 0, 0]],
+          ]);
+          const transforms = deformation.buildForestTransformsFromLocalRotations(
+            forest, centers, {rotationByBoneId: rotations});
+          const opposite = physics.rotationVectorBetween([1, 1, 0], [-1, -1, 0]);
           return {
-            lever: physics.representativeComponentLever(
-              forest.components[0], centers),
-            plus: solve([.2, 0, 0]),
-            minus: solve([-.2, 0, 0]),
-            parallel: solve([0, .2, 0]),
-            alongAxis: solve([0, 0, .2]),
-            zeroResponse: solve([.2, 0, 0], 0),
-            fullResponse: solve([.2, 0, 0], 1),
-            afterAcceleration, afterConstant,
-            degenerate: [...degenerate.joints.values()]
-              .map(joint => [joint.angle, joint.angularVelocity]),
+            initialShape,
+            targets: [...targets.entries()],
+            kicked: [...kicked.joints.values()],
+            spring: [...spring.joints.values()],
+            settled,
+            translated: [...translated.joints.values()]
+              .map(joint => joint.rotationVector),
+            translationDiagnostics,
+            velocity: [...velocity.joints.values()]
+              .map(joint => joint.angularVelocity),
+            velocityDiagnostics,
+            gravity: gravity.accelerationByBoneId.get(1),
+            gravityDiagnostic: gravity.diagnostics.components[0],
+            limited: limited.joints.get(1),
+            zeroLimited: zeroLimited.joints.get(1),
+            opposite,
+            rootIdentity: transforms.get(0).equals(new THREE.Matrix4()),
+            childMatrix: transforms.get(1).elements,
+            grandchildMatrix: transforms.get(2).elements,
           };
         }""")
-        assert result["lever"] == pytest.approx([0, 1, 0])
-        assert result["plus"]["impulse"] == pytest.approx(.1)
-        assert result["plus"]["angles"] == pytest.approx([.3, 0])
-        assert result["plus"]["velocities"] == pytest.approx([.45, .05])
-        assert result["minus"]["impulse"] == pytest.approx(.1)
-        assert result["minus"]["velocities"] == pytest.approx([.35, -.05])
-        assert result["parallel"]["impulse"] == pytest.approx(0)
-        assert result["alongAxis"]["impulse"] == pytest.approx(0)
-        assert result["zeroResponse"]["impulse"] == pytest.approx(0)
-        assert result["fullResponse"]["impulse"] == pytest.approx(.2)
-        assert result["afterAcceleration"] == pytest.approx([.05, .05])
-        assert result["afterConstant"] == pytest.approx(result["afterAcceleration"])
-        assert result["degenerate"][0] == pytest.approx([0, 0])
+        assert all(
+            entry["rotationVector"] == [0, 0, 0]
+            and entry["angularVelocity"] == [0, 0, 0]
+            for entry in result["initialShape"])
+        assert [entry[0] for entry in result["targets"]] == [1, 2, 3]
+        assert result["targets"][0][1] == pytest.approx([.2, .1, -.1])
+        assert result["targets"][1][1] == pytest.approx([.2, .1, -.1])
+        assert result["kicked"][0]["rotationVector"] == pytest.approx(
+            [-.15, -.2, -.25])
+        assert result["kicked"][1]["angularVelocity"] == pytest.approx(
+            [1, 2, 3])
+        assert result["spring"][0]["rotationVector"] == pytest.approx(
+            [.15, .1, -.05], abs=.002)
+        assert result["settled"]
+        assert any(
+            abs(value) > 1e-4
+            for value in result["translated"][0])
+        assert all(abs(value) > 1e-4 for value in result["velocity"][0])
+        assert result["gravity"] == pytest.approx([0, 0, -9.81])
+        assert result["gravityDiagnostic"]["totalAngularAccelerationVector"] == pytest.approx(
+            [0, 0, -9.81])
+        limited = result["limited"]
+        assert math.sqrt(sum(value * value for value in limited["rotationVector"])) == pytest.approx(.5)
+        assert limited["angularVelocity"][2] == pytest.approx(1)
+        assert limited["angularVelocity"][0] == pytest.approx(0)
+        assert limited["angularVelocity"][1] == pytest.approx(0)
+        assert result["zeroLimited"] == {
+            "rotationVector": [0, 0, 0], "angularVelocity": [0, 0, 0]}
+        assert math.sqrt(sum(value * value for value in result["opposite"])) == pytest.approx(
+            math.pi)
+        assert result["rootIdentity"]
+        assert result["childMatrix"] != result["grandchildMatrix"]
     finally:
         context.close()
 
 
+def test_skinning_physics_drag_controller_owns_only_rmb(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"PhysicsDrag": _payload("PhysicsDrag")})
+    try:
+        result = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const controllerModule = await import(
+            './js/scene/physics-drag-controller.js');
+          const canvas = document.createElement('canvas');
+          canvas.width = 100;
+          canvas.height = 100;
+          canvas.getBoundingClientRect = () => ({
+            left: 0, top: 0, width: 100, height: 100,
+          });
+          document.body.appendChild(canvas);
+          const camera = new THREE.PerspectiveCamera();
+          const actions = [];
+          const motions = [];
+          const controls = {
+            unsetMouseAction: button => actions.push(['unset', button]),
+            setMouseAction: (action, button) =>
+              actions.push(['set', action, button]),
+          };
+          const controller = controllerModule.createPhysicsDragController({
+            canvas, camera, controls,
+            onMotion: detail => motions.push(detail),
+          });
+          const timestamped = (type, init, timeStamp) => {
+            const event = new PointerEvent(type, {
+              bubbles: true, ...init,
+            });
+            Object.defineProperty(event, 'timeStamp', {value: timeStamp});
+            return event;
+          };
+          const dispatch = event => canvas.dispatchEvent(event);
+          controller.setEnabled(true);
+          dispatch(timestamped('pointerdown', {
+            pointerId: 1, button: 0, clientX: 10, clientY: 10,
+          }, 0));
+          dispatch(timestamped('pointerdown', {
+            pointerId: 2, button: 2, clientX: 10, clientY: 10,
+          }, 0));
+          dispatch(timestamped('pointermove', {
+            pointerId: 2, buttons: 2, clientX: 11, clientY: 11,
+          }, 10));
+          dispatch(timestamped('pointermove', {
+            pointerId: 2, buttons: 2, clientX: 20, clientY: 0,
+          }, 30));
+          dispatch(timestamped('pointerup', {
+            pointerId: 2, button: 2, clientX: 20, clientY: 0,
+          }, 1020));
+          const activeMotions = motions.filter(motion => motion.active);
+          const release = motions[motions.length - 1];
+          controller.setEnabled(false);
+          const disabledActions = actions.slice();
+          controller.dispose();
+          canvas.remove();
+          return {
+            actions, disabledActions, activeMotions, release,
+            lmbActive: motions.some(motion => motion.source !== 'rmb-drag'),
+          };
+        }""")
+        assert result["actions"][0] == ["unset", 2]
+        assert result["disabledActions"][-1] == ["set", "PAN", 2]
+        assert result["activeMotions"]
+        velocity = result["activeMotions"][0]["normalizedLinearVelocityWorld"]
+        assert math.hypot(velocity[0], velocity[1]) == pytest.approx(4)
+        assert velocity[0] > 0 and velocity[1] > 0 and velocity[2] == 0
+        assert result["release"]["active"] is False
+        assert result["release"]["normalizedLinearVelocityWorld"] == [0, 0, 0]
+        assert result["lmbActive"] is False
+    finally:
+        context.close()
 
 
-def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
+def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
         edge_browser, frontend_url):
     context, page = _page(
         edge_browser, frontend_url,
-        {"PhysicsLifecycle": _payload("PhysicsLifecycle")})
+        {"PhysicsLifecycle3D": _payload("PhysicsLifecycle3D")})
     try:
-        _open(page, "PhysicsLifecycle")
+        _open(page, "PhysicsLifecycle3D")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
         result = page.evaluate("""async () => {
           const mesh = window.modViewer.activeMeshes[0];
@@ -936,8 +453,6 @@ def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
             }, diagnostics: {},
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
-          const {setControlValue} = await import('./js/editing/control-state.js');
-          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
           await experiment.loadSkinningWeights(mesh);
           experiment.ensureCandidateForest(mesh);
           const queuedFrames = [];
@@ -959,96 +474,60 @@ def test_skinning_physics_lifecycle_sleeps_switches_and_disposes(
           experiment.setPhysicsEnabled(mesh, true);
           const enabled = experiment.getSkinningState(mesh);
           const enabledState = {
-            mode: enabled.deformationMode,
             enabled: enabled.physicsEnabled,
-            jointCount: enabled.physicsState.joints.size,
+            jointShape: [...enabled.physicsState.joints.values()]
+              .every(joint => Array.isArray(joint.rotationVector)
+                && Array.isArray(joint.angularVelocity)),
             scheduled: experiment.isPhysicsScheduled(mesh),
           };
           runFrame(0);
           runFrame(16.7);
           const sleeping = experiment.getSkinningState(mesh);
-          const sleepingState = {
-            settled: sleeping.physicsSettled,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            target: sleeping.physicsTargetAngle,
-            joints: [...sleeping.physicsState.joints.values()].map(joint => ({
-              angle: joint.angle, angularVelocity: joint.angularVelocity,
-            })),
-          };
-
-          const beforeTarget = [...mesh.geometry.attributes.position.array];
-          experiment.setPhysicsTargetAngle(mesh, 30);
-          runFrame(100);
-          runFrame(116.7);
+          const beforeVirtual = [...sleeping.physicsState.joints.values()]
+            .map(joint => [...joint.angularVelocity]);
+          window.dispatchEvent(new CustomEvent(
+            'mod-viewer-virtual-model-motion', {detail: {
+              normalizedLinearVelocityWorld: [.3, .1, .2],
+              active: true, source: 'rmb-drag',
+            }}));
           const moving = experiment.getSkinningState(mesh);
-          const movingPositions = [...mesh.geometry.attributes.position.array];
-          const movingState = {
-            target: moving.physicsTargetAngle,
-            mode: moving.deformationMode,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            angle: moving.physicsState.joints.get(1).angle,
-            changed: movingPositions.some((value, index) =>
-              Math.abs(value - beforeTarget[index]) > 1e-5),
-          };
-
-          experiment.ensureCandidateForest(mesh);
-          experiment.setPhysicsEnabled(mesh, true);
-          experiment.setPhysicsTargetAngle(mesh, 20);
-          runFrame(200);
-          runFrame(216.7);
+          const movingVelocity = [...moving.physicsState.joints.values()]
+            .map(joint => [...joint.angularVelocity]);
+          window.dispatchEvent(new CustomEvent(
+            'mod-viewer-virtual-model-motion', {detail: {
+              normalizedLinearVelocityWorld: [0, 0, 0],
+              active: false, source: 'rmb-drag',
+            }}));
+          const released = experiment.getSkinningState(mesh);
+          const virtualVelocity = released.physicsVirtualLinearVelocityLocal;
           experiment.resetPhysicsMotion(mesh);
           const reset = experiment.getSkinningState(mesh);
-          const resetState = {
-            enabled: reset.physicsEnabled,
-            mode: reset.deformationMode,
-            target: reset.physicsTargetAngle,
-            settled: reset.physicsSettled,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            angles: [...reset.physicsState.joints.values()]
-              .map(joint => joint.angle),
-            positions: [...mesh.geometry.attributes.position.array],
-          };
-
-          experiment.setPhysicsTargetAngle(mesh, 20);
-          const scheduledBeforeShape = experiment.isPhysicsScheduled(mesh);
-          setControlValue('shape', '1');
-          refreshMeshes();
-          const afterShape = experiment.getSkinningState(mesh);
           window.requestAnimationFrame = originalRequestAnimationFrame;
           window.cancelAnimationFrame = originalCancelAnimationFrame;
           URL.revokeObjectURL(url);
           return {
-            enabledState, sleepingState, movingState, resetState,
-            scheduledBeforeShape,
-            afterShape: afterShape === null,
-            scheduledAfterShape: experiment.isPhysicsScheduled(mesh),
+            enabledState, sleeping: sleeping.physicsSettled,
+            beforeVirtual, movingVelocity, virtualVelocity,
+            reset: [...reset.physicsState.joints.values()],
+            enabledAfterReset: reset.physicsEnabled,
+            scheduledAfterReset: experiment.isPhysicsScheduled(mesh),
           };
         }""")
         assert result["enabledState"] == {
-            "mode": "physics", "enabled": True, "jointCount": 2,
-            "scheduled": True}
-        assert result["sleepingState"]["settled"]
-        assert not result["sleepingState"]["scheduled"]
-        assert result["sleepingState"]["target"] == 0
-        assert [joint["angle"] for joint in result["sleepingState"]["joints"]] == pytest.approx([
-            0, 0])
-        assert result["movingState"]["target"] == 30
-        assert result["movingState"]["mode"] == "physics"
-        assert result["movingState"]["scheduled"]
-        assert result["movingState"]["angle"] != pytest.approx(0)
-        assert result["movingState"]["changed"]
-        assert result["resetState"]["enabled"]
-        assert result["resetState"]["mode"] == "physics"
-        assert result["resetState"]["target"] == 0
-        assert result["resetState"]["settled"]
-        assert not result["resetState"]["scheduled"]
-        assert result["resetState"]["angles"] == pytest.approx([0, 0])
-        assert result["scheduledBeforeShape"]
-        assert result["afterShape"]
-        assert not result["scheduledAfterShape"]
+            "enabled": True, "jointShape": True, "scheduled": True}
+        assert result["sleeping"]
+        assert any(
+            any(abs(value) > 1e-6 for value in vector)
+            for vector in result["movingVelocity"])
+        assert result["virtualVelocity"] == [0, 0, 0]
+        assert all(
+            joint["rotationVector"] == [0, 0, 0]
+            and joint["angularVelocity"] == [0, 0, 0]
+            for joint in result["reset"])
+        assert result["enabledAfterReset"]
+        assert not result["scheduledAfterReset"]
     finally:
         context.close()
-
 
 def test_skinning_load_is_invalidated_by_shape_change(
         edge_browser, frontend_url):
@@ -1373,40 +852,35 @@ def test_clean_control_refresh_skips_texture_run_reconciliation(
         context.close()
 
 
-def test_skinning_angular_motion_follows_model_turn_and_ignores_camera(
+def test_skinning_angular_motion_uses_full_quaternion_delta(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"AngularLifecycle": _payload("AngularLifecycle")})
+        edge_browser, frontend_url, {"AngularLifecycle3D": _payload("AngularLifecycle3D")})
     try:
-        _open(page, "AngularLifecycle")
+        _open(page, "AngularLifecycle3D")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
         result = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const experiment = await import('./js/mesh/weight-experiment.js');
           const mesh = window.modViewer.activeMeshes[0];
           const bytes = new Uint8Array(48);
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          let previewCalls = 0;
-          window.pywebview.api.get_skinning_preview = async () => {
-            previewCalls += 1;
-            return {
-              status: 'ok', vertex_count: 3, influence_count: 2,
-              bone_ids: [0, 1, 2], encoding: 'test',
-              data: {
-                url, length: 48,
-                indices: {offset: 0, length: 24, type: 'u32'},
-                weights: {offset: 24, length: 24, type: 'f32'},
-              }, diagnostics: {},
-            };
-          };
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          window.pywebview.api.get_skinning_preview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test',
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
           await experiment.loadSkinningWeights(mesh);
           experiment.ensureCandidateForest(mesh);
-          previewCalls = 0;
-
-          const queuedFrames = [];
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
+          const queuedFrames = [];
           window.requestAnimationFrame = callback => {
             queuedFrames.push(callback);
             return callback;
@@ -1415,214 +889,55 @@ def test_skinning_angular_motion_follows_model_turn_and_ignores_camera(
             const index = queuedFrames.indexOf(callback);
             if (index >= 0) queuedFrames.splice(index, 1);
           };
-          const runFrame = timestamp => {
-            const callbacks = queuedFrames.splice(0);
-            if (!callbacks.length) throw new Error('Expected a queued frame.');
-            callbacks.forEach(callback => callback(timestamp));
+          const runFrames = timestamp => {
+            queuedFrames.splice(0).forEach(callback => callback(timestamp));
           };
-          const settle = timestamp => {
-            let current = timestamp;
-            let frames = 0;
-            while (queuedFrames.length && frames < 600) {
-              runFrame(current);
-              current += 16.7;
-              frames += 1;
-            }
-            return {current, frames};
-          };
-
-          const motionEvents = [];
-          window.addEventListener('mod-viewer-model-transform-changed', event => {
-            motionEvents.push({
-              reason: event.detail?.reason,
-              includesMesh: event.detail?.meshes?.includes(mesh),
-            });
-          });
-          experiment.setPhysicsAxis(mesh, 'Y');
-          experiment.setPhysicsMotionStrength(mesh, .35);
-          experiment.setPhysicsTargetAngle(mesh, 0);
           experiment.setPhysicsEnabled(mesh, true);
-          runFrame(0);
-          runFrame(16.7);
-          const settledBeforeTurn = experiment.getSkinningState(mesh);
-          const settledQuaternion = mesh.quaternion.clone();
-          const settledPositions = [...mesh.geometry.attributes.position.array];
-
-          document.querySelector('#camera-flip-btn').click();
-          const afterTurn = experiment.getSkinningState(mesh);
-          const firstLag = afterTurn.physicsState.joints.get(1)?.angle || 0;
-          const firstTurn = {
-            quaternionChanged: !mesh.quaternion.equals(settledQuaternion),
-            eventCount: afterTurn.motionEventCount,
-            event: motionEvents.at(-1),
-            rootDelta: afterTurn.lastRootAngularDelta,
-            projected: afterTurn.lastProjectedAngularDelta,
-            angle: firstLag,
-            mode: afterTurn.deformationMode,
-            settled: afterTurn.physicsSettled,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            geometryChanged: mesh.geometry.attributes.position.array.some(
-              (value, index) => Math.abs(value - settledPositions[index]) > 1e-5),
-            previewCalls,
-          };
-
-          document.querySelector('#camera-flip-btn').click();
-          const repeated = experiment.getSkinningState(mesh);
-          const repeatedLag = repeated.physicsState.joints.get(1)?.angle || 0;
-          const repeatedTurn = {
-            eventCount: repeated.motionEventCount,
-            moreLag: repeatedLag < firstLag,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          let timing = settle(33.4);
-          const afterTurns = experiment.getSkinningState(mesh);
-          const settledAfterTurns = {
-            settled: afterTurns.physicsSettled,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            angles: [...afterTurns.physicsState.joints.values()]
-              .map(joint => joint.angle),
-            velocities: [...afterTurns.physicsState.joints.values()]
-              .map(joint => joint.angularVelocity),
-            frames: timing.frames,
-          };
-
-          document.querySelector('#camera-reset-view-btn').click();
-          const afterResetView = experiment.getSkinningState(mesh);
-          const resetLag = afterResetView.physicsState.joints.get(1)?.angle || 0;
-          const resetViewMotion = {
-            eventCount: afterResetView.motionEventCount,
-            positiveLag: resetLag > 0,
-            reason: motionEvents.at(-1)?.reason,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            referenceMatches: afterResetView.physicsReferenceQuaternion
-              .equals(mesh.quaternion),
-          };
-          timing = settle(timing.current);
-          const afterResetSettle = experiment.getSkinningState(mesh);
-          const settledAfterReset = {
-            settled: afterResetSettle.physicsSettled,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            angles: [...afterResetSettle.physicsState.joints.values()]
-              .map(joint => joint.angle),
-          };
-
-          const {camera} = await import('./js/scene/scene.js');
-          const cameraBefore = camera.position.clone();
-          camera.position.x += .2;
-          camera.updateMatrixWorld();
-          if (queuedFrames.length) runFrame(timing.current);
-          const afterCamera = experiment.getSkinningState(mesh);
-          const cameraIsolation = {
-            cameraChanged: !camera.position.equals(cameraBefore),
-            eventCount: afterCamera.motionEventCount,
-            angle: afterCamera.physicsState.joints.get(1)?.angle || 0,
-            settled: afterCamera.physicsSettled,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-
-          experiment.setPhysicsAxis(mesh, 'Y');
-          document.querySelector('#camera-flip-horizontal-btn').click();
-          const yAxisXTurn = experiment.getSkinningState(mesh);
-          const yAxisIsolation = {
-            eventCount: yAxisXTurn.motionEventCount,
-            angle: yAxisXTurn.physicsState.joints.get(1)?.angle || 0,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          document.querySelector('#camera-reset-view-btn').click();
-          const afterHorizontalReset = experiment.getSkinningState(mesh);
-          experiment.setPhysicsAxis(mesh, 'X');
-          document.querySelector('#camera-flip-horizontal-btn').click();
-          const xAxisXTurn = experiment.getSkinningState(mesh);
-          const xAxisIsolation = {
-            eventCount: xAxisXTurn.motionEventCount,
-            angle: xAxisXTurn.physicsState.joints.get(1)?.angle || 0,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            referenceMatches: xAxisXTurn.physicsReferenceQuaternion
-              .equals(mesh.quaternion),
-          };
-          experiment.resetPhysicsMotion(mesh);
-          const resetMotionState = experiment.getSkinningState(mesh);
-          const motionReset = {
-            angle: resetMotionState.physicsState.joints.get(1)?.angle || 0,
-            velocity: resetMotionState.physicsState.joints.get(1)
-              ?.angularVelocity || 0,
-            eventCount: resetMotionState.motionEventCount,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            referenceMatches: resetMotionState.physicsReferenceQuaternion
-              .equals(mesh.quaternion),
-          };
-          const quaternionBeforeDisable = mesh.quaternion.clone();
-          experiment.setPhysicsEnabled(mesh, false);
-          const disabled = experiment.getSkinningState(mesh);
-          const disabledState = {
-            quaternionUnchanged: mesh.quaternion.equals(quaternionBeforeDisable),
-            referenceCleared: disabled.physicsReferenceQuaternion === null,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
+          runFrames(0);
+          runFrames(16.7);
+          const before = [...mesh.geometry.attributes.position.array];
+          mesh.quaternion.copy(new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(.2, .3, .4, 'XYZ')));
+          window.dispatchEvent(new CustomEvent(
+            'mod-viewer-model-transform-changed', {
+              detail: {meshes: [mesh], reason: 'test-rotation'},
+            }));
+          const state = experiment.getSkinningState(mesh);
+          const delta = state.lastRootAngularDeltaVector;
+          const jointVectors = [...state.physicsState.joints.values()]
+            .map(joint => joint.rotationVector);
+          runFrames(33.4);
+          const after = experiment.getSkinningState(mesh);
           window.requestAnimationFrame = originalRequestAnimationFrame;
           window.cancelAnimationFrame = originalCancelAnimationFrame;
           URL.revokeObjectURL(url);
           return {
-            firstTurn, repeatedTurn, settledAfterTurns,
-                resetViewMotion, settledAfterReset, cameraIsolation,
-            yAxisIsolation, xAxisIsolation, motionReset, disabledState,
-            horizontalResetEventCount: afterHorizontalReset.motionEventCount,
+            delta,
+            deltaMagnitude: state.lastRootAngularDeltaMagnitude,
+            jointVectors,
+            geometryChanged: mesh.geometry.attributes.position.array.some(
+              (value, index) => Math.abs(value - before[index]) > 1e-6),
+            scheduled: experiment.isPhysicsScheduled(mesh),
+            settled: after.physicsSettled,
           };
         }""")
-        assert result["firstTurn"]["quaternionChanged"]
-        assert result["firstTurn"]["eventCount"] == 1
-        assert result["firstTurn"]["event"] == {
-            "reason": "rotate-y", "includesMesh": True}
-        assert result["firstTurn"]["rootDelta"] == pytest.approx(math.pi / 2)
-        assert result["firstTurn"]["projected"] == pytest.approx(math.pi / 2)
-        assert result["firstTurn"]["angle"] < 0
-        assert result["firstTurn"]["mode"] == "physics"
-        assert not result["firstTurn"]["settled"]
-        assert result["firstTurn"]["scheduled"]
-        assert result["firstTurn"]["geometryChanged"]
-        assert result["firstTurn"]["previewCalls"] == 0
-        assert result["repeatedTurn"] == {
-            "eventCount": 2, "moreLag": True, "scheduled": True}
-        assert result["settledAfterTurns"]["settled"]
-        assert not result["settledAfterTurns"]["scheduled"]
-        assert result["settledAfterTurns"]["angles"] == pytest.approx([0, 0], abs=.002)
-        assert result["settledAfterTurns"]["velocities"] == pytest.approx([0, 0], abs=.002)
-        assert result["resetViewMotion"]["eventCount"] == 3
-        assert result["resetViewMotion"]["positiveLag"]
-        assert result["resetViewMotion"]["reason"] == "reset-view"
-        assert result["resetViewMotion"]["scheduled"]
-        assert result["resetViewMotion"]["referenceMatches"]
-        assert result["settledAfterReset"]["settled"]
-        assert not result["settledAfterReset"]["scheduled"]
-        assert result["settledAfterReset"]["angles"] == pytest.approx([0, 0], abs=.002)
-        assert result["cameraIsolation"]["cameraChanged"]
-        assert result["cameraIsolation"]["eventCount"] == 3
-        assert result["cameraIsolation"]["angle"] == pytest.approx(0, abs=.002)
-        assert result["cameraIsolation"]["settled"]
-        assert not result["cameraIsolation"]["scheduled"]
-        assert result["yAxisIsolation"]["eventCount"] == 4
-        assert result["yAxisIsolation"]["angle"] == pytest.approx(0, abs=.002)
-        assert not result["yAxisIsolation"]["scheduled"]
-        assert result["xAxisIsolation"]["eventCount"] == 6
-        assert result["xAxisIsolation"]["angle"] < 0
-        assert result["xAxisIsolation"]["scheduled"]
-        assert result["xAxisIsolation"]["referenceMatches"]
-        assert result["motionReset"] == {
-            "angle": 0, "velocity": 0, "eventCount": 0,
-            "scheduled": False, "referenceMatches": True}
-        assert result["disabledState"] == {
-            "quaternionUnchanged": True, "referenceCleared": True,
-            "scheduled": False}
+        assert all(abs(value) > 1e-5 for value in result["delta"])
+        assert result["deltaMagnitude"] > .1
+        assert any(
+            sum(abs(value) for value in vector) > 1e-5
+            for vector in result["jointVectors"])
+        assert result["geometryChanged"]
+        assert result["scheduled"]
     finally:
         context.close()
 
 
-def test_skinning_translation_motion_uses_scene_transform_lifecycle(
+def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"TranslationLifecycle": _payload("TranslationLifecycle")})
+        edge_browser, frontend_url, {"MotionLifecycle3D": _payload("MotionLifecycle3D")})
     try:
-        _open(page, "TranslationLifecycle")
+        _open(page, "MotionLifecycle3D")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
         result = page.evaluate("""async () => {
           const THREE = await import('three');
@@ -1633,172 +948,6 @@ def test_skinning_translation_motion_uses_scene_transform_lifecycle(
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          let previewCalls = 0;
-          window.pywebview.api.get_skinning_preview = async () => {
-            previewCalls += 1;
-            return {
-              status: 'ok', vertex_count: 3, influence_count: 2,
-              bone_ids: [0, 1, 2], encoding: 'test',
-              data: {
-                url, length: 48,
-                indices: {offset: 0, length: 24, type: 'u32'},
-                weights: {offset: 24, length: 24, type: 'f32'},
-              }, diagnostics: {},
-            };
-          };
-          await experiment.loadSkinningWeights(mesh);
-          experiment.ensureCandidateForest(mesh);
-          previewCalls = 0;
-          experiment.setPhysicsAxis(mesh, 'Z');
-          experiment.setPhysicsLinearMotionStrength(mesh, .35);
-          experiment.setPhysicsTargetAngle(mesh, 0);
-
-          const queuedFrames = [];
-          const originalRequestAnimationFrame = window.requestAnimationFrame;
-          const originalCancelAnimationFrame = window.cancelAnimationFrame;
-          window.requestAnimationFrame = callback => {
-            queuedFrames.push(callback);
-            return callback;
-          };
-          window.cancelAnimationFrame = callback => {
-            const index = queuedFrames.indexOf(callback);
-            if (index >= 0) queuedFrames.splice(index, 1);
-          };
-          const runFrame = timestamp => {
-            const callbacks = queuedFrames.splice(0);
-            if (!callbacks.length) throw new Error('Expected a queued frame.');
-            callbacks.forEach(callback => callback(timestamp));
-          };
-          const settle = timestamp => {
-            let current = timestamp;
-            let frames = 0;
-            while (queuedFrames.length && frames < 600) {
-              runFrame(current);
-              current += 16.7;
-              frames += 1;
-            }
-            return {current, frames};
-          };
-
-          experiment.setPhysicsEnabled(mesh, true);
-          runFrame(0);
-          settle(16.7);
-          const initialPositions = mesh.position.clone();
-          const initialQuaternion = mesh.quaternion.clone();
-          const initialGeometry = [...mesh.geometry.attributes.position.array];
-          const radius = mesh.geometry.boundingSphere.radius;
-          const delta = new THREE.Vector3(radius * .1, 0, 0);
-          const events = [];
-          window.addEventListener('mod-viewer-model-transform-changed', event => {
-            if (event.detail?.meshes?.includes(mesh)) {
-              events.push({
-                reason: event.detail.reason,
-                translation: event.detail.translationDeltaWorld,
-              });
-            }
-          });
-          const cameraBefore = scene.camera.position.clone();
-          scene.translateModel(window.modViewer.activeMeshes, delta);
-          const afterTranslation = experiment.getSkinningState(mesh);
-          const firstPositionDelta = mesh.position.clone().sub(initialPositions);
-          const firstTranslation = {
-            positions: firstPositionDelta.toArray(),
-            quaternionUnchanged: mesh.quaternion.equals(initialQuaternion),
-            geometryChanged: mesh.geometry.attributes.position.array.some(
-              (value, index) => Math.abs(value - initialGeometry[index]) > 1e-6),
-            eventCount: afterTranslation.translationEventCount,
-            world: afterTranslation.lastRootTranslationDeltaWorld,
-            local: afterTranslation.lastRootTranslationDeltaLocal,
-            lag: afterTranslation.lastTranslationLag,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            previewCalls,
-            cameraUnchanged: scene.camera.position.equals(cameraBefore),
-          };
-
-          scene.translateModel(window.modViewer.activeMeshes, delta);
-          const afterRepeat = experiment.getSkinningState(mesh);
-          const repeated = {
-            eventCount: afterRepeat.translationEventCount,
-            positionDelta: mesh.position.clone().sub(initialPositions).toArray(),
-            world: afterRepeat.lastRootTranslationDeltaWorld,
-          };
-
-          scene.rotateModelHorizontalQuarterTurn(window.modViewer.activeMeshes);
-          const afterRotation = experiment.getSkinningState(mesh);
-          const rotationOnly = {
-            reason: events.at(-1)?.reason,
-            translationCount: afterRotation.translationEventCount,
-            world: afterRotation.lastRootTranslationDeltaWorld,
-            motionCount: afterRotation.motionEventCount,
-          };
-
-          scene.resetView();
-          const afterReset = experiment.getSkinningState(mesh);
-          const resetEvent = events.at(-1);
-          const resetState = {
-            reason: resetEvent?.reason,
-            reverse: resetEvent?.translation,
-            translationCount: afterReset.translationEventCount,
-            position: mesh.position.clone().toArray(),
-            referenceMatches: afterReset.physicsReferenceQuaternion
-              .equals(mesh.quaternion),
-          };
-          settle(33.4);
-          const settled = experiment.getSkinningState(mesh);
-          window.requestAnimationFrame = originalRequestAnimationFrame;
-          window.cancelAnimationFrame = originalCancelAnimationFrame;
-          URL.revokeObjectURL(url);
-          return {firstTranslation, repeated, rotationOnly, resetState,
-            settled: settled.physicsSettled,
-            eventCount: events.length,
-            initialPositions: initialPositions.toArray(),
-          };
-        }""")
-        assert result["firstTranslation"]["positions"] == pytest.approx([
-            result["firstTranslation"]["positions"][0], 0, 0])
-        assert result["firstTranslation"]["quaternionUnchanged"]
-        assert result["firstTranslation"]["geometryChanged"]
-        assert result["firstTranslation"]["eventCount"] == 1
-        assert result["firstTranslation"]["world"][0] > 0
-        assert result["firstTranslation"]["local"][0] > 0
-        assert abs(result["firstTranslation"]["lag"]) > 1e-6
-        assert result["firstTranslation"]["scheduled"]
-        assert result["firstTranslation"]["previewCalls"] == 0
-        assert result["firstTranslation"]["cameraUnchanged"]
-        assert result["repeated"]["eventCount"] == 2
-        assert result["repeated"]["positionDelta"] == pytest.approx([
-            result["firstTranslation"]["positions"][0] * 2, 0, 0])
-        assert result["repeated"]["world"] == pytest.approx(
-            result["firstTranslation"]["world"])
-        assert result["rotationOnly"] == {
-            "reason": "rotate-x", "translationCount": 2,
-            "world": result["firstTranslation"]["world"], "motionCount": 3}
-        assert result["resetState"]["reason"] == "reset-view"
-        assert result["resetState"]["reverse"] == pytest.approx([
-            -result["firstTranslation"]["world"][0] * 2, 0, 0])
-        assert result["resetState"]["translationCount"] == 3
-        assert result["resetState"]["position"] == pytest.approx(
-            result["initialPositions"])
-        assert result["resetState"]["referenceMatches"]
-        assert result["settled"]
-        assert result["eventCount"] == 4
-    finally:
-        context.close()
-
-
-def test_skinning_gravity_lifecycle_refreshes_and_composes_with_motion(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"GravityLifecycle": _payload("GravityLifecycle")})
-    try:
-        _open(page, "GravityLifecycle")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        result = page.evaluate("""async () => {
-          const mesh = window.modViewer.activeMeshes[0];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
           window.pywebview.api.get_skinning_preview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
             bone_ids: [0, 1, 2], encoding: 'test',
@@ -1808,18 +957,11 @@ def test_skinning_gravity_lifecycle_refreshes_and_composes_with_motion(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          const experiment = await import('./js/mesh/weight-experiment.js');
           await experiment.loadSkinningWeights(mesh);
           experiment.ensureCandidateForest(mesh);
-          const state = experiment.getSkinningState(mesh);
-          state.centerByBoneId = new Map([
-            [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
-          ]);
-          state.influenceGraph.boundingSphereRadius = 2;
-
-          const queuedFrames = [];
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
+          const queuedFrames = [];
           window.requestAnimationFrame = callback => {
             queuedFrames.push(callback);
             return callback;
@@ -1828,395 +970,78 @@ def test_skinning_gravity_lifecycle_refreshes_and_composes_with_motion(
             const index = queuedFrames.indexOf(callback);
             if (index >= 0) queuedFrames.splice(index, 1);
           };
-          const runFrame = timestamp => {
-            const callbacks = queuedFrames.splice(0);
-            if (!callbacks.length) throw new Error('Expected a queued frame.');
-            callbacks.forEach(callback => callback(timestamp));
+          const runFrames = timestamp => {
+            queuedFrames.splice(0).forEach(callback => callback(timestamp));
           };
-          const settle = timestamp => {
-            let current = timestamp;
-            let frames = 0;
-            while (queuedFrames.length && frames < 900) {
-              runFrame(current);
-              current += 16.7;
-              frames += 1;
-            }
-            return {current, frames};
-          };
-
-          experiment.setPhysicsAxis(mesh, 'Z');
           experiment.setPhysicsEnabled(mesh, true);
-          let timing = settle(0);
+          runFrames(0);
+          runFrames(16.7);
+          const cameraBefore = scene.camera.position.clone();
+          const positionBefore = mesh.position.clone();
+          scene.translateModel([mesh], [0, 0, .25]);
+          const translated = experiment.getSkinningState(mesh);
+          const translationVector = [...translated.lastTranslationLagRotationVector];
+          const translationMagnitude = translated.lastTranslationLagRotationMagnitude;
           experiment.setPhysicsGravityEnabled(mesh, true);
-          const gravityEnabled = experiment.getSkinningState(mesh);
-          const enabledSnapshot = {
-            enabled: gravityEnabled.physicsGravityEnabled,
-            map: [...gravityEnabled.physicsGravityAccelerations.entries()],
-            local: gravityEnabled.physicsGravityLocal,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          timing = settle(timing.current);
-          const gravitySettled = experiment.getSkinningState(mesh);
-          const initialGravity = {
-            angle: gravitySettled.physicsState.joints.get(1).angle,
-            settled: gravitySettled.physicsSettled,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            maxAcceleration: gravitySettled.physicsGravityDiagnostics
-              .maxAbsTotalAcceleration,
-          };
-
-          const angleBeforeScale = gravitySettled.physicsState.joints.get(1).angle;
-          experiment.setPhysicsGravityScale(mesh, .5);
-          const scaledImmediate = experiment.getSkinningState(mesh);
-          const scaleSnapshot = {
-            scale: scaledImmediate.physicsGravityScale,
-            anglePreserved: scaledImmediate.physicsState.joints.get(1).angle,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          timing = settle(timing.current);
-          const scaledSettled = experiment.getSkinningState(mesh);
-          const scaleResult = {
-            angleBefore: angleBeforeScale,
-            angleAfter: scaledSettled.physicsState.joints.get(1).angle,
-            settled: scaledSettled.physicsSettled,
-          };
-
-          const angleBeforeDisable = scaledSettled.physicsState.joints.get(1).angle;
-          experiment.setPhysicsGravityEnabled(mesh, false);
-          const gravityDisabled = experiment.getSkinningState(mesh);
-          const disabledImmediate = {
-            mapCleared: gravityDisabled.physicsGravityAccelerations === null,
-            diagnosticsCleared: gravityDisabled.physicsGravityDiagnostics === null,
-            angle: gravityDisabled.physicsState.joints.get(1).angle,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          timing = settle(timing.current);
-          const disabledSettled = experiment.getSkinningState(mesh);
-          const disableResult = {
-            angleBefore: angleBeforeDisable,
-            angleAfter: disabledSettled.physicsState.joints.get(1).angle,
-            settled: disabledSettled.physicsSettled,
-          };
-
-          experiment.setPhysicsGravityScale(mesh, 1);
-          experiment.setPhysicsGravityEnabled(mesh, true);
-          timing = settle(timing.current);
-          const beforeTilt = experiment.getSkinningState(mesh);
-          const beforeTiltLocal = beforeTilt.physicsGravityLocal;
-          document.querySelector('#camera-flip-horizontal-btn').click();
-          const afterTilt = experiment.getSkinningState(mesh);
-          const tiltSnapshot = {
-            localChanged: afterTilt.physicsGravityLocal.some((value, index) =>
-              Math.abs(value - beforeTiltLocal[index]) > 1e-5),
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            referenceMatches: afterTilt.physicsReferenceQuaternion
-              .equals(mesh.quaternion),
-          };
-          experiment.setPhysicsAxis(mesh, 'Y');
-          timing = settle(timing.current);
-          const rotatedSettled = experiment.getSkinningState(mesh);
-          const axisSnapshot = {
-            axis: rotatedSettled.physicsAxis,
-            local: rotatedSettled.physicsGravityLocal,
-            angle: rotatedSettled.physicsState.joints.get(1).angle,
-            settled: rotatedSettled.physicsSettled,
-            maxAcceleration: rotatedSettled.physicsGravityDiagnostics
-              .maxAbsTotalAcceleration,
-          };
-
-          const gravityOnly = experiment.getSkinningState(mesh);
-          const gravitySnapshot = {
-            gravityEnabled: gravityOnly.physicsGravityEnabled,
-            gravityMapPresent: gravityOnly.physicsGravityAccelerations instanceof Map,
-            physicsScheduled: experiment.isPhysicsScheduled(mesh),
-          };
-
+          const gravity = experiment.getSkinningState(mesh);
+          const gravityVector = [...gravity.physicsGravityAccelerations.get(1)];
+          const gravityMax = gravity.physicsGravityDiagnostics
+            .maxTotalAccelerationMagnitude;
+          experiment.setPhysicsConstraintsEnabled(mesh, true);
+          experiment.setPhysicsMaxBendDegrees(mesh, 10);
+          const constrained = experiment.getSkinningState(mesh);
+          const limits = constrained.physicsJointLimits instanceof Map;
+          const beforeReset = [...constrained.physicsState.joints.values()]
+            .map(joint => ({
+              rotationVector: joint.rotationVector,
+              angularVelocity: joint.angularVelocity,
+            }));
           experiment.resetPhysicsMotion(mesh);
-          const resetImmediate = experiment.getSkinningState(mesh);
-          const resetSnapshot = {
-            enabled: resetImmediate.physicsGravityEnabled,
-            angle: resetImmediate.physicsState.joints.get(1).angle,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          timing = settle(timing.current);
-          const resetSettled = experiment.getSkinningState(mesh);
-          const resetResult = {
-            angle: resetSettled.physicsState.joints.get(1).angle,
-            settled: resetSettled.physicsSettled,
-          };
-
+          const reset = experiment.getSkinningState(mesh);
+          const resetJoints = [...reset.physicsState.joints.values()];
+          const resetKeepsEnabled = reset.physicsEnabled;
           experiment.setPhysicsEnabled(mesh, false);
-          const disabledPhysics = experiment.getSkinningState(mesh);
+          const disabled = experiment.getSkinningState(mesh);
           window.requestAnimationFrame = originalRequestAnimationFrame;
           window.cancelAnimationFrame = originalCancelAnimationFrame;
           URL.revokeObjectURL(url);
           return {
-            enabledSnapshot, initialGravity, scaleSnapshot, scaleResult,
-            disabledImmediate, disableResult, tiltSnapshot, axisSnapshot,
-            gravitySnapshot, resetSnapshot, resetResult,
-            disabledPhysics: {
-              enabled: disabledPhysics.physicsEnabled,
-              gravityEnabled: disabledPhysics.physicsGravityEnabled,
-              gravityMap: disabledPhysics.physicsGravityAccelerations,
-              scheduled: experiment.isPhysicsScheduled(mesh),
+            moved: !mesh.position.equals(positionBefore),
+            cameraUnchanged: scene.camera.position.equals(cameraBefore),
+            translationVector,
+            translationMagnitude,
+            gravityVector,
+            gravityMax,
+            limits,
+            beforeReset,
+            reset: resetJoints,
+            resetKeepsEnabled,
+            disabled: {
+              enabled: disabled.physicsEnabled,
+              reference: disabled.physicsReferenceQuaternion,
             },
           };
         }""")
-        assert result["enabledSnapshot"]["enabled"]
-        assert result["enabledSnapshot"]["map"]
-        assert result["enabledSnapshot"]["local"] == pytest.approx([0, -1, 0])
-        assert result["enabledSnapshot"]["scheduled"]
-        assert result["initialGravity"]["angle"] < 0
-        assert result["initialGravity"]["settled"]
-        assert not result["initialGravity"]["scheduled"]
-        assert result["initialGravity"]["maxAcceleration"] > 0
-        assert result["scaleSnapshot"]["scale"] == pytest.approx(.5)
-        assert result["scaleSnapshot"]["anglePreserved"] == pytest.approx(
-            result["scaleResult"]["angleBefore"])
-        assert result["scaleSnapshot"]["scheduled"]
-        assert result["scaleResult"]["angleAfter"] == pytest.approx(
-            result["scaleResult"]["angleBefore"] / 2, abs=.01)
-        assert result["scaleResult"]["settled"]
-        assert result["disabledImmediate"]["mapCleared"]
-        assert result["disabledImmediate"]["diagnosticsCleared"]
-        assert result["disabledImmediate"]["angle"] == pytest.approx(
-            result["disableResult"]["angleBefore"])
-        assert result["disabledImmediate"]["scheduled"]
-        assert result["disableResult"]["angleAfter"] == pytest.approx(0, abs=.002)
-        assert result["disableResult"]["settled"]
-        assert result["tiltSnapshot"]["localChanged"]
-        assert result["tiltSnapshot"]["scheduled"]
-        assert result["tiltSnapshot"]["referenceMatches"]
-        assert result["axisSnapshot"]["axis"] == "Y"
-        assert result["axisSnapshot"]["maxAcceleration"] > 0
-        assert result["axisSnapshot"]["angle"] < 0
-        assert result["axisSnapshot"]["settled"]
-        assert result["gravitySnapshot"]["gravityEnabled"]
-        assert result["gravitySnapshot"]["gravityMapPresent"]
-        assert isinstance(result["gravitySnapshot"]["physicsScheduled"], bool)
-        assert result["resetSnapshot"] == {
-            "enabled": True, "angle": 0, "scheduled": True}
-        assert result["resetResult"]["angle"] < 0
-        assert result["resetResult"]["settled"]
-        assert result["disabledPhysics"] == {
-            "enabled": False, "gravityEnabled": False,
-            "gravityMap": None, "scheduled": False}
+        assert result["moved"]
+        assert result["cameraUnchanged"]
+        print('DEBUG_TRANSLATION', result)
+        assert result["translationMagnitude"] > 1e-5
+        assert any(abs(value) > 1e-5 for value in result["translationVector"])
+        assert result["gravityVector"]
+        assert result["gravityMax"] > 0
+        assert result["limits"]
+        assert any(
+            sum(abs(value) for value in joint["rotationVector"]) > 1e-5
+            for joint in result["beforeReset"])
+        assert all(
+            joint["rotationVector"] == [0, 0, 0]
+            and joint["angularVelocity"] == [0, 0, 0]
+            for joint in result["reset"])
+        assert result["resetKeepsEnabled"]
+        assert result["disabled"] == {"enabled": False, "reference": None}
     finally:
         context.close()
 
-
-
-
-def test_skinning_joint_limits_lifecycle_preserves_state_and_cleanup(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url,
-        {"JointLimitLifecycle": _payload("JointLimitLifecycle")})
-    try:
-        _open(page, "JointLimitLifecycle")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        result = page.evaluate("""async () => {
-          const mesh = window.modViewer.activeMeshes[0];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          await experiment.loadSkinningWeights(mesh);
-          experiment.ensureCandidateForest(mesh);
-          const state = experiment.getSkinningState(mesh);
-          state.centerByBoneId = new Map([
-            [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
-          ]);
-          state.influenceGraph.boundingSphereRadius = 2;
-
-          const queuedFrames = [];
-          const originalRequestAnimationFrame = window.requestAnimationFrame;
-          const originalCancelAnimationFrame = window.cancelAnimationFrame;
-          window.requestAnimationFrame = callback => {
-            queuedFrames.push(callback);
-            return callback;
-          };
-          window.cancelAnimationFrame = callback => {
-            const index = queuedFrames.indexOf(callback);
-            if (index >= 0) queuedFrames.splice(index, 1);
-          };
-          const runFrame = timestamp => {
-            const callbacks = queuedFrames.splice(0);
-            if (!callbacks.length) throw new Error('Expected a queued frame.');
-            callbacks.forEach(callback => callback(timestamp));
-          };
-          const settle = timestamp => {
-            let current = timestamp;
-            let frames = 0;
-            while (queuedFrames.length && frames < 900) {
-              runFrame(current);
-              current += 16.7;
-              frames += 1;
-            }
-            return {current, frames};
-          };
-          const jointAngles = () => [...state.physicsState.joints.values()]
-            .map(joint => joint.angle);
-          const maxAngle = () => Math.max(...jointAngles().map(
-            angle => Math.abs(angle)));
-          const firstState = () => state.physicsState;
-
-          experiment.setPhysicsEnabled(mesh, true);
-          let timing = settle(0);
-          experiment.setPhysicsConstraintsEnabled(mesh, true);
-          experiment.setPhysicsMaxBendDegrees(mesh, 10);
-          const enabledState = firstState();
-          experiment.setPhysicsTargetAngle(mesh, 40);
-          timing = settle(timing.current);
-          const limited = {
-            stateSame: state.physicsState === enabledState,
-            limits: [...state.physicsJointLimits.values()],
-            maxAngle: maxAngle(),
-            settled: state.physicsSettled,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-
-          const limitedAngle = state.physicsState.joints.get(1).angle;
-          experiment.setPhysicsMaxBendDegrees(mesh, 50);
-          const loosenedImmediate = {
-            stateSame: state.physicsState === enabledState,
-            angle: state.physicsState.joints.get(1).angle,
-            anglePreserved: state.physicsState.joints.get(1).angle
-              === limitedAngle,
-            limits: [...state.physicsJointLimits.values()],
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          timing = settle(timing.current);
-          const loosened = {
-            maxAngle: maxAngle(), settled: state.physicsSettled,
-          };
-
-          experiment.setPhysicsMaxBendDegrees(mesh, 10);
-          const tightenedImmediate = {
-            maxAngle: maxAngle(), scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          timing = settle(timing.current);
-          const tightened = {
-            maxAngle: maxAngle(), settled: state.physicsSettled,
-          };
-
-          experiment.setPhysicsTargetAngle(mesh, -40);
-          timing = settle(timing.current);
-          const reversed = {
-            maxAngle: maxAngle(), angle: state.physicsState.joints.get(1).angle,
-            settled: state.physicsSettled,
-          };
-
-          experiment.setPhysicsTargetAngle(mesh, 0);
-          experiment.setPhysicsGravityEnabled(mesh, true);
-          timing = settle(timing.current);
-          const gravityLimit = {
-            enabled: state.physicsGravityEnabled,
-            angle: state.physicsState.joints.get(1).angle,
-            maxAngle: maxAngle(), settled: state.physicsSettled,
-            mapPresent: state.physicsGravityAccelerations instanceof Map,
-          };
-
-          experiment.setPhysicsGravityEnabled(mesh, false);
-          timing = settle(timing.current);
-          const gravityOff = {
-            angle: state.physicsState.joints.get(1).angle,
-            settled: state.physicsSettled,
-            gravityMap: state.physicsGravityAccelerations,
-          };
-
-          experiment.resetPhysicsMotion(mesh);
-          const reset = {
-            angles: jointAngles(),
-            constraintsEnabled: state.physicsConstraintsEnabled,
-            mapPresent: state.physicsJointLimits instanceof Map,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-
-          experiment.setPhysicsConstraintsEnabled(mesh, false);
-          const constraintsOff = {
-            enabled: state.physicsConstraintsEnabled,
-            map: state.physicsJointLimits,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          timing = settle(timing.current);
-          const constraintsOffSettled = {
-            angles: jointAngles(), settled: state.physicsSettled,
-          };
-
-          experiment.setPhysicsEnabled(mesh, false);
-          const disabled = {
-            physicsEnabled: state.physicsEnabled,
-            physicsState: state.physicsState,
-            constraintsEnabled: state.physicsConstraintsEnabled,
-            limits: state.physicsJointLimits,
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          window.requestAnimationFrame = originalRequestAnimationFrame;
-          window.cancelAnimationFrame = originalCancelAnimationFrame;
-          URL.revokeObjectURL(url);
-          return {
-            limited, loosenedImmediate, loosened, tightenedImmediate, tightened,
-            reversed, gravityLimit, gravityOff, reset, constraintsOff,
-            constraintsOffSettled, disabled,
-          };
-        }""")
-        assert result["limited"]["stateSame"]
-        assert result["limited"]["limits"] == pytest.approx([
-            math.radians(5), math.radians(5)])
-        assert result["limited"]["maxAngle"] <= math.radians(5) + 1e-6
-        assert result["limited"]["settled"]
-        assert not result["limited"]["scheduled"]
-        assert result["loosenedImmediate"]["stateSame"]
-        assert result["loosenedImmediate"]["anglePreserved"]
-        assert result["loosenedImmediate"]["limits"] == pytest.approx([
-            math.radians(25), math.radians(25)])
-        assert result["loosenedImmediate"]["scheduled"]
-        assert result["loosened"]["maxAngle"] == pytest.approx(
-            math.radians(20), abs=1e-3)
-        assert result["loosened"]["settled"]
-        assert result["tightenedImmediate"]["maxAngle"] <= math.radians(5) + 1e-6
-        assert result["tightenedImmediate"]["scheduled"]
-        assert result["tightened"]["maxAngle"] <= math.radians(5) + 1e-6
-        assert result["tightened"]["settled"]
-        assert result["reversed"]["angle"] == pytest.approx(
-            math.radians(-5), abs=1e-3)
-        assert result["reversed"]["maxAngle"] <= math.radians(5) + 1e-6
-        assert result["reversed"]["settled"]
-        assert result["gravityLimit"]["enabled"]
-        assert result["gravityLimit"]["angle"] < 0
-        assert result["gravityLimit"]["maxAngle"] <= math.radians(5) + 1e-6
-        assert result["gravityLimit"]["settled"]
-        assert result["gravityLimit"]["mapPresent"]
-        assert result["gravityOff"]["angle"] == pytest.approx(0, abs=1e-3)
-        assert result["gravityOff"]["settled"]
-        assert result["gravityOff"]["gravityMap"] is None
-        assert result["reset"]["angles"] == pytest.approx([0, 0])
-        assert result["reset"]["constraintsEnabled"]
-        assert result["reset"]["mapPresent"]
-        assert not result["reset"]["scheduled"]
-        assert not result["constraintsOff"]["enabled"]
-        assert result["constraintsOff"]["map"] is None
-        assert result["constraintsOff"]["scheduled"]
-        assert result["constraintsOffSettled"]["angles"] == pytest.approx([0, 0])
-        assert result["constraintsOffSettled"]["settled"]
-        assert not result["disabled"]["physicsEnabled"]
-        assert result["disabled"]["physicsState"] is None
-        assert not result["disabled"]["constraintsEnabled"]
-        assert result["disabled"]["limits"] is None
-        assert not result["disabled"]["scheduled"]
-    finally:
-        context.close()
 
 
 
