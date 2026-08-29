@@ -101,3 +101,48 @@ def test_get_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch)
     assert struct.unpack_from("<4I", published["blob"], 0) == (7, 8, 9, 0)
     assert struct.unpack_from("<4f", published["blob"], 4 * 4 * 4) == pytest.approx(
         (.6, .3, .1, 0.))
+
+
+def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
+        tmp_path, monkeypatch):
+    ini = _write_mod(tmp_path)
+    sections = merge_sections([str(ini)])
+    groups = build_draw_groups(sections, extract_resources(sections))
+    geometry = GeometryBlob()
+    rendered = build_mesh_result(groups, str(tmp_path), geometry=geometry)
+    rendered.meshes["MissingBlend"] = {
+        "skinning_available": True,
+        "pos": {"length": 48},
+    }
+    published = []
+
+    def publish(blob, *, replace=True):
+        published.append((bytes(blob), replace))
+        return "/geometry/model-skin-test"
+
+    context = SimpleNamespace(
+        mod_dir=str(tmp_path), ini_paths=[str(ini)], docs={}, metadata={},
+        asset_folders=[])
+    preview = ModPreview(_Access())
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _path: (str(tmp_path), {}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.publish_geometry", publish)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.analyze_mod_inis",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            game=SimpleNamespace(game="gimi"), groups=groups),
+    )
+    preview._active_mesh_keys[str(tmp_path)] = {
+        "BodyBlend-1", "MissingBlend",
+    }
+
+    result = preview.get_model_skinning_preview(str(tmp_path))
+
+    assert result["status"] == "partial"
+    assert result["meshes"]["BodyBlend-1"]["status"] == "ok"
+    assert result["meshes"]["MissingBlend"]["status"] == "error"
+    assert result["data"]["url"] == "/geometry/model-skin-test"
+    assert result["data"]["length"] == len(published[0][0])
+    assert published[0][1] is False

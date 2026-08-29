@@ -2,46 +2,56 @@
 // transient choice to have the dock open at all.
 
 const STORAGE_KEY = 'mod-viewer.right-dock-tab';
+const VALID_TABS = Object.freeze(['controls', 'inspector', 'weight']);
 
 let selectedTab = 'controls';
 let openTab = null;
 let dockEnabled = false;
 let userHasChosenDockState = false;
 let ready = false;
+let lastNotifiedTab = null;
 
 function validTab(tab) {
-  return tab === 'controls' || tab === 'inspector';
+  return VALID_TABS.includes(tab);
 }
 
 function elements() {
   return {
-    inspectorTab: document.getElementById('inspector-tab'),
-    controlsTab: document.getElementById('controls-tab'),
-    inspector: document.getElementById('inspector-panel'),
-    controls: document.getElementById('controls-panel'),
+    tabs: Object.fromEntries(VALID_TABS.map(tab => [
+      tab, document.getElementById(`${tab}-tab`),
+    ])),
+    panes: Object.fromEntries(VALID_TABS.map(tab => [
+      tab, document.getElementById(`${tab}-panel`),
+    ])),
     dock: document.getElementById('right-dock'),
   };
 }
 
-function renderRightDock() {
-  const { inspectorTab, controlsTab, inspector, controls, dock } = elements();
-  const panelVisible = dockEnabled && validTab(openTab);
-  const inspectorActive = panelVisible && openTab === 'inspector';
-  const controlsActive = panelVisible && openTab === 'controls';
-  inspectorTab?.classList.toggle('active', inspectorActive);
-  controlsTab?.classList.toggle('active', controlsActive);
-  inspectorTab?.setAttribute('aria-selected', String(inspectorActive));
-  controlsTab?.setAttribute('aria-selected', String(controlsActive));
-  inspectorTab?.setAttribute('aria-expanded', String(inspectorActive));
-  controlsTab?.setAttribute('aria-expanded', String(controlsActive));
-  if (inspector) inspector.hidden = !inspectorActive;
-  if (controls) controls.hidden = !controlsActive;
-  dock?.classList.toggle('ui-visible', dockEnabled);
-  document.body?.classList.toggle('right-dock-mounted', dockEnabled);
-  document.body?.classList.toggle('right-dock-visible', panelVisible);
+function notifyTabChange(activeTab) {
+  if (activeTab === lastNotifiedTab) return;
+  lastNotifiedTab = activeTab;
+  window.dispatchEvent(new CustomEvent('mod-viewer-right-dock-tab-changed', {
+    detail: {tab: activeTab, open: !!activeTab},
+  }));
 }
 
-export function setRightDockTab(tab, { persist = true, userInitiated = false } = {}) {
+function renderRightDock() {
+  const {tabs, panes, dock} = elements();
+  const activeTab = dockEnabled && validTab(openTab) ? openTab : null;
+  VALID_TABS.forEach(tab => {
+    const active = activeTab === tab;
+    tabs[tab]?.classList.toggle('active', active);
+    tabs[tab]?.setAttribute('aria-selected', String(active));
+    tabs[tab]?.setAttribute('aria-expanded', String(active));
+    if (panes[tab]) panes[tab].hidden = !active;
+  });
+  dock?.classList.toggle('ui-visible', dockEnabled);
+  document.body?.classList.toggle('right-dock-mounted', dockEnabled);
+  document.body?.classList.toggle('right-dock-visible', !!activeTab);
+  notifyTabChange(activeTab);
+}
+
+export function setRightDockTab(tab, {persist = true, userInitiated = false} = {}) {
   if (!validTab(tab)) return false;
   selectedTab = tab;
   openTab = tab;
@@ -82,10 +92,10 @@ export function setRightDockEnabled(enabled) {
 }
 
 export function initRightDock() {
-  const { inspectorTab, controlsTab } = elements();
-  if (!inspectorTab || !controlsTab) return;
-  inspectorTab.addEventListener('click', () => toggleRightDockTab('inspector'));
-  controlsTab.addEventListener('click', () => toggleRightDockTab('controls'));
+  const {tabs} = elements();
+  if (!tabs.controls || !tabs.inspector || !tabs.weight) return;
+  VALID_TABS.forEach(tab =>
+    tabs[tab].addEventListener('click', () => toggleRightDockTab(tab)));
   if (!ready) {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);

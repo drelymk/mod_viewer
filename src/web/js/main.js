@@ -20,11 +20,13 @@ import { initLeftDock, setLeftDockTab } from './panels/left-dock.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-profile.js';
 import { requestRender } from './scene/render-scheduler.js';
 import {
-  disableModelPhysics, enableModelPhysics, getModelPhysicsState,
-  resetModelPhysicsMotion,
+  clearSelectedBoneIds, disableModelPhysics, enableModelPhysics,
+  ensureModelWeightsLoaded, getModelPhysicsState, getModelWeightState,
+  resetModelPhysicsMotion, setModelWeightHeatmap, setSelectedBoneIds,
 } from './mesh/weight-experiment.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
+import { initWeightPanel } from './panels/weight-panel.js';
 import { initPanelOpacityControl } from './ui/appearance.js';
 import {
   getOutlineState as getMeshOutlineState,
@@ -195,6 +197,7 @@ rendererReady.then(ready => {
   $('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
   const applyEnvironmentPreset = initEnvironmentControl();
   initLeftDock();
+  initWeightPanel();
   initRightDock();
   initInspectorPanel();
   initSelection();
@@ -306,6 +309,11 @@ rendererReady.then(ready => {
     enableModelPhysics,
     disableModelPhysics,
     resetModelPhysicsMotion,
+    getModelWeightState,
+    ensureModelWeightsLoaded,
+    setSelectedBoneIds,
+    clearSelectedBoneIds,
+    setModelWeightHeatmap,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,
     setOutlineEnabled: value => {

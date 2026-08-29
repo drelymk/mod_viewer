@@ -158,63 +158,158 @@ class ModPreview:
                 return {"status": "error", "code": "mesh_not_found",
                         "error": "The selected mesh could not be found."}
 
-            parsed = analyze_mod_inis(
-                context.ini_paths, context.mod_dir, overrides, context.docs)
-            selected = None
-            for group in parsed.groups:
-                for draw in deduplicate_draws(group):
-                    if draw.label == mesh_key:
-                        selected = (draw, group)
-                        break
-                if selected:
-                    break
+            parsed, draws = self._skinning_draws(context, overrides)
+            selected = draws.get(mesh_key)
             if selected is None:
                 return {"status": "error", "code": "mesh_not_found",
                         "error": "The selected mesh could not be found."}
 
             draw, group = selected
-            paths = [
-                safe_resource_path(context.mod_dir, group["position_file"]),
-                safe_resource_path(context.mod_dir, group["texcoord_file"]),
-                safe_resource_path(context.mod_dir, group["ib_file"]),
-            ]
-            if not all(path and os.path.exists(path) for path in paths):
-                return {"status": "error", "code": "geometry_not_available",
-                        "error": "The rendered draw geometry could not be prepared."}
             buffers = BufferStore()
-            default_streams = buffers.vertex_streams(
-                paths[0], group.get("position_stride"), paths[1],
-                group.get("texcoord_stride"))
-            buffers.raw(paths[2])
-            decoded = build_skinning_preview(
-                draw, group, context.mod_dir, buffers=buffers,
-                default_streams=default_streams,
-                default_index_size=group.get("index_size", 4),
-                geometry_convention=geometry_convention_for(parsed.game.game))
-            blob = decoded.indices + decoded.weights
+            decoded = self._decode_skinning_draw(
+                draw, group, context.mod_dir, buffers,
+                geometry_convention_for(parsed.game.game))
+            entry, blob = self._skin_entry(decoded, draw, 0)
             url = server.publish_geometry(blob, replace=False)
-            index_length = len(decoded.indices)
+            entry["data"] = {
+                **entry["data"],
+                "url": url,
+                "length": len(blob),
+            }
             return {
                 "status": "ok",
                 "format_version": 1,
-                "vertex_count": decoded.vertex_count,
-                "influence_count": decoded.influence_count,
-                "bone_ids": list(decoded.bone_ids),
-                "encoding": draw.skinning_source.encoding,
-                "data": {
-                    "url": url,
-                    "length": len(blob),
-                    "indices": {"offset": 0, "length": index_length,
-                                "type": "u32"},
-                    "weights": {"offset": index_length,
-                                "length": len(decoded.weights),
-                                "type": "f32"},
-                },
-                "diagnostics": dict(decoded.diagnostics),
+                **{key: value for key, value in entry.items()
+                   if key != "status"},
             }
         except SkinningPreviewError as error:
             return {"status": "error", "code": error.code,
                     "error": error.message}
+        except Exception:
+            return self._semantic_read_error()
+
+    @staticmethod
+    def _skinning_draws(context, overrides):
+        """Resolve every rendered draw once for single and bulk previews."""
+        parsed = analyze_mod_inis(
+            context.ini_paths, context.mod_dir, overrides, context.docs)
+        draws = {}
+        for group in parsed.groups:
+            for draw in deduplicate_draws(group):
+                draws.setdefault(draw.label, (draw, group))
+        return parsed, draws
+
+    @staticmethod
+    def _decode_skinning_draw(draw, group, mod_dir, buffers,
+                              geometry_convention):
+        paths = [
+            safe_resource_path(mod_dir, group["position_file"]),
+            safe_resource_path(mod_dir, group["texcoord_file"]),
+            safe_resource_path(mod_dir, group["ib_file"]),
+        ]
+        if not all(path and os.path.exists(path) for path in paths):
+            raise SkinningPreviewError(
+                "geometry_not_available",
+                "The rendered draw geometry could not be prepared.")
+        default_streams = buffers.vertex_streams(
+            paths[0], group.get("position_stride"), paths[1],
+            group.get("texcoord_stride"))
+        buffers.raw(paths[2])
+        return build_skinning_preview(
+            draw, group, mod_dir, buffers=buffers,
+            default_streams=default_streams,
+            default_index_size=group.get("index_size", 4),
+            geometry_convention=geometry_convention)
+
+    @staticmethod
+    def _skin_entry(decoded, draw, offset):
+        indices_length = len(decoded.indices)
+        blob = decoded.indices + decoded.weights
+        return ({
+            "status": "ok",
+            "vertex_count": decoded.vertex_count,
+            "influence_count": decoded.influence_count,
+            "bone_ids": list(decoded.bone_ids),
+            "encoding": draw.skinning_source.encoding,
+            "data": {
+                "indices": {
+                    "offset": offset,
+                    "length": indices_length,
+                    "type": "u32",
+                },
+                "weights": {
+                    "offset": offset + indices_length,
+                    "length": len(decoded.weights),
+                    "type": "f32",
+                },
+            },
+            "diagnostics": dict(decoded.diagnostics),
+        }, blob)
+
+    def get_model_skinning_preview(self, folder_path):
+        """Decode all active skinned draws through one analyzed model context."""
+        try:
+            folder_path, overrides, _pending, context = \
+                self.authoritative_context(folder_path)
+            parsed, draws = self._skinning_draws(context, overrides)
+            active_mesh_keys = self._active_mesh_keys.get(folder_path)
+            requested = (set(active_mesh_keys) if active_mesh_keys is not None
+                         else set(draws))
+            meshes = {}
+            pieces = []
+            offset = 0
+            buffers = BufferStore()
+            convention = geometry_convention_for(parsed.game.game)
+            for mesh_key in sorted(requested):
+                selected = draws.get(mesh_key)
+                if selected is None:
+                    meshes[mesh_key] = {
+                        "status": "error",
+                        "code": "mesh_not_found",
+                        "error": "The selected mesh could not be found.",
+                    }
+                    continue
+                draw, group = selected
+                try:
+                    decoded = self._decode_skinning_draw(
+                        draw, group, context.mod_dir, buffers, convention)
+                    entry, blob = self._skin_entry(decoded, draw, offset)
+                except SkinningPreviewError as error:
+                    meshes[mesh_key] = {
+                        "status": "error",
+                        "code": error.code,
+                        "error": error.message,
+                    }
+                    continue
+                except Exception:
+                    traceback.print_exc()
+                    meshes[mesh_key] = {
+                        "status": "error",
+                        "code": "skinning_preview_failed",
+                        "error": "Could not decode skin weights for this mesh.",
+                    }
+                    continue
+                meshes[mesh_key] = entry
+                pieces.append(blob)
+                offset += len(blob)
+
+            if not pieces:
+                return {
+                    "status": "error",
+                    "format_version": 1,
+                    "meshes": meshes,
+                    "error": "No active mesh has usable skin weights.",
+                }
+            blob = b"".join(pieces)
+            url = server.publish_geometry(blob, replace=False)
+            return {
+                "status": "ok" if all(
+                    entry.get("status") == "ok" for entry in meshes.values())
+                    else "partial",
+                "format_version": 1,
+                "data": {"url": url, "length": len(blob)},
+                "meshes": meshes,
+            }
         except Exception:
             return self._semantic_read_error()
 

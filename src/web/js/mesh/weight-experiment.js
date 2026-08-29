@@ -1,5 +1,5 @@
 // Explicit, removable skin-weight experiment. Normal mesh loading never
-// imports or invokes this module's bridge operation until the Inspector asks.
+// imports or invokes this module's bridge operation until the Weight tab asks.
 
 import * as THREE from 'three';
 import {
@@ -21,10 +21,9 @@ import {
   isPhysicsSettled, physicsRotationMap, resetPhysicsState,
   stepSpringPhysics,
 } from './weight-physics.js';
-export {buildBoneMobility, buildVertexMobility} from './weight-mobility.js';
 import {
-  buildBoneMobility, buildVertexMobility,
-} from './weight-mobility.js';
+  buildSelectedWeightMask, normalizeSelectedBoneIds,
+} from './weight-selection.js';
 import {
   MODEL_PHYSICS_STEP, createModelPhysicsSession,
 } from './model-physics-session.js';
@@ -52,6 +51,19 @@ export {
 const states = new WeakMap();
 const knownMeshes = new Set();
 let activeExperimentHelperMesh = null;
+let modelWeightGeneration = 0;
+const modelWeightState = {
+  loaded: false,
+  loading: false,
+  promise: null,
+  error: null,
+  noWeights: false,
+  availableBoneIds: [],
+  selectedBoneIds: new Set(),
+  heatmapEnabled: false,
+  loadedMeshCount: 0,
+  failedMeshCount: 0,
+};
 
 const modelPhysicsSession = createModelPhysicsSession({
   onInputOwnershipChanged: enabled => setPhysicsInteractionEnabled(enabled),
@@ -122,8 +134,7 @@ function newState() {
     physicsSettled: true,
     physicsParticipantStatus: 'not-attempted',
     physicsParticipantError: null,
-    boneMobility: null,
-    vertexMobility: null,
+    selectedWeightMask: null,
     influenceNodes: null,
     influenceGraph: null,
     candidateRootId: null,
@@ -139,6 +150,9 @@ function newState() {
     diagnostics: null,
     encoding: null,
     centerByBoneId: null,
+    physicsCenterByBoneId: null,
+    physicsForest: null,
+    physicsSelectionKey: '',
   };
 }
 
@@ -154,6 +168,102 @@ function stateFor(mesh) {
 
 export function getSkinningState(mesh) {
   return states.get(mesh) || null;
+}
+
+function modelWeightSnapshot() {
+  return {
+    loaded: modelWeightState.loaded,
+    loading: modelWeightState.loading,
+    generation: modelWeightGeneration,
+    error: modelWeightState.error,
+    noWeights: modelWeightState.noWeights,
+    availableBoneIds: [...modelWeightState.availableBoneIds],
+    selectedBoneIds: normalizeSelectedBoneIds(
+      modelWeightState.selectedBoneIds),
+    heatmapEnabled: modelWeightState.heatmapEnabled,
+    loadedMeshCount: modelWeightState.loadedMeshCount,
+    failedMeshCount: modelWeightState.failedMeshCount,
+  };
+}
+
+function notifyModelWeightChanged() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('mod-viewer-model-weight-changed', {
+      detail: modelWeightSnapshot(),
+    }));
+  }
+}
+
+export function getModelWeightState() {
+  return modelWeightSnapshot();
+}
+
+function eligibleSkinningMesh(mesh) {
+  return mesh?.userData?.skinningAvailable === true
+    && mesh.userData?.assetFill !== true
+    && !!mesh.userData?.modPath
+    && !!mesh.userData?.semanticKey;
+}
+
+function refreshModelWeightSummary() {
+  const ids = new Set();
+  let loadedMeshCount = 0;
+  let failedMeshCount = 0;
+  knownMeshes.forEach(mesh => {
+    const state = states.get(mesh);
+    if (state?.loaded) {
+      loadedMeshCount += 1;
+      (state.boneIds || []).forEach(id => ids.add(Number(id)));
+    } else if (state?.error) {
+      failedMeshCount += 1;
+    }
+  });
+  modelWeightState.availableBoneIds = [...ids]
+    .filter(Number.isFinite).sort((left, right) => left - right);
+  modelWeightState.loadedMeshCount = loadedMeshCount;
+  modelWeightState.failedMeshCount = failedMeshCount;
+  if (modelWeightState.loaded) {
+    modelWeightState.selectedBoneIds = new Set(
+      normalizeSelectedBoneIds(modelWeightState.selectedBoneIds)
+        .filter(id => ids.has(id)));
+  }
+}
+
+function refreshSelectedWeightMask(mesh, state) {
+  if (!state?.loaded) return null;
+  state.selectedWeightMask = buildSelectedWeightMask(
+    state.indices, state.weights, state.influenceCount,
+    modelWeightState.selectedBoneIds);
+  state.selectedBone = normalizeSelectedBoneIds(
+    modelWeightState.selectedBoneIds)[0] ?? null;
+  return state.selectedWeightMask;
+}
+
+function selectedWeightPresent(state) {
+  return !!state?.selectedWeightMask
+    && [...state.selectedWeightMask].some(value => value > 0);
+}
+
+function setModelWeightLoadError(error) {
+  modelWeightState.error = error instanceof Error
+    ? error.message : String(error);
+  modelWeightState.loaded = false;
+  modelWeightState.noWeights = false;
+}
+
+function resetModelWeightState() {
+  modelWeightGeneration += 1;
+  modelWeightState.loaded = false;
+  modelWeightState.loading = false;
+  modelWeightState.promise = null;
+  modelWeightState.error = null;
+  modelWeightState.noWeights = false;
+  modelWeightState.availableBoneIds = [];
+  modelWeightState.selectedBoneIds = new Set();
+  modelWeightState.heatmapEnabled = false;
+  modelWeightState.loadedMeshCount = 0;
+  modelWeightState.failedMeshCount = 0;
+  notifyModelWeightChanged();
 }
 
 /** Return the game material owned by a loaded skinning experiment. */
@@ -207,13 +317,13 @@ export function gravityDirectionLocal(mesh, orientation = null) {
 }
 
 function refreshConstraintState(state, settings = modelPhysicsSession.getSettings()) {
-  if (!settings.constraintsEnabled || !state.candidateForest) {
+  if (!settings.constraintsEnabled || !state.physicsForest) {
     state.physicsJointLimits = null;
     state.physicsConstraintDiagnostics = null;
     return;
   }
   const result = buildPhysicsJointLimits(
-    state.candidateForest,
+    state.physicsForest,
     THREE.MathUtils.degToRad(settings.maxBendDegrees));
   state.physicsJointLimits = result.limitByBoneId;
   state.physicsConstraintDiagnostics = result.diagnostics;
@@ -256,7 +366,8 @@ function refreshGravityState(
   const referenceRadius = Number(
     state.influenceGraph?.boundingSphereRadius);
   const gravity = buildGravityAngularAccelerations(
-    state.candidateForest, state.centerByBoneId, localDirection, {
+    state.physicsForest,
+    state.physicsCenterByBoneId || state.centerByBoneId, localDirection, {
       referenceRadius,
       gravityScale: settings.gravityScale,
     });
@@ -294,10 +405,8 @@ function physicsReferenceRadius(mesh, state) {
 }
 
 function refreshParticipantDerivedState(mesh, state, settings) {
-  if (!state.candidateForest) return;
-  state.boneMobility = buildBoneMobility(state.candidateForest);
-  state.vertexMobility = buildVertexMobility(
-    state.indices, state.weights, state.influenceCount, state.boneMobility);
+  if (!state.physicsForest) return;
+  refreshSelectedWeightMask(mesh, state);
   refreshConstraintState(state, settings);
   refreshGravityState(mesh, state, settings);
 }
@@ -310,7 +419,7 @@ function createPhysicsParticipant(mesh, state) {
       state.deformationMode = 'physics';
       state.physicsParticipantStatus = 'participating';
       state.physicsParticipantError = null;
-      state.physicsState = initializePhysicsState(state.candidateForest);
+      state.physicsState = initializePhysicsState(state.physicsForest);
       state.physicsSettled = false;
       refreshParticipantDerivedState(mesh, state, settings);
       applyDeformation(mesh, state, {
@@ -340,7 +449,7 @@ function createPhysicsParticipant(mesh, state) {
       state.physicsSettled = false;
     },
     onModelMotion(motion) {
-      if (!state.physicsState || !state.candidateForest) return false;
+      if (!state.physicsState || !state.physicsForest) return false;
       const rotationMagnitude = Math.hypot(...motion.rotationVector);
       state.lastRootAngularDeltaVector = [...motion.rotationVector];
       state.lastRootAngularDeltaMagnitude = rotationMagnitude;
@@ -354,7 +463,7 @@ function createPhysicsParticipant(mesh, state) {
       }
       if (rotationMagnitude >= 1e-10 && settings.angularResponse > 0) {
         applyReferenceFrameAngularDelta(
-          state.physicsState, state.candidateForest,
+          state.physicsState, state.physicsForest,
           motion.rotationVector, settings.angularResponse,
           settings.constraintsEnabled ? state.physicsJointLimits : null);
         physicsChanged = true;
@@ -369,7 +478,8 @@ function createPhysicsParticipant(mesh, state) {
         state.lastRootLinearVelocityDelta = deltaVelocityLocal;
         const diagnostics = {};
         applyReferenceFrameLinearVelocityDelta(
-          state.physicsState, state.candidateForest, state.centerByBoneId,
+          state.physicsState, state.physicsForest,
+          state.physicsCenterByBoneId || state.centerByBoneId,
           deltaVelocityLocal, settings.velocityResponse, diagnostics,
           settings.constraintsEnabled ? state.physicsJointLimits : null);
         physicsChanged = diagnostics.maxDeltaAngularVelocityMagnitude >= 1e-10
@@ -383,7 +493,8 @@ function createPhysicsParticipant(mesh, state) {
         state.translationEventCount += 1;
         const diagnostics = {};
         applyReferenceFrameTranslationDelta(
-          state.physicsState, state.candidateForest, state.centerByBoneId,
+          state.physicsState, state.physicsForest,
+          state.physicsCenterByBoneId || state.centerByBoneId,
           translationLocal, settings.translationResponse, diagnostics,
           settings.constraintsEnabled ? state.physicsJointLimits : null);
         state.lastTranslationLagRotationVector = [
@@ -404,7 +515,7 @@ function createPhysicsParticipant(mesh, state) {
       return true;
     },
     onVirtualMotion(motion) {
-      if (!state.physicsState || !state.candidateForest
+      if (!state.physicsState || !state.physicsForest
           || !motion.modelOrientation) return false;
       const currentVelocityLocal = localVector(
         motion.velocityWorld, motion.modelOrientation)
@@ -416,7 +527,8 @@ function createPhysicsParticipant(mesh, state) {
         ? [0, 0, 0] : [...currentVelocityLocal];
       const diagnostics = {};
       applyReferenceFrameLinearVelocityDelta(
-        state.physicsState, state.candidateForest, state.centerByBoneId,
+        state.physicsState, state.physicsForest,
+        state.physicsCenterByBoneId || state.centerByBoneId,
         deltaVelocityLocal, motion.settings.velocityResponse, diagnostics,
         motion.settings.constraintsEnabled ? state.physicsJointLimits : null);
       if (motion.active === false) state.physicsSettled = false;
@@ -424,9 +536,9 @@ function createPhysicsParticipant(mesh, state) {
         || motion.active === false;
     },
     step(dt, settings) {
-      if (!state.physicsState || !state.candidateForest) return;
+      if (!state.physicsState || !state.physicsForest) return;
       stepSpringPhysics(
-        state.physicsState, state.candidateForest, dt, {
+        state.physicsState, state.physicsForest, dt, {
           frequencyHz: settings.frequencyHz,
           dampingRatio: settings.dampingRatio,
           targetRotation: [0, 0, 0],
@@ -437,7 +549,7 @@ function createPhysicsParticipant(mesh, state) {
           maxDt: MODEL_PHYSICS_STEP,
         });
       state.physicsSettled = isPhysicsSettled(
-        state.physicsState, state.candidateForest, [0, 0, 0], {
+        state.physicsState, state.physicsForest, [0, 0, 0], {
           frequencyHz: settings.frequencyHz,
           externalAngularAccelerationByBoneId: settings.gravityEnabled
             ? state.physicsGravityAccelerations : null,
@@ -460,60 +572,148 @@ function createPhysicsParticipant(mesh, state) {
   };
 }
 
-export function isPhysicsScheduled() {
-  return modelPhysicsSession.isScheduled();
+function averageSelectedCenter(state, ids) {
+  const centers = ids.map(id => state.centerByBoneId?.get(id))
+    .filter(center => Array.isArray(center) && center.length >= 3);
+  if (!centers.length) return [0, 0, 0];
+  return centers.reduce((sum, center) => [
+    sum[0] + Number(center[0] || 0),
+    sum[1] + Number(center[1] || 0),
+    sum[2] + Number(center[2] || 0),
+  ], [0, 0, 0]).map(value => value / centers.length);
 }
 
-async function loadPhysicsParticipant(mesh, generation) {
-  const state = stateFor(mesh);
-  try {
-    await loadSkinningWeights(mesh);
-    if (!modelPhysicsSession.getState().enabled
-        || !modelPhysicsSession.isGeneration(generation)
-        || !knownMeshes.has(mesh)) return false;
-    ensureCandidateForest(mesh);
-    if (!state.candidateForest) throw new Error('Could not infer skin hierarchy.');
-    modelPhysicsSession.attach(createPhysicsParticipant(mesh, state));
-    return true;
-  } catch (error) {
-    if (states.get(mesh) === state
-        && modelPhysicsSession.getState().enabled
-        && modelPhysicsSession.isGeneration(generation)
-        && knownMeshes.has(mesh)) {
-      state.physicsParticipantStatus = 'failed';
-      state.physicsParticipantError = error instanceof Error
-        ? error.message : String(error);
-      modelPhysicsSession.markFailed(mesh, error);
+function selectedPhysicsForest(mesh, state) {
+  const graph = ensureInfluenceGraph(mesh, state);
+  const selected = new Set(
+    normalizeSelectedBoneIds(modelWeightState.selectedBoneIds)
+      .filter(id => state.boneIds.includes(id)));
+  if (!selected.size) return null;
+  const selectedNodes = (graph.nodes || []).filter(node =>
+    selected.has(Number(node.boneId)));
+  const selectedEdges = (graph.relationships || []).filter(relationship =>
+    selected.has(Number(relationship.boneA))
+    && selected.has(Number(relationship.boneB)));
+  const selectedTree = buildMaximumSpanningTree(selectedNodes, selectedEdges);
+  const centers = new Map(state.centerByBoneId || []);
+  const components = [];
+  const componentByBoneId = {};
+
+  selectedTree.components.forEach((componentIds, componentIndex) => {
+    const componentSet = new Set(componentIds);
+    const boundary = (graph.relationships || [])
+      .filter(relationship => {
+        const boneA = Number(relationship.boneA);
+        const boneB = Number(relationship.boneB);
+        const leftSelected = componentSet.has(boneA);
+        const rightSelected = componentSet.has(boneB);
+        if (leftSelected === rightSelected) return false;
+        const other = leftSelected ? boneB : boneA;
+        return !selected.has(other);
+      })
+      .sort(relationshipSort)[0];
+    let rootId;
+    let attachment = 'authored';
+    let attachmentEdge;
+    if (boundary) {
+      rootId = componentSet.has(Number(boundary.boneA))
+        ? Number(boundary.boneB) : Number(boundary.boneA);
+      attachmentEdge = {
+        boneA: rootId,
+        boneB: componentSet.has(Number(boundary.boneA))
+          ? Number(boundary.boneA) : Number(boundary.boneB),
+        containment: boundary.containment,
+        jaccard: boundary.jaccard,
+        treeEdgeScore: boundary.treeEdgeScore,
+        attachment: 'authored',
+      };
+    } else {
+      rootId = -1 - componentIndex;
+      attachment = 'synthetic';
+      const attachmentBone = [...componentIds].sort((left, right) => {
+        const leftCenter = centers.get(left) || [0, 0, 0];
+        const rightCenter = centers.get(right) || [0, 0, 0];
+        return Math.hypot(...leftCenter) - Math.hypot(...rightCenter);
+      })[0];
+      centers.set(rootId, averageSelectedCenter(state, componentIds));
+      attachmentEdge = {
+        boneA: rootId,
+        boneB: attachmentBone,
+        containment: 0,
+        jaccard: 0,
+        treeEdgeScore: 0,
+        attachment: 'synthetic',
+      };
     }
-    return false;
-  }
+    const edges = selectedTree.edges.filter(edge =>
+      componentSet.has(Number(edge.boneA))
+      && componentSet.has(Number(edge.boneB)));
+    edges.push(attachmentEdge);
+    const nodeIds = [rootId, ...componentIds];
+    const orientation = orientTree(edges, rootId);
+    const depths = Object.values(orientation.depthById)
+      .filter(depth => depth !== null).map(Number);
+    const component = {
+      componentId: componentIndex,
+      nodeIds,
+      dynamicNodeIds: [...componentIds],
+      rootId,
+      parentById: orientation.parentById,
+      childrenById: orientation.childrenById,
+      depthById: orientation.depthById,
+      edgeCount: edges.length,
+      maxDepth: Math.max(0, ...depths),
+      primary: componentIndex === 0,
+      attachment,
+    };
+    components.push(component);
+    nodeIds.forEach(id => { componentByBoneId[id] = componentIndex; });
+  });
+  return {
+    primaryRootId: components[0]?.rootId ?? null,
+    primaryComponentId: components.length ? 0 : null,
+    components,
+    componentByBoneId,
+    selectedBoneIds: [...selected],
+    centers,
+  };
+}
+
+function refreshPhysicsSelectionState(mesh, state) {
+  if (!state?.loaded) return false;
+  const nextForest = selectedPhysicsForest(mesh, state);
+  const selectedIds = nextForest?.selectedBoneIds || [];
+  const nextKey = selectedIds.join(',');
+  const changed = state.physicsSelectionKey !== nextKey;
+  state.physicsForest = nextForest;
+  state.physicsCenterByBoneId = nextForest?.centers || state.centerByBoneId;
+  state.physicsSelectionKey = nextKey;
+  refreshParticipantDerivedState(mesh, state, modelPhysicsSession.getSettings());
+  return changed;
+}
+
+export function isPhysicsScheduled() {
+  return modelPhysicsSession.isScheduled();
 }
 
 export function registerSkinningMesh(mesh) {
   if (!mesh) return;
   knownMeshes.add(mesh);
   if (!modelPhysicsSession.getState().enabled) return;
-  if (mesh.userData?.skinningAvailable !== true
-      || mesh.userData?.assetFill === true
-      || !mesh.userData?.modPath || !mesh.userData?.semanticKey) {
-    stateFor(mesh).physicsParticipantStatus = 'unavailable';
+  const state = stateFor(mesh);
+  if (!eligibleSkinningMesh(mesh)) {
+    state.physicsParticipantStatus = 'unavailable';
     modelPhysicsSession.markUnavailable(mesh, 'skinning-unavailable');
     return;
   }
-  modelPhysicsSession.markLoading(mesh);
-  const generation = modelPhysicsSession.getState().generation;
-  modelPhysicsSession.setLoading(true);
-  void loadPhysicsParticipant(mesh, generation).finally(() => {
-    const current = modelPhysicsSession.getState();
-    if (current.generation === generation && current.loadingCount === 0) {
-      modelPhysicsSession.setLoading(false);
-    }
-  });
+  if (state.loaded) syncPhysicsParticipants();
 }
 
 export function unregisterSkinningMesh(mesh) {
   knownMeshes.delete(mesh);
   modelPhysicsSession.detach(mesh);
+  refreshModelWeightSummary();
+  notifyModelWeightChanged();
 }
 
 export function getModelPhysicsState() {
@@ -523,6 +723,7 @@ export function getModelPhysicsState() {
 export function destroyModelPhysicsSession() {
   modelPhysicsSession.destroy();
   knownMeshes.clear();
+  resetModelWeightState();
 }
 
 export function disableModelPhysics() {
@@ -530,53 +731,165 @@ export function disableModelPhysics() {
   return false;
 }
 
+function installSkinningEntry(mesh, entry, buffer) {
+  const state = stateFor(mesh);
+  const indices = typedView(buffer, entry.data?.indices, Uint32Array, 'u32');
+  const weights = typedView(buffer, entry.data?.weights, Float32Array, 'f32');
+  const position = mesh.geometry?.attributes?.position;
+  const influenceCount = Number(entry.influence_count);
+  if (!position || !Number.isInteger(influenceCount) || influenceCount <= 0
+      || position.count !== Number(entry.vertex_count)
+      || indices.length !== position.count * influenceCount
+      || weights.length !== position.count * influenceCount) {
+    throw new Error('Skin data does not match rendered vertices.');
+  }
+  captureBaseline(mesh, state);
+  state.indices = indices;
+  state.weights = weights;
+  state.influenceCount = influenceCount;
+  state.boneIds = Array.isArray(entry.bone_ids)
+    ? [...entry.bone_ids].map(Number).filter(Number.isFinite)
+      .sort((left, right) => left - right)
+    : buildBoneIds(indices, weights, influenceCount);
+  state.selectedBone = null;
+  state.encoding = entry.encoding || null;
+  state.diagnostics = entry.diagnostics || null;
+  state.loaded = true;
+  state.error = null;
+  state.influenceNodes = buildInfluenceNodes(
+    state.baselinePositions, state.indices, state.weights,
+    state.influenceCount, state.boneIds);
+  state.centerByBoneId = new Map(state.influenceNodes.map(node => [
+    node.boneId, node.weightedCenter]));
+  refreshSelectedWeightMask(mesh, state);
+  return state;
+}
+
+/** Load all active model weights through one backend request and one blob. */
+export function ensureModelWeightsLoaded() {
+  if (modelWeightState.loaded) return Promise.resolve(modelWeightSnapshot());
+  if (modelWeightState.promise) return modelWeightState.promise;
+  const meshes = [...knownMeshes].filter(eligibleSkinningMesh);
+  const generation = modelWeightGeneration;
+  if (!meshes.length) {
+    modelWeightState.loaded = true;
+    modelWeightState.noWeights = true;
+    refreshModelWeightSummary();
+    notifyModelWeightChanged();
+    return Promise.resolve(modelWeightSnapshot());
+  }
+  const folderPath = meshes[0].userData.modPath;
+  modelWeightState.loading = true;
+  modelWeightState.error = null;
+  modelWeightState.noWeights = false;
+  notifyModelWeightChanged();
+  modelWeightState.promise = (async () => {
+    const api = window.pywebview?.api?.get_model_skinning_preview;
+    if (typeof api !== 'function') {
+      throw new Error('Model skin-weight preview is unavailable.');
+    }
+    const preview = await api(folderPath);
+    if (generation !== modelWeightGeneration) return modelWeightSnapshot();
+    const bufferResponse = preview?.data?.url
+      ? await fetch(preview.data.url, {cache: 'no-store'}) : null;
+    if (bufferResponse && !bufferResponse.ok) {
+      throw new Error(`Skin data download failed (${bufferResponse.status}).`);
+    }
+    const buffer = bufferResponse ? await bufferResponse.arrayBuffer() : null;
+    if (buffer && buffer.byteLength !== Number(preview.data.length)) {
+      throw new Error('Skin data download was incomplete.');
+    }
+    for (const mesh of meshes) {
+      if (generation !== modelWeightGeneration || !knownMeshes.has(mesh)) break;
+      const state = stateFor(mesh);
+      const entry = preview?.meshes?.[mesh.userData.semanticKey];
+      if (!entry || entry.status !== 'ok') {
+        state.error = entry?.error || 'No usable skin weights were returned.';
+        state.loaded = false;
+        continue;
+      }
+      try {
+        installSkinningEntry(mesh, entry, buffer);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : String(error);
+        state.loaded = false;
+      }
+    }
+    if (generation !== modelWeightGeneration) return modelWeightSnapshot();
+    modelWeightState.loaded = true;
+    refreshModelWeightSummary();
+    syncPhysicsParticipants();
+    notifyModelWeightChanged();
+    return modelWeightSnapshot();
+  })();
+  return modelWeightState.promise
+    .catch(error => {
+      if (generation === modelWeightGeneration) {
+        setModelWeightLoadError(error);
+        refreshModelWeightSummary();
+        notifyModelWeightChanged();
+      }
+      return modelWeightSnapshot();
+    })
+    .finally(() => {
+      if (generation === modelWeightGeneration) {
+        modelWeightState.loading = false;
+        modelWeightState.promise = null;
+        notifyModelWeightChanged();
+      }
+    });
+}
+
+function syncPhysicsParticipants() {
+  if (!modelPhysicsSession.getState().enabled) return;
+  if (!modelWeightState.selectedBoneIds.size) {
+    disableModelPhysics();
+    return;
+  }
+  let attached = false;
+  [...knownMeshes].forEach(mesh => {
+    if (!eligibleSkinningMesh(mesh)) return;
+    const state = states.get(mesh);
+    if (!state?.loaded) {
+      if (state?.error) {
+        state.physicsParticipantStatus = 'failed';
+        state.physicsParticipantError = state.error;
+        modelPhysicsSession.markFailed(mesh, state.error);
+      }
+      return;
+    }
+    const changed = refreshPhysicsSelectionState(mesh, state);
+    const participant = modelPhysicsSession.getParticipant(mesh);
+    if (!state.physicsForest) {
+      if (participant) modelPhysicsSession.detach(mesh);
+      state.physicsParticipantStatus = 'not-selected';
+      state.physicsState = null;
+      state.physicsEnabled = false;
+      return;
+    }
+    if (changed && participant) modelPhysicsSession.detach(mesh);
+    if (!modelPhysicsSession.getParticipant(mesh)) {
+      attached = modelPhysicsSession.attach(
+        createPhysicsParticipant(mesh, state)) || attached;
+    }
+  });
+  if (attached) {
+    modelPhysicsSession.wake();
+    invalidateCharacterShadowGeometry({request: false});
+    requestRender();
+  }
+}
+
 export function enableModelPhysics() {
   if (modelPhysicsSession.getState().enabled) {
     return Promise.resolve(getModelPhysicsState());
   }
+  if (!modelWeightState.selectedBoneIds.size) {
+    return Promise.resolve(getModelPhysicsState());
+  }
   const generation = modelPhysicsSession.enable(getModelTransformState());
-  const pending = [];
-  let attached = false;
-  [...knownMeshes].forEach(mesh => {
-    const state = stateFor(mesh);
-    if (mesh.userData?.skinningAvailable !== true
-        || mesh.userData?.assetFill === true
-        || !mesh.userData?.modPath || !mesh.userData?.semanticKey) {
-      state.physicsParticipantStatus = 'unavailable';
-      modelPhysicsSession.markUnavailable(mesh, 'skinning-unavailable');
-      return;
-    }
-    if (state.loaded) {
-      try {
-        ensureCandidateForest(mesh);
-        attached = modelPhysicsSession.attach(
-          createPhysicsParticipant(mesh, state)) || attached;
-      } catch (error) {
-        state.physicsParticipantStatus = 'failed';
-        state.physicsParticipantError = error instanceof Error
-          ? error.message : String(error);
-        modelPhysicsSession.markFailed(mesh, error);
-      }
-    } else {
-      modelPhysicsSession.markLoading(mesh);
-      pending.push(loadPhysicsParticipant(mesh, generation));
-    }
-  });
-  modelPhysicsSession.setLoading(
-    modelPhysicsSession.getState().loadingCount > 0);
-  return Promise.allSettled(pending).then(() => {
-    if (modelPhysicsSession.isGeneration(generation)) {
-      attached = pending.some(result => result.status === 'fulfilled'
-        && result.value) || attached;
-      modelPhysicsSession.setLoading(
-        modelPhysicsSession.getState().loadingCount > 0);
-      if (attached) {
-        invalidateCharacterShadowGeometry({request: false});
-        requestRender();
-      }
-    }
-    return getModelPhysicsState();
-  });
+  syncPhysicsParticipants();
+  return Promise.resolve({...getModelPhysicsState(), generation});
 }
 
 export function resetModelPhysicsMotion() {
@@ -1345,12 +1658,20 @@ export function refreshSkinningAfterShapeChange(mesh) {
   state.influenceGraph = null;
   state.candidateTree = null;
   state.candidateForest = null;
+  const wasPhysicsEnabled = state.physicsEnabled;
+  const participant = modelPhysicsSession.getParticipant(mesh);
+  if (participant) modelPhysicsSession.detach(mesh);
   state.physicsTransforms = null;
+  state.physicsForest = null;
+  state.physicsCenterByBoneId = state.centerByBoneId;
 
-  const shouldInfer = state.physicsEnabled
-    || state.heatmapMode === 'mobility'
-    || state.influenceVisualizationMode === 'tree';
-  if (shouldInfer) {
+  if (wasPhysicsEnabled) {
+    refreshPhysicsSelectionState(mesh, state);
+    if (state.physicsForest && modelPhysicsSession.getState().enabled) {
+      modelPhysicsSession.attach(createPhysicsParticipant(mesh, state));
+      modelPhysicsSession.wake();
+    }
+  } else if (state.influenceVisualizationMode === 'tree') {
     ensureCandidateForest(mesh);
   } else if (state.influenceVisualizationMode === 'center') {
     createInfluenceVisualization(mesh, state, 'center');
@@ -1425,16 +1746,17 @@ function applyDeformation(mesh, state, {
 } = {}) {
   if (!state.loaded || !state.baselinePositions) return;
   const physicsActive = state.deformationMode === 'physics'
-    && state.physicsEnabled && state.physicsState && state.candidateForest;
+    && state.physicsEnabled && state.physicsState && state.physicsForest;
   let result;
   if (physicsActive) {
     state.physicsTransforms = buildForestTransformsFromLocalRotations(
-      state.candidateForest, state.centerByBoneId, {
+      state.physicsForest,
+      state.physicsCenterByBoneId || state.centerByBoneId, {
         rotationByBoneId: physicsRotationMap(state.physicsState),
       });
     result = applyWeightedTransformDeformation(
       state.baselinePositions, state.indices, state.weights,
-        state.influenceCount, state.physicsTransforms, state.vertexMobility);
+        state.influenceCount, state.physicsTransforms);
   } else {
     state.physicsTransforms = null;
     result = state.baselinePositions;
@@ -1458,20 +1780,12 @@ function applyDeformation(mesh, state, {
 }
 
 function updateHeatmap(mesh, state) {
-  if (!state.heatmapMode) return;
-  if (state.heatmapMode === 'mobility' && !state.vertexMobility
-      && state.candidateForest) {
-    refreshParticipantDerivedState(
-      mesh, state, modelPhysicsSession.getSettings());
-  }
+  if (!state.heatmapMode || !state.selectedWeightMask) return;
   const count = Math.floor(state.indices.length / state.influenceCount);
   const colors = new Float32Array(count * 3);
   for (let vertex = 0; vertex < count; vertex += 1) {
-    const value = state.heatmapMode === 'mobility'
-      ? Math.max(0, Math.min(1, Number(state.vertexMobility?.[vertex]) || 0))
-      : Math.max(0, Math.min(1, weightForBone(
-          state.indices, state.weights, state.influenceCount,
-          vertex, state.selectedBone)));
+    const value = Math.max(0, Math.min(1,
+      Number(state.selectedWeightMask[vertex]) || 0));
     const offset = vertex * 3;
     // Blue at zero, yellow/red at high influence for quick spatial reading.
     colors[offset] = value;
@@ -1487,6 +1801,20 @@ function updateHeatmap(mesh, state) {
     });
   }
   mesh.material = state.debugMaterial;
+}
+
+function updateModelWeightHeatmap() {
+  knownMeshes.forEach(mesh => {
+    const state = states.get(mesh);
+    if (!state?.loaded) return;
+    refreshSelectedWeightMask(mesh, state);
+    if (modelWeightState.heatmapEnabled && selectedWeightPresent(state)) {
+      state.heatmapMode = 'bone';
+      updateHeatmap(mesh, state);
+    } else if (state.heatmapMode) {
+      disableHeatmap(mesh, state);
+    }
+  });
 }
 
 function disableHeatmap(mesh, state) {
@@ -1549,7 +1877,7 @@ export async function loadSkinningWeights(mesh) {
       ? [...preview.bone_ids].map(Number).filter(Number.isFinite)
         .sort((a, b) => a - b)
       : buildBoneIds(indices, weights, influenceCount);
-    state.selectedBone = state.boneIds[0] ?? 0;
+    state.selectedBone = null;
     state.encoding = preview.encoding || null;
     state.diagnostics = preview.diagnostics || null;
     state.loaded = true;
@@ -1558,7 +1886,9 @@ export async function loadSkinningWeights(mesh) {
       state.influenceCount, state.boneIds);
     state.centerByBoneId = new Map(state.influenceNodes.map(node => [
       node.boneId, node.weightedCenter]));
-    state.candidateRootId = state.boneIds[0] ?? null;
+    refreshSelectedWeightMask(mesh, state);
+    refreshModelWeightSummary();
+    notifyModelWeightChanged();
     return state;
   })();
   try {
@@ -1572,17 +1902,34 @@ export async function loadSkinningWeights(mesh) {
   }
 }
 
+export function setSelectedBoneIds(ids) {
+  refreshModelWeightSummary();
+  const available = new Set(modelWeightState.availableBoneIds);
+  const normalized = normalizeSelectedBoneIds(ids)
+    .filter(id => !available.size || available.has(id));
+  const previous = normalizeSelectedBoneIds(modelWeightState.selectedBoneIds);
+  if (previous.length === normalized.length
+      && previous.every((id, index) => id === normalized[index])) {
+    return modelWeightSnapshot();
+  }
+  modelWeightState.selectedBoneIds = new Set(normalized);
+  knownMeshes.forEach(mesh => refreshSelectedWeightMask(mesh, states.get(mesh)));
+  if (modelWeightState.heatmapEnabled) updateModelWeightHeatmap();
+  if (modelPhysicsSession.getState().enabled) syncPhysicsParticipants();
+  notifyModelWeightChanged();
+  requestRender();
+  return modelWeightSnapshot();
+}
+
+export function clearSelectedBoneIds() {
+  return setSelectedBoneIds([]);
+}
+
+/** Compatibility helper for callers that previously selected one mesh bone. */
 export function setSelectedBone(mesh, boneId) {
   const state = stateFor(mesh);
-  if (!state?.loaded) return;
-  const id = Number(boneId);
-  if (!state.boneIds.includes(id)) return;
-  state.selectedBone = id;
-  if (state.heatmapMode === 'bone') updateHeatmap(mesh, state);
-  if (state.influenceVisualizationMode === 'center') {
-    createInfluenceVisualization(mesh, state, 'center');
-  }
-  requestRender();
+  if (!state?.loaded || !state.boneIds.includes(Number(boneId))) return;
+  return setSelectedBoneIds([boneId]);
 }
 
 export function setPhysicsFrequency(mesh, frequencyHz) {
@@ -1655,28 +2002,20 @@ export function resetPhysicsMotion(mesh) {
 }
 
 export function setSkinningHeatmapMode(mesh, mode) {
-  const state = stateFor(mesh);
-  if (!state?.loaded) return false;
-  if (mode !== null && mode !== 'bone' && mode !== 'mobility') {
-    return state.heatmapMode;
-  }
-  if (mode === 'mobility' && !state.candidateForest) {
-    ensureCandidateForest(mesh);
-  }
-  state.heatmapMode = mode;
-  if (state.heatmapMode) updateHeatmap(mesh, state);
-  else disableHeatmap(mesh, state);
-  requestRender();
-  return state.heatmapMode;
+  if (mode !== null && mode !== 'bone') return false;
+  return setModelWeightHeatmap(mode === 'bone');
 }
 
 export function setSkinningHeatmap(mesh, enabled) {
-  return setSkinningHeatmapMode(mesh, enabled ? 'bone' : null) === 'bone';
+  return setModelWeightHeatmap(enabled);
 }
 
-export function setPhysicsMobilityHeatmap(mesh, enabled) {
-  return setSkinningHeatmapMode(mesh, enabled ? 'mobility' : null)
-    === 'mobility';
+export function setModelWeightHeatmap(enabled) {
+  modelWeightState.heatmapEnabled = !!enabled;
+  updateModelWeightHeatmap();
+  notifyModelWeightChanged();
+  requestRender();
+  return modelWeightState.heatmapEnabled;
 }
 
 export function resetSkinningExperiment(mesh) {

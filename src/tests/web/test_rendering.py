@@ -536,6 +536,8 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
             }, diagnostics: {},
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
+          await experiment.loadSkinningWeights(mesh);
+          experiment.setSelectedBoneIds([1]);
           await experiment.enableModelPhysics();
           return experiment.getModelPhysicsState();
         }""")
@@ -592,36 +594,19 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
         context.close()
 
 
-def test_skinning_mobility_envelope_follows_inferred_depth(
+def test_selected_weight_mask_aggregates_authored_influences(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"Mobility": _payload("Mobility")})
+        edge_browser, frontend_url, {"Weights": _payload("Weights")})
     try:
         result = page.evaluate("""async () => {
-          const mobility = await import('./js/mesh/weight-mobility.js');
-          const deformation = await import('./js/mesh/weight-deformation.js');
-          const forest = {components: [{rootId: 0, nodeIds: [0, 1],
-            maxDepth: 1, depthById: {0: 0, 1: 1}}]};
-          const boneMobility = mobility.buildBoneMobility(forest);
-          const vertexMobility = mobility.buildVertexMobility(
-            [0, 1], [1, 1], 1, boneMobility);
-          const transforms = new Map([
-            [0, new (await import('three')).Matrix4()],
-            [1, new (await import('three')).Matrix4().makeTranslation(0, 1, 0)],
-          ]);
-          const result = deformation.applyWeightedTransformDeformation(
-            new Float32Array([0, 0, 0, 1, 0, 0]),
-            new Uint32Array([0, 1]), new Float32Array([1, 1]), 1,
-            transforms, vertexMobility);
-          return {
-            boneMobility: [...boneMobility.entries()],
-            vertexMobility: [...vertexMobility],
-            positions: [...result],
-          };
+          const selection = await import('./js/mesh/weight-selection.js');
+          const mask = selection.buildSelectedWeightMask(
+            new Uint32Array([0, 1, 2, 3, 4, 5]),
+            new Float32Array([.2, .3, .5, .6, .1, .9]), 2, [1, 2]);
+          return [...mask];
         }""")
-        assert result["boneMobility"] == [[0, 0], [1, 1]]
-        assert result["vertexMobility"] == [0, 1]
-        assert result["positions"] == [0, 0, 0, 1, 1, 0]
+        assert result == pytest.approx([.3, .5, 0])
     finally:
         context.close()
 
@@ -651,6 +636,7 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
           await experiment.loadSkinningWeights(mesh);
+          experiment.setSelectedBoneIds([1]);
           experiment.ensureCandidateForest(mesh);
           const queuedFrames = [];
           const originalRequestAnimationFrame = window.requestAnimationFrame;
@@ -858,6 +844,10 @@ def test_model_physics_loads_eligible_meshes_with_partial_failures(
             };
           };
           const experiment = await import('./js/mesh/weight-experiment.js');
+          for (const mesh of window.modViewer.activeMeshes) {
+            try { await experiment.loadSkinningWeights(mesh); } catch (_) {}
+          }
+          experiment.setSelectedBoneIds([1]);
           const finalState = await experiment.enableModelPhysics();
           const states = window.modViewer.activeMeshes.map(mesh => {
             const state = experiment.getSkinningState(mesh);
@@ -1186,6 +1176,7 @@ def test_skinning_angular_motion_uses_full_quaternion_delta(
             }, diagnostics: {},
           });
           await experiment.loadSkinningWeights(mesh);
+          experiment.setSelectedBoneIds([1]);
           experiment.ensureCandidateForest(mesh);
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -1267,6 +1258,7 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
             }, diagnostics: {},
           });
           await experiment.loadSkinningWeights(mesh);
+          experiment.setSelectedBoneIds([1]);
           experiment.ensureCandidateForest(mesh);
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -1354,174 +1346,80 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
 
 
 
-def test_skinning_inspector_keeps_normal_controls_and_builds_hierarchy_lazily(
+def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"SkinningInspector": _payload("SkinningInspector")})
+        edge_browser, frontend_url, {"WeightPanel": _payload("WeightPanel")})
     try:
-        _open(page, "SkinningInspector")
+        _open(page, "WeightPanel")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
         page.evaluate("""async () => {
           const bytes = new Uint8Array(48);
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          Object.defineProperty(navigator, 'clipboard', {
-            configurable: true,
-            value: {
-              writeText: async value => {
-                window.__copiedSkinningDiagnostics = value;
-              },
-            },
-          });
+          const key = window.modViewer.activeMeshes[0].userData.semanticKey;
+          window.__weightPreviewCalls = 0;
+          window.pywebview.api.get_model_skinning_preview = async () => {
+            window.__weightPreviewCalls += 1;
+            return {
+              status: 'ok', format_version: 1,
+              data: {url, length: 48},
+              meshes: {[key]: {
+                status: 'ok', vertex_count: 3, influence_count: 2,
+                bone_ids: [0, 1, 2], encoding: 'test',
+                data: {
+                  indices: {offset: 0, length: 24, type: 'u32'},
+                  weights: {offset: 24, length: 24, type: 'f32'},
+                }, diagnostics: {},
+              }},
+            };
+          };
         }""")
+        assert page.evaluate("window.modViewer.getModelWeightState().selectedBoneIds") == []
+        page.locator("#weight-tab").click()
+        page.wait_for_function("window.__weightPreviewCalls === 1")
+        page.wait_for_function("window.modViewer.getModelWeightState().loaded")
+        assert page.locator("#inspector-panel .weight-section").count() == 0
+        assert page.locator(".weight-bone-select").inner_text() == "Select bones"
+
+        page.locator(".weight-bone-select").click()
+        page.locator('.weight-bone-option input[value="1"]').check()
+        page.wait_for_function("""() => JSON.stringify(
+          window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
+        mask = page.evaluate("""async () => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const {getSkinningState} = await import('./js/mesh/weight-experiment.js');
+          return [...getSkinningState(mesh).selectedWeightMask];
+        }""")
+        assert mask == pytest.approx([.2, .7, 0])
+
         page.locator(".draw-item").click()
-        page.locator(".inspector-skinning-load").wait_for()
-        page.locator(".inspector-skinning-physics").wait_for()
-        assert "Hold RMB and drag to excite the character" in page.locator(
-            ".inspector-skinning-physics").inner_text()
-        page.locator(".inspector-skinning-load").click()
-        page.wait_for_function("""() =>
-          document.querySelector('.inspector-skinning-load')?.textContent
-            === 'Weights loaded'
-        """)
-
-        loaded = page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
+        assert page.locator("#weight-tab").get_attribute("aria-selected") == "true"
+        page.locator(".weight-heatmap-enable").check()
+        assert page.evaluate("window.modViewer.getModelWeightState().heatmapEnabled")
+        page.locator("#weight-tab").click()
+        page.locator("#weight-tab").click()
+        page.wait_for_function("window.modViewer.getModelWeightState().heatmapEnabled")
+        assert page.evaluate("window.__weightPreviewCalls") == 1
+        page.locator(".weight-physics-enable").check()
+        page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
+        physics = page.evaluate("""async () => {
+          const {getSkinningState} = await import('./js/mesh/weight-experiment.js');
           const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return {
-            loaded: state.loaded,
-            nodes: state.influenceNodes?.length || 0,
-            graph: state.influenceGraph,
-            forest: state.candidateForest,
-            title: document.querySelector('.inspector-skinning-title')?.textContent,
-            stats: document.querySelector('.inspector-skinning-influence-stats')
-              ?.textContent || '',
-            oldControls: [...document.querySelectorAll(
-              '.inspector-skinning-chain, .inspector-skinning-translation, '
-                + '.inspector-skinning-kick')].length,
-          };
+          return {enabled: state.physicsEnabled,
+            dynamic: state.physicsForest?.components?.[0]?.dynamicNodeIds || []};
         }""")
-        assert loaded["loaded"]
-        assert loaded["nodes"] == 3
-        assert loaded["graph"] is None
-        assert loaded["forest"] is None
-        assert loaded["title"] == "Skin Weights"
-        assert "Affected vertices" in loaded["stats"]
-        assert loaded["oldControls"] == 0
-
-        page.locator(".inspector-skinning-mobility-heatmap").click()
-        mobility = page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return {mode: state.heatmapMode, mobility: [...state.vertexMobility]};
-        }""")
-        assert mobility["mode"] == "mobility"
-        assert mobility["mobility"] == pytest.approx([0.2, 0.85, 0.2])
-        page.locator(".inspector-skinning-mobility-heatmap").click()
-
-        page.locator(".inspector-skinning-center").click()
-        centered = page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return {
-            mode: state.influenceVisualizationMode,
-            graph: state.influenceGraph,
-            forest: state.candidateForest,
-          };
-        }""")
-        assert centered["mode"] == "center"
-        assert centered["graph"]
-        assert centered["forest"]
-
-        page.locator(".inspector-skinning-physics-enable").check()
-        physics_built = page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return {
-            enabled: state.physicsEnabled,
-            graph: !!state.influenceGraph,
-            forest: !!state.candidateForest,
-            mode: state.deformationMode,
-          };
-        }""")
-        assert physics_built == {
-            "enabled": True, "graph": True, "forest": True, "mode": "physics"}
-
-        page.locator(".inspector-skinning-hierarchy-show").click()
-        page.wait_for_function("""() =>
-          document.querySelector('.inspector-skinning-hierarchy-show')
-            ?.textContent === 'Hide Hierarchy'
-        """)
-        page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          window.__skinGraphBeforeRoot =
-            getSkinningState(window.modViewer.activeMeshes[0]).influenceGraph;
-        }""")
-        page.locator(".inspector-skinning-hierarchy-root").select_option("1")
-        page.wait_for_function("""() =>
-          document.querySelector('.inspector-skinning-hierarchy-root')?.value === '1'
-        """)
-        hierarchy = page.evaluate("""async () => {
-          const {getSkinningState} =
-            await import('./js/mesh/weight-experiment.js');
-          const state = getSkinningState(window.modViewer.activeMeshes[0]);
-          return {
-            root: state.candidateTree?.rootId,
-            graphReused: state.influenceGraph === window.__skinGraphBeforeRoot,
-            summary: document.querySelector(
-              '.inspector-skinning-hierarchy-summary')?.textContent || '',
-            output: document.querySelector(
-              '.inspector-skinning-hierarchy-output')?.textContent || '',
-          };
-        }""")
-        assert hierarchy["root"] == 1
-        assert hierarchy["graphReused"]
-        assert "Inferred influence hierarchy" in hierarchy["summary"]
-        assert "Root 1" in hierarchy["output"]
-
-        page.locator(".inspector-skinning-copy-skinning").click()
-        page.wait_for_function(
-            "() => document.querySelector('.inspector-skinning-copy-status')"
-            "?.textContent.includes('copied')")
-        copied = page.evaluate("""() => JSON.parse(
-          window.__copiedSkinningDiagnostics || '{}')""")
-        assert copied["skinning"]["boneIds"] == [0, 1, 2]
-        assert copied["hierarchy"]["rootId"] == 1
-        assert copied["physics"]["enabled"]
-
-        labels = page.locator(".inspector-skinning-group").inner_text()
-        order = page.locator(
-            ".inspector-skinning-advanced > section").evaluate_all(
-                "nodes => nodes.map(node => ({className: node.className, "
-                "tagName: node.tagName}))")
-        assert order == [
-            {"className": "inspector-section inspector-skinning-physics",
-             "tagName": "SECTION"},
-            {"className": "inspector-section inspector-skinning-hierarchy",
-             "tagName": "SECTION"},
-        ]
-        assert "Inferred Influence Hierarchy" in labels
-        assert "Secondary Motion" in labels
-        assert "Kick" not in labels
-        assert "Move Axis" not in labels
-        assert "Build Candidate Tree" not in labels
-        page.locator(".inspector-skinning-physics-enable").uncheck()
+        assert physics["enabled"]
+        assert physics["dynamic"] == [1]
+        page.locator(".weight-clear-selection").click()
+        page.wait_for_function("!window.modViewer.getModelPhysicsState().enabled")
+        assert page.evaluate("window.__weightPreviewCalls") == 1
+        assert page.evaluate("window.modViewer.getModelWeightState().selectedBoneIds") == []
     finally:
+        page.evaluate("""() => {
+          if (window.__weightPreviewCalls) window.__weightPreviewCalls = 0;
+        }""")
         context.close()
 
 
@@ -3092,6 +2990,7 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
           await experiment.loadSkinningWeights(mesh);
+          experiment.setSelectedBoneIds([1]);
           const oldMaterial = mesh.material;
           let oldMaterialDisposals = 0;
           oldMaterial.addEventListener('dispose',

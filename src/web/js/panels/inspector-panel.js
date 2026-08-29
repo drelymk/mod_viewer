@@ -1,28 +1,10 @@
 // Selection-aware details panel. Mesh creation remains owned by mesh-panel;
-// this module only presents the already-authoritative mesh/component state.
+// this module presents material and texture state for the selected item.
 
-import { isRightDockOpen, setRightDockTab } from './right-dock.js';
+import { getRightDockTab, isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';
-import {
-  GRAVITY_WORLD_DIRECTION,
-  getSkinningState, loadSkinningWeights, resetSkinningExperiment,
-  setSelectedBone, setSkinningHeatmap,
-  setInfluenceVisualizationMode,
-  setCandidateTreeRoot,
-  setPhysicsFrequency,
-  setPhysicsDamping, setPhysicsMotionStrength,
-  setPhysicsLinearMotionStrength, setPhysicsContinuousLinearResponse,
-  getPhysicsConstraintDiagnostics,
-  setPhysicsConstraintsEnabled, setPhysicsMaxBendDegrees,
-  setPhysicsGravityEnabled, setPhysicsGravityScale,
-  setPhysicsEnabled,
-  resetPhysicsMotion, getModelPhysicsState,
-  setPhysicsMobilityHeatmap,
-} from '../mesh/weight-experiment.js';
 
 const meshRecords = new WeakMap();
-const skinningUpdates = new WeakMap();
-const physicsUpdates = new WeakMap();
 let current = null;
 let selectionCount = 0;
 const $ = id => document.getElementById(id);
@@ -163,8 +145,7 @@ function buildComponentTextureSection(content, record) {
   section.appendChild(title);
   const pool = record.texturePool || [];
   addText(section, 'inspector-texture-count', pool.length
-    ? `${pool.length} available`
-    : 'No textures discovered');
+    ? `${pool.length} available` : 'No textures discovered');
   const manage = buildManageTexturesButton(record.openTextureManager);
   if (manage) section.appendChild(manage);
   content.appendChild(section);
@@ -178,7 +159,6 @@ function buildTextureControls(content, record, mesh) {
   title.className = 'inspector-section-title';
   title.textContent = 'Texture';
   section.appendChild(title);
-
   const pool = component?.texturePool || [];
   const override = component?.getTextureOverride?.(mesh) || {
     value: undefined, automatic: true, resolved: null,
@@ -200,9 +180,8 @@ function buildTextureControls(content, record, mesh) {
     });
     list.appendChild(option);
   };
-  addOption(
-    automaticTextureLabel(override.resolved, pool),
-    undefined, override.automatic, 'automatic', override.resolved || 'Automatic');
+  addOption(automaticTextureLabel(override.resolved, pool), undefined,
+    override.automatic, 'automatic', override.resolved || 'Automatic');
   pool.forEach(option => addOption(
     textureOptionLabel(option), option.tex_key,
     !override.automatic && override.value === option.tex_key,
@@ -234,765 +213,11 @@ function updateTextureControlState(content, mesh, component) {
   });
 }
 
-function skinningNumber(value) {
-  return Number.isFinite(Number(value)) ? Number(value).toFixed(4) : 'n/a';
-}
-
-function buildSkinningDiagnostics(parent, state, vertexCount) {
-  const diagnostics = state.diagnostics || {};
-  const rows = [
-    `${Number(diagnostics.vertex_count ?? vertexCount).toLocaleString()} vertices`,
-    `weight sums ${skinningNumber(diagnostics.min_weight_sum)}–${skinningNumber(diagnostics.max_weight_sum)}`,
-    `${Number(diagnostics.invalid_weight_vertices || 0).toLocaleString()} invalid`,
-  ];
-  if (state.vertexMobility) {
-    const mobility = [...state.vertexMobility];
-    const minimum = Math.min(...mobility);
-    const maximum = Math.max(...mobility);
-    rows.push(`mobility ${skinningNumber(minimum)}–${skinningNumber(maximum)}`);
-  }
-  rows.forEach(text => addText(parent, 'inspector-skinning-diagnostic', text));
-}
-function syncSkinningHeatmapControls(section, mesh) {
-  const state = getSkinningState(mesh);
-  if (!state || !section) return;
-  const heatmap = section.querySelector('.inspector-skinning-heatmap');
-  const mobility = section.querySelector('.inspector-skinning-mobility-heatmap');
-  if (!heatmap || !mobility) return;
-  const active = state.heatmapMode === 'bone';
-  const mobilityActive = state.heatmapMode === 'mobility';
-  heatmap.setAttribute('aria-pressed', String(active));
-  heatmap.classList.toggle('active', active);
-  heatmap.textContent = active
-    ? 'Hide Weight Heatmap' : 'Show Weight Heatmap';
-  mobility.setAttribute('aria-pressed', String(mobilityActive));
-  mobility.classList.toggle('active', mobilityActive);
-  mobility.textContent = mobilityActive
-    ? 'Hide Mobility Heatmap' : 'Show Mobility Heatmap';
-}
-
-function selectedInfluenceNode(state) {
-  return (state?.influenceNodes || []).find(node =>
-    node.boneId === state.selectedBone) || null;
-}
-
-function buildSelectedInfluenceStats(parent, mesh, state) {
-  const stats = document.createElement('div');
-  stats.className = 'inspector-skinning-influence-stats';
-  parent.appendChild(stats);
-
-  function addStat(label, value) {
-    const row = document.createElement('div');
-    row.className = 'inspector-skinning-stat';
-    addText(row, 'inspector-label', label);
-    addText(row, 'inspector-value', value);
-    stats.appendChild(row);
-  }
-
-  function update(latest = getSkinningState(mesh)) {
-    stats.replaceChildren();
-    const node = selectedInfluenceNode(latest);
-    if (!node) return;
-    addStat('Affected vertices',
-      Number(node.affectedVertexCount || 0).toLocaleString());
-    addStat('Total weight', skinningNumber(node.totalWeight));
-    addStat('Maximum weight', skinningNumber(node.maxVertexWeight));
-    addStat('Weighted radius', skinningNumber(node.weightedRadius));
-  }
-
-  update(state);
-  return {update};
-}
-
-function candidateTreeText(tree) {
-  if (!tree) return '';
-  const lines = ['Root ' + tree.rootId];
-  const append = (orientation, boneId, prefix, last, root = false) => {
-    if (!root) {
-      lines.push(prefix + (last ? '\u2514\u2500 ' : '\u251c\u2500 ') + boneId);
-    }
-    const children = orientation?.childrenById?.[boneId] || [];
-    children.forEach((child, index) => append(
-      orientation,
-      child,
-      root ? '' : prefix + (last ? '   ' : '\u2502  '),
-      index === children.length - 1));
-  };
-  const forest = tree.forest;
-  const primary = forest?.components?.[forest.primaryComponentId];
-  const primaryOrientation = primary || tree.orientation;
-  if (Number.isFinite(Number(tree.rootId))) {
-    append(primaryOrientation, Number(tree.rootId), '', true, true);
-  }
-  if (forest?.components?.length > 1) {
-    lines.push('Inferred hierarchy has ' + forest.components.length
-      + ' components');
-    forest.components.forEach(component => {
-      if (component.primary) return;
-      const rootLabel = component.rootId == null
-        ? 'no root' : 'Root ' + component.rootId;
-      lines.push('Component ' + component.componentId + ' · ' + rootLabel
-        + ' (automatic)');
-      if (component.rootId != null) {
-        append(component, Number(component.rootId), '', true, true);
-      }
-    });
-  }
-  return lines.join('\n');
-}
-
-function hierarchySummary(forest) {
-  if (!forest) return 'Hierarchy not inferred. Select Show Hierarchy to build it.';
-  const nodes = (forest.components || []).reduce(
-    (total, component) => total + (component.nodeIds || []).length, 0);
-  const edges = (forest.components || []).reduce(
-    (total, component) => total + Number(component.edgeCount || 0), 0);
-  const maxDepth = Math.max(0, ...(forest.components || [])
-    .map(component => Number(component.maxDepth) || 0));
-  return [
-    'Inferred influence hierarchy',
-    'Components ' + (forest.components || []).length
-      + ' · Nodes ' + nodes + ' · Edges ' + edges,
-    'Primary root ' + (forest.primaryRootId ?? 'n/a')
-      + ' · Max depth ' + maxDepth,
-  ].join('\n');
-}
-
-function physicsDiagnosticsPayload(state) {
-  const model = getModelPhysicsState();
-  if (!model.enabled && !state?.physicsEnabled && !state?.physicsState) {
-    return null;
-  }
-  const constraints = getPhysicsConstraintDiagnostics(state);
-  const mobility = state?.vertexMobility ? [...state.vertexMobility] : [];
-  return {
-    enabled: !!model.enabled,
-    participantCount: model.participantCount,
-    participant: {
-      status: state?.physicsParticipantStatus || 'not-attempted',
-      error: state?.physicsParticipantError || null,
-    },
-    unavailableCount: model.unavailableCount,
-    failedCount: model.failedCount,
-    frequencyHz: model.frequencyHz,
-    dampingRatio: model.dampingRatio,
-    angularResponse: model.angularResponse,
-    linearResponse: model.translationResponse,
-    continuousLinearResponse: model.velocityResponse,
-    gravity: {
-      enabled: !!model.gravityEnabled,
-      scale: model.gravityScale,
-      localDirection: [...(state?.physicsGravityLocal
-        || GRAVITY_WORLD_DIRECTION)],
-      diagnostics: state?.physicsGravityDiagnostics || null,
-    },
-    motion: {
-      rootAngularDeltaVector: [...(state?.lastRootAngularDeltaVector
-        || [0, 0, 0])],
-      rootAngularDeltaMagnitude: Number(
-        state?.lastRootAngularDeltaMagnitude) || 0,
-      translationLagRotationVector: [...(state?.lastTranslationLagRotationVector
-        || [0, 0, 0])],
-      translationLagRotationMagnitude: Number(
-        state?.lastTranslationLagRotationMagnitude) || 0,
-      virtualLinearVelocityLocal: [...(state?.physicsVirtualLinearVelocityLocal
-        || [0, 0, 0])],
-    },
-    constraints,
-    mobility: mobility.length ? {
-      minimum: Math.min(...mobility),
-      maximum: Math.max(...mobility),
-      average: mobility.reduce((sum, value) => sum + value, 0)
-        / mobility.length,
-    } : null,
-    settled: !!model.settled,
-    joints: Object.fromEntries(
-      [...(state?.physicsState?.joints || new Map()).entries()]
-        .map(([boneId, joint]) => [boneId, {
-          rotationVector: [...(joint.rotationVector || [0, 0, 0])],
-          rotationMagnitude: Math.hypot(
-            ...(joint.rotationVector || [0, 0, 0])),
-          angularVelocity: [...(joint.angularVelocity || [0, 0, 0])],
-          angularVelocityMagnitude: Math.hypot(
-            ...(joint.angularVelocity || [0, 0, 0])),
-        }])),
-  };
-}
-
-function hierarchyDiagnosticsPayload(state) {
-  const tree = state?.candidateTree;
-  const forest = state?.candidateForest;
-  if (!tree || !forest) return null;
-  return {
-    rootId: tree.rootId,
-    components: tree.components,
-    edges: tree.edges,
-    orientation: tree.orientation,
-    forest,
-  };
-}
-
-function skinningDiagnosticsPayload(mesh, state) {
-  if (!state?.loaded) return null;
-  const selected = selectedInfluenceNode(state);
-  return {
-    mesh: {
-      semanticKey: mesh?.userData?.semanticKey || null,
-    },
-    skinning: {
-      influenceCount: state.influenceCount,
-      boneIds: [...state.boneIds],
-      selectedBone: state.selectedBone,
-      selectedInfluence: selected ? {
-        boneId: selected.boneId,
-        totalWeight: selected.totalWeight,
-        affectedVertexCount: selected.affectedVertexCount,
-        maxVertexWeight: selected.maxVertexWeight,
-        weightedCenter: selected.weightedCenter,
-        weightedRadius: selected.weightedRadius,
-      } : null,
-      encoding: state.encoding,
-      sourceDiagnostics: state.diagnostics,
-    },
-    hierarchy: hierarchyDiagnosticsPayload(state),
-    physics: physicsDiagnosticsPayload(state),
-  };
-}
-
-async function copySkinningDiagnostics(mesh, state) {
-  const payload = skinningDiagnosticsPayload(mesh, state);
-  if (!payload) throw new Error('Skin weights are not available.');
-  const text = JSON.stringify(payload, null, 2);
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', '');
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  try {
-    if (!document.execCommand('copy')) {
-      throw new Error('Clipboard access is unavailable.');
-    }
-  } finally {
-    textarea.remove();
-  }
-}
-
-function buildSkinningHierarchyControls(parent, mesh, state) {
-  const hierarchy = document.createElement('section');
-  hierarchy.className = 'inspector-section inspector-skinning-hierarchy';
-  const title = document.createElement('div');
-  title.className = 'inspector-skinning-subtitle';
-  title.textContent = 'Inferred Influence Hierarchy';
-  hierarchy.appendChild(title);
-  addText(hierarchy, 'inspector-skinning-hint',
-    'Derived from shared skin weights and influence-center proximity. '
-      + 'It is inferred, not an authored skeleton.');
-
-  const show = document.createElement('button');
-  show.type = 'button';
-  show.className = 'ui-button inspector-skinning-hierarchy-show';
-  show.addEventListener('click', () => {
-    const latest = getSkinningState(mesh);
-    if (!latest) return;
-    const next = latest.influenceVisualizationMode === 'tree'
-      ? null : 'tree';
-    setInfluenceVisualizationMode(mesh, next);
-    update(latest);
-  });
-  hierarchy.appendChild(show);
-
-  const rootLabel = document.createElement('label');
-  rootLabel.className = 'inspector-skinning-field';
-  addText(rootLabel, 'inspector-label', 'Root');
-  const rootSelect = document.createElement('select');
-  rootSelect.className = 'inspector-skinning-hierarchy-root';
-  rootSelect.setAttribute('aria-label', 'Inferred hierarchy root');
-  (state.boneIds || []).forEach(id => {
-    const option = document.createElement('option');
-    option.value = id;
-    option.textContent = id;
-    rootSelect.appendChild(option);
-  });
-  rootSelect.addEventListener('change', () => {
-    setCandidateTreeRoot(mesh, Number(rootSelect.value));
-    update(getSkinningState(mesh));
-  });
-  rootLabel.appendChild(rootSelect);
-  hierarchy.appendChild(rootLabel);
-
-  const summary = document.createElement('pre');
-  summary.className = 'inspector-skinning-hierarchy-summary';
-  hierarchy.appendChild(summary);
-  const output = document.createElement('pre');
-  output.className = 'inspector-skinning-hierarchy-output';
-  hierarchy.appendChild(output);
-
-  let copying = false;
-  const copyButton = document.createElement('button');
-  copyButton.type = 'button';
-  copyButton.className = 'ui-button inspector-skinning-copy-skinning';
-  copyButton.textContent = 'Copy Skinning Diagnostics';
-  copyButton.addEventListener('click', async () => {
-    const latest = getSkinningState(mesh);
-    if (!latest) return;
-    copying = true;
-    update(latest);
-    try {
-      await copySkinningDiagnostics(mesh, latest);
-      copyStatus.textContent = 'Skinning diagnostics copied.';
-    } catch (error) {
-      copyStatus.textContent = error instanceof Error
-        ? error.message : String(error);
-    } finally {
-      copying = false;
-      update(getSkinningState(mesh));
-    }
-  });
-  hierarchy.appendChild(copyButton);
-  const copyStatus = addText(hierarchy, 'inspector-skinning-copy-status', '');
-
-  function update(latest = getSkinningState(mesh)) {
-    if (!latest) return;
-    const forest = latest.candidateForest;
-    const visible = latest.influenceVisualizationMode === 'tree';
-    show.textContent = visible ? 'Hide Hierarchy' : 'Show Hierarchy';
-    show.setAttribute('aria-pressed', String(visible));
-    show.disabled = !latest.loaded;
-    rootSelect.disabled = !forest;
-    rootSelect.value = String(latest.candidateRootId
-      ?? latest.boneIds?.[0] ?? '');
-    summary.textContent = hierarchySummary(forest);
-    output.textContent = forest ? candidateTreeText(latest.candidateTree) : '';
-    copyButton.disabled = !latest.loaded || copying;
-    if (!latest.loaded) copyStatus.textContent = '';
-  }
-
-  parent.appendChild(hierarchy);
-  update(state);
-  return {update};
-}
-
-function physicsSummary(state) {
-  const model = getModelPhysicsState();
-  const status = !model.enabled ? 'Disabled'
-    : model.loading ? 'Loading'
-      : model.settled ? 'Settled' : 'Active';
-  const constraints = getPhysicsConstraintDiagnostics(state);
-  const participant = state?.physicsParticipantStatus || 'not-attempted';
-  return [
-    'Character Physics ' + status + ' · ' + model.participantCount
-      + ' participating meshes',
-    'Participant ' + participant + ' · ' + model.loadingCount
-      + ' loading · ' + model.unavailableCount + ' unavailable · '
-      + model.failedCount + ' failed',
-    'Frequency ' + Number(model.frequencyHz).toFixed(2) + ' Hz · '
-      + 'Damping ' + Number(model.dampingRatio).toFixed(2),
-    'Angular response ' + Number(model.angularResponse).toFixed(2)
-      + ' · Translation response '
-      + Number(model.translationResponse).toFixed(2),
-    'Velocity response '
-      + Number(model.velocityResponse).toFixed(2),
-    'Gravity ' + (model.gravityEnabled ? 'On' : 'Off')
-      + ' · Scale ' + Number(model.gravityScale).toFixed(1),
-    'Joint limits ' + (constraints.enabled ? 'On' : 'Off')
-      + ' · At limit ' + constraints.atLimitCount
-      + ' / ' + constraints.limitedJointCount,
-  ].join('\n');
-}
-
-
-function addPhysicsRange(parent, className, label, min, max, step, value,
-    onInput) {
-  const field = document.createElement('label');
-  field.className = 'inspector-skinning-field';
-  const header = document.createElement('div');
-  header.className = 'inspector-skinning-rotation-header';
-  addText(header, 'inspector-label', label);
-  const valueNode = addText(header, 'inspector-value', String(value));
-  field.appendChild(header);
-  const input = document.createElement('input');
-  input.type = 'range';
-  input.className = className;
-  input.min = String(min);
-  input.max = String(max);
-  input.step = String(step);
-  input.value = String(value);
-  input.addEventListener('input', () => {
-    onInput(input.value);
-    valueNode.textContent = input.value;
-  });
-  field.appendChild(input);
-  parent.appendChild(field);
-  return {input, valueNode};
-}
-
-function buildSkinningPhysicsControls(parent, mesh, state) {
-  const initial = getModelPhysicsState();
-  const section = document.createElement('section');
-  section.className = 'inspector-section inspector-skinning-physics';
-  const title = document.createElement('div');
-  title.className = 'inspector-skinning-subtitle';
-  title.textContent = 'Character Physics - Secondary Motion - Experimental';
-  section.appendChild(title);
-  addText(section, 'inspector-skinning-hint',
-    'Hold RMB and drag to excite the character. '
-      + 'LMB continues to control the camera.');
-
-  const enableLabel = document.createElement('label');
-  enableLabel.className = 'inspector-skinning-physics-enable-label';
-  const enableInput = document.createElement('input');
-  enableInput.type = 'checkbox';
-  enableInput.className = 'inspector-skinning-physics-enable';
-  enableInput.addEventListener('change', () => {
-    setPhysicsEnabled(mesh, enableInput.checked);
-    update();
-  });
-  enableLabel.appendChild(enableInput);
-  addText(enableLabel, 'inspector-label', 'Enable Character Physics');
-  section.appendChild(enableLabel);
-
-  const frequency = addPhysicsRange(section,
-    'inspector-skinning-physics-frequency', 'Frequency (Hz)',
-    0.1, 10, 0.1, initial.frequencyHz,
-    value => setPhysicsFrequency(mesh, value));
-  const damping = addPhysicsRange(section,
-    'inspector-skinning-physics-damping', 'Damping',
-    0, 2, 0.05, initial.dampingRatio,
-    value => setPhysicsDamping(mesh, value));
-  const angular = addPhysicsRange(section,
-    'inspector-skinning-physics-motion', 'Angular response',
-    0, 1, 0.05, initial.angularResponse,
-    value => setPhysicsMotionStrength(mesh, value));
-  const linear = addPhysicsRange(section,
-    'inspector-skinning-physics-linear', 'Translation response',
-    0, 1, 0.05, initial.translationResponse,
-    value => setPhysicsLinearMotionStrength(mesh, value));
-  const continuous = addPhysicsRange(section,
-    'inspector-skinning-physics-continuous-response',
-    'Velocity response', 0, 1, 0.05,
-    initial.velocityResponse,
-    value => setPhysicsContinuousLinearResponse(mesh, value));
-
-  const gravity = document.createElement('div');
-  gravity.className = 'inspector-skinning-physics-gravity';
-  const gravityLabel = document.createElement('label');
-  gravityLabel.className = 'inspector-skinning-checkbox';
-  const gravityEnableInput = document.createElement('input');
-  gravityEnableInput.type = 'checkbox';
-  gravityEnableInput.className = 'inspector-skinning-physics-gravity-enable';
-  gravityEnableInput.addEventListener('change', () => {
-    setPhysicsGravityEnabled(mesh, gravityEnableInput.checked);
-    update();
-  });
-  gravityLabel.appendChild(gravityEnableInput);
-  addText(gravityLabel, 'inspector-label', 'Gravity');
-  gravity.appendChild(gravityLabel);
-  const gravityScale = addPhysicsRange(gravity,
-    'inspector-skinning-physics-gravity-scale', 'Gravity scale',
-    0, 2, 0.1, initial.gravityScale,
-    value => setPhysicsGravityScale(mesh, value));
-  const gravityDirection = addText(gravity,
-    'inspector-skinning-physics-gravity-direction', '');
-  const gravityDiagnostic = addText(gravity,
-    'inspector-skinning-physics-gravity-diagnostic', '');
-  section.appendChild(gravity);
-
-  const constraints = document.createElement('div');
-  constraints.className = 'inspector-skinning-physics-constraints';
-  const constraintsLabel = document.createElement('label');
-  constraintsLabel.className = 'inspector-skinning-checkbox';
-  const constraintsEnableInput = document.createElement('input');
-  constraintsEnableInput.type = 'checkbox';
-  constraintsEnableInput.className =
-    'inspector-skinning-physics-constraints-enable';
-  constraintsEnableInput.addEventListener('change', () => {
-    setPhysicsConstraintsEnabled(mesh, constraintsEnableInput.checked);
-    update();
-  });
-  constraintsLabel.appendChild(constraintsEnableInput);
-  addText(constraintsLabel, 'inspector-label', 'Joint limits');
-  constraints.appendChild(constraintsLabel);
-  const maxBend = addPhysicsRange(constraints,
-    'inspector-skinning-physics-max-bend', 'Max bend',
-    0, 90, 1, initial.maxBendDegrees,
-    value => setPhysicsMaxBendDegrees(mesh, value));
-  const constraintsDiagnostic = addText(constraints,
-    'inspector-skinning-physics-constraints-diagnostic', '');
-  section.appendChild(constraints);
-
-  const summary = document.createElement('pre');
-  summary.className = 'inspector-skinning-physics-summary';
-  section.appendChild(summary);
-  const actions = document.createElement('div');
-  actions.className = 'inspector-skinning-actions';
-  const reset = document.createElement('button');
-  reset.type = 'button';
-  reset.className = 'ui-button inspector-skinning-physics-reset';
-  reset.textContent = 'Reset Motion';
-  reset.addEventListener('click', () => {
-    resetPhysicsMotion();
-    update();
-  });
-  actions.appendChild(reset);
-  section.appendChild(actions);
-
-  function update(latest = getSkinningState(mesh)) {
-    const model = getModelPhysicsState();
-    summary.textContent = physicsSummary(latest);
-    enableInput.checked = !!model.enabled;
-    enableInput.disabled = false;
-    frequency.input.disabled = false;
-    frequency.input.value = model.frequencyHz;
-    frequency.valueNode.textContent =
-      Number(model.frequencyHz).toFixed(2);
-    damping.input.disabled = false;
-    damping.input.value = model.dampingRatio;
-    damping.valueNode.textContent =
-      Number(model.dampingRatio).toFixed(2);
-    angular.input.disabled = false;
-    angular.input.value = model.angularResponse;
-    angular.valueNode.textContent =
-      Number(model.angularResponse).toFixed(2);
-    linear.input.disabled = false;
-    linear.input.value = model.translationResponse;
-    linear.valueNode.textContent =
-      Number(model.translationResponse).toFixed(2);
-    continuous.input.disabled = false;
-    continuous.input.value = model.velocityResponse;
-    continuous.valueNode.textContent =
-      Number(model.velocityResponse).toFixed(2);
-    gravityEnableInput.disabled = false;
-    gravityEnableInput.checked = !!model.gravityEnabled;
-    gravityScale.input.disabled = false;
-    gravityScale.input.value = model.gravityScale;
-    gravityScale.valueNode.textContent =
-      Number(model.gravityScale).toFixed(1);
-    const local = latest?.physicsGravityLocal || GRAVITY_WORLD_DIRECTION;
-    gravityDirection.textContent = 'Down (-Y) → local ['
-      + local.map(value => Number(value).toFixed(2)).join(', ') + ']';
-    const gravityMax = Number(
-      latest?.physicsGravityDiagnostics?.maxTotalAccelerationMagnitude) || 0;
-    gravityDiagnostic.textContent = 'Max gravity acceleration '
-      + (gravityMax * 180 / Math.PI).toFixed(1) + ' deg/s²';
-    const diagnostics = getPhysicsConstraintDiagnostics(latest);
-    constraintsEnableInput.disabled = false;
-    constraintsEnableInput.checked = diagnostics.enabled;
-    maxBend.input.disabled = false;
-    maxBend.input.value = diagnostics.maxComponentBend;
-    maxBend.valueNode.textContent =
-      diagnostics.maxComponentBend.toFixed(0) + '°';
-    constraintsDiagnostic.textContent = 'At limit '
-      + diagnostics.atLimitCount + ' / ' + diagnostics.limitedJointCount
-      + ' joints · Max usage '
-      + (diagnostics.maxUsage * 100).toFixed(0) + '%';
-    reset.disabled = !model.enabled;
-  }
-
-  parent.appendChild(section);
-  update(state);
-  physicsUpdates.set(mesh, update);
-  return {update};
-}
-
-function buildSkinningAdvancedControls(parent, mesh, state) {
-  const advanced = document.createElement('div');
-  advanced.className = 'inspector-skinning-advanced';
-  const physics = buildSkinningPhysicsControls(advanced, mesh, state);
-  const hierarchy = buildSkinningHierarchyControls(advanced, mesh, state);
-  parent.appendChild(advanced);
-  return {
-    update(latest = getSkinningState(mesh)) {
-      hierarchy.update(latest);
-      physics.update(latest);
-    },
-  };
-}
-
-function renderSkinningControls(section, mesh, state, advancedHost = null) {
-  const load = section.querySelector('.inspector-skinning-load');
-  const status = section.querySelector('.inspector-skinning-status');
-  const controls = section.querySelector('.inspector-skinning-controls');
-  if (!load || !status || !controls) return;
-  if (!state?.loaded) {
-    skinningUpdates.delete(mesh);
-    if (advancedHost) {
-      advancedHost.replaceChildren();
-      advancedHost.hidden = false;
-      buildSkinningPhysicsControls(advancedHost, mesh, state);
-    }
-    controls.hidden = true;
-    const available = mesh.userData?.skinningAvailable === true
-      && !!mesh.userData?.modPath && !!mesh.userData?.semanticKey;
-    load.disabled = !!state?.loading || !available;
-    if (!available) load.textContent = 'No Skin Weights';
-    load.textContent = state?.loading ? 'Loading…' : 'Load Weights';
-    status.textContent = state?.error
-      || (!available ? 'No skin-weight stream was found for this draw.' : '');
-    status.hidden = !status.textContent;
-    return;
-  }
-
-  load.disabled = true;
-  load.textContent = 'Weights loaded';
-  status.hidden = true;
-  controls.hidden = false;
-  skinningUpdates.delete(mesh);
-  physicsUpdates.delete(mesh);
-  controls.replaceChildren();
-  if (advancedHost) {
-    advancedHost.replaceChildren();
-    advancedHost.hidden = false;
-  }
-
-  const summary = document.createElement('div');
-  summary.className = 'inspector-skinning-summary';
-  summary.textContent = state.influenceCount + ' influences / vertex · '
-    + state.boneIds.length + ' bone IDs';
-  controls.appendChild(summary);
-
-  const boneLabel = document.createElement('label');
-  boneLabel.className = 'inspector-skinning-field';
-  addText(boneLabel, 'inspector-label', 'Bone ID');
-  const boneSelect = document.createElement('select');
-  boneSelect.className = 'inspector-skinning-bone';
-  state.boneIds.forEach(id => {
-    const option = document.createElement('option');
-    option.value = id;
-    option.textContent = id;
-    option.selected = id === state.selectedBone;
-    boneSelect.appendChild(option);
-  });
-  boneSelect.disabled = !state.boneIds.length;
-  boneSelect.addEventListener('change', () => {
-    setSelectedBone(mesh, Number(boneSelect.value));
-    skinningUpdates.get(mesh)?.();
-  });
-  boneLabel.appendChild(boneSelect);
-  controls.appendChild(boneLabel);
-
-  const influenceStats = buildSelectedInfluenceStats(controls, mesh, state);
-
-  const heatmap = document.createElement('button');
-  heatmap.type = 'button';
-  heatmap.className = 'ui-button inspector-skinning-heatmap';
-  heatmap.addEventListener('click', () => {
-    setSkinningHeatmap(
-      mesh, getSkinningState(mesh).heatmapMode !== 'bone');
-    skinningUpdates.get(mesh)?.();
-  });
-  controls.appendChild(heatmap);
-
-  const mobilityHeatmap = document.createElement('button');
-  mobilityHeatmap.type = 'button';
-  mobilityHeatmap.className =
-    'ui-button inspector-skinning-mobility-heatmap';
-  mobilityHeatmap.addEventListener('click', () => {
-    const latest = getSkinningState(mesh);
-    setPhysicsMobilityHeatmap(mesh, latest?.heatmapMode !== 'mobility');
-    skinningUpdates.get(mesh)?.();
-  });
-  controls.appendChild(mobilityHeatmap);
-
-  const center = document.createElement('button');
-  center.type = 'button';
-  center.className = 'ui-button inspector-skinning-center';
-  center.addEventListener('click', () => {
-    const latest = getSkinningState(mesh);
-    const visible = latest?.influenceVisualizationMode === 'center';
-    setInfluenceVisualizationMode(mesh, visible ? null : 'center');
-    skinningUpdates.get(mesh)?.();
-  });
-  controls.appendChild(center);
-
-  const reset = document.createElement('button');
-  reset.type = 'button';
-  reset.className = 'ui-button inspector-skinning-reset';
-  reset.textContent = 'Reset';
-  reset.addEventListener('click', () => {
-    resetSkinningExperiment(mesh);
-    renderSkinningControls(
-      section, mesh, getSkinningState(mesh), advancedHost);
-  });
-  controls.appendChild(reset);
-
-  buildSkinningDiagnostics(
-    controls, state, mesh.geometry.attributes.position.count);
-  const advanced = buildSkinningAdvancedControls(
-    advancedHost || controls, mesh, state);
-
-  function update(latest = getSkinningState(mesh)) {
-    if (!latest) return;
-    boneSelect.value = String(latest.selectedBone ?? '');
-    influenceStats.update(latest);
-    syncSkinningHeatmapControls(section, mesh);
-    const centerVisible = latest.influenceVisualizationMode === 'center';
-    center.textContent = centerVisible
-      ? 'Hide Influence Center' : 'Show Influence Center';
-    center.setAttribute('aria-pressed', String(centerVisible));
-    advanced.update(latest);
-  }
-
-  skinningUpdates.set(mesh, update);
-  update(state);
-}
-function buildSkinningSection(content, mesh) {
-  if (!mesh || mesh.userData?.assetFill === true) return;
-  const group = document.createElement('div');
-  group.className = 'inspector-skinning-group';
-  const section = document.createElement('section');
-  section.className = 'inspector-section inspector-skinning-section';
-  const title = document.createElement('div');
-  title.className = 'inspector-skinning-title';
-  title.textContent = 'Skin Weights';
-  section.appendChild(title);
-  const load = document.createElement('button');
-  load.type = 'button';
-  load.className = 'ui-button inspector-skinning-load';
-  load.textContent = 'Load Weights';
-  section.appendChild(load);
-  const status = addText(section, 'inspector-skinning-status', '');
-  status.hidden = true;
-  const controls = document.createElement('div');
-  controls.className = 'inspector-skinning-controls';
-  controls.hidden = true;
-  section.appendChild(controls);
-  const advancedHost = document.createElement('div');
-  advancedHost.className = 'inspector-skinning-advanced-host';
-  advancedHost.hidden = true;
-  group.append(section, advancedHost);
-  content.appendChild(group);
-  renderSkinningControls(
-    section, mesh, getSkinningState(mesh), advancedHost);
-  load.addEventListener('click', async () => {
-    if (load.disabled) return;
-    load.disabled = true;
-    status.hidden = true;
-    status.textContent = '';
-    try {
-      await loadSkinningWeights(mesh);
-    } catch (error) {
-      console.error('Could not load skin weights', error);
-    }
-    renderSkinningControls(
-      section, mesh, getSkinningState(mesh), advancedHost);
-  });
-}
-
 function buildComponent(record) {
   const content = showContent();
   content.replaceChildren();
-  buildHeader(
-    content,
-    record.component || 'Component',
-    componentContext(record),
-    record.source || '',
-  );
+  buildHeader(content, record.component || 'Component',
+    componentContext(record), record.source || '');
   buildMaterialSection(content, record);
   buildComponentTextureSection(content, record);
 }
@@ -1003,10 +228,10 @@ function buildMesh(mesh, record) {
   const name = mesh.userData.displayName || record.label || 'Mesh';
   const component = record.component;
   const componentName = component?.component || component || 'Component';
-  buildHeader(content, name, componentName, record.entry?.source?.[0]?.ini || '');
+  buildHeader(content, name, componentName,
+    record.entry?.source?.[0]?.ini || '');
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, mesh);
-  buildSkinningSection(content, mesh);
 }
 
 function updateInspectorState() {
@@ -1019,8 +244,7 @@ function updateInspectorState() {
     material.value = owner?.getMaterialKind?.() || 'auto';
   }
   if (current.type === 'mesh') {
-    updateTextureControlState(
-      content, current.mesh, current.record.component);
+    updateTextureControlState(content, current.mesh, current.record.component);
   } else {
     const context = content.querySelector('[data-inspector-context="true"]');
     if (context) context.textContent = componentContext(current.record);
@@ -1032,13 +256,18 @@ function updateInspectorState() {
   }
 }
 
+function showInspectorOnSelection() {
+  if (selectionCount++ === 0 && isRightDockOpen()
+      && getRightDockTab() !== 'weight') {
+    setRightDockTab('inspector', {persist: false});
+  }
+}
+
 function selectComponent(record) {
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
   clearSelection();
-  if (selectionCount++ === 0 && isRightDockOpen()) {
-    setRightDockTab('inspector', { persist: false });
-  }
-  current = { type: 'component', record };
+  showInspectorOnSelection();
+  current = {type: 'component', record};
   record.header?.classList.add('selected');
   buildComponent(record);
   const status = $('selected-mesh-status');
@@ -1048,11 +277,9 @@ function selectComponent(record) {
 function selectMesh(mesh) {
   const record = meshRecords.get(mesh);
   if (!record) return;
-  if (selectionCount++ === 0 && isRightDockOpen()) {
-    setRightDockTab('inspector', { persist: false });
-  }
+  showInspectorOnSelection();
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
-  current = { type: 'mesh', mesh, record };
+  current = {type: 'mesh', mesh, record};
   buildMesh(mesh, record);
   const status = $('selected-mesh-status');
   if (status) {
@@ -1097,22 +324,7 @@ export function initInspectorPanel() {
     const affected = current.type === 'mesh'
       ? changed.includes(current.mesh)
       : (current.record.meshes || []).some(mesh => changed.includes(mesh));
-    if (affected) {
-      updateInspectorState();
-      if (current.type === 'mesh') {
-        skinningUpdates.get(current.mesh)?.();
-        physicsUpdates.get(current.mesh)?.();
-      }
-    }
-  });
-  window.addEventListener('mod-viewer-model-transform-changed', event => {
-    const changed = event.detail?.meshes || [];
-    if (current?.type === 'mesh' && changed.includes(current.mesh)) {
-      physicsUpdates.get(current.mesh)?.();
-    }
-  });
-  window.addEventListener('mod-viewer-model-physics-changed', () => {
-    if (current?.type === 'mesh') physicsUpdates.get(current.mesh)?.();
+    if (affected) updateInspectorState();
   });
   clearContent();
 }

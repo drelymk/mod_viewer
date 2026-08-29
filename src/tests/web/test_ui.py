@@ -123,7 +123,8 @@ def test_controls_precede_inspector_and_are_the_default_right_dock_tab(
         _open(page, "A")
         page.locator(".draw-item").wait_for()
         assert page.locator(".right-dock-tabs > button").evaluate_all(
-            "tabs => tabs.map(tab => tab.id)") == ["controls-tab", "inspector-tab"]
+            "tabs => tabs.map(tab => tab.id)") == [
+                "controls-tab", "inspector-tab", "weight-tab"]
         assert page.locator("#controls-tab").get_attribute(
             "aria-selected") == "true"
         assert page.locator("#controls-panel").is_visible()
