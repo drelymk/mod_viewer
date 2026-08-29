@@ -25,12 +25,21 @@ class DrawOccurrence:
 
     section: str | None
     ordinal: int | None
+    path: tuple = ()
 
     def key_value(self):
-        return [self.section or "", self.ordinal]
+        value = [self.section or "", self.ordinal]
+        path = _occurrence_path_value(self.path)
+        if path:
+            value.append(path)
+        return value
 
     def to_dict(self):
-        return {"section": self.section, "ordinal": self.ordinal}
+        return {
+            "section": self.section,
+            "ordinal": self.ordinal,
+            "path": _occurrence_path_value(self.path),
+        }
 
 
 def normalize_identity_source(value):
@@ -43,11 +52,25 @@ def normalize_identity_source(value):
     return source or None
 
 
+def _occurrence_path_value(path):
+    return [
+        [str(item[0]) if item[0] is not None else "", item[1]]
+        for item in (path or ())
+        if isinstance(item, (tuple, list)) and len(item) == 2
+    ]
+
+
 def _draw_occurrence_value(value):
     if isinstance(value, DrawOccurrence):
         return value.key_value()
     if isinstance(value, (tuple, list)) and len(value) == 2:
         return [str(value[0]) if value[0] is not None else "", value[1]]
+    if isinstance(value, (tuple, list)) and len(value) == 3:
+        return [
+            str(value[0]) if value[0] is not None else "",
+            value[1],
+            _occurrence_path_value(value[2]),
+        ]
     return None
 
 
@@ -58,6 +81,12 @@ def _draw_occurrence_dict(value):
         return {
             "section": value[0],
             "ordinal": value[1],
+        }
+    if isinstance(value, (tuple, list)) and len(value) == 3:
+        return {
+            "section": value[0],
+            "ordinal": value[1],
+            "path": _occurrence_path_value(value[2]),
         }
     return None
 
@@ -142,7 +171,7 @@ class MeshIdentity:
 
     @property
     def version(self):
-        return 4
+        return 5
 
     @property
     def key(self):

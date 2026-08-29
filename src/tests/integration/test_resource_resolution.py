@@ -8,6 +8,7 @@ from tests.support.corpus import sample_mods
 from app.mods import loader as mod_loader
 from core.ini.parser import (_scan_sections_for_draws, build_draw_groups,
                              extract_resources, merge_sections, parse_sections)
+from core.geometry.semantics import deduplicate_draws, build_mesh_semantics
 from core.textures import encode_texture_file
 from tests.support.provenance import (build_mesh_fixture, geometry_values, visible,
                                  write)
@@ -322,6 +323,61 @@ def test_run_inlines_nested_commandlist_draws():
         }
 
         chained = by_count[50]
+        assert chained["occurrence"].path == (
+            ("TextureOverrideBodyBlend", 0),
+            ("CustomShaderOuter", 0),
+        )
         assert (visible(chained["conditions"], {"naked": "0", "flag": "0"})), ("chained draw visible when both naked==0 and flag==0")
         assert (not visible(chained["conditions"], {"naked": "1", "flag": "0"})), ("chained draw hidden when the caller's own gate (naked==0) fails")
         assert (not visible(chained["conditions"], {"naked": "0", "flag": "1"})), ("chained draw hidden when the callee's own gate (flag==0) fails")
+
+
+def test_repeated_commandlist_execution_has_distinct_occurrences(tmp_path):
+    ini = """[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+Resource\\GIMI\\Diffuse = ResourceRed
+run = CommandListDraw
+Resource\\GIMI\\Diffuse = ResourceBlue
+run = CommandListDraw
+
+[CommandListDraw]
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body.buf
+stride = 12
+
+[ResourceBodyTexcoord]
+filename = body-uv.buf
+stride = 8
+
+[ResourceRed]
+filename = red.dds
+
+[ResourceBlue]
+filename = blue.dds
+"""
+    path = write(tmp_path, "mod.ini", ini)
+    sections = merge_sections([path])
+    groups = build_draw_groups(sections, extract_resources(sections))
+
+    assert len(groups) == 1
+    draws = groups[0]["draws"]
+    assert len(draws) == 2
+    assert [draw.texture_default("diffuse") for draw in draws] == [
+        "red.dds", "blue.dds"]
+    assert [draw.occurrence.path for draw in draws] == [
+        (("TextureOverrideBody", 0),),
+        (("TextureOverrideBody", 1),),
+    ]
+    assert len(deduplicate_draws(groups[0])) == 2
+
+    semantics = build_mesh_semantics(groups, str(tmp_path))
+    keys = [entry["identity"]["key"] for entry in semantics.values()]
+    assert len(keys) == len(set(keys)) == 2

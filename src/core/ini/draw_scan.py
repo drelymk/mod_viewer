@@ -265,8 +265,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 result.pop(role, None)
         return result
 
-    def scan(lines, info, cond_stack, visiting, section_name):
+    def scan(lines, info, cond_stack, visiting, section_name,
+             execution_path=()):
         draw_ordinal = 0
+        run_ordinal = 0
         for raw in lines:
             line = raw.split(";")[0].strip()
             if not line:
@@ -345,7 +347,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 r"drawindexed\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)\s*",
                 line, re.I)
             if match:
-                occurrence = DrawOccurrence(section_name, draw_ordinal)
+                occurrence = DrawOccurrence(
+                    section_name, draw_ordinal, execution_path)
                 draw_ordinal += 1
                 combined = DNF_TRUE
                 for frame in cond_stack:
@@ -378,12 +381,16 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     record_texture_assignment(
                         info, role, semantic.group(2), cond_stack,
                         source="semantic")
-            if re.match(r"run\s*=\s*(\S+)", line, re.I):
+            run_match = re.match(r"run\s*=\s*(\S+)", line, re.I)
+            if run_match:
+                current_run = run_ordinal
+                run_ordinal += 1
                 target_name = _run_target_name(line, section_lookup)
                 if target_name and target_name not in visiting:
                     visiting.add(target_name)
                     scan(sections[target_name], info, cond_stack, visiting,
-                         target_name)
+                         target_name,
+                         execution_path + ((section_name, current_run),))
                     visiting.discard(target_name)
 
     scanned = _ScannedSections(texture_override_index=texture_override_index)

@@ -37,8 +37,8 @@ def test_mesh_semantics_preserves_group_source_and_component_identity(tmp_path):
     assert result["Body-1"]["source"] == "Root.ini"
     assert result["Body-1"]["component"] == "Body Display"
     assert result["Body-1"]["identity"] == {
-        "version": 4,
-        "key": 'mesh:[4,"Root.ini","Body Display",null,'
+        "version": 5,
+        "key": 'mesh:[5,"Root.ini","Body Display",null,'
                 '["1234abcd",0,3],[3,0,0],'
                 '[null,null,null,null,null,null,null]]',
         "source": "Root.ini",
@@ -93,7 +93,7 @@ def test_mesh_identity_survives_uncertain_asset_resolution(tmp_path, status):
     }], str(tmp_path))["Body-1"]
 
     assert result["identity"]["key"] == (
-        'mesh:[4,"Root.ini","Body",null,["1234abcd",0,3],[3,0,0],'
+        'mesh:[5,"Root.ini","Body",null,["1234abcd",0,3],[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     assert result["asset_binding"]["status"] == status
 

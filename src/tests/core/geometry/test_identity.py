@@ -41,10 +41,10 @@ def test_mesh_identity_is_deterministic_and_projects_all_authored_fields():
         _draw(), source=".\\Root.ini", component="Body:Main")
 
     assert identity.key == (
-        'mesh:[4,"Root.ini","Body:Main",null,["1234ABCD",8,120],'
+        'mesh:[5,"Root.ini","Body:Main",null,["1234ABCD",8,120],'
                 '[120,4,-2],[null,null,null,null,null,null,null]]')
     assert identity.to_dict() == {
-        "version": 4,
+        "version": 5,
         "key": identity.key,
         "source": "Root.ini",
         "component": "Body:Main",
@@ -129,11 +129,16 @@ def test_mesh_identity_occurrence_distinguishes_texture_only_draws():
         _draw(texture_default_file="red.dds",
               occurrence=("TextureOverrideBody", 0)),
         source="Root.ini", component="Body")
+    same_occurrence = make_mesh_identity(
+        _draw(texture_default_file="red-v2.dds",
+              occurrence=("TextureOverrideBody", 0)),
+        source="Root.ini", component="Body")
     second = make_mesh_identity(
         _draw(texture_default_file="blue.dds",
               occurrence=("TextureOverrideBody", 1)),
         source="Root.ini", component="Body")
 
+    assert same_occurrence.key == first.key
     assert first.key != second.key
     assert first.to_dict()["occurrence"] == {
         "section": "TextureOverrideBody", "ordinal": 0}
@@ -153,8 +158,8 @@ def test_mesh_identity_without_geometry_evidence_is_still_present():
         _draw(geometry_match=None), source=None, component=None)
 
     assert identity.to_dict() == {
-        "version": 4,
-        "key": 'mesh:[4,"","",null,null,[120,4,-2],'
+        "version": 5,
+        "key": 'mesh:[5,"","",null,null,[120,4,-2],'
                 '[null,null,null,null,null,null,null]]',
         "source": None,
         "component": None,

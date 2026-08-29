@@ -357,10 +357,10 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
 def test_metadata_texture_migration_prefers_identity_key_and_rekeys_legacy(
         tmp_path):
     identity_key = (
-        'mesh:[4,"Root.ini","Body",null,null,[3,0,0],'
+        'mesh:[5,"Root.ini","Body",null,null,[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {"Body-1": {
-        "identity": {"version": 4, "key": identity_key},
+        "identity": {"version": 5, "key": identity_key},
         "component": "Body", "drawindexed": [3, 0, 0],
         "texture_options": [],
     }}, "textures": {}}
@@ -384,10 +384,10 @@ def test_metadata_texture_migration_prefers_identity_key_and_rekeys_legacy(
 def test_metadata_texture_migration_reads_legacy_key_under_new_identity(
         tmp_path):
     identity_key = (
-        'mesh:[4,"Root.ini","Body",null,null,[3,0,0],'
+        'mesh:[5,"Root.ini","Body",null,null,[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {"Body-1": {
-        "identity": {"version": 4, "key": identity_key},
+        "identity": {"version": 5, "key": identity_key},
         "component": "Body", "drawindexed": [3, 0, 0],
         "texture_options": [],
     }}, "textures": {}}
@@ -405,16 +405,16 @@ def test_metadata_texture_migration_reads_legacy_key_under_new_identity(
 
 def test_metadata_texture_migration_skips_ambiguous_legacy_key(tmp_path):
     identity_a = (
-        'mesh:[4,"A.ini","Body",null,null,[3,0,0],'
+        'mesh:[5,"A.ini","Body",null,null,[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     identity_b = (
-        'mesh:[4,"B.ini","Body",null,null,[3,0,0],'
+        'mesh:[5,"B.ini","Body",null,null,[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {
-        "Body-1": {"identity": {"version": 4, "key": identity_a},
+        "Body-1": {"identity": {"version": 5, "key": identity_a},
                     "component": "Body", "drawindexed": [3, 0, 0],
                     "texture_options": []},
-        "Body_2-1": {"identity": {"version": 4, "key": identity_b},
+        "Body_2-1": {"identity": {"version": 5, "key": identity_b},
                       "component": "Body", "drawindexed": [3, 0, 0],
                       "texture_options": []},
     }, "textures": {}}
@@ -431,10 +431,10 @@ def test_metadata_texture_migration_skips_ambiguous_legacy_key(tmp_path):
 
 def test_metadata_mesh_name_migration_prefers_new_key_and_rekeys_legacy():
     identity_key = (
-        'mesh:[4,"Root.ini","Body",null,null,[3,0,0],'
+        'mesh:[5,"Root.ini","Body",null,null,[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {"Body-1": {
-        "identity": {"version": 4, "key": identity_key},
+        "identity": {"version": 5, "key": identity_key},
         "component": "Body", "drawindexed": [3, 0, 0],
     }}}
     data = {"mesh_names": {
@@ -449,10 +449,10 @@ def test_metadata_mesh_name_migration_prefers_new_key_and_rekeys_legacy():
 
 def test_metadata_mesh_name_migration_reads_legacy_key_under_new_identity():
     identity_key = (
-        'mesh:[4,"Root.ini","Body",null,null,[3,0,0],'
+        'mesh:[5,"Root.ini","Body",null,null,[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {"Body-1": {
-        "identity": {"version": 4, "key": identity_key},
+        "identity": {"version": 5, "key": identity_key},
         "component": "Body", "drawindexed": [3, 0, 0],
     }}}
     data = {"mesh_names": {"Body::3,0,0": "Legacy name"}}
@@ -464,15 +464,15 @@ def test_metadata_mesh_name_migration_reads_legacy_key_under_new_identity():
 
 def test_metadata_mesh_name_migration_skips_ambiguous_legacy_key():
     identity_a = (
-        'mesh:[4,"A.ini","Body",null,null,[3,0,0],'
+        'mesh:[5,"A.ini","Body",null,null,[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     identity_b = (
-        'mesh:[4,"B.ini","Body",null,null,[3,0,0],'
+        'mesh:[5,"B.ini","Body",null,null,[3,0,0],'
         '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {
-        "Body-1": {"identity": {"version": 4, "key": identity_a},
+        "Body-1": {"identity": {"version": 5, "key": identity_a},
                     "component": "Body", "drawindexed": [3, 0, 0]},
-        "Body_2-1": {"identity": {"version": 4, "key": identity_b},
+        "Body_2-1": {"identity": {"version": 5, "key": identity_b},
                       "component": "Body", "drawindexed": [3, 0, 0]},
     }}
     data = {"mesh_names": {"Body::3,0,0": "Legacy name"}}
