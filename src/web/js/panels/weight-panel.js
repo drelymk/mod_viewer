@@ -31,13 +31,25 @@ function selectedLabel(ids) {
   return `${ids.length} bones selected`;
 }
 
+function formatAffectedVertices(value) {
+  const count = Math.max(0, Math.round(Number(value) || 0));
+  if (count < 1000) return `${count.toLocaleString('en-US')} verts`;
+  const compact = (count / 1000).toFixed(1).replace(/\.0$/, '');
+  return `${compact}k verts`;
+}
+
+function formatBoneMeta(stats) {
+  const average = Math.max(0, Number(stats?.averageInfluence) || 0);
+  return `${formatAffectedVertices(stats?.affectedVertexCount)} · ${Math.round(average * 100)}%`;
+}
+
 function addRange(parent, className, label, min, max, step, value, onInput) {
   const field = document.createElement('label');
   field.className = 'weight-field';
   const header = document.createElement('div');
   header.className = 'weight-range-header';
-  addText(header, 'inspector-label', label);
-  const valueNode = addText(header, 'inspector-value', Number(value).toFixed(2));
+  addText(header, 'weight-label', label);
+  const valueNode = addText(header, 'weight-value', Number(value).toFixed(2));
   field.appendChild(header);
   const input = document.createElement('input');
   input.type = 'range';
@@ -59,7 +71,7 @@ function buildBonePicker(content) {
   const section = document.createElement('section');
   section.className = 'weight-section';
   const title = document.createElement('div');
-  title.className = 'inspector-section-title';
+  title.className = 'weight-section-title';
   title.textContent = 'Selected bones';
   section.appendChild(title);
 
@@ -91,7 +103,7 @@ function buildBonePicker(content) {
   selectedOnly.type = 'checkbox';
   selectedOnly.className = 'weight-selected-only';
   filter.appendChild(selectedOnly);
-  addText(filter, 'inspector-label', 'Selected only');
+  addText(filter, 'weight-label', 'Selected only');
   popover.appendChild(filter);
 
   const list = document.createElement('div');
@@ -116,6 +128,7 @@ function buildBonePicker(content) {
   ui.boneList = list;
   ui.clearSelection = clear;
   ui.optionById = new Map();
+  ui.metaById = new Map();
   ui.optionKey = null;
 
   button.addEventListener('click', () => {
@@ -132,7 +145,7 @@ function buildPhysicsControls(content) {
   const section = document.createElement('section');
   section.className = 'weight-section weight-physics';
   const title = document.createElement('div');
-  title.className = 'inspector-section-title';
+  title.className = 'weight-section-title';
   title.textContent = 'Character physics';
   section.appendChild(title);
   addText(section, 'weight-hint',
@@ -148,7 +161,7 @@ function buildPhysicsControls(content) {
     else disableModelPhysics();
   });
   enableLabel.appendChild(enable);
-  addText(enableLabel, 'inspector-label', 'Enable Character Physics');
+  addText(enableLabel, 'weight-label', 'Enable Character Physics');
   section.appendChild(enableLabel);
 
   const ranges = {};
@@ -178,7 +191,7 @@ function buildPhysicsControls(content) {
     setPhysicsGravityEnabled(null, gravityEnable.checked);
   });
   gravityLabel.appendChild(gravityEnable);
-  addText(gravityLabel, 'inspector-label', 'Gravity');
+  addText(gravityLabel, 'weight-label', 'Gravity');
   gravity.appendChild(gravityLabel);
   ranges.gravity = addRange(gravity, 'weight-physics-gravity-scale',
     'Gravity scale', 0, 2, 0.1, 1,
@@ -196,7 +209,7 @@ function buildPhysicsControls(content) {
     setPhysicsConstraintsEnabled(null, constraintsEnable.checked);
   });
   constraintsLabel.appendChild(constraintsEnable);
-  addText(constraintsLabel, 'inspector-label', 'Joint limits');
+  addText(constraintsLabel, 'weight-label', 'Joint limits');
   constraints.appendChild(constraintsLabel);
   ranges.maxBend = addRange(constraints, 'weight-physics-max-bend',
     'Max bend', 0, 90, 1, 45,
@@ -241,7 +254,7 @@ function buildPanel() {
   heatmap.className = 'weight-heatmap-enable';
   heatmap.addEventListener('change', () => setModelWeightHeatmap(heatmap.checked));
   heatmapLabel.appendChild(heatmap);
-  addText(heatmapLabel, 'inspector-label', 'Show Weight Heatmap');
+  addText(heatmapLabel, 'weight-label', 'Show Weight Heatmap');
   display.appendChild(heatmapLabel);
   panel.appendChild(display);
   ui.heatmap = heatmap;
@@ -270,6 +283,7 @@ function syncBoneOptions(state) {
       if (!available.has(id)) {
         option.remove();
         ui.optionById.delete(id);
+        ui.metaById.delete(id);
       }
     });
     state.availableBoneIds.forEach(id => {
@@ -288,7 +302,9 @@ function syncBoneOptions(state) {
       });
       label.appendChild(checkbox);
       addText(label, 'weight-bone-id', String(id));
+      const meta = addText(label, 'weight-bone-meta', '');
       ui.optionById.set(id, label);
+      ui.metaById.set(id, meta);
     });
     state.availableBoneIds.forEach(id =>
       ui.boneList.appendChild(ui.optionById.get(id)));
@@ -297,6 +313,7 @@ function syncBoneOptions(state) {
   }
   state.availableBoneIds.forEach(id => {
     ui.optionById.get(id).querySelector('input').checked = selected.has(id);
+    ui.metaById.get(id).textContent = formatBoneMeta(state.boneStats?.[id]);
   });
   if (!state.availableBoneIds.length) {
     if (!ui.empty) {

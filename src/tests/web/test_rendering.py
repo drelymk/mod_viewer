@@ -1387,6 +1387,22 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         assert page.locator(".weight-bone-select").inner_text() == "Select bones"
 
         page.locator(".weight-bone-select").click()
+        assert page.locator(".weight-bone-option").evaluate_all("""
+          nodes => nodes.map(node => [
+            node.querySelector('.weight-bone-id').textContent,
+            node.querySelector('.weight-bone-meta').textContent,
+          ])
+        """) == [
+            ["0", "2 verts · 70%"],
+            ["1", "2 verts · 45%"],
+            ["2", "2 verts · 35%"],
+        ]
+        assert page.locator("#weight-panel .inspector-label").count() == 0
+        assert page.locator("#weight-panel .inspector-value").count() == 0
+        assert page.locator("#weight-panel .inspector-section-title").count() == 0
+        stats_build_count = page.evaluate("""async () =>
+          (await import('./js/mesh/weight-experiment.js'))
+            .getModelBoneStatsBuildCount()""")
         page.locator('.weight-bone-option input[value="1"]').check()
         page.wait_for_function("""() => JSON.stringify(
           window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
@@ -1421,6 +1437,9 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         assert mask_count_after - mask_count_before == 1
         page.locator(".weight-bone-select").click()
         assert page.evaluate("window.__weightPreviewCalls") == 1
+        assert page.evaluate("""async () =>
+          (await import('./js/mesh/weight-experiment.js'))
+            .getModelBoneStatsBuildCount()""") == stats_build_count
         page.locator(".weight-physics-enable").check()
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
         physics = page.evaluate("""async () => {
@@ -1573,6 +1592,97 @@ def test_selected_weight_topology_filters_weak_edges_and_pivots_synthetic_roots(
             "candidateCount": 0,
             "componentCount": 2,
             "pivotedPoint": pytest.approx([1, 0, 0]),
+        }
+    finally:
+        context.close()
+
+
+def test_selected_weight_topology_preserves_mirrored_branches_and_attachment(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightTopologyMirrored": _payload("WeightTopologyMirrored")})
+    try:
+        result = page.evaluate("""async () => {
+          const weight = await import('./js/mesh/weight-experiment.js');
+          const edges = [
+            {boneA: 45, boneB: 49, treeEdgeScore: .90,
+              containment: .90, jaccard: .30, normalizedDistance: .1},
+            {boneA: 47, boneB: 53, treeEdgeScore: .89,
+              containment: .89, jaccard: .30, normalizedDistance: .1},
+            {boneA: 45, boneB: 47, treeEdgeScore: .20,
+              containment: .20, jaccard: .02, normalizedDistance: .1},
+          ];
+          const kept = weight.pruneSelectedRelationshipEdges(edges);
+          const attachment = weight.selectAttachmentRelationship([
+            {boneA: 2, boneB: 45, minOverlap: 120,
+              sharedVertexCount: 300, containment: .40, jaccard: .20,
+              normalizedDistance: .4},
+            {boneA: 47, boneB: 58, minOverlap: 1,
+              sharedVertexCount: 50, containment: 1, jaccard: .1,
+              normalizedDistance: .1},
+          ]);
+          const left = weight.orientTree([
+            {boneA: 2, boneB: 45}, {boneA: 45, boneB: 49}], 2);
+          const right = weight.orientTree([
+            {boneA: 2, boneB: 47}, {boneA: 47, boneB: 53}], 2);
+          const forest = {components: [
+            {rootId: 2, nodeIds: [2, 45, 49], childrenById: left.childrenById},
+            {rootId: 2, nodeIds: [2, 47, 53], childrenById: right.childrenById},
+          ]};
+          const centers = new Map([
+            [2, [0, 0, 0]], [45, [-1, 0, 0]], [49, [-1, 1, 0]],
+            [47, [1, 0, 0]], [53, [1, 1, 0]],
+          ]);
+          const transforms = weight.buildForestTransformsFromLocalRotations(
+            forest, centers, {rotationByBoneId: new Map([
+                  [45, [0, 0, .2]], [47, [0, 0, -.2]],
+                  [49, [0, 0, .15]], [53, [0, 0, -.15]],
+            ])});
+          const THREE = await import('three');
+          const leftPoint = new THREE.Vector3(-1, 1, 0);
+          const rightPoint = new THREE.Vector3(1, 1, 0);
+          const leftMoved = leftPoint.clone().applyMatrix4(transforms.get(49))
+            .distanceTo(leftPoint);
+          const rightMoved = rightPoint.clone().applyMatrix4(transforms.get(53))
+            .distanceTo(rightPoint);
+          return {
+            kept: kept.map(edge => `${edge.boneA}-${edge.boneB}`),
+            attachment: `${attachment.boneA}-${attachment.boneB}`,
+            depths: [left.depthById[45], left.depthById[49],
+              right.depthById[47], right.depthById[53]],
+            moved: [leftMoved, rightMoved],
+          };
+        }""")
+        assert result["kept"] == ["45-49", "47-53"]
+        assert result["attachment"] == "2-45"
+        assert result["depths"] == [1, 2, 1, 2]
+        assert result["moved"][0] == pytest.approx(result["moved"][1])
+    finally:
+        context.close()
+
+
+def test_model_bone_stats_sum_same_ids_before_averaging(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightStats": _payload("WeightStats")})
+    try:
+        result = page.evaluate("""async () => {
+          const weight = await import('./js/mesh/weight-experiment.js');
+          return weight.aggregateModelBoneStats([
+            [{boneId: 45, affectedVertexCount: 2, totalWeight: .6}],
+            [
+              {boneId: 45, affectedVertexCount: 4, totalWeight: 2},
+              {boneId: 7, affectedVertexCount: 1, totalWeight: .25},
+            ],
+          ]);
+        }""")
+        assert result["45"] == {
+            "affectedVertexCount": 6,
+            "averageInfluence": pytest.approx(2.6 / 6),
+        }
+        assert result["7"] == {
+            "affectedVertexCount": 1,
+            "averageInfluence": pytest.approx(.25),
         }
     finally:
         context.close()

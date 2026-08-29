@@ -53,6 +53,7 @@ const knownMeshes = new Set();
 let activeExperimentHelperMesh = null;
 let modelWeightGeneration = 0;
 let selectedWeightMaskBuildCount = 0;
+let modelBoneStatsBuildCount = 0;
 const modelWeightState = {
   loaded: false,
   loading: false,
@@ -64,6 +65,7 @@ const modelWeightState = {
   heatmapEnabled: false,
   loadedMeshCount: 0,
   failedMeshCount: 0,
+  boneStats: {},
 };
 
 const modelPhysicsSession = createModelPhysicsSession({
@@ -184,6 +186,8 @@ function modelWeightSnapshot() {
     heatmapEnabled: modelWeightState.heatmapEnabled,
     loadedMeshCount: modelWeightState.loadedMeshCount,
     failedMeshCount: modelWeightState.failedMeshCount,
+    boneStats: Object.fromEntries(Object.entries(modelWeightState.boneStats)
+      .map(([id, stats]) => [id, {...stats}])),
   };
 }
 
@@ -206,7 +210,46 @@ function eligibleSkinningMesh(mesh) {
     && !!mesh.userData?.semanticKey;
 }
 
-function refreshModelWeightSummary() {
+export function aggregateModelBoneStats(nodeLists) {
+  const totals = new Map();
+  for (const nodes of nodeLists || []) {
+    for (const node of nodes || []) {
+      const boneId = Number(node?.boneId);
+      const affectedVertexCount = Number(node?.affectedVertexCount);
+      const totalWeight = Number(node?.totalWeight);
+      if (!Number.isFinite(boneId) || !Number.isFinite(affectedVertexCount)
+          || affectedVertexCount < 0 || !Number.isFinite(totalWeight)) {
+        continue;
+      }
+      const entry = totals.get(boneId) || {
+        affectedVertexCount: 0,
+        totalWeight: 0,
+      };
+      entry.affectedVertexCount += affectedVertexCount;
+      entry.totalWeight += totalWeight;
+      totals.set(boneId, entry);
+    }
+  }
+  return Object.fromEntries([...totals.entries()]
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .map(([boneId, entry]) => [boneId, {
+      affectedVertexCount: entry.affectedVertexCount,
+      averageInfluence: entry.affectedVertexCount > 0
+        ? entry.totalWeight / entry.affectedVertexCount : 0,
+    }]));
+}
+
+function refreshModelBoneStats() {
+  modelBoneStatsBuildCount += 1;
+  modelWeightState.boneStats = aggregateModelBoneStats(
+    [...knownMeshes].map(mesh => states.get(mesh)?.influenceNodes));
+}
+
+export function getModelBoneStatsBuildCount() {
+  return modelBoneStatsBuildCount;
+}
+
+function refreshModelWeightSummary({refreshStats = false} = {}) {
   const ids = new Set();
   let loadedMeshCount = 0;
   let failedMeshCount = 0;
@@ -228,6 +271,7 @@ function refreshModelWeightSummary() {
       normalizeSelectedBoneIds(modelWeightState.selectedBoneIds)
         .filter(id => ids.has(id)));
   }
+  if (refreshStats) refreshModelBoneStats();
 }
 
 function refreshSelectedWeightMask(mesh, state) {
@@ -269,6 +313,7 @@ function resetModelWeightState() {
   modelWeightState.heatmapEnabled = false;
   modelWeightState.loadedMeshCount = 0;
   modelWeightState.failedMeshCount = 0;
+  modelWeightState.boneStats = {};
   notifyModelWeightChanged();
 }
 
@@ -589,6 +634,22 @@ function averageSelectedCenter(state, ids) {
   ], [0, 0, 0]).map(value => value / centers.length);
 }
 
+function attachmentRelationshipSort(a, b) {
+  return (Number(b.minOverlap) || 0) - (Number(a.minOverlap) || 0)
+    || (Number(b.sharedVertexCount) || 0)
+      - (Number(a.sharedVertexCount) || 0)
+    || (Number(b.containment) || 0) - (Number(a.containment) || 0)
+    || (Number(b.jaccard) || 0) - (Number(a.jaccard) || 0)
+    || (Number(a.normalizedDistance ?? Infinity)
+      - Number(b.normalizedDistance ?? Infinity))
+    || Number(a.boneA) - Number(b.boneA)
+    || Number(a.boneB) - Number(b.boneB);
+}
+
+export function selectAttachmentRelationship(relationships) {
+  return [...relationships || []].sort(attachmentRelationshipSort)[0] || null;
+}
+
 function selectedPhysicsForest(mesh, state) {
   const graph = ensureInfluenceGraph(mesh, state);
   const selected = new Set(
@@ -601,14 +662,15 @@ function selectedPhysicsForest(mesh, state) {
   const selectedEdges = candidateEdges.filter(relationship =>
     selected.has(Number(relationship.boneA))
     && selected.has(Number(relationship.boneB)));
-  const selectedTree = buildMaximumSpanningTree(selectedNodes, selectedEdges);
+  const physicsEdges = pruneSelectedRelationshipEdges(selectedEdges);
+  const selectedTree = buildMaximumSpanningTree(selectedNodes, physicsEdges);
   const centers = new Map(state.centerByBoneId || []);
   const components = [];
   const componentByBoneId = {};
 
   selectedTree.components.forEach((componentIds, componentIndex) => {
     const componentSet = new Set(componentIds);
-    const boundary = (graph.relationships || [])
+    const boundary = selectAttachmentRelationship((graph.relationships || [])
       .filter(relationship => {
         const boneA = Number(relationship.boneA);
         const boneB = Number(relationship.boneB);
@@ -617,8 +679,7 @@ function selectedPhysicsForest(mesh, state) {
         if (leftSelected === rightSelected) return false;
         const other = leftSelected ? boneB : boneA;
         return !selected.has(other);
-      })
-      .sort(relationshipSort)[0];
+      }));
     let rootId;
     let attachment = 'authored';
     let attachmentEdge;
@@ -631,6 +692,8 @@ function selectedPhysicsForest(mesh, state) {
           ? Number(boundary.boneA) : Number(boundary.boneB),
         containment: boundary.containment,
         jaccard: boundary.jaccard,
+        minOverlap: boundary.minOverlap,
+        sharedVertexCount: boundary.sharedVertexCount,
         treeEdgeScore: boundary.treeEdgeScore,
         attachment: 'authored',
       };
@@ -720,7 +783,7 @@ export function registerSkinningMesh(mesh) {
 export function unregisterSkinningMesh(mesh) {
   knownMeshes.delete(mesh);
   modelPhysicsSession.detach(mesh);
-  refreshModelWeightSummary();
+  refreshModelWeightSummary({refreshStats: true});
   notifyModelWeightChanged();
 }
 
@@ -782,7 +845,7 @@ export function ensureModelWeightsLoaded() {
   if (!meshes.length) {
     modelWeightState.loaded = true;
     modelWeightState.noWeights = true;
-    refreshModelWeightSummary();
+    refreshModelWeightSummary({refreshStats: true});
     notifyModelWeightChanged();
     return Promise.resolve(modelWeightSnapshot());
   }
@@ -825,7 +888,7 @@ export function ensureModelWeightsLoaded() {
     }
     if (generation !== modelWeightGeneration) return modelWeightSnapshot();
     modelWeightState.loaded = true;
-    refreshModelWeightSummary();
+    refreshModelWeightSummary({refreshStats: true});
     syncPhysicsParticipants();
     notifyModelWeightChanged();
     return modelWeightSnapshot();
@@ -834,7 +897,7 @@ export function ensureModelWeightsLoaded() {
     .catch(error => {
       if (generation === modelWeightGeneration) {
         setModelWeightLoadError(error);
-        refreshModelWeightSummary();
+        refreshModelWeightSummary({refreshStats: true});
         notifyModelWeightChanged();
       }
       return modelWeightSnapshot();
@@ -1143,6 +1206,28 @@ function treeEdgeScore(edge) {
     ?? edge.containment ?? edge.jaccard ?? 0) || 0;
 }
 
+function treeEdgeCompare(a, b) {
+  return treeEdgeScore(b) - treeEdgeScore(a)
+    || relationshipSort(a, b);
+}
+
+/** Keep selected-selected edges that are strongest for at least one endpoint. */
+export function pruneSelectedRelationshipEdges(edges) {
+  const strongestByBone = new Map();
+  for (const edge of edges || []) {
+    for (const boneId of [Number(edge.boneA), Number(edge.boneB)]) {
+      if (!Number.isFinite(boneId)) continue;
+      const current = strongestByBone.get(boneId);
+      if (!current || treeEdgeCompare(edge, current) < 0) {
+        strongestByBone.set(boneId, edge);
+      }
+    }
+  }
+  return (edges || []).filter(edge =>
+    strongestByBone.get(Number(edge.boneA)) === edge
+    || strongestByBone.get(Number(edge.boneB)) === edge);
+}
+
 export function buildMaximumSpanningTree(nodes, edges) {
   const nodeIds = [...new Set((nodes || []).map(node => Number(node.boneId)))];
   const parent = new Map(nodeIds.map(id => [id, id]));
@@ -1170,9 +1255,7 @@ export function buildMaximumSpanningTree(nodes, edges) {
     }
     return true;
   };
-  const orderedEdges = [...edges || []].sort((a, b) =>
-    treeEdgeScore(b) - treeEdgeScore(a)
-      || relationshipSort(a, b));
+  const orderedEdges = [...edges || []].sort(treeEdgeCompare);
   const selected = [];
   for (const edge of orderedEdges) {
     const boneA = Number(edge.boneA);
@@ -1894,7 +1977,7 @@ export async function loadSkinningWeights(mesh) {
     state.centerByBoneId = new Map(state.influenceNodes.map(node => [
       node.boneId, node.weightedCenter]));
     refreshSelectedWeightMask(mesh, state);
-    refreshModelWeightSummary();
+    refreshModelWeightSummary({refreshStats: true});
     notifyModelWeightChanged();
     return state;
   })();
