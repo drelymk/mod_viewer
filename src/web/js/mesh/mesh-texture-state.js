@@ -9,7 +9,7 @@ export {
   registerTextureRunGroup, unregisterTextureRunGroup,
 } from './mesh-texture-runs.js';
 
-export function meshMetadataKey(name, entry) {
+export function legacyMeshMetadataKey(name, entry) {
   const component = entry.component || name.replace(/-\d+$/, '');
   const draw = entry.drawindexed ? entry.drawindexed.join(',') : 'whole';
   return `${component}::${draw}`;

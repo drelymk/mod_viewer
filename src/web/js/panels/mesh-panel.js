@@ -8,7 +8,7 @@ import {
   setManualTexOverride,
 } from '../mesh/mesh-state.js';
 import {
-  clearTextureRunGroups, meshMetadataKey, recomputeTextureRuns,
+  clearTextureRunGroups, legacyMeshMetadataKey, recomputeTextureRuns,
   registerTextureRunGroup, unregisterTextureRunGroup, saveTextureState,
 } from '../mesh/mesh-texture-state.js';
 import { bindMeshView, getMeshView } from '../mesh/mesh-view-bindings.js';
@@ -59,7 +59,8 @@ function syncMeshPanel() {
 function groupByComponent(names, meshes) {
   const grouped = {};
   for (const name of names) {
-    const explicit = meshes[name]?.component;
+    const explicit = meshes[name]?.identity?.component
+      || meshes[name]?.component;
     let key = explicit;
     if (!key) {
       const m = name.match(/^(.+)-\d+$/);
@@ -331,7 +332,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
         .map(n => meshes[n].material_kind_override)
         .find(Boolean) || null;
       const componentIdentity = names
-        .map(n => meshes[n].component)
+        .map(n => meshes[n].identity?.component || meshes[n].component)
         .find(Boolean) || null;
 
       const itemCbs = [], itemObjs = [];
@@ -422,7 +423,9 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
         const materialProfile = materialProfiles?.[entry.material_profile_id] || null;
         const mesh = buildMesh(name, entry, materialProfile);
         mesh.userData.semanticKey = name;
-        mesh.userData.metadataKey = meshMetadataKey(name, meshes[name]);
+        mesh.userData.identity = entry.identity || null;
+        mesh.userData.metadataKey = entry.identity?.key
+          || legacyMeshMetadataKey(name, entry);
         mesh.userData.texturePool = texturePool;
         mesh.userData.displayName = meshNames[mesh.userData.metadataKey]
           || entry.display_name || null;

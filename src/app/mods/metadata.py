@@ -14,13 +14,25 @@ PRESENT_NAMES_KEY = "__all__"
 _LOCK = threading.RLock()
 
 
-def _mesh_key(name, entry):
+def _legacy_mesh_key(name, entry):
     component = entry.get("component")
     if not component:
         component = name.rsplit("-", 1)[0] if name.rsplit("-", 1)[-1].isdigit() else name
     draw = entry.get("drawindexed")
     draw_key = ",".join(str(value) for value in draw) if draw else "whole"
     return f"{component}::{draw_key}"
+
+
+def _mesh_metadata_keys(name, entry):
+    """Return canonical then legacy keys for one displayed mesh."""
+    identity = entry.get("identity") if isinstance(entry, dict) else None
+    canonical = identity.get("key") if isinstance(identity, dict) else None
+    if not isinstance(canonical, str) or not canonical:
+        canonical = None
+    legacy = _legacy_mesh_key(name, entry)
+    if canonical and canonical != legacy:
+        return canonical, legacy
+    return (canonical or legacy,)
 
 
 def load(folder_path):
@@ -54,6 +66,26 @@ def save_textures(folder_path, textures):
         data = load(folder_path)
         data["textures"] = textures if isinstance(textures, dict) else {}
         return _save(folder_path, data)
+
+
+def hydrate_mesh_names(payload, data=None):
+    """Project saved mesh names onto current canonical metadata keys."""
+    data = data if isinstance(data, dict) else {}
+    saved = data.get("mesh_names")
+    if not isinstance(saved, dict):
+        return {}
+    meshes = payload.get("meshes", {}) if isinstance(payload, dict) else {}
+    hydrated = {}
+    for name, entry in meshes.items():
+        if not isinstance(entry, dict) or entry.get("error"):
+            continue
+        keys = _mesh_metadata_keys(name, entry)
+        value = next((saved[key] for key in keys
+                      if isinstance(saved.get(key), str)
+                      and saved[key].strip()), None)
+        if value is not None:
+            hydrated[keys[0]] = value
+    return hydrated
 
 
 def _source_key(value):
@@ -344,8 +376,10 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
     for name, entry in meshes.items():
         if not isinstance(entry, dict) or entry.get("error"):
             continue
-        mesh_key = _mesh_key(name, entry)
-        state = highlighted.get(mesh_key)
+        keys = _mesh_metadata_keys(name, entry)
+        mesh_key = keys[0]
+        state = next((highlighted[key] for key in keys
+                      if key in highlighted), None)
         if state:
             restored[mesh_key] = state
             if state["manual"]:
@@ -360,7 +394,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         group = (entry.get("source"), entry.get("component"))
         pool = pools.setdefault(group, [])
         candidates = list(entry.get("texture_options") or [])
-        mesh_key = _mesh_key(name, entry)
+        mesh_key = _mesh_metadata_keys(name, entry)[0]
         if mesh_key in restored:
             state = restored[mesh_key]
             candidates.append({key: value for key, value in state.items()

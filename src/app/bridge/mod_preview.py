@@ -90,7 +90,7 @@ class ModPreview:
 
             saved_metadata = context.metadata
             result.setdefault("metadata", {})["mesh_names"] = \
-                saved_metadata.get("mesh_names", {})
+                metadata.hydrate_mesh_names(result, saved_metadata)
             game_metadata = result.get("metadata", {}).get("game", {})
             publication.set_game_profile(game_metadata.get("id"))
             metadata.hydrate_textures(

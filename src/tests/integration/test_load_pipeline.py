@@ -78,6 +78,35 @@ format = R32_UINT
         }
         assert "nested/nested.ini" in source_inis
 
+        semantic = mod_loader.load_mesh_semantics(
+            mod_loader.ModLoadContext(
+                root, mod_loader.find_inis(root), {}, {}))
+        assert {
+            name: entry["identity"]
+            for name, entry in payload["meshes"].items()
+        } == {
+            name: entry["identity"]
+            for name, entry in semantic["meshes"].items()
+        }
+        assert len({entry["identity"]["key"] for entry in meshes}) == 2
+
+
+def test_source_qualified_identity_avoids_legacy_metadata_collision(tmp_path):
+    groups = [{
+        "name": "Body", "display_name": "Body", "source": "A.ini",
+        "draws": [DrawCall(label="Body-1", count=100, start=0, base=0)],
+    }, {
+        "name": "Body_2", "display_name": "Body", "source": "B.ini",
+        "draws": [DrawCall(label="Body_2-1", count=100, start=0, base=0)],
+    }]
+
+    result = build_mesh_semantics(groups, str(tmp_path))
+    entries = list(result.values())
+
+    assert len({metadata._legacy_mesh_key(name, entry)
+                for name, entry in result.items()}) == 1
+    assert len({entry["identity"]["key"] for entry in entries}) == 2
+
 
 def test_document_projection_keeps_authoritative_text_and_source():
     path = os.path.join(tempfile.gettempdir(), "staged-refactor.ini")
@@ -260,6 +289,80 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
     assert entry["tex_key"] == "diffuse::existing.dds"
     assert [item["file"] for item in pool] == [
         "existing.dds", "Components-0 t=candidate.dds"]
+
+
+def test_metadata_texture_migration_prefers_identity_key_and_rekeys_legacy(
+        tmp_path):
+    identity_key = 'mesh:[2,"Root.ini","Body",null,[3,0,0]]'
+    payload = {"meshes": {"Body-1": {
+        "identity": {"version": 2, "key": identity_key},
+        "component": "Body", "drawindexed": [3, 0, 0],
+        "texture_options": [],
+    }}, "textures": {}}
+    data = {"textures": {
+        "Body::3,0,0": {
+            "tex_key": "legacy.png", "label": "Legacy", "manual": True,
+        },
+        identity_key: {
+            "tex_key": "canonical.png", "label": "Canonical", "manual": True,
+        },
+    }}
+
+    restored = metadata.hydrate_textures(str(tmp_path), payload, data)
+
+    assert set(restored) == {identity_key}
+    assert restored[identity_key]["label"] == "Canonical"
+    assert payload["meshes"]["Body-1"]["saved_texture_override"] == (
+        "diffuse::canonical.png")
+
+
+def test_metadata_texture_migration_reads_legacy_key_under_new_identity(
+        tmp_path):
+    identity_key = 'mesh:[2,"Root.ini","Body",null,[3,0,0]]'
+    payload = {"meshes": {"Body-1": {
+        "identity": {"version": 2, "key": identity_key},
+        "component": "Body", "drawindexed": [3, 0, 0],
+        "texture_options": [],
+    }}, "textures": {}}
+    data = {"textures": {
+        "Body::3,0,0": {
+            "tex_key": "legacy.png", "label": "Legacy", "manual": True,
+        },
+    }}
+
+    restored = metadata.hydrate_textures(str(tmp_path), payload, data)
+
+    assert set(restored) == {identity_key}
+    assert restored[identity_key]["label"] == "Legacy"
+
+
+def test_metadata_mesh_name_migration_prefers_new_key_and_rekeys_legacy():
+    identity_key = 'mesh:[2,"Root.ini","Body",null,[3,0,0]]'
+    payload = {"meshes": {"Body-1": {
+        "identity": {"version": 2, "key": identity_key},
+        "component": "Body", "drawindexed": [3, 0, 0],
+    }}}
+    data = {"mesh_names": {
+        "Body::3,0,0": "Legacy name",
+        identity_key: "Canonical name",
+    }}
+
+    assert metadata.hydrate_mesh_names(payload, data) == {
+        identity_key: "Canonical name",
+    }
+
+
+def test_metadata_mesh_name_migration_reads_legacy_key_under_new_identity():
+    identity_key = 'mesh:[2,"Root.ini","Body",null,[3,0,0]]'
+    payload = {"meshes": {"Body-1": {
+        "identity": {"version": 2, "key": identity_key},
+        "component": "Body", "drawindexed": [3, 0, 0],
+    }}}
+    data = {"mesh_names": {"Body::3,0,0": "Legacy name"}}
+
+    assert metadata.hydrate_mesh_names(payload, data) == {
+        identity_key: "Legacy name",
+    }
 
 
 def test_mesh_semantics_include_conditional_texture_roles_without_geometry(

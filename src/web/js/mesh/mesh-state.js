@@ -150,6 +150,7 @@ export function resetMeshVisibility() {
 
 const SEMANTIC_SNAPSHOT_FIELDS = [
   'conditions', 'sources', 'source', 'component',
+  'identity',
   'textureVariants', 'normalMapVariants', 'normalDataVariants',
   'lightMapVariants', 'materialMapVariants', 'emissionMapVariants',
   'defaultTexKey', 'defaultNormalMapKey', 'defaultNormalDataKey',
@@ -180,6 +181,14 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
   const keys = semanticMeshes.map(mesh => mesh.userData.semanticKey);
   if (keys.some(key => !next[key])
       || Object.keys(next).length !== keys.length) {
+    return {success: false, materialChangedMeshes: []};
+  }
+  const identityMismatch = semanticMeshes.some(mesh => {
+    const currentKey = mesh.userData.identity?.key;
+    const nextKey = next[mesh.userData.semanticKey]?.identity?.key;
+    return currentKey && nextKey && currentKey !== nextKey;
+  });
+  if (identityMismatch) {
     return {success: false, materialChangedMeshes: []};
   }
 
@@ -216,6 +225,9 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
       }
       if (Object.hasOwn(semantic, 'component')) {
         mesh.userData.component = semantic.component;
+      }
+      if (Object.hasOwn(semantic, 'identity')) {
+        mesh.userData.identity = semantic.identity || null;
       }
       const variants = [
         ['textureVariants', 'texture_variants'],
