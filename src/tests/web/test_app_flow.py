@@ -11,8 +11,10 @@ def test_frontend_public_surface_and_lifecycle_events(edge_browser, frontend_url
             "getAmbientOcclusionStrength", "getBloomEnabled", "getCurrentSource",
             "getEnvironmentPreset", "getMaterialState",
             "getOutlineState", "getRenderCount", "openMod",
+            "disableModelPhysics", "enableModelPhysics", "getModelPhysicsState",
             "refreshControlSemantics", "refreshMeshSemantics",
             "refreshPresentState", "reloadCurrentMod", "setEnvironmentPreset",
+            "resetModelPhysicsMotion",
             "setBloomEnabled", "setMaterialDebugMode", "setOutlineEnabled", "switchAsset",
             "setAmbientOcclusionStrength", "switchMod",
         ])

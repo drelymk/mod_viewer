@@ -92,6 +92,7 @@ def _payload(label="A"):
                 "drawindexed": [3, 0, 0],
                 "pos": _f32(0, 0, 0, 1, 0, 0, 0, 1, 0),
                 "idx": _u32(0, 1, 2),
+                "skinning_available": True,
                 "tex_key": texture_pool[0]["tex_key"],
                 "texture_pool_id": "p0",
                 "texture_variants": [{

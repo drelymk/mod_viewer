@@ -65,6 +65,7 @@ def test_get_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch)
     geometry = GeometryBlob()
     rendered = build_mesh_result(groups, str(tmp_path), geometry=geometry)
     entry = rendered.meshes["BodyBlend-1"]
+    assert entry["skinning_available"] is True
     published = {}
 
     def publish(blob, *, replace=True):

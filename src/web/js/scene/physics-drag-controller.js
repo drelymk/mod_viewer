@@ -37,7 +37,7 @@ export function createPhysicsDragController({
         && event.pointerId !== pointer.id)) return;
     const current = pointer;
     pointer = null;
-    emit([0, 0, 0], false);
+    if (current.moved) emit([0, 0, 0], false);
     if (canvas?.hasPointerCapture?.(current.id)) {
       try {
         canvas.releasePointerCapture(current.id);

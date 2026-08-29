@@ -3,15 +3,14 @@
 
 import * as THREE from 'three';
 import {
-  invalidateCharacterShadowGeometry, setPhysicsInteractionEnabled,
+  getModelTransformState, invalidateCharacterShadowGeometry,
+  setPhysicsInteractionEnabled,
 } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import {
   buildForestTransformsFromLocalRotations, applyWeightedTransformDeformation,
 } from './weight-deformation.js';
 import {
-  DEFAULT_PHYSICS_DAMPING_RATIO, DEFAULT_PHYSICS_FREQUENCY_HZ,
-  DEFAULT_PHYSICS_MAX_BEND_DEGREES,
   GRAVITY_WORLD_DIRECTION, MIN_GRAVITY_LEVER_RATIO, STANDARD_GRAVITY,
   applyReferenceFrameAngularDelta,
   applyReferenceFrameLinearVelocityDelta,
@@ -22,6 +21,13 @@ import {
   isPhysicsSettled, physicsRotationMap, resetPhysicsState,
   stepSpringPhysics,
 } from './weight-physics.js';
+export {buildBoneMobility, buildVertexMobility} from './weight-mobility.js';
+import {
+  buildBoneMobility, buildVertexMobility,
+} from './weight-mobility.js';
+import {
+  MODEL_PHYSICS_STEP, createModelPhysicsSession,
+} from './model-physics-session.js';
 export {
   buildForestTransformsFromLocalRotations, applyWeightedTransformDeformation,
 } from './weight-deformation.js';
@@ -44,13 +50,27 @@ export {
   stepSpringPhysics,
 } from './weight-physics.js';
 const states = new WeakMap();
+const knownMeshes = new Set();
 let activeExperimentHelperMesh = null;
-const PHYSICS_STEP = 1 / 120;
-const MAX_PHYSICS_FRAME_DELTA = 0.05;
-const MAX_PHYSICS_SUBSTEPS = 6;
-let physicsFrameId = null;
-const activePhysicsMeshes = new Set();
-const physicsEnabledMeshes = new Set();
+
+const modelPhysicsSession = createModelPhysicsSession({
+  onInputOwnershipChanged: enabled => setPhysicsInteractionEnabled(enabled),
+  onFrame: ({visibleParticipants}) => {
+    if (!visibleParticipants?.length) return;
+    invalidateCharacterShadowGeometry({request: false});
+    requestRender();
+  },
+  onStateChanged: detail => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(
+        'mod-viewer-model-physics-changed', {detail}));
+    }
+  },
+  requestAnimationFrame: callback =>
+    typeof window !== 'undefined' ? window.requestAnimationFrame(callback) : null,
+  cancelAnimationFrame: frameId =>
+    typeof window !== 'undefined' ? window.cancelAnimationFrame(frameId) : null,
+});
 
 export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
 export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
@@ -80,23 +100,11 @@ function newState() {
     selectedBone: null,
     deformationMode: null,
     physicsEnabled: false,
-    physicsFrequencyHz: DEFAULT_PHYSICS_FREQUENCY_HZ,
-    physicsDampingRatio: DEFAULT_PHYSICS_DAMPING_RATIO,
-    physicsMotionStrength: 0.35,
-    physicsLinearMotionStrength: 0.35,
-    physicsRootLinearVelocityLocal: [0, 0, 0],
-    physicsVirtualLinearVelocityLocal: [0, 0, 0],
-    physicsContinuousLinearResponse: 0.35,
-    physicsConstraintsEnabled: false,
-    physicsMaxBendDegrees: DEFAULT_PHYSICS_MAX_BEND_DEGREES,
     physicsJointLimits: null,
     physicsConstraintDiagnostics: null,
-    physicsGravityEnabled: false,
-    physicsGravityScale: 1.0,
     physicsGravityLocal: [...GRAVITY_WORLD_DIRECTION],
     physicsGravityAccelerations: null,
     physicsGravityDiagnostics: null,
-    physicsReferenceQuaternion: null,
     lastRootAngularDeltaVector: [0, 0, 0],
     lastRootAngularDeltaMagnitude: 0,
     motionEventCount: 0,
@@ -108,11 +116,14 @@ function newState() {
     lastRootLinearVelocityWorld: [0, 0, 0],
     lastRootLinearVelocityLocal: [0, 0, 0],
     lastRootLinearVelocityDelta: [0, 0, 0],
+    physicsVirtualLinearVelocityLocal: [0, 0, 0],
     physicsState: null,
     physicsTransforms: null,
-    physicsAccumulator: 0,
-    physicsLastTimestamp: null,
     physicsSettled: true,
+    physicsParticipantStatus: 'not-attempted',
+    physicsParticipantError: null,
+    boneMobility: null,
+    vertexMobility: null,
     influenceNodes: null,
     influenceGraph: null,
     candidateRootId: null,
@@ -157,7 +168,7 @@ export function withSkinningBaseMaterial(mesh, operation) {
   const state = states.get(mesh);
   if (!state) return operation();
 
-  const heatmapActive = state.heatmapMode === 'bone'
+  const heatmapActive = state.heatmapMode
     && state.debugMaterial && mesh.material === state.debugMaterial;
   const displayedMaterial = mesh.material;
   if (heatmapActive) mesh.material = state.originalMaterial || mesh.material;
@@ -179,15 +190,14 @@ function clearMotionDiagnostics(state) {
   state.lastTranslationLagRotationVector = [0, 0, 0];
   state.lastTranslationLagRotationMagnitude = 0;
   state.translationEventCount = 0;
-  state.physicsRootLinearVelocityLocal = [0, 0, 0];
-  state.physicsVirtualLinearVelocityLocal = [0, 0, 0];
   state.lastRootLinearVelocityWorld = [0, 0, 0];
   state.lastRootLinearVelocityLocal = [0, 0, 0];
   state.lastRootLinearVelocityDelta = [0, 0, 0];
+  state.physicsVirtualLinearVelocityLocal = [0, 0, 0];
 }
 
-export function gravityDirectionLocal(mesh) {
-  const quaternion = mesh?.quaternion;
+export function gravityDirectionLocal(mesh, orientation = null) {
+  const quaternion = quaternionFromArray(orientation) || mesh?.quaternion;
   if (!quaternion?.clone || quaternion.lengthSq() === 0) {
     return [...GRAVITY_WORLD_DIRECTION];
   }
@@ -196,29 +206,30 @@ export function gravityDirectionLocal(mesh) {
     .normalize().toArray();
 }
 
-function refreshConstraintState(state) {
-  if (!state.physicsConstraintsEnabled || !state.candidateForest) {
+function refreshConstraintState(state, settings = modelPhysicsSession.getSettings()) {
+  if (!settings.constraintsEnabled || !state.candidateForest) {
     state.physicsJointLimits = null;
     state.physicsConstraintDiagnostics = null;
     return;
   }
   const result = buildPhysicsJointLimits(
     state.candidateForest,
-    THREE.MathUtils.degToRad(state.physicsMaxBendDegrees));
+    THREE.MathUtils.degToRad(settings.maxBendDegrees));
   state.physicsJointLimits = result.limitByBoneId;
   state.physicsConstraintDiagnostics = result.diagnostics;
 }
 
 export function getPhysicsConstraintDiagnostics(meshOrState) {
   const state = states.get(meshOrState) || meshOrState;
-  const enabled = !!state?.physicsConstraintsEnabled
+  const settings = modelPhysicsSession.getSettings();
+  const enabled = !!settings.constraintsEnabled
     && state.physicsJointLimits instanceof Map;
   const dynamic = buildPhysicsConstraintDiagnostics(
     state?.physicsState, enabled ? state.physicsJointLimits : null,
     enabled ? state.physicsConstraintDiagnostics : null);
   return {
     enabled,
-    maxComponentBend: Number(state?.physicsMaxBendDegrees) || 0,
+    maxComponentBend: Number(settings.maxBendDegrees) || 0,
     limitedJointCount: dynamic.limitedJointCount,
     atLimitCount: dynamic.atLimitCount,
     maxUsage: dynamic.maxUsage,
@@ -233,158 +244,44 @@ export function getPhysicsConstraintDiagnostics(meshOrState) {
   };
 }
 
-function refreshGravityState(mesh, state) {
-  if (!state.physicsGravityEnabled) {
+function refreshGravityState(
+    mesh, state, settings = modelPhysicsSession.getSettings(), orientation = null) {
+  if (!settings.gravityEnabled) {
     state.physicsGravityAccelerations = null;
     state.physicsGravityDiagnostics = null;
     state.physicsGravityLocal = [...GRAVITY_WORLD_DIRECTION];
     return;
   }
-  const localDirection = gravityDirectionLocal(mesh);
+  const localDirection = gravityDirectionLocal(mesh, orientation);
   const referenceRadius = Number(
     state.influenceGraph?.boundingSphereRadius);
   const gravity = buildGravityAngularAccelerations(
     state.candidateForest, state.centerByBoneId, localDirection, {
       referenceRadius,
-      gravityScale: state.physicsGravityScale,
+      gravityScale: settings.gravityScale,
     });
   state.physicsGravityLocal = localDirection;
   state.physicsGravityAccelerations = gravity.accelerationByBoneId;
   state.physicsGravityDiagnostics = {
     ...gravity.diagnostics,
     enabled: true,
-    scale: state.physicsGravityScale,
+    scale: settings.gravityScale,
     worldDirection: [...GRAVITY_WORLD_DIRECTION],
     localDirection: [...localDirection],
   };
 }
 
-function shortestQuaternionDelta(previousQuaternion, currentQuaternion) {
-  if (!previousQuaternion?.clone || !currentQuaternion?.clone) return null;
-  const previous = previousQuaternion.clone();
-  const current = currentQuaternion.clone();
-  if (!previous.isQuaternion || !current.isQuaternion
-      || previous.lengthSq() === 0 || current.lengthSq() === 0) return null;
-  previous.normalize();
-  current.normalize();
-  const delta = previous.clone().invert().multiply(current).normalize();
-  // q and -q are equivalent orientations. Canonicalizing w selects the
-  // shortest representation and prevents a fake near-360-degree impulse.
-  if (delta.w < 0) {
-    delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
-  }
-  const vector = new THREE.Vector3(delta.x, delta.y, delta.z);
-  const vectorLength = vector.length();
-  if (vectorLength < 1e-12) {
-    return {angle: 0, rotationVector: new THREE.Vector3()};
-  }
-  const angle = 2 * Math.atan2(vectorLength,
-    Math.max(-1, Math.min(1, delta.w)));
-  return {
-    angle,
-    rotationVector: vector.multiplyScalar(angle / vectorLength),
-  };
+function quaternionFromArray(value) {
+  if (!Array.isArray(value) || value.length < 4) return null;
+  const quaternion = new THREE.Quaternion(...value.slice(0, 4).map(Number));
+  return quaternion.lengthSq() > 1e-12 ? quaternion.normalize() : null;
 }
 
-function handleModelTransformChanged(event) {
-  const meshes = event.detail?.meshes;
-  if (!Array.isArray(meshes)) return;
-  meshes.forEach(mesh => {
-    const state = states.get(mesh);
-    if (!state?.physicsReferenceQuaternion || !mesh?.quaternion) return;
-    const previous = state.physicsReferenceQuaternion.clone();
-    const current = mesh.quaternion;
-    const rootDelta = shortestQuaternionDelta(previous, current);
-    const rootAngularRotation = rootDelta
-      ? rootDelta.rotationVector.toArray() : [0, 0, 0];
-    const rootAngularMagnitude = rootDelta?.angle || 0;
-    const orientationChanged = rootAngularMagnitude >= 1e-10;
-    const translationValues = event.detail?.translationDeltaWorld;
-    const translationWorld = Array.isArray(translationValues)
-      && translationValues.length >= 3
-      ? translationValues.slice(0, 3).map(Number) : null;
-    const hasTranslation = translationWorld?.every(Number.isFinite)
-      && translationWorld.some(value => Math.abs(value) > 1e-10);
-    const translationLocal = hasTranslation
-      ? new THREE.Vector3(...translationWorld).applyQuaternion(
-        previous.clone().invert()).toArray()
-      : null;
-    const velocityValues = event.detail?.kinematics?.linearVelocityWorld;
-    const linearVelocityWorld = Array.isArray(velocityValues)
-      && velocityValues.length >= 3
-      ? velocityValues.slice(0, 3).map(Number) : null;
-    const hasContinuousVelocity = linearVelocityWorld?.every(Number.isFinite);
-    const linearVelocityLocal = hasContinuousVelocity
-      ? new THREE.Vector3(...linearVelocityWorld).applyQuaternion(
-        previous.clone().invert()).toArray()
-      : null;
-    // Keep the reference current even when this event is not active physics
-    // input, so ignored transforms cannot accumulate into a later impulse.
-    state.physicsReferenceQuaternion.copy(current);
-    if (state.physicsGravityEnabled && orientationChanged) {
-      refreshGravityState(mesh, state);
-    }
-    if (!state.physicsEnabled || state.deformationMode !== 'physics'
-        || !state.physicsState || !state.candidateForest) return;
-    state.lastRootAngularDeltaVector = rootAngularRotation;
-    state.lastRootAngularDeltaMagnitude = rootAngularMagnitude;
-    state.motionEventCount += 1;
-    let physicsChanged = state.physicsGravityEnabled && orientationChanged;
-    let immediateDeformation = false;
-    const angularStrength = Number(state.physicsMotionStrength) || 0;
-    if (rootAngularMagnitude >= 1e-10 && angularStrength > 0) {
-      applyReferenceFrameAngularDelta(
-        state.physicsState, state.candidateForest,
-        rootAngularRotation, angularStrength, state.physicsJointLimits);
-      physicsChanged = true;
-      immediateDeformation = true;
-    }
-    if (hasContinuousVelocity) {
-      const previousVelocity = state.physicsRootLinearVelocityLocal;
-      const deltaVelocityLocal = linearVelocityLocal.map((value, index) =>
-        value - (Number(previousVelocity[index]) || 0));
-      state.physicsRootLinearVelocityLocal = linearVelocityLocal;
-      state.lastRootLinearVelocityWorld = linearVelocityWorld;
-      state.lastRootLinearVelocityLocal = linearVelocityLocal;
-      state.lastRootLinearVelocityDelta = deltaVelocityLocal;
-      const velocityDiagnostics = {};
-      applyReferenceFrameLinearVelocityDelta(
-        state.physicsState, state.candidateForest, state.centerByBoneId,
-        deltaVelocityLocal,
-        state.physicsContinuousLinearResponse, velocityDiagnostics,
-        state.physicsJointLimits);
-      if (Number(velocityDiagnostics.maxDeltaAngularVelocityMagnitude) >= 1e-10
-          && Number(state.physicsContinuousLinearResponse) > 0) {
-        physicsChanged = true;
-      }
-    } else if (hasTranslation) {
-      state.lastRootTranslationDeltaWorld = translationWorld;
-      state.lastRootTranslationDeltaLocal = translationLocal;
-      state.translationEventCount += 1;
-      const translationDiagnostics = {};
-      applyReferenceFrameTranslationDelta(
-        state.physicsState, state.candidateForest, state.centerByBoneId,
-        translationLocal,
-        state.physicsLinearMotionStrength, translationDiagnostics,
-        state.physicsJointLimits);
-      state.lastTranslationLagRotationVector = [
-        ...(translationDiagnostics.maxLagRotationVector || [0, 0, 0])];
-      state.lastTranslationLagRotationMagnitude = Number(
-        translationDiagnostics.maxLagRotationMagnitude) || 0;
-      if (state.lastTranslationLagRotationMagnitude >= 1e-10
-          && Number(state.physicsLinearMotionStrength) > 0) {
-        physicsChanged = true;
-        immediateDeformation = true;
-      }
-    }
-    if (!physicsChanged) return;
-    state.physicsSettled = false;
-    // Discrete reference-frame lag changes angles immediately. Continuous
-    // velocity impulses only change spring velocity; its first fixed step
-    // produces the visible response.
-    if (immediateDeformation) applyDeformation(mesh, state);
-    wakePhysics(mesh, state);
-  });
+function localVector(value, orientation) {
+  const quaternion = quaternionFromArray(orientation);
+  if (!quaternion) return [...value];
+  return new THREE.Vector3(...value)
+    .applyQuaternion(quaternion.invert()).toArray();
 }
 
 function physicsReferenceRadius(mesh, state) {
@@ -396,168 +293,312 @@ function physicsReferenceRadius(mesh, state) {
     ? geometryRadius : 1;
 }
 
-function handleVirtualModelMotion(event) {
-  const values = event.detail?.normalizedLinearVelocityWorld;
-  const velocityWorld = Array.isArray(values) && values.length >= 3
-    ? values.slice(0, 3).map(Number) : [0, 0, 0];
-  if (!velocityWorld.every(Number.isFinite)) return;
-  physicsEnabledMeshes.forEach(mesh => {
-    const state = states.get(mesh);
-    if (!state?.physicsEnabled || state.deformationMode !== 'physics'
-        || !state.physicsState || !state.candidateForest) return;
-    const reference = state.physicsReferenceQuaternion?.clone?.()
-      || mesh.quaternion?.clone?.();
-    if (!reference) return;
-    const radius = physicsReferenceRadius(mesh, state);
-    const velocityLocal = new THREE.Vector3(...velocityWorld)
-      .multiplyScalar(radius)
-      .applyQuaternion(reference.normalize().invert()).toArray();
-    const previous = state.physicsVirtualLinearVelocityLocal || [0, 0, 0];
-    const deltaVelocity = velocityLocal.map((value, index) =>
-      value - (Number(previous[index]) || 0));
-    state.physicsVirtualLinearVelocityLocal = velocityLocal;
-    const diagnostics = {};
-    applyReferenceFrameLinearVelocityDelta(
-      state.physicsState, state.candidateForest, state.centerByBoneId,
-      deltaVelocity, state.physicsContinuousLinearResponse, diagnostics,
-      state.physicsJointLimits);
-    if (event.detail?.active === false) {
-      state.physicsVirtualLinearVelocityLocal = [0, 0, 0];
-    }
-    if (Number(diagnostics.maxDeltaAngularVelocityMagnitude) < 1e-10
-        && event.detail?.active !== false) return;
-    state.physicsSettled = false;
-    wakePhysics(mesh, state);
-  });
+function refreshParticipantDerivedState(mesh, state, settings) {
+  if (!state.candidateForest) return;
+  state.boneMobility = buildBoneMobility(state.candidateForest);
+  state.vertexMobility = buildVertexMobility(
+    state.indices, state.weights, state.influenceCount, state.boneMobility);
+  refreshConstraintState(state, settings);
+  refreshGravityState(mesh, state, settings);
 }
 
-function removePhysicsMesh(mesh) {
-  activePhysicsMeshes.delete(mesh);
-  if (!activePhysicsMeshes.size && physicsFrameId !== null
-      && typeof window !== 'undefined'
-      && typeof window.cancelAnimationFrame === 'function') {
-    window.cancelAnimationFrame(physicsFrameId);
-    physicsFrameId = null;
-  }
-}
-
-function schedulePhysicsFrame() {
-  if (physicsFrameId !== null || !activePhysicsMeshes.size
-      || typeof window === 'undefined'
-      || typeof window.requestAnimationFrame !== 'function') return;
-  physicsFrameId = window.requestAnimationFrame(timestamp => {
-    physicsFrameId = null;
-    activePhysicsMeshes.forEach(mesh => advancePhysicsMesh(mesh, timestamp));
-    if (activePhysicsMeshes.size) schedulePhysicsFrame();
-  });
-}
-
-export function isPhysicsScheduled(mesh) {
-  return activePhysicsMeshes.has(mesh);
-}
-
-function stopPhysics(mesh, state) {
-  removePhysicsMesh(mesh);
-  const wasPhysicsInteractionEnabled = physicsEnabledMeshes.delete(mesh);
-  if (wasPhysicsInteractionEnabled && !physicsEnabledMeshes.size) {
-    setPhysicsInteractionEnabled(false);
-  }
-  state.physicsEnabled = false;
-  state.physicsState = null;
-  state.physicsTransforms = null;
-  state.physicsAccumulator = 0;
-  state.physicsLastTimestamp = null;
-  state.physicsSettled = true;
-  state.physicsReferenceQuaternion = null;
-  state.physicsGravityEnabled = false;
-  state.physicsGravityLocal = [...GRAVITY_WORLD_DIRECTION];
-  state.physicsGravityAccelerations = null;
-  state.physicsGravityDiagnostics = null;
-  state.physicsConstraintsEnabled = false;
-  state.physicsJointLimits = null;
-  state.physicsConstraintDiagnostics = null;
-  state.physicsVirtualLinearVelocityLocal = [0, 0, 0];
-  clearMotionDiagnostics(state);
-  if (state.deformationMode === 'physics') state.deformationMode = null;
-}
-
-function wakePhysics(mesh, state) {
-  if (!state.physicsEnabled || !state.candidateForest) return false;
-  if (!state.physicsState) {
-    state.physicsState = initializePhysicsState(state.candidateForest);
-  }
-  if (!activePhysicsMeshes.has(mesh)) {
-    state.physicsAccumulator = 0;
-    state.physicsLastTimestamp = null;
-  }
-  state.physicsSettled = false;
-  activePhysicsMeshes.add(mesh);
-  schedulePhysicsFrame();
-  return true;
-}
-
-function advancePhysicsMesh(mesh, timestamp) {
-  const state = states.get(mesh);
-  if (!state || !state.physicsEnabled
-      || state.deformationMode !== 'physics'
-      || !state.candidateForest || !state.physicsState) {
-    removePhysicsMesh(mesh);
-    return;
-  }
-  const currentTimestamp = Number(timestamp);
-  if (!Number.isFinite(currentTimestamp)) {
-    removePhysicsMesh(mesh);
-    return;
-  }
-  if (state.physicsLastTimestamp === null) {
-    state.physicsLastTimestamp = currentTimestamp;
-    return;
-  }
-  const elapsed = Math.max(0, Math.min(
-    MAX_PHYSICS_FRAME_DELTA,
-    (currentTimestamp - state.physicsLastTimestamp) / 1000));
-  state.physicsLastTimestamp = currentTimestamp;
-  state.physicsAccumulator += elapsed;
-  let steps = 0;
-  while (state.physicsAccumulator >= PHYSICS_STEP
-      && steps < MAX_PHYSICS_SUBSTEPS) {
-    stepSpringPhysics(
-      state.physicsState, state.candidateForest, PHYSICS_STEP, {
-        frequencyHz: state.physicsFrequencyHz,
-        dampingRatio: state.physicsDampingRatio,
-        targetRotation: [0, 0, 0],
-        externalAngularAccelerationByBoneId:
-          state.physicsGravityEnabled
-            ? state.physicsGravityAccelerations : null,
-        jointLimitByBoneId: state.physicsConstraintsEnabled
-          ? state.physicsJointLimits : null,
-        maxDt: PHYSICS_STEP,
+function createPhysicsParticipant(mesh, state) {
+  return {
+    mesh,
+    onSessionAttached(settings) {
+      state.physicsEnabled = true;
+      state.deformationMode = 'physics';
+      state.physicsParticipantStatus = 'participating';
+      state.physicsParticipantError = null;
+      state.physicsState = initializePhysicsState(state.candidateForest);
+      state.physicsSettled = false;
+      refreshParticipantDerivedState(mesh, state, settings);
+      applyDeformation(mesh, state, {
+        request: false, invalidateShadow: false, skipHidden: true,
       });
-    state.physicsAccumulator -= PHYSICS_STEP;
-    steps += 1;
-  }
-  if (steps === MAX_PHYSICS_SUBSTEPS
-      && state.physicsAccumulator >= PHYSICS_STEP) {
-    state.physicsAccumulator = PHYSICS_STEP;
-  }
-  if (!steps) return;
+    },
+    onSessionDetached() {
+      state.physicsEnabled = false;
+      state.deformationMode = null;
+      state.physicsState = null;
+      state.physicsTransforms = null;
+      state.physicsJointLimits = null;
+      state.physicsConstraintDiagnostics = null;
+      state.physicsGravityAccelerations = null;
+      state.physicsGravityDiagnostics = null;
+      state.physicsSettled = true;
+      clearMotionDiagnostics(state);
+      applyDeformation(mesh, state, {
+        request: false, invalidateShadow: false, skipHidden: false,
+      });
+    },
+    onSettingsChanged(settings) {
+      refreshParticipantDerivedState(mesh, state, settings);
+      if (settings.constraintsEnabled) {
+        applyPhysicsJointLimits(state.physicsState, state.physicsJointLimits);
+      }
+      state.physicsSettled = false;
+    },
+    onModelMotion(motion) {
+      if (!state.physicsState || !state.candidateForest) return false;
+      const rotationMagnitude = Math.hypot(...motion.rotationVector);
+      state.lastRootAngularDeltaVector = [...motion.rotationVector];
+      state.lastRootAngularDeltaMagnitude = rotationMagnitude;
+      state.motionEventCount += 1;
+      let physicsChanged = false;
+      let immediateDeformation = false;
+      const settings = motion.settings;
+      if (rotationMagnitude >= 1e-10) {
+        refreshGravityState(
+          mesh, state, settings, motion.modelOrientation);
+      }
+      if (rotationMagnitude >= 1e-10 && settings.angularResponse > 0) {
+        applyReferenceFrameAngularDelta(
+          state.physicsState, state.candidateForest,
+          motion.rotationVector, settings.angularResponse,
+          settings.constraintsEnabled ? state.physicsJointLimits : null);
+        physicsChanged = true;
+        immediateDeformation = true;
+      }
+      if (motion.deltaLinearVelocityWorld) {
+        const deltaVelocityLocal = localVector(
+          motion.deltaLinearVelocityWorld, motion.previousModelOrientation);
+        state.lastRootLinearVelocityWorld = [...motion.linearVelocityWorld];
+        state.lastRootLinearVelocityLocal = [...localVector(
+          motion.linearVelocityWorld, motion.previousModelOrientation)];
+        state.lastRootLinearVelocityDelta = deltaVelocityLocal;
+        const diagnostics = {};
+        applyReferenceFrameLinearVelocityDelta(
+          state.physicsState, state.candidateForest, state.centerByBoneId,
+          deltaVelocityLocal, settings.velocityResponse, diagnostics,
+          settings.constraintsEnabled ? state.physicsJointLimits : null);
+        physicsChanged = diagnostics.maxDeltaAngularVelocityMagnitude >= 1e-10
+          || physicsChanged;
+      } else if (Math.hypot(...motion.translationDeltaWorld) >= 1e-10) {
+        const translationLocal = localVector(
+          motion.translationDeltaWorld, motion.previousModelOrientation);
+        state.lastRootTranslationDeltaWorld = [
+          ...motion.translationDeltaWorld];
+        state.lastRootTranslationDeltaLocal = [...translationLocal];
+        state.translationEventCount += 1;
+        const diagnostics = {};
+        applyReferenceFrameTranslationDelta(
+          state.physicsState, state.candidateForest, state.centerByBoneId,
+          translationLocal, settings.translationResponse, diagnostics,
+          settings.constraintsEnabled ? state.physicsJointLimits : null);
+        state.lastTranslationLagRotationVector = [
+          ...(diagnostics.maxLagRotationVector || [0, 0, 0])];
+        state.lastTranslationLagRotationMagnitude = Number(
+          diagnostics.maxLagRotationMagnitude) || 0;
+        if (state.lastTranslationLagRotationMagnitude >= 1e-10
+            && settings.translationResponse > 0) {
+          physicsChanged = true;
+          immediateDeformation = true;
+        }
+      }
+      if (!physicsChanged) return false;
+      state.physicsSettled = false;
+      if (immediateDeformation) applyDeformation(mesh, state, {
+        request: false, invalidateShadow: false, skipHidden: true,
+      });
+      return true;
+    },
+    onVirtualMotion(motion) {
+      if (!state.physicsState || !state.candidateForest
+          || !motion.modelOrientation) return false;
+      const currentVelocityLocal = localVector(
+        motion.velocityWorld, motion.modelOrientation)
+        .map(value => value * physicsReferenceRadius(mesh, state));
+      const deltaVelocityLocal = localVector(
+        motion.deltaVelocityWorld, motion.modelOrientation)
+        .map(value => value * physicsReferenceRadius(mesh, state));
+      state.physicsVirtualLinearVelocityLocal = motion.active === false
+        ? [0, 0, 0] : [...currentVelocityLocal];
+      const diagnostics = {};
+      applyReferenceFrameLinearVelocityDelta(
+        state.physicsState, state.candidateForest, state.centerByBoneId,
+        deltaVelocityLocal, motion.settings.velocityResponse, diagnostics,
+        motion.settings.constraintsEnabled ? state.physicsJointLimits : null);
+      if (motion.active === false) state.physicsSettled = false;
+      return diagnostics.maxDeltaAngularVelocityMagnitude >= 1e-10
+        || motion.active === false;
+    },
+    step(dt, settings) {
+      if (!state.physicsState || !state.candidateForest) return;
+      stepSpringPhysics(
+        state.physicsState, state.candidateForest, dt, {
+          frequencyHz: settings.frequencyHz,
+          dampingRatio: settings.dampingRatio,
+          targetRotation: [0, 0, 0],
+          externalAngularAccelerationByBoneId: settings.gravityEnabled
+            ? state.physicsGravityAccelerations : null,
+          jointLimitByBoneId: settings.constraintsEnabled
+            ? state.physicsJointLimits : null,
+          maxDt: MODEL_PHYSICS_STEP,
+        });
+      state.physicsSettled = isPhysicsSettled(
+        state.physicsState, state.candidateForest, [0, 0, 0], {
+          frequencyHz: settings.frequencyHz,
+          externalAngularAccelerationByBoneId: settings.gravityEnabled
+            ? state.physicsGravityAccelerations : null,
+          jointLimitByBoneId: settings.constraintsEnabled
+            ? state.physicsJointLimits : null,
+        });
+    },
+    isSettled: () => state.physicsSettled,
+    isVisible: () => mesh.visible,
+    deform: options => applyDeformation(mesh, state, options),
+    reset(settings) {
+      resetPhysicsState(state.physicsState);
+      refreshParticipantDerivedState(mesh, state, settings);
+      state.physicsSettled = !settings.gravityEnabled;
+      clearMotionDiagnostics(state);
+      applyDeformation(mesh, state, {
+        request: false, invalidateShadow: false, skipHidden: true,
+      });
+    },
+  };
+}
 
-  // Integrate all fixed substeps first, then update the mesh once per frame.
-  applyDeformation(mesh, state);
-  state.physicsSettled = isPhysicsSettled(
-    state.physicsState, state.candidateForest,
-    [0, 0, 0], {
-      frequencyHz: state.physicsFrequencyHz,
-      externalAngularAccelerationByBoneId:
-        state.physicsGravityEnabled
-          ? state.physicsGravityAccelerations : null,
-      jointLimitByBoneId: state.physicsConstraintsEnabled
-        ? state.physicsJointLimits : null,
-    });
-  if (state.physicsSettled) {
-    state.physicsLastTimestamp = null;
-    removePhysicsMesh(mesh);
+export function isPhysicsScheduled() {
+  return modelPhysicsSession.isScheduled();
+}
+
+async function loadPhysicsParticipant(mesh, generation) {
+  const state = stateFor(mesh);
+  try {
+    await loadSkinningWeights(mesh);
+    if (!modelPhysicsSession.getState().enabled
+        || !modelPhysicsSession.isGeneration(generation)
+        || !knownMeshes.has(mesh)) return false;
+    ensureCandidateForest(mesh);
+    if (!state.candidateForest) throw new Error('Could not infer skin hierarchy.');
+    modelPhysicsSession.attach(createPhysicsParticipant(mesh, state));
+    return true;
+  } catch (error) {
+    if (states.get(mesh) === state
+        && modelPhysicsSession.getState().enabled
+        && modelPhysicsSession.isGeneration(generation)
+        && knownMeshes.has(mesh)) {
+      state.physicsParticipantStatus = 'failed';
+      state.physicsParticipantError = error instanceof Error
+        ? error.message : String(error);
+      modelPhysicsSession.markFailed(mesh, error);
+    }
+    return false;
   }
+}
+
+export function registerSkinningMesh(mesh) {
+  if (!mesh) return;
+  knownMeshes.add(mesh);
+  if (!modelPhysicsSession.getState().enabled) return;
+  if (mesh.userData?.skinningAvailable !== true
+      || mesh.userData?.assetFill === true
+      || !mesh.userData?.modPath || !mesh.userData?.semanticKey) {
+    stateFor(mesh).physicsParticipantStatus = 'unavailable';
+    modelPhysicsSession.markUnavailable(mesh, 'skinning-unavailable');
+    return;
+  }
+  modelPhysicsSession.markLoading(mesh);
+  const generation = modelPhysicsSession.getState().generation;
+  modelPhysicsSession.setLoading(true);
+  void loadPhysicsParticipant(mesh, generation).finally(() => {
+    const current = modelPhysicsSession.getState();
+    if (current.generation === generation && current.loadingCount === 0) {
+      modelPhysicsSession.setLoading(false);
+    }
+  });
+}
+
+export function unregisterSkinningMesh(mesh) {
+  knownMeshes.delete(mesh);
+  modelPhysicsSession.detach(mesh);
+}
+
+export function getModelPhysicsState() {
+  return modelPhysicsSession.getState();
+}
+
+export function destroyModelPhysicsSession() {
+  modelPhysicsSession.destroy();
+  knownMeshes.clear();
+}
+
+export function disableModelPhysics() {
+  modelPhysicsSession.disable();
+  return false;
+}
+
+export function enableModelPhysics() {
+  if (modelPhysicsSession.getState().enabled) {
+    return Promise.resolve(getModelPhysicsState());
+  }
+  const generation = modelPhysicsSession.enable(getModelTransformState());
+  const pending = [];
+  let attached = false;
+  [...knownMeshes].forEach(mesh => {
+    const state = stateFor(mesh);
+    if (mesh.userData?.skinningAvailable !== true
+        || mesh.userData?.assetFill === true
+        || !mesh.userData?.modPath || !mesh.userData?.semanticKey) {
+      state.physicsParticipantStatus = 'unavailable';
+      modelPhysicsSession.markUnavailable(mesh, 'skinning-unavailable');
+      return;
+    }
+    if (state.loaded) {
+      try {
+        ensureCandidateForest(mesh);
+        attached = modelPhysicsSession.attach(
+          createPhysicsParticipant(mesh, state)) || attached;
+      } catch (error) {
+        state.physicsParticipantStatus = 'failed';
+        state.physicsParticipantError = error instanceof Error
+          ? error.message : String(error);
+        modelPhysicsSession.markFailed(mesh, error);
+      }
+    } else {
+      modelPhysicsSession.markLoading(mesh);
+      pending.push(loadPhysicsParticipant(mesh, generation));
+    }
+  });
+  modelPhysicsSession.setLoading(
+    modelPhysicsSession.getState().loadingCount > 0);
+  return Promise.allSettled(pending).then(() => {
+    if (modelPhysicsSession.isGeneration(generation)) {
+      attached = pending.some(result => result.status === 'fulfilled'
+        && result.value) || attached;
+      modelPhysicsSession.setLoading(
+        modelPhysicsSession.getState().loadingCount > 0);
+      if (attached) {
+        invalidateCharacterShadowGeometry({request: false});
+        requestRender();
+      }
+    }
+    return getModelPhysicsState();
+  });
+}
+
+export function resetModelPhysicsMotion() {
+  return modelPhysicsSession.reset(getModelTransformState());
+}
+
+function handleModelTransformChanged(event) {
+  const detail = event.detail || {};
+  const fallbackMesh = detail.meshes?.[0];
+  const fallbackTransform = fallbackMesh?.quaternion?.toArray
+    ? {
+      orientation: fallbackMesh.quaternion.toArray(),
+      translation: fallbackMesh.position?.toArray?.() || [0, 0, 0],
+    } : getModelTransformState();
+  modelPhysicsSession.handleModelTransform({
+    ...detail,
+    modelTransform: detail.modelTransform || fallbackTransform,
+  });
+}
+
+function handleVirtualModelMotion(event) {
+  modelPhysicsSession.handleVirtualMotion(event.detail);
 }
 
 export function weightForBone(indices, weights, influenceCount,
@@ -1231,28 +1272,22 @@ function updateInfluenceVisualization(mesh, state) {
 }
 
 function refreshAfterForestTopologyChange(mesh, state) {
-  refreshConstraintState(state);
-  if (state.physicsEnabled && state.deformationMode === 'physics') {
-    state.physicsState = initializePhysicsState(state.candidateForest);
-    state.physicsReferenceQuaternion = mesh.quaternion.clone();
-    clearMotionDiagnostics(state);
-    state.physicsTransforms = null;
-    state.physicsAccumulator = 0;
-    state.physicsLastTimestamp = null;
-    state.physicsSettled = false;
-    activePhysicsMeshes.add(mesh);
-    schedulePhysicsFrame();
-  }
-  refreshGravityState(mesh, state);
+  const settings = modelPhysicsSession.getSettings();
+  const participant = modelPhysicsSession.getParticipant(mesh);
+  if (participant) modelPhysicsSession.detach(mesh);
+  refreshParticipantDerivedState(mesh, state, settings);
   if (state.influenceVisualizationMode) {
     createInfluenceVisualization(
       mesh, state, state.influenceVisualizationMode);
   }
-  if (state.physicsEnabled && state.deformationMode === 'physics') {
-    applyDeformation(mesh, state);
-  } else {
-    requestRender();
+  if (participant && modelPhysicsSession.getState().enabled) {
+    modelPhysicsSession.attach(createPhysicsParticipant(mesh, state));
+    modelPhysicsSession.wake();
   }
+  applyDeformation(mesh, state, {
+    request: false, invalidateShadow: false, skipHidden: true,
+  });
+  requestRender();
 }
 
 function ensureInfluenceGraph(mesh, state) {
@@ -1292,6 +1327,36 @@ export function ensureCandidateForest(mesh) {
   };
   refreshAfterForestTopologyChange(mesh, state);
   return state.candidateForest;
+}
+
+/** Re-baseline loaded weights after the authoritative shape geometry changes. */
+export function refreshSkinningAfterShapeChange(mesh) {
+  const state = states.get(mesh);
+  const position = mesh?.geometry?.attributes?.position;
+  if (!state?.loaded || !position) return false;
+  const normal = mesh.geometry.attributes.normal;
+  state.baselinePositions = new Float32Array(position.array);
+  state.baselineNormals = normal ? new Float32Array(normal.array) : null;
+  state.influenceNodes = buildInfluenceNodes(
+    state.baselinePositions, state.indices, state.weights,
+    state.influenceCount, state.boneIds);
+  state.centerByBoneId = new Map(state.influenceNodes.map(node => [
+    node.boneId, node.weightedCenter]));
+  state.influenceGraph = null;
+  state.candidateTree = null;
+  state.candidateForest = null;
+  state.physicsTransforms = null;
+
+  const shouldInfer = state.physicsEnabled
+    || state.heatmapMode === 'mobility'
+    || state.influenceVisualizationMode === 'tree';
+  if (shouldInfer) {
+    ensureCandidateForest(mesh);
+  } else if (state.influenceVisualizationMode === 'center') {
+    createInfluenceVisualization(mesh, state, 'center');
+  }
+  if (state.heatmapMode) updateHeatmap(mesh, state);
+  return true;
 }
 
 export function setCandidateTreeRoot(mesh, rootId) {
@@ -1341,6 +1406,9 @@ if (typeof window !== 'undefined') {
     handleModelTransformChanged);
   window.addEventListener('mod-viewer-virtual-model-motion',
     handleVirtualModelMotion);
+  window.addEventListener('mod-viewer-mesh-state-changed', event => {
+    modelPhysicsSession.handleMeshStateChanged(event.detail?.meshes || []);
+  });
   window.addEventListener('mod-viewer-mesh-selected', event => {
     const mesh = event.detail?.mesh || null;
     if (activeExperimentHelperMesh && activeExperimentHelperMesh !== mesh) {
@@ -1350,9 +1418,12 @@ if (typeof window !== 'undefined') {
   });
 }
 
-function applyDeformation(mesh, state) {
+function applyDeformation(mesh, state, {
+  request = true,
+  invalidateShadow = true,
+  skipHidden = false,
+} = {}) {
   if (!state.loaded || !state.baselinePositions) return;
-  const position = mesh.geometry.attributes.position;
   const physicsActive = state.deformationMode === 'physics'
     && state.physicsEnabled && state.physicsState && state.candidateForest;
   let result;
@@ -1363,11 +1434,13 @@ function applyDeformation(mesh, state) {
       });
     result = applyWeightedTransformDeformation(
       state.baselinePositions, state.indices, state.weights,
-        state.influenceCount, state.physicsTransforms);
+        state.influenceCount, state.physicsTransforms, state.vertexMobility);
   } else {
     state.physicsTransforms = null;
     result = state.baselinePositions;
   }
+  if (skipHidden && !mesh.visible) return false;
+  const position = mesh.geometry.attributes.position;
   position.array.set(result);
   position.needsUpdate = true;
   if (!physicsActive) {
@@ -1379,18 +1452,26 @@ function applyDeformation(mesh, state) {
   updateInfluenceVisualization(mesh, state);
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
-  invalidateCharacterShadowGeometry();
-  requestRender();
+  if (invalidateShadow) invalidateCharacterShadowGeometry({request});
+  else if (request) requestRender();
+  return true;
 }
 
 function updateHeatmap(mesh, state) {
   if (!state.heatmapMode) return;
+  if (state.heatmapMode === 'mobility' && !state.vertexMobility
+      && state.candidateForest) {
+    refreshParticipantDerivedState(
+      mesh, state, modelPhysicsSession.getSettings());
+  }
   const count = Math.floor(state.indices.length / state.influenceCount);
   const colors = new Float32Array(count * 3);
   for (let vertex = 0; vertex < count; vertex += 1) {
-    const value = Math.max(0, Math.min(1, weightForBone(
-        state.indices, state.weights, state.influenceCount,
-        vertex, state.selectedBone)));
+    const value = state.heatmapMode === 'mobility'
+      ? Math.max(0, Math.min(1, Number(state.vertexMobility?.[vertex]) || 0))
+      : Math.max(0, Math.min(1, weightForBone(
+          state.indices, state.weights, state.influenceCount,
+          vertex, state.selectedBone)));
     const offset = vertex * 3;
     // Blue at zero, yellow/red at high influence for quick spatial reading.
     colors[offset] = value;
@@ -1505,161 +1586,82 @@ export function setSelectedBone(mesh, boneId) {
 }
 
 export function setPhysicsFrequency(mesh, frequencyHz) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(frequencyHz);
   if (!Number.isFinite(value)) return false;
-  state.physicsFrequencyHz = Math.max(0.1, Math.min(10, value));
-  if (state.physicsEnabled) wakePhysics(mesh, state);
+  modelPhysicsSession.setSettings({frequencyHz: value});
   return true;
 }
 
 export function setPhysicsDamping(mesh, dampingRatio) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(dampingRatio);
   if (!Number.isFinite(value)) return false;
-  state.physicsDampingRatio = Math.max(0, Math.min(2, value));
-  if (state.physicsEnabled) wakePhysics(mesh, state);
+  modelPhysicsSession.setSettings({dampingRatio: value});
   return true;
 }
 
 export function setPhysicsMotionStrength(mesh, strength) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
-  state.physicsMotionStrength = Math.max(0, Math.min(1, value));
+  modelPhysicsSession.setSettings({angularResponse: value});
   return true;
 }
 
 export function setPhysicsLinearMotionStrength(mesh, strength) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
-  state.physicsLinearMotionStrength = Math.max(0, Math.min(1, value));
+  modelPhysicsSession.setSettings({translationResponse: value});
   return true;
 }
 
 export function setPhysicsContinuousLinearResponse(mesh, strength) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
-  state.physicsContinuousLinearResponse = Math.max(0, Math.min(1, value));
+  modelPhysicsSession.setSettings({velocityResponse: value});
   return true;
 }
 
 export function setPhysicsGravityEnabled(mesh, enabled) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
-  state.physicsGravityEnabled = !!enabled;
-  refreshGravityState(mesh, state);
-  if (state.physicsEnabled && state.deformationMode === 'physics') {
-    state.physicsSettled = false;
-    wakePhysics(mesh, state);
-  }
-  return state.physicsGravityEnabled;
+  modelPhysicsSession.setSettings({gravityEnabled: !!enabled});
+  return !!enabled;
 }
 
 export function setPhysicsGravityScale(mesh, scale) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(scale);
   if (!Number.isFinite(value)) return false;
-  state.physicsGravityScale = Math.max(0, Math.min(2, value));
-  refreshGravityState(mesh, state);
-  if (state.physicsEnabled && state.deformationMode === 'physics') {
-    state.physicsSettled = false;
-    wakePhysics(mesh, state);
-  }
+  modelPhysicsSession.setSettings({gravityScale: value});
   return true;
 }
 
 export function setPhysicsConstraintsEnabled(mesh, enabled) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
-  state.physicsConstraintsEnabled = !!enabled;
-  refreshConstraintState(state);
-  if (state.physicsEnabled && state.deformationMode === 'physics') {
-    if (state.physicsConstraintsEnabled) {
-      applyPhysicsJointLimits(state.physicsState, state.physicsJointLimits);
-    }
-    applyDeformation(mesh, state);
-    wakePhysics(mesh, state);
-  }
-  return state.physicsConstraintsEnabled;
+  modelPhysicsSession.setSettings({constraintsEnabled: !!enabled});
+  return !!enabled;
 }
 
 export function setPhysicsMaxBendDegrees(mesh, degrees) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
   const value = Number(degrees);
   if (!Number.isFinite(value)) return false;
-  state.physicsMaxBendDegrees = Math.max(0, Math.min(90, value));
-  refreshConstraintState(state);
-  if (state.physicsEnabled && state.deformationMode === 'physics') {
-    if (state.physicsConstraintsEnabled) {
-      applyPhysicsJointLimits(state.physicsState, state.physicsJointLimits);
-    }
-    applyDeformation(mesh, state);
-    wakePhysics(mesh, state);
-  }
+  modelPhysicsSession.setSettings({maxBendDegrees: value});
   return true;
 }
 
 export function setPhysicsEnabled(mesh, enabled) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
-  if (!enabled) {
-    stopPhysics(mesh, state);
-    applyDeformation(mesh, state);
-    return false;
-  }
-  state.deformationMode = 'physics';
-  state.physicsEnabled = true;
-  const wasPhysicsInteractionEnabled = physicsEnabledMeshes.size > 0;
-  physicsEnabledMeshes.add(mesh);
-  if (!wasPhysicsInteractionEnabled) setPhysicsInteractionEnabled(true);
-  state.physicsReferenceQuaternion = mesh.quaternion.clone();
-  clearMotionDiagnostics(state);
-  refreshConstraintState(state);
-  state.physicsState = initializePhysicsState(state.candidateForest);
-  refreshGravityState(mesh, state);
-  state.physicsTransforms = null;
-  state.physicsAccumulator = 0;
-  state.physicsLastTimestamp = null;
-  state.physicsSettled = false;
-  applyDeformation(mesh, state);
-  wakePhysics(mesh, state);
+  if (!enabled) return disableModelPhysics();
+  void enableModelPhysics();
   return true;
 }
 
 export function resetPhysicsMotion(mesh) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !state.physicsEnabled
-      || state.deformationMode !== 'physics') return false;
-  resetPhysicsState(state.physicsState);
-  state.physicsReferenceQuaternion = mesh.quaternion.clone();
-  clearMotionDiagnostics(state);
-  refreshConstraintState(state);
-  refreshGravityState(mesh, state);
-  state.physicsTransforms = null;
-  state.physicsAccumulator = 0;
-  state.physicsLastTimestamp = null;
-  state.physicsSettled = !state.physicsGravityEnabled;
-  removePhysicsMesh(mesh);
-  applyDeformation(mesh, state);
-  if (state.physicsGravityEnabled) wakePhysics(mesh, state);
-  return true;
+  return resetModelPhysicsMotion();
 }
 
 export function setSkinningHeatmapMode(mesh, mode) {
   const state = stateFor(mesh);
   if (!state?.loaded) return false;
-  if (mode !== null && mode !== 'bone') {
+  if (mode !== null && mode !== 'bone' && mode !== 'mobility') {
     return state.heatmapMode;
+  }
+  if (mode === 'mobility' && !state.candidateForest) {
+    ensureCandidateForest(mesh);
   }
   state.heatmapMode = mode;
   if (state.heatmapMode) updateHeatmap(mesh, state);
@@ -1672,12 +1674,23 @@ export function setSkinningHeatmap(mesh, enabled) {
   return setSkinningHeatmapMode(mesh, enabled ? 'bone' : null) === 'bone';
 }
 
+export function setPhysicsMobilityHeatmap(mesh, enabled) {
+  return setSkinningHeatmapMode(mesh, enabled ? 'mobility' : null)
+    === 'mobility';
+}
+
 export function resetSkinningExperiment(mesh) {
   const state = stateFor(mesh);
   if (!state?.loaded) return;
-  if (state.physicsEnabled) stopPhysics(mesh, state);
+  if (state.physicsEnabled) {
+    resetModelPhysicsMotion();
+    removeInfluenceVisualization(state);
+    if (state.heatmapMode || state.debugMaterial) disableHeatmap(mesh, state);
+    requestRender();
+    return;
+  }
   state.deformationMode = null;
-  state.physicsTransforms = null;
+  if (!state.physicsEnabled) state.physicsTransforms = null;
   removeInfluenceVisualization(state);
   applyDeformation(mesh, state);
   if (state.heatmapMode || state.debugMaterial) disableHeatmap(mesh, state);
@@ -1687,15 +1700,12 @@ export function resetSkinningExperiment(mesh) {
   requestRender();
 }
 
-export function disposeSkinningExperiment(mesh) {
+export function disposeSkinningExperiment(mesh, {preserveRegistration = false} = {}) {
   const state = states.get(mesh);
+  if (preserveRegistration) modelPhysicsSession.detach(mesh);
+  else unregisterSkinningMesh(mesh);
   if (!state) return;
   state.disposed = true;
-  removePhysicsMesh(mesh);
-  const wasPhysicsInteractionEnabled = physicsEnabledMeshes.delete(mesh);
-  if (wasPhysicsInteractionEnabled && !physicsEnabledMeshes.size) {
-    setPhysicsInteractionEnabled(false);
-  }
   removeInfluenceVisualization(state);
   if (state.debugMaterial) state.debugMaterial.dispose();
   mesh.geometry?.deleteAttribute?.('color');

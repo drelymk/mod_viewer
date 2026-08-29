@@ -19,6 +19,10 @@ import { initAssetFolderPanel } from './panels/asset-folder-panel.js';
 import { initLeftDock, setLeftDockTab } from './panels/left-dock.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-profile.js';
 import { requestRender } from './scene/render-scheduler.js';
+import {
+  disableModelPhysics, enableModelPhysics, getModelPhysicsState,
+  resetModelPhysicsMotion,
+} from './mesh/weight-experiment.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
 import { initPanelOpacityControl } from './ui/appearance.js';
@@ -298,6 +302,10 @@ rendererReady.then(ready => {
       return changed;
     },
     getMaterialState,
+    getModelPhysicsState,
+    enableModelPhysics,
+    disableModelPhysics,
+    resetModelPhysicsMotion,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,
     setOutlineEnabled: value => {

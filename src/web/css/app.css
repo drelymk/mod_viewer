@@ -1083,6 +1083,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 .inspector-skinning-heatmap.active,
+.inspector-skinning-mobility-heatmap.active,
 .inspector-skinning-center[aria-pressed="true"] {
   color: var(--accent-soft); border-color: var(--accent-soft);
 }

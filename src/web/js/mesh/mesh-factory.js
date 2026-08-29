@@ -314,6 +314,7 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.baseNormals = data.normal
     ? new Float32Array(geo.attributes.normal.array) : null;
   mesh.userData.hasAuthoredNormals = !!data.normal;
+  mesh.userData.skinningAvailable = data.skinning_available === true;
   mesh.userData.shapeTargets = (data.shape_targets || []).map(target => ({
     var: target.var,
     mode: target.mode,

@@ -108,7 +108,8 @@ function transformForBone(transformByBoneId, boneId) {
 }
 
 export function applyWeightedTransformDeformation(
-    baselinePositions, indices, weights, influenceCount, transformByBoneId) {
+    baselinePositions, indices, weights, influenceCount, transformByBoneId,
+    vertexMobility = null) {
   const result = new Float32Array(baselinePositions || 0);
   if (!baselinePositions || !indices || !weights || influenceCount <= 0
       || !transformByBoneId) return result;
@@ -135,9 +136,16 @@ export function applyWeightedTransformDeformation(
       z += transformed.z * weight;
     }
     const unchanged = Math.max(0, 1 - transformedWeight);
-    result[offset] = baseline.x * unchanged + x;
-    result[offset + 1] = baseline.y * unchanged + y;
-    result[offset + 2] = baseline.z * unchanged + z;
+    const deformedX = baseline.x * unchanged + x;
+    const deformedY = baseline.y * unchanged + y;
+    const deformedZ = baseline.z * unchanged + z;
+    const mobilityValue = vertexMobility && vertex < vertexMobility.length
+      ? Number(vertexMobility[vertex]) : 1;
+    const mobility = Number.isFinite(mobilityValue)
+      ? Math.max(0, Math.min(1, mobilityValue)) : 1;
+    result[offset] = baseline.x + (deformedX - baseline.x) * mobility;
+    result[offset + 1] = baseline.y + (deformedY - baseline.y) * mobility;
+    result[offset + 2] = baseline.z + (deformedZ - baseline.z) * mobility;
   }
   return result;
 }

@@ -16,7 +16,8 @@ import {
   setPhysicsConstraintsEnabled, setPhysicsMaxBendDegrees,
   setPhysicsGravityEnabled, setPhysicsGravityScale,
   setPhysicsEnabled,
-  resetPhysicsMotion,
+  resetPhysicsMotion, getModelPhysicsState,
+  setPhysicsMobilityHeatmap,
 } from '../mesh/weight-experiment.js';
 
 const meshRecords = new WeakMap();
@@ -244,18 +245,30 @@ function buildSkinningDiagnostics(parent, state, vertexCount) {
     `weight sums ${skinningNumber(diagnostics.min_weight_sum)}–${skinningNumber(diagnostics.max_weight_sum)}`,
     `${Number(diagnostics.invalid_weight_vertices || 0).toLocaleString()} invalid`,
   ];
+  if (state.vertexMobility) {
+    const mobility = [...state.vertexMobility];
+    const minimum = Math.min(...mobility);
+    const maximum = Math.max(...mobility);
+    rows.push(`mobility ${skinningNumber(minimum)}–${skinningNumber(maximum)}`);
+  }
   rows.forEach(text => addText(parent, 'inspector-skinning-diagnostic', text));
 }
 function syncSkinningHeatmapControls(section, mesh) {
   const state = getSkinningState(mesh);
   if (!state || !section) return;
   const heatmap = section.querySelector('.inspector-skinning-heatmap');
-  if (!heatmap) return;
+  const mobility = section.querySelector('.inspector-skinning-mobility-heatmap');
+  if (!heatmap || !mobility) return;
   const active = state.heatmapMode === 'bone';
+  const mobilityActive = state.heatmapMode === 'mobility';
   heatmap.setAttribute('aria-pressed', String(active));
   heatmap.classList.toggle('active', active);
   heatmap.textContent = active
     ? 'Hide Weight Heatmap' : 'Show Weight Heatmap';
+  mobility.setAttribute('aria-pressed', String(mobilityActive));
+  mobility.classList.toggle('active', mobilityActive);
+  mobility.textContent = mobilityActive
+    ? 'Hide Mobility Heatmap' : 'Show Mobility Heatmap';
 }
 
 function selectedInfluenceNode(state) {
@@ -346,38 +359,55 @@ function hierarchySummary(forest) {
 }
 
 function physicsDiagnosticsPayload(state) {
-  if (!state?.physicsEnabled && !state?.physicsState) return null;
+  const model = getModelPhysicsState();
+  if (!model.enabled && !state?.physicsEnabled && !state?.physicsState) {
+    return null;
+  }
   const constraints = getPhysicsConstraintDiagnostics(state);
+  const mobility = state?.vertexMobility ? [...state.vertexMobility] : [];
   return {
-    enabled: !!state.physicsEnabled,
-    frequencyHz: state.physicsFrequencyHz,
-    dampingRatio: state.physicsDampingRatio,
-    angularResponse: state.physicsMotionStrength,
-    linearResponse: state.physicsLinearMotionStrength,
-    continuousLinearResponse: state.physicsContinuousLinearResponse,
+    enabled: !!model.enabled,
+    participantCount: model.participantCount,
+    participant: {
+      status: state?.physicsParticipantStatus || 'not-attempted',
+      error: state?.physicsParticipantError || null,
+    },
+    unavailableCount: model.unavailableCount,
+    failedCount: model.failedCount,
+    frequencyHz: model.frequencyHz,
+    dampingRatio: model.dampingRatio,
+    angularResponse: model.angularResponse,
+    linearResponse: model.translationResponse,
+    continuousLinearResponse: model.velocityResponse,
     gravity: {
-      enabled: !!state.physicsGravityEnabled,
-      scale: state.physicsGravityScale,
-      localDirection: [...(state.physicsGravityLocal
+      enabled: !!model.gravityEnabled,
+      scale: model.gravityScale,
+      localDirection: [...(state?.physicsGravityLocal
         || GRAVITY_WORLD_DIRECTION)],
-      diagnostics: state.physicsGravityDiagnostics || null,
+      diagnostics: state?.physicsGravityDiagnostics || null,
     },
     motion: {
-      rootAngularDeltaVector: [...(state.lastRootAngularDeltaVector
+      rootAngularDeltaVector: [...(state?.lastRootAngularDeltaVector
         || [0, 0, 0])],
       rootAngularDeltaMagnitude: Number(
-        state.lastRootAngularDeltaMagnitude) || 0,
-      translationLagRotationVector: [...(state.lastTranslationLagRotationVector
+        state?.lastRootAngularDeltaMagnitude) || 0,
+      translationLagRotationVector: [...(state?.lastTranslationLagRotationVector
         || [0, 0, 0])],
       translationLagRotationMagnitude: Number(
-        state.lastTranslationLagRotationMagnitude) || 0,
-      virtualLinearVelocityLocal: [...(state.physicsVirtualLinearVelocityLocal
+        state?.lastTranslationLagRotationMagnitude) || 0,
+      virtualLinearVelocityLocal: [...(state?.physicsVirtualLinearVelocityLocal
         || [0, 0, 0])],
     },
     constraints,
-    settled: !!state.physicsSettled,
+    mobility: mobility.length ? {
+      minimum: Math.min(...mobility),
+      maximum: Math.max(...mobility),
+      average: mobility.reduce((sum, value) => sum + value, 0)
+        / mobility.length,
+    } : null,
+    settled: !!model.settled,
     joints: Object.fromEntries(
-      [...(state.physicsState?.joints || new Map()).entries()]
+      [...(state?.physicsState?.joints || new Map()).entries()]
         .map(([boneId, joint]) => [boneId, {
           rotationVector: [...(joint.rotationVector || [0, 0, 0])],
           rotationMagnitude: Math.hypot(
@@ -549,27 +579,27 @@ function buildSkinningHierarchyControls(parent, mesh, state) {
 }
 
 function physicsSummary(state) {
-  if (!state?.candidateForest) {
-    return 'Infer the hierarchy to enable experimental secondary motion.';
-  }
-  const status = state.physicsEnabled
-    ? (state.physicsSettled ? 'Settled' : 'Active') : 'Disabled';
-  const jointCount = state.physicsState?.joints?.size
-    ?? (state.candidateForest.components || []).reduce(
-      (total, component) => total + Math.max(
-        0, (component.nodeIds || []).length - 1), 0);
+  const model = getModelPhysicsState();
+  const status = !model.enabled ? 'Disabled'
+    : model.loading ? 'Loading'
+      : model.settled ? 'Settled' : 'Active';
   const constraints = getPhysicsConstraintDiagnostics(state);
+  const participant = state?.physicsParticipantStatus || 'not-attempted';
   return [
-    'Physics ' + status + ' · ' + jointCount + ' dynamic joints · 3D',
-    'Frequency ' + Number(state.physicsFrequencyHz).toFixed(2) + ' Hz · '
-      + 'Damping ' + Number(state.physicsDampingRatio).toFixed(2),
-    'Angular response ' + Number(state.physicsMotionStrength).toFixed(2)
+    'Character Physics ' + status + ' · ' + model.participantCount
+      + ' participating meshes',
+    'Participant ' + participant + ' · ' + model.loadingCount
+      + ' loading · ' + model.unavailableCount + ' unavailable · '
+      + model.failedCount + ' failed',
+    'Frequency ' + Number(model.frequencyHz).toFixed(2) + ' Hz · '
+      + 'Damping ' + Number(model.dampingRatio).toFixed(2),
+    'Angular response ' + Number(model.angularResponse).toFixed(2)
       + ' · Translation response '
-      + Number(state.physicsLinearMotionStrength).toFixed(2),
+      + Number(model.translationResponse).toFixed(2),
     'Velocity response '
-      + Number(state.physicsContinuousLinearResponse).toFixed(2),
-    'Gravity ' + (state.physicsGravityEnabled ? 'On' : 'Off')
-      + ' · Scale ' + Number(state.physicsGravityScale).toFixed(1),
+      + Number(model.velocityResponse).toFixed(2),
+    'Gravity ' + (model.gravityEnabled ? 'On' : 'Off')
+      + ' · Scale ' + Number(model.gravityScale).toFixed(1),
     'Joint limits ' + (constraints.enabled ? 'On' : 'Off')
       + ' · At limit ' + constraints.atLimitCount
       + ' / ' + constraints.limitedJointCount,
@@ -603,14 +633,15 @@ function addPhysicsRange(parent, className, label, min, max, step, value,
 }
 
 function buildSkinningPhysicsControls(parent, mesh, state) {
+  const initial = getModelPhysicsState();
   const section = document.createElement('section');
   section.className = 'inspector-section inspector-skinning-physics';
   const title = document.createElement('div');
   title.className = 'inspector-skinning-subtitle';
-  title.textContent = 'Secondary Motion — Experimental';
+  title.textContent = 'Character Physics - Secondary Motion - Experimental';
   section.appendChild(title);
   addText(section, 'inspector-skinning-hint',
-    'Hold RMB and drag the viewport to excite secondary motion. '
+    'Hold RMB and drag to excite the character. '
       + 'LMB continues to control the camera.');
 
   const enableLabel = document.createElement('label');
@@ -623,29 +654,29 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     update();
   });
   enableLabel.appendChild(enableInput);
-  addText(enableLabel, 'inspector-label', 'Enable Physics');
+  addText(enableLabel, 'inspector-label', 'Enable Character Physics');
   section.appendChild(enableLabel);
 
   const frequency = addPhysicsRange(section,
     'inspector-skinning-physics-frequency', 'Frequency (Hz)',
-    0.1, 10, 0.1, state.physicsFrequencyHz,
+    0.1, 10, 0.1, initial.frequencyHz,
     value => setPhysicsFrequency(mesh, value));
   const damping = addPhysicsRange(section,
     'inspector-skinning-physics-damping', 'Damping',
-    0, 2, 0.05, state.physicsDampingRatio,
+    0, 2, 0.05, initial.dampingRatio,
     value => setPhysicsDamping(mesh, value));
   const angular = addPhysicsRange(section,
     'inspector-skinning-physics-motion', 'Angular response',
-    0, 1, 0.05, state.physicsMotionStrength,
+    0, 1, 0.05, initial.angularResponse,
     value => setPhysicsMotionStrength(mesh, value));
   const linear = addPhysicsRange(section,
     'inspector-skinning-physics-linear', 'Translation response',
-    0, 1, 0.05, state.physicsLinearMotionStrength,
+    0, 1, 0.05, initial.translationResponse,
     value => setPhysicsLinearMotionStrength(mesh, value));
   const continuous = addPhysicsRange(section,
     'inspector-skinning-physics-continuous-response',
     'Velocity response', 0, 1, 0.05,
-    state.physicsContinuousLinearResponse,
+    initial.velocityResponse,
     value => setPhysicsContinuousLinearResponse(mesh, value));
 
   const gravity = document.createElement('div');
@@ -664,7 +695,7 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   gravity.appendChild(gravityLabel);
   const gravityScale = addPhysicsRange(gravity,
     'inspector-skinning-physics-gravity-scale', 'Gravity scale',
-    0, 2, 0.1, state.physicsGravityScale,
+    0, 2, 0.1, initial.gravityScale,
     value => setPhysicsGravityScale(mesh, value));
   const gravityDirection = addText(gravity,
     'inspector-skinning-physics-gravity-direction', '');
@@ -689,7 +720,7 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   constraints.appendChild(constraintsLabel);
   const maxBend = addPhysicsRange(constraints,
     'inspector-skinning-physics-max-bend', 'Max bend',
-    0, 90, 1, state.physicsMaxBendDegrees,
+    0, 90, 1, initial.maxBendDegrees,
     value => setPhysicsMaxBendDegrees(mesh, value));
   const constraintsDiagnostic = addText(constraints,
     'inspector-skinning-physics-constraints-diagnostic', '');
@@ -705,55 +736,54 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   reset.className = 'ui-button inspector-skinning-physics-reset';
   reset.textContent = 'Reset Motion';
   reset.addEventListener('click', () => {
-    resetPhysicsMotion(mesh);
+    resetPhysicsMotion();
     update();
   });
   actions.appendChild(reset);
   section.appendChild(actions);
 
   function update(latest = getSkinningState(mesh)) {
-    if (!latest) return;
-    const valid = !!latest.candidateForest;
+    const model = getModelPhysicsState();
     summary.textContent = physicsSummary(latest);
-    enableInput.checked = !!latest.physicsEnabled;
-    enableInput.disabled = !latest.loaded;
-    frequency.input.disabled = !valid;
-    frequency.input.value = latest.physicsFrequencyHz;
+    enableInput.checked = !!model.enabled;
+    enableInput.disabled = false;
+    frequency.input.disabled = false;
+    frequency.input.value = model.frequencyHz;
     frequency.valueNode.textContent =
-      Number(latest.physicsFrequencyHz).toFixed(2);
-    damping.input.disabled = !valid;
-    damping.input.value = latest.physicsDampingRatio;
+      Number(model.frequencyHz).toFixed(2);
+    damping.input.disabled = false;
+    damping.input.value = model.dampingRatio;
     damping.valueNode.textContent =
-      Number(latest.physicsDampingRatio).toFixed(2);
-    angular.input.disabled = !valid;
-    angular.input.value = latest.physicsMotionStrength;
+      Number(model.dampingRatio).toFixed(2);
+    angular.input.disabled = false;
+    angular.input.value = model.angularResponse;
     angular.valueNode.textContent =
-      Number(latest.physicsMotionStrength).toFixed(2);
-    linear.input.disabled = !valid;
-    linear.input.value = latest.physicsLinearMotionStrength;
+      Number(model.angularResponse).toFixed(2);
+    linear.input.disabled = false;
+    linear.input.value = model.translationResponse;
     linear.valueNode.textContent =
-      Number(latest.physicsLinearMotionStrength).toFixed(2);
-    continuous.input.disabled = !valid;
-    continuous.input.value = latest.physicsContinuousLinearResponse;
+      Number(model.translationResponse).toFixed(2);
+    continuous.input.disabled = false;
+    continuous.input.value = model.velocityResponse;
     continuous.valueNode.textContent =
-      Number(latest.physicsContinuousLinearResponse).toFixed(2);
-    gravityEnableInput.disabled = !valid;
-    gravityEnableInput.checked = !!latest.physicsGravityEnabled;
-    gravityScale.input.disabled = !valid;
-    gravityScale.input.value = latest.physicsGravityScale;
+      Number(model.velocityResponse).toFixed(2);
+    gravityEnableInput.disabled = false;
+    gravityEnableInput.checked = !!model.gravityEnabled;
+    gravityScale.input.disabled = false;
+    gravityScale.input.value = model.gravityScale;
     gravityScale.valueNode.textContent =
-      Number(latest.physicsGravityScale).toFixed(1);
-    const local = latest.physicsGravityLocal || GRAVITY_WORLD_DIRECTION;
+      Number(model.gravityScale).toFixed(1);
+    const local = latest?.physicsGravityLocal || GRAVITY_WORLD_DIRECTION;
     gravityDirection.textContent = 'Down (-Y) → local ['
       + local.map(value => Number(value).toFixed(2)).join(', ') + ']';
     const gravityMax = Number(
-      latest.physicsGravityDiagnostics?.maxTotalAccelerationMagnitude) || 0;
+      latest?.physicsGravityDiagnostics?.maxTotalAccelerationMagnitude) || 0;
     gravityDiagnostic.textContent = 'Max gravity acceleration '
       + (gravityMax * 180 / Math.PI).toFixed(1) + ' deg/s²';
     const diagnostics = getPhysicsConstraintDiagnostics(latest);
-    constraintsEnableInput.disabled = !valid;
+    constraintsEnableInput.disabled = false;
     constraintsEnableInput.checked = diagnostics.enabled;
-    maxBend.input.disabled = !valid;
+    maxBend.input.disabled = false;
     maxBend.input.value = diagnostics.maxComponentBend;
     maxBend.valueNode.textContent =
       diagnostics.maxComponentBend.toFixed(0) + '°';
@@ -761,7 +791,7 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
       + diagnostics.atLimitCount + ' / ' + diagnostics.limitedJointCount
       + ' joints · Max usage '
       + (diagnostics.maxUsage * 100).toFixed(0) + '%';
-    reset.disabled = !latest.physicsEnabled;
+    reset.disabled = !model.enabled;
   }
 
   parent.appendChild(section);
@@ -791,15 +821,19 @@ function renderSkinningControls(section, mesh, state, advancedHost = null) {
   if (!load || !status || !controls) return;
   if (!state?.loaded) {
     skinningUpdates.delete(mesh);
-    physicsUpdates.delete(mesh);
     if (advancedHost) {
       advancedHost.replaceChildren();
-      advancedHost.hidden = true;
+      advancedHost.hidden = false;
+      buildSkinningPhysicsControls(advancedHost, mesh, state);
     }
     controls.hidden = true;
-    load.disabled = !!state?.loading;
+    const available = mesh.userData?.skinningAvailable === true
+      && !!mesh.userData?.modPath && !!mesh.userData?.semanticKey;
+    load.disabled = !!state?.loading || !available;
+    if (!available) load.textContent = 'No Skin Weights';
     load.textContent = state?.loading ? 'Loading…' : 'Load Weights';
-    status.textContent = state?.error || '';
+    status.textContent = state?.error
+      || (!available ? 'No skin-weight stream was found for this draw.' : '');
     status.hidden = !status.textContent;
     return;
   }
@@ -854,6 +888,17 @@ function renderSkinningControls(section, mesh, state, advancedHost = null) {
   });
   controls.appendChild(heatmap);
 
+  const mobilityHeatmap = document.createElement('button');
+  mobilityHeatmap.type = 'button';
+  mobilityHeatmap.className =
+    'ui-button inspector-skinning-mobility-heatmap';
+  mobilityHeatmap.addEventListener('click', () => {
+    const latest = getSkinningState(mesh);
+    setPhysicsMobilityHeatmap(mesh, latest?.heatmapMode !== 'mobility');
+    skinningUpdates.get(mesh)?.();
+  });
+  controls.appendChild(mobilityHeatmap);
+
   const center = document.createElement('button');
   center.type = 'button';
   center.className = 'ui-button inspector-skinning-center';
@@ -897,8 +942,7 @@ function renderSkinningControls(section, mesh, state, advancedHost = null) {
   update(state);
 }
 function buildSkinningSection(content, mesh) {
-  if (!mesh?.userData?.modPath || !mesh.userData.semanticKey
-      || mesh.userData.assetFill === true) return;
+  if (!mesh || mesh.userData?.assetFill === true) return;
   const group = document.createElement('div');
   group.className = 'inspector-skinning-group';
   const section = document.createElement('section');
@@ -926,6 +970,7 @@ function buildSkinningSection(content, mesh) {
   renderSkinningControls(
     section, mesh, getSkinningState(mesh), advancedHost);
   load.addEventListener('click', async () => {
+    if (load.disabled) return;
     load.disabled = true;
     status.hidden = true;
     status.textContent = '';
@@ -1052,13 +1097,22 @@ export function initInspectorPanel() {
     const affected = current.type === 'mesh'
       ? changed.includes(current.mesh)
       : (current.record.meshes || []).some(mesh => changed.includes(mesh));
-    if (affected) updateInspectorState();
+    if (affected) {
+      updateInspectorState();
+      if (current.type === 'mesh') {
+        skinningUpdates.get(current.mesh)?.();
+        physicsUpdates.get(current.mesh)?.();
+      }
+    }
   });
   window.addEventListener('mod-viewer-model-transform-changed', event => {
     const changed = event.detail?.meshes || [];
     if (current?.type === 'mesh' && changed.includes(current.mesh)) {
       physicsUpdates.get(current.mesh)?.();
     }
+  });
+  window.addEventListener('mod-viewer-model-physics-changed', () => {
+    if (current?.type === 'mesh') physicsUpdates.get(current.mesh)?.();
   });
   clearContent();
 }

@@ -98,6 +98,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             entry: dict = {
                 "pos": _geometry_ref(packed.positions, geometry),
                 "idx": _geometry_ref(packed.indices, geometry),
+                "skinning_available": draw.skinning_source is not None,
                 "tex_key": None,
                 "normal_map_y_sign": texture_profile.normal_y_sign,
                 "normal_map_enabled": texture_profile.bind_normal_map,

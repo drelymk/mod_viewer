@@ -20,6 +20,9 @@ import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
 import {
   disposeSkinningExperiment, getSkinningBaseMaterial, getSkinningState,
+  destroyModelPhysicsSession, registerSkinningMesh,
+  refreshSkinningAfterShapeChange,
+  unregisterSkinningMesh,
   withSkinningBaseMaterial,
 } from './weight-experiment.js';
 
@@ -81,6 +84,7 @@ export function resetMeshes({ preserveModelOrientation = false } = {}) {
     });
   });
   activeMeshes.length = 0;
+  destroyModelPhysicsSession();
   clearTextureRunGroups();
   resetModelOrientation({ preserveRotation: preserveModelOrientation });
   resetCharacterShadows();
@@ -108,6 +112,7 @@ export function addMesh(mesh, conditions, sources, textureVariants, materialVari
   attachOutline(mesh);
   scene.add(mesh);
   activeMeshes.push(mesh);
+  registerSkinningMesh(mesh);
   applyTextureVariant(mesh);
 }
 
@@ -395,8 +400,9 @@ function applyShapeTargets(mesh, { render = true } = {}) {
   if (previous?.length === controlValues.length
       && controlValues.every((value, index) => value === previous[index])) return false;
   const skinning = getSkinningState(mesh);
-  if (skinning?.loaded || skinning?.loading || skinning?.promise) {
-    disposeSkinningExperiment(mesh);
+  const restartSkinningLoad = !!(skinning?.loading || skinning?.promise);
+  if (skinning?.loading || skinning?.promise) {
+    disposeSkinningExperiment(mesh, {preserveRegistration: true});
   }
   mesh.userData.shapeControlValues = controlValues;
 
@@ -429,6 +435,8 @@ function applyShapeTargets(mesh, { render = true } = {}) {
   updateGeometryNormals(mesh, deformed);
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
+  refreshSkinningAfterShapeChange(mesh);
+  if (restartSkinningLoad) registerSkinningMesh(mesh);
   invalidateCharacterShadowGeometry({ request: render });
   return true;
 }
