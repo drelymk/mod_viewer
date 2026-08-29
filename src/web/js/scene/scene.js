@@ -334,15 +334,15 @@ export function resetCharacterShadows() {
   viewportRenderPipeline.reset();
 }
 
-export function invalidateCharacterShadowGeometry() {
+export function invalidateCharacterShadowGeometry({ request = true } = {}) {
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
-  requestRender();
+  if (request) requestRender();
 }
 
-export function invalidateCharacterShadowVisibility() {
+export function invalidateCharacterShadowVisibility({ request = true } = {}) {
   characterShadowController.invalidateVisibility();
-  requestRender();
+  if (request) requestRender();
 }
 
 export function getCharacterShadowDebugState() {

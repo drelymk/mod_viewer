@@ -1101,6 +1101,243 @@ def test_skinning_load_is_invalidated_by_shape_change(
         context.close()
 
 
+def _invalidation_payload():
+    payload = _payload("Invalidation")
+    template = next(iter(payload["meshes"].values()))
+
+    def condition(variable, value):
+        return [[{"var": variable, "value": value, "negate": False}]]
+
+    def mesh(name, *, conditions=None, texture_variants=None, shape=None):
+        entry = copy.deepcopy(template)
+        entry["component"] = name
+        entry["conditions"] = conditions or []
+        entry["texture_variants"] = texture_variants or []
+        entry["shape_targets"] = [] if shape is None else [{
+            "var": shape,
+            "pos": _f32(0, 0, 0, 1.5, 0, 0, 0, 1.5, 0),
+        }]
+        return entry
+
+    alt_texture = payload["texture_pools"]["p0"][1]["tex_key"]
+    payload["meshes"] = {
+        "Mesh-A": mesh("Mesh A", conditions=condition("visibleA", "1"),
+                        shape="shapeA"),
+        "Mesh-B": mesh("Mesh B", texture_variants=[{
+            "conditions": condition("textureB", "1"),
+            "tex_key": alt_texture,
+        }], shape="shapeB"),
+        "Mesh-C": mesh("Mesh C"),
+    }
+    payload["controls"]["menu"] = {}
+    payload["state"]["defaults"].update({
+        "visibleA": "1", "textureB": "0", "shapeA": "0", "shapeB": "0",
+    })
+    return payload
+
+
+def test_control_dependency_and_snapshot_helpers(edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Deps": _payload("Deps")})
+    try:
+        result = page.evaluate("""async () => {
+          const visibility = await import('./js/mesh/visibility.js');
+          const controls = await import('./js/editing/control-state.js');
+          const mesh = {userData: {
+            conditions: [[{var: 'A'}, {var: 'B'}], [{var: 'C'}]],
+            textureVariants: [{conditions: [[{var: 'D'}]]}],
+            normalMapVariants: [{conditions: [[{var: 'E'}]]}],
+            emissionMapVariants: [{conditions: [[{var: 'F'}]]}],
+            shapeTargets: [{var: 'ShapeA'}, {var: 'ShapeB'}, {var: 'ShapeA'}],
+          }};
+          const first = visibility.dependenciesFor(mesh);
+          const cached = visibility.dependenciesFor(mesh) === first;
+          mesh.userData.conditions = [[{var: 'NewVisibility'}]];
+          const beforeInvalidate = [...visibility.dependenciesFor(mesh).visibility];
+          visibility.invalidateControlDependencies(mesh);
+          const afterInvalidate = [...visibility.dependenciesFor(mesh).visibility];
+          const changed = [...controls.changedControlVariables(
+            {A: '0', B: '1'}, {A: '1', B: '1', C: '0'})];
+          const removed = [...controls.changedControlVariables(
+            {A: '1', B: '1'}, {A: '1'})];
+          return {
+            conditionVariables: [...visibility.variablesFromConditions(
+              mesh.userData.conditions)],
+            textureVariables: [...first.textures],
+            shapeVariables: [...first.shapes],
+            cached, beforeInvalidate, afterInvalidate, changed, removed,
+          };
+        }""")
+        assert result == {
+            "conditionVariables": ["NewVisibility"],
+            "textureVariables": ["D", "E", "F"],
+            "shapeVariables": ["ShapeA", "ShapeB"],
+            "cached": True,
+            "beforeInvalidate": ["A", "B", "C"],
+            "afterInvalidate": ["NewVisibility"],
+            "changed": ["A", "C"],
+            "removed": ["B"],
+        }
+    finally:
+        context.close()
+
+
+def test_control_refresh_updates_only_affected_mesh_categories(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Invalidation": _invalidation_payload()})
+    try:
+        _open(page, "Invalidation")
+        page.locator(".draw-item").nth(2).wait_for()
+        page.wait_for_timeout(100)
+        result = page.evaluate("""async () => {
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshAll} = await import('./js/mesh/visibility.js');
+          const meshes = window.modViewer.activeMeshes;
+          const refs = meshes.map(mesh => ({
+            mesh, geometry: mesh.geometry, material: mesh.material,
+          }));
+          const capture = () => meshes.map(mesh => ({
+            name: mesh.userData.semanticKey,
+            visible: mesh.visible,
+            positionVersion: mesh.geometry.attributes.position.version,
+            resolved: mesh.userData.resolvedTexKey,
+          }));
+          const initial = capture();
+          const stable = refreshAll();
+          const noOp = capture();
+
+          setControlValue('visibleA', '0');
+          const visibility = refreshAll();
+          const afterVisibility = capture();
+
+          setControlValue('shapeA', '1');
+          const shape = refreshAll();
+          const afterShape = capture();
+
+          setControlValue('textureB', '1');
+          const texture = refreshAll();
+          const afterTexture = capture();
+          const sameObjects = refs.every((ref, index) =>
+            meshes[index] === ref.mesh && meshes[index].geometry === ref.geometry
+              && meshes[index].material === ref.material);
+          const names = result => result.changedMeshes.map(mesh => mesh.userData.semanticKey);
+          return {
+            stable: {
+              visibilityChanged: stable.visibilityChanged,
+              texturesChanged: stable.texturesChanged,
+              shapesChanged: stable.shapesChanged,
+              state: noOp,
+            },
+            visibility: {
+              names: names(visibility), state: afterVisibility,
+            },
+            shape: {names: names(shape), state: afterShape},
+            texture: {names: names(texture), state: afterTexture},
+            initial, sameObjects,
+          };
+        }""")
+        assert result["stable"] == {
+            "visibilityChanged": False, "texturesChanged": False,
+            "shapesChanged": False, "state": result["initial"],
+        }
+        assert result["visibility"]["names"] == ["Mesh-A"]
+        assert result["visibility"]["state"][0]["visible"] is False
+        assert [item["positionVersion"] for item in result["visibility"]["state"]] == [
+            item["positionVersion"] for item in result["initial"]]
+        assert result["shape"]["names"] == ["Mesh-A"]
+        assert result["shape"]["state"][0]["positionVersion"] > \
+            result["initial"][0]["positionVersion"]
+        assert [item["positionVersion"] for item in result["shape"]["state"][1:]] == [
+            item["positionVersion"] for item in result["initial"][1:]]
+        assert result["texture"]["names"] == ["Mesh-B"]
+        assert result["texture"]["state"][1]["resolved"] == \
+            "diffuse::Invalidation-two.png"
+        assert [item["positionVersion"] for item in result["texture"]["state"]] == [
+            item["positionVersion"] for item in result["shape"]["state"]]
+        assert result["sameObjects"]
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Invalidation"]
+    finally:
+        context.close()
+
+
+def test_control_refresh_plans_all_final_values_from_derived_rules(
+        edge_browser, frontend_url):
+    payload = _invalidation_payload()
+    payload["state"]["defaults"].update({
+        "root": "0", "visibleA": "1", "shapeA": "0", "textureB": "0",
+    })
+    payload["state"]["rules"] = [
+        {"conditions": [[{"var": "root", "value": "1"}]],
+         "var": "visibleA", "value": "0"},
+        {"conditions": [[{"var": "visibleA", "value": "0"}]],
+         "var": "shapeA", "value": "1"},
+        {"conditions": [[{"var": "shapeA", "value": "1"}]],
+         "var": "textureB", "value": "1"},
+    ]
+    context, page = _page(
+        edge_browser, frontend_url, {"Derived": payload})
+    try:
+        _open(page, "Derived")
+        page.locator(".draw-item").nth(2).wait_for()
+        result = page.evaluate("""async () => {
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshAll} = await import('./js/mesh/visibility.js');
+          const before = window.modViewer.activeMeshes.map(mesh => ({
+            visible: mesh.visible,
+            positionVersion: mesh.geometry.attributes.position.version,
+            texture: mesh.userData.resolvedTexKey,
+          }));
+          setControlValue('root', '1');
+          const refresh = refreshAll();
+          const after = window.modViewer.activeMeshes.map(mesh => ({
+            visible: mesh.visible,
+            positionVersion: mesh.geometry.attributes.position.version,
+            texture: mesh.userData.resolvedTexKey,
+          }));
+          return {
+            changed: [...refresh.changedMeshes].map(mesh => mesh.userData.semanticKey),
+            visibilityChanged: refresh.visibilityChanged,
+            shapesChanged: refresh.shapesChanged,
+            texturesChanged: refresh.texturesChanged,
+            before, after,
+          };
+        }""")
+        assert result["changed"] == ["Mesh-A", "Mesh-B"]
+        assert result["visibilityChanged"]
+        assert result["shapesChanged"]
+        assert result["texturesChanged"]
+        assert not result["after"][0]["visible"]
+        assert result["after"][0]["positionVersion"] > \
+            result["before"][0]["positionVersion"]
+        assert result["after"][1]["texture"] == "diffuse::Invalidation-two.png"
+        assert result["after"][2] == result["before"][2]
+    finally:
+        context.close()
+
+
+def test_noop_control_refresh_does_not_request_render(edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"NoOp": _payload("NoOp")})
+    try:
+        _open(page, "NoOp")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_timeout(150)
+        before = page.evaluate("""() => ({
+          render: window.modViewer.getRenderCount(),
+          positions: window.modViewer.activeMeshes.map(mesh =>
+            mesh.geometry.attributes.position.version),
+        })""")
+        page.evaluate("import('./js/mesh/visibility.js').then(({refreshAll}) => refreshAll())")
+        page.wait_for_timeout(100)
+        after = page.evaluate("""() => ({
+          render: window.modViewer.getRenderCount(),
+          positions: window.modViewer.activeMeshes.map(mesh =>
+            mesh.geometry.attributes.position.version),
+        })""")
+        assert after == before
+    finally:
+        context.close()
+
+
 def test_skinning_angular_motion_follows_model_turn_and_ignores_camera(
         edge_browser, frontend_url):
     context, page = _page(

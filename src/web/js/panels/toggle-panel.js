@@ -270,5 +270,4 @@ export function buildTogglePanel(toggles, ctx = {}) {
     }
   }
 
-  refreshAll();
 }
