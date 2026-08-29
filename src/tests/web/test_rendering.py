@@ -1338,6 +1338,41 @@ def test_noop_control_refresh_does_not_request_render(edge_browser, frontend_url
         context.close()
 
 
+def test_clean_control_refresh_skips_texture_run_reconciliation(
+        edge_browser, frontend_url):
+    payload = _invalidation_payload()
+    context, page = _page(
+        edge_browser, frontend_url, {"TextureRuns": payload})
+    try:
+        _open(page, "TextureRuns")
+        page.locator(".draw-item").nth(2).wait_for()
+        result = page.evaluate("""async () => {
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshAll} = await import('./js/mesh/visibility.js');
+          const pool = window.modViewer.activeMeshes[0].userData.texturePool;
+          const marker = 'light::reconciliation-marker';
+          const markAndRefresh = () => {
+            pool[0].light_map = marker;
+            refreshAll();
+            return Object.hasOwn(pool[0], 'light_map');
+          };
+          const noOp = markAndRefresh();
+          setControlValue('visibleA', '0');
+          const visibility = markAndRefresh();
+          setControlValue('shapeA', '1');
+          const shape = markAndRefresh();
+          setControlValue('textureB', '1');
+          const texture = markAndRefresh();
+          return {noOp, visibility, shape, texture};
+        }""")
+        assert result == {
+            "noOp": True, "visibility": True, "shape": True,
+            "texture": False,
+        }
+    finally:
+        context.close()
+
+
 def test_skinning_angular_motion_follows_model_turn_and_ignores_camera(
         edge_browser, frontend_url):
     context, page = _page(

@@ -8,6 +8,7 @@ import {
 import { dnfSatisfied, getControlValue } from '../editing/control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
 import { setMeshTextureState, updateGeometryNormals } from './mesh-factory.js';
+import { clearTextureRunGroups, recomputeAllTextureRuns } from './mesh-texture-runs.js';
 import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
@@ -74,6 +75,7 @@ export function resetMeshes({ preserveModelOrientation = false } = {}) {
     });
   });
   activeMeshes.length = 0;
+  clearTextureRunGroups();
   resetModelOrientation({ preserveRotation: preserveModelOrientation });
   resetCharacterShadows();
   requestRender();
@@ -379,6 +381,12 @@ export function refreshMeshes(options) {
         changedMeshes.add(mesh);
       }
     }
+  }
+
+  if (textureDirty) {
+    const runChangedMeshes = recomputeAllTextureRuns({ render: false });
+    for (const mesh of runChangedMeshes) changedMeshes.add(mesh);
+    texturesChanged = runChangedMeshes.size > 0 || texturesChanged;
   }
 
   const changedList = [...changedMeshes];
