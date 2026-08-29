@@ -1088,6 +1088,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   font-size: 12px;
 }
 .weight-bone-option { padding: 3px 5px; border-radius: var(--radius-sm); cursor: pointer; }
+.weight-bone-option[hidden] { display: none; }
 .weight-bone-option:hover { color: var(--text); background: var(--surface-active); }
 .weight-bone-id { color: var(--text); font-family: ui-monospace, monospace; }
 .weight-bone-meta {

@@ -282,6 +282,7 @@ export function createModelPhysicsSession({
   }
 
   function destroy() {
+    settings = {...DEFAULT_MODEL_PHYSICS_SETTINGS};
     disable();
   }
 
@@ -450,8 +451,11 @@ export function createModelPhysicsSession({
   }
 
   function reset(modelTransform, {settingsPatch = null} = {}) {
-    if (!enabled) return false;
     if (settingsPatch) settings = normalizedSettings(settings, settingsPatch);
+    if (!enabled) {
+      if (settingsPatch) notify();
+      return !!settingsPatch;
+    }
     participants.forEach(participant => participant.reset?.(settings));
     accumulator = 0;
     lastTimestamp = null;

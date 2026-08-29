@@ -17,6 +17,10 @@ let ui = null;
 let loadingPromise = null;
 let currentMesh = null;
 let meshFilterMode = 'all';
+let latestWeightState = null;
+let cachedMeshSummary = null;
+let cachedMeshSummaryMesh = null;
+let cachedMeshSummaryVersion = null;
 
 const $ = id => document.getElementById(id);
 
@@ -172,16 +176,16 @@ function buildBonePicker(content) {
     button.setAttribute('aria-expanded', String(open));
     if (open) search.focus();
   });
-  search.addEventListener('input', syncBoneFilter);
-  selectedOnly.addEventListener('change', syncBoneFilter);
+  search.addEventListener('input', () => syncBoneFilter());
+  selectedOnly.addEventListener('change', () => syncBoneFilter());
   allMeshes.addEventListener('click', () => {
     meshFilterMode = 'all';
-    syncPanel();
+    syncWeightControls();
   });
   currentMeshButton.addEventListener('click', () => {
     if (!currentMesh) return;
     meshFilterMode = 'current';
-    syncPanel();
+    syncWeightControls();
   });
 }
 
@@ -294,10 +298,10 @@ function buildPanel() {
   buildPhysicsControls(panel);
 }
 
-function syncBoneFilter() {
+function syncBoneFilter(weightState = latestWeightState || getModelWeightState()) {
   if (!ui?.optionById) return;
   const query = ui.search.value.trim().toLowerCase();
-  const selected = new Set(getModelWeightState().selectedBoneIds);
+  const selected = new Set(weightState.selectedBoneIds);
   ui.optionById.forEach((option, id) => {
     option.hidden = (!!query && !String(id).includes(query))
       || (ui.selectedOnly.checked && !selected.has(id));
@@ -364,10 +368,24 @@ function syncRange(range, value) {
   range.valueNode.textContent = numeric.toFixed(2);
 }
 
-function syncPanel() {
+function meshSummaryFor(weightState) {
+  if (!currentMesh) return {availableBoneIds: [], boneStats: {}};
+  const version = [
+    weightState.generation, weightState.loaded,
+    weightState.loadedMeshCount, weightState.failedMeshCount,
+  ].join(':');
+  if (cachedMeshSummaryMesh !== currentMesh
+      || cachedMeshSummaryVersion !== version) {
+    cachedMeshSummary = getMeshWeightSummary(currentMesh);
+    cachedMeshSummaryMesh = currentMesh;
+    cachedMeshSummaryVersion = version;
+  }
+  return cachedMeshSummary;
+}
+
+function syncWeightControls(weightState = getModelWeightState()) {
   if (!ui) return;
-  const weightState = getModelWeightState();
-  const physicsState = getModelPhysicsState();
+  latestWeightState = weightState;
   if (weightState.loading) ui.status.textContent = 'Loading model weights…';
   else if (weightState.error) ui.status.textContent = weightState.error;
   else if (weightState.noWeights || !weightState.availableBoneIds.length) {
@@ -376,10 +394,13 @@ function syncPanel() {
   } else {
     ui.status.textContent = `${weightState.availableBoneIds.length} bone IDs available`;
   }
+  if (weightState.selectionSaveError) {
+    ui.status.textContent = `Could not save bone selection: ${weightState.selectionSaveError}`;
+  }
 
   if (!currentMesh && meshFilterMode === 'current') meshFilterMode = 'all';
   const displayState = meshFilterMode === 'current'
-    ? {...weightState, ...getMeshWeightSummary(currentMesh)} : weightState;
+    ? {...weightState, ...meshSummaryFor(weightState)} : weightState;
   syncBoneOptions(displayState);
   ui.boneButton.textContent = selectedLabel(weightState.selectedBoneIds);
   ui.boneButton.disabled = !weightState.loaded
@@ -398,9 +419,14 @@ function syncPanel() {
   ui.currentMesh.disabled = !currentMesh;
   ui.heatmap.checked = !!weightState.heatmapEnabled;
   ui.heatmap.disabled = !weightState.loaded;
+  ui.physicsReset.disabled = !weightState.loaded;
+  syncBoneFilter(weightState);
+}
+
+function syncPhysicsControls(physicsState = getModelPhysicsState()) {
+  if (!ui) return;
   ui.physicsGravityEnable.checked = !!physicsState.gravityEnabled;
   ui.physicsConstraintsEnable.checked = !!physicsState.constraintsEnabled;
-  ui.physicsReset.disabled = !physicsState.enabled;
   syncRange(ui.ranges.frequency, physicsState.frequencyHz);
   syncRange(ui.ranges.damping, physicsState.dampingRatio);
   syncRange(ui.ranges.motion, physicsState.angularResponse);
@@ -408,7 +434,11 @@ function syncPanel() {
   syncRange(ui.ranges.continuous, physicsState.velocityResponse);
   syncRange(ui.ranges.gravity, physicsState.gravityScale);
   syncRange(ui.ranges.maxBend, physicsState.maxBendDegrees);
-  syncBoneFilter();
+}
+
+function syncPanel() {
+  syncWeightControls();
+  syncPhysicsControls();
 }
 
 function closePopover() {
@@ -429,12 +459,19 @@ export function initWeightPanel() {
   panel = $('weight-panel');
   if (!panel) return;
   buildPanel();
-  window.addEventListener('mod-viewer-model-weight-changed', syncPanel);
-  window.addEventListener('mod-viewer-model-physics-changed', syncPanel);
+  window.addEventListener('mod-viewer-model-weight-changed', event => {
+    syncWeightControls(event.detail);
+  });
+  window.addEventListener('mod-viewer-model-physics-changed', event => {
+    syncPhysicsControls(event.detail);
+  });
   window.addEventListener('mod-viewer-mesh-selected', event => {
     currentMesh = event.detail?.mesh || null;
+    cachedMeshSummary = null;
+    cachedMeshSummaryMesh = null;
+    cachedMeshSummaryVersion = null;
     if (!currentMesh) meshFilterMode = 'all';
-    syncPanel();
+    syncWeightControls();
   });
   window.addEventListener('mod-viewer-right-dock-tab-changed', event => {
     const inWeight = event.detail?.tab === 'weight' && event.detail?.open;
@@ -443,6 +480,7 @@ export function initWeightPanel() {
   });
   document.addEventListener('pointerdown', event => {
     if (ui?.popover?.hidden || ui.picker.contains(event.target)) return;
+    if (event.target.closest?.('#canvas-container canvas, .draw-item')) return;
     closePopover();
   });
   document.addEventListener('keydown', event => {

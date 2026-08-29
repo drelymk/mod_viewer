@@ -540,7 +540,7 @@ def test_model_physics_reset_updates_numeric_defaults_once_and_keeps_toggles(
           });
           const before = notifications;
           const defaults = physics.DEFAULT_MODEL_PHYSICS_SETTINGS;
-          session.reset(transform, {settingsPatch: {
+          const settingsPatch = {
             frequencyHz: defaults.frequencyHz,
             dampingRatio: defaults.dampingRatio,
             angularResponse: defaults.angularResponse,
@@ -548,15 +548,34 @@ def test_model_physics_reset_updates_numeric_defaults_once_and_keeps_toggles(
             velocityResponse: defaults.velocityResponse,
             gravityScale: defaults.gravityScale,
             maxBendDegrees: defaults.maxBendDegrees,
-          }});
+          };
+          session.reset(transform, {settingsPatch});
+          const state = session.getState();
+          const activeNotificationCount = notifications - before;
+          session.disable();
+          session.setSettings({frequencyHz: 7, dampingRatio: 1.2});
+          const beforeDisabledReset = notifications;
+          session.reset(transform, {settingsPatch});
+          const disabledResetState = session.getState();
+          const disabledResetNotifications = notifications - beforeDisabledReset;
+          session.setSettings({frequencyHz: 7, gravityEnabled: true});
+          session.destroy();
           return {
-            notificationCount: notifications - before,
-            state: session.getState(), participantSettings, defaults,
+            notificationCount: activeNotificationCount,
+            state, participantSettings, defaults,
+            disabledResetNotifications, disabledResetState,
+            destroyedState: session.getState(),
           };
         }""")
         assert result["notificationCount"] == 1
         assert result["state"]["gravityEnabled"] is True
         assert result["state"]["constraintsEnabled"] is True
+        assert result["disabledResetNotifications"] == 1
+        assert result["disabledResetState"]["enabled"] is False
+        assert result["disabledResetState"]["frequencyHz"] == 2
+        assert result["disabledResetState"]["dampingRatio"] == pytest.approx(.35)
+        assert result["destroyedState"]["frequencyHz"] == 2
+        assert result["destroyedState"]["gravityEnabled"] is False
         for key in (
                 "frequencyHz", "dampingRatio", "angularResponse",
                 "translationResponse", "velocityResponse", "gravityScale",
@@ -1566,12 +1585,22 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
           window.modViewer.getModelWeightState().selectedBoneIds) === '[1,2]'""")
         assert page.evaluate("window.__weightPicker === document.querySelector('.weight-bone-popover')")
         page.locator(".weight-selected-only").check()
+        assert page.locator(".weight-bone-option").evaluate_all("""nodes =>
+          nodes.filter(node => !node.hidden).map(node => ({
+            id: node.dataset.boneId,
+            display: getComputedStyle(node).display,
+          }))""") == [
+            {"id": "1", "display": "flex"},
+            {"id": "2", "display": "flex"},
+        ]
         page.locator(".weight-bone-search").fill("2")
         page.locator('.weight-bone-option input[value="2"]').uncheck()
         page.wait_for_function("""() => JSON.stringify(
           window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
         assert page.locator(".weight-bone-search").input_value() == "2"
         assert page.locator(".weight-selected-only").is_checked()
+        assert page.locator(".weight-bone-option").evaluate_all(
+            "nodes => nodes.every(node => node.hidden && getComputedStyle(node).display === 'none')")
         assert page.locator(".weight-bone-select").get_attribute("aria-expanded") == "true"
         page.locator(".weight-bone-select").click()
 
@@ -1587,11 +1616,22 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
         assert slider.input_value() == "3.5"
 
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
-        page.evaluate("""() => {
+        writes = page.evaluate("""() => {
+          const input = document.querySelector('.weight-bone-option input');
+          const checked = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype, 'checked');
+          let writes = 0;
+          Object.defineProperty(input, 'checked', {
+            configurable: true,
+            get: () => checked.get.call(input),
+            set: value => { writes += 1; checked.set.call(input, value); },
+          });
           for (let i = 0; i < 20; i += 1) {
             window.dispatchEvent(new CustomEvent('mod-viewer-model-physics-changed'));
           }
+          return writes;
         }""")
+        assert writes == 0
         assert page.evaluate("window.__weightSlider === document.querySelector('.weight-physics-frequency')")
         page.locator(".weight-bone-select").click()
         assert page.locator(".weight-bone-select").get_attribute("aria-expanded") == "true"
@@ -1644,6 +1684,25 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
         page.wait_for_function("!window.modViewer.getModelPhysicsState().enabled")
         assert page.evaluate(
             "window.modViewer.getModelWeightState().savedBoneIds") == [1, 99]
+        page.evaluate("""() => {
+          for (const [selector, value] of [
+            ['.weight-physics-frequency', '7'],
+            ['.weight-physics-damping', '1.2'],
+          ]) {
+            const input = document.querySelector(selector);
+            input.value = value;
+            input.dispatchEvent(new Event('input', {bubbles: true}));
+          }
+        }""")
+        assert not page.locator(".weight-physics-reset").is_disabled()
+        page.locator(".weight-physics-reset").click()
+        page.wait_for_function("""() => {
+          const state = window.modViewer.getModelPhysicsState();
+          return state.frequencyHz === 2 && state.dampingRatio === .35;
+        }""")
+        assert not page.evaluate("window.modViewer.getModelPhysicsState().enabled")
+        assert page.evaluate(
+            "window.modViewer.getModelWeightState().selectedBoneIds") == []
         page.locator("#weight-tab").click()
         page.locator("#weight-tab").click()
         assert page.evaluate(
@@ -1654,6 +1713,16 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
         page.locator(".weight-save-selection").click()
         page.wait_for_function("window.__savedSelections.length === 1")
         assert page.evaluate("window.__savedSelections") == [[1]]
+        page.evaluate("""() => {
+          window.pywebview.api.save_weight_selected_bone_ids = async () => {
+            throw new Error('disk full');
+          };
+        }""")
+        page.locator(".weight-save-selection").click()
+        page.wait_for_function("""() =>
+          window.modViewer.getModelWeightState().selectionSaveError === 'disk full'""")
+        assert page.locator(".weight-status").inner_text() == (
+            "Could not save bone selection: disk full")
     finally:
         context.close()
 
@@ -1710,6 +1779,11 @@ def test_weight_picker_current_mesh_filter_is_display_only(
             "nodes => nodes.map(node => node.dataset.boneId)") == ["0", "1"]
         assert page.evaluate(
             "window.modViewer.getModelWeightState().selectedBoneIds") == [2]
+        page.locator(".draw-item").nth(1).click()
+        assert page.locator(".weight-bone-select").get_attribute(
+            "aria-expanded") == "true"
+        assert page.locator(".weight-bone-option").evaluate_all(
+            "nodes => nodes.map(node => node.dataset.boneId)") == ["1", "2"]
         page.evaluate("""async () => {
           const {clearSelection} = await import('./js/scene/selection.js');
           clearSelection();
@@ -1779,13 +1853,32 @@ def test_selected_weight_topology_preserves_mirrored_branches_and_attachment(
           const weight = await import('./js/mesh/weight-experiment.js');
           const edges = [
             {boneA: 45, boneB: 49, treeEdgeScore: .90,
-              containment: .90, jaccard: .30, normalizedDistance: .1},
+              minOverlap: 90, containment: .90, jaccard: .30,
+              normalizedDistance: .1},
             {boneA: 47, boneB: 53, treeEdgeScore: .89,
-              containment: .89, jaccard: .30, normalizedDistance: .1},
+              minOverlap: 89, containment: .89, jaccard: .30,
+              normalizedDistance: .1},
             {boneA: 45, boneB: 47, treeEdgeScore: .20,
-              containment: .20, jaccard: .02, normalizedDistance: .1},
+              minOverlap: 2, containment: .20, jaccard: .02,
+              normalizedDistance: .1},
           ];
-          const kept = weight.pruneSelectedRelationshipEdges(edges);
+          const staticAttachments = [
+            {boneA: 2, boneB: 45, minOverlap: 120,
+              sharedVertexCount: 300, containment: .40, jaccard: .20,
+              normalizedDistance: .4},
+            {boneA: 2, boneB: 47, minOverlap: 110,
+              sharedVertexCount: 280, containment: .38, jaccard: .18,
+              normalizedDistance: .4},
+          ];
+          const kept = weight.pruneSelectedRelationshipEdges(
+            edges, [...edges, ...staticAttachments], [45, 49, 47, 53]);
+          const chain = [
+            {boneA: 10, boneB: 11, minOverlap: 90, treeEdgeScore: .90},
+            {boneA: 11, boneB: 12, minOverlap: 60, treeEdgeScore: .60},
+            {boneA: 12, boneB: 13, minOverlap: 95, treeEdgeScore: .95},
+          ];
+          const keptChain = weight.pruneSelectedRelationshipEdges(
+            chain, chain, [10, 11, 12, 13]);
           const attachment = weight.selectAttachmentRelationship([
             {boneA: 2, boneB: 45, minOverlap: 120,
               sharedVertexCount: 300, containment: .40, jaccard: .20,
@@ -1820,6 +1913,7 @@ def test_selected_weight_topology_preserves_mirrored_branches_and_attachment(
             .distanceTo(rightPoint);
           return {
             kept: kept.map(edge => `${edge.boneA}-${edge.boneB}`),
+            keptChain: keptChain.map(edge => `${edge.boneA}-${edge.boneB}`),
             attachment: `${attachment.boneA}-${attachment.boneB}`,
             depths: [left.depthById[45], left.depthById[49],
               right.depthById[47], right.depthById[53]],
@@ -1827,6 +1921,7 @@ def test_selected_weight_topology_preserves_mirrored_branches_and_attachment(
           };
         }""")
         assert result["kept"] == ["45-49", "47-53"]
+        assert result["keptChain"] == ["10-11", "11-12", "12-13"]
         assert result["attachment"] == "2-45"
         assert result["depths"] == [1, 2, 1, 2]
         assert result["moved"][0] == pytest.approx(result["moved"][1])

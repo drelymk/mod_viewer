@@ -691,7 +691,9 @@ function selectedPhysicsForest(mesh, state) {
   const selectedEdges = candidateEdges.filter(relationship =>
     selected.has(Number(relationship.boneA))
     && selected.has(Number(relationship.boneB)));
-  const physicsEdges = pruneSelectedRelationshipEdges(selectedEdges);
+  const candidateTree = buildMaximumSpanningTree(selectedNodes, selectedEdges);
+  const physicsEdges = pruneSelectedRelationshipEdges(
+    candidateTree.edges, graph.relationships, selected);
   const selectedTree = buildMaximumSpanningTree(selectedNodes, physicsEdges);
   const centers = new Map(state.centerByBoneId || []);
   const components = [];
@@ -1278,21 +1280,68 @@ function treeEdgeCompare(a, b) {
     || relationshipSort(a, b);
 }
 
-/** Keep selected-selected edges that are strongest for at least one endpoint. */
-export function pruneSelectedRelationshipEdges(edges) {
-  const strongestByBone = new Map();
+function treeSideForEdge(edges, startId, skippedEdge) {
+  const adjacency = new Map();
   for (const edge of edges || []) {
-    for (const boneId of [Number(edge.boneA), Number(edge.boneB)]) {
-      if (!Number.isFinite(boneId)) continue;
-      const current = strongestByBone.get(boneId);
-      if (!current || treeEdgeCompare(edge, current) < 0) {
-        strongestByBone.set(boneId, edge);
-      }
+    if (edge === skippedEdge) continue;
+    const boneA = Number(edge.boneA);
+    const boneB = Number(edge.boneB);
+    if (!Number.isFinite(boneA) || !Number.isFinite(boneB)) continue;
+    if (!adjacency.has(boneA)) adjacency.set(boneA, []);
+    if (!adjacency.has(boneB)) adjacency.set(boneB, []);
+    adjacency.get(boneA).push(boneB);
+    adjacency.get(boneB).push(boneA);
+  }
+  const side = new Set([startId]);
+  const pending = [startId];
+  while (pending.length) {
+    const boneId = pending.pop();
+    for (const neighbor of adjacency.get(boneId) || []) {
+      if (side.has(neighbor)) continue;
+      side.add(neighbor);
+      pending.push(neighbor);
     }
   }
-  return (edges || []).filter(edge =>
-    strongestByBone.get(Number(edge.boneA)) === edge
-    || strongestByBone.get(Number(edge.boneB)) === edge);
+  return side;
+}
+
+function bestStaticAttachment(side, relationships, selected) {
+  return selectAttachmentRelationship((relationships || []).filter(edge => {
+    const boneA = Number(edge.boneA);
+    const boneB = Number(edge.boneB);
+    const leftInside = side.has(boneA);
+    const rightInside = side.has(boneB);
+    if (leftInside === rightInside) return false;
+    const outside = leftInside ? boneB : boneA;
+    return !selected.has(outside);
+  }));
+}
+
+/** Cut only tree bridges whose two sides have stronger static attachments. */
+export function pruneSelectedRelationshipEdges(
+    treeEdges, relationships = [], selectedBoneIds = []) {
+  const edges = [...treeEdges || []];
+  const selected = new Set(normalizeSelectedBoneIds(selectedBoneIds));
+  if (!selected.size) {
+    edges.forEach(edge => {
+      selected.add(Number(edge.boneA));
+      selected.add(Number(edge.boneB));
+    });
+  }
+  return edges.filter(edge => {
+    const boneA = Number(edge.boneA);
+    const boneB = Number(edge.boneB);
+    const left = treeSideForEdge(edges, boneA, edge);
+    const right = treeSideForEdge(edges, boneB, edge);
+    const leftAttachment = bestStaticAttachment(
+      left, relationships, selected);
+    const rightAttachment = bestStaticAttachment(
+      right, relationships, selected);
+    const bridgeOverlap = Number(edge.minOverlap) || 0;
+    return !(leftAttachment && rightAttachment
+      && Number(leftAttachment.minOverlap) > bridgeOverlap
+      && Number(rightAttachment.minOverlap) > bridgeOverlap);
+  });
 }
 
 export function buildMaximumSpanningTree(nodes, edges) {
