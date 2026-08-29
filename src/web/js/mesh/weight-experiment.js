@@ -2,10 +2,12 @@
 // imports or invokes this module's bridge operation until the Inspector asks.
 
 import * as THREE from 'three';
-import { invalidateCharacterShadowGeometry } from '../scene/scene.js';
+import {
+  invalidateCharacterShadowGeometry, setPhysicsInteractionEnabled,
+} from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import {
-  buildForestTransformsFromLocalAngles, applyWeightedTransformDeformation,
+  buildForestTransformsFromLocalRotations, applyWeightedTransformDeformation,
 } from './weight-deformation.js';
 import {
   DEFAULT_PHYSICS_DAMPING_RATIO, DEFAULT_PHYSICS_FREQUENCY_HZ,
@@ -14,15 +16,14 @@ import {
   applyReferenceFrameAngularDelta,
   applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
-  applyJointLimitsToAngles,
   applyPhysicsJointLimits, initializePhysicsState,
   buildGravityAngularAccelerations, buildPhysicsConstraintDiagnostics,
-  buildPhysicsEquilibriumAngles, buildPhysicsJointLimits,
-  isPhysicsSettled, physicsAngleMap, resetPhysicsState,
+  buildPhysicsJointLimits,
+  isPhysicsSettled, physicsRotationMap, resetPhysicsState,
   stepSpringPhysics,
 } from './weight-physics.js';
 export {
-  buildForestTransformsFromLocalAngles, applyWeightedTransformDeformation,
+  buildForestTransformsFromLocalRotations, applyWeightedTransformDeformation,
 } from './weight-deformation.js';
 
 export {
@@ -34,13 +35,13 @@ export {
   applyReferenceFrameAngularDelta,
   applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
-  applyJointLimitsToAngles,
   applyPhysicsJointLimits,
   buildGravityAngularAccelerations, buildPhysicsConstraintDiagnostics,
-  buildPhysicsEquilibriumAngles, buildPhysicsJointLimits,
+  buildPhysicsEquilibriumRotations, buildPhysicsJointLimits,
   representativeComponentLever,
-  buildPhysicsTargetAngles, initializePhysicsState, isPhysicsSettled,
-  physicsAngleMap, resetPhysicsState, stepSpringPhysics,
+  buildPhysicsTargetRotations, initializePhysicsState, isPhysicsSettled,
+  physicsRotationMap, resetPhysicsState, rotationVectorBetween,
+  stepSpringPhysics,
 } from './weight-physics.js';
 const states = new WeakMap();
 let activeExperimentHelperMesh = null;
@@ -49,6 +50,7 @@ const MAX_PHYSICS_FRAME_DELTA = 0.05;
 const MAX_PHYSICS_SUBSTEPS = 6;
 let physicsFrameId = null;
 const activePhysicsMeshes = new Set();
+const physicsEnabledMeshes = new Set();
 
 export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
 export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
@@ -78,13 +80,12 @@ function newState() {
     selectedBone: null,
     deformationMode: null,
     physicsEnabled: false,
-    physicsAxis: 'Z',
-    physicsTargetAngle: 0,
     physicsFrequencyHz: DEFAULT_PHYSICS_FREQUENCY_HZ,
     physicsDampingRatio: DEFAULT_PHYSICS_DAMPING_RATIO,
     physicsMotionStrength: 0.35,
     physicsLinearMotionStrength: 0.35,
     physicsRootLinearVelocityLocal: [0, 0, 0],
+    physicsVirtualLinearVelocityLocal: [0, 0, 0],
     physicsContinuousLinearResponse: 0.35,
     physicsConstraintsEnabled: false,
     physicsMaxBendDegrees: DEFAULT_PHYSICS_MAX_BEND_DEGREES,
@@ -96,12 +97,13 @@ function newState() {
     physicsGravityAccelerations: null,
     physicsGravityDiagnostics: null,
     physicsReferenceQuaternion: null,
-    lastRootAngularDelta: 0,
-    lastProjectedAngularDelta: 0,
+    lastRootAngularDeltaVector: [0, 0, 0],
+    lastRootAngularDeltaMagnitude: 0,
     motionEventCount: 0,
     lastRootTranslationDeltaWorld: [0, 0, 0],
     lastRootTranslationDeltaLocal: [0, 0, 0],
-    lastTranslationLag: 0,
+    lastTranslationLagRotationVector: [0, 0, 0],
+    lastTranslationLagRotationMagnitude: 0,
     translationEventCount: 0,
     lastRootLinearVelocityWorld: [0, 0, 0],
     lastRootLinearVelocityLocal: [0, 0, 0],
@@ -169,23 +171,19 @@ export function withSkinningBaseMaterial(mesh, operation) {
 }
 
 function clearMotionDiagnostics(state) {
-  state.lastRootAngularDelta = 0;
-  state.lastProjectedAngularDelta = 0;
+  state.lastRootAngularDeltaVector = [0, 0, 0];
+  state.lastRootAngularDeltaMagnitude = 0;
   state.motionEventCount = 0;
   state.lastRootTranslationDeltaWorld = [0, 0, 0];
   state.lastRootTranslationDeltaLocal = [0, 0, 0];
-  state.lastTranslationLag = 0;
+  state.lastTranslationLagRotationVector = [0, 0, 0];
+  state.lastTranslationLagRotationMagnitude = 0;
   state.translationEventCount = 0;
   state.physicsRootLinearVelocityLocal = [0, 0, 0];
+  state.physicsVirtualLinearVelocityLocal = [0, 0, 0];
   state.lastRootLinearVelocityWorld = [0, 0, 0];
   state.lastRootLinearVelocityLocal = [0, 0, 0];
   state.lastRootLinearVelocityDelta = [0, 0, 0];
-}
-
-function motionAxisVector(axis) {
-  if (axis === 'X') return new THREE.Vector3(1, 0, 0);
-  if (axis === 'Y') return new THREE.Vector3(0, 1, 0);
-  return new THREE.Vector3(0, 0, 1);
 }
 
 export function gravityDirectionLocal(mesh) {
@@ -223,8 +221,6 @@ export function getPhysicsConstraintDiagnostics(meshOrState) {
     maxComponentBend: Number(state?.physicsMaxBendDegrees) || 0,
     limitedJointCount: dynamic.limitedJointCount,
     atLimitCount: dynamic.atLimitCount,
-    positiveLimitCount: dynamic.positiveLimitCount,
-    negativeLimitCount: dynamic.negativeLimitCount,
     maxUsage: dynamic.maxUsage,
     components: dynamic.components.map(component => ({
       componentId: component.componentId,
@@ -248,8 +244,7 @@ function refreshGravityState(mesh, state) {
   const referenceRadius = Number(
     state.influenceGraph?.boundingSphereRadius);
   const gravity = buildGravityAngularAccelerations(
-    state.candidateForest, state.centerByBoneId, localDirection,
-    state.physicsAxis, {
+    state.candidateForest, state.centerByBoneId, localDirection, {
       referenceRadius,
       gravityScale: state.physicsGravityScale,
     });
@@ -291,28 +286,6 @@ function shortestQuaternionDelta(previousQuaternion, currentQuaternion) {
   };
 }
 
-function signedQuaternionDeltaAngle(previousQuaternion, currentQuaternion) {
-  const delta = shortestQuaternionDelta(previousQuaternion, currentQuaternion);
-  if (!delta?.angle) return 0;
-  const components = [
-    delta.rotationVector.x,
-    delta.rotationVector.y,
-    delta.rotationVector.z,
-  ];
-  const dominant = components.reduce((best, value) =>
-    Math.abs(value) > Math.abs(best) ? value : best, 0);
-  return delta.angle * Math.sign(dominant || 1);
-}
-
-/** Project a shortest relative quaternion rotation into the previous local
- * frame and return its signed scalar component on the selected axis. */
-export function projectQuaternionDeltaOntoAxis(
-    previousQuaternion, currentQuaternion, axis) {
-  const delta = shortestQuaternionDelta(previousQuaternion, currentQuaternion);
-  if (!delta) return 0;
-  return delta.rotationVector.dot(motionAxisVector(axis));
-}
-
 function handleModelTransformChanged(event) {
   const meshes = event.detail?.meshes;
   if (!Array.isArray(meshes)) return;
@@ -322,10 +295,10 @@ function handleModelTransformChanged(event) {
     const previous = state.physicsReferenceQuaternion.clone();
     const current = mesh.quaternion;
     const rootDelta = shortestQuaternionDelta(previous, current);
-    const rootAngularDelta = signedQuaternionDeltaAngle(previous, current);
-    const orientationChanged = Math.abs(rootAngularDelta) >= 1e-10;
-    const projectedDelta = projectQuaternionDeltaOntoAxis(
-      previous, current, state.physicsAxis);
+    const rootAngularRotation = rootDelta
+      ? rootDelta.rotationVector.toArray() : [0, 0, 0];
+    const rootAngularMagnitude = rootDelta?.angle || 0;
+    const orientationChanged = rootAngularMagnitude >= 1e-10;
     const translationValues = event.detail?.translationDeltaWorld;
     const translationWorld = Array.isArray(translationValues)
       && translationValues.length >= 3
@@ -353,16 +326,16 @@ function handleModelTransformChanged(event) {
     }
     if (!state.physicsEnabled || state.deformationMode !== 'physics'
         || !state.physicsState || !state.candidateForest) return;
-    state.lastRootAngularDelta = rootDelta ? rootAngularDelta : 0;
-    state.lastProjectedAngularDelta = projectedDelta;
+    state.lastRootAngularDeltaVector = rootAngularRotation;
+    state.lastRootAngularDeltaMagnitude = rootAngularMagnitude;
     state.motionEventCount += 1;
     let physicsChanged = state.physicsGravityEnabled && orientationChanged;
     let immediateDeformation = false;
     const angularStrength = Number(state.physicsMotionStrength) || 0;
-    if (Math.abs(projectedDelta) >= 1e-10 && angularStrength > 0) {
+    if (rootAngularMagnitude >= 1e-10 && angularStrength > 0) {
       applyReferenceFrameAngularDelta(
         state.physicsState, state.candidateForest,
-        projectedDelta, angularStrength, state.physicsJointLimits);
+        rootAngularRotation, angularStrength, state.physicsJointLimits);
       physicsChanged = true;
       immediateDeformation = true;
     }
@@ -377,10 +350,10 @@ function handleModelTransformChanged(event) {
       const velocityDiagnostics = {};
       applyReferenceFrameLinearVelocityDelta(
         state.physicsState, state.candidateForest, state.centerByBoneId,
-        deltaVelocityLocal, state.physicsAxis,
+        deltaVelocityLocal,
         state.physicsContinuousLinearResponse, velocityDiagnostics,
         state.physicsJointLimits);
-      if (Number(velocityDiagnostics.maxAbsDeltaOmega) >= 1e-10
+      if (Number(velocityDiagnostics.maxDeltaAngularVelocityMagnitude) >= 1e-10
           && Number(state.physicsContinuousLinearResponse) > 0) {
         physicsChanged = true;
       }
@@ -391,12 +364,14 @@ function handleModelTransformChanged(event) {
       const translationDiagnostics = {};
       applyReferenceFrameTranslationDelta(
         state.physicsState, state.candidateForest, state.centerByBoneId,
-        translationLocal, state.physicsAxis,
+        translationLocal,
         state.physicsLinearMotionStrength, translationDiagnostics,
         state.physicsJointLimits);
-      state.lastTranslationLag = Number(
-        translationDiagnostics.maxAbsLag) || 0;
-      if (Math.abs(state.lastTranslationLag) >= 1e-10
+      state.lastTranslationLagRotationVector = [
+        ...(translationDiagnostics.maxLagRotationVector || [0, 0, 0])];
+      state.lastTranslationLagRotationMagnitude = Number(
+        translationDiagnostics.maxLagRotationMagnitude) || 0;
+      if (state.lastTranslationLagRotationMagnitude >= 1e-10
           && Number(state.physicsLinearMotionStrength) > 0) {
         physicsChanged = true;
         immediateDeformation = true;
@@ -408,6 +383,50 @@ function handleModelTransformChanged(event) {
     // velocity impulses only change spring velocity; its first fixed step
     // produces the visible response.
     if (immediateDeformation) applyDeformation(mesh, state);
+    wakePhysics(mesh, state);
+  });
+}
+
+function physicsReferenceRadius(mesh, state) {
+  const graphRadius = Number(state.influenceGraph?.boundingSphereRadius);
+  if (Number.isFinite(graphRadius) && graphRadius > 0) return graphRadius;
+  if (!mesh.geometry?.boundingSphere) mesh.geometry?.computeBoundingSphere?.();
+  const geometryRadius = Number(mesh.geometry?.boundingSphere?.radius);
+  return Number.isFinite(geometryRadius) && geometryRadius > 0
+    ? geometryRadius : 1;
+}
+
+function handleVirtualModelMotion(event) {
+  const values = event.detail?.normalizedLinearVelocityWorld;
+  const velocityWorld = Array.isArray(values) && values.length >= 3
+    ? values.slice(0, 3).map(Number) : [0, 0, 0];
+  if (!velocityWorld.every(Number.isFinite)) return;
+  physicsEnabledMeshes.forEach(mesh => {
+    const state = states.get(mesh);
+    if (!state?.physicsEnabled || state.deformationMode !== 'physics'
+        || !state.physicsState || !state.candidateForest) return;
+    const reference = state.physicsReferenceQuaternion?.clone?.()
+      || mesh.quaternion?.clone?.();
+    if (!reference) return;
+    const radius = physicsReferenceRadius(mesh, state);
+    const velocityLocal = new THREE.Vector3(...velocityWorld)
+      .multiplyScalar(radius)
+      .applyQuaternion(reference.normalize().invert()).toArray();
+    const previous = state.physicsVirtualLinearVelocityLocal || [0, 0, 0];
+    const deltaVelocity = velocityLocal.map((value, index) =>
+      value - (Number(previous[index]) || 0));
+    state.physicsVirtualLinearVelocityLocal = velocityLocal;
+    const diagnostics = {};
+    applyReferenceFrameLinearVelocityDelta(
+      state.physicsState, state.candidateForest, state.centerByBoneId,
+      deltaVelocity, state.physicsContinuousLinearResponse, diagnostics,
+      state.physicsJointLimits);
+    if (event.detail?.active === false) {
+      state.physicsVirtualLinearVelocityLocal = [0, 0, 0];
+    }
+    if (Number(diagnostics.maxDeltaAngularVelocityMagnitude) < 1e-10
+        && event.detail?.active !== false) return;
+    state.physicsSettled = false;
     wakePhysics(mesh, state);
   });
 }
@@ -439,13 +458,16 @@ export function isPhysicsScheduled(mesh) {
 
 function stopPhysics(mesh, state) {
   removePhysicsMesh(mesh);
+  const wasPhysicsInteractionEnabled = physicsEnabledMeshes.delete(mesh);
+  if (wasPhysicsInteractionEnabled && !physicsEnabledMeshes.size) {
+    setPhysicsInteractionEnabled(false);
+  }
   state.physicsEnabled = false;
   state.physicsState = null;
   state.physicsTransforms = null;
   state.physicsAccumulator = 0;
   state.physicsLastTimestamp = null;
   state.physicsSettled = true;
-  state.physicsTargetAngle = 0;
   state.physicsReferenceQuaternion = null;
   state.physicsGravityEnabled = false;
   state.physicsGravityLocal = [...GRAVITY_WORLD_DIRECTION];
@@ -454,6 +476,7 @@ function stopPhysics(mesh, state) {
   state.physicsConstraintsEnabled = false;
   state.physicsJointLimits = null;
   state.physicsConstraintDiagnostics = null;
+  state.physicsVirtualLinearVelocityLocal = [0, 0, 0];
   clearMotionDiagnostics(state);
   if (state.deformationMode === 'physics') state.deformationMode = null;
 }
@@ -502,8 +525,7 @@ function advancePhysicsMesh(mesh, timestamp) {
       state.physicsState, state.candidateForest, PHYSICS_STEP, {
         frequencyHz: state.physicsFrequencyHz,
         dampingRatio: state.physicsDampingRatio,
-        targetAngleRadians: THREE.MathUtils.degToRad(
-          state.physicsTargetAngle),
+        targetRotation: [0, 0, 0],
         externalAngularAccelerationByBoneId:
           state.physicsGravityEnabled
             ? state.physicsGravityAccelerations : null,
@@ -524,7 +546,7 @@ function advancePhysicsMesh(mesh, timestamp) {
   applyDeformation(mesh, state);
   state.physicsSettled = isPhysicsSettled(
     state.physicsState, state.candidateForest,
-    THREE.MathUtils.degToRad(state.physicsTargetAngle), {
+    [0, 0, 0], {
       frequencyHz: state.physicsFrequencyHz,
       externalAngularAccelerationByBoneId:
         state.physicsGravityEnabled
@@ -1317,6 +1339,8 @@ export function setCandidateTreeVisible(mesh, visible) {
 if (typeof window !== 'undefined') {
   window.addEventListener('mod-viewer-model-transform-changed',
     handleModelTransformChanged);
+  window.addEventListener('mod-viewer-virtual-model-motion',
+    handleVirtualModelMotion);
   window.addEventListener('mod-viewer-mesh-selected', event => {
     const mesh = event.detail?.mesh || null;
     if (activeExperimentHelperMesh && activeExperimentHelperMesh !== mesh) {
@@ -1333,10 +1357,9 @@ function applyDeformation(mesh, state) {
     && state.physicsEnabled && state.physicsState && state.candidateForest;
   let result;
   if (physicsActive) {
-    state.physicsTransforms = buildForestTransformsFromLocalAngles(
+    state.physicsTransforms = buildForestTransformsFromLocalRotations(
       state.candidateForest, state.centerByBoneId, {
-        axis: state.physicsAxis,
-        angleByBoneId: physicsAngleMap(state.physicsState),
+        rotationByBoneId: physicsRotationMap(state.physicsState),
       });
     result = applyWeightedTransformDeformation(
       state.baselinePositions, state.indices, state.weights,
@@ -1481,33 +1504,6 @@ export function setSelectedBone(mesh, boneId) {
   requestRender();
 }
 
-export function setPhysicsAxis(mesh, axis) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)
-      || !['X', 'Y', 'Z'].includes(axis)) return;
-  state.physicsAxis = axis;
-  const gravityEnabled = state.physicsGravityEnabled;
-  refreshGravityState(mesh, state);
-  if (state.physicsEnabled && gravityEnabled) {
-    applyDeformation(mesh, state);
-    wakePhysics(mesh, state);
-  } else if (state.physicsEnabled) {
-    applyDeformation(mesh, state);
-  }
-}
-
-export function setPhysicsTargetAngle(mesh, angle) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
-  state.physicsTargetAngle = Math.max(
-    -40, Math.min(40, Number(angle) || 0));
-  if (state.physicsEnabled) {
-    applyDeformation(mesh, state);
-    wakePhysics(mesh, state);
-  }
-  return true;
-}
-
 export function setPhysicsFrequency(mesh, frequencyHz) {
   const state = stateFor(mesh);
   if (!state?.loaded || !ensureCandidateForest(mesh)) return false;
@@ -1623,6 +1619,9 @@ export function setPhysicsEnabled(mesh, enabled) {
   }
   state.deformationMode = 'physics';
   state.physicsEnabled = true;
+  const wasPhysicsInteractionEnabled = physicsEnabledMeshes.size > 0;
+  physicsEnabledMeshes.add(mesh);
+  if (!wasPhysicsInteractionEnabled) setPhysicsInteractionEnabled(true);
   state.physicsReferenceQuaternion = mesh.quaternion.clone();
   clearMotionDiagnostics(state);
   refreshConstraintState(state);
@@ -1642,7 +1641,6 @@ export function resetPhysicsMotion(mesh) {
   if (!state?.loaded || !state.physicsEnabled
       || state.deformationMode !== 'physics') return false;
   resetPhysicsState(state.physicsState);
-  state.physicsTargetAngle = 0;
   state.physicsReferenceQuaternion = mesh.quaternion.clone();
   clearMotionDiagnostics(state);
   refreshConstraintState(state);
@@ -1694,6 +1692,10 @@ export function disposeSkinningExperiment(mesh) {
   if (!state) return;
   state.disposed = true;
   removePhysicsMesh(mesh);
+  const wasPhysicsInteractionEnabled = physicsEnabledMeshes.delete(mesh);
+  if (wasPhysicsInteractionEnabled && !physicsEnabledMeshes.size) {
+    setPhysicsInteractionEnabled(false);
+  }
   removeInfluenceVisualization(state);
   if (state.debugMaterial) state.debugMaterial.dispose();
   mesh.geometry?.deleteAttribute?.('color');

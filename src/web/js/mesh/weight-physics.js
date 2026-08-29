@@ -10,6 +10,71 @@ export const GRAVITY_WORLD_DIRECTION = Object.freeze([0, -1, 0]);
 export const STANDARD_GRAVITY = 9.81;
 export const MIN_GRAVITY_LEVER_RATIO = 0.15;
 
+const VECTOR_EPSILON = 1e-8;
+
+function clamp(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function finiteVector(value) {
+  const values = value?.isVector3
+    ? [value.x, value.y, value.z]
+    : Array.isArray(value) ? value : [value?.x, value?.y, value?.z];
+  if (values.length < 3) return null;
+  const vector = values.slice(0, 3).map(Number);
+  return vector.every(Number.isFinite) ? vector : null;
+}
+
+function vectorAdd(left, right) {
+  return [left[0] + right[0], left[1] + right[1], left[2] + right[2]];
+}
+
+function vectorSubtract(left, right) {
+  return [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
+}
+
+function vectorScale(vector, scale) {
+  return [vector[0] * scale, vector[1] * scale, vector[2] * scale];
+}
+
+function vectorDot(left, right) {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+function vectorCross(left, right) {
+  return [
+    left[1] * right[2] - left[2] * right[1],
+    left[2] * right[0] - left[0] * right[2],
+    left[0] * right[1] - left[1] * right[0],
+  ];
+}
+
+function vectorLength(vector) {
+  return Math.sqrt(Math.max(0, vectorDot(vector, vector)));
+}
+
+function vectorNormalize(vector, fallback = [0, 0, 0]) {
+  const length = vectorLength(vector);
+  return length > VECTOR_EPSILON ? vectorScale(vector, 1 / length) : [...fallback];
+}
+
+function vectorClampMagnitude(vector, maximum) {
+  const length = vectorLength(vector);
+  if (!Number.isFinite(length) || length <= maximum) return [...vector];
+  return vectorScale(vector, maximum / length);
+}
+
+function safeVector(value, fallback = [0, 0, 0]) {
+  return finiteVector(value) || [...fallback];
+}
+
+function valueForBone(collection, boneId) {
+  if (collection instanceof Map) {
+    return collection.get(Number(boneId)) ?? collection.get(String(boneId));
+  }
+  return collection?.[boneId];
+}
+
 function nodeIdsForComponent(component) {
   return (component?.nodeIds || []).map(value => Number(value))
     .filter(Number.isFinite);
@@ -23,16 +88,16 @@ function maxDepthForComponent(component) {
     .map(Number));
 }
 
-export function buildPhysicsTargetAngles(forest, targetAngleRadians) {
+export function buildPhysicsTargetRotations(forest, targetRotation = [0, 0, 0]) {
   const targets = new Map();
-  const candidateAngle = Number(targetAngleRadians);
-  const totalAngle = Number.isFinite(candidateAngle) ? candidateAngle : 0;
+  const totalRotation = safeVector(targetRotation);
   (forest?.components || []).forEach(component => {
     const rootId = Number(component.rootId);
     const maxDepth = maxDepthForComponent(component);
-    const localAngle = maxDepth > 0 ? totalAngle / maxDepth : 0;
+    const localRotation = maxDepth > 0
+      ? vectorScale(totalRotation, 1 / maxDepth) : [0, 0, 0];
     nodeIdsForComponent(component).forEach(nodeId => {
-      if (nodeId !== rootId) targets.set(nodeId, localAngle);
+      if (nodeId !== rootId) targets.set(nodeId, [...localRotation]);
     });
   });
   return targets;
@@ -52,8 +117,7 @@ export function buildPhysicsJointLimits(forest, maxComponentBendRadians) {
     const nodeIds = nodeIdsForComponent(component);
     const maxDepth = maxDepthForComponent(component);
     const jointCount = nodeIds.filter(nodeId => !hasRoot
-      || nodeId !== numericRootId)
-      .length;
+      || nodeId !== numericRootId).length;
     const localLimitRadians = maxDepth > 0
       ? clamp(maxComponentBend / maxDepth, 0, MAX_LOCAL_ANGLE) : 0;
     nodeIds.forEach(nodeId => {
@@ -94,17 +158,19 @@ function hasLimitForBone(jointLimitByBoneId, boneId) {
       || jointLimitByBoneId.has(String(boneId)));
 }
 
-export function applyJointLimitsToAngles(
-    angleByBoneId, jointLimitByBoneId) {
-  const result = angleByBoneId instanceof Map
-    ? new Map(angleByBoneId) : new Map();
+export function applyJointLimitsToRotations(
+    rotationByBoneId, jointLimitByBoneId) {
+  const result = new Map();
+  if (rotationByBoneId instanceof Map) {
+    rotationByBoneId.forEach((rotation, boneId) => {
+      result.set(boneId, [...safeVector(rotation)]);
+    });
+  }
   if (!(jointLimitByBoneId instanceof Map)) return result;
-  result.forEach((angle, boneId) => {
+  result.forEach((rotation, boneId) => {
     if (!hasLimitForBone(jointLimitByBoneId, boneId)) return;
-    const value = Number(angle);
-    const safeAngle = Number.isFinite(value) ? value : 0;
-    const limit = limitForBone(jointLimitByBoneId, boneId);
-    result.set(boneId, clamp(safeAngle, -limit, limit));
+    result.set(boneId, vectorClampMagnitude(
+      rotation, limitForBone(jointLimitByBoneId, boneId)));
   });
   return result;
 }
@@ -115,34 +181,64 @@ export function initializePhysicsState(forest) {
     const rootId = Number(component.rootId);
     nodeIdsForComponent(component).forEach(nodeId => {
       if (nodeId !== rootId) {
-        joints.set(nodeId, {angle: 0, angularVelocity: 0});
+        joints.set(nodeId, {
+          rotationVector: [0, 0, 0],
+          angularVelocity: [0, 0, 0],
+        });
       }
     });
   });
   return {joints};
 }
 
-export function physicsAngleMap(physicsState) {
-  const angles = new Map();
+export function physicsRotationMap(physicsState) {
+  const rotations = new Map();
   physicsState?.joints?.forEach((joint, boneId) => {
-    angles.set(Number(boneId), Number(joint.angle) || 0);
+    rotations.set(Number(boneId), [...safeVector(joint?.rotationVector)]);
   });
-  return angles;
+  return rotations;
 }
 
-/** Apply a root-orientation change as a temporary local bend in every forest
- * component. The solver owns velocity; this helper only changes position. */
+/** Return the shortest rotation vector carrying one direction to another. */
+export function rotationVectorBetween(fromValue, toValue) {
+  const from = finiteVector(fromValue);
+  const to = finiteVector(toValue);
+  if (!from || !to) return [0, 0, 0];
+  const fromLength = vectorLength(from);
+  const toLength = vectorLength(to);
+  if (fromLength <= VECTOR_EPSILON || toLength <= VECTOR_EPSILON) {
+    return [0, 0, 0];
+  }
+  const fromUnit = vectorScale(from, 1 / fromLength);
+  const toUnit = vectorScale(to, 1 / toLength);
+  const cross = vectorCross(fromUnit, toUnit);
+  const crossLength = vectorLength(cross);
+  const dot = clamp(vectorDot(fromUnit, toUnit), -1, 1);
+  if (crossLength > VECTOR_EPSILON) {
+    return vectorScale(cross, Math.atan2(crossLength, dot) / crossLength);
+  }
+  if (dot >= 0) return [0, 0, 0];
+
+  // Opposite vectors have infinitely many valid axes. Pick the basis least
+  // aligned with the source to make the result deterministic.
+  const basis = Math.abs(fromUnit[0]) <= Math.abs(fromUnit[1])
+    && Math.abs(fromUnit[0]) <= Math.abs(fromUnit[2]) ? [1, 0, 0]
+    : Math.abs(fromUnit[1]) <= Math.abs(fromUnit[2]) ? [0, 1, 0] : [0, 0, 1];
+  return vectorScale(vectorNormalize(vectorCross(fromUnit, basis)), Math.PI);
+}
+
+/** Apply a root orientation change as a local 3D bend in every component. */
 export function applyReferenceFrameAngularDelta(
-    physicsState, forest, angularDeltaRadians, strength = 1,
+    physicsState, forest, angularDeltaVector, strength = 1,
     jointLimitByBoneId = null) {
-  const delta = Number(angularDeltaRadians);
+  const delta = finiteVector(angularDeltaVector);
   const response = Number(strength);
-  if (!Number.isFinite(delta) || !Number.isFinite(response)) {
+  if (!delta || !Number.isFinite(response)) {
     applyPhysicsJointLimits(physicsState, jointLimitByBoneId);
     return physicsState;
   }
-  const lag = -delta * clamp(response, 0, 1);
-  if (lag === 0) {
+  const lag = vectorScale(delta, -clamp(response, 0, 1));
+  if (vectorLength(lag) <= VECTOR_EPSILON) {
     applyPhysicsJointLimits(physicsState, jointLimitByBoneId);
     return physicsState;
   }
@@ -150,53 +246,17 @@ export function applyReferenceFrameAngularDelta(
     const rootId = Number(component.rootId);
     const maxDepth = maxDepthForComponent(component);
     if (maxDepth <= 0) return;
-    const localLag = lag / maxDepth;
+    const localLag = vectorScale(lag, 1 / maxDepth);
     nodeIdsForComponent(component).forEach(nodeId => {
       if (nodeId === rootId) return;
       const joint = physicsState?.joints?.get(nodeId);
       if (!joint) return;
-      joint.angle = clamp(
-        (Number(joint.angle) || 0) + localLag,
-        -MAX_LOCAL_ANGLE, MAX_LOCAL_ANGLE);
+      joint.rotationVector = vectorClampMagnitude(
+        vectorAdd(safeVector(joint.rotationVector), localLag), MAX_LOCAL_ANGLE);
     });
   });
   applyPhysicsJointLimits(physicsState, jointLimitByBoneId);
   return physicsState;
-}
-
-const TRANSLATION_EPSILON = 1e-8;
-
-function finiteVector(value) {
-  const values = value?.isVector3
-    ? [value.x, value.y, value.z]
-    : Array.isArray(value) ? value : [value?.x, value?.y, value?.z];
-  if (values.length < 3) return null;
-  const vector = values.slice(0, 3).map(Number);
-  return vector.every(Number.isFinite) ? vector : null;
-}
-
-function vectorAdd(left, right) {
-  return [left[0] + right[0], left[1] + right[1], left[2] + right[2]];
-}
-
-function vectorSubtract(left, right) {
-  return [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
-}
-
-function vectorScale(vector, scale) {
-  return [vector[0] * scale, vector[1] * scale, vector[2] * scale];
-}
-
-function vectorDot(left, right) {
-  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
-}
-
-function vectorCross(left, right) {
-  return [
-    left[1] * right[2] - left[2] * right[1],
-    left[2] * right[0] - left[0] * right[2],
-    left[0] * right[1] - left[1] * right[0],
-  ];
 }
 
 function centerForBone(centerByBoneId, boneId) {
@@ -204,12 +264,6 @@ function centerForBone(centerByBoneId, boneId) {
     ?? centerByBoneId?.get?.(String(boneId))
     ?? centerByBoneId?.[boneId];
   return finiteVector(candidate);
-}
-
-function translationAxisVector(axis) {
-  if (axis === 'X') return [1, 0, 0];
-  if (axis === 'Y') return [0, 1, 0];
-  return [0, 0, 1];
 }
 
 function averageVectors(vectors) {
@@ -245,22 +299,7 @@ export function representativeComponentLever(component, centerByBoneId) {
       return candidateDistance > farthestDistance ? candidate : farthest;
     });
   }
-
   return vectorSubtract(distalCenter, rootCenter);
-}
-
-function gravityDiagnostics(componentId, rootId, maxDepth) {
-  return {
-    componentId,
-    rootId,
-    maxDepth,
-    leverLength: 0,
-    projectedLeverLength: 0,
-    effectiveLeverLength: 0,
-    totalAngularAcceleration: 0,
-    localAngularAcceleration: 0,
-    clamped: false,
-  };
 }
 
 function diagnosticComponentId(component, fallback) {
@@ -273,10 +312,24 @@ function diagnosticRootId(component) {
   return Number.isFinite(rootId) ? rootId : null;
 }
 
-/** Build one-axis gravity acceleration inputs from rest-space component
- * levers. The returned map contains only non-root joints. */
+function gravityDiagnostics(componentId, rootId, maxDepth) {
+  return {
+    componentId,
+    rootId,
+    maxDepth,
+    leverLength: 0,
+    effectiveLeverLength: 0,
+    totalAngularAccelerationVector: [0, 0, 0],
+    localAngularAccelerationVector: [0, 0, 0],
+    totalAngularAccelerationMagnitude: 0,
+    localAngularAccelerationMagnitude: 0,
+    clamped: false,
+  };
+}
+
+/** Build 3D angular acceleration inputs from rest-space component levers. */
 export function buildGravityAngularAccelerations(
-    forest, centerByBoneId, gravityLocal, axis,
+    forest, centerByBoneId, gravityLocal,
     {referenceRadius, gravityScale = 1} = {}) {
   const direction = finiteVector(gravityLocal);
   const radius = Number(referenceRadius);
@@ -286,35 +339,32 @@ export function buildGravityAngularAccelerations(
     componentCount: (forest?.components || []).length,
     activeComponentCount: 0,
     clampedComponentCount: 0,
-    maxAbsTotalAcceleration: 0,
-    maxAbsLocalAcceleration: 0,
+    maxTotalAccelerationMagnitude: 0,
+    maxLocalAccelerationMagnitude: 0,
     referenceRadius: Number.isFinite(radius) && radius > 0 ? radius : 0,
     minLeverRatio: MIN_GRAVITY_LEVER_RATIO,
     components: [],
   };
+  const addEmptyDiagnostics = () => {
+    (forest?.components || []).forEach((component, index) => {
+      diagnostics.components.push(gravityDiagnostics(
+        diagnosticComponentId(component, index), diagnosticRootId(component),
+        maxDepthForComponent(component)));
+    });
+  };
   if (!direction || !Number.isFinite(radius) || radius <= 0
       || !Number.isFinite(scale) || scale < 0) {
-    (forest?.components || []).forEach((component, index) => {
-      diagnostics.components.push(gravityDiagnostics(
-        diagnosticComponentId(component, index), diagnosticRootId(component),
-        maxDepthForComponent(component)));
-    });
+    addEmptyDiagnostics();
+    return {accelerationByBoneId: accelerations, diagnostics};
+  }
+  const directionLength = vectorLength(direction);
+  if (directionLength <= VECTOR_EPSILON) {
+    addEmptyDiagnostics();
     return {accelerationByBoneId: accelerations, diagnostics};
   }
 
-  const directionLength = Math.sqrt(vectorDot(direction, direction));
-  if (directionLength <= TRANSLATION_EPSILON) {
-    (forest?.components || []).forEach((component, index) => {
-      diagnostics.components.push(gravityDiagnostics(
-        diagnosticComponentId(component, index), diagnosticRootId(component),
-        maxDepthForComponent(component)));
-    });
-    return {accelerationByBoneId: accelerations, diagnostics};
-  }
-
-  const unitAxis = translationAxisVector(axis);
-  const gravityMagnitude = STANDARD_GRAVITY * radius * scale;
-  const gravity = vectorScale(direction, gravityMagnitude / directionLength);
+  const gravity = vectorScale(
+    direction, STANDARD_GRAVITY * radius * scale / directionLength);
   const minimumLever = radius * MIN_GRAVITY_LEVER_RATIO;
   (forest?.components || []).forEach((component, index) => {
     const componentId = diagnosticComponentId(component, index);
@@ -324,39 +374,33 @@ export function buildGravityAngularAccelerations(
       componentId, diagnosticRootId(component), maxDepth);
     const lever = representativeComponentLever(component, centerByBoneId);
     if (lever && maxDepth > 0) {
-      const leverLength = Math.sqrt(vectorDot(lever, lever));
-      const leverPlane = vectorSubtract(lever,
-        vectorScale(unitAxis, vectorDot(lever, unitAxis)));
-      const projectedLeverLength = Math.sqrt(
-        vectorDot(leverPlane, leverPlane));
-      const effectiveLeverLength = Math.max(
-        projectedLeverLength, minimumLever);
+      const leverLength = vectorLength(lever);
+      const effectiveLeverLength = Math.max(leverLength, minimumLever);
       const denominator = effectiveLeverLength * effectiveLeverLength;
-      const totalAngularAcceleration = vectorDot(
-        unitAxis, vectorCross(lever, gravity)) / denominator;
-      const localAngularAcceleration = totalAngularAcceleration / maxDepth;
-      if (Number.isFinite(totalAngularAcceleration)
-          && Number.isFinite(localAngularAcceleration)) {
+      const totalAcceleration = vectorScale(
+        vectorCross(lever, gravity), 1 / denominator);
+      const localAcceleration = vectorScale(totalAcceleration, 1 / maxDepth);
+      if (totalAcceleration.every(Number.isFinite)
+          && localAcceleration.every(Number.isFinite)) {
         details.leverLength = leverLength;
-        details.projectedLeverLength = projectedLeverLength;
         details.effectiveLeverLength = effectiveLeverLength;
-        details.totalAngularAcceleration = totalAngularAcceleration;
-        details.localAngularAcceleration = localAngularAcceleration;
-        details.clamped = projectedLeverLength < minimumLever;
+        details.totalAngularAccelerationVector = totalAcceleration;
+        details.localAngularAccelerationVector = localAcceleration;
+        details.totalAngularAccelerationMagnitude = vectorLength(totalAcceleration);
+        details.localAngularAccelerationMagnitude = vectorLength(localAcceleration);
+        details.clamped = leverLength < minimumLever;
         if (details.clamped) diagnostics.clampedComponentCount += 1;
-        if (Math.abs(totalAngularAcceleration) > TRANSLATION_EPSILON) {
+        if (details.totalAngularAccelerationMagnitude > VECTOR_EPSILON) {
           diagnostics.activeComponentCount += 1;
         }
-        diagnostics.maxAbsTotalAcceleration = Math.max(
-          diagnostics.maxAbsTotalAcceleration,
-          Math.abs(totalAngularAcceleration));
-        diagnostics.maxAbsLocalAcceleration = Math.max(
-          diagnostics.maxAbsLocalAcceleration,
-          Math.abs(localAngularAcceleration));
+        diagnostics.maxTotalAccelerationMagnitude = Math.max(
+          diagnostics.maxTotalAccelerationMagnitude,
+          details.totalAngularAccelerationMagnitude);
+        diagnostics.maxLocalAccelerationMagnitude = Math.max(
+          diagnostics.maxLocalAccelerationMagnitude,
+          details.localAngularAccelerationMagnitude);
         nodeIdsForComponent(component).forEach(nodeId => {
-          if (nodeId !== rootId) {
-            accelerations.set(nodeId, localAngularAcceleration);
-          }
+          if (nodeId !== rootId) accelerations.set(nodeId, [...localAcceleration]);
         });
       }
     }
@@ -365,130 +409,104 @@ export function buildGravityAngularAccelerations(
   return {accelerationByBoneId: accelerations, diagnostics};
 }
 
-function componentTranslationLag(
-    component, centerByBoneId, translationDeltaLocal, axis, strength) {
-  const lever = representativeComponentLever(component, centerByBoneId);
-  if (!lever) return 0;
-  const displacement = vectorScale(
-    translationDeltaLocal, clamp(Number(strength) || 0, 0, 1));
-  const desired = vectorSubtract(lever, displacement);
-  const unitAxis = translationAxisVector(axis);
-  const leverPlane = vectorSubtract(lever,
-    vectorScale(unitAxis, vectorDot(lever, unitAxis)));
-  const desiredPlane = vectorSubtract(desired,
-    vectorScale(unitAxis, vectorDot(desired, unitAxis)));
-  const leverLength = Math.sqrt(vectorDot(leverPlane, leverPlane));
-  const desiredLength = Math.sqrt(vectorDot(desiredPlane, desiredPlane));
-  if (leverLength <= TRANSLATION_EPSILON
-      || desiredLength <= TRANSLATION_EPSILON) return 0;
-  return Math.atan2(
-    vectorDot(unitAxis, vectorCross(leverPlane, desiredPlane)),
-    vectorDot(leverPlane, desiredPlane));
-}
-
-/** Apply semantic model translation as a geometric lag in each component's
- * previous local reference frame. This helper is intentionally independent
- * of meshes, rendering, and the DOM. */
+/** Apply translation lag by rotating each component's lever toward its new
+ * rest-space direction. The shortest 3D rotation is used for every joint. */
 export function applyReferenceFrameTranslationDelta(
     physicsState, forest, centerByBoneId, translationDeltaLocal,
-    axis, strength = 1, diagnostics = null, jointLimitByBoneId = null) {
+    strength = 1, diagnostics = null, jointLimitByBoneId = null) {
   const delta = finiteVector(translationDeltaLocal);
   const response = Number(strength);
   if (!delta || !Number.isFinite(response)) {
-    if (diagnostics) diagnostics.maxAbsLag = 0;
+    if (diagnostics) {
+      diagnostics.maxLagRotationVector = [0, 0, 0];
+      diagnostics.maxLagRotationMagnitude = 0;
+    }
     applyPhysicsJointLimits(physicsState, jointLimitByBoneId);
     return physicsState;
   }
-  if (Math.sqrt(vectorDot(delta, delta)) <= TRANSLATION_EPSILON) {
-    if (diagnostics) diagnostics.maxAbsLag = 0;
+  const displacement = vectorScale(delta, clamp(response, 0, 1));
+  if (vectorLength(displacement) <= VECTOR_EPSILON) {
+    if (diagnostics) {
+      diagnostics.maxLagRotationVector = [0, 0, 0];
+      diagnostics.maxLagRotationMagnitude = 0;
+    }
     applyPhysicsJointLimits(physicsState, jointLimitByBoneId);
     return physicsState;
   }
-  let diagnosticLag = 0;
+  let largestLag = [0, 0, 0];
   (forest?.components || []).forEach(component => {
-    const totalLag = componentTranslationLag(
-      component, centerByBoneId, delta, axis, response);
-    if (Math.abs(totalLag) > Math.abs(diagnosticLag)) diagnosticLag = totalLag;
+    const lever = representativeComponentLever(component, centerByBoneId);
     const maxDepth = maxDepthForComponent(component);
-    if (!totalLag || maxDepth <= 0) return;
+    if (!lever || maxDepth <= 0) return;
+    const localLag = vectorScale(rotationVectorBetween(
+      lever, vectorSubtract(lever, displacement)), 1 / maxDepth);
+    if (vectorLength(localLag) > vectorLength(largestLag)) largestLag = localLag;
     const rootId = Number(component.rootId);
-    const localLag = totalLag / maxDepth;
     nodeIdsForComponent(component).forEach(nodeId => {
       if (nodeId === rootId) return;
       const joint = physicsState?.joints?.get(nodeId);
       if (!joint) return;
-      joint.angle = clamp(
-        (Number(joint.angle) || 0) + localLag,
-        -MAX_LOCAL_ANGLE, MAX_LOCAL_ANGLE);
+      joint.rotationVector = vectorClampMagnitude(
+        vectorAdd(safeVector(joint.rotationVector), localLag), MAX_LOCAL_ANGLE);
     });
   });
-  if (diagnostics) diagnostics.maxAbsLag = Math.abs(diagnosticLag);
+  if (diagnostics) {
+    diagnostics.maxLagRotationVector = [...largestLag];
+    diagnostics.maxLagRotationMagnitude = vectorLength(largestLag);
+  }
   applyPhysicsJointLimits(physicsState, jointLimitByBoneId);
   return physicsState;
 }
 
 function addJointAngularVelocity(joint, delta) {
   if (!joint) return;
-  const currentVelocity = Number(joint.angularVelocity);
-  const impulse = Number(delta);
-  joint.angularVelocity = clamp(
-    (Number.isFinite(currentVelocity) ? currentVelocity : 0)
-      + (Number.isFinite(impulse) ? impulse : 0),
-    -MAX_ANGULAR_VELOCITY, MAX_ANGULAR_VELOCITY);
-  if (joint.angle >= MAX_LOCAL_ANGLE && joint.angularVelocity > 0) {
-    joint.angularVelocity = 0;
-  }
-  if (joint.angle <= -MAX_LOCAL_ANGLE && joint.angularVelocity < 0) {
-    joint.angularVelocity = 0;
-  }
+  const currentVelocity = safeVector(joint.angularVelocity);
+  joint.angularVelocity = vectorClampMagnitude(
+    vectorAdd(currentVelocity, safeVector(delta)), MAX_ANGULAR_VELOCITY);
 }
 
-/** Apply a semantic root velocity change as an angular velocity impulse in
- * the selected local bend plane. Unlike displacement lag, this only changes
- * the spring's existing velocity state. */
+/** Apply a root velocity change as a 3D angular-velocity impulse. */
 export function applyReferenceFrameLinearVelocityDelta(
     physicsState, forest, centerByBoneId, deltaVelocityLocal,
-    axis, strength = 1, diagnostics = null, jointLimitByBoneId = null) {
+    strength = 1, diagnostics = null, jointLimitByBoneId = null) {
   const delta = finiteVector(deltaVelocityLocal);
   const response = Number(strength);
   if (!delta || !Number.isFinite(response)) {
-    if (diagnostics) diagnostics.maxAbsDeltaOmega = 0;
+    if (diagnostics) {
+      diagnostics.maxDeltaAngularVelocityVector = [0, 0, 0];
+      diagnostics.maxDeltaAngularVelocityMagnitude = 0;
+    }
     applyPhysicsJointLimits(physicsState, jointLimitByBoneId);
     return physicsState;
   }
-  const unitAxis = translationAxisVector(axis);
-  const deltaPlane = vectorSubtract(delta,
-    vectorScale(unitAxis, vectorDot(delta, unitAxis)));
   const responseScale = clamp(response, 0, 1);
-  let maxAbsDeltaOmega = 0;
+  let largestImpulse = [0, 0, 0];
   (forest?.components || []).forEach(component => {
     const lever = representativeComponentLever(component, centerByBoneId);
     const maxDepth = maxDepthForComponent(component);
     if (!lever || maxDepth <= 0) return;
-    const leverPlane = vectorSubtract(lever,
-      vectorScale(unitAxis, vectorDot(lever, unitAxis)));
-    const denominator = vectorDot(leverPlane, leverPlane);
-    if (denominator <= TRANSLATION_EPSILON) return;
-    const totalDeltaOmega = responseScale * vectorDot(
-      unitAxis, vectorCross(leverPlane, vectorScale(deltaPlane, -1)))
-      / denominator;
-    if (!Number.isFinite(totalDeltaOmega)) return;
-    maxAbsDeltaOmega = Math.max(maxAbsDeltaOmega, Math.abs(totalDeltaOmega));
-    const localDeltaOmega = totalDeltaOmega / maxDepth;
+    const denominator = Math.max(vectorDot(lever, lever), VECTOR_EPSILON);
+    const totalImpulse = vectorScale(
+      vectorCross(lever, vectorScale(delta, -responseScale)),
+      1 / denominator);
+    if (!totalImpulse.every(Number.isFinite)) return;
+    const localImpulse = vectorScale(totalImpulse, 1 / maxDepth);
+    if (vectorLength(localImpulse) > vectorLength(largestImpulse)) {
+      largestImpulse = localImpulse;
+    }
     const rootId = Number(component.rootId);
     nodeIdsForComponent(component).forEach(nodeId => {
       if (nodeId === rootId) return;
       addJointAngularVelocity(
-        physicsState?.joints?.get(nodeId), localDeltaOmega);
+        physicsState?.joints?.get(nodeId), localImpulse);
     });
   });
-  if (diagnostics) diagnostics.maxAbsDeltaOmega = maxAbsDeltaOmega;
+  if (diagnostics) {
+    diagnostics.maxDeltaAngularVelocityVector = [...largestImpulse];
+    diagnostics.maxDeltaAngularVelocityMagnitude = vectorLength(largestImpulse);
+  }
   applyPhysicsJointLimits(physicsState, jointLimitByBoneId);
   return physicsState;
-}
-
-function clamp(value, minimum, maximum) {
-  return Math.max(minimum, Math.min(maximum, value));
 }
 
 function projectJointToLimit(joint, limitRadians = MAX_LOCAL_ANGLE) {
@@ -497,27 +515,25 @@ function projectJointToLimit(joint, limitRadians = MAX_LOCAL_ANGLE) {
   const limit = Number.isFinite(candidateLimit)
     ? clamp(Math.max(0, candidateLimit), 0, MAX_LOCAL_ANGLE)
     : MAX_LOCAL_ANGLE;
-  const candidateAngle = Number(joint.angle);
-  const candidateVelocity = Number(joint.angularVelocity);
-  let angle = Number.isFinite(candidateAngle) ? candidateAngle : 0;
-  let velocity = Number.isFinite(candidateVelocity) ? candidateVelocity : 0;
-  velocity = clamp(velocity, -MAX_ANGULAR_VELOCITY, MAX_ANGULAR_VELOCITY);
-  if (limit === 0) {
-    angle = 0;
-    velocity = 0;
-  } else if (angle > limit) {
-    angle = limit;
-    if (velocity > 0) velocity = 0;
-  } else if (angle < -limit) {
-    angle = -limit;
-    if (velocity < 0) velocity = 0;
-  } else if (angle === limit && velocity > 0) {
-    velocity = 0;
-  } else if (angle === -limit && velocity < 0) {
-    velocity = 0;
+  const candidateRotation = finiteVector(joint.rotationVector);
+  const candidateVelocity = finiteVector(joint.angularVelocity);
+  let rotation = vectorClampMagnitude(
+    candidateRotation || [0, 0, 0], limit);
+  let velocity = vectorClampMagnitude(
+    candidateVelocity || [0, 0, 0], MAX_ANGULAR_VELOCITY);
+  if (limit <= VECTOR_EPSILON) {
+    rotation = [0, 0, 0];
+    velocity = [0, 0, 0];
+  } else if (vectorLength(rotation) >= limit - JOINT_LIMIT_CONTACT_EPSILON) {
+    const radial = vectorNormalize(rotation);
+    const outward = vectorDot(velocity, radial);
+    if (outward > 0) velocity = vectorSubtract(velocity, vectorScale(radial, outward));
   }
-  const changed = angle !== candidateAngle || velocity !== candidateVelocity;
-  joint.angle = angle;
+  const changed = !candidateRotation
+    || rotation.some((value, index) => value !== candidateRotation[index])
+    || !candidateVelocity
+    || velocity.some((value, index) => value !== candidateVelocity[index]);
+  joint.rotationVector = rotation;
   joint.angularVelocity = velocity;
   return changed;
 }
@@ -537,98 +553,85 @@ export function buildPhysicsConstraintDiagnostics(
     physicsState, jointLimitByBoneId, limitDiagnostics = null) {
   const limited = jointLimitByBoneId instanceof Map;
   let atLimitCount = 0;
-  let positiveLimitCount = 0;
-  let negativeLimitCount = 0;
   let maxUsage = 0;
   physicsState?.joints?.forEach((joint, boneId) => {
     if (!limited || !hasLimitForBone(jointLimitByBoneId, boneId)) return;
     const limit = limitForBone(jointLimitByBoneId, boneId);
-    const angle = Number(joint.angle);
-    const safeAngle = Number.isFinite(angle) ? angle : 0;
-    const atLimit = limit === 0
-      ? Math.abs(safeAngle) <= JOINT_LIMIT_CONTACT_EPSILON
-      : Math.abs(Math.abs(safeAngle) - limit)
-        <= JOINT_LIMIT_CONTACT_EPSILON;
-    const usage = limit === 0 ? 1 : clamp(Math.abs(safeAngle) / limit, 0, 1);
+    const magnitude = vectorLength(safeVector(joint?.rotationVector));
+    const atLimit = limit <= VECTOR_EPSILON
+      ? magnitude <= JOINT_LIMIT_CONTACT_EPSILON
+      : Math.abs(magnitude - limit) <= JOINT_LIMIT_CONTACT_EPSILON;
+    const usage = limit <= VECTOR_EPSILON ? 1 : clamp(magnitude / limit, 0, 1);
     maxUsage = Math.max(maxUsage, usage);
-    if (!atLimit) return;
-    atLimitCount += 1;
-    if (safeAngle > JOINT_LIMIT_CONTACT_EPSILON) positiveLimitCount += 1;
-    if (safeAngle < -JOINT_LIMIT_CONTACT_EPSILON) negativeLimitCount += 1;
+    if (atLimit) atLimitCount += 1;
   });
   return {
     maxComponentBend: Number(limitDiagnostics?.maxComponentBend) || 0,
     limitedJointCount: limited ? jointLimitByBoneId.size : 0,
     atLimitCount,
-    positiveLimitCount,
-    negativeLimitCount,
     maxUsage,
     components: limited ? (limitDiagnostics?.components || []) : [],
   };
 }
 
 function externalAccelerationForBone(externalAccelerations, boneId) {
-  if (!(externalAccelerations instanceof Map)) return 0;
-  const value = Number(externalAccelerations.get(Number(boneId)));
-  return Number.isFinite(value) ? value : 0;
+  return safeVector(valueForBone(externalAccelerations, boneId));
 }
 
 function hasExternalAcceleration(externalAccelerations) {
   if (!(externalAccelerations instanceof Map)) return false;
   for (const value of externalAccelerations.values()) {
-    if (Number.isFinite(Number(value))
-        && Math.abs(Number(value)) > TRANSLATION_EPSILON) return true;
+    if (vectorLength(safeVector(value)) > VECTOR_EPSILON) return true;
   }
   return false;
 }
 
 function applyExternalEquilibriumOffset(
     targets, frequencyHz, externalAngularAccelerationByBoneId) {
-  if (!(externalAngularAccelerationByBoneId instanceof Map)) return targets;
+  if (!(externalAngularAccelerationByBoneId instanceof Map)) {
+    return new Map(targets);
+  }
   const frequency = Number(frequencyHz);
   const omega = 2 * Math.PI * (Number.isFinite(frequency)
     ? Math.max(0, frequency) : DEFAULT_PHYSICS_FREQUENCY_HZ);
   const omegaSquared = omega * omega;
-  if (omegaSquared <= TRANSLATION_EPSILON) return targets;
-  const result = new Map(targets);
-  result.forEach((target, boneId) => {
-    const external = externalAccelerationForBone(
-      externalAngularAccelerationByBoneId, boneId);
-    result.set(boneId, clamp(
-      target + external / omegaSquared, -MAX_LOCAL_ANGLE, MAX_LOCAL_ANGLE));
+  if (omegaSquared <= VECTOR_EPSILON) return new Map(targets);
+  const result = new Map();
+  targets.forEach((target, boneId) => {
+    result.set(boneId, vectorClampMagnitude(vectorAdd(
+      safeVector(target), vectorScale(
+        externalAccelerationForBone(externalAngularAccelerationByBoneId, boneId),
+        1 / omegaSquared)), MAX_LOCAL_ANGLE));
   });
   return result;
 }
 
-/** Return the spring equilibrium after adding per-joint external angular
- * acceleration. The input maps are never mutated. */
-export function buildPhysicsEquilibriumAngles(
-    forest, targetAngleRadians, frequencyHz,
+/** Return spring equilibria after adding per-joint external acceleration. */
+export function buildPhysicsEquilibriumRotations(
+    forest, targetRotation, frequencyHz,
     externalAngularAccelerationByBoneId = null,
     jointLimitByBoneId = null) {
-  const constrainedTargets = applyJointLimitsToAngles(
-    buildPhysicsTargetAngles(forest, targetAngleRadians),
-    jointLimitByBoneId);
-  return applyJointLimitsToAngles(
+  const constrainedTargets = applyJointLimitsToRotations(
+    buildPhysicsTargetRotations(forest, targetRotation), jointLimitByBoneId);
+  return applyJointLimitsToRotations(
     applyExternalEquilibriumOffset(
       constrainedTargets, frequencyHz, externalAngularAccelerationByBoneId),
     jointLimitByBoneId);
 }
 
 function jointAcceleration(
-    joint, targetAngle, externalAcceleration, frequencyHz, dampingRatio) {
+    joint, targetRotation, externalAcceleration, frequencyHz, dampingRatio) {
   const frequency = Number.isFinite(Number(frequencyHz))
     ? Math.max(0, Number(frequencyHz)) : DEFAULT_PHYSICS_FREQUENCY_HZ;
   const damping = Number.isFinite(Number(dampingRatio))
     ? Math.max(0, Number(dampingRatio)) : DEFAULT_PHYSICS_DAMPING_RATIO;
   const omega = 2 * Math.PI * frequency;
-  return omega * omega * (targetAngle - joint.angle)
-    - 2 * damping * omega * joint.angularVelocity
-    + externalAcceleration;
-}
-
-function clampJoint(joint, limitRadians = MAX_LOCAL_ANGLE) {
-  projectJointToLimit(joint, limitRadians);
+  return vectorAdd(
+    vectorScale(vectorSubtract(targetRotation, safeVector(joint.rotationVector)),
+      omega * omega),
+    vectorAdd(
+      vectorScale(safeVector(joint.angularVelocity), -2 * damping * omega),
+      externalAcceleration));
 }
 
 export function stepSpringPhysics(
@@ -645,57 +648,60 @@ export function stepSpringPhysics(
   const damping = Number.isFinite(candidateDamping)
     ? Math.max(0, candidateDamping) : DEFAULT_PHYSICS_DAMPING_RATIO;
   const step = clamp(Number(dt) || 0, 0, maxDt);
-  const targets = options.angleByBoneId instanceof Map
-    ? options.angleByBoneId
-    : buildPhysicsTargetAngles(forest, options.targetAngleRadians);
+  const targets = options.targetRotationByBoneId instanceof Map
+    ? options.targetRotationByBoneId
+    : buildPhysicsTargetRotations(forest, options.targetRotation);
   const jointLimitByBoneId = options.jointLimitByBoneId;
-  const constrainedTargets = applyJointLimitsToAngles(
+  const constrainedTargets = applyJointLimitsToRotations(
     targets, jointLimitByBoneId);
   const externalAccelerations = options
     .externalAngularAccelerationByBoneId;
-  const equilibriumTargets = applyJointLimitsToAngles(
+  const equilibriumTargets = applyJointLimitsToRotations(
     applyExternalEquilibriumOffset(
       constrainedTargets, frequency, externalAccelerations),
     jointLimitByBoneId);
-  let maxAngleError = 0;
-  let maxAngularVelocity = 0;
+  let maxRotationErrorMagnitude = 0;
+  let maxAngularVelocityMagnitude = 0;
   physicsState?.joints?.forEach((joint, boneId) => {
-    const target = Number(constrainedTargets.get(Number(boneId))) || 0;
+    const target = safeVector(valueForBone(constrainedTargets, boneId));
     const limit = hasLimitForBone(jointLimitByBoneId, boneId)
       ? limitForBone(jointLimitByBoneId, boneId) : MAX_LOCAL_ANGLE;
     const acceleration = jointAcceleration(
       joint, target, externalAccelerationForBone(
         externalAccelerations, boneId), frequency, damping);
-    joint.angularVelocity += acceleration * step;
-    clampJoint(joint, limit);
-    joint.angle += joint.angularVelocity * step;
-    clampJoint(joint, limit);
-    const equilibrium = Number(equilibriumTargets.get(Number(boneId)));
-    maxAngleError = Math.max(
-      maxAngleError, Math.abs((Number.isFinite(equilibrium)
-        ? equilibrium : target) - joint.angle));
-    maxAngularVelocity = Math.max(
-      maxAngularVelocity, Math.abs(joint.angularVelocity));
+    const velocity = vectorAdd(
+      safeVector(joint.angularVelocity), vectorScale(acceleration, step));
+    joint.angularVelocity = vectorClampMagnitude(velocity, MAX_ANGULAR_VELOCITY);
+    projectJointToLimit(joint, limit);
+    joint.rotationVector = vectorClampMagnitude(vectorAdd(
+      safeVector(joint.rotationVector),
+      vectorScale(joint.angularVelocity, step)), limit);
+    projectJointToLimit(joint, limit);
+    const equilibrium = safeVector(valueForBone(equilibriumTargets, boneId), target);
+    maxRotationErrorMagnitude = Math.max(maxRotationErrorMagnitude,
+      vectorLength(vectorSubtract(equilibrium, joint.rotationVector)));
+    maxAngularVelocityMagnitude = Math.max(maxAngularVelocityMagnitude,
+      vectorLength(joint.angularVelocity));
   });
-  return {maxAngleError, maxAngularVelocity};
+  return {maxRotationErrorMagnitude, maxAngularVelocityMagnitude};
 }
 
 export function isPhysicsSettled(
-    physicsState, forest, targetAngleRadians, options = {}) {
-  const candidateAngleTolerance = Number(
-    options.angleTolerance ?? DEFAULT_ANGLE_TOLERANCE);
-  const angleTolerance = Number.isFinite(candidateAngleTolerance)
-    ? Math.max(0, candidateAngleTolerance) : DEFAULT_ANGLE_TOLERANCE;
+    physicsState, forest, targetRotation = [0, 0, 0], options = {}) {
+  const candidateRotationTolerance = Number(
+    options.rotationTolerance ?? options.angleTolerance ?? DEFAULT_ANGLE_TOLERANCE);
+  const rotationTolerance = Number.isFinite(candidateRotationTolerance)
+    ? Math.max(0, candidateRotationTolerance) : DEFAULT_ANGLE_TOLERANCE;
   const candidateVelocityTolerance = Number(
     options.velocityTolerance ?? DEFAULT_VELOCITY_TOLERANCE);
   const velocityTolerance = Number.isFinite(candidateVelocityTolerance)
     ? Math.max(0, candidateVelocityTolerance) : DEFAULT_VELOCITY_TOLERANCE;
-  const constrainedTargets = applyJointLimitsToAngles(
-    options.angleByBoneId instanceof Map
-      ? options.angleByBoneId
-      : buildPhysicsTargetAngles(forest, targetAngleRadians),
+  const constrainedTargets = applyJointLimitsToRotations(
+    options.targetRotationByBoneId instanceof Map
+      ? options.targetRotationByBoneId
+      : buildPhysicsTargetRotations(forest, targetRotation),
     options.jointLimitByBoneId);
-  const targets = applyJointLimitsToAngles(
+  const targets = applyJointLimitsToRotations(
     applyExternalEquilibriumOffset(
       constrainedTargets, options.frequencyHz,
       options.externalAngularAccelerationByBoneId),
@@ -703,22 +709,22 @@ export function isPhysicsSettled(
   const frequency = Number(options.frequencyHz ?? DEFAULT_PHYSICS_FREQUENCY_HZ);
   if (hasExternalAcceleration(options.externalAngularAccelerationByBoneId)
       && Number.isFinite(frequency) && frequency <= 0) return false;
-  let maxAngleError = 0;
-  let maxAngularVelocity = 0;
+  let maxRotationErrorMagnitude = 0;
+  let maxAngularVelocityMagnitude = 0;
   physicsState?.joints?.forEach((joint, boneId) => {
-    const target = Number(targets.get(Number(boneId))) || 0;
-    maxAngleError = Math.max(maxAngleError, Math.abs(target - joint.angle));
-    maxAngularVelocity = Math.max(
-      maxAngularVelocity, Math.abs(joint.angularVelocity));
+    const target = safeVector(valueForBone(targets, boneId));
+    maxRotationErrorMagnitude = Math.max(maxRotationErrorMagnitude,
+      vectorLength(vectorSubtract(target, safeVector(joint.rotationVector))));
+    maxAngularVelocityMagnitude = Math.max(maxAngularVelocityMagnitude,
+      vectorLength(safeVector(joint.angularVelocity)));
   });
-  return maxAngleError < angleTolerance
-    && maxAngularVelocity < velocityTolerance;
+  return maxRotationErrorMagnitude < rotationTolerance
+    && maxAngularVelocityMagnitude < velocityTolerance;
 }
 
 export function applyPhysicsKick(
-    physicsState, forest, impulseRadiansPerSecond,
-    jointLimitByBoneId = null) {
-  const impulse = Number(impulseRadiansPerSecond) || 0;
+    physicsState, forest, impulseVector, jointLimitByBoneId = null) {
+  const impulse = safeVector(impulseVector);
   physicsState?.joints?.forEach((joint, boneId) => {
     const component = (forest?.components || []).find(item =>
       nodeIdsForComponent(item).includes(Number(boneId)));
@@ -726,7 +732,7 @@ export function applyPhysicsKick(
     const depth = Number(component?.depthById?.[boneId]);
     const scale = maxDepth > 0 && Number.isFinite(depth)
       ? Math.max(0, depth / maxDepth) : 0;
-    addJointAngularVelocity(joint, impulse * scale);
+    addJointAngularVelocity(joint, vectorScale(impulse, scale));
   });
   applyPhysicsJointLimits(physicsState, jointLimitByBoneId);
   return physicsState;
@@ -734,8 +740,8 @@ export function applyPhysicsKick(
 
 export function resetPhysicsState(physicsState) {
   physicsState?.joints?.forEach(joint => {
-    joint.angle = 0;
-    joint.angularVelocity = 0;
+    joint.rotationVector = [0, 0, 0];
+    joint.angularVelocity = [0, 0, 0];
   });
   return physicsState;
 }

@@ -9,7 +9,7 @@ import {
   setSelectedBone, setSkinningHeatmap,
   setInfluenceVisualizationMode,
   setCandidateTreeRoot,
-  setPhysicsAxis, setPhysicsTargetAngle, setPhysicsFrequency,
+  setPhysicsFrequency,
   setPhysicsDamping, setPhysicsMotionStrength,
   setPhysicsLinearMotionStrength, setPhysicsContinuousLinearResponse,
   getPhysicsConstraintDiagnostics,
@@ -350,8 +350,6 @@ function physicsDiagnosticsPayload(state) {
   const constraints = getPhysicsConstraintDiagnostics(state);
   return {
     enabled: !!state.physicsEnabled,
-    axis: state.physicsAxis,
-    targetAngle: state.physicsTargetAngle,
     frequencyHz: state.physicsFrequencyHz,
     dampingRatio: state.physicsDampingRatio,
     angularResponse: state.physicsMotionStrength,
@@ -362,14 +360,31 @@ function physicsDiagnosticsPayload(state) {
       scale: state.physicsGravityScale,
       localDirection: [...(state.physicsGravityLocal
         || GRAVITY_WORLD_DIRECTION)],
+      diagnostics: state.physicsGravityDiagnostics || null,
+    },
+    motion: {
+      rootAngularDeltaVector: [...(state.lastRootAngularDeltaVector
+        || [0, 0, 0])],
+      rootAngularDeltaMagnitude: Number(
+        state.lastRootAngularDeltaMagnitude) || 0,
+      translationLagRotationVector: [...(state.lastTranslationLagRotationVector
+        || [0, 0, 0])],
+      translationLagRotationMagnitude: Number(
+        state.lastTranslationLagRotationMagnitude) || 0,
+      virtualLinearVelocityLocal: [...(state.physicsVirtualLinearVelocityLocal
+        || [0, 0, 0])],
     },
     constraints,
     settled: !!state.physicsSettled,
     joints: Object.fromEntries(
       [...(state.physicsState?.joints || new Map()).entries()]
         .map(([boneId, joint]) => [boneId, {
-          angle: Number(joint.angle) || 0,
-          angularVelocity: Number(joint.angularVelocity) || 0,
+          rotationVector: [...(joint.rotationVector || [0, 0, 0])],
+          rotationMagnitude: Math.hypot(
+            ...(joint.rotationVector || [0, 0, 0])),
+          angularVelocity: [...(joint.angularVelocity || [0, 0, 0])],
+          angularVelocityMagnitude: Math.hypot(
+            ...(joint.angularVelocity || [0, 0, 0])),
         }])),
   };
 }
@@ -545,14 +560,13 @@ function physicsSummary(state) {
         0, (component.nodeIds || []).length - 1), 0);
   const constraints = getPhysicsConstraintDiagnostics(state);
   return [
-    'Physics ' + status + ' · ' + jointCount + ' dynamic joints',
-    'Target bend ' + state.physicsTargetAngle + '° · Axis ' + state.physicsAxis,
+    'Physics ' + status + ' · ' + jointCount + ' dynamic joints · 3D',
     'Frequency ' + Number(state.physicsFrequencyHz).toFixed(2) + ' Hz · '
       + 'Damping ' + Number(state.physicsDampingRatio).toFixed(2),
     'Angular response ' + Number(state.physicsMotionStrength).toFixed(2)
-      + ' · Linear response '
+      + ' · Translation response '
       + Number(state.physicsLinearMotionStrength).toFixed(2),
-    'Continuous response '
+    'Velocity response '
       + Number(state.physicsContinuousLinearResponse).toFixed(2),
     'Gravity ' + (state.physicsGravityEnabled ? 'On' : 'Off')
       + ' · Scale ' + Number(state.physicsGravityScale).toFixed(1),
@@ -561,6 +575,7 @@ function physicsSummary(state) {
       + ' / ' + constraints.limitedJointCount,
   ].join('\n');
 }
+
 
 function addPhysicsRange(parent, className, label, min, max, step, value,
     onInput) {
@@ -595,7 +610,8 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   title.textContent = 'Secondary Motion — Experimental';
   section.appendChild(title);
   addText(section, 'inspector-skinning-hint',
-    'Spring, gravity, and response controls operate on the inferred hierarchy.');
+    'Hold RMB and drag the viewport to excite secondary motion. '
+      + 'LMB continues to control the camera.');
 
   const enableLabel = document.createElement('label');
   enableLabel.className = 'inspector-skinning-physics-enable-label';
@@ -610,27 +626,6 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
   addText(enableLabel, 'inspector-label', 'Enable Physics');
   section.appendChild(enableLabel);
 
-  const axisRow = document.createElement('div');
-  axisRow.className = 'inspector-skinning-physics-axis';
-  addText(axisRow, 'inspector-label', 'Axis');
-  const axisButtons = document.createElement('span');
-  ['X', 'Y', 'Z'].forEach(axis => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'inspector-skinning-axis-button';
-    button.textContent = axis;
-    button.addEventListener('click', () => {
-      setPhysicsAxis(mesh, axis);
-      update();
-    });
-    axisButtons.appendChild(button);
-  });
-  axisRow.appendChild(axisButtons);
-  section.appendChild(axisRow);
-
-  const target = addPhysicsRange(section, 'inspector-skinning-physics-target',
-    'Target bend', -40, 40, 1, state.physicsTargetAngle,
-    value => setPhysicsTargetAngle(mesh, value));
   const frequency = addPhysicsRange(section,
     'inspector-skinning-physics-frequency', 'Frequency (Hz)',
     0.1, 10, 0.1, state.physicsFrequencyHz,
@@ -644,12 +639,12 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     0, 1, 0.05, state.physicsMotionStrength,
     value => setPhysicsMotionStrength(mesh, value));
   const linear = addPhysicsRange(section,
-    'inspector-skinning-physics-linear', 'Linear response',
+    'inspector-skinning-physics-linear', 'Translation response',
     0, 1, 0.05, state.physicsLinearMotionStrength,
     value => setPhysicsLinearMotionStrength(mesh, value));
   const continuous = addPhysicsRange(section,
     'inspector-skinning-physics-continuous-response',
-    'Continuous response', 0, 1, 0.05,
+    'Velocity response', 0, 1, 0.05,
     state.physicsContinuousLinearResponse,
     value => setPhysicsContinuousLinearResponse(mesh, value));
 
@@ -722,14 +717,6 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     summary.textContent = physicsSummary(latest);
     enableInput.checked = !!latest.physicsEnabled;
     enableInput.disabled = !latest.loaded;
-    axisButtons.querySelectorAll('button').forEach(button => {
-      button.disabled = !valid;
-      button.classList.toggle('selected',
-        button.textContent === latest.physicsAxis);
-    });
-    target.input.disabled = !valid;
-    target.input.value = latest.physicsTargetAngle;
-    target.valueNode.textContent = latest.physicsTargetAngle + '°';
     frequency.input.disabled = !valid;
     frequency.input.value = latest.physicsFrequencyHz;
     frequency.valueNode.textContent =
@@ -760,7 +747,7 @@ function buildSkinningPhysicsControls(parent, mesh, state) {
     gravityDirection.textContent = 'Down (-Y) → local ['
       + local.map(value => Number(value).toFixed(2)).join(', ') + ']';
     const gravityMax = Number(
-      latest.physicsGravityDiagnostics?.maxAbsTotalAcceleration) || 0;
+      latest.physicsGravityDiagnostics?.maxTotalAccelerationMagnitude) || 0;
     gravityDiagnostic.textContent = 'Max gravity acceleration '
       + (gravityMax * 180 / Math.PI).toFixed(1) + ' deg/s²';
     const diagnostics = getPhysicsConstraintDiagnostics(latest);
