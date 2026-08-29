@@ -327,8 +327,9 @@ export function buildMesh(name, data, materialProfile = null) {
   // applyTextureVariant). Immutable; setMeshTextureState updates the stable
   // binding state without rebuilding the material.
   mesh.userData.defaultTexKey = data.tex_key || null;
+  const authoredNormalMapKey = data.normal_map_key || null;
   mesh.userData.normalMapKey = usesPackedNormal(mat)
-    ? null : (data.normal_map_key || null);
+    ? null : authoredNormalMapKey;
   mesh.userData.normalDataKey = data.normal_data_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
   mesh.userData.materialMapKey = data.material_map_key || null;
@@ -343,7 +344,9 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.normalMapEnabled = data.normal_map_enabled !== false;
   mesh.userData.normalMapYSign = Number.isFinite(data.normal_map_y_sign)
     ? data.normal_map_y_sign : -1;
-  mesh.userData.defaultNormalMapKey = mesh.userData.normalMapKey;
+  // Keep the authored normal-map default even while a packed profile hides
+  // it. A later profile swap may need to restore that role in place.
+  mesh.userData.defaultNormalMapKey = authoredNormalMapKey;
   mesh.userData.defaultNormalDataKey = mesh.userData.normalDataKey;
   mesh.userData.defaultLightMapKey = mesh.userData.lightMapKey;
   mesh.userData.defaultMaterialMapKey = mesh.userData.materialMapKey;

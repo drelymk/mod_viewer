@@ -61,7 +61,7 @@ function semanticHandlers() {
 
 function modelHandlers() {
   return {
-    onMaterialKindChanged: reloadCurrentMod,
+    onMaterialKindChanged: () => refreshMeshSemanticsFlow(semanticHandlers()),
     onPresentChange: handlePresentChange,
     onReload: reloadCurrentMod,
     onToggleChange: handleToggleChange,

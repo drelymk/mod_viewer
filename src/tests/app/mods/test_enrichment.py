@@ -70,7 +70,8 @@ def test_full_and_semantic_loads_share_enrichment_stage(tmp_path):
                              meshes={"Body-1": {}}, textures={})), \
             patch.object(loader, "_assign_material_profiles", return_value={}):
         semantic_result = loader.load_mesh_semantics(context)
-        assert semantic_result["meshes"] == {"Body-1": {}}
+        assert semantic_result["meshes"] == {
+            "Body-1": {"material_kind_override": None}}
         assert enrich.call_count == 1
 
         full_result = loader.load_mod(context=context)

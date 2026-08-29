@@ -129,6 +129,12 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
                         mod_dir, draw.texture_default("emission_map"),
                         "emission_map")),
             }
+            source = group.get("source")
+            component = group.get("display_name") or group.get("name")
+            if source:
+                entry["source"] = source
+            if component:
+                entry["component"] = component
             normal_key = _semantic_texture_key(
                 mod_dir, draw.texture_default("normal_map"), normal_role)
             normal_key = (_semantic_asset_key(

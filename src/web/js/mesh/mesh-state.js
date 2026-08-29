@@ -7,14 +7,20 @@ import {
 } from '../scene/scene.js';
 import { dnfSatisfied, getControlValue } from '../editing/control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
-import { setMeshTextureState, updateGeometryNormals } from './mesh-factory.js';
+import {
+  setMeshTextureState, updateGeometryNormals,
+} from './mesh-factory.js';
+import {
+  replaceMeshMaterial, updateMeshMaterialMetadata,
+} from './mesh-material-state.js';
 import { clearTextureRunGroups, recomputeAllTextureRuns } from './mesh-texture-runs.js';
 import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
 import {
-  disposeSkinningExperiment, getSkinningState,
+  disposeSkinningExperiment, getSkinningBaseMaterial, getSkinningState,
+  withSkinningBaseMaterial,
 } from './weight-experiment.js';
 
 export const activeMeshes = [];
@@ -142,53 +148,145 @@ export function resetMeshVisibility() {
   requestRender();
 }
 
-/** Replace draw visibility and texture semantics without applying rendering. */
-export function updateMeshSemantics(semantics) {
+const SEMANTIC_SNAPSHOT_FIELDS = [
+  'conditions', 'sources', 'source', 'component',
+  'textureVariants', 'normalMapVariants', 'normalDataVariants',
+  'lightMapVariants', 'materialMapVariants', 'emissionMapVariants',
+  'defaultTexKey', 'defaultNormalMapKey', 'defaultNormalDataKey',
+  'defaultLightMapKey', 'defaultMaterialMapKey', 'defaultEmissionMapKey',
+  'assetEntry', 'materialKind', 'materialKindReliable',
+  'materialKindReason', 'materialKindOverride', 'materialProfileId',
+  'materialProfile', 'texKey', 'normalMapKey', 'normalDataKey',
+  'lightMapKey', 'materialMapKey', 'emissionMapKey',
+];
+
+function snapshotMeshSemantics(mesh) {
+  const values = {};
+  for (const field of SEMANTIC_SNAPSHOT_FIELDS) {
+    values[field] = mesh.userData[field];
+  }
+  return {mesh, values};
+}
+
+function restoreMeshSemantics(snapshot) {
+  Object.assign(snapshot.mesh.userData, snapshot.values);
+}
+
+/** Replace draw visibility, texture and material semantics without reloading. */
+export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
   const next = semantics || {};
   const semanticMeshes = activeMeshes.filter(
     mesh => mesh.userData.assetFill !== true);
   const keys = semanticMeshes.map(mesh => mesh.userData.semanticKey);
   if (keys.some(key => !next[key])
-      || Object.keys(next).length !== keys.length) return false;
-  semanticMeshes.forEach(mesh => {
+      || Object.keys(next).length !== keys.length) {
+    return {success: false, materialChangedMeshes: []};
+  }
+
+  const updates = semanticMeshes.map(mesh => {
     const semantic = next[mesh.userData.semanticKey];
-    mesh.userData.conditions = semantic.conditions || [];
-    mesh.userData.sources = semantic.sources || [];
-    const variants = [
-      ['textureVariants', 'texture_variants'],
-      ['normalMapVariants', 'normal_map_variants'],
-      ['normalDataVariants', 'normal_data_variants'],
-      ['lightMapVariants', 'light_map_variants'],
-      ['materialMapVariants', 'material_map_variants'],
-      ['emissionMapVariants', 'emission_map_variants'],
-    ];
-    for (const [target, source] of variants) {
-      mesh.userData[target] = semantic[source] || [];
+    if (!Object.hasOwn(semantic, 'material_profile_id')) {
+      return {mesh, semantic, material: null};
     }
-    const defaults = [
-      ['defaultTexKey', 'tex_key'],
-      ['defaultNormalMapKey', 'normal_map_key'],
-      ['defaultNormalDataKey', 'normal_data_key'],
-      ['defaultLightMapKey', 'light_map_key'],
-      ['defaultMaterialMapKey', 'material_map_key'],
-      ['defaultEmissionMapKey', 'emission_map_key'],
-    ];
-    for (const [target, source] of defaults) {
-      if (Object.hasOwn(semantic, source)) {
-        mesh.userData[target] = semantic[source] || null;
-      }
-    }
-    const assetEntry = mesh.userData.assetEntry || {};
-    for (const field of [
-      'asset_binding', 'texture_resolution', 'asset_slot_evidence',
-    ]) {
-      if (Object.hasOwn(semantic, field)) assetEntry[field] = semantic[field];
-      else delete assetEntry[field];
-    }
-    mesh.userData.assetEntry = assetEntry;
-    invalidateControlDependencies(mesh);
+    const profileId = semantic.material_profile_id || 'none';
+    const profile = materialProfiles?.[profileId] || null;
+    if (profileId !== 'none' && !profile) return null;
+    return {
+      mesh,
+      semantic,
+      material: {
+        profile,
+        changed: mesh.userData.materialProfileId !== profileId,
+      },
+    };
   });
-  return true;
+  if (updates.some(update => update === null)) {
+    return {success: false, materialChangedMeshes: []};
+  }
+
+  const snapshots = semanticMeshes.map(snapshotMeshSemantics);
+  const materialChangedMeshes = [];
+  const replacements = [];
+  try {
+    updates.forEach(({mesh, semantic, material}) => {
+      mesh.userData.conditions = semantic.conditions || [];
+      mesh.userData.sources = semantic.sources || [];
+      if (Object.hasOwn(semantic, 'source')) {
+        mesh.userData.source = semantic.source;
+      }
+      if (Object.hasOwn(semantic, 'component')) {
+        mesh.userData.component = semantic.component;
+      }
+      const variants = [
+        ['textureVariants', 'texture_variants'],
+        ['normalMapVariants', 'normal_map_variants'],
+        ['normalDataVariants', 'normal_data_variants'],
+        ['lightMapVariants', 'light_map_variants'],
+        ['materialMapVariants', 'material_map_variants'],
+        ['emissionMapVariants', 'emission_map_variants'],
+      ];
+      for (const [target, source] of variants) {
+        mesh.userData[target] = semantic[source] || [];
+      }
+      const defaults = [
+        ['defaultTexKey', 'tex_key'],
+        ['defaultNormalMapKey', 'normal_map_key'],
+        ['defaultNormalDataKey', 'normal_data_key'],
+        ['defaultLightMapKey', 'light_map_key'],
+        ['defaultMaterialMapKey', 'material_map_key'],
+        ['defaultEmissionMapKey', 'emission_map_key'],
+      ];
+      for (const [target, source] of defaults) {
+        if (Object.hasOwn(semantic, source)) {
+          mesh.userData[target] = semantic[source] || null;
+        }
+      }
+      const assetEntry = {...(mesh.userData.assetEntry || {})};
+      for (const field of [
+        'asset_binding', 'texture_resolution', 'asset_slot_evidence',
+      ]) {
+        if (Object.hasOwn(semantic, field)) assetEntry[field] = semantic[field];
+        else delete assetEntry[field];
+      }
+      mesh.userData.assetEntry = assetEntry;
+      if (material?.changed) {
+        const replacement = withSkinningBaseMaterial(mesh, () =>
+          replaceMeshMaterial(mesh, material.profile, semantic, {
+            render: false, disposeOld: false,
+          }));
+        replacements.push({
+          mesh, oldMaterial: replacement.oldMaterial,
+          newMaterial: replacement.material,
+        });
+        materialChangedMeshes.push(mesh);
+      } else if (material && updateMeshMaterialMetadata(
+          mesh, semantic, material.profile)) {
+        materialChangedMeshes.push(mesh);
+      }
+      invalidateControlDependencies(mesh);
+    });
+  } catch (error) {
+    console.error('Could not apply mesh semantic material update', error);
+    for (const {mesh, oldMaterial, newMaterial} of replacements.reverse()) {
+      const currentMaterial = getSkinningBaseMaterial(mesh);
+      const materialToDispose = currentMaterial === oldMaterial
+        ? newMaterial : currentMaterial;
+      if (materialToDispose && materialToDispose !== oldMaterial) {
+        disposeGameMaterial(materialToDispose);
+        materialToDispose.dispose();
+      }
+      withSkinningBaseMaterial(mesh, () => {
+        mesh.material = oldMaterial;
+      });
+    }
+    snapshots.forEach(restoreMeshSemantics);
+    return {success: false, materialChangedMeshes: []};
+  }
+  replacements.forEach(({oldMaterial}) => {
+    disposeGameMaterial(oldMaterial);
+    oldMaterial.dispose();
+  });
+  return {success: true, materialChangedMeshes};
 }
 
 /** Pin or clear one mesh's highlighted diffuse. Ordered component propagation
@@ -335,6 +433,7 @@ export function refreshMeshes(options) {
   const {
     changedVariables = new Set(),
     force = {},
+    additionalMeshes = [],
   } = options || {};
   const changed = changedVariables instanceof Set
     ? changedVariables : new Set(changedVariables || []);
@@ -347,6 +446,9 @@ export function refreshMeshes(options) {
   const textureDirty = texturesForced || normalMeshes.some(mesh =>
     intersects(dependenciesFor(mesh).textures, changed));
   const changedMeshes = new Set();
+  for (const mesh of additionalMeshes || []) {
+    if (activeMeshes.includes(mesh)) changedMeshes.add(mesh);
+  }
   let visibilityChanged = false;
   let texturesChanged = false;
   let shapesChanged = false;
@@ -391,7 +493,8 @@ export function refreshMeshes(options) {
 
   const changedList = [...changedMeshes];
   if (changedList.length) notifyMeshStateChanged(changedList);
-  if (visibilityChanged || texturesChanged || shapesChanged) requestRender();
+  if (visibilityChanged || texturesChanged || shapesChanged
+      || (additionalMeshes?.length && changedMeshes.size)) requestRender();
   return {
     visibilityChanged,
     texturesChanged,

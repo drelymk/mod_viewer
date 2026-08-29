@@ -130,7 +130,10 @@ export async function refreshMeshSemantics(handlers = {}) {
       await alertDialog('Could not refresh mesh render semantics:\n\n' + result.error);
       return false;
     }
-    if (!updateMeshSemantics(result.meshes)) {
+    const update = updateMeshSemantics(result.meshes, {
+      materialProfiles: result.material_profiles || {},
+    });
+    if (!update.success) {
       await alertDialog('Could not refresh mesh render semantics:\n\n' +
         'The staged draw set no longer matches the displayed model.');
       return false;
@@ -138,7 +141,10 @@ export async function refreshMeshSemantics(handlers = {}) {
     const assetResolution = result.asset_resolution || null;
     refreshMeshAssetDiagnostics(assetResolution);
     setAssetResolution(assetResolution);
-    refreshAll({force: {visibility: true, textures: true}});
+    refreshAll({
+      force: {visibility: true, textures: true},
+      additionalMeshes: update.materialChangedMeshes,
+    });
     return true;
   } finally {
     await finishSemanticRefresh(path, epoch, callbacks);

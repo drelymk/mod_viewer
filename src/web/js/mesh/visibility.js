@@ -46,7 +46,7 @@ export function syncCheckboxes() {
   syncView('mesh-panel');
 }
 
-export function refreshAll({ force = {} } = {}) {
+export function refreshAll({ force = {}, additionalMeshes = [] } = {}) {
   replayControlStateRules();
   const next = getControlState();
   const initialApplication = lastAppliedControlState === null;
@@ -55,6 +55,7 @@ export function refreshAll({ force = {} } = {}) {
     : changedControlVariables(lastAppliedControlState, next);
   const result = refreshMeshes({
     changedVariables,
+    additionalMeshes,
     force: initialApplication
       ? { visibility: true, textures: true, shapes: true }
       : force,
