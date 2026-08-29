@@ -253,21 +253,21 @@ class ModPreview:
                 self.authoritative_context(folder_path)
             parsed, draws = self._skinning_draws(context, overrides)
             active_mesh_keys = self._active_mesh_keys.get(folder_path)
+            eligible_draws = {
+                key: selected for key, selected in draws.items()
+                if selected[0].skinning_source is not None
+            }
             requested = (set(active_mesh_keys) if active_mesh_keys is not None
-                         else set(draws))
+                         else set(eligible_draws))
+            requested &= set(eligible_draws)
             meshes = {}
             pieces = []
             offset = 0
             buffers = BufferStore()
             convention = geometry_convention_for(parsed.game.game)
             for mesh_key in sorted(requested):
-                selected = draws.get(mesh_key)
+                selected = eligible_draws.get(mesh_key)
                 if selected is None:
-                    meshes[mesh_key] = {
-                        "status": "error",
-                        "code": "mesh_not_found",
-                        "error": "The selected mesh could not be found.",
-                    }
                     continue
                 draw, group = selected
                 try:

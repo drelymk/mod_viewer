@@ -52,6 +52,7 @@ const states = new WeakMap();
 const knownMeshes = new Set();
 let activeExperimentHelperMesh = null;
 let modelWeightGeneration = 0;
+let selectedWeightMaskBuildCount = 0;
 const modelWeightState = {
   loaded: false,
   loading: false,
@@ -231,6 +232,7 @@ function refreshModelWeightSummary() {
 
 function refreshSelectedWeightMask(mesh, state) {
   if (!state?.loaded) return null;
+  selectedWeightMaskBuildCount += 1;
   state.selectedWeightMask = buildSelectedWeightMask(
     state.indices, state.weights, state.influenceCount,
     modelWeightState.selectedBoneIds);
@@ -239,9 +241,13 @@ function refreshSelectedWeightMask(mesh, state) {
   return state.selectedWeightMask;
 }
 
+export function getSelectedWeightMaskBuildCount() {
+  return selectedWeightMaskBuildCount;
+}
+
 function selectedWeightPresent(state) {
   return !!state?.selectedWeightMask
-    && [...state.selectedWeightMask].some(value => value > 0);
+    && state.selectedWeightMask.some(value => value > 0);
 }
 
 function setModelWeightLoadError(error) {
@@ -591,7 +597,8 @@ function selectedPhysicsForest(mesh, state) {
   if (!selected.size) return null;
   const selectedNodes = (graph.nodes || []).filter(node =>
     selected.has(Number(node.boneId)));
-  const selectedEdges = (graph.relationships || []).filter(relationship =>
+  const candidateEdges = candidateRelationshipEdges(graph);
+  const selectedEdges = candidateEdges.filter(relationship =>
     selected.has(Number(relationship.boneA))
     && selected.has(Number(relationship.boneB)));
   const selectedTree = buildMaximumSpanningTree(selectedNodes, selectedEdges);
@@ -635,7 +642,8 @@ function selectedPhysicsForest(mesh, state) {
         const rightCenter = centers.get(right) || [0, 0, 0];
         return Math.hypot(...leftCenter) - Math.hypot(...rightCenter);
       })[0];
-      centers.set(rootId, averageSelectedCenter(state, componentIds));
+      centers.set(rootId, centers.get(attachmentBone)
+        || averageSelectedCenter(state, componentIds));
       attachmentEdge = {
         boneA: rootId,
         boneB: attachmentBone,
@@ -1807,7 +1815,6 @@ function updateModelWeightHeatmap() {
   knownMeshes.forEach(mesh => {
     const state = states.get(mesh);
     if (!state?.loaded) return;
-    refreshSelectedWeightMask(mesh, state);
     if (modelWeightState.heatmapEnabled && selectedWeightPresent(state)) {
       state.heatmapMode = 'bone';
       updateHeatmap(mesh, state);

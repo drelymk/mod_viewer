@@ -14,6 +14,7 @@ class SkinningSource:
     stride: int
     influence_count: int
     encoding: str
+    bone_id_offset: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +44,8 @@ def _format_supports_packed_weights(value):
             or "R8G8B8A8_UINT" in text)
 
 
-def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info):
+def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
+                            bone_id_offset=0):
     """Resolve one conservative Blend candidate from active ``vbN`` state.
 
     The caller supplies the resolver already used by draw-group assembly, so
@@ -51,6 +53,10 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info):
     Returns ``(source, error_code)``; an error code is retained on the draw as
     non-render metadata for the explicit preview operation.
     """
+    try:
+        bone_id_offset = max(0, int(bone_id_offset))
+    except (TypeError, ValueError):
+        bone_id_offset = 0
     candidates = {}
     unsupported = []
     for _slot, resource_name in sorted(
@@ -86,8 +92,10 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info):
             continue
         source = SkinningSource(
             file=filename, stride=stride,
-            influence_count=influence_count, encoding=encoding)
-        candidates[(source.file, source.stride, source.encoding)] = source
+            influence_count=influence_count, encoding=encoding,
+            bone_id_offset=bone_id_offset)
+        candidates[(source.file, source.stride, source.encoding,
+                    source.bone_id_offset)] = source
 
     if len(candidates) > 1:
         return None, "ambiguous_skinning_source"
@@ -181,8 +189,9 @@ def decode_skinning(source, raw_data, used_vertices):
         sums.append(weight_sum)
         if weight_sum <= 0:
             zero_weight += 1
-        for influence, (bone, weight) in enumerate(
+        for influence, (raw_bone, weight) in enumerate(
                 zip(decoded_indices, values)):
+            bone = int(raw_bone) + int(source.bone_id_offset)
             struct.pack_into("<I", index_bytes,
                              output_offset + influence * 4, bone)
             struct.pack_into("<f", weight_bytes,
@@ -200,6 +209,8 @@ def decode_skinning(source, raw_data, used_vertices):
         "invalid_weight_vertices": invalid,
         "truncated_vertices": truncated,
         "out_of_range_vertices": out_of_range,
+        "bone_id_namespace": "model",
+        "bone_id_offset": int(source.bone_id_offset),
     }
     return DecodedSkinning(
         vertex_count=count, influence_count=source.influence_count,

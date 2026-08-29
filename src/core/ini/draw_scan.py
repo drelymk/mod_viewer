@@ -22,6 +22,8 @@ from .sections import line_source
 _RUN_SKIP_PREFIXES = (
     "TextureOverride", "ShaderOverride", "Resource", "Present", "Key",
     "Constants")
+_WWMI_BONE_OFFSET_RE = re.compile(
+    r"^\$\\WWMIv1\\vg_offset\s*=\s*(\d+)\s*$", re.I)
 
 
 class _ScannedSections(dict):
@@ -276,6 +278,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             if info["src"] is None:
                 info["src"] = line_source(raw)
             low = line.lower()
+            bone_offset = _WWMI_BONE_OFFSET_RE.match(line)
+            if bone_offset:
+                info["_cur_skinning_bone_offset"] = int(
+                    bone_offset.group(1))
             match_elif = re.match(r"(?:else\s+if|elif)\s+(.*)$", line, re.I)
             if match_elif:
                 if cond_stack:
@@ -368,6 +374,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     auxiliary_maps=aux_snapshot(info),
                     texture_provenance=texture_provenance_snapshot(info),
                     geometry_match=geometry_match(info),
+                    skinning_bone_offset=info.get(
+                        "_cur_skinning_bone_offset", 0),
                     slot_textures=slot_snapshot(info),
                 ))
             semantic = re.match(
@@ -410,6 +418,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,
+            "_cur_skinning_bone_offset": 0,
         }
         scan(lines, info, [], {name}, name)
         info.pop("_cur_ib", None)

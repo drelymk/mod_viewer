@@ -1,5 +1,5 @@
-// Model-wide authored-weight controls. This panel intentionally has no mesh
-// selection dependency: the selected bone set and its heatmap span the model.
+// Model-wide authored-weight controls. The panel owns one stable DOM tree so
+// simulation and input events never interrupt an active picker or slider.
 
 import {
   clearSelectedBoneIds, disableModelPhysics, enableModelPhysics,
@@ -12,6 +12,7 @@ import {
 } from '../mesh/weight-experiment.js';
 
 let panel = null;
+let ui = null;
 let loadingPromise = null;
 
 const $ = id => document.getElementById(id);
@@ -22,6 +23,12 @@ function addText(parent, className, value) {
   node.textContent = value;
   parent.appendChild(node);
   return node;
+}
+
+function selectedLabel(ids) {
+  if (!ids.length) return 'Select bones';
+  if (ids.length <= 4) return ids.join(', ');
+  return `${ids.length} bones selected`;
 }
 
 function addRange(parent, className, label, min, max, step, value, onInput) {
@@ -40,15 +47,15 @@ function addRange(parent, className, label, min, max, step, value, onInput) {
   input.step = String(step);
   input.value = String(value);
   input.addEventListener('input', () => {
-    valueNode.textContent = input.value;
+    valueNode.textContent = Number(input.value).toFixed(2);
     onInput(input.value);
   });
   field.appendChild(input);
   parent.appendChild(field);
-  return input;
+  return {input, valueNode};
 }
 
-function buildBonePicker(content, state) {
+function buildBonePicker(content) {
   const section = document.createElement('section');
   section.className = 'weight-section';
   const title = document.createElement('div');
@@ -63,10 +70,6 @@ function buildBonePicker(content, state) {
   button.className = 'ui-button weight-bone-select';
   button.setAttribute('aria-haspopup', 'listbox');
   button.setAttribute('aria-expanded', 'false');
-  const selected = new Set(state.selectedBoneIds);
-  button.textContent = selected.size
-    ? `${selected.size} bone${selected.size === 1 ? '' : 's'} selected`
-    : 'Select bones';
   picker.appendChild(button);
 
   const popover = document.createElement('div');
@@ -74,43 +77,58 @@ function buildBonePicker(content, state) {
   popover.hidden = true;
   popover.setAttribute('role', 'listbox');
   popover.setAttribute('aria-label', 'Bone IDs');
-  state.availableBoneIds.forEach(id => {
-    const label = document.createElement('label');
-    label.className = 'weight-bone-option';
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.value = String(id);
-    checkbox.checked = selected.has(id);
-    checkbox.addEventListener('change', () => {
-      const next = [...popover.querySelectorAll('input:checked')]
-        .map(input => Number(input.value));
-      setSelectedBoneIds(next);
-    });
-    label.appendChild(checkbox);
-    addText(label, 'weight-bone-id', String(id));
-    popover.appendChild(label);
-  });
-  if (!state.availableBoneIds.length) {
-    addText(popover, 'weight-empty', 'No bone IDs available.');
-  }
+
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'weight-bone-search';
+  search.placeholder = 'Find bone ID…';
+  search.setAttribute('aria-label', 'Find bone ID');
+  popover.appendChild(search);
+
+  const filter = document.createElement('label');
+  filter.className = 'weight-checkbox weight-bone-filter';
+  const selectedOnly = document.createElement('input');
+  selectedOnly.type = 'checkbox';
+  selectedOnly.className = 'weight-selected-only';
+  filter.appendChild(selectedOnly);
+  addText(filter, 'inspector-label', 'Selected only');
+  popover.appendChild(filter);
+
+  const list = document.createElement('div');
+  list.className = 'weight-bone-list';
+  popover.appendChild(list);
   picker.appendChild(popover);
-  button.addEventListener('click', () => {
-    popover.hidden = !popover.hidden;
-    button.setAttribute('aria-expanded', String(!popover.hidden));
-  });
   section.appendChild(picker);
 
   const clear = document.createElement('button');
   clear.type = 'button';
   clear.className = 'ui-button weight-clear-selection';
   clear.textContent = 'Clear selection';
-  clear.disabled = !selected.size;
   clear.addEventListener('click', () => clearSelectedBoneIds());
   section.appendChild(clear);
   content.appendChild(section);
+
+  ui.picker = picker;
+  ui.boneButton = button;
+  ui.popover = popover;
+  ui.search = search;
+  ui.selectedOnly = selectedOnly;
+  ui.boneList = list;
+  ui.clearSelection = clear;
+  ui.optionById = new Map();
+  ui.optionKey = null;
+
+  button.addEventListener('click', () => {
+    const open = popover.hidden;
+    popover.hidden = !open;
+    button.setAttribute('aria-expanded', String(open));
+    if (open) search.focus();
+  });
+  search.addEventListener('input', syncBoneFilter);
+  selectedOnly.addEventListener('change', syncBoneFilter);
 }
 
-function buildPhysicsControls(content, weightState, physicsState) {
+function buildPhysicsControls(content) {
   const section = document.createElement('section');
   section.className = 'weight-section weight-physics';
   const title = document.createElement('div');
@@ -125,8 +143,6 @@ function buildPhysicsControls(content, weightState, physicsState) {
   const enable = document.createElement('input');
   enable.type = 'checkbox';
   enable.className = 'weight-physics-enable';
-  enable.checked = !!physicsState.enabled;
-  enable.disabled = !weightState.loaded || !weightState.selectedBoneIds.length;
   enable.addEventListener('change', () => {
     if (enable.checked) void enableModelPhysics();
     else disableModelPhysics();
@@ -135,20 +151,20 @@ function buildPhysicsControls(content, weightState, physicsState) {
   addText(enableLabel, 'inspector-label', 'Enable Character Physics');
   section.appendChild(enableLabel);
 
-  addRange(section, 'weight-physics-frequency', 'Frequency (Hz)',
-    0.1, 10, 0.1, physicsState.frequencyHz,
+  const ranges = {};
+  ranges.frequency = addRange(section, 'weight-physics-frequency',
+    'Frequency (Hz)', 0.1, 10, 0.1, 2,
     value => setPhysicsFrequency(null, value));
-  addRange(section, 'weight-physics-damping', 'Damping',
-    0, 2, 0.05, physicsState.dampingRatio,
-    value => setPhysicsDamping(null, value));
-  addRange(section, 'weight-physics-motion', 'Angular response',
-    0, 1, 0.05, physicsState.angularResponse,
+  ranges.damping = addRange(section, 'weight-physics-damping', 'Damping',
+    0, 2, 0.05, 0.35, value => setPhysicsDamping(null, value));
+  ranges.motion = addRange(section, 'weight-physics-motion',
+    'Angular response', 0, 1, 0.05, 0.35,
     value => setPhysicsMotionStrength(null, value));
-  addRange(section, 'weight-physics-linear', 'Translation response',
-    0, 1, 0.05, physicsState.translationResponse,
+  ranges.linear = addRange(section, 'weight-physics-linear',
+    'Translation response', 0, 1, 0.05, 0.35,
     value => setPhysicsLinearMotionStrength(null, value));
-  addRange(section, 'weight-physics-continuous-response', 'Velocity response',
-    0, 1, 0.05, physicsState.velocityResponse,
+  ranges.continuous = addRange(section, 'weight-physics-continuous-response',
+    'Velocity response', 0, 1, 0.05, 0.35,
     value => setPhysicsContinuousLinearResponse(null, value));
 
   const gravity = document.createElement('div');
@@ -158,15 +174,14 @@ function buildPhysicsControls(content, weightState, physicsState) {
   const gravityEnable = document.createElement('input');
   gravityEnable.type = 'checkbox';
   gravityEnable.className = 'weight-physics-gravity-enable';
-  gravityEnable.checked = !!physicsState.gravityEnabled;
   gravityEnable.addEventListener('change', () => {
     setPhysicsGravityEnabled(null, gravityEnable.checked);
   });
   gravityLabel.appendChild(gravityEnable);
   addText(gravityLabel, 'inspector-label', 'Gravity');
   gravity.appendChild(gravityLabel);
-  addRange(gravity, 'weight-physics-gravity-scale', 'Gravity scale',
-    0, 2, 0.1, physicsState.gravityScale,
+  ranges.gravity = addRange(gravity, 'weight-physics-gravity-scale',
+    'Gravity scale', 0, 2, 0.1, 1,
     value => setPhysicsGravityScale(null, value));
   section.appendChild(gravity);
 
@@ -177,15 +192,14 @@ function buildPhysicsControls(content, weightState, physicsState) {
   const constraintsEnable = document.createElement('input');
   constraintsEnable.type = 'checkbox';
   constraintsEnable.className = 'weight-physics-constraints-enable';
-  constraintsEnable.checked = !!physicsState.constraintsEnabled;
   constraintsEnable.addEventListener('change', () => {
     setPhysicsConstraintsEnabled(null, constraintsEnable.checked);
   });
   constraintsLabel.appendChild(constraintsEnable);
   addText(constraintsLabel, 'inspector-label', 'Joint limits');
   constraints.appendChild(constraintsLabel);
-  addRange(constraints, 'weight-physics-max-bend', 'Max bend',
-    0, 90, 1, physicsState.maxBendDegrees,
+  ranges.maxBend = addRange(constraints, 'weight-physics-max-bend',
+    'Max bend', 0, 90, 1, 45,
     value => setPhysicsMaxBendDegrees(null, value));
   section.appendChild(constraints);
 
@@ -195,52 +209,153 @@ function buildPhysicsControls(content, weightState, physicsState) {
   reset.type = 'button';
   reset.className = 'ui-button weight-physics-reset';
   reset.textContent = 'Reset motion';
-  reset.disabled = !physicsState.enabled;
   reset.addEventListener('click', () => resetModelPhysicsMotion());
   actions.appendChild(reset);
   section.appendChild(actions);
   content.appendChild(section);
+
+  ui.physicsEnable = enable;
+  ui.physicsGravityEnable = gravityEnable;
+  ui.physicsConstraintsEnable = constraintsEnable;
+  ui.physicsReset = reset;
+  ui.ranges = ranges;
 }
 
-function render() {
-  if (!panel) return;
-  const weightState = getModelWeightState();
-  const physicsState = getModelPhysicsState();
+function buildPanel() {
   panel.replaceChildren();
+  ui = {};
   const header = document.createElement('div');
   header.className = 'weight-header';
   const heading = document.createElement('h3');
   heading.textContent = 'Weight';
   header.appendChild(heading);
-  const status = addText(header, 'weight-status', '');
-  if (weightState.loading) status.textContent = 'Loading model weights…';
-  else if (weightState.error) status.textContent = weightState.error;
-  else if (weightState.noWeights || !weightState.availableBoneIds.length) {
-    status.textContent = weightState.loaded
-      ? 'No usable skin weights found.' : 'Open this tab to load model weights.';
-  } else {
-    status.textContent = `${weightState.availableBoneIds.length} bone IDs available`;
-  }
+  ui.status = addText(header, 'weight-status', '');
   panel.appendChild(header);
 
-  if (!weightState.loading) {
-    buildBonePicker(panel, weightState);
-    const display = document.createElement('section');
-    display.className = 'weight-section';
-    const heatmapLabel = document.createElement('label');
-    heatmapLabel.className = 'weight-checkbox';
-    const heatmap = document.createElement('input');
-    heatmap.type = 'checkbox';
-    heatmap.className = 'weight-heatmap-enable';
-    heatmap.checked = !!weightState.heatmapEnabled;
-    heatmap.disabled = !weightState.loaded;
-    heatmap.addEventListener('change', () => setModelWeightHeatmap(heatmap.checked));
-    heatmapLabel.appendChild(heatmap);
-    addText(heatmapLabel, 'inspector-label', 'Show Weight Heatmap');
-    display.appendChild(heatmapLabel);
-    panel.appendChild(display);
-    buildPhysicsControls(panel, weightState, physicsState);
+  const display = document.createElement('section');
+  display.className = 'weight-section';
+  const heatmapLabel = document.createElement('label');
+  heatmapLabel.className = 'weight-checkbox';
+  const heatmap = document.createElement('input');
+  heatmap.type = 'checkbox';
+  heatmap.className = 'weight-heatmap-enable';
+  heatmap.addEventListener('change', () => setModelWeightHeatmap(heatmap.checked));
+  heatmapLabel.appendChild(heatmap);
+  addText(heatmapLabel, 'inspector-label', 'Show Weight Heatmap');
+  display.appendChild(heatmapLabel);
+  panel.appendChild(display);
+  ui.heatmap = heatmap;
+
+  buildBonePicker(panel);
+  buildPhysicsControls(panel);
+}
+
+function syncBoneFilter() {
+  if (!ui?.optionById) return;
+  const query = ui.search.value.trim().toLowerCase();
+  const selected = new Set(getModelWeightState().selectedBoneIds);
+  ui.optionById.forEach((option, id) => {
+    option.hidden = (!!query && !String(id).includes(query))
+      || (ui.selectedOnly.checked && !selected.has(id));
+  });
+}
+
+function syncBoneOptions(state) {
+  const available = new Set(state.availableBoneIds);
+  const selected = new Set(state.selectedBoneIds);
+  const optionKey = state.availableBoneIds.join(',');
+  if (optionKey !== ui.optionKey) {
+    const scrollTop = ui.boneList.scrollTop;
+    ui.optionById.forEach((option, id) => {
+      if (!available.has(id)) {
+        option.remove();
+        ui.optionById.delete(id);
+      }
+    });
+    state.availableBoneIds.forEach(id => {
+      if (ui.optionById.has(id)) return;
+      const label = document.createElement('label');
+      label.className = 'weight-bone-option';
+      label.dataset.boneId = String(id);
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = String(id);
+      checkbox.addEventListener('change', event => {
+        const next = new Set(getModelWeightState().selectedBoneIds);
+        if (event.target.checked) next.add(id);
+        else next.delete(id);
+        setSelectedBoneIds([...next]);
+      });
+      label.appendChild(checkbox);
+      addText(label, 'weight-bone-id', String(id));
+      ui.optionById.set(id, label);
+    });
+    state.availableBoneIds.forEach(id =>
+      ui.boneList.appendChild(ui.optionById.get(id)));
+    ui.boneList.scrollTop = scrollTop;
+    ui.optionKey = optionKey;
   }
+  state.availableBoneIds.forEach(id => {
+    ui.optionById.get(id).querySelector('input').checked = selected.has(id);
+  });
+  if (!state.availableBoneIds.length) {
+    if (!ui.empty) {
+      ui.empty = addText(ui.boneList, 'weight-empty', 'No bone IDs available.');
+    }
+    ui.empty.hidden = false;
+  } else if (ui.empty) {
+    ui.empty.hidden = true;
+  }
+}
+
+function syncRange(range, value) {
+  if (!range) return;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return;
+  if (document.activeElement !== range.input) range.input.value = String(numeric);
+  range.valueNode.textContent = numeric.toFixed(2);
+}
+
+function syncPanel() {
+  if (!ui) return;
+  const weightState = getModelWeightState();
+  const physicsState = getModelPhysicsState();
+  if (weightState.loading) ui.status.textContent = 'Loading model weights…';
+  else if (weightState.error) ui.status.textContent = weightState.error;
+  else if (weightState.noWeights || !weightState.availableBoneIds.length) {
+    ui.status.textContent = weightState.loaded
+      ? 'No usable skin weights found.' : 'Open this tab to load model weights.';
+  } else {
+    ui.status.textContent = `${weightState.availableBoneIds.length} bone IDs available`;
+  }
+
+  syncBoneOptions(weightState);
+  ui.boneButton.textContent = selectedLabel(weightState.selectedBoneIds);
+  ui.boneButton.disabled = !weightState.loaded
+    && !weightState.availableBoneIds.length;
+  ui.clearSelection.disabled = !weightState.selectedBoneIds.length;
+  ui.heatmap.checked = !!weightState.heatmapEnabled;
+  ui.heatmap.disabled = !weightState.loaded;
+  ui.physicsEnable.checked = !!physicsState.enabled;
+  ui.physicsEnable.disabled = !weightState.loaded
+    || !weightState.selectedBoneIds.length;
+  ui.physicsGravityEnable.checked = !!physicsState.gravityEnabled;
+  ui.physicsConstraintsEnable.checked = !!physicsState.constraintsEnabled;
+  ui.physicsReset.disabled = !physicsState.enabled;
+  syncRange(ui.ranges.frequency, physicsState.frequencyHz);
+  syncRange(ui.ranges.damping, physicsState.dampingRatio);
+  syncRange(ui.ranges.motion, physicsState.angularResponse);
+  syncRange(ui.ranges.linear, physicsState.translationResponse);
+  syncRange(ui.ranges.continuous, physicsState.velocityResponse);
+  syncRange(ui.ranges.gravity, physicsState.gravityScale);
+  syncRange(ui.ranges.maxBend, physicsState.maxBendDegrees);
+  syncBoneFilter();
+}
+
+function closePopover() {
+  if (!ui?.popover || ui.popover.hidden) return;
+  ui.popover.hidden = true;
+  ui.boneButton.setAttribute('aria-expanded', 'false');
 }
 
 function loadOnDemand() {
@@ -254,11 +369,23 @@ function loadOnDemand() {
 export function initWeightPanel() {
   panel = $('weight-panel');
   if (!panel) return;
-  window.addEventListener('mod-viewer-model-weight-changed', render);
-  window.addEventListener('mod-viewer-model-physics-changed', render);
+  buildPanel();
+  window.addEventListener('mod-viewer-model-weight-changed', syncPanel);
+  window.addEventListener('mod-viewer-model-physics-changed', syncPanel);
   window.addEventListener('mod-viewer-right-dock-tab-changed', event => {
-    if (event.detail?.tab !== 'weight' || !event.detail?.open) return;
-    void loadOnDemand();
+    const inWeight = event.detail?.tab === 'weight' && event.detail?.open;
+    if (!inWeight) closePopover();
+    if (inWeight) void loadOnDemand();
   });
-  render();
+  document.addEventListener('pointerdown', event => {
+    if (ui?.popover?.hidden || ui.picker.contains(event.target)) return;
+    closePopover();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !ui?.popover?.hidden) {
+      closePopover();
+      ui.boneButton.focus();
+    }
+  });
+  syncPanel();
 }

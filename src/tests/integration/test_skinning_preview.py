@@ -1,12 +1,14 @@
 """On-demand skin preview integration coverage."""
 
 import struct
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from app.bridge.mod_preview import ModPreview
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from core.geometry.skinning import SkinningSource
 from core.ini.draw_groups import build_draw_groups
 from core.ini.sections import extract_resources, merge_sections
 
@@ -109,11 +111,7 @@ def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
     geometry = GeometryBlob()
-    rendered = build_mesh_result(groups, str(tmp_path), geometry=geometry)
-    rendered.meshes["MissingBlend"] = {
-        "skinning_available": True,
-        "pos": {"length": 48},
-    }
+    build_mesh_result(groups, str(tmp_path), geometry=geometry)
     published = []
 
     def publish(blob, *, replace=True):
@@ -129,20 +127,29 @@ def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
         lambda _path: (str(tmp_path), {}, {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.publish_geometry", publish)
+    parsed = SimpleNamespace(game=SimpleNamespace(game="gimi"), groups=groups)
+    draw = groups[0]["draws"][0]
+    broken = replace(draw, skinning_source=SkinningSource(
+        "missing.blend", 32, 4, "gimi_f32_u32_4"))
+    static = replace(draw, skinning_source=None)
     monkeypatch.setattr(
-        "app.bridge.mod_preview.analyze_mod_inis",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            game=SimpleNamespace(game="gimi"), groups=groups),
+        preview, "_skinning_draws",
+        lambda *_args, **_kwargs: (parsed, {
+            "BodyBlend-1": (draw, groups[0]),
+            "BrokenBlend-1": (broken, groups[0]),
+            "Static-1": (static, groups[0]),
+        }),
     )
     preview._active_mesh_keys[str(tmp_path)] = {
-        "BodyBlend-1", "MissingBlend",
+        "BodyBlend-1", "BrokenBlend-1", "Static-1",
     }
 
     result = preview.get_model_skinning_preview(str(tmp_path))
 
     assert result["status"] == "partial"
     assert result["meshes"]["BodyBlend-1"]["status"] == "ok"
-    assert result["meshes"]["MissingBlend"]["status"] == "error"
+    assert result["meshes"]["BrokenBlend-1"]["status"] == "error"
+    assert "Static-1" not in result["meshes"]
     assert result["data"]["url"] == "/geometry/model-skin-test"
     assert result["data"]["length"] == len(published[0][0])
     assert published[0][1] is False

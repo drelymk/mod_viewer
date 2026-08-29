@@ -46,6 +46,7 @@ class AuthoredDrawCall:
     auxiliary_maps: dict = field(default_factory=dict)
     texture_provenance: dict = field(default_factory=dict)
     geometry_match: GeometryMatch | None = None
+    skinning_bone_offset: int = 0
     slot_textures: list = field(default_factory=list)
 
 
@@ -122,6 +123,7 @@ class DrawCall(MutableMapping):
     # Experimental, non-render metadata.  This is resolved from the active
     # vertex-resource bindings but is intentionally excluded from geometry and
     # material identity.
+    skinning_bone_offset: int = 0
     skinning_source: SkinningSource | None = None
     skinning_error: str | None = None
 
@@ -139,6 +141,7 @@ class DrawCall(MutableMapping):
         "label", "conditions", "sources", "occurrence", "geometry_match",
         "slot_textures", "asset_binding", "texture_provenance",
         "asset_slot_evidence", "texture_hashes",
+        "skinning_bone_offset",
         "skinning_source", "skinning_error",
     })
     _RENDER_IDENTITY_FIELDS: ClassVar[tuple[str, ...]] = (

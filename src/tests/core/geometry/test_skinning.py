@@ -59,6 +59,24 @@ def test_decode_rigid_uses_one_implicit_weight():
     assert decoded.bone_ids == (27,)
 
 
+def test_decode_normalizes_component_offsets_into_model_namespace():
+    raw = bytes([1, 0, 0, 0, 255, 0, 0, 0])
+    first = decode_skinning(
+        SkinningSource("body.blend", 8, 4, "wwmi_u8_4", 0), raw, [0])
+    second = decode_skinning(
+        SkinningSource("face.blend", 8, 4, "wwmi_u8_4", 10), raw, [0])
+    repeated = decode_skinning(
+        SkinningSource("shared.blend", 8, 4, "wwmi_u8_4", 0), raw, [0])
+
+    assert unpack_values(first.indices, "4I")[0] == 1
+    assert unpack_values(second.indices, "4I")[0] == 11
+    assert unpack_values(repeated.indices, "4I")[0] == 1
+    assert first.bone_ids == (1,)
+    assert second.bone_ids == (11,)
+    assert first.diagnostics["bone_id_namespace"] == "model"
+    assert second.diagnostics["bone_id_offset"] == 10
+
+
 def test_decode_malformed_records_are_safe_and_diagnostic():
     source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4")
     raw = struct.pack("<4f4I", math.nan, .3, .1, 0., 7, 8, 9, 0)
@@ -98,6 +116,19 @@ def test_resolver_accepts_known_blend_layouts(stride, fmt, encoding):
     assert source == SkinningSource(
         "blend.buf", stride,
         8 if stride == 16 else (4 if stride in (8, 32) else 1), encoding)
+
+
+def test_resolver_carries_the_authored_model_bone_offset():
+    resources = {"ResourceBlendBuffer": {
+        "filename": "blend.buf", "stride": 8,
+        "format": "DXGI_FORMAT_R8_UINT",
+    }}
+
+    source, error = resolve_skinning_source(
+        {1: "ResourceBlendBuffer"}, resources.get, bone_id_offset=12)
+
+    assert error is None
+    assert source.bone_id_offset == 12
 
 
 def test_resolver_does_not_infer_blend_from_stride_alone():

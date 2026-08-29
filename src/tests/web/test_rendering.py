@@ -1380,6 +1380,9 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         page.locator("#weight-tab").click()
         page.wait_for_function("window.__weightPreviewCalls === 1")
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
+        mask_count_before = page.evaluate("""async () =>
+          (await import('./js/mesh/weight-experiment.js'))
+            .getSelectedWeightMaskBuildCount()""")
         assert page.locator("#inspector-panel .weight-section").count() == 0
         assert page.locator(".weight-bone-select").inner_text() == "Select bones"
 
@@ -1387,6 +1390,10 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         page.locator('.weight-bone-option input[value="1"]').check()
         page.wait_for_function("""() => JSON.stringify(
           window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
+        mask_count_after = page.evaluate("""async () =>
+          (await import('./js/mesh/weight-experiment.js'))
+            .getSelectedWeightMaskBuildCount()""")
+        assert mask_count_after - mask_count_before == 1
         mask = page.evaluate("""async () => {
           const mesh = window.modViewer.activeMeshes[0];
           const {getSkinningState} = await import('./js/mesh/weight-experiment.js');
@@ -1398,9 +1405,21 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         assert page.locator("#weight-tab").get_attribute("aria-selected") == "true"
         page.locator(".weight-heatmap-enable").check()
         assert page.evaluate("window.modViewer.getModelWeightState().heatmapEnabled")
+        mask_count_before = page.evaluate("""async () =>
+          (await import('./js/mesh/weight-experiment.js'))
+            .getSelectedWeightMaskBuildCount()""")
         page.locator("#weight-tab").click()
         page.locator("#weight-tab").click()
         page.wait_for_function("window.modViewer.getModelWeightState().heatmapEnabled")
+        page.locator(".weight-bone-select").click()
+        page.locator('.weight-bone-option input[value="2"]').check()
+        page.wait_for_function("""() => JSON.stringify(
+          window.modViewer.getModelWeightState().selectedBoneIds) === '[1,2]'""")
+        mask_count_after = page.evaluate("""async () =>
+          (await import('./js/mesh/weight-experiment.js'))
+            .getSelectedWeightMaskBuildCount()""")
+        assert mask_count_after - mask_count_before == 1
+        page.locator(".weight-bone-select").click()
         assert page.evaluate("window.__weightPreviewCalls") == 1
         page.locator(".weight-physics-enable").check()
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
@@ -1411,7 +1430,7 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
             dynamic: state.physicsForest?.components?.[0]?.dynamicNodeIds || []};
         }""")
         assert physics["enabled"]
-        assert physics["dynamic"] == [1]
+        assert physics["dynamic"] == [1, 2]
         page.locator(".weight-clear-selection").click()
         page.wait_for_function("!window.modViewer.getModelPhysicsState().enabled")
         assert page.evaluate("window.__weightPreviewCalls") == 1
@@ -1420,6 +1439,134 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         page.evaluate("""() => {
           if (window.__weightPreviewCalls) window.__weightPreviewCalls = 0;
         }""")
+        context.close()
+
+
+def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightStable": _payload("WeightStable")})
+    try:
+        _open(page, "WeightStable")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          const key = window.modViewer.activeMeshes[0].userData.semanticKey;
+          window.pywebview.api.get_model_skinning_preview = async () => ({
+            status: 'ok', format_version: 1, data: {url, length: 48},
+            meshes: {[key]: {
+              status: 'ok', vertex_count: 3, influence_count: 2,
+              bone_ids: [0, 1, 2], encoding: 'test',
+              data: {
+                indices: {offset: 0, length: 24, type: 'u32'},
+                weights: {offset: 24, length: 24, type: 'f32'},
+              }, diagnostics: {},
+            }},
+          });
+        }""")
+        page.locator("#weight-tab").click()
+        page.wait_for_function("window.modViewer.getModelWeightState().loaded")
+        page.locator(".weight-bone-select").click()
+        page.locator(".weight-bone-search").fill("1")
+        page.evaluate("window.__weightPicker = document.querySelector('.weight-bone-popover')")
+        page.locator('.weight-bone-option input[value="1"]').check()
+        page.wait_for_function("""() => JSON.stringify(
+          window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
+        assert page.evaluate("window.__weightPicker === document.querySelector('.weight-bone-popover')")
+        assert page.locator(".weight-bone-select").get_attribute("aria-expanded") == "true"
+        assert page.locator(".weight-bone-search").input_value() == "1"
+
+        page.locator(".weight-bone-search").fill("")
+        page.locator('.weight-bone-option input[value="2"]').check()
+        page.wait_for_function("""() => JSON.stringify(
+          window.modViewer.getModelWeightState().selectedBoneIds) === '[1,2]'""")
+        assert page.evaluate("window.__weightPicker === document.querySelector('.weight-bone-popover')")
+        page.locator(".weight-selected-only").check()
+        page.locator(".weight-bone-search").fill("2")
+        page.locator('.weight-bone-option input[value="2"]').uncheck()
+        page.wait_for_function("""() => JSON.stringify(
+          window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
+        assert page.locator(".weight-bone-search").input_value() == "2"
+        assert page.locator(".weight-selected-only").is_checked()
+        assert page.locator(".weight-bone-select").get_attribute("aria-expanded") == "true"
+        page.locator(".weight-bone-select").click()
+
+        slider = page.locator(".weight-physics-frequency")
+        page.evaluate("window.__weightSlider = document.querySelector('.weight-physics-frequency')")
+        page.evaluate("""() => {
+          const input = document.querySelector('.weight-physics-frequency');
+          input.value = '3.5';
+          input.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
+        page.wait_for_function("window.modViewer.getModelPhysicsState().frequencyHz === 3.5")
+        assert page.evaluate("window.__weightSlider === document.querySelector('.weight-physics-frequency')")
+        assert slider.input_value() == "3.5"
+
+        page.locator(".weight-physics-enable").check()
+        page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
+        page.evaluate("""() => {
+          for (let i = 0; i < 20; i += 1) {
+            window.dispatchEvent(new CustomEvent('mod-viewer-model-physics-changed'));
+          }
+        }""")
+        assert page.evaluate("window.__weightSlider === document.querySelector('.weight-physics-frequency')")
+        page.locator(".weight-bone-select").click()
+        assert page.locator(".weight-bone-select").get_attribute("aria-expanded") == "true"
+        page.locator("#inspector-tab").click()
+        assert page.locator(".weight-bone-popover").is_hidden()
+        page.locator("#weight-tab").click()
+        assert page.evaluate("window.__weightPicker === document.querySelector('.weight-bone-popover')")
+    finally:
+        context.close()
+
+
+def test_selected_weight_topology_filters_weak_edges_and_pivots_synthetic_roots(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightTopology": _payload("WeightTopology")})
+    try:
+        result = page.evaluate("""async () => {
+          const weight = await import('./js/mesh/weight-experiment.js');
+          const weak = {
+            boneA: 7, boneB: 8, sharedVertexCount: 1,
+            containment: .001, jaccard: .001, normalizedDistance: 0,
+          };
+          const candidateEdges = weight.candidateRelationshipEdges({
+            relationships: [weak],
+          });
+          const tree = weight.buildMaximumSpanningTree(
+            [{boneId: 7}, {boneId: 8}], candidateEdges);
+          const forest = {
+            components: [{
+              rootId: -1, nodeIds: [-1, 7, 8],
+              childrenById: {'-1': [7], '7': [8]},
+            }],
+          };
+          const centers = new Map([
+            [-1, [2, 0, 0]], [7, [2, 1, 0]], [8, [2, 2, 0]],
+          ]);
+          const transforms = weight.buildForestTransformsFromLocalRotations(
+            forest, centers, {
+              rotationByBoneId: new Map([[7, [0, 0, Math.PI / 2]]]),
+            });
+          const THREE = await import('three');
+          const point = new THREE.Vector3(2, 1, 0).applyMatrix4(
+            transforms.get(7));
+          return {
+            candidateCount: candidateEdges.length,
+            componentCount: tree.components.length,
+            pivotedPoint: point.toArray(),
+          };
+        }""")
+        assert result == {
+            "candidateCount": 0,
+            "componentCount": 2,
+            "pivotedPoint": pytest.approx([1, 0, 0]),
+        }
+    finally:
         context.close()
 
 
