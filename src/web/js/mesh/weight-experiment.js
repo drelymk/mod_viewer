@@ -143,6 +143,31 @@ export function getSkinningState(mesh) {
   return states.get(mesh) || null;
 }
 
+/** Return the game material owned by a loaded skinning experiment. */
+export function getSkinningBaseMaterial(mesh) {
+  const state = states.get(mesh);
+  return state ? (state.originalMaterial || mesh.material)
+    : mesh?.material;
+}
+
+/** Run a material operation against the game material, not the heatmap. */
+export function withSkinningBaseMaterial(mesh, operation) {
+  const state = states.get(mesh);
+  if (!state) return operation();
+
+  const heatmapActive = state.heatmapMode === 'bone'
+    && state.debugMaterial && mesh.material === state.debugMaterial;
+  const displayedMaterial = mesh.material;
+  if (heatmapActive) mesh.material = state.originalMaterial || mesh.material;
+  try {
+    const result = operation();
+    state.originalMaterial = mesh.material;
+    return result;
+  } finally {
+    if (heatmapActive) mesh.material = displayedMaterial;
+  }
+}
+
 function clearMotionDiagnostics(state) {
   state.lastRootAngularDelta = 0;
   state.lastProjectedAngularDelta = 0;

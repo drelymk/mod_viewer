@@ -17,7 +17,8 @@ import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
 import {
-  disposeSkinningExperiment, getSkinningState,
+  disposeSkinningExperiment, getSkinningBaseMaterial, getSkinningState,
+  withSkinningBaseMaterial,
 } from './weight-experiment.js';
 
 export const activeMeshes = [];
@@ -145,6 +146,30 @@ export function resetMeshVisibility() {
   requestRender();
 }
 
+const SEMANTIC_SNAPSHOT_FIELDS = [
+  'conditions', 'sources', 'source', 'component',
+  'textureVariants', 'normalMapVariants', 'normalDataVariants',
+  'lightMapVariants', 'materialMapVariants', 'emissionMapVariants',
+  'defaultTexKey', 'defaultNormalMapKey', 'defaultNormalDataKey',
+  'defaultLightMapKey', 'defaultMaterialMapKey', 'defaultEmissionMapKey',
+  'assetEntry', 'materialKind', 'materialKindReliable',
+  'materialKindReason', 'materialKindOverride', 'materialProfileId',
+  'materialProfile', 'texKey', 'normalMapKey', 'normalDataKey',
+  'lightMapKey', 'materialMapKey', 'emissionMapKey',
+];
+
+function snapshotMeshSemantics(mesh) {
+  const values = {};
+  for (const field of SEMANTIC_SNAPSHOT_FIELDS) {
+    values[field] = mesh.userData[field];
+  }
+  return {mesh, values};
+}
+
+function restoreMeshSemantics(snapshot) {
+  Object.assign(snapshot.mesh.userData, snapshot.values);
+}
+
 /** Replace draw visibility, texture and material semantics without reloading. */
 export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
   const next = semantics || {};
@@ -177,7 +202,9 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
     return {success: false, materialChangedMeshes: []};
   }
 
+  const snapshots = semanticMeshes.map(snapshotMeshSemantics);
   const materialChangedMeshes = [];
+  const replacements = [];
   try {
     updates.forEach(({mesh, semantic, material}) => {
       mesh.userData.conditions = semantic.conditions || [];
@@ -212,7 +239,7 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
           mesh.userData[target] = semantic[source] || null;
         }
       }
-      const assetEntry = mesh.userData.assetEntry || {};
+      const assetEntry = {...(mesh.userData.assetEntry || {})};
       for (const field of [
         'asset_binding', 'texture_resolution', 'asset_slot_evidence',
       ]) {
@@ -221,7 +248,14 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
       }
       mesh.userData.assetEntry = assetEntry;
       if (material?.changed) {
-        replaceMeshMaterial(mesh, material.profile, semantic, {render: false});
+        const replacement = withSkinningBaseMaterial(mesh, () =>
+          replaceMeshMaterial(mesh, material.profile, semantic, {
+            render: false, disposeOld: false,
+          }));
+        replacements.push({
+          mesh, oldMaterial: replacement.oldMaterial,
+          newMaterial: replacement.material,
+        });
         materialChangedMeshes.push(mesh);
       } else if (material && updateMeshMaterialMetadata(
           mesh, semantic, material.profile)) {
@@ -231,8 +265,25 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
     });
   } catch (error) {
     console.error('Could not apply mesh semantic material update', error);
-    return {success: false, materialChangedMeshes};
+    for (const {mesh, oldMaterial, newMaterial} of replacements.reverse()) {
+      const currentMaterial = getSkinningBaseMaterial(mesh);
+      const materialToDispose = currentMaterial === oldMaterial
+        ? newMaterial : currentMaterial;
+      if (materialToDispose && materialToDispose !== oldMaterial) {
+        disposeGameMaterial(materialToDispose);
+        materialToDispose.dispose();
+      }
+      withSkinningBaseMaterial(mesh, () => {
+        mesh.material = oldMaterial;
+      });
+    }
+    snapshots.forEach(restoreMeshSemantics);
+    return {success: false, materialChangedMeshes: []};
   }
+  replacements.forEach(({oldMaterial}) => {
+    disposeGameMaterial(oldMaterial);
+    oldMaterial.dispose();
+  });
   return {success: true, materialChangedMeshes};
 }
 

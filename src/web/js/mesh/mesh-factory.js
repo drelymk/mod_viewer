@@ -315,7 +315,7 @@ export function updateMeshMaterialMetadata(mesh, metadata, profile) {
 
 /** Replace one mesh material without replacing its mesh or geometry. */
 export function replaceMeshMaterial(
-    mesh, profile, metadata = {}, { render = true } = {}) {
+    mesh, profile, metadata = {}, { render = true, disposeOld = true } = {}) {
   const oldMaterial = mesh.material;
   const viewerState = captureGameMaterialViewerState(oldMaterial);
   const previousMetadata = Object.fromEntries(
@@ -358,10 +358,12 @@ export function replaceMeshMaterial(
     nextMaterial.dispose();
     throw error;
   }
-  disposeGameMaterial(oldMaterial);
-  oldMaterial.dispose();
+  if (disposeOld) {
+    disposeGameMaterial(oldMaterial);
+    oldMaterial.dispose();
+  }
   if (render) requestRender();
-  return true;
+  return disposeOld ? true : {material: nextMaterial, oldMaterial};
 }
 
 /** Colour for meshes with no texture, guessed from the component name. */

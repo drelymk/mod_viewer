@@ -349,6 +349,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
       const canPersist = !readOnlySource && !!modPath;
       const setMaterialKind = async kind => {
         if (!canPersist || !componentIdentity || materialKindInFlight) return false;
+        const previousKind = materialKind;
         materialKindInFlight = true;
         try {
           const result = await saveComponentMaterialKind(
@@ -357,9 +358,14 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
             throw new Error(result?.error || 'material kind was not saved');
           }
           materialKind = kind === 'auto' ? null : kind;
-          await options.onMaterialKindChanged?.();
+          const refreshed = await options.onMaterialKindChanged?.();
+          if (refreshed === false) {
+            materialKind = previousKind;
+            return false;
+          }
           return true;
         } catch (error) {
+          materialKind = previousKind;
           console.error(`Could not save material kind for ${groupName}`, error);
           return false;
         } finally {
