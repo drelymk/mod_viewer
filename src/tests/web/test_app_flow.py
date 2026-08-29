@@ -413,7 +413,7 @@ def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
     payload = _payload("Semantic")
     mesh_name = next(iter(payload["meshes"]))
     identity = {
-        "version": 2, "key": "mesh:[2,\"Semantic.ini\",\"Body\",null,[3,0,0]]",
+        "version": 3, "key": "mesh:[3,\"Semantic.ini\",\"Body\",null,[3,0,0],[null,null,null,null,null,null,null]]",
         "source": "Semantic.ini", "component": "Body", "geometry": None,
         "draw": {"count": 3, "start": 0, "base": 0},
     }
@@ -481,8 +481,8 @@ def test_frontend_uses_backend_mesh_identity_for_metadata_key(
     payload = _payload("Identity")
     mesh_name, entry = next(iter(payload["meshes"].items()))
     entry["identity"] = {
-        "version": 2,
-        "key": "mesh:[2,\"Identity.ini\",\"Body\",null,[3,0,0]]",
+        "version": 3,
+        "key": "mesh:[3,\"Identity.ini\",\"Body\",null,[3,0,0],[null,null,null,null,null,null,null]]",
         "source": "Identity.ini", "component": "Body", "geometry": None,
         "draw": {"count": 3, "start": 0, "base": 0},
     }
@@ -511,13 +511,13 @@ def test_semantic_refresh_rejects_identity_mismatch_without_mutation(
     payload = _payload("Mismatch")
     mesh_name, entry = next(iter(payload["meshes"].items()))
     identity_a = {
-        "version": 2, "key": "mesh:[2,\"Mismatch.ini\",\"Body\",null,[3,0,0]]",
+        "version": 3, "key": "mesh:[3,\"Mismatch.ini\",\"Body\",null,[3,0,0],[null,null,null,null,null,null,null]]",
         "source": "Mismatch.ini", "component": "Body", "geometry": None,
         "draw": {"count": 3, "start": 0, "base": 0},
     }
     identity_b = {
         **identity_a,
-        "key": "mesh:[2,\"Mismatch.ini\",\"Body\",null,[4,0,0]]",
+        "key": "mesh:[3,\"Mismatch.ini\",\"Body\",null,[4,0,0],[null,null,null,null,null,null,null]]",
         "draw": {"count": 4, "start": 0, "base": 0},
     }
     entry["identity"] = identity_a

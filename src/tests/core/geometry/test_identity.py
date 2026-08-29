@@ -9,6 +9,7 @@ from core.geometry.draw_call import DrawCall
 from core.geometry.identity import (
     GeometryMatch, make_mesh_identity, normalize_identity_source,
 )
+from core.geometry.vertex_attributes import VertexAttributeSource
 
 
 @pytest.mark.parametrize("value, expected", [
@@ -39,10 +40,10 @@ def test_mesh_identity_is_deterministic_and_projects_all_authored_fields():
         _draw(), source=".\\Root.ini", component="Body:Main")
 
     assert identity.key == (
-        'mesh:[2,"Root.ini","Body:Main",["1234ABCD",8,120],'
-        '[120,4,-2]]')
+        'mesh:[3,"Root.ini","Body:Main",["1234ABCD",8,120],'
+        '[120,4,-2],[null,null,null,null,null,null,null]]')
     assert identity.to_dict() == {
-        "version": 2,
+        "version": 3,
         "key": identity.key,
         "source": "Root.ini",
         "component": "Body:Main",
@@ -52,6 +53,12 @@ def test_mesh_identity_is_deterministic_and_projects_all_authored_fields():
             "index_count": 120,
         },
         "draw": {"count": 120, "start": 4, "base": -2},
+        "geometry_state": {
+            "ib_file": None, "index_size": None,
+            "position_file": None, "position_stride": None,
+            "texcoord_file": None, "texcoord_stride": None,
+            "normal_source": None,
+        },
     }
     assert make_mesh_identity(
         _draw(), source=".\\Root.ini", component="Body:Main").key == identity.key
@@ -73,6 +80,36 @@ def test_mesh_identity_key_changes_for_structural_fields(field, value):
     assert replace(identity, **{field: value}).key != identity.key
 
 
+@pytest.mark.parametrize("field, value", [
+    ("ib_file", "other.ib"),
+    ("index_size", 2),
+    ("position_file", "other-position.buf"),
+    ("position_stride", 40),
+    ("texcoord_file", "other-texcoord.buf"),
+    ("texcoord_stride", 16),
+    ("normal_source", VertexAttributeSource(
+        "other-normals.buf", 8, 4, "snorm8x3")),
+])
+def test_mesh_identity_key_changes_for_geometry_resources(field, value):
+    first = make_mesh_identity(
+        _draw(), source="Root.ini", component="Body")
+    changed_draw = _draw(**{field: value})
+
+    assert make_mesh_identity(
+        changed_draw, source="Root.ini", component="Body").key != first.key
+
+
+def test_mesh_identity_normalizes_geometry_resource_paths():
+    first = make_mesh_identity(
+        _draw(position_file="variants\\Body.buf"),
+        source="Root.ini", component="Body")
+    second = make_mesh_identity(
+        _draw(position_file="variants/Body.buf"),
+        source="Root.ini", component="Body")
+
+    assert first.key == second.key
+
+
 def test_mesh_identity_keeps_asset_binding_and_render_state_out_of_key():
     draw = _draw()
     first = make_mesh_identity(draw, source="Root.ini", component="Body")
@@ -89,10 +126,17 @@ def test_mesh_identity_without_geometry_evidence_is_still_present():
         _draw(geometry_match=None), source=None, component=None)
 
     assert identity.to_dict() == {
-        "version": 2,
-        "key": 'mesh:[2,"","",null,[120,4,-2]]',
+        "version": 3,
+        "key": 'mesh:[3,"","",null,[120,4,-2],'
+                '[null,null,null,null,null,null,null]]',
         "source": None,
         "component": None,
         "geometry": None,
         "draw": {"count": 120, "start": 4, "base": -2},
+        "geometry_state": {
+            "ib_file": None, "index_size": None,
+            "position_file": None, "position_stride": None,
+            "texcoord_file": None, "texcoord_stride": None,
+            "normal_source": None,
+        },
     }

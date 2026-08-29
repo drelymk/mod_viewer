@@ -8,6 +8,7 @@ from app.assets.resolver import AssetComponentBinding
 from core.geometry.draw_call import DrawCall
 from core.geometry.identity import GeometryMatch
 from core.geometry.mesh_builder import build_mesh_semantics
+from core.geometry.semantics import deduplicate_draws
 
 
 def test_mesh_semantics_does_not_read_buffers_or_publish_textures(tmp_path):
@@ -36,14 +37,21 @@ def test_mesh_semantics_preserves_group_source_and_component_identity(tmp_path):
     assert result["Body-1"]["source"] == "Root.ini"
     assert result["Body-1"]["component"] == "Body Display"
     assert result["Body-1"]["identity"] == {
-        "version": 2,
-        "key": 'mesh:[2,"Root.ini","Body Display",'
-                '["1234abcd",0,3],[3,0,0]]',
+        "version": 3,
+        "key": 'mesh:[3,"Root.ini","Body Display",'
+                '["1234abcd",0,3],[3,0,0],'
+                '[null,null,null,null,null,null,null]]',
         "source": "Root.ini",
         "component": "Body Display",
         "geometry": {"hash": "1234abcd", "first_index": 0,
                      "index_count": 3},
         "draw": {"count": 3, "start": 0, "base": 0},
+        "geometry_state": {
+            "ib_file": None, "index_size": None,
+            "position_file": None, "position_stride": None,
+            "texcoord_file": None, "texcoord_stride": None,
+            "normal_source": None,
+        },
     }
 
 
@@ -84,5 +92,34 @@ def test_mesh_identity_survives_uncertain_asset_resolution(tmp_path, status):
     }], str(tmp_path))["Body-1"]
 
     assert result["identity"]["key"] == (
-        'mesh:[2,"Root.ini","Body",["1234abcd",0,3],[3,0,0]]')
+        'mesh:[3,"Root.ini","Body",["1234abcd",0,3],[3,0,0],'
+        '[null,null,null,null,null,null,null]]')
     assert result["asset_binding"]["status"] == status
+
+
+def test_distinct_geometry_resources_keep_distinct_mesh_identities(tmp_path):
+    geometry_match = GeometryMatch("1234abcd", 0, 3)
+    draws = [
+        DrawCall(
+            label="Body-1", count=3, start=0, base=0,
+            ib_file="body.ib", index_size=4,
+            position_file="body-a.buf", position_stride=12,
+            texcoord_file="body-uv.buf", texcoord_stride=8,
+            geometry_match=geometry_match),
+        DrawCall(
+            label="Body-2", count=3, start=0, base=0,
+            ib_file="body.ib", index_size=4,
+            position_file="body-b.buf", position_stride=12,
+            texcoord_file="body-uv.buf", texcoord_stride=8,
+            geometry_match=geometry_match),
+    ]
+    group = [{
+        "name": "Body", "display_name": "Body", "source": "Root.ini",
+        "draws": draws,
+    }]
+
+    assert len(deduplicate_draws(group[0])) == 2
+    result = build_mesh_semantics(group, str(tmp_path))
+
+    assert len(result) == 2
+    assert len({entry["identity"]["key"] for entry in result.values()}) == 2

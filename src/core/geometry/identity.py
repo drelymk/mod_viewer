@@ -1,8 +1,10 @@
 """Shared, conservative geometry and displayed-mesh identity values."""
 
-from dataclasses import dataclass
 import json
 import re
+from dataclasses import dataclass
+
+from .vertex_attributes import VertexAttributeSource
 
 
 _GEOMETRY_HASH = re.compile(r"^[0-9a-fA-F]{8}$")
@@ -28,6 +30,71 @@ def normalize_identity_source(value):
 
 
 @dataclass(frozen=True, slots=True)
+class MeshGeometryIdentity:
+    """Effective geometry resources that distinguish rendered draws."""
+
+    ib_file: str | None
+    index_size: int | None
+    position_file: str | None
+    position_stride: int | None
+    texcoord_file: str | None
+    texcoord_stride: int | None
+    normal_source: VertexAttributeSource | None = None
+
+    def key_value(self):
+        normal = None
+        if self.normal_source is not None:
+            normal = [
+                normalize_identity_source(self.normal_source.file),
+                self.normal_source.stride,
+                self.normal_source.offset,
+                self.normal_source.encoding,
+            ]
+        return [
+            normalize_identity_source(self.ib_file),
+            self.index_size,
+            normalize_identity_source(self.position_file),
+            self.position_stride,
+            normalize_identity_source(self.texcoord_file),
+            self.texcoord_stride,
+            normal,
+        ]
+
+    def to_dict(self):
+        """Return the diagnostic projection of the effective resources."""
+        normal = None
+        if self.normal_source is not None:
+            normal = {
+                "file": normalize_identity_source(self.normal_source.file),
+                "stride": self.normal_source.stride,
+                "offset": self.normal_source.offset,
+                "encoding": self.normal_source.encoding,
+            }
+        return {
+            "ib_file": normalize_identity_source(self.ib_file),
+            "index_size": self.index_size,
+            "position_file": normalize_identity_source(self.position_file),
+            "position_stride": self.position_stride,
+            "texcoord_file": normalize_identity_source(self.texcoord_file),
+            "texcoord_stride": self.texcoord_stride,
+            "normal_source": normal,
+        }
+
+
+def make_mesh_geometry_identity(draw):
+    """Project only effective geometry state from a resolved draw."""
+    return MeshGeometryIdentity(
+        ib_file=draw.ib_file,
+        index_size=draw.index_size,
+        position_file=draw.position_file,
+        position_stride=draw.position_stride,
+        texcoord_file=draw.texcoord_file,
+        texcoord_stride=draw.texcoord_stride,
+        normal_source=draw.normal_source,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class MeshIdentity:
     """Stable identity for one displayed, authored mod draw."""
 
@@ -37,10 +104,11 @@ class MeshIdentity:
     count: int | None
     start: int
     base: int
+    geometry_state: MeshGeometryIdentity | None = None
 
     @property
     def version(self):
-        return 2
+        return 3
 
     @property
     def key(self):
@@ -57,6 +125,8 @@ class MeshIdentity:
             self.component or "",
             geometry,
             [self.count, self.start, self.base],
+            (self.geometry_state.key_value()
+             if self.geometry_state is not None else None),
         ]
         return "mesh:" + json.dumps(
             value, ensure_ascii=False, separators=(",", ":"))
@@ -81,6 +151,8 @@ class MeshIdentity:
                 "start": self.start,
                 "base": self.base,
             },
+            "geometry_state": (self.geometry_state.to_dict()
+                                if self.geometry_state is not None else None),
         }
 
 
@@ -93,6 +165,7 @@ def make_mesh_identity(draw, source=None, component=None):
         count=draw.count,
         start=draw.start,
         base=draw.base,
+        geometry_state=make_mesh_geometry_identity(draw),
     )
 
 

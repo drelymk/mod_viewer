@@ -88,7 +88,67 @@ format = R32_UINT
             name: entry["identity"]
             for name, entry in semantic["meshes"].items()
         }
+        assert {entry["identity"]["source"] for entry in meshes} == {
+            "root.ini", "nested/nested.ini",
+        }
         assert len({entry["identity"]["key"] for entry in meshes}) == 2
+
+
+def test_mesh_identity_uses_relative_ini_paths_not_ui_source_labels(tmp_path):
+    ini = """[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = R32_UINT
+[ResourceBodyPosition]
+filename = body.buf
+stride = 12
+[ResourceBodyTexcoord]
+filename = body-uv.buf
+stride = 8
+"""
+
+    def write_ini(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(ini, encoding="utf-8")
+
+    root_ini = tmp_path / "Root.ini"
+    write_ini(root_ini)
+    single = mod_analysis.analyze_mod_inis([str(root_ini)], str(tmp_path))
+    single_result = build_mesh_semantics(single.groups, str(tmp_path))
+    single_identity = next(iter(single_result.values()))["identity"]
+
+    variants = [tmp_path / "variants" / name for name in ("A.ini", "B.ini")]
+    for path in variants:
+        write_ini(path)
+    sibling_analysis = mod_analysis.analyze_mod_inis(
+        [str(path) for path in variants], str(tmp_path))
+    sibling_result = build_mesh_semantics(
+        sibling_analysis.groups, str(tmp_path))
+    sibling_identities = [
+        entry["identity"] for entry in sibling_result.values()]
+
+    assert {identity["source"] for identity in sibling_identities} == {
+        "variants/A.ini", "variants/B.ini",
+    }
+    assert len({identity["key"] for identity in sibling_identities}) == 2
+
+    sibling_ini = tmp_path / "Sibling.ini"
+    write_ini(sibling_ini)
+    with_sibling = mod_analysis.analyze_mod_inis(
+        [str(root_ini), str(sibling_ini)], str(tmp_path))
+    with_sibling_result = build_mesh_semantics(
+        with_sibling.groups, str(tmp_path))
+    root_identity = next(
+        entry["identity"] for entry in with_sibling_result.values()
+        if entry["identity"]["source"] == "Root.ini")
+
+    assert single_identity["source"] == "Root.ini"
+    assert root_identity == single_identity
 
 
 def test_source_qualified_identity_avoids_legacy_metadata_collision(tmp_path):
@@ -293,9 +353,11 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
 
 def test_metadata_texture_migration_prefers_identity_key_and_rekeys_legacy(
         tmp_path):
-    identity_key = 'mesh:[2,"Root.ini","Body",null,[3,0,0]]'
+    identity_key = (
+        'mesh:[3,"Root.ini","Body",null,[3,0,0],'
+        '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {"Body-1": {
-        "identity": {"version": 2, "key": identity_key},
+        "identity": {"version": 3, "key": identity_key},
         "component": "Body", "drawindexed": [3, 0, 0],
         "texture_options": [],
     }}, "textures": {}}
@@ -318,9 +380,11 @@ def test_metadata_texture_migration_prefers_identity_key_and_rekeys_legacy(
 
 def test_metadata_texture_migration_reads_legacy_key_under_new_identity(
         tmp_path):
-    identity_key = 'mesh:[2,"Root.ini","Body",null,[3,0,0]]'
+    identity_key = (
+        'mesh:[3,"Root.ini","Body",null,[3,0,0],'
+        '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {"Body-1": {
-        "identity": {"version": 2, "key": identity_key},
+        "identity": {"version": 3, "key": identity_key},
         "component": "Body", "drawindexed": [3, 0, 0],
         "texture_options": [],
     }}, "textures": {}}
@@ -336,10 +400,38 @@ def test_metadata_texture_migration_reads_legacy_key_under_new_identity(
     assert restored[identity_key]["label"] == "Legacy"
 
 
+def test_metadata_texture_migration_skips_ambiguous_legacy_key(tmp_path):
+    identity_a = (
+        'mesh:[3,"A.ini","Body",null,[3,0,0],'
+        '[null,null,null,null,null,null,null]]')
+    identity_b = (
+        'mesh:[3,"B.ini","Body",null,[3,0,0],'
+        '[null,null,null,null,null,null,null]]')
+    payload = {"meshes": {
+        "Body-1": {"identity": {"version": 3, "key": identity_a},
+                    "component": "Body", "drawindexed": [3, 0, 0],
+                    "texture_options": []},
+        "Body_2-1": {"identity": {"version": 3, "key": identity_b},
+                      "component": "Body", "drawindexed": [3, 0, 0],
+                      "texture_options": []},
+    }, "textures": {}}
+    data = {"textures": {"Body::3,0,0": {
+        "tex_key": "legacy.png", "label": "Legacy", "manual": True,
+    }}}
+
+    restored = metadata.hydrate_textures(str(tmp_path), payload, data)
+
+    assert restored == {}
+    assert "saved_texture_override" not in payload["meshes"]["Body-1"]
+    assert "saved_texture_override" not in payload["meshes"]["Body_2-1"]
+
+
 def test_metadata_mesh_name_migration_prefers_new_key_and_rekeys_legacy():
-    identity_key = 'mesh:[2,"Root.ini","Body",null,[3,0,0]]'
+    identity_key = (
+        'mesh:[3,"Root.ini","Body",null,[3,0,0],'
+        '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {"Body-1": {
-        "identity": {"version": 2, "key": identity_key},
+        "identity": {"version": 3, "key": identity_key},
         "component": "Body", "drawindexed": [3, 0, 0],
     }}}
     data = {"mesh_names": {
@@ -353,9 +445,11 @@ def test_metadata_mesh_name_migration_prefers_new_key_and_rekeys_legacy():
 
 
 def test_metadata_mesh_name_migration_reads_legacy_key_under_new_identity():
-    identity_key = 'mesh:[2,"Root.ini","Body",null,[3,0,0]]'
+    identity_key = (
+        'mesh:[3,"Root.ini","Body",null,[3,0,0],'
+        '[null,null,null,null,null,null,null]]')
     payload = {"meshes": {"Body-1": {
-        "identity": {"version": 2, "key": identity_key},
+        "identity": {"version": 3, "key": identity_key},
         "component": "Body", "drawindexed": [3, 0, 0],
     }}}
     data = {"mesh_names": {"Body::3,0,0": "Legacy name"}}
@@ -363,6 +457,24 @@ def test_metadata_mesh_name_migration_reads_legacy_key_under_new_identity():
     assert metadata.hydrate_mesh_names(payload, data) == {
         identity_key: "Legacy name",
     }
+
+
+def test_metadata_mesh_name_migration_skips_ambiguous_legacy_key():
+    identity_a = (
+        'mesh:[3,"A.ini","Body",null,[3,0,0],'
+        '[null,null,null,null,null,null,null]]')
+    identity_b = (
+        'mesh:[3,"B.ini","Body",null,[3,0,0],'
+        '[null,null,null,null,null,null,null]]')
+    payload = {"meshes": {
+        "Body-1": {"identity": {"version": 3, "key": identity_a},
+                    "component": "Body", "drawindexed": [3, 0, 0]},
+        "Body_2-1": {"identity": {"version": 3, "key": identity_b},
+                      "component": "Body", "drawindexed": [3, 0, 0]},
+    }}
+    data = {"mesh_names": {"Body::3,0,0": "Legacy name"}}
+
+    assert metadata.hydrate_mesh_names(payload, data) == {}
 
 
 def test_mesh_semantics_include_conditional_texture_roles_without_geometry(
