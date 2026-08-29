@@ -401,6 +401,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   const semantic = {};
                   for (const key of [
                     'conditions', 'sources', 'source', 'component',
+                    'identity',
                     'tex_key', 'texture_variants', 'normal_map_key',
                     'normal_map_variants', 'normal_data_key',
                     'normal_data_variants', 'light_map_key',

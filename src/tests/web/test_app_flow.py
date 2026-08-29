@@ -412,8 +412,14 @@ def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
         edge_browser, frontend_url):
     payload = _payload("Semantic")
     mesh_name = next(iter(payload["meshes"]))
+    identity = {
+        "version": 5, "key": "mesh:[5,\"Semantic.ini\",\"Body\",null,null,[3,0,0],[null,null,null,null,null,null,null]]",
+        "source": "Semantic.ini", "component": "Body", "geometry": None,
+        "draw": {"count": 3, "start": 0, "base": 0},
+    }
+    payload["meshes"][mesh_name]["identity"] = identity
     payload["meshSemantics"] = {
-        mesh_name: {"conditions": [[{
+        mesh_name: {"identity": identity, "conditions": [[{
             "var": "toggle", "value": "1", "negate": False,
         }]], "sources": payload["meshes"][mesh_name]["sources"],
         "tex_key": "diffuse::Semantic-one.png",
@@ -466,6 +472,88 @@ def test_control_and_mesh_semantic_refreshes_preserve_existing_meshes(
         }
         assert page.evaluate("window.__fakeApi.calls.loadMod.length") == 1
         assert page.evaluate("window.__fakeApi.calls.meshSemantics") == ["Semantic"]
+    finally:
+        context.close()
+
+
+def test_frontend_uses_backend_mesh_identity_for_metadata_key(
+        edge_browser, frontend_url):
+    payload = _payload("Identity")
+    mesh_name, entry = next(iter(payload["meshes"].items()))
+    entry["identity"] = {
+        "version": 5,
+        "key": "mesh:[5,\"Identity.ini\",\"Body\",null,null,[3,0,0],[null,null,null,null,null,null,null]]",
+        "source": "Identity.ini", "component": "Body", "geometry": None,
+        "draw": {"count": 3, "start": 0, "base": 0},
+    }
+    context, page = _page(edge_browser, frontend_url, {"Identity": payload})
+    try:
+        _open(page, "Identity")
+        page.locator(".draw-item").wait_for()
+        assert page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return {
+            key: mesh.userData.metadataKey,
+            identity: mesh.userData.identity,
+          };
+        }""") == {
+            "key": entry["identity"]["key"],
+            "identity": entry["identity"],
+        }
+        assert page.evaluate("window.modViewer.activeMeshes[0].userData.metadataKey") != (
+            "Body::3,0,0")
+    finally:
+        context.close()
+
+
+def test_semantic_refresh_rejects_identity_mismatch_without_mutation(
+        edge_browser, frontend_url):
+    payload = _payload("Mismatch")
+    mesh_name, entry = next(iter(payload["meshes"].items()))
+    identity_a = {
+        "version": 5, "key": "mesh:[5,\"Mismatch.ini\",\"Body\",null,null,[3,0,0],[null,null,null,null,null,null,null]]",
+        "source": "Mismatch.ini", "component": "Body", "geometry": None,
+        "draw": {"count": 3, "start": 0, "base": 0},
+    }
+    identity_b = {
+        **identity_a,
+        "key": "mesh:[5,\"Mismatch.ini\",\"Body\",null,null,[4,0,0],[null,null,null,null,null,null,null]]",
+        "draw": {"count": 4, "start": 0, "base": 0},
+    }
+    entry["identity"] = identity_a
+    payload["meshSemantics"] = {mesh_name: {"identity": identity_b}}
+    context, page = _page(edge_browser, frontend_url, {"Mismatch": payload})
+    try:
+        _open(page, "Mismatch")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          window.__identityBefore = {
+            mesh,
+            geometry: mesh.geometry,
+            material: mesh.material,
+            identity: mesh.userData.identity,
+          };
+          window.__identityRefresh = window.modViewer.refreshMeshSemantics();
+        }""")
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
+        assert page.evaluate(
+            "async () => await window.__identityRefresh") is False
+        assert page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return {
+            sameMesh: mesh === window.__identityBefore.mesh,
+            sameGeometry: mesh.geometry === window.__identityBefore.geometry,
+            sameMaterial: mesh.material === window.__identityBefore.material,
+            identity: mesh.userData.identity,
+          };
+        }""") == {
+            "sameMesh": True,
+            "sameGeometry": True,
+            "sameMaterial": True,
+            "identity": identity_a,
+        }
     finally:
         context.close()
 

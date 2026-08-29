@@ -18,6 +18,7 @@ from .texture_bindings import (
     TextureRegistry, apply_draw_texture_bindings, build_texture_options,
 )
 from .transport import GeometryBlob
+from .identity import make_mesh_identity
 from ..resource_paths import safe_resource_path
 
 
@@ -68,6 +69,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         index_size = group.get("index_size", INDEX_SIZE)
         component = group.get("display_name") or group.get("name")
         source = group.get("source")
+        identity_source = group.get("identity_source") or source
 
         if not all(path and os.path.exists(path)
                    for path in (pos_path, tc_path, ib_path)):
@@ -134,6 +136,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 entry["source"] = source
             if component:
                 entry["component"] = component
+            entry["identity"] = make_mesh_identity(
+                draw, source=identity_source, component=component).to_dict()
             binding = draw.asset_binding
             if binding is not None and hasattr(binding, "to_dict"):
                 entry["asset_binding"] = binding.to_dict()

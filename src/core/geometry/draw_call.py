@@ -12,7 +12,7 @@ from collections.abc import Iterator, Mapping, MutableMapping
 from dataclasses import dataclass, field, fields
 from typing import ClassVar
 
-from .identity import GeometryMatch
+from .identity import DrawOccurrence, GeometryMatch
 from .vertex_attributes import VertexAttributeSource
 from .skinning import SkinningSource
 
@@ -36,6 +36,7 @@ class AuthoredDrawCall:
     base: int
     conditions: list = field(default_factory=list)
     source: dict | None = None
+    occurrence: DrawOccurrence | tuple | None = None
     index_resource: str | None = None
     diffuse_variants: list = field(default_factory=list)
     diffuse_history: list = field(default_factory=list)
@@ -88,6 +89,9 @@ class DrawCall(MutableMapping):
     base: int = 0
     conditions: list = field(default_factory=list)
     sources: list = field(default_factory=list)
+    # Authored provenance used to distinguish separate displayed rows, not
+    # rendered output and therefore not part of render_identity().
+    occurrence: DrawOccurrence | tuple | None = None
 
     ib_file: str | None = None
     index_size: int | None = None
@@ -132,7 +136,7 @@ class DrawCall(MutableMapping):
         "emission_map": "emission_map",
     }
     _NON_RENDER_FIELDS: ClassVar[frozenset[str]] = frozenset({
-        "label", "conditions", "sources", "geometry_match",
+        "label", "conditions", "sources", "occurrence", "geometry_match",
         "slot_textures", "asset_binding", "texture_provenance",
         "asset_slot_evidence", "texture_hashes",
         "skinning_source", "skinning_error",

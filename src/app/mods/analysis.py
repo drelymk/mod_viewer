@@ -114,6 +114,11 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
             secs, resources=resources, var_prefix=var_prefix, source=source,
             seen=seen_labels)
         ini_groups = analysis.draw_groups
+        identity_source = _ini_rel(ini_path, folder_path)
+        for group in ini_groups:
+            # ``source`` is intentionally a compact UI grouping label. Keep
+            # the complete relative INI path separately for mesh identity.
+            group["identity_source"] = identity_source
         shape_sliders = analysis.shapes
         state_rules.extend(analysis.state_rules)
         game_evidence.extend(analysis.game_evidence)
