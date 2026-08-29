@@ -1471,6 +1471,14 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
         page.locator(".weight-bone-select").click()
         page.locator(".weight-bone-search").fill("1")
+        assert page.evaluate("""() => {
+          const button = document.querySelector('.weight-bone-select');
+          const option = document.querySelector('.weight-bone-option');
+          const filter = document.querySelector('.weight-bone-filter');
+          const search = document.querySelector('.weight-bone-search');
+          return [button, option, filter, search].map(
+            node => getComputedStyle(node).fontSize);
+        }""") == ["12px", "12px", "12px", "12px"]
         page.evaluate("window.__weightPicker = document.querySelector('.weight-bone-popover')")
         page.locator('.weight-bone-option input[value="1"]').check()
         page.wait_for_function("""() => JSON.stringify(
