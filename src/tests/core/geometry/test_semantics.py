@@ -17,3 +17,16 @@ def test_mesh_semantics_does_not_read_buffers_or_publish_textures(tmp_path):
         result = build_mesh_semantics(groups, str(tmp_path))
 
     assert result["Body-1"]["tex_key"] == "diffuse::diffuse.dds"
+
+
+def test_mesh_semantics_preserves_group_source_and_component_identity(tmp_path):
+    draw = DrawCall(label="Body-1")
+    result = build_mesh_semantics([{
+        "name": "Body",
+        "display_name": "Body Display",
+        "source": "Root.ini",
+        "draws": [draw],
+    }], str(tmp_path))
+
+    assert result["Body-1"]["source"] == "Root.ini"
+    assert result["Body-1"]["component"] == "Body Display"

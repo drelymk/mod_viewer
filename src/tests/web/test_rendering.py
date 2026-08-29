@@ -3628,6 +3628,195 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
     finally:
         context.close()
 
+def test_material_kind_refresh_hot_swaps_profile_without_reloading_model(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx")
+    mesh_name, entry = next(iter(payload["meshes"].items()))
+    entry["source"] = "Packed.ini"
+    initial_semantic = copy.deepcopy(entry)
+    initial_semantic.update({
+        "source": "Packed.ini",
+        "component": entry["component"],
+        "material_kind": "body",
+        "material_kind_reliable": False,
+        "material_kind_reason": "automatic detection",
+        "material_kind_override": None,
+        "material_profile_id": "wuwa:rabbitfx",
+    })
+    explicit_semantic = copy.deepcopy(initial_semantic)
+    explicit_semantic.update({
+        "material_kind": "body",
+        "material_kind_reliable": True,
+        "material_kind_reason": "viewer material-kind override",
+        "material_kind_override": "body",
+        "material_profile_id": "wuwa:rabbitfx:body",
+    })
+    payload["meshSemantics"] = {mesh_name: initial_semantic}
+    payload["metadata"]["material_profiles"]["wuwa:rabbitfx:body"] = \
+        material_profile_for("wuwa", "rabbitfx", "body").to_metadata()
+
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
+        page.locator("#inspector-tab").click()
+        page.locator(".group-hdr .group-name").first.click()
+        page.locator(".inspector-material-kind-control").wait_for()
+        page.locator(".draw-item").first.click()
+        page.evaluate("""async () => {
+          const {setManualTexOverride} =
+            await import('./js/mesh/mesh-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setManualTexOverride(mesh, 'diffuse::Packed-two.png', {
+            notify: false,
+          });
+          document.querySelector('#wire-btn').click();
+          document.querySelector('#shading-btn').click();
+          document.querySelector('#glossy-btn').click();
+          document.querySelector('#toon-btn').click();
+          window.modViewer.setMaterialDebugMode('normal-data-b');
+          const game = mesh.material.userData.gameMaterial;
+          window.__materialHotSwapBefore = {
+            mesh,
+            geometry: mesh.geometry,
+            position: mesh.position.toArray(),
+            quaternion: mesh.quaternion.toArray(),
+            positionAttribute: mesh.geometry.getAttribute('position'),
+            shapeTargets: mesh.userData.shapeTargets,
+            material: mesh.material,
+            diffuseKey: mesh.userData.texKey,
+            normalDataKey: mesh.userData.normalDataKey,
+            manualTexOverride: mesh.userData.manualTexOverride,
+            normalDataBound: game.bindings.normal_data.enabledNode.value,
+            debugMode: window.modViewer.getMaterialState(0).debugMode,
+            selected: game.selectionEnabledNode.value,
+          };
+        }""")
+        page.evaluate("""data => {
+          const response = window.__fakeApi.responses.Packed;
+          window.__fakeApi.calls.materialKind = [];
+          window.pywebview.api.save_component_material_kind =
+            async (path, source, component, kind) => {
+              window.__fakeApi.calls.materialKind.push(
+                [path, source, component, kind]);
+              response.meshSemantics = {
+                [data.mesh]: kind === 'body'
+                  ? data.explicit : data.automatic,
+              };
+              return {saved: true};
+            };
+        }""", {
+            "mesh": mesh_name,
+            "automatic": initial_semantic,
+            "explicit": explicit_semantic,
+        })
+
+        page.locator(".inspector-material-kind-control").select_option("body")
+        page.wait_for_function(
+            "window.__fakeApi.calls.meshSemantics.length === 1")
+        switched = page.evaluate("""() => {
+          const before = window.__materialHotSwapBefore;
+          const mesh = window.modViewer.activeMeshes[0];
+          const game = mesh.material.userData.gameMaterial;
+          return {
+            sameMesh: mesh === before.mesh,
+            sameGeometry: mesh.geometry === before.geometry,
+            samePositionAttribute:
+              mesh.geometry.getAttribute('position') === before.positionAttribute,
+            sameShapeTargets: mesh.userData.shapeTargets === before.shapeTargets,
+            position: mesh.position.toArray(),
+            quaternion: mesh.quaternion.toArray(),
+            newMaterial: mesh.material !== before.material,
+            profileId: mesh.userData.materialProfileId,
+            materialKindOverride: mesh.userData.materialKindOverride,
+            manualTexOverride: mesh.userData.manualTexOverride,
+            diffuseKey: mesh.userData.texKey,
+            normalDataKey: mesh.userData.normalDataKey,
+            normalDataBound: game.bindings.normal_data.enabledNode.value,
+            normalSource: game.normalSource,
+            debugMode: window.modViewer.getMaterialState(0).debugMode,
+            selected: game.selectionEnabledNode.value,
+            wireframe: mesh.material.wireframe,
+            flatShading: mesh.material.flatShading,
+            roughness: mesh.material.roughness,
+            toon: game.toonEnabledNode.value,
+            rim: game.rimEnabledNode.value,
+          };
+        }""")
+        assert switched["sameMesh"]
+        assert switched["sameGeometry"]
+        assert switched["samePositionAttribute"]
+        assert switched["sameShapeTargets"]
+        assert switched["position"] == pytest.approx(
+            page.evaluate("window.__materialHotSwapBefore.position"))
+        assert switched["quaternion"] == pytest.approx(
+            page.evaluate("window.__materialHotSwapBefore.quaternion"))
+        assert switched["newMaterial"]
+        assert switched["profileId"] == "wuwa:rabbitfx:body"
+        assert switched["materialKindOverride"] == "body"
+        assert switched["manualTexOverride"] == "diffuse::Packed-two.png"
+        assert switched["diffuseKey"] == "diffuse::Packed-two.png"
+        assert switched["normalDataKey"] == initial_semantic["normal_data_key"]
+        assert switched["normalDataBound"]
+        assert switched["normalSource"] == "normal_data"
+        assert switched["debugMode"] == "normal-data-b"
+        assert switched["selected"]
+        assert switched["wireframe"]
+        assert switched["flatShading"]
+        assert switched["roughness"] == pytest.approx(0.2)
+        assert switched["toon"]
+        assert not switched["rim"]
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Packed"]
+        assert page.evaluate("window.__fakeApi.calls.materialKind") == [[
+            "Packed", "Packed.ini", "Body Packed", "body"]]
+
+        page.locator(".inspector-material-kind-control").select_option("auto")
+        page.wait_for_function(
+            "window.__fakeApi.calls.meshSemantics.length === 2")
+        automatic = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const game = mesh.material.userData.gameMaterial;
+          return {
+            sameMesh: mesh === window.__materialHotSwapBefore.mesh,
+            sameGeometry: mesh.geometry ===
+              window.__materialHotSwapBefore.geometry,
+            profileId: mesh.userData.materialProfileId,
+            materialKindOverride: mesh.userData.materialKindOverride,
+            manualTexOverride: mesh.userData.manualTexOverride,
+            debugMode: window.modViewer.getMaterialState(0).debugMode,
+            selected: game.selectionEnabledNode.value,
+            normalDataBound: game.bindings.normal_data.enabledNode.value,
+            wireframe: mesh.material.wireframe,
+            flatShading: mesh.material.flatShading,
+            roughness: mesh.material.roughness,
+            toon: game.toonEnabledNode.value,
+          };
+        }""")
+        assert automatic == {
+            "sameMesh": True,
+            "sameGeometry": True,
+            "profileId": "wuwa:rabbitfx",
+            "materialKindOverride": None,
+            "manualTexOverride": "diffuse::Packed-two.png",
+            "debugMode": "normal-data-b",
+            "selected": True,
+            "normalDataBound": True,
+            "wireframe": True,
+            "flatShading": True,
+            "roughness": pytest.approx(0.2),
+            "toon": True,
+        }
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Packed"]
+        assert page.evaluate("window.__fakeApi.calls.materialKind") == [
+            ["Packed", "Packed.ini", "Body Packed", "body"],
+            ["Packed", "Packed.ini", "Body Packed", "auto"],
+        ]
+    finally:
+        context.close()
+
+
 def test_each_mesh_resolves_its_own_profile_and_packed_source(
         edge_browser, frontend_url):
     payload = _packed_material_payload("zzz:zzmi")

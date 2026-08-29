@@ -3,12 +3,14 @@
 import * as THREE from 'three';
 import { decodeF32, decodeU32 } from '../textures/decode.js';
 import {
-  createGameMaterial, getGameMaterialSources, updateGameMaterialTextures,
-  usesPackedNormal,
+  captureGameMaterialViewerState, createGameMaterial, disposeGameMaterial,
+  getGameMaterialSources, restoreGameMaterialViewerState,
+  updateGameMaterialTextures, usesPackedNormal,
 } from './material-profile.js';
 import { getMeshView } from './mesh-view-bindings.js';
 import { loadDDSTexture } from '../textures/dds-loader.js';
 import { requestRender } from '../scene/render-scheduler.js';
+import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { supportsBCTextureCompression } from '../scene/renderer-capabilities.js';
 import { splitTextureKey } from '../textures/texture-key.js';
 import { CHARACTER_AO_LAYER } from '../scene/viewer-layers.js';
@@ -277,6 +279,91 @@ export function setMeshTextureState(mesh, state, { render = true } = {}) {
   return refreshMeshTexture(mesh, { render });
 }
 
+const MATERIAL_METADATA_FIELDS = [
+  ['materialKind', 'material_kind'],
+  ['materialKindReliable', 'material_kind_reliable'],
+  ['materialKindReason', 'material_kind_reason'],
+  ['materialKindOverride', 'material_kind_override'],
+  ['materialProfileId', 'material_profile_id'],
+];
+
+export function updateMeshMaterialMetadata(mesh, metadata, profile) {
+  let changed = false;
+  for (const [target, source] of MATERIAL_METADATA_FIELDS) {
+    if (!Object.hasOwn(metadata, source)) continue;
+    const value = metadata[source];
+    let next;
+    if (target === 'materialKindReliable') {
+      next = value === true;
+    } else if (target === 'materialKindOverride') {
+      next = value || null;
+    } else if (target === 'materialProfileId') {
+      next = value || 'none';
+    } else if (target === 'materialKind') {
+      next = value || 'unknown';
+    } else {
+      next = value || '';
+    }
+    changed = !Object.is(mesh.userData[target], next) || changed;
+    mesh.userData[target] = next;
+  }
+  if (Object.hasOwn(metadata, 'material_profile_id')) {
+    mesh.userData.materialProfile = profile;
+  }
+  return changed;
+}
+
+/** Replace one mesh material without replacing its mesh or geometry. */
+export function replaceMeshMaterial(
+    mesh, profile, metadata = {}, { render = true } = {}) {
+  const oldMaterial = mesh.material;
+  const viewerState = captureGameMaterialViewerState(oldMaterial);
+  const previousMetadata = Object.fromEntries(
+    MATERIAL_METADATA_FIELDS.map(([target]) => [target, mesh.userData[target]])
+      .concat([['materialProfile', mesh.userData.materialProfile]]));
+  const textureStateFields = [
+    'texKey', 'normalMapKey', 'normalDataKey', 'lightMapKey',
+    'materialMapKey', 'emissionMapKey',
+  ];
+  const previousTextureState = Object.fromEntries(
+    textureStateFields.map(field => [field, mesh.userData[field]]));
+  const nextMaterial = createGameMaterial(
+    profile, mesh.userData.fallbackColor ?? 0xcccccc,
+    { hasUv: !!mesh.geometry?.attributes?.uv });
+  try {
+    mesh.material = nextMaterial;
+    initializeMeshRenderModes(mesh);
+    restoreGameMaterialViewerState(nextMaterial, viewerState);
+    updateMeshMaterialMetadata(mesh, metadata, profile);
+    setMeshTextureState(mesh, {
+      diffuse: mesh.userData.texKey,
+      // The applied normal-map key is intentionally not authoritative when
+      // the new profile consumes packed normal data instead.
+      normal_map: mesh.userData.resolvedNormalMapKey,
+      normal_data: mesh.userData.normalDataKey
+        || mesh.userData.resolvedNormalDataKey,
+      light_map: mesh.userData.lightMapKey,
+      material_map: mesh.userData.materialMapKey,
+      emission_map: mesh.userData.emissionMapKey,
+    }, { render: false });
+  } catch (error) {
+    mesh.material = oldMaterial;
+    for (const [target, value] of Object.entries(previousMetadata)) {
+      mesh.userData[target] = value;
+    }
+    for (const [field, value] of Object.entries(previousTextureState)) {
+      mesh.userData[field] = value;
+    }
+    disposeGameMaterial(nextMaterial);
+    nextMaterial.dispose();
+    throw error;
+  }
+  disposeGameMaterial(oldMaterial);
+  oldMaterial.dispose();
+  if (render) requestRender();
+  return true;
+}
+
 /** Colour for meshes with no texture, guessed from the component name. */
 function fallbackColor(name) {
   const n = name.toLowerCase();
@@ -327,8 +414,9 @@ export function buildMesh(name, data, materialProfile = null) {
   // applyTextureVariant). Immutable; setMeshTextureState updates the stable
   // binding state without rebuilding the material.
   mesh.userData.defaultTexKey = data.tex_key || null;
+  const authoredNormalMapKey = data.normal_map_key || null;
   mesh.userData.normalMapKey = usesPackedNormal(mat)
-    ? null : (data.normal_map_key || null);
+    ? null : authoredNormalMapKey;
   mesh.userData.normalDataKey = data.normal_data_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
   mesh.userData.materialMapKey = data.material_map_key || null;
@@ -343,7 +431,9 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.normalMapEnabled = data.normal_map_enabled !== false;
   mesh.userData.normalMapYSign = Number.isFinite(data.normal_map_y_sign)
     ? data.normal_map_y_sign : -1;
-  mesh.userData.defaultNormalMapKey = mesh.userData.normalMapKey;
+  // Keep the authored normal-map default even while a packed profile hides
+  // it. A later profile swap may need to restore that role in place.
+  mesh.userData.defaultNormalMapKey = authoredNormalMapKey;
   mesh.userData.defaultNormalDataKey = mesh.userData.normalDataKey;
   mesh.userData.defaultLightMapKey = mesh.userData.lightMapKey;
   mesh.userData.defaultMaterialMapKey = mesh.userData.materialMapKey;

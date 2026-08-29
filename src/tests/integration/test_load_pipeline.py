@@ -163,6 +163,49 @@ def test_geometry_blob_bypasses_base64_intermediate():
         assert set(loaded["metadata"]["material_profiles"]) == {"none"}, ("profile metadata is deduplicated at payload scope")
 
 
+def test_full_and_semantic_material_resolution_are_in_parity(tmp_path):
+    from core.materials.game_profile import GameDetection
+
+    parsed = mod_loader.ParsedModAnalysis(
+        groups=[{"name": "Body", "draws": [SimpleNamespace()]}],
+        toggles={}, menu={}, defaults={}, state_rules=[], present={},
+        game=GameDetection(
+            game="wuwa", runtime="rabbitfx", texture_api="rabbitfx",
+            confidence="high", scores={}),
+    )
+    context = mod_loader.ModLoadContext(
+        str(tmp_path), [str(tmp_path / "Root.ini")], {}, {
+            "component_material_kinds": {"Root.ini": {"Body": "body"}},
+        })
+
+    def semantic_meshes(*_args, **_kwargs):
+        return {"Body-1": {"source": "Root.ini", "component": "Body"}}
+
+    with patch.object(mod_loader, "analyze_mod_inis", return_value=parsed), \
+            patch.object(mod_loader, "enrich_mod_analysis",
+                         return_value=([], {"index_status": "unavailable"})), \
+            patch.object(mod_loader, "build_mesh_semantics",
+                         side_effect=semantic_meshes), \
+            patch.object(mod_loader, "build_mesh_result",
+                         return_value=SimpleNamespace(
+                             meshes=semantic_meshes(), textures={})):
+        semantic_result = mod_loader.load_mesh_semantics(context)
+        full_result = mod_loader.load_mod(context=context)
+
+    semantic_mesh = semantic_result["meshes"]["Body-1"]
+    full_mesh = full_result["meshes"]["Body-1"]
+    for field in (
+            "material_kind", "material_kind_reliable",
+            "material_kind_reason", "material_kind_override",
+            "material_profile_id"):
+        assert semantic_mesh[field] == full_mesh[field]
+    profile_id = semantic_mesh["material_profile_id"]
+    assert semantic_result["material_profiles"][profile_id] == \
+        full_result["metadata"]["material_profiles"][profile_id]
+    assert not {"pos", "idx", "uv", "normal", "shape_targets"}.intersection(
+        semantic_mesh)
+
+
 def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
         tmp_path):
     (tmp_path / "Components-0 t=candidate.dds").write_bytes(
@@ -285,10 +328,13 @@ def test_mesh_semantics_returns_asset_resolution_summary(tmp_path):
                          side_effect=resolve), \
             patch.object(mod_enrichment.asset_enrichment, "apply"), \
             patch.object(mod_loader, "build_mesh_semantics",
-                         return_value={"Body-1": {}}):
+                         return_value={"Body-1": {}}), \
+            patch.object(mod_loader, "_assign_material_profiles",
+                         return_value={}):
         result = mod_loader.load_mesh_semantics(context)
 
-    assert result["meshes"] == {"Body-1": {}}
+    assert result["meshes"] == {
+        "Body-1": {"material_kind_override": None}}
     assert result["asset_resolution"]["index_status"] == "ready"
     assert result["asset_resolution"]["exact_draws"] == 1
 

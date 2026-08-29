@@ -964,6 +964,22 @@ export function getMaterialDebugMode(material) {
     || 'off';
 }
 
+/** Capture viewer state that is owned by an individual material instance. */
+export function captureGameMaterialViewerState(material) {
+  const state = material?.userData?.gameMaterial;
+  return {
+    debugMode: getMaterialDebugMode(material),
+    selectionEnabled: state?.selectionEnabledNode?.value === true,
+  };
+}
+
+/** Restore per-material viewer state onto a newly-created material graph. */
+export function restoreGameMaterialViewerState(material, viewerState = {}) {
+  setMaterialDebugMode([material], viewerState.debugMode || 'off');
+  setGameMaterialSelectionEnabled(
+    material, viewerState.selectionEnabled === true);
+}
+
 /** Toggle viewer rim lighting without rebuilding the material node graph. */
 export function setGameMaterialRimEnabled(material, enabled) {
   const node = material?.userData?.gameMaterial?.rimEnabledNode;

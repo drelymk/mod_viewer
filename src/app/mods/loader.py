@@ -121,14 +121,22 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
 
 
 def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
-    """Read draw visibility semantics without building geometry."""
+    """Read draw and material semantics without building geometry."""
     parsed = analyze_mod_inis(
         context.ini_paths, context.mod_dir, overrides, context.docs)
     _bindings, asset_resolution = enrich_mod_analysis(parsed, context)
+    mesh_payload = build_mesh_semantics(
+        parsed.groups, context.mod_dir, game_profile=parsed.game.game,
+        active_mesh_keys=active_mesh_keys)
+    # Keep semantic refresh on the same authoritative material-resolution
+    # chain as a full model load. Viewer-only choices affect evidence here but
+    # never edit the source INI.
+    from .metadata import hydrate_component_material_kinds
+    hydrate_component_material_kinds(mesh_payload, context.metadata)
+    material_profiles = _assign_material_profiles(mesh_payload, parsed.game)
     return {
-        "meshes": build_mesh_semantics(
-            parsed.groups, context.mod_dir, game_profile=parsed.game.game,
-            active_mesh_keys=active_mesh_keys),
+        "meshes": mesh_payload,
+        "material_profiles": material_profiles,
         "asset_resolution": asset_resolution,
     }
 

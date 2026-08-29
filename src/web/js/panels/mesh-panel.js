@@ -394,7 +394,8 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
         saveTextureState(modPath);
       };
       Object.assign(componentDescriptor, {
-        getMaterialKind: () => materialKind,
+        getMaterialKind: () => itemObjs[0]?.userData.materialKindOverride
+          || materialKind,
         setMaterialKind: canPersist ? setMaterialKind : undefined,
         openTextureManager: () => openTextureModal(
           groupName, texturePool, modPath, onPoolChange, texturePicker),
