@@ -227,6 +227,66 @@ machine-specific paths or facts that are obvious from the source.
   fallback. Compressed DDS and fallback PNG must share the same orientation;
   color-space rules remain role-based.
 
+## Weight and secondary-motion invariants
+
+- Normal model loading only advertises whether a draw has a usable skinning
+  stream. Weight decoding is lazy: the first Weight access performs one
+  model-wide backend analysis and publishes one concatenated binary blob with
+  per-mesh ranges. Weight decode failures are partial feature failures and must
+  not turn an otherwise loadable model into a model-load failure.
+- Skin weights come from the authored Blend vertex stream; the index buffer is
+  used only to preserve the same compact rendered-vertex mapping as geometry.
+  A Bone ID is not model-global. Its durable identity is the normalized
+  mod-relative Blend source plus the resolved skinning Bone offset. Framework-
+  specific offset handling belongs in backend decoding, never in browser code.
+- The Weight selection is model-wide but source-scoped. Selecting Bone 38 from
+  one Blend source must not select Bone 38 from another source. Meshes that use
+  the exact same skinning source key share that selection. Saved selections use
+  the same source-scoped identity in `.mod_viewer.json` and preserve unrelated
+  metadata; picker filters never change hidden selections.
+- Pick-from-model is discovery only. It samples a small neighborhood on the
+  exact hit mesh, using a radius of two percent of the model bounding-sphere
+  radius with distance-weighted authored influences and an exact triangle
+  interpolation fallback. The result is scoped to the hit mesh's Blend source,
+  must not select Bones automatically, and must not alter physics until the
+  user changes the actual selection.
+- Character physics is selection-driven and model-scoped: a non-empty selected
+  Bone set enables the session, an empty set disables it, and settings are not
+  owned by any mesh. Unselected authored influence remains at the baseline
+  pose; selected influence receives the dynamic Bone transform. Never
+  renormalize selected weights or reintroduce depth-derived mobility.
+- Physics ownership is one source rig per exact skinning source key, not one
+  simulation per mesh and not one simulation for the entire model. All loaded
+  meshes sharing a source contribute authored evidence to one canonical set of
+  Bone centers and relationships, even when some member meshes are hidden.
+  The source rig owns one inferred forest, one physics state and one transform
+  per Bone; each member mesh consumes those shared transforms with its own
+  authored weights. This prevents seams from tearing when one authored Bone
+  spans several rendered draw sections.
+- Source topology is inferred only from authored influence overlap and weighted
+  centers; Blend data does not provide Bone names, a canonical skeleton,
+  hierarchy, bind pose or animation. Keep the maximum-spanning relationship
+  selection, weak-bridge pruning and meaningful static-boundary attachment
+  semantics conservative; do not infer semantic labels such as hair or skirt.
+- The solver remains fixed-step at 1/120 second with bounded catch-up. A source
+  rig is stepped and its transforms built once, then visible member meshes
+  deform only vertices touched by the current selected-weight mask. Authored
+  baseline normals are transformed with the same selected influence instead of
+  recomputing every face normal on each frame.
+- Continuous physics frames must avoid whole-model maintenance work. Exact
+  bounding volumes and shadow-camera fitting are deferred until motion settles;
+  source-member frustum behavior must remain conservative while bounds are
+  stale. The character shadow map, however, must update on every visible
+  deformation frame so current geometry is never rendered against a stale
+  physics shadow. Do not trade that synchronization for a lower shadow update
+  frequency; reduce dynamic shadow cost by another means if profiling requires
+  it.
+- Shape changes re-baseline loaded positions/normals and invalidate the
+  affected source rig because canonical centers/topology may have changed.
+  Material, texture and ordinary visibility changes must not reload skinning
+  data or redefine the source rig. Model teardown releases source participants
+  before member geometry is disposed.
+
 ## Game and material interpretation
 
 - Game, runtime, texture API and material kind are separate concepts. Resolve a
