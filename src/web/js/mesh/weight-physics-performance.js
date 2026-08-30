@@ -2,8 +2,6 @@ const STAT_NAMES = Object.freeze([
   'physicsFrameCount',
   'physicsStepCount',
   'physicsStepMs',
-  'physicsTransformBuildCount',
-  'physicsTransformMs',
   'physicsDeformCount',
   'physicsDeformMs',
   'physicsDeformedVertexCount',
@@ -17,6 +15,7 @@ const STAT_NAMES = Object.freeze([
   'sourcePhysicsRigCount',
   'sourcePhysicsStepCount',
   'sourceTransformBuildCount',
+  'sourceTransformMs',
   'participatingPhysicsMeshCount',
 ]);
 

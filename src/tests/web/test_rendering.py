@@ -843,7 +843,6 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
           }]);
-          experiment.ensureCandidateForest(mesh);
           const queuedFrames = [];
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -874,13 +873,20 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
           runFrame(16.7);
           const sleeping = experiment.getSkinningState(mesh);
           const framePerformance = experiment.getWeightPhysicsPerformanceStats();
-          const beforeVirtual = [...sleeping.physicsState.joints.values()]
-            .map(joint => [...joint.angularVelocity]);
+          experiment.resetWeightPhysicsPerformanceStats();
           window.dispatchEvent(new CustomEvent(
             'mod-viewer-virtual-model-motion', {detail: {
               normalizedLinearVelocityWorld: [.3, .1, .2],
               active: true, source: 'rmb-drag',
             }}));
+          runFrame(33.4);
+          for (let index = 0; index < 10; index += 1) {
+            runFrame(50.1 + index * 16.7);
+          }
+          const movingFramePerformance =
+            experiment.getWeightPhysicsPerformanceStats();
+          const beforeVirtual = [...sleeping.physicsState.joints.values()]
+            .map(joint => [...joint.angularVelocity]);
           const moving = experiment.getSkinningState(mesh);
           const movingVelocity = [...moving.physicsState.joints.values()]
             .map(joint => [...joint.angularVelocity]);
@@ -898,6 +904,7 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
           URL.revokeObjectURL(url);
           return {
             enabledState, framePerformance,
+            movingFramePerformance,
             activeVertices: sleeping.physicsActiveVertices.length,
             sleeping: sleeping.physicsSettled,
             beforeVirtual, movingVelocity, virtualVelocity,
@@ -912,6 +919,11 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
         assert result["framePerformance"]["physicsDeformedVertexCount"] == 2
         assert result["framePerformance"]["physicsBoundsUpdateCount"] == 1
         assert result["framePerformance"]["physicsUiNotifyCount"] == 0
+        assert result["movingFramePerformance"]["physicsFrameCount"] == 10
+        assert result["movingFramePerformance"]["dynamicShadowUpdateCount"] == 10
+        assert result["movingFramePerformance"]["shadowFitCount"] == 0
+        assert result["movingFramePerformance"]["physicsBoundsUpdateCount"] == 0
+        assert result["movingFramePerformance"]["sourceTransformBuildCount"] == 10
         assert result["sleeping"]
         assert any(
             any(abs(value) > 1e-6 for value in vector)
@@ -1020,14 +1032,12 @@ def test_loaded_skinning_rebaselines_after_shape_change(
             baseline: [...state.baselinePositions],
             before, after,
             graph: state.influenceGraph,
-            forest: state.candidateForest,
           };
         }""")
         assert result["loaded"]
         assert result["before"] != result["after"]
         assert result["baseline"] == pytest.approx(result["after"])
         assert result["graph"] is None
-        assert result["forest"] is None
     finally:
         context.close()
 
@@ -1408,7 +1418,6 @@ def test_skinning_angular_motion_uses_full_quaternion_delta(
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
           }]);
-          experiment.ensureCandidateForest(mesh);
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
           const queuedFrames = [];
@@ -1496,7 +1505,6 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
           }]);
-          experiment.ensureCandidateForest(mesh);
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
           const queuedFrames = [];
