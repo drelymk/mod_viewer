@@ -128,9 +128,9 @@ class ModViewerAPI:
 
     # -- Mod preview --------------------------------------------------------
 
-    def load_mod(self, folder_path):
+    def load_mod(self, folder_path, disabled_ini=False):
         self._asset_preview.clear_fill()
-        return self._mod_preview.load_mod(folder_path)
+        return self._mod_preview.load_mod(folder_path, disabled_ini)
 
     def get_present_state(self, folder_path):
         return self._mod_preview.get_present_state(folder_path)

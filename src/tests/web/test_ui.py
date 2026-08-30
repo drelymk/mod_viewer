@@ -59,6 +59,24 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
     finally:
         context.close()
 
+def test_reload_current_mod_does_not_read_disabled_ini_checkbox(
+        edge_browser, frontend_url):
+    path = "ReloadCheckbox"
+    context, page = _page(edge_browser, frontend_url, {path: _payload(path)})
+    try:
+        _open(page, path)
+        page.locator(".draw-item").wait_for()
+        page.locator("#open-disabled-mod").check()
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadModArgs.length === 2")
+
+        assert page.evaluate("window.__fakeApi.calls.loadModArgs") == [
+            [path, False], [path, False],
+        ]
+    finally:
+        context.close()
+
 def test_mesh_row_selection_invalidates_on_demand_renderer(
         edge_browser, frontend_url):
     payload = _payload("Selection")
@@ -227,12 +245,15 @@ def test_feature_flag_css_keeps_cycle_preview_and_core_invariants(
             "No key or menu toggle is available for PRESENT.")
         assert page.locator("#present-action-btn").is_enabled()
         page.evaluate("""
-          document.body.classList.add('feature-export-off', 'feature-modify-toggle-off')
+          document.body.classList.add(
+            'feature-export-off', 'feature-modify-toggle-off',
+            'feature-open-disabled-mod-off')
         """)
         assert page.locator("#export-btn").is_hidden()
         assert page.locator("#toggle-add-btn").is_hidden()
         assert page.locator("#toggle-list .toggle-actions").is_hidden()
         assert page.locator("#toggle-list .toggle-cycle-btn").is_visible()
+        assert page.locator("#open-disabled-mod").is_hidden()
 
         css = (paths.web_dir() + "/css/app.css")
         with open(css, encoding="utf-8") as handle:
@@ -242,6 +263,63 @@ def test_feature_flag_css_keeps_cycle_preview_and_core_invariants(
             html = handle.read()
         assert "https://cdn" not in html.lower()
         assert "http://" not in html.lower()
+    finally:
+        context.close()
+
+
+def test_open_disabled_checkbox_controls_direct_and_library_loads(
+        edge_browser, frontend_url):
+    direct_unchecked = "DirectUnchecked"
+    direct_checked = "DirectChecked"
+    library_unchecked = "LibraryUnchecked"
+    library_checked = "LibraryChecked"
+    context, page = _page(
+        edge_browser, frontend_url,
+        {path: _payload(path) for path in (
+            direct_unchecked, direct_checked,
+            library_unchecked, library_checked)},
+        mod_folders=[
+            {"name": "Library Unchecked", "path": library_unchecked,
+             "exists": True},
+            {"name": "Library Checked", "path": library_checked,
+             "exists": True},
+        ],
+    )
+    try:
+        checkbox = page.locator("#open-disabled-mod")
+        assert checkbox.is_visible()
+        assert checkbox.get_attribute("title") == "Open disabled mod"
+        assert checkbox.get_attribute("aria-label") == "Open disabled mod"
+        assert not checkbox.is_checked()
+        assert checkbox.evaluate("element => element.labels.length") == 0
+        assert "Open disabled mod" not in page.locator("#toolbar").inner_text()
+
+        _open(page, direct_unchecked)
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadModArgs.length === 1")
+        checkbox.check()
+        _open(page, direct_checked)
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadModArgs.length === 2")
+
+        checkbox.uncheck()
+        _open_library(page)
+        page.locator(".mod-folder-select", has_text="Library Unchecked").click()
+        page.locator(".draw-item").wait_for(state="attached")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadModArgs.length === 3")
+        checkbox.check()
+        page.locator(".mod-folder-select", has_text="Library Checked").click()
+        page.locator(".draw-item").wait_for(state="attached")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadModArgs.length === 4")
+
+        assert page.evaluate("window.__fakeApi.calls.loadModArgs") == [
+            [direct_unchecked, False], [direct_checked, True],
+            [library_unchecked, False], [library_checked, True],
+        ]
     finally:
         context.close()
 

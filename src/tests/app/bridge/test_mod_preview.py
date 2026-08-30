@@ -34,6 +34,56 @@ def _context():
     return SimpleNamespace(metadata={}, asset_folders=[])
 
 
+@pytest.mark.parametrize(
+    "disabled_ini, expected_name",
+    [(False, "Active.ini"), (True, "DISABLEDActive.ini")],
+)
+def test_authoritative_context_discovers_only_selected_ini_mode(
+        disabled_ini, expected_name, monkeypatch):
+    preview = ModPreview(_Access())
+    discovered = []
+    ini_path = f"mod/{expected_name}"
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.discover_ini_paths",
+        lambda folder, *, disabled=False: discovered.append(disabled)
+        or [ini_path],
+    )
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.document_paths",
+        lambda _folder: [],
+    )
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.load_documents",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.overrides_for",
+        lambda _folder: {},
+    )
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.new_sections_for",
+        lambda _folder: {},
+    )
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.documents_for",
+        lambda _folder: {},
+    )
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.load",
+        lambda _folder: {},
+    )
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.asset_folders.load_registry",
+        lambda: [],
+    )
+
+    _folder, _overrides, _pending, context = preview.authoritative_context(
+        "mod", disabled_ini=disabled_ini)
+
+    assert discovered == [disabled_ini]
+    assert context.ini_paths == [ini_path]
+
+
 def test_model_skinning_preview_includes_validated_saved_bones(monkeypatch):
     preview = ModPreview(_Access())
     context = _context()
@@ -84,7 +134,7 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     preview = ModPreview(_Access())
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder: ("mod", {}, {}, _context()))
+        lambda _folder, **_kwargs: ("mod", {}, {}, _context()))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.begin_texture_publication",
         lambda _folder: publication)
@@ -113,6 +163,72 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     assert preview._active_mesh_keys == {"mod": {"Body-1"}}
 
 
+def test_load_forwards_disabled_mode_to_authoritative_context(monkeypatch):
+    publication = _Publication([])
+    preview = ModPreview(_Access())
+    context = _context()
+    context.ini_paths = ["mod/DISABLEDActive.ini"]
+    captured = {}
+
+    def authoritative_context(_folder, *, disabled_ini=False):
+        captured["disabled_ini"] = disabled_ini
+        return "mod", {}, {}, context
+
+    monkeypatch.setattr(preview, "authoritative_context", authoritative_context)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.begin_texture_publication",
+        lambda _folder: publication)
+
+    def load_model(**kwargs):
+        captured["context"] = kwargs["context"]
+        return {
+            "meshes": {"Body-1": {}},
+            "metadata": {"game": {"id": "genshin"}},
+            "controls": {"present": {}},
+        }
+
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.mod_loader.load_mod", load_model)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.hydrate_textures",
+        lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.hydrate_present",
+        lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.publish_payload_geometry",
+        lambda *_args, **_kwargs: None,
+    )
+
+    preview.load_mod("mod", disabled_ini=True)
+
+    assert captured["disabled_ini"] is True
+    assert captured["context"].ini_paths == ["mod/DISABLEDActive.ini"]
+
+
+def test_load_reports_disabled_ini_error_when_discovery_is_empty(monkeypatch):
+    publication = _Publication([])
+    preview = ModPreview(_Access())
+    context = _context()
+    context.ini_paths = []
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder, **_kwargs: ("mod", {}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.begin_texture_publication",
+        lambda _folder: publication)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.mod_loader.load_mod",
+        lambda **_kwargs: {
+            "error": "No active .ini files found in this folder.",
+        })
+
+    result = preview.load_mod("mod", disabled_ini=True)
+
+    assert result["error"] == "No disabled .ini files found in this folder."
+    assert publication.events == [("discard",)]
+
+
 def test_failed_load_discards_publication_and_clears_active_meshes(monkeypatch):
     events = []
     publication = _Publication(events)
@@ -120,7 +236,7 @@ def test_failed_load_discards_publication_and_clears_active_meshes(monkeypatch):
     preview._active_mesh_keys["mod"] = {"old"}
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder: ("mod", {}, {}, _context()))
+        lambda _folder, **_kwargs: ("mod", {}, {}, _context()))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.begin_texture_publication",
         lambda _folder: publication)

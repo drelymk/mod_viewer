@@ -6,18 +6,19 @@ import urllib.request
 from app.runtime import server as server
 
 
-def _read_index(tmp_path, monkeypatch):
+def _read_index(tmp_path, monkeypatch, feature_flags=None):
     web = tmp_path / "web"
     web.mkdir(parents=True)
     (web / "index.html").write_text(
-        '<script type="importmap" nonce="__CSP_NONCE__"></script>',
+        '<body class="__BODY_CLASS__"><script type="importmap" '
+        'nonce="__CSP_NONCE__"></script></body>',
         encoding="utf-8")
     monkeypatch.setattr(server.paths, "has_vendored_three", lambda: True)
     monkeypatch.setattr(server.paths, "web_dir", lambda: str(web))
     monkeypatch.setattr(server.paths, "vendor_dir", lambda: str(web))
     monkeypatch.setattr(server.features, "get_features", lambda: {
-        "export": True, "modify_toggle": True,
-    })
+        "export": True, "modify_toggle": True, "open_disabled_mod": True,
+    } if feature_flags is None else feature_flags)
 
     response = urllib.request.urlopen(server.start(), timeout=5)
     return response.headers, response.read().decode("utf-8")
@@ -40,3 +41,12 @@ def test_server_generates_fresh_nonce_and_applies_it_consistently(
         nonces.append(nonce)
 
     assert nonces[0] != nonces[1]
+
+
+def test_server_marks_disabled_mod_feature_as_hidden(tmp_path, monkeypatch):
+    _headers, body = _read_index(
+        tmp_path, monkeypatch,
+        {"export": True, "modify_toggle": True, "open_disabled_mod": False},
+    )
+
+    assert "feature-open-disabled-mod-off" in body

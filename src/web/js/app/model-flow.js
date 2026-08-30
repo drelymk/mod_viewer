@@ -229,14 +229,16 @@ export async function displayMeshPayload(payload, {
   showLoading(false);
 }
 
-async function loadModAt(path, handlers = {}) {
+async function loadModAt(path, disabledIni, handlers = {}) {
   const preserveViewerPose = samePath(viewerState.displayedModPath, path);
   beginModLoad(path, 'Loading Model…', {
     preserveModelOrientation: preserveViewerPose,
     onReload: handlers.onReload,
   });
 
-  const data = await window.pywebview.api.load_mod(path);
+  const data = disabledIni === undefined
+    ? await window.pywebview.api.load_mod(path)
+    : await window.pywebview.api.load_mod(path, disabledIni);
   setHealthReport(data?.health, data?.asset_resolution);
   if (data && data.error) {
     showLoading(false);
@@ -323,7 +325,8 @@ async function performModSwitch(path, handlers = {}) {
     await window.pywebview.api.discard_changes(viewerState.currentModPath);
   }
 
-  return await loadModAt(path, handlers);
+  const disabledIni = $('open-disabled-mod')?.checked === true;
+  return await loadModAt(path, disabledIni, handlers);
 }
 
 async function confirmLeaveCurrentModIfDirty() {
@@ -397,7 +400,7 @@ export async function reloadCurrentMod(handlers = {}) {
   if (!viewerState.currentModPath) return false;
   return await runModTransition(async () => {
     try {
-      return await loadModAt(viewerState.currentModPath, handlers);
+      return await loadModAt(viewerState.currentModPath, undefined, handlers);
     } catch (error) {
       showLoading(false);
       await alertDialog('Unexpected error while reloading:\n\n' + error);

@@ -501,6 +501,8 @@ def start():
         body_classes.append("feature-export-off")
     if not flags["modify_toggle"]:
         body_classes.append("feature-modify-toggle-off")
+    if not flags["open_disabled_mod"]:
+        body_classes.append("feature-open-disabled-mod-off")
 
     template_vars = {
         "__THREE_URL__": three_url,

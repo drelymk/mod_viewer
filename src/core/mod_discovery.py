@@ -1,4 +1,4 @@
-"""Filesystem-only discovery of active INI files for a selected mod folder."""
+"""Filesystem-only discovery of selected INI files for a mod folder."""
 
 import os
 import re
@@ -11,15 +11,19 @@ _DRAW_RE = re.compile(r"^drawindexed\s*=", re.I)
 _IB_RE = re.compile(r"^ib\s*=", re.I)
 
 
-def _active_ini_names(folder):
+def _ini_names(folder, *, disabled=False):
     try:
         names = os.listdir(folder)
     except OSError:
         return []
-    return [name for name in sorted(names)
-            if not name.upper().startswith("DISABLED")
-            and name.lower().endswith(".ini")
-            and os.path.isfile(os.path.join(folder, name))]
+    selected = []
+    for name in sorted(names):
+        is_disabled = name.upper().startswith("DISABLED")
+        if is_disabled != disabled or not name.lower().endswith(".ini"):
+            continue
+        if os.path.isfile(os.path.join(folder, name)):
+            selected.append(name)
+    return selected
 
 
 def _has_geometry_sections(path):
@@ -52,15 +56,17 @@ def _has_geometry_sections(path):
     return has_draw or has_index
 
 
-def discover_ini_paths(mod_dir):
-    """Return active direct INIs and bounded nested INIs for ``mod_dir``.
+def discover_ini_paths(mod_dir, *, disabled=False):
+    """Return selected direct INIs and bounded nested INIs for ``mod_dir``.
 
     Direct files are always retained.  Nested files are considered only when
     a direct INI contains a geometry command, and are capped at two directory
-    levels and ten total files.  This keeps category/library folders from
-    accidentally combining unrelated nested mods.
+    levels and ten total files.  ``disabled`` selects only filenames beginning
+    with ``DISABLED`` (case-insensitively); active and disabled files are never
+    combined.
     """
-    direct = [os.path.join(mod_dir, name) for name in _active_ini_names(mod_dir)]
+    direct = [os.path.join(mod_dir, name)
+              for name in _ini_names(mod_dir, disabled=disabled)]
     if not any(_has_geometry_sections(path) for path in direct):
         return direct
 
@@ -73,7 +79,7 @@ def discover_ini_paths(mod_dir):
         dirs[:] = sorted(dirs) if depth < _MAX_INI_DEPTH else []
         if depth == 0:
             continue
-        for name in _active_ini_names(base):
+        for name in _ini_names(base, disabled=disabled):
             found.append(os.path.join(base, name))
             if len(found) >= _MAX_INI_FILES:
                 return found
