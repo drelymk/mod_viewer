@@ -209,7 +209,9 @@ export const rendererReady = initializeRenderer()
     openButton.disabled = !isRendererAvailable();
     void environmentController.prepare()
       .then(prepared => {
-        if (prepared) requestRender();
+        if (prepared && environmentController.getPreset().id === 'outdoor') {
+          requestRender();
+        }
       })
       .catch(error => {
         // Outdoor IBL is optional; renderer startup must remain usable when

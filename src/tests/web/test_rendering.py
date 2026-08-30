@@ -365,6 +365,59 @@ def test_environment_controller_prepare_is_single_flight(
         context.close()
 
 
+def test_environment_controller_dispose_cancels_pending_preparation(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        result = page.evaluate("""async () => {
+          const THREE = await import('three/webgpu');
+          const {renderer, rendererReady, getEnvironmentDebugState} =
+            await import('./js/scene/scene.js');
+          const {createEnvironmentController} =
+            await import('./js/scene/environment.js');
+          await rendererReady;
+          for (let attempts = 0; attempts < 100; attempts += 1) {
+            const state = getEnvironmentDebugState();
+            if (state.prepared || state.preparationError) break;
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+
+          const originalFromScene = THREE.PMREMGenerator.prototype.fromScene;
+          let generationCalls = 0;
+          THREE.PMREMGenerator.prototype.fromScene = function (...args) {
+            generationCalls += 1;
+            return originalFromScene.apply(this, args);
+          };
+          const testScene = new THREE.Scene();
+          const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+          const hemisphere = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
+          const lightTarget = new THREE.Object3D();
+          const controller = createEnvironmentController({
+            renderer, scene: testScene, ambientLight: ambient,
+            hemisphereLight: hemisphere, lightTarget,
+          });
+          try {
+            const pending = controller.prepare();
+            controller.dispose();
+            return {
+              prepared: await pending,
+              generationCalls,
+              debug: controller.getDebugState(),
+            };
+          } finally {
+            THREE.PMREMGenerator.prototype.fromScene = originalFromScene;
+            controller.dispose();
+          }
+        }""")
+        assert result["prepared"] is False
+        assert result["generationCalls"] == 0
+        assert result["debug"]["pmremGenerationCount"] == 0
+        assert result["debug"]["outdoorIblAvailable"] is False
+        assert result["debug"]["prepared"] is False
+    finally:
+        context.close()
+
+
 def test_environment_controller_uses_legacy_lighting_when_pmrem_fails(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {})

@@ -318,6 +318,7 @@ export function createEnvironmentController({
         // preparation begins. This also gives concurrent callers one promise
         // to join while the optional warm-up is in progress.
         await new Promise(resolve => setTimeout(resolve, 0));
+        if (disposed) return false;
         captureScene = new THREE.Scene();
         captureSky = new SkyMesh();
         configureOutdoorSky(captureSky);
