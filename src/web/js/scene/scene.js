@@ -106,20 +106,6 @@ renderer.onError = info => {
   failRenderer(`WebGPU reported an unrecoverable error: ${info?.message || 'unknown error'}.`);
 };
 
-export const rendererReady = initializeRenderer()
-  .then(() => {
-    if (!isRendererAvailable()) {
-      throw new Error('The renderer is not using the required WebGPU core backend.');
-    }
-    requestRender();
-    openButton.disabled = !isRendererAvailable();
-    return true;
-  })
-  .catch(error => {
-    showRendererError(rendererFailureMessage(error));
-    return false;
-  });
-
 export const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d1117);
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
@@ -161,6 +147,7 @@ export function setPhysicsInteractionEnabled(enabled) {
 }
 
 const environmentController = createEnvironmentController({
+  renderer,
   scene,
   ambientLight,
   hemisphereLight,
@@ -213,6 +200,30 @@ function renderFrame() {
 setRenderCallback(renderFrame);
 controls.addEventListener('change', requestRender);
 
+export const rendererReady = initializeRenderer()
+  .then(async () => {
+    if (!isRendererAvailable()) {
+      throw new Error('The renderer is not using the required WebGPU core backend.');
+    }
+    try {
+      await environmentController.prepare();
+    } catch (error) {
+      // Outdoor IBL is optional; renderer startup must remain usable when the
+      // GPU cannot generate the cached environment.
+      console.debug(
+        'Outdoor environment preparation failed; using baseline lighting.',
+        error,
+      );
+    }
+    requestRender();
+    openButton.disabled = !isRendererAvailable();
+    return true;
+  })
+  .catch(error => {
+    showRendererError(rendererFailureMessage(error));
+    return false;
+  });
+
 export function setEnvironmentPreset(id) {
   const changed = environmentController.setPreset(id);
   if (changed) requestRender();
@@ -221,6 +232,10 @@ export function setEnvironmentPreset(id) {
 
 export function getEnvironmentPreset() {
   return environmentController.getPreset();
+}
+
+export function getEnvironmentDebugState() {
+  return environmentController.getDebugState();
 }
 
 export function toggleGrid() {

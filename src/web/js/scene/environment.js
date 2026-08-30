@@ -1,11 +1,23 @@
 // Viewer-only environment moods. This module deliberately knows nothing
 // about mods, meshes, INIs, or the Python bridge.
 
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
+import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 
 const BACKGROUND_WIDTH = 512;
 const BACKGROUND_HEIGHT = 256;
 const freeze = Object.freeze;
+const OUTDOOR_PMREM_SIZE = 256;
+const OUTDOOR_ENVIRONMENT_INTENSITY = 0.7;
+const OUTDOOR_SKY = freeze({
+  turbidity: 2.5,
+  rayleigh: 0.8,
+  mieCoefficient: 0.003,
+  mieDirectionalG: 0.75,
+  cloudCoverage: 0.2,
+  cloudDensity: 0.35,
+  cloudElevation: 0.5,
+});
 
 const makeStops = (entries) => freeze(
   entries.map(([offset, color]) => freeze({ offset, color })));
@@ -82,8 +94,8 @@ export const ENVIRONMENT_PRESETS = freeze({
     verticalBackground([
       [0, '#285b8a'], [0.42, '#75a8ce'], [0.68, '#879eae'], [1, '#46515a'],
     ]),
-    makeAmbient(0xdbeaff, 0.26),
-    makeHemisphere(0x78b5ed, 0x667068, 0.45),
+    makeAmbient(0xdbeaff, 0.12),
+    makeHemisphere(0x78b5ed, 0x667068, 0.2),
     makeAccent(0xffe6bd, 0.7, [-6, 10, 6]),
   ),
 });
@@ -144,23 +156,26 @@ function restoreLightState(light, state) {
 }
 
 /**
- * Create the synchronous, asset-free environment controller.
+ * Create the synchronously constructible environment controller.
  *
  * Environment presets define baseline scene lighting. The movable key light
  * in scene.js remains an independent user-controlled inspection light layered
  * on top of these presets.
  */
 export function createEnvironmentController({
+  renderer,
   scene,
   ambientLight,
   hemisphereLight,
   lightTarget,
 }) {
-  if (!scene || !ambientLight || !hemisphereLight || !lightTarget) {
-    throw new Error('EnvironmentController needs a scene, viewer lights and target.');
+  if (!renderer || !scene || !ambientLight || !hemisphereLight || !lightTarget) {
+    throw new Error('EnvironmentController needs a renderer, scene, viewer lights and target.');
   }
 
   const originalBackground = scene.background;
+  const originalEnvironment = scene.environment;
+  const originalEnvironmentIntensity = scene.environmentIntensity;
   const originalAmbient = captureLightState(ambientLight);
   const originalHemisphere = captureLightState(hemisphereLight, true);
   const background = createBackgroundTexture();
@@ -171,8 +186,20 @@ export function createEnvironmentController({
   // movable key light updates this target whenever the model is reframed.
   lightTarget.add(accentLight);
 
+  const sunDirection = new THREE.Vector3()
+    .fromArray(ENVIRONMENT_PRESETS.outdoor.accent.position)
+    .normalize();
+
   let currentPresetId = 'default';
   let disposed = false;
+  let prepared = false;
+  let preparationAttempted = false;
+  let preparePromise = null;
+  let outdoorEnvironmentTarget = null;
+  let outdoorEnvironmentTexture = null;
+  let outdoorIblAvailable = false;
+  let preparationError = null;
+  let pmremGenerationCount = 0;
 
   function drawBackground(preset) {
     if (!preset.background) {
@@ -211,8 +238,23 @@ export function createEnvironmentController({
     applyAccent(preset.accent);
   }
 
+  function restoreEnvironment() {
+    scene.environment = originalEnvironment;
+    scene.environmentIntensity = originalEnvironmentIntensity;
+  }
+
+  function applyOutdoorEnvironment() {
+    if (!outdoorEnvironmentTexture) {
+      restoreEnvironment();
+      return;
+    }
+    scene.environment = outdoorEnvironmentTexture;
+    scene.environmentIntensity = OUTDOOR_ENVIRONMENT_INTENSITY;
+  }
+
   function applyDefault() {
     scene.background = originalBackground;
+    restoreEnvironment();
     restoreLightState(ambientLight, originalAmbient);
     restoreLightState(hemisphereLight, originalHemisphere);
     applyAccent(null);
@@ -228,9 +270,91 @@ export function createEnvironmentController({
     } else {
       drawBackground(preset);
       applyLights(preset);
+      if (id === 'outdoor') applyOutdoorEnvironment();
+      else restoreEnvironment();
     }
     currentPresetId = preset.id;
     return true;
+  }
+
+  function configureOutdoorSky(sky) {
+    sky.scale.setScalar(10000);
+    sky.turbidity.value = OUTDOOR_SKY.turbidity;
+    sky.rayleigh.value = OUTDOOR_SKY.rayleigh;
+    sky.mieCoefficient.value = OUTDOOR_SKY.mieCoefficient;
+    sky.mieDirectionalG.value = OUTDOOR_SKY.mieDirectionalG;
+    sky.cloudCoverage.value = OUTDOOR_SKY.cloudCoverage;
+    sky.cloudDensity.value = OUTDOOR_SKY.cloudDensity;
+    sky.cloudElevation.value = OUTDOOR_SKY.cloudElevation;
+    sky.sunPosition.value.copy(sunDirection);
+    sky.showSunDisc.value = false;
+  }
+
+  async function prepare() {
+    if (disposed) return false;
+    if (prepared || preparationAttempted) return outdoorIblAvailable;
+    if (preparePromise) return preparePromise;
+    preparationAttempted = true;
+
+    preparePromise = (async () => {
+      let captureScene = null;
+      let captureSky = null;
+      let pmremGenerator = null;
+      try {
+        captureScene = new THREE.Scene();
+        captureSky = new SkyMesh();
+        configureOutdoorSky(captureSky);
+        captureScene.add(captureSky);
+
+        pmremGenerator = new THREE.PMREMGenerator(renderer);
+        const target = pmremGenerator.fromScene(
+          captureScene, 0, 0.1, 100, {size: OUTDOOR_PMREM_SIZE});
+        if (!target?.texture) {
+          throw new Error('Outdoor PMREM generation returned no texture.');
+        }
+        outdoorEnvironmentTarget = target;
+        outdoorEnvironmentTexture = target.texture;
+        outdoorIblAvailable = true;
+        pmremGenerationCount += 1;
+        return true;
+      } catch (error) {
+        outdoorIblAvailable = false;
+        preparationError = error?.message || String(error);
+        console.debug(
+          'Outdoor environment preparation failed; using baseline lighting.',
+          error,
+        );
+        return false;
+      } finally {
+        if (captureSky) {
+          captureScene.remove(captureSky);
+          captureSky.geometry?.dispose?.();
+          captureSky.material?.dispose?.();
+        }
+        pmremGenerator?.dispose?.();
+        prepared = outdoorIblAvailable;
+        if (!disposed && currentPresetId === 'outdoor') {
+          applyOutdoorEnvironment();
+        }
+      }
+    })();
+    return preparePromise;
+  }
+
+  function getDebugState() {
+    const environmentIsOutdoor = scene.environment === outdoorEnvironmentTexture
+      && outdoorEnvironmentTexture !== null;
+    return {
+      preset: currentPresetId,
+      prepared,
+      outdoorIblAvailable,
+      environmentActive: environmentIsOutdoor,
+      environmentIntensity: scene.environmentIntensity,
+      pmremGenerationCount,
+      environmentIsOutdoor,
+      sunDirection: sunDirection.toArray(),
+      preparationError,
+    };
   }
 
   function getPreset() {
@@ -240,14 +364,19 @@ export function createEnvironmentController({
   function dispose() {
     if (disposed) return;
     applyDefault();
+    outdoorEnvironmentTarget?.dispose?.();
+    outdoorEnvironmentTarget = null;
+    outdoorEnvironmentTexture = null;
     background.texture.dispose();
     lightTarget.remove(accentLight);
     disposed = true;
   }
 
   return {
+    prepare,
     setPreset,
     getPreset,
+    getDebugState,
     dispose,
   };
 }

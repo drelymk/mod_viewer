@@ -213,6 +213,140 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
     finally:
         context.close()
 
+
+def test_outdoor_environment_uses_one_cached_pmrem_and_restores_original(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        page.wait_for_function("""async () => {
+          const {rendererReady, getEnvironmentDebugState} =
+            await import('./js/scene/scene.js');
+          await rendererReady;
+          return getEnvironmentDebugState().prepared;
+        }""")
+        initial = page.evaluate("""async () => {
+          const {scene, getEnvironmentDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getEnvironmentDebugState();
+          return {...state,
+            environmentId: scene.environment?.uuid || null,
+            hasVisibleSky: scene.getObjectByProperty('isSkyMesh', true) != null,
+          };
+        }""")
+        assert initial["outdoorIblAvailable"]
+        assert initial["pmremGenerationCount"] == 1
+        assert not initial["environmentActive"]
+        assert not initial["hasVisibleSky"]
+
+        def select_preset(preset):
+            before = page.evaluate("window.modViewer.getRenderCount()")
+            assert page.evaluate(
+                "preset => window.modViewer.setEnvironmentPreset(preset)",
+                preset,
+            )
+            page.wait_for_function(
+                "count => window.modViewer.getRenderCount() > count",
+                arg=before,
+            )
+            return page.evaluate("""async () => {
+              const {scene, getEnvironmentDebugState} =
+                await import('./js/scene/scene.js');
+              return {...getEnvironmentDebugState(),
+                environmentId: scene.environment?.uuid || null};
+            }""")
+
+        outdoor = select_preset("outdoor")
+        assert outdoor["environmentIsOutdoor"]
+        assert outdoor["environmentActive"]
+        assert outdoor["environmentIntensity"] == pytest.approx(0.7)
+        assert outdoor["environmentId"] is not None
+
+        studio = select_preset("studio")
+        assert not studio["environmentIsOutdoor"]
+        assert not studio["environmentActive"]
+
+        indoor = select_preset("indoor")
+        assert not indoor["environmentIsOutdoor"]
+        assert not indoor["environmentActive"]
+
+        outdoor_again = select_preset("outdoor")
+        assert outdoor_again["environmentIsOutdoor"]
+        assert outdoor_again["environmentId"] == outdoor["environmentId"]
+        assert outdoor_again["pmremGenerationCount"] == 1
+        assert outdoor_again["sunDirection"] == pytest.approx(
+            [-6 / math.sqrt(172), 10 / math.sqrt(172), 6 / math.sqrt(172)],
+        )
+
+        idle_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.wait_for_timeout(200)
+        assert page.evaluate("window.modViewer.getRenderCount()") == idle_count
+    finally:
+        context.close()
+
+
+def test_outdoor_environment_generation_failure_keeps_viewer_usable(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        result = page.evaluate("""async () => {
+          const THREE = await import('three/webgpu');
+          const {renderer, rendererReady} = await import('./js/scene/scene.js');
+          const {createEnvironmentController} =
+            await import('./js/scene/environment.js');
+          const rendererReadyResult = await rendererReady;
+
+          const originalFromScene = THREE.PMREMGenerator.prototype.fromScene;
+          const testScene = new THREE.Scene();
+          testScene.environment = null;
+          testScene.environmentIntensity = 1;
+          const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+          const hemisphere = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
+          const lightTarget = new THREE.Object3D();
+          let controller = null;
+          try {
+            THREE.PMREMGenerator.prototype.fromScene = () => {
+              throw new Error('simulated Outdoor PMREM failure');
+            };
+            controller = createEnvironmentController({
+              renderer, scene: testScene, ambientLight: ambient,
+              hemisphereLight: hemisphere, lightTarget,
+            });
+            const prepared = await controller.prepare();
+            controller.setPreset('outdoor');
+            const outdoor = controller.getDebugState();
+            const outdoorLighting = {
+              backgroundChanged: testScene.background !== null,
+              ambient: ambient.intensity,
+              hemisphere: hemisphere.intensity,
+              accentVisible: lightTarget.children.some(
+                object => object.isDirectionalLight && object.visible),
+            };
+            return {
+              rendererReady: rendererReadyResult,
+              prepared, outdoor, outdoorLighting,
+            };
+          } finally {
+            THREE.PMREMGenerator.prototype.fromScene = originalFromScene;
+            controller?.dispose();
+          }
+        }""")
+        assert result["rendererReady"]
+        assert result["prepared"] is False
+        assert result["outdoor"]["outdoorIblAvailable"] is False
+        assert result["outdoor"]["environmentActive"] is False
+        assert result["outdoor"]["pmremGenerationCount"] == 0
+        assert "simulated Outdoor PMREM failure" in result["outdoor"][
+            "preparationError"]
+        assert result["outdoorLighting"] == {
+            "backgroundChanged": True,
+            "ambient": 0.12,
+            "hemisphere": 0.2,
+            "accentVisible": True,
+        }
+    finally:
+        context.close()
+
+
 def test_skinning_physics_solver_uses_true_3d_vectors_and_quaternions(
         edge_browser, frontend_url):
     context, page = _page(
