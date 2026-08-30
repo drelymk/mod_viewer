@@ -46,11 +46,11 @@ class ModPreview:
 
         return register
 
-    def authoritative_context(self, folder_path):
-        """Load active INI documents while preserving the current session."""
+    def authoritative_context(self, folder_path, disabled_ini=False):
+        """Load selected INI documents while preserving the current session."""
         folder_path = self._access.mod_folder(folder_path)
         ini_paths = (edit_session.document_paths(folder_path)
-                     or discover_ini_paths(folder_path))
+                     or discover_ini_paths(folder_path, disabled=disabled_ini))
         edit_session.load_documents(folder_path, ini_paths)
         overrides = edit_session.overrides_for(folder_path)
         pending_new_sections = edit_session.new_sections_for(folder_path)
@@ -73,9 +73,9 @@ class ModPreview:
         traceback.print_exc()
         return {"error": "Unexpected backend error. See the application log for details."}
 
-    def load_mod(self, folder_path):
+    def load_mod(self, folder_path, disabled_ini=False):
         folder_path, overrides, pending_new_sections, context = \
-            self.authoritative_context(folder_path)
+            self.authoritative_context(folder_path, disabled_ini=disabled_ini)
         geometry = GeometryBlob()
         publication = server.begin_texture_publication(folder_path)
         try:
@@ -83,6 +83,11 @@ class ModPreview:
                 context=context, overrides=overrides,
                 pending_new_sections=pending_new_sections, geometry=geometry,
                 texture_source=publication.register)
+            if (disabled_ini and isinstance(result, dict)
+                    and not context.ini_paths
+                    and result.get("error") ==
+                    "No active .ini files found in this folder."):
+                result["error"] = "No disabled .ini files found in this folder."
             if not isinstance(result, dict) or result.get("error"):
                 publication.discard()
                 self._active_mesh_keys.pop(folder_path, None)

@@ -107,3 +107,17 @@ def test_missing_asset_parts_preserves_unauthorized_folder_error(
         "status": "error",
         "error": "This folder was not selected through the native folder picker.",
     }
+
+
+def test_load_mod_forwards_disabled_ini_flag(monkeypatch):
+    api = ModViewerAPI()
+    calls = []
+    monkeypatch.setattr(api._asset_preview, "clear_fill", lambda: None)
+    monkeypatch.setattr(
+        api._mod_preview, "load_mod",
+        lambda path, disabled_ini=False: calls.append((path, disabled_ini))
+        or {"ok": True},
+    )
+
+    assert api.load_mod("mod", True) == {"ok": True}
+    assert calls == [("mod", True)]

@@ -2,7 +2,7 @@
 exposes), split across two seams that this file tests separately:
 
   - build.py's resolve_features(ini_path): reads features.ini at BUILD time
-    and resolves it to {"export": bool, "modify_toggle": bool}. This is now
+    and resolves it to the three feature booleans. This is now
     the only place that ever parses the ini file. write_baked_features()/
     clean_baked_features() round-trip those booleans through a tiny
     generated module (app/settings/_baked_features.py) so PyInstaller compiles them
@@ -14,7 +14,7 @@ exposes), split across two seams that this file tests separately:
     source checkout (paths.is_frozen()), regardless of any baked module
     present, so flags meant for a distributed build do not hide source
     features. When frozen, it imports app.settings._baked_features and reads
-    its EXPORT/MODIFY_TOGGLE constants, falling back to True for a flag if the
+    its baked constants, falling back to True for a flag if the
     module or the constant is missing (a broken/skipped bake should never
     silently hide a feature nobody deliberately disabled).
 
@@ -44,41 +44,56 @@ def _fixture(tmp, text, name="features.ini"):
 
 # ── build.py: resolve_features() / write_baked_features() ───────────────────
 
-_FLAG_CASES = [(False, True), (True, False)]
+_FLAG_CASES = [(False, True, False), (True, False, True)]
 
 
-def _run_feature_case(export, modify_toggle, tmp):
+def _run_feature_case(export, modify_toggle, open_disabled_mod, tmp):
     path = _fixture(
         tmp,
         "[features]\n"
         f"Export = {int(export)}\n"
-        f"Modify_Toggle = {int(modify_toggle)}\n",
+        f"Modify_Toggle = {int(modify_toggle)}\n"
+        f"Open_Disabled_Mod = {int(open_disabled_mod)}\n",
     )
     result = build.resolve_features(path)
-    assert result == {"export": export, "modify_toggle": modify_toggle}, f"feature flags resolve independently (got {result})"
+    assert result == {
+        "export": export,
+        "modify_toggle": modify_toggle,
+        "open_disabled_mod": open_disabled_mod,
+    }, f"feature flags resolve independently (got {result})"
 
 
-@pytest.mark.parametrize("export, modify_toggle", _FLAG_CASES)
-def test_resolve_features_flag_matrix(export, modify_toggle, tmp_path):
-    """Every pair of authored feature flags maps to the same booleans."""
-    _run_feature_case(export, modify_toggle, str(tmp_path))
+@pytest.mark.parametrize("export, modify_toggle, open_disabled_mod", _FLAG_CASES)
+def test_resolve_features_flag_matrix(
+        export, modify_toggle, open_disabled_mod, tmp_path):
+    """Every authored feature combination maps to the same booleans."""
+    _run_feature_case(
+        export, modify_toggle, open_disabled_mod, str(tmp_path))
 
 
 def test_missing_feature_config_defaults_enabled(tmp_path):
     result = build.resolve_features(str(tmp_path / "does_not_exist.ini"))
-    assert result == {"export": True, "modify_toggle": True}
+    assert result == {
+        "export": True, "modify_toggle": True, "open_disabled_mod": True,
+    }
 
 
 def test_write_baked_features_round_trips_through_import():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "_baked_features_test.py")
-        build.write_baked_features({"export": False, "modify_toggle": True}, path=path)
+        build.write_baked_features({
+            "export": False, "modify_toggle": True, "open_disabled_mod": False,
+        }, path=path)
         ns = {}
         with open(path, encoding="utf-8") as fh:
             exec(compile(fh.read(), path, "exec"), ns)
-        assert ns.get("EXPORT") is False and ns.get("MODIFY_TOGGLE") is True, (
+        assert (ns.get("EXPORT") is False
+                and ns.get("MODIFY_TOGGLE") is True
+                and ns.get("OPEN_DISABLED_MOD") is False), (
             f"the generated module's constants match the flags passed in "
-            f"(got EXPORT={ns.get('EXPORT')!r}, MODIFY_TOGGLE={ns.get('MODIFY_TOGGLE')!r})")
+            f"(got EXPORT={ns.get('EXPORT')!r}, "
+            f"MODIFY_TOGGLE={ns.get('MODIFY_TOGGLE')!r}, "
+            f"OPEN_DISABLED_MOD={ns.get('OPEN_DISABLED_MOD')!r})")
         build.clean_baked_features(path=path)
     assert not os.path.isfile(path), "clean_baked_features removes the generated module"
 
@@ -88,10 +103,18 @@ def test_write_baked_features_round_trips_through_import():
 @pytest.mark.parametrize(
     "frozen, baked, expected",
     [
-        (False, (False, False), {"export": True, "modify_toggle": True}),
-        (True, (False, True), {"export": False, "modify_toggle": True}),
-        (True, None, {"export": True, "modify_toggle": True}),
-        (True, (False, None), {"export": False, "modify_toggle": True}),
+        (False, (False, False, False), {
+            "export": True, "modify_toggle": True, "open_disabled_mod": True,
+        }),
+        (True, (False, True, False), {
+            "export": False, "modify_toggle": True, "open_disabled_mod": False,
+        }),
+        (True, None, {
+            "export": True, "modify_toggle": True, "open_disabled_mod": True,
+        }),
+        (True, (False, None, True), {
+            "export": False, "modify_toggle": True, "open_disabled_mod": True,
+        }),
     ],
     ids=["source-ignores-baked", "frozen-reads-baked",
          "frozen-missing-module", "frozen-missing-attribute"],
@@ -107,6 +130,8 @@ def test_runtime_feature_resolution(frozen, baked, expected, monkeypatch):
             module.EXPORT = baked[0]
         if baked[1] is not None:
             module.MODIFY_TOGGLE = baked[1]
+        if baked[2] is not None:
+            module.OPEN_DISABLED_MOD = baked[2]
         monkeypatch.setitem(sys.modules, module_name, module)
 
     assert features.get_features() == expected

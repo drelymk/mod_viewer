@@ -66,6 +66,11 @@ body {
 }
 #open-btn:hover:not(:disabled) { background: var(--success-hover); }
 #open-btn:disabled { opacity: .45; cursor: default; }
+#open-disabled-mod {
+  width: 14px; height: 14px; margin: 0 -4px 0 0; accent-color: var(--success);
+  cursor: pointer;
+}
+#open-disabled-mod:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .pending-indicator {
   display: none; font-size: 11px; color: var(--warning); background: #2b2111;
   border: 1px solid #4d3a14; border-radius: 6px; padding: 4px 8px; white-space: nowrap;
@@ -856,6 +861,7 @@ body.feature-modify-toggle-off #toggle-add-btn { display: none; }
 body.feature-modify-toggle-off .toggle-actions { display: none; }
 body.feature-modify-toggle-off #present-action-btn { display: none; }
 body.feature-modify-toggle-off .present-author-actions { display: none; }
+body.feature-open-disabled-mod-off #open-disabled-mod { display: none; }
 .menu-slider-item {
   gap: 7px;
 }

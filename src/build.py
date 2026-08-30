@@ -408,11 +408,15 @@ def verify_features():
         raise RuntimeError(f"missing feature-flags config: {FEATURES_FILE}")
 
 
-_FEATURE_DEFAULTS = {"export": True, "modify_toggle": True}
+_FEATURE_DEFAULTS = {
+    "export": True,
+    "modify_toggle": True,
+    "open_disabled_mod": True,
+}
 
 
 def resolve_features(ini_path):
-    """Parse features.ini into {"export": bool, "modify_toggle": bool}.
+    """Parse features.ini into the resolved optional feature flags.
 
     This is the one place that ini gets read — the resolved booleans are
     baked into the exe at build time (write_baked_features()) instead of
@@ -455,6 +459,7 @@ def write_baked_features(flags, path=BAKED_FEATURES_MODULE):
             "# a safety net should a build ever be interrupted first.\n"
             f"EXPORT = {flags['export']!r}\n"
             f"MODIFY_TOGGLE = {flags['modify_toggle']!r}\n"
+            f"OPEN_DISABLED_MOD = {flags['open_disabled_mod']!r}\n"
         )
 
 

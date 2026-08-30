@@ -322,7 +322,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             "summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
         "panelOpacity": panel_opacity,
         "panelOpacityApi": panel_opacity_api,
-        "calls": {"loadMod": [], "loadAsset": [], "listSubfolders": [],
+        "calls": {"loadMod": [], "loadModArgs": [], "loadAsset": [], "listSubfolders": [],
                    "listAssetSubfolders": [],
                    "selectAssetFolder": [],
                    "rebuildAssetIndex": [],
@@ -357,8 +357,9 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.calls.selectAssetFolder.push(path);
               return path;
             },
-            load_mod: async path => {
+            load_mod: async (path, disabledIni = false) => {
               state.calls.loadMod.push(path);
+              state.calls.loadModArgs.push([path, disabledIni]);
               if (state.blockLoads?.[path]) {
                 await new Promise(resolve => {
                   (loadWaiters[path] ||= []).push(resolve);
