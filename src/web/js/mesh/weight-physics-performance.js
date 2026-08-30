@@ -14,6 +14,10 @@ const STAT_NAMES = Object.freeze([
   'physicsUiNotifyCount',
   'dynamicShadowUpdateCount',
   'shadowFitCount',
+  'sourcePhysicsRigCount',
+  'sourcePhysicsStepCount',
+  'sourceTransformBuildCount',
+  'participatingPhysicsMeshCount',
 ]);
 
 const stats = Object.fromEntries(STAT_NAMES.map(name => [name, 0]));

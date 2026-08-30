@@ -72,6 +72,9 @@ export function invalidateControlDependencies(mesh) {
 }
 
 export function resetMeshes({ preserveModelOrientation = false } = {}) {
+  // Release source-level physics participants before their member geometry is
+  // disposed. This keeps teardown callbacks on live meshes.
+  destroyModelPhysicsSession();
   activeMeshes.forEach(mesh => {
     disposeSkinningExperiment(mesh);
     detachOutline(mesh);
@@ -84,7 +87,6 @@ export function resetMeshes({ preserveModelOrientation = false } = {}) {
     });
   });
   activeMeshes.length = 0;
-  destroyModelPhysicsSession();
   clearTextureRunGroups();
   resetModelOrientation({ preserveRotation: preserveModelOrientation });
   resetCharacterShadows();

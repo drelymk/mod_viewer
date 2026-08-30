@@ -1804,6 +1804,24 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         assert page.locator(".weight-bone-popover").is_hidden()
         assert page.locator(".weight-pick-model").get_attribute(
             "aria-pressed") == "false"
+
+        page.locator(".weight-pick-model").click()
+        page.evaluate("""() => {
+          const canvas = document.querySelector('#canvas-container canvas');
+          canvas.dispatchEvent(new PointerEvent('pointerdown', {
+            bubbles: true, button: 0, pointerId: 77,
+            clientX: 10, clientY: 10,
+          }));
+          canvas.dispatchEvent(new PointerEvent('pointercancel', {
+            bubbles: true, pointerId: 77,
+          }));
+        }""")
+        page.wait_for_function(
+            "!window.modViewer.getModelWeightState().picking")
+        cancelled = page.evaluate(
+            "window.modViewer.getModelWeightState()")
+        assert cancelled["pickedPoint"] == previous_pick
+        assert cancelled["pickStatus"] == ""
     finally:
         context.close()
 
@@ -2164,6 +2182,27 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
           return window.modViewer.activeMeshes.map(mesh =>
             getSkinningState(mesh).heatmapMode);
         }""") == ["bone", None]
+        distinct = page.evaluate("""async () => {
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          experiment.setSelectedBones([
+            {sourceKey: 'hair/hairblend.buf|offset=0',
+             sourceFile: 'Hair/HairBlend.buf', boneIdOffset: 0, boneIds: [1]},
+            {sourceKey: 'coat/coatblend.buf|offset=0',
+             sourceFile: 'Coat/CoatBlend.buf', boneIdOffset: 0, boneIds: [1]},
+          ]);
+          const [hair, coat] = window.modViewer.activeMeshes.map(
+            experiment.getSkinningState);
+          return {
+            physics: experiment.getModelPhysicsState(),
+            independentState: hair.physicsState !== coat.physicsState,
+            independentTransforms: hair.physicsTransforms
+              !== coat.physicsTransforms,
+          };
+        }""")
+        assert distinct["physics"]["participantCount"] == 2
+        assert distinct["physics"]["participatingMeshCount"] == 2
+        assert distinct["independentState"]
+        assert distinct["independentTransforms"]
     finally:
         context.close()
 
@@ -2216,19 +2255,53 @@ def test_weight_selection_shared_source_participates_per_mesh(
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
         result = page.evaluate("""async () => {
           const {getSkinningState} = await import('./js/mesh/weight-experiment.js');
+          const meshes = window.modViewer.activeMeshes;
+          const [body, hair] = meshes.map(getSkinningState);
+          const scene = await import('./js/scene/scene.js');
+          scene.rotateModelQuarterTurn(meshes);
+          const movedPositions = meshes.map(mesh =>
+            [...mesh.geometry.attributes.position.array]);
+          const hiddenMesh = meshes[1];
+          hiddenMesh.visible = false;
+          window.dispatchEvent(new CustomEvent(
+            'mod-viewer-mesh-state-changed', {detail: {meshes: [hiddenMesh]}}));
+          const hiddenState = window.modViewer.getModelPhysicsState();
+          hiddenMesh.visible = true;
+          window.dispatchEvent(new CustomEvent(
+            'mod-viewer-mesh-state-changed', {detail: {meshes: [hiddenMesh]}}));
+          const revealedPositions = [
+            ...hiddenMesh.geometry.attributes.position.array];
+          const maxSeamError = movedPositions[0].reduce((max, value, index) =>
+            Math.max(max, Math.abs(value - movedPositions[1][index])), 0);
+          const maxRevealError = revealedPositions.reduce((max, value, index) =>
+            Math.max(max, Math.abs(value -
+              meshes[0].geometry.attributes.position.array[index])), 0);
           return {
             sources: window.modViewer.getModelWeightState().sources,
-            masks: window.modViewer.activeMeshes.map(mesh =>
+            masks: meshes.map(mesh =>
               getSkinningState(mesh).selectedWeightMask[0]),
             physics: window.modViewer.getModelPhysicsState(),
-            participants: window.modViewer.activeMeshes.map(mesh =>
+            hiddenPhysics: hiddenState,
+            participants: meshes.map(mesh =>
               getSkinningState(mesh).physicsEnabled),
+            sharedState: body.physicsState === hair.physicsState,
+            sharedTransforms: body.physicsTransforms === hair.physicsTransforms,
+            sharedRotation: body.physicsRotations === hair.physicsRotations,
+            maxSeamError,
+            maxRevealError,
           };
         }""")
         assert len(result["sources"]) == 1
         assert result["masks"] == pytest.approx([.8, .8])
         assert result["participants"] == [True, True]
-        assert result["physics"]["participantCount"] == 2
+        assert result["physics"]["participantCount"] == 1
+        assert result["physics"]["participatingMeshCount"] == 2
+        assert result["hiddenPhysics"]["participantCount"] == 1
+        assert result["sharedState"]
+        assert result["sharedTransforms"]
+        assert result["sharedRotation"]
+        assert result["maxSeamError"] == pytest.approx(0)
+        assert result["maxRevealError"] == pytest.approx(0)
     finally:
         context.close()
 

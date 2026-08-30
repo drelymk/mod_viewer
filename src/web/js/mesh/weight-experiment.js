@@ -68,6 +68,7 @@ export {
 } from './weight-physics.js';
 const states = new WeakMap();
 const knownMeshes = new Set();
+const sourcePhysicsRigs = new Map();
 let activeExperimentHelperMesh = null;
 let modelWeightGeneration = 0;
 let selectedWeightMaskBuildCount = 0;
@@ -646,6 +647,7 @@ function setModelWeightLoadError(error) {
 
 function resetModelWeightState() {
   modelWeightGeneration += 1;
+  sourcePhysicsRigs.clear();
   modelWeightState.loaded = false;
   modelWeightState.loading = false;
   modelWeightState.promise = null;
@@ -829,201 +831,284 @@ function beginPhysicsGeometryUpdate(mesh, state) {
   mesh.frustumCulled = false;
 }
 
-function createPhysicsParticipant(mesh, state) {
+function buildSourcePhysicsTransforms(rig) {
+  rig.transforms = buildForestTransformsFromLocalRotations(
+    rig.physicsForest,
+    rig.physicsCenterByBoneId || rig.centerByBoneId, {
+      getRotation: boneId => rig.physicsState?.joints.get(boneId)
+        ?.rotationVector,
+      rotationOutput: rig.rotations,
+      transformCache: rig.physicsTransformCache,
+    });
+  addWeightPhysicsPerformance('sourceTransformBuildCount');
+  return rig.transforms;
+}
+
+function forEachRigMesh(rig, callback) {
+  rig.meshes.forEach(mesh => {
+    const state = states.get(mesh);
+    if (state?.loaded) callback(mesh, state);
+  });
+}
+
+function syncRigAliases(rig) {
+  forEachRigMesh(rig, (mesh, state) => {
+    syncMeshPhysicsAlias(mesh, state, rig, !!rig.physicsState);
+    for (const key of [
+      'lastRootAngularDeltaVector', 'lastRootTranslationDeltaWorld',
+      'lastRootTranslationDeltaLocal', 'lastTranslationLagRotationVector',
+      'lastRootLinearVelocityWorld', 'lastRootLinearVelocityLocal',
+      'lastRootLinearVelocityDelta', 'physicsVirtualLinearVelocityLocal',
+    ]) {
+      if (rig[key]) state[key] = [...rig[key]];
+    }
+    for (const key of [
+      'lastRootAngularDeltaMagnitude', 'motionEventCount',
+      'lastTranslationLagRotationMagnitude', 'translationEventCount',
+    ]) {
+      if (rig[key] !== undefined) state[key] = rig[key];
+    }
+    if (rig.lastPhysicsStepMetrics) {
+      state.lastPhysicsStepMetrics = rig.lastPhysicsStepMetrics;
+    }
+  });
+}
+
+function applySourceDeformation(rig, {visibleOnly = true, meshes = null} = {}) {
+  if (!rig.physicsState || !rig.physicsForest) return false;
+  buildSourcePhysicsTransforms(rig);
+  // Keep every member's diagnostic aliases on the same source-frame maps,
+  // including when only one newly visible member is being redrawn.
+  syncRigAliases(rig);
+  let changed = false;
+  const target = meshes ? new Set(meshes) : null;
+  forEachRigMesh(rig, (mesh, state) => {
+    if (target && !target.has(mesh)) return;
+    if (visibleOnly && !mesh.visible) return;
+    if (!state.physicsActiveVertices?.length) return;
+    beginPhysicsGeometryUpdate(mesh, state);
+    syncMeshPhysicsAlias(mesh, state, rig, true);
+    changed = applyDeformation(mesh, state, {
+      request: false, invalidateShadow: false, skipHidden: false,
+      physicsTransforms: rig.transforms, physicsRotations: rig.rotations,
+    }) || changed;
+    addWeightPhysicsPerformance('participatingPhysicsMeshCount');
+  });
+  return changed;
+}
+
+function createSourcePhysicsParticipant(rig) {
   return {
-    mesh,
+    key: rig.sourceKey,
+    getMeshCount: () => rig.meshes.size,
     onSessionAttached(settings) {
-      state.physicsEnabled = true;
-      state.deformationMode = 'physics';
-      state.physicsParticipantStatus = 'participating';
-      state.physicsParticipantError = null;
-      state.physicsState = initializePhysicsState(state.physicsForest);
-      state.physicsSettled = false;
-      beginPhysicsGeometryUpdate(mesh, state);
-      refreshParticipantDerivedState(mesh, state, settings);
-      applyDeformation(mesh, state, {
-        request: false, invalidateShadow: false, skipHidden: true,
-      });
+      rig.physicsState = initializePhysicsState(rig.physicsForest);
+      rig.physicsSettled = false;
+      refreshParticipantDerivedState(
+        [...rig.meshes][0], rig, settings);
+      syncRigAliases(rig);
+      applySourceDeformation(rig, {visibleOnly: false});
     },
     onSessionDetached() {
-      state.physicsEnabled = false;
-      state.deformationMode = null;
-      state.physicsState = null;
-      state.physicsTransforms = null;
-      state.physicsRotations.clear();
-      state.physicsJointLimits = null;
-      state.physicsConstraintDiagnostics = null;
-      state.physicsGravityAccelerations = null;
-      state.physicsGravityDiagnostics = null;
-      state.physicsTargetByBoneId = null;
-      state.physicsEquilibriumByBoneId = null;
-      state.physicsSettled = true;
-      clearMotionDiagnostics(state);
-      applyDeformation(mesh, state, {
-        request: false, invalidateShadow: false, skipHidden: false,
+      forEachRigMesh(rig, (mesh, state) => {
+        state.physicsEnabled = false;
+        state.deformationMode = null;
+        state.physicsState = null;
+        state.physicsTransforms = null;
+        state.physicsRotations = new Map();
+        state.physicsJointLimits = null;
+        state.physicsConstraintDiagnostics = null;
+        state.physicsGravityAccelerations = null;
+        state.physicsGravityDiagnostics = null;
+        state.physicsTargetByBoneId = null;
+        state.physicsEquilibriumByBoneId = null;
+        state.physicsSettled = true;
+        state.physicsParticipantStatus = 'not-selected';
+        state.physicsParticipantError = null;
+        clearMotionDiagnostics(state);
+        applyDeformation(mesh, state, {
+          request: false, invalidateShadow: false, skipHidden: false,
+        });
+        finalizePhysicsGeometry(mesh, state);
       });
-      finalizePhysicsGeometry(mesh, state);
+      rig.physicsState = null;
+      rig.transforms.clear();
+      rig.rotations.clear();
+      rig.physicsSettled = true;
+      clearMotionDiagnostics(rig);
+      rig.lastPhysicsStepMetrics = null;
       invalidateCharacterShadowGeometry({request: false});
       requestRender();
     },
     onSettingsChanged(settings) {
-      refreshParticipantDerivedState(mesh, state, settings);
+      refreshParticipantDerivedState(
+        [...rig.meshes][0], rig, settings);
       if (settings.constraintsEnabled) {
-        applyPhysicsJointLimits(state.physicsState, state.physicsJointLimits);
+        applyPhysicsJointLimits(rig.physicsState, rig.physicsJointLimits);
       }
-      state.physicsSettled = false;
+      rig.physicsSettled = false;
+      syncRigAliases(rig);
     },
     onModelMotion(motion) {
-      if (!state.physicsState || !state.physicsForest) return false;
+      if (!rig.physicsState || !rig.physicsForest) return false;
+      const representative = [...rig.meshes][0];
       const rotationMagnitude = Math.hypot(...motion.rotationVector);
-      state.lastRootAngularDeltaVector = [...motion.rotationVector];
-      state.lastRootAngularDeltaMagnitude = rotationMagnitude;
-      state.motionEventCount += 1;
+      rig.lastRootAngularDeltaVector = [...motion.rotationVector];
+      rig.lastRootAngularDeltaMagnitude = rotationMagnitude;
+      rig.motionEventCount = (rig.motionEventCount || 0) + 1;
       let physicsChanged = false;
       let immediateDeformation = false;
       const settings = motion.settings;
       if (rotationMagnitude >= 1e-10) {
         refreshGravityState(
-          mesh, state, settings, motion.modelOrientation);
-        refreshPhysicsEquilibrium(state, settings);
+          representative, rig, settings, motion.modelOrientation);
+        refreshPhysicsEquilibrium(rig, settings);
       }
       if (rotationMagnitude >= 1e-10 && settings.angularResponse > 0) {
         applyReferenceFrameAngularDelta(
-          state.physicsState, state.physicsForest,
+          rig.physicsState, rig.physicsForest,
           motion.rotationVector, settings.angularResponse,
-          settings.constraintsEnabled ? state.physicsJointLimits : null);
+          settings.constraintsEnabled ? rig.physicsJointLimits : null);
         physicsChanged = true;
         immediateDeformation = true;
       }
       if (motion.deltaLinearVelocityWorld) {
         const deltaVelocityLocal = localVector(
           motion.deltaLinearVelocityWorld, motion.previousModelOrientation);
-        state.lastRootLinearVelocityWorld = [...motion.linearVelocityWorld];
-        state.lastRootLinearVelocityLocal = [...localVector(
+        rig.lastRootLinearVelocityWorld = [...motion.linearVelocityWorld];
+        rig.lastRootLinearVelocityLocal = [...localVector(
           motion.linearVelocityWorld, motion.previousModelOrientation)];
-        state.lastRootLinearVelocityDelta = deltaVelocityLocal;
+        rig.lastRootLinearVelocityDelta = deltaVelocityLocal;
         const diagnostics = {};
         applyReferenceFrameLinearVelocityDelta(
-          state.physicsState, state.physicsForest,
-          state.physicsCenterByBoneId || state.centerByBoneId,
+          rig.physicsState, rig.physicsForest,
+          rig.physicsCenterByBoneId || rig.centerByBoneId,
           deltaVelocityLocal, settings.velocityResponse, diagnostics,
-          settings.constraintsEnabled ? state.physicsJointLimits : null);
+          settings.constraintsEnabled ? rig.physicsJointLimits : null);
         physicsChanged = diagnostics.maxDeltaAngularVelocityMagnitude >= 1e-10
           || physicsChanged;
       } else if (Math.hypot(...motion.translationDeltaWorld) >= 1e-10) {
         const translationLocal = localVector(
           motion.translationDeltaWorld, motion.previousModelOrientation);
-        state.lastRootTranslationDeltaWorld = [
-          ...motion.translationDeltaWorld];
-        state.lastRootTranslationDeltaLocal = [...translationLocal];
-        state.translationEventCount += 1;
+        rig.lastRootTranslationDeltaWorld = [...motion.translationDeltaWorld];
+        rig.lastRootTranslationDeltaLocal = [...translationLocal];
+        rig.translationEventCount = (rig.translationEventCount || 0) + 1;
         const diagnostics = {};
         applyReferenceFrameTranslationDelta(
-          state.physicsState, state.physicsForest,
-          state.physicsCenterByBoneId || state.centerByBoneId,
+          rig.physicsState, rig.physicsForest,
+          rig.physicsCenterByBoneId || rig.centerByBoneId,
           translationLocal, settings.translationResponse, diagnostics,
-          settings.constraintsEnabled ? state.physicsJointLimits : null);
-        state.lastTranslationLagRotationVector = [
+          settings.constraintsEnabled ? rig.physicsJointLimits : null);
+        rig.lastTranslationLagRotationVector = [
           ...(diagnostics.maxLagRotationVector || [0, 0, 0])];
-        state.lastTranslationLagRotationMagnitude = Number(
+        rig.lastTranslationLagRotationMagnitude = Number(
           diagnostics.maxLagRotationMagnitude) || 0;
-        if (state.lastTranslationLagRotationMagnitude >= 1e-10
+        if (rig.lastTranslationLagRotationMagnitude >= 1e-10
             && settings.translationResponse > 0) {
           physicsChanged = true;
           immediateDeformation = true;
         }
       }
       if (!physicsChanged) return false;
-      state.physicsSettled = false;
-      if (immediateDeformation) {
-        beginPhysicsGeometryUpdate(mesh, state);
-        applyDeformation(mesh, state, {
-          request: false, invalidateShadow: false, skipHidden: true,
-        });
-      }
+      rig.physicsSettled = false;
+      syncRigAliases(rig);
+      if (immediateDeformation) applySourceDeformation(rig);
       return true;
     },
     onVirtualMotion(motion) {
-      if (!state.physicsState || !state.physicsForest
+      const representative = [...rig.meshes][0];
+      if (!rig.physicsState || !rig.physicsForest || !representative
           || !motion.modelOrientation) return false;
       const currentVelocityLocal = localVector(
         motion.velocityWorld, motion.modelOrientation)
-        .map(value => value * physicsReferenceRadius(mesh, state));
+        .map(value => value * physicsReferenceRadius(representative, rig));
       const deltaVelocityLocal = localVector(
         motion.deltaVelocityWorld, motion.modelOrientation)
-        .map(value => value * physicsReferenceRadius(mesh, state));
-      state.physicsVirtualLinearVelocityLocal = motion.active === false
+        .map(value => value * physicsReferenceRadius(representative, rig));
+      rig.physicsVirtualLinearVelocityLocal = motion.active === false
         ? [0, 0, 0] : [...currentVelocityLocal];
       const diagnostics = {};
       applyReferenceFrameLinearVelocityDelta(
-        state.physicsState, state.physicsForest,
-        state.physicsCenterByBoneId || state.centerByBoneId,
+        rig.physicsState, rig.physicsForest,
+        rig.physicsCenterByBoneId || rig.centerByBoneId,
         deltaVelocityLocal, motion.settings.velocityResponse, diagnostics,
-        motion.settings.constraintsEnabled ? state.physicsJointLimits : null);
-      if (motion.active === false) state.physicsSettled = false;
+        motion.settings.constraintsEnabled ? rig.physicsJointLimits : null);
+      if (motion.active === false) rig.physicsSettled = false;
+      syncRigAliases(rig);
       return diagnostics.maxDeltaAngularVelocityMagnitude >= 1e-10
         || motion.active === false;
     },
     step(dt, settings) {
-      if (!state.physicsState || !state.physicsForest) return;
-      beginPhysicsGeometryUpdate(mesh, state);
-      state.lastPhysicsStepMetrics = stepSpringPhysics(
-        state.physicsState, state.physicsForest, dt, {
+      if (!rig.physicsState || !rig.physicsForest) return;
+      rig.lastPhysicsStepMetrics = stepSpringPhysics(
+        rig.physicsState, rig.physicsForest, dt, {
           frequencyHz: settings.frequencyHz,
           dampingRatio: settings.dampingRatio,
-          targetRotation: [0, 0, 0],
-          targetRotationByBoneId: state.physicsTargetByBoneId,
-          constrainedTargetRotationByBoneId: state.physicsTargetByBoneId,
-          equilibriumRotationByBoneId: state.physicsEquilibriumByBoneId,
+          targetRotationByBoneId: rig.physicsTargetByBoneId,
+          constrainedTargetRotationByBoneId: rig.physicsTargetByBoneId,
+          equilibriumRotationByBoneId: rig.physicsEquilibriumByBoneId,
           externalAngularAccelerationByBoneId: settings.gravityEnabled
-            ? state.physicsGravityAccelerations : null,
+            ? rig.physicsGravityAccelerations : null,
           jointLimitByBoneId: settings.constraintsEnabled
-            ? state.physicsJointLimits : null,
+            ? rig.physicsJointLimits : null,
           maxDt: MODEL_PHYSICS_STEP,
         });
+      addWeightPhysicsPerformance('sourcePhysicsStepCount');
     },
     updateSettled(settings) {
-      if (!state.physicsState || !state.physicsForest) return;
-      state.physicsSettled = isPhysicsSettled(
-        state.physicsState, state.physicsForest, [0, 0, 0], {
+      if (!rig.physicsState || !rig.physicsForest) return;
+      rig.physicsSettled = isPhysicsSettled(
+        rig.physicsState, rig.physicsForest, [0, 0, 0], {
           frequencyHz: settings.frequencyHz,
-          targetRotationByBoneId: state.physicsTargetByBoneId,
-          constrainedTargetRotationByBoneId: state.physicsTargetByBoneId,
-          equilibriumRotationByBoneId: state.physicsEquilibriumByBoneId,
+          targetRotationByBoneId: rig.physicsTargetByBoneId,
+          constrainedTargetRotationByBoneId: rig.physicsTargetByBoneId,
+          equilibriumRotationByBoneId: rig.physicsEquilibriumByBoneId,
           externalAngularAccelerationByBoneId: settings.gravityEnabled
-            ? state.physicsGravityAccelerations : null,
+            ? rig.physicsGravityAccelerations : null,
           jointLimitByBoneId: settings.constraintsEnabled
-            ? state.physicsJointLimits : null,
+            ? rig.physicsJointLimits : null,
         });
+      syncRigAliases(rig);
     },
     onSettled() {
-      finalizePhysicsGeometry(mesh, state);
+      forEachRigMesh(rig, (mesh, state) => finalizePhysicsGeometry(mesh, state));
       invalidateCharacterShadowGeometry({request: false});
     },
-    isSettled: () => state.physicsSettled,
-    isVisible: () => mesh.visible,
-    deform(options) {
-      beginPhysicsGeometryUpdate(mesh, state);
-      return applyDeformation(mesh, state, options);
+    isSettled: () => rig.physicsSettled,
+    isVisible: () => [...rig.meshes].some(mesh => {
+      const state = states.get(mesh);
+      return mesh.visible && !!state?.physicsActiveVertices?.length;
+    }),
+    onMeshStateChanged(changedMeshes) {
+      const affected = changedMeshes.filter(mesh => rig.meshes.has(mesh)
+        && mesh.visible
+        && states.get(mesh)?.physicsActiveVertices?.length);
+      if (!affected.length) return false;
+      return applySourceDeformation(rig, {meshes: affected, visibleOnly: false});
+    },
+    deform() {
+      return applySourceDeformation(rig);
     },
     reset(settings) {
-      resetPhysicsState(state.physicsState);
-      refreshParticipantDerivedState(mesh, state, settings);
-      state.physicsSettled = !settings.gravityEnabled;
-      clearMotionDiagnostics(state);
-      applyDeformation(mesh, state, {
-        request: false, invalidateShadow: false, skipHidden: true,
-      });
-      if (state.physicsSettled) {
-        finalizePhysicsGeometry(mesh, state);
+      resetPhysicsState(rig.physicsState);
+      refreshParticipantDerivedState(
+        [...rig.meshes][0], rig, settings);
+      rig.physicsSettled = !settings.gravityEnabled;
+      clearMotionDiagnostics(rig);
+      rig.lastPhysicsStepMetrics = null;
+      forEachRigMesh(rig, (mesh, state) => clearMotionDiagnostics(state));
+      syncRigAliases(rig);
+      applySourceDeformation(rig, {visibleOnly: false});
+      if (rig.physicsSettled) {
+        forEachRigMesh(rig, (mesh, state) => finalizePhysicsGeometry(mesh, state));
         invalidateCharacterShadowGeometry({request: false});
       }
     },
   };
 }
 
-function averageSelectedCenter(state, ids) {
-  const centers = ids.map(id => state.centerByBoneId?.get(id))
+function averageSelectedCenter(centerByBoneId, ids) {
+  const centers = ids.map(id => centerByBoneId?.get(id))
     .filter(center => Array.isArray(center) && center.length >= 3);
   if (!centers.length) return [0, 0, 0];
   return centers.reduce((sum, center) => [
@@ -1049,12 +1134,199 @@ export function selectAttachmentRelationship(relationships) {
   return [...relationships || []].sort(attachmentRelationshipSort)[0] || null;
 }
 
-function selectedPhysicsForest(mesh, state) {
-  const graph = ensureInfluenceGraph(mesh, state);
+function aggregateSourceInfluenceGraph(members) {
+  const nodeTotals = new Map();
+  const relationshipTotals = new Map();
+  for (const mesh of members) {
+    const state = states.get(mesh);
+    if (!state?.loaded) continue;
+    const graph = ensureInfluenceGraph(mesh, state);
+    for (const node of graph.nodes || []) {
+      const boneId = Number(node.boneId);
+      const totalWeight = Number(node.totalWeight) || 0;
+      if (!Number.isFinite(boneId) || totalWeight <= 0) continue;
+      const center = node.weightedCenter || [0, 0, 0];
+      const radius = Math.max(0, Number(node.weightedRadius) || 0);
+      const entry = nodeTotals.get(boneId) || {
+        boneId,
+        totalWeight: 0,
+        affectedVertexCount: 0,
+        maxVertexWeight: 0,
+        weightedX: 0,
+        weightedY: 0,
+        weightedZ: 0,
+        secondMoment: 0,
+      };
+      entry.totalWeight += totalWeight;
+      entry.affectedVertexCount += Number(node.affectedVertexCount) || 0;
+      entry.maxVertexWeight = Math.max(
+        entry.maxVertexWeight, Number(node.maxVertexWeight) || 0);
+      entry.weightedX += totalWeight * (Number(center[0]) || 0);
+      entry.weightedY += totalWeight * (Number(center[1]) || 0);
+      entry.weightedZ += totalWeight * (Number(center[2]) || 0);
+      entry.secondMoment += totalWeight * (
+        radius * radius + (Number(center[0]) || 0) ** 2
+        + (Number(center[1]) || 0) ** 2
+        + (Number(center[2]) || 0) ** 2);
+      nodeTotals.set(boneId, entry);
+    }
+    for (const relationship of graph.relationships || []) {
+      const boneA = Number(relationship.boneA);
+      const boneB = Number(relationship.boneB);
+      if (!Number.isFinite(boneA) || !Number.isFinite(boneB)) continue;
+      const key = pairKey(boneA, boneB);
+      const entry = relationshipTotals.get(key) || {
+        boneA: Math.min(boneA, boneB),
+        boneB: Math.max(boneA, boneB),
+        sharedVertexCount: 0,
+        minOverlap: 0,
+        productOverlap: 0,
+      };
+      entry.sharedVertexCount += Number(relationship.sharedVertexCount) || 0;
+      entry.minOverlap += Number(relationship.minOverlap) || 0;
+      entry.productOverlap += Number(relationship.productOverlap) || 0;
+      relationshipTotals.set(key, entry);
+    }
+  }
+
+  const nodes = [...nodeTotals.values()].map(entry => {
+    const center = entry.totalWeight > 0 ? [
+      entry.weightedX / entry.totalWeight,
+      entry.weightedY / entry.totalWeight,
+      entry.weightedZ / entry.totalWeight,
+    ] : [0, 0, 0];
+    const centerLengthSquared = center.reduce(
+      (sum, value) => sum + value * value, 0);
+    return {
+      boneId: entry.boneId,
+      totalWeight: entry.totalWeight,
+      affectedVertexCount: entry.affectedVertexCount,
+      maxVertexWeight: entry.maxVertexWeight,
+      weightedCenter: center,
+      weightedRadius: Math.sqrt(Math.max(0,
+        entry.secondMoment / entry.totalWeight - centerLengthSquared)),
+    };
+  }).sort((left, right) => left.boneId - right.boneId);
+  const nodeById = new Map(nodes.map(node => [node.boneId, node]));
+  const totalWeight = nodes.reduce((sum, node) => sum + node.totalWeight, 0);
+  const sourceCenter = nodes.length ? nodes.reduce((sum, node) => [
+    sum[0] + node.weightedCenter[0] * node.totalWeight,
+    sum[1] + node.weightedCenter[1] * node.totalWeight,
+    sum[2] + node.weightedCenter[2] * node.totalWeight,
+  ], [0, 0, 0]).map(value => totalWeight > 0 ? value / totalWeight : 0)
+    : [0, 0, 0];
+  const radius = nodes.length ? Math.max(...nodes.map(node => {
+    const distance = centerDistance(node.weightedCenter, sourceCenter) || 0;
+    return distance + (Number(node.weightedRadius) || 0);
+  })) : null;
+  const relationships = [...relationshipTotals.values()].map(relationship => {
+    const nodeA = nodeById.get(relationship.boneA);
+    const nodeB = nodeById.get(relationship.boneB);
+    const supportA = Number(nodeA?.totalWeight) || 0;
+    const supportB = Number(nodeB?.totalWeight) || 0;
+    const containmentDenominator = Math.min(supportA, supportB);
+    const containment = containmentDenominator > 0
+      ? relationship.minOverlap / containmentDenominator : 0;
+    const jaccardDenominator = supportA + supportB - relationship.minOverlap;
+    const distance = centerDistance(
+      nodeA?.weightedCenter, nodeB?.weightedCenter);
+    const normalizedDistance = distance !== null && radius > 0
+      ? distance / radius : null;
+    const distancePenalty = Number.isFinite(normalizedDistance)
+      ? 1 / (1 + Math.max(0, normalizedDistance)) : 1;
+    return {
+      ...relationship,
+      containment,
+      jaccard: jaccardDenominator > 0
+        ? relationship.minOverlap / jaccardDenominator : 0,
+      centerDistance: distance,
+      normalizedDistance,
+      treeEdgeScore: containment * distancePenalty,
+    };
+  });
+  return {nodes, relationships, boundingSphereRadius: radius};
+}
+
+function createSourcePhysicsRig(sourceKey, members) {
+  const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
+  const rig = {
+    key: sourceKey,
+    sourceKey,
+    sourceFile: descriptor?.sourceFile || '',
+    boneIdOffset: descriptor?.boneIdOffset ?? 0,
+    meshes: new Set(members),
+    influenceGraph: null,
+    centerByBoneId: null,
+    physicsCenterByBoneId: null,
+    physicsForest: null,
+    selectionKey: '',
+    physicsState: null,
+    physicsSettled: true,
+    physicsJointLimits: null,
+    physicsConstraintDiagnostics: null,
+    physicsGravityAccelerations: null,
+    physicsGravityDiagnostics: null,
+    physicsGravityLocal: [...GRAVITY_WORLD_DIRECTION],
+    physicsTargetByBoneId: null,
+    physicsEquilibriumByBoneId: null,
+    physicsTransformCache: new Map(),
+    transforms: new Map(),
+    rotations: new Map(),
+  };
+  refreshSourcePhysicsRig(rig, members);
+  addWeightPhysicsPerformance('sourcePhysicsRigCount');
+  return rig;
+}
+
+function refreshSourcePhysicsRig(rig, members) {
+  rig.meshes = new Set(members);
+  rig.influenceGraph = aggregateSourceInfluenceGraph(members);
+  rig.centerByBoneId = new Map((rig.influenceGraph.nodes || []).map(node => [
+    node.boneId, node.weightedCenter]));
+  const selected = modelWeightState.selectedBonesBySource.get(rig.sourceKey)
+    || new Set();
+  rig.physicsForest = selectedPhysicsForest(
+    rig.influenceGraph, rig.centerByBoneId,
+    (rig.influenceGraph.nodes || []).map(node => node.boneId), selected);
+  const selectedIds = rig.physicsForest?.selectedBoneIds || [];
+  rig.selectionKey = selectedIds.join(',');
+  rig.physicsCenterByBoneId = rig.physicsForest?.centers || rig.centerByBoneId;
+  return rig;
+}
+
+function syncMeshPhysicsAlias(mesh, state, rig, enabled) {
+  state.physicsEnabled = !!enabled;
+  state.deformationMode = enabled ? 'physics' : null;
+  state.physicsState = enabled ? rig.physicsState : null;
+  state.physicsForest = enabled ? rig.physicsForest : null;
+  state.physicsCenterByBoneId = enabled
+    ? rig.physicsCenterByBoneId : state.centerByBoneId;
+  state.physicsJointLimits = enabled ? rig.physicsJointLimits : null;
+  state.physicsConstraintDiagnostics = enabled
+    ? rig.physicsConstraintDiagnostics : null;
+  state.physicsGravityAccelerations = enabled
+    ? rig.physicsGravityAccelerations : null;
+  state.physicsGravityDiagnostics = enabled
+    ? rig.physicsGravityDiagnostics : null;
+  state.physicsTargetByBoneId = enabled ? rig.physicsTargetByBoneId : null;
+  state.physicsEquilibriumByBoneId = enabled
+    ? rig.physicsEquilibriumByBoneId : null;
+  state.physicsGravityLocal = enabled
+    ? [...(rig.physicsGravityLocal || GRAVITY_WORLD_DIRECTION)]
+    : [...GRAVITY_WORLD_DIRECTION];
+  state.physicsTransforms = enabled ? rig.transforms : null;
+  state.physicsRotations = enabled ? rig.rotations : new Map();
+  state.physicsTransformCache = enabled ? rig.physicsTransformCache : new Map();
+  state.physicsSelectionKey = enabled ? rig.selectionKey : '';
+  state.physicsSettled = enabled ? rig.physicsSettled : true;
+  state.physicsParticipantStatus = enabled ? 'participating' : 'not-selected';
+  state.physicsParticipantError = null;
+}
+
+function selectedPhysicsForest(graph, centerByBoneId, boneIds, selectedBoneIds) {
   const selected = new Set(
-    normalizeSelectedBoneIds(
-      modelWeightState.selectedBonesBySource.get(state.skinningSourceKey))
-      .filter(id => state.boneIds.includes(id)));
+    normalizeSelectedBoneIds(selectedBoneIds)
+      .filter(id => boneIds.includes(id)));
   if (!selected.size) return null;
   const selectedNodes = (graph.nodes || []).filter(node =>
     selected.has(Number(node.boneId)));
@@ -1066,7 +1338,7 @@ function selectedPhysicsForest(mesh, state) {
   const physicsEdges = pruneSelectedRelationshipEdges(
     candidateTree.edges, graph.relationships, selected);
   const selectedTree = buildMaximumSpanningTree(selectedNodes, physicsEdges);
-  const centers = new Map(state.centerByBoneId || []);
+  const centers = new Map(centerByBoneId || []);
   const components = [];
   const componentByBoneId = {};
 
@@ -1108,7 +1380,7 @@ function selectedPhysicsForest(mesh, state) {
         return Math.hypot(...leftCenter) - Math.hypot(...rightCenter);
       })[0];
       centers.set(rootId, centers.get(attachmentBone)
-        || averageSelectedCenter(state, componentIds));
+        || averageSelectedCenter(centerByBoneId, componentIds));
       attachmentEdge = {
         boneA: rootId,
         boneB: attachmentBone,
@@ -1152,19 +1424,6 @@ function selectedPhysicsForest(mesh, state) {
   };
 }
 
-function refreshPhysicsSelectionState(mesh, state) {
-  if (!state?.loaded) return false;
-  const nextForest = selectedPhysicsForest(mesh, state);
-  const selectedIds = nextForest?.selectedBoneIds || [];
-  const nextKey = selectedIds.join(',');
-  const changed = state.physicsSelectionKey !== nextKey;
-  state.physicsForest = nextForest;
-  state.physicsCenterByBoneId = nextForest?.centers || state.centerByBoneId;
-  state.physicsSelectionKey = nextKey;
-  refreshParticipantDerivedState(mesh, state, modelPhysicsSession.getSettings());
-  return changed;
-}
-
 export function isPhysicsScheduled() {
   return modelPhysicsSession.isScheduled();
 }
@@ -1188,8 +1447,15 @@ export function unregisterSkinningMesh(mesh) {
     clearPickedPoint();
   }
   knownMeshes.delete(mesh);
-  modelPhysicsSession.detach(mesh);
+  const sourceKey = states.get(mesh)?.skinningSourceKey;
+  if (sourceKey) {
+    modelPhysicsSession.detach(sourceKey);
+    sourcePhysicsRigs.delete(sourceKey);
+  }
   refreshModelWeightSummary({refreshStats: true});
+  if (sourceKey && modelPhysicsSession.getState().enabled) {
+    syncPhysicsParticipants(new Set([sourceKey]));
+  }
   notifyModelWeightChanged();
 }
 
@@ -1342,35 +1608,68 @@ function syncPhysicsParticipants(changedSourceKeys = null) {
     disableModelPhysics();
     return;
   }
-  let attached = false;
-  [...knownMeshes].forEach(mesh => {
-    if (!eligibleSkinningMesh(mesh)) return;
+  const groups = new Map();
+  for (const mesh of knownMeshes) {
     const state = states.get(mesh);
-    if (changedSourceKeys
-        && !changedSourceKeys.has(state?.skinningSourceKey)) return;
-    if (!state?.loaded) {
+    if (!eligibleSkinningMesh(mesh)) {
       if (state?.error) {
         state.physicsParticipantStatus = 'failed';
         state.physicsParticipantError = state.error;
         modelPhysicsSession.markFailed(mesh, state.error);
       }
-      return;
+      continue;
     }
-    const changed = refreshPhysicsSelectionState(mesh, state);
-    const participant = modelPhysicsSession.getParticipant(mesh);
-    if (!state.physicsForest) {
-      if (participant) modelPhysicsSession.detach(mesh);
-      state.physicsParticipantStatus = 'not-selected';
-      state.physicsState = null;
-      state.physicsEnabled = false;
-      return;
+    if (!state?.loaded || !state.skinningSourceKey) {
+      if (state?.error) {
+        state.physicsParticipantStatus = 'failed';
+        state.physicsParticipantError = state.error;
+        modelPhysicsSession.markFailed(mesh, state.error);
+      }
+      continue;
     }
-    if (changed && participant) modelPhysicsSession.detach(mesh);
-    if (!modelPhysicsSession.getParticipant(mesh)) {
+    modelPhysicsSession.clearStatus(mesh);
+    const members = groups.get(state.skinningSourceKey) || [];
+    members.push(mesh);
+    groups.set(state.skinningSourceKey, members);
+  }
+  const affected = changedSourceKeys
+    ? new Set(changedSourceKeys)
+    : new Set([...groups.keys(), ...sourcePhysicsRigs.keys()]);
+  for (const sourceKey of affected) {
+    if (modelPhysicsSession.getParticipant(sourceKey)) {
+      modelPhysicsSession.detach(sourceKey);
+    }
+    sourcePhysicsRigs.delete(sourceKey);
+  }
+
+  for (const sourceKey of [...sourcePhysicsRigs.keys()]) {
+    if (!groups.has(sourceKey)
+        || !modelWeightState.selectedBonesBySource.has(sourceKey)) {
+      modelPhysicsSession.detach(sourceKey);
+      sourcePhysicsRigs.delete(sourceKey);
+    }
+  }
+
+  let attached = false;
+  for (const [sourceKey, members] of groups) {
+    const selected = modelWeightState.selectedBonesBySource.get(sourceKey);
+    members.forEach(mesh => {
+      const state = states.get(mesh);
+      if (state) {
+        state.physicsParticipantStatus = 'not-selected';
+        state.physicsParticipantError = null;
+      }
+    });
+    if (!selected?.size) continue;
+    const rig = sourcePhysicsRigs.get(sourceKey)
+      || createSourcePhysicsRig(sourceKey, members);
+    sourcePhysicsRigs.set(sourceKey, rig);
+    if (!rig.physicsForest) continue;
+    if (!modelPhysicsSession.getParticipant(sourceKey)) {
       attached = modelPhysicsSession.attach(
-        createPhysicsParticipant(mesh, state)) || attached;
+        createSourcePhysicsParticipant(rig)) || attached;
     }
-  });
+  }
   if (attached) {
     modelPhysicsSession.wake();
     invalidateCharacterShadowGeometry({request: false});
@@ -2194,20 +2493,24 @@ function updateInfluenceVisualization(mesh, state) {
 
 function refreshAfterForestTopologyChange(mesh, state) {
   const settings = modelPhysicsSession.getSettings();
-  const participant = modelPhysicsSession.getParticipant(mesh);
-  if (participant) modelPhysicsSession.detach(mesh);
+  const sourceKey = state.skinningSourceKey;
+  const participant = sourceKey
+    ? modelPhysicsSession.getParticipant(sourceKey) : null;
+  if (participant) modelPhysicsSession.detach(sourceKey);
+  if (sourceKey) sourcePhysicsRigs.delete(sourceKey);
   refreshParticipantDerivedState(mesh, state, settings);
   if (state.influenceVisualizationMode) {
     createInfluenceVisualization(
       mesh, state, state.influenceVisualizationMode);
   }
   if (participant && modelPhysicsSession.getState().enabled) {
-    modelPhysicsSession.attach(createPhysicsParticipant(mesh, state));
+    syncPhysicsParticipants(new Set([sourceKey]));
     modelPhysicsSession.wake();
+  } else {
+    applyDeformation(mesh, state, {
+      request: false, invalidateShadow: false, skipHidden: true,
+    });
   }
-  applyDeformation(mesh, state, {
-    request: false, invalidateShadow: false, skipHidden: true,
-  });
   requestRender();
 }
 
@@ -2256,6 +2559,12 @@ export function refreshSkinningAfterShapeChange(mesh) {
   const position = mesh?.geometry?.attributes?.position;
   clearPickedPoint();
   if (!state?.loaded || !position) return false;
+  const sourceKey = state.skinningSourceKey;
+  const participant = sourceKey
+    ? modelPhysicsSession.getParticipant(sourceKey) : null;
+  const wasPhysicsEnabled = !!participant || state.physicsEnabled;
+  if (participant) modelPhysicsSession.detach(sourceKey);
+  if (sourceKey) sourcePhysicsRigs.delete(sourceKey);
   const normal = mesh.geometry.attributes.normal;
   state.baselinePositions = new Float32Array(position.array);
   state.baselineNormals = normal ? new Float32Array(normal.array) : null;
@@ -2267,19 +2576,14 @@ export function refreshSkinningAfterShapeChange(mesh) {
   state.influenceGraph = null;
   state.candidateTree = null;
   state.candidateForest = null;
-  const wasPhysicsEnabled = state.physicsEnabled;
-  const participant = modelPhysicsSession.getParticipant(mesh);
-  if (participant) modelPhysicsSession.detach(mesh);
   state.physicsTransforms = null;
   state.physicsForest = null;
   state.physicsCenterByBoneId = state.centerByBoneId;
 
-  if (wasPhysicsEnabled) {
-    refreshPhysicsSelectionState(mesh, state);
-    if (state.physicsForest && modelPhysicsSession.getState().enabled) {
-      modelPhysicsSession.attach(createPhysicsParticipant(mesh, state));
-      modelPhysicsSession.wake();
-    }
+  if (wasPhysicsEnabled && modelPhysicsSession.getState().enabled
+      && sourceKey) {
+    syncPhysicsParticipants(new Set([sourceKey]));
+    modelPhysicsSession.wake();
   } else if (state.influenceVisualizationMode === 'tree') {
     ensureCandidateForest(mesh);
   } else if (state.influenceVisualizationMode === 'center') {
@@ -2352,6 +2656,8 @@ function applyDeformation(mesh, state, {
   request = true,
   invalidateShadow = true,
   skipHidden = false,
+  physicsTransforms = null,
+  physicsRotations = null,
 } = {}) {
   if (!state.loaded || !state.baselinePositions) return;
   if (skipHidden && !mesh.visible) return false;
@@ -2360,7 +2666,7 @@ function applyDeformation(mesh, state, {
   const position = mesh.geometry.attributes.position;
   if (physicsActive) {
     const transformStarted = performanceNow();
-    state.physicsTransforms = buildForestTransformsFromLocalRotations(
+    state.physicsTransforms = physicsTransforms || buildForestTransformsFromLocalRotations(
       state.physicsForest,
       state.physicsCenterByBoneId || state.centerByBoneId, {
         getRotation: boneId => state.physicsState.joints.get(boneId)
@@ -2368,9 +2674,11 @@ function applyDeformation(mesh, state, {
         rotationOutput: state.physicsRotations,
         transformCache: state.physicsTransformCache,
       });
-    addWeightPhysicsPerformance('physicsTransformBuildCount');
-    addWeightPhysicsPerformance(
-      'physicsTransformMs', performanceNow() - transformStarted);
+    if (!physicsTransforms) {
+      addWeightPhysicsPerformance('physicsTransformBuildCount');
+      addWeightPhysicsPerformance(
+        'physicsTransformMs', performanceNow() - transformStarted);
+    }
     const deformStarted = performanceNow();
     const deformedVertices = applyWeightedTransformDeformationInto(
       position.array, state.baselinePositions, state.indices, state.weights,
@@ -2386,7 +2694,7 @@ function applyDeformation(mesh, state, {
       const normalStarted = performanceNow();
       applyWeightedNormalDeformationInto(
         normal.array, state.baselineNormals, state.indices, state.weights,
-        state.influenceCount, state.physicsRotations,
+        state.influenceCount, physicsRotations || state.physicsRotations,
         state.physicsActiveVertices);
       normal.needsUpdate = true;
       addWeightPhysicsPerformance('physicsNormalUpdateCount');

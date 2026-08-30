@@ -94,7 +94,7 @@ export function createWeightPickController({
         && event.pointerId !== pointer.id)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    finish(null);
+    finish(null, {cancelled: true});
   }
 
   function keyDown(event) {
@@ -116,7 +116,7 @@ export function createWeightPickController({
     cancel,
     isEnabled: () => enabled,
     dispose() {
-      if (enabled) finish(null);
+      if (enabled) finish(null, {cancelled: true});
       canvas?.removeEventListener('pointerdown', pointerDown);
       canvas?.removeEventListener('pointermove', pointerMove);
       canvas?.removeEventListener('pointerup', pointerUp);

@@ -163,6 +163,30 @@ export function createModelPhysicsSession({
   const participants = new Map();
   const statuses = new Map();
 
+  function participantKey(participantOrKey) {
+    if (participantOrKey && typeof participantOrKey === 'object') {
+      return participantOrKey.key ?? participantOrKey.mesh;
+    }
+    return participantOrKey;
+  }
+
+  function participantContainsMesh(participant, mesh) {
+    if (participant?.meshes instanceof Set) return participant.meshes.has(mesh);
+    if (Array.isArray(participant?.meshes)) return participant.meshes.includes(mesh);
+    return participant?.mesh === mesh;
+  }
+
+  function resolvedParticipantKey(participantOrKey) {
+    const key = participantKey(participantOrKey);
+    if (participants.has(key)) return key;
+    for (const [candidateKey, participant] of participants) {
+      if (participantContainsMesh(participant, participantOrKey)) {
+        return candidateKey;
+      }
+    }
+    return key;
+  }
+
   function notify() {
     addWeightPhysicsPerformance('physicsUiNotifyCount');
     onStateChanged?.(getState());
@@ -220,6 +244,9 @@ export function createModelPhysicsSession({
       enabled,
       generation,
       participantCount: participants.size,
+      participatingMeshCount: [...participants.values()].reduce(
+        (count, participant) => count + Number(
+          participant.getMeshCount?.() ?? (participant.mesh ? 1 : 0)), 0),
       unavailableCount,
       failedCount,
       frequencyHz: settings.frequencyHz,
@@ -286,10 +313,10 @@ export function createModelPhysicsSession({
   }
 
   function attach(participant) {
-    const mesh = participant?.mesh;
-    if (!enabled || !mesh) return false;
-    statuses.delete(mesh);
-    participants.set(mesh, participant);
+    const key = participantKey(participant);
+    if (!enabled || key === undefined || key === null) return false;
+    statuses.delete(key);
+    participants.set(key, participant);
     participant.onSessionAttached?.(settings);
     settled = false;
     syncInputOwnership();
@@ -299,15 +326,16 @@ export function createModelPhysicsSession({
   }
 
   function detach(mesh) {
-    const participant = participants.get(mesh);
+    const key = resolvedParticipantKey(mesh);
+    const participant = participants.get(key);
     if (!participant) {
-      statuses.delete(mesh);
+      statuses.delete(key);
       syncInputOwnership();
       return false;
     }
     participant.onSessionDetached?.();
-    participants.delete(mesh);
-    statuses.delete(mesh);
+    participants.delete(key);
+    statuses.delete(key);
     if (participants.size === 0) {
       settled = true;
       cancelScheduledFrame();
@@ -318,7 +346,7 @@ export function createModelPhysicsSession({
   }
 
   function markUnavailable(mesh, reason = 'unavailable') {
-    if (!enabled || participants.has(mesh)) return;
+    if (!enabled || participants.has(participantKey(mesh))) return;
     statuses.set(mesh, {kind: 'unavailable', reason});
     notify();
   }
@@ -330,6 +358,14 @@ export function createModelPhysicsSession({
       error: error instanceof Error ? error.message : String(error || ''),
     });
     notify();
+  }
+
+  function clearStatus(mesh) {
+    const key = participantKey(mesh);
+    let changedStatus = statuses.delete(key);
+    if (key !== mesh) changedStatus = statuses.delete(mesh) || changedStatus;
+    if (changedStatus) notify();
+    return changedStatus;
   }
 
   function setSettings(patch) {
@@ -418,14 +454,22 @@ export function createModelPhysicsSession({
 
   function handleMeshStateChanged(meshes = []) {
     if (!enabled) return false;
+    const changedMeshes = Array.isArray(meshes) ? meshes : [meshes];
     const visibleParticipants = [];
-    for (const mesh of meshes) {
-      const participant = participants.get(mesh);
-      if (!participant || participant.isVisible?.() === false) continue;
+    participants.forEach(participant => {
+      if (participant.onMeshStateChanged) {
+        if (participant.onMeshStateChanged(changedMeshes)) {
+          visibleParticipants.push(participant);
+        }
+        return;
+      }
+      const mesh = participant.mesh;
+      if (!changedMeshes.includes(mesh)
+          || participant.isVisible?.() === false) return;
       if (participant.deform?.({
         request: false, invalidateShadow: false, skipHidden: false,
       })) visibleParticipants.push(participant);
-    }
+    });
     if (!visibleParticipants.length) return false;
     onFrame?.({visibleParticipants, steps: 0});
     return true;
@@ -519,10 +563,11 @@ export function createModelPhysicsSession({
     detach,
     markUnavailable,
     markFailed,
+    clearStatus,
     setSettings,
     getSettings: () => ({...settings}),
     getState,
-    getParticipant: mesh => participants.get(mesh) || null,
+    getParticipant: mesh => participants.get(resolvedParticipantKey(mesh)) || null,
     handleModelTransform,
     handleVirtualMotion,
     handleMeshStateChanged,
