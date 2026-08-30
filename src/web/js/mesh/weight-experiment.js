@@ -144,15 +144,6 @@ export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
 export const WEIGHT_PICK_RADIUS_RATIO = 0.02;
 
 const ERROR_MESSAGES = Object.freeze({
-  mesh_not_found: 'The selected mesh could not be found.',
-  skinning_not_available: 'No skin-weight stream was found for this draw.',
-  ambiguous_skinning_source:
-    'More than one possible Blend stream is active for this draw.',
-  unsupported_skinning_layout:
-    'This Blend format is not supported by the experiment.',
-  skinning_buffer_truncated: 'The skin-weight buffer is truncated.',
-  geometry_not_available:
-    'The rendered draw geometry could not be prepared.',
   skinning_source_identity_unavailable:
     'The skin-weight source identity is unavailable for this draw.',
 });
@@ -2627,59 +2618,59 @@ export function saveModelWeightSelection() {
   return selectionSavePromise;
 }
 
-export function setPhysicsFrequency(mesh, frequencyHz) {
+export function setPhysicsFrequency(frequencyHz) {
   const value = Number(frequencyHz);
   if (!Number.isFinite(value)) return false;
   modelPhysicsSession.setSettings({frequencyHz: value});
   return true;
 }
 
-export function setPhysicsDamping(mesh, dampingRatio) {
+export function setPhysicsDamping(dampingRatio) {
   const value = Number(dampingRatio);
   if (!Number.isFinite(value)) return false;
   modelPhysicsSession.setSettings({dampingRatio: value});
   return true;
 }
 
-export function setPhysicsMotionStrength(mesh, strength) {
+export function setPhysicsMotionStrength(strength) {
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
   modelPhysicsSession.setSettings({angularResponse: value});
   return true;
 }
 
-export function setPhysicsLinearMotionStrength(mesh, strength) {
+export function setPhysicsLinearMotionStrength(strength) {
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
   modelPhysicsSession.setSettings({translationResponse: value});
   return true;
 }
 
-export function setPhysicsContinuousLinearResponse(mesh, strength) {
+export function setPhysicsContinuousLinearResponse(strength) {
   const value = Number(strength);
   if (!Number.isFinite(value)) return false;
   modelPhysicsSession.setSettings({velocityResponse: value});
   return true;
 }
 
-export function setPhysicsGravityEnabled(mesh, enabled) {
+export function setPhysicsGravityEnabled(enabled) {
   modelPhysicsSession.setSettings({gravityEnabled: !!enabled});
   return !!enabled;
 }
 
-export function setPhysicsGravityScale(mesh, scale) {
+export function setPhysicsGravityScale(scale) {
   const value = Number(scale);
   if (!Number.isFinite(value)) return false;
   modelPhysicsSession.setSettings({gravityScale: value});
   return true;
 }
 
-export function setPhysicsConstraintsEnabled(mesh, enabled) {
+export function setPhysicsConstraintsEnabled(enabled) {
   modelPhysicsSession.setSettings({constraintsEnabled: !!enabled});
   return !!enabled;
 }
 
-export function setPhysicsMaxBendDegrees(mesh, degrees) {
+export function setPhysicsMaxBendDegrees(degrees) {
   const value = Number(degrees);
   if (!Number.isFinite(value)) return false;
   modelPhysicsSession.setSettings({maxBendDegrees: value});

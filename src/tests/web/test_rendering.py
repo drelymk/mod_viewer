@@ -1529,13 +1529,13 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
           const translated = experiment.getSkinningState(mesh);
           const translationVector = [...translated.lastTranslationLagRotationVector];
           const translationMagnitude = translated.lastTranslationLagRotationMagnitude;
-          experiment.setPhysicsGravityEnabled(mesh, true);
+          experiment.setPhysicsGravityEnabled(true);
           const gravity = experiment.getSkinningState(mesh);
           const gravityVector = [...gravity.physicsGravityAccelerations.get(1)];
           const gravityMax = gravity.physicsGravityDiagnostics
             .maxTotalAccelerationMagnitude;
-          experiment.setPhysicsConstraintsEnabled(mesh, true);
-          experiment.setPhysicsMaxBendDegrees(mesh, 10);
+          experiment.setPhysicsConstraintsEnabled(true);
+          experiment.setPhysicsMaxBendDegrees(10);
           const constrained = experiment.getSkinningState(mesh);
           const limits = constrained.physicsJointLimits instanceof Map;
           const beforeReset = [...constrained.physicsState.joints.values()]

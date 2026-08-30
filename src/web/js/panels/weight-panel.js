@@ -220,18 +220,18 @@ function buildPhysicsControls(content) {
   const ranges = {};
   ranges.frequency = addRange(section, 'weight-physics-frequency',
     'Frequency (Hz)', 0.1, 10, 0.1, initial.frequencyHz,
-    value => setPhysicsFrequency(null, value));
+    value => setPhysicsFrequency(value));
   ranges.damping = addRange(section, 'weight-physics-damping', 'Damping',
-    0, 2, 0.05, initial.dampingRatio, value => setPhysicsDamping(null, value));
+    0, 2, 0.05, initial.dampingRatio, value => setPhysicsDamping(value));
   ranges.motion = addRange(section, 'weight-physics-motion',
     'Angular response', 0, 1, 0.05, initial.angularResponse,
-    value => setPhysicsMotionStrength(null, value));
+    value => setPhysicsMotionStrength(value));
   ranges.linear = addRange(section, 'weight-physics-linear',
     'Translation response', 0, 1, 0.05, initial.translationResponse,
-    value => setPhysicsLinearMotionStrength(null, value));
+    value => setPhysicsLinearMotionStrength(value));
   ranges.continuous = addRange(section, 'weight-physics-continuous-response',
     'Velocity response', 0, 1, 0.05, initial.velocityResponse,
-    value => setPhysicsContinuousLinearResponse(null, value));
+    value => setPhysicsContinuousLinearResponse(value));
 
   const gravity = document.createElement('div');
   gravity.className = 'weight-subsection';
@@ -241,14 +241,14 @@ function buildPhysicsControls(content) {
   gravityEnable.type = 'checkbox';
   gravityEnable.className = 'weight-physics-gravity-enable';
   gravityEnable.addEventListener('change', () => {
-    setPhysicsGravityEnabled(null, gravityEnable.checked);
+    setPhysicsGravityEnabled(gravityEnable.checked);
   });
   gravityLabel.appendChild(gravityEnable);
   addText(gravityLabel, 'weight-label', 'Gravity');
   gravity.appendChild(gravityLabel);
   ranges.gravity = addRange(gravity, 'weight-physics-gravity-scale',
     'Gravity scale', 0, 2, 0.1, initial.gravityScale,
-    value => setPhysicsGravityScale(null, value));
+    value => setPhysicsGravityScale(value));
   section.appendChild(gravity);
 
   const constraints = document.createElement('div');
@@ -259,14 +259,14 @@ function buildPhysicsControls(content) {
   constraintsEnable.type = 'checkbox';
   constraintsEnable.className = 'weight-physics-constraints-enable';
   constraintsEnable.addEventListener('change', () => {
-    setPhysicsConstraintsEnabled(null, constraintsEnable.checked);
+    setPhysicsConstraintsEnabled(constraintsEnable.checked);
   });
   constraintsLabel.appendChild(constraintsEnable);
   addText(constraintsLabel, 'weight-label', 'Joint limits');
   constraints.appendChild(constraintsLabel);
   ranges.maxBend = addRange(constraints, 'weight-physics-max-bend',
     'Max bend', 0, 90, 1, initial.maxBendDegrees,
-    value => setPhysicsMaxBendDegrees(null, value));
+    value => setPhysicsMaxBendDegrees(value));
   section.appendChild(constraints);
 
   const actions = document.createElement('div');
