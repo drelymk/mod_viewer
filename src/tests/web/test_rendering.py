@@ -228,9 +228,20 @@ def test_outdoor_environment_uses_one_cached_pmrem_and_restores_original(
           const {scene, getEnvironmentDebugState} =
             await import('./js/scene/scene.js');
           const state = getEnvironmentDebugState();
+          const ambient = scene.children.find(object => object.isAmbientLight);
+          const hemisphere = scene.children.find(
+            object => object.isHemisphereLight);
+          let accent = null;
+          scene.traverse(object => {
+            if (object.isDirectionalLight && object !== scene.children.find(
+                candidate => candidate.isDirectionalLight)) accent = object;
+          });
           return {...state,
             environmentId: scene.environment?.uuid || null,
             hasVisibleSky: scene.getObjectByProperty('isSkyMesh', true) != null,
+            ambientIntensity: ambient?.intensity,
+            hemisphereIntensity: hemisphere?.intensity,
+            accentIntensity: accent?.intensity,
           };
         }""")
         assert initial["outdoorIblAvailable"]
@@ -251,23 +262,39 @@ def test_outdoor_environment_uses_one_cached_pmrem_and_restores_original(
             return page.evaluate("""async () => {
               const {scene, getEnvironmentDebugState} =
                 await import('./js/scene/scene.js');
+              const ambient = scene.children.find(object => object.isAmbientLight);
+              const hemisphere = scene.children.find(
+                object => object.isHemisphereLight);
+              let accent = null;
+              scene.traverse(object => {
+                if (object.isDirectionalLight && object !== scene.children.find(
+                    candidate => candidate.isDirectionalLight)) accent = object;
+              });
               return {...getEnvironmentDebugState(),
-                environmentId: scene.environment?.uuid || null};
+                environmentId: scene.environment?.uuid || null,
+                ambientIntensity: ambient?.intensity,
+                hemisphereIntensity: hemisphere?.intensity,
+                accentIntensity: accent?.intensity};
             }""")
 
         outdoor = select_preset("outdoor")
         assert outdoor["environmentIsOutdoor"]
         assert outdoor["environmentActive"]
-        assert outdoor["environmentIntensity"] == pytest.approx(0.7)
+        assert outdoor["environmentIntensity"] == pytest.approx(0.1)
+        assert outdoor["ambientIntensity"] == pytest.approx(0.04)
+        assert outdoor["hemisphereIntensity"] == pytest.approx(0.08)
+        assert outdoor["accentIntensity"] == pytest.approx(0.4)
         assert outdoor["environmentId"] is not None
 
         studio = select_preset("studio")
         assert not studio["environmentIsOutdoor"]
         assert not studio["environmentActive"]
+        assert studio["environmentIntensity"] == initial["environmentIntensity"]
 
         indoor = select_preset("indoor")
         assert not indoor["environmentIsOutdoor"]
         assert not indoor["environmentActive"]
+        assert indoor["environmentIntensity"] == initial["environmentIntensity"]
 
         outdoor_again = select_preset("outdoor")
         assert outdoor_again["environmentIsOutdoor"]
@@ -284,16 +311,76 @@ def test_outdoor_environment_uses_one_cached_pmrem_and_restores_original(
         context.close()
 
 
-def test_outdoor_environment_generation_failure_keeps_viewer_usable(
+def test_environment_controller_prepare_is_single_flight(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {})
     try:
         result = page.evaluate("""async () => {
           const THREE = await import('three/webgpu');
-          const {renderer, rendererReady} = await import('./js/scene/scene.js');
+          const {renderer, rendererReady, getEnvironmentDebugState} =
+            await import('./js/scene/scene.js');
+          const {createEnvironmentController} =
+            await import('./js/scene/environment.js');
+          await rendererReady;
+          for (let attempts = 0; attempts < 100; attempts += 1) {
+            const state = getEnvironmentDebugState();
+            if (state.prepared || state.preparationError) break;
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+
+          const originalFromScene = THREE.PMREMGenerator.prototype.fromScene;
+          let generationCalls = 0;
+          THREE.PMREMGenerator.prototype.fromScene = function (...args) {
+            generationCalls += 1;
+            return originalFromScene.apply(this, args);
+          };
+          const testScene = new THREE.Scene();
+          const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+          const hemisphere = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
+          const lightTarget = new THREE.Object3D();
+          let controller = null;
+          try {
+            controller = createEnvironmentController({
+              renderer, scene: testScene, ambientLight: ambient,
+              hemisphereLight: hemisphere, lightTarget,
+            });
+            const first = controller.prepare();
+            const second = controller.prepare();
+            const [firstResult, secondResult] = await Promise.all([first, second]);
+            return {
+              firstResult, secondResult, generationCalls,
+              debug: controller.getDebugState(),
+            };
+          } finally {
+            THREE.PMREMGenerator.prototype.fromScene = originalFromScene;
+            controller?.dispose();
+          }
+        }""")
+        assert result["firstResult"] is True
+        assert result["secondResult"] is True
+        assert result["generationCalls"] == 1
+        assert result["debug"]["pmremGenerationCount"] == 1
+        assert result["debug"]["prepared"] is True
+    finally:
+        context.close()
+
+
+def test_environment_controller_uses_legacy_lighting_when_pmrem_fails(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        result = page.evaluate("""async () => {
+          const THREE = await import('three/webgpu');
+          const {renderer, rendererReady, getEnvironmentDebugState} =
+            await import('./js/scene/scene.js');
           const {createEnvironmentController} =
             await import('./js/scene/environment.js');
           const rendererReadyResult = await rendererReady;
+          for (let attempts = 0; attempts < 100; attempts += 1) {
+            const state = getEnvironmentDebugState();
+            if (state.prepared || state.preparationError) break;
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
 
           const originalFromScene = THREE.PMREMGenerator.prototype.fromScene;
           const testScene = new THREE.Scene();
@@ -318,6 +405,8 @@ def test_outdoor_environment_generation_failure_keeps_viewer_usable(
               backgroundChanged: testScene.background !== null,
               ambient: ambient.intensity,
               hemisphere: hemisphere.intensity,
+              accent: lightTarget.children.find(
+                object => object.isDirectionalLight)?.intensity,
               accentVisible: lightTarget.children.some(
                 object => object.isDirectionalLight && object.visible),
             };
@@ -339,8 +428,9 @@ def test_outdoor_environment_generation_failure_keeps_viewer_usable(
             "preparationError"]
         assert result["outdoorLighting"] == {
             "backgroundChanged": True,
-            "ambient": 0.12,
-            "hemisphere": 0.2,
+            "ambient": 0.26,
+            "hemisphere": 0.45,
+            "accent": 0.7,
             "accentVisible": True,
         }
     finally:
@@ -4291,7 +4381,15 @@ def test_each_mesh_resolves_its_own_profile_and_packed_source(
         page.wait_for_function(
             "window.modViewer.activeMeshes.length === 2 && "
             "window.modViewer.activeMeshes.every(mesh => "
-            "mesh.material.userData.gameMaterial)")
+            "mesh.material.userData.gameMaterial) && "
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial"
+            ".bindings.light_map.enabledNode.value === true && "
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial"
+            ".bindings.material_map.enabledNode.value === true && "
+            "window.modViewer.activeMeshes[1].material.userData.gameMaterial"
+            ".bindings.light_map.enabledNode.value === true && "
+            "window.modViewer.activeMeshes[1].material.userData.gameMaterial"
+            ".bindings.material_map.enabledNode.value === false")
         states = page.evaluate("""() => window.modViewer.activeMeshes.map(mesh => ({
           profileId: mesh.userData.materialProfileId,
           kind: mesh.userData.materialKind,
@@ -5880,7 +5978,8 @@ def test_character_shadows_are_on_demand_and_visibility_keeps_stable_ground(
         page.locator(".draw-item").wait_for()
         page.wait_for_function("""async () => {
           const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return getCharacterShadowDebugState().shadowUpdateCount > 0;
+          const state = getCharacterShadowDebugState();
+          return state.modelBounds !== null && state.casterBounds !== null;
         }""")
         initial = page.evaluate("""async () => {
           const {getCharacterShadowDebugState, renderer, scene} =
@@ -6013,6 +6112,11 @@ def test_shadow_fit_and_bias_scale_with_model_size(edge_browser, frontend_url, s
     try:
         _open(page, label)
         page.locator(".draw-item").wait_for()
+        page.wait_for_function("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          const state = getCharacterShadowDebugState();
+          return state.modelBounds !== null && state.casterBounds !== null;
+        }""")
         state = page.evaluate("""async () => {
           const {getCharacterShadowDebugState, scene} = await import('./js/scene/scene.js');
           const light = scene.children.find(object => object.isDirectionalLight);

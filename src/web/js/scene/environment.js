@@ -8,14 +8,14 @@ const BACKGROUND_WIDTH = 512;
 const BACKGROUND_HEIGHT = 256;
 const freeze = Object.freeze;
 const OUTDOOR_PMREM_SIZE = 256;
-const OUTDOOR_ENVIRONMENT_INTENSITY = 0.7;
+const OUTDOOR_ENVIRONMENT_INTENSITY = 0.1;
 const OUTDOOR_SKY = freeze({
   turbidity: 2.5,
   rayleigh: 0.8,
   mieCoefficient: 0.003,
   mieDirectionalG: 0.75,
-  cloudCoverage: 0.2,
-  cloudDensity: 0.35,
+  cloudCoverage: 0,
+  cloudDensity: 0,
   cloudElevation: 0.5,
 });
 
@@ -46,6 +46,11 @@ const makeHemisphere = (color, groundColor, intensity) => freeze({
 });
 const makeAccent = (color, intensity, position) => freeze({
   color, intensity, position: freeze(position),
+});
+const OUTDOOR_IBL_LIGHTING = freeze({
+  ambient: makeAmbient(0xdbeaff, 0.04),
+  hemisphere: makeHemisphere(0x78b5ed, 0x667068, 0.08),
+  accent: makeAccent(0xffe6bd, 0.4, [-6, 10, 6]),
 });
 const makePreset = (id, label, background, ambient, hemisphere, accent) => freeze({
   id,
@@ -94,8 +99,8 @@ export const ENVIRONMENT_PRESETS = freeze({
     verticalBackground([
       [0, '#285b8a'], [0.42, '#75a8ce'], [0.68, '#879eae'], [1, '#46515a'],
     ]),
-    makeAmbient(0xdbeaff, 0.12),
-    makeHemisphere(0x78b5ed, 0x667068, 0.2),
+    makeAmbient(0xdbeaff, 0.26),
+    makeHemisphere(0x78b5ed, 0x667068, 0.45),
     makeAccent(0xffe6bd, 0.7, [-6, 10, 6]),
   ),
 });
@@ -238,6 +243,11 @@ export function createEnvironmentController({
     applyAccent(preset.accent);
   }
 
+  function applyOutdoorLights() {
+    applyLights(outdoorIblAvailable
+      ? OUTDOOR_IBL_LIGHTING : ENVIRONMENT_PRESETS.outdoor);
+  }
+
   function restoreEnvironment() {
     scene.environment = originalEnvironment;
     scene.environmentIntensity = originalEnvironmentIntensity;
@@ -267,11 +277,14 @@ export function createEnvironmentController({
 
     if (id === 'default') {
       applyDefault();
+    } else if (id === 'outdoor') {
+      drawBackground(preset);
+      applyOutdoorLights();
+      applyOutdoorEnvironment();
     } else {
       drawBackground(preset);
       applyLights(preset);
-      if (id === 'outdoor') applyOutdoorEnvironment();
-      else restoreEnvironment();
+      restoreEnvironment();
     }
     currentPresetId = preset.id;
     return true;
@@ -292,8 +305,8 @@ export function createEnvironmentController({
 
   async function prepare() {
     if (disposed) return false;
-    if (prepared || preparationAttempted) return outdoorIblAvailable;
     if (preparePromise) return preparePromise;
+    if (prepared || preparationAttempted) return outdoorIblAvailable;
     preparationAttempted = true;
 
     preparePromise = (async () => {
@@ -301,6 +314,10 @@ export function createEnvironmentController({
       let captureSky = null;
       let pmremGenerator = null;
       try {
+        // Let rendererReady publish the usable viewer before GPU-heavy PMREM
+        // preparation begins. This also gives concurrent callers one promise
+        // to join while the optional warm-up is in progress.
+        await new Promise(resolve => setTimeout(resolve, 0));
         captureScene = new THREE.Scene();
         captureSky = new SkyMesh();
         configureOutdoorSky(captureSky);
@@ -334,8 +351,10 @@ export function createEnvironmentController({
         pmremGenerator?.dispose?.();
         prepared = outdoorIblAvailable;
         if (!disposed && currentPresetId === 'outdoor') {
+          applyOutdoorLights();
           applyOutdoorEnvironment();
         }
+        preparePromise = null;
       }
     })();
     return preparePromise;

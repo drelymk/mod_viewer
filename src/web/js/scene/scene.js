@@ -201,22 +201,24 @@ setRenderCallback(renderFrame);
 controls.addEventListener('change', requestRender);
 
 export const rendererReady = initializeRenderer()
-  .then(async () => {
+  .then(() => {
     if (!isRendererAvailable()) {
       throw new Error('The renderer is not using the required WebGPU core backend.');
     }
-    try {
-      await environmentController.prepare();
-    } catch (error) {
-      // Outdoor IBL is optional; renderer startup must remain usable when the
-      // GPU cannot generate the cached environment.
-      console.debug(
-        'Outdoor environment preparation failed; using baseline lighting.',
-        error,
-      );
-    }
     requestRender();
     openButton.disabled = !isRendererAvailable();
+    void environmentController.prepare()
+      .then(prepared => {
+        if (prepared) requestRender();
+      })
+      .catch(error => {
+        // Outdoor IBL is optional; renderer startup must remain usable when
+        // the GPU cannot generate the cached environment.
+        console.debug(
+          'Outdoor environment preparation failed; using baseline lighting.',
+          error,
+        );
+      });
     return true;
   })
   .catch(error => {
