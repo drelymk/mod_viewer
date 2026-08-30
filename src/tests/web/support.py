@@ -92,6 +92,7 @@ def _payload(label="A"):
                 "drawindexed": [3, 0, 0],
                 "pos": _f32(0, 0, 0, 1, 0, 0, 0, 1, 0),
                 "idx": _u32(0, 1, 2),
+                "skinning_available": True,
                 "tex_key": texture_pool[0]["tex_key"],
                 "texture_pool_id": "p0",
                 "texture_variants": [{
@@ -426,6 +427,60 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   ?? payload.asset_resolution ?? null,
               });
             },
+            get_model_skinning_preview: async path => {
+              const single = window.__testSkinningPreview;
+              if (typeof single !== 'function') {
+                return {status: 'error', error: 'Skin preview unavailable.'};
+              }
+              const meshes = {};
+              const chunks = [];
+              let byteLength = 0;
+              for (const mesh of window.modViewer?.activeMeshes || []) {
+                const key = mesh.userData.semanticKey;
+                const entry = await single(path, key);
+                const copied = copy(entry);
+                if (copied?.status === 'ok' && copied.data?.url) {
+                  const response = await fetch(copied.data.url,
+                    {cache: 'no-store'});
+                  if (!response.ok) {
+                    throw new Error(`Skin data download failed (${response.status}).`);
+                  }
+                  const bytes = new Uint8Array(
+                    await response.arrayBuffer());
+                  const base = byteLength;
+                  byteLength += bytes.byteLength;
+                  chunks.push(bytes);
+                  const rebase = descriptor => descriptor
+                    ? {...descriptor,
+                      offset: Number(descriptor.offset || 0) + base}
+                    : descriptor;
+                  copied.data = {
+                    ...copied.data,
+                    indices: rebase(copied.data.indices),
+                    weights: rebase(copied.data.weights),
+                  };
+                  delete copied.data.url;
+                  delete copied.data.length;
+                }
+                meshes[key] = copied;
+              }
+              let data = null;
+              if (chunks.length) {
+                const bytes = new Uint8Array(byteLength);
+                let offset = 0;
+                for (const chunk of chunks) {
+                  bytes.set(chunk, offset);
+                  offset += chunk.byteLength;
+                }
+                data = {
+                  url: URL.createObjectURL(new Blob([bytes])),
+                  length: byteLength,
+                };
+              }
+              return copy({
+                status: 'ok', saved_bones: [], meshes, data,
+              });
+            },
             delete_toggle: async (path, ini, section) => {
               state.calls.deleteToggle.push([path, ini, section]);
               return copy({ok: true, result: {}});
@@ -501,6 +556,9 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             update_ini_text: async () => ({pending: true}),
             save_mesh_textures: async () => ({}),
             save_mesh_names: async () => ({}),
+            save_weight_selection: async (_path, bones) => ({
+              saved: true, selected_bones: [...bones],
+            }),
             save_component_material_kind: async () => ({}),
             pick_texture_file: async () => copy(state.picks.shift() || null),
             get_record_positions: async () => ({positions: 2, vars: ['toggle']}),

@@ -59,6 +59,8 @@ def test_mid_section_ib_reassignment_mesh_builder():
         meshes, geometry = build_mesh_fixture(groups, tmp)
         assert (len(meshes) == 2), (f"both draws survive as distinct meshes, not merged "
                                  f"(got {len(meshes)})")
+        assert all(entry["skinning_available"] is False
+                   for entry in meshes.values())
 
         def _verts(entry):
             pos = geometry_values(geometry, entry["pos"])

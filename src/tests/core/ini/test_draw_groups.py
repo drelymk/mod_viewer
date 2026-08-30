@@ -225,6 +225,40 @@ stride = 20
     assert draw.skinning_source.encoding == "gimi_f32_u32_4"
 
 
+def test_draw_groups_resolve_wwmi_component_bone_offset():
+    sections = parse_sections("sample.ini", text=r"""[TextureOverrideComponent3]
+$\WWMIv1\vg_offset = 24
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyBlend
+vb2 = ResourceBodyTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 40
+
+[ResourceBodyBlend]
+filename = body-blend.buf
+stride = 8
+format = DXGI_FORMAT_R8_UINT
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 20
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_bone_offset == 24
+    assert draw.skinning_source.bone_id_offset == 24
+
+
 @pytest.mark.parametrize(
     ("blend_slot", "expect_source"),
     [(1, False), (4, True)],

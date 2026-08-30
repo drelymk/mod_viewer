@@ -141,8 +141,8 @@ class ModViewerAPI:
     def get_mesh_semantics(self, folder_path):
         return self._mod_preview.get_mesh_semantics(folder_path)
 
-    def get_skinning_preview(self, folder_path, mesh_key):
-        return self._mod_preview.get_skinning_preview(folder_path, mesh_key)
+    def get_model_skinning_preview(self, folder_path):
+        return self._mod_preview.get_model_skinning_preview(folder_path)
 
     def get_diagnostics(self, folder_path):
         return self._mod_preview.get_diagnostics(folder_path)
@@ -152,6 +152,9 @@ class ModViewerAPI:
 
     def save_mesh_textures(self, folder_path, textures):
         return self._mod_preview.save_mesh_textures(folder_path, textures)
+
+    def save_weight_selection(self, folder_path, bones):
+        return self._mod_preview.save_weight_selection(folder_path, bones)
 
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):

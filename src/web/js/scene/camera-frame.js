@@ -113,6 +113,17 @@ export function createCameraFrame({
       : null;
   }
 
+  function getModelTransformState() {
+    return {
+      orientation: modelRotation.clone()
+        .multiply(baseFacingRotation)
+        .multiply(uprightRotation),
+      userRotation: modelRotation.clone(),
+      translation: modelTranslation.clone(),
+      pivot: currentModelPivot(),
+    };
+  }
+
   function rotateMeshesAroundCenter(meshes, rotation, centerOverride = null) {
     if (!meshes.length) return [];
     // The post-upright pivot is stable; recomputing an AABB center after each
@@ -356,6 +367,7 @@ export function createCameraFrame({
     fitTo,
     frameView,
     forgetModelMeshes,
+    getModelTransformState,
     resetModelOrientation,
     resetView,
     resize,

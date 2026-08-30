@@ -1,7 +1,9 @@
 """Small, explicit skin-weight decoding helpers for the preview experiment."""
 
 import math
+import ntpath
 import os
+import posixpath
 import struct
 from dataclasses import dataclass
 
@@ -14,6 +16,7 @@ class SkinningSource:
     stride: int
     influence_count: int
     encoding: str
+    bone_id_offset: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,13 +40,67 @@ class SkinningPreviewError(ValueError):
         self.message = message
 
 
+def normalize_skinning_source_file(value):
+    """Return a safe, normalized mod-relative Blend-buffer path."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip().replace("\\", "/")
+    if not value or value.startswith("/") or ntpath.splitdrive(value)[0]:
+        return None
+    normalized = posixpath.normpath(value)
+    # Resource loading permits one parent level when the resolved path remains
+    # within the shared sandbox ceiling.  The normalizer has no mod root to
+    # resolve against, so it preserves that one-parent spelling while
+    # rejecting paths that can escape more than one level.
+    if (normalized in ("", ".", "..")
+            or normalized.startswith("../../")
+            or normalized.startswith("/")
+            or ntpath.splitdrive(normalized)[0]):
+        return None
+    return normalized
+
+
+def skinning_source_key(source_file, bone_id_offset=0):
+    """Build the case-insensitive identity for one decoded skin namespace."""
+    normalized = normalize_skinning_source_file(source_file)
+    if normalized is None:
+        return None
+    if isinstance(bone_id_offset, bool):
+        return None
+    try:
+        offset = int(bone_id_offset)
+    except (TypeError, ValueError):
+        return None
+    if offset < 0:
+        return None
+    return f"{normalized.casefold()}|offset={offset}"
+
+
+def skinning_source_descriptor(source):
+    """Return the stable frontend descriptor for a resolved source."""
+    if not isinstance(source, SkinningSource):
+        return None
+    file = normalize_skinning_source_file(source.file)
+    if isinstance(source.bone_id_offset, bool):
+        return None
+    try:
+        offset = int(source.bone_id_offset)
+    except (TypeError, ValueError):
+        return None
+    key = skinning_source_key(file, offset)
+    if key is None:
+        return None
+    return {"key": key, "file": file, "bone_id_offset": offset}
+
+
 def _format_supports_packed_weights(value):
     text = str(value or "").upper()
     return (not text or "R8_UINT" in text
             or "R8G8B8A8_UINT" in text)
 
 
-def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info):
+def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
+                            bone_id_offset=0):
     """Resolve one conservative Blend candidate from active ``vbN`` state.
 
     The caller supplies the resolver already used by draw-group assembly, so
@@ -51,6 +108,10 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info):
     Returns ``(source, error_code)``; an error code is retained on the draw as
     non-render metadata for the explicit preview operation.
     """
+    try:
+        bone_id_offset = max(0, int(bone_id_offset))
+    except (TypeError, ValueError):
+        bone_id_offset = 0
     candidates = {}
     unsupported = []
     for _slot, resource_name in sorted(
@@ -86,8 +147,10 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info):
             continue
         source = SkinningSource(
             file=filename, stride=stride,
-            influence_count=influence_count, encoding=encoding)
-        candidates[(source.file, source.stride, source.encoding)] = source
+            influence_count=influence_count, encoding=encoding,
+            bone_id_offset=bone_id_offset)
+        candidates[(source.file, source.stride, source.encoding,
+                    source.bone_id_offset)] = source
 
     if len(candidates) > 1:
         return None, "ambiguous_skinning_source"
@@ -181,8 +244,9 @@ def decode_skinning(source, raw_data, used_vertices):
         sums.append(weight_sum)
         if weight_sum <= 0:
             zero_weight += 1
-        for influence, (bone, weight) in enumerate(
+        for influence, (raw_bone, weight) in enumerate(
                 zip(decoded_indices, values)):
+            bone = int(raw_bone) + int(source.bone_id_offset)
             struct.pack_into("<I", index_bytes,
                              output_offset + influence * 4, bone)
             struct.pack_into("<f", weight_bytes,
@@ -200,6 +264,8 @@ def decode_skinning(source, raw_data, used_vertices):
         "invalid_weight_vertices": invalid,
         "truncated_vertices": truncated,
         "out_of_range_vertices": out_of_range,
+        "bone_id_namespace": "model",
+        "bone_id_offset": int(source.bone_id_offset),
     }
     return DecodedSkinning(
         vertex_count=count, influence_count=source.influence_count,
@@ -258,5 +324,7 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
 
 __all__ = [
     "SkinningSource", "DecodedSkinning", "SkinningPreviewError",
-    "resolve_skinning_source", "decode_skinning", "build_skinning_preview",
+    "normalize_skinning_source_file", "skinning_source_key",
+    "skinning_source_descriptor", "resolve_skinning_source",
+    "decode_skinning", "build_skinning_preview",
 ]

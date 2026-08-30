@@ -19,7 +19,10 @@ import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
 import {
-  disposeSkinningExperiment, getSkinningBaseMaterial, getSkinningState,
+  disposeSkinningExperiment, getSkinningBaseMaterial,
+  destroyModelPhysicsSession, registerSkinningMesh,
+  refreshSkinningAfterShapeChange,
+  unregisterSkinningMesh,
   withSkinningBaseMaterial,
 } from './weight-experiment.js';
 
@@ -69,6 +72,9 @@ export function invalidateControlDependencies(mesh) {
 }
 
 export function resetMeshes({ preserveModelOrientation = false } = {}) {
+  // Release source-level physics participants before their member geometry is
+  // disposed. This keeps teardown callbacks on live meshes.
+  destroyModelPhysicsSession();
   activeMeshes.forEach(mesh => {
     disposeSkinningExperiment(mesh);
     detachOutline(mesh);
@@ -108,6 +114,7 @@ export function addMesh(mesh, conditions, sources, textureVariants, materialVari
   attachOutline(mesh);
   scene.add(mesh);
   activeMeshes.push(mesh);
+  registerSkinningMesh(mesh);
   applyTextureVariant(mesh);
 }
 
@@ -394,10 +401,6 @@ function applyShapeTargets(mesh, { render = true } = {}) {
   const previous = mesh.userData.shapeControlValues;
   if (previous?.length === controlValues.length
       && controlValues.every((value, index) => value === previous[index])) return false;
-  const skinning = getSkinningState(mesh);
-  if (skinning?.loaded || skinning?.loading || skinning?.promise) {
-    disposeSkinningExperiment(mesh);
-  }
   mesh.userData.shapeControlValues = controlValues;
 
   const attr = mesh.geometry.attributes.position;
@@ -429,6 +432,7 @@ function applyShapeTargets(mesh, { render = true } = {}) {
   updateGeometryNormals(mesh, deformed);
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
+  refreshSkinningAfterShapeChange(mesh);
   invalidateCharacterShadowGeometry({ request: render });
   return true;
 }

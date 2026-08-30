@@ -652,14 +652,17 @@ export function stepSpringPhysics(
     ? options.targetRotationByBoneId
     : buildPhysicsTargetRotations(forest, options.targetRotation);
   const jointLimitByBoneId = options.jointLimitByBoneId;
-  const constrainedTargets = applyJointLimitsToRotations(
-    targets, jointLimitByBoneId);
+  const constrainedTargets = options.constrainedTargetRotationByBoneId
+    instanceof Map ? options.constrainedTargetRotationByBoneId
+    : applyJointLimitsToRotations(targets, jointLimitByBoneId);
   const externalAccelerations = options
     .externalAngularAccelerationByBoneId;
-  const equilibriumTargets = applyJointLimitsToRotations(
-    applyExternalEquilibriumOffset(
-      constrainedTargets, frequency, externalAccelerations),
-    jointLimitByBoneId);
+  const equilibriumTargets = options.equilibriumRotationByBoneId instanceof Map
+    ? options.equilibriumRotationByBoneId
+    : applyJointLimitsToRotations(
+      applyExternalEquilibriumOffset(
+        constrainedTargets, frequency, externalAccelerations),
+      jointLimitByBoneId);
   let maxRotationErrorMagnitude = 0;
   let maxAngularVelocityMagnitude = 0;
   physicsState?.joints?.forEach((joint, boneId) => {
@@ -696,16 +699,20 @@ export function isPhysicsSettled(
     options.velocityTolerance ?? DEFAULT_VELOCITY_TOLERANCE);
   const velocityTolerance = Number.isFinite(candidateVelocityTolerance)
     ? Math.max(0, candidateVelocityTolerance) : DEFAULT_VELOCITY_TOLERANCE;
-  const constrainedTargets = applyJointLimitsToRotations(
-    options.targetRotationByBoneId instanceof Map
-      ? options.targetRotationByBoneId
-      : buildPhysicsTargetRotations(forest, targetRotation),
-    options.jointLimitByBoneId);
-  const targets = applyJointLimitsToRotations(
-    applyExternalEquilibriumOffset(
-      constrainedTargets, options.frequencyHz,
-      options.externalAngularAccelerationByBoneId),
-    options.jointLimitByBoneId);
+  const constrainedTargets = options.constrainedTargetRotationByBoneId
+    instanceof Map ? options.constrainedTargetRotationByBoneId
+    : applyJointLimitsToRotations(
+      options.targetRotationByBoneId instanceof Map
+        ? options.targetRotationByBoneId
+        : buildPhysicsTargetRotations(forest, targetRotation),
+      options.jointLimitByBoneId);
+  const targets = options.equilibriumRotationByBoneId instanceof Map
+    ? options.equilibriumRotationByBoneId
+    : applyJointLimitsToRotations(
+      applyExternalEquilibriumOffset(
+        constrainedTargets, options.frequencyHz,
+        options.externalAngularAccelerationByBoneId),
+      options.jointLimitByBoneId);
   const frequency = Number(options.frequencyHz ?? DEFAULT_PHYSICS_FREQUENCY_HZ);
   if (hasExternalAcceleration(options.externalAngularAccelerationByBoneId)
       && Number.isFinite(frequency) && frequency <= 0) return false;

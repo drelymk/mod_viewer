@@ -242,6 +242,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 texcoord_file=texcoord_file, texcoord_stride=texcoord_stride,
                 normal_source=group_normal_source,
                 geometry_match=authored.geometry_match,
+                skinning_bone_offset=authored.skinning_bone_offset,
                 texture_provenance=dict(authored.texture_provenance),
                 slot_textures=_resolve_slot_texture_files(
                     authored, resolve_texture_file),
@@ -311,7 +312,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             direct_skinning_resources = dict(group_vertex_resources)
             direct_skinning_resources.update(vertex_resources)
             skinning_source, skinning_error = resolve_skinning_source(
-                direct_skinning_resources, resolve_vertex_info)
+                direct_skinning_resources, resolve_vertex_info,
+                bone_id_offset=authored.skinning_bone_offset)
             if skinning_source is None and skinning_error is None:
                 occupied_slots = (set(group_vertex_resources)
                                   | set(vertex_resources))
@@ -322,7 +324,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     if slot not in occupied_slots
                 }
                 skinning_source, skinning_error = resolve_skinning_source(
-                    blend_fallback, resolve_vertex_info)
+                    blend_fallback, resolve_vertex_info,
+                    bone_id_offset=authored.skinning_bone_offset)
             draw.skinning_source = skinning_source
             draw.skinning_error = skinning_error
             _apply_diffuse_state(draw, authored, resolve_texture_file)

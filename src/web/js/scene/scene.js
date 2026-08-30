@@ -268,6 +268,10 @@ export function resetView() {
   requestRender();
 }
 
+export function getModelTransformState() {
+  return cameraFrame.getModelTransformState();
+}
+
 function translationArray(delta) {
   if (!delta) return null;
   const values = delta.isVector3 ? [delta.x, delta.y, delta.z]
@@ -282,6 +286,28 @@ function kinematicsPayload(kinematics) {
   return velocity ? {linearVelocityWorld: velocity} : null;
 }
 
+function modelTransformPayload(value) {
+  const state = value || cameraFrame.getModelTransformState();
+  const orientation = state?.orientation;
+  const translation = state?.translation;
+  if (!orientation || !translation) return null;
+  const orientationValues = orientation.isQuaternion
+    ? [orientation.x, orientation.y, orientation.z, orientation.w]
+    : orientation;
+  const translationValues = translation.isVector3
+    ? [translation.x, translation.y, translation.z] : translation;
+  const normalizedOrientation = orientationValues?.slice?.(0, 4).map(Number);
+  const normalizedTranslation = translationValues?.slice?.(0, 3).map(Number);
+  if (normalizedOrientation?.length !== 4
+      || !normalizedOrientation.every(Number.isFinite)
+      || normalizedTranslation?.length !== 3
+      || !normalizedTranslation.every(Number.isFinite)) return null;
+  return {
+    orientation: normalizedOrientation,
+    translation: normalizedTranslation,
+  };
+}
+
 function notifyModelTransformChanged(
     meshes, reason, translationDeltaWorld = null, kinematics = null) {
   if (!meshes?.length || typeof window === 'undefined') return;
@@ -289,6 +315,7 @@ function notifyModelTransformChanged(
     meshes,
     reason,
     translationDeltaWorld: translationArray(translationDeltaWorld),
+    modelTransform: modelTransformPayload(),
   };
   const normalizedKinematics = kinematicsPayload(kinematics);
   if (normalizedKinematics) detail.kinematics = normalizedKinematics;
@@ -356,6 +383,21 @@ export function invalidateCharacterShadowGeometry({ request = true } = {}) {
 
 export function invalidateCharacterShadowVisibility({ request = true } = {}) {
   characterShadowController.invalidateVisibility();
+  if (request) requestRender();
+}
+
+export function invalidateCharacterShadowMap({ request = true } = {}) {
+  characterShadowController.invalidateMap();
+  if (request) requestRender();
+}
+
+export function invalidateCharacterShadowFit({ request = true } = {}) {
+  characterShadowController.invalidateVisibility();
+  if (request) requestRender();
+}
+
+export function invalidateViewportModelGeometry({ request = true } = {}) {
+  viewportRenderPipeline.invalidateGeometry();
   if (request) requestRender();
 }
 

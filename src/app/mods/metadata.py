@@ -8,6 +8,9 @@ from copy import deepcopy
 from core.textures import (encode_texture_key, split_texture_key,
                            texture_key_for_role)
 from core.materials.kind import normalize_material_kind
+from core.geometry.skinning import (
+    normalize_skinning_source_file, skinning_source_key,
+)
 from core.textures.profiles import texture_profile_for
 
 METADATA_NAME = ".mod_viewer.json"
@@ -94,6 +97,72 @@ def save_textures(folder_path, textures):
         data = load(folder_path)
         data["textures"] = textures if isinstance(textures, dict) else {}
         return _save(folder_path, data)
+
+
+def _normalized_weight_bones(value):
+    """Normalize source-scoped selection entries and merge duplicate sources."""
+    if not isinstance(value, list):
+        return []
+    merged = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        source = normalize_skinning_source_file(item.get("source"))
+        offset = item.get("bone_id_offset")
+        if (source is None or isinstance(offset, bool)
+                or not isinstance(offset, int) or offset < 0):
+            continue
+        key = skinning_source_key(source, offset)
+        if key is None:
+            continue
+        bone_ids = {
+            bone_id for bone_id in (item.get("bone_ids") or [])
+            if isinstance(bone_id, int) and not isinstance(bone_id, bool)
+            and bone_id >= 0
+        }
+        if not bone_ids:
+            continue
+        entry = merged.setdefault(key, {
+            "source": source,
+            "bone_id_offset": offset,
+            "bone_ids": set(),
+        })
+        entry["bone_ids"].update(bone_ids)
+    return [
+        {
+            "source": entry["source"],
+            "bone_id_offset": entry["bone_id_offset"],
+            "bone_ids": sorted(entry["bone_ids"]),
+        }
+        for _key, entry in sorted(merged.items())
+    ]
+
+
+def weight_selected_bones(folder_path=None, data=None):
+    """Return the validated viewer-saved source-scoped Bone selection."""
+    data = (load(folder_path) if data is None and folder_path is not None
+            else ({} if data is None else data))
+    weight = data.get("weight") if isinstance(data, dict) else None
+    return _normalized_weight_bones(
+        weight.get("selected_bones") if isinstance(weight, dict) else None)
+
+
+def save_weight_selected_bones(folder_path, bones):
+    """Persist only the normalized source-scoped Bone selection."""
+    if not isinstance(bones, list):
+        return {"saved": False, "selected_bones": []}
+    normalized = _normalized_weight_bones(bones)
+    with _LOCK:
+        data = load(folder_path)
+        weight = data.get("weight")
+        if not isinstance(weight, dict):
+            weight = {}
+        weight["selected_bones"] = normalized
+        data["weight"] = weight
+        return {
+            **_save(folder_path, data),
+            "selected_bones": normalized,
+        }
 
 
 def hydrate_mesh_names(payload, data=None):
