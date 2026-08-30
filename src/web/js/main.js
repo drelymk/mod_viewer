@@ -20,9 +20,9 @@ import { initLeftDock, setLeftDockTab } from './panels/left-dock.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-profile.js';
 import { requestRender } from './scene/render-scheduler.js';
 import {
-  clearSelectedBoneIds, disableModelPhysics, enableModelPhysics,
+  disableModelPhysics, enableModelPhysics,
   ensureModelWeightsLoaded, getModelPhysicsState, getModelWeightState,
-  resetModelPhysicsMotion, setModelWeightHeatmap, setSelectedBoneIds,
+  resetModelPhysicsMotion, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
@@ -311,8 +311,6 @@ rendererReady.then(ready => {
     resetModelPhysicsMotion,
     getModelWeightState,
     ensureModelWeightsLoaded,
-    setSelectedBoneIds,
-    clearSelectedBoneIds,
     setModelWeightHeatmap,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,

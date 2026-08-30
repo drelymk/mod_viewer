@@ -10,7 +10,7 @@ from core.geometry.conventions import geometry_convention_for
 from core.geometry.mesh_builder import GeometryBlob
 from core.geometry.semantics import deduplicate_draws
 from core.geometry.skinning import (
-    SkinningPreviewError, build_skinning_preview,
+    SkinningPreviewError, build_skinning_preview, skinning_source_descriptor,
 )
 from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_file
@@ -222,6 +222,10 @@ class ModPreview:
             geometry_convention=geometry_convention)
 
     @staticmethod
+    def _skinning_source_descriptor(draw):
+        return skinning_source_descriptor(draw.skinning_source)
+
+    @staticmethod
     def _skin_entry(decoded, draw, offset):
         indices_length = len(decoded.indices)
         blob = decoded.indices + decoded.weights
@@ -231,6 +235,7 @@ class ModPreview:
             "influence_count": decoded.influence_count,
             "bone_ids": list(decoded.bone_ids),
             "encoding": draw.skinning_source.encoding,
+            "source": ModPreview._skinning_source_descriptor(draw),
             "data": {
                 "indices": {
                     "offset": offset,
@@ -251,7 +256,7 @@ class ModPreview:
         try:
             folder_path, overrides, _pending, context = \
                 self.authoritative_context(folder_path)
-            saved_bone_ids = metadata.weight_selected_bone_ids(
+            saved_bones = metadata.weight_selected_bones(
                 data=context.metadata)
             parsed, draws = self._skinning_draws(context, overrides)
             active_mesh_keys = self._active_mesh_keys.get(folder_path)
@@ -299,7 +304,7 @@ class ModPreview:
                 return {
                     "status": "error",
                     "format_version": 1,
-                    "saved_bone_ids": saved_bone_ids,
+                    "saved_bones": saved_bones,
                     "meshes": meshes,
                     "error": "No active mesh has usable skin weights.",
                 }
@@ -310,7 +315,7 @@ class ModPreview:
                     entry.get("status") == "ok" for entry in meshes.values())
                     else "partial",
                 "format_version": 1,
-                "saved_bone_ids": saved_bone_ids,
+                "saved_bones": saved_bones,
                 "data": {"url": url, "length": len(blob)},
                 "meshes": meshes,
             }
@@ -355,9 +360,9 @@ class ModPreview:
         edit_session.invalidate_diagnostics(folder_path)
         return result
 
-    def save_weight_selected_bone_ids(self, folder_path, bone_ids):
+    def save_weight_selection(self, folder_path, bones):
         folder_path = self._access.mod_folder(folder_path)
-        return metadata.save_weight_selected_bone_ids(folder_path, bone_ids)
+        return metadata.save_weight_selected_bones(folder_path, bones)
 
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):

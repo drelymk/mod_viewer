@@ -50,7 +50,7 @@ EXPECTED_API_METHODS = {
     "save_component_material_kind",
     "save_mesh_names",
     "save_mesh_textures",
-    "save_weight_selected_bone_ids",
+    "save_weight_selection",
     "select_asset_folder",
     "select_folder",
     "set_asset_folder_enabled",

@@ -502,8 +502,8 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             update_ini_text: async () => ({pending: true}),
             save_mesh_textures: async () => ({}),
             save_mesh_names: async () => ({}),
-            save_weight_selected_bone_ids: async (_path, boneIds) => ({
-              saved: true, selected_bone_ids: [...boneIds],
+            save_weight_selection: async (_path, bones) => ({
+              saved: true, selected_bones: [...bones],
             }),
             save_component_material_kind: async () => ({}),
             pick_texture_file: async () => copy(state.picks.shift() || null),

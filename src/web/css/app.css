@@ -1083,6 +1083,12 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .weight-mesh-filter-option:disabled { opacity: .45; cursor: default; }
 .weight-bone-filter { flex: 0 0 auto; padding: 2px 5px; }
 .weight-bone-list { min-height: 0; overflow-y: auto; }
+.weight-bone-group { padding: 4px 0; border-top: 1px solid var(--border); }
+.weight-bone-group:first-child { border-top: 0; }
+.weight-bone-source {
+  padding: 4px 5px 2px; color: var(--text-muted); font-size: 10px;
+  font-weight: 600; letter-spacing: .06em; overflow-wrap: anywhere;
+}
 .weight-bone-option, .weight-checkbox {
   display: flex; align-items: center; gap: 8px; min-height: 28px; color: var(--text-muted);
   font-size: 12px;

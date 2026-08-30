@@ -22,7 +22,9 @@ import {
   stepSpringPhysics,
 } from './weight-physics.js';
 import {
-  buildSelectedWeightMask, normalizeSelectedBoneIds,
+  buildSelectedWeightMask, normalizeBoneSelection,
+  normalizeSelectedBoneIds, selectedBoneCount,
+  serializeBoneSelection, sameBoneSelection,
 } from './weight-selection.js';
 import {
   DEFAULT_MODEL_PHYSICS_SETTINGS, MODEL_PHYSICS_STEP,
@@ -62,9 +64,10 @@ const modelWeightState = {
   promise: null,
   error: null,
   noWeights: false,
-  availableBoneIds: [],
-  selectedBoneIds: new Set(),
-  savedBoneIds: [],
+  sources: [],
+  selectedBonesBySource: new Map(),
+  savedBonesBySource: new Map(),
+  sourceDescriptors: new Map(),
   savedSelectionApplied: false,
   savingSelection: false,
   selectionSaveError: null,
@@ -162,6 +165,9 @@ function newState() {
     physicsCenterByBoneId: null,
     physicsForest: null,
     physicsSelectionKey: '',
+    skinningSourceKey: '',
+    skinningSourceFile: '',
+    skinningBoneOffset: 0,
   };
 }
 
@@ -180,16 +186,36 @@ export function getSkinningState(mesh) {
 }
 
 function modelWeightSnapshot() {
+  const selectedBones = selectionRecordsFromMap(
+    modelWeightState.selectedBonesBySource);
+  const savedBones = selectionRecordsFromMap(
+    modelWeightState.savedBonesBySource);
+  const availableBoneIds = [...new Set(modelWeightState.sources.flatMap(
+    source => source.availableBoneIds || []))].sort((left, right) => left - right);
+  const selectedBoneIds = [...new Set(selectedBones.flatMap(
+    entry => entry.boneIds))].sort((left, right) => left - right);
+  const savedBoneIds = [...new Set(savedBones.flatMap(
+    entry => entry.boneIds))].sort((left, right) => left - right);
   return {
     loaded: modelWeightState.loaded,
     loading: modelWeightState.loading,
     generation: modelWeightGeneration,
     error: modelWeightState.error,
     noWeights: modelWeightState.noWeights,
-    availableBoneIds: [...modelWeightState.availableBoneIds],
-    selectedBoneIds: normalizeSelectedBoneIds(
-      modelWeightState.selectedBoneIds),
-    savedBoneIds: [...modelWeightState.savedBoneIds],
+    sources: modelWeightState.sources.map(source => ({
+      ...source,
+      availableBoneIds: [...source.availableBoneIds],
+      boneStats: Object.fromEntries(Object.entries(source.boneStats || {})
+        .map(([id, stats]) => [id, {...stats}])),
+    })),
+    selectedBones,
+    savedBones,
+    selectedBoneCount: selectedBoneCount(selectedBones),
+    // Temporary read-only aliases for existing integrations. Selection logic
+    // below never uses these model-global numeric projections.
+    availableBoneIds,
+    selectedBoneIds,
+    savedBoneIds,
     savedSelectionApplied: modelWeightState.savedSelectionApplied,
     savingSelection: modelWeightState.savingSelection,
     selectionSaveError: modelWeightState.selectionSaveError,
@@ -213,10 +239,67 @@ export function getModelWeightState() {
   return modelWeightSnapshot();
 }
 
-function normalizedPersistedBoneIds(value) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter(id =>
-    Number.isInteger(id) && id >= 0))].sort((left, right) => left - right);
+function sourceDescriptorForEntry(entry, mesh) {
+  const source = entry?.source;
+  if (source && typeof source === 'object'
+      && typeof source.key === 'string' && source.key
+      && typeof source.file === 'string' && source.file) {
+    const offset = Number(source.bone_id_offset);
+    if (Number.isInteger(offset) && offset >= 0) {
+      return {
+        sourceKey: source.key,
+        sourceFile: source.file,
+        boneIdOffset: offset,
+      };
+    }
+  }
+  return {
+    // Older test/debug responses predate source descriptors. Treat them as a
+    // single model source; production backend responses always include one.
+    sourceKey: 'legacy/model/weights.buf|offset=0',
+    sourceFile: 'legacy/model/weights.buf',
+    boneIdOffset: 0,
+  };
+}
+
+function selectionRecordsFromMap(selectionMap) {
+  return [...(selectionMap || [])].map(([sourceKey, boneIds]) => {
+    const separator = String(sourceKey).lastIndexOf('|offset=');
+    const fallbackOffset = Number(String(sourceKey).slice(separator + 8));
+    const descriptor = modelWeightState.sourceDescriptors.get(sourceKey)
+      || (separator > 0 && Number.isInteger(fallbackOffset)
+        ? {
+          sourceKey,
+          sourceFile: String(sourceKey).slice(0, separator),
+          boneIdOffset: fallbackOffset,
+        } : null);
+    return descriptor ? {
+      ...descriptor,
+      boneIds: normalizeSelectedBoneIds(boneIds),
+    } : null;
+  }).filter(entry => entry?.boneIds.length);
+}
+
+function selectionMapFromEntries(entries) {
+  const map = new Map();
+  for (const entry of normalizeBoneSelection(entries)) {
+    map.set(entry.sourceKey, new Set(entry.boneIds));
+    modelWeightState.sourceDescriptors.set(entry.sourceKey, {
+      sourceKey: entry.sourceKey,
+      sourceFile: entry.sourceFile,
+      boneIdOffset: entry.boneIdOffset,
+    });
+  }
+  return map;
+}
+
+function sourceSelectionEntries(selectionMap) {
+  return selectionRecordsFromMap(selectionMap).map(entry => ({
+    sourceKey: entry.sourceKey,
+    sourceFile: entry.sourceFile,
+    boneIdOffset: entry.boneIdOffset,
+    boneIds: entry.boneIds,
+  }));
 }
 
 function eligibleSkinningMesh(mesh) {
@@ -257,8 +340,22 @@ export function aggregateModelBoneStats(nodeLists) {
 
 function refreshModelBoneStats() {
   modelBoneStatsBuildCount += 1;
-  modelWeightState.boneStats = aggregateModelBoneStats(
-    [...knownMeshes].map(mesh => states.get(mesh)?.influenceNodes));
+  const allNodes = [];
+  const nodesBySource = new Map();
+  for (const mesh of knownMeshes) {
+    const state = states.get(mesh);
+    if (!state?.loaded || !state.skinningSourceKey) continue;
+    const nodes = state.influenceNodes || [];
+    const sourceNodes = nodesBySource.get(state.skinningSourceKey) || [];
+    sourceNodes.push(nodes);
+    nodesBySource.set(state.skinningSourceKey, sourceNodes);
+    allNodes.push(nodes);
+  }
+  modelWeightState.sources = modelWeightState.sources.map(source => ({
+    ...source,
+    boneStats: aggregateModelBoneStats(nodesBySource.get(source.key) || []),
+  }));
+  modelWeightState.boneStats = aggregateModelBoneStats(allNodes);
 }
 
 export function getModelBoneStatsBuildCount() {
@@ -267,34 +364,87 @@ export function getModelBoneStatsBuildCount() {
 
 export function getMeshWeightSummary(mesh) {
   const state = states.get(mesh);
-  if (!state?.loaded) return {availableBoneIds: [], boneStats: {}};
+  if (!state?.loaded) return {
+    source: null, sources: [], availableBoneIds: [], boneStats: {},
+  };
+  const source = modelWeightState.sourceDescriptors.get(
+    state.skinningSourceKey) || {
+      sourceKey: state.skinningSourceKey,
+      sourceFile: state.skinningSourceFile,
+      boneIdOffset: state.skinningBoneOffset,
+    };
   return {
+    source: {
+      key: source.sourceKey,
+      file: source.sourceFile,
+      boneIdOffset: source.boneIdOffset,
+    },
+    sources: [{
+      key: source.sourceKey,
+      file: source.sourceFile,
+      boneIdOffset: source.boneIdOffset,
+      availableBoneIds: [...state.boneIds],
+      boneStats: aggregateModelBoneStats([state.influenceNodes]),
+    }],
     availableBoneIds: [...state.boneIds],
     boneStats: aggregateModelBoneStats([state.influenceNodes]),
   };
 }
 
 function refreshModelWeightSummary({refreshStats = false} = {}) {
-  const ids = new Set();
+  const groups = new Map();
+  const previousStats = new Map(modelWeightState.sources.map(source => [
+    source.key, source.boneStats || {},
+  ]));
   let loadedMeshCount = 0;
   let failedMeshCount = 0;
   knownMeshes.forEach(mesh => {
     const state = states.get(mesh);
     if (state?.loaded) {
       loadedMeshCount += 1;
-      (state.boneIds || []).forEach(id => ids.add(Number(id)));
+      const source = modelWeightState.sourceDescriptors.get(
+        state.skinningSourceKey);
+      if (!source) return;
+      const group = groups.get(state.skinningSourceKey) || {
+        key: source.sourceKey,
+        file: source.sourceFile,
+        boneIdOffset: source.boneIdOffset,
+        availableBoneIds: new Set(),
+        boneStats: previousStats.get(state.skinningSourceKey) || {},
+      };
+      (state.boneIds || []).forEach(id => group.availableBoneIds.add(Number(id)));
+      groups.set(state.skinningSourceKey, group);
     } else if (state?.error) {
       failedMeshCount += 1;
     }
   });
-  modelWeightState.availableBoneIds = [...ids]
-    .filter(Number.isFinite).sort((left, right) => left - right);
+  modelWeightState.sources = [...groups.values()]
+    .map(group => ({...group,
+      availableBoneIds: [...group.availableBoneIds]
+        .filter(Number.isFinite).sort((left, right) => left - right),
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key));
   modelWeightState.loadedMeshCount = loadedMeshCount;
   modelWeightState.failedMeshCount = failedMeshCount;
   if (modelWeightState.loaded) {
-    modelWeightState.selectedBoneIds = new Set(
-      normalizeSelectedBoneIds(modelWeightState.selectedBoneIds)
-        .filter(id => ids.has(id)));
+    const availableBySource = new Map(modelWeightState.sources.map(source => [
+      source.key, new Set(source.availableBoneIds),
+    ]));
+    // Keep the saved document intact for Load/status reporting. Applying a
+    // saved selection below performs the same per-source availability filter
+    // against the current model without migrating stale IDs.
+    for (const map of [modelWeightState.selectedBonesBySource]) {
+      for (const [sourceKey, ids] of map) {
+        const available = availableBySource.get(sourceKey);
+        if (!available) {
+          map.delete(sourceKey);
+          continue;
+        }
+        const filtered = new Set([...ids].filter(id => available.has(id)));
+        if (filtered.size) map.set(sourceKey, filtered);
+        else map.delete(sourceKey);
+      }
+    }
   }
   if (refreshStats) refreshModelBoneStats();
 }
@@ -302,11 +452,12 @@ function refreshModelWeightSummary({refreshStats = false} = {}) {
 function refreshSelectedWeightMask(mesh, state) {
   if (!state?.loaded) return null;
   selectedWeightMaskBuildCount += 1;
+  const selected = modelWeightState.selectedBonesBySource.get(
+    state.skinningSourceKey) || new Set();
   state.selectedWeightMask = buildSelectedWeightMask(
     state.indices, state.weights, state.influenceCount,
-    modelWeightState.selectedBoneIds);
-  state.selectedBone = normalizeSelectedBoneIds(
-    modelWeightState.selectedBoneIds)[0] ?? null;
+    selected);
+  state.selectedBone = normalizeSelectedBoneIds(selected)[0] ?? null;
   return state.selectedWeightMask;
 }
 
@@ -333,9 +484,10 @@ function resetModelWeightState() {
   modelWeightState.promise = null;
   modelWeightState.error = null;
   modelWeightState.noWeights = false;
-  modelWeightState.availableBoneIds = [];
-  modelWeightState.selectedBoneIds = new Set();
-  modelWeightState.savedBoneIds = [];
+  modelWeightState.sources = [];
+  modelWeightState.selectedBonesBySource = new Map();
+  modelWeightState.savedBonesBySource = new Map();
+  modelWeightState.sourceDescriptors = new Map();
   modelWeightState.savedSelectionApplied = false;
   modelWeightState.savingSelection = false;
   modelWeightState.selectionSaveError = null;
@@ -682,7 +834,8 @@ export function selectAttachmentRelationship(relationships) {
 function selectedPhysicsForest(mesh, state) {
   const graph = ensureInfluenceGraph(mesh, state);
   const selected = new Set(
-    normalizeSelectedBoneIds(modelWeightState.selectedBoneIds)
+    normalizeSelectedBoneIds(
+      modelWeightState.selectedBonesBySource.get(state.skinningSourceKey))
       .filter(id => state.boneIds.includes(id)));
   if (!selected.size) return null;
   const selectedNodes = (graph.nodes || []).filter(node =>
@@ -836,6 +989,11 @@ export function disableModelPhysics() {
 
 function installSkinningEntry(mesh, entry, buffer) {
   const state = stateFor(mesh);
+  const source = sourceDescriptorForEntry(entry, mesh);
+  state.skinningSourceKey = source.sourceKey;
+  state.skinningSourceFile = source.sourceFile;
+  state.skinningBoneOffset = source.boneIdOffset;
+  modelWeightState.sourceDescriptors.set(source.sourceKey, source);
   const indices = typedView(buffer, entry.data?.indices, Uint32Array, 'u32');
   const weights = typedView(buffer, entry.data?.weights, Float32Array, 'f32');
   const position = mesh.geometry?.attributes?.position;
@@ -895,8 +1053,8 @@ export function ensureModelWeightsLoaded() {
     }
     const preview = await api(folderPath);
     if (generation !== modelWeightGeneration) return modelWeightSnapshot();
-    modelWeightState.savedBoneIds = normalizedPersistedBoneIds(
-      preview?.saved_bone_ids);
+    modelWeightState.savedBonesBySource = selectionMapFromEntries(
+      preview?.saved_bones);
     const bufferResponse = preview?.data?.url
       ? await fetch(preview.data.url, {cache: 'no-store'}) : null;
     if (bufferResponse && !bufferResponse.ok) {
@@ -927,7 +1085,8 @@ export function ensureModelWeightsLoaded() {
     refreshModelWeightSummary({refreshStats: true});
     if (!modelWeightState.savedSelectionApplied) {
       modelWeightState.savedSelectionApplied = true;
-      setSelectedBoneIds(modelWeightState.savedBoneIds);
+      setSelectedBones(sourceSelectionEntries(
+        modelWeightState.savedBonesBySource));
     } else {
       syncPhysicsToSelection();
       notifyModelWeightChanged();
@@ -952,9 +1111,9 @@ export function ensureModelWeightsLoaded() {
     });
 }
 
-function syncPhysicsParticipants() {
+function syncPhysicsParticipants(changedSourceKeys = null) {
   if (!modelPhysicsSession.getState().enabled) return;
-  if (!modelWeightState.selectedBoneIds.size) {
+  if (!selectedBoneCount(modelWeightState.selectedBonesBySource)) {
     disableModelPhysics();
     return;
   }
@@ -962,6 +1121,8 @@ function syncPhysicsParticipants() {
   [...knownMeshes].forEach(mesh => {
     if (!eligibleSkinningMesh(mesh)) return;
     const state = states.get(mesh);
+    if (changedSourceKeys
+        && !changedSourceKeys.has(state?.skinningSourceKey)) return;
     if (!state?.loaded) {
       if (state?.error) {
         state.physicsParticipantStatus = 'failed';
@@ -992,16 +1153,16 @@ function syncPhysicsParticipants() {
   }
 }
 
-function syncPhysicsToSelection() {
+function syncPhysicsToSelection(changedSourceKeys = null) {
   const shouldEnable = modelWeightState.loaded
-    && modelWeightState.selectedBoneIds.size > 0;
+    && selectedBoneCount(modelWeightState.selectedBonesBySource) > 0;
   const enabled = modelPhysicsSession.getState().enabled;
   if (!shouldEnable) {
     if (enabled) disableModelPhysics();
     return false;
   }
   if (!enabled) modelPhysicsSession.enable(getModelTransformState());
-  syncPhysicsParticipants();
+  syncPhysicsParticipants(changedSourceKeys);
   return true;
 }
 
@@ -1009,7 +1170,7 @@ export function enableModelPhysics() {
   if (modelPhysicsSession.getState().enabled) {
     return Promise.resolve(getModelPhysicsState());
   }
-  if (!modelWeightState.selectedBoneIds.size) {
+  if (!selectedBoneCount(modelWeightState.selectedBonesBySource)) {
     return Promise.resolve(getModelPhysicsState());
   }
   const generation = modelPhysicsSession.enable(getModelTransformState());
@@ -2010,10 +2171,12 @@ function updateHeatmap(mesh, state) {
   mesh.material = state.debugMaterial;
 }
 
-function updateModelWeightHeatmap() {
+function updateModelWeightHeatmap(changedSourceKeys = null) {
   knownMeshes.forEach(mesh => {
     const state = states.get(mesh);
     if (!state?.loaded) return;
+    if (changedSourceKeys
+        && !changedSourceKeys.has(state.skinningSourceKey)) return;
     if (modelWeightState.heatmapEnabled && selectedWeightPresent(state)) {
       state.heatmapMode = 'bone';
       updateHeatmap(mesh, state);
@@ -2076,6 +2239,11 @@ export async function loadSkinningWeights(mesh) {
         || weights.length !== positionCount * influenceCount) {
       throw new Error('Skin data does not match rendered vertices.');
     }
+    const source = sourceDescriptorForEntry(preview, mesh);
+    state.skinningSourceKey = source.sourceKey;
+    state.skinningSourceFile = source.sourceFile;
+    state.skinningBoneOffset = source.boneIdOffset;
+    modelWeightState.sourceDescriptors.set(source.sourceKey, source);
     state.indices = indices;
     state.weights = weights;
     state.influenceCount = influenceCount;
@@ -2108,41 +2276,108 @@ export async function loadSkinningWeights(mesh) {
   }
 }
 
-export function setSelectedBoneIds(ids) {
+export function setSelectedBones(selection) {
   refreshModelWeightSummary();
-  const available = new Set(modelWeightState.availableBoneIds);
-  const normalized = normalizeSelectedBoneIds(ids)
-    .filter(id => !modelWeightState.loaded || available.has(id));
-  const previous = normalizeSelectedBoneIds(modelWeightState.selectedBoneIds);
-  if (previous.length === normalized.length
-      && previous.every((id, index) => id === normalized[index])) {
+  const next = selectionMapFromEntries(selection);
+  if (modelWeightState.loaded) {
+    const available = new Map(modelWeightState.sources.map(source => [
+      source.key, new Set(source.availableBoneIds),
+    ]));
+    for (const [sourceKey, ids] of next) {
+      const valid = available.get(sourceKey);
+      if (!valid) {
+        next.delete(sourceKey);
+        continue;
+      }
+      const filtered = new Set([...ids].filter(id => valid.has(id)));
+      if (filtered.size) next.set(sourceKey, filtered);
+      else next.delete(sourceKey);
+    }
+  }
+  const previousEntries = sourceSelectionEntries(
+    modelWeightState.selectedBonesBySource);
+  const nextEntries = sourceSelectionEntries(next);
+  if (sameBoneSelection(previousEntries, nextEntries)) {
     syncPhysicsToSelection();
     return modelWeightSnapshot();
   }
-  modelWeightState.selectedBoneIds = new Set(normalized);
-  knownMeshes.forEach(mesh => refreshSelectedWeightMask(mesh, states.get(mesh)));
-  if (modelWeightState.heatmapEnabled) updateModelWeightHeatmap();
-  syncPhysicsToSelection();
+  const changedSourceKeys = new Set([
+    ...modelWeightState.selectedBonesBySource.keys(), ...next.keys(),
+  ].filter(sourceKey => !sameBoneSelection(
+    sourceSelectionEntries(new Map([
+      [sourceKey, modelWeightState.selectedBonesBySource.get(sourceKey)
+        || new Set()],
+    ])),
+    sourceSelectionEntries(new Map([
+      [sourceKey, next.get(sourceKey) || new Set()],
+    ])),
+  )));
+  modelWeightState.selectedBonesBySource = next;
+  knownMeshes.forEach(mesh => {
+    const state = states.get(mesh);
+    if (changedSourceKeys.has(state?.skinningSourceKey)) {
+      refreshSelectedWeightMask(mesh, state);
+    }
+  });
+  if (modelWeightState.heatmapEnabled) {
+    updateModelWeightHeatmap(changedSourceKeys);
+  }
+  syncPhysicsToSelection(changedSourceKeys);
   notifyModelWeightChanged();
   requestRender();
   return modelWeightSnapshot();
 }
 
-export function clearSelectedBoneIds() {
-  return setSelectedBoneIds([]);
+export function setBoneSelected(sourceKey, boneId, selected) {
+  const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
+  const id = Number(boneId);
+  if (!descriptor || !Number.isInteger(id) || id < 0) {
+    return modelWeightSnapshot();
+  }
+  const entries = sourceSelectionEntries(modelWeightState.selectedBonesBySource)
+    .filter(entry => entry.sourceKey !== sourceKey);
+  const ids = new Set(modelWeightState.selectedBonesBySource.get(sourceKey));
+  if (selected) ids.add(id);
+  else ids.delete(id);
+  if (ids.size) entries.push({...descriptor, boneIds: [...ids]});
+  return setSelectedBones(entries);
+}
+
+export function clearSelectedBones() {
+  return setSelectedBones([]);
 }
 
 export function loadSavedBoneSelection() {
-  return setSelectedBoneIds(modelWeightState.savedBoneIds);
+  return setSelectedBones(sourceSelectionEntries(
+    modelWeightState.savedBonesBySource));
+}
+
+/** Compatibility helper for old module-level test/debug callers. */
+export function setSelectedBoneIds(ids) {
+  const source = modelWeightState.sources.length === 1
+    ? modelWeightState.sources[0]
+    : [...modelWeightState.sourceDescriptors.values()][0];
+  if (!source) return modelWeightSnapshot();
+  return setSelectedBones([{
+    sourceKey: source.key || source.sourceKey,
+    sourceFile: source.file || source.sourceFile,
+    boneIdOffset: source.boneIdOffset,
+    boneIds: ids,
+  }]);
+}
+
+/** Compatibility helper for old module-level test/debug callers. */
+export function clearSelectedBoneIds() {
+  return clearSelectedBones();
 }
 
 export function saveModelWeightSelection() {
   if (selectionSavePromise) return selectionSavePromise;
-  const selectedBoneIds = normalizeSelectedBoneIds(
-    modelWeightState.selectedBoneIds);
+  const selectedBones = serializeBoneSelection(sourceSelectionEntries(
+    modelWeightState.selectedBonesBySource));
   const mesh = [...knownMeshes].find(eligibleSkinningMesh);
-  const api = window.pywebview?.api?.save_weight_selected_bone_ids;
-  if (!selectedBoneIds.length || !mesh || typeof api !== 'function') {
+  const api = window.pywebview?.api?.save_weight_selection;
+  if (!selectedBones.length || !mesh || typeof api !== 'function') {
     return Promise.resolve(modelWeightSnapshot());
   }
   const generation = modelWeightGeneration;
@@ -2150,12 +2385,12 @@ export function saveModelWeightSelection() {
   modelWeightState.selectionSaveError = null;
   notifyModelWeightChanged();
   selectionSavePromise = Promise.resolve(
-    api(mesh.userData.modPath, selectedBoneIds))
+    api(mesh.userData.modPath, selectedBones))
     .then(result => {
       if (generation !== modelWeightGeneration) return modelWeightSnapshot();
       if (!result?.saved) throw new Error('The bone selection was not saved.');
-      modelWeightState.savedBoneIds = normalizedPersistedBoneIds(
-        result.selected_bone_ids ?? selectedBoneIds);
+      modelWeightState.savedBonesBySource = selectionMapFromEntries(
+        result.selected_bones ?? selectedBones);
       return modelWeightSnapshot();
     })
     .catch(error => {
@@ -2179,7 +2414,15 @@ export function saveModelWeightSelection() {
 export function setSelectedBone(mesh, boneId) {
   const state = stateFor(mesh);
   if (!state?.loaded || !state.boneIds.includes(Number(boneId))) return;
-  return setSelectedBoneIds([boneId]);
+  const entries = sourceSelectionEntries(modelWeightState.selectedBonesBySource)
+    .filter(entry => entry.sourceKey !== state.skinningSourceKey);
+  entries.push({
+    sourceKey: state.skinningSourceKey,
+    sourceFile: state.skinningSourceFile,
+    boneIdOffset: state.skinningBoneOffset,
+    boneIds: [boneId],
+  });
+  return setSelectedBones(entries);
 }
 
 export function setPhysicsFrequency(mesh, frequencyHz) {

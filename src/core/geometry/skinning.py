@@ -2,6 +2,7 @@
 
 import math
 import os
+import posixpath
 import struct
 from dataclasses import dataclass
 
@@ -36,6 +37,55 @@ class SkinningPreviewError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def normalize_skinning_source_file(value):
+    """Return a safe, normalized mod-relative Blend-buffer path."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip().replace("\\", "/")
+    if not value or value.startswith("/") or ":" in value[:3]:
+        return None
+    normalized = posixpath.normpath(value)
+    if normalized in ("", ".") or normalized == ".." \
+            or normalized.startswith("../"):
+        return None
+    if "/" not in normalized:
+        return None
+    return normalized
+
+
+def skinning_source_key(source_file, bone_id_offset=0):
+    """Build the case-insensitive identity for one decoded skin namespace."""
+    normalized = normalize_skinning_source_file(source_file)
+    if normalized is None:
+        return None
+    if isinstance(bone_id_offset, bool):
+        return None
+    try:
+        offset = int(bone_id_offset)
+    except (TypeError, ValueError):
+        return None
+    if offset < 0:
+        return None
+    return f"{normalized.casefold()}|offset={offset}"
+
+
+def skinning_source_descriptor(source):
+    """Return the stable frontend descriptor for a resolved source."""
+    if not isinstance(source, SkinningSource):
+        return None
+    file = normalize_skinning_source_file(source.file)
+    if isinstance(source.bone_id_offset, bool):
+        return None
+    try:
+        offset = int(source.bone_id_offset)
+    except (TypeError, ValueError):
+        return None
+    key = skinning_source_key(file, offset)
+    if key is None:
+        return None
+    return {"key": key, "file": file, "bone_id_offset": offset}
 
 
 def _format_supports_packed_weights(value):
@@ -269,5 +319,7 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
 
 __all__ = [
     "SkinningSource", "DecodedSkinning", "SkinningPreviewError",
-    "resolve_skinning_source", "decode_skinning", "build_skinning_preview",
+    "normalize_skinning_source_file", "skinning_source_key",
+    "skinning_source_descriptor", "resolve_skinning_source",
+    "decode_skinning", "build_skinning_preview",
 ]

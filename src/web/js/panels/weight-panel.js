@@ -2,14 +2,14 @@
 // simulation and input events never interrupt an active picker or slider.
 
 import {
-  clearSelectedBoneIds, ensureModelWeightsLoaded, getMeshWeightSummary,
+  clearSelectedBones, ensureModelWeightsLoaded, getMeshWeightSummary,
   getModelPhysicsState, getModelWeightState, loadSavedBoneSelection,
   resetModelPhysics, saveModelWeightSelection, setModelWeightHeatmap,
   setPhysicsConstraintsEnabled,
   setPhysicsContinuousLinearResponse, setPhysicsDamping,
   setPhysicsFrequency, setPhysicsGravityEnabled, setPhysicsGravityScale,
   setPhysicsLinearMotionStrength, setPhysicsMaxBendDegrees,
-  setPhysicsMotionStrength, setSelectedBoneIds,
+  setPhysicsMotionStrength, setBoneSelected,
 } from '../mesh/weight-experiment.js';
 
 let panel = null;
@@ -32,10 +32,15 @@ function addText(parent, className, value) {
   return node;
 }
 
-function selectedLabel(ids) {
-  if (!ids.length) return 'Select bones';
-  if (ids.length <= 4) return ids.join(', ');
-  return `${ids.length} bones selected`;
+function selectedLabel(state) {
+  const entries = state.selectedBones || [];
+  if (!entries.length) return 'Select bones';
+  const count = Number(state.selectedBoneCount)
+    || entries.reduce((total, entry) => total + entry.boneIds.length, 0);
+  if (entries.length === 1 && count <= 4) {
+    return entries[0].boneIds.join(', ');
+  }
+  return `${count} bones selected`;
 }
 
 function formatAffectedVertices(value) {
@@ -150,7 +155,7 @@ function buildBonePicker(content) {
   clear.type = 'button';
   clear.className = 'ui-button weight-clear-selection';
   clear.textContent = 'Clear';
-  clear.addEventListener('click', () => clearSelectedBoneIds());
+  clear.addEventListener('click', () => clearSelectedBones());
   actions.append(save, load, clear);
   section.appendChild(actions);
   content.appendChild(section);
@@ -166,8 +171,7 @@ function buildBonePicker(content) {
   ui.clearSelection = clear;
   ui.saveSelection = save;
   ui.loadSelection = load;
-  ui.optionById = new Map();
-  ui.metaById = new Map();
+  ui.groupBySource = new Map();
   ui.optionKey = null;
 
   button.addEventListener('click', () => {
@@ -299,58 +303,96 @@ function buildPanel() {
 }
 
 function syncBoneFilter(weightState = latestWeightState || getModelWeightState()) {
-  if (!ui?.optionById) return;
+  if (!ui?.groupBySource) return;
   const query = ui.search.value.trim().toLowerCase();
-  const selected = new Set(weightState.selectedBoneIds);
-  ui.optionById.forEach((option, id) => {
-    option.hidden = (!!query && !String(id).includes(query))
-      || (ui.selectedOnly.checked && !selected.has(id));
+  const selected = new Map((weightState.selectedBones || []).map(entry => [
+    entry.sourceKey, new Set(entry.boneIds),
+  ]));
+  ui.groupBySource.forEach((group, sourceKey) => {
+    const sourceSelected = selected.get(sourceKey) || new Set();
+    let visible = 0;
+    group.optionById.forEach((option, id) => {
+      option.hidden = (!!query && !String(id).includes(query))
+        || (ui.selectedOnly.checked && !sourceSelected.has(id));
+      if (!option.hidden) visible += 1;
+    });
+    group.root.hidden = visible === 0;
   });
 }
 
 function syncBoneOptions(state) {
-  const available = new Set(state.availableBoneIds);
-  const selected = new Set(state.selectedBoneIds);
-  const optionKey = state.availableBoneIds.join(',');
+  const sources = state.sources || [];
+  const optionKey = JSON.stringify(sources.map(source => [
+    source.key, source.file, source.boneIdOffset, source.availableBoneIds,
+  ]));
   if (optionKey !== ui.optionKey) {
     const scrollTop = ui.boneList.scrollTop;
-    ui.optionById.forEach((option, id) => {
-      if (!available.has(id)) {
-        option.remove();
-        ui.optionById.delete(id);
-        ui.metaById.delete(id);
+    ui.boneList.replaceChildren();
+    ui.groupBySource = new Map();
+    const basenames = new Map(sources.map(source => [
+      source.key, String(source.file).split('/').pop().toLowerCase(),
+    ]));
+    const basenameCounts = new Map();
+    basenames.forEach(name => basenameCounts.set(
+      name, (basenameCounts.get(name) || 0) + 1));
+    const fileCounts = new Map();
+    sources.forEach(source => fileCounts.set(
+      String(source.file).toLowerCase(),
+      (fileCounts.get(String(source.file).toLowerCase()) || 0) + 1));
+    sources.forEach(source => {
+      const root = document.createElement('section');
+      root.className = 'weight-bone-group';
+      const heading = addText(root, 'weight-bone-source', '');
+      const basename = String(source.file).split('/').pop();
+      let label = basename;
+      if (basenameCounts.get(basenames.get(source.key)) > 1) label = source.file;
+      if (fileCounts.get(String(source.file).toLowerCase()) > 1) {
+        label += ` · offset +${source.boneIdOffset}`;
       }
-    });
-    state.availableBoneIds.forEach(id => {
-      if (ui.optionById.has(id)) return;
+      heading.textContent = label.toUpperCase();
+      heading.title = source.file;
+      root.appendChild(heading);
+      const optionById = new Map();
+      const metaById = new Map();
+      source.availableBoneIds.forEach(id => {
       const label = document.createElement('label');
       label.className = 'weight-bone-option';
       label.dataset.boneId = String(id);
+      label.dataset.sourceKey = source.key;
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.value = String(id);
       checkbox.addEventListener('change', event => {
-        const next = new Set(getModelWeightState().selectedBoneIds);
-        if (event.target.checked) next.add(id);
-        else next.delete(id);
-        setSelectedBoneIds([...next]);
+        setBoneSelected(source.key, id, event.target.checked);
       });
       label.appendChild(checkbox);
       addText(label, 'weight-bone-id', String(id));
       const meta = addText(label, 'weight-bone-meta', '');
-      ui.optionById.set(id, label);
-      ui.metaById.set(id, meta);
+      optionById.set(id, label);
+      metaById.set(id, meta);
+      root.appendChild(label);
     });
-    state.availableBoneIds.forEach(id =>
-      ui.boneList.appendChild(ui.optionById.get(id)));
+      ui.boneList.appendChild(root);
+      ui.groupBySource.set(source.key, {root, optionById, metaById});
+    });
     ui.boneList.scrollTop = scrollTop;
     ui.optionKey = optionKey;
   }
-  state.availableBoneIds.forEach(id => {
-    ui.optionById.get(id).querySelector('input').checked = selected.has(id);
-    ui.metaById.get(id).textContent = formatBoneMeta(state.boneStats?.[id]);
+  const selected = new Map((state.selectedBones || []).map(entry => [
+    entry.sourceKey, new Set(entry.boneIds),
+  ]));
+  sources.forEach(source => {
+    const group = ui.groupBySource.get(source.key);
+    if (!group) return;
+    const sourceSelected = selected.get(source.key) || new Set();
+    source.availableBoneIds.forEach(id => {
+      group.optionById.get(id).querySelector('input').checked =
+        sourceSelected.has(id);
+      group.metaById.get(id).textContent = formatBoneMeta(
+        source.boneStats?.[id]);
+    });
   });
-  if (!state.availableBoneIds.length) {
+  if (!sources.some(source => source.availableBoneIds.length)) {
     if (!ui.empty) {
       ui.empty = addText(ui.boneList, 'weight-empty', 'No bone IDs available.');
     }
@@ -402,15 +444,13 @@ function syncWeightControls(weightState = getModelWeightState()) {
   const displayState = meshFilterMode === 'current'
     ? {...weightState, ...meshSummaryFor(weightState)} : weightState;
   syncBoneOptions(displayState);
-  ui.boneButton.textContent = selectedLabel(weightState.selectedBoneIds);
+  ui.boneButton.textContent = selectedLabel(weightState);
   ui.boneButton.disabled = !weightState.loaded
     && !weightState.availableBoneIds.length;
-  ui.clearSelection.disabled = !weightState.selectedBoneIds.length;
-  ui.saveSelection.disabled = !weightState.selectedBoneIds.length
+  ui.clearSelection.disabled = !weightState.selectedBoneCount;
+  ui.saveSelection.disabled = !weightState.selectedBoneCount
     || weightState.savingSelection;
-  const available = new Set(weightState.availableBoneIds);
-  ui.loadSelection.disabled = !weightState.savedBoneIds.some(id =>
-    available.has(id));
+  ui.loadSelection.disabled = !weightState.savedBones?.length;
   ui.allMeshes.classList.toggle('active', meshFilterMode === 'all');
   ui.allMeshes.setAttribute('aria-pressed', String(meshFilterMode === 'all'));
   ui.currentMesh.classList.toggle('active', meshFilterMode === 'current');

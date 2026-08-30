@@ -7,7 +7,8 @@ import pytest
 
 from core.geometry.draw_call import DrawCall
 from core.geometry.skinning import (
-    SkinningSource, decode_skinning, resolve_skinning_source,
+    SkinningSource, decode_skinning, normalize_skinning_source_file,
+    resolve_skinning_source, skinning_source_descriptor, skinning_source_key,
 )
 
 
@@ -129,6 +130,38 @@ def test_resolver_carries_the_authored_model_bone_offset():
 
     assert error is None
     assert source.bone_id_offset == 12
+
+
+@pytest.mark.parametrize(
+    ("source_file", "offset", "expected"),
+    [
+        (r"Hair\.\HairBlend.buf", 0,
+         "hair/hairblend.buf|offset=0"),
+        ("Hair/HairBlend.buf", 24, "hair/hairblend.buf|offset=24"),
+        ("Accessory/HairBlend.buf", 0,
+         "accessory/hairblend.buf|offset=0"),
+    ],
+)
+def test_skinning_source_key_uses_relative_path_and_offset(
+        source_file, offset, expected):
+    assert skinning_source_key(source_file, offset) == expected
+
+
+def test_skinning_source_normalization_rejects_unsafe_or_basename_paths():
+    assert normalize_skinning_source_file("HairBlend.buf") is None
+    assert normalize_skinning_source_file("../Hair/HairBlend.buf") is None
+    assert normalize_skinning_source_file("C:/Hair/HairBlend.buf") is None
+
+
+def test_skinning_source_descriptor_excludes_decoder_details():
+    source = SkinningSource(
+        r"Hair\HairBlend.buf", 8, 4, "wwmi_u8_4", bone_id_offset=24)
+
+    assert skinning_source_descriptor(source) == {
+        "key": "hair/hairblend.buf|offset=24",
+        "file": "Hair/HairBlend.buf",
+        "bone_id_offset": 24,
+    }
 
 
 def test_resolver_does_not_infer_blend_from_stride_alone():

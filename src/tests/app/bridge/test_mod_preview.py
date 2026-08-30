@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.bridge.mod_preview import ModPreview
+from core.geometry.skinning import SkinningSource
 
 
 class _Access:
@@ -33,11 +34,14 @@ def _context():
     return SimpleNamespace(metadata={}, asset_folders=[])
 
 
-def test_model_skinning_preview_includes_validated_saved_bone_ids(monkeypatch):
+def test_model_skinning_preview_includes_validated_saved_bones(monkeypatch):
     preview = ModPreview(_Access())
     context = _context()
     context.metadata = {
-        "weight": {"selected_bone_ids": [9, True, -1, 7, 9]},
+        "weight": {"selected_bones": [{
+            "source": "Hair\\HairBlend.buf", "bone_id_offset": 0,
+            "bone_ids": [9, True, -1, 7, 9],
+        }]},
     }
     monkeypatch.setattr(
         preview, "authoritative_context",
@@ -50,7 +54,28 @@ def test_model_skinning_preview_includes_validated_saved_bone_ids(monkeypatch):
     result = preview.get_model_skinning_preview("mod")
 
     assert result["status"] == "error"
-    assert result["saved_bone_ids"] == [7, 9]
+    assert result["saved_bones"] == [{
+        "source": "Hair/HairBlend.buf", "bone_id_offset": 0,
+        "bone_ids": [7, 9],
+    }]
+
+
+def test_single_and_bulk_skin_entries_share_source_descriptor():
+    draw = SimpleNamespace(skinning_source=SkinningSource(
+        file=r"Hair\HairBlend.buf", stride=8, influence_count=4,
+        encoding="wwmi_u8_4", bone_id_offset=24))
+    decoded = SimpleNamespace(
+        indices=b"index", weights=b"weight", vertex_count=1,
+        influence_count=1, bone_ids=(45,), diagnostics={})
+
+    single, _single_blob = ModPreview._skin_entry(decoded, draw, 0)
+    bulk, _bulk_blob = ModPreview._skin_entry(decoded, draw, 11)
+
+    assert single["source"] == bulk["source"] == {
+        "key": "hair/hairblend.buf|offset=24",
+        "file": "Hair/HairBlend.buf",
+        "bone_id_offset": 24,
+    }
 
 
 def test_load_commits_texture_publication_after_geometry(monkeypatch):
