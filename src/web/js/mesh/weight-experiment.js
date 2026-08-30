@@ -876,9 +876,6 @@ function syncRigDiagnostics(rig) {
 function applySourceDeformation(rig, {visibleOnly = true, meshes = null} = {}) {
   if (!rig.physicsState || !rig.physicsForest) return false;
   const transforms = ensureSourcePhysicsTransforms(rig);
-  // Keep every member's source-frame references synchronized, including when
-  // only one newly visible member is being redrawn.
-  syncRigAliases(rig);
   let changed = false;
   const target = meshes ? new Set(meshes) : null;
   forEachRigMesh(rig, (mesh, state) => {
@@ -2292,12 +2289,6 @@ export function orientForest(nodes, treeEdges, primaryRootId, options = {}) {
   };
 }
 
-function previewError(result) {
-  const code = result?.code;
-  return new Error(ERROR_MESSAGES[code] || result?.error
-    || 'Could not load skin weights.');
-}
-
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {
     throw new Error('Skin data has an unsupported binary layout.');
@@ -2520,88 +2511,6 @@ function disableHeatmap(mesh, state) {
   if (state.debugMaterial) {
     state.debugMaterial.dispose();
     state.debugMaterial = null;
-  }
-}
-
-export async function loadSkinningWeights(mesh) {
-  const state = stateFor(mesh);
-  if (!state) throw new Error('No mesh was selected.');
-  if (state.loaded) return state;
-  if (state.promise) return state.promise;
-
-  state.loading = true;
-  state.error = null;
-  state.promise = (async () => {
-    captureBaseline(mesh, state);
-    const api = window.pywebview?.api?.get_skinning_preview;
-    if (typeof api !== 'function') {
-      throw new Error('Skin-weight preview is unavailable.');
-    }
-    const preview = await api(
-      mesh.userData.modPath, mesh.userData.semanticKey);
-    if (!preview || preview.status !== 'ok') throw previewError(preview);
-    const response = await fetch(preview.data?.url, {cache: 'no-store'});
-    if (!response.ok) {
-      throw new Error(`Skin data download failed (${response.status}).`);
-    }
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength !== Number(preview.data.length)) {
-      throw new Error('Skin data download was incomplete.');
-    }
-    const indices = typedView(
-      buffer, preview.data.indices, Uint32Array, 'u32');
-    const weights = typedView(
-      buffer, preview.data.weights, Float32Array, 'f32');
-    if (states.get(mesh) !== state) {
-      throw new Error('The skin-weight experiment was reset.');
-    }
-    const positionCount = mesh.geometry.attributes.position.count;
-    if (positionCount !== Number(preview.vertex_count)) {
-      throw new Error(
-        `Skin data does not match rendered vertices. Expected ${positionCount.toLocaleString()}, received ${Number(preview.vertex_count).toLocaleString()}.`);
-    }
-    const influenceCount = Number(preview.influence_count);
-    if (!Number.isInteger(influenceCount) || influenceCount <= 0
-        || indices.length !== positionCount * influenceCount
-        || weights.length !== positionCount * influenceCount) {
-      throw new Error('Skin data does not match rendered vertices.');
-    }
-    const source = sourceDescriptorForEntry(preview);
-    if (!source) {
-      throw new Error(ERROR_MESSAGES.skinning_source_identity_unavailable);
-    }
-    state.skinningSourceKey = source.sourceKey;
-    state.skinningSourceFile = source.sourceFile;
-    state.skinningBoneOffset = source.boneIdOffset;
-    modelWeightState.sourceDescriptors.set(source.sourceKey, source);
-    state.indices = indices;
-    state.weights = weights;
-    state.influenceCount = influenceCount;
-    state.boneIds = Array.isArray(preview.bone_ids)
-      ? [...preview.bone_ids].map(Number).filter(Number.isFinite)
-        .sort((a, b) => a - b)
-      : buildBoneIds(indices, weights, influenceCount);
-    state.encoding = preview.encoding || null;
-    state.diagnostics = preview.diagnostics || null;
-    state.loaded = true;
-    state.influenceNodes = buildInfluenceNodes(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.boneIds);
-    state.centerByBoneId = new Map(state.influenceNodes.map(node => [
-      node.boneId, node.weightedCenter]));
-    refreshSelectedWeightMask(mesh, state);
-    refreshModelWeightSummary({refreshStats: true});
-    notifyModelWeightChanged();
-    return state;
-  })();
-  try {
-    return await state.promise;
-  } catch (error) {
-    state.error = error instanceof Error ? error.message : String(error);
-    throw error;
-  } finally {
-    state.loading = false;
-    state.promise = null;
   }
 }
 

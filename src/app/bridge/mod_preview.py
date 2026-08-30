@@ -144,53 +144,9 @@ class ModPreview:
         except Exception:
             return self._semantic_read_error()
 
-    def get_skinning_preview(self, folder_path, mesh_key):
-        """Decode one selected mod draw's weights on explicit user request."""
-        try:
-            folder_path, overrides, _pending, context = \
-                self.authoritative_context(folder_path)
-            if not isinstance(mesh_key, str) or not mesh_key:
-                return {"status": "error", "code": "mesh_not_found",
-                        "error": "The selected mesh could not be found."}
-            active_mesh_keys = self._active_mesh_keys.get(folder_path)
-            if (active_mesh_keys is not None
-                    and mesh_key not in active_mesh_keys):
-                return {"status": "error", "code": "mesh_not_found",
-                        "error": "The selected mesh could not be found."}
-
-            parsed, draws = self._skinning_draws(context, overrides)
-            selected = draws.get(mesh_key)
-            if selected is None:
-                return {"status": "error", "code": "mesh_not_found",
-                        "error": "The selected mesh could not be found."}
-
-            draw, group = selected
-            buffers = BufferStore()
-            decoded = self._decode_skinning_draw(
-                draw, group, context.mod_dir, buffers,
-                geometry_convention_for(parsed.game.game))
-            entry, blob = self._skin_entry(decoded, draw, 0)
-            url = server.publish_geometry(blob, replace=False)
-            entry["data"] = {
-                **entry["data"],
-                "url": url,
-                "length": len(blob),
-            }
-            return {
-                "status": "ok",
-                "format_version": 1,
-                **{key: value for key, value in entry.items()
-                   if key != "status"},
-            }
-        except SkinningPreviewError as error:
-            return {"status": "error", "code": error.code,
-                    "error": error.message}
-        except Exception:
-            return self._semantic_read_error()
-
     @staticmethod
     def _skinning_draws(context, overrides):
-        """Resolve every rendered draw once for single and bulk previews."""
+        """Resolve every rendered draw once for the model preview."""
         parsed = analyze_mod_inis(
             context.ini_paths, context.mod_dir, overrides, context.docs)
         draws = {}

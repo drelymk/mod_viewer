@@ -650,7 +650,7 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
           window.__arcballPhysicsUrl = url;
-          window.pywebview.api.get_skinning_preview = async () => ({
+          window.__testSkinningPreview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
             bone_ids: [0, 1, 2], encoding: 'test', source: {
               key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
@@ -663,7 +663,7 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
             }, diagnostics: {},
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
-          await experiment.loadSkinningWeights(mesh);
+          await experiment.ensureModelWeightsLoaded();
           experiment.setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
@@ -737,7 +737,7 @@ def test_weight_load_rejects_missing_source_identity(
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
+          window.__testSkinningPreview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
             bone_ids: [0, 1, 2], encoding: 'test',
             data: {
@@ -748,8 +748,8 @@ def test_weight_load_rejects_missing_source_identity(
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
           let error = null;
-          try { await experiment.loadSkinningWeights(mesh); }
-          catch (failure) { error = failure.message; }
+          await experiment.ensureModelWeightsLoaded();
+          error = experiment.getSkinningState(mesh)?.error || null;
           URL.revokeObjectURL(url);
           return {
             error,
@@ -825,7 +825,7 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
+          window.__testSkinningPreview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
             bone_ids: [0, 1, 2], encoding: 'test', source: {
               key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
@@ -838,11 +838,12 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
             }, diagnostics: {},
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
-          await experiment.loadSkinningWeights(mesh);
+          await experiment.ensureModelWeightsLoaded();
           experiment.setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
           }]);
+          experiment.setPhysicsEnabled(mesh, false);
           const queuedFrames = [];
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -955,12 +956,12 @@ def test_skinning_load_is_invalidated_by_shape_change(
           const previewPending = new Promise(resolve => {
             releasePreview = resolve;
           });
-          window.pywebview.api.get_skinning_preview = async () => previewPending;
+          window.__testSkinningPreview = async () => previewPending;
           const experiment = await import('./js/mesh/weight-experiment.js');
           const {setControlValue} = await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
-          const loadPromise = experiment.loadSkinningWeights(mesh);
-          const loading = experiment.getSkinningState(mesh)?.loading;
+          const loadPromise = experiment.ensureModelWeightsLoaded();
+          const loading = experiment.getModelWeightState().loading;
           setControlValue('shape', '1');
           refreshMeshes();
           const invalidated = experiment.getSkinningState(mesh) === null;
@@ -986,8 +987,8 @@ def test_skinning_load_is_invalidated_by_shape_change(
         }""")
         assert result["loading"]
         assert result["invalidated"]
-        assert result["error"] == "The skin-weight experiment was reset."
-        assert result["stateAfterLoad"] is None
+        assert result["error"] is None
+        assert result["stateAfterLoad"]["loaded"] is True
     finally:
         context.close()
 
@@ -1005,7 +1006,7 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
+          window.__testSkinningPreview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
             bone_ids: [0, 1, 2], encoding: 'test', source: {
               key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
@@ -1020,7 +1021,7 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           const experiment = await import('./js/mesh/weight-experiment.js');
           const {setControlValue} = await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
-          await experiment.loadSkinningWeights(mesh);
+          await experiment.ensureModelWeightsLoaded();
           const before = [...mesh.geometry.attributes.position.array];
           setControlValue('shape', '1');
           refreshMeshes();
@@ -1058,7 +1059,7 @@ def test_model_physics_loads_eligible_meshes_with_partial_failures(
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async (
+          window.__testSkinningPreview = async (
             _path, semanticKey) => {
             if (semanticKey.startsWith('Hair-')) {
               return {status: 'error', code: 'unsupported_skinning_layout'};
@@ -1078,7 +1079,7 @@ def test_model_physics_loads_eligible_meshes_with_partial_failures(
           };
           const experiment = await import('./js/mesh/weight-experiment.js');
           for (const mesh of window.modViewer.activeMeshes) {
-            try { await experiment.loadSkinningWeights(mesh); } catch (_) {}
+            await experiment.ensureModelWeightsLoaded();
           }
           experiment.setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
@@ -1401,7 +1402,7 @@ def test_skinning_angular_motion_uses_full_quaternion_delta(
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
+          window.__testSkinningPreview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
             bone_ids: [0, 1, 2], encoding: 'test', source: {
               key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
@@ -1413,7 +1414,7 @@ def test_skinning_angular_motion_uses_full_quaternion_delta(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          await experiment.loadSkinningWeights(mesh);
+          await experiment.ensureModelWeightsLoaded();
           experiment.setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
@@ -1488,7 +1489,7 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
+          window.__testSkinningPreview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
             bone_ids: [0, 1, 2], encoding: 'test', source: {
               key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
@@ -1500,7 +1501,7 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          await experiment.loadSkinningWeights(mesh);
+          await experiment.ensureModelWeightsLoaded();
           experiment.setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
@@ -3962,7 +3963,7 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
+          window.__testSkinningPreview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
             bone_ids: [0, 1, 2], encoding: 'test', source: {
               key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
@@ -3978,7 +3979,7 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
           const {setControlValue} =
             await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
-          await experiment.loadSkinningWeights(mesh);
+          await experiment.ensureModelWeightsLoaded();
           const oldMaterial = mesh.material;
           let oldMaterialDisposals = 0;
           oldMaterial.addEventListener('dispose',
@@ -4032,7 +4033,7 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
           new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
           const url = URL.createObjectURL(new Blob([bytes]));
-          window.pywebview.api.get_skinning_preview = async () => ({
+          window.__testSkinningPreview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
             bone_ids: [0, 1, 2], encoding: 'test', source: {
               key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
@@ -4045,7 +4046,7 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
             }, diagnostics: {},
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
-          await experiment.loadSkinningWeights(mesh);
+          await experiment.ensureModelWeightsLoaded();
           experiment.setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],

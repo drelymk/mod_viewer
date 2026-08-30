@@ -427,6 +427,23 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   ?? payload.asset_resolution ?? null,
               });
             },
+            get_model_skinning_preview: async path => {
+              const single = window.__testSkinningPreview;
+              if (typeof single !== 'function') {
+                return {status: 'error', error: 'Skin preview unavailable.'};
+              }
+              const meshes = {};
+              let data = null;
+              for (const mesh of window.modViewer?.activeMeshes || []) {
+                const key = mesh.userData.semanticKey;
+                const entry = await single(path, key);
+                meshes[key] = copy(entry);
+                if (!data && entry?.status === 'ok') data = entry.data;
+              }
+              return copy({
+                status: 'ok', saved_bones: [], meshes, data,
+              });
+            },
             delete_toggle: async (path, ini, section) => {
               state.calls.deleteToggle.push([path, ini, section]);
               return copy({ok: true, result: {}});

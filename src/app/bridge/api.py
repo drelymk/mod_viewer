@@ -141,9 +141,6 @@ class ModViewerAPI:
     def get_mesh_semantics(self, folder_path):
         return self._mod_preview.get_mesh_semantics(folder_path)
 
-    def get_skinning_preview(self, folder_path, mesh_key):
-        return self._mod_preview.get_skinning_preview(folder_path, mesh_key)
-
     def get_model_skinning_preview(self, folder_path):
         return self._mod_preview.get_model_skinning_preview(folder_path)
 

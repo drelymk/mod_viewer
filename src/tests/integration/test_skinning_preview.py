@@ -60,7 +60,7 @@ stride = 20
     return ini
 
 
-def test_get_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch):
+def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch):
     ini = _write_mod(tmp_path)
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
@@ -90,15 +90,17 @@ def test_get_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch)
             AssertionError("preview must not load the model")),
     )
 
-    result = preview.get_skinning_preview(str(tmp_path), "BodyBlend-1")
+    result = preview.get_model_skinning_preview(str(tmp_path))
+    result_entry = result["meshes"]["BodyBlend-1"]
 
     position_length = entry["pos"]["length"]
     assert result["status"] == "ok"
-    assert result["vertex_count"] == position_length // 12
-    assert result["encoding"] == "gimi_f32_u32_4"
-    assert result["bone_ids"] == [7, 8, 9]
-    assert result["data"]["indices"]["offset"] == 0
-    assert result["data"]["weights"]["offset"] == 4 * 4 * 4
+    assert result_entry["vertex_count"] == position_length // 12
+    assert result_entry["encoding"] == "gimi_f32_u32_4"
+    assert result_entry["bone_ids"] == [7, 8, 9]
+    assert result_entry["data"]["indices"]["offset"] == 0
+    assert result_entry["data"]["weights"]["offset"] == 4 * 4 * 4
+    assert result["data"]["length"] == len(published["blob"])
     assert published["replace"] is False
     assert struct.unpack_from("<4I", published["blob"], 0) == (7, 8, 9, 0)
     assert struct.unpack_from("<4f", published["blob"], 4 * 4 * 4) == pytest.approx(

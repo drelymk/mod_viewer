@@ -32,7 +32,6 @@ EXPECTED_API_METHODS = {
     "get_present_state",
     "get_record_positions",
     "get_model_skinning_preview",
-    "get_skinning_preview",
     "get_toggle_details",
     "has_pending_changes",
     "list_asset_subfolders",
