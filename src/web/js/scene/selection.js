@@ -3,15 +3,12 @@
 // group/source section it's hiding inside), and clicking a row does the same
 // in reverse. Clicking empty space in the 3D view deselects.
 
-import * as THREE from 'three';
 import { camera, renderer } from './scene.js';
 import { activeMeshes } from '../mesh/visibility.js';
 import { getMeshView } from '../mesh/mesh-view-bindings.js';
 import { setGameMaterialSelectionEnabled } from '../mesh/material-profile.js';
+import { raycastModelAtClientPoint } from './model-picking.js';
 import { requestRender } from './render-scheduler.js';
-
-const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
 
 let selected = null; // currently selected mesh, or null
 
@@ -64,12 +61,6 @@ export function clearSelection() {
   selectMesh(null);
 }
 
-function toNDC(event) {
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-}
-
 // A plain "click" event still fires after an orbit-drag release (mousedown
 // and mouseup share the same target regardless of movement between), so a
 // pick has to gate on how far the pointer actually moved instead.
@@ -82,10 +73,14 @@ function onPointerDown(e) {
 function onPointerUp(e) {
   if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return; // was a drag, not a click
 
-  toNDC(e);
-  raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(activeMeshes.filter(m => m.visible), false);
-  selectMesh(hits.length ? hits[0].object : null);
+  const hit = raycastModelAtClientPoint({
+    clientX: e.clientX,
+    clientY: e.clientY,
+    canvas: renderer.domElement,
+    camera,
+    meshes: activeMeshes,
+  });
+  selectMesh(hit?.object || null);
 }
 
 export function initSelection() {

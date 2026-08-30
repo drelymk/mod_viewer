@@ -135,6 +135,8 @@ def test_resolver_carries_the_authored_model_bone_offset():
 @pytest.mark.parametrize(
     ("source_file", "offset", "expected"),
     [
+        ("BodyBlend.buf", 0, "bodyblend.buf|offset=0"),
+        ("BodyBlend2.buf", 0, "bodyblend2.buf|offset=0"),
         (r"Hair\.\HairBlend.buf", 0,
          "hair/hairblend.buf|offset=0"),
         ("Hair/HairBlend.buf", 24, "hair/hairblend.buf|offset=24"),
@@ -147,9 +149,21 @@ def test_skinning_source_key_uses_relative_path_and_offset(
     assert skinning_source_key(source_file, offset) == expected
 
 
-def test_skinning_source_normalization_rejects_unsafe_or_basename_paths():
-    assert normalize_skinning_source_file("HairBlend.buf") is None
-    assert normalize_skinning_source_file("../Hair/HairBlend.buf") is None
+def test_skinning_source_normalization_accepts_safe_relative_paths():
+    assert normalize_skinning_source_file("BodyBlend.buf") == "BodyBlend.buf"
+    assert normalize_skinning_source_file("Hair/HairBlend.buf") == \
+        "Hair/HairBlend.buf"
+    assert normalize_skinning_source_file("./Hair/HairBlend.buf") == \
+        "Hair/HairBlend.buf"
+    assert normalize_skinning_source_file(r"Hair\HairBlend.buf") == \
+        "Hair/HairBlend.buf"
+    assert normalize_skinning_source_file("../Shared/SharedBlend.buf") == \
+        "../Shared/SharedBlend.buf"
+
+
+def test_skinning_source_normalization_rejects_unsafe_paths():
+    assert normalize_skinning_source_file("../../escape.buf") is None
+    assert normalize_skinning_source_file("/absolute/path.buf") is None
     assert normalize_skinning_source_file("C:/Hair/HairBlend.buf") is None
 
 

@@ -602,7 +602,10 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
           window.__arcballPhysicsUrl = url;
           window.pywebview.api.get_skinning_preview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
             data: {
               url, length: 48,
               indices: {offset: 0, length: 24, type: 'u32'},
@@ -611,7 +614,10 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
           await experiment.loadSkinningWeights(mesh);
-          experiment.setSelectedBoneIds([1]);
+          experiment.setSelectedBones([{
+            sourceKey: 'test/bodyblend.buf|offset=0',
+            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
+          }]);
           await experiment.enableModelPhysics();
           return experiment.getModelPhysicsState();
         }""")
@@ -668,6 +674,48 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
         context.close()
 
 
+def test_weight_load_rejects_missing_source_identity(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightSourceRequired": _payload("WeightSourceRequired")})
+    try:
+        _open(page, "WeightSourceRequired")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        result = page.evaluate("""async () => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.pywebview.api.get_skinning_preview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test',
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          let error = null;
+          try { await experiment.loadSkinningWeights(mesh); }
+          catch (failure) { error = failure.message; }
+          URL.revokeObjectURL(url);
+          return {
+            error,
+            state: experiment.getSkinningState(mesh),
+            model: experiment.getModelWeightState(),
+          };
+        }""")
+        assert result["error"] == \
+            "The skin-weight source identity is unavailable for this draw."
+        assert result["state"]["loaded"] is False
+        assert result["model"]["sources"] == []
+        assert "legacy/model/weights.buf" not in str(result)
+    finally:
+        context.close()
+
+
 def test_selected_weight_mask_aggregates_authored_influences(
         edge_browser, frontend_url):
     context, page = _page(
@@ -681,6 +729,34 @@ def test_selected_weight_mask_aggregates_authored_influences(
           return [...mask];
         }""")
         assert result == pytest.approx([.3, .5, 0])
+    finally:
+        context.close()
+
+
+def test_weight_picker_sampling_uses_smooth_distance_falloff_and_exact_fallback(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightSampling": _payload("WeightSampling")})
+    try:
+        result = page.evaluate("""async () => {
+          const selection = await import('./js/mesh/weight-selection.js');
+          const nearby = selection.sampleNearbyBoneWeights(
+            new Float32Array([0, 0, 0, .5, 0, 0, 1, 0, 0]),
+            new Uint32Array([1, 2, 1, 2, 1, 2]),
+            new Float32Array([.8, .2, .4, .6, .1, .9]), 2,
+            [0, 0, 0], 1);
+          const exact = selection.interpolateTriangleBoneWeights(
+            new Uint32Array([1, 2, 1, 2, 1, 2]),
+            new Float32Array([.8, .2, .4, .6, .1, .9]), 2,
+            [0, 1, 2], [0.25, 0.5, 0.25]);
+          return {nearby, exact};
+        }""")
+        assert [entry["boneId"] for entry in result["nearby"]] == [1, 2]
+        assert [entry["weight"] for entry in result["nearby"]] == pytest.approx(
+            [.6666667, .3333333])
+        assert [entry["boneId"] for entry in result["exact"]] == [2, 1]
+        assert [entry["weight"] for entry in result["exact"]] == pytest.approx(
+            [.575, .425])
     finally:
         context.close()
 
@@ -701,7 +777,10 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
           const url = URL.createObjectURL(new Blob([bytes]));
           window.pywebview.api.get_skinning_preview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
             data: {
               url, length: 48,
               indices: {offset: 0, length: 24, type: 'u32'},
@@ -710,7 +789,10 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
           await experiment.loadSkinningWeights(mesh);
-          experiment.setSelectedBoneIds([1]);
+          experiment.setSelectedBones([{
+            sourceKey: 'test/bodyblend.buf|offset=0',
+            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
+          }]);
           experiment.ensureCandidateForest(mesh);
           const queuedFrames = [];
           const originalRequestAnimationFrame = window.requestAnimationFrame;
@@ -814,7 +896,10 @@ def test_skinning_load_is_invalidated_by_shape_change(
           const invalidated = experiment.getSkinningState(mesh) === null;
           releasePreview({
             status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
             data: {
               url, length: 48,
               indices: {offset: 0, length: 24, type: 'u32'},
@@ -852,7 +937,10 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           const url = URL.createObjectURL(new Blob([bytes]));
           window.pywebview.api.get_skinning_preview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
             data: {
               url, length: 48,
               indices: {offset: 0, length: 24, type: 'u32'},
@@ -909,7 +997,10 @@ def test_model_physics_loads_eligible_meshes_with_partial_failures(
             }
             return {
               status: 'ok', vertex_count: 3, influence_count: 2,
-              bone_ids: [0, 1, 2], encoding: 'test',
+              bone_ids: [0, 1, 2], encoding: 'test', source: {
+                key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+                bone_id_offset: 0,
+              },
               data: {
                 url, length: 48,
                 indices: {offset: 0, length: 24, type: 'u32'},
@@ -921,7 +1012,10 @@ def test_model_physics_loads_eligible_meshes_with_partial_failures(
           for (const mesh of window.modViewer.activeMeshes) {
             try { await experiment.loadSkinningWeights(mesh); } catch (_) {}
           }
-          experiment.setSelectedBoneIds([1]);
+          experiment.setSelectedBones([{
+            sourceKey: 'test/bodyblend.buf|offset=0',
+            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
+          }]);
           const finalState = await experiment.enableModelPhysics();
           const states = window.modViewer.activeMeshes.map(mesh => {
             const state = experiment.getSkinningState(mesh);
@@ -1242,7 +1336,10 @@ def test_skinning_angular_motion_uses_full_quaternion_delta(
           const url = URL.createObjectURL(new Blob([bytes]));
           window.pywebview.api.get_skinning_preview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
             data: {
               url, length: 48,
               indices: {offset: 0, length: 24, type: 'u32'},
@@ -1250,7 +1347,10 @@ def test_skinning_angular_motion_uses_full_quaternion_delta(
             }, diagnostics: {},
           });
           await experiment.loadSkinningWeights(mesh);
-          experiment.setSelectedBoneIds([1]);
+          experiment.setSelectedBones([{
+            sourceKey: 'test/bodyblend.buf|offset=0',
+            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
+          }]);
           experiment.ensureCandidateForest(mesh);
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -1324,7 +1424,10 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
           const url = URL.createObjectURL(new Blob([bytes]));
           window.pywebview.api.get_skinning_preview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
             data: {
               url, length: 48,
               indices: {offset: 0, length: 24, type: 'u32'},
@@ -1332,7 +1435,10 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
             }, diagnostics: {},
           });
           await experiment.loadSkinningWeights(mesh);
-          experiment.setSelectedBoneIds([1]);
+          experiment.setSelectedBones([{
+            sourceKey: 'test/bodyblend.buf|offset=0',
+            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
+          }]);
           experiment.ensureCandidateForest(mesh);
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -1441,7 +1547,10 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
               data: {url, length: 48},
               meshes: {[key]: {
                 status: 'ok', vertex_count: 3, influence_count: 2,
-                bone_ids: [0, 1, 2], encoding: 'test',
+                bone_ids: [0, 1, 2], encoding: 'test', source: {
+                  key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+                  bone_id_offset: 0,
+                },
                 data: {
                   indices: {offset: 0, length: 24, type: 'u32'},
                   weights: {offset: 24, length: 24, type: 'f32'},
@@ -1450,7 +1559,7 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
             };
           };
         }""")
-        assert page.evaluate("window.modViewer.getModelWeightState().selectedBoneIds") == []
+        assert page.evaluate("window.modViewer.getModelWeightState().selectedBoneCount") == 0
         page.locator("#weight-tab").click()
         page.wait_for_function("window.__weightPreviewCalls === 1")
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
@@ -1478,8 +1587,8 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
           (await import('./js/mesh/weight-experiment.js'))
             .getModelBoneStatsBuildCount()""")
         page.locator('.weight-bone-option input[value="1"]').check()
-        page.wait_for_function("""() => JSON.stringify(
-          window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
+        page.wait_for_function("""() =>
+          window.modViewer.getModelWeightState().selectedBoneCount === 1""")
         mask_count_after = page.evaluate("""async () =>
           (await import('./js/mesh/weight-experiment.js'))
             .getSelectedWeightMaskBuildCount()""")
@@ -1503,8 +1612,8 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         page.wait_for_function("window.modViewer.getModelWeightState().heatmapEnabled")
         page.locator(".weight-bone-select").click()
         page.locator('.weight-bone-option input[value="2"]').check()
-        page.wait_for_function("""() => JSON.stringify(
-          window.modViewer.getModelWeightState().selectedBoneIds) === '[1,2]'""")
+        page.wait_for_function("""() =>
+          window.modViewer.getModelWeightState().selectedBoneCount === 2""")
         mask_count_after = page.evaluate("""async () =>
           (await import('./js/mesh/weight-experiment.js'))
             .getSelectedWeightMaskBuildCount()""")
@@ -1526,11 +1635,91 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         page.locator(".weight-clear-selection").click()
         page.wait_for_function("!window.modViewer.getModelPhysicsState().enabled")
         assert page.evaluate("window.__weightPreviewCalls") == 1
-        assert page.evaluate("window.modViewer.getModelWeightState().selectedBoneIds") == []
+        assert page.evaluate("window.modViewer.getModelWeightState().selectedBoneCount") == 0
     finally:
         page.evaluate("""() => {
           if (window.__weightPreviewCalls) window.__weightPreviewCalls = 0;
         }""")
+        context.close()
+
+
+def test_weight_picker_discovers_influences_without_mutating_selection(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightPick": _payload("WeightPick")})
+    try:
+        _open(page, "WeightPick")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          const key = window.modViewer.activeMeshes[0].userData.semanticKey;
+          window.pywebview.api.get_model_skinning_preview = async () => ({
+            status: 'ok', format_version: 1, saved_bones: [],
+            data: {url, length: 48},
+            meshes: {[key]: {
+              status: 'ok', vertex_count: 3, influence_count: 2,
+              bone_ids: [0, 1, 2], encoding: 'test', source: {
+                key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+                bone_id_offset: 0,
+              },
+              data: {
+                indices: {offset: 0, length: 24, type: 'u32'},
+                weights: {offset: 24, length: 24, type: 'f32'},
+              }, diagnostics: {},
+            }},
+          });
+        }""")
+        page.locator("#weight-tab").click()
+        page.wait_for_function("window.modViewer.getModelWeightState().loaded")
+        page.locator(".weight-bone-select").click()
+        page.locator('.weight-bone-option input[value="1"]').check()
+        page.wait_for_function(
+            "window.modViewer.getModelWeightState().selectedBoneCount === 1")
+        page.locator(".weight-pick-model").click()
+        assert page.locator(".weight-bone-popover").is_hidden()
+        assert page.evaluate(
+            "getComputedStyle(document.querySelector('#canvas-container canvas')).cursor") == "crosshair"
+        point = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const {camera, renderer} = await import('./js/scene/scene.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const projected = new THREE.Vector3(.25, .25, 0)
+            .applyMatrix4(mesh.matrixWorld).project(camera);
+          const rect = renderer.domElement.getBoundingClientRect();
+          return {
+            x: rect.left + (projected.x + 1) * rect.width / 2,
+            y: rect.top + (1 - projected.y) * rect.height / 2,
+          };
+        }""")
+        page.mouse.click(point["x"], point["y"])
+        page.wait_for_function(
+            "window.modViewer.getModelWeightState().pickerViewMode === 'picked'")
+        result = page.evaluate("""() => {
+          const state = window.modViewer.getModelWeightState();
+          return {
+            selected: state.selectedBones,
+            picked: state.pickedPoint,
+            mode: state.pickerViewMode,
+            rows: [...document.querySelectorAll('.weight-bone-option')]
+              .map(row => row.dataset.boneId),
+            cursor: getComputedStyle(
+              document.querySelector('#canvas-container canvas')).cursor,
+          };
+        }""")
+        assert result["selected"] == [{
+            "sourceKey": "test/bodyblend.buf|offset=0",
+            "sourceFile": "Test/BodyBlend.buf", "boneIdOffset": 0,
+            "boneIds": [1],
+        }]
+        assert result["picked"]["sourceKey"] == "test/bodyblend.buf|offset=0"
+        assert result["picked"]["influences"]
+        assert result["mode"] == "picked"
+        assert result["rows"]
+        assert result["cursor"] in ("auto", "")
+    finally:
         context.close()
 
 
@@ -1551,7 +1740,10 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
             status: 'ok', format_version: 1, data: {url, length: 48},
             meshes: {[key]: {
               status: 'ok', vertex_count: 3, influence_count: 2,
-              bone_ids: [0, 1, 2], encoding: 'test',
+              bone_ids: [0, 1, 2], encoding: 'test', source: {
+                key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+                bone_id_offset: 0,
+              },
               data: {
                 indices: {offset: 0, length: 24, type: 'u32'},
                 weights: {offset: 24, length: 24, type: 'f32'},
@@ -1573,16 +1765,16 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
         }""") == ["12px", "12px", "12px", "12px"]
         page.evaluate("window.__weightPicker = document.querySelector('.weight-bone-popover')")
         page.locator('.weight-bone-option input[value="1"]').check()
-        page.wait_for_function("""() => JSON.stringify(
-          window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
+        page.wait_for_function("""() =>
+          window.modViewer.getModelWeightState().selectedBoneCount === 1""")
         assert page.evaluate("window.__weightPicker === document.querySelector('.weight-bone-popover')")
         assert page.locator(".weight-bone-select").get_attribute("aria-expanded") == "true"
         assert page.locator(".weight-bone-search").input_value() == "1"
 
         page.locator(".weight-bone-search").fill("")
         page.locator('.weight-bone-option input[value="2"]').check()
-        page.wait_for_function("""() => JSON.stringify(
-          window.modViewer.getModelWeightState().selectedBoneIds) === '[1,2]'""")
+        page.wait_for_function("""() =>
+          window.modViewer.getModelWeightState().selectedBoneCount === 2""")
         assert page.evaluate("window.__weightPicker === document.querySelector('.weight-bone-popover')")
         page.locator(".weight-selected-only").check()
         assert page.locator(".weight-bone-option").evaluate_all("""nodes =>
@@ -1595,8 +1787,8 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
         ]
         page.locator(".weight-bone-search").fill("2")
         page.locator('.weight-bone-option input[value="2"]').uncheck()
-        page.wait_for_function("""() => JSON.stringify(
-          window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
+        page.wait_for_function("""() =>
+          window.modViewer.getModelWeightState().selectedBoneCount === 1""")
         assert page.locator(".weight-bone-search").input_value() == "2"
         assert page.locator(".weight-selected-only").is_checked()
         assert page.locator(".weight-bone-option").evaluate_all(
@@ -1664,7 +1856,10 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
             data: {url, length: 48},
             meshes: {[key]: {
               status: 'ok', vertex_count: 3, influence_count: 2,
-              bone_ids: [0, 1, 2], encoding: 'test',
+              bone_ids: [0, 1, 2], encoding: 'test', source: {
+                key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+                bone_id_offset: 0,
+              },
               data: {
                 indices: {offset: 0, length: 24, type: 'u32'},
                 weights: {offset: 24, length: 24, type: 'f32'},
@@ -1681,14 +1876,14 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
             };
         }""")
         page.locator("#weight-tab").click()
-        page.wait_for_function("""() => JSON.stringify(
-          window.modViewer.getModelWeightState().selectedBoneIds) === '[1]'""")
+        page.wait_for_function("""() =>
+          window.modViewer.getModelWeightState().selectedBoneCount === 1""")
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
 
         page.locator(".weight-clear-selection").click()
         page.wait_for_function("!window.modViewer.getModelPhysicsState().enabled")
         assert page.evaluate(
-            "window.modViewer.getModelWeightState().savedBoneIds") == [1, 99]
+            "window.modViewer.getModelWeightState().savedBones[0].boneIds") == [1, 99]
         page.evaluate("""() => {
           for (const [selector, value] of [
             ['.weight-physics-frequency', '7'],
@@ -1707,11 +1902,11 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
         }""")
         assert not page.evaluate("window.modViewer.getModelPhysicsState().enabled")
         assert page.evaluate(
-            "window.modViewer.getModelWeightState().selectedBoneIds") == []
+            "window.modViewer.getModelWeightState().selectedBoneCount") == 0
         page.locator("#weight-tab").click()
         page.locator("#weight-tab").click()
         assert page.evaluate(
-            "window.modViewer.getModelWeightState().selectedBoneIds") == []
+            "window.modViewer.getModelWeightState().selectedBoneCount") == 0
 
         page.locator(".weight-load-selection").click()
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
@@ -1735,7 +1930,7 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
         context.close()
 
 
-def test_weight_picker_current_mesh_filter_is_display_only(
+def test_weight_picker_ignores_mesh_selection(
         edge_browser, frontend_url):
     payload = _payload("WeightMeshFilter")
     first_name, first = next(iter(payload["meshes"].items()))
@@ -1761,7 +1956,10 @@ def test_weight_picker_current_mesh_filter_is_display_only(
             mesh.userData.semanticKey,
             {
               status: 'ok', vertex_count: 3, influence_count: 2,
-              bone_ids: index ? [1, 2] : [0, 1], encoding: 'test',
+              bone_ids: index ? [1, 2] : [0, 1], encoding: 'test', source: {
+                key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+                bone_id_offset: 0,
+              },
               data: {
                 indices: {offset: index * 48, length: 24, type: 'u32'},
                 weights: {offset: index * 48 + 24, length: 24, type: 'f32'},
@@ -1782,25 +1980,24 @@ def test_weight_picker_current_mesh_filter_is_display_only(
           const {selectMesh} = await import('./js/scene/selection.js');
           selectMesh(window.modViewer.activeMeshes[0]);
         }""")
-        page.locator(".weight-mesh-filter-option", has_text="Current mesh").click()
         assert page.locator(".weight-bone-option").evaluate_all(
-            "nodes => nodes.map(node => node.dataset.boneId)") == ["0", "1"]
+            "nodes => nodes.map(node => node.dataset.boneId)") == ["0", "1", "2"]
         assert page.evaluate(
-            "window.modViewer.getModelWeightState().selectedBoneIds") == [2]
+            "window.modViewer.getModelWeightState().selectedBoneCount") == 1
         page.locator(".draw-item").nth(1).click()
         assert page.locator(".weight-bone-select").get_attribute(
             "aria-expanded") == "true"
         assert page.locator(".weight-bone-option").evaluate_all(
-            "nodes => nodes.map(node => node.dataset.boneId)") == ["1", "2"]
+            "nodes => nodes.map(node => node.dataset.boneId)") == ["0", "1", "2"]
         page.evaluate("""async () => {
           const {clearSelection} = await import('./js/scene/selection.js');
           clearSelection();
         }""")
         assert page.locator(
-            ".weight-mesh-filter-option", has_text="All meshes").get_attribute(
+            ".weight-picker-view-option[data-mode='all']").get_attribute(
                 "aria-pressed") == "true"
         assert page.locator(
-            ".weight-mesh-filter-option", has_text="Current mesh").is_disabled()
+            ".weight-picker-view-option[data-mode='picked']").is_disabled()
     finally:
         context.close()
 
@@ -3601,7 +3798,10 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
           const url = URL.createObjectURL(new Blob([bytes]));
           window.pywebview.api.get_skinning_preview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
             data: {
               url, length: 48,
               indices: {offset: 0, length: 24, type: 'u32'},
@@ -3668,7 +3868,10 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
           const url = URL.createObjectURL(new Blob([bytes]));
           window.pywebview.api.get_skinning_preview = async () => ({
             status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test',
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
             data: {
               url, length: 48,
               indices: {offset: 0, length: 24, type: 'u32'},
@@ -3677,7 +3880,10 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
           });
           const experiment = await import('./js/mesh/weight-experiment.js');
           await experiment.loadSkinningWeights(mesh);
-          experiment.setSelectedBoneIds([1]);
+          experiment.setSelectedBones([{
+            sourceKey: 'test/bodyblend.buf|offset=0',
+            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
+          }]);
           const oldMaterial = mesh.material;
           let oldMaterialDisposals = 0;
           oldMaterial.addEventListener('dispose',

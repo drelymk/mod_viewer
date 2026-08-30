@@ -30,6 +30,8 @@ from app.mods import metadata
              "bone_ids": [45, 49]},
             {"source": "Hair/HairBlend.buf", "bone_id_offset": 24,
              "bone_ids": [1]},
+            {"source": "HairBlend.buf", "bone_id_offset": 0,
+             "bone_ids": [99]},
         ]),
     ],
 )

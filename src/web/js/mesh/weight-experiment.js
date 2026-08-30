@@ -3,7 +3,8 @@
 
 import * as THREE from 'three';
 import {
-  getModelTransformState, invalidateCharacterShadowGeometry,
+  camera, controls, getModelTransformState, invalidateCharacterShadowGeometry,
+  renderer,
   setPhysicsInteractionEnabled,
 } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
@@ -24,8 +25,11 @@ import {
 import {
   buildSelectedWeightMask, normalizeBoneSelection,
   normalizeSelectedBoneIds, selectedBoneCount,
-  serializeBoneSelection, sameBoneSelection,
+  serializeBoneSelection, sameBoneSelection, barycentricCoordinates,
+  interpolateTriangleBoneWeights, sampleNearbyBoneWeights,
 } from './weight-selection.js';
+import { createWeightPickController } from '../scene/weight-pick-controller.js';
+import { computeModelBounds } from '../scene/model-bounds.js';
 import {
   DEFAULT_MODEL_PHYSICS_SETTINGS, MODEL_PHYSICS_STEP,
   createModelPhysicsSession,
@@ -74,7 +78,9 @@ const modelWeightState = {
   heatmapEnabled: false,
   loadedMeshCount: 0,
   failedMeshCount: 0,
-  boneStats: {},
+  pickedPoint: null,
+  pickerViewMode: 'all',
+  pickStatus: '',
 };
 
 const modelPhysicsSession = createModelPhysicsSession({
@@ -96,8 +102,18 @@ const modelPhysicsSession = createModelPhysicsSession({
     typeof window !== 'undefined' ? window.cancelAnimationFrame(frameId) : null,
 });
 
+const weightPickController = createWeightPickController({
+  canvas: renderer.domElement,
+  camera,
+  controls,
+  getMeshes: () => [...knownMeshes],
+  onPick: handlePickedIntersection,
+  requestRender,
+});
+
 export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
 export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
+export const WEIGHT_PICK_RADIUS_RATIO = 0.02;
 
 const ERROR_MESSAGES = Object.freeze({
   mesh_not_found: 'The selected mesh could not be found.',
@@ -109,6 +125,8 @@ const ERROR_MESSAGES = Object.freeze({
   skinning_buffer_truncated: 'The skin-weight buffer is truncated.',
   geometry_not_available:
     'The rendered draw geometry could not be prepared.',
+  skinning_source_identity_unavailable:
+    'The skin-weight source identity is unavailable for this draw.',
 });
 
 function newState() {
@@ -190,12 +208,6 @@ function modelWeightSnapshot() {
     modelWeightState.selectedBonesBySource);
   const savedBones = selectionRecordsFromMap(
     modelWeightState.savedBonesBySource);
-  const availableBoneIds = [...new Set(modelWeightState.sources.flatMap(
-    source => source.availableBoneIds || []))].sort((left, right) => left - right);
-  const selectedBoneIds = [...new Set(selectedBones.flatMap(
-    entry => entry.boneIds))].sort((left, right) => left - right);
-  const savedBoneIds = [...new Set(savedBones.flatMap(
-    entry => entry.boneIds))].sort((left, right) => left - right);
   return {
     loaded: modelWeightState.loaded,
     loading: modelWeightState.loading,
@@ -211,19 +223,20 @@ function modelWeightSnapshot() {
     selectedBones,
     savedBones,
     selectedBoneCount: selectedBoneCount(selectedBones),
-    // Temporary read-only aliases for existing integrations. Selection logic
-    // below never uses these model-global numeric projections.
-    availableBoneIds,
-    selectedBoneIds,
-    savedBoneIds,
+    pickedPoint: modelWeightState.pickedPoint
+      ? {...modelWeightState.pickedPoint,
+        point: [...modelWeightState.pickedPoint.point],
+        influences: modelWeightState.pickedPoint.influences
+          .map(influence => ({...influence}))}
+      : null,
+    pickerViewMode: modelWeightState.pickerViewMode,
+    pickStatus: modelWeightState.pickStatus,
     savedSelectionApplied: modelWeightState.savedSelectionApplied,
     savingSelection: modelWeightState.savingSelection,
     selectionSaveError: modelWeightState.selectionSaveError,
     heatmapEnabled: modelWeightState.heatmapEnabled,
     loadedMeshCount: modelWeightState.loadedMeshCount,
     failedMeshCount: modelWeightState.failedMeshCount,
-    boneStats: Object.fromEntries(Object.entries(modelWeightState.boneStats)
-      .map(([id, stats]) => [id, {...stats}])),
   };
 }
 
@@ -239,7 +252,154 @@ export function getModelWeightState() {
   return modelWeightSnapshot();
 }
 
-function sourceDescriptorForEntry(entry, mesh) {
+function modelPickMeshes() {
+  return [...knownMeshes].filter(mesh => mesh?.userData?.assetFill !== true);
+}
+
+function worldPositionArray(mesh) {
+  const position = mesh?.geometry?.attributes?.position;
+  if (!position?.array) return null;
+  mesh.updateWorldMatrix?.(true, false);
+  const result = new Float32Array(position.array.length);
+  const point = new THREE.Vector3();
+  for (let offset = 0; offset < position.array.length; offset += 3) {
+    point.set(
+      Number(position.array[offset]),
+      Number(position.array[offset + 1]),
+      Number(position.array[offset + 2]));
+    point.applyMatrix4(mesh.matrixWorld);
+    result[offset] = point.x;
+    result[offset + 1] = point.y;
+    result[offset + 2] = point.z;
+  }
+  return result;
+}
+
+function triangleVertexIndices(mesh, faceIndex) {
+  const triangle = Number(faceIndex);
+  if (!Number.isInteger(triangle) || triangle < 0) return null;
+  const index = mesh.geometry?.index?.array;
+  const positions = mesh.geometry?.attributes?.position;
+  const start = triangle * 3;
+  if (index) {
+    if (start + 2 >= index.length) return null;
+    return [Number(index[start]), Number(index[start + 1]), Number(index[start + 2])];
+  }
+  if (!positions || start + 2 >= positions.count) return null;
+  return [start, start + 1, start + 2];
+}
+
+function trianglePoint(worldPositions, vertices, vertex) {
+  const offset = vertices[vertex] * 3;
+  return [worldPositions[offset], worldPositions[offset + 1],
+    worldPositions[offset + 2]];
+}
+
+function pickRadiusWorld() {
+  const box = computeModelBounds(modelPickMeshes());
+  if (box.isEmpty()) return 0.0001;
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const radius = Number(sphere.radius);
+  return Number.isFinite(radius) && radius > 0
+    ? Math.max(radius * WEIGHT_PICK_RADIUS_RATIO, 0.000001) : 0.0001;
+}
+
+function clearPickedPoint({notify = true} = {}) {
+  if (!modelWeightState.pickedPoint && modelWeightState.pickerViewMode === 'all'
+      && !modelWeightState.pickStatus) return false;
+  modelWeightState.pickedPoint = null;
+  modelWeightState.pickerViewMode = 'all';
+  modelWeightState.pickStatus = '';
+  if (notify) notifyModelWeightChanged();
+  return true;
+}
+
+function handlePickedIntersection(intersection) {
+  if (!intersection) {
+    modelWeightState.pickStatus = 'No model surface was picked.';
+    notifyModelWeightChanged();
+    return null;
+  }
+  const mesh = intersection.object;
+  const state = states.get(mesh);
+  if (!state?.loaded || !state.skinningSourceKey) {
+    modelWeightState.pickStatus = 'No skin weights are available for this part.';
+    notifyModelWeightChanged();
+    return null;
+  }
+  const positions = worldPositionArray(mesh);
+  const point = intersection.point;
+  const radiusWorld = pickRadiusWorld();
+  if (!positions || !point || positions.length < 3) {
+    modelWeightState.pickStatus = 'No skin weights are available for this part.';
+    notifyModelWeightChanged();
+    return null;
+  }
+  let influences = sampleNearbyBoneWeights(
+    positions, state.indices, state.weights, state.influenceCount,
+    point.toArray(), radiusWorld);
+  if (!influences.length) {
+    const vertices = triangleVertexIndices(mesh, intersection.faceIndex);
+    if (vertices) {
+      const first = trianglePoint(positions, vertices, 0);
+      const second = trianglePoint(positions, vertices, 1);
+      const third = trianglePoint(positions, vertices, 2);
+      const barycentric = barycentricCoordinates(
+        point.toArray(), first, second, third);
+      if (barycentric) {
+        influences = interpolateTriangleBoneWeights(
+          state.indices, state.weights, state.influenceCount,
+          vertices, barycentric);
+      }
+    }
+  }
+  if (!influences.length) {
+    modelWeightState.pickStatus = 'No skin weights are available for this part.';
+    notifyModelWeightChanged();
+    return null;
+  }
+  const source = modelWeightState.sourceDescriptors.get(
+    state.skinningSourceKey);
+  modelWeightState.pickedPoint = {
+    point: point.toArray(),
+    sourceKey: state.skinningSourceKey,
+    sourceFile: source?.sourceFile || state.skinningSourceFile,
+    boneIdOffset: source?.boneIdOffset ?? state.skinningBoneOffset,
+    meshKey: mesh.userData?.semanticKey || null,
+    radiusWorld,
+    influences,
+  };
+  modelWeightState.pickerViewMode = 'picked';
+  modelWeightState.pickStatus = '';
+  notifyModelWeightChanged();
+  return modelWeightState.pickedPoint;
+}
+
+export function beginWeightPicking() {
+  if (!modelWeightState.loaded) {
+    modelWeightState.pickStatus = 'Load model weights before picking.';
+    notifyModelWeightChanged();
+    return false;
+  }
+  return weightPickController.begin();
+}
+
+export function cancelWeightPicking() {
+  return weightPickController.cancel();
+}
+
+export function setWeightPickerViewMode(mode) {
+  if (mode !== 'all' && mode !== 'picked') return modelWeightState.pickerViewMode;
+  if (mode === 'picked' && !modelWeightState.pickedPoint) {
+    return modelWeightState.pickerViewMode;
+  }
+  modelWeightState.pickerViewMode = mode;
+  modelWeightState.pickStatus = '';
+  notifyModelWeightChanged();
+  return mode;
+}
+
+function sourceDescriptorForEntry(entry) {
   const source = entry?.source;
   if (source && typeof source === 'object'
       && typeof source.key === 'string' && source.key
@@ -253,13 +413,7 @@ function sourceDescriptorForEntry(entry, mesh) {
       };
     }
   }
-  return {
-    // Older test/debug responses predate source descriptors. Treat them as a
-    // single model source; production backend responses always include one.
-    sourceKey: 'legacy/model/weights.buf|offset=0',
-    sourceFile: 'legacy/model/weights.buf',
-    boneIdOffset: 0,
-  };
+  return null;
 }
 
 function selectionRecordsFromMap(selectionMap) {
@@ -340,7 +494,6 @@ export function aggregateModelBoneStats(nodeLists) {
 
 function refreshModelBoneStats() {
   modelBoneStatsBuildCount += 1;
-  const allNodes = [];
   const nodesBySource = new Map();
   for (const mesh of knownMeshes) {
     const state = states.get(mesh);
@@ -349,46 +502,15 @@ function refreshModelBoneStats() {
     const sourceNodes = nodesBySource.get(state.skinningSourceKey) || [];
     sourceNodes.push(nodes);
     nodesBySource.set(state.skinningSourceKey, sourceNodes);
-    allNodes.push(nodes);
   }
   modelWeightState.sources = modelWeightState.sources.map(source => ({
     ...source,
     boneStats: aggregateModelBoneStats(nodesBySource.get(source.key) || []),
   }));
-  modelWeightState.boneStats = aggregateModelBoneStats(allNodes);
 }
 
 export function getModelBoneStatsBuildCount() {
   return modelBoneStatsBuildCount;
-}
-
-export function getMeshWeightSummary(mesh) {
-  const state = states.get(mesh);
-  if (!state?.loaded) return {
-    source: null, sources: [], availableBoneIds: [], boneStats: {},
-  };
-  const source = modelWeightState.sourceDescriptors.get(
-    state.skinningSourceKey) || {
-      sourceKey: state.skinningSourceKey,
-      sourceFile: state.skinningSourceFile,
-      boneIdOffset: state.skinningBoneOffset,
-    };
-  return {
-    source: {
-      key: source.sourceKey,
-      file: source.sourceFile,
-      boneIdOffset: source.boneIdOffset,
-    },
-    sources: [{
-      key: source.sourceKey,
-      file: source.sourceFile,
-      boneIdOffset: source.boneIdOffset,
-      availableBoneIds: [...state.boneIds],
-      boneStats: aggregateModelBoneStats([state.influenceNodes]),
-    }],
-    availableBoneIds: [...state.boneIds],
-    boneStats: aggregateModelBoneStats([state.influenceNodes]),
-  };
 }
 
 function refreshModelWeightSummary({refreshStats = false} = {}) {
@@ -495,7 +617,9 @@ function resetModelWeightState() {
   modelWeightState.heatmapEnabled = false;
   modelWeightState.loadedMeshCount = 0;
   modelWeightState.failedMeshCount = 0;
-  modelWeightState.boneStats = {};
+  modelWeightState.pickedPoint = null;
+  modelWeightState.pickerViewMode = 'all';
+  modelWeightState.pickStatus = '';
   notifyModelWeightChanged();
 }
 
@@ -965,6 +1089,10 @@ export function registerSkinningMesh(mesh) {
 }
 
 export function unregisterSkinningMesh(mesh) {
+  if (modelWeightState.pickedPoint?.meshKey
+      && modelWeightState.pickedPoint.meshKey === mesh?.userData?.semanticKey) {
+    clearPickedPoint();
+  }
   knownMeshes.delete(mesh);
   modelPhysicsSession.detach(mesh);
   refreshModelWeightSummary({refreshStats: true});
@@ -976,6 +1104,7 @@ export function getModelPhysicsState() {
 }
 
 export function destroyModelPhysicsSession() {
+  weightPickController.cancel();
   modelPhysicsSession.destroy();
   knownMeshes.clear();
   resetModelWeightState();
@@ -989,7 +1118,8 @@ export function disableModelPhysics() {
 
 function installSkinningEntry(mesh, entry, buffer) {
   const state = stateFor(mesh);
-  const source = sourceDescriptorForEntry(entry, mesh);
+  const source = sourceDescriptorForEntry(entry);
+  if (!source) throw new Error(ERROR_MESSAGES.skinning_source_identity_unavailable);
   state.skinningSourceKey = source.sourceKey;
   state.skinningSourceFile = source.sourceFile;
   state.skinningBoneOffset = source.boneIdOffset;
@@ -2014,6 +2144,7 @@ export function ensureCandidateForest(mesh) {
 export function refreshSkinningAfterShapeChange(mesh) {
   const state = states.get(mesh);
   const position = mesh?.geometry?.attributes?.position;
+  clearPickedPoint();
   if (!state?.loaded || !position) return false;
   const normal = mesh.geometry.attributes.normal;
   state.baselinePositions = new Float32Array(position.array);
@@ -2239,7 +2370,10 @@ export async function loadSkinningWeights(mesh) {
         || weights.length !== positionCount * influenceCount) {
       throw new Error('Skin data does not match rendered vertices.');
     }
-    const source = sourceDescriptorForEntry(preview, mesh);
+    const source = sourceDescriptorForEntry(preview);
+    if (!source) {
+      throw new Error(ERROR_MESSAGES.skinning_source_identity_unavailable);
+    }
     state.skinningSourceKey = source.sourceKey;
     state.skinningSourceFile = source.sourceFile;
     state.skinningBoneOffset = source.boneIdOffset;
@@ -2350,25 +2484,6 @@ export function clearSelectedBones() {
 export function loadSavedBoneSelection() {
   return setSelectedBones(sourceSelectionEntries(
     modelWeightState.savedBonesBySource));
-}
-
-/** Compatibility helper for old module-level test/debug callers. */
-export function setSelectedBoneIds(ids) {
-  const source = modelWeightState.sources.length === 1
-    ? modelWeightState.sources[0]
-    : [...modelWeightState.sourceDescriptors.values()][0];
-  if (!source) return modelWeightSnapshot();
-  return setSelectedBones([{
-    sourceKey: source.key || source.sourceKey,
-    sourceFile: source.file || source.sourceFile,
-    boneIdOffset: source.boneIdOffset,
-    boneIds: ids,
-  }]);
-}
-
-/** Compatibility helper for old module-level test/debug callers. */
-export function clearSelectedBoneIds() {
-  return clearSelectedBones();
 }
 
 export function saveModelWeightSelection() {

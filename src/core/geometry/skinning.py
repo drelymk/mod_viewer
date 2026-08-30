@@ -1,6 +1,7 @@
 """Small, explicit skin-weight decoding helpers for the preview experiment."""
 
 import math
+import ntpath
 import os
 import posixpath
 import struct
@@ -44,13 +45,17 @@ def normalize_skinning_source_file(value):
     if not isinstance(value, str):
         return None
     value = value.strip().replace("\\", "/")
-    if not value or value.startswith("/") or ":" in value[:3]:
+    if not value or value.startswith("/") or ntpath.splitdrive(value)[0]:
         return None
     normalized = posixpath.normpath(value)
-    if normalized in ("", ".") or normalized == ".." \
-            or normalized.startswith("../"):
-        return None
-    if "/" not in normalized:
+    # Resource loading permits one parent level when the resolved path remains
+    # within the shared sandbox ceiling.  The normalizer has no mod root to
+    # resolve against, so it preserves that one-parent spelling while
+    # rejecting paths that can escape more than one level.
+    if (normalized in ("", ".", "..")
+            or normalized.startswith("../../")
+            or normalized.startswith("/")
+            or ntpath.splitdrive(normalized)[0]):
         return None
     return normalized
 
