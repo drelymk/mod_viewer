@@ -6,7 +6,7 @@ const LEFT_BUTTON = 0;
 const DRAG_THRESHOLD_PIXELS = 5;
 
 export function createWeightPickController({
-  canvas, controls, camera, getMeshes, onPick, requestRender,
+  canvas, controls, camera, getMeshes, onPick, onStateChanged, requestRender,
 } = {}) {
   let enabled = false;
   let pointer = null;
@@ -16,7 +16,7 @@ export function createWeightPickController({
     if (canvas?.style) canvas.style.cursor = '';
   }
 
-  function finish(intersection) {
+  function finish(intersection, {cancelled = false} = {}) {
     const current = pointer;
     pointer = null;
     enabled = false;
@@ -24,7 +24,8 @@ export function createWeightPickController({
       try { canvas.releasePointerCapture(current.id); } catch { /* best effort */ }
     }
     restoreControls();
-    onPick?.(intersection || null);
+    onStateChanged?.(false, {cancelled});
+    if (!cancelled) onPick?.(intersection || null);
     requestRender?.();
   }
 
@@ -34,13 +35,14 @@ export function createWeightPickController({
     pointer = null;
     controls?.unsetMouseAction?.(LEFT_BUTTON);
     if (canvas?.style) canvas.style.cursor = 'crosshair';
+    onStateChanged?.(true, {cancelled: false});
     requestRender?.();
     return true;
   }
 
   function cancel() {
     if (!enabled) return false;
-    finish(null);
+    finish(null, {cancelled: true});
     return true;
   }
 
@@ -74,7 +76,7 @@ export function createWeightPickController({
       event.clientX - pointer.startX, event.clientY - pointer.startY)
       > DRAG_THRESHOLD_PIXELS;
     if (moved) {
-      finish(null);
+      finish(null, {cancelled: true});
       return;
     }
     const intersection = raycastModelAtClientPoint({

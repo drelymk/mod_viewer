@@ -28,35 +28,58 @@ function rotationFromCollection(rotationByBoneId, boneId) {
   const value = rotationByBoneId instanceof Map
     ? rotationByBoneId.get(boneId) ?? rotationByBoneId.get(String(boneId))
     : rotationByBoneId?.[boneId];
-  const values = value?.isVector3
-    ? [value.x, value.y, value.z]
-    : Array.isArray(value) ? value : [value?.x, value?.y, value?.z];
+  const rotation = value?.rotationVector ?? value;
+  const values = rotation?.isVector3
+    ? [rotation.x, rotation.y, rotation.z]
+    : Array.isArray(rotation) ? rotation
+      : [rotation?.x, rotation?.y, rotation?.z];
   const vector = values.slice(0, 3).map(Number);
   return vector.length === 3 && vector.every(Number.isFinite)
     ? new THREE.Vector3(...vector) : new THREE.Vector3();
 }
 
 function quaternionFromRotationVector(rotationVector) {
-  const angle = rotationVector.length();
+  const vector = rotationVector?.isVector3
+    ? rotationVector : new THREE.Vector3(
+      Number(rotationVector?.[0] ?? rotationVector?.x) || 0,
+      Number(rotationVector?.[1] ?? rotationVector?.y) || 0,
+      Number(rotationVector?.[2] ?? rotationVector?.z) || 0,
+    );
+  const angle = vector.length();
   if (!Number.isFinite(angle) || angle < 1e-12) {
     return new THREE.Quaternion();
   }
   return new THREE.Quaternion().setFromAxisAngle(
-    rotationVector.clone().multiplyScalar(1 / angle), angle);
+    vector.clone().multiplyScalar(1 / angle), angle);
 }
 
 export function buildForestTransformsFromLocalRotations(
     forest, nodeCenters, options = {}) {
   const transforms = new Map();
   const rotations = new Map();
+  const transformCache = options.transformCache instanceof Map
+    ? options.transformCache : new Map();
+  const entryFor = boneId => {
+    let entry = transformCache.get(boneId);
+    if (!entry) {
+      entry = {matrix: new THREE.Matrix4(), rotation: new THREE.Quaternion()};
+      transformCache.set(boneId, entry);
+    }
+    return entry;
+  };
   const rotationByBoneId = options.rotationByBoneId || new Map();
+  const getRotation = typeof options.getRotation === 'function'
+    ? options.getRotation : boneId => rotationFromCollection(
+      rotationByBoneId, boneId);
 
   (forest?.components || []).forEach(component => {
     const rootId = Number(component.rootId);
     if (!Number.isFinite(rootId)) return;
-    const rootTransform = new THREE.Matrix4();
+    const rootEntry = entryFor(rootId);
+    const rootTransform = rootEntry.matrix.identity();
+    rootEntry.rotation.identity();
     transforms.set(rootId, rootTransform);
-    rotations.set(rootId, new THREE.Quaternion());
+    rotations.set(rootId, rootEntry.rotation);
     const queue = [rootId];
     const visited = new Set([rootId]);
     while (queue.length) {
@@ -73,7 +96,7 @@ export function buildForestTransformsFromLocalRotations(
         if (!Number.isFinite(childId) || visited.has(childId)) return;
         visited.add(childId);
         const localRotation = quaternionFromRotationVector(
-          rotationFromCollection(rotationByBoneId, childId));
+          getRotation(childId));
         // The local rotation vector is expressed in the parent frame. Convert
         // it to a world-space rotation around the already transformed pivot,
         // then inherit the parent's affine transform.
@@ -82,9 +105,11 @@ export function buildForestTransformsFromLocalRotations(
           .multiply(parentRotation.clone().invert());
         const aroundPivot = rotationAroundPivot(
           pivot, worldRotation);
-        transforms.set(childId,
-          aroundPivot.clone().multiply(parentTransform.clone()));
-        rotations.set(childId, parentRotation.clone().multiply(localRotation));
+        const childEntry = entryFor(childId);
+        childEntry.matrix.copy(aroundPivot).multiply(parentTransform);
+        childEntry.rotation.copy(parentRotation).multiply(localRotation);
+        transforms.set(childId, childEntry.matrix);
+        rotations.set(childId, childEntry.rotation);
         queue.push(childId);
       });
     }
@@ -93,10 +118,20 @@ export function buildForestTransformsFromLocalRotations(
     (component.nodeIds || []).forEach(nodeValue => {
       const nodeId = Number(nodeValue);
       if (Number.isFinite(nodeId) && !transforms.has(nodeId)) {
-        transforms.set(nodeId, new THREE.Matrix4());
+        const entry = entryFor(nodeId);
+        entry.matrix.identity();
+        entry.rotation.identity();
+        transforms.set(nodeId, entry.matrix);
+        rotations.set(nodeId, entry.rotation);
       }
     });
   });
+  if (options.rotationOutput instanceof Map) {
+    options.rotationOutput.clear();
+    rotations.forEach((rotation, boneId) => {
+      options.rotationOutput.set(boneId, rotation);
+    });
+  }
   return transforms;
 }
 
@@ -110,12 +145,24 @@ function transformForBone(transformByBoneId, boneId) {
 export function applyWeightedTransformDeformation(
     baselinePositions, indices, weights, influenceCount, transformByBoneId) {
   const result = new Float32Array(baselinePositions || 0);
+  applyWeightedTransformDeformationInto(
+    result, baselinePositions, indices, weights, influenceCount,
+    transformByBoneId);
+  return result;
+}
+
+export function applyWeightedTransformDeformationInto(
+    outputPositions, baselinePositions, indices, weights, influenceCount,
+    transformByBoneId, activeVertices = null) {
   if (!baselinePositions || !indices || !weights || influenceCount <= 0
-      || !transformByBoneId) return result;
+      || !transformByBoneId || !outputPositions) return 0;
   const vertexCount = Math.floor(baselinePositions.length / 3);
   const baseline = new THREE.Vector3();
   const transformed = new THREE.Vector3();
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+  const vertices = activeVertices || {length: vertexCount};
+  for (let activeIndex = 0; activeIndex < vertices.length; activeIndex += 1) {
+    const vertex = activeVertices ? Number(vertices[activeIndex]) : activeIndex;
+    if (!Number.isInteger(vertex) || vertex < 0 || vertex >= vertexCount) continue;
     const offset = vertex * 3;
     baseline.set(
       baselinePositions[offset], baselinePositions[offset + 1],
@@ -138,9 +185,54 @@ export function applyWeightedTransformDeformation(
     const deformedX = baseline.x * unchanged + x;
     const deformedY = baseline.y * unchanged + y;
     const deformedZ = baseline.z * unchanged + z;
-    result[offset] = deformedX;
-    result[offset + 1] = deformedY;
-    result[offset + 2] = deformedZ;
+    outputPositions[offset] = deformedX;
+    outputPositions[offset + 1] = deformedY;
+    outputPositions[offset + 2] = deformedZ;
   }
-  return result;
+  return vertices.length;
+}
+
+export function applyWeightedNormalDeformationInto(
+    outputNormals, baselineNormals, indices, weights, influenceCount,
+    rotationByBoneId, activeVertices = null) {
+  if (!outputNormals || !baselineNormals || !indices || !weights
+      || influenceCount <= 0 || !rotationByBoneId) return 0;
+  const vertexCount = Math.floor(baselineNormals.length / 3);
+  const baseline = new THREE.Vector3();
+  const transformed = new THREE.Vector3();
+  const vertices = activeVertices || {length: vertexCount};
+  for (let activeIndex = 0; activeIndex < vertices.length; activeIndex += 1) {
+    const vertex = activeVertices ? Number(vertices[activeIndex]) : activeIndex;
+    if (!Number.isInteger(vertex) || vertex < 0 || vertex >= vertexCount) continue;
+    const offset = vertex * 3;
+    baseline.set(
+      baselineNormals[offset], baselineNormals[offset + 1],
+      baselineNormals[offset + 2]);
+    const start = vertex * influenceCount;
+    let transformedWeight = 0;
+    let x = 0, y = 0, z = 0;
+    for (let influence = 0; influence < influenceCount; influence += 1) {
+      const weight = weights[start + influence];
+      const rotation = transformForBone(
+        rotationByBoneId, indices[start + influence]);
+      if (!rotation || !Number.isFinite(weight) || weight <= 0) continue;
+      transformedWeight += weight;
+      transformed.copy(baseline).applyQuaternion(rotation);
+      x += transformed.x * weight;
+      y += transformed.y * weight;
+      z += transformed.z * weight;
+    }
+    const unchanged = Math.max(0, 1 - transformedWeight);
+    transformed.set(
+      baseline.x * unchanged + x,
+      baseline.y * unchanged + y,
+      baseline.z * unchanged + z,
+    );
+    if (transformed.lengthSq() > 1e-20) transformed.normalize();
+    else transformed.copy(baseline).normalize();
+    outputNormals[offset] = transformed.x;
+    outputNormals[offset + 1] = transformed.y;
+    outputNormals[offset + 2] = transformed.z;
+  }
+  return vertices.length;
 }

@@ -1,5 +1,9 @@
 // Character-wide ownership for the opt-in secondary-motion simulation.
 
+import {
+  addWeightPhysicsPerformance, performanceNow,
+} from './weight-physics-performance.js';
+
 export const MODEL_PHYSICS_STEP = 1 / 120;
 export const MODEL_PHYSICS_MAX_FRAME_DELTA = 0.05;
 export const MODEL_PHYSICS_MAX_SUBSTEPS = 6;
@@ -144,7 +148,6 @@ export function createModelPhysicsSession({
   cancelAnimationFrame: cancelFrame,
 } = {}) {
   let enabled = false;
-  let loading = false;
   let generation = 0;
   let settings = {...DEFAULT_MODEL_PHYSICS_SETTINGS};
   let previousModelOrientation = null;
@@ -161,6 +164,7 @@ export function createModelPhysicsSession({
   const statuses = new Map();
 
   function notify() {
+    addWeightPhysicsPerformance('physicsUiNotifyCount');
     onStateChanged?.(getState());
   }
 
@@ -208,18 +212,14 @@ export function createModelPhysicsSession({
   function getState() {
     let failedCount = 0;
     let unavailableCount = 0;
-    let loadingCount = 0;
     statuses.forEach(status => {
       if (status.kind === 'failed') failedCount += 1;
       if (status.kind === 'unavailable') unavailableCount += 1;
-      if (status.kind === 'loading') loadingCount += 1;
     });
     return {
       enabled,
-      loading,
       generation,
       participantCount: participants.size,
-      loadingCount,
       unavailableCount,
       failedCount,
       frequencyHz: settings.frequencyHz,
@@ -268,7 +268,6 @@ export function createModelPhysicsSession({
     participants.clear();
     statuses.clear();
     enabled = false;
-    loading = false;
     previousModelOrientation = null;
     previousModelTranslation = [...ZERO_VECTOR];
     rootLinearVelocityWorld = [...ZERO_VECTOR];
@@ -284,11 +283,6 @@ export function createModelPhysicsSession({
   function destroy() {
     settings = {...DEFAULT_MODEL_PHYSICS_SETTINGS};
     disable();
-  }
-
-  function setLoading(value) {
-    loading = !!value;
-    notify();
   }
 
   function attach(participant) {
@@ -329,12 +323,6 @@ export function createModelPhysicsSession({
     notify();
   }
 
-  function markLoading(mesh) {
-    if (!enabled || participants.has(mesh)) return;
-    statuses.set(mesh, {kind: 'loading'});
-    notify();
-  }
-
   function markFailed(mesh, error) {
     if (!enabled || participants.has(mesh)) return;
     statuses.set(mesh, {
@@ -342,11 +330,6 @@ export function createModelPhysicsSession({
       error: error instanceof Error ? error.message : String(error || ''),
     });
     notify();
-  }
-
-  function statusFor(mesh) {
-    if (participants.has(mesh)) return 'participating';
-    return statuses.get(mesh)?.kind || 'not-attempted';
   }
 
   function setSettings(patch) {
@@ -402,7 +385,6 @@ export function createModelPhysicsSession({
     });
     if (changedParticipant || changed(rotationVector)
         || changed(translationDeltaWorld) || hasVelocity) wake();
-    notify();
     return changedParticipant;
   }
 
@@ -431,7 +413,6 @@ export function createModelPhysicsSession({
     });
     if (!virtualActive) virtualLinearVelocityWorld = [...ZERO_VECTOR];
     if (changedParticipant || changed(deltaVelocityWorld) || !virtualActive) wake();
-    notify();
     return changedParticipant;
   }
 
@@ -446,7 +427,7 @@ export function createModelPhysicsSession({
       })) visibleParticipants.push(participant);
     }
     if (!visibleParticipants.length) return false;
-    onFrame?.({visibleParticipants, participants: [...participants.values()], steps: 0});
+    onFrame?.({visibleParticipants, steps: 0});
     return true;
   }
 
@@ -485,6 +466,7 @@ export function createModelPhysicsSession({
     lastTimestamp = currentTimestamp;
     accumulator += elapsed;
     let steps = 0;
+    const stepStarted = performanceNow();
     while (accumulator >= MODEL_PHYSICS_STEP
         && steps < MODEL_PHYSICS_MAX_SUBSTEPS) {
       participants.forEach(participant =>
@@ -492,11 +474,18 @@ export function createModelPhysicsSession({
       accumulator -= MODEL_PHYSICS_STEP;
       steps += 1;
     }
+    if (steps) {
+      addWeightPhysicsPerformance('physicsStepCount', steps);
+      addWeightPhysicsPerformance('physicsStepMs', performanceNow() - stepStarted);
+    }
     if (steps === MODEL_PHYSICS_MAX_SUBSTEPS
         && accumulator >= MODEL_PHYSICS_STEP) {
       accumulator = MODEL_PHYSICS_STEP;
     }
     if (!steps) return;
+
+    participants.forEach(participant =>
+      participant.updateSettled?.(settings));
 
     const visibleParticipants = [];
     participants.forEach(participant => {
@@ -508,34 +497,31 @@ export function createModelPhysicsSession({
     if (visibleParticipants.length) {
       onFrame?.({
         visibleParticipants,
-        participants: [...participants.values()],
         steps,
+        timestamp: currentTimestamp,
       });
     }
     settled = !virtualActive && [...participants.values()].every(participant =>
       participant.isSettled?.() !== false);
-    notify();
     if (settled) {
+      participants.forEach(participant => participant.onSettled?.());
       lastTimestamp = null;
       cancelScheduledFrame();
     }
+    addWeightPhysicsPerformance('physicsFrameCount');
   }
 
   return {
     enable,
     disable,
     destroy,
-    setLoading,
     attach,
     detach,
     markUnavailable,
-    markLoading,
     markFailed,
-    statusFor,
     setSettings,
     getSettings: () => ({...settings}),
     getState,
-    isGeneration: value => Number(value) === generation,
     getParticipant: mesh => participants.get(mesh) || null,
     handleModelTransform,
     handleVirtualMotion,

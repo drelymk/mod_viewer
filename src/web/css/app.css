@@ -1082,6 +1082,9 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 .weight-picker-view-option:disabled { opacity: .45; cursor: default; }
 .weight-pick-model { width: 100%; }
+.weight-pick-model.active {
+  color: var(--text); background: var(--accent); border-color: var(--accent-soft);
+}
 .weight-bone-filter { flex: 0 0 auto; padding: 2px 5px; }
 .weight-bone-list { min-height: 0; overflow-y: auto; }
 .weight-bone-group { padding: 4px 0; border-top: 1px solid var(--border); }

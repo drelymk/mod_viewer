@@ -386,6 +386,21 @@ export function invalidateCharacterShadowVisibility({ request = true } = {}) {
   if (request) requestRender();
 }
 
+export function invalidateCharacterShadowMap({ request = true } = {}) {
+  characterShadowController.invalidateMap();
+  if (request) requestRender();
+}
+
+export function invalidateCharacterShadowFit({ request = true } = {}) {
+  characterShadowController.invalidateVisibility();
+  if (request) requestRender();
+}
+
+export function invalidateViewportModelGeometry({ request = true } = {}) {
+  viewportRenderPipeline.invalidateGeometry();
+  if (request) requestRender();
+}
+
 export function getCharacterShadowDebugState() {
   return characterShadowController.getDebugState();
 }

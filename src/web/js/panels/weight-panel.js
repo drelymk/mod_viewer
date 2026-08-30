@@ -466,6 +466,8 @@ function syncWeightControls(weightState = getModelWeightState()) {
   ui.boneButton.disabled = !weightState.loaded
     && !availableCount;
   ui.pickModel.disabled = !weightState.loaded || !availableCount;
+  ui.pickModel.classList.toggle('active', !!weightState.picking);
+  ui.pickModel.setAttribute('aria-pressed', String(!!weightState.picking));
   ui.clearSelection.disabled = !weightState.selectedBoneCount;
   ui.saveSelection.disabled = !weightState.selectedBoneCount
     || weightState.savingSelection;
@@ -524,6 +526,12 @@ export function initWeightPanel() {
   });
   window.addEventListener('mod-viewer-model-physics-changed', event => {
     syncPhysicsControls(event.detail);
+  });
+  window.addEventListener('mod-viewer-weight-point-picked', event => {
+    syncWeightControls(event.detail);
+    ui.boneList.scrollTop = 0;
+    ui.popover.hidden = false;
+    ui.boneButton.setAttribute('aria-expanded', 'true');
   });
   window.addEventListener('mod-viewer-right-dock-tab-changed', event => {
     const inWeight = event.detail?.tab === 'weight' && event.detail?.open;

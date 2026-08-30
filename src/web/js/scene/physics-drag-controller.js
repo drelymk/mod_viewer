@@ -18,7 +18,7 @@ function clampSpeed(x, y) {
 
 /** Owns only the RMB gesture used to feed virtual physics motion. */
 export function createPhysicsDragController({
-  canvas, camera, controls, onMotion, requestRender: requestFrame,
+  canvas, camera, controls, onMotion,
 } = {}) {
   let enabled = false;
   let pointer = null;
@@ -29,7 +29,6 @@ export function createPhysicsDragController({
       active,
       source: 'rmb-drag',
     });
-    requestFrame?.();
   }
 
   function release(event) {

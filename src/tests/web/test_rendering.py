@@ -438,6 +438,53 @@ def test_skinning_physics_drag_controller_owns_only_rmb(
         context.close()
 
 
+def test_active_vertex_deformation_updates_positions_and_authored_normals(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"ActiveDeform": _payload("ActiveDeform")})
+    try:
+        result = page.evaluate("""async () => {
+          const deformation = await import('./js/mesh/weight-deformation.js');
+          const THREE = await import('three');
+          const baselinePositions = new Float32Array([
+            1, 0, 0, 2, 0, 0, 3, 0, 0,
+          ]);
+          const outputPositions = new Float32Array(baselinePositions);
+          const baselineNormals = new Float32Array([
+            1, 0, 0, 1, 0, 0, 1, 0, 0,
+          ]);
+          const outputNormals = new Float32Array(baselineNormals);
+          const indices = new Uint32Array([1, 2, 1, 2, 2, 0]);
+          const weights = new Float32Array([1, 0, .5, .5, 1, 0]);
+          const matrix = new THREE.Matrix4().makeRotationZ(Math.PI / 2)
+            .setPosition(5, 7, 0);
+          const rotation = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 0, 1), Math.PI / 2);
+          const active = new Uint32Array([0, 1]);
+          const positionCount = deformation.applyWeightedTransformDeformationInto(
+            outputPositions, baselinePositions, indices, weights, 2,
+            new Map([[1, matrix]]), active);
+          const normalCount = deformation.applyWeightedNormalDeformationInto(
+            outputNormals, baselineNormals, indices, weights, 2,
+            new Map([[1, rotation]]), active);
+          return {
+            positions: [...outputPositions], normals: [...outputNormals],
+            positionCount, normalCount,
+          };
+        }""")
+        assert result["positionCount"] == 2
+        assert result["normalCount"] == 2
+        assert result["positions"][:3] == pytest.approx([5, 8, 0])
+        assert result["positions"][3:6] == pytest.approx([3.5, 4.5, 0])
+        assert result["positions"][6:] == [3, 0, 0]
+        assert result["normals"][:3] == pytest.approx([0, 1, 0], abs=1e-6)
+        assert result["normals"][3:6] == pytest.approx(
+            [math.sqrt(.5), math.sqrt(.5), 0], abs=1e-6)
+        assert result["normals"][6:] == [1, 0, 0]
+    finally:
+        context.close()
+
+
 def test_model_physics_session_owns_fixed_clock_and_generation(
         edge_browser, frontend_url):
     context, page = _page(
@@ -465,11 +512,13 @@ def test_model_physics_session_owns_fixed_clock_and_generation(
           let steps = 0;
           let motions = 0;
           let detached = 0;
+          let settledUpdates = 0;
           const participant = {
             mesh,
             onSessionDetached: () => { detached += 1; },
             onModelMotion: () => { motions += 1; return true; },
             step: () => { steps += 1; },
+            updateSettled: () => { settledUpdates += 1; },
             isSettled: () => false,
             isVisible: () => false,
           };
@@ -491,7 +540,7 @@ def test_model_physics_session_owns_fixed_clock_and_generation(
           session.disable();
           return {
             generation, activeGeneration: active.generation,
-            steps, motions, participantCount: active.participantCount,
+            steps, settledUpdates, motions, participantCount: active.participantCount,
             detached, canceled: canceled.length,
             disabled: session.getState(),
             inputEvents: events,
@@ -500,6 +549,7 @@ def test_model_physics_session_owns_fixed_clock_and_generation(
         assert result["generation"] == 1
         assert result["activeGeneration"] == 1
         assert result["steps"] == 6
+        assert result["settledUpdates"] == 1
         assert result["motions"] == 1
         assert result["participantCount"] == 1
         assert result["detached"] == 1
@@ -819,9 +869,11 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
                 && Array.isArray(joint.angularVelocity)),
             scheduled: experiment.isPhysicsScheduled(mesh),
           };
+          experiment.resetWeightPhysicsPerformanceStats();
           runFrame(0);
           runFrame(16.7);
           const sleeping = experiment.getSkinningState(mesh);
+          const framePerformance = experiment.getWeightPhysicsPerformanceStats();
           const beforeVirtual = [...sleeping.physicsState.joints.values()]
             .map(joint => [...joint.angularVelocity]);
           window.dispatchEvent(new CustomEvent(
@@ -845,7 +897,9 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
           window.cancelAnimationFrame = originalCancelAnimationFrame;
           URL.revokeObjectURL(url);
           return {
-            enabledState, sleeping: sleeping.physicsSettled,
+            enabledState, framePerformance,
+            activeVertices: sleeping.physicsActiveVertices.length,
+            sleeping: sleeping.physicsSettled,
             beforeVirtual, movingVelocity, virtualVelocity,
             reset: [...reset.physicsState.joints.values()],
             enabledAfterReset: reset.physicsEnabled,
@@ -854,6 +908,10 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
         }""")
         assert result["enabledState"] == {
             "enabled": True, "jointShape": True, "scheduled": True}
+        assert result["activeVertices"] == 2
+        assert result["framePerformance"]["physicsDeformedVertexCount"] == 2
+        assert result["framePerformance"]["physicsBoundsUpdateCount"] == 1
+        assert result["framePerformance"]["physicsUiNotifyCount"] == 0
         assert result["sleeping"]
         assert any(
             any(abs(value) > 1e-6 for value in vector)
@@ -1037,7 +1095,6 @@ def test_model_physics_loads_eligible_meshes_with_partial_failures(
         assert result["state"]["enabled"]
         assert result["state"]["participantCount"] == 1
         assert result["state"]["failedCount"] == 1
-        assert result["state"]["loadingCount"] == 0
         assert sorted(item["status"] for item in result["states"]) == [
             "failed", "participating"]
         assert all(result["disabledStates"]) is False
@@ -1680,6 +1737,8 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
             "window.modViewer.getModelWeightState().selectedBoneCount === 1")
         page.locator(".weight-pick-model").click()
         assert page.locator(".weight-bone-popover").is_hidden()
+        assert page.locator(".weight-pick-model").get_attribute("aria-pressed") == "true"
+        assert "active" in (page.locator(".weight-pick-model").get_attribute("class") or "")
         assert page.evaluate(
             "getComputedStyle(document.querySelector('#canvas-container canvas')).cursor") == "crosshair"
         point = page.evaluate("""async () => {
@@ -1707,6 +1766,15 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
               .map(row => row.dataset.boneId),
             cursor: getComputedStyle(
               document.querySelector('#canvas-container canvas')).cursor,
+            picking: state.picking,
+            popoverOpen: !document.querySelector('.weight-bone-popover').hidden,
+            expanded: document.querySelector('.weight-bone-select')
+              .getAttribute('aria-expanded'),
+            pickPressed: document.querySelector('.weight-pick-model')
+              .getAttribute('aria-pressed'),
+            pickedActive: document.querySelector('.weight-picker-view-option'
+              + '[data-mode="picked"]').classList.contains('active'),
+            scrollTop: document.querySelector('.weight-bone-list').scrollTop,
           };
         }""")
         assert result["selected"] == [{
@@ -1719,6 +1787,23 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         assert result["mode"] == "picked"
         assert result["rows"]
         assert result["cursor"] in ("auto", "")
+        assert not result["picking"]
+        assert result["popoverOpen"]
+        assert result["expanded"] == "true"
+        assert result["pickPressed"] == "false"
+        assert result["pickedActive"]
+        assert result["scrollTop"] == 0
+
+        previous_pick = result["picked"]
+        page.locator(".weight-pick-model").click()
+        page.keyboard.press("Escape")
+        page.wait_for_function(
+            "!window.modViewer.getModelWeightState().picking")
+        assert page.evaluate(
+            "window.modViewer.getModelWeightState().pickedPoint") == previous_pick
+        assert page.locator(".weight-bone-popover").is_hidden()
+        assert page.locator(".weight-pick-model").get_attribute(
+            "aria-pressed") == "false"
     finally:
         context.close()
 

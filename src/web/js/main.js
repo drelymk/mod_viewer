@@ -22,6 +22,7 @@ import { requestRender } from './scene/render-scheduler.js';
 import {
   disableModelPhysics, enableModelPhysics,
   ensureModelWeightsLoaded, getModelPhysicsState, getModelWeightState,
+  getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
   resetModelPhysicsMotion, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
@@ -310,6 +311,8 @@ rendererReady.then(ready => {
     disableModelPhysics,
     resetModelPhysicsMotion,
     getModelWeightState,
+    getWeightPhysicsPerformanceStats,
+    resetWeightPhysicsPerformanceStats,
     ensureModelWeightsLoaded,
     setModelWeightHeatmap,
     getRenderCount,

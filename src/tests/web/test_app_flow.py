@@ -12,6 +12,8 @@ def test_frontend_public_surface_and_lifecycle_events(edge_browser, frontend_url
             "getEnvironmentPreset", "getMaterialState",
             "getOutlineState", "getRenderCount", "openMod",
             "disableModelPhysics", "enableModelPhysics", "getModelPhysicsState",
+            "getWeightPhysicsPerformanceStats",
+            "resetWeightPhysicsPerformanceStats",
             "ensureModelWeightsLoaded",
             "getModelWeightState", "setModelWeightHeatmap",
             "refreshControlSemantics", "refreshMeshSemantics",
