@@ -19,7 +19,7 @@ import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
 import {
-  disposeSkinningExperiment, getSkinningBaseMaterial, getSkinningState,
+  disposeSkinningExperiment, getSkinningBaseMaterial,
   destroyModelPhysicsSession, registerSkinningMesh,
   refreshSkinningAfterShapeChange,
   unregisterSkinningMesh,
@@ -401,11 +401,6 @@ function applyShapeTargets(mesh, { render = true } = {}) {
   const previous = mesh.userData.shapeControlValues;
   if (previous?.length === controlValues.length
       && controlValues.every((value, index) => value === previous[index])) return false;
-  const skinning = getSkinningState(mesh);
-  const restartSkinningLoad = !!(skinning?.loading || skinning?.promise);
-  if (skinning?.loading || skinning?.promise) {
-    disposeSkinningExperiment(mesh, {preserveRegistration: true});
-  }
   mesh.userData.shapeControlValues = controlValues;
 
   const attr = mesh.geometry.attributes.position;
@@ -438,7 +433,6 @@ function applyShapeTargets(mesh, { render = true } = {}) {
   mesh.geometry.computeBoundingBox();
   mesh.geometry.computeBoundingSphere();
   refreshSkinningAfterShapeChange(mesh);
-  if (restartSkinningLoad) registerSkinningMesh(mesh);
   invalidateCharacterShadowGeometry({ request: render });
   return true;
 }

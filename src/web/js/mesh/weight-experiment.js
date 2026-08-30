@@ -160,8 +160,6 @@ const ERROR_MESSAGES = Object.freeze({
 function newState() {
   return {
     loaded: false,
-    loading: false,
-    promise: null,
     error: null,
     influenceCount: 0,
     boneIds: [],
@@ -2629,21 +2627,6 @@ export function saveModelWeightSelection() {
   return selectionSavePromise;
 }
 
-/** Compatibility helper for callers that previously selected one mesh bone. */
-export function setSelectedBone(mesh, boneId) {
-  const state = stateFor(mesh);
-  if (!state?.loaded || !state.boneIds.includes(Number(boneId))) return;
-  const entries = sourceSelectionEntries(modelWeightState.selectedBonesBySource)
-    .filter(entry => entry.sourceKey !== state.skinningSourceKey);
-  entries.push({
-    sourceKey: state.skinningSourceKey,
-    sourceFile: state.skinningSourceFile,
-    boneIdOffset: state.skinningBoneOffset,
-    boneIds: [boneId],
-  });
-  return setSelectedBones(entries);
-}
-
 export function setPhysicsFrequency(mesh, frequencyHz) {
   const value = Number(frequencyHz);
   if (!Number.isFinite(value)) return false;
@@ -2701,25 +2684,6 @@ export function setPhysicsMaxBendDegrees(mesh, degrees) {
   if (!Number.isFinite(value)) return false;
   modelPhysicsSession.setSettings({maxBendDegrees: value});
   return true;
-}
-
-export function setPhysicsEnabled(mesh, enabled) {
-  if (!enabled) return disableModelPhysics();
-  void enableModelPhysics();
-  return true;
-}
-
-export function resetPhysicsMotion(mesh) {
-  return resetModelPhysicsMotion();
-}
-
-export function setSkinningHeatmapMode(mesh, mode) {
-  if (mode !== null && mode !== 'bone') return false;
-  return setModelWeightHeatmap(mode === 'bone');
-}
-
-export function setSkinningHeatmap(mesh, enabled) {
-  return setModelWeightHeatmap(enabled);
 }
 
 export function setModelWeightHeatmap(enabled) {

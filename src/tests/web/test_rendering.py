@@ -843,7 +843,7 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
           }]);
-          experiment.setPhysicsEnabled(mesh, false);
+          experiment.disableModelPhysics();
           const queuedFrames = [];
           const originalRequestAnimationFrame = window.requestAnimationFrame;
           const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -860,7 +860,7 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
             if (!callback) throw new Error('Expected a queued physics frame.');
             callback(timestamp);
           };
-          experiment.setPhysicsEnabled(mesh, true);
+          await experiment.enableModelPhysics();
           const enabled = experiment.getSkinningState(mesh);
           const enabledState = {
             enabled: enabled.physicsEnabled,
@@ -898,7 +898,7 @@ def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
             }}));
           const released = experiment.getSkinningState(mesh);
           const virtualVelocity = released.physicsVirtualLinearVelocityLocal;
-          experiment.resetPhysicsMotion(mesh);
+          experiment.resetModelPhysicsMotion();
           const reset = experiment.getSkinningState(mesh);
           window.requestAnimationFrame = originalRequestAnimationFrame;
           window.cancelAnimationFrame = originalCancelAnimationFrame;
@@ -1433,7 +1433,7 @@ def test_skinning_angular_motion_uses_full_quaternion_delta(
           const runFrames = timestamp => {
             queuedFrames.splice(0).forEach(callback => callback(timestamp));
           };
-          experiment.setPhysicsEnabled(mesh, true);
+          await experiment.enableModelPhysics();
           runFrames(0);
           runFrames(16.7);
           const before = [...mesh.geometry.attributes.position.array];
@@ -1520,7 +1520,7 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
           const runFrames = timestamp => {
             queuedFrames.splice(0).forEach(callback => callback(timestamp));
           };
-          experiment.setPhysicsEnabled(mesh, true);
+          await experiment.enableModelPhysics();
           runFrames(0);
           runFrames(16.7);
           const cameraBefore = scene.camera.position.clone();
@@ -1543,11 +1543,11 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
               rotationVector: joint.rotationVector,
               angularVelocity: joint.angularVelocity,
             }));
-          experiment.resetPhysicsMotion(mesh);
+          experiment.resetModelPhysicsMotion();
           const reset = experiment.getSkinningState(mesh);
           const resetJoints = [...reset.physicsState.joints.values()];
           const resetKeepsEnabled = reset.physicsEnabled;
-          experiment.setPhysicsEnabled(mesh, false);
+          experiment.disableModelPhysics();
           const disabled = experiment.getSkinningState(mesh);
           window.requestAnimationFrame = originalRequestAnimationFrame;
           window.cancelAnimationFrame = originalCancelAnimationFrame;
@@ -4055,7 +4055,7 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
           let oldMaterialDisposals = 0;
           oldMaterial.addEventListener('dispose',
             () => oldMaterialDisposals += 1);
-          experiment.setSkinningHeatmap(mesh, true);
+          experiment.setModelWeightHeatmap(true);
           const heatmapMaterial = mesh.material;
           let heatmapDisposals = 0;
           heatmapMaterial.addEventListener('dispose',
@@ -4064,11 +4064,11 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
           const afterSwap = experiment.getSkinningState(mesh);
           const newMaterial = afterSwap.originalMaterial;
           const displayedAfterSwap = mesh.material === heatmapMaterial;
-          experiment.setSelectedBone(mesh, 1);
+          experiment.setBoneSelected('test/bodyblend.buf|offset=0', 1, true);
           const selectedBoneKeepsHeatmap =
             mesh.material === heatmapMaterial
             && experiment.getSkinningState(mesh).debugMaterial === heatmapMaterial;
-          const disabled = experiment.setSkinningHeatmap(mesh, false);
+          const disabled = experiment.setModelWeightHeatmap(false);
           URL.revokeObjectURL(url);
           return {
             refreshed,

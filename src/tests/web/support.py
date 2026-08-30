@@ -433,12 +433,49 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                 return {status: 'error', error: 'Skin preview unavailable.'};
               }
               const meshes = {};
-              let data = null;
+              const chunks = [];
+              let byteLength = 0;
               for (const mesh of window.modViewer?.activeMeshes || []) {
                 const key = mesh.userData.semanticKey;
                 const entry = await single(path, key);
-                meshes[key] = copy(entry);
-                if (!data && entry?.status === 'ok') data = entry.data;
+                const copied = copy(entry);
+                if (copied?.status === 'ok' && copied.data?.url) {
+                  const response = await fetch(copied.data.url,
+                    {cache: 'no-store'});
+                  if (!response.ok) {
+                    throw new Error(`Skin data download failed (${response.status}).`);
+                  }
+                  const bytes = new Uint8Array(
+                    await response.arrayBuffer());
+                  const base = byteLength;
+                  byteLength += bytes.byteLength;
+                  chunks.push(bytes);
+                  const rebase = descriptor => descriptor
+                    ? {...descriptor,
+                      offset: Number(descriptor.offset || 0) + base}
+                    : descriptor;
+                  copied.data = {
+                    ...copied.data,
+                    indices: rebase(copied.data.indices),
+                    weights: rebase(copied.data.weights),
+                  };
+                  delete copied.data.url;
+                  delete copied.data.length;
+                }
+                meshes[key] = copied;
+              }
+              let data = null;
+              if (chunks.length) {
+                const bytes = new Uint8Array(byteLength);
+                let offset = 0;
+                for (const chunk of chunks) {
+                  bytes.set(chunk, offset);
+                  offset += chunk.byteLength;
+                }
+                data = {
+                  url: URL.createObjectURL(new Blob([bytes])),
+                  length: byteLength,
+                };
               }
               return copy({
                 status: 'ok', saved_bones: [], meshes, data,
