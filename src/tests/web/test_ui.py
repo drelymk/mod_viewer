@@ -101,12 +101,16 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
           return window.modViewer.activeMeshes.map(mesh => ({
             emissive: mesh.material.emissive.getHex(),
             intensity: mesh.material.emissiveIntensity,
-            selected: mesh.material.userData.gameMaterial.selectionEnabledNode.value,
+            selected: mesh.userData.viewerOutline.userData.selectionSelected,
+            outlineVisible: mesh.userData.viewerOutline.visible,
+            outlineMaterial: mesh.userData.viewerOutline.material.color.getHex(),
           }));
         }""")
         assert first_state == [
-            {"emissive": 0x000000, "intensity": 1, "selected": True},
-            {"emissive": 0x000000, "intensity": 1, "selected": False},
+            {"emissive": 0x000000, "intensity": 1, "selected": True,
+             "outlineVisible": True, "outlineMaterial": 0xffd60a},
+            {"emissive": 0x000000, "intensity": 1, "selected": False,
+             "outlineVisible": False, "outlineMaterial": 0x111318},
         ]
 
         selected_count = page.evaluate("window.modViewer.getRenderCount()")
@@ -120,12 +124,16 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
           return window.modViewer.activeMeshes.map(mesh => ({
             emissive: mesh.material.emissive.getHex(),
             intensity: mesh.material.emissiveIntensity,
-            selected: mesh.material.userData.gameMaterial.selectionEnabledNode.value,
+            selected: mesh.userData.viewerOutline.userData.selectionSelected,
+            outlineVisible: mesh.userData.viewerOutline.visible,
+            outlineMaterial: mesh.userData.viewerOutline.material.color.getHex(),
           }));
         }""")
         assert second_state == [
-            {"emissive": 0x000000, "intensity": 1, "selected": False},
-            {"emissive": 0x000000, "intensity": 1, "selected": True},
+            {"emissive": 0x000000, "intensity": 1, "selected": False,
+             "outlineVisible": False, "outlineMaterial": 0x111318},
+            {"emissive": 0x000000, "intensity": 1, "selected": True,
+             "outlineVisible": True, "outlineMaterial": 0xffd60a},
         ]
 
         final_count = page.evaluate("window.modViewer.getRenderCount()")
@@ -803,7 +811,7 @@ def test_inspector_follows_component_and_mesh_selection(
         assert inspector.locator(".inspector-header h3").inner_text()
         assert inspector.locator(".inspector-context").inner_text() == "Body A"
         assert inspector.locator(".inspector-section-title").all_inner_texts() == [
-            "MATERIAL", "TEXTURE"]
+            "MATERIAL", "TEXTURE", "COLOR"]
         assert "State" not in inspector.inner_text()
         assert "Material kind" not in inspector.inner_text()
         assert "Texture provenance" not in inspector.inner_text()
@@ -863,6 +871,87 @@ def test_inspector_follows_component_and_mesh_selection(
         assert not page.locator("#inspector-panel").is_hidden()
     finally:
         context.close()
+
+def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
+        edge_browser, frontend_url):
+    payload = _payload("ColorUI")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body ColorUI::3,0,0": {
+            "hue": 30, "saturation": 1.15, "brightness": 1,
+            "contrast": 1, "red": 1, "green": 1, "blue": 1,
+            "tint": "#ffffff", "tint_strength": 0,
+        },
+    }
+    context, page = _page(edge_browser, frontend_url, {"ColorUI": payload})
+    try:
+        _open(page, "ColorUI")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        color = page.locator(".inspector-color-section")
+        assert color.locator(".inspector-color-slider").count() == 8
+        hue = color.locator("[data-color-field='hue'] .inspector-color-slider")
+        assert hue.input_value() == "30"
+        assert color.locator("[data-color-field='saturation'] .inspector-color-value").inner_text() == "115%"
+
+        before_loads = page.evaluate("window.__fakeApi.calls.loadMod.length")
+        page.evaluate("""() => {
+          const slider = document.querySelector(
+            '[data-color-field="hue"] .inspector-color-slider');
+          slider.value = '55';
+          slider.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue") == 55
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].material.userData.gameMaterial.colorAdjustmentEnabledNode.value")
+        assert page.evaluate("window.__fakeApi.calls.loadMod.length") == before_loads
+        page.evaluate("""() => document.querySelector(
+          '[data-color-field="hue"] .inspector-color-slider')
+          .dispatchEvent(new Event('change', {bubbles: true}))""")
+        page.wait_for_function(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length === 1")
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment[0][2].hue") == 55
+
+        page.evaluate("""async () => {
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {diffuse: 'diffuse::asset/root/Body.dds'});
+          window.dispatchEvent(new CustomEvent('mod-viewer-mesh-state-changed', {
+            detail: {meshes: [mesh]},
+          }));
+        }""")
+        page.locator(".inspector-color-readonly-title").wait_for()
+        assert color.locator(".inspector-color-slider").count() == 0
+        assert "Color editing is unavailable for Asset textures." in color.inner_text()
+
+        page.evaluate("""async () => {
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {diffuse: mesh.userData.defaultTexKey});
+          window.dispatchEvent(new CustomEvent('mod-viewer-mesh-state-changed', {
+            detail: {meshes: [mesh]},
+          }));
+        }""")
+        page.locator(".inspector-color-slider").first.wait_for()
+        assert page.locator(
+            "[data-color-field='hue'] .inspector-color-slider").input_value() == "55"
+
+        page.evaluate("""async () => {
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {diffuse: null});
+          window.dispatchEvent(new CustomEvent('mod-viewer-mesh-state-changed', {
+            detail: {meshes: [mesh]},
+          }));
+        }""")
+        page.locator(".inspector-color-readonly-title").wait_for()
+        assert page.locator(".inspector-color-readonly-title").inner_text() == (
+            "No diffuse texture")
+    finally:
+        context.close()
+
 
 def test_viewport_toolbar_popovers_and_responsive_overflow(
         edge_browser, frontend_url):

@@ -96,6 +96,8 @@ class ModPreview:
             saved_metadata = context.metadata
             result.setdefault("metadata", {})["mesh_names"] = \
                 metadata.hydrate_mesh_names(result, saved_metadata)
+            result["metadata"]["mesh_color_adjustments"] = \
+                metadata.hydrate_mesh_color_adjustments(result, saved_metadata)
             game_metadata = result.get("metadata", {}).get("game", {})
             publication.set_game_profile(game_metadata.get("id"))
             metadata.hydrate_textures(
@@ -320,6 +322,11 @@ class ModPreview:
         result = metadata.save_textures(folder_path, textures)
         edit_session.invalidate_diagnostics(folder_path)
         return result
+
+    def save_mesh_color_adjustment(self, folder_path, mesh_key, adjustment):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.save_mesh_color_adjustment(
+            folder_path, mesh_key, adjustment)
 
     def save_weight_selection(self, folder_path, bones):
         folder_path = self._access.mod_folder(folder_path)

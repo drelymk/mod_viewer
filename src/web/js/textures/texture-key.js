@@ -26,3 +26,9 @@ export function textureRole(key) {
 export function textureFile(key) {
   return splitTextureKey(key)?.path || '';
 }
+
+/** Return whether a canonical role-aware key names an Asset texture. */
+export function isAssetTextureKey(key) {
+  const parsed = splitTextureKey(key);
+  return !!parsed?.path.startsWith('asset/');
+}

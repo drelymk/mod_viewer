@@ -3,6 +3,10 @@
 
 import { getRightDockTab, isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';
+import {
+  canEditMeshColor, getMeshColorAdjustment, resetMeshColorAdjustment,
+  setMeshColorAdjustment,
+} from '../mesh/mesh-color-state.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -213,6 +217,174 @@ function updateTextureControlState(content, mesh, component) {
   });
 }
 
+function formatHue(value) {
+  const rounded = Math.round(value);
+  return `${rounded > 0 ? '+' : ''}${rounded}°`;
+}
+
+function formatPercent(value) {
+  return `${Math.round(value)}%`;
+}
+
+function colorControlValue(field, adjustment) {
+  return field === 'hue' ? adjustment.hue : adjustment[field] * 100;
+}
+
+function colorAdjustmentValue(field, controlValue) {
+  return field === 'hue' ? controlValue : controlValue / 100;
+}
+
+/** Build one range control shared by the Inspector's color sliders. */
+function buildRangeControl({
+  field, label, min, max, step, value, formatValue, onInput, onChange,
+}) {
+  const row = document.createElement('label');
+  row.className = 'inspector-color-control';
+  row.dataset.colorField = field;
+  const heading = document.createElement('span');
+  heading.className = 'inspector-color-control-heading';
+  heading.textContent = label;
+  const valueNode = document.createElement('span');
+  valueNode.className = 'inspector-color-value';
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.className = 'inspector-color-slider';
+  slider.min = String(min);
+  slider.max = String(max);
+  slider.step = String(step);
+  slider.value = String(value);
+  const syncValue = () => {
+    valueNode.textContent = formatValue(Number(slider.value));
+  };
+  slider.addEventListener('input', () => {
+    syncValue();
+    onInput(Number(slider.value));
+  });
+  slider.addEventListener('change', () => onChange(Number(slider.value)));
+  syncValue();
+  row.append(heading, slider, valueNode);
+  return row;
+}
+
+function updateColorAdjustment(mesh, field, controlValue, persist = false) {
+  const next = getMeshColorAdjustment(mesh);
+  next[field] = colorAdjustmentValue(field, controlValue);
+  setMeshColorAdjustment(mesh, next, { persist, render: true });
+}
+
+function buildColorSection(content, mesh) {
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-color-section';
+  const title = document.createElement('div');
+  title.className = 'inspector-section-title';
+  title.textContent = 'Color';
+  section.appendChild(title);
+
+  const eligibility = canEditMeshColor(mesh);
+  section.dataset.colorEditable = String(eligibility.editable);
+  section.dataset.colorReason = eligibility.reason || '';
+  if (!eligibility.editable) {
+    if (eligibility.reason === 'asset-texture') {
+      addText(section, 'inspector-color-readonly-title', 'Asset texture');
+      addText(section, 'inspector-color-readonly',
+        'Color editing is unavailable for Asset textures.');
+    } else {
+      addText(section, 'inspector-color-readonly-title', 'No diffuse texture');
+      addText(section, 'inspector-color-readonly',
+        'Select a diffuse texture to adjust its color.');
+    }
+    content.appendChild(section);
+    return section;
+  }
+
+  const adjustment = getMeshColorAdjustment(mesh);
+  const addSlider = (field, label, min, max, step, formatValue) => {
+    section.appendChild(buildRangeControl({
+      field, label, min, max, step,
+      value: colorControlValue(field, adjustment), formatValue,
+      onInput: value => updateColorAdjustment(mesh, field, value),
+      onChange: value => updateColorAdjustment(mesh, field, value, true),
+    }));
+  };
+  addSlider('hue', 'Hue', -180, 180, 1, formatHue);
+  addSlider('saturation', 'Saturation', 0, 200, 1, formatPercent);
+  addSlider('brightness', 'Brightness', 0, 200, 1, formatPercent);
+  addSlider('contrast', 'Contrast', 0, 200, 1, formatPercent);
+
+  const rgbTitle = document.createElement('div');
+  rgbTitle.className = 'inspector-color-subtitle';
+  rgbTitle.textContent = 'RGB';
+  section.appendChild(rgbTitle);
+  addSlider('red', 'R', 0, 200, 1, formatPercent);
+  addSlider('green', 'G', 0, 200, 1, formatPercent);
+  addSlider('blue', 'B', 0, 200, 1, formatPercent);
+
+  const tint = document.createElement('label');
+  tint.className = 'inspector-color-tint';
+  const tintLabel = document.createElement('span');
+  tintLabel.className = 'inspector-color-control-heading';
+  tintLabel.textContent = 'Tint';
+  const tintInput = document.createElement('input');
+  tintInput.type = 'color';
+  tintInput.className = 'inspector-color-tint-input';
+  tintInput.value = adjustment.tint;
+  const tintValue = document.createElement('span');
+  tintValue.className = 'inspector-color-value';
+  tintValue.dataset.colorTintValue = 'true';
+  tintValue.textContent = adjustment.tint.toUpperCase();
+  const applyTint = persist => {
+    tintValue.textContent = tintInput.value.toUpperCase();
+    const next = getMeshColorAdjustment(mesh);
+    next.tint = tintInput.value;
+    setMeshColorAdjustment(mesh, next, { persist, render: true });
+  };
+  tintInput.addEventListener('input', () => applyTint(false));
+  tintInput.addEventListener('change', () => applyTint(true));
+  tint.append(tintLabel, tintInput, tintValue);
+  section.appendChild(tint);
+
+  addSlider('tintStrength', 'Strength', 0, 100, 1, formatPercent);
+
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'ui-button inspector-color-reset';
+  reset.textContent = 'Reset Color';
+  reset.addEventListener('click', () => {
+    resetMeshColorAdjustment(mesh, { persist: true, render: true });
+    updateColorControlState(content, mesh);
+  });
+  section.appendChild(reset);
+  content.appendChild(section);
+  return section;
+}
+
+function updateColorControlState(content, mesh) {
+  const section = content.querySelector('.inspector-color-section');
+  if (!section) return true;
+  const eligibility = canEditMeshColor(mesh);
+  if (section.dataset.colorEditable !== String(eligibility.editable)
+      || section.dataset.colorReason !== (eligibility.reason || '')) {
+    return false;
+  }
+  if (!eligibility.editable) return true;
+  const adjustment = getMeshColorAdjustment(mesh);
+  section.querySelectorAll('[data-color-field]').forEach(row => {
+    const field = row.dataset.colorField;
+    const slider = row.querySelector('.inspector-color-slider');
+    const value = row.querySelector('.inspector-color-value');
+    if (!slider || !value || !Object.hasOwn(adjustment, field)) return;
+    const controlValue = colorControlValue(field, adjustment);
+    slider.value = String(controlValue);
+    value.textContent = field === 'hue'
+      ? formatHue(controlValue) : formatPercent(controlValue);
+  });
+  const tintInput = section.querySelector('.inspector-color-tint-input');
+  const tintValue = section.querySelector('[data-color-tint-value]');
+  if (tintInput) tintInput.value = adjustment.tint;
+  if (tintValue) tintValue.textContent = adjustment.tint.toUpperCase();
+  return true;
+}
+
 function buildComponent(record) {
   const content = showContent();
   content.replaceChildren();
@@ -232,6 +404,7 @@ function buildMesh(mesh, record) {
     record.entry?.source?.[0]?.ini || '');
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, mesh);
+  buildColorSection(content, mesh);
 }
 
 function updateInspectorState() {
@@ -245,6 +418,9 @@ function updateInspectorState() {
   }
   if (current.type === 'mesh') {
     updateTextureControlState(content, current.mesh, current.record.component);
+    if (!updateColorControlState(content, current.mesh)) {
+      buildMesh(current.mesh, current.record);
+    }
   } else {
     const context = content.querySelector('[data-inspector-context="true"]');
     if (context) context.textContent = componentContext(current.record);

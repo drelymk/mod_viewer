@@ -6,6 +6,7 @@ import {
   createGameMaterial, getGameMaterialSources, updateGameMaterialTextures,
   usesPackedNormal,
 } from './material-profile.js';
+import { syncMeshColorAdjustment } from './mesh-color-state.js';
 import { getMeshView } from './mesh-view-bindings.js';
 import { loadDDSTexture } from '../textures/dds-loader.js';
 import { requestRender } from '../scene/render-scheduler.js';
@@ -274,7 +275,12 @@ export function setMeshTextureState(mesh, state, { render = true } = {}) {
   mesh.userData.lightMapKey = state.light_map || null;
   mesh.userData.materialMapKey = state.material_map || null;
   mesh.userData.emissionMapKey = state.emission_map || null;
-  return refreshMeshTexture(mesh, { render });
+  const textureChanged = refreshMeshTexture(mesh, { render: false });
+  const colorChanged = syncMeshColorAdjustment(mesh, { render: false });
+  if (render && (textureChanged || colorChanged) && mesh.visible) {
+    requestRender();
+  }
+  return textureChanged || colorChanged;
 }
 
 /** Colour for meshes with no texture, guessed from the component name. */

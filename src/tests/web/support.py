@@ -335,7 +335,8 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "consumeStartupRequest": [],
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
-                   "deleteToggle": [], "exportChanges": []},
+                   "deleteToggle": [], "exportChanges": [],
+                   "saveMeshColorAdjustment": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -566,6 +567,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             get_ini_text: async () => ({ini: 'A.ini', text: '[Test]\\nkey = 1\\n', dirty: false}),
             update_ini_text: async () => ({pending: true}),
             save_mesh_textures: async () => ({}),
+            save_mesh_color_adjustment: async (path, key, adjustment) => {
+              state.calls.saveMeshColorAdjustment.push([path, key, adjustment]);
+              return {};
+            },
             save_mesh_names: async () => ({}),
             save_weight_selection: async (_path, bones) => ({
               saved: true, selected_bones: [...bones],

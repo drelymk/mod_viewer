@@ -22,6 +22,8 @@ import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import {
   assetSecondaryLabel, assetSummaryLabel, summarizeAssetBindings,
 } from './asset-diagnostics.js';
+import { normalizeColorAdjustment } from '../mesh/color-adjustment.js';
+import { syncMeshColorAdjustment } from '../mesh/mesh-color-state.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
@@ -301,6 +303,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
   }
   registerViewSync('mesh-panel', syncMeshPanel);
   const texturePools = options.texturePools || {};
+  const colorAdjustments = options.colorAdjustments || {};
   const readOnlySource = options.readOnlySource === true;
   const texturePicker = options.texturePicker || null;
 
@@ -426,6 +429,8 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
         mesh.userData.identity = entry.identity || null;
         mesh.userData.metadataKey = entry.identity?.key
           || legacyMeshMetadataKey(name, entry);
+        mesh.userData.colorAdjustment = normalizeColorAdjustment(
+          colorAdjustments[mesh.userData.metadataKey]);
         mesh.userData.texturePool = texturePool;
         mesh.userData.displayName = meshNames[mesh.userData.metadataKey]
           || entry.display_name || null;
@@ -444,6 +449,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
             material_map: meshes[name].material_map_variants,
             emission_map: meshes[name].emission_map_variants,
           });
+        syncMeshColorAdjustment(mesh, { render: false });
         // addMesh establishes the automatic defaults; restore persisted
         // viewer choices only after that initialization has completed.
         if (Object.hasOwn(meshes[name], 'saved_texture_override')) {

@@ -3854,6 +3854,16 @@ def test_texture_stays_fallback_until_png_load_completes(
         pending_pixel = _sample_mesh_pixel(page)
         assert min(pending_pixel) > 20
         assert max(pending_pixel) - min(pending_pixel) < 30
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+            hue: 0, saturation: 1, brightness: 0, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#ffffff', tintStrength: 0,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        assert _sample_mesh_pixel(page) == pytest.approx(pending_pixel, abs=2)
 
         idle_count = page.evaluate("window.modViewer.getRenderCount()")
         page.wait_for_timeout(200)
@@ -3880,8 +3890,63 @@ def test_texture_stays_fallback_until_png_load_completes(
         page.wait_for_function(
             "count => window.modViewer.getRenderCount() > count", arg=changed_count)
         loaded_pixel = _sample_mesh_pixel(page)
-        assert loaded_pixel[0] > loaded_pixel[1] * 1.5, loaded_pixel
-        assert loaded_pixel != pending_pixel, (pending_pixel, loaded_pixel)
+        assert any(abs(left - right) > 5
+                   for left, right in zip(loaded_pixel, pending_pixel)), (
+                       pending_pixel, loaded_pixel)
+    finally:
+        context.close()
+
+def test_mesh_color_adjustment_does_not_recolor_flat_texture_fallback(
+        edge_browser, frontend_url):
+    payload = _payload("FallbackColor")
+    entry = payload["meshes"]["Body-FallbackColor-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, -1, 1, 0)
+    entry["idx"] = _u32(0, 1, 2)
+    entry["drawindexed"] = [3, 0, 0]
+    payload["textures"] = {
+        entry["tex_key"]: _flat_png_uri((220, 40, 40, 255)),
+    }
+    context, page = _page(edge_browser, frontend_url, {"FallbackColor": payload})
+    try:
+        _open(page, "FallbackColor")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.wait_for_function("""() => window.modViewer.activeMeshes[0]
+          ?.material?.userData?.gameMaterial?.bindings?.diffuse
+          ?.enabledNode?.value === true""")
+        page.wait_for_timeout(250)
+        page.evaluate("""async () => {
+          const {setTextureDisplayMode} = await import(
+            './js/scene/render-modes.js');
+          setTextureDisplayMode('none', window.modViewer.activeMeshes);
+        }""")
+        page.wait_for_timeout(250)
+        fallback_pixel = _sample_mesh_pixel_at(page, -0.25, -0.25)
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+            hue: 0, saturation: 1, brightness: 0, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#4080c0', tintStrength: 1,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        assert _sample_mesh_pixel_at(page, -0.25, -0.25) == pytest.approx(
+            fallback_pixel, abs=2)
+
+        page.evaluate("""async () => {
+          const {setTextureDisplayMode} = await import(
+            './js/scene/render-modes.js');
+          setTextureDisplayMode('all', window.modViewer.activeMeshes);
+        }""")
+        page.wait_for_function("""() => window.modViewer.activeMeshes[0]
+          ?.material?.userData?.gameMaterial?.bindings?.diffuse
+          ?.enabledNode?.value === true""")
+        page.wait_for_timeout(250)
+        textured_pixel = _sample_mesh_pixel_at(page, -0.25, -0.25)
+        assert any(abs(left - right) > 5
+                   for left, right in zip(textured_pixel, fallback_pixel)), (
+                       fallback_pixel, textured_pixel)
     finally:
         context.close()
 
@@ -4347,6 +4412,258 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
     finally:
         context.close()
 
+
+def test_asset_texture_identity_is_reserved_to_the_canonical_namespace(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        result = page.evaluate("""async () => {
+          const {isAssetTextureKey} = await import('./js/textures/texture-key.js');
+          return [
+            isAssetTextureKey('diffuse::BodyDiffuse.dds'),
+            isAssetTextureKey('diffuse::Textures/Body.dds'),
+            isAssetTextureKey('diffuse::asset/abc123/BodyDiffuse.dds'),
+            isAssetTextureKey('normal_map::asset/abc123/BodyNormal.dds'),
+            isAssetTextureKey('diffuse::textures/my_asset_copy.dds'),
+            isAssetTextureKey('invalid'),
+          ];
+        }""")
+        assert result == [False, False, True, True, False, False]
+    finally:
+        context.close()
+
+
+def test_mesh_color_adjustment_updates_stable_uniforms_and_gates_assets(
+        edge_browser, frontend_url):
+    payload = _payload("Color")
+    entry = payload["meshes"]["Body-Color-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    asset_key = "diffuse::asset/root/Body.dds"
+    payload["textures"][entry["tex_key"]] = _flat_png_uri((255, 0, 0, 255))
+    payload["textures"][asset_key] = _flat_png_uri((0, 255, 0, 255))
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Color::3,0,0": {
+            "hue": 40, "saturation": 1, "brightness": 1, "contrast": 1,
+            "red": 1, "green": 1, "blue": 1,
+            "tint": "#ffffff", "tint_strength": 0,
+        },
+    }
+    context, page = _page(edge_browser, frontend_url, {"Color": payload})
+    try:
+        _open(page, "Color")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.wait_for_function("""() => {
+          const game = window.modViewer.activeMeshes[0]?.material
+            ?.userData?.gameMaterial;
+          return game?.bindings?.diffuse?.enabledNode?.value === true;
+        }""")
+        state = page.evaluate("""async assetKey => {
+          const {getMeshColorAdjustment, canEditMeshColor,
+            setMeshColorAdjustment} = await import('./js/mesh/mesh-color-state.js');
+          const {getGameMaterialColorAdjustment} =
+            await import('./js/mesh/material-profile.js');
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
+          const {replaceMeshMaterial} = await import('./js/mesh/mesh-material-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const oldMaterial = mesh.material;
+          const oldTexture = oldMaterial.userData.gameMaterial
+            .bindings.diffuse.textureNode.value;
+          const before = {
+            adjustment: getMeshColorAdjustment(mesh),
+            editable: canEditMeshColor(mesh),
+            enabled: oldMaterial.userData.gameMaterial
+              .colorAdjustmentEnabledNode.value,
+          };
+          setMeshColorAdjustment(mesh, {
+            ...before.adjustment, hue: 55,
+          }, {persist: false});
+          const live = getGameMaterialColorAdjustment(mesh.material);
+          const sameMaterialDuringLive = mesh.material === oldMaterial;
+          const sameTextureDuringLive = mesh.material.userData.gameMaterial
+            .bindings.diffuse.textureNode.value === oldTexture;
+          setMeshTextureState(mesh, {diffuse: assetKey});
+          window.__fakeApi.calls.saveMeshColorAdjustment = [];
+          setMeshColorAdjustment(mesh, {
+            ...before.adjustment, hue: 55,
+          }, {persist: true});
+          const assetPersistenceCalls =
+            window.__fakeApi.calls.saveMeshColorAdjustment.length;
+          const asset = {
+            adjustment: getMeshColorAdjustment(mesh),
+            editable: canEditMeshColor(mesh),
+            enabled: mesh.material.userData.gameMaterial
+              .colorAdjustmentEnabledNode.value,
+          };
+          setMeshTextureState(mesh, {diffuse: null});
+          setMeshColorAdjustment(mesh, {
+            ...before.adjustment, hue: 55,
+          }, {persist: true});
+          const noDiffusePersistenceCalls =
+            window.__fakeApi.calls.saveMeshColorAdjustment.length;
+          setMeshTextureState(mesh, {diffuse: mesh.userData.defaultTexKey});
+          const restored = {
+            editable: canEditMeshColor(mesh),
+            enabled: mesh.material.userData.gameMaterial
+              .colorAdjustmentEnabledNode.value,
+            hue: getGameMaterialColorAdjustment(mesh.material).hue,
+          };
+          replaceMeshMaterial(mesh, mesh.userData.materialProfile, {}, {
+            render: false,
+          });
+          return {
+            before, live, asset, restored,
+            assetPersistenceCalls, noDiffusePersistenceCalls,
+            sameMaterialDuringLive, sameTextureDuringLive,
+            materialReplaced: mesh.material !== oldMaterial,
+            sameTexture: mesh.material.userData.gameMaterial
+              .bindings.diffuse.textureNode.value === oldTexture,
+            afterReplacement: {
+              hue: getGameMaterialColorAdjustment(mesh.material).hue,
+              enabled: mesh.material.userData.gameMaterial
+                .colorAdjustmentEnabledNode.value,
+            },
+          };
+        }""", asset_key)
+        assert state["before"]["adjustment"]["hue"] == 40
+        assert state["before"]["editable"] == {"editable": True, "reason": None}
+        assert state["before"]["enabled"] is True
+        assert state["live"]["hue"] == 55
+        assert state["sameMaterialDuringLive"] is True
+        assert state["sameTextureDuringLive"] is True
+        assert state["asset"]["adjustment"]["hue"] == 55
+        assert state["asset"]["editable"] == {
+            "editable": False, "reason": "asset-texture"}
+        assert state["asset"]["enabled"] is False
+        assert state["assetPersistenceCalls"] == 0
+        assert state["noDiffusePersistenceCalls"] == 0
+        assert state["restored"] == {
+            "editable": {"editable": True, "reason": None},
+            "enabled": True, "hue": 55,
+        }
+        assert state["materialReplaced"] is True
+        assert state["afterReplacement"] == {"hue": 55, "enabled": True}
+    finally:
+        context.close()
+
+def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
+        edge_browser, frontend_url):
+    payload = _payload("ColorRender")
+    entry = payload["meshes"]["Body-ColorRender-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, -1, 1, 0)
+    entry["idx"] = _u32(0, 1, 2)
+    entry["drawindexed"] = [3, 0, 0]
+    payload["textures"] = {
+        entry["tex_key"]: _flat_png_uri((255, 0, 0, 255)),
+        "diffuse::ColorRender-white.png": _flat_png_uri((255, 255, 255, 255)),
+    }
+    context, page = _page(edge_browser, frontend_url, {"ColorRender": payload})
+    try:
+        _open(page, "ColorRender")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.wait_for_timeout(250)
+        opacity = page.evaluate("window.modViewer.activeMeshes[0].material.opacity")
+        before = _sample_mesh_pixel_at(page, -0.5, -0.5)
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshColorAdjustment(mesh, {
+            hue: 120, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#ffffff', tintStrength: 0,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        after = _sample_mesh_pixel_at(page, -0.5, -0.5)
+        assert after[1] > after[0], (before, after)
+        assert after[1] > after[2], (before, after)
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].material.opacity") == opacity
+
+        tints = page.evaluate("""async () => {
+          const {setGameMaterialColorAdjustment,
+            getGameMaterialColorAdjustment} = await import(
+            './js/mesh/material-profile.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const cases = [
+            ['#808080', 1], ['#4080c0', 1], ['#4080c0', .5],
+          ];
+          return cases.map(([tint, tintStrength]) => {
+            setGameMaterialColorAdjustment(mesh.material, {
+              hue: 0, saturation: 1, brightness: 1, contrast: 1,
+              red: 1, green: 1, blue: 1, tint, tintStrength,
+            }, {enabled: true});
+            return {
+              state: getGameMaterialColorAdjustment(mesh.material),
+              raw: mesh.material.userData.gameMaterial.colorTintNode.value
+                .toArray(),
+            };
+          });
+        }""")
+        assert [item["state"]["tint"] for item in tints] == [
+            "#808080", "#4080c0", "#4080c0"]
+        expected_raw_tints = [
+            [128 / 255, 128 / 255, 128 / 255],
+            [64 / 255, 128 / 255, 192 / 255],
+            [64 / 255, 128 / 255, 192 / 255],
+        ]
+        for actual, expected in zip(
+                [item["raw"] for item in tints], expected_raw_tints):
+            assert actual == pytest.approx(expected)
+
+        white_key = "diffuse::ColorRender-white.png"
+        page.evaluate("""async ({whiteKey}) => {
+          const {setMeshTextureState} = await import(
+            './js/mesh/mesh-factory.js');
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {diffuse: whiteKey});
+          setMeshColorAdjustment(mesh, {
+            hue: 0, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#ffffff', tintStrength: 0,
+          });
+        }""", {"whiteKey": white_key})
+        page.wait_for_function("""() =>
+          window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial
+            ?.bindings?.diffuse?.textureNode?.value?.image?.width === 4""")
+        page.wait_for_timeout(250)
+        neutral_rendered = _sample_mesh_pixel_at(page, -0.25, -0.25)
+
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+            hue: 0, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#4080c0', tintStrength: 1,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        full_rendered = _sample_mesh_pixel_at(page, -0.25, -0.25)
+
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+            hue: 0, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#4080c0', tintStrength: .5,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        half_rendered = _sample_mesh_pixel_at(page, -0.25, -0.25)
+
+        assert full_rendered[2] > full_rendered[1] > full_rendered[0], (
+            neutral_rendered, full_rendered)
+        assert any(abs(neutral - full) > 5
+                   for neutral, full in zip(neutral_rendered, full_rendered))
+        for neutral, full, half in zip(
+                neutral_rendered, full_rendered, half_rendered):
+            assert min(neutral, full) - 3 <= half <= max(neutral, full) + 3, (
+                neutral_rendered, full_rendered, half_rendered)
+    finally:
+        context.close()
+
+
 def test_material_kind_refresh_hot_swaps_profile_without_reloading_model(
         edge_browser, frontend_url):
     payload = _packed_material_payload("wuwa:rabbitfx")
@@ -4410,7 +4727,8 @@ def test_material_kind_refresh_hot_swaps_profile_without_reloading_model(
             manualTexOverride: mesh.userData.manualTexOverride,
             normalDataBound: game.bindings.normal_data.enabledNode.value,
             debugMode: window.modViewer.getMaterialState(0).debugMode,
-            selected: game.selectionEnabledNode.value,
+            selected: mesh.userData.viewerOutline.userData.selectionSelected,
+            selectionOutline: window.modViewer.getOutlineState(0),
           };
         }""")
         page.evaluate("""data => {
@@ -4456,7 +4774,8 @@ def test_material_kind_refresh_hot_swaps_profile_without_reloading_model(
             normalDataBound: game.bindings.normal_data.enabledNode.value,
             normalSource: game.normalSource,
             debugMode: window.modViewer.getMaterialState(0).debugMode,
-            selected: game.selectionEnabledNode.value,
+            selected: mesh.userData.viewerOutline.userData.selectionSelected,
+            selectionOutline: window.modViewer.getOutlineState(0),
             wireframe: mesh.material.wireframe,
             flatShading: mesh.material.flatShading,
             roughness: mesh.material.roughness,
@@ -4482,6 +4801,10 @@ def test_material_kind_refresh_hot_swaps_profile_without_reloading_model(
         assert switched["normalSource"] == "normal_data"
         assert switched["debugMode"] == "normal-data-b"
         assert switched["selected"]
+        assert switched["selectionOutline"]["selected"] is True
+        assert switched["selectionOutline"]["visible"] is False
+        assert switched["selectionOutline"]["suppressedByDebug"] is True
+        assert switched["selectionOutline"]["material"] == "selection"
         assert switched["wireframe"]
         assert switched["flatShading"]
         assert switched["roughness"] == pytest.approx(0.2)
@@ -4505,7 +4828,7 @@ def test_material_kind_refresh_hot_swaps_profile_without_reloading_model(
             materialKindOverride: mesh.userData.materialKindOverride,
             manualTexOverride: mesh.userData.manualTexOverride,
             debugMode: window.modViewer.getMaterialState(0).debugMode,
-            selected: game.selectionEnabledNode.value,
+            selected: mesh.userData.viewerOutline.userData.selectionSelected,
             normalDataBound: game.bindings.normal_data.enabledNode.value,
             wireframe: mesh.material.wireframe,
             flatShading: mesh.material.flatShading,
@@ -6033,6 +6356,7 @@ def test_outline_child_shares_geometry_and_render_modes_suppress_it(
         assert structure["state"]["referenceProjectionSpan"] > 0
         base_outline_state = {
             "attached": True, "visible": False, "globalEnabled": False,
+            "selected": False, "material": "normal",
             "referenceWidthPixels": 0.75,
             "minWidthPixels": 0.5,
             "maxWidthPixels": 1.5,
@@ -6079,6 +6403,90 @@ def test_outline_child_shares_geometry_and_render_modes_suppress_it(
     finally:
         context.close()
 
+
+def test_mesh_selection_uses_outline_without_surface_tint(
+        edge_browser, frontend_url):
+    payload = _payload("SelectionOutline")
+    entry = payload["meshes"]["Body-SelectionOutline-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, -1, 1, 0)
+    entry["idx"] = _u32(0, 1, 2)
+    entry["drawindexed"] = [3, 0, 0]
+    payload["textures"] = {
+        entry["tex_key"]: _flat_png_uri((160, 80, 40, 255)),
+    }
+    context, page = _page(
+        edge_browser, frontend_url, {"SelectionOutline": payload})
+    try:
+        _open(page, "SelectionOutline")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.wait_for_function("""() => window.modViewer.activeMeshes[0]
+          ?.material?.userData?.gameMaterial?.bindings?.diffuse
+          ?.enabledNode?.value === true""")
+        page.wait_for_timeout(250)
+        before = _sample_mesh_pixel_at(page, -0.25, -0.25)
+        render_count = page.evaluate("window.modViewer.getRenderCount()")
+        page.evaluate("""async () => {
+          const {selectMesh} = await import('./js/scene/selection.js');
+          selectMesh(window.modViewer.activeMeshes[0]);
+        }""")
+        page.wait_for_function(
+            "count => window.modViewer.getRenderCount() > count",
+            arg=render_count)
+        after = _sample_mesh_pixel_at(page, -0.25, -0.25)
+        assert after == pytest.approx(before, abs=3), (before, after)
+
+        selected = page.evaluate("""async () => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const outline = mesh.userData.viewerOutline;
+          return {
+            state: window.modViewer.getOutlineState(0),
+            outlineRaycastDisabled: outline.raycast !== mesh.raycast,
+          };
+        }""")
+        assert selected["state"]["selected"] is True
+        assert selected["state"]["visible"] is True
+        assert selected["state"]["material"] == "selection"
+        assert selected["outlineRaycastDisabled"] is True
+
+        page.locator("#wire-btn").click()
+        wireframe_selected = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert wireframe_selected["selected"] is True
+        assert wireframe_selected["visible"] is False
+        assert wireframe_selected["suppressedByWireframe"] is True
+        page.locator("#wire-btn").click()
+        wireframe_disabled = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert wireframe_disabled["selected"] is True
+        assert wireframe_disabled["visible"] is True
+        assert wireframe_disabled["suppressedByWireframe"] is False
+
+        page.evaluate("window.modViewer.setMaterialDebugMode('shadow-mask')")
+        debug_selected = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert debug_selected["selected"] is True
+        assert debug_selected["visible"] is False
+        assert debug_selected["suppressedByDebug"] is True
+        page.evaluate("window.modViewer.setMaterialDebugMode('off')")
+        debug_disabled = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert debug_disabled["selected"] is True
+        assert debug_disabled["visible"] is True
+        assert debug_disabled["suppressedByDebug"] is False
+
+        page.evaluate("import('./js/scene/selection.js').then(({clearSelection}) => clearSelection())")
+        deselected = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert deselected["selected"] is False
+        assert deselected["visible"] is False
+        assert deselected["material"] == "normal"
+        page.evaluate("window.modViewer.setOutlineEnabled(true)")
+        normal = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert normal["visible"] is True
+        assert normal["selected"] is False
+        assert normal["material"] == "normal"
+        page.evaluate("window.modViewer.setOutlineEnabled(false)")
+        hidden = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert hidden["visible"] is False
+        assert hidden["material"] == "normal"
+    finally:
+        context.close()
 
 def test_outline_width_is_perspective_correct_and_material_stable(
         edge_browser, frontend_url):
