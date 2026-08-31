@@ -305,7 +305,8 @@ def edge_browser():
 
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
           mod_folders=None, subfolders=None, diagnostics=None, panel_opacity=58,
-          panel_opacity_api=True, asset_folders=None, asset_subfolders=None):
+          panel_opacity_api=True, asset_folders=None, asset_subfolders=None,
+          startup_request=None, startup_api_ready=True):
     # Playwright's wait_for_function uses eval internally. Bypass the app's
     # production CSP only in this isolated test context so behavioral waits
     # do not require weakening the served application's policy.
@@ -322,6 +323,8 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             "summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
         "panelOpacity": panel_opacity,
         "panelOpacityApi": panel_opacity_api,
+        "startupRequest": startup_request,
+        "startupApiReady": startup_api_ready,
         "calls": {"loadMod": [], "loadModArgs": [], "loadAsset": [], "listSubfolders": [],
                    "listAssetSubfolders": [],
                    "selectAssetFolder": [],
@@ -329,6 +332,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "loadMissingAssetParts": [],
                    "removeMissingAssetParts": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
+                   "consumeStartupRequest": [],
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
                    "deleteToggle": [], "exportChanges": []},
@@ -356,6 +360,12 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.nextPath = null;
               state.calls.selectAssetFolder.push(path);
               return path;
+            },
+            consume_startup_request: async () => {
+              state.calls.consumeStartupRequest.push(true);
+              const request = state.startupRequest;
+              state.startupRequest = null;
+              return copy(request);
             },
             load_mod: async (path, disabledIni = false) => {
               state.calls.loadMod.push(path);
@@ -567,6 +577,9 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
           if (!state.panelOpacityApi) {
             delete window.pywebview.api.get_panel_opacity;
             delete window.pywebview.api.set_panel_opacity;
+          }
+          if (!state.startupApiReady) {
+            delete window.pywebview.api.consume_startup_request;
           }
         }
         """.replace("__STATE__", encoded_state),

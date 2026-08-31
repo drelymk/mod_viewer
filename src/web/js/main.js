@@ -29,6 +29,7 @@ import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
 import { initWeightPanel } from './panels/weight-panel.js';
 import { initPanelOpacityControl } from './ui/appearance.js';
+import { alertDialog } from './ui/dialogs.js';
 import {
   getOutlineState as getMeshOutlineState,
   setOutlineSuppressedByDebug, setOutlinesEnabled,
@@ -108,6 +109,32 @@ function openMod() {
 
 function switchMod(path) {
   return switchModFlow(path, modelHandlers());
+}
+
+async function openStartupMod() {
+  const consume = window.pywebview?.api?.consume_startup_request;
+  if (typeof consume !== 'function') return false;
+
+  let request;
+  try {
+    request = await consume.call(window.pywebview.api);
+  } catch (error) {
+    await alertDialog(
+      'Could not open startup mod:\n\n' + (error?.message || String(error)));
+    return true;
+  }
+  if (!request) return true;
+  if (request.error) {
+    await alertDialog(`Could not open startup mod:\n\n${request.error}`);
+    return true;
+  }
+
+  if (typeof request.disabled_ini === 'boolean') {
+    const checkbox = $('open-disabled-mod');
+    if (checkbox) checkbox.checked = request.disabled_ini;
+  }
+  await switchMod(request.path);
+  return true;
 }
 
 function switchAsset(path, entry = {}) {
@@ -329,4 +356,11 @@ rendererReady.then(ready => {
     getCurrentSource: () => viewerState.currentSource
       ? { ...viewerState.currentSource } : null,
   };
+
+  void openStartupMod().then(apiReady => {
+    if (!apiReady) {
+      window.addEventListener(
+        'pywebviewready', () => void openStartupMod(), { once: true });
+    }
+  });
 });
