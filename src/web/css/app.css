@@ -386,18 +386,13 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
 #texture-btn { background: var(--accent); }
 #texture-btn.diffuse-normal, #texture-btn.diffuse-only { background: #9a6700; }
 #texture-btn.off { background: var(--bg-control); }
-#light-btn.double { background: var(--accent); color: #fff; }
-#light-btn.current { background: #9a6700; color: #fff3b0; }
 #light-btn.off { background: var(--bg-control); color: var(--text); }
 #trackball-btn { background: var(--accent); }
 #trackball-btn.off { background: var(--bg-control); }
 .tool-btn.active,
 #grid-btn:not(.off), #shading-btn:not(.off), #toon-btn:not(.off), #glossy-btn:not(.off),
 #texture-btn:not(.off), #trackball-btn:not(.off),
-#light-btn.double, #light-btn.current {
-  background: rgba(31,111,235,.22); border-color: var(--accent-soft); color: var(--accent-soft);
-}
-#texture-btn.diffuse-normal, #texture-btn.diffuse-only, #light-btn.current {
+#texture-btn.diffuse-normal, #texture-btn.diffuse-only {
   background: rgba(227,179,65,.18); border-color: var(--warning); color: #f2cc72;
 }
 #ao-btn.partial {

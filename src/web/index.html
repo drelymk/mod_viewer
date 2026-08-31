@@ -232,7 +232,8 @@
       <button id="grid-btn" class="tool-btn" title="Grid visibility: on" aria-label="Grid visibility: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-grid"></use></svg></button>
       <button id="shading-btn" class="tool-btn" title="Smooth shading: on" aria-label="Smooth shading: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shading"></use></svg></button>
       <button id="texture-btn" class="tool-btn" title="Textures: all maps" aria-label="Textures: all maps"><svg class="ui-icon" aria-hidden="true"><use href="#icon-texture"></use></svg></button>
-      <button id="light-btn" class="tool-btn double" title="Key light: double brightness and handle size" aria-label="Key light: double" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-light"></use></svg></button>
+      <button id="light-btn" class="tool-btn active" title="Key light: 67%" aria-label="Key light: 67%"
+              aria-expanded="false" aria-controls="light-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-light"></use></svg></button>
       <button id="trackball-btn" class="tool-btn active" title="Toggle navigation gizmo: on" aria-label="Toggle navigation gizmo: on" aria-pressed="true">
         <svg class="nav-gizmo-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path class="nav-x" d="M12 12L20 15"/><path class="nav-y" d="M12 12V3"/><path class="nav-z" d="M12 12L5 18"/>
@@ -301,7 +302,15 @@
   </div>
   </div>
   <div id="texture-popover" class="ui-popover tool-popover" role="menu" aria-label="Texture display options" hidden></div>
-  <div id="light-popover" class="ui-popover tool-popover" role="menu" aria-label="Light options" hidden></div>
+  <div id="light-popover" class="ui-popover tool-popover range-popover" role="dialog"
+       aria-label="Key light" hidden>
+    <div class="range-control-row">
+      <label for="light-slider">Key light</label>
+      <output id="light-value" class="range-control-value" for="light-slider">67%</output>
+    </div>
+    <input id="light-slider" class="range-control-slider" type="range"
+           min="0" max="100" step="1" value="67"/>
+  </div>
   <div id="ao-popover" class="ui-popover tool-popover range-popover" role="dialog"
        aria-label="Ambient occlusion" hidden>
     <div class="range-control-row">

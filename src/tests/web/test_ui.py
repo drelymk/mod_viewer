@@ -993,17 +993,42 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
           };
         }""")
         assert light_position == {"above": True, "within": True}
-        assert page.locator("#light-popover .ui-popover-option").all_inner_texts() == [
-            "Bright", "Normal", "Off"]
-        page.locator("#light-popover .ui-popover-option", has_text="Normal").click()
-        assert page.locator("#light-popover").is_hidden()
-        assert page.locator("#light-btn").get_attribute("aria-expanded") == "false"
-        assert page.locator("#light-btn").get_attribute("aria-label").startswith("Key light: normal")
-
-        page.locator("#light-btn").click()
-        page.locator("#light-popover:not([hidden])").wait_for()
-        assert page.locator("#light-popover .ui-popover-option").all_inner_texts() == [
-            "Bright", "Normal", "Off"]
+        assert page.locator("#light-btn").get_attribute("aria-haspopup") == "dialog"
+        assert page.locator("#light-btn").get_attribute("aria-controls") == "light-popover"
+        assert page.locator("#light-btn").get_attribute("aria-label") == "Key light: 67%"
+        slider = page.locator("#light-slider")
+        assert slider.get_attribute("min") == "0"
+        assert slider.get_attribute("max") == "100"
+        assert slider.get_attribute("step") == "1"
+        assert slider.input_value() == "67"
+        assert page.locator("#light-btn").get_attribute("aria-expanded") == "true"
+        assert page.evaluate("document.activeElement.id") == "light-slider"
+        for level in (0, 33, 67, 100):
+            before = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("""value => {
+              const slider = document.querySelector('#light-slider');
+              slider.value = String(value);
+              slider.dispatchEvent(new Event('input', {bubbles: true}));
+            }""", level)
+            page.wait_for_function(
+                "count => window.modViewer.getRenderCount() > count", arg=before)
+            assert slider.input_value() == str(level)
+            assert page.locator("#light-value").text_content() == f"{level}%"
+            expected_label = "Key light: Off" if level == 0 else f"Key light: {level}%"
+            assert page.locator("#light-btn").get_attribute("aria-label") == expected_label
+            assert page.locator("#light-btn").get_attribute("title") == expected_label
+            assert page.locator("#light-btn").evaluate(
+                "(button, level) => button.classList.contains('active') === (level > 0)",
+                level,
+            )
+            assert page.locator("#light-btn").evaluate(
+                "(button, level) => button.classList.contains('off') === (level === 0)",
+                level,
+            )
+            assert page.evaluate("""async () => {
+              const {getKeyLightIntensity} = await import('./js/scene/scene.js');
+              return getKeyLightIntensity();
+            }""") == pytest.approx(level / 100 * 1.5)
         page.locator("#light-btn").click()
         assert page.locator("#light-popover").is_hidden()
 

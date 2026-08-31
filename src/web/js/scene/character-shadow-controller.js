@@ -43,19 +43,9 @@ export function createCharacterShadowController({ renderer, scene, light }) {
 
   renderer.shadowMap.enabled = true;
   if (THREE.PCFShadowMap !== undefined) renderer.shadowMap.type = THREE.PCFShadowMap;
-
-  function activateShadowLight(nextLight) {
-    nextLight.castShadow = true;
-    nextLight.shadow.autoUpdate = false;
-    nextLight.shadow.mapSize.set(2048, 2048);
-  }
-
-  function deactivateShadowLight(previousLight) {
-    previousLight.castShadow = false;
-  }
-
-  let activeLight = light;
-  activateShadowLight(activeLight);
+  light.castShadow = true;
+  light.shadow.autoUpdate = false;
+  light.shadow.mapSize.set(2048, 2048);
 
   let meshes = [];
   let modelBoundsDirty = true;
@@ -63,39 +53,11 @@ export function createCharacterShadowController({ renderer, scene, light }) {
   let shadowMapDirty = true;
   let modelBounds = new THREE.Box3();
   let casterBounds = new THREE.Box3();
-  let lastLightWorldPosition = null;
-  let lastTargetWorldPosition = null;
+  let lastLightPosition = null;
+  let lastLightTarget = null;
   let groundAvailable = false;
   let fitCount = 0;
   let shadowUpdateCount = 0;
-  const lightWorldPosition = new THREE.Vector3();
-  const targetWorldPosition = new THREE.Vector3();
-  const lightDirection = new THREE.Vector3();
-
-  function readLightWorldState() {
-    activeLight.updateWorldMatrix(true, false);
-    activeLight.target.updateWorldMatrix(true, false);
-    activeLight.getWorldPosition(lightWorldPosition);
-    activeLight.target.getWorldPosition(targetWorldPosition);
-    lightDirection.subVectors(targetWorldPosition, lightWorldPosition);
-    if (lightDirection.lengthSq() < 0.00000001) {
-      lightDirection.set(0, -1, 0);
-    } else {
-      lightDirection.normalize();
-    }
-  }
-
-  function setLight(nextLight) {
-    if (!nextLight || nextLight === activeLight) return false;
-    deactivateShadowLight(activeLight);
-    activeLight = nextLight;
-    activateShadowLight(activeLight);
-    lastLightWorldPosition = null;
-    lastTargetWorldPosition = null;
-    shadowFitDirty = true;
-    shadowMapDirty = true;
-    return true;
-  }
 
   function invalidateGeometry() {
     modelBoundsDirty = true;
@@ -163,6 +125,9 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     }
 
     const modelSize = Math.max(modelBounds.getSize(new THREE.Vector3()).length(), MIN_SIZE);
+    const lightDirection = light.target.position.clone().sub(light.position);
+    if (lightDirection.lengthSq() < 0.00000001) lightDirection.set(0, -1, 0);
+    lightDirection.normalize();
     const casterCorners = boxCorners(casterBounds);
     const footprint = projectGroundFootprint(
       casterCorners, modelBounds.min.y, modelSize, lightDirection);
@@ -179,11 +144,13 @@ export function createCharacterShadowController({ renderer, scene, light }) {
       Math.max(footprintSize.z + groundMargin * 2, MIN_SIZE), 1,
     );
 
-    const shadowCamera = activeLight.shadow.camera;
-    shadowCamera.position.copy(lightWorldPosition);
+    const shadowCamera = light.shadow.camera;
+    light.updateWorldMatrix(true, false);
+    light.target.updateWorldMatrix(true, false);
+    shadowCamera.position.copy(light.position);
     shadowCamera.up.set(0, 1, 0);
     if (Math.abs(lightDirection.dot(shadowCamera.up)) > 0.98) shadowCamera.up.set(0, 0, 1);
-    shadowCamera.lookAt(targetWorldPosition);
+    shadowCamera.lookAt(light.target.position);
     shadowCamera.updateMatrixWorld(true);
     const lightSpace = footprint.map(point => point.clone().applyMatrix4(shadowCamera.matrixWorldInverse));
     const lightBox = new THREE.Box3().setFromPoints(lightSpace);
@@ -204,10 +171,10 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     shadowCamera.near = Math.max(MIN_SIZE, -lightBox.max.z - marginDepth);
     shadowCamera.far = Math.max(shadowCamera.near + MIN_SIZE, -lightBox.min.z + marginDepth);
     shadowCamera.updateProjectionMatrix();
-    activeLight.shadow.bias = -0.00002;
-    activeLight.shadow.normalBias = modelSize * NORMAL_BIAS_SCALE;
+    light.shadow.bias = -0.00002;
+    light.shadow.normalBias = modelSize * NORMAL_BIAS_SCALE;
     groundAvailable = true;
-    ground.visible = activeLight.intensity > 0;
+    ground.visible = light.intensity > 0;
     shadowFitDirty = false;
     fitCount += 1;
     addWeightPhysicsPerformance('shadowFitCount');
@@ -215,24 +182,22 @@ export function createCharacterShadowController({ renderer, scene, light }) {
   }
 
   function update() {
-    readLightWorldState();
-    const changedLight = !sameVector(
-      lastLightWorldPosition, lightWorldPosition)
-      || !sameVector(lastTargetWorldPosition, targetWorldPosition);
+    const changedLight = !sameVector(lastLightPosition, light.position)
+      || !sameVector(lastLightTarget, light.target.position);
     if (changedLight) {
-      lastLightWorldPosition = lightWorldPosition.clone();
-      lastTargetWorldPosition = targetWorldPosition.clone();
+      lastLightPosition = light.position.clone();
+      lastLightTarget = light.target.position.clone();
       shadowFitDirty = true;
       shadowMapDirty = true;
     }
-    if (activeLight.intensity <= 0) {
+    if (light.intensity <= 0) {
       ground.visible = false;
       return;
     }
     if (shadowFitDirty) fitShadow();
     else ground.visible = groundAvailable;
     if (shadowMapDirty) {
-      activeLight.shadow.needsUpdate = true;
+      light.shadow.needsUpdate = true;
       renderer.shadowMap.needsUpdate = true;
       shadowMapDirty = false;
       shadowUpdateCount += 1;
@@ -246,14 +211,13 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     modelBoundsDirty = false;
     shadowFitDirty = false;
     shadowMapDirty = false;
-    lastLightWorldPosition = null;
-    lastTargetWorldPosition = null;
+    lastLightPosition = null;
+    lastLightTarget = null;
     groundAvailable = false;
     ground.visible = false;
   }
 
   function getDebugState() {
-    readLightWorldState();
     const serialize = box => finiteBox(box) ? {
       min: box.min.toArray(), max: box.max.toArray(),
     } : null;
@@ -263,18 +227,12 @@ export function createCharacterShadowController({ renderer, scene, light }) {
       fitCount,
       shadowUpdateCount,
       groundVisible: ground.visible,
-      normalBias: activeLight.shadow.normalBias,
-      activeLightUuid: activeLight.uuid,
-      activeLightIntensity: activeLight.intensity,
-      activeLightPosition: lightWorldPosition.toArray(),
-      activeLightTarget: targetWorldPosition.toArray(),
-      activeLightDirection: lightDirection.toArray(),
-      activeLightCastsShadow: activeLight.castShadow,
+      normalBias: light.shadow.normalBias,
     };
   }
 
   return {
-    setLight, setMeshes, adoptMeshes, forgetMeshes,
+    setMeshes, adoptMeshes, forgetMeshes,
     invalidateGeometry, invalidateVisibility, invalidateMap,
     update, reset, getDebugState,
   };

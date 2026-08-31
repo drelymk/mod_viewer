@@ -3,9 +3,10 @@
 import { activeMeshes } from '../mesh/visibility.js';
 import { ENVIRONMENT_PRESETS } from '../scene/environment.js';
 import {
-  getAmbientOcclusionStrength, getEnvironmentPreset, getLightMode,
-  setAmbientOcclusionStrength, setEnvironmentPreset, setLightMode,
+  getAmbientOcclusionStrength, getEnvironmentPreset, getKeyLightIntensity,
+  setAmbientOcclusionStrength, setEnvironmentPreset, setKeyLightIntensity,
 } from '../scene/scene.js';
+import { KEY_LIGHT_MAX_INTENSITY } from '../scene/key-light-controller.js';
 import { setTextureDisplayMode } from '../scene/render-modes.js';
 
 const $ = (id) => document.getElementById(id);
@@ -20,6 +21,17 @@ function normalizeAmbientOcclusionLevel(value) {
 function strengthToAmbientOcclusionLevel(value) {
   return normalizeAmbientOcclusionLevel(
     Number(value) / AO_MAX_STRENGTH * 100);
+}
+
+function normalizeKeyLightLevel(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.min(100, Math.max(0, Math.round(number)));
+}
+
+function intensityToKeyLightLevel(value) {
+  return normalizeKeyLightLevel(
+    Number(value) / KEY_LIGHT_MAX_INTENSITY * 100);
 }
 
 export function initEnvironmentControl() {
@@ -98,6 +110,8 @@ export function initToolPopovers() {
   const aoPopover = $('ao-popover');
   const aoSlider = $('ao-slider');
   const aoValue = $('ao-value');
+  const lightSlider = $('light-slider');
+  const lightValue = $('light-value');
   const close = popover => {
     if (!popover) return;
     popover.hidden = true;
@@ -177,29 +191,39 @@ export function initToolPopovers() {
     positionPopover(texturePopover, textureButton);
   }
 
+  const updateKeyLightControl = value => {
+    const level = normalizeKeyLightLevel(value);
+    if (lightSlider) lightSlider.value = String(level);
+    if (lightValue) {
+      lightValue.value = level + '%';
+      lightValue.textContent = level + '%';
+    }
+    lightButton?.classList.toggle('active', level > 0);
+    lightButton?.classList.toggle('off', level === 0);
+    const label = 'Key light: ' + (level === 0 ? 'Off' : level + '%');
+    lightButton?.setAttribute('aria-label', label);
+    if (lightButton) lightButton.title = label;
+    return level;
+  };
+
+  const applyKeyLightLevel = value => {
+    const level = normalizeKeyLightLevel(value);
+    setKeyLightIntensity(level / 100 * KEY_LIGHT_MAX_INTENSITY);
+    return updateKeyLightControl(
+      intensityToKeyLightLevel(getKeyLightIntensity()));
+  };
+
   function toggleLightPopover() {
     if (!lightPopover) return;
     const wasOpen = !lightPopover.hidden;
     closeAll();
     if (wasOpen) return;
-    lightPopover.replaceChildren();
-    [['double', 'Bright'], ['current', 'Normal'], ['off', 'Off']].forEach(([mode, label]) => {
-      const option = document.createElement('button');
-      option.type = 'button';
-      option.className = 'ui-popover-option';
-      option.setAttribute('role', 'menuitemradio');
-      option.setAttribute('aria-checked', String(getLightMode() === mode));
-      option.textContent = label;
-      option.addEventListener('click', () => {
-        setLightMode(mode);
-        closeAll();
-      });
-      lightPopover.appendChild(option);
-    });
+    updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
     lightPopover.hidden = false;
     lightButton?.setAttribute('aria-expanded', 'true');
     activeToolPopover = { popover: lightPopover, button: lightButton };
     positionPopover(lightPopover, lightButton);
+    lightSlider?.focus();
   }
 
   function toggleAmbientOcclusionPopover() {
@@ -217,16 +241,18 @@ export function initToolPopovers() {
   }
 
   textureButton?.setAttribute('aria-haspopup', 'menu');
-  lightButton?.setAttribute('aria-haspopup', 'menu');
+  lightButton?.setAttribute('aria-haspopup', 'dialog');
   aoButton?.setAttribute('aria-haspopup', 'dialog');
   textureButton?.setAttribute('aria-expanded', 'false');
   lightButton?.setAttribute('aria-expanded', 'false');
   aoButton?.setAttribute('aria-expanded', 'false');
   updateAmbientOcclusionControl(
     strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+  updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
   textureButton?.addEventListener('click', toggleTexturePopover);
   lightButton?.addEventListener('click', toggleLightPopover);
   aoButton?.addEventListener('click', toggleAmbientOcclusionPopover);
+  lightSlider?.addEventListener('input', () => applyKeyLightLevel(lightSlider.value));
   aoSlider?.addEventListener('input', () => applyAmbientOcclusionLevel(aoSlider.value));
   document.addEventListener('click', event => {
     if (event.target.closest(

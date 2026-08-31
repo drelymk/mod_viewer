@@ -575,8 +575,8 @@ def test_environment_ibl_failure_is_isolated_and_uses_legacy_lighting(
                 hemisphere: hemisphere.intensity,
                 accent: accentLight?.intensity,
                 accentVisible: accentLight?.visible === true,
-                dominantLightIsAccent:
-                  controller.getDominantLight() === accentLight,
+                dominantLightDirection:
+                  controller.getDominantLightDirection(),
               };
             };
             controller.setPreset(failedProfile);
@@ -627,7 +627,7 @@ def test_environment_ibl_failure_is_isolated_and_uses_legacy_lighting(
         }[failed_profile]
         assert {key: failed[key] for key in fallback} == fallback
         assert failed["accentVisible"] is True
-        assert failed["dominantLightIsAccent"] is True
+        assert len(failed["dominantLightDirection"]) == 3
 
         for working_profile in working_profiles:
             working = result["working"][working_profile]
@@ -646,7 +646,7 @@ def test_environment_ibl_failure_is_isolated_and_uses_legacy_lighting(
             }[working_profile]
             assert {key: working[key] for key in expected} == expected
             assert working["accentVisible"] is True
-            assert working["dominantLightIsAccent"] is True
+            assert len(working["dominantLightDirection"]) == 3
     finally:
         context.close()
 
@@ -6402,47 +6402,82 @@ def test_wireframe_toggles_rim_uniform_without_rebuilding_material(
         context.close()
 
 
-def test_key_light_mode_changes_restore_ground_without_refitting_shadows(
+def test_key_light_intensity_controls_marker_and_ground_without_refitting_shadows(
         edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {"LightMode": _payload("LightMode")})
+    context, page = _page(edge_browser, frontend_url, {"LightIntensity": _payload("LightIntensity")})
     try:
-        _open(page, "LightMode")
+        _open(page, "LightIntensity")
         page.locator(".draw-item").wait_for()
         page.wait_for_function("""async () => {
           const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return getCharacterShadowDebugState().groundVisible;
         }""")
-        before = page.evaluate("""async () => {
-          const {getCharacterShadowDebugState, setLightMode} = await import('./js/scene/scene.js');
-          setLightMode('off');
-          return getCharacterShadowDebugState();
+
+        def snapshot():
+            return page.evaluate("""async () => {
+              const {
+                getCharacterShadowDebugState, getKeyLightIntensity, scene,
+              } = await import('./js/scene/scene.js');
+              const handle = scene.children.find(object => object.isSprite);
+              const debug = getCharacterShadowDebugState();
+              return {
+                intensity: getKeyLightIntensity(),
+                visible: handle.visible,
+                scale: handle.scale.x,
+                debug,
+              };
+            }""")
+
+        initial = snapshot()
+        assert initial["intensity"] == pytest.approx(1.0)
+        assert initial["visible"] is True
+        levels = [(0, 0.0), (33, 0.495), (67, 1.005), (100, 1.5)]
+        states = []
+        for level, expected in levels:
+            before_render = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("""async value => {
+              const {setKeyLightIntensity} = await import('./js/scene/scene.js');
+              setKeyLightIntensity(value);
+            }""", expected)
+            page.wait_for_function(
+                "count => window.modViewer.getRenderCount() > count",
+                arg=before_render,
+            )
+            state = snapshot()
+            states.append(state)
+            assert state["intensity"] == pytest.approx(expected)
+            assert state["visible"] is (level > 0)
+            assert state["debug"]["groundVisible"] is (level > 0)
+
+        assert states[0]["scale"] < states[1]["scale"] < states[2]["scale"] < states[3]["scale"]
+        assert states[1]["debug"]["fitCount"] == states[2]["debug"]["fitCount"]
+        assert states[2]["debug"]["shadowUpdateCount"] == states[3]["debug"]["shadowUpdateCount"]
+
+        before_noop = page.evaluate("window.modViewer.getRenderCount()")
+        changed = page.evaluate("""async () => {
+          const {setKeyLightIntensity} = await import('./js/scene/scene.js');
+          return setKeyLightIntensity(1.5);
         }""")
-        page.wait_for_function("""async () => {
-          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return !getCharacterShadowDebugState().groundVisible;
-        }""")
-        off = page.evaluate("""async () => {
-          const {getCharacterShadowDebugState, setLightMode} = await import('./js/scene/scene.js');
-          setLightMode('current');
-          return getCharacterShadowDebugState();
-        }""")
-        page.wait_for_function("""async () => {
-          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return getCharacterShadowDebugState().groundVisible;
-        }""")
-        restored = page.evaluate("""async () => {
-          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return getCharacterShadowDebugState();
-        }""")
-        assert off["fitCount"] == before["fitCount"]
-        assert off["shadowUpdateCount"] == before["shadowUpdateCount"]
-        assert restored["fitCount"] == before["fitCount"]
-        assert restored["shadowUpdateCount"] == before["shadowUpdateCount"]
+        assert changed is False
+        page.wait_for_timeout(100)
+        assert page.evaluate("window.modViewer.getRenderCount()") == before_noop
+
+        for value, expected in [(-1, 0.0), (2, 1.5)]:
+            before_render = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("""async intensity => {
+              const {setKeyLightIntensity} = await import('./js/scene/scene.js');
+              setKeyLightIntensity(intensity);
+            }""", value)
+            page.wait_for_function(
+                "count => window.modViewer.getRenderCount() > count",
+                arg=before_render,
+            )
+            assert snapshot()["intensity"] == pytest.approx(expected)
     finally:
         context.close()
 
 
-def test_environment_presets_own_world_space_character_shadows(
+def test_environment_presets_keep_key_light_as_character_shadow_source(
         edge_browser, frontend_url):
     context, page = _page(
         edge_browser, frontend_url, {"ShadowSource": _payload("ShadowSource")})
@@ -6458,7 +6493,7 @@ def test_environment_presets_own_world_space_character_shadows(
         def snapshot():
             return page.evaluate("""async () => {
               const {
-                getCharacterShadowDebugState, getLightMode, scene,
+                getCharacterShadowDebugState, scene,
               } = await import('./js/scene/scene.js');
               const lights = [];
               scene.traverse(object => {
@@ -6473,7 +6508,8 @@ def test_environment_presets_own_world_space_character_shadows(
                 keyCastsShadow: key.castShadow,
                 accentCastsShadow: accent.castShadow,
                 castingCount: lights.filter(object => object.castShadow).length,
-                keyMode: getLightMode(),
+                keyPosition: key.position.toArray(),
+                keyTarget: key.target.position.toArray(),
               };
             }""")
 
@@ -6487,126 +6523,68 @@ def test_environment_presets_own_world_space_character_shadows(
                 "count => window.modViewer.getRenderCount() > count", arg=before)
             return snapshot()
 
-        def assert_single_source(state, source):
+        def assert_single_source(state):
             debug = state["debug"]
             assert state["castingCount"] == 1
-            assert debug["activeLightCastsShadow"] is True
-            if source == "key":
-                assert debug["activeLightUuid"] == state["keyUuid"]
-                assert state["keyCastsShadow"] is True
-                assert state["accentCastsShadow"] is False
-            else:
-                assert debug["activeLightUuid"] == state["accentUuid"]
-                assert state["keyCastsShadow"] is False
-                assert state["accentCastsShadow"] is True
+            assert state["keyCastsShadow"] is True
+            assert state["accentCastsShadow"] is False
 
         default = snapshot()
-        assert_single_source(default, "key")
+        assert_single_source(default)
 
-        studio = select_preset("studio")
-        assert_single_source(studio, "accent")
-        assert studio["debug"]["activeLightDirection"] == pytest.approx(
-            [-4 / math.sqrt(116), -8 / math.sqrt(116), -6 / math.sqrt(116)],
-        )
-        assert studio["debug"]["fitCount"] == default["debug"]["fitCount"] + 1
+        previous = default
+        for preset in ("studio", "indoor", "outdoor", "default"):
+            current = select_preset(preset)
+            assert_single_source(current)
+            assert current["keyUuid"] == default["keyUuid"]
+            assert current["accentUuid"] == default["accentUuid"]
+            assert current["keyPosition"] == pytest.approx(previous["keyPosition"])
+            assert current["keyTarget"] == pytest.approx(previous["keyTarget"])
+            assert current["debug"]["fitCount"] == previous["debug"]["fitCount"]
 
-        indoor = select_preset("indoor")
-        assert_single_source(indoor, "accent")
-        assert indoor["accentUuid"] == studio["accentUuid"]
-        assert indoor["debug"]["activeLightDirection"] == pytest.approx(
-            [-4 / math.sqrt(105), -8 / math.sqrt(105), -5 / math.sqrt(105)],
-        )
-        assert indoor["debug"]["fitCount"] == studio["debug"]["fitCount"] + 1
-
-        outdoor = select_preset("outdoor")
-        assert_single_source(outdoor, "accent")
-        assert outdoor["accentUuid"] == studio["accentUuid"]
-        assert outdoor["debug"]["activeLightDirection"] == pytest.approx(
-            [6 / math.sqrt(172), -10 / math.sqrt(172), -6 / math.sqrt(172)],
-        )
-        assert outdoor["debug"]["fitCount"] == indoor["debug"]["fitCount"] + 1
-        assert outdoor["debug"]["shadowUpdateCount"] > indoor["debug"][
-            "shadowUpdateCount"]
-
-        before_target_move = outdoor["debug"]
-        render_count = page.evaluate("window.modViewer.getRenderCount()")
-        page.evaluate("""async () => {
-          const THREE = await import('three');
-          const {controls} = await import('./js/scene/scene.js');
-          const {requestRender} = await import('./js/scene/render-scheduler.js');
-          controls.target.add(new THREE.Vector3(1.25, 0.5, -0.75));
-          requestRender();
-        }""")
-        page.wait_for_function(
-            "count => window.modViewer.getRenderCount() > count", arg=render_count)
-        target_moved = snapshot()
-        assert target_moved["debug"]["fitCount"] == (
-            before_target_move["fitCount"] + 1)
-        assert target_moved["debug"]["activeLightDirection"] == pytest.approx(
-            before_target_move["activeLightDirection"])
-        expected_delta = [1.25, 0.5, -0.75]
-        assert [
-            current - previous for current, previous in zip(
-                target_moved["debug"]["activeLightPosition"],
-                before_target_move["activeLightPosition"],
+            render_count = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("""async () => {
+              const THREE = await import('three');
+              const {scene} = await import('./js/scene/scene.js');
+              const {requestRender} = await import('./js/scene/render-scheduler.js');
+              const key = scene.children.find(object => object.isDirectionalLight);
+              key.position.add(new THREE.Vector3(3, 0, -2));
+              requestRender();
+            }""")
+            page.wait_for_function(
+                "count => window.modViewer.getRenderCount() > count",
+                arg=render_count,
             )
-        ] == pytest.approx(expected_delta)
-        assert [
-            current - previous for current, previous in zip(
-                target_moved["debug"]["activeLightTarget"],
-                before_target_move["activeLightTarget"],
+            moved = snapshot()
+            assert_single_source(moved)
+            assert moved["debug"]["fitCount"] == current["debug"]["fitCount"] + 1
+            assert moved["debug"]["shadowUpdateCount"] > current["debug"]["shadowUpdateCount"]
+
+            render_count = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("""async () => {
+              const {setKeyLightIntensity} = await import('./js/scene/scene.js');
+              setKeyLightIntensity(0);
+            }""")
+            page.wait_for_function(
+                "count => window.modViewer.getRenderCount() > count",
+                arg=render_count,
             )
-        ] == pytest.approx(expected_delta)
+            off = snapshot()
+            assert_single_source(off)
+            assert off["debug"]["groundVisible"] is False
+            assert off["debug"]["fitCount"] == moved["debug"]["fitCount"]
 
-        render_count = page.evaluate("window.modViewer.getRenderCount()")
-        page.evaluate("""async () => {
-          const THREE = await import('three');
-          const {scene} = await import('./js/scene/scene.js');
-          const {requestRender} = await import('./js/scene/render-scheduler.js');
-          const key = scene.children.find(object => object.isDirectionalLight);
-          key.position.add(new THREE.Vector3(3, 0, -2));
-          requestRender();
-        }""")
-        page.wait_for_function(
-            "count => window.modViewer.getRenderCount() > count", arg=render_count)
-        key_moved = snapshot()
-        assert_single_source(key_moved, "accent")
-        assert key_moved["debug"]["activeLightDirection"] == pytest.approx(
-            target_moved["debug"]["activeLightDirection"])
-        assert key_moved["debug"]["fitCount"] == target_moved["debug"]["fitCount"]
-        assert key_moved["debug"]["shadowUpdateCount"] == target_moved["debug"][
-            "shadowUpdateCount"]
-
-        render_count = page.evaluate("window.modViewer.getRenderCount()")
-        page.evaluate("""async () => {
-          const {setLightMode} = await import('./js/scene/scene.js');
-          setLightMode('off');
-        }""")
-        page.wait_for_function(
-            "count => window.modViewer.getRenderCount() > count", arg=render_count)
-        outdoor_key_off = snapshot()
-        assert_single_source(outdoor_key_off, "accent")
-        assert outdoor_key_off["debug"]["groundVisible"] is True
-        assert outdoor_key_off["debug"]["fitCount"] == key_moved["debug"]["fitCount"]
-
-        default_key_off = select_preset("default")
-        assert_single_source(default_key_off, "key")
-        assert default_key_off["keyMode"] == "off"
-        assert default_key_off["debug"]["groundVisible"] is False
-
-        render_count = page.evaluate("window.modViewer.getRenderCount()")
-        page.evaluate("""async () => {
-          const {setLightMode} = await import('./js/scene/scene.js');
-          setLightMode('current');
-        }""")
-        page.wait_for_function("""async state => {
-          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return window.modViewer.getRenderCount() > state.renderCount
-            && getCharacterShadowDebugState().groundVisible;
-        }""", arg={"renderCount": render_count})
-        restored = snapshot()
-        assert_single_source(restored, "key")
-        assert restored["keyMode"] == "current"
+            render_count = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("""async () => {
+              const {setKeyLightIntensity} = await import('./js/scene/scene.js');
+              setKeyLightIntensity(1);
+            }""")
+            page.wait_for_function("""async state => {
+              const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+              return window.modViewer.getRenderCount() > state.renderCount
+                && getCharacterShadowDebugState().groundVisible;
+            }""", arg={"renderCount": render_count})
+            previous = snapshot()
     finally:
         context.close()
 

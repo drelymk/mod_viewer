@@ -160,12 +160,6 @@ const keyLightController = createKeyLightController({
 const characterShadowController = createCharacterShadowController({
   renderer, scene, light: keyLight,
 });
-
-function syncCharacterShadowLight() {
-  characterShadowController.setLight(
-    environmentController.getDominantLight() || keyLight,
-  );
-}
 const viewportRenderPipeline = createViewportRenderPipeline({
   renderer, scene, camera,
 });
@@ -231,10 +225,8 @@ export const rendererReady = initializeRenderer()
 
 export function setEnvironmentPreset(id) {
   const changed = environmentController.setPreset(id);
-  if (!changed) return false;
-  syncCharacterShadowLight();
-  requestRender();
-  return true;
+  if (changed) requestRender();
+  return changed;
 }
 
 export function getEnvironmentPreset() {
@@ -258,19 +250,14 @@ export function toggleTrackballGizmo() {
   viewGizmoController.toggle();
 }
 
-export function toggleLightHandle() {
-  keyLightController.toggleMode();
-  requestRender();
-}
-
-export function setLightMode(mode) {
-  const changed = keyLightController.setMode(mode);
+export function setKeyLightIntensity(value) {
+  const changed = keyLightController.setIntensity(value);
   if (changed) requestRender();
   return changed;
 }
 
-export function getLightMode() {
-  return keyLightController.getMode();
+export function getKeyLightIntensity() {
+  return keyLightController.getIntensity();
 }
 
 export function frameView(meshes = [], direction = null, targetYOffset = 0) {
