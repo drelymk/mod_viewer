@@ -1,5 +1,64 @@
 from .support import *
 
+def test_startup_mod_uses_switch_flow_and_disabled_ini_setting(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Startup": _payload("Startup")},
+        startup_request={"path": "Startup", "disabled_ini": True})
+    try:
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 1")
+        page.locator(".draw-item").wait_for()
+
+        assert page.evaluate("window.__fakeApi.calls.consumeStartupRequest") == [True]
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Startup"]
+        assert page.evaluate("window.__fakeApi.calls.loadModArgs") == [["Startup", True]]
+        assert page.locator("#open-disabled-mod").is_checked()
+        assert page.evaluate("window.modViewer.getCurrentSource().path") == "Startup"
+    finally:
+        context.close()
+
+
+def test_startup_mod_waits_for_pywebview_ready(edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Startup": _payload("Startup")},
+        startup_request={"path": "Startup"}, startup_api_ready=False)
+    try:
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == []
+        page.evaluate("""() => {
+          const state = window.__fakeApi;
+          window.pywebview.api.consume_startup_request = async () => {
+            state.calls.consumeStartupRequest.push(true);
+            const request = state.startupRequest;
+            state.startupRequest = null;
+            return structuredClone(request);
+          };
+          window.dispatchEvent(new Event('pywebviewready'));
+        }""")
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 1")
+
+        assert page.evaluate("window.__fakeApi.calls.consumeStartupRequest") == [True]
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Startup"]
+    finally:
+        context.close()
+
+
+def test_invalid_startup_request_shows_dialog_and_keeps_viewer_usable(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Unused": _payload("Unused")},
+        startup_request={"error": "Startup mod folder does not exist: missing"})
+    try:
+        page.locator("#dialog-backdrop.show").wait_for()
+        assert page.locator("#dialog-message").inner_text() == (
+            "Could not open startup mod:\n\n"
+            "Startup mod folder does not exist: missing")
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == []
+        page.locator("#dialog-ok").click()
+        assert page.locator("#open-btn").is_enabled()
+    finally:
+        context.close()
+
+
 def test_frontend_public_surface_and_lifecycle_events(edge_browser, frontend_url):
     context, page = _page(
         edge_browser, frontend_url,

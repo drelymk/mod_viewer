@@ -19,19 +19,35 @@ from app.bridge import toggle as toggle_api
 
 
 class ModViewerAPI:
-    def __init__(self):
+    def __init__(self, startup_mod=None, startup_disabled_ini=False):
         # Underscore-private on purpose: pywebview reflects over the js_api
         # object's public attributes to expose them to JavaScript, and the
         # native window is a deeply self-referential COM object. Exposing it
         # sends that reflection into infinite recursion.
         self._window = None
         self._access = FolderAccess()
+        self._startup_request = None
+        if startup_mod is not None:
+            try:
+                path = self._access.remember_mod_launch_selection(startup_mod)
+            except (OSError, TypeError, ValueError) as error:
+                self._startup_request = {"error": str(error)}
+            else:
+                self._startup_request = {
+                    "path": path,
+                    "disabled_ini": bool(startup_disabled_ini),
+                }
         self._mod_preview = ModPreview(self._access)
         self._asset_preview = AssetPreview(self._access)
         self._mod_registry = ModFolderRegistry(self._access)
         self._asset_registry = AssetFolderRegistry(
             self._access,
             on_changed=self._asset_preview.invalidate_plan_cache)
+
+    def consume_startup_request(self):
+        request = self._startup_request
+        self._startup_request = None
+        return request
 
     # -- native folder pickers ---------------------------------------------
 

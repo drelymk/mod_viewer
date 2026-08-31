@@ -70,3 +70,37 @@ def test_malformed_optional_config_does_not_block_access_construction(
     access = FolderAccess()
 
     assert isinstance(access, FolderAccess)
+
+
+def test_launch_selection_is_exact_and_not_picker_authorized(
+        tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    launch_folder = tmp_path / "mods" / "launch"
+    sibling = tmp_path / "mods" / "sibling"
+    launch_folder.mkdir(parents=True)
+    sibling.mkdir()
+    monkeypatch.setattr(paths, "config_path", lambda: str(config))
+
+    access = FolderAccess()
+    selected = access.remember_mod_launch_selection(str(launch_folder))
+
+    assert selected == mod_folders.normalize_path(str(launch_folder))
+    assert access.mod_folder(str(launch_folder)) == selected
+    assert access.was_picker_selected(str(launch_folder)) is False
+    with pytest.raises(PermissionError):
+        access.mod_folder(str(sibling))
+    with pytest.raises(PermissionError):
+        access.mod_folder(str(launch_folder.parent))
+    assert access._authorized_roots == set()
+    assert json.loads(config.read_text(encoding="utf-8"))["modFolders"] == []
+
+
+def test_launch_selection_rejects_relative_and_missing_paths(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "config_path", lambda: str(_config(tmp_path)))
+    access = FolderAccess()
+
+    with pytest.raises(ValueError, match="Startup mod path must be absolute"):
+        access.remember_mod_launch_selection("relative-mod")
+    with pytest.raises(ValueError, match="Startup mod folder does not exist"):
+        access.remember_mod_launch_selection(str(tmp_path / "missing"))

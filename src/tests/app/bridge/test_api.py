@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from app.bridge.api import ModViewerAPI
 from app.session import edit as edit_session
+from app.settings import mod_folders
 from app.settings import paths
 
 
@@ -11,6 +12,7 @@ EXPECTED_API_METHODS = {
     "add_present",
     "add_toggle",
     "capture_present",
+    "consume_startup_request",
     "delete_asset_folder",
     "delete_mod_folder",
     "delete_present",
@@ -68,6 +70,46 @@ def test_mod_viewer_api_surface_is_explicit_and_private_state_stays_private():
 
     assert public == EXPECTED_API_METHODS
     assert all(name.startswith("_") for name in vars(api))
+
+
+def test_startup_request_is_consumed_once_and_authorizes_valid_folder(
+        tmp_path, monkeypatch):
+    root = tmp_path / "unregistered-mod"
+    root.mkdir()
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+
+    api = ModViewerAPI(startup_mod=str(root))
+    normalized = mod_folders.normalize_path(str(root))
+
+    assert api.consume_startup_request() == {
+        "path": normalized,
+        "disabled_ini": False,
+    }
+    assert api.consume_startup_request() is None
+    assert api._access.was_picker_selected(str(root)) is False
+    assert api._access.mod_folder(str(root)) == normalized
+
+
+def test_startup_request_preserves_disabled_ini_flag(tmp_path, monkeypatch):
+    root = tmp_path / "mod"
+    root.mkdir()
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+
+    api = ModViewerAPI(startup_mod=str(root), startup_disabled_ini=True)
+
+    assert api.consume_startup_request()["disabled_ini"] is True
+
+
+def test_invalid_startup_request_is_reported_without_failing_api(
+        tmp_path, monkeypatch):
+    missing = tmp_path / "missing-mod"
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+
+    api = ModViewerAPI(startup_mod=str(missing))
+
+    request = api.consume_startup_request()
+    assert request["error"].startswith("Startup mod folder does not exist:")
+    assert api.consume_startup_request() is None
 
 
 def test_facade_composes_picker_registry_preview_and_editing(tmp_path, monkeypatch):

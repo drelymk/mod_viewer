@@ -1,11 +1,13 @@
-"""Authorization state for native-selected Mod and Asset folders."""
+"""Authorization state for Mod and Asset folders."""
+
+import os
 
 from app.assets import folders as asset_folders
 from app.settings import mod_folders
 
 
 class FolderAccess:
-    """Keep the bridge's native-picker and registered-root trust boundaries."""
+    """Keep native-picker, launch, and registered-root trust boundaries distinct."""
 
     def __init__(self):
         self._authorized_folders = set()
@@ -55,6 +57,22 @@ class FolderAccess:
         folder = mod_folders.normalize_path(folder_path)
         self._authorized_folders.add(folder)
         self._picker_authorized_folders.add(folder)
+        return folder
+
+    def remember_mod_launch_selection(self, folder_path):
+        """Authorize one existing absolute folder for this process only."""
+        try:
+            raw_path = os.fspath(folder_path)
+        except TypeError as error:
+            raise ValueError("Startup mod path must be absolute.") from error
+        if not isinstance(raw_path, str) or not raw_path.strip() \
+                or not os.path.isabs(raw_path):
+            raise ValueError("Startup mod path must be absolute.")
+
+        folder = mod_folders.normalize_path(raw_path)
+        if not os.path.isdir(folder):
+            raise ValueError(f"Startup mod folder does not exist: {folder}")
+        self._authorized_folders.add(folder)
         return folder
 
     def remember_asset_picker_selection(self, folder_path):
