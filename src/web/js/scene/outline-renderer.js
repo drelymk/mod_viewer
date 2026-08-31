@@ -47,10 +47,6 @@ let outlineProjectionSpan = 0;
 let outlineReferenceProjectionSpan = 0;
 let outlineProjectionRatio = 1;
 
-function outlinesVisible() {
-  return outlinesEnabled && !suppressedByWireframe && !suppressedByDebug;
-}
-
 function syncOutlineVisibility() {
   attachedOutlines.forEach(syncOutline);
 }
@@ -58,7 +54,8 @@ function syncOutlineVisibility() {
 function syncOutline(outline) {
   const selected = outline.userData.selectionSelected === true;
   outline.material = selected ? selectionOutlineMaterial : outlineMaterial;
-  outline.visible = selected || outlinesVisible();
+  const allowed = !suppressedByWireframe && !suppressedByDebug;
+  outline.visible = allowed && (selected || outlinesEnabled);
 }
 
 /** Attach one outline child while retaining the base mesh's exact geometry. */

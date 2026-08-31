@@ -4555,6 +4555,7 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
     entry["drawindexed"] = [3, 0, 0]
     payload["textures"] = {
         entry["tex_key"]: _flat_png_uri((255, 0, 0, 255)),
+        "diffuse::ColorRender-white.png": _flat_png_uri((255, 255, 255, 255)),
     }
     context, page = _page(edge_browser, frontend_url, {"ColorRender": payload})
     try:
@@ -4609,6 +4610,56 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
         for actual, expected in zip(
                 [item["raw"] for item in tints], expected_raw_tints):
             assert actual == pytest.approx(expected)
+
+        white_key = "diffuse::ColorRender-white.png"
+        page.evaluate("""async ({whiteKey}) => {
+          const {setMeshTextureState} = await import(
+            './js/mesh/mesh-factory.js');
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshTextureState(mesh, {diffuse: whiteKey});
+          setMeshColorAdjustment(mesh, {
+            hue: 0, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#ffffff', tintStrength: 0,
+          });
+        }""", {"whiteKey": white_key})
+        page.wait_for_function("""() =>
+          window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial
+            ?.bindings?.diffuse?.textureNode?.value?.image?.width === 4""")
+        page.wait_for_timeout(250)
+        neutral_rendered = _sample_mesh_pixel_at(page, -0.25, -0.25)
+
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+            hue: 0, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#4080c0', tintStrength: 1,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        full_rendered = _sample_mesh_pixel_at(page, -0.25, -0.25)
+
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+            hue: 0, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#4080c0', tintStrength: .5,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        half_rendered = _sample_mesh_pixel_at(page, -0.25, -0.25)
+
+        assert full_rendered[2] > full_rendered[1] > full_rendered[0], (
+            neutral_rendered, full_rendered)
+        assert any(abs(neutral - full) > 5
+                   for neutral, full in zip(neutral_rendered, full_rendered))
+        for neutral, full, half in zip(
+                neutral_rendered, full_rendered, half_rendered):
+            assert min(neutral, full) - 3 <= half <= max(neutral, full) + 3, (
+                neutral_rendered, full_rendered, half_rendered)
     finally:
         context.close()
 
@@ -4751,7 +4802,8 @@ def test_material_kind_refresh_hot_swaps_profile_without_reloading_model(
         assert switched["debugMode"] == "normal-data-b"
         assert switched["selected"]
         assert switched["selectionOutline"]["selected"] is True
-        assert switched["selectionOutline"]["visible"] is True
+        assert switched["selectionOutline"]["visible"] is False
+        assert switched["selectionOutline"]["suppressedByDebug"] is True
         assert switched["selectionOutline"]["material"] == "selection"
         assert switched["wireframe"]
         assert switched["flatShading"]
@@ -6396,6 +6448,28 @@ def test_mesh_selection_uses_outline_without_surface_tint(
         assert selected["state"]["visible"] is True
         assert selected["state"]["material"] == "selection"
         assert selected["outlineRaycastDisabled"] is True
+
+        page.locator("#wire-btn").click()
+        wireframe_selected = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert wireframe_selected["selected"] is True
+        assert wireframe_selected["visible"] is False
+        assert wireframe_selected["suppressedByWireframe"] is True
+        page.locator("#wire-btn").click()
+        wireframe_disabled = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert wireframe_disabled["selected"] is True
+        assert wireframe_disabled["visible"] is True
+        assert wireframe_disabled["suppressedByWireframe"] is False
+
+        page.evaluate("window.modViewer.setMaterialDebugMode('shadow-mask')")
+        debug_selected = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert debug_selected["selected"] is True
+        assert debug_selected["visible"] is False
+        assert debug_selected["suppressedByDebug"] is True
+        page.evaluate("window.modViewer.setMaterialDebugMode('off')")
+        debug_disabled = page.evaluate("window.modViewer.getOutlineState(0)")
+        assert debug_disabled["selected"] is True
+        assert debug_disabled["visible"] is True
+        assert debug_disabled["suppressedByDebug"] is False
 
         page.evaluate("import('./js/scene/selection.js').then(({clearSelection}) => clearSelection())")
         deselected = page.evaluate("window.modViewer.getOutlineState(0)")
