@@ -55,6 +55,52 @@ const INDOOR_CAPTURE = freeze({
     distanceFromOrigin: 2.5,
   }),
 });
+const STUDIO_CAPTURE = freeze({
+  room: freeze({
+    color: 0x25282d,
+    size: freeze([18, 12, 18]),
+    position: freeze([0, 1, 0]),
+  }),
+  floor: freeze({
+    color: 0x17191c,
+    size: freeze([18, 18]),
+    position: freeze([0, -4.95, 0]),
+  }),
+  mainCard: freeze({
+    color: 0xffffff,
+    intensity: 3.0,
+    distance: 6,
+    size: freeze([5.0, 3.8]),
+  }),
+  fillCard: freeze({
+    color: 0xe8eef5,
+    intensity: 1.0,
+    position: freeze([-4.5, 1.5, -4]),
+    size: freeze([4.0, 3.0]),
+    target: freeze([0, 0, 0]),
+  }),
+  overheadCard: freeze({
+    color: 0xffffff,
+    intensity: 1.5,
+    position: freeze([0, 4.8, 0]),
+    size: freeze([6.5, 2.0]),
+    target: freeze([0, 0, 0]),
+  }),
+  backCard: freeze({
+    color: 0xdde3ea,
+    intensity: 0.45,
+    position: freeze([0, 2.0, -5.5]),
+    size: freeze([3.0, 3.5]),
+    target: freeze([0, 1, 0]),
+  }),
+  roomLight: freeze({
+    color: 0xffffff,
+    intensity: 20,
+    distance: 12,
+    decay: 2,
+    distanceFromOrigin: 2.0,
+  }),
+});
 
 const makeStops = (entries) => freeze(
   entries.map(([offset, color]) => freeze({ offset, color })));
@@ -184,30 +230,35 @@ function createLightCard({color, intensity, position, size, target}) {
   return card;
 }
 
-function createIndoorCaptureScene() {
-  const captureScene = new THREE.Scene();
-  captureScene.userData.iblPresetId = 'indoor';
+function createCaptureRoom({room: roomConfig, floor: floorConfig}) {
   const room = new THREE.Mesh(
-    new THREE.BoxGeometry(...INDOOR_CAPTURE.room.size),
+    new THREE.BoxGeometry(...roomConfig.size),
     new THREE.MeshStandardMaterial({
-      color: INDOOR_CAPTURE.room.color,
+      color: roomConfig.color,
       roughness: 1,
       metalness: 0,
       side: THREE.BackSide,
     }),
   );
-  room.position.fromArray(INDOOR_CAPTURE.room.position);
+  room.position.fromArray(roomConfig.position);
 
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(...INDOOR_CAPTURE.floor.size),
+    new THREE.PlaneGeometry(...floorConfig.size),
     new THREE.MeshStandardMaterial({
-      color: INDOOR_CAPTURE.floor.color,
+      color: floorConfig.color,
       roughness: 1,
       metalness: 0,
     }),
   );
   floor.rotation.x = -Math.PI / 2;
-  floor.position.fromArray(INDOOR_CAPTURE.floor.position);
+  floor.position.fromArray(floorConfig.position);
+  return {room, floor};
+}
+
+function createIndoorCaptureScene() {
+  const captureScene = new THREE.Scene();
+  captureScene.userData.iblPresetId = 'indoor';
+  const {room, floor} = createCaptureRoom(INDOOR_CAPTURE);
 
   const mainPosition = new THREE.Vector3()
     .fromArray(IBL_PROFILES.indoor.dominantDirection)
@@ -233,6 +284,36 @@ function createIndoorCaptureScene() {
   return captureScene;
 }
 
+function createStudioCaptureScene() {
+  const captureScene = new THREE.Scene();
+  captureScene.userData.iblPresetId = 'studio';
+  const {room, floor} = createCaptureRoom(STUDIO_CAPTURE);
+  const mainPosition = new THREE.Vector3()
+    .fromArray(IBL_PROFILES.studio.dominantDirection)
+    .multiplyScalar(STUDIO_CAPTURE.mainCard.distance)
+    .toArray();
+  const mainCard = createLightCard({
+    ...STUDIO_CAPTURE.mainCard,
+    position: mainPosition,
+    target: [0, 0, 0],
+  });
+  const fillCard = createLightCard(STUDIO_CAPTURE.fillCard);
+  const overheadCard = createLightCard(STUDIO_CAPTURE.overheadCard);
+  const backCard = createLightCard(STUDIO_CAPTURE.backCard);
+  const roomLight = new THREE.PointLight(
+    STUDIO_CAPTURE.roomLight.color,
+    STUDIO_CAPTURE.roomLight.intensity,
+    STUDIO_CAPTURE.roomLight.distance,
+    STUDIO_CAPTURE.roomLight.decay,
+  );
+  roomLight.position.fromArray(IBL_PROFILES.studio.dominantDirection)
+    .multiplyScalar(STUDIO_CAPTURE.roomLight.distanceFromOrigin);
+  captureScene.add(
+    room, floor, mainCard, fillCard, overheadCard, backCard, roomLight,
+  );
+  return captureScene;
+}
+
 const IBL_PROFILES = freeze({
   outdoor: freeze({
     environmentIntensity: 0.1,
@@ -255,6 +336,17 @@ const IBL_PROFILES = freeze({
     dominantDirection: directionFromPresetAccent('indoor'),
     pmrem: DEFAULT_PMREM,
     createCaptureScene: createIndoorCaptureScene,
+  }),
+  studio: freeze({
+    environmentIntensity: 0.15,
+    lightIntensity: freeze({
+      ambient: 0.03,
+      hemisphere: 0.06,
+      accent: 0.2,
+    }),
+    dominantDirection: directionFromPresetAccent('studio'),
+    pmrem: DEFAULT_PMREM,
+    createCaptureScene: createStudioCaptureScene,
   }),
 });
 

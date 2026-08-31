@@ -61,9 +61,8 @@ def _wait_for_environment_preparation(page):
         await import('./js/scene/scene.js');
       await rendererReady;
       const state = getEnvironmentDebugState();
-      const resources = Object.values(state.resources || {});
-      return resources.length === 2
-        && resources.every(resource => resource.attempted)
+      const expected = ['outdoor', 'indoor', 'studio'];
+      return expected.every(id => state.resources?.[id]?.attempted === true)
         && !state.preparationInFlight;
     }""")
 
@@ -253,8 +252,12 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
                 "attempted": True, "available": True,
                 "generationCount": 1, "error": None,
             },
+            "studio": {
+                "attempted": True, "available": True,
+                "generationCount": 1, "error": None,
+            },
         }
-        assert initial["totalPmremGenerationCount"] == 2
+        assert initial["totalPmremGenerationCount"] == 3
 
         def select_preset(preset):
             before = page.evaluate("window.modViewer.getRenderCount()")
@@ -332,25 +335,46 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
         assert "sunDirection" not in outdoor
 
         studio = select_preset("studio")
-        assert studio["activeIblPreset"] is None
-        assert studio["activeDominantDirection"] is None
-        assert not studio["environmentActive"]
-        assert studio["environmentId"] == initial["environmentId"]
-        assert studio["environmentIntensity"] == initial["environmentIntensity"]
+        assert studio["activeIblPreset"] == "studio"
+        assert studio["environmentActive"]
+        assert studio["environmentIntensity"] == pytest.approx(0.15)
+        assert studio["ambientColor"] == 0xf5f7fa
+        assert studio["ambientIntensity"] == pytest.approx(0.03)
+        assert studio["hemisphereColor"] == 0xe1e9f3
+        assert studio["hemisphereGroundColor"] == 0x454b55
+        assert studio["hemisphereIntensity"] == pytest.approx(0.06)
+        assert studio["accentColor"] == 0xffffff
+        assert studio["accentPosition"] == [4, 8, 6]
+        assert studio["accentIntensity"] == pytest.approx(0.2)
+        assert studio["activeDominantDirection"] == pytest.approx(
+            [4 / math.sqrt(116), 8 / math.sqrt(116), 6 / math.sqrt(116)],
+        )
+        assert studio["environmentId"] not in (
+            None, indoor["environmentId"], outdoor["environmentId"],
+        )
+        assert studio["backgroundIsCanvas"]
+        assert not studio["hasVisibleSky"]
 
         indoor_again = select_preset("indoor")
         outdoor_again = select_preset("outdoor")
         default = select_preset("default")
+        studio_again = select_preset("studio")
+        outdoor_third = select_preset("outdoor")
         indoor_third = select_preset("indoor")
+        studio_third = select_preset("studio")
         assert indoor_again["environmentId"] == indoor["environmentId"]
         assert outdoor_again["environmentId"] == outdoor["environmentId"]
+        assert studio_again["environmentId"] == studio["environmentId"]
+        assert outdoor_third["environmentId"] == outdoor["environmentId"]
         assert default["activeIblPreset"] is None
         assert default["activeDominantDirection"] is None
         assert default["environmentId"] == initial["environmentId"]
         assert default["environmentIntensity"] == initial["environmentIntensity"]
         assert indoor_third["environmentId"] == indoor["environmentId"]
+        assert studio_third["environmentId"] == studio["environmentId"]
         assert indoor_third["resources"] == initial["resources"]
-        assert indoor_third["totalPmremGenerationCount"] == 2
+        assert studio_again["totalPmremGenerationCount"] == 3
+        assert indoor_third["totalPmremGenerationCount"] == 3
 
         idle_count = page.evaluate("window.modViewer.getRenderCount()")
         page.wait_for_timeout(200)
@@ -418,14 +442,16 @@ def test_environment_controller_prepare_is_single_flight(
         }""")
         assert result["firstResult"] is True
         assert result["secondResult"] is True
-        assert result["generationCalls"] == 2
-        assert result["generationOrder"] == ["outdoor", "indoor"]
-        assert result["targetDisposals"] == 2
+        assert result["generationCalls"] == 3
+        assert result["generationOrder"] == ["outdoor", "indoor", "studio"]
+        assert result["targetDisposals"] == 3
         assert result["debug"]["resources"]["outdoor"][
             "generationCount"] == 1
         assert result["debug"]["resources"]["indoor"][
             "generationCount"] == 1
-        assert result["debug"]["totalPmremGenerationCount"] == 2
+        assert result["debug"]["resources"]["studio"][
+            "generationCount"] == 1
+        assert result["debug"]["totalPmremGenerationCount"] == 3
         assert result["debug"]["preparationInFlight"] is False
         assert result["dominantDirections"]["default"] is None
         assert result["dominantDirections"]["indoor"] == pytest.approx(
@@ -434,7 +460,9 @@ def test_environment_controller_prepare_is_single_flight(
         assert result["dominantDirections"]["outdoor"] == pytest.approx(
             [-6 / math.sqrt(172), 10 / math.sqrt(172), 6 / math.sqrt(172)],
         )
-        assert result["dominantDirections"]["studio"] is None
+        assert result["dominantDirections"]["studio"] == pytest.approx(
+            [4 / math.sqrt(116), 8 / math.sqrt(116), 6 / math.sqrt(116)],
+        )
     finally:
         context.close()
 
@@ -491,12 +519,16 @@ def test_environment_controller_dispose_cancels_pending_preparation(
                 "attempted": False, "available": False,
                 "generationCount": 0, "error": None,
             },
+            "studio": {
+                "attempted": False, "available": False,
+                "generationCount": 0, "error": None,
+            },
         }
     finally:
         context.close()
 
 
-@pytest.mark.parametrize("failed_profile", ["outdoor", "indoor"])
+@pytest.mark.parametrize("failed_profile", ["outdoor", "indoor", "studio"])
 def test_environment_ibl_failure_is_isolated_and_uses_legacy_lighting(
         edge_browser, frontend_url, failed_profile):
     context, page = _page(edge_browser, frontend_url, {})
@@ -545,13 +577,16 @@ def test_environment_ibl_failure_is_isolated_and_uses_legacy_lighting(
             });
             controller.setPreset(failedProfile);
             const failed = snapshot();
-            const workingProfile = failedProfile === 'outdoor'
-              ? 'indoor' : 'outdoor';
-            controller.setPreset(workingProfile);
-            const working = snapshot();
+            const workingProfiles = ['outdoor', 'indoor', 'studio']
+              .filter(id => id !== failedProfile);
+            const working = {};
+            for (const profile of workingProfiles) {
+              controller.setPreset(profile);
+              working[profile] = snapshot();
+            }
             return {
-              rendererReady: rendererReadyResult,
-              prepared, failedProfile, workingProfile, failed, working,
+              rendererReady: rendererReadyResult, prepared, failedProfile,
+              workingProfiles, failed, working,
             };
           } finally {
             THREE.PMREMGenerator.prototype.fromScene = originalFromScene;
@@ -562,37 +597,50 @@ def test_environment_ibl_failure_is_isolated_and_uses_legacy_lighting(
         assert result["rendererReady"]
         assert result["prepared"] is False
         failed = result["failed"]
-        working = result["working"]
         failed_resource = failed["state"]["resources"][failed_profile]
-        working_profile = result["workingProfile"]
-        working_resource = failed["state"]["resources"][working_profile]
+        working_profiles = result["workingProfiles"]
+        assert working_profiles == [
+            profile for profile in ["outdoor", "indoor", "studio"]
+            if profile != failed_profile
+        ]
         assert failed_resource["attempted"] is True
         assert failed_resource["available"] is False
         assert failed_resource["generationCount"] == 0
         assert f"simulated {failed_profile} PMREM failure" in failed_resource[
             "error"]
-        assert working_resource == {
-            "attempted": True, "available": True,
-            "generationCount": 1, "error": None,
-        }
-        assert failed["state"]["totalPmremGenerationCount"] == 1
+        for profile in working_profiles:
+            assert failed["state"]["resources"][profile] == {
+                "attempted": True, "available": True,
+                "generationCount": 1, "error": None,
+            }
+        assert failed["state"]["totalPmremGenerationCount"] == 2
         assert failed["state"]["activeIblPreset"] is None
         assert failed["environmentIsOriginal"] is True
         fallback = {
             "outdoor": {"ambient": 0.26, "hemisphere": 0.45, "accent": 0.7},
             "indoor": {"ambient": 0.32, "hemisphere": 0.38, "accent": 0.45},
+            "studio": {"ambient": 0.38, "hemisphere": 0.42, "accent": 0.18},
         }[failed_profile]
         assert {key: failed[key] for key in fallback} == fallback
         assert failed["accentVisible"] is True
 
-        assert working["state"]["activeIblPreset"] == working_profile
-        assert working["environmentIsOriginal"] is False
-        enhanced = {
-            "outdoor": {"ambient": 0.04, "hemisphere": 0.08, "accent": 0.4},
-            "indoor": {"ambient": 0.05, "hemisphere": 0.1, "accent": 0.3},
-        }[working_profile]
-        assert {key: working[key] for key in enhanced} == enhanced
-        assert working["accentVisible"] is True
+        for working_profile in working_profiles:
+            working = result["working"][working_profile]
+            assert working["state"]["activeIblPreset"] == working_profile
+            assert working["environmentIsOriginal"] is False
+            expected = {
+                "outdoor": {
+                    "ambient": 0.04, "hemisphere": 0.08, "accent": 0.4,
+                },
+                "indoor": {
+                    "ambient": 0.05, "hemisphere": 0.1, "accent": 0.3,
+                },
+                "studio": {
+                    "ambient": 0.03, "hemisphere": 0.06, "accent": 0.2,
+                },
+            }[working_profile]
+            assert {key: working[key] for key in expected} == expected
+            assert working["accentVisible"] is True
     finally:
         context.close()
 
@@ -626,10 +674,10 @@ def test_environment_disposal_between_resources_stops_later_generation(
               hemisphereLight: hemisphere, lightTarget,
               onVisualChange: () => {
                 visualChanges.push(controller.getPreset().id);
-                controller.dispose();
+                if (controller.getPreset().id === 'indoor') controller.dispose();
               },
             });
-            controller.setPreset('outdoor');
+            controller.setPreset('indoor');
             const prepared = await controller.prepare();
             return {
               prepared, generationOrder, visualChanges,
@@ -641,12 +689,14 @@ def test_environment_disposal_between_resources_stops_later_generation(
           }
         }""")
         assert result["prepared"] is False
-        assert result["generationOrder"] == ["outdoor"]
-        assert result["visualChanges"] == ["outdoor"]
+        assert result["generationOrder"] == ["outdoor", "indoor"]
+        assert result["visualChanges"] == ["indoor"]
         assert result["debug"]["resources"]["outdoor"][
             "generationCount"] == 1
-        assert result["debug"]["resources"]["indoor"]["attempted"] is False
         assert result["debug"]["resources"]["indoor"][
+            "generationCount"] == 1
+        assert result["debug"]["resources"]["studio"]["attempted"] is False
+        assert result["debug"]["resources"]["studio"][
             "generationCount"] == 0
     finally:
         context.close()
@@ -656,6 +706,7 @@ def test_environment_disposal_between_resources_stops_later_generation(
     ("default", []),
     ("outdoor", ["outdoor"]),
     ("indoor", ["indoor"]),
+    ("studio", ["studio"]),
 ])
 def test_environment_preparation_notifies_only_for_active_visual_upgrade(
         edge_browser, frontend_url, active_preset, expected_visual_changes):
@@ -699,7 +750,7 @@ def test_environment_preparation_notifies_only_for_active_visual_upgrade(
         }""", active_preset)
         assert result["prepared"] is True
         assert result["visualChanges"] == expected_visual_changes
-        assert result["debug"]["totalPmremGenerationCount"] == 2
+        assert result["debug"]["totalPmremGenerationCount"] == 3
         assert result["before"]["state"]["activeIblPreset"] is None
         if active_preset != "default":
             fallback = {
@@ -708,6 +759,9 @@ def test_environment_preparation_notifies_only_for_active_visual_upgrade(
                 },
                 "indoor": {
                     "ambient": 0.32, "hemisphere": 0.38, "accent": 0.45,
+                },
+                "studio": {
+                    "ambient": 0.38, "hemisphere": 0.42, "accent": 0.18,
                 },
             }[active_preset]
             assert {
