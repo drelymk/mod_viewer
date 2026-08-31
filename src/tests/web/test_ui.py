@@ -927,6 +927,20 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
         assert toon_button.get_attribute("aria-pressed") == "false"
         assert toon_button.evaluate(
             "button => button.classList.contains('off')")
+        active_colors = page.evaluate("""() => {
+          const color = selector => getComputedStyle(
+            document.querySelector(selector)).backgroundColor;
+          return {
+            grid: color('#grid-btn'),
+            light: color('#light-btn'),
+          };
+        }""")
+        assert active_colors == {
+            "grid": "rgba(31, 111, 235, 0.22)",
+            "light": "rgba(227, 179, 65, 0.18)",
+        }
+        assert page.locator("#light-btn").evaluate(
+            "button => button.classList.contains('partial')")
         tool_order = page.evaluate(
             "() => [...document.querySelectorAll('#tool-buttons > .tool-btn')]"
             ".map(button => button.id)")
@@ -979,6 +993,9 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
             "Textures: diffuse only")
         assert page.locator("#texture-btn").get_attribute("aria-expanded") == "false"
         assert page.locator("#texture-popover").is_hidden()
+        assert page.evaluate(
+            "getComputedStyle(document.querySelector('#texture-btn')).backgroundColor"
+        ) == "rgba(227, 179, 65, 0.18)"
 
         page.locator("#light-btn").click()
         page.locator("#light-popover:not([hidden])").wait_for()
@@ -993,17 +1010,46 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
           };
         }""")
         assert light_position == {"above": True, "within": True}
-        assert page.locator("#light-popover .ui-popover-option").all_inner_texts() == [
-            "Bright", "Normal", "Off"]
-        page.locator("#light-popover .ui-popover-option", has_text="Normal").click()
-        assert page.locator("#light-popover").is_hidden()
-        assert page.locator("#light-btn").get_attribute("aria-expanded") == "false"
-        assert page.locator("#light-btn").get_attribute("aria-label").startswith("Key light: normal")
-
-        page.locator("#light-btn").click()
-        page.locator("#light-popover:not([hidden])").wait_for()
-        assert page.locator("#light-popover .ui-popover-option").all_inner_texts() == [
-            "Bright", "Normal", "Off"]
+        assert page.locator("#light-btn").get_attribute("aria-haspopup") == "dialog"
+        assert page.locator("#light-btn").get_attribute("aria-controls") == "light-popover"
+        assert page.locator("#light-btn").get_attribute("aria-label") == "Key light: 67%"
+        slider = page.locator("#light-slider")
+        assert slider.get_attribute("min") == "0"
+        assert slider.get_attribute("max") == "100"
+        assert slider.get_attribute("step") == "1"
+        assert slider.input_value() == "67"
+        assert page.locator("#light-btn").get_attribute("aria-expanded") == "true"
+        assert page.evaluate("document.activeElement.id") == "light-slider"
+        for level in (0, 33, 67, 100):
+            before = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("""value => {
+              const slider = document.querySelector('#light-slider');
+              slider.value = String(value);
+              slider.dispatchEvent(new Event('input', {bubbles: true}));
+            }""", level)
+            page.wait_for_function(
+                "count => window.modViewer.getRenderCount() > count", arg=before)
+            assert slider.input_value() == str(level)
+            assert page.locator("#light-value").text_content() == f"{level}%"
+            expected_label = "Key light: Off" if level == 0 else f"Key light: {level}%"
+            assert page.locator("#light-btn").get_attribute("aria-label") == expected_label
+            assert page.locator("#light-btn").get_attribute("title") == expected_label
+            assert page.locator("#light-btn").evaluate(
+                "(button, level) => button.classList.contains('active') === (level === 100)",
+                level,
+            )
+            assert page.locator("#light-btn").evaluate(
+                "(button, level) => button.classList.contains('partial') === (level > 0 && level < 100)",
+                level,
+            )
+            assert page.locator("#light-btn").evaluate(
+                "(button, level) => button.classList.contains('off') === (level === 0)",
+                level,
+            )
+            assert page.evaluate("""async () => {
+              const {getKeyLightIntensity} = await import('./js/scene/scene.js');
+              return getKeyLightIntensity();
+            }""") == pytest.approx(level / 100 * 1.5)
         page.locator("#light-btn").click()
         assert page.locator("#light-popover").is_hidden()
 

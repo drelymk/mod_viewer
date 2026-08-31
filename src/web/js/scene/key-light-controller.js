@@ -2,17 +2,37 @@
 
 import * as THREE from 'three';
 
+export const KEY_LIGHT_MAX_INTENSITY = 1.5;
+export const DEFAULT_KEY_LIGHT_INTENSITY = 1.0;
+
 function createLightHandle() {
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 64;
+  canvas.width = canvas.height = 128;
   const context = canvas.getContext('2d');
-  const glow = context.createRadialGradient(32, 32, 4, 32, 32, 30);
-  glow.addColorStop(0, 'rgba(255,248,190,1)');
-  glow.addColorStop(0.35, 'rgba(255,216,102,.95)');
-  glow.addColorStop(0.7, 'rgba(255,184,70,.4)');
-  glow.addColorStop(1, 'rgba(255,184,70,0)');
-  context.fillStyle = glow;
-  context.fillRect(0, 0, 64, 64);
+  const center = 64;
+  const halo = context.createRadialGradient(center, center, 10, center, center, 52);
+  halo.addColorStop(0, 'rgba(255,240,170,.25)');
+  halo.addColorStop(0.4, 'rgba(255,214,115,.14)');
+  halo.addColorStop(0.72, 'rgba(255,198,86,.04)');
+  halo.addColorStop(1, 'rgba(255,190,70,0)');
+  context.fillStyle = halo;
+  context.fillRect(0, 0, 128, 128);
+
+  const innerGlow = context.createRadialGradient(center, center, 3, center, center, 31);
+  innerGlow.addColorStop(0, 'rgba(255,253,240,.92)');
+  innerGlow.addColorStop(0.32, 'rgba(255,245,190,.72)');
+  innerGlow.addColorStop(0.7, 'rgba(255,218,111,.3)');
+  innerGlow.addColorStop(1, 'rgba(255,198,86,0)');
+  context.fillStyle = innerGlow;
+  context.fillRect(0, 0, 128, 128);
+
+  const core = context.createRadialGradient(60, 59, 1, center, center, 16);
+  core.addColorStop(0, '#fffdf0');
+  core.addColorStop(0.45, 'rgba(255,248,205,.98)');
+  core.addColorStop(0.8, 'rgba(255,224,126,.7)');
+  core.addColorStop(1, 'rgba(246,201,93,0)');
+  context.fillStyle = core;
+  context.fillRect(0, 0, 128, 128);
   const handle = new THREE.Sprite(new THREE.SpriteMaterial({
     map: new THREE.CanvasTexture(canvas), transparent: true,
     // Model depth must occlude the marker instead of showing through meshes.
@@ -31,8 +51,11 @@ export function createKeyLightController({
 
   let drag = null;
   let pointerInside = false;
-  const modes = ['double', 'current', 'off'];
-  let modeIndex = 0;
+  let intensity = Number.isFinite(light.intensity)
+    ? Math.min(KEY_LIGHT_MAX_INTENSITY, Math.max(0, light.intensity))
+    : DEFAULT_KEY_LIGHT_INTENSITY;
+  light.intensity = intensity;
+  handle.visible = intensity > 0;
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   const dragPlane = new THREE.Plane();
@@ -133,32 +156,17 @@ export function createKeyLightController({
   renderer.domElement.addEventListener('pointerup', finishDrag);
   renderer.domElement.addEventListener('pointercancel', finishDrag);
 
-  function setMode(nextMode) {
-    const nextIndex = modes.indexOf(nextMode);
-    if (nextIndex < 0) return false;
-    modeIndex = nextIndex;
-    const mode = modes[modeIndex];
-    handle.visible = mode !== 'off';
-    light.intensity = mode === 'double' ? 1 : (mode === 'current' ? 0.5 : 0);
-    const button = document.getElementById('light-btn');
-    button.classList.toggle('double', mode === 'double');
-    button.classList.toggle('current', mode === 'current');
-    button.classList.toggle('off', mode === 'off');
-    const labels = {
-      double: 'Key light: double brightness and handle size',
-      current: 'Key light: normal (drag; Shift-drag for depth)',
-      off: 'Key light: off',
-    };
-    button.title = labels[mode];
-    button.setAttribute('aria-label', labels[mode]);
-    button.setAttribute('aria-pressed', String(mode !== 'off'));
+  function setIntensity(value) {
+    const number = Number(value);
+    const next = Number.isNaN(number)
+      ? 0 : Math.min(KEY_LIGHT_MAX_INTENSITY, Math.max(0, number));
+    if (next === intensity) return false;
+    intensity = next;
+    light.intensity = intensity;
+    handle.visible = intensity > 0;
     updateCursor();
     onChange?.();
     return true;
-  }
-
-  function toggleMode() {
-    return setMode(modes[(modeIndex + 1) % modes.length]);
   }
 
   function rebase(modelSize) {
@@ -172,12 +180,14 @@ export function createKeyLightController({
   function update() {
     light.target.position.copy(controls.target);
     handle.position.copy(light.position);
-    const multiplier = modes[modeIndex] === 'double' ? 2 : 1;
+    const normalized = THREE.MathUtils.clamp(
+      intensity / KEY_LIGHT_MAX_INTENSITY, 0, 1);
+    const sizeMultiplier = 0.75 + normalized * 1.25;
     const size = Math.max(
-      camera.position.distanceTo(controls.target) * 0.035 * multiplier,
+      camera.position.distanceTo(controls.target) * 0.035 * sizeMultiplier,
       0.0001);
     handle.scale.set(size, size, 1);
   }
 
-  return { toggleMode, setMode, getMode: () => modes[modeIndex], rebase, update };
+  return { setIntensity, getIntensity: () => intensity, rebase, update };
 }

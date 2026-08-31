@@ -8,6 +8,8 @@ const FIT_MARGIN = 0.12;
 const MAX_GROUND_REACH = 2.5;
 const NORMAL_BIAS_SCALE = 0.0015;
 const MIN_SIZE = 0.001;
+const SHADOW_OPACITY = 0.32;
+const SHADOW_REFERENCE_INTENSITY = 1.0;
 
 function finiteBox(box) {
   return !box.isEmpty() && [
@@ -29,10 +31,19 @@ function sameVector(left, right) {
   return !!left && left.distanceToSquared(right) < 0.0000000001;
 }
 
+function shadowOpacityForIntensity(intensity) {
+  return SHADOW_OPACITY * THREE.MathUtils.clamp(
+    intensity / SHADOW_REFERENCE_INTENSITY, 0, 1);
+}
+
 export function createCharacterShadowController({ renderer, scene, light }) {
+  const groundMaterial = new THREE.ShadowMaterial({
+    color: 0x000000, opacity: shadowOpacityForIntensity(light.intensity),
+    transparent: true, depthWrite: false,
+  });
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
-    new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.32, transparent: true, depthWrite: false }),
+    groundMaterial,
   );
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
@@ -182,6 +193,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
   }
 
   function update() {
+    groundMaterial.opacity = shadowOpacityForIntensity(light.intensity);
     const changedLight = !sameVector(lastLightPosition, light.position)
       || !sameVector(lastLightTarget, light.target.position);
     if (changedLight) {

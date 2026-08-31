@@ -99,6 +99,16 @@ def test_build_minimum_python_excludes_unsupported_versions():
     assert build.MIN_PYTHON == (3, 10, 1)
 
 
+def test_sky_mesh_is_pinned_in_the_vendor_manifest():
+    spec = build.ASSET_FILES["addons/objects/SkyMesh.js"]
+
+    assert spec["url"] == (
+        "https://cdn.jsdelivr.net/npm/three@0.185.0/"
+        "examples/jsm/objects/SkyMesh.js")
+    assert spec["sha256"] == (
+        "a44cb7c543d04b2690b0079b8b473da9a36660629b2eb091f7eab8b4111d7b7a")
+
+
 def test_verify_web_uses_refactored_frontend_paths(tmp_path, monkeypatch):
     for relative_path in (
         "index.html",
