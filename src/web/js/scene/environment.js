@@ -646,6 +646,11 @@ export function createEnvironmentController({
     return direction ? [...direction] : null;
   }
 
+  function getDominantLight() {
+    return accentLight.visible && accentLight.intensity > 0
+      ? accentLight : null;
+  }
+
   function getPreset() {
     return ENVIRONMENT_PRESETS[currentPresetId];
   }
@@ -668,6 +673,7 @@ export function createEnvironmentController({
     prepare,
     setPreset,
     getPreset,
+    getDominantLight,
     getDominantLightDirection,
     getDebugState,
     dispose,

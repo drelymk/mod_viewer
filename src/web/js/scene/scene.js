@@ -160,6 +160,12 @@ const keyLightController = createKeyLightController({
 const characterShadowController = createCharacterShadowController({
   renderer, scene, light: keyLight,
 });
+
+function syncCharacterShadowLight() {
+  characterShadowController.setLight(
+    environmentController.getDominantLight() || keyLight,
+  );
+}
 const viewportRenderPipeline = createViewportRenderPipeline({
   renderer, scene, camera,
 });
@@ -225,8 +231,10 @@ export const rendererReady = initializeRenderer()
 
 export function setEnvironmentPreset(id) {
   const changed = environmentController.setPreset(id);
-  if (changed) requestRender();
-  return changed;
+  if (!changed) return false;
+  syncCharacterShadowLight();
+  requestRender();
+  return true;
 }
 
 export function getEnvironmentPreset() {
