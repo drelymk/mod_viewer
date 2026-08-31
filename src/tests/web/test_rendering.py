@@ -708,6 +708,63 @@ def test_environment_disposal_between_resources_stops_later_generation(
         context.close()
 
 
+def test_environment_dispose_restores_default_logical_state(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        result = page.evaluate("""async () => {
+          const THREE = await import('three/webgpu');
+          const {renderer, rendererReady} = await import('./js/scene/scene.js');
+          const {createEnvironmentController} =
+            await import('./js/scene/environment.js');
+          await rendererReady;
+          const originalBackground = new THREE.Color(0x123456);
+          const originalEnvironment = new THREE.Texture();
+          const testScene = new THREE.Scene();
+          testScene.background = originalBackground;
+          testScene.environment = originalEnvironment;
+          testScene.environmentIntensity = 0.7;
+          const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+          const hemisphere = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
+          const lightTarget = new THREE.Object3D();
+          const controller = createEnvironmentController({
+            renderer, scene: testScene, ambientLight: ambient,
+            hemisphereLight: hemisphere, lightTarget,
+          });
+          controller.setPreset('indoor');
+          const indoorDirection = controller.getDominantLightDirection();
+          controller.dispose();
+          const debug = controller.getDebugState();
+          return {
+            indoorDirection,
+            preset: controller.getPreset().id,
+            direction: controller.getDominantLightDirection(),
+            debugPreset: debug.preset,
+            activeDominantDirection: debug.activeDominantDirection,
+            environmentRestored: testScene.environment === originalEnvironment,
+            backgroundRestored: testScene.background === originalBackground,
+            environmentIntensity: testScene.environmentIntensity,
+            ambient: ambient.intensity,
+            hemisphere: hemisphere.intensity,
+            accentCount: lightTarget.children.filter(
+              object => object.isDirectionalLight).length,
+          };
+        }""")
+        assert len(result["indoorDirection"]) == 3
+        assert result["preset"] == "default"
+        assert result["direction"] is None
+        assert result["debugPreset"] == "default"
+        assert result["activeDominantDirection"] is None
+        assert result["environmentRestored"] is True
+        assert result["backgroundRestored"] is True
+        assert result["environmentIntensity"] == pytest.approx(0.7)
+        assert result["ambient"] == pytest.approx(0.55)
+        assert result["hemisphere"] == pytest.approx(0.35)
+        assert result["accentCount"] == 0
+    finally:
+        context.close()
+
+
 @pytest.mark.parametrize(("active_preset", "expected_visual_changes"), [
     ("default", []),
     ("outdoor", ["outdoor"]),
@@ -6419,11 +6476,14 @@ def test_key_light_intensity_controls_marker_and_ground_without_refitting_shadow
                 getCharacterShadowDebugState, getKeyLightIntensity, scene,
               } = await import('./js/scene/scene.js');
               const handle = scene.children.find(object => object.isSprite);
+              const ground = scene.children.find(
+                object => object.userData.isViewerGround);
               const debug = getCharacterShadowDebugState();
               return {
                 intensity: getKeyLightIntensity(),
                 visible: handle.visible,
                 scale: handle.scale.x,
+                opacity: ground.material.opacity,
                 debug,
               };
             }""")
@@ -6431,6 +6491,25 @@ def test_key_light_intensity_controls_marker_and_ground_without_refitting_shadow
         initial = snapshot()
         assert initial["intensity"] == pytest.approx(1.0)
         assert initial["visible"] is True
+        assert initial["opacity"] == pytest.approx(0.32)
+        initial_fit_count = initial["debug"]["fitCount"]
+        initial_shadow_update_count = initial["debug"]["shadowUpdateCount"]
+        for expected, opacity in [(0.0, 0.0), (0.5, 0.16),
+                                  (1.0, 0.32), (1.5, 0.32)]:
+            before_render = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("""async intensity => {
+              const {setKeyLightIntensity} = await import('./js/scene/scene.js');
+              setKeyLightIntensity(intensity);
+            }""", expected)
+            page.wait_for_function(
+                "count => window.modViewer.getRenderCount() > count",
+                arg=before_render,
+            )
+            state = snapshot()
+            assert state["opacity"] == pytest.approx(opacity)
+            assert state["debug"]["fitCount"] == initial_fit_count
+            assert state["debug"]["shadowUpdateCount"] == initial_shadow_update_count
+
         levels = [(0, 0.0), (33, 0.495), (67, 1.005), (100, 1.5)]
         states = []
         for level, expected in levels:
@@ -6446,6 +6525,7 @@ def test_key_light_intensity_controls_marker_and_ground_without_refitting_shadow
             state = snapshot()
             states.append(state)
             assert state["intensity"] == pytest.approx(expected)
+            assert state["opacity"] == pytest.approx(min(expected, 1.0) * 0.32)
             assert state["visible"] is (level > 0)
             assert state["debug"]["groundVisible"] is (level > 0)
 

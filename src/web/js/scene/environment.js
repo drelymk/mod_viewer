@@ -653,6 +653,7 @@ export function createEnvironmentController({
   function dispose() {
     if (disposed) return;
     disposed = true;
+    currentPresetId = 'default';
     applyDefault();
     for (const resource of iblResources.values()) {
       resource.target?.dispose?.();
