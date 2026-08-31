@@ -22,9 +22,8 @@ import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import {
   assetSecondaryLabel, assetSummaryLabel, summarizeAssetBindings,
 } from './asset-diagnostics.js';
-import {
-  normalizeColorAdjustment, syncMeshColorAdjustment,
-} from '../mesh/mesh-color-state.js';
+import { normalizeColorAdjustment } from '../mesh/color-adjustment.js';
+import { syncMeshColorAdjustment } from '../mesh/mesh-color-state.js';
 
 let groupsUI = [];
 let meshSectionId = 0;

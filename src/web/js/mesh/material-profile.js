@@ -3,7 +3,6 @@
 // through stable TSL nodes and their bindings are changed in place.
 
 import {
-  Color,
   DataTexture,
   DoubleSide,
   MeshPhysicalNodeMaterial,
@@ -16,7 +15,14 @@ import {
   TSL,
   UnsignedByteType,
   Vector2,
+  Vector3,
 } from 'three/webgpu';
+import {
+  DEFAULT_COLOR_ADJUSTMENT,
+  normalizeColorAdjustment,
+  tintHexFromRgb,
+  tintRgbFromHex,
+} from './color-adjustment.js';
 import {
   abs,
   clamp,
@@ -378,18 +384,19 @@ function setStableMaterialNodes(material, state, fallbackColor) {
   const fallbackNormal = orientedGeometryNormal;
   let baseColor;
   if (hasUv) {
-    // The conditional keeps the texture binding live without changing the
-    // material graph when a diffuse texture is loaded or removed.
+    // Apply adjustments only to an active diffuse sample. A loading, failed,
+    // disabled or no-texture state must retain the viewer's flat fallback.
+    const adjustedDiffuse = createColorAdjustmentNode(
+      state, bindings.diffuse.textureNode.rgb);
     baseColor = bindings.diffuse.enabledNode.select(
-      bindings.diffuse.textureNode.rgb, color(fallbackColor));
+      adjustedDiffuse, color(fallbackColor));
     material.normalNode = createProfileNormalNode(
       profile, bindings, state.normalScaleNode, fallbackNormal);
   } else {
     baseColor = color(fallbackColor);
     material.normalNode = fallbackNormal;
   }
-  material.colorNode = createDebugOutputNode(
-    state, createColorAdjustmentNode(state, baseColor));
+  material.colorNode = createDebugOutputNode(state, baseColor);
   material.emissiveNode = state.emissionNode;
 
   if (!state.packedResponse) return;
@@ -427,18 +434,8 @@ function applyViewerRim(state, result) {
   return vec4(result.rgb.add(tint.mul(amount)), result.a);
 }
 
-function applyViewerSelection(state, result) {
-  if (!state?.selectionEnabledNode || !state?.selectionStrengthNode) {
-    return result;
-  }
-  const highlighted = mix(result.rgb, color(0xffd60a), state.selectionStrengthNode);
-  return vec4(
-    mix(result.rgb, highlighted, state.selectionEnabledNode), result.a);
-}
-
 function applyViewerOutput(state, result) {
-  return applyDebugOverride(
-    state, applyViewerSelection(state, applyViewerRim(state, result)));
+  return applyDebugOverride(state, applyViewerRim(state, result));
 }
 
 function createEmissionNode(profile, bindings, hasUv) {
@@ -899,8 +896,6 @@ export function configureGameMaterial(material, profile, options = {}) {
     rimEnabledNode: uniform(true),
     rimStrengthNode: uniform(0.075),
     rimPowerNode: uniform(4.0),
-    selectionEnabledNode: uniform(false),
-    selectionStrengthNode: uniform(0.22),
     colorAdjustmentEnabledNode: uniform(false),
     colorHueNode: uniform(0),
     colorSaturationNode: uniform(1),
@@ -909,7 +904,9 @@ export function configureGameMaterial(material, profile, options = {}) {
     colorRedNode: uniform(1),
     colorGreenNode: uniform(1),
     colorBlueNode: uniform(1),
-    colorTintNode: uniform(new Color(0xffffff)),
+    // Picker values are raw editor-sRGB components. Do not use THREE.Color,
+    // whose hex/CSS setters convert into the linear working color space.
+    colorTintNode: uniform(new Vector3(1, 1, 1)),
     colorTintStrengthNode: uniform(0),
     hasMaterialId,
     hasSpecularArea,
@@ -1052,49 +1049,11 @@ export function getMaterialDebugMode(material) {
     || 'off';
 }
 
-const COLOR_ADJUSTMENT_DEFAULTS = Object.freeze({
-  hue: 0,
-  saturation: 1,
-  brightness: 1,
-  contrast: 1,
-  red: 1,
-  green: 1,
-  blue: 1,
-  tint: '#ffffff',
-  tintStrength: 0,
-});
-
-function colorAdjustmentNumber(value, fallback, minimum, maximum) {
-  const number = typeof value === 'number' && Number.isFinite(value)
-    ? value : fallback;
-  return Math.min(maximum, Math.max(minimum, number));
-}
-
-function colorAdjustmentTint(value) {
-  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
-    ? value.toLowerCase() : COLOR_ADJUSTMENT_DEFAULTS.tint;
-}
-
-function normalizedMaterialColorAdjustment(value = {}) {
-  return {
-    hue: colorAdjustmentNumber(value.hue, 0, -180, 180),
-    saturation: colorAdjustmentNumber(value.saturation, 1, 0, 2),
-    brightness: colorAdjustmentNumber(value.brightness, 1, 0, 2),
-    contrast: colorAdjustmentNumber(value.contrast, 1, 0, 2),
-    red: colorAdjustmentNumber(value.red, 1, 0, 2),
-    green: colorAdjustmentNumber(value.green, 1, 0, 2),
-    blue: colorAdjustmentNumber(value.blue, 1, 0, 2),
-    tint: colorAdjustmentTint(value.tint),
-    tintStrength: colorAdjustmentNumber(
-      value.tintStrength ?? value.tint_strength, 0, 0, 1),
-  };
-}
-
 export function getGameMaterialColorAdjustment(material) {
   const state = material?.userData?.gameMaterial;
-  if (!state) return {...COLOR_ADJUSTMENT_DEFAULTS};
+  if (!state) return {...DEFAULT_COLOR_ADJUSTMENT};
   const tint = state.colorTintNode?.value;
-  return normalizedMaterialColorAdjustment({
+  return normalizeColorAdjustment({
     hue: state.colorHueNode?.value,
     saturation: state.colorSaturationNode?.value,
     brightness: state.colorBrightnessNode?.value,
@@ -1102,7 +1061,7 @@ export function getGameMaterialColorAdjustment(material) {
     red: state.colorRedNode?.value,
     green: state.colorGreenNode?.value,
     blue: state.colorBlueNode?.value,
-    tint: tint?.getHexString ? `#${tint.getHexString()}` : '#ffffff',
+    tint: tintHexFromRgb(tint),
     tintStrength: state.colorTintStrengthNode?.value,
   });
 }
@@ -1111,7 +1070,7 @@ export function setGameMaterialColorAdjustment(
     material, adjustment = {}, {enabled = false} = {}) {
   const state = material?.userData?.gameMaterial;
   if (!state?.colorAdjustmentEnabledNode) return false;
-  const value = normalizedMaterialColorAdjustment(adjustment);
+  const value = normalizeColorAdjustment(adjustment);
   let changed = false;
   const scalarNodes = [
     ['colorHueNode', value.hue],
@@ -1129,11 +1088,11 @@ export function setGameMaterialColorAdjustment(
     node.value = next;
   });
   const tintNode = state.colorTintNode;
-  const currentTint = tintNode.value?.getHexString
-    ? `#${tintNode.value.getHexString()}` : '#ffffff';
+  const currentTint = tintHexFromRgb(tintNode.value);
+  const tintRgb = tintRgbFromHex(value.tint);
   changed = currentTint !== value.tint || changed;
-  if (tintNode.value?.set) tintNode.value.set(value.tint);
-  else tintNode.value = new Color(value.tint);
+  if (tintNode.value?.set) tintNode.value.set(...tintRgb);
+  else tintNode.value = new Vector3(...tintRgb);
   const nextEnabled = enabled === true;
   changed = !Object.is(state.colorAdjustmentEnabledNode.value, nextEnabled)
     || changed;
@@ -1146,7 +1105,6 @@ export function captureGameMaterialViewerState(material) {
   const state = material?.userData?.gameMaterial;
   return {
     debugMode: getMaterialDebugMode(material),
-    selectionEnabled: state?.selectionEnabledNode?.value === true,
     colorAdjustment: getGameMaterialColorAdjustment(material),
     colorAdjustmentEnabled: state?.colorAdjustmentEnabledNode?.value === true,
   };
@@ -1155,10 +1113,8 @@ export function captureGameMaterialViewerState(material) {
 /** Restore per-material viewer state onto a newly-created material graph. */
 export function restoreGameMaterialViewerState(material, viewerState = {}) {
   setMaterialDebugMode([material], viewerState.debugMode || 'off');
-  setGameMaterialSelectionEnabled(
-    material, viewerState.selectionEnabled === true);
   setGameMaterialColorAdjustment(
-    material, viewerState.colorAdjustment || COLOR_ADJUSTMENT_DEFAULTS,
+    material, viewerState.colorAdjustment || DEFAULT_COLOR_ADJUSTMENT,
     {enabled: viewerState.colorAdjustmentEnabled === true});
 }
 
@@ -1173,14 +1129,6 @@ export function setGameMaterialRimEnabled(material, enabled) {
 /** Toggle profile-driven toon direct diffuse without rebuilding the material. */
 export function setGameMaterialToonEnabled(material, enabled) {
   const node = material?.userData?.gameMaterial?.toonEnabledNode;
-  if (!node) return false;
-  node.value = enabled === true;
-  return true;
-}
-
-/** Keep selection out of material emissive so MRT bloom sees authored light only. */
-export function setGameMaterialSelectionEnabled(material, enabled) {
-  const node = material?.userData?.gameMaterial?.selectionEnabledNode;
   if (!node) return false;
   node.value = enabled === true;
   return true;

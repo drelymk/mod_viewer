@@ -101,12 +101,16 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
           return window.modViewer.activeMeshes.map(mesh => ({
             emissive: mesh.material.emissive.getHex(),
             intensity: mesh.material.emissiveIntensity,
-            selected: mesh.material.userData.gameMaterial.selectionEnabledNode.value,
+            selected: mesh.userData.viewerOutline.userData.selectionSelected,
+            outlineVisible: mesh.userData.viewerOutline.visible,
+            outlineMaterial: mesh.userData.viewerOutline.material.color.getHex(),
           }));
         }""")
         assert first_state == [
-            {"emissive": 0x000000, "intensity": 1, "selected": True},
-            {"emissive": 0x000000, "intensity": 1, "selected": False},
+            {"emissive": 0x000000, "intensity": 1, "selected": True,
+             "outlineVisible": True, "outlineMaterial": 0xffd60a},
+            {"emissive": 0x000000, "intensity": 1, "selected": False,
+             "outlineVisible": False, "outlineMaterial": 0x111318},
         ]
 
         selected_count = page.evaluate("window.modViewer.getRenderCount()")
@@ -120,12 +124,16 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
           return window.modViewer.activeMeshes.map(mesh => ({
             emissive: mesh.material.emissive.getHex(),
             intensity: mesh.material.emissiveIntensity,
-            selected: mesh.material.userData.gameMaterial.selectionEnabledNode.value,
+            selected: mesh.userData.viewerOutline.userData.selectionSelected,
+            outlineVisible: mesh.userData.viewerOutline.visible,
+            outlineMaterial: mesh.userData.viewerOutline.material.color.getHex(),
           }));
         }""")
         assert second_state == [
-            {"emissive": 0x000000, "intensity": 1, "selected": False},
-            {"emissive": 0x000000, "intensity": 1, "selected": True},
+            {"emissive": 0x000000, "intensity": 1, "selected": False,
+             "outlineVisible": False, "outlineMaterial": 0x111318},
+            {"emissive": 0x000000, "intensity": 1, "selected": True,
+             "outlineVisible": True, "outlineMaterial": 0xffd60a},
         ]
 
         final_count = page.evaluate("window.modViewer.getRenderCount()")

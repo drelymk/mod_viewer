@@ -6,14 +6,14 @@
 import { camera, renderer } from './scene.js';
 import { activeMeshes } from '../mesh/visibility.js';
 import { getMeshView } from '../mesh/mesh-view-bindings.js';
-import { setGameMaterialSelectionEnabled } from '../mesh/material-profile.js';
+import { setMeshSelectionOutline } from './outline-renderer.js';
 import { raycastModelAtClientPoint } from './model-picking.js';
 import { requestRender } from './render-scheduler.js';
 
 let selected = null; // currently selected mesh, or null
 
 function setHighlight(mesh, on) {
-  setGameMaterialSelectionEnabled(mesh.material, on);
+  setMeshSelectionOutline(mesh, on);
 }
 
 function setRowSelected(mesh, on) {

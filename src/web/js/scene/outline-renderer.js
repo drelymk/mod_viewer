@@ -14,19 +14,27 @@ const REFERENCE_OUTLINE_WIDTH_PIXELS = 0.75;
 const MIN_OUTLINE_WIDTH_PIXELS = 0.5;
 const MAX_OUTLINE_WIDTH_PIXELS = 1.5;
 const outlineScalePerDepthNode = uniform(0);
-const outlineMaterial = new THREE.MeshBasicNodeMaterial({
-  color: 0x111318,
-  side: THREE.BackSide,
-  depthTest: true,
-  depthWrite: false,
-});
-outlineMaterial.toneMapped = false;
 const outlineViewDepth = positionView.z.negate().max(0.000001);
 const outlineWidthView = outlineViewDepth.mul(outlineScalePerDepthNode);
 const displacedOutlinePositionView = positionView.add(
   normalViewGeometry.mul(outlineWidthView));
-outlineMaterial.vertexNode = cameraProjectionMatrix.mul(
+const outlineVertexNode = cameraProjectionMatrix.mul(
   vec4(displacedOutlinePositionView, 1));
+
+function createOutlineMaterial(color) {
+  const material = new THREE.MeshBasicNodeMaterial({
+    color,
+    side: THREE.BackSide,
+    depthTest: true,
+    depthWrite: false,
+  });
+  material.toneMapped = false;
+  material.vertexNode = outlineVertexNode;
+  return material;
+}
+
+const outlineMaterial = createOutlineMaterial(0x111318);
+const selectionOutlineMaterial = createOutlineMaterial(0xffd60a);
 
 const attachedOutlines = new Set();
 let outlinesEnabled = false;
@@ -44,8 +52,13 @@ function outlinesVisible() {
 }
 
 function syncOutlineVisibility() {
-  const visible = outlinesVisible();
-  attachedOutlines.forEach(outline => { outline.visible = visible; });
+  attachedOutlines.forEach(syncOutline);
+}
+
+function syncOutline(outline) {
+  const selected = outline.userData.selectionSelected === true;
+  outline.material = selected ? selectionOutlineMaterial : outlineMaterial;
+  outline.visible = selected || outlinesVisible();
 }
 
 /** Attach one outline child while retaining the base mesh's exact geometry. */
@@ -61,12 +74,22 @@ export function attachOutline(mesh) {
   outline.name = `${mesh.name || 'mesh'}-viewer-outline`;
   outline.renderOrder = 1;
   outline.userData.isViewerOutline = true;
+  outline.userData.selectionSelected = false;
   outline.raycast = () => {};
   mesh.add(outline);
   mesh.userData.viewerOutline = outline;
   attachedOutlines.add(outline);
-  outline.visible = outlinesVisible();
+  syncOutline(outline);
   return outline;
+}
+
+/** Show selection on the existing inverted hull without changing the surface. */
+export function setMeshSelectionOutline(mesh, selected) {
+  const outline = mesh?.userData?.viewerOutline;
+  if (!outline) return false;
+  outline.userData.selectionSelected = selected === true;
+  syncOutline(outline);
+  return true;
 }
 
 /** Remove the child reference without disposing shared geometry or material. */
@@ -169,6 +192,9 @@ export function getOutlineState(mesh) {
   return {
     attached: !!outline,
     visible: !!outline?.visible,
+    selected: outline?.userData?.selectionSelected === true,
+    material: outline?.material === selectionOutlineMaterial
+      ? 'selection' : 'normal',
     globalEnabled: outlinesEnabled,
     referenceWidthPixels: REFERENCE_OUTLINE_WIDTH_PIXELS,
     minWidthPixels: MIN_OUTLINE_WIDTH_PIXELS,
