@@ -55,6 +55,19 @@ def _set_test_key_light(page, x=1.0, z=0.25):
     page.wait_for_timeout(400)
 
 
+def _wait_for_environment_preparation(page):
+    page.wait_for_function("""async () => {
+      const {rendererReady, getEnvironmentDebugState} =
+        await import('./js/scene/scene.js');
+      await rendererReady;
+      const state = getEnvironmentDebugState();
+      const resources = Object.values(state.resources || {});
+      return resources.length === 2
+        && resources.every(resource => resource.attempted)
+        && !state.preparationInFlight;
+    }""")
+
+
 def _outline_payload():
     payload = _payload("Outline")
     positions = (
@@ -214,40 +227,33 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         context.close()
 
 
-def test_outdoor_environment_uses_one_cached_pmrem_and_restores_original(
+def test_environment_ibl_resources_are_cached_and_presets_restore_original(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {})
     try:
-        page.wait_for_function("""async () => {
-          const {rendererReady, getEnvironmentDebugState} =
-            await import('./js/scene/scene.js');
-          await rendererReady;
-          return getEnvironmentDebugState().prepared;
-        }""")
+        _wait_for_environment_preparation(page)
         initial = page.evaluate("""async () => {
           const {scene, getEnvironmentDebugState} =
             await import('./js/scene/scene.js');
-          const state = getEnvironmentDebugState();
-          const ambient = scene.children.find(object => object.isAmbientLight);
-          const hemisphere = scene.children.find(
-            object => object.isHemisphereLight);
-          let accent = null;
-          scene.traverse(object => {
-            if (object.isDirectionalLight && object !== scene.children.find(
-                candidate => candidate.isDirectionalLight)) accent = object;
-          });
-          return {...state,
+          return {...getEnvironmentDebugState(),
             environmentId: scene.environment?.uuid || null,
             hasVisibleSky: scene.getObjectByProperty('isSkyMesh', true) != null,
-            ambientIntensity: ambient?.intensity,
-            hemisphereIntensity: hemisphere?.intensity,
-            accentIntensity: accent?.intensity,
           };
         }""")
-        assert initial["outdoorIblAvailable"]
-        assert initial["pmremGenerationCount"] == 1
+        assert initial["activeIblPreset"] is None
         assert not initial["environmentActive"]
         assert not initial["hasVisibleSky"]
+        assert initial["resources"] == {
+            "outdoor": {
+                "attempted": True, "available": True,
+                "generationCount": 1, "error": None,
+            },
+            "indoor": {
+                "attempted": True, "available": True,
+                "generationCount": 1, "error": None,
+            },
+        }
+        assert initial["totalPmremGenerationCount"] == 2
 
         def select_preset(preset):
             before = page.evaluate("window.modViewer.getRenderCount()")
@@ -272,37 +278,57 @@ def test_outdoor_environment_uses_one_cached_pmrem_and_restores_original(
               });
               return {...getEnvironmentDebugState(),
                 environmentId: scene.environment?.uuid || null,
+                backgroundIsCanvas: scene.background?.isCanvasTexture === true,
+                hasVisibleSky: scene.getObjectByProperty('isSkyMesh', true) != null,
                 ambientIntensity: ambient?.intensity,
                 hemisphereIntensity: hemisphere?.intensity,
                 accentIntensity: accent?.intensity};
             }""")
 
+        indoor = select_preset("indoor")
+        assert indoor["activeIblPreset"] == "indoor"
+        assert indoor["environmentActive"]
+        assert indoor["environmentIntensity"] == pytest.approx(0.15)
+        assert indoor["ambientIntensity"] == pytest.approx(0.05)
+        assert indoor["hemisphereIntensity"] == pytest.approx(0.1)
+        assert indoor["accentIntensity"] == pytest.approx(0.3)
+        assert indoor["environmentId"] is not None
+        assert indoor["environmentId"] != initial["environmentId"]
+        assert indoor["backgroundIsCanvas"]
+        assert not indoor["hasVisibleSky"]
+
         outdoor = select_preset("outdoor")
-        assert outdoor["environmentIsOutdoor"]
+        assert outdoor["activeIblPreset"] == "outdoor"
         assert outdoor["environmentActive"]
         assert outdoor["environmentIntensity"] == pytest.approx(0.1)
         assert outdoor["ambientIntensity"] == pytest.approx(0.04)
         assert outdoor["hemisphereIntensity"] == pytest.approx(0.08)
         assert outdoor["accentIntensity"] == pytest.approx(0.4)
-        assert outdoor["environmentId"] is not None
-
-        studio = select_preset("studio")
-        assert not studio["environmentIsOutdoor"]
-        assert not studio["environmentActive"]
-        assert studio["environmentIntensity"] == initial["environmentIntensity"]
-
-        indoor = select_preset("indoor")
-        assert not indoor["environmentIsOutdoor"]
-        assert not indoor["environmentActive"]
-        assert indoor["environmentIntensity"] == initial["environmentIntensity"]
-
-        outdoor_again = select_preset("outdoor")
-        assert outdoor_again["environmentIsOutdoor"]
-        assert outdoor_again["environmentId"] == outdoor["environmentId"]
-        assert outdoor_again["pmremGenerationCount"] == 1
-        assert outdoor_again["sunDirection"] == pytest.approx(
+        assert outdoor["environmentId"] not in (None, indoor["environmentId"])
+        assert outdoor["backgroundIsCanvas"]
+        assert not outdoor["hasVisibleSky"]
+        assert outdoor["sunDirection"] == pytest.approx(
             [-6 / math.sqrt(172), 10 / math.sqrt(172), 6 / math.sqrt(172)],
         )
+
+        studio = select_preset("studio")
+        assert studio["activeIblPreset"] is None
+        assert not studio["environmentActive"]
+        assert studio["environmentId"] == initial["environmentId"]
+        assert studio["environmentIntensity"] == initial["environmentIntensity"]
+
+        indoor_again = select_preset("indoor")
+        outdoor_again = select_preset("outdoor")
+        default = select_preset("default")
+        indoor_third = select_preset("indoor")
+        assert indoor_again["environmentId"] == indoor["environmentId"]
+        assert outdoor_again["environmentId"] == outdoor["environmentId"]
+        assert default["activeIblPreset"] is None
+        assert default["environmentId"] == initial["environmentId"]
+        assert default["environmentIntensity"] == initial["environmentIntensity"]
+        assert indoor_third["environmentId"] == indoor["environmentId"]
+        assert indoor_third["resources"] == initial["resources"]
+        assert indoor_third["totalPmremGenerationCount"] == 2
 
         idle_count = page.evaluate("window.modViewer.getRenderCount()")
         page.wait_for_timeout(200)
@@ -315,24 +341,29 @@ def test_environment_controller_prepare_is_single_flight(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {})
     try:
+        _wait_for_environment_preparation(page)
         result = page.evaluate("""async () => {
           const THREE = await import('three/webgpu');
-          const {renderer, rendererReady, getEnvironmentDebugState} =
+          const {renderer, rendererReady} =
             await import('./js/scene/scene.js');
           const {createEnvironmentController} =
             await import('./js/scene/environment.js');
           await rendererReady;
-          for (let attempts = 0; attempts < 100; attempts += 1) {
-            const state = getEnvironmentDebugState();
-            if (state.prepared || state.preparationError) break;
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
 
           const originalFromScene = THREE.PMREMGenerator.prototype.fromScene;
           let generationCalls = 0;
+          let targetDisposals = 0;
+          const generationOrder = [];
           THREE.PMREMGenerator.prototype.fromScene = function (...args) {
             generationCalls += 1;
-            return originalFromScene.apply(this, args);
+            generationOrder.push(args[0].userData.iblPresetId);
+            const target = originalFromScene.apply(this, args);
+            const originalDispose = target.dispose.bind(target);
+            target.dispose = () => {
+              targetDisposals += 1;
+              originalDispose();
+            };
+            return target;
           };
           const testScene = new THREE.Scene();
           const ambient = new THREE.AmbientLight(0xffffff, 0.55);
@@ -347,9 +378,11 @@ def test_environment_controller_prepare_is_single_flight(
             const first = controller.prepare();
             const second = controller.prepare();
             const [firstResult, secondResult] = await Promise.all([first, second]);
+            const debug = controller.getDebugState();
+            controller.dispose();
             return {
-              firstResult, secondResult, generationCalls,
-              debug: controller.getDebugState(),
+              firstResult, secondResult, generationCalls, generationOrder,
+              targetDisposals, debug,
             };
           } finally {
             THREE.PMREMGenerator.prototype.fromScene = originalFromScene;
@@ -358,9 +391,15 @@ def test_environment_controller_prepare_is_single_flight(
         }""")
         assert result["firstResult"] is True
         assert result["secondResult"] is True
-        assert result["generationCalls"] == 1
-        assert result["debug"]["pmremGenerationCount"] == 1
-        assert result["debug"]["prepared"] is True
+        assert result["generationCalls"] == 2
+        assert result["generationOrder"] == ["outdoor", "indoor"]
+        assert result["targetDisposals"] == 2
+        assert result["debug"]["resources"]["outdoor"][
+            "generationCount"] == 1
+        assert result["debug"]["resources"]["indoor"][
+            "generationCount"] == 1
+        assert result["debug"]["totalPmremGenerationCount"] == 2
+        assert result["debug"]["preparationInFlight"] is False
     finally:
         context.close()
 
@@ -369,18 +408,14 @@ def test_environment_controller_dispose_cancels_pending_preparation(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {})
     try:
+        _wait_for_environment_preparation(page)
         result = page.evaluate("""async () => {
           const THREE = await import('three/webgpu');
-          const {renderer, rendererReady, getEnvironmentDebugState} =
+          const {renderer, rendererReady} =
             await import('./js/scene/scene.js');
           const {createEnvironmentController} =
             await import('./js/scene/environment.js');
           await rendererReady;
-          for (let attempts = 0; attempts < 100; attempts += 1) {
-            const state = getEnvironmentDebugState();
-            if (state.prepared || state.preparationError) break;
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
 
           const originalFromScene = THREE.PMREMGenerator.prototype.fromScene;
           let generationCalls = 0;
@@ -411,81 +446,238 @@ def test_environment_controller_dispose_cancels_pending_preparation(
         }""")
         assert result["prepared"] is False
         assert result["generationCalls"] == 0
-        assert result["debug"]["pmremGenerationCount"] == 0
-        assert result["debug"]["outdoorIblAvailable"] is False
-        assert result["debug"]["prepared"] is False
+        assert result["debug"]["totalPmremGenerationCount"] == 0
+        assert result["debug"]["resources"] == {
+            "outdoor": {
+                "attempted": False, "available": False,
+                "generationCount": 0, "error": None,
+            },
+            "indoor": {
+                "attempted": False, "available": False,
+                "generationCount": 0, "error": None,
+            },
+        }
     finally:
         context.close()
 
 
-def test_environment_controller_uses_legacy_lighting_when_pmrem_fails(
-        edge_browser, frontend_url):
+@pytest.mark.parametrize("failed_profile", ["outdoor", "indoor"])
+def test_environment_ibl_failure_is_isolated_and_uses_legacy_lighting(
+        edge_browser, frontend_url, failed_profile):
     context, page = _page(edge_browser, frontend_url, {})
     try:
-        result = page.evaluate("""async () => {
+        _wait_for_environment_preparation(page)
+        result = page.evaluate("""async failedProfile => {
           const THREE = await import('three/webgpu');
-          const {renderer, rendererReady, getEnvironmentDebugState} =
+          const {renderer, rendererReady} =
             await import('./js/scene/scene.js');
           const {createEnvironmentController} =
             await import('./js/scene/environment.js');
           const rendererReadyResult = await rendererReady;
-          for (let attempts = 0; attempts < 100; attempts += 1) {
-            const state = getEnvironmentDebugState();
-            if (state.prepared || state.preparationError) break;
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
 
           const originalFromScene = THREE.PMREMGenerator.prototype.fromScene;
           const testScene = new THREE.Scene();
-          testScene.environment = null;
+          const originalEnvironment = new THREE.Texture();
+          testScene.environment = originalEnvironment;
           testScene.environmentIntensity = 1;
           const ambient = new THREE.AmbientLight(0xffffff, 0.55);
           const hemisphere = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
           const lightTarget = new THREE.Object3D();
           let controller = null;
           try {
-            THREE.PMREMGenerator.prototype.fromScene = () => {
-              throw new Error('simulated Outdoor PMREM failure');
+            THREE.PMREMGenerator.prototype.fromScene = function (...args) {
+              const id = args[0].userData.iblPresetId;
+              if (id === failedProfile) {
+                throw new Error(`simulated ${id} PMREM failure`);
+              }
+              return originalFromScene.apply(this, args);
             };
             controller = createEnvironmentController({
               renderer, scene: testScene, ambientLight: ambient,
               hemisphereLight: hemisphere, lightTarget,
             });
             const prepared = await controller.prepare();
-            controller.setPreset('outdoor');
-            const outdoor = controller.getDebugState();
-            const outdoorLighting = {
-              backgroundChanged: testScene.background !== null,
+            const snapshot = () => ({
+              state: controller.getDebugState(),
+              environmentIsOriginal: testScene.environment === originalEnvironment,
+              environmentId: testScene.environment?.uuid || null,
               ambient: ambient.intensity,
               hemisphere: hemisphere.intensity,
               accent: lightTarget.children.find(
                 object => object.isDirectionalLight)?.intensity,
               accentVisible: lightTarget.children.some(
                 object => object.isDirectionalLight && object.visible),
-            };
+            });
+            controller.setPreset(failedProfile);
+            const failed = snapshot();
+            const workingProfile = failedProfile === 'outdoor'
+              ? 'indoor' : 'outdoor';
+            controller.setPreset(workingProfile);
+            const working = snapshot();
             return {
               rendererReady: rendererReadyResult,
-              prepared, outdoor, outdoorLighting,
+              prepared, failedProfile, workingProfile, failed, working,
+            };
+          } finally {
+            THREE.PMREMGenerator.prototype.fromScene = originalFromScene;
+            controller?.dispose();
+            originalEnvironment.dispose();
+          }
+        }""", failed_profile)
+        assert result["rendererReady"]
+        assert result["prepared"] is False
+        failed = result["failed"]
+        working = result["working"]
+        failed_resource = failed["state"]["resources"][failed_profile]
+        working_profile = result["workingProfile"]
+        working_resource = failed["state"]["resources"][working_profile]
+        assert failed_resource["attempted"] is True
+        assert failed_resource["available"] is False
+        assert failed_resource["generationCount"] == 0
+        assert f"simulated {failed_profile} PMREM failure" in failed_resource[
+            "error"]
+        assert working_resource == {
+            "attempted": True, "available": True,
+            "generationCount": 1, "error": None,
+        }
+        assert failed["state"]["totalPmremGenerationCount"] == 1
+        assert failed["state"]["activeIblPreset"] is None
+        assert failed["environmentIsOriginal"] is True
+        fallback = {
+            "outdoor": {"ambient": 0.26, "hemisphere": 0.45, "accent": 0.7},
+            "indoor": {"ambient": 0.32, "hemisphere": 0.38, "accent": 0.45},
+        }[failed_profile]
+        assert {key: failed[key] for key in fallback} == fallback
+        assert failed["accentVisible"] is True
+
+        assert working["state"]["activeIblPreset"] == working_profile
+        assert working["environmentIsOriginal"] is False
+        enhanced = {
+            "outdoor": {"ambient": 0.04, "hemisphere": 0.08, "accent": 0.4},
+            "indoor": {"ambient": 0.05, "hemisphere": 0.1, "accent": 0.3},
+        }[working_profile]
+        assert {key: working[key] for key in enhanced} == enhanced
+        assert working["accentVisible"] is True
+    finally:
+        context.close()
+
+
+def test_environment_disposal_between_resources_stops_later_generation(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        _wait_for_environment_preparation(page)
+        result = page.evaluate("""async () => {
+          const THREE = await import('three/webgpu');
+          const {renderer, rendererReady} = await import('./js/scene/scene.js');
+          const {createEnvironmentController} =
+            await import('./js/scene/environment.js');
+          await rendererReady;
+          const originalFromScene = THREE.PMREMGenerator.prototype.fromScene;
+          const generationOrder = [];
+          THREE.PMREMGenerator.prototype.fromScene = function (...args) {
+            generationOrder.push(args[0].userData.iblPresetId);
+            return originalFromScene.apply(this, args);
+          };
+          const testScene = new THREE.Scene();
+          const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+          const hemisphere = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
+          const lightTarget = new THREE.Object3D();
+          const visualChanges = [];
+          let controller = null;
+          try {
+            controller = createEnvironmentController({
+              renderer, scene: testScene, ambientLight: ambient,
+              hemisphereLight: hemisphere, lightTarget,
+              onVisualChange: () => {
+                visualChanges.push(controller.getPreset().id);
+                controller.dispose();
+              },
+            });
+            controller.setPreset('outdoor');
+            const prepared = await controller.prepare();
+            return {
+              prepared, generationOrder, visualChanges,
+              debug: controller.getDebugState(),
             };
           } finally {
             THREE.PMREMGenerator.prototype.fromScene = originalFromScene;
             controller?.dispose();
           }
         }""")
-        assert result["rendererReady"]
         assert result["prepared"] is False
-        assert result["outdoor"]["outdoorIblAvailable"] is False
-        assert result["outdoor"]["environmentActive"] is False
-        assert result["outdoor"]["pmremGenerationCount"] == 0
-        assert "simulated Outdoor PMREM failure" in result["outdoor"][
-            "preparationError"]
-        assert result["outdoorLighting"] == {
-            "backgroundChanged": True,
-            "ambient": 0.26,
-            "hemisphere": 0.45,
-            "accent": 0.7,
-            "accentVisible": True,
-        }
+        assert result["generationOrder"] == ["outdoor"]
+        assert result["visualChanges"] == ["outdoor"]
+        assert result["debug"]["resources"]["outdoor"][
+            "generationCount"] == 1
+        assert result["debug"]["resources"]["indoor"]["attempted"] is False
+        assert result["debug"]["resources"]["indoor"][
+            "generationCount"] == 0
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize(("active_preset", "expected_visual_changes"), [
+    ("default", []),
+    ("outdoor", ["outdoor"]),
+    ("indoor", ["indoor"]),
+])
+def test_environment_preparation_notifies_only_for_active_visual_upgrade(
+        edge_browser, frontend_url, active_preset, expected_visual_changes):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        _wait_for_environment_preparation(page)
+        result = page.evaluate("""async activePreset => {
+          const THREE = await import('three/webgpu');
+          const {renderer, rendererReady} = await import('./js/scene/scene.js');
+          const {createEnvironmentController} =
+            await import('./js/scene/environment.js');
+          await rendererReady;
+          const testScene = new THREE.Scene();
+          const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+          const hemisphere = new THREE.HemisphereLight(0xffffff, 0x30343f, 0.35);
+          const lightTarget = new THREE.Object3D();
+          const visualChanges = [];
+          let controller = null;
+          try {
+            controller = createEnvironmentController({
+              renderer, scene: testScene, ambientLight: ambient,
+              hemisphereLight: hemisphere, lightTarget,
+              onVisualChange: () => visualChanges.push(controller.getPreset().id),
+            });
+            controller.setPreset(activePreset);
+            const before = {
+              state: controller.getDebugState(),
+              ambient: ambient.intensity,
+              hemisphere: hemisphere.intensity,
+              accent: lightTarget.children.find(
+                object => object.isDirectionalLight)?.intensity,
+            };
+            const prepared = await controller.prepare();
+            return {
+              prepared, visualChanges, before,
+              debug: controller.getDebugState(),
+            };
+          } finally {
+            controller?.dispose();
+          }
+        }""", active_preset)
+        assert result["prepared"] is True
+        assert result["visualChanges"] == expected_visual_changes
+        assert result["debug"]["totalPmremGenerationCount"] == 2
+        assert result["before"]["state"]["activeIblPreset"] is None
+        if active_preset != "default":
+            fallback = {
+                "outdoor": {
+                    "ambient": 0.26, "hemisphere": 0.45, "accent": 0.7,
+                },
+                "indoor": {
+                    "ambient": 0.32, "hemisphere": 0.38, "accent": 0.45,
+                },
+            }[active_preset]
+            assert {
+                key: result["before"][key] for key in fallback
+            } == fallback
     finally:
         context.close()
 

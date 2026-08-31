@@ -152,6 +152,7 @@ const environmentController = createEnvironmentController({
   ambientLight,
   hemisphereLight,
   lightTarget: keyLight.target,
+  onVisualChange: requestRender,
 });
 const keyLightController = createKeyLightController({
   scene, camera, renderer, controls, light: keyLight, onChange: requestRender,
@@ -208,16 +209,10 @@ export const rendererReady = initializeRenderer()
     requestRender();
     openButton.disabled = !isRendererAvailable();
     void environmentController.prepare()
-      .then(prepared => {
-        if (prepared && environmentController.getPreset().id === 'outdoor') {
-          requestRender();
-        }
-      })
       .catch(error => {
-        // Outdoor IBL is optional; renderer startup must remain usable when
-        // the GPU cannot generate the cached environment.
+        // Optional IBL must not make renderer startup unusable.
         console.debug(
-          'Outdoor environment preparation failed; using baseline lighting.',
+          'Environment preparation failed; using baseline lighting.',
           error,
         );
       });
