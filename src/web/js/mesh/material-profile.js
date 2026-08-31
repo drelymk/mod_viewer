@@ -3,6 +3,7 @@
 // through stable TSL nodes and their bindings are changed in place.
 
 import {
+  Color,
   DataTexture,
   DoubleSide,
   MeshPhysicalNodeMaterial,
@@ -21,6 +22,7 @@ import {
   clamp,
   color,
   diffuseColor,
+  floor,
   float,
   Fn,
   ior,
@@ -260,6 +262,81 @@ function createRawChannelNode(ref, bindings) {
     : float(0);
 }
 
+function colorMap(rgb, transform) {
+  return vec3(transform(rgb.r), transform(rgb.g), transform(rgb.b));
+}
+
+function linearToEditorSrgbChannel(value) {
+  const clamped = value.clamp(0, 1);
+  return clamped.lessThanEqual(0.0031308)
+    .select(clamped.mul(12.92), clamped.pow(1 / 2.4).mul(1.055).sub(0.055));
+}
+
+function editorSrgbToLinearChannel(value) {
+  const clamped = value.clamp(0, 1);
+  return clamped.lessThanEqual(0.04045)
+    .select(clamped.div(12.92), clamped.add(0.055).div(1.055).pow(2.4));
+}
+
+function rgbToHsv(rgb) {
+  const maximum = rgb.r.max(rgb.g).max(rgb.b);
+  const minimum = rgb.r.min(rgb.g).min(rgb.b);
+  const delta = maximum.sub(minimum);
+  const safeDelta = delta.max(0.000001);
+  const redHue = rgb.g.sub(rgb.b).div(safeDelta);
+  const greenHue = rgb.b.sub(rgb.r).div(safeDelta).add(2);
+  const blueHue = rgb.r.sub(rgb.g).div(safeDelta).add(4);
+  const hue = maximum.equal(rgb.r).select(
+    redHue.lessThan(0).select(redHue.add(6), redHue),
+    maximum.equal(rgb.g).select(greenHue, blueHue),
+  ).div(6);
+  const saturation = maximum.equal(0).select(0, delta.div(maximum));
+  return vec3(hue, saturation, maximum);
+}
+
+function hsvToRgb(hsv) {
+  const hue = hsv.x;
+  const saturation = hsv.y;
+  const value = hsv.z;
+  const sectorValue = hue.mul(6);
+  const sector = floor(sectorValue);
+  const fraction = sectorValue.sub(sector);
+  const p = value.mul(float(1).sub(saturation));
+  const q = value.mul(float(1).sub(saturation.mul(fraction)));
+  const t = value.mul(float(1).sub(
+    saturation.mul(float(1).sub(fraction))));
+  return sector.equal(0).select(vec3(value, t, p),
+    sector.equal(1).select(vec3(q, value, p),
+      sector.equal(2).select(vec3(p, value, t),
+        sector.equal(3).select(vec3(p, q, value),
+          sector.equal(4).select(vec3(t, p, value),
+            vec3(value, p, q))))));
+}
+
+function createColorAdjustmentNode(state, baseColor) {
+  const editorColor = colorMap(baseColor, linearToEditorSrgbChannel);
+  const hsv = rgbToHsv(editorColor);
+  let hue = hsv.x.add(state.colorHueNode.div(360));
+  hue = hue.lessThan(0).select(hue.add(1), hue);
+  hue = hue.greaterThanEqual(1).select(hue.sub(1), hue);
+  const adjustedHsv = vec3(
+    hue,
+    hsv.y.mul(state.colorSaturationNode).clamp(0, 1),
+    hsv.z.mul(state.colorBrightnessNode).clamp(0, 1),
+  );
+  let result = hsvToRgb(adjustedHsv);
+  result = result.sub(0.5).mul(state.colorContrastNode).add(0.5);
+  result = vec3(
+    result.r.mul(state.colorRedNode),
+    result.g.mul(state.colorGreenNode),
+    result.b.mul(state.colorBlueNode),
+  ).clamp(0, 1);
+  result = mix(result, state.colorTintNode, state.colorTintStrengthNode);
+  result = result.clamp(0, 1);
+  result = colorMap(result, editorSrgbToLinearChannel);
+  return state.colorAdjustmentEnabledNode.select(result, baseColor);
+}
+
 function createDebugOutputNode(state, baseColor) {
   // Build the mode table once while the material graph is created.  An
   // unsupported mode has no active branch, so the final output remains the
@@ -311,7 +388,8 @@ function setStableMaterialNodes(material, state, fallbackColor) {
     baseColor = color(fallbackColor);
     material.normalNode = fallbackNormal;
   }
-  material.colorNode = createDebugOutputNode(state, baseColor);
+  material.colorNode = createDebugOutputNode(
+    state, createColorAdjustmentNode(state, baseColor));
   material.emissiveNode = state.emissionNode;
 
   if (!state.packedResponse) return;
@@ -823,6 +901,16 @@ export function configureGameMaterial(material, profile, options = {}) {
     rimPowerNode: uniform(4.0),
     selectionEnabledNode: uniform(false),
     selectionStrengthNode: uniform(0.22),
+    colorAdjustmentEnabledNode: uniform(false),
+    colorHueNode: uniform(0),
+    colorSaturationNode: uniform(1),
+    colorBrightnessNode: uniform(1),
+    colorContrastNode: uniform(1),
+    colorRedNode: uniform(1),
+    colorGreenNode: uniform(1),
+    colorBlueNode: uniform(1),
+    colorTintNode: uniform(new Color(0xffffff)),
+    colorTintStrengthNode: uniform(0),
     hasMaterialId,
     hasSpecularArea,
     hasShadowMask,
@@ -964,12 +1052,103 @@ export function getMaterialDebugMode(material) {
     || 'off';
 }
 
+const COLOR_ADJUSTMENT_DEFAULTS = Object.freeze({
+  hue: 0,
+  saturation: 1,
+  brightness: 1,
+  contrast: 1,
+  red: 1,
+  green: 1,
+  blue: 1,
+  tint: '#ffffff',
+  tintStrength: 0,
+});
+
+function colorAdjustmentNumber(value, fallback, minimum, maximum) {
+  const number = typeof value === 'number' && Number.isFinite(value)
+    ? value : fallback;
+  return Math.min(maximum, Math.max(minimum, number));
+}
+
+function colorAdjustmentTint(value) {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+    ? value.toLowerCase() : COLOR_ADJUSTMENT_DEFAULTS.tint;
+}
+
+function normalizedMaterialColorAdjustment(value = {}) {
+  return {
+    hue: colorAdjustmentNumber(value.hue, 0, -180, 180),
+    saturation: colorAdjustmentNumber(value.saturation, 1, 0, 2),
+    brightness: colorAdjustmentNumber(value.brightness, 1, 0, 2),
+    contrast: colorAdjustmentNumber(value.contrast, 1, 0, 2),
+    red: colorAdjustmentNumber(value.red, 1, 0, 2),
+    green: colorAdjustmentNumber(value.green, 1, 0, 2),
+    blue: colorAdjustmentNumber(value.blue, 1, 0, 2),
+    tint: colorAdjustmentTint(value.tint),
+    tintStrength: colorAdjustmentNumber(
+      value.tintStrength ?? value.tint_strength, 0, 0, 1),
+  };
+}
+
+export function getGameMaterialColorAdjustment(material) {
+  const state = material?.userData?.gameMaterial;
+  if (!state) return {...COLOR_ADJUSTMENT_DEFAULTS};
+  const tint = state.colorTintNode?.value;
+  return normalizedMaterialColorAdjustment({
+    hue: state.colorHueNode?.value,
+    saturation: state.colorSaturationNode?.value,
+    brightness: state.colorBrightnessNode?.value,
+    contrast: state.colorContrastNode?.value,
+    red: state.colorRedNode?.value,
+    green: state.colorGreenNode?.value,
+    blue: state.colorBlueNode?.value,
+    tint: tint?.getHexString ? `#${tint.getHexString()}` : '#ffffff',
+    tintStrength: state.colorTintStrengthNode?.value,
+  });
+}
+
+export function setGameMaterialColorAdjustment(
+    material, adjustment = {}, {enabled = false} = {}) {
+  const state = material?.userData?.gameMaterial;
+  if (!state?.colorAdjustmentEnabledNode) return false;
+  const value = normalizedMaterialColorAdjustment(adjustment);
+  let changed = false;
+  const scalarNodes = [
+    ['colorHueNode', value.hue],
+    ['colorSaturationNode', value.saturation],
+    ['colorBrightnessNode', value.brightness],
+    ['colorContrastNode', value.contrast],
+    ['colorRedNode', value.red],
+    ['colorGreenNode', value.green],
+    ['colorBlueNode', value.blue],
+    ['colorTintStrengthNode', value.tintStrength],
+  ];
+  scalarNodes.forEach(([name, next]) => {
+    const node = state[name];
+    changed = !Object.is(node.value, next) || changed;
+    node.value = next;
+  });
+  const tintNode = state.colorTintNode;
+  const currentTint = tintNode.value?.getHexString
+    ? `#${tintNode.value.getHexString()}` : '#ffffff';
+  changed = currentTint !== value.tint || changed;
+  if (tintNode.value?.set) tintNode.value.set(value.tint);
+  else tintNode.value = new Color(value.tint);
+  const nextEnabled = enabled === true;
+  changed = !Object.is(state.colorAdjustmentEnabledNode.value, nextEnabled)
+    || changed;
+  state.colorAdjustmentEnabledNode.value = nextEnabled;
+  return changed;
+}
+
 /** Capture viewer state that is owned by an individual material instance. */
 export function captureGameMaterialViewerState(material) {
   const state = material?.userData?.gameMaterial;
   return {
     debugMode: getMaterialDebugMode(material),
     selectionEnabled: state?.selectionEnabledNode?.value === true,
+    colorAdjustment: getGameMaterialColorAdjustment(material),
+    colorAdjustmentEnabled: state?.colorAdjustmentEnabledNode?.value === true,
   };
 }
 
@@ -978,6 +1157,9 @@ export function restoreGameMaterialViewerState(material, viewerState = {}) {
   setMaterialDebugMode([material], viewerState.debugMode || 'off');
   setGameMaterialSelectionEnabled(
     material, viewerState.selectionEnabled === true);
+  setGameMaterialColorAdjustment(
+    material, viewerState.colorAdjustment || COLOR_ADJUSTMENT_DEFAULTS,
+    {enabled: viewerState.colorAdjustmentEnabled === true});
 }
 
 /** Toggle viewer rim lighting without rebuilding the material node graph. */

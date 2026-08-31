@@ -169,6 +169,10 @@ class ModViewerAPI:
     def save_mesh_textures(self, folder_path, textures):
         return self._mod_preview.save_mesh_textures(folder_path, textures)
 
+    def save_mesh_color_adjustment(self, folder_path, mesh_key, adjustment):
+        return self._mod_preview.save_mesh_color_adjustment(
+            folder_path, mesh_key, adjustment)
+
     def save_weight_selection(self, folder_path, bones):
         return self._mod_preview.save_weight_selection(folder_path, bones)
 

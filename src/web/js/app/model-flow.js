@@ -196,6 +196,7 @@ export async function displayMeshPayload(payload, {
     meshes, modelPath, payload.metadata?.mesh_names || {},
     payload.metadata?.material_profiles || {},
     {
+      colorAdjustments: payload.metadata?.mesh_color_adjustments || {},
       onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
       texturePools: payload.texture_pools || {},
       assetResolution: payload.asset_resolution || null,

@@ -109,7 +109,11 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
             "defaults": state_defaults or {},
         },
         "geometry": None,
-        "metadata": {"mesh_names": {}, "material_profiles": profile_table},
+        "metadata": {
+            "mesh_names": {},
+            "mesh_color_adjustments": {},
+            "material_profiles": profile_table,
+        },
         "health": health,
         "asset_resolution": asset_resolution,
     }

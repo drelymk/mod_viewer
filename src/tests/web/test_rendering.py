@@ -4347,6 +4347,161 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
     finally:
         context.close()
 
+
+def test_asset_texture_identity_is_reserved_to_the_canonical_namespace(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        result = page.evaluate("""async () => {
+          const {isAssetTextureKey} = await import('./js/textures/texture-key.js');
+          return [
+            isAssetTextureKey('diffuse::BodyDiffuse.dds'),
+            isAssetTextureKey('diffuse::Textures/Body.dds'),
+            isAssetTextureKey('diffuse::asset/abc123/BodyDiffuse.dds'),
+            isAssetTextureKey('normal_map::asset/abc123/BodyNormal.dds'),
+            isAssetTextureKey('diffuse::textures/my_asset_copy.dds'),
+            isAssetTextureKey('invalid'),
+          ];
+        }""")
+        assert result == [False, False, True, True, False, False]
+    finally:
+        context.close()
+
+
+def test_mesh_color_adjustment_updates_stable_uniforms_and_gates_assets(
+        edge_browser, frontend_url):
+    payload = _payload("Color")
+    entry = payload["meshes"]["Body-Color-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    asset_key = "diffuse::asset/root/Body.dds"
+    payload["textures"][entry["tex_key"]] = _flat_png_uri((255, 0, 0, 255))
+    payload["textures"][asset_key] = _flat_png_uri((0, 255, 0, 255))
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Color::3,0,0": {
+            "hue": 40, "saturation": 1, "brightness": 1, "contrast": 1,
+            "red": 1, "green": 1, "blue": 1,
+            "tint": "#ffffff", "tint_strength": 0,
+        },
+    }
+    context, page = _page(edge_browser, frontend_url, {"Color": payload})
+    try:
+        _open(page, "Color")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.wait_for_function("""() => {
+          const game = window.modViewer.activeMeshes[0]?.material
+            ?.userData?.gameMaterial;
+          return game?.bindings?.diffuse?.enabledNode?.value === true;
+        }""")
+        state = page.evaluate("""async assetKey => {
+          const {getMeshColorAdjustment, canEditMeshColor,
+            setMeshColorAdjustment} = await import('./js/mesh/mesh-color-state.js');
+          const {getGameMaterialColorAdjustment} =
+            await import('./js/mesh/material-profile.js');
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
+          const {replaceMeshMaterial} = await import('./js/mesh/mesh-material-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const oldMaterial = mesh.material;
+          const oldTexture = oldMaterial.userData.gameMaterial
+            .bindings.diffuse.textureNode.value;
+          const before = {
+            adjustment: getMeshColorAdjustment(mesh),
+            editable: canEditMeshColor(mesh),
+            enabled: oldMaterial.userData.gameMaterial
+              .colorAdjustmentEnabledNode.value,
+          };
+          setMeshColorAdjustment(mesh, {
+            ...before.adjustment, hue: 55,
+          }, {persist: false});
+          const live = getGameMaterialColorAdjustment(mesh.material);
+          const sameMaterialDuringLive = mesh.material === oldMaterial;
+          const sameTextureDuringLive = mesh.material.userData.gameMaterial
+            .bindings.diffuse.textureNode.value === oldTexture;
+          setMeshTextureState(mesh, {diffuse: assetKey});
+          const asset = {
+            adjustment: getMeshColorAdjustment(mesh),
+            editable: canEditMeshColor(mesh),
+            enabled: mesh.material.userData.gameMaterial
+              .colorAdjustmentEnabledNode.value,
+          };
+          setMeshTextureState(mesh, {diffuse: mesh.userData.defaultTexKey});
+          const restored = {
+            editable: canEditMeshColor(mesh),
+            enabled: mesh.material.userData.gameMaterial
+              .colorAdjustmentEnabledNode.value,
+            hue: getGameMaterialColorAdjustment(mesh.material).hue,
+          };
+          replaceMeshMaterial(mesh, mesh.userData.materialProfile, {}, {
+            render: false,
+          });
+          return {
+            before, live, asset, restored,
+            sameMaterialDuringLive, sameTextureDuringLive,
+            materialReplaced: mesh.material !== oldMaterial,
+            sameTexture: mesh.material.userData.gameMaterial
+              .bindings.diffuse.textureNode.value === oldTexture,
+            afterReplacement: {
+              hue: getGameMaterialColorAdjustment(mesh.material).hue,
+              enabled: mesh.material.userData.gameMaterial
+                .colorAdjustmentEnabledNode.value,
+            },
+          };
+        }""", asset_key)
+        assert state["before"]["adjustment"]["hue"] == 40
+        assert state["before"]["editable"] == {"editable": True, "reason": None}
+        assert state["before"]["enabled"] is True
+        assert state["live"]["hue"] == 55
+        assert state["sameMaterialDuringLive"] is True
+        assert state["sameTextureDuringLive"] is True
+        assert state["asset"]["adjustment"]["hue"] == 55
+        assert state["asset"]["editable"] == {
+            "editable": False, "reason": "asset-texture"}
+        assert state["asset"]["enabled"] is False
+        assert state["restored"] == {
+            "editable": {"editable": True, "reason": None},
+            "enabled": True, "hue": 55,
+        }
+        assert state["materialReplaced"] is True
+        assert state["afterReplacement"] == {"hue": 55, "enabled": True}
+    finally:
+        context.close()
+
+def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
+        edge_browser, frontend_url):
+    payload = _payload("ColorRender")
+    entry = payload["meshes"]["Body-ColorRender-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, -1, 1, 0)
+    entry["idx"] = _u32(0, 1, 2)
+    entry["drawindexed"] = [3, 0, 0]
+    payload["textures"] = {
+        entry["tex_key"]: _flat_png_uri((255, 0, 0, 255)),
+    }
+    context, page = _page(edge_browser, frontend_url, {"ColorRender": payload})
+    try:
+        _open(page, "ColorRender")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.wait_for_timeout(250)
+        opacity = page.evaluate("window.modViewer.activeMeshes[0].material.opacity")
+        before = _sample_mesh_pixel_at(page, -0.5, -0.5)
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          setMeshColorAdjustment(mesh, {
+            hue: 120, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 1, blue: 1, tint: '#ffffff', tintStrength: 0,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        after = _sample_mesh_pixel_at(page, -0.5, -0.5)
+        assert after[1] > after[0], (before, after)
+        assert after[1] > after[2], (before, after)
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].material.opacity") == opacity
+    finally:
+        context.close()
+
+
 def test_material_kind_refresh_hot_swaps_profile_without_reloading_model(
         edge_browser, frontend_url):
     payload = _packed_material_payload("wuwa:rabbitfx")

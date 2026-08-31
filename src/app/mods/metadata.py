@@ -1,7 +1,9 @@
 """Viewer-only mesh labels and texture choices stored beside a mod."""
 from collections import Counter
 import json
+import math
 import os
+import re
 import threading
 from copy import deepcopy
 
@@ -16,6 +18,30 @@ from core.textures.profiles import texture_profile_for
 METADATA_NAME = ".mod_viewer.json"
 PRESENT_NAMES_KEY = "__all__"
 _LOCK = threading.RLock()
+
+MESH_COLOR_ADJUSTMENTS_KEY = "mesh_color_adjustments"
+_COLOR_DEFAULTS = {
+    "hue": 0,
+    "saturation": 1.0,
+    "brightness": 1.0,
+    "contrast": 1.0,
+    "red": 1.0,
+    "green": 1.0,
+    "blue": 1.0,
+    "tint": "#ffffff",
+    "tint_strength": 0.0,
+}
+_COLOR_RANGES = {
+    "hue": (-180.0, 180.0),
+    "saturation": (0.0, 2.0),
+    "brightness": (0.0, 2.0),
+    "contrast": (0.0, 2.0),
+    "red": (0.0, 2.0),
+    "green": (0.0, 2.0),
+    "blue": (0.0, 2.0),
+    "tint_strength": (0.0, 1.0),
+}
+_TINT_PATTERN = re.compile(r"^#[0-9a-f]{6}$", re.IGNORECASE)
 
 
 def _legacy_mesh_key(name, entry):
@@ -83,6 +109,110 @@ def _save(folder_path, data):
         fh.write("\n")
     os.replace(temp_path, path)
     return {"saved": True, "path": path}
+
+
+def _normalize_mesh_color_adjustment(value, *, reject_invalid=False):
+    """Normalize one sparse viewer color state, or reject malformed input."""
+    if not isinstance(value, dict):
+        return None
+    result = {}
+    for field, default in _COLOR_DEFAULTS.items():
+        raw = value.get(field, default)
+        if field == "tint":
+            if not isinstance(raw, str) or not _TINT_PATTERN.fullmatch(raw):
+                if reject_invalid:
+                    return None
+                raw = default
+            result[field] = raw.lower()
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            if reject_invalid:
+                return None
+            raw = default
+        elif not math.isfinite(raw):
+            if reject_invalid:
+                return None
+            raw = default
+        minimum, maximum = _COLOR_RANGES[field]
+        result[field] = min(maximum, max(minimum, float(raw)))
+    result["hue"] = int(result["hue"]) if result["hue"].is_integer() else result["hue"]
+    return result
+
+
+def _is_neutral_mesh_color_adjustment(value):
+    return value == _COLOR_DEFAULTS
+
+
+def mesh_color_adjustments(folder_path=None, data=None):
+    """Return validated non-neutral per-mesh color states."""
+    data = (load(folder_path) if data is None and folder_path is not None
+            else ({} if data is None else data))
+    saved = data.get(MESH_COLOR_ADJUSTMENTS_KEY) \
+        if isinstance(data, dict) else None
+    if not isinstance(saved, dict):
+        return {}
+    result = {}
+    for mesh_key, value in saved.items():
+        if not isinstance(mesh_key, str) or not mesh_key:
+            continue
+        normalized = _normalize_mesh_color_adjustment(value)
+        if normalized is not None and not _is_neutral_mesh_color_adjustment(
+                normalized):
+            result[mesh_key] = normalized
+    return result
+
+
+def save_mesh_color_adjustment(folder_path, mesh_key, adjustment):
+    """Persist one viewer-only color state without touching source assets."""
+    if not isinstance(mesh_key, str) or not mesh_key:
+        return {"saved": False, "error": "Invalid mesh metadata key."}
+    normalized = _normalize_mesh_color_adjustment(
+        adjustment, reject_invalid=True)
+    if normalized is None:
+        return {"saved": False, "error": "Invalid mesh color adjustment."}
+    with _LOCK:
+        data = load(folder_path)
+        raw_adjustments = data.get(MESH_COLOR_ADJUSTMENTS_KEY)
+        raw_has_entry = (isinstance(raw_adjustments, dict)
+                         and mesh_key in raw_adjustments)
+        adjustments = mesh_color_adjustments(data=data)
+        if _is_neutral_mesh_color_adjustment(normalized):
+            existed = mesh_key in adjustments or raw_has_entry
+            adjustments.pop(mesh_key, None)
+        else:
+            existed = adjustments.get(mesh_key) == normalized
+            adjustments[mesh_key] = normalized
+        if adjustments:
+            data[MESH_COLOR_ADJUSTMENTS_KEY] = adjustments
+        else:
+            data.pop(MESH_COLOR_ADJUSTMENTS_KEY, None)
+        if not adjustments and not data and not existed:
+            return {"saved": False}
+        if existed and not _is_neutral_mesh_color_adjustment(normalized):
+            return {"saved": False}
+        if not existed and _is_neutral_mesh_color_adjustment(normalized):
+            return {"saved": False}
+        return _save(folder_path, data)
+
+
+def hydrate_mesh_color_adjustments(payload, data=None):
+    """Project saved color state through canonical/legacy mesh identities."""
+    saved = mesh_color_adjustments(data=data)
+    meshes = payload.get("meshes", {}) if isinstance(payload, dict) else {}
+    if not isinstance(meshes, dict):
+        return {}
+    legacy_key_counts = _legacy_mesh_key_counts(meshes)
+    hydrated = {}
+    for name, entry in meshes.items():
+        if not isinstance(entry, dict) or entry.get("error"):
+            continue
+        keys = _mesh_metadata_keys(name, entry, legacy_key_counts)
+        if not keys:
+            continue
+        value = next((saved[key] for key in keys if key in saved), None)
+        if value is not None:
+            hydrated[_canonical_mesh_key(name, entry)] = value.copy()
+    return hydrated
 
 
 def save_mesh_names(folder_path, names):

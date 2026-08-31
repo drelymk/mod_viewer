@@ -49,6 +49,7 @@ EXPECTED_API_METHODS = {
     "record_toggle",
     "remove_missing_asset_parts",
     "save_component_material_kind",
+    "save_mesh_color_adjustment",
     "save_mesh_names",
     "save_mesh_textures",
     "save_weight_selection",
