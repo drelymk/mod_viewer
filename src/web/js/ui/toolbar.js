@@ -198,7 +198,8 @@ export function initToolPopovers() {
       lightValue.value = level + '%';
       lightValue.textContent = level + '%';
     }
-    lightButton?.classList.toggle('active', level > 0);
+    lightButton?.classList.toggle('active', level === 100);
+    lightButton?.classList.toggle('partial', level > 0 && level < 100);
     lightButton?.classList.toggle('off', level === 0);
     const label = 'Key light: ' + (level === 0 ? 'Off' : level + '%');
     lightButton?.setAttribute('aria-label', label);

@@ -10,37 +10,29 @@ function createLightHandle() {
   canvas.width = canvas.height = 128;
   const context = canvas.getContext('2d');
   const center = 64;
-  const corona = context.createRadialGradient(center, center, 8, center, center, 54);
-  corona.addColorStop(0, 'rgba(255,218,112,.22)');
-  corona.addColorStop(0.45, 'rgba(255,196,76,.08)');
-  corona.addColorStop(1, 'rgba(255,184,70,0)');
-  context.fillStyle = corona;
+  const halo = context.createRadialGradient(center, center, 10, center, center, 52);
+  halo.addColorStop(0, 'rgba(255,240,170,.25)');
+  halo.addColorStop(0.4, 'rgba(255,214,115,.14)');
+  halo.addColorStop(0.72, 'rgba(255,198,86,.04)');
+  halo.addColorStop(1, 'rgba(255,190,70,0)');
+  context.fillStyle = halo;
   context.fillRect(0, 0, 128, 128);
 
-  context.save();
-  context.translate(center, center);
-  for (let index = 0; index < 12; index += 1) {
-    context.rotate(Math.PI / 6);
-    const ray = context.createLinearGradient(0, 23, 0, 42);
-    ray.addColorStop(0, 'rgba(255,243,165,.26)');
-    ray.addColorStop(1, 'rgba(246,201,93,0)');
-    context.strokeStyle = ray;
-    context.lineWidth = 2;
-    context.beginPath();
-    context.moveTo(0, 22);
-    context.lineTo(0, 41);
-    context.stroke();
-  }
-  context.restore();
+  const innerGlow = context.createRadialGradient(center, center, 3, center, center, 31);
+  innerGlow.addColorStop(0, 'rgba(255,253,240,.92)');
+  innerGlow.addColorStop(0.32, 'rgba(255,245,190,.72)');
+  innerGlow.addColorStop(0.7, 'rgba(255,218,111,.3)');
+  innerGlow.addColorStop(1, 'rgba(255,198,86,0)');
+  context.fillStyle = innerGlow;
+  context.fillRect(0, 0, 128, 128);
 
-  const disk = context.createRadialGradient(58, 57, 2, center, center, 20);
-  disk.addColorStop(0, '#fffde5');
-  disk.addColorStop(0.5, '#fff3a5');
-  disk.addColorStop(1, '#f6c95d');
-  context.fillStyle = disk;
-  context.beginPath();
-  context.arc(center, center, 19, 0, Math.PI * 2);
-  context.fill();
+  const core = context.createRadialGradient(60, 59, 1, center, center, 16);
+  core.addColorStop(0, '#fffdf0');
+  core.addColorStop(0.45, 'rgba(255,248,205,.98)');
+  core.addColorStop(0.8, 'rgba(255,224,126,.7)');
+  core.addColorStop(1, 'rgba(246,201,93,0)');
+  context.fillStyle = core;
+  context.fillRect(0, 0, 128, 128);
   const handle = new THREE.Sprite(new THREE.SpriteMaterial({
     map: new THREE.CanvasTexture(canvas), transparent: true,
     // Model depth must occlude the marker instead of showing through meshes.

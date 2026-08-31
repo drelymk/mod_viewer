@@ -927,6 +927,20 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
         assert toon_button.get_attribute("aria-pressed") == "false"
         assert toon_button.evaluate(
             "button => button.classList.contains('off')")
+        active_colors = page.evaluate("""() => {
+          const color = selector => getComputedStyle(
+            document.querySelector(selector)).backgroundColor;
+          return {
+            grid: color('#grid-btn'),
+            light: color('#light-btn'),
+          };
+        }""")
+        assert active_colors == {
+            "grid": "rgba(31, 111, 235, 0.22)",
+            "light": "rgba(227, 179, 65, 0.18)",
+        }
+        assert page.locator("#light-btn").evaluate(
+            "button => button.classList.contains('partial')")
         tool_order = page.evaluate(
             "() => [...document.querySelectorAll('#tool-buttons > .tool-btn')]"
             ".map(button => button.id)")
@@ -979,6 +993,9 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
             "Textures: diffuse only")
         assert page.locator("#texture-btn").get_attribute("aria-expanded") == "false"
         assert page.locator("#texture-popover").is_hidden()
+        assert page.evaluate(
+            "getComputedStyle(document.querySelector('#texture-btn')).backgroundColor"
+        ) == "rgba(227, 179, 65, 0.18)"
 
         page.locator("#light-btn").click()
         page.locator("#light-popover:not([hidden])").wait_for()
@@ -1018,7 +1035,11 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
             assert page.locator("#light-btn").get_attribute("aria-label") == expected_label
             assert page.locator("#light-btn").get_attribute("title") == expected_label
             assert page.locator("#light-btn").evaluate(
-                "(button, level) => button.classList.contains('active') === (level > 0)",
+                "(button, level) => button.classList.contains('active') === (level === 100)",
+                level,
+            )
+            assert page.locator("#light-btn").evaluate(
+                "(button, level) => button.classList.contains('partial') === (level > 0 && level < 100)",
                 level,
             )
             assert page.locator("#light-btn").evaluate(

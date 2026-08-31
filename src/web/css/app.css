@@ -391,11 +391,11 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
 #trackball-btn.off { background: var(--bg-control); }
 .tool-btn.active,
 #grid-btn:not(.off), #shading-btn:not(.off), #toon-btn:not(.off), #glossy-btn:not(.off),
-#texture-btn:not(.off), #trackball-btn:not(.off),
-#texture-btn.diffuse-normal, #texture-btn.diffuse-only {
-  background: rgba(227,179,65,.18); border-color: var(--warning); color: #f2cc72;
+#texture-btn:not(.off), #trackball-btn:not(.off) {
+  background: rgba(31,111,235,.22); border-color: var(--accent-soft); color: var(--accent-soft);
 }
-#ao-btn.partial {
+#texture-btn.diffuse-normal, #texture-btn.diffuse-only, #ao-btn.partial,
+#light-btn.partial {
   background: rgba(227,179,65,.18); border-color: var(--warning); color: #f2cc72;
 }
 .nav-gizmo-icon { width: 24px; height: 24px; overflow: visible; }
