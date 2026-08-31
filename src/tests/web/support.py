@@ -336,7 +336,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
                    "deleteToggle": [], "exportChanges": [],
-                   "saveMeshColorAdjustment": []},
+                   "saveMeshColorAdjustment": [], "analyzeTextureBake": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -437,6 +437,23 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   || payload.metadata?.material_profiles || {},
                 asset_resolution: payload.meshSemanticsAssetResolution
                   ?? payload.asset_resolution ?? null,
+              });
+            },
+            analyze_mesh_texture_bake: async (path, semanticKey, texKey, usage) => {
+              state.calls.analyzeTextureBake.push([path, semanticKey, texKey, usage]);
+              return copy(state.responses[path]?.textureBakeResponse || {
+                status: 'ok',
+                safety: 'safe',
+                semantic_key: semanticKey,
+                tex_key: texKey,
+                texture: {file: 'body.dds', width: 8, height: 8, format: 'bc7_unorm'},
+                coverage: {
+                  unit: 'block', unit_width: 4, unit_height: 4,
+                  total_units: 4, selected_units: 1, unique_units: 1,
+                  shared_units: 0, selected_percent: 25,
+                  shared_percent_of_selected: 0,
+                },
+                shared_with: [], unresolved_consumers: [],
               });
             },
             get_model_skinning_preview: async path => {

@@ -8,7 +8,6 @@ import webview
 from core.geometry.buffers import BufferStore
 from core.geometry.conventions import geometry_convention_for
 from core.geometry.mesh_builder import GeometryBlob
-from core.geometry.semantics import deduplicate_draws
 from core.geometry.skinning import (
     SkinningPreviewError, build_skinning_preview, skinning_source_descriptor,
 )
@@ -16,7 +15,8 @@ from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_file
 from core.mod_discovery import discover_ini_paths
 from core.ini.health import analyze_mod
-from app.mods.analysis import analyze_mod_inis
+from app.mods.analysis import resolved_draws
+from app.mods.texture_bake import analyze_texture_bake
 from core.textures.profiles import texture_profile_for
 
 from app.assets import folders as asset_folders
@@ -151,16 +151,22 @@ class ModPreview:
         except Exception:
             return self._semantic_read_error()
 
+    def analyze_mesh_texture_bake(
+            self, folder_path, semantic_key, tex_key, texture_usage):
+        """Analyze selected-mesh DDS coverage without modifying the mod."""
+        try:
+            folder_path, overrides, _pending, context = \
+                self.authoritative_context(folder_path)
+            return analyze_texture_bake(
+                context, overrides, self._active_mesh_keys.get(folder_path),
+                semantic_key, tex_key, texture_usage)
+        except Exception:
+            return self._semantic_read_error()
+
     @staticmethod
     def _skinning_draws(context, overrides):
         """Resolve every rendered draw once for the model preview."""
-        parsed = analyze_mod_inis(
-            context.ini_paths, context.mod_dir, overrides, context.docs)
-        draws = {}
-        for group in parsed.groups:
-            for draw in deduplicate_draws(group):
-                draws.setdefault(draw.label, (draw, group))
-        return parsed, draws
+        return resolved_draws(context, overrides)
 
     @staticmethod
     def _decode_skinning_draw(draw, group, mod_dir, buffers,

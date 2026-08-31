@@ -3,6 +3,7 @@
 import os
 from dataclasses import dataclass
 
+from core.geometry.semantics import deduplicate_draws
 from core.editing.present import SECTION_NAME as PRESENT_SECTION
 from core.ini.analysis import analyze_ini
 from core.ini.menu import attach_menu_images
@@ -231,3 +232,14 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
         game=resolve_game_detection(
             game_evidence, runtime_evidence, texture_api_evidence),
     )
+
+
+def resolved_draws(context, overrides=None):
+    """Resolve the current staged draw map once for analysis consumers."""
+    parsed = analyze_mod_inis(
+        context.ini_paths, context.mod_dir, overrides, context.docs)
+    draws = {}
+    for group in parsed.groups:
+        for draw in deduplicate_draws(group):
+            draws.setdefault(draw.label, (draw, group))
+    return parsed, draws

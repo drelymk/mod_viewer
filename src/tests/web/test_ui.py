@@ -953,6 +953,113 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         context.close()
 
 
+def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
+        edge_browser, frontend_url):
+    payload = _payload("Bake")
+    first = payload["meshes"]["Body-Bake-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::Bake-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    second = copy.deepcopy(first)
+    second["component"] = "Face Bake"
+    payload["meshes"]["Face-Bake-0"] = second
+    response = {
+        "status": "ok", "safety": "shared",
+        "texture": {"file": "Bake-one.dds", "width": 8, "height": 8,
+                     "format": "bc7_unorm"},
+        "coverage": {"unit": "block", "selected_units": 2,
+                     "total_units": 4, "unique_units": 1, "shared_units": 1,
+                     "selected_percent": 50, "shared_percent_of_selected": 50},
+        "shared_with": [{"semantic_key": "Face-Bake-0", "shared_units": 1}],
+        "unresolved_consumers": [],
+    }
+    context, page = _page(edge_browser, frontend_url, {"Bake": {
+        **payload, "textureBakeResponse": response,
+    }})
+    try:
+        _open(page, "Bake")
+        page.locator(".draw-item").first.wait_for()
+        page.evaluate("""() => {
+          window.modViewer.activeMeshes[1].visible = false;
+        }""")
+        page.evaluate("""async () => {
+          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
+          setMeshTextureState(window.modViewer.activeMeshes[1], {
+            diffuse: 'diffuse::Bake-two.dds',
+          });
+        }""")
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        button = page.locator(".inspector-texture-bake")
+        assert button.count() == 1
+        button.click()
+        page.locator("#texture-bake-modal-backdrop.show").wait_for()
+        assert page.locator("#texture-bake-body").inner_text().find(
+            "Texture Coverage Results") >= 0
+        assert page.locator("#texture-bake-close").count() == 1
+        assert page.locator("#texture-bake-close-x").count() == 1
+        assert page.locator("#texture-bake-body").inner_text().find(
+            "Coverage overlaps") >= 0
+        usage = page.evaluate("window.__fakeApi.calls.analyzeTextureBake[0][3]")
+        assert len(usage) == 2
+        assert {item["semantic_key"] for item in usage} == {
+            "Body-Bake-0", "Face-Bake-0"}
+        assert usage[1]["tex_key"] == "diffuse::Bake-two.dds"
+        assert page.evaluate("window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+        page.locator("#texture-bake-close").click()
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
+    finally:
+        context.close()
+
+
+def test_texture_coverage_action_explains_non_dds_without_backend_call(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"NonDDS": _payload("NonDDS")})
+    try:
+        _open(page, "NonDDS")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        color = page.locator(".inspector-color-section")
+        assert color.locator(".inspector-texture-bake").count() == 0
+        assert "requires a DDS source" in color.inner_text()
+        assert page.evaluate("window.__fakeApi.calls.analyzeTextureBake.length") == 0
+    finally:
+        context.close()
+
+
+def test_texture_coverage_stale_response_is_discarded(
+        edge_browser, frontend_url):
+    payload = _payload("Stale")
+    key = "diffuse::Stale-one.dds"
+    old_key = payload["meshes"]["Body-Stale-0"]["tex_key"]
+    payload["meshes"]["Body-Stale-0"]["tex_key"] = key
+    payload["texture_pools"]["p0"][0]["tex_key"] = key
+    payload["textures"][key] = payload["textures"].pop(old_key)
+    context, page = _page(edge_browser, frontend_url, {"Stale": payload})
+    try:
+        _open(page, "Stale")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.evaluate("""() => {
+          window.pywebview.api.analyze_mesh_texture_bake = async () =>
+            new Promise(resolve => { window.__releaseBake = resolve; });
+        }""")
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-modal-backdrop.show").wait_for()
+        page.wait_for_function("window.__releaseBake !== undefined")
+        page.evaluate("import('./js/scene/selection.js').then(({clearSelection}) => clearSelection())")
+        page.evaluate("window.__releaseBake({status: 'ok', safety: 'safe', coverage: {}})")
+        page.wait_for_function(
+            "document.querySelector('#texture-bake-modal-backdrop').classList.contains('show') === false")
+        assert page.locator("#texture-bake-state").count() == 0
+    finally:
+        context.close()
+
+
 def test_viewport_toolbar_popovers_and_responsive_overflow(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
