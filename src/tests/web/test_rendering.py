@@ -337,15 +337,15 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
         studio = select_preset("studio")
         assert studio["activeIblPreset"] == "studio"
         assert studio["environmentActive"]
-        assert studio["environmentIntensity"] == pytest.approx(0.15)
+        assert studio["environmentIntensity"] == pytest.approx(0.18)
         assert studio["ambientColor"] == 0xf5f7fa
-        assert studio["ambientIntensity"] == pytest.approx(0.03)
+        assert studio["ambientIntensity"] == pytest.approx(0.04)
         assert studio["hemisphereColor"] == 0xe1e9f3
         assert studio["hemisphereGroundColor"] == 0x454b55
-        assert studio["hemisphereIntensity"] == pytest.approx(0.06)
+        assert studio["hemisphereIntensity"] == pytest.approx(0.08)
         assert studio["accentColor"] == 0xffffff
         assert studio["accentPosition"] == [4, 8, 6]
-        assert studio["accentIntensity"] == pytest.approx(0.2)
+        assert studio["accentIntensity"] == pytest.approx(0.24)
         assert studio["activeDominantDirection"] == pytest.approx(
             [4 / math.sqrt(116), 8 / math.sqrt(116), 6 / math.sqrt(116)],
         )
@@ -636,7 +636,7 @@ def test_environment_ibl_failure_is_isolated_and_uses_legacy_lighting(
                     "ambient": 0.05, "hemisphere": 0.1, "accent": 0.3,
                 },
                 "studio": {
-                    "ambient": 0.03, "hemisphere": 0.06, "accent": 0.2,
+                    "ambient": 0.04, "hemisphere": 0.08, "accent": 0.24,
                 },
             }[working_profile]
             assert {key: working[key] for key in expected} == expected

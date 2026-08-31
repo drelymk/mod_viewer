@@ -338,11 +338,11 @@ const IBL_PROFILES = freeze({
     createCaptureScene: createIndoorCaptureScene,
   }),
   studio: freeze({
-    environmentIntensity: 0.15,
+    environmentIntensity: 0.18,
     lightIntensity: freeze({
-      ambient: 0.03,
-      hemisphere: 0.06,
-      accent: 0.2,
+      ambient: 0.04,
+      hemisphere: 0.08,
+      accent: 0.24,
     }),
     dominantDirection: directionFromPresetAccent('studio'),
     pmrem: DEFAULT_PMREM,
