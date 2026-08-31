@@ -137,12 +137,13 @@ export const ENVIRONMENT_PRESETS = freeze({
   ),
 });
 
-const OUTDOOR_SUN_DIRECTION = new THREE.Vector3()
-  .fromArray(ENVIRONMENT_PRESETS.outdoor.accent.position)
-  .normalize();
-const INDOOR_KEY_DIRECTION = new THREE.Vector3()
-  .fromArray(ENVIRONMENT_PRESETS.indoor.accent.position)
-  .normalize();
+function directionFromPresetAccent(id) {
+  return freeze(new THREE.Vector3()
+    .fromArray(ENVIRONMENT_PRESETS[id].accent.position)
+    .normalize()
+    .toArray());
+}
+
 const DEFAULT_PMREM = freeze({size: 256, sigma: 0, near: 0.1, far: 100});
 
 function configureOutdoorSky(sky) {
@@ -154,7 +155,7 @@ function configureOutdoorSky(sky) {
   sky.cloudCoverage.value = OUTDOOR_SKY.cloudCoverage;
   sky.cloudDensity.value = OUTDOOR_SKY.cloudDensity;
   sky.cloudElevation.value = OUTDOOR_SKY.cloudElevation;
-  sky.sunPosition.value.copy(OUTDOOR_SUN_DIRECTION);
+  sky.sunPosition.value.fromArray(IBL_PROFILES.outdoor.dominantDirection);
   sky.showSunDisc.value = false;
 }
 
@@ -208,7 +209,8 @@ function createIndoorCaptureScene() {
   floor.rotation.x = -Math.PI / 2;
   floor.position.fromArray(INDOOR_CAPTURE.floor.position);
 
-  const mainPosition = INDOOR_KEY_DIRECTION.clone()
+  const mainPosition = new THREE.Vector3()
+    .fromArray(IBL_PROFILES.indoor.dominantDirection)
     .multiplyScalar(INDOOR_CAPTURE.mainCard.distance)
     .toArray();
   const mainCard = createLightCard({
@@ -225,7 +227,7 @@ function createIndoorCaptureScene() {
     INDOOR_CAPTURE.roomLight.distance,
     INDOOR_CAPTURE.roomLight.decay,
   );
-  roomLight.position.copy(INDOOR_KEY_DIRECTION)
+  roomLight.position.fromArray(IBL_PROFILES.indoor.dominantDirection)
     .multiplyScalar(INDOOR_CAPTURE.roomLight.distanceFromOrigin);
   captureScene.add(room, floor, mainCard, ceilingCard, fillCard, roomLight);
   return captureScene;
@@ -234,21 +236,23 @@ function createIndoorCaptureScene() {
 const IBL_PROFILES = freeze({
   outdoor: freeze({
     environmentIntensity: 0.1,
-    lighting: freeze({
-      ambient: makeAmbient(0xdbeaff, 0.04),
-      hemisphere: makeHemisphere(0x78b5ed, 0x667068, 0.08),
-      accent: makeAccent(0xffe6bd, 0.4, [-6, 10, 6]),
+    lightIntensity: freeze({
+      ambient: 0.04,
+      hemisphere: 0.08,
+      accent: 0.4,
     }),
+    dominantDirection: directionFromPresetAccent('outdoor'),
     pmrem: DEFAULT_PMREM,
     createCaptureScene: createOutdoorCaptureScene,
   }),
   indoor: freeze({
     environmentIntensity: 0.15,
-    lighting: freeze({
-      ambient: makeAmbient(0xffd4af, 0.05),
-      hemisphere: makeHemisphere(0xffd3a6, 0x2b3440, 0.1),
-      accent: makeAccent(0xffb36b, 0.3, [4, 8, 5]),
+    lightIntensity: freeze({
+      ambient: 0.05,
+      hemisphere: 0.1,
+      accent: 0.3,
     }),
+    dominantDirection: directionFromPresetAccent('indoor'),
     pmrem: DEFAULT_PMREM,
     createCaptureScene: createIndoorCaptureScene,
   }),
@@ -385,7 +389,7 @@ export function createEnvironmentController({
     scene.background = background.texture;
   }
 
-  function applyAccent(config) {
+  function applyAccent(config, intensity = null) {
     if (!config) {
       accentLight.visible = false;
       accentLight.intensity = 0;
@@ -394,17 +398,18 @@ export function createEnvironmentController({
     accentLight.color.set(config.color);
     // This is local to lightTarget, so the accent follows offset models.
     accentLight.position.fromArray(config.position);
-    accentLight.intensity = config.intensity;
+    accentLight.intensity = intensity ?? config.intensity;
     accentLight.visible = true;
   }
 
-  function applyLights(preset) {
+  function applyLights(preset, intensities = null) {
     ambientLight.color.set(preset.ambient.color);
-    ambientLight.intensity = preset.ambient.intensity;
+    ambientLight.intensity = intensities?.ambient ?? preset.ambient.intensity;
     hemisphereLight.color.set(preset.hemisphere.color);
     hemisphereLight.groundColor.set(preset.hemisphere.groundColor);
-    hemisphereLight.intensity = preset.hemisphere.intensity;
-    applyAccent(preset.accent);
+    hemisphereLight.intensity = intensities?.hemisphere
+      ?? preset.hemisphere.intensity;
+    applyAccent(preset.accent, intensities?.accent);
   }
 
   function restoreEnvironment() {
@@ -431,7 +436,7 @@ export function createEnvironmentController({
     const profile = IBL_PROFILES[id];
     const resource = iblResources.get(id);
     if (profile && resource?.available && resource.texture) {
-      applyLights(profile.lighting);
+      applyLights(preset, profile.lightIntensity);
       scene.environment = resource.texture;
       scene.environmentIntensity = profile.environmentIntensity;
       return;
@@ -540,8 +545,13 @@ export function createEnvironmentController({
       resources,
       totalPmremGenerationCount: [...iblResources.values()]
         .reduce((total, resource) => total + resource.generationCount, 0),
-      sunDirection: OUTDOOR_SUN_DIRECTION.toArray(),
+      activeDominantDirection: getDominantLightDirection(),
     };
+  }
+
+  function getDominantLightDirection() {
+    const direction = IBL_PROFILES[currentPresetId]?.dominantDirection;
+    return direction ? [...direction] : null;
   }
 
   function getPreset() {
@@ -566,6 +576,7 @@ export function createEnvironmentController({
     prepare,
     setPreset,
     getPreset,
+    getDominantLightDirection,
     getDebugState,
     dispose,
   };

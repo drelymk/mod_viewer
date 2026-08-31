@@ -241,6 +241,7 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
           };
         }""")
         assert initial["activeIblPreset"] is None
+        assert initial["activeDominantDirection"] is None
         assert not initial["environmentActive"]
         assert not initial["hasVisibleSky"]
         assert initial["resources"] == {
@@ -280,8 +281,13 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
                 environmentId: scene.environment?.uuid || null,
                 backgroundIsCanvas: scene.background?.isCanvasTexture === true,
                 hasVisibleSky: scene.getObjectByProperty('isSkyMesh', true) != null,
+                ambientColor: ambient?.color.getHex(),
                 ambientIntensity: ambient?.intensity,
+                hemisphereColor: hemisphere?.color.getHex(),
+                hemisphereGroundColor: hemisphere?.groundColor.getHex(),
                 hemisphereIntensity: hemisphere?.intensity,
+                accentColor: accent?.color.getHex(),
+                accentPosition: accent?.position.toArray(),
                 accentIntensity: accent?.intensity};
             }""")
 
@@ -289,9 +295,17 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
         assert indoor["activeIblPreset"] == "indoor"
         assert indoor["environmentActive"]
         assert indoor["environmentIntensity"] == pytest.approx(0.15)
+        assert indoor["ambientColor"] == 0xffd4af
         assert indoor["ambientIntensity"] == pytest.approx(0.05)
+        assert indoor["hemisphereColor"] == 0xffd3a6
+        assert indoor["hemisphereGroundColor"] == 0x2b3440
         assert indoor["hemisphereIntensity"] == pytest.approx(0.1)
+        assert indoor["accentColor"] == 0xffb36b
+        assert indoor["accentPosition"] == [4, 8, 5]
         assert indoor["accentIntensity"] == pytest.approx(0.3)
+        assert indoor["activeDominantDirection"] == pytest.approx(
+            [4 / math.sqrt(105), 8 / math.sqrt(105), 5 / math.sqrt(105)],
+        )
         assert indoor["environmentId"] is not None
         assert indoor["environmentId"] != initial["environmentId"]
         assert indoor["backgroundIsCanvas"]
@@ -301,18 +315,25 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
         assert outdoor["activeIblPreset"] == "outdoor"
         assert outdoor["environmentActive"]
         assert outdoor["environmentIntensity"] == pytest.approx(0.1)
+        assert outdoor["ambientColor"] == 0xdbeaff
         assert outdoor["ambientIntensity"] == pytest.approx(0.04)
+        assert outdoor["hemisphereColor"] == 0x78b5ed
+        assert outdoor["hemisphereGroundColor"] == 0x667068
         assert outdoor["hemisphereIntensity"] == pytest.approx(0.08)
+        assert outdoor["accentColor"] == 0xffe6bd
+        assert outdoor["accentPosition"] == [-6, 10, 6]
         assert outdoor["accentIntensity"] == pytest.approx(0.4)
         assert outdoor["environmentId"] not in (None, indoor["environmentId"])
         assert outdoor["backgroundIsCanvas"]
         assert not outdoor["hasVisibleSky"]
-        assert outdoor["sunDirection"] == pytest.approx(
+        assert outdoor["activeDominantDirection"] == pytest.approx(
             [-6 / math.sqrt(172), 10 / math.sqrt(172), 6 / math.sqrt(172)],
         )
+        assert "sunDirection" not in outdoor
 
         studio = select_preset("studio")
         assert studio["activeIblPreset"] is None
+        assert studio["activeDominantDirection"] is None
         assert not studio["environmentActive"]
         assert studio["environmentId"] == initial["environmentId"]
         assert studio["environmentIntensity"] == initial["environmentIntensity"]
@@ -324,6 +345,7 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
         assert indoor_again["environmentId"] == indoor["environmentId"]
         assert outdoor_again["environmentId"] == outdoor["environmentId"]
         assert default["activeIblPreset"] is None
+        assert default["activeDominantDirection"] is None
         assert default["environmentId"] == initial["environmentId"]
         assert default["environmentIntensity"] == initial["environmentIntensity"]
         assert indoor_third["environmentId"] == indoor["environmentId"]
@@ -379,10 +401,15 @@ def test_environment_controller_prepare_is_single_flight(
             const second = controller.prepare();
             const [firstResult, secondResult] = await Promise.all([first, second]);
             const debug = controller.getDebugState();
+            const dominantDirections = {};
+            for (const id of ['default', 'indoor', 'outdoor', 'studio']) {
+              controller.setPreset(id);
+              dominantDirections[id] = controller.getDominantLightDirection();
+            }
             controller.dispose();
             return {
               firstResult, secondResult, generationCalls, generationOrder,
-              targetDisposals, debug,
+              targetDisposals, debug, dominantDirections,
             };
           } finally {
             THREE.PMREMGenerator.prototype.fromScene = originalFromScene;
@@ -400,6 +427,14 @@ def test_environment_controller_prepare_is_single_flight(
             "generationCount"] == 1
         assert result["debug"]["totalPmremGenerationCount"] == 2
         assert result["debug"]["preparationInFlight"] is False
+        assert result["dominantDirections"]["default"] is None
+        assert result["dominantDirections"]["indoor"] == pytest.approx(
+            [4 / math.sqrt(105), 8 / math.sqrt(105), 5 / math.sqrt(105)],
+        )
+        assert result["dominantDirections"]["outdoor"] == pytest.approx(
+            [-6 / math.sqrt(172), 10 / math.sqrt(172), 6 / math.sqrt(172)],
+        )
+        assert result["dominantDirections"]["studio"] is None
     finally:
         context.close()
 
