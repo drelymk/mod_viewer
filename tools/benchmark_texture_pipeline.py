@@ -5,10 +5,12 @@ and prints JSON suitable for comparing PRs:
 
     python tools/benchmark_texture_pipeline.py "<mod-folder>"
 
-Each worker loads the mod through ``ModViewerAPI``, starts the real localhost
-server, displays the payload in Edge, and waits for the visible texture
-requests to settle.  The worker is isolated so Pillow's cache and browser
-processes cannot make later concurrency rows artificially warm.
+Each worker starts the real localhost server, loads the mod through the
+``pywebview.api.load_mod``-shaped browser bridge backed by ``ModViewerAPI``,
+and runs the frontend load path in Edge. It reports backend stages, bridge
+transport, geometry transfer, CPU-side Three.js construction, and texture
+requests. The worker is isolated so Pillow's cache and browser processes
+cannot make later concurrency rows artificially warm.
 """
 
 from __future__ import annotations
@@ -117,17 +119,108 @@ class RenderConcurrencyProbe:
         return measured
 
 
-def _install_timing(module, name, label, timings):
-    original = getattr(module, name)
+def _install_load_instrumentation(timings, counters):
+    """Install opt-in probes around the existing load pipeline.
 
-    def measured(*args, **kwargs):
+    The worker is isolated for each benchmark row, so these probes can wrap
+    the real functions without becoming application state or changing the
+    production loader contract.
+    """
+    from app.bridge import mod_preview
+    from app.runtime import server
+    from app.session import edit as edit_session
+    from app.mods import metadata
+    from app.mods import loader as mod_loader
+    from app.assets import index as asset_index
+    from core.geometry import buffers as geometry_buffers
+    from core.geometry import mesh_builder
+
+    patches = []
+
+    def timing(module, name, label):
+        original = getattr(module, name)
+
+        def measured(*args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return original(*args, **kwargs)
+            finally:
+                timings[label].append(time.perf_counter() - started)
+
+        setattr(module, name, measured)
+        patches.append((module, name, original))
+
+    timing(mod_preview.ModPreview, "authoritative_context",
+           "authoritative_context")
+    timing(mod_preview, "discover_ini_paths", "ini_discovery")
+    timing(edit_session, "load_documents", "session_load")
+    timing(metadata, "load", "metadata_load")
+    timing(mod_loader, "analyze_mod_inis", "analyze_mod_inis")
+    timing(mod_loader, "enrich_mod_analysis", "asset_enrichment")
+    timing(mod_loader, "build_mesh_result", "build_mesh_result")
+    timing(metadata, "hydrate_textures", "metadata_hydrate_textures")
+    timing(server, "publish_payload_geometry", "geometry_publication")
+
+    original_index_load = asset_index.load_index
+
+    def measured_index_load(*args, **kwargs):
+        started = time.perf_counter()
+        filename = asset_index.index_path(*args[:2])
+        try:
+            return original_index_load(*args, **kwargs)
+        finally:
+            timings["asset_index_load"].append(
+                time.perf_counter() - started)
+            if os.path.isfile(filename):
+                counters["asset_index_bytes"] += os.path.getsize(filename)
+                counters["asset_index_files_read"] += 1
+
+    asset_index.load_index = measured_index_load
+    patches.append((asset_index, "load_index", original_index_load))
+
+    original_raw = geometry_buffers.BufferStore.raw
+
+    def measured_raw(store, path):
+        was_cached = path in store._raw
+        result = original_raw(store, path)
+        if not was_cached:
+            counters["raw_buffer_bytes_read"] += len(result)
+            counters["raw_buffer_files_read"] += 1
+        return result
+
+    geometry_buffers.BufferStore.raw = measured_raw
+    patches.append((geometry_buffers.BufferStore, "raw", original_raw))
+
+    original_pack = mesh_builder.pack_draw_geometry
+
+    def measured_pack(*args, **kwargs):
         started = time.perf_counter()
         try:
-            return original(*args, **kwargs)
+            result = original_pack(*args, **kwargs)
+            if result is not None:
+                counters["packed_draw_count"] += 1
+                counters["packed_vertices"] += len(result.positions) // 12
+                counters["packed_indices"] += len(result.indices) // 4
+                counters["shape_target_bytes"] += sum(
+                    len(target.positions)
+                    + len(target.low_positions or b"")
+                    for target in result.shape_targets)
+                counters["meshes_missing_authored_normals"] += int(
+                    result.normals is None)
+            return result
         finally:
-            timings[label].append(time.perf_counter() - started)
+            timings["pack_draw_geometry"].append(
+                time.perf_counter() - started)
 
-    setattr(module, name, measured)
+    mesh_builder.pack_draw_geometry = measured_pack
+    patches.append((mesh_builder, "pack_draw_geometry", original_pack))
+
+    return patches
+
+
+def _restore_patches(patches):
+    for module, name, original in reversed(patches):
+        setattr(module, name, original)
 
 
 class _ProcessSampler:
@@ -333,34 +426,64 @@ else:  # pragma: no cover - definitions are selected by platform
         return 0, 0.0
 
 
-def _run_browser(base_url, payload, profiler, sampler, concurrency,
+def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
                  browser_channel, render_probe):
     from playwright.sync_api import sync_playwright
 
     requested_urls = set()
     texture_responses = []
+    geometry_responses = []
     page_errors = []
-    display_started = None
+    console_errors = []
+    payload_holder = {}
+    backend_events_holder = []
+    bridge_callback_timings = []
+    bridge_json_serialization_timings = []
 
     def on_request(request):
         if "/texture/" in request.url:
             requested_urls.add(request.url)
 
     def on_response(response):
-        if "/texture/" not in response.url:
+        if "/texture/" not in response.url and "/geometry/" not in response.url:
             return
         try:
             bytes_served = int(response.headers.get("content-length", "0"))
         except (TypeError, ValueError):
             bytes_served = 0
-        texture_responses.append({
+        item = {
             "url": response.url,
             "status": response.status,
             "bytes": bytes_served,
-        })
+        }
+        if "/texture/" in response.url:
+            texture_responses.append(item)
+        else:
+            geometry_responses.append(item)
 
     def on_page_error(error):
         page_errors.append(str(error))
+
+    def on_console(message):
+        if message.type == "error":
+            console_errors.append(message.text)
+
+    def bridge_load_mod(path, disabled_ini=False):
+        started = time.perf_counter()
+        try:
+            result = api.load_mod(path, disabled_ini)
+        finally:
+            bridge_callback_timings.append(time.perf_counter() - started)
+            backend_events_holder.extend(profiler.clear())
+        payload_holder["payload"] = result
+        if isinstance(result, dict):
+            serialization_started = time.perf_counter()
+            payload_holder["json_bytes"] = len(json.dumps(
+                result, ensure_ascii=False,
+                separators=(",", ":")).encode("utf-8"))
+            bridge_json_serialization_timings.append(
+                time.perf_counter() - serialization_started)
+        return result
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -368,51 +491,164 @@ def _run_browser(base_url, payload, profiler, sampler, concurrency,
             headless=True,
             args=["--use-angle=swiftshader"],
         )
-        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        context = browser.new_context(
+            viewport={"width": 1400, "height": 900}, bypass_csp=True)
+        page = context.new_page()
         page.set_default_timeout(180000)
         page.on("request", on_request)
         page.on("response", on_response)
         page.on("pageerror", on_page_error)
+        page.on("console", on_console)
+
+        page.expose_function("__benchmark_load_mod", bridge_load_mod)
+        page.add_init_script(
+            """
+            globalThis.__modViewerBenchmark = {enabled: true};
+            window.pywebview = {api: {
+              load_mod: (...args) => window.__benchmark_load_mod(...args),
+              has_pending_changes: async () => false,
+              get_diagnostics: async () => ({
+                summary: {issues: 0, errors: 0, warnings: 0},
+                files: {}, issues: [],
+              }),
+              consume_startup_request: async () => null,
+              get_mod_folders: async () => ({folders: []}),
+              get_asset_folders: async () => ({folders: []}),
+              get_panel_opacity: async () => ({value: 58}),
+            }};
+            """)
 
         navigation_started = time.perf_counter()
         page.goto(base_url, wait_until="load", timeout=180000)
         navigation_seconds = time.perf_counter() - navigation_started
 
-        display_started = time.perf_counter()
-        display_start_browser_ms = page.evaluate(
-            """async payload => {
-              const started = performance.now();
-              await window.modViewer.displayMeshPayload(payload);
-              return started;
-            }""",
-            payload)
-        display_seconds = time.perf_counter() - display_started
-        texture_started = display_started
+        renderer_available = True
+        bootstrap_error = None
+        try:
+            page.wait_for_function(
+                "(window.modViewer && typeof window.modViewer.switchMod === 'function')"
+                " || document.getElementById('renderer-error')?.classList.contains('show')",
+                timeout=30000)
+        except Exception as error:
+            renderer_available = False
+            bootstrap_error = (
+                f"{error}; page_errors={page_errors}; "
+                f"console_errors={console_errors}")
+        else:
+            renderer_available = bool(page.evaluate(
+                "window.modViewer && typeof window.modViewer.switchMod === 'function'"))
+            if not renderer_available:
+                bootstrap_error = page.locator("#renderer-error").inner_text()
+        frontend_started = time.perf_counter()
+        if renderer_available:
+            bridge_result = page.evaluate(
+                """async path => {
+                  const loaded = await window.modViewer.switchMod(path);
+                  // Let the probe's first requestAnimationFrame callback run
+                  // before returning its snapshot to Python.
+                  await new Promise(resolve => requestAnimationFrame(resolve));
+                  return {
+                    loaded,
+                    timing: window.modViewer.getLoadBenchmark(),
+                  };
+                }""",
+                mod_path)
+        else:
+            # Headless Edge can expose navigator.gpu while offering no usable
+            # adapter. Keep the backend/bridge and CPU-side Three.js creation
+            # measurable, but label this path because it cannot render a GPU
+            # frame. A WebGPU-capable run always uses switchMod above.
+            bridge_result = page.evaluate(
+                """async path => {
+                  const flow = await import('./js/app/model-flow.js');
+                  const benchmark = await import('./js/app/load-benchmark.js');
+                  const {viewerState} = await import('./js/app/state.js');
+                  viewerState.currentModPath = path;
+                  viewerState.currentSource = {kind: 'mod', path};
+                  benchmark.beginLoadBenchmark();
+                  const data = await benchmark.measureLoadStage(
+                    'bridge_load_mod', () => window.pywebview.api.load_mod(path));
+                  if (data?.error) {
+                    benchmark.finishLoadBenchmark({success: false, error: data.error});
+                    return {
+                      loaded: false,
+                      timing: benchmark.getLoadBenchmark(),
+                    };
+                  }
+                  await flow.displayMeshPayload(data);
+                  benchmark.finishLoadBenchmark({
+                    success: true,
+                    active_meshes: (await import('./js/mesh/visibility.js')).activeMeshes.length,
+                    payload_meshes: Object.keys(data?.meshes || {}).length,
+                  });
+                  await new Promise(resolve => requestAnimationFrame(resolve));
+                  return {
+                    loaded: true,
+                    timing: benchmark.getLoadBenchmark(),
+                  };
+                }""",
+                mod_path)
+        frontend_elapsed = time.perf_counter() - frontend_started
+        frontend = bridge_result.get("timing") or {}
+        texture_started = frontend_started
         network_idle_error = None
         try:
             page.wait_for_load_state("networkidle", timeout=180000)
         except Exception as error:
             network_idle_error = str(error)
-        page.wait_for_timeout(250)
+        # Without a WebGPU adapter Three.js still queues texture requests,
+        # but there is no render loop to keep the page alive while the local
+        # PNG workers finish. Give those requests a short settling window so
+        # the benchmark does not close the client socket mid-response.
+        page.wait_for_timeout(5000 if not renderer_available else 250)
         texture_finished = time.perf_counter()
-        resource_metrics = page.evaluate("""displayStart => performance
+        resource_metrics = page.evaluate("""loadStart => performance
           .getEntriesByType('resource')
           .filter(entry => entry.name.includes('/texture/'))
           .map(entry => ({
             duration: entry.duration,
             response_end: entry.responseEnd - entry.startTime,
-            elapsed_since_display: entry.responseEnd - displayStart,
-          }))""", display_start_browser_ms)
+            elapsed_since_load: entry.responseEnd - loadStart,
+          }))""", frontend.get("started", 0))
         response_elapsed = [
-            entry["elapsed_since_display"] / 1000.0
+            entry["elapsed_since_load"] / 1000.0
             for entry in resource_metrics
-            if entry["elapsed_since_display"] >= 0
+            if entry["elapsed_since_load"] >= 0
         ]
-        active_meshes = page.evaluate(
-            "window.modViewer.activeMeshes.length")
+        active_meshes = (page.evaluate("window.modViewer.activeMeshes.length")
+                         if renderer_available else frontend.get(
+                             "active_meshes", 0))
         browser_result = {
             "navigation_seconds": navigation_seconds,
-            "browser_display_seconds": display_seconds,
+            "browser_display_seconds": frontend.get(
+                "total_seconds", frontend_elapsed),
+            "frontend": frontend,
+            "frontend_evaluate_seconds": frontend_elapsed,
+            "bridge_load_mod_seconds": frontend.get("stages", {}).get(
+                "bridge_load_mod"),
+            "geometry_fetch_arraybuffer_seconds": frontend.get(
+                "stages", {}).get("geometry_fetch_arraybuffer"),
+            "build_mesh_panel_seconds": frontend.get("stages", {}).get(
+                "build_mesh_panel"),
+            "control_panels_seconds": frontend.get("stages", {}).get(
+                "control_panels"),
+            "refresh_all_seconds": frontend.get("stages", {}).get(
+                "refresh_all"),
+            "fit_to_seconds": frontend.get("stages", {}).get("fit_to"),
+            "first_request_animation_frame_seconds": frontend.get(
+                "first_request_animation_frame_seconds"),
+            "renderer_available": renderer_available,
+            "renderer_bootstrap_error": bootstrap_error,
+            "benchmark_path": "switchMod" if renderer_available
+                else "displayMeshPayload_without_webgpu",
+            "bridge_callback_seconds": sum(bridge_callback_timings),
+            "bridge_payload_json_serialization_seconds": sum(
+                bridge_json_serialization_timings),
+            "bridge_transport_serialization_seconds": max(
+                0.0,
+                frontend.get("stages", {}).get("bridge_load_mod", 0.0)
+                - sum(bridge_callback_timings)
+                - sum(bridge_json_serialization_timings)),
             "first_texture_response_seconds": min(
                 response_elapsed, default=None),
             "all_texture_responses_seconds": max(
@@ -435,52 +671,69 @@ def _run_browser(base_url, payload, profiler, sampler, concurrency,
                 if not response["url"].split("?", 1)[0].lower().endswith(".dds")),
             "texture_bytes_served": sum(
                 response["bytes"] for response in texture_responses),
+            "geometry_response_count": len(geometry_responses),
+            "geometry_bytes_served": sum(
+                response["bytes"] for response in geometry_responses),
+            "geometry_http_seconds": max(
+                (entry["response_end"] / 1000.0
+                 for entry in page.evaluate("""performance
+                   .getEntriesByType('resource')
+                   .filter(entry => entry.name.includes('/geometry/'))
+                   .map(entry => ({response_end: entry.responseEnd - entry.startTime}))""")),
+                default=0.0),
             "http_resource_max_seconds": max(
                 (entry["response_end"] / 1000.0
                  for entry in resource_metrics),
                 default=0.0),
             "active_meshes": active_meshes,
             "page_errors": page_errors,
+            "console_errors": console_errors,
             "network_idle_error": network_idle_error,
         }
+        if not bridge_result.get("loaded"):
+            raise RuntimeError(
+                f"Frontend mod load failed: {frontend.get('error') or bridge_result}")
+        context.close()
         browser.close()
 
     texture_window = sampler.window(texture_started, texture_finished)
     browser_result.update(texture_window)
     browser_result["rss_cpu_source"] = sampler.source
     browser_result["peak_simultaneous_encodes"] = render_probe.peak
-    return browser_result
+    return browser_result, payload_holder.get("payload"), backend_events_holder
 
 
 def _run_once(mod_path, concurrency, browser_channel):
-    from app.bridge import mod_preview
-    from app.session import edit as edit_session
-    from app.mods import metadata, loader as mod_loader
     from app.runtime import server
     from app.bridge.api import ModViewerAPI
     from core import textures
 
     timings = defaultdict(list)
+    counters = defaultdict(int)
     profiler = TextureProfiler()
     sampler = _ProcessSampler()
     sampler.start()
     old_hook = textures.set_texture_profile_hook(profiler)
     textures.reset_texture_cache()
-    for module, name, label in (
-        (mod_preview, "discover_ini_paths", "ini_discovery"),
-        (edit_session, "load_documents", "session_load"),
-        (metadata, "load", "metadata_load"),
-        (mod_loader, "load_mod", "mod_loader_load_mod"),
-        (metadata, "hydrate_textures", "metadata_hydrate_textures"),
-        (server, "publish_payload_geometry", "geometry_publication"),
-    ):
-        _install_timing(module, name, label, timings)
-
     api = ModViewerAPI()
     api._access.remember_mod_picker_selection(mod_path)
-    backend_started = time.perf_counter()
-    payload = api.load_mod(mod_path)
-    backend_seconds = time.perf_counter() - backend_started
+    patches = _install_load_instrumentation(timings, counters)
+
+    server._texture_encode_semaphore = threading.BoundedSemaphore(concurrency)
+    render_probe = RenderConcurrencyProbe()
+    original_server_render = server.render_texture_png
+    server.render_texture_png = render_probe.wrap(original_server_render)
+    try:
+        base_url = server.start()
+        browser, payload, backend_events = _run_browser(
+            base_url, api, mod_path, profiler, sampler, concurrency,
+            browser_channel, render_probe)
+    finally:
+        server.render_texture_png = original_server_render
+        textures.set_texture_profile_hook(old_hook)
+        sampler.stop()
+        _restore_patches(patches)
+
     if not isinstance(payload, dict) or payload.get("error"):
         raise RuntimeError(f"Mod load failed: {payload}")
 
@@ -488,7 +741,6 @@ def _run_once(mod_path, concurrency, browser_channel):
     sources = list(publication._sources.values()) if publication else []
     source_paths = {
         os.path.normcase(os.path.abspath(source.path)) for source in sources}
-    backend_events = profiler.clear()
     backend_rendered = {
         (event.get("path"), event.get("role"))
         for event in backend_events if event["stage"] == "encoded"
@@ -497,20 +749,6 @@ def _run_once(mod_path, concurrency, browser_channel):
         identity for identity in backend_rendered
         if os.path.normcase(identity[0]) in source_paths
     }
-
-    server._texture_encode_semaphore = threading.BoundedSemaphore(concurrency)
-    render_probe = RenderConcurrencyProbe()
-    original_server_render = server.render_texture_png
-    server.render_texture_png = render_probe.wrap(original_server_render)
-    try:
-        base_url = server.start()
-        browser = _run_browser(
-            base_url, payload, profiler, sampler, concurrency,
-            browser_channel, render_probe)
-    finally:
-        server.render_texture_png = original_server_render
-        textures.set_texture_profile_hook(old_hook)
-        sampler.stop()
 
     texture_events = profiler.clear()
     profile = profiler.summarize(texture_events)
@@ -535,15 +773,27 @@ def _run_once(mod_path, concurrency, browser_channel):
         if isinstance(pool, list))
     payload_bytes = len(json.dumps(
         payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    counters["mesh_count"] = len(mesh_entries)
+    counters["draw_count"] = len(mesh_entries)
+    counters["final_geometry_bytes"] = (
+        (payload.get("geometry") or {}).get("length", 0)
+        if isinstance(payload.get("geometry"), dict) else 0)
+    counters["structured_bridge_payload_bytes"] = payload_bytes
     return {
         "concurrency": concurrency,
         "backend": {
-            "api_load_seconds": backend_seconds,
-            "mod_loader_load_mod_seconds": sum(
-                timings["mod_loader_load_mod"]),
+            "api_load_seconds": browser.get("bridge_callback_seconds", 0.0),
+            "authoritative_context_seconds": sum(
+                timings["authoritative_context"]),
             "ini_discovery_seconds": sum(timings["ini_discovery"]),
             "session_load_seconds": sum(timings["session_load"]),
             "metadata_load_seconds": sum(timings["metadata_load"]),
+            "analyze_mod_inis_seconds": sum(timings["analyze_mod_inis"]),
+            "asset_index_load_seconds": sum(timings["asset_index_load"]),
+            "asset_enrichment_seconds": sum(timings["asset_enrichment"]),
+            "build_mesh_result_seconds": sum(timings["build_mesh_result"]),
+            "pack_draw_geometry_seconds": sum(
+                timings["pack_draw_geometry"]),
             "metadata_hydrate_textures_seconds": sum(
                 timings["metadata_hydrate_textures"]),
             "geometry_publication_seconds": sum(
@@ -554,6 +804,7 @@ def _run_once(mod_path, concurrency, browser_channel):
             "backend_model_texture_renders": len(backend_model_rendered),
             "backend_other_texture_renders": len(backend_rendered)
                 - len(backend_model_rendered),
+            **counters,
         },
         "assets": {
             "mesh_count": len(mesh_entries),

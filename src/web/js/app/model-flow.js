@@ -25,6 +25,9 @@ import {
 } from '../panels/health-report.js';
 import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
+import {
+  beginLoadBenchmark, finishLoadBenchmark, measureLoadStage,
+} from './load-benchmark.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -112,6 +115,7 @@ function beginModLoad(path, message, {
   preserveModelOrientation = false,
   onReload = null,
 } = {}) {
+  beginLoadBenchmark();
   viewerState.assetFill.epoch += 1;
   viewerState.currentModPath = path;
   viewerState.currentSource = { kind: 'mod', path };
@@ -163,11 +167,13 @@ export async function displayMeshPayload(payload, {
 } = {}) {
   const geometry = payload.geometry;
   if (geometry) {
-    const response = await fetch(geometry.url, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`Geometry download failed (${response.status}).`);
-    const blob = await response.arrayBuffer();
-    if (blob.byteLength !== geometry.length) throw new Error('Geometry download was incomplete.');
-    setGeometryBlob(blob);
+    await measureLoadStage('geometry_fetch_arraybuffer', async () => {
+      const response = await fetch(geometry.url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`Geometry download failed (${response.status}).`);
+      const blob = await response.arrayBuffer();
+      if (blob.byteLength !== geometry.length) throw new Error('Geometry download was incomplete.');
+      setGeometryBlob(blob);
+    });
   } else {
     setGeometryBlob(null);
   }
@@ -192,7 +198,7 @@ export async function displayMeshPayload(payload, {
     toggles: controls.toggles || {}, menu: controls.menu || {},
   });
   setTextures(payload.textures);
-  buildMeshPanel(
+  await measureLoadStage('build_mesh_panel', () => buildMeshPanel(
     meshes, modelPath, payload.metadata?.mesh_names || {},
     payload.metadata?.material_profiles || {},
     {
@@ -204,27 +210,29 @@ export async function displayMeshPayload(payload, {
       texturePicker: assetMode
         ? (role => window.pywebview.api.pick_asset_texture_file(
           viewerState.currentSource.path, role)) : null,
+    }));
+  await measureLoadStage('control_panels', () => {
+    buildTogglePanel(controls.toggles, {
+      modPath: viewerState.currentModPath, onChange: onToggleChange,
     });
-  buildTogglePanel(controls.toggles, {
-    modPath: viewerState.currentModPath, onChange: onToggleChange,
+    buildMenuPanel(controls.menu);
+    buildPresentPanel(controls.present, {
+      modPath: viewerState.currentModPath, onChange: onPresentChange,
+    });
   });
-  buildMenuPanel(controls.menu);
-  buildPresentPanel(controls.present, {
-    modPath: viewerState.currentModPath, onChange: onPresentChange,
-  });
-  refreshAll({
+  await measureLoadStage('refresh_all', () => refreshAll({
     force: { visibility: true, textures: true, shapes: true },
-  });
+  }));
   setMeshesAvailable(true);
   viewerState.rightDockEnabled = true;
   syncViewportControlPlacement();
-  fitTo(activeMeshes, {
+  await measureLoadStage('fit_to', () => fitTo(activeMeshes, {
     preserveCamera,
     // WWMI models use the opposite horizontal facing convention from the
     // viewer's default front view. Keep this as a model base transform so
     // camera controls and viewer-only orientation state remain independent.
     initialRotationY: payload.metadata?.game?.id === 'wuwa' ? Math.PI : 0,
-  });
+  }));
 
   updateAssetFillButton();
   showLoading(false);
@@ -237,13 +245,20 @@ async function loadModAt(path, disabledIni, handlers = {}) {
     onReload: handlers.onReload,
   });
 
-  const data = disabledIni === undefined
-    ? await window.pywebview.api.load_mod(path)
-    : await window.pywebview.api.load_mod(path, disabledIni);
+  let data;
+  try {
+    data = await measureLoadStage('bridge_load_mod', () => disabledIni === undefined
+      ? window.pywebview.api.load_mod(path)
+      : window.pywebview.api.load_mod(path, disabledIni));
+  } catch (error) {
+    finishLoadBenchmark({success: false, error: error?.message || String(error)});
+    throw error;
+  }
   setHealthReport(data?.health, data?.asset_resolution);
   if (data && data.error) {
     showLoading(false);
-    await refreshPendingState();
+    await measureLoadStage('refresh_pending_state', () => refreshPendingState());
+    finishLoadBenchmark({success: false, error: data.error});
     await alertDialog('Could not load mod:\n\n' + data.error);
     return false;
   }
@@ -256,11 +271,12 @@ async function loadModAt(path, disabledIni, handlers = {}) {
     clearScene({ preserveModelOrientation: preserveViewerPose });
     clearPendingState();
     showLoading(false);
-    await refreshPendingState();
+    await measureLoadStage('refresh_pending_state', () => refreshPendingState());
+    finishLoadBenchmark({success: false, error: error?.message || String(error)});
     await alertDialog('Could not load mod geometry:\n\n' + error.message);
     return false;
   }
-  await refreshPendingState();
+  await measureLoadStage('refresh_pending_state', () => refreshPendingState());
 
   // Lead with the folder name; the full path is long and rarely the useful part.
   const folderName = path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1);
@@ -275,6 +291,11 @@ async function loadModAt(path, disabledIni, handlers = {}) {
   // mod is visible so the toolbar badge is populated without requiring a
   // click on the Diagnostics button.
   void refreshHealthReport();
+  finishLoadBenchmark({
+    success: true,
+    active_meshes: activeMeshes.length,
+    payload_meshes: Object.keys(data?.meshes || {}).length,
+  });
   return true;
 }
 

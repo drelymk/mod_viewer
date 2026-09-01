@@ -51,6 +51,7 @@ import {
   refreshPresentState as refreshPresentStateFlow,
 } from './app/semantic-refresh.js';
 import { viewerState } from './app/state.js';
+import { getLoadBenchmark } from './app/load-benchmark.js';
 import {
   initEnvironmentControl, initToolPopovers, initToolbarOverflow,
 } from './ui/toolbar.js';
@@ -313,6 +314,7 @@ rendererReady.then(ready => {
   };
   window.modViewer = {
     displayMeshPayload, openMod, switchMod, switchAsset, reloadCurrentMod,
+    getLoadBenchmark,
     exportChanges,
     refreshPresentState: handlePresentChange,
     refreshControlSemantics: () => refreshControlSemanticsFlow(semanticHandlers()),
