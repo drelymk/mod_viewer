@@ -1171,6 +1171,42 @@ def test_texture_bake_modal_blocks_dismissal_while_baking(
         context.close()
 
 
+def test_texture_bake_error_hides_consumed_bake_action(
+        edge_browser, frontend_url):
+    payload, _tex_key = _bake_test_payload("BakeFailure", _PNG_URI)
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakeFailure": payload})
+    try:
+        _open(page, "BakeFailure")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = async () => ({
+            status: 'error', error: 'Temporary bake failure.',
+          });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("""() => document.querySelector(
+          '#texture-bake-error').textContent === 'Temporary bake failure.'""")
+        assert page.locator("#texture-bake-confirm").is_hidden()
+
+        page.locator("#texture-bake-close").click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = undefined;
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("""() => document.querySelector(
+          '#texture-bake-error').textContent === 'Texture baking is unavailable.'""")
+        assert page.locator("#texture-bake-confirm").is_hidden()
+    finally:
+        context.close()
+
+
 def test_successful_bake_syncs_stale_mesh_after_selection_changes(
         edge_browser, frontend_url):
     payload, tex_key = _bake_test_payload(

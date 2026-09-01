@@ -895,6 +895,8 @@ def bake_texture_color(
                     "The DDS encoder produced an invalid candidate.") from error
             candidate_layout = _validate_candidate(
                 prepared.layout, candidate_path, candidate)
+            _validate_alpha_preservation(
+                candidate, candidate_layout, prepared.safe_masks)
             final = _patch_dds_units(
                 original, candidate, prepared.layout,
                 prepared.safe_masks, candidate_layout)

@@ -165,7 +165,7 @@ async function runBake(mesh, isCurrent) {
   const api = window.pywebview?.api?.bake_mesh_texture_color;
   if (typeof api !== 'function') {
     setModalError(error, 'Texture baking is unavailable.');
-    setBakeAction({visible: true, disabled: false, label: 'Bake Color'});
+    setBakeAction();
     return null;
   }
   baking = true;
@@ -187,8 +187,10 @@ async function runBake(mesh, isCurrent) {
   }
   if (result?.status !== 'ok') {
     setModalError(error, result?.error || 'Texture baking failed.');
-    setBakeAction({visible: true, disabled: false,
-      label: 'Bake Color'});
+    // A failed destructive request must go through a fresh preflight. The
+    // captured job has been consumed, so an enabled action here would be
+    // misleading and inert; the user can close and start analysis again.
+    setBakeAction();
     return result;
   }
   renderBakeSuccess(result);
