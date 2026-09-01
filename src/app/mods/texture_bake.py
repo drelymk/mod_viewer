@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import io
 import os
 import struct
 import tempfile
@@ -703,22 +704,101 @@ def _validate_candidate(source_layout, candidate_path, candidate_bytes):
     return candidate_layout
 
 
-def _validate_alpha_preservation(info, image):
-    """Reject BC1/BC7 transparency that the block patch cannot preserve."""
-    if info.format not in _OPAQUE_ONLY_FORMATS:
-        return
+def _alpha_preservation_error():
+    return TextureBakeAnalysisError(
+        "alpha_preservation_unsupported",
+        "This texture contains transparency that cannot currently be "
+        "preserved exactly while recoloring its compressed blocks.",
+        "unsupported")
+
+
+def _bc1_block_is_opaque(block):
+    """Return whether a BC1 block decodes to opaque alpha in every texel."""
+    if len(block) != 8:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "DDS payload layout is invalid.")
+    color0, color1 = struct.unpack_from("<HH", block)
+    if color0 > color1:
+        return True
+    selectors = struct.unpack_from("<I", block, 4)[0]
+    return all(((selectors >> (2 * index)) & 0x3) != 3
+               for index in range(16))
+
+
+def _decode_dds_mip_rgba(source, layout, mip):
+    """Decode one source mip using the shared Pillow DDS decoder."""
+    if (layout.info.format not in {"bc7_unorm", "bc7_srgb"}
+            or len(source) < layout.data_offset
+            or len(source) < mip.offset + mip.length):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "DDS payload layout is invalid.")
+    header = bytearray(source[:layout.data_offset])
+    struct.pack_into("<II", header, 12, mip.height, mip.width)
+    struct.pack_into("<I", header, 28, 1)
+    if layout.info.format == "bc7_srgb":
+        # Pillow's BC7 decoder accepts the equivalent UNORM payload more
+        # consistently than the typed sRGB DXGI variant. The alpha plane is
+        # identical, so this header-only conversion is lossless for validation.
+        struct.pack_into("<I", header, 128, 98)
+    payload = source[mip.offset:mip.offset + mip.length]
     try:
-        alpha_min, _alpha_max = image.getchannel("A").getextrema()
+        from PIL import Image
+        image = Image.open(io.BytesIO(bytes(header) + payload))
+        image.load()
+        return image.convert("RGBA")
     except Exception as error:
+        raise _alpha_preservation_error() from error
+
+
+def _validate_bc7_safe_blocks(source, layout, safe_masks):
+    """Require decoded alpha 255 for every safe BC7 block at every mip."""
+    for mip, mask in zip(layout.mips, safe_masks):
+        if not any(mask):
+            continue
+        try:
+            image = _decode_dds_mip_rgba(source, layout, mip)
+            if image.size != (mip.width, mip.height):
+                raise ValueError("decoded mip dimensions differ from DDS")
+            alpha = image.getchannel("A").tobytes()
+        except TextureBakeAnalysisError:
+            raise
+        except Exception as error:
+            raise _alpha_preservation_error() from error
+        for index, selected in enumerate(mask):
+            if not selected:
+                continue
+            unit_x = (index % mip.units_x) * 4
+            unit_y = (index // mip.units_x) * 4
+            unit_width = min(4, mip.width - unit_x)
+            unit_height = min(4, mip.height - unit_y)
+            if any(alpha[row * mip.width + unit_x:
+                       row * mip.width + unit_x + unit_width].count(255)
+                   != unit_width
+                   for row in range(unit_y, unit_y + unit_height)):
+                raise _alpha_preservation_error()
+
+
+def _validate_alpha_preservation(source, layout, safe_masks):
+    """Prove alpha is unchanged for every compressed block being replaced."""
+    if layout.info.format not in _OPAQUE_ONLY_FORMATS:
+        return
+    if (len(source) < layout.payload_end
+            or len(safe_masks) != len(layout.mips)
+            or any(len(mask) != mip.units_x * mip.units_y
+                   for mip, mask in zip(layout.mips, safe_masks))):
         raise TextureBakeAnalysisError(
-            "texture_decode_failed",
-            "The source DDS alpha channel could not be inspected.") from error
-    if alpha_min != 255:
-        raise TextureBakeAnalysisError(
-            "alpha_preservation_unsupported",
-            "This texture contains transparency that cannot currently be "
-            "preserved exactly while recoloring its compressed blocks.",
-            "unsupported")
+            "texture_validation_failed", "DDS payload layout is invalid.")
+    if layout.info.format.startswith("bc1"):
+        for mip, mask in zip(layout.mips, safe_masks):
+            for index, selected in enumerate(mask):
+                if not selected:
+                    continue
+                start = mip.offset + index * mip.bytes_per_unit
+                if not _bc1_block_is_opaque(
+                        source[start:start + mip.bytes_per_unit]):
+                    raise _alpha_preservation_error()
+        return
+    _validate_bc7_safe_blocks(source, layout, safe_masks)
 
 
 def _affected_texture_keys(context, prepared):
@@ -785,7 +865,8 @@ def bake_texture_color(
             raise TextureBakeAnalysisError(
                 "texture_decode_failed", "The source DDS could not be decoded at full resolution.")
         rgba = image.convert("RGBA")
-        _validate_alpha_preservation(prepared.info, rgba)
+        _validate_alpha_preservation(
+            original, prepared.layout, prepared.safe_masks)
         masked_rgba = adjust_rgba_bytes(
             rgba.tobytes(), rgba.width, rgba.height, normalized,
             prepared.selected_pixels.mask)
@@ -799,7 +880,7 @@ def bake_texture_color(
             try:
                 candidate_path = encode_png_to_dds(
                     png_path, workdir, prepared.info.format,
-                    prepared.info.mip_count)
+                    prepared.info.mip_count, srgb=True)
             except TexconvUnavailableError as error:
                 raise TextureBakeAnalysisError(
                     "texconv_unavailable", str(error)) from error

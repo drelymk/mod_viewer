@@ -13,7 +13,7 @@ from core.textures.dds import inspect_dds_layout
 
 def test_build_texconv_command_preserves_format_and_mip_count():
     command = texconv.build_texconv_command(
-        "texconv.exe", "bake.png", "out", "bc7_srgb", 5)
+        "texconv.exe", "bake.png", "out", "bc7_srgb", 5, srgb=True)
 
     assert command[:2] == ["texconv.exe", "-nologo"]
     assert command[command.index("-f") + 1] == "BC7_UNORM_SRGB"
@@ -24,16 +24,25 @@ def test_build_texconv_command_preserves_format_and_mip_count():
     assert "-flip" not in command
 
 
-@pytest.mark.parametrize(("format_name", "expects_srgb"), [
-    ("bc7_srgb", True), ("bc3_srgb", True),
-    ("bc7_unorm", False), ("rgba8", False),
+@pytest.mark.parametrize(("format_name", "dxgi_format"), [
+    ("bc7_unorm", "BC7_UNORM"),
+    ("bc7_srgb", "BC7_UNORM_SRGB"),
+    ("rgba8", "R8G8B8A8_UNORM"),
 ])
-def test_build_texconv_command_sets_srgb_colorspace_explicitly(
-        format_name, expects_srgb):
+def test_build_texconv_command_uses_diffuse_srgb_semantics(
+        format_name, dxgi_format):
     command = texconv.build_texconv_command(
-        "texconv.exe", "bake.png", "out", format_name, 2)
+        "texconv.exe", "bake.png", "out", format_name, 2, srgb=True)
 
-    assert ("-srgb" in command) is expects_srgb
+    assert command[command.index("-f") + 1] == dxgi_format
+    assert "-srgb" in command
+
+
+def test_build_texconv_command_leaves_colorspace_unspecified_for_data():
+    command = texconv.build_texconv_command(
+        "texconv.exe", "bake.png", "out", "bc7_unorm", 2, srgb=False)
+
+    assert "-srgb" not in command
 
 
 def test_encode_png_to_dds_uses_no_shell_and_checks_candidate(tmp_path):
@@ -49,7 +58,8 @@ def test_encode_png_to_dds_uses_no_shell_and_checks_candidate(tmp_path):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     result = texconv.encode_png_to_dds(
-        source, output, "rgba8", 3, executable="texconv.exe", runner=runner)
+        source, output, "rgba8", 3, executable="texconv.exe", runner=runner,
+        srgb=True)
 
     assert result == str(output / "bake.dds")
     command, kwargs = calls[0]
@@ -57,6 +67,7 @@ def test_encode_png_to_dds_uses_no_shell_and_checks_candidate(tmp_path):
     assert kwargs["shell"] is False
     assert kwargs["check"] is False
     assert kwargs["timeout"] == texconv.DEFAULT_TIMEOUT
+    assert "-srgb" in command
 
 
 def test_encode_png_to_dds_reports_missing_encoder(monkeypatch, tmp_path):
@@ -66,7 +77,9 @@ def test_encode_png_to_dds_reports_missing_encoder(monkeypatch, tmp_path):
         texconv.encode_png_to_dds(tmp_path / "bake.png", tmp_path, "rgba8", 1)
 
 
-def test_real_pinned_texconv_uses_srgb_mip_filtering_when_available(tmp_path):
+@pytest.mark.parametrize("format_name", ["bc7_srgb", "bc7_unorm"])
+def test_real_pinned_texconv_uses_srgb_mip_filtering_when_available(
+        tmp_path, format_name):
     """Exercise the bundled encoder's colorspace behavior when packaged."""
     from app.settings.paths import texconv_path
 
@@ -85,9 +98,10 @@ def test_real_pinned_texconv_uses_srgb_mip_filtering_when_available(tmp_path):
     output.mkdir()
 
     candidate = texconv.encode_png_to_dds(
-        source, output, "bc7_srgb", 2, executable=executable)
+        source, output, format_name, 2, executable=executable, srgb=True)
     layout = inspect_dds_layout(candidate)
     assert layout is not None
+    assert layout.info.format == format_name
     mip = layout.mips[1]
     raw = bytearray(open(candidate, "rb").read(layout.data_offset))
     struct.pack_into("<II", raw, 12, 1, 1)

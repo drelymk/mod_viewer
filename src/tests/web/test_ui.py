@@ -1129,6 +1129,48 @@ def _bake_test_payload(label, texture_uri, hue=30):
     return payload, tex_key
 
 
+def test_texture_bake_modal_blocks_dismissal_while_baking(
+        edge_browser, frontend_url):
+    payload, tex_key = _bake_test_payload("BakeModal", _PNG_URI)
+    context, page = _page(edge_browser, frontend_url, {"BakeModal": payload})
+    try:
+        _open(page, "BakeModal")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureBake = resolve; });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureBake !== undefined")
+
+        page.locator("#texture-bake-close").click()
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
+        page.locator("#texture-bake-close-x").click()
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
+        page.keyboard.press("Escape")
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
+        page.evaluate("""() => document.querySelector(
+          '#texture-bake-modal-backdrop').dispatchEvent(
+            new MouseEvent('click', {bubbles: true}))""")
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
+
+        page.evaluate("""() => window.__releaseTextureBake({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          texture: {file: 'BakeModal-bake.dds'},
+          patched: {mip0_units: 1, shared_units_preserved: 0},
+          backup: {file: 'BakeModal-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(tex_key), json.dumps(tex_key)))
+        page.locator("#texture-bake-body", has_text="TEXTURE BAKED").wait_for()
+        page.locator("#texture-bake-close").click()
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
+    finally:
+        context.close()
+
+
 def test_successful_bake_syncs_stale_mesh_after_selection_changes(
         edge_browser, frontend_url):
     payload, tex_key = _bake_test_payload(
@@ -1170,8 +1212,8 @@ def test_successful_bake_syncs_stale_mesh_after_selection_changes(
         }""")
         page.locator("#texture-bake-confirm").click()
         page.wait_for_function("window.__releaseTextureBake !== undefined")
-        page.locator("#texture-bake-close").click()
-        page.locator(".draw-item").nth(1).click()
+        page.evaluate("import('./js/scene/selection.js').then(({selectMesh}) => "
+                      "selectMesh(window.modViewer.activeMeshes[1]))")
         assert "Face BakeSelectionRace" in page.locator(
             "#selected-mesh-status").inner_text()
 

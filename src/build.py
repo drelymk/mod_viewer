@@ -38,6 +38,7 @@ from app.settings.paths import APP_VERSION
 
 ASSETS = os.path.join(HERE, "assets")
 WEB = os.path.join(HERE, "web")
+THIRD_PARTY_NOTICES = os.path.join(HERE, "..", "THIRD_PARTY_NOTICES.md")
 FEATURES_FILE = os.path.join(HERE, "features.ini")
 # Generated at build time from FEATURES_FILE and deleted again right after --
 # see resolve_features()/write_baked_features()/clean_baked_features(). Never
@@ -585,6 +586,9 @@ def build(onedir=False, console=False, python=None):
             "--add-data", f"{ASSETS}{os.pathsep}assets",
             # DirectXTex is a runtime encoder, never browser-served data.
             "--add-binary", f"{os.path.join(RUNTIME_TOOLS, 'texconv.exe')}{os.pathsep}runtime_tools",
+            # Make the licenses for bundled runtime tools available beside the
+            # packaged application rather than only in the source checkout.
+            "--add-data", f"{THIRD_PARTY_NOTICES}{os.pathsep}.",
             # The HTML/CSS/JS UI, served from that same port.
             "--add-data", f"{WEB}{os.pathsep}web",
             # Pulled in dynamically by the WebView2 backend, so PyInstaller's static

@@ -30,10 +30,12 @@ function displayNameForSemanticKey(semanticKey) {
 }
 
 function closeTextureBakeModal() {
-  if (!baking) {
-    cancelTextureBakeAnalysis();
-    pendingBake = null;
-  }
+  // The modal is the guard around the destructive request. Keep it visible
+  // until the write settles so the user cannot edit another color state while
+  // the backend is committing the captured adjustment.
+  if (baking) return;
+  cancelTextureBakeAnalysis();
+  pendingBake = null;
   backdrop?.classList.remove('show');
 }
 

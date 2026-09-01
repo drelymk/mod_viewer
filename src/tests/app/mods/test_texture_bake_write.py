@@ -66,7 +66,7 @@ def test_bake_replaces_only_safe_units_and_keeps_backup(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: Image.frombytes(
             "RGBA", (2, 1), bytes([10, 20, 30, 40, 50, 60, 70, 80])))
 
-    def encode(_png, output, _format, _mips):
+    def encode(_png, output, _format, _mips, **_kwargs):
         candidate = Path(output) / "bake.dds"
         candidate.write_bytes(_rgba8_dds(
             [200, 201, 202, 203, 50, 60, 70, 81]))
@@ -99,7 +99,7 @@ def test_bake_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatc
         texture_bake, "load_texture_image_full",
         lambda *_args, **_kwargs: Image.frombytes(
             "RGBA", (2, 1), bytes([10, 20, 30, 40, 50, 60, 70, 80])))
-    def encode(_png, output, _format, _mips):
+    def encode(_png, output, _format, _mips, **_kwargs):
         candidate = Path(output) / "bake.dds"
         candidate.write_bytes(_rgba8_dds(
             [200, 201, 202, 203, 50, 60, 70, 81]))
@@ -194,6 +194,69 @@ def test_patch_preserves_bc3_alpha_sub_block(tmp_path):
     assert final[156:164] == candidate[156:164]
 
 
+def _bc1_block(color0, color1, selectors=0):
+    return struct.pack("<HHI", color0, color1, selectors)
+
+
+def test_bc1_alpha_validation_is_per_safe_block_and_per_mip(tmp_path):
+    source = tmp_path / "bc1-mipped.dds"
+    source.write_bytes(_dx10_dds(
+        _bc1_block(0xffff, 0) + _bc1_block(0, 0, 0xffffffff)
+        + _bc1_block(0, 0, 0xffffffff),
+        71, width=8, height=4, mip_count=2))
+    layout = inspect_dds_layout(source)
+
+    # The unrelated transparent block does not prevent changing the opaque
+    # block that coverage marked safe.
+    texture_bake._validate_alpha_preservation(
+        source.read_bytes(), layout, (bytearray([1, 0]), bytearray([0])))
+
+    with pytest.raises(texture_bake.TextureBakeAnalysisError) as error:
+        texture_bake._validate_alpha_preservation(
+            source.read_bytes(), layout, (bytearray([1, 0]), bytearray([1])))
+    assert error.value.code == "alpha_preservation_unsupported"
+
+
+def test_bc1_alpha_validation_rejects_transparent_safe_block(tmp_path):
+    source = tmp_path / "bc1-transparent-safe.dds"
+    source.write_bytes(_dx10_dds(
+        _bc1_block(0, 0, 0xffffffff), 71, width=4, height=4))
+    layout = inspect_dds_layout(source)
+
+    with pytest.raises(texture_bake.TextureBakeAnalysisError) as error:
+        texture_bake._validate_alpha_preservation(
+            source.read_bytes(), layout, (bytearray([1]),))
+    assert error.value.code == "alpha_preservation_unsupported"
+
+
+def test_bc7_alpha_validation_checks_only_safe_blocks_at_each_mip(
+        tmp_path, monkeypatch):
+    source = tmp_path / "bc7-mipped.dds"
+    source.write_bytes(_dx10_dds(bytes(48), 98, width=8, height=4,
+                                 mip_count=2))
+    layout = inspect_dds_layout(source)
+
+    def decode(_source, _layout, mip):
+        image = Image.new("RGBA", (mip.width, mip.height), (0, 0, 0, 255))
+        if mip.level == 0:
+            for y in range(mip.height):
+                for x in range(4, mip.width):
+                    image.putpixel((x, y), (0, 0, 0, 0))
+        elif mip.level == 1:
+            image.putpixel((0, 0), (0, 0, 0, 0))
+        return image
+
+    monkeypatch.setattr(texture_bake, "_decode_dds_mip_rgba", decode)
+    # A transparent block outside the safe mask is allowed.
+    texture_bake._validate_alpha_preservation(
+        source.read_bytes(), layout, (bytearray([1, 0]), bytearray([0])))
+
+    with pytest.raises(texture_bake.TextureBakeAnalysisError) as error:
+        texture_bake._validate_alpha_preservation(
+            source.read_bytes(), layout, (bytearray([1, 0]), bytearray([1])))
+    assert error.value.code == "alpha_preservation_unsupported"
+
+
 def test_bc7_transparency_is_rejected_before_backup_or_encoder(
         tmp_path, monkeypatch):
     source = tmp_path / "transparent-bc7.dds"
@@ -212,9 +275,13 @@ def test_bc7_transparency_is_rejected_before_backup_or_encoder(
     monkeypatch.setattr(
         texture_bake, "load_texture_image_full",
         lambda *_args, **_kwargs: Image.new("RGBA", (4, 4), (10, 20, 30, 128)))
+    monkeypatch.setattr(
+        texture_bake, "_decode_dds_mip_rgba",
+        lambda *_args: Image.new("RGBA", (4, 4), (10, 20, 30, 128)))
     called = []
     monkeypatch.setattr(
-        texture_bake, "encode_png_to_dds", lambda *args: called.append(args))
+        texture_bake, "encode_png_to_dds",
+        lambda *args, **kwargs: called.append((args, kwargs)))
 
     result = texture_bake.bake_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
@@ -244,8 +311,11 @@ def test_opaque_bc7_can_be_baked(tmp_path, monkeypatch):
     monkeypatch.setattr(
         texture_bake, "load_texture_image_full",
         lambda *_args, **_kwargs: Image.new("RGBA", (4, 4), (10, 20, 30, 255)))
+    monkeypatch.setattr(
+        texture_bake, "_decode_dds_mip_rgba",
+        lambda *_args: Image.new("RGBA", (4, 4), (10, 20, 30, 255)))
 
-    def encode(_png, output, _format, _mips):
+    def encode(_png, output, _format, _mips, **_kwargs):
         candidate = Path(output) / "bake.dds"
         candidate.write_bytes(_dx10_dds(bytes(range(100, 116)), 98))
         return str(candidate)
@@ -274,7 +344,7 @@ def test_bake_reports_committed_state_when_replace_raises_after_replacing(
         lambda *_args, **_kwargs: Image.frombytes(
             "RGBA", (2, 1), bytes([10, 20, 30, 40, 50, 60, 70, 80])))
 
-    def encode(_png, output, _format, _mips):
+    def encode(_png, output, _format, _mips, **_kwargs):
         candidate = Path(output) / "bake.dds"
         candidate.write_bytes(_rgba8_dds(
             [200, 201, 202, 203, 50, 60, 70, 81]))
@@ -384,7 +454,8 @@ def test_bake_rejects_non_mod_texture_paths_before_encoder(
         tmp_path, monkeypatch, texture_key, code):
     called = []
     monkeypatch.setattr(
-        texture_bake, "encode_png_to_dds", lambda *args: called.append(args))
+        texture_bake, "encode_png_to_dds",
+        lambda *args, **kwargs: called.append((args, kwargs)))
 
     result = texture_bake.bake_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
@@ -407,7 +478,8 @@ def test_bake_refuses_when_no_top_level_unit_is_unique(tmp_path, monkeypatch):
         texture_bake, "load_texture_image_full",
         lambda *args: called.append(args))
     monkeypatch.setattr(
-        texture_bake, "encode_png_to_dds", lambda *args: called.append(args))
+        texture_bake, "encode_png_to_dds",
+        lambda *args, **kwargs: called.append((args, kwargs)))
 
     result = texture_bake.bake_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",

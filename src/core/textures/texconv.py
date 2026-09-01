@@ -48,7 +48,7 @@ def texconv_path():
 
 
 def build_texconv_command(executable, input_png, output_dir, format_name,
-                          mip_count):
+                          mip_count, *, srgb=False):
     """Build the no-shell command for an exact-format DDS conversion."""
     dxgi_format = FORMAT_TO_TEXCONV.get(format_name)
     if dxgi_format is None:
@@ -65,10 +65,11 @@ def build_texconv_command(executable, input_png, output_dir, format_name,
         "-sepalpha", "-nogpu", "-o", os.fspath(output_dir),
         os.fspath(input_png),
     ]
-    if format_name.endswith("_srgb"):
+    if srgb:
         # LINEAR selects the resize filter; it does not select the colorspace
-        # used while filtering. The bake PNG contains editor-sRGB bytes, so
-        # typed sRGB outputs must opt into linear-light mip generation.
+        # used while filtering. Diffuse bake PNGs contain editor-sRGB bytes,
+        # so they must opt into linear-light mip generation regardless of the
+        # source DDS's physical UNORM/sRGB format.
         command.insert(command.index("-sepalpha"), "-srgb")
     return command
 
@@ -84,7 +85,7 @@ def _hidden_startupinfo():
 
 def encode_png_to_dds(input_png, output_dir, format_name, mip_count,
                       *, executable=None, runner=None,
-                      timeout=DEFAULT_TIMEOUT):
+                      timeout=DEFAULT_TIMEOUT, srgb=False):
     """Encode a PNG and return its candidate DDS path.
 
     The runner is injectable so command construction and failure handling can
@@ -94,7 +95,7 @@ def encode_png_to_dds(input_png, output_dir, format_name, mip_count,
     if not executable:
         raise TexconvUnavailableError("texconv.exe is unavailable")
     command = build_texconv_command(
-        executable, input_png, output_dir, format_name, mip_count)
+        executable, input_png, output_dir, format_name, mip_count, srgb=srgb)
     runner = subprocess.run if runner is None else runner
     kwargs = {
         "shell": False,
