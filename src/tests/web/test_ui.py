@@ -1030,6 +1030,14 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         assert {item["semantic_key"] for item in usage} == {
             "Body-Bake-0", "Face-Bake-0"}
         assert usage[1]["tex_key"] == "diffuse::Bake-two.dds"
+        assert usage[1]["texture_keys"] == {
+            "diffuse": "diffuse::Bake-two.dds",
+            "normal_map": None,
+            "normal_data": None,
+            "light_map": None,
+            "material_map": None,
+            "emission_map": None,
+        }
         assert page.evaluate("window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
@@ -1095,6 +1103,50 @@ def test_texture_bake_action_is_disabled_for_neutral_color_state(
             "Adjust the mesh color before baking."
         assert page.evaluate(
             "window.__fakeApi.calls.analyzeTextureBake.length") == 0
+    finally:
+        context.close()
+
+
+def test_texture_coverage_cross_role_usage_keeps_bake_unavailable(
+        edge_browser, frontend_url):
+    payload = _payload("CrossRole")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body CrossRole::3,0,0": {"hue": 30},
+    }
+    first = payload["meshes"]["Body-CrossRole-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::CrossRole-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    second = copy.deepcopy(first)
+    second["component"] = "Face CrossRole"
+    second["display_name"] = "Friendly Face"
+    second["normal_map_key"] = dds_key.replace("diffuse::", "normal_map::")
+    payload["meshes"]["Face-CrossRole-0"] = second
+    payload["textureBakeResponse"] = {
+        "status": "unsupported",
+        "code": "cross_role_texture_usage",
+        "error": "This DDS is also used as a Normal Map by Face-CrossRole-0.",
+    }
+    context, page = _page(edge_browser, frontend_url, {"CrossRole": payload})
+    try:
+        _open(page, "CrossRole")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-modal-backdrop.show").wait_for()
+        assert page.locator("#texture-bake-error").inner_text() == (
+            "This DDS is also used as a Normal Map by Face-CrossRole-0.")
+        assert page.locator("#texture-bake-confirm").is_hidden()
+        usage = page.evaluate("window.__fakeApi.calls.analyzeTextureBake[0][3]")
+        face = next(item for item in usage
+                    if item["semantic_key"] == "Face-CrossRole-0")
+        assert face["texture_keys"]["normal_map"] == (
+            "normal_map::CrossRole-one.dds")
+        assert page.evaluate(
+            "window.__fakeApi.calls.bakeMeshTextureColor.length") == 0
     finally:
         context.close()
 
@@ -1377,7 +1429,17 @@ def test_texture_bake_confirmation_resets_color_and_refreshes_affected_keys(
             "window.__fakeApi.calls.bakeMeshTextureColor[0]") == [
                 "BakeConfirm", "Body-BakeConfirm-0",
                 "Body BakeConfirm::3,0,0", dds_key,
-                [{"semantic_key": "Body-BakeConfirm-0", "tex_key": dds_key}],
+                [{
+                    "semantic_key": "Body-BakeConfirm-0", "tex_key": dds_key,
+                    "texture_keys": {
+                        "diffuse": dds_key,
+                        "normal_map": None,
+                        "normal_data": None,
+                        "light_map": None,
+                        "material_map": None,
+                        "emission_map": None,
+                    },
+                }],
                 {"hue": 30, "saturation": 1, "brightness": 1, "contrast": 1,
                  "red": 1, "green": 1, "blue": 1, "tint": "#ffffff",
                  "tint_strength": 0},

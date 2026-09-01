@@ -13,7 +13,7 @@ from core.geometry.buffers import BufferStore
 from core.geometry.conventions import geometry_convention_for
 from core.geometry.packing import pack_draw_geometry
 from core.resource_paths import _canonical, safe_resource_path
-from core.textures import split_texture_key
+from core.textures import TEXTURE_ROLES, split_texture_key
 from core.textures.color_adjustment import (
     adjust_rgba_bytes, is_neutral_color_adjustment,
     normalize_color_adjustment,
@@ -43,6 +43,14 @@ _UNSUPPORTED_COLOR_FORMATS = frozenset({
 _OPAQUE_ONLY_FORMATS = frozenset({
     "bc1_unorm", "bc1_srgb", "bc7_unorm", "bc7_srgb",
 })
+_TEXTURE_USAGE_ROLES = tuple(TEXTURE_ROLES)
+_TEXTURE_ROLE_LABELS = {
+    "normal_map": "Normal Map",
+    "normal_data": "Normal Data",
+    "light_map": "Light Map",
+    "material_map": "Material Map",
+    "emission_map": "Emission Map",
+}
 
 
 class TextureBakeAnalysisError(ValueError):
@@ -146,6 +154,18 @@ def _texture_path(mod_dir, key, *, selected=False):
                 "texture_not_found", "The selected diffuse texture was not found.")
         return None
     return path
+
+
+def _usage_texture_path(mod_dir, key, expected_role):
+    """Resolve one submitted role assignment with the shared mod sandbox."""
+    if not key:
+        return None
+    role, relative_path = split_texture_key(key, expected_role)
+    if role != expected_role or not relative_path:
+        return None
+    if is_asset_texture_key(key):
+        return None
+    return _canonical_mod_path(mod_dir, relative_path)
 
 
 def _texture_details(path, info):
@@ -283,13 +303,44 @@ def _validate_usage(active_mesh_keys, selected_semantic_key, selected_texture_ke
             raise TextureBakeAnalysisError(
                 "stale_mesh_state",
                 "The model changed before texture coverage could be analyzed.")
-        texture_key = item.get("tex_key")
-        if texture_key is not None and not isinstance(texture_key, str):
+        has_role_snapshot = "texture_keys" in item
+        role_keys = item.get("texture_keys")
+        legacy_texture_key = item.get("tex_key")
+        if not has_role_snapshot:
+            # Keep older direct callers safe while the browser rolls forward;
+            # a complete role snapshot is authoritative when it is present.
+            role_keys = {role: None for role in _TEXTURE_USAGE_ROLES}
+            role_keys["diffuse"] = legacy_texture_key
+        if (not isinstance(role_keys, dict)
+                or set(role_keys) != set(_TEXTURE_USAGE_ROLES)):
             raise TextureBakeAnalysisError(
                 "stale_mesh_state",
                 "The model changed before texture coverage could be analyzed.")
+        if (legacy_texture_key is not None
+                and legacy_texture_key != role_keys["diffuse"]):
+            raise TextureBakeAnalysisError(
+                "stale_mesh_state",
+                "The model changed before texture coverage could be analyzed.")
+        for role in _TEXTURE_USAGE_ROLES:
+            texture_key = role_keys[role]
+            if texture_key is not None and not isinstance(texture_key, str):
+                raise TextureBakeAnalysisError(
+                    "stale_mesh_state",
+                    "The model changed before texture coverage could be analyzed.")
+            if texture_key is not None and has_role_snapshot:
+                parsed_role, relative_path = split_texture_key(
+                    texture_key, role)
+                if parsed_role != role or not relative_path:
+                    raise TextureBakeAnalysisError(
+                        "stale_mesh_state",
+                        "The model changed before texture coverage could be analyzed.")
         keys.append(key)
-        entries.append({"semantic_key": key, "tex_key": texture_key})
+        entries.append({
+            "semantic_key": key,
+            # The alias is retained for the existing diffuse consumer result.
+            "tex_key": role_keys["diffuse"],
+            "texture_keys": dict(role_keys),
+        })
     expected = set(active_mesh_keys or ())
     if set(keys) != expected or len(keys) != len(expected):
         raise TextureBakeAnalysisError(
@@ -323,6 +374,28 @@ def _resolve_request(context, overrides, active_mesh_keys, selected_semantic_key
         raise TextureBakeAnalysisError(
             "mesh_not_found", "The selected mesh is no longer available.")
     selected_identity = _physical_identity(selected_path)
+    cross_role_usage = []
+    for entry in entries:
+        for role in _TEXTURE_USAGE_ROLES:
+            if role == "diffuse":
+                continue
+            texture_key = entry["texture_keys"][role]
+            path = _usage_texture_path(
+                context.mod_dir, texture_key, role)
+            if path and _physical_identity(path) == selected_identity:
+                cross_role_usage.append((entry["semantic_key"], role))
+    if cross_role_usage:
+        uses = []
+        for semantic_key, role in cross_role_usage:
+            uses.append(
+                f"as a {_TEXTURE_ROLE_LABELS[role]} by {semantic_key}")
+        if len(uses) == 1:
+            message = f"This DDS is also used {uses[0]}."
+        else:
+            message = "This DDS is also used " + ", ".join(uses[:-1])
+            message += f", and {uses[-1]}."
+        raise TextureBakeAnalysisError(
+            "cross_role_texture_usage", message, "unsupported")
     consumers = []
     for entry in entries:
         if entry["semantic_key"] == selected_semantic_key:
@@ -807,13 +880,18 @@ def _affected_texture_keys(context, prepared):
     affected = []
     seen_keys = set()
     for entry in prepared.entries:
-        key = entry["tex_key"]
-        path = _texture_path(context.mod_dir, key) if key else None
-        if (not key or not path or key in seen_keys
-                or _physical_identity(path) != selected_identity):
-            continue
-        seen_keys.add(key)
-        affected.append(key)
+        role_keys = entry.get("texture_keys")
+        if role_keys is None:
+            role_keys = {"diffuse": entry.get("tex_key")}
+        for role in _TEXTURE_USAGE_ROLES:
+            key = role_keys.get(role)
+            path = _usage_texture_path(
+                context.mod_dir, key, role) if key else None
+            if (not key or not path or key in seen_keys
+                    or _physical_identity(path) != selected_identity):
+                continue
+            seen_keys.add(key)
+            affected.append(key)
     return affected
 
 

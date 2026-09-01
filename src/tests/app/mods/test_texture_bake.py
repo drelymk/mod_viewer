@@ -35,6 +35,23 @@ def _coverage(mask):
         triangle_count=1, degenerate_triangle_count=0)
 
 
+def _role_usage(semantic_key, diffuse=None, **roles):
+    texture_keys = {
+        "diffuse": diffuse,
+        "normal_map": None,
+        "normal_data": None,
+        "light_map": None,
+        "material_map": None,
+        "emission_map": None,
+    }
+    texture_keys.update(roles)
+    return {
+        "semantic_key": semantic_key,
+        "tex_key": diffuse,
+        "texture_keys": texture_keys,
+    }
+
+
 def _patch_analysis(monkeypatch, draws, coverage_by_label):
     parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"))
     groups = {label: ({"draws": []}) for label in draws}
@@ -110,6 +127,150 @@ def test_shared_physical_texture_reports_overlap_and_hidden_consumer(
     }]
     assert texture.read_bytes() == original
     assert texture.stat().st_mtime_ns == before
+
+
+@pytest.mark.parametrize(("role", "key", "semantic_key", "draws"), [
+    ("normal_map", "normal_map::body.dds", "Face-1",
+     ("selected", "consumer")),
+    ("normal_data", "normal_data::body.dds", "Face-1",
+     ("selected", "consumer")),
+    ("light_map", "light_map::body.dds", "Face-1",
+     ("selected", "consumer")),
+    ("material_map", "material_map::body.dds", "Body-1",
+     ("selected",)),
+    # Visibility is intentionally absent from this backend snapshot: active
+    # hidden meshes must remain part of the ownership proof.
+    ("emission_map", "emission_map::body.dds", "Hidden-1",
+     ("selected", "consumer")),
+    ("normal_map", "normal_map::nested/../body.dds", "Face-1",
+     ("selected", "consumer")),
+])
+def test_cross_role_texture_usage_blocks_safe_bake(
+        tmp_path, monkeypatch, role, key, semantic_key, draws):
+    source = tmp_path / "body.dds"
+    source.write_bytes(b"fixture")
+    draw_map = {
+        "Body-1": _draw("Body-1"),
+    }
+    if "consumer" in draws:
+        draw_map[semantic_key] = _draw(semantic_key)
+    _patch_analysis(monkeypatch, draw_map, {
+        label: [1, 0, 0, 0] for label in draw_map
+    })
+    selected_entry = _role_usage(
+        "Body-1", "diffuse::body.dds", **({role: key}
+                                             if semantic_key == "Body-1"
+                                             else {}))
+    usage = [selected_entry]
+    if semantic_key != "Body-1":
+        usage.append(_role_usage(semantic_key, **{role: key}))
+
+    result = texture_bake.analyze_texture_bake(
+        _context(tmp_path), {}, set(draw_map), "Body-1",
+        "diffuse::body.dds", usage)
+
+    assert result["status"] == "unsupported"
+    assert result["code"] == "cross_role_texture_usage"
+    assert "This DDS is also used as a" in result["error"]
+    assert semantic_key in result["error"]
+    assert result["error"].endswith(".")
+
+
+def test_unrelated_non_diffuse_role_does_not_block_safe_bake(
+        tmp_path, monkeypatch):
+    (tmp_path / "body.dds").write_bytes(b"fixture")
+    (tmp_path / "other.dds").write_bytes(b"fixture")
+    draws = {"Body-1": _draw("Body-1"), "Face-1": _draw("Face-1")}
+    _patch_analysis(monkeypatch, draws, {
+        "Body-1": [1, 0, 0, 0], "Face-1": [0, 1, 0, 0],
+    })
+    usage = [
+        _role_usage("Body-1", "diffuse::body.dds"),
+        _role_usage("Face-1", "diffuse::other.dds",
+                    normal_map="normal_map::other.dds"),
+    ]
+
+    result = texture_bake.analyze_texture_bake(
+        _context(tmp_path), {}, set(draws), "Body-1",
+        "diffuse::body.dds", usage)
+
+    assert result["status"] == "ok"
+    assert result["safety"] == "safe"
+
+
+def test_affected_texture_keys_include_role_assignments_and_dedupe_keys(
+        tmp_path):
+    source = tmp_path / "body.dds"
+    source.write_bytes(b"fixture")
+    prepared = SimpleNamespace(
+        selected_path=str(source),
+        entries=(
+            _role_usage("Body-1", "diffuse::body.dds",
+                        normal_map="normal_map::body.dds"),
+            _role_usage("Face-1", "diffuse::nested/../body.dds",
+                        normal_map="normal_map::body.dds",
+                        material_map="material_map::body.dds"),
+        ),
+    )
+
+    assert texture_bake._affected_texture_keys(
+        _context(tmp_path), prepared) == [
+            "diffuse::body.dds",
+            "normal_map::body.dds",
+            "diffuse::nested/../body.dds",
+            "material_map::body.dds",
+        ]
+
+
+def test_bake_rechecks_cross_role_texture_usage_before_writing(
+        tmp_path, monkeypatch):
+    source = tmp_path / "body.dds"
+    source.write_bytes(b"fixture")
+    draws = {"Body-1": _draw("Body-1"), "Face-1": _draw("Face-1")}
+    _patch_analysis(monkeypatch, draws, {
+        "Body-1": [1, 0, 0, 0], "Face-1": [0, 1, 0, 0],
+    })
+    usage = [
+        _role_usage("Body-1", "diffuse::body.dds"),
+        _role_usage("Face-1", normal_map="normal_map::body.dds"),
+    ]
+
+    result = texture_bake.bake_texture_color(
+        _context(tmp_path), {}, set(draws), "Body-1",
+        "diffuse::body.dds", usage, {"hue": 30})
+
+    assert result["status"] == "unsupported"
+    assert result["code"] == "cross_role_texture_usage"
+    assert source.read_bytes() == b"fixture"
+    assert not (tmp_path / "body.dds.modviewer.bak").exists()
+
+
+def test_texture_usage_rejects_arbitrary_role_names(tmp_path, monkeypatch):
+    source = tmp_path / "body.dds"
+    source.write_bytes(b"fixture")
+    monkeypatch.setattr(
+        texture_bake, "resolved_draws",
+        lambda *_args: (SimpleNamespace(game=SimpleNamespace(game="unknown")), {}),
+    )
+    texture_keys = {
+        "diffuse": "diffuse::body.dds",
+        "normal_map": None,
+        "normal_data": None,
+        "light_map": None,
+        "material_map": None,
+        "unexpected": "unexpected::body.dds",
+    }
+
+    result = texture_bake.analyze_texture_bake(
+        _context(tmp_path), {}, {"Body-1"}, "Body-1",
+        "diffuse::body.dds", [{
+            "semantic_key": "Body-1",
+            "tex_key": "diffuse::body.dds",
+            "texture_keys": texture_keys,
+        }])
+
+    assert result["status"] == "error"
+    assert result["code"] == "stale_mesh_state"
 
 
 def test_unanalyzable_same_texture_consumer_is_unknown(
