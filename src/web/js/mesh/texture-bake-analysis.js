@@ -112,12 +112,15 @@ export function formatBakeAnalysis(result, displayName = key => key) {
     };
   }
   const coverage = result.coverage || {};
+  const uniqueUnits = coverage.unique_units == null
+    ? 'Unknown'
+    : `${coverage.unique_units} ${coverage.unit || 'units'}`;
   const rows = [
     ['Texture', result.texture?.file || 'Unknown'],
     ['Format', result.texture?.format || 'Unknown'],
     ['Texture size', `${result.texture?.width || 0} × ${result.texture?.height || 0}`],
     ['Selected coverage', `${coverage.selected_percent?.toFixed?.(1) ?? 0}% (${coverage.selected_units || 0} ${coverage.unit || 'units'})`],
-    ['Unique coverage', `${coverage.unique_units || 0} ${coverage.unit || 'units'}`],
+    ['Unique coverage', uniqueUnits],
     ['Shared coverage', `${coverage.shared_percent_of_selected?.toFixed?.(1) ?? 0}% (${coverage.shared_units || 0} ${coverage.unit || 'units'})`],
   ];
   const shared = (result.shared_with || []).map(item =>

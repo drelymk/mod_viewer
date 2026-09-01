@@ -312,7 +312,8 @@ def analyze_texture_bake(
                 "unit_height": unit,
                 "total_units": total_units,
                 "selected_units": selected_units,
-                "unique_units": selected_units - shared_units,
+                "unique_units": (
+                    None if unresolved else selected_units - shared_units),
                 "shared_units": shared_units,
                 "selected_percent": 100 * selected_units / total_units,
                 "shared_percent_of_selected": (

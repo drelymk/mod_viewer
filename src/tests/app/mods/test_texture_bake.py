@@ -55,7 +55,7 @@ def _patch_analysis(monkeypatch, draws, coverage_by_label):
 def test_coverage_uses_packed_geometry_and_restores_source_v(tmp_path):
     import struct
 
-    source_uvs = [(0.1, 0.2), (0.9, 0.2), (0.1, 0.8)]
+    source_uvs = [(0.125, 0.25), (0.875, 0.25), (0.125, 0.75)]
     (tmp_path / "position.buf").write_bytes(struct.pack(
         "<9f", 0., 0., 0., 1., 0., 0., 0., 1., 0.))
     (tmp_path / "texcoord.buf").write_bytes(struct.pack(
@@ -136,6 +136,7 @@ def test_unanalyzable_same_texture_consumer_is_unknown(
     assert result["status"] == "ok"
     assert result["safety"] == "unknown"
     assert result["unresolved_consumers"] == ["Body-2"]
+    assert result["coverage"]["unique_units"] is None
     assert result["unresolved_consumer_details"][0]["code"] == \
         "geometry_not_available"
 

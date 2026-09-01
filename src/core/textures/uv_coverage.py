@@ -101,9 +101,13 @@ def _mark_point(mask, grid_width, grid_height, x, y):
     y_cell = _cell_index(y, grid_height)
     x_cells = {x_cell}
     y_cells = {y_cell}
-    if abs(x - round(x)) <= _UV_EPSILON and x > 0:
+    if (abs(x - round(x)) <= _UV_EPSILON
+            and x > 0
+            and x < grid_width - _UV_EPSILON):
         x_cells.add(max(0, x_cell - 1))
-    if abs(y - round(y)) <= _UV_EPSILON and y > 0:
+    if (abs(y - round(y)) <= _UV_EPSILON
+            and y > 0
+            and y < grid_height - _UV_EPSILON):
         y_cells.add(max(0, y_cell - 1))
     for cell_y in y_cells:
         for cell_x in x_cells:
@@ -132,7 +136,25 @@ def _supercover_segment(mask, grid_width, grid_height, start, end):
 
     cell_x = initial(x0, dx, grid_width)
     cell_y = initial(y0, dy, grid_height)
-    _mark_cell(mask, grid_width, grid_height, cell_x, cell_y)
+    horizontal_boundary = (
+        abs(dy) <= _AREA_EPSILON
+        and abs(y0 - round(y0)) <= _UV_EPSILON
+        and y0 > _UV_EPSILON
+        and y0 < grid_height - _UV_EPSILON)
+    vertical_boundary = (
+        abs(dx) <= _AREA_EPSILON
+        and abs(x0 - round(x0)) <= _UV_EPSILON
+        and x0 > _UV_EPSILON
+        and x0 < grid_width - _UV_EPSILON)
+
+    def mark_traversed(cell_x, cell_y):
+        _mark_cell(mask, grid_width, grid_height, cell_x, cell_y)
+        if horizontal_boundary:
+            _mark_cell(mask, grid_width, grid_height, cell_x, cell_y - 1)
+        if vertical_boundary:
+            _mark_cell(mask, grid_width, grid_height, cell_x - 1, cell_y)
+
+    mark_traversed(cell_x, cell_y)
     _mark_point(mask, grid_width, grid_height, x0, y0)
     _mark_point(mask, grid_width, grid_height, x1, y1)
 
@@ -144,20 +166,24 @@ def _supercover_segment(mask, grid_width, grid_height, start, end):
               else (cell_x - x0) / dx if dx < 0 else math.inf)
     next_y = ((cell_y + 1 - y0) / dy if dy > 0
               else (cell_y - y0) / dy if dy < 0 else math.inf)
-    while True:
+    while min(next_x, next_y) <= 1.0 + _UV_EPSILON:
         if next_x < next_y - _UV_EPSILON:
             cell_x += step_x
-            _mark_cell(mask, grid_width, grid_height, cell_x, cell_y)
+            mark_traversed(cell_x, cell_y)
             next_x += delta_x
         elif next_y < next_x - _UV_EPSILON:
             cell_y += step_y
-            _mark_cell(mask, grid_width, grid_height, cell_x, cell_y)
+            mark_traversed(cell_x, cell_y)
             next_y += delta_y
         else:
+            crossing_x = x0 + dx * next_x
+            crossing_y = y0 + dy * next_y
+            _mark_point(mask, grid_width, grid_height,
+                        crossing_x, crossing_y)
             cell_x += step_x
-            _mark_cell(mask, grid_width, grid_height, cell_x, cell_y)
+            mark_traversed(cell_x, cell_y)
             cell_y += step_y
-            _mark_cell(mask, grid_width, grid_height, cell_x, cell_y)
+            mark_traversed(cell_x, cell_y)
             next_x += delta_x
             next_y += delta_y
         if not (0 <= cell_x < grid_width and 0 <= cell_y < grid_height):

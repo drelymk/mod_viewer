@@ -2,7 +2,9 @@
 
 import pytest
 
-from core.textures.uv_coverage import UVCoverageError, rasterize_uv_coverage
+from core.textures.uv_coverage import (
+    UVCoverageError, _supercover_segment, rasterize_uv_coverage,
+)
 
 
 def test_full_uv_quad_covers_every_non_multiple_block():
@@ -52,6 +54,64 @@ def test_thin_triangle_crossing_a_unit_is_not_lost_to_center_sampling():
 
     assert result.count == 8
     assert result.bounds == (0, 0, 7, 0)
+
+
+@pytest.mark.parametrize("start,end", [
+    ((4, 4), (8, 4)), ((8, 4), (4, 4)),
+    ((4, 4), (4, 8)), ((4, 8), (4, 4)),
+])
+def test_short_axis_aligned_edges_stop_at_the_endpoint(start, end):
+    mask = bytearray(16 * 16)
+
+    _supercover_segment(mask, 16, 16, start, end)
+
+    assert [index for index, value in enumerate(mask) if value] == (
+        [51, 52, 53, 54, 55, 56, 67, 68, 69, 70, 71, 72]
+        if start[1] == end[1]
+        else [51, 52, 67, 68, 83, 84, 99, 100, 115, 116, 131, 132])
+
+
+@pytest.mark.parametrize("start,end", [
+    ((4, 4), (8, 8)), ((8, 8), (4, 4)),
+])
+def test_short_diagonal_edges_are_symmetric_and_stop_at_endpoint(start, end):
+    mask = bytearray(16 * 16)
+
+    _supercover_segment(mask, 16, 16, start, end)
+
+    assert [index for index, value in enumerate(mask) if value] == [
+        51, 52, 67, 68, 69, 84, 85, 86,
+        101, 102, 103, 118, 119, 120, 135, 136,
+    ]
+
+
+def test_interior_triangle_has_an_exact_local_mask():
+    result = rasterize_uv_coverage(
+        [0, 1, 2], [(0.25, 0.25), (0.50, 0.25), (0.25, 0.50)], 16, 16)
+
+    assert [index for index, value in enumerate(result.mask) if value] == [
+        51, 52, 53, 54, 55, 56, 67, 68, 69, 70, 71, 72,
+        83, 84, 85, 86, 87, 99, 100, 101, 102,
+        115, 116, 117, 131, 132,
+    ]
+
+
+@pytest.mark.parametrize("uvs,edge", [
+    ([(0.999, 0.25), (1.0, 0.25), (0.999, 0.26)], "right"),
+    ([(0.25, 0.999), (0.26, 0.999), (0.25, 1.0)], "bottom"),
+])
+def test_outer_texture_boundaries_do_not_mark_a_penultimate_unit(uvs, edge):
+    result = rasterize_uv_coverage([0, 1, 2], uvs, 16, 16)
+    occupied = [index for index, value in enumerate(result.mask) if value]
+    columns = {index % 16 for index in occupied}
+    rows = {index // 16 for index in occupied}
+
+    if edge == "right":
+        assert columns == {15}
+        assert rows <= {3, 4}
+    else:
+        assert rows == {15}
+        assert columns <= {3, 4}
 
 
 def test_source_uv_boundaries_are_inclusive():

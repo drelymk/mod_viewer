@@ -4,11 +4,18 @@ import { bindModalDismiss, setModalError } from './modal-shell.js';
 import {
   analyzeMeshTextureBake, cancelTextureBakeAnalysis, formatBakeAnalysis,
 } from '../mesh/texture-bake-analysis.js';
+import { activeMeshes } from '../mesh/mesh-state.js';
 
 const $ = id => document.getElementById(id);
 const backdrop = $('texture-bake-modal-backdrop');
 const body = $('texture-bake-body');
 const error = $('texture-bake-error');
+
+function displayNameForSemanticKey(semanticKey) {
+  const mesh = activeMeshes.find(item =>
+    item.userData?.semanticKey === semanticKey);
+  return mesh?.userData?.displayName || semanticKey;
+}
 
 function closeTextureBakeModal() {
   cancelTextureBakeAnalysis();
@@ -26,15 +33,15 @@ function setLoading(loading) {
   }
 }
 
-function renderResult(result, displayName) {
+function renderResult(result, displayName = displayNameForSemanticKey) {
   setModalError(error, '');
+  body.replaceChildren();
   const formatted = formatBakeAnalysis(result, displayName);
   if (!formatted) return false;
   if (formatted.kind === 'error') {
     setModalError(error, formatted.summary);
     return true;
   }
-  body.replaceChildren();
   const state = document.createElement('div');
   state.className = `texture-bake-state texture-bake-state-${formatted.kind}`;
   state.textContent = formatted.title;

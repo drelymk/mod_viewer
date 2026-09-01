@@ -964,6 +964,7 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
     payload["textures"][dds_key] = payload["textures"].pop(old_key)
     second = copy.deepcopy(first)
     second["component"] = "Face Bake"
+    second["display_name"] = "Friendly Face"
     payload["meshes"]["Face-Bake-0"] = second
     response = {
         "status": "ok", "safety": "shared",
@@ -1002,6 +1003,7 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         assert page.locator("#texture-bake-close-x").count() == 1
         assert page.locator("#texture-bake-body").inner_text().find(
             "Coverage overlaps") >= 0
+        assert "Friendly Face" in page.locator("#texture-bake-body").inner_text()
         usage = page.evaluate("window.__fakeApi.calls.analyzeTextureBake[0][3]")
         assert len(usage) == 2
         assert {item["semantic_key"] for item in usage} == {
@@ -1010,6 +1012,67 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         assert page.evaluate("window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
+    finally:
+        context.close()
+
+
+def test_texture_coverage_unknown_state_does_not_claim_unique_units(
+        edge_browser, frontend_url):
+    payload = _payload("Unknown")
+    old_key = payload["meshes"]["Body-Unknown-0"]["tex_key"]
+    dds_key = "diffuse::Unknown-one.dds"
+    payload["meshes"]["Body-Unknown-0"]["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    payload["textureBakeResponse"] = {
+        "status": "ok", "safety": "unknown",
+        "texture": {"file": "Unknown-one.dds", "width": 8, "height": 8,
+                     "format": "bc7_unorm"},
+        "coverage": {"unit": "block", "selected_units": 4,
+                     "total_units": 4, "unique_units": None,
+                     "shared_units": 1, "selected_percent": 100,
+                     "shared_percent_of_selected": 25},
+        "shared_with": [], "unresolved_consumers": ["Other-0"],
+    }
+    context, page = _page(edge_browser, frontend_url, {"Unknown": payload})
+    try:
+        _open(page, "Unknown")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-modal-backdrop.show").wait_for()
+        details = page.locator("#texture-bake-body").inner_text()
+        assert "Safety is unknown" in details
+        assert "Unknown" in details
+    finally:
+        context.close()
+
+
+def test_texture_coverage_error_clears_loading_message(
+        edge_browser, frontend_url):
+    payload = _payload("Error")
+    old_key = payload["meshes"]["Body-Error-0"]["tex_key"]
+    dds_key = "diffuse::Error-one.dds"
+    payload["meshes"]["Body-Error-0"]["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    payload["textureBakeResponse"] = {
+        "status": "error", "code": "coverage_incomplete",
+        "error": "Texture coverage could not be analyzed safely.",
+    }
+    context, page = _page(edge_browser, frontend_url, {"Error": payload})
+    try:
+        _open(page, "Error")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-error").wait_for()
+        assert page.locator("#texture-bake-error").inner_text() == (
+            "Texture coverage could not be analyzed safely.")
+        assert "Analyzing texture coverage" not in page.locator(
+            "#texture-bake-body").inner_text()
     finally:
         context.close()
 
