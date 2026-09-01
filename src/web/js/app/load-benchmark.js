@@ -27,34 +27,58 @@ export function beginLoadBenchmark() {
     started: performance.now(),
     finished: false,
     stages: {},
-    first_request_animation_frame_seconds: null,
+    first_model_frame_seconds: null,
   };
   current = state;
-  requestAnimationFrame(() => {
-    if (current !== state) return;
-    state.first_request_animation_frame_seconds = Math.max(
-      0, performance.now() - state.started) / 1000;
-  });
   return state;
 }
 
-export async function measureLoadStage(name, operation) {
-  if (!current) return operation();
+function recordStage(state, name, started) {
+  state.stages[name] = Math.max(0, performance.now() - started) / 1000;
+}
+
+export function measureLoadStage(name, operation) {
+  const state = current;
+  if (!state) return operation();
   const started = performance.now();
   try {
-    return await operation();
+    return operation();
   } finally {
-    current.stages[name] = Math.max(0, performance.now() - started) / 1000;
+    recordStage(state, name, started);
   }
+}
+
+export function measureAsyncLoadStage(name, operation) {
+  const state = current;
+  if (!state) return operation();
+  const started = performance.now();
+  try {
+    return Promise.resolve(operation()).finally(() => {
+      recordStage(state, name, started);
+    });
+  } catch (error) {
+    recordStage(state, name, started);
+    throw error;
+  }
+}
+
+function scheduleFirstModelFrame(state) {
+  requestAnimationFrame(() => {
+    if (current !== state) return;
+    state.first_model_frame_seconds = Math.max(
+      0, performance.now() - state.started) / 1000;
+  });
 }
 
 export function finishLoadBenchmark(fields = {}) {
   if (!current) return null;
+  const state = current;
   current.finished = true;
   current.finished_at = performance.now();
   current.total_seconds = Math.max(
     0, current.finished_at - current.started) / 1000;
   Object.assign(current, fields);
+  if (fields.success === true) scheduleFirstModelFrame(state);
   return snapshot(current);
 }
 

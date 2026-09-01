@@ -1,7 +1,8 @@
 """Benchmark the lazy texture pipeline on a real mod.
 
 The default command runs one isolated worker for each requested semaphore size
-and prints JSON suitable for comparing PRs:
+and prints JSON suitable for comparing PRs. Use ``--repeats 3`` for a
+three-sample summary per semaphore size:
 
     python tools/benchmark_texture_pipeline.py "<mod-folder>"
 
@@ -9,8 +10,11 @@ Each worker starts the real localhost server, loads the mod through the
 ``pywebview.api.load_mod``-shaped browser bridge backed by ``ModViewerAPI``,
 and runs the frontend load path in Edge. It reports backend stages, bridge
 transport, geometry transfer, CPU-side Three.js construction, and texture
-requests. The worker is isolated so Pillow's cache and browser processes
-cannot make later concurrency rows artificially warm.
+requests. Playwright bridge timings are harness overhead estimates, not
+native pywebview/WebView2 transport measurements. The worker is isolated so
+Pillow's cache and browser processes cannot make later concurrency rows
+artificially warm. Process isolation does not flush the operating system's
+filesystem cache, so repeated buffer reads may be filesystem-cache warm.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import ctypes
 import ctypes.wintypes
 import json
 import os
+import statistics
 import subprocess
 import sys
 import threading
@@ -41,6 +46,54 @@ _PROFILE_STAGES = (
     "resize",
     "normal_z_reconstruction",
     "png_encoding",
+)
+
+_SUMMARY_TIMING_FIELDS = (
+    ("backend.api_load_seconds", ("backend", "api_load_seconds")),
+    ("backend.authoritative_context_seconds",
+     ("backend", "authoritative_context_seconds")),
+    ("backend.analyze_mod_inis_seconds",
+     ("backend", "analyze_mod_inis_seconds")),
+    ("backend.asset_index_load_seconds",
+     ("backend", "asset_index_load_seconds")),
+    ("backend.asset_enrichment_seconds",
+     ("backend", "asset_enrichment_seconds")),
+    ("backend.build_mesh_result_seconds",
+     ("backend", "build_mesh_result_seconds")),
+    ("backend.pack_draw_geometry_seconds",
+     ("backend", "pack_draw_geometry_seconds")),
+    ("backend.metadata_hydrate_textures_seconds",
+     ("backend", "metadata_hydrate_textures_seconds")),
+    ("backend.geometry_publication_seconds",
+     ("backend", "geometry_publication_seconds")),
+    ("browser.browser_display_seconds",
+     ("browser", "browser_display_seconds")),
+    ("browser.bridge_load_mod_seconds",
+     ("browser", "bridge_load_mod_seconds")),
+    ("browser.payload_json_encode_probe_seconds",
+     ("browser", "payload_json_encode_probe_seconds")),
+    ("browser.playwright_bridge_remainder_seconds",
+     ("browser", "playwright_bridge_remainder_seconds")),
+    ("browser.geometry_fetch_arraybuffer_seconds",
+     ("browser", "geometry_fetch_arraybuffer_seconds")),
+    ("browser.geometry_http_seconds",
+     ("browser", "geometry_http_seconds")),
+    ("browser.build_mesh_panel_seconds",
+     ("browser", "build_mesh_panel_seconds")),
+    ("browser.control_panels_seconds",
+     ("browser", "control_panels_seconds")),
+    ("browser.refresh_all_seconds",
+     ("browser", "refresh_all_seconds")),
+    ("browser.fit_to_seconds", ("browser", "fit_to_seconds")),
+    ("browser.first_model_frame_seconds",
+     ("browser", "first_model_frame_seconds")),
+)
+
+_SUMMARY_COUNTER_FIELDS = (
+    "asset_index_bytes", "raw_buffer_bytes_read", "final_geometry_bytes",
+    "structured_bridge_payload_bytes", "mesh_count", "draw_count",
+    "packed_vertices", "packed_indices", "shape_target_bytes",
+    "meshes_missing_authored_normals",
 )
 
 
@@ -469,6 +522,8 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
             console_errors.append(message.text)
 
     def bridge_load_mod(path, disabled_ini=False):
+        # This callback models the browser-side API call, but its transport is
+        # Playwright's exposed-function channel rather than native pywebview.
         started = time.perf_counter()
         try:
             result = api.load_mod(path, disabled_ini)
@@ -566,7 +621,7 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
                   viewerState.currentModPath = path;
                   viewerState.currentSource = {kind: 'mod', path};
                   benchmark.beginLoadBenchmark();
-                  const data = await benchmark.measureLoadStage(
+                  const data = await benchmark.measureAsyncLoadStage(
                     'bridge_load_mod', () => window.pywebview.api.load_mod(path));
                   if (data?.error) {
                     benchmark.finishLoadBenchmark({success: false, error: data.error});
@@ -635,16 +690,16 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
             "refresh_all_seconds": frontend.get("stages", {}).get(
                 "refresh_all"),
             "fit_to_seconds": frontend.get("stages", {}).get("fit_to"),
-            "first_request_animation_frame_seconds": frontend.get(
-                "first_request_animation_frame_seconds"),
+            "first_model_frame_seconds": frontend.get(
+                "first_model_frame_seconds"),
             "renderer_available": renderer_available,
             "renderer_bootstrap_error": bootstrap_error,
             "benchmark_path": "switchMod" if renderer_available
                 else "displayMeshPayload_without_webgpu",
             "bridge_callback_seconds": sum(bridge_callback_timings),
-            "bridge_payload_json_serialization_seconds": sum(
+            "payload_json_encode_probe_seconds": sum(
                 bridge_json_serialization_timings),
-            "bridge_transport_serialization_seconds": max(
+            "playwright_bridge_remainder_seconds": max(
                 0.0,
                 frontend.get("stages", {}).get("bridge_load_mod", 0.0)
                 - sum(bridge_callback_timings)
@@ -820,12 +875,57 @@ def _run_once(mod_path, concurrency, browser_channel):
     }
 
 
+def _summary_stats(values):
+    return {
+        "median": statistics.median(values),
+        "min": min(values),
+        "max": max(values),
+    }
+
+
+def _nested_value(value, path):
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def _summarize_runs(runs, concurrency):
+    selected = [run for run in runs if run["concurrency"] == concurrency]
+    timings = {}
+    for label, path in _SUMMARY_TIMING_FIELDS:
+        values = [
+            value for run in selected
+            if (value := _nested_value(run, path)) is not None
+        ]
+        if values:
+            timings[label] = _summary_stats(values)
+
+    counters = {}
+    for field in _SUMMARY_COUNTER_FIELDS:
+        values = [
+            value for run in selected
+            if (value := run.get("backend", {}).get(field)) is not None
+        ]
+        if values:
+            counters[field] = _summary_stats(values)
+    return {
+        "concurrency": concurrency,
+        "repeats": len(selected),
+        "timings": timings,
+        "counters": counters,
+    }
+
+
 def _parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mod_path", type=Path)
     parser.add_argument("--concurrency", nargs="+", type=int,
                         default=[1, 2, 4],
                         help="semaphore sizes (default: 1 2 4)")
+    parser.add_argument("--repeats", type=int, default=1,
+                        help="isolated samples per semaphore size (default: 1)")
     parser.add_argument("--browser-channel", default="msedge")
     parser.add_argument("--worker", action="store_true",
                         help=argparse.SUPPRESS)
@@ -840,6 +940,8 @@ def main():
         raise SystemExit(f"Mod folder not found: {mod_path}")
     if any(value <= 0 for value in args.concurrency):
         raise SystemExit("--concurrency values must be positive")
+    if args.repeats <= 0:
+        raise SystemExit("--repeats must be positive")
 
     if args.worker:
         with contextlib.redirect_stdout(sys.stderr):
@@ -850,25 +952,40 @@ def main():
 
     runs = []
     for concurrency in args.concurrency:
-        command = [
-            sys.executable, str(Path(__file__).resolve()), mod_path,
-            "--worker", "--concurrency", str(concurrency),
-            "--browser-channel", args.browser_channel,
-        ]
-        completed = subprocess.run(
-            command, cwd=str(REPO_ROOT), text=True,
-            capture_output=True, timeout=600)
-        if completed.stderr:
-            print(completed.stderr, file=sys.stderr, end="")
-        if completed.returncode:
-            raise SystemExit(
-                f"benchmark worker failed for concurrency {concurrency}: "
-                f"{completed.stdout}")
-        runs.append(json.loads(completed.stdout))
+        for repeat in range(1, args.repeats + 1):
+            command = [
+                sys.executable, str(Path(__file__).resolve()), mod_path,
+                "--worker", "--concurrency", str(concurrency),
+                "--browser-channel", args.browser_channel,
+            ]
+            completed = subprocess.run(
+                command, cwd=str(REPO_ROOT), text=True,
+                capture_output=True, timeout=600)
+            if completed.stderr:
+                print(completed.stderr, file=sys.stderr, end="")
+            if completed.returncode:
+                raise SystemExit(
+                    f"benchmark worker failed for concurrency {concurrency}, "
+                    f"repeat {repeat}: {completed.stdout}")
+            result = json.loads(completed.stdout)
+            result["repeat"] = repeat
+            runs.append(result)
     output = {
         "mod_path": mod_path,
         "browser_channel": args.browser_channel,
+        "repeats": args.repeats,
+        "os_filesystem_cache_flushed": False,
+        "notes": [
+            "Process isolation does not flush the operating system filesystem "
+            "cache.",
+            "Playwright bridge timings are harness estimates, not native "
+            "pywebview/WebView2 measurements.",
+        ],
         "runs": runs,
+        "summary": [
+            _summarize_runs(runs, concurrency)
+            for concurrency in args.concurrency
+        ],
     }
     print(json.dumps(output, indent=2 if args.pretty else None))
 

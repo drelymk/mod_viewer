@@ -26,7 +26,8 @@ import {
 import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
 import {
-  beginLoadBenchmark, finishLoadBenchmark, measureLoadStage,
+  beginLoadBenchmark, finishLoadBenchmark, measureAsyncLoadStage,
+  measureLoadStage,
 } from './load-benchmark.js';
 
 const $ = (id) => document.getElementById(id);
@@ -167,7 +168,7 @@ export async function displayMeshPayload(payload, {
 } = {}) {
   const geometry = payload.geometry;
   if (geometry) {
-    await measureLoadStage('geometry_fetch_arraybuffer', async () => {
+    await measureAsyncLoadStage('geometry_fetch_arraybuffer', async () => {
       const response = await fetch(geometry.url, { cache: 'no-store' });
       if (!response.ok) throw new Error(`Geometry download failed (${response.status}).`);
       const blob = await response.arrayBuffer();
@@ -198,7 +199,7 @@ export async function displayMeshPayload(payload, {
     toggles: controls.toggles || {}, menu: controls.menu || {},
   });
   setTextures(payload.textures);
-  await measureLoadStage('build_mesh_panel', () => buildMeshPanel(
+  measureLoadStage('build_mesh_panel', () => buildMeshPanel(
     meshes, modelPath, payload.metadata?.mesh_names || {},
     payload.metadata?.material_profiles || {},
     {
@@ -211,7 +212,7 @@ export async function displayMeshPayload(payload, {
         ? (role => window.pywebview.api.pick_asset_texture_file(
           viewerState.currentSource.path, role)) : null,
     }));
-  await measureLoadStage('control_panels', () => {
+  measureLoadStage('control_panels', () => {
     buildTogglePanel(controls.toggles, {
       modPath: viewerState.currentModPath, onChange: onToggleChange,
     });
@@ -220,13 +221,13 @@ export async function displayMeshPayload(payload, {
       modPath: viewerState.currentModPath, onChange: onPresentChange,
     });
   });
-  await measureLoadStage('refresh_all', () => refreshAll({
+  measureLoadStage('refresh_all', () => refreshAll({
     force: { visibility: true, textures: true, shapes: true },
   }));
   setMeshesAvailable(true);
   viewerState.rightDockEnabled = true;
   syncViewportControlPlacement();
-  await measureLoadStage('fit_to', () => fitTo(activeMeshes, {
+  measureLoadStage('fit_to', () => fitTo(activeMeshes, {
     preserveCamera,
     // WWMI models use the opposite horizontal facing convention from the
     // viewer's default front view. Keep this as a model base transform so
@@ -247,7 +248,7 @@ async function loadModAt(path, disabledIni, handlers = {}) {
 
   let data;
   try {
-    data = await measureLoadStage('bridge_load_mod', () => disabledIni === undefined
+    data = await measureAsyncLoadStage('bridge_load_mod', () => disabledIni === undefined
       ? window.pywebview.api.load_mod(path)
       : window.pywebview.api.load_mod(path, disabledIni));
   } catch (error) {
@@ -257,7 +258,7 @@ async function loadModAt(path, disabledIni, handlers = {}) {
   setHealthReport(data?.health, data?.asset_resolution);
   if (data && data.error) {
     showLoading(false);
-    await measureLoadStage('refresh_pending_state', () => refreshPendingState());
+    await measureAsyncLoadStage('refresh_pending_state', () => refreshPendingState());
     finishLoadBenchmark({success: false, error: data.error});
     await alertDialog('Could not load mod:\n\n' + data.error);
     return false;
@@ -271,12 +272,12 @@ async function loadModAt(path, disabledIni, handlers = {}) {
     clearScene({ preserveModelOrientation: preserveViewerPose });
     clearPendingState();
     showLoading(false);
-    await measureLoadStage('refresh_pending_state', () => refreshPendingState());
+    await measureAsyncLoadStage('refresh_pending_state', () => refreshPendingState());
     finishLoadBenchmark({success: false, error: error?.message || String(error)});
     await alertDialog('Could not load mod geometry:\n\n' + error.message);
     return false;
   }
-  await measureLoadStage('refresh_pending_state', () => refreshPendingState());
+  await measureAsyncLoadStage('refresh_pending_state', () => refreshPendingState());
 
   // Lead with the folder name; the full path is long and rarely the useful part.
   const folderName = path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1);
