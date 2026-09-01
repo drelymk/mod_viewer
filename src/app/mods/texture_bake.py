@@ -176,6 +176,31 @@ def _usage_texture_path(mod_dir, key, expected_role):
     return _canonical_mod_path(mod_dir, relative_path)
 
 
+def authored_diffuse_run_consumers(
+        group, mod_dir, selected_physical_identity, game_profile=None):
+    """Project possible diffuse consumers through one ordered draw group.
+
+    A conditional authored diffuse assignment can start a texture run whose
+    following draws inherit the selected texture.  The conservative projection
+    keeps every draw after the first possible selected assignment because a
+    later boundary is not necessarily active in every reachable state.
+    """
+    consumers = []
+    run_started = False
+    for draw in deduplicate_draws(group):
+        if not run_started:
+            owned = authored_texture_keys_for_draw(
+                draw, mod_dir, game_profile)
+            run_started = any(
+                path and _physical_identity(path) == selected_physical_identity
+                for texture_key in owned.get("diffuse", ())
+                for path in (_usage_texture_path(
+                    mod_dir, texture_key, "diffuse"),))
+        if run_started and draw.label not in consumers:
+            consumers.append(draw.label)
+    return tuple(consumers)
+
+
 def _texture_details(path, info):
     return {
         "file": os.path.basename(path),
@@ -411,20 +436,22 @@ def _resolve_request(context, overrides, active_mesh_keys, selected_semantic_key
             owned = authored_texture_keys_for_draw(
                 draw, context.mod_dir, parsed.game.game)
             for role in _TEXTURE_USAGE_ROLES:
+                if role == "diffuse":
+                    continue
                 for texture_key in owned.get(role, ()):
                     path = _usage_texture_path(
                         context.mod_dir, texture_key, role)
                     if not path or _physical_identity(path) != selected_identity:
                         continue
-                    if role == "diffuse":
-                        if draw.label != selected_semantic_key:
-                            authored_consumers.setdefault(
-                                draw.label, draws.get(draw.label))
-                    else:
-                        value = (draw.label, role)
-                        if value not in cross_role_seen:
-                            cross_role_seen.add(value)
-                            cross_role_usage.append(value)
+                    value = (draw.label, role)
+                    if value not in cross_role_seen:
+                        cross_role_seen.add(value)
+                        cross_role_usage.append(value)
+        for semantic_key in authored_diffuse_run_consumers(
+                group, context.mod_dir, selected_identity, parsed.game.game):
+            if semantic_key != selected_semantic_key:
+                authored_consumers.setdefault(
+                    semantic_key, draws.get(semantic_key))
     if cross_role_usage:
         uses = []
         for semantic_key, role in cross_role_usage:

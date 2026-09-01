@@ -10,6 +10,7 @@ let currentReport = null;
 let currentFilter = 'all';
 let reportLoader = null;
 let reportGeneration = 0;
+let healthRequestId = 0;
 let activeReportLoad = null;
 let currentAssetResolution = null;
 
@@ -191,6 +192,7 @@ export function refreshHealthReport({force = false} = {}) {
     return activeReportLoad.promise;
   }
 
+  const requestId = ++healthRequestId;
   const entry = { generation, promise: null };
   entry.promise = (async () => {
     const button = $('health-btn');
@@ -198,12 +200,14 @@ export function refreshHealthReport({force = false} = {}) {
     button.title = 'Running INI diagnostics…';
     try {
       const report = await loader();
-      if (generation !== reportGeneration || loader !== reportLoader) return null;
+      if (generation !== reportGeneration || loader !== reportLoader
+          || requestId !== healthRequestId) return null;
       const normalized = report && !report.error ? report : fallbackReport();
       setHealthReport(normalized);
       return normalized;
     } catch (error) {
-      if (generation !== reportGeneration || loader !== reportLoader) return null;
+      if (generation !== reportGeneration || loader !== reportLoader
+          || requestId !== healthRequestId) return null;
       const detail = error?.message ? `: ${error.message}` : '';
       const fallback = fallbackReport(
         `The INI diagnostics could not be completed${detail}`);

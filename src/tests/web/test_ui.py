@@ -1542,6 +1542,57 @@ def test_texture_bake_confirmation_resets_color_and_refreshes_affected_keys(
         context.close()
 
 
+def test_forced_health_refresh_keeps_newer_backup_report(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url,
+                           {"HealthRace": _payload("HealthRace")})
+    try:
+        _open(page, "HealthRace")
+        page.locator(".draw-item").first.wait_for()
+        page.wait_for_function(
+            "window.__fakeApi.calls.diagnostics.length >= 1")
+        page.evaluate("""async () => {
+          const health = await import('./js/panels/health-report.js');
+          window.__healthResolvers = [];
+          health.setHealthLoader(() => new Promise(resolve => {
+            window.__healthResolvers.push(resolve);
+          }));
+          window.__healthOld = health.refreshHealthReport();
+          window.dispatchEvent(new Event('mod-viewer-texture-baked'));
+        }""")
+        page.wait_for_function("window.__healthResolvers.length === 2")
+
+        page.evaluate("""() => {
+          window.__healthResolvers[1]({
+            summary: {issues: 1, warnings: 1, errors: 0},
+            files: {referenced: 0, inactive_only: 0, viewer_only: 0},
+            issues: [{severity: 'warning', category: 'asset',
+              message: 'Fresh timestamped backup is unreferenced.'}],
+          });
+        }""")
+        page.wait_for_function("""() =>
+          document.querySelector('#health-count').textContent === '1' &&
+          document.querySelector('#health-btn').classList.contains('warning')""")
+
+        page.evaluate("""() => {
+          window.__healthResolvers[0]({
+            summary: {issues: 0, warnings: 0, errors: 0},
+            files: {referenced: 0, inactive_only: 0, viewer_only: 0},
+            issues: [],
+          });
+        }""")
+        page.wait_for_timeout(100)
+        assert page.locator("#health-count").inner_text() == "1"
+        assert page.locator("#health-btn").get_attribute("class").find(
+            "warning") >= 0
+
+        page.locator("#health-btn").click()
+        assert page.locator("#health-list .health-message").inner_text() == (
+            "Fresh timestamped backup is unreferenced.")
+    finally:
+        context.close()
+
+
 def test_texture_coverage_error_clears_loading_message(
         edge_browser, frontend_url):
     payload = _payload("Error")

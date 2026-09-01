@@ -232,6 +232,74 @@ def test_authored_inactive_diffuse_variant_is_a_texture_consumer(
     assert resolved[-1] == (("Face-1", (inactive, inactive_group)),)
 
 
+def test_authored_diffuse_variant_protects_following_run_consumers(
+        tmp_path, monkeypatch):
+    for name in ("shared.dds", "a.dds", "c.dds"):
+        (tmp_path / name).write_bytes(b"fixture")
+    selected = DrawCall(
+        label="Selected-1", count=3, start=0,
+        texture_default_file="shared.dds")
+    first = DrawCall(
+        label="A-1", count=3, start=3, texture_default_file="a.dds",
+        texture_variants=[{
+            "conditions": [[{"var": "toggle", "value": "1"}]],
+            "file": "shared.dds",
+        }])
+    follower = DrawCall(label="B-1", count=3, start=6)
+    longer_follower = DrawCall(label="C-1", count=3, start=9)
+    boundary = DrawCall(
+        label="D-1", count=3, start=12, texture_default_file="c.dds")
+    selected_group = {"draws": [selected]}
+    authored_group = {"draws": [first, follower, longer_follower, boundary]}
+    parsed = SimpleNamespace(
+        game=SimpleNamespace(game="unknown"),
+        groups=[selected_group, authored_group],
+    )
+    draw_map = {
+        draw.label: (draw, group)
+        for group in parsed.groups
+        for draw in group["draws"]
+    }
+    monkeypatch.setattr(
+        texture_bake, "resolved_draws",
+        lambda *_args: (parsed, draw_map))
+    monkeypatch.setattr(texture_bake, "_inspect_color_texture", lambda _: _info())
+    coverage = {
+        "Selected-1": [1, 0, 0, 0],
+        "A-1": [0, 1, 0, 0],
+        "B-1": [1, 0, 0, 0],
+        "C-1": [0, 0, 1, 0],
+        "D-1": [0, 0, 0, 1],
+    }
+    monkeypatch.setattr(
+        texture_bake, "_coverage",
+        lambda draw, *_args: _coverage(coverage[draw.label]))
+    usage = [
+        _role_usage("Selected-1", "diffuse::shared.dds"),
+        _role_usage("A-1", "diffuse::a.dds"),
+        _role_usage("B-1", "diffuse::a.dds"),
+        _role_usage("C-1", "diffuse::a.dds"),
+        _role_usage("D-1", "diffuse::c.dds"),
+    ]
+
+    resolved = texture_bake._resolve_request(
+        _context(tmp_path), {}, set(draw_map), "Selected-1",
+        "diffuse::shared.dds", usage)
+    assert {key for key, _draw in resolved[-1]} >= {
+        "A-1", "B-1", "C-1",
+    }
+
+    result = texture_bake.analyze_texture_bake(
+        _context(tmp_path), {}, set(draw_map), "Selected-1",
+        "diffuse::shared.dds", usage)
+
+    assert result["status"] == "ok"
+    assert result["safety"] == "shared"
+    assert result["shared_with"] == [{
+        "semantic_key": "B-1", "shared_units": 1,
+    }]
+
+
 def test_authored_inactive_non_diffuse_variant_blocks_bake(
         tmp_path, monkeypatch):
     source = tmp_path / "body.dds"
