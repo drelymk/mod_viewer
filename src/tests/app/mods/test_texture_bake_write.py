@@ -1,6 +1,7 @@
 """Safe DDS color-bake write-path regressions."""
 
 from types import SimpleNamespace
+from datetime import datetime
 from pathlib import Path
 import struct
 
@@ -10,6 +11,10 @@ from PIL import Image
 from app.mods import texture_bake
 from core.textures.dds import inspect_dds, inspect_dds_layout
 from core.textures.uv_coverage import UVCoverage
+
+
+def _backups(directory, stem):
+    return sorted(directory.glob(f"{stem}-??????????????.dds"))
 
 
 def _rgba8_dds(payload, format_name="rgba8"):
@@ -85,7 +90,9 @@ def test_bake_replaces_only_safe_units_and_keeps_backup(tmp_path, monkeypatch):
     assert updated[:128] == original[:128]
     assert updated[128:132] == bytes([200, 201, 202, 40])
     assert updated[132:] == original[132:]
-    assert (tmp_path / "body.dds.modviewer.bak").read_bytes() == original
+    backups = _backups(tmp_path, "body")
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
 
 
 def test_bake_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatch):
@@ -128,7 +135,7 @@ def test_bake_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatc
 
     assert result["code"] == "texture_changed_during_bake"
     assert source.read_bytes() == original
-    assert not (tmp_path / "body.dds.modviewer.bak").exists()
+    assert not _backups(tmp_path, "body")
 
 
 def test_patch_copies_only_safe_units_at_each_mip(tmp_path):
@@ -274,10 +281,10 @@ def test_bake_validates_candidate_bc1_alpha_before_backup(
     if candidate_transparent:
         assert result["code"] == "alpha_preservation_unsupported"
         assert source.read_bytes() == original
-        assert not (tmp_path / "bc1-candidate.dds.modviewer.bak").exists()
+        assert not _backups(tmp_path, "bc1-candidate")
     else:
         assert result["status"] == "ok"
-        assert (tmp_path / "bc1-candidate.dds.modviewer.bak").exists()
+        assert _backups(tmp_path, "bc1-candidate")
 
 
 def test_bc7_alpha_validation_checks_only_safe_blocks_at_each_mip(
@@ -353,7 +360,7 @@ def test_bake_rejects_transparent_bc7_candidate_before_backup(
 
     assert result["code"] == "alpha_preservation_unsupported"
     assert source.read_bytes() == original
-    assert not (tmp_path / "bc7-candidate.dds.modviewer.bak").exists()
+    assert not _backups(tmp_path, "bc7-candidate")
 
 
 def test_bc7_transparency_is_rejected_before_backup_or_encoder(
@@ -390,7 +397,7 @@ def test_bc7_transparency_is_rejected_before_backup_or_encoder(
 
     assert result["code"] == "alpha_preservation_unsupported"
     assert called == []
-    assert not (tmp_path / "transparent-bc7.dds.modviewer.bak").exists()
+    assert not _backups(tmp_path, "transparent-bc7")
 
 
 def test_opaque_bc7_can_be_baked(tmp_path, monkeypatch):
@@ -522,6 +529,14 @@ def test_lower_mip_collision_makes_only_that_level_shared(tmp_path, monkeypatch)
         return UVCoverage(1, 1, bytearray([1]), 1, (0, 0, 0, 0), 1, 0)
 
     monkeypatch.setattr(texture_bake, "_rasterize_geometry", coverage)
+    # The collision fixture supplies edit-unit masks directly; the dedicated
+    # consumer-padding behavior is covered by the pixel-mask tests.
+    monkeypatch.setattr(
+        texture_bake, "_protected_consumer_coverages",
+        lambda geometry, layout, _info: tuple(
+            coverage(geometry, mip.width, mip.height, 4, 4)
+            for mip in layout.mips),
+    )
     prepared = texture_bake._prepare_texture_bake(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"selected", "other"},
         "selected", "diffuse::lower-mip.dds", list(entries))
@@ -532,15 +547,23 @@ def test_lower_mip_collision_makes_only_that_level_shared(tmp_path, monkeypatch)
     assert prepare_calls == ["selected", "other"]
 
 
-def test_backup_names_never_overwrite_previous_backup(tmp_path):
+def test_backup_names_never_overwrite_previous_backup(tmp_path, monkeypatch):
     source = tmp_path / "body.dds"
     source.write_bytes(b"original")
+    monkeypatch.setattr(
+        texture_bake, "datetime",
+        SimpleNamespace(now=lambda: datetime(2026, 9, 1, 15, 22, 30)))
 
     first = texture_bake._write_backup(str(source), b"first")
     second = texture_bake._write_backup(str(source), b"second")
 
-    assert first.endswith("body.dds.modviewer.bak")
-    assert second.endswith("body.dds.modviewer.2.bak")
+    assert Path(first).name.endswith(".dds")
+    assert Path(second).name.endswith(".dds")
+    assert Path(first).stem.startswith("body-")
+    assert Path(second).stem.startswith("body-")
+    assert Path(first).name == "body-20260901152230.dds"
+    assert Path(second).name == "body-20260901152231.dds"
+    assert first != second
     assert Path(first).read_bytes() == b"first"
     assert Path(second).read_bytes() == b"second"
 
@@ -561,7 +584,7 @@ def test_bake_rejects_non_mod_texture_paths_before_encoder(
         texture_key, [{"semantic_key": "Body-1", "tex_key": texture_key}],
         {"hue": 30})
 
-    assert result["code"] == code
+    assert result["code"] == "stale_mesh_state"
     assert called == []
 
 

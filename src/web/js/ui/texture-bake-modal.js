@@ -2,12 +2,13 @@
 
 import { bindModalDismiss, setModalError } from './modal-shell.js';
 import {
-  analyzeMeshTextureBake, buildTextureUsageSnapshot,
-  cancelTextureBakeAnalysis, formatBakeAnalysis,
+  analyzeMeshTextureBake, cancelTextureBakeAnalysis, captureTextureBakeState,
+  formatBakeAnalysis, textureBakeStateMatches,
 } from '../mesh/texture-bake-analysis.js';
 import { activeMeshes } from '../mesh/mesh-state.js';
 import {
-  getMeshColorAdjustment, resetMeshColorAdjustment,
+  flushMeshColorAdjustmentPersistence, getMeshColorAdjustment,
+  resetMeshColorAdjustment,
 } from '../mesh/mesh-color-state.js';
 import { isNeutralColorAdjustment } from '../mesh/color-adjustment.js';
 import { reloadTextures } from '../mesh/mesh-factory.js';
@@ -22,6 +23,7 @@ const bakeButton = $('texture-bake-confirm');
 
 let pendingBake = null;
 let baking = false;
+let preparing = false;
 
 function displayNameForSemanticKey(semanticKey) {
   const mesh = activeMeshes.find(item =>
@@ -33,7 +35,7 @@ function closeTextureBakeModal() {
   // The modal is the guard around the destructive request. Keep it visible
   // until the write settles so the user cannot edit another color state while
   // the backend is committing the captured adjustment.
-  if (baking) return;
+  if (baking || preparing) return;
   cancelTextureBakeAnalysis();
   pendingBake = null;
   backdrop?.classList.remove('show');
@@ -122,70 +124,108 @@ function renderBakeSuccess(result) {
   setBakeAction();
 }
 
-function bakeRequestFor(mesh) {
-  const adjustment = getMeshColorAdjustment(mesh);
+function copyAdjustment(adjustment) {
   return {
-    semanticKey: mesh.userData?.semanticKey,
-    metadataKey: mesh.userData?.metadataKey,
-    texKey: mesh.userData?.texKey || null,
-    textureUsage: buildTextureUsageSnapshot(),
-    adjustment: {
-      hue: adjustment.hue,
-      saturation: adjustment.saturation,
-      brightness: adjustment.brightness,
-      contrast: adjustment.contrast,
-      red: adjustment.red,
-      green: adjustment.green,
-      blue: adjustment.blue,
-      tint: adjustment.tint,
-      tint_strength: adjustment.tintStrength,
-    },
+    hue: adjustment.hue,
+    saturation: adjustment.saturation,
+    brightness: adjustment.brightness,
+    contrast: adjustment.contrast,
+    red: adjustment.red,
+    green: adjustment.green,
+    blue: adjustment.blue,
+    tint: adjustment.tint,
+    tint_strength: adjustment.tintStrength,
   };
 }
 
-function synchronizeCommittedBake(mesh, result) {
+function sameAdjustment(left, right) {
+  return left.hue === right.hue
+    && left.saturation === right.saturation
+    && left.brightness === right.brightness
+    && left.contrast === right.contrast
+    && left.red === right.red
+    && left.green === right.green
+    && left.blue === right.blue
+    && left.tint === right.tint
+    && left.tintStrength === right.tintStrength;
+}
+
+function bakeRequestFor(state, adjustment) {
+  return {
+    modPath: state.modPath,
+    semanticKey: state.semanticKey,
+    metadataKey: state.metadataKey,
+    texKey: state.texKey,
+    textureUsage: state.textureUsage,
+    adjustment: copyAdjustment(adjustment),
+  };
+}
+
+async function synchronizeCommittedBake(mesh, result) {
+  if (result.warning === 'color_state_reset_failed') {
+    // Retry through the normal persistence boundary; texture_bake.py never
+    // edits viewer metadata directly.
+    resetMeshColorAdjustment(mesh, {persist: true, render: false});
+    await flushMeshColorAdjustmentPersistence(mesh);
+  }
   const sameLoadedMod = activeMeshes.includes(mesh)
     && viewerState.currentSource?.kind === 'mod'
     && samePath(mesh.userData?.modPath, viewerState.currentModPath);
   if (!sameLoadedMod) return false;
 
   resetMeshColorAdjustment(mesh, {persist: false, render: false});
-  if (result.warning === 'color_state_reset_failed') {
-    // Retry through the normal persistence boundary; texture_bake.py never
-    // edits viewer metadata directly.
-    resetMeshColorAdjustment(mesh, {persist: true, render: false});
-  }
   reloadTextures(result.affected_tex_keys || [result.tex_key]);
   notifyMeshStateChanged([mesh]);
+  window.dispatchEvent(new CustomEvent('mod-viewer-texture-baked', {
+    detail: {
+      texKey: result.tex_key,
+      affectedTexKeys: result.affected_tex_keys || [],
+    },
+  }));
   return true;
 }
 
-async function runBake(mesh, isCurrent) {
-  const request = bakeRequestFor(mesh);
+async function runBake(job) {
+  const {mesh, isCurrent, analyzedState, adjustment} = job;
   const api = window.pywebview?.api?.bake_mesh_texture_color;
   if (typeof api !== 'function') {
     setModalError(error, 'Texture baking is unavailable.');
     setBakeAction();
     return null;
   }
+  preparing = true;
+  setBakeAction({visible: true, disabled: true, label: 'Preparing…'});
+  setLoading('Preparing the bake…');
+  await flushMeshColorAdjustmentPersistence(mesh);
+  const currentState = captureTextureBakeState(mesh);
+  const currentAdjustment = getMeshColorAdjustment(mesh);
+  if (!textureBakeStateMatches(mesh, analyzedState)
+      || !sameAdjustment(currentAdjustment, adjustment)) {
+    preparing = false;
+    setBakeAction();
+    return openTextureBakeModal(mesh, {isCurrent});
+  }
+  const request = bakeRequestFor(currentState, currentAdjustment);
+  preparing = false;
   baking = true;
   setBakeAction({visible: true, disabled: true, label: 'Baking…'});
   setLoading(`Baking color into ${request.texKey || 'the texture'}…`);
   let result;
   try {
     result = await api(
-      mesh.userData.modPath, request.semanticKey, request.metadataKey,
+      request.modPath, request.semanticKey, request.metadataKey,
       request.texKey, request.textureUsage, request.adjustment);
   } catch (_requestError) {
     result = {status: 'error', error: 'Texture baking failed.'};
   }
   baking = false;
-  if (result?.status === 'ok') synchronizeCommittedBake(mesh, result);
+  if (result?.status === 'ok') await synchronizeCommittedBake(mesh, result);
   if (typeof isCurrent === 'function' && !isCurrent()) {
     closeTextureBakeModal();
     return result;
   }
   if (result?.status !== 'ok') {
+    body.replaceChildren();
     setModalError(error, result?.error || 'Texture baking failed.');
     // A failed destructive request must go through a fresh preflight. The
     // captured job has been consumed, so an enabled action here would be
@@ -204,9 +244,13 @@ export async function openTextureBakeModal(mesh, { isCurrent } = {}) {
   setBakeAction();
   setLoading();
   backdrop.classList.add('show');
+  const analyzedState = captureTextureBakeState(mesh);
+  const analyzedAdjustment = getMeshColorAdjustment(mesh);
   let result;
   try {
-    result = await analyzeMeshTextureBake(mesh, {isCurrent});
+    result = await analyzeMeshTextureBake(mesh, {
+      isCurrent, snapshot: analyzedState,
+    });
   } catch (_requestError) {
     result = {
       status: 'error',
@@ -221,7 +265,9 @@ export async function openTextureBakeModal(mesh, { isCurrent } = {}) {
   if (result.status === 'ok' && (result.safety === 'safe'
       || result.safety === 'shared')) {
     if (!isNeutralColorAdjustment(getMeshColorAdjustment(mesh))) {
-      pendingBake = {mesh, isCurrent};
+      pendingBake = {
+        mesh, isCurrent, analyzedState, adjustment: analyzedAdjustment,
+      };
       setBakeAction({
         visible: true, disabled: false,
         label: result.safety === 'shared'
@@ -233,10 +279,10 @@ export async function openTextureBakeModal(mesh, { isCurrent } = {}) {
 }
 
 bakeButton?.addEventListener('click', async () => {
-  if (!pendingBake || baking) return;
+  if (!pendingBake || baking || preparing) return;
   const job = pendingBake;
   pendingBake = null;
-  await runBake(job.mesh, job.isCurrent);
+  await runBake(job);
 });
 
 bindModalDismiss({
@@ -246,7 +292,7 @@ bindModalDismiss({
 });
 
 window.addEventListener('mod-viewer-mesh-selected', () => {
-  if (backdrop?.classList.contains('show') && !baking) {
+  if (backdrop?.classList.contains('show') && !baking && !preparing) {
     closeTextureBakeModal();
   }
 });

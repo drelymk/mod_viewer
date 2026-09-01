@@ -346,6 +346,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
           const state = window.__fakeApi = JSON.parse(__STATE__);
           const copy = value => value == null ? value : structuredClone(value);
           const loadWaiters = {};
+          const colorSaveWaiters = [];
+          state.releaseColorSaves = () => {
+            state.blockColorSaves = false;
+            colorSaveWaiters.splice(0).forEach(resolve => resolve());
+          };
           state.releaseLoad = path => {
             state.blockLoads = state.blockLoads || {};
             state.blockLoads[path] = false;
@@ -601,6 +606,9 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             save_mesh_textures: async () => ({}),
             save_mesh_color_adjustment: async (path, key, adjustment) => {
               state.calls.saveMeshColorAdjustment.push([path, key, adjustment]);
+              if (state.blockColorSaves) {
+                await new Promise(resolve => colorSaveWaiters.push(resolve));
+              }
               return {};
             },
             save_mesh_names: async () => ({}),

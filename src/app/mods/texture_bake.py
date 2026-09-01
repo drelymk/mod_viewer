@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 import hashlib
 import io
 import os
@@ -12,6 +13,9 @@ import tempfile
 from core.geometry.buffers import BufferStore
 from core.geometry.conventions import geometry_convention_for
 from core.geometry.packing import pack_draw_geometry
+from core.geometry.semantics import (
+    authored_texture_keys_for_draw, deduplicate_draws,
+)
 from core.resource_paths import _canonical, safe_resource_path
 from core.textures import TEXTURE_ROLES, split_texture_key
 from core.textures.color_adjustment import (
@@ -25,7 +29,10 @@ from core.textures.pipeline import load_texture_image_full
 from core.textures.texconv import (
     TexconvError, TexconvUnavailableError, encode_png_to_dds,
 )
-from core.textures.uv_coverage import UVCoverageError, rasterize_uv_coverage
+from core.textures.uv_coverage import (
+    UVCoverage, UVCoverageError, collapse_pixel_mask_to_units,
+    dilate_pixel_mask, rasterize_uv_coverage,
+)
 
 from app.assets.textures import is_asset_texture_key
 from app.mods.analysis import resolved_draws
@@ -82,6 +89,7 @@ class _PreparedConsumer:
 class _PreparedTextureBake:
     entries: tuple
     selected_path: str
+    selected_metadata_key: str | None
     info: object
     layout: object
     selected_pixels: object
@@ -286,7 +294,7 @@ def _coverage(draw, group, mod_dir, info, buffers, sparse_shape_cache, conventio
 
 
 def _validate_usage(active_mesh_keys, selected_semantic_key, selected_texture_key,
-                    texture_usage):
+                    texture_usage, *, require_complete_roles=False):
     if not isinstance(texture_usage, list):
         raise TextureBakeAnalysisError(
             "stale_mesh_state",
@@ -304,6 +312,10 @@ def _validate_usage(active_mesh_keys, selected_semantic_key, selected_texture_ke
                 "stale_mesh_state",
                 "The model changed before texture coverage could be analyzed.")
         has_role_snapshot = "texture_keys" in item
+        if require_complete_roles and not has_role_snapshot:
+            raise TextureBakeAnalysisError(
+                "stale_mesh_state",
+                "The model changed before texture coverage could be analyzed.")
         role_keys = item.get("texture_keys")
         legacy_texture_key = item.get("tex_key")
         if not has_role_snapshot:
@@ -361,10 +373,11 @@ def _validate_usage(active_mesh_keys, selected_semantic_key, selected_texture_ke
 
 
 def _resolve_request(context, overrides, active_mesh_keys, selected_semantic_key,
-                     selected_texture_key, texture_usage):
+                     selected_texture_key, texture_usage,
+                     require_complete_roles=False):
     entries = _validate_usage(
         active_mesh_keys, selected_semantic_key, selected_texture_key,
-        texture_usage)
+        texture_usage, require_complete_roles=require_complete_roles)
     selected_path = _texture_path(
         context.mod_dir, selected_texture_key, selected=True)
     info = _inspect_color_texture(selected_path)
@@ -375,6 +388,7 @@ def _resolve_request(context, overrides, active_mesh_keys, selected_semantic_key
             "mesh_not_found", "The selected mesh is no longer available.")
     selected_identity = _physical_identity(selected_path)
     cross_role_usage = []
+    cross_role_seen = set()
     for entry in entries:
         for role in _TEXTURE_USAGE_ROLES:
             if role == "diffuse":
@@ -383,7 +397,34 @@ def _resolve_request(context, overrides, active_mesh_keys, selected_semantic_key
             path = _usage_texture_path(
                 context.mod_dir, texture_key, role)
             if path and _physical_identity(path) == selected_identity:
-                cross_role_usage.append((entry["semantic_key"], role))
+                value = (entry["semantic_key"], role)
+                if value not in cross_role_seen:
+                    cross_role_seen.add(value)
+                    cross_role_usage.append(value)
+
+    # The live viewer snapshot only describes active bindings.  Parse the
+    # authored defaults and every conditional variant as well, since an
+    # inactive branch can still own the same physical DDS.
+    authored_consumers = {}
+    for group in getattr(parsed, "groups", ()):
+        for draw in deduplicate_draws(group):
+            owned = authored_texture_keys_for_draw(
+                draw, context.mod_dir, parsed.game.game)
+            for role in _TEXTURE_USAGE_ROLES:
+                for texture_key in owned.get(role, ()):
+                    path = _usage_texture_path(
+                        context.mod_dir, texture_key, role)
+                    if not path or _physical_identity(path) != selected_identity:
+                        continue
+                    if role == "diffuse":
+                        if draw.label != selected_semantic_key:
+                            authored_consumers.setdefault(
+                                draw.label, draws.get(draw.label))
+                    else:
+                        value = (draw.label, role)
+                        if value not in cross_role_seen:
+                            cross_role_seen.add(value)
+                            cross_role_usage.append(value)
     if cross_role_usage:
         uses = []
         for semantic_key, role in cross_role_usage:
@@ -396,18 +437,24 @@ def _resolve_request(context, overrides, active_mesh_keys, selected_semantic_key
             message += f", and {uses[-1]}."
         raise TextureBakeAnalysisError(
             "cross_role_texture_usage", message, "unsupported")
-    consumers = []
+    consumer_map = {}
     for entry in entries:
         if entry["semantic_key"] == selected_semantic_key:
             continue
         path = _texture_path(context.mod_dir, entry["tex_key"])
         if path and _physical_identity(path) == selected_identity:
-            consumers.append((entry["semantic_key"], draws.get(entry["semantic_key"])))
+            consumer_map[entry["semantic_key"]] = draws.get(entry["semantic_key"])
         elif entry["tex_key"] == selected_texture_key:
             # A consumer claiming the selected key but lacking a resolvable
             # source cannot be safely excluded from the sharing analysis.
-            consumers.append((entry["semantic_key"], None))
-    return entries, selected_path, info, parsed, selected_draw, tuple(consumers)
+            consumer_map[entry["semantic_key"]] = None
+    for semantic_key, consumer in authored_consumers.items():
+        if semantic_key not in consumer_map:
+            consumer_map[semantic_key] = consumer
+        elif consumer_map[semantic_key] is None and consumer is not None:
+            consumer_map[semantic_key] = consumer
+    return entries, selected_path, info, parsed, selected_draw, tuple(
+        consumer_map.items())
 
 
 def _unit_size(info):
@@ -415,14 +462,55 @@ def _unit_size(info):
     return (4, 4) if info.compressed else (1, 1)
 
 
+def _protected_consumer_coverages(geometry, layout, info):
+    """Protect neighboring edit units for non-selected texture consumers."""
+    unit_width, unit_height = _unit_size(info)
+    coverages = []
+    for mip in layout.mips:
+        pixels = _rasterize_geometry(
+            geometry, mip.width, mip.height, 1, 1)
+        protected = dilate_pixel_mask(
+            pixels.mask, mip.width, mip.height, radius=1)
+        mask = collapse_pixel_mask_to_units(
+            protected, mip.width, mip.height, unit_width, unit_height)
+        grid_width = (mip.width + unit_width - 1) // unit_width
+        grid_height = (mip.height + unit_height - 1) // unit_height
+        used = [index for index, value in enumerate(mask) if value]
+        bounds = None
+        if used:
+            bounds = (
+                min(index % grid_width for index in used),
+                min(index // grid_width for index in used),
+                max(index % grid_width for index in used),
+                max(index // grid_width for index in used),
+            )
+        coverages.append(UVCoverage(
+            grid_width, grid_height, mask, sum(mask), bounds,
+            pixels.triangle_count, pixels.degenerate_triangle_count))
+    return tuple(coverages)
+
+
 def _prepare_texture_bake(context, overrides, active_mesh_keys,
                           selected_semantic_key, selected_texture_key,
-                          texture_usage, *, require_file_layout=True):
+                          texture_usage, *, require_file_layout=True,
+                          require_complete_roles=False, metadata_key=None):
     """Resolve geometry and all per-mip masks for one authoritative request."""
     (entries, selected_path, info, parsed, selected_draw,
      consumers) = _resolve_request(
          context, overrides, active_mesh_keys, selected_semantic_key,
-         selected_texture_key, texture_usage)
+         selected_texture_key, texture_usage, require_complete_roles)
+    from core.geometry.identity import mesh_identity_for_draw
+    try:
+        selected_metadata_key = mesh_identity_for_draw(
+            selected_draw[0], selected_draw[1]).key
+    except AttributeError:
+        # Keep low-level mocked analysis fixtures source-compatible; real
+        # resolved DrawCall records always contain the identity fields.
+        selected_metadata_key = None
+    if metadata_key is not None and metadata_key != selected_metadata_key:
+        raise TextureBakeAnalysisError(
+            "stale_mesh_state",
+            "The selected mesh identity changed before the bake started.")
     layout = inspect_dds_layout(selected_path)
     if layout is None:
         if require_file_layout:
@@ -457,10 +545,7 @@ def _prepare_texture_bake(context, overrides, active_mesh_keys,
             geometry = _prepare_uv_geometry(
                 consumer[0], consumer[1], context.mod_dir, buffers,
                 sparse_shape_cache, convention)
-            coverages = tuple(
-                _rasterize_geometry(
-                    geometry, mip.width, mip.height, *_unit_size(info))
-                for mip in layout.mips)
+            coverages = _protected_consumer_coverages(geometry, layout, info)
         except TextureBakeAnalysisError as error:
             unresolved.append(semantic_key)
             unresolved_details.append({
@@ -496,7 +581,8 @@ def _prepare_texture_bake(context, overrides, active_mesh_keys,
         safe_masks.append(safe)
         shared_masks.append(shared)
     return _PreparedTextureBake(
-        entries=entries, selected_path=selected_path, info=info, layout=layout,
+        entries=entries, selected_path=selected_path,
+        selected_metadata_key=selected_metadata_key, info=info, layout=layout,
         selected_pixels=selected_pixels, selected_consumer=selected_consumer,
         other_consumers=tuple(other_consumers), safe_masks=tuple(safe_masks),
         shared_masks=tuple(shared_masks), shared_with=tuple(shared_with),
@@ -682,10 +768,11 @@ def _assert_source_unchanged(path, original_hash):
 
 def _write_backup(path, original):
     directory = os.path.dirname(path)
-    stem = os.path.basename(path) + ".modviewer"
-    for index in range(1, 10000):
-        suffix = ".bak" if index == 1 else f".{index}.bak"
-        backup = os.path.join(directory, stem + suffix)
+    stem = os.path.splitext(os.path.basename(path))[0]
+    moment = datetime.now()
+    for _index in range(10000):
+        backup = os.path.join(
+            directory, f"{stem}-{moment.strftime('%Y%m%d%H%M%S')}.dds")
         try:
             with open(backup, "xb") as stream:
                 stream.write(original)
@@ -693,6 +780,7 @@ def _write_backup(path, original):
                 os.fsync(stream.fileno())
             return backup
         except FileExistsError:
+            moment += timedelta(seconds=1)
             continue
         except OSError as error:
             raise TextureBakeAnalysisError(
@@ -907,7 +995,7 @@ def _replacement_completed(source_path, temporary_path, final):
 
 def bake_texture_color(
         context, overrides, active_mesh_keys, selected_semantic_key,
-        selected_texture_key, texture_usage, adjustment):
+        selected_texture_key, texture_usage, adjustment, metadata_key=None):
     """Safely bake a non-neutral adjustment into unique DDS units only."""
     committed = False
     success_result = None
@@ -916,7 +1004,8 @@ def bake_texture_color(
         # repeated for the destructive request, even after a prior analysis.
         prepared = _prepare_texture_bake(
             context, overrides, active_mesh_keys, selected_semantic_key,
-            selected_texture_key, texture_usage, require_file_layout=True)
+            selected_texture_key, texture_usage, require_file_layout=True,
+            require_complete_roles=True, metadata_key=metadata_key)
         normalized = normalize_color_adjustment(
             adjustment, reject_invalid=True)
         if normalized is None:
@@ -979,27 +1068,7 @@ def bake_texture_color(
                 original, candidate, prepared.layout,
                 prepared.safe_masks, candidate_layout)
 
-            # Check immediately before backup, and again after the backup has
-            # been created. A valid backup may remain if the source went stale.
-            _assert_source_unchanged(prepared.selected_path, original_hash)
-            backup_path = _write_backup(prepared.selected_path, original)
-            _assert_source_unchanged(prepared.selected_path, original_hash)
             temporary = _write_temp(prepared.selected_path, final)
-            success_result = {
-                "status": "ok",
-                "tex_key": selected_texture_key,
-                "affected_tex_keys": affected,
-                "texture": _texture_details(
-                    prepared.selected_path, prepared.info),
-                "patched": {
-                    "mip0_units": mip0_safe,
-                    "total_units": sum(
-                        len(mask) for mask in prepared.safe_masks),
-                    "shared_units_preserved": sum(
-                        sum(mask) for mask in prepared.shared_masks),
-                },
-                "backup": {"file": os.path.basename(backup_path)},
-            }
             try:
                 final_layout = inspect_dds_layout(temporary)
                 if final_layout is None:
@@ -1007,8 +1076,30 @@ def bake_texture_color(
                         "texture_validation_failed",
                         "The patched DDS failed validation.")
                 _validate_candidate(prepared.layout, temporary, final)
+                _validate_alpha_preservation(
+                    final, final_layout, prepared.safe_masks)
+                # The backup is deliberately created only after the complete
+                # temporary candidate has passed validation. If a later source
+                # race or replace failure occurs, that backup remains useful.
                 _assert_source_unchanged(
                     prepared.selected_path, original_hash)
+                backup_path = _write_backup(prepared.selected_path, original)
+                _assert_source_unchanged(prepared.selected_path, original_hash)
+                success_result = {
+                    "status": "ok",
+                    "tex_key": selected_texture_key,
+                    "affected_tex_keys": affected,
+                    "texture": _texture_details(
+                        prepared.selected_path, prepared.info),
+                    "patched": {
+                        "mip0_units": mip0_safe,
+                        "total_units": sum(
+                            len(mask) for mask in prepared.safe_masks),
+                        "shared_units_preserved": sum(
+                            sum(mask) for mask in prepared.shared_masks),
+                    },
+                    "backup": {"file": os.path.basename(backup_path)},
+                }
                 try:
                     os.replace(temporary, prepared.selected_path)
                 except OSError as error:

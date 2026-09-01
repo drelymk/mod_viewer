@@ -18,7 +18,10 @@ from .pipeline import (
     texture_key,
     texture_key_for_role,
 )
-from .uv_coverage import UVCoverage, UVCoverageError, rasterize_uv_coverage
+from .uv_coverage import (
+    UVCoverage, UVCoverageError, collapse_pixel_mask_to_units,
+    dilate_pixel_mask, rasterize_uv_coverage,
+)
 from .color_adjustment import (
     COLOR_DEFAULTS, COLOR_RANGES, adjust_rgba_bytes,
     apply_color_adjustment, is_neutral_color_adjustment,
@@ -44,6 +47,8 @@ __all__ = [
     "texture_key_for_role",
     "UVCoverage",
     "UVCoverageError",
+    "collapse_pixel_mask_to_units",
+    "dilate_pixel_mask",
     "rasterize_uv_coverage",
     "COLOR_DEFAULTS",
     "COLOR_RANGES",

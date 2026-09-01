@@ -174,7 +174,8 @@ class ModPreview:
                 self.authoritative_context(folder_path)
             result = bake_mesh_texture_color(
                 context, overrides, self._active_mesh_keys.get(folder_path),
-                semantic_key, tex_key, texture_usage, adjustment)
+                semantic_key, tex_key, texture_usage, adjustment,
+                metadata_key)
             if result.get("status") != "ok":
                 return result
             try:

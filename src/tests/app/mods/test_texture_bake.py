@@ -198,6 +198,96 @@ def test_unrelated_non_diffuse_role_does_not_block_safe_bake(
     assert result["safety"] == "safe"
 
 
+def test_authored_inactive_diffuse_variant_is_a_texture_consumer(
+        tmp_path, monkeypatch):
+    source = tmp_path / "body.dds"
+    (tmp_path / "face.dds").write_bytes(b"fixture")
+    source.write_bytes(b"fixture")
+    selected = DrawCall(label="Body-1", count=3,
+                        texture_default_file="body.dds")
+    inactive = DrawCall(
+        label="Face-1", count=3, texture_default_file="face.dds",
+        texture_variants=[{
+            "conditions": [[{"var": "toggle", "value": "1"}]],
+            "file": "body.dds",
+        }])
+    selected_group = {"draws": [selected]}
+    inactive_group = {"draws": [inactive]}
+    parsed = SimpleNamespace(
+        game=SimpleNamespace(game="unknown"),
+        groups=[selected_group, inactive_group],
+    )
+    monkeypatch.setattr(
+        texture_bake, "resolved_draws",
+        lambda *_args: (parsed, {
+            "Body-1": (selected, selected_group),
+            "Face-1": (inactive, inactive_group),
+        }))
+    monkeypatch.setattr(texture_bake, "_inspect_color_texture", lambda _: _info())
+
+    resolved = texture_bake._resolve_request(
+        _context(tmp_path), {}, {"Body-1"}, "Body-1",
+        "diffuse::body.dds", [_role_usage("Body-1", "diffuse::body.dds")])
+
+    assert resolved[-1] == (("Face-1", (inactive, inactive_group)),)
+
+
+def test_authored_inactive_non_diffuse_variant_blocks_bake(
+        tmp_path, monkeypatch):
+    source = tmp_path / "body.dds"
+    source.write_bytes(b"fixture")
+    selected = DrawCall(label="Body-1", count=3,
+                        texture_default_file="body.dds")
+    inactive = DrawCall(
+        label="Face-1", count=3, texture_default_file="face.dds",
+        normal_map_variants=[{
+            "conditions": [[{"var": "toggle", "value": "1"}]],
+            "file": "body.dds",
+        }])
+    selected_group = {"draws": [selected]}
+    inactive_group = {"draws": [inactive]}
+    parsed = SimpleNamespace(
+        game=SimpleNamespace(game="unknown"),
+        groups=[selected_group, inactive_group],
+    )
+    monkeypatch.setattr(
+        texture_bake, "resolved_draws",
+        lambda *_args: (parsed, {
+            "Body-1": (selected, selected_group),
+            "Face-1": (inactive, inactive_group),
+        }))
+    monkeypatch.setattr(texture_bake, "_inspect_color_texture", lambda _: _info())
+
+    result = texture_bake.analyze_texture_bake(
+        _context(tmp_path), {}, {"Body-1"}, "Body-1",
+        "diffuse::body.dds", [_role_usage("Body-1", "diffuse::body.dds")])
+
+    assert result["code"] == "cross_role_texture_usage"
+    assert "Normal Map" in result["error"]
+
+
+def test_destructive_bake_rejects_stale_metadata_identity_before_write(
+        tmp_path, monkeypatch):
+    source = tmp_path / "body.dds"
+    source.write_bytes(b"fixture")
+    draw = DrawCall(label="Body-1", count=3, start=0, base=0,
+                    texture_default_file="body.dds")
+    group = {"name": "Body", "source": "Root.ini", "draws": [draw]}
+    parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"), groups=[])
+    monkeypatch.setattr(
+        texture_bake, "resolved_draws",
+        lambda *_args: (parsed, {"Body-1": (draw, group)}))
+    monkeypatch.setattr(texture_bake, "_inspect_color_texture", lambda _: _info())
+
+    with pytest.raises(texture_bake.TextureBakeAnalysisError) as raised:
+        texture_bake._prepare_texture_bake(
+            _context(tmp_path), {}, {"Body-1"}, "Body-1",
+            "diffuse::body.dds", [_role_usage("Body-1", "diffuse::body.dds")],
+            require_file_layout=False, metadata_key="mesh:stale")
+
+    assert raised.value.code == "stale_mesh_state"
+
+
 def test_affected_texture_keys_include_role_assignments_and_dedupe_keys(
         tmp_path):
     source = tmp_path / "body.dds"

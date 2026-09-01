@@ -183,11 +183,13 @@ function fallbackReport(message = 'The INI diagnostics could not be completed.')
 // Run diagnostics without opening the modal. Loads are tied to the current
 // loader generation so a slower report for the previous mod cannot overwrite
 // the badge after the user switches folders.
-export function refreshHealthReport() {
+export function refreshHealthReport({force = false} = {}) {
   const loader = reportLoader;
   const generation = reportGeneration;
   if (!loader) return Promise.resolve(null);
-  if (activeReportLoad?.generation === generation) return activeReportLoad.promise;
+  if (!force && activeReportLoad?.generation === generation) {
+    return activeReportLoad.promise;
+  }
 
   const entry = { generation, promise: null };
   entry.promise = (async () => {
@@ -244,4 +246,8 @@ bindModalDismiss({
   backdrop: $('health-modal-backdrop'),
   close: closeReport,
   buttons: [$('health-close'), $('health-close-x')],
+});
+
+window.addEventListener('mod-viewer-texture-baked', () => {
+  void refreshHealthReport({force: true});
 });

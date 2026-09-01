@@ -968,6 +968,66 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         context.close()
 
 
+def test_color_persistence_serializes_updates_and_flushes_before_bake(
+        edge_browser, frontend_url):
+    payload = _payload("ColorQueue")
+    first = payload["meshes"]["Body-ColorQueue-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::ColorQueue-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body ColorQueue::3,0,0": {"hue": 30},
+    }
+    context, page = _page(edge_browser, frontend_url, {"ColorQueue": payload})
+    try:
+        _open(page, "ColorQueue")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.evaluate("window.__fakeApi.blockColorSaves = true")
+        page.evaluate("""() => {
+          const slider = document.querySelector(
+            '[data-color-field="hue"] .inspector-color-slider');
+          slider.value = '40';
+          slider.dispatchEvent(new Event('input', {bubbles: true}));
+          slider.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        page.wait_for_function(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length === 1")
+        page.evaluate("""() => {
+          const slider = document.querySelector(
+            '[data-color-field="hue"] .inspector-color-slider');
+          slider.value = '55';
+          slider.dispatchEvent(new Event('input', {bubbles: true}));
+          slider.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        page.wait_for_timeout(50)
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 1
+        page.evaluate("""async () => {
+          const {flushMeshColorAdjustmentPersistence} =
+            await import('./js/mesh/mesh-color-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          window.__colorFlushDone = false;
+          flushMeshColorAdjustmentPersistence(mesh).then(() => {
+            window.__colorFlushDone = true;
+          });
+        }""")
+        page.wait_for_timeout(50)
+        assert not page.evaluate("window.__colorFlushDone")
+        page.evaluate("window.__fakeApi.releaseColorSaves()")
+        page.wait_for_function(
+            "window.__colorFlushDone && "
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length === 2")
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.map(item => item[2].hue)") == [
+                40, 55]
+    finally:
+        context.close()
+
+
 def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         edge_browser, frontend_url):
     payload = _payload("Bake")
@@ -1020,7 +1080,7 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         assert page.locator("#texture-bake-close").count() == 1
         assert page.locator("#texture-bake-close-x").count() == 1
         assert page.locator("#texture-bake-body").inner_text().find(
-            "Coverage overlaps") >= 0
+            "Shared blocks will remain unchanged") >= 0
         assert "Friendly Face" in page.locator("#texture-bake-body").inner_text()
         assert page.locator("#texture-bake-confirm").inner_text() == \
             "Bake Unique Areas Only"
@@ -1219,6 +1279,34 @@ def test_texture_bake_modal_blocks_dismissal_while_baking(
         page.locator("#texture-bake-body", has_text="TEXTURE BAKED").wait_for()
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
+    finally:
+        context.close()
+
+
+def test_texture_bake_requires_fresh_confirmation_after_color_change(
+        edge_browser, frontend_url):
+    payload, _tex_key = _bake_test_payload("BakeStale", _PNG_URI)
+    context, page = _page(edge_browser, frontend_url, {"BakeStale": payload})
+    try:
+        _open(page, "BakeStale")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} =
+            await import('./js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {hue: 75}, {
+            persist: false,
+          });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.analyzeTextureBake.length === 2")
+        assert page.evaluate(
+            "window.__fakeApi.calls.bakeMeshTextureColor.length") == 0
+        assert page.locator("#texture-bake-confirm").is_visible()
     finally:
         context.close()
 
@@ -1448,6 +1536,8 @@ def test_texture_bake_confirmation_resets_color_and_refreshes_affected_keys(
             "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue") == 0
         assert page.evaluate(
             "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+        page.wait_for_function(
+            "window.__fakeApi.calls.diagnostics.length >= 2")
     finally:
         context.close()
 

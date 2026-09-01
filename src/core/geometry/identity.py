@@ -235,6 +235,17 @@ def make_mesh_identity(draw, source=None, component=None):
     )
 
 
+def mesh_identity_for_draw(draw, group):
+    """Build the canonical identity using a parsed draw group.
+
+    Mesh construction, semantic refresh, and destructive texture operations
+    must derive the metadata key from the same source/component projection.
+    """
+    source = group.get("identity_source") or group.get("source")
+    component = group.get("display_name") or group.get("name")
+    return make_mesh_identity(draw, source=source, component=component)
+
+
 def normalize_geometry_hash(value):
     """Return a canonical eight-digit geometry hash, or ``None``."""
     if not isinstance(value, str):
