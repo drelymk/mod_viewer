@@ -68,7 +68,7 @@ def test_frontend_public_surface_and_lifecycle_events(edge_browser, frontend_url
         assert page.evaluate("Object.keys(window.modViewer).sort()") == sorted([
             "activeMeshes", "displayMeshPayload", "exportChanges",
             "getAmbientOcclusionStrength", "getBloomEnabled", "getCurrentSource",
-            "getEnvironmentPreset", "getMaterialState",
+            "getEnvironmentPreset", "getLoadBenchmark", "getMaterialState",
             "getOutlineState", "getRenderCount", "openMod",
             "disableModelPhysics", "enableModelPhysics", "getModelPhysicsState",
             "getWeightPhysicsPerformanceStats",
