@@ -336,7 +336,8 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
                    "deleteToggle": [], "exportChanges": [],
-                   "saveMeshColorAdjustment": [], "analyzeTextureBake": []},
+                   "saveMeshColorAdjustment": [], "analyzeTextureBake": [],
+                   "bakeMeshTextureColor": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -345,6 +346,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
           const state = window.__fakeApi = JSON.parse(__STATE__);
           const copy = value => value == null ? value : structuredClone(value);
           const loadWaiters = {};
+          const colorSaveWaiters = [];
+          state.releaseColorSaves = () => {
+            state.blockColorSaves = false;
+            colorSaveWaiters.splice(0).forEach(resolve => resolve());
+          };
           state.releaseLoad = path => {
             state.blockLoads = state.blockLoads || {};
             state.blockLoads[path] = false;
@@ -454,6 +460,20 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   shared_percent_of_selected: 0,
                 },
                 shared_with: [], unresolved_consumers: [],
+              });
+            },
+            bake_mesh_texture_color: async (path, semanticKey, metadataKey,
+                                             texKey, usage, adjustment) => {
+              state.calls.bakeMeshTextureColor.push([
+                path, semanticKey, metadataKey, texKey, usage, adjustment]);
+              return copy(state.responses[path]?.textureBakeResult || {
+                status: 'ok',
+                semantic_key: semanticKey,
+                tex_key: texKey,
+                affected_tex_keys: texKey ? [texKey] : [],
+                texture: {file: 'body.dds'},
+                patched: {mip0_units: 1, shared_units_preserved: 0},
+                backup: {file: 'body.dds.modviewer.bak'},
               });
             },
             get_model_skinning_preview: async path => {
@@ -586,6 +606,9 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             save_mesh_textures: async () => ({}),
             save_mesh_color_adjustment: async (path, key, adjustment) => {
               state.calls.saveMeshColorAdjustment.push([path, key, adjustment]);
+              if (state.blockColorSaves) {
+                await new Promise(resolve => colorSaveWaiters.push(resolve));
+              }
               return {};
             },
             save_mesh_names: async () => ({}),

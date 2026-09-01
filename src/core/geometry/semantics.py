@@ -3,7 +3,7 @@
 import os
 
 from .draw_call import DrawCall
-from .identity import make_mesh_identity
+from .identity import mesh_identity_for_draw
 from ..resource_paths import safe_resource_path
 from ..textures.pipeline import normalize_texture_role, texture_key
 
@@ -89,6 +89,40 @@ def _semantic_texture_variants(draw, mod_dir, authored_role, transport_role=None
     return variants
 
 
+def authored_texture_keys_for_draw(draw, mod_dir, game_profile=None):
+    """Return every authored texture identity owned by a resolved draw.
+
+    This includes inactive conditional variants because they still identify
+    the same physical resource ownership for destructive texture edits.  The
+    profile's normal transport role is used so packed normal sources are
+    compared in the same namespace as the runtime texture registry.
+    """
+    from ..textures.profiles import TEXTURE_ROLES, texture_profile_for
+
+    normal_role = texture_profile_for(game_profile).normal_transport_role
+    result = {role: set() for role in TEXTURE_ROLES}
+    roles = (
+        ("diffuse", "diffuse"),
+        ("normal_map", normal_role),
+        ("light_map", "light_map"),
+        ("material_map", "material_map"),
+        ("emission_map", "emission_map"),
+    )
+    for authored_role, transport_role in roles:
+        default = (_semantic_asset_key(draw, authored_role, transport_role)
+                   or _semantic_texture_key(
+                       mod_dir, draw.texture_default(authored_role),
+                       transport_role))
+        if default:
+            result[transport_role].add(default)
+        for variant in draw.texture_rules(authored_role):
+            key = _semantic_texture_key(
+                mod_dir, variant.get("file"), transport_role)
+            if key:
+                result[transport_role].add(key)
+    return result
+
+
 def validate_draw_count(groups):
     draw_total = sum(len(group.get("draws", [])) for group in groups)
     if draw_total > _MAX_DRAWS:
@@ -131,14 +165,12 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
                         "emission_map")),
             }
             source = group.get("source")
-            identity_source = group.get("identity_source") or source
             component = group.get("display_name") or group.get("name")
             if source:
                 entry["source"] = source
             if component:
                 entry["component"] = component
-            entry["identity"] = make_mesh_identity(
-                draw, source=identity_source, component=component).to_dict()
+            entry["identity"] = mesh_identity_for_draw(draw, group).to_dict()
             normal_key = _semantic_texture_key(
                 mod_dir, draw.texture_default("normal_map"), normal_role)
             normal_key = (_semantic_asset_key(
@@ -173,5 +205,5 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
 
 __all__ = [
     "build_mesh_semantics", "deduplicate_draws", "validate_draw_count",
-    "_deduplicate_draws", "_rel_source",
+    "authored_texture_keys_for_draw", "_deduplicate_draws", "_rel_source",
 ]

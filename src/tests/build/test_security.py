@@ -1,6 +1,7 @@
 """Security contracts for build-time downloaded and extracted inputs."""
 
 import io
+import os
 import tarfile
 
 import pytest
@@ -107,6 +108,30 @@ def test_sky_mesh_is_pinned_in_the_vendor_manifest():
         "examples/jsm/objects/SkyMesh.js")
     assert spec["sha256"] == (
         "a44cb7c543d04b2690b0079b8b473da9a36660629b2eb091f7eab8b4111d7b7a")
+
+
+def test_texconv_is_pinned_as_a_runtime_tool():
+    spec = build.RUNTIME_TOOL_FILES["texconv.exe"]
+
+    assert spec["url"].endswith("/DirectXTex/releases/download/may2026/texconv.exe")
+    assert spec["sha256"] == (
+        "dcfdec10244e02cf5037fba089c55fb7e1326b1c8181742d77d15fa5cb5eef06")
+
+
+def test_pyinstaller_command_bundles_third_party_notices(monkeypatch):
+    commands = []
+    monkeypatch.setattr(build, "write_baked_features", lambda _features: None)
+    monkeypatch.setattr(build, "clean_baked_features", lambda: None)
+    monkeypatch.setattr(build, "write_version_file", lambda: "version.txt")
+    monkeypatch.setattr(build, "run", lambda command: commands.append(command))
+
+    build.build(python="python", onedir=True, console=True)
+
+    command = commands[0]
+    notice_data = f"{build.THIRD_PARTY_NOTICES}{os.pathsep}."
+    notice_index = command.index("--add-data", command.index("--add-binary"))
+    assert command[notice_index:notice_index + 2] == [
+        "--add-data", notice_data]
 
 
 def test_verify_web_uses_refactored_frontend_paths(tmp_path, monkeypatch):

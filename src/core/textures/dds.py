@@ -30,6 +30,37 @@ class DDSInfo:
     requires_bc: bool
 
 
+@dataclass(frozen=True)
+class DDSMipLayout:
+    """Byte layout and edit-unit grid for one DDS mip level."""
+
+    level: int
+    width: int
+    height: int
+    offset: int
+    length: int
+    units_x: int
+    units_y: int
+    bytes_per_unit: int
+
+
+@dataclass(frozen=True)
+class DDSLayout:
+    """Validated payload layout for every mip in a 2D DDS texture."""
+
+    info: DDSInfo
+    data_offset: int
+    mips: tuple[DDSMipLayout, ...]
+
+    @property
+    def payload_length(self):
+        return sum(mip.length for mip in self.mips)
+
+    @property
+    def payload_end(self):
+        return self.data_offset + self.payload_length
+
+
 _DXGI_FORMATS = {
     71: "bc1_unorm",
     72: "bc1_srgb",
@@ -72,6 +103,39 @@ def _info(width, height, mip_count, format_name):
     compressed = format_name in _COMPRESSED_FORMATS
     return DDSInfo(width, height, mip_count, format_name, compressed,
                    compressed)
+
+
+def _bytes_per_unit(format_name):
+    if not format_name.startswith("bc"):
+        return 4
+    return 8 if format_name.startswith(("bc1", "bc4")) else 16
+
+
+def _layout(info, data_offset):
+    """Build the one authoritative DDS payload layout from validated info."""
+    offset = int(data_offset)
+    width, height = info.width, info.height
+    bytes_per_unit = _bytes_per_unit(info.format)
+    mips = []
+    for level in range(info.mip_count):
+        units_x = ((width + 3) // 4) if info.compressed else width
+        units_y = ((height + 3) // 4) if info.compressed else height
+        length = units_x * units_y * bytes_per_unit
+        mips.append(DDSMipLayout(
+            level=level, width=width, height=height, offset=offset,
+            length=length, units_x=units_x, units_y=units_y,
+            bytes_per_unit=bytes_per_unit))
+        offset += length
+        width = max(1, width // 2)
+        height = max(1, height // 2)
+    return DDSLayout(info=info, data_offset=data_offset, mips=tuple(mips))
+
+
+def dds_layout_for_info(info, data_offset=None):
+    """Build a layout for validated metadata without rereading a file."""
+    if data_offset is None:
+        data_offset = 148 if info.format in _COMPRESSED_FORMATS else 128
+    return _layout(info, data_offset)
 
 
 def _inspect_header(header):
@@ -142,6 +206,12 @@ def _inspect_header(header):
 
 def inspect_dds(path):
     """Inspect only the DDS header and return ``None`` for unsafe inputs."""
+    layout = inspect_dds_layout(path)
+    return layout.info if layout is not None else None
+
+
+def inspect_dds_layout(path):
+    """Inspect a DDS and return the exact byte layout of its mip payload."""
     try:
         with open(path, "rb") as stream:
             header = stream.read(148)
@@ -152,19 +222,10 @@ def inspect_dds(path):
     if info is None:
         return None
     header_size = 148 if _fourcc(header, 84) == _DX10_FOURCC else 128
-    width, height = info.width, info.height
-    payload_size = 0
-    for _ in range(info.mip_count):
-        if info.compressed:
-            block_size = 8 if info.format.startswith(("bc1", "bc4")) else 16
-            payload_size += ((width + 3) // 4) * ((height + 3) // 4) * block_size
-        else:
-            payload_size += width * height * 4
-        width = max(1, width // 2)
-        height = max(1, height // 2)
-    if file_size < header_size + payload_size:
+    layout = _layout(info, header_size)
+    if file_size < layout.payload_end:
         return None
-    return info
+    return layout
 
 
 def native_dds_info(path, max_size=2048, transform="passthrough"):
@@ -187,3 +248,9 @@ def native_dds_info(path, max_size=2048, transform="passthrough"):
     if info is None or max(info.width, info.height) > max_size:
         return None
     return info
+
+
+__all__ = [
+    "DDSInfo", "DDSMipLayout", "DDSLayout", "dds_layout_for_info",
+    "inspect_dds", "inspect_dds_layout", "native_dds_info",
+]

@@ -116,6 +116,7 @@ def test_file_classification_and_overrides():
         _write(os.path.join(tmp, "inactive.dds"), b"x", binary=True)
         _write(os.path.join(tmp, "viewer.png"), b"x", binary=True)
         _write(os.path.join(tmp, "orphan.tga"), b"x", binary=True)
+        _write(os.path.join(tmp, "active-20260901152230.dds"), b"x", binary=True)
         with open(os.path.join(tmp, ".mod_viewer.json"), "w", encoding="utf-8") as fh:
             json.dump({"textures": {"Body::whole": {
                 "tex_key": "viewer.png", "label": "viewer", "manual": True,
@@ -126,7 +127,7 @@ def test_file_classification_and_overrides():
             "[ResourceIB]\nfilename = active.buf\n")
         report = analyze_mod(tmp, overrides={ini: staged})
 
-    assert (report["files"] == {"unreferenced": 1, "inactive_only": 1,
+    assert (report["files"] == {"unreferenced": 2, "inactive_only": 1,
                               "viewer_only": 1, "referenced": 1}), (f"active, inactive-only, viewer-only and unused assets classify separately ({report['files']})")
     assert ("malformed_condition_nesting" in _codes(report)), ("staged in-memory INI text is analyzed instead of stale disk text")
 

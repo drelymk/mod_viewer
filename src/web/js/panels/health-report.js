@@ -10,6 +10,7 @@ let currentReport = null;
 let currentFilter = 'all';
 let reportLoader = null;
 let reportGeneration = 0;
+let healthRequestId = 0;
 let activeReportLoad = null;
 let currentAssetResolution = null;
 
@@ -183,12 +184,15 @@ function fallbackReport(message = 'The INI diagnostics could not be completed.')
 // Run diagnostics without opening the modal. Loads are tied to the current
 // loader generation so a slower report for the previous mod cannot overwrite
 // the badge after the user switches folders.
-export function refreshHealthReport() {
+export function refreshHealthReport({force = false} = {}) {
   const loader = reportLoader;
   const generation = reportGeneration;
   if (!loader) return Promise.resolve(null);
-  if (activeReportLoad?.generation === generation) return activeReportLoad.promise;
+  if (!force && activeReportLoad?.generation === generation) {
+    return activeReportLoad.promise;
+  }
 
+  const requestId = ++healthRequestId;
   const entry = { generation, promise: null };
   entry.promise = (async () => {
     const button = $('health-btn');
@@ -196,12 +200,14 @@ export function refreshHealthReport() {
     button.title = 'Running INI diagnostics…';
     try {
       const report = await loader();
-      if (generation !== reportGeneration || loader !== reportLoader) return null;
+      if (generation !== reportGeneration || loader !== reportLoader
+          || requestId !== healthRequestId) return null;
       const normalized = report && !report.error ? report : fallbackReport();
       setHealthReport(normalized);
       return normalized;
     } catch (error) {
-      if (generation !== reportGeneration || loader !== reportLoader) return null;
+      if (generation !== reportGeneration || loader !== reportLoader
+          || requestId !== healthRequestId) return null;
       const detail = error?.message ? `: ${error.message}` : '';
       const fallback = fallbackReport(
         `The INI diagnostics could not be completed${detail}`);
@@ -244,4 +250,8 @@ bindModalDismiss({
   backdrop: $('health-modal-backdrop'),
   close: closeReport,
   buttons: [$('health-close'), $('health-close-x')],
+});
+
+window.addEventListener('mod-viewer-texture-baked', () => {
+  void refreshHealthReport({force: true});
 });

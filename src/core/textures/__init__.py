@@ -7,6 +7,7 @@ from .pipeline import (
     encode_texture_file,
     encode_texture_key,
     load_texture_image,
+    load_texture_image_full,
     normalize_texture_key,
     normalize_texture_role,
     normalize_texture_transform,
@@ -17,7 +18,15 @@ from .pipeline import (
     texture_key,
     texture_key_for_role,
 )
-from .uv_coverage import UVCoverage, UVCoverageError, rasterize_uv_coverage
+from .uv_coverage import (
+    UVCoverage, UVCoverageError, collapse_pixel_mask_to_units,
+    dilate_pixel_mask, rasterize_uv_coverage,
+)
+from .color_adjustment import (
+    COLOR_DEFAULTS, COLOR_RANGES, adjust_rgba_bytes,
+    apply_color_adjustment, is_neutral_color_adjustment,
+    normalize_color_adjustment,
+)
 
 __all__ = [
     "TEXTURE_ROLES",
@@ -26,6 +35,7 @@ __all__ = [
     "encode_texture_file",
     "encode_texture_key",
     "load_texture_image",
+    "load_texture_image_full",
     "normalize_texture_key",
     "normalize_texture_role",
     "normalize_texture_transform",
@@ -37,5 +47,13 @@ __all__ = [
     "texture_key_for_role",
     "UVCoverage",
     "UVCoverageError",
+    "collapse_pixel_mask_to_units",
+    "dilate_pixel_mask",
     "rasterize_uv_coverage",
+    "COLOR_DEFAULTS",
+    "COLOR_RANGES",
+    "adjust_rgba_bytes",
+    "apply_color_adjustment",
+    "is_neutral_color_adjustment",
+    "normalize_color_adjustment",
 ]

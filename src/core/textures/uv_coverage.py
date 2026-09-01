@@ -219,6 +219,65 @@ def _rasterize_triangle(mask, grid_width, grid_height, triangle):
                 _mark_cell(mask, grid_width, grid_height, cell_x, cell_y)
 
 
+def _rasterize_degenerate(mask, grid_width, grid_height, points):
+    """Conservatively retain point and segment coverage for zero-area UVs."""
+    for point in points:
+        _mark_point(mask, grid_width, grid_height, *point)
+    for start, end in zip(points, points[1:] + points[:1]):
+        _supercover_segment(mask, grid_width, grid_height, start, end)
+
+
+def dilate_pixel_mask(mask, width, height, radius=1):
+    """Dilate a pixel mask by a clamped square neighborhood."""
+    try:
+        width, height, radius = int(width), int(height), int(radius)
+    except (TypeError, ValueError):
+        raise UVCoverageError(
+            "invalid_geometry", "Pixel mask dimensions are invalid.") from None
+    if width <= 0 or height <= 0 or radius < 0:
+        raise UVCoverageError(
+            "invalid_geometry", "Pixel mask dimensions are invalid.")
+    if len(mask) != width * height:
+        raise UVCoverageError(
+            "invalid_geometry", "Pixel mask length does not match dimensions.")
+    result = bytearray(width * height)
+    for index, value in enumerate(mask):
+        if not value:
+            continue
+        x, y = index % width, index // width
+        for row in range(max(0, y - radius), min(height, y + radius + 1)):
+            start = max(0, x - radius)
+            end = min(width, x + radius + 1)
+            result[row * width + start:row * width + end] = \
+                b"\x01" * (end - start)
+    return result
+
+
+def collapse_pixel_mask_to_units(pixel_mask, width, height,
+                                 unit_width, unit_height):
+    """Collapse protected source pixels into conservative edit units."""
+    try:
+        width, height = int(width), int(height)
+        unit_width, unit_height = int(unit_width), int(unit_height)
+    except (TypeError, ValueError):
+        raise UVCoverageError(
+            "invalid_geometry", "Edit-unit dimensions are invalid.") from None
+    if min(width, height, unit_width, unit_height) <= 0:
+        raise UVCoverageError(
+            "invalid_geometry", "Edit-unit dimensions are invalid.")
+    if len(pixel_mask) != width * height:
+        raise UVCoverageError(
+            "invalid_geometry", "Pixel mask length does not match dimensions.")
+    grid_width = math.ceil(width / unit_width)
+    grid_height = math.ceil(height / unit_height)
+    result = bytearray(grid_width * grid_height)
+    for y in range(height):
+        for x in range(width):
+            if pixel_mask[y * width + x]:
+                result[(y // unit_height) * grid_width + x // unit_width] = 1
+    return result
+
+
 def rasterize_uv_coverage(
         indices, texcoords, texture_width, texture_height, *,
         unit_width=1, unit_height=1):
@@ -268,13 +327,14 @@ def rasterize_uv_coverage(
                 * (points[2][0] - points[0][0]))
         if abs(area) <= _AREA_EPSILON:
             degenerate += 1
-            continue
-        _rasterize_triangle(mask, grid_width, grid_height, points)
+            _rasterize_degenerate(mask, grid_width, grid_height, points)
+        else:
+            _rasterize_triangle(mask, grid_width, grid_height, points)
 
     count = sum(mask)
     if not count:
         raise UVCoverageError(
-            "no_uv_coverage", "The mesh has no non-degenerate UV coverage.")
+            "no_uv_coverage", "The mesh has no UV coverage.")
     used = [index for index, value in enumerate(mask) if value]
     bounds = (
         min(index % grid_width for index in used),
@@ -287,4 +347,7 @@ def rasterize_uv_coverage(
         triangle_count, degenerate)
 
 
-__all__ = ["UVCoverage", "UVCoverageError", "rasterize_uv_coverage"]
+__all__ = [
+    "UVCoverage", "UVCoverageError", "collapse_pixel_mask_to_units",
+    "dilate_pixel_mask", "rasterize_uv_coverage",
+]

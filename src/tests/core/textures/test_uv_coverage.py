@@ -3,7 +3,8 @@
 import pytest
 
 from core.textures.uv_coverage import (
-    UVCoverageError, _supercover_segment, rasterize_uv_coverage,
+    UVCoverageError, _supercover_segment, collapse_pixel_mask_to_units,
+    dilate_pixel_mask, rasterize_uv_coverage,
 )
 
 
@@ -40,12 +41,38 @@ def test_degenerate_triangles_are_skipped_and_reported():
     assert result.count > 0
 
 
-def test_all_degenerate_triangles_report_no_coverage():
-    with pytest.raises(UVCoverageError) as raised:
-        rasterize_uv_coverage(
-            [0, 1, 2], [(0, 0), (0.5, 0), (1, 0)], 8, 8)
+def test_all_degenerate_triangles_retain_conservative_segment_coverage():
+    result = rasterize_uv_coverage(
+        [0, 1, 2], [(0, 0), (0.5, 0), (1, 0)], 8, 8)
 
-    assert raised.value.code == "no_uv_coverage"
+    assert result.degenerate_triangle_count == 1
+    assert result.count > 0
+    assert result.bounds[1] == result.bounds[3] == 0
+
+
+def test_repeated_degenerate_point_retains_point_supercover():
+    result = rasterize_uv_coverage(
+        [0, 1, 2], [(0.5, 0.5), (0.5, 0.5), (0.5, 0.5)], 4, 4)
+
+    assert result.count == 4
+    assert result.bounds == (1, 1, 2, 2)
+
+
+def test_pixel_dilation_is_clamped_to_edges_and_corners():
+    corner = dilate_pixel_mask(bytearray([1, 0, 0, 0, 0, 0, 0, 0, 0]), 3, 3)
+    center = dilate_pixel_mask(bytearray([0, 0, 0, 0, 1, 0, 0, 0, 0]), 3, 3)
+
+    assert list(corner) == [1, 1, 0, 1, 1, 0, 0, 0, 0]
+    assert list(center) == [1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+
+def test_pixel_masks_collapse_to_partial_edge_units():
+    pixels = bytearray(5 * 3)
+    pixels[2 * 5 + 2] = 1
+
+    assert list(collapse_pixel_mask_to_units(pixels, 5, 3, 2, 2)) == [
+        0, 0, 0, 0, 1, 0,
+    ]
 
 
 def test_thin_triangle_crossing_a_unit_is_not_lost_to_center_sampling():

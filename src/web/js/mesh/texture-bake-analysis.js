@@ -22,10 +22,35 @@ function reasonText(reason) {
 export function buildTextureUsageSnapshot() {
   return activeMeshes
     .filter(mesh => mesh?.userData?.assetFill !== true)
-    .map(mesh => ({
-      semantic_key: mesh.userData?.semanticKey || '',
-      tex_key: mesh.userData?.texKey || null,
-    }));
+    .map(mesh => {
+      const data = mesh.userData || {};
+      const textureKeys = {
+        diffuse: data.texKey || null,
+        normal_map: data.normalMapKey || null,
+        normal_data: data.normalDataKey || null,
+        light_map: data.lightMapKey || null,
+        material_map: data.materialMapKey || null,
+        emission_map: data.emissionMapKey || null,
+      };
+      return {
+        semantic_key: data.semanticKey || '',
+        // Keep the legacy alias for callers that only consume diffuse usage.
+        tex_key: textureKeys.diffuse,
+        texture_keys: textureKeys,
+      };
+    });
+}
+
+/** Capture every identity and role binding used by a bake request. */
+export function captureTextureBakeState(mesh) {
+  const data = mesh?.userData || {};
+  return {
+    modPath: viewerState.currentModPath,
+    semanticKey: data.semanticKey || null,
+    metadataKey: data.metadataKey || null,
+    texKey: data.texKey || null,
+    textureUsage: buildTextureUsageSnapshot(),
+  };
 }
 
 /** Check the selected mesh without touching the backend or material state. */
@@ -55,20 +80,28 @@ export function canAnalyzeTextureBake(mesh) {
   return { editable: true, reason: null, message: '' };
 }
 
-function currentSelectionStillMatches(mesh, semanticKey, texKey, modPath, isCurrent) {
+export function textureBakeStateMatches(mesh, snapshot) {
+  if (!snapshot) return false;
+  const current = captureTextureBakeState(mesh);
+  return samePath(current.modPath, snapshot.modPath)
+    && current.semanticKey === snapshot.semanticKey
+    && current.metadataKey === snapshot.metadataKey
+    && current.texKey === snapshot.texKey
+    && JSON.stringify(current.textureUsage)
+      === JSON.stringify(snapshot.textureUsage)
+    && activeMeshes.includes(mesh);
+}
+
+function currentSelectionStillMatches(mesh, snapshot, isCurrent) {
   if (typeof isCurrent === 'function' && !isCurrent()) return false;
-  return activeMeshes.includes(mesh)
-    && mesh.userData?.semanticKey === semanticKey
-    && (mesh.userData?.texKey || null) === (texKey || null)
-    && samePath(mesh.userData?.modPath, modPath)
-    && samePath(viewerState.currentModPath, modPath);
+  return textureBakeStateMatches(mesh, snapshot);
 }
 
 /**
  * Request selected-mesh coverage using only semantic texture identities.
  * A stale response is discarded and returned as null.
  */
-export async function analyzeMeshTextureBake(mesh, { isCurrent } = {}) {
+export async function analyzeMeshTextureBake(mesh, { isCurrent, snapshot } = {}) {
   const token = ++requestToken;
   const eligibility = canAnalyzeTextureBake(mesh);
   if (!eligibility.editable) {
@@ -79,9 +112,7 @@ export async function analyzeMeshTextureBake(mesh, { isCurrent } = {}) {
     };
   }
 
-  const semanticKey = mesh.userData.semanticKey;
-  const texKey = mesh.userData.texKey || null;
-  const modPath = viewerState.currentModPath;
+  const state = snapshot || captureTextureBakeState(mesh);
   const api = window.pywebview?.api?.analyze_mesh_texture_bake;
   if (typeof api !== 'function') {
     return {
@@ -90,10 +121,10 @@ export async function analyzeMeshTextureBake(mesh, { isCurrent } = {}) {
       error: 'Texture coverage analysis is unavailable.',
     };
   }
-  const textureUsage = buildTextureUsageSnapshot();
-  const result = await api(modPath, semanticKey, texKey, textureUsage);
+  const result = await api(
+    state.modPath, state.semanticKey, state.texKey, state.textureUsage);
   if (token !== requestToken || !currentSelectionStillMatches(
-      mesh, semanticKey, texKey, modPath, isCurrent)) {
+      mesh, state, isCurrent)) {
     return null;
   }
   return result;
@@ -119,6 +150,7 @@ export function formatBakeAnalysis(result, displayName = key => key) {
     ['Texture', result.texture?.file || 'Unknown'],
     ['Format', result.texture?.format || 'Unknown'],
     ['Texture size', `${result.texture?.width || 0} × ${result.texture?.height || 0}`],
+    ['Mip levels', result.mip_summary?.levels || result.texture?.mip_count || 1],
     ['Selected coverage', `${coverage.selected_percent?.toFixed?.(1) ?? 0}% (${coverage.selected_units || 0} ${coverage.unit || 'units'})`],
     ['Unique coverage', uniqueUnits],
     ['Shared coverage', `${coverage.shared_percent_of_selected?.toFixed?.(1) ?? 0}% (${coverage.shared_units || 0} ${coverage.unit || 'units'})`],
@@ -132,9 +164,16 @@ export function formatBakeAnalysis(result, displayName = key => key) {
       ? `Safety is unknown because coverage could not be analyzed for: ${unresolved.join(', ')}.`
       : 'Safety is unknown because one or more consumers could not be analyzed.';
   } else if (result.safety === 'shared') {
-    warning = shared.length
-      ? `Coverage overlaps: ${shared.join(', ')}.`
-      : 'Coverage overlaps another active draw using this texture.';
+    warning = 'Only unique texture blocks will be baked. Shared blocks will '
+      + 'remain unchanged. The live Color adjustment will be reset after a '
+      + 'successful bake, so shared areas may return to their original '
+      + 'texture color.';
+    if (shared.length) warning += ` Shared with: ${shared.join(', ')}.`;
+    const levels = result.mip_summary?.shared_levels || [];
+    if (levels.length) {
+      warning += ` Some mip levels contain shared blocks, so appearance may `
+        + `differ at farther viewing distances (levels ${levels.join(', ')}).`;
+    }
   }
   return {
     kind: result.safety === 'unknown' ? 'unknown' : 'ok',

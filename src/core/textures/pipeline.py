@@ -204,13 +204,14 @@ def _open_texture_image(path, image_module):
             return None
 
 
-def load_texture_image(path, max_size=2048, preserve_alpha=False):
-    """Decode a texture once and return its bounded Pillow image."""
+def _decode_texture_image(path, max_size=None, preserve_alpha=False):
+    """Decode a texture with the shared DDS and decompression safeguards."""
     try:
-        max_size = int(max_size)
+        if max_size is not None:
+            max_size = int(max_size)
+            if max_size <= 0:
+                return None
     except (TypeError, ValueError):
-        return None
-    if max_size <= 0:
         return None
     try:
         from PIL import Image
@@ -221,11 +222,21 @@ def load_texture_image(path, max_size=2048, preserve_alpha=False):
             if image is None:
                 return None
         image = image.convert("RGBA" if preserve_alpha else "RGB")
-        if max(image.size) > max_size:
+        if max_size is not None and max(image.size) > max_size:
             image.thumbnail((max_size, max_size), Image.LANCZOS)
         return image
     except Exception:
         return None
+
+
+def load_texture_image(path, max_size=2048, preserve_alpha=False):
+    """Decode a texture once and return its bounded Pillow image."""
+    return _decode_texture_image(path, max_size, preserve_alpha)
+
+
+def load_texture_image_full(path, preserve_alpha=True):
+    """Decode a texture at its authored dimensions without preview resizing."""
+    return _decode_texture_image(path, None, preserve_alpha)
 
 
 def render_texture_png(path, max_size=2048, preserve_alpha=False,

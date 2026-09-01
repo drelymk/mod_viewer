@@ -1,3 +1,7 @@
+import base64
+import copy
+import json
+
 from .support import *
 
 def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
@@ -875,6 +879,12 @@ def test_inspector_follows_component_and_mesh_selection(
 def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         edge_browser, frontend_url):
     payload = _payload("ColorUI")
+    first = payload["meshes"]["Body-ColorUI-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::ColorUI-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
     payload["metadata"]["mesh_color_adjustments"] = {
         "Body ColorUI::3,0,0": {
             "hue": 30, "saturation": 1.15, "brightness": 1,
@@ -938,6 +948,11 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         assert page.locator(
             "[data-color-field='hue'] .inspector-color-slider").input_value() == "55"
 
+        color.locator(".inspector-color-reset").click()
+        assert page.locator(
+            "[data-color-field='hue'] .inspector-color-slider").input_value() == "0"
+        assert color.locator(".inspector-texture-bake").is_disabled()
+
         page.evaluate("""async () => {
           const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
@@ -953,9 +968,72 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         context.close()
 
 
+def test_color_persistence_serializes_updates_and_flushes_before_bake(
+        edge_browser, frontend_url):
+    payload = _payload("ColorQueue")
+    first = payload["meshes"]["Body-ColorQueue-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::ColorQueue-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body ColorQueue::3,0,0": {"hue": 30},
+    }
+    context, page = _page(edge_browser, frontend_url, {"ColorQueue": payload})
+    try:
+        _open(page, "ColorQueue")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.evaluate("window.__fakeApi.blockColorSaves = true")
+        page.evaluate("""() => {
+          const slider = document.querySelector(
+            '[data-color-field="hue"] .inspector-color-slider');
+          slider.value = '40';
+          slider.dispatchEvent(new Event('input', {bubbles: true}));
+          slider.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        page.wait_for_function(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length === 1")
+        page.evaluate("""() => {
+          const slider = document.querySelector(
+            '[data-color-field="hue"] .inspector-color-slider');
+          slider.value = '55';
+          slider.dispatchEvent(new Event('input', {bubbles: true}));
+          slider.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        page.wait_for_timeout(50)
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 1
+        page.evaluate("""async () => {
+          const {flushMeshColorAdjustmentPersistence} =
+            await import('./js/mesh/mesh-color-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          window.__colorFlushDone = false;
+          flushMeshColorAdjustmentPersistence(mesh).then(() => {
+            window.__colorFlushDone = true;
+          });
+        }""")
+        page.wait_for_timeout(50)
+        assert not page.evaluate("window.__colorFlushDone")
+        page.evaluate("window.__fakeApi.releaseColorSaves()")
+        page.wait_for_function(
+            "window.__colorFlushDone && "
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length === 2")
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.map(item => item[2].hue)") == [
+                40, 55]
+    finally:
+        context.close()
+
+
 def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         edge_browser, frontend_url):
     payload = _payload("Bake")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Bake::3,0,0": {"hue": 30},
+    }
     first = payload["meshes"]["Body-Bake-0"]
     old_key = first["tex_key"]
     dds_key = "diffuse::Bake-one.dds"
@@ -1002,13 +1080,24 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         assert page.locator("#texture-bake-close").count() == 1
         assert page.locator("#texture-bake-close-x").count() == 1
         assert page.locator("#texture-bake-body").inner_text().find(
-            "Coverage overlaps") >= 0
+            "Shared blocks will remain unchanged") >= 0
         assert "Friendly Face" in page.locator("#texture-bake-body").inner_text()
+        assert page.locator("#texture-bake-confirm").inner_text() == \
+            "Bake Unique Areas Only"
+        assert page.locator("#texture-bake-confirm").is_visible()
         usage = page.evaluate("window.__fakeApi.calls.analyzeTextureBake[0][3]")
         assert len(usage) == 2
         assert {item["semantic_key"] for item in usage} == {
             "Body-Bake-0", "Face-Bake-0"}
         assert usage[1]["tex_key"] == "diffuse::Bake-two.dds"
+        assert usage[1]["texture_keys"] == {
+            "diffuse": "diffuse::Bake-two.dds",
+            "normal_map": None,
+            "normal_data": None,
+            "light_map": None,
+            "material_map": None,
+            "emission_map": None,
+        }
         assert page.evaluate("window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
@@ -1019,6 +1108,9 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
 def test_texture_coverage_unknown_state_does_not_claim_unique_units(
         edge_browser, frontend_url):
     payload = _payload("Unknown")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Unknown::3,0,0": {"hue": 30},
+    }
     old_key = payload["meshes"]["Body-Unknown-0"]["tex_key"]
     dds_key = "diffuse::Unknown-one.dds"
     payload["meshes"]["Body-Unknown-0"]["tex_key"] = dds_key
@@ -1045,6 +1137,458 @@ def test_texture_coverage_unknown_state_does_not_claim_unique_units(
         details = page.locator("#texture-bake-body").inner_text()
         assert "Safety is unknown" in details
         assert "Unknown" in details
+        assert page.locator("#texture-bake-confirm").is_hidden()
+    finally:
+        context.close()
+
+
+def test_texture_bake_action_is_disabled_for_neutral_color_state(
+        edge_browser, frontend_url):
+    payload = _payload("NeutralBake")
+    first = payload["meshes"]["Body-NeutralBake-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::NeutralBake-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    context, page = _page(edge_browser, frontend_url, {"NeutralBake": payload})
+    try:
+        _open(page, "NeutralBake")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        button = page.locator(".inspector-texture-bake")
+        assert button.is_disabled()
+        assert button.get_attribute("title") == \
+            "Adjust the mesh color before baking."
+        assert page.evaluate(
+            "window.__fakeApi.calls.analyzeTextureBake.length") == 0
+    finally:
+        context.close()
+
+
+def test_texture_coverage_cross_role_usage_keeps_bake_unavailable(
+        edge_browser, frontend_url):
+    payload = _payload("CrossRole")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body CrossRole::3,0,0": {"hue": 30},
+    }
+    first = payload["meshes"]["Body-CrossRole-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::CrossRole-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    second = copy.deepcopy(first)
+    second["component"] = "Face CrossRole"
+    second["display_name"] = "Friendly Face"
+    second["normal_map_key"] = dds_key.replace("diffuse::", "normal_map::")
+    payload["meshes"]["Face-CrossRole-0"] = second
+    payload["textureBakeResponse"] = {
+        "status": "unsupported",
+        "code": "cross_role_texture_usage",
+        "error": "This DDS is also used as a Normal Map by Face-CrossRole-0.",
+    }
+    context, page = _page(edge_browser, frontend_url, {"CrossRole": payload})
+    try:
+        _open(page, "CrossRole")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-modal-backdrop.show").wait_for()
+        assert page.locator("#texture-bake-error").inner_text() == (
+            "This DDS is also used as a Normal Map by Face-CrossRole-0.")
+        assert page.locator("#texture-bake-confirm").is_hidden()
+        usage = page.evaluate("window.__fakeApi.calls.analyzeTextureBake[0][3]")
+        face = next(item for item in usage
+                    if item["semantic_key"] == "Face-CrossRole-0")
+        assert face["texture_keys"]["normal_map"] == (
+            "normal_map::CrossRole-one.dds")
+        assert page.evaluate(
+            "window.__fakeApi.calls.bakeMeshTextureColor.length") == 0
+    finally:
+        context.close()
+
+
+def _bake_test_payload(label, texture_uri, hue=30):
+    payload = _payload(label)
+    first = payload["meshes"][f"Body-{label}-0"]
+    tex_key = f"diffuse::{label}-bake.dds"
+    first["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    first["tex_key"] = tex_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = tex_key
+    payload["textures"] = {tex_key: texture_uri}
+    payload["metadata"]["mesh_color_adjustments"] = {
+        f"Body {label}::3,0,0": {"hue": hue},
+    }
+    payload["textureBakeResponse"] = {
+        "status": "ok", "safety": "safe",
+        "texture": {"file": f"{label}-bake.dds", "width": 8,
+                     "height": 8, "format": "bc7_unorm"},
+        "coverage": {"unit": "block", "selected_units": 1,
+                     "total_units": 4, "unique_units": 1, "shared_units": 0,
+                     "selected_percent": 25, "shared_percent_of_selected": 0},
+        "shared_with": [], "unresolved_consumers": [],
+    }
+    payload["textureBakeResult"] = {
+        "status": "ok", "tex_key": tex_key,
+        "affected_tex_keys": [tex_key],
+        "texture": {"file": f"{label}-bake.dds"},
+        "patched": {"mip0_units": 1, "shared_units_preserved": 0},
+        "backup": {"file": f"{label}-bake.dds.modviewer.bak"},
+    }
+    return payload, tex_key
+
+
+def test_texture_bake_modal_blocks_dismissal_while_baking(
+        edge_browser, frontend_url):
+    payload, tex_key = _bake_test_payload("BakeModal", _PNG_URI)
+    context, page = _page(edge_browser, frontend_url, {"BakeModal": payload})
+    try:
+        _open(page, "BakeModal")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureBake = resolve; });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureBake !== undefined")
+
+        page.locator("#texture-bake-close").click()
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
+        page.locator("#texture-bake-close-x").click()
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
+        page.keyboard.press("Escape")
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
+        page.evaluate("""() => document.querySelector(
+          '#texture-bake-modal-backdrop').dispatchEvent(
+            new MouseEvent('click', {bubbles: true}))""")
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
+
+        page.evaluate("""() => window.__releaseTextureBake({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          texture: {file: 'BakeModal-bake.dds'},
+          patched: {mip0_units: 1, shared_units_preserved: 0},
+          backup: {file: 'BakeModal-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(tex_key), json.dumps(tex_key)))
+        page.locator("#texture-bake-body", has_text="TEXTURE BAKED").wait_for()
+        page.locator("#texture-bake-close").click()
+        assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
+    finally:
+        context.close()
+
+
+def test_texture_bake_requires_fresh_confirmation_after_color_change(
+        edge_browser, frontend_url):
+    payload, _tex_key = _bake_test_payload("BakeStale", _PNG_URI)
+    context, page = _page(edge_browser, frontend_url, {"BakeStale": payload})
+    try:
+        _open(page, "BakeStale")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} =
+            await import('./js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {hue: 75}, {
+            persist: false,
+          });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.analyzeTextureBake.length === 2")
+        assert page.evaluate(
+            "window.__fakeApi.calls.bakeMeshTextureColor.length") == 0
+        assert page.locator("#texture-bake-confirm").is_visible()
+    finally:
+        context.close()
+
+
+def test_texture_bake_error_hides_consumed_bake_action(
+        edge_browser, frontend_url):
+    payload, _tex_key = _bake_test_payload("BakeFailure", _PNG_URI)
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakeFailure": payload})
+    try:
+        _open(page, "BakeFailure")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = async () => ({
+            status: 'error', error: 'Temporary bake failure.',
+          });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("""() => document.querySelector(
+          '#texture-bake-error').textContent === 'Temporary bake failure.'""")
+        assert page.locator("#texture-bake-confirm").is_hidden()
+
+        page.locator("#texture-bake-close").click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = undefined;
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("""() => document.querySelector(
+          '#texture-bake-error').textContent === 'Texture baking is unavailable.'""")
+        assert page.locator("#texture-bake-confirm").is_hidden()
+    finally:
+        context.close()
+
+
+def test_successful_bake_syncs_stale_mesh_after_selection_changes(
+        edge_browser, frontend_url):
+    payload, tex_key = _bake_test_payload(
+        "BakeSelectionRace", f"{frontend_url}/bake-selection-race.png")
+    first = payload["meshes"]["Body-BakeSelectionRace-0"]
+    second = copy.deepcopy(first)
+    second["component"] = "Face BakeSelectionRace"
+    second["display_name"] = "Face target"
+    payload["meshes"]["Face-BakeSelectionRace-0"] = second
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakeSelectionRace": payload})
+    try:
+        page.route("**/bake-selection-race.png", lambda route: (
+            route.fulfill(
+                body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+                content_type="image/png",
+                headers={"Cache-Control": "no-store"})))
+        page.evaluate("""async () => {
+          const THREE = await import('three');
+          THREE.Cache.enabled = false;
+        }""")
+        _open(page, "BakeSelectionRace")
+        page.locator(".draw-item").nth(1).wait_for()
+        page.wait_for_function(
+            "window.modViewer.getMaterialState(0).diffuseBound")
+        page.evaluate("""async () => {
+          const {getGameMaterialTexture} =
+            await import('./js/mesh/material-profile.js');
+          window.__initialBakeTextureUuid = getGameMaterialTexture(
+            window.modViewer.activeMeshes[0].material, 'diffuse').uuid;
+        }""")
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").nth(0).click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureBake = resolve; });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureBake !== undefined")
+        page.evaluate("import('./js/scene/selection.js').then(({selectMesh}) => "
+                      "selectMesh(window.modViewer.activeMeshes[1]))")
+        assert "Face BakeSelectionRace" in page.locator(
+            "#selected-mesh-status").inner_text()
+
+        page.evaluate("""() => window.__releaseTextureBake({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          texture: {file: 'BakeSelectionRace-bake.dds'},
+          patched: {mip0_units: 1, shared_units_preserved: 0},
+          backup: {file: 'BakeSelectionRace-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(tex_key), json.dumps(tex_key)))
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue === 0")
+        page.wait_for_function("""async () => {
+          const {getGameMaterialTexture} =
+            await import('./js/mesh/material-profile.js');
+          const texture = getGameMaterialTexture(
+            window.modViewer.activeMeshes[0].material, 'diffuse');
+          return texture?.uuid !== window.__initialBakeTextureUuid;
+        }""")
+        assert "Face BakeSelectionRace" in page.locator(
+            "#selected-mesh-status").inner_text()
+    finally:
+        context.close()
+
+
+def test_successful_bake_does_not_reload_a_new_mod_after_switch(
+        edge_browser, frontend_url):
+    first_payload, first_key = _bake_test_payload(
+        "BakeSwitchA", f"{frontend_url}/bake-switch-a.png")
+    second_payload, _second_key = _bake_test_payload(
+        "BakeSwitchB", f"{frontend_url}/bake-switch-b.png", hue=0)
+    requests = {"a": 0, "b": 0}
+    context, page = _page(edge_browser, frontend_url, {
+        "BakeSwitchA": first_payload, "BakeSwitchB": second_payload,
+    })
+    try:
+        page.route("**/bake-switch-a.png", lambda route: (
+            requests.__setitem__("a", requests["a"] + 1),
+            route.fulfill(
+                body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+                content_type="image/png",
+                headers={"Cache-Control": "no-store"})))
+        page.route("**/bake-switch-b.png", lambda route: (
+            requests.__setitem__("b", requests["b"] + 1),
+            route.fulfill(
+                body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+                content_type="image/png",
+                headers={"Cache-Control": "no-store"})))
+        _open(page, "BakeSwitchA")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureBake = resolve; });
+        }""")
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureBake !== undefined")
+
+        page.evaluate("""async () => {
+          await window.modViewer.switchMod('BakeSwitchB');
+        }""")
+        page.locator(".draw-item").first.wait_for()
+        page.wait_for_timeout(300)
+        b_requests_after_load = requests["b"]
+        assert page.evaluate("window.modViewer.getCurrentSource().path") == (
+            "BakeSwitchB")
+
+        page.evaluate("""() => window.__releaseTextureBake({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          texture: {file: 'BakeSwitchA-bake.dds'},
+          patched: {mip0_units: 1, shared_units_preserved: 0},
+          backup: {file: 'BakeSwitchA-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(first_key), json.dumps(first_key)))
+        page.wait_for_function(
+            "document.querySelector('#texture-bake-modal-backdrop').classList.contains('show') === false")
+        page.wait_for_timeout(300)
+        assert requests["b"] == b_requests_after_load
+    finally:
+        context.close()
+
+
+def test_texture_bake_confirmation_resets_color_and_refreshes_affected_keys(
+        edge_browser, frontend_url):
+    payload = _payload("BakeConfirm")
+    first = payload["meshes"]["Body-BakeConfirm-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::BakeConfirm-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body BakeConfirm::3,0,0": {"hue": 30},
+    }
+    payload["textureBakeResponse"] = {
+        "status": "ok", "safety": "safe",
+        "texture": {"file": "BakeConfirm-one.dds", "width": 8,
+                     "height": 8, "format": "bc7_unorm"},
+        "coverage": {"unit": "block", "selected_units": 1,
+                     "total_units": 4, "unique_units": 1, "shared_units": 0,
+                     "selected_percent": 25, "shared_percent_of_selected": 0},
+        "shared_with": [], "unresolved_consumers": [],
+    }
+    payload["textureBakeResult"] = {
+        "status": "ok", "tex_key": dds_key,
+        "affected_tex_keys": [dds_key],
+        "texture": {"file": "BakeConfirm-one.dds"},
+        "patched": {"mip0_units": 1, "shared_units_preserved": 0},
+        "backup": {"file": "BakeConfirm-one.dds.modviewer.bak"},
+    }
+    context, page = _page(edge_browser, frontend_url, {"BakeConfirm": payload})
+    try:
+        _open(page, "BakeConfirm")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        bake = page.locator(".inspector-texture-bake")
+        assert bake.is_enabled()
+        bake.click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.locator("#texture-bake-confirm").click()
+        page.locator("#texture-bake-body", has_text="TEXTURE BAKED").wait_for()
+        assert page.evaluate(
+            "window.__fakeApi.calls.bakeMeshTextureColor[0]") == [
+                "BakeConfirm", "Body-BakeConfirm-0",
+                "Body BakeConfirm::3,0,0", dds_key,
+                [{
+                    "semantic_key": "Body-BakeConfirm-0", "tex_key": dds_key,
+                    "texture_keys": {
+                        "diffuse": dds_key,
+                        "normal_map": None,
+                        "normal_data": None,
+                        "light_map": None,
+                        "material_map": None,
+                        "emission_map": None,
+                    },
+                }],
+                {"hue": 30, "saturation": 1, "brightness": 1, "contrast": 1,
+                 "red": 1, "green": 1, "blue": 1, "tint": "#ffffff",
+                 "tint_strength": 0},
+            ]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue") == 0
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+        page.wait_for_function(
+            "window.__fakeApi.calls.diagnostics.length >= 2")
+    finally:
+        context.close()
+
+
+def test_forced_health_refresh_keeps_newer_backup_report(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url,
+                           {"HealthRace": _payload("HealthRace")})
+    try:
+        _open(page, "HealthRace")
+        page.locator(".draw-item").first.wait_for()
+        page.wait_for_function(
+            "window.__fakeApi.calls.diagnostics.length >= 1")
+        page.evaluate("""async () => {
+          const health = await import('./js/panels/health-report.js');
+          window.__healthResolvers = [];
+          health.setHealthLoader(() => new Promise(resolve => {
+            window.__healthResolvers.push(resolve);
+          }));
+          window.__healthOld = health.refreshHealthReport();
+          window.dispatchEvent(new Event('mod-viewer-texture-baked'));
+        }""")
+        page.wait_for_function("window.__healthResolvers.length === 2")
+
+        page.evaluate("""() => {
+          window.__healthResolvers[1]({
+            summary: {issues: 1, warnings: 1, errors: 0},
+            files: {referenced: 0, inactive_only: 0, viewer_only: 0},
+            issues: [{severity: 'warning', category: 'asset',
+              message: 'Fresh timestamped backup is unreferenced.'}],
+          });
+        }""")
+        page.wait_for_function("""() =>
+          document.querySelector('#health-count').textContent === '1' &&
+          document.querySelector('#health-btn').classList.contains('warning')""")
+
+        page.evaluate("""() => {
+          window.__healthResolvers[0]({
+            summary: {issues: 0, warnings: 0, errors: 0},
+            files: {referenced: 0, inactive_only: 0, viewer_only: 0},
+            issues: [],
+          });
+        }""")
+        page.wait_for_timeout(100)
+        assert page.locator("#health-count").inner_text() == "1"
+        assert page.locator("#health-btn").get_attribute("class").find(
+            "warning") >= 0
+
+        page.locator("#health-btn").click()
+        assert page.locator("#health-list .health-message").inner_text() == (
+            "Fresh timestamped backup is unreferenced.")
     finally:
         context.close()
 
@@ -1052,6 +1596,9 @@ def test_texture_coverage_unknown_state_does_not_claim_unique_units(
 def test_texture_coverage_error_clears_loading_message(
         edge_browser, frontend_url):
     payload = _payload("Error")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Error::3,0,0": {"hue": 30},
+    }
     old_key = payload["meshes"]["Body-Error-0"]["tex_key"]
     dds_key = "diffuse::Error-one.dds"
     payload["meshes"]["Body-Error-0"]["tex_key"] = dds_key
@@ -1096,6 +1643,9 @@ def test_texture_coverage_action_explains_non_dds_without_backend_call(
 def test_texture_coverage_stale_response_is_discarded(
         edge_browser, frontend_url):
     payload = _payload("Stale")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Stale::3,0,0": {"hue": 30},
+    }
     key = "diffuse::Stale-one.dds"
     old_key = payload["meshes"]["Body-Stale-0"]["tex_key"]
     payload["meshes"]["Body-Stale-0"]["tex_key"] = key
