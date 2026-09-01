@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from core.textures import color_adjustment
 from core.textures.color_adjustment import (
     COLOR_DEFAULTS, adjust_rgba_bytes, apply_color_adjustment,
     is_neutral_color_adjustment, normalize_color_adjustment,
@@ -43,3 +44,20 @@ def test_adjust_rgba_preserves_alpha_and_only_changes_selected_pixels():
         source, 2, 1, {"hue": 120}, pixel_mask=[True, False])
 
     assert result == bytes([0, 255, 0, 7, 0, 255, 0, 129])
+
+
+def test_adjust_rgba_skips_transform_for_unselected_pixels(monkeypatch):
+    calls = []
+    real_apply = color_adjustment._apply_normalized
+
+    def counting_apply(rgb, normalized):
+        calls.append(rgb)
+        return real_apply(rgb, normalized)
+
+    monkeypatch.setattr(color_adjustment, "_apply_normalized", counting_apply)
+
+    color_adjustment.adjust_rgba_bytes(
+        bytes([10, 20, 30, 7, 40, 50, 60, 8, 70, 80, 90, 9]),
+        3, 1, {"hue": 30}, pixel_mask=[True, False, False])
+
+    assert len(calls) == 1

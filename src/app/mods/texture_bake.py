@@ -39,6 +39,9 @@ _UNSUPPORTED_COLOR_FORMATS = frozenset({
     "bc4_unorm", "bc4_snorm", "bc5_unorm", "bc5_snorm",
     "bc6h_ufloat", "bc6h_float",
 })
+_OPAQUE_ONLY_FORMATS = frozenset({
+    "bc1_unorm", "bc1_srgb", "bc7_unorm", "bc7_srgb",
+})
 
 
 class TextureBakeAnalysisError(ValueError):
@@ -644,7 +647,7 @@ def _write_temp(path, data):
 
 
 def _patch_dds_units(original, candidate, layout, safe_masks, candidate_layout=None):
-    """Copy only selected-and-unique edit units from candidate DDS bytes."""
+    """Copy safe color data while retaining source alpha when possible."""
     candidate_layout = candidate_layout or layout
     if (len(original) < layout.payload_end
             or len(candidate) < candidate_layout.payload_end
@@ -667,8 +670,20 @@ def _patch_dds_units(original, candidate, layout, safe_masks, candidate_layout=N
                 continue
             source_start = candidate_mip.offset + index * candidate_mip.bytes_per_unit
             target_start = mip.offset + index * mip.bytes_per_unit
-            result[target_start:target_start + mip.bytes_per_unit] = candidate[
+            candidate_unit = candidate[
                 source_start:source_start + candidate_mip.bytes_per_unit]
+            if layout.info.format in {"rgba8", "bgra8"}:
+                # The first three bytes are the format's RGB channels; byte 3
+                # is authored alpha and must remain byte-for-byte unchanged.
+                unit = candidate_unit[:3] + original[
+                    target_start + 3:target_start + 4]
+            elif layout.info.format.startswith(("bc2", "bc3")):
+                # BC2/BC3 store alpha in an independent eight-byte sub-block.
+                unit = original[target_start:target_start + 8] + candidate_unit[8:]
+            else:
+                # BC1/BC7 are admitted only after the source was proven opaque.
+                unit = candidate_unit
+            result[target_start:target_start + mip.bytes_per_unit] = unit
     return bytes(result)
 
 
@@ -688,10 +703,56 @@ def _validate_candidate(source_layout, candidate_path, candidate_bytes):
     return candidate_layout
 
 
+def _validate_alpha_preservation(info, image):
+    """Reject BC1/BC7 transparency that the block patch cannot preserve."""
+    if info.format not in _OPAQUE_ONLY_FORMATS:
+        return
+    try:
+        alpha_min, _alpha_max = image.getchannel("A").getextrema()
+    except Exception as error:
+        raise TextureBakeAnalysisError(
+            "texture_decode_failed",
+            "The source DDS alpha channel could not be inspected.") from error
+    if alpha_min != 255:
+        raise TextureBakeAnalysisError(
+            "alpha_preservation_unsupported",
+            "This texture contains transparency that cannot currently be "
+            "preserved exactly while recoloring its compressed blocks.",
+            "unsupported")
+
+
+def _affected_texture_keys(context, prepared):
+    """Resolve every active usage key for the physically changed source."""
+    selected_identity = _physical_identity(prepared.selected_path)
+    affected = []
+    seen_keys = set()
+    for entry in prepared.entries:
+        key = entry["tex_key"]
+        path = _texture_path(context.mod_dir, key) if key else None
+        if (not key or not path or key in seen_keys
+                or _physical_identity(path) != selected_identity):
+            continue
+        seen_keys.add(key)
+        affected.append(key)
+    return affected
+
+
+def _replacement_completed(source_path, temporary_path, final):
+    """Detect a replace call that completed before surfacing an OSError."""
+    try:
+        if os.path.exists(temporary_path):
+            return False
+        return _read_source(source_path) == final
+    except Exception:
+        return False
+
+
 def bake_texture_color(
         context, overrides, active_mesh_keys, selected_semantic_key,
         selected_texture_key, texture_usage, adjustment):
     """Safely bake a non-neutral adjustment into unique DDS units only."""
+    committed = False
+    success_result = None
     try:
         # Preparation includes the independent mod-root/Asset check and must be
         # repeated for the destructive request, even after a prior analysis.
@@ -724,9 +785,12 @@ def bake_texture_color(
             raise TextureBakeAnalysisError(
                 "texture_decode_failed", "The source DDS could not be decoded at full resolution.")
         rgba = image.convert("RGBA")
+        _validate_alpha_preservation(prepared.info, rgba)
         masked_rgba = adjust_rgba_bytes(
             rgba.tobytes(), rgba.width, rgba.height, normalized,
             prepared.selected_pixels.mask)
+        # Resolve all post-commit metadata before the destructive boundary.
+        affected = _affected_texture_keys(context, prepared)
 
         with tempfile.TemporaryDirectory(prefix="modviewer-bake-") as workdir:
             from PIL import Image
@@ -760,6 +824,21 @@ def bake_texture_color(
             backup_path = _write_backup(prepared.selected_path, original)
             _assert_source_unchanged(prepared.selected_path, original_hash)
             temporary = _write_temp(prepared.selected_path, final)
+            success_result = {
+                "status": "ok",
+                "tex_key": selected_texture_key,
+                "affected_tex_keys": affected,
+                "texture": _texture_details(
+                    prepared.selected_path, prepared.info),
+                "patched": {
+                    "mip0_units": mip0_safe,
+                    "total_units": sum(
+                        len(mask) for mask in prepared.safe_masks),
+                    "shared_units_preserved": sum(
+                        sum(mask) for mask in prepared.shared_masks),
+                },
+                "backup": {"file": os.path.basename(backup_path)},
+            }
             try:
                 final_layout = inspect_dds_layout(temporary)
                 if final_layout is None:
@@ -772,40 +851,29 @@ def bake_texture_color(
                 try:
                     os.replace(temporary, prepared.selected_path)
                 except OSError as error:
-                    raise TextureBakeAnalysisError(
-                        "texture_write_failed", "The DDS could not be replaced safely.") from error
-                temporary = None
+                    if not _replacement_completed(
+                            prepared.selected_path, temporary, final):
+                        raise TextureBakeAnalysisError(
+                            "texture_write_failed",
+                            "The DDS could not be replaced safely.") from error
+                    committed = True
+                    temporary = None
+                else:
+                    committed = True
+                    temporary = None
             finally:
                 if temporary and os.path.exists(temporary):
                     os.remove(temporary)
-
-        selected_identity = _physical_identity(prepared.selected_path)
-        affected = []
-        seen_keys = set()
-        for entry in prepared.entries:
-            key = entry["tex_key"]
-            path = _texture_path(context.mod_dir, key) if key else None
-            if (not key or not path or key in seen_keys
-                    or _physical_identity(path) != selected_identity):
-                continue
-            seen_keys.add(key)
-            affected.append(key)
-        return {
-            "status": "ok",
-            "tex_key": selected_texture_key,
-            "affected_tex_keys": affected,
-            "texture": _texture_details(prepared.selected_path, prepared.info),
-            "patched": {
-                "mip0_units": mip0_safe,
-                "total_units": sum(len(mask) for mask in prepared.safe_masks),
-                "shared_units_preserved": sum(
-                    sum(mask) for mask in prepared.shared_masks),
-            },
-            "backup": {"file": os.path.basename(backup_path)},
-        }
+        return success_result
     except TextureBakeAnalysisError as error:
+        if committed and success_result is not None:
+            success_result["warning"] = "post_bake_cleanup_failed"
+            return success_result
         return _error(error.code, error.message, error.status)
     except Exception:
+        if committed and success_result is not None:
+            success_result["warning"] = "post_bake_cleanup_failed"
+            return success_result
         return _error(
             "texture_write_failed", "The DDS could not be baked safely.")
 

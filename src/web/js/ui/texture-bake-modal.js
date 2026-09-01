@@ -12,6 +12,7 @@ import {
 import { isNeutralColorAdjustment } from '../mesh/color-adjustment.js';
 import { reloadTextures } from '../mesh/mesh-factory.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
+import { viewerState, samePath } from '../app/state.js';
 
 const $ = id => document.getElementById(id);
 const backdrop = $('texture-bake-modal-backdrop');
@@ -140,6 +141,23 @@ function bakeRequestFor(mesh) {
   };
 }
 
+function synchronizeCommittedBake(mesh, result) {
+  const sameLoadedMod = activeMeshes.includes(mesh)
+    && viewerState.currentSource?.kind === 'mod'
+    && samePath(mesh.userData?.modPath, viewerState.currentModPath);
+  if (!sameLoadedMod) return false;
+
+  resetMeshColorAdjustment(mesh, {persist: false, render: false});
+  if (result.warning === 'color_state_reset_failed') {
+    // Retry through the normal persistence boundary; texture_bake.py never
+    // edits viewer metadata directly.
+    resetMeshColorAdjustment(mesh, {persist: true, render: false});
+  }
+  reloadTextures(result.affected_tex_keys || [result.tex_key]);
+  notifyMeshStateChanged([mesh]);
+  return true;
+}
+
 async function runBake(mesh, isCurrent) {
   const request = bakeRequestFor(mesh);
   const api = window.pywebview?.api?.bake_mesh_texture_color;
@@ -160,9 +178,10 @@ async function runBake(mesh, isCurrent) {
     result = {status: 'error', error: 'Texture baking failed.'};
   }
   baking = false;
+  if (result?.status === 'ok') synchronizeCommittedBake(mesh, result);
   if (typeof isCurrent === 'function' && !isCurrent()) {
     closeTextureBakeModal();
-    return null;
+    return result;
   }
   if (result?.status !== 'ok') {
     setModalError(error, result?.error || 'Texture baking failed.');
@@ -170,14 +189,6 @@ async function runBake(mesh, isCurrent) {
       label: 'Bake Color'});
     return result;
   }
-  resetMeshColorAdjustment(mesh, {persist: false, render: false});
-  if (result.warning === 'color_state_reset_failed') {
-    // Retry through the normal persistence boundary; texture_bake.py never
-    // edits viewer metadata directly.
-    resetMeshColorAdjustment(mesh, {persist: true, render: false});
-  }
-  reloadTextures(result.affected_tex_keys || [result.tex_key]);
-  notifyMeshStateChanged([mesh]);
   renderBakeSuccess(result);
   return result;
 }

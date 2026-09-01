@@ -171,9 +171,8 @@ def adjust_rgba_bytes(data, width, height, adjustment, pixel_mask=None):
     """Return adjusted RGBA bytes, preserving every source alpha byte.
 
     When *pixel_mask* is supplied it must contain one truthy entry per pixel;
-    only selected pixels receive the RGB operation.  A full adjusted candidate
-    is still computed for each source pixel before the mask is composited, which
-    mirrors the bake pipeline's image-to-encoder boundary.
+    only selected pixels receive the RGB operation. Unselected pixels are
+    copied without entering the color transform.
     """
     normalized = normalize_color_adjustment(adjustment, reject_invalid=True)
     if normalized is None:
@@ -188,14 +187,15 @@ def adjust_rgba_bytes(data, width, height, adjustment, pixel_mask=None):
         raise ValueError("pixel mask has the wrong size")
     result = bytearray(len(data))
     for index in range(0, len(data), 4):
+        pixel_index = index // 4
+        if pixel_mask is not None and not pixel_mask[pixel_index]:
+            result[index:index + 4] = data[index:index + 4]
+            continue
         red, green, blue = (data[index + channel] / 255.0
                             for channel in range(3))
         adjusted = _apply_normalized((red, green, blue), normalized)
-        pixel_index = index // 4
-        source = adjusted if pixel_mask is None or pixel_mask[pixel_index] else (
-            red, green, blue)
         result[index:index + 3] = bytes(
-            min(255, max(0, round(channel * 255.0))) for channel in source)
+            min(255, max(0, round(channel * 255.0))) for channel in adjusted)
         result[index + 3] = data[index + 3]
     return bytes(result)
 

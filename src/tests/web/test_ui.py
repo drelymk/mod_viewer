@@ -1,3 +1,7 @@
+import base64
+import copy
+import json
+
 from .support import *
 
 def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
@@ -875,6 +879,12 @@ def test_inspector_follows_component_and_mesh_selection(
 def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         edge_browser, frontend_url):
     payload = _payload("ColorUI")
+    first = payload["meshes"]["Body-ColorUI-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::ColorUI-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
     payload["metadata"]["mesh_color_adjustments"] = {
         "Body ColorUI::3,0,0": {
             "hue": 30, "saturation": 1.15, "brightness": 1,
@@ -937,6 +947,11 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         page.locator(".inspector-color-slider").first.wait_for()
         assert page.locator(
             "[data-color-field='hue'] .inspector-color-slider").input_value() == "55"
+
+        color.locator(".inspector-color-reset").click()
+        assert page.locator(
+            "[data-color-field='hue'] .inspector-color-slider").input_value() == "0"
+        assert color.locator(".inspector-texture-bake").is_disabled()
 
         page.evaluate("""async () => {
           const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
@@ -1080,6 +1095,162 @@ def test_texture_bake_action_is_disabled_for_neutral_color_state(
             "Adjust the mesh color before baking."
         assert page.evaluate(
             "window.__fakeApi.calls.analyzeTextureBake.length") == 0
+    finally:
+        context.close()
+
+
+def _bake_test_payload(label, texture_uri, hue=30):
+    payload = _payload(label)
+    first = payload["meshes"][f"Body-{label}-0"]
+    tex_key = f"diffuse::{label}-bake.dds"
+    first["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    first["tex_key"] = tex_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = tex_key
+    payload["textures"] = {tex_key: texture_uri}
+    payload["metadata"]["mesh_color_adjustments"] = {
+        f"Body {label}::3,0,0": {"hue": hue},
+    }
+    payload["textureBakeResponse"] = {
+        "status": "ok", "safety": "safe",
+        "texture": {"file": f"{label}-bake.dds", "width": 8,
+                     "height": 8, "format": "bc7_unorm"},
+        "coverage": {"unit": "block", "selected_units": 1,
+                     "total_units": 4, "unique_units": 1, "shared_units": 0,
+                     "selected_percent": 25, "shared_percent_of_selected": 0},
+        "shared_with": [], "unresolved_consumers": [],
+    }
+    payload["textureBakeResult"] = {
+        "status": "ok", "tex_key": tex_key,
+        "affected_tex_keys": [tex_key],
+        "texture": {"file": f"{label}-bake.dds"},
+        "patched": {"mip0_units": 1, "shared_units_preserved": 0},
+        "backup": {"file": f"{label}-bake.dds.modviewer.bak"},
+    }
+    return payload, tex_key
+
+
+def test_successful_bake_syncs_stale_mesh_after_selection_changes(
+        edge_browser, frontend_url):
+    payload, tex_key = _bake_test_payload(
+        "BakeSelectionRace", f"{frontend_url}/bake-selection-race.png")
+    first = payload["meshes"]["Body-BakeSelectionRace-0"]
+    second = copy.deepcopy(first)
+    second["component"] = "Face BakeSelectionRace"
+    second["display_name"] = "Face target"
+    payload["meshes"]["Face-BakeSelectionRace-0"] = second
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakeSelectionRace": payload})
+    try:
+        page.route("**/bake-selection-race.png", lambda route: (
+            route.fulfill(
+                body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+                content_type="image/png",
+                headers={"Cache-Control": "no-store"})))
+        page.evaluate("""async () => {
+          const THREE = await import('three');
+          THREE.Cache.enabled = false;
+        }""")
+        _open(page, "BakeSelectionRace")
+        page.locator(".draw-item").nth(1).wait_for()
+        page.wait_for_function(
+            "window.modViewer.getMaterialState(0).diffuseBound")
+        page.evaluate("""async () => {
+          const {getGameMaterialTexture} =
+            await import('./js/mesh/material-profile.js');
+          window.__initialBakeTextureUuid = getGameMaterialTexture(
+            window.modViewer.activeMeshes[0].material, 'diffuse').uuid;
+        }""")
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").nth(0).click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureBake = resolve; });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureBake !== undefined")
+        page.locator("#texture-bake-close").click()
+        page.locator(".draw-item").nth(1).click()
+        assert "Face BakeSelectionRace" in page.locator(
+            "#selected-mesh-status").inner_text()
+
+        page.evaluate("""() => window.__releaseTextureBake({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          texture: {file: 'BakeSelectionRace-bake.dds'},
+          patched: {mip0_units: 1, shared_units_preserved: 0},
+          backup: {file: 'BakeSelectionRace-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(tex_key), json.dumps(tex_key)))
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue === 0")
+        page.wait_for_function("""async () => {
+          const {getGameMaterialTexture} =
+            await import('./js/mesh/material-profile.js');
+          const texture = getGameMaterialTexture(
+            window.modViewer.activeMeshes[0].material, 'diffuse');
+          return texture?.uuid !== window.__initialBakeTextureUuid;
+        }""")
+        assert "Face BakeSelectionRace" in page.locator(
+            "#selected-mesh-status").inner_text()
+    finally:
+        context.close()
+
+
+def test_successful_bake_does_not_reload_a_new_mod_after_switch(
+        edge_browser, frontend_url):
+    first_payload, first_key = _bake_test_payload(
+        "BakeSwitchA", f"{frontend_url}/bake-switch-a.png")
+    second_payload, _second_key = _bake_test_payload(
+        "BakeSwitchB", f"{frontend_url}/bake-switch-b.png", hue=0)
+    requests = {"a": 0, "b": 0}
+    context, page = _page(edge_browser, frontend_url, {
+        "BakeSwitchA": first_payload, "BakeSwitchB": second_payload,
+    })
+    try:
+        page.route("**/bake-switch-a.png", lambda route: (
+            requests.__setitem__("a", requests["a"] + 1),
+            route.fulfill(
+                body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+                content_type="image/png",
+                headers={"Cache-Control": "no-store"})))
+        page.route("**/bake-switch-b.png", lambda route: (
+            requests.__setitem__("b", requests["b"] + 1),
+            route.fulfill(
+                body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
+                content_type="image/png",
+                headers={"Cache-Control": "no-store"})))
+        _open(page, "BakeSwitchA")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.evaluate("""() => {
+          window.pywebview.api.bake_mesh_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureBake = resolve; });
+        }""")
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureBake !== undefined")
+
+        page.evaluate("""async () => {
+          await window.modViewer.switchMod('BakeSwitchB');
+        }""")
+        page.locator(".draw-item").first.wait_for()
+        page.wait_for_timeout(300)
+        b_requests_after_load = requests["b"]
+        assert page.evaluate("window.modViewer.getCurrentSource().path") == (
+            "BakeSwitchB")
+
+        page.evaluate("""() => window.__releaseTextureBake({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          texture: {file: 'BakeSwitchA-bake.dds'},
+          patched: {mip0_units: 1, shared_units_preserved: 0},
+          backup: {file: 'BakeSwitchA-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(first_key), json.dumps(first_key)))
+        page.wait_for_function(
+            "document.querySelector('#texture-bake-modal-backdrop').classList.contains('show') === false")
+        page.wait_for_timeout(300)
+        assert requests["b"] == b_requests_after_load
     finally:
         context.close()
 

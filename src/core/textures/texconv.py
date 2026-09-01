@@ -59,12 +59,18 @@ def build_texconv_command(executable, input_png, output_dir, format_name,
         raise ValueError("DDS mip count is invalid") from None
     if mip_count <= 0:
         raise ValueError("DDS mip count is invalid")
-    return [
+    command = [
         os.fspath(executable), "-nologo", "-y", "-ft", "DDS",
         "-f", dxgi_format, "-m", str(mip_count), "-if", "LINEAR",
         "-sepalpha", "-nogpu", "-o", os.fspath(output_dir),
         os.fspath(input_png),
     ]
+    if format_name.endswith("_srgb"):
+        # LINEAR selects the resize filter; it does not select the colorspace
+        # used while filtering. The bake PNG contains editor-sRGB bytes, so
+        # typed sRGB outputs must opt into linear-light mip generation.
+        command.insert(command.index("-sepalpha"), "-srgb")
+    return command
 
 
 def _hidden_startupinfo():

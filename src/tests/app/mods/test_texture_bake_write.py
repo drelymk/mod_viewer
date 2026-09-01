@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from pathlib import Path
+import struct
 
 import pytest
 from PIL import Image
@@ -11,7 +12,7 @@ from core.textures.dds import inspect_dds, inspect_dds_layout
 from core.textures.uv_coverage import UVCoverage
 
 
-def _rgba8_dds(payload):
+def _rgba8_dds(payload, format_name="rgba8"):
     header = bytearray(128)
     header[:4] = b"DDS "
     header[4:8] = (124).to_bytes(4, "little")
@@ -20,10 +21,23 @@ def _rgba8_dds(payload):
     header[76:80] = (32).to_bytes(4, "little")
     header[80:84] = (0x41).to_bytes(4, "little")
     header[88:92] = (32).to_bytes(4, "little")
-    for offset, value in zip((92, 96, 100, 104),
-                             (0x000000FF, 0x0000FF00,
-                              0x00FF0000, 0xFF000000)):
+    masks = ((0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000)
+             if format_name == "rgba8" else
+             (0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000))
+    for offset, value in zip((92, 96, 100, 104), masks):
         header[offset:offset + 4] = value.to_bytes(4, "little")
+    return bytes(header) + bytes(payload)
+
+
+def _dx10_dds(payload, dxgi_format, width=4, height=4, mip_count=1):
+    header = bytearray(148)
+    header[:4] = b"DDS "
+    struct.pack_into("<I", header, 4, 124)
+    struct.pack_into("<II", header, 12, height, width)
+    struct.pack_into("<I", header, 28, mip_count)
+    struct.pack_into("<I", header, 76, 32)
+    struct.pack_into("<II", header, 80, 4, int.from_bytes(b"DX10", "little"))
+    struct.pack_into("<IIIII", header, 128, dxgi_format, 3, 0, 1, 0)
     return bytes(header) + bytes(payload)
 
 
@@ -69,7 +83,7 @@ def test_bake_replaces_only_safe_units_and_keeps_backup(tmp_path, monkeypatch):
     assert result["patched"]["mip0_units"] == 1
     updated = source.read_bytes()
     assert updated[:128] == original[:128]
-    assert updated[128:132] == bytes([200, 201, 202, 203])
+    assert updated[128:132] == bytes([200, 201, 202, 40])
     assert updated[132:] == original[132:]
     assert (tmp_path / "body.dds.modviewer.bak").read_bytes() == original
 
@@ -141,11 +155,148 @@ def test_patch_copies_only_safe_units_at_each_mip(tmp_path):
         original, candidate, layout,
         (bytearray([1] + [0] * 15), bytearray([0, 0, 1, 0])))
 
-    assert final[128:132] == candidate[128:132]
+    assert final[128:131] == candidate[128:131]
+    assert final[131:132] == original[131:132]
     assert final[132:192] == original[132:192]
     assert final[192:200] == original[192:200]
-    assert final[200:204] == candidate[200:204]
+    assert final[200:203] == candidate[200:203]
+    assert final[203:204] == original[203:204]
     assert final[204:208] == original[204:208]
+
+
+@pytest.mark.parametrize("format_name", ["rgba8", "bgra8"])
+def test_patch_preserves_uncompressed_alpha(tmp_path, format_name):
+    source = tmp_path / f"{format_name}.dds"
+    original = _rgba8_dds(
+        [10, 20, 30, 40, 50, 60, 70, 80], format_name)
+    candidate = _rgba8_dds(
+        [200, 201, 202, 203, 210, 211, 212, 213], format_name)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+
+    final = texture_bake._patch_dds_units(
+        original, candidate, layout, (bytearray([1, 1]),))
+
+    assert final[128:136] == bytes([200, 201, 202, 40, 210, 211, 212, 80])
+
+
+def test_patch_preserves_bc3_alpha_sub_block(tmp_path):
+    source = tmp_path / "bc3.dds"
+    original = _dx10_dds(bytes(range(16)), 77)
+    candidate = _dx10_dds(bytes(range(100, 116)), 77)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+
+    final = texture_bake._patch_dds_units(
+        original, candidate, layout, (bytearray([1]),))
+
+    assert final[148:156] == original[148:156]
+    assert final[156:164] == candidate[156:164]
+
+
+def test_bc7_transparency_is_rejected_before_backup_or_encoder(
+        tmp_path, monkeypatch):
+    source = tmp_path / "transparent-bc7.dds"
+    source.write_bytes(_dx10_dds(bytes(16), 98))
+    layout = inspect_dds_layout(source)
+    prepared = SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        selected_pixels=SimpleNamespace(mask=bytearray(16)),
+        safe_masks=(bytearray([1]),), shared_masks=(bytearray([0]),),
+        entries=({"semantic_key": "Body-1", "tex_key": "diffuse::transparent-bc7.dds"},),
+        unresolved=(),
+    )
+    prepared.selected_pixels.mask[0] = 1
+    monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
+                        lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(
+        texture_bake, "load_texture_image_full",
+        lambda *_args, **_kwargs: Image.new("RGBA", (4, 4), (10, 20, 30, 128)))
+    called = []
+    monkeypatch.setattr(
+        texture_bake, "encode_png_to_dds", lambda *args: called.append(args))
+
+    result = texture_bake.bake_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
+        "diffuse::transparent-bc7.dds", [
+            {"semantic_key": "Body-1", "tex_key": "diffuse::transparent-bc7.dds"},
+        ], {"hue": 30})
+
+    assert result["code"] == "alpha_preservation_unsupported"
+    assert called == []
+    assert not (tmp_path / "transparent-bc7.dds.modviewer.bak").exists()
+
+
+def test_opaque_bc7_can_be_baked(tmp_path, monkeypatch):
+    source = tmp_path / "opaque-bc7.dds"
+    original = _dx10_dds(bytes(16), 98)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        selected_pixels=SimpleNamespace(mask=bytearray([1] + [0] * 15)),
+        safe_masks=(bytearray([1]),), shared_masks=(bytearray([0]),),
+        entries=({"semantic_key": "Body-1", "tex_key": "diffuse::opaque-bc7.dds"},),
+        unresolved=(),
+    )
+    monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
+                        lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(
+        texture_bake, "load_texture_image_full",
+        lambda *_args, **_kwargs: Image.new("RGBA", (4, 4), (10, 20, 30, 255)))
+
+    def encode(_png, output, _format, _mips):
+        candidate = Path(output) / "bake.dds"
+        candidate.write_bytes(_dx10_dds(bytes(range(100, 116)), 98))
+        return str(candidate)
+
+    monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
+
+    result = texture_bake.bake_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
+        "diffuse::opaque-bc7.dds", [
+            {"semantic_key": "Body-1", "tex_key": "diffuse::opaque-bc7.dds"},
+        ], {"hue": 30})
+
+    assert result["status"] == "ok"
+
+
+def test_bake_reports_committed_state_when_replace_raises_after_replacing(
+        tmp_path, monkeypatch):
+    source = tmp_path / "replace-race.dds"
+    original = _rgba8_dds([10, 20, 30, 40, 50, 60, 70, 80])
+    source.write_bytes(original)
+    prepared = _prepared(source)
+    monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
+                        lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(
+        texture_bake, "load_texture_image_full",
+        lambda *_args, **_kwargs: Image.frombytes(
+            "RGBA", (2, 1), bytes([10, 20, 30, 40, 50, 60, 70, 80])))
+
+    def encode(_png, output, _format, _mips):
+        candidate = Path(output) / "bake.dds"
+        candidate.write_bytes(_rgba8_dds(
+            [200, 201, 202, 203, 50, 60, 70, 81]))
+        return str(candidate)
+
+    monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
+    real_replace = texture_bake.os.replace
+
+    def replace_then_raise(source_path, target_path):
+        real_replace(source_path, target_path)
+        raise OSError("reported after replacement")
+
+    monkeypatch.setattr(texture_bake.os, "replace", replace_then_raise)
+
+    result = texture_bake.bake_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
+        "diffuse::body.dds", [
+            {"semantic_key": "Body-1", "tex_key": "diffuse::body.dds"},
+        ], {"hue": 30})
+
+    assert result["status"] == "ok"
+    assert source.read_bytes() != original
 
 
 def test_lower_mip_collision_makes_only_that_level_shared(tmp_path, monkeypatch):
