@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from datetime import datetime
+import logging
 from pathlib import Path
 import struct
 
@@ -44,6 +45,31 @@ def _dx10_dds(payload, dxgi_format, width=4, height=4, mip_count=1):
     struct.pack_into("<II", header, 80, 4, int.from_bytes(b"DX10", "little"))
     struct.pack_into("<IIIII", header, 128, dxgi_format, 3, 0, 1, 0)
     return bytes(header) + bytes(payload)
+
+
+def _bc7_mode6_block(alpha0, alpha1, indices, rgb0=(40, 60, 80),
+                     rgb1=(120, 140, 160)):
+    """Build a small valid mode-6 block for deterministic fallback tests."""
+    assert len(indices) == 16
+    assert 0 <= alpha0 <= 255 and 0 <= alpha1 <= 255
+    pbits = (alpha0 & 1, alpha1 & 1)
+    bits = 1 << 6
+
+    def put(start, count, value):
+        nonlocal bits
+        bits = texture_bake._bc7_set_bits(bits, start, count, value)
+
+    for channel in range(3):
+        put(7 + channel * 14, 7, rgb0[channel] >> 1)
+        put(14 + channel * 14, 7, rgb1[channel] >> 1)
+    put(49, 7, alpha0 >> 1)
+    put(56, 7, alpha1 >> 1)
+    put(63, 1, pbits[0])
+    put(64, 1, pbits[1])
+    put(65, 3, indices[0])
+    for index, value in enumerate(indices[1:], 1):
+        put(68 + (index - 1) * 4, 4, value)
+    return bits.to_bytes(16, "little")
 
 
 def _prepared(path):
@@ -619,6 +645,127 @@ def test_bc7_mode6_retry_uses_q_flag_and_reports_compatibility(
     assert stats[0].source_mode6_compatible == 1
 
 
+def test_mode6_fallback_preserves_alpha_and_recolors_source_blocks(
+        tmp_path, monkeypatch):
+    blocks = (
+        _bc7_mode6_block(0, 255, [0, 15] * 8),
+        _bc7_mode6_block(128, 128, [0] * 16, rgb0=(50, 70, 90),
+                          rgb1=(170, 190, 210)),
+        _bc7_mode6_block(254, 254, [15] * 16, rgb0=(70, 90, 110),
+                          rgb1=(190, 210, 230)),
+        _bc7_mode6_block(255, 255, [15] * 16, rgb0=(90, 110, 130),
+                          rgb1=(210, 230, 250)),
+    )
+    source = tmp_path / "bc7-mode6-fallback.dds"
+    original = _dx10_dds(b"".join(blocks), 98, width=8, height=8)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1, 1, 1, 1]),),
+        (SimpleNamespace(mask=bytearray([1] * 64)),),
+        "diffuse::bc7-mode6-fallback.dds")
+    source_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        original, layout, layout.mips[0])
+    assert {0, 128, 254, 255} <= set(
+        source_image.getchannel("A").tobytes())
+    timings = {}
+    candidate_blocks, stats = texture_bake._encode_mode6_fallback(
+        original, prepared, layout.mips[0], source_image,
+        bytearray([1] * 64), bytearray([1, 1, 1, 1]),
+        {"hue": 120, "saturation": 2}, timings)
+
+    assert set(candidate_blocks) == {0, 1, 2, 3}
+    assert stats.compatible_units == 4
+    assert stats.protected_units == 0
+    assert timings["mode6_fallback"] >= 0
+
+    candidate_payload = b"".join(
+        candidate_blocks[index][0] for index in range(4))
+    candidate = _dx10_dds(candidate_payload, 98, width=8, height=8)
+    candidate_path = tmp_path / "bc7-mode6-fallback-candidate.dds"
+    candidate_path.write_bytes(candidate)
+    candidate_layout = inspect_dds_layout(candidate_path)
+    candidate_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        candidate, candidate_layout, candidate_layout.mips[0])
+    assert (candidate_image.getchannel("A").tobytes()
+            == source_image.getchannel("A").tobytes())
+    assert (candidate_image.convert("RGB").tobytes()
+            != source_image.convert("RGB").tobytes())
+    for index, block in enumerate(blocks):
+        source_pbits, source_endpoints, source_indices = (
+            texture_bake._bc7_mode6_parameters(block))
+        candidate_pbits, candidate_endpoints, candidate_indices = (
+            texture_bake._bc7_mode6_parameters(candidate_blocks[index][0]))
+        assert candidate_pbits == source_pbits
+        assert candidate_indices == source_indices
+        assert [endpoint[3] for endpoint in candidate_endpoints] == [
+            endpoint[3] for endpoint in source_endpoints]
+        assert ([endpoint[:3] for endpoint in candidate_endpoints]
+                != [endpoint[:3] for endpoint in source_endpoints])
+    target_rgba, _safe_indices, target_width, target_height = (
+        texture_bake._build_safe_block_atlas(
+            source_image, layout.mips[0], bytearray([1] * 64),
+            bytearray([1, 1, 1, 1]), {"hue": 120, "saturation": 2}))
+    target_image = Image.frombytes(
+        "RGBA", (target_width, target_height), target_rgba)
+
+    def rgb_error(left, right):
+        return sum((left[index] - right[index]) ** 2
+                   for index in range(len(left)) if index % 4 != 3)
+
+    assert rgb_error(candidate_image.tobytes(), target_image.tobytes()) < (
+        rgb_error(source_image.tobytes(), target_image.tobytes()))
+
+
+def test_bc7_bake_uses_mode6_fallback_before_mip0_abort(
+        tmp_path, monkeypatch):
+    source_block = _bc7_mode6_block(0, 255, [0, 15] * 8)
+    rejected_block = _bc7_mode6_block(1, 254, [0, 15] * 8)
+    source = tmp_path / "bc7-mode6-bake.dds"
+    original = _dx10_dds(source_block, 98)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]),),
+        (SimpleNamespace(mask=bytearray([1] * 16)),),
+        "diffuse::bc7-mode6-bake.dds")
+    monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
+                        lambda *args, **kwargs: prepared)
+    encoded = []
+
+    def encode(_png, output, _format, _mips, **kwargs):
+        encoded.append((kwargs.get("bc_flags"), kwargs.get("alpha_weight")))
+        candidate_path = Path(output) / "candidate.dds"
+        candidate_path.write_bytes(_dx10_dds(rejected_block, 98))
+        return str(candidate_path)
+
+    monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
+    result = texture_bake.bake_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
+        "diffuse::bc7-mode6-bake.dds", [
+            {"semantic_key": "Body-1", "tex_key": "diffuse::bc7-mode6-bake.dds"},
+        ], {"hue": 30})
+
+    updated = source.read_bytes()
+    assert encoded == [
+        (None, None), (None, 2.0), (None, 4.0),
+        (None, 8.0), (None, 16.0), (None, 32.0),
+        ("q", 2.0), ("q", 4.0), ("q", 8.0),
+        ("q", 16.0), ("q", 32.0),
+    ]
+    assert result["status"] == "ok"
+    assert result["patched"]["mip0_units"] == 1
+    assert result["patched"]["alpha_protected_mip0_units"] == 0
+    assert updated[148:164] != source_block
+    final_layout = inspect_dds_layout(source)
+    final_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        updated, final_layout, final_layout.mips[0])
+    source_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        original, layout, layout.mips[0])
+    assert (final_image.getchannel("A").tobytes()
+            == source_image.getchannel("A").tobytes())
+
+
 def test_bc7_mode_mask_identifies_unary_prefix_mode():
     assert texture_bake._bc7_block_mode(bytes([0x40]) + bytes(15)) == 6
     assert texture_bake._bc7_block_mode(bytes([0x02]) + bytes(15)) == 1
@@ -628,7 +775,8 @@ def test_bc7_mode_mask_identifies_unary_prefix_mode():
 
 
 def test_bc7_bake_with_no_compatible_mip0_does_not_write_or_backup(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger=texture_bake.__name__)
     source = tmp_path / "bc7-unsupported.dds"
     original = _dx10_dds(bytes([1]) * 16, 98)
     source.write_bytes(original)
@@ -661,6 +809,8 @@ def test_bc7_bake_with_no_compatible_mip0_does_not_write_or_backup(
         ], {"hue": 30})
 
     assert result["code"] == "alpha_preservation_unsupported"
+    assert "any unique color blocks" in result["error"]
+    assert "protected_mode_counts': {0: 1}" in caplog.text
     assert called == [True] * 6
     assert source.read_bytes() == original
     assert not _backups(tmp_path, "bc7-unsupported")

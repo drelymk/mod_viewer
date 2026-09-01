@@ -62,6 +62,8 @@ _TEXTURE_ROLE_LABELS = {
     "emission_map": "Emission Map",
 }
 _BC7_ALPHA_WEIGHT_CANDIDATES = (2.0, 4.0, 8.0, 16.0, 32.0)
+_BC7_MODE6_WEIGHTS = (0, 4, 9, 13, 17, 21, 26, 30,
+                      34, 38, 43, 47, 51, 55, 60, 64)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -104,6 +106,7 @@ class AlphaCompatibilityStats:
     rgb_max_error: int = 0
     source_mode6_tested: int = 0
     source_mode6_compatible: int = 0
+    protected_mode_counts: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -1002,7 +1005,7 @@ def _alpha_preservation_error(*, mip0_protected=False):
         return TextureBakeAnalysisError(
             "alpha_preservation_unsupported",
             "The texture could not be recolored uniformly while preserving "
-            "alpha.",
+            "alpha; some mip-0 blocks remain unresolved.",
             "unsupported")
     return TextureBakeAnalysisError(
         "alpha_preservation_unsupported",
@@ -1051,6 +1054,116 @@ def _bc7_mode_mask(original, source_mip, pending_mask, mode):
         if _bc7_block_mode(block) == mode:
             result[index] = 1
     return result
+
+
+def _bc7_get_bits(bits, start, count):
+    """Read little-endian BC7 bit fields from a 128-bit block integer."""
+    return (bits >> start) & ((1 << count) - 1)
+
+
+def _bc7_set_bits(bits, start, count, value):
+    """Replace a little-endian BC7 bit field in a 128-bit block integer."""
+    mask = ((1 << count) - 1) << start
+    return (bits & ~mask) | ((value & ((1 << count) - 1)) << start)
+
+
+def _bc7_mode6_parameters(block):
+    """Read mode-6 endpoints, p-bits, and shared color/alpha indices."""
+    if _bc7_block_mode(block) != 6:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "DDS block is not BC7 mode 6.")
+    bits = int.from_bytes(block, "little")
+    pbits = (_bc7_get_bits(bits, 63, 1), _bc7_get_bits(bits, 64, 1))
+    endpoints = [[0, 0, 0, 0], [0, 0, 0, 0]]
+    for channel in range(4):
+        for endpoint in range(2):
+            base = _bc7_get_bits(bits, 7 + channel * 14 + endpoint * 7, 7)
+            endpoints[endpoint][channel] = (base << 1) | pbits[endpoint]
+    indices = [_bc7_get_bits(bits, 65, 3)]
+    indices.extend(
+        _bc7_get_bits(bits, 68 + (index - 1) * 4, 4)
+        for index in range(1, 16))
+    return (tuple(pbits), tuple(tuple(endpoint) for endpoint in endpoints),
+            tuple(indices))
+
+
+def _bc7_mode6_decode_block(block):
+    """Decode one mode-6 block using its exact integer interpolation rules."""
+    _pbits, endpoints, indices = _bc7_mode6_parameters(block)
+    pixels = []
+    for index in indices:
+        weight = _BC7_MODE6_WEIGHTS[index]
+        pixels.append(tuple(
+            (endpoints[0][channel] * (64 - weight)
+             + endpoints[1][channel] * weight + 32) >> 6
+            for channel in range(4)))
+    return tuple(pixels)
+
+
+def _mode6_channel_error(base0, base1, p0, p1, targets, indices):
+    endpoint0 = (base0 << 1) | p0
+    endpoint1 = (base1 << 1) | p1
+    return sum(
+        (((endpoint0 * (64 - _BC7_MODE6_WEIGHTS[index])
+           + endpoint1 * _BC7_MODE6_WEIGHTS[index] + 32) >> 6) - target) ** 2
+        for target, index in zip(targets, indices))
+
+
+def _fit_mode6_channel(targets, indices, p0, p1):
+    """Fit two 7-bit endpoint fields while retaining their source p-bits."""
+    if not targets:
+        return 0, 0
+    fractions = tuple(_BC7_MODE6_WEIGHTS[index] / 64.0 for index in indices)
+    bb = sum(fraction ** 2 for fraction in fractions)
+
+    def quantize(value, pbit):
+        return max(0, min(127, int(round((value - pbit) / 2.0))))
+
+    best = None
+    for base0 in range(128):
+        endpoint0 = (base0 << 1) | p0
+        if bb:
+            endpoint1 = sum(
+                fraction * (target - endpoint0 * (1.0 - fraction))
+                for fraction, target in zip(fractions, targets)) / bb
+        else:
+            endpoint1 = sum(targets) / len(targets)
+        center1 = quantize(endpoint1, p1)
+        candidates1 = {
+            max(0, min(127, center1 + delta))
+            for delta in range(-4, 5)
+        }
+        candidates1.update((0, 127, quantize(min(targets), p1),
+                            quantize(max(targets), p1)))
+        for base1 in candidates1:
+            key = (_mode6_channel_error(
+                base0, base1, p0, p1, targets, indices), base0, base1)
+            if best is None or key < best[0]:
+                best = (key, (base0, base1))
+    return best[1]
+
+
+def _recolor_mode6_block(block, target_pixels, valid_width, valid_height):
+    """Change only mode-6 RGB endpoints and preserve alpha-bearing bits."""
+    pbits, _endpoints, indices = _bc7_mode6_parameters(block)
+    targets_by_channel = [[], [], []]
+    index_values = []
+    for row in range(valid_height):
+        for column in range(valid_width):
+            pixel_index = row * 4 + column
+            index_values.append(indices[pixel_index])
+            for channel in range(3):
+                targets_by_channel[channel].append(
+                    target_pixels[pixel_index][channel])
+
+    bits = int.from_bytes(block, "little")
+    for channel in range(3):
+        base0, base1 = _fit_mode6_channel(
+            targets_by_channel[channel], index_values, pbits[0], pbits[1])
+        bits = _bc7_set_bits(bits, 7 + channel * 14, 7, base0)
+        bits = _bc7_set_bits(bits, 14 + channel * 14, 7, base1)
+    candidate = bits.to_bytes(16, "little")
+    return candidate, _bc7_mode6_decode_block(candidate)
 
 
 def _bc7_candidate_strategy_groups(format_name):
@@ -1401,6 +1514,126 @@ def _candidate_quality_key(quality):
             quality.rgb_max_error)
 
 
+def _atlas_block_pixels(atlas_rgba, atlas_width, atlas_index):
+    """Return one compact-atlas block as sixteen RGBA pixel tuples."""
+    atlas_x = (atlas_index % (atlas_width // 4)) * 4
+    atlas_y = (atlas_index // (atlas_width // 4)) * 4
+    return tuple(
+        tuple(atlas_rgba[((atlas_y + row) * atlas_width
+                          + atlas_x + column) * 4:
+                         ((atlas_y + row) * atlas_width
+                          + atlas_x + column + 1) * 4])
+        for row in range(4) for column in range(4))
+
+
+def _mode6_candidate_quality(target_pixels, candidate_pixels,
+                             valid_width, valid_height, alpha_exact):
+    """Measure RGB error for a decoded mode-6 fallback block."""
+    squared_error = 0
+    absolute_error = 0
+    max_error = 0
+    for row in range(valid_height):
+        for column in range(valid_width):
+            index = row * 4 + column
+            for channel in range(3):
+                delta = (candidate_pixels[index][channel]
+                         - target_pixels[index][channel])
+                squared_error += delta * delta
+                absolute_error += abs(delta)
+                max_error = max(max_error, abs(delta))
+    return BlockCandidateQuality(
+        alpha_exact=bool(alpha_exact),
+        rgb_squared_error=squared_error,
+        rgb_absolute_error=absolute_error,
+        rgb_max_error=max_error)
+
+
+def _log_alpha_quality(alpha_stats):
+    """Log alpha compatibility and unresolved source-mode diagnostics."""
+    if not alpha_stats:
+        return
+    _LOGGER.debug(
+        "texture bake alpha_quality=%s",
+        [{"tested_units": item.tested_units,
+          "compatible_units": item.compatible_units,
+          "protected_units": item.protected_units,
+          "changed_pixels": item.changed_pixels,
+          "max_delta": item.max_delta,
+          "rgb_squared_error": item.rgb_squared_error,
+          "rgb_absolute_error": item.rgb_absolute_error,
+          "rgb_max_error": item.rgb_max_error,
+          "source_mode6_tested": item.source_mode6_tested,
+          "source_mode6_compatible": item.source_mode6_compatible,
+          "protected_mode_counts": dict(item.protected_mode_counts)}
+         for item in alpha_stats])
+
+
+def _encode_mode6_fallback(
+        original, prepared, source_mip, source_image, pixel_mask,
+        pending_mask, adjustment, timings):
+    """Recolor unresolved mode-6 blocks without changing alpha-bearing bits."""
+    mode6_mask = _bc7_mode_mask(
+        original, source_mip, pending_mask, 6)
+    if not any(mode6_mask):
+        return {}, AlphaCompatibilityStats(0, 0, 0, 0, 0)
+
+    from PIL import Image
+
+    started = time.perf_counter()
+    atlas_rgba, safe_indices, atlas_width, _atlas_height = (
+        _build_safe_block_atlas(
+            source_image, source_mip, pixel_mask, mode6_mask, adjustment))
+    target_image = Image.frombytes(
+        "RGBA", (atlas_width, _atlas_height), atlas_rgba)
+    target_rgba = target_image.tobytes()
+    source_rgba = source_image.tobytes()
+    timings["color_adjust"] = timings.get("color_adjust", 0.0) + (
+        time.perf_counter() - started)
+
+    candidate_blocks = {}
+    rgb_squared_error = 0
+    rgb_absolute_error = 0
+    rgb_max_error = 0
+    for atlas_index, source_index in enumerate(safe_indices):
+        source_start = (source_mip.offset
+                        + source_index * source_mip.bytes_per_unit)
+        source_block = original[
+            source_start:source_start + source_mip.bytes_per_unit]
+        source_x, source_y, unit_width, unit_height = _unit_bounds(
+            source_mip, source_index)
+        target_pixels = _atlas_block_pixels(
+            target_rgba, atlas_width, atlas_index)
+        candidate_block, candidate_pixels = _recolor_mode6_block(
+            source_block, target_pixels, unit_width, unit_height)
+        alpha_exact = all(
+            candidate_pixels[row * 4 + column][3]
+            == source_rgba[((source_y + row) * source_mip.width
+                            + source_x + column) * 4 + 3]
+            for row in range(unit_height)
+            for column in range(unit_width))
+        if not alpha_exact:
+            raise TextureBakeAnalysisError(
+                "texture_validation_failed",
+                "The mode-6 fallback changed source alpha.")
+        quality = _mode6_candidate_quality(
+            target_pixels, candidate_pixels, unit_width, unit_height, True)
+        candidate_blocks[source_index] = (candidate_block, quality)
+        rgb_squared_error += quality.rgb_squared_error
+        rgb_absolute_error += quality.rgb_absolute_error
+        rgb_max_error = max(rgb_max_error, quality.rgb_max_error)
+    timings["mode6_fallback"] = timings.get("mode6_fallback", 0.0) + (
+        time.perf_counter() - started)
+    return candidate_blocks, AlphaCompatibilityStats(
+        tested_units=len(candidate_blocks),
+        compatible_units=len(candidate_blocks),
+        protected_units=0,
+        changed_pixels=0,
+        max_delta=0,
+        rgb_squared_error=rgb_squared_error,
+        rgb_absolute_error=rgb_absolute_error,
+        rgb_max_error=rgb_max_error)
+
+
 def _validate_patched_units(original, final, source_layout, writable_masks,
                             candidate, candidate_layout):
     """Assert that every final unit came from its allowed source or candidate."""
@@ -1616,6 +1849,23 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
                     winners[source_index] = candidate
                 pending[source_index] = 0
 
+        fallback_stats = AlphaCompatibilityStats(0, 0, 0, 0, 0)
+        if prepared.info.format.startswith("bc7") and any(pending):
+            fallback_blocks, fallback_stats = _encode_mode6_fallback(
+                original, prepared, source_mip, source_image, pixel_mask,
+                pending, adjustment, timings)
+            tested_units += fallback_stats.tested_units
+            rgb_squared_error += fallback_stats.rgb_squared_error
+            rgb_absolute_error += fallback_stats.rgb_absolute_error
+            rgb_max_error = max(rgb_max_error, fallback_stats.rgb_max_error)
+            for source_index, candidate in fallback_blocks.items():
+                previous = winners.get(source_index)
+                if (previous is None
+                        or _candidate_quality_key(candidate[1])
+                        < _candidate_quality_key(previous[1])):
+                    winners[source_index] = candidate
+                pending[source_index] = 0
+
         writable = bytearray(
             index in winners for index in range(len(safe_mask)))
         protected = bytearray(
@@ -1641,6 +1891,16 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
                             + index * source_mip.bytes_per_unit:
                             source_mip.offset
                             + (index + 1) * source_mip.bytes_per_unit]) == 6)
+        protected_mode_counts = {}
+        if prepared.info.format.startswith("bc7"):
+            for index, selected in enumerate(protected):
+                if not selected:
+                    continue
+                start = source_mip.offset + index * source_mip.bytes_per_unit
+                mode = _bc7_block_mode(
+                    original[start:start + source_mip.bytes_per_unit])
+                protected_mode_counts[mode] = (
+                    protected_mode_counts.get(mode, 0) + 1)
         stats.append(AlphaCompatibilityStats(
             tested_units=tested_units,
             compatible_units=sum(writable),
@@ -1651,7 +1911,8 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
             rgb_absolute_error=rgb_absolute_error,
             rgb_max_error=rgb_max_error,
             source_mode6_tested=mode6_safe,
-            source_mode6_compatible=mode6_writable))
+            source_mode6_compatible=mode6_writable,
+            protected_mode_counts=tuple(sorted(protected_mode_counts.items()))))
 
     candidate = (
         original[:prepared.layout.data_offset] + b"".join(candidate_payloads)
@@ -1709,10 +1970,11 @@ def bake_texture_color(
                 (candidate, writable_masks, alpha_protected_masks,
                  alpha_stats) = _encode_alpha_coupled_mips(
                     original, prepared, normalized, workdir, timings)
-                if any(alpha_protected_masks[0]):
-                    raise _alpha_preservation_error(mip0_protected=True)
+                _log_alpha_quality(alpha_stats)
                 if not any(writable_masks[0]):
                     raise _alpha_preservation_error()
+                if any(alpha_protected_masks[0]):
+                    raise _alpha_preservation_error(mip0_protected=True)
                 patch_candidate_layout = prepared.layout
             else:
                 started = time.perf_counter()
@@ -1834,20 +2096,6 @@ def bake_texture_color(
             "texture bake timing_ms=%s",
             {key: round(value * 1000.0, 2)
              for key, value in timings.items()})
-        if alpha_stats:
-            _LOGGER.debug(
-                "texture bake alpha_quality=%s",
-                [{"tested_units": item.tested_units,
-                  "compatible_units": item.compatible_units,
-                  "protected_units": item.protected_units,
-                  "changed_pixels": item.changed_pixels,
-                  "max_delta": item.max_delta,
-                  "rgb_squared_error": item.rgb_squared_error,
-                  "rgb_absolute_error": item.rgb_absolute_error,
-                  "rgb_max_error": item.rgb_max_error,
-                  "source_mode6_tested": item.source_mode6_tested,
-                  "source_mode6_compatible": item.source_mode6_compatible}
-                 for item in alpha_stats])
         return success_result
     except TextureBakeAnalysisError as error:
         if committed and success_result is not None:
