@@ -205,236 +205,287 @@ def _bc1_block(color0, color1, selectors=0):
     return struct.pack("<HHI", color0, color1, selectors)
 
 
-def test_bc1_alpha_validation_is_per_safe_block_and_per_mip(tmp_path):
-    source = tmp_path / "bc1-mipped.dds"
+def test_bc1_alpha_compatibility_is_per_block_and_edge_aware(tmp_path):
+    source = tmp_path / "bc1-mixed.dds"
+    original = _dx10_dds(
+        _bc1_block(0, 0) + _bc1_block(0, 0, 0xffffffff),
+        71, width=8, height=4)
+    candidate = _dx10_dds(
+        _bc1_block(0x7bef, 0) + _bc1_block(0xffff, 0),
+        71, width=8, height=4)
+    source.write_bytes(original)
+    candidate_path = tmp_path / "bc1-mixed-candidate.dds"
+    candidate_path.write_bytes(candidate)
+    layout = inspect_dds_layout(source)
+    candidate_layout = inspect_dds_layout(candidate_path)
+
+    compatible, stats = texture_bake._alpha_compatibility_for_units(
+        original, layout, layout.mips[0], candidate, candidate_layout,
+        candidate_layout.mips[0], bytearray([1, 1]))
+
+    assert list(compatible) == [1, 0]
+    assert stats.tested_units == 2
+    assert stats.compatible_units == 1
+    assert stats.protected_units == 1
+    assert stats.changed_pixels == 16
+    assert stats.max_delta == 255
+
+    one_pixel_candidate = _dx10_dds(
+        _bc1_block(0, 0, 3 << (2 * 5)), 71, width=4, height=4)
+    one_pixel_source = _dx10_dds(
+        _bc1_block(0, 0), 71, width=4, height=4)
+    one_pixel_source_path = tmp_path / "bc1-one-pixel-source.dds"
+    one_pixel_path = tmp_path / "bc1-one-pixel-candidate.dds"
+    one_pixel_source_path.write_bytes(one_pixel_source)
+    one_pixel_path.write_bytes(one_pixel_candidate)
+    one_pixel_source_layout = inspect_dds_layout(one_pixel_source_path)
+    one_pixel_layout = inspect_dds_layout(one_pixel_path)
+    one_pixel_compatible, one_pixel_stats = (
+        texture_bake._alpha_compatibility_for_units(
+            one_pixel_source, one_pixel_source_layout,
+            one_pixel_source_layout.mips[0], one_pixel_candidate,
+            one_pixel_layout,
+            one_pixel_layout.mips[0], bytearray([1])))
+    assert list(one_pixel_compatible) == [0]
+    assert one_pixel_stats.changed_pixels == 1
+
+    edge_source = _dx10_dds(_bc1_block(0, 0), 71, width=2, height=2)
+    edge_candidate = _dx10_dds(
+        _bc1_block(0, 0, 3 << (2 * 15)), 71, width=2, height=2)
+    edge_source_path = tmp_path / "bc1-edge.dds"
+    edge_candidate_path = tmp_path / "bc1-edge-candidate.dds"
+    edge_source_path.write_bytes(edge_source)
+    edge_candidate_path.write_bytes(edge_candidate)
+    edge_layout = inspect_dds_layout(edge_source_path)
+    edge_candidate_layout = inspect_dds_layout(edge_candidate_path)
+    edge_compatible, _stats = texture_bake._alpha_compatibility_for_units(
+        edge_source, edge_layout, edge_layout.mips[0], edge_candidate,
+        edge_candidate_layout, edge_candidate_layout.mips[0], bytearray([1]))
+    assert list(edge_compatible) == [1]
+
+
+def test_validate_mip_candidate_requires_one_matching_authored_mip(tmp_path):
+    source = tmp_path / "source.dds"
     source.write_bytes(_dx10_dds(
-        _bc1_block(0xffff, 0) + _bc1_block(0, 0, 0xffffffff)
-        + _bc1_block(0, 0, 0xffffffff),
+        _bc1_block(0, 0) * 2 + _bc1_block(0, 0),
         71, width=8, height=4, mip_count=2))
     layout = inspect_dds_layout(source)
+    candidate = tmp_path / "candidate.dds"
+    candidate.write_bytes(_dx10_dds(
+        _bc1_block(0x7bef, 0) * 2, 71, width=8, height=4))
 
-    # The unrelated transparent block does not prevent changing the opaque
-    # block that coverage marked safe.
-    texture_bake._validate_alpha_preservation(
-        source.read_bytes(), layout, (bytearray([1, 0]), bytearray([0])))
+    assert texture_bake._validate_mip_candidate(
+        layout, layout.mips[0], candidate, candidate.read_bytes()).info.mip_count == 1
 
+    invalid = tmp_path / "invalid-candidate.dds"
+    invalid.write_bytes(_dx10_dds(
+        _bc1_block(0x7bef, 0) * 3,
+        71, width=8, height=4, mip_count=2))
     with pytest.raises(texture_bake.TextureBakeAnalysisError) as error:
-        texture_bake._validate_alpha_preservation(
-            source.read_bytes(), layout, (bytearray([1, 0]), bytearray([1])))
-    assert error.value.code == "alpha_preservation_unsupported"
+        texture_bake._validate_mip_candidate(
+            layout, layout.mips[0], invalid, invalid.read_bytes())
+    assert error.value.code == "texconv_output_invalid"
 
 
-def test_bc1_alpha_validation_rejects_transparent_safe_block(tmp_path):
-    source = tmp_path / "bc1-transparent-safe.dds"
-    source.write_bytes(_dx10_dds(
-        _bc1_block(0, 0, 0xffffffff), 71, width=4, height=4))
-    layout = inspect_dds_layout(source)
-
-    with pytest.raises(texture_bake.TextureBakeAnalysisError) as error:
-        texture_bake._validate_alpha_preservation(
-            source.read_bytes(), layout, (bytearray([1]),))
-    assert error.value.code == "alpha_preservation_unsupported"
-
-
-@pytest.mark.parametrize("candidate_transparent", [False, True])
-def test_bake_validates_candidate_bc1_alpha_before_backup(
-        tmp_path, monkeypatch, candidate_transparent):
-    source = tmp_path / "bc1-candidate.dds"
-    original = _dx10_dds(
-        _bc1_block(0xffff, 0) + _bc1_block(0xffff, 0),
-        71, width=4, height=4, mip_count=2)
-    candidate_lower = (_bc1_block(0, 0, 0xffffffff)
-                       if candidate_transparent
-                       else _bc1_block(0x7bef, 0))
-    candidate = _dx10_dds(
-        _bc1_block(0xffff, 0) + candidate_lower,
-        71, width=4, height=4, mip_count=2)
-    source.write_bytes(original)
-    layout = inspect_dds_layout(source)
-    prepared = SimpleNamespace(
-        selected_path=str(source), info=layout.info, layout=layout,
-        selected_pixels=SimpleNamespace(mask=bytearray([1] * 16)),
-        safe_masks=(bytearray([1]), bytearray([1])),
-        shared_masks=(bytearray([0]), bytearray([0])),
-        entries=({"semantic_key": "Body-1",
-                  "tex_key": "diffuse::bc1-candidate.dds"},),
-        unresolved=(),
-    )
-    monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
-                        lambda *args, **kwargs: prepared)
-    monkeypatch.setattr(
-        texture_bake, "load_texture_image_full",
-        lambda *_args, **_kwargs: Image.new("RGBA", (4, 4), (10, 20, 30, 255)))
-
-    def encode(_png, output, _format, _mips, **_kwargs):
-        candidate_path = Path(output) / "bake.dds"
-        candidate_path.write_bytes(candidate)
-        return str(candidate_path)
-
-    monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
-    result = texture_bake.bake_texture_color(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
-        "diffuse::bc1-candidate.dds", [
-            {"semantic_key": "Body-1", "tex_key": "diffuse::bc1-candidate.dds"},
-        ], {"hue": 30})
-
-    if candidate_transparent:
-        assert result["code"] == "alpha_preservation_unsupported"
-        assert source.read_bytes() == original
-        assert not _backups(tmp_path, "bc1-candidate")
-    else:
-        assert result["status"] == "ok"
-        assert _backups(tmp_path, "bc1-candidate")
-
-
-def test_bc7_alpha_validation_checks_only_safe_blocks_at_each_mip(
+def test_bc7_alpha_compatibility_reports_exact_pixel_deltas(
         tmp_path, monkeypatch):
-    source = tmp_path / "bc7-mipped.dds"
-    source.write_bytes(_dx10_dds(bytes(48), 98, width=8, height=4,
-                                 mip_count=2))
-    layout = inspect_dds_layout(source)
-
-    def decode(_source, _layout, mip):
-        image = Image.new("RGBA", (mip.width, mip.height), (0, 0, 0, 255))
-        if mip.level == 0:
-            for y in range(mip.height):
-                for x in range(4, mip.width):
-                    image.putpixel((x, y), (0, 0, 0, 0))
-        elif mip.level == 1:
-            image.putpixel((0, 0), (0, 0, 0, 0))
-        return image
-
-    monkeypatch.setattr(texture_bake, "_decode_dds_mip_rgba", decode)
-    # A transparent block outside the safe mask is allowed.
-    texture_bake._validate_alpha_preservation(
-        source.read_bytes(), layout, (bytearray([1, 0]), bytearray([0])))
-
-    with pytest.raises(texture_bake.TextureBakeAnalysisError) as error:
-        texture_bake._validate_alpha_preservation(
-            source.read_bytes(), layout, (bytearray([1, 0]), bytearray([1])))
-    assert error.value.code == "alpha_preservation_unsupported"
-
-
-def test_bake_rejects_transparent_bc7_candidate_before_backup(
-        tmp_path, monkeypatch):
-    source = tmp_path / "bc7-candidate.dds"
-    original = _dx10_dds(bytes([1]) * 32, 98, width=4, height=4,
-                          mip_count=2)
-    candidate = _dx10_dds(
-        bytes([1]) * 16 + bytes([0xee]) * 16, 98, width=4, height=4,
-        mip_count=2)
+    source = tmp_path / "bc7-source.dds"
+    original = _dx10_dds(bytes([1]) * 16, 98)
+    candidate = _dx10_dds(bytes([2]) * 16, 98)
     source.write_bytes(original)
+    candidate_path = tmp_path / "bc7-candidate.dds"
+    candidate_path.write_bytes(candidate)
     layout = inspect_dds_layout(source)
-    prepared = SimpleNamespace(
-        selected_path=str(source), info=layout.info, layout=layout,
-        selected_pixels=SimpleNamespace(mask=bytearray([1] * 16)),
-        safe_masks=(bytearray([1]), bytearray([1])),
-        shared_masks=(bytearray([0]), bytearray([0])),
-        entries=({"semantic_key": "Body-1",
-                  "tex_key": "diffuse::bc7-candidate.dds"},),
-        unresolved=(),
-    )
-    monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
-                        lambda *args, **kwargs: prepared)
-    monkeypatch.setattr(
-        texture_bake, "load_texture_image_full",
-        lambda *_args, **_kwargs: Image.new("RGBA", (4, 4), (10, 20, 30, 255)))
+    candidate_layout = inspect_dds_layout(candidate_path)
 
     def decode(data, _layout, mip):
-        alpha = 0 if data[mip.offset] == 0xee else 255
+        alpha = 128 if data[mip.offset] == 1 else 127
         return Image.new("RGBA", (mip.width, mip.height), (0, 0, 0, alpha))
 
-    monkeypatch.setattr(texture_bake, "_decode_dds_mip_rgba", decode)
+    monkeypatch.setattr(texture_bake, "_decode_alpha_coupled_mip_rgba", decode)
+    compatible, stats = texture_bake._alpha_compatibility_for_units(
+        original, layout, layout.mips[0], candidate, candidate_layout,
+        candidate_layout.mips[0], bytearray([1]))
 
-    def encode(_png, output, _format, _mips, **_kwargs):
-        candidate_path = Path(output) / "bake.dds"
+    assert list(compatible) == [0]
+    assert stats.tested_units == 1
+    assert stats.compatible_units == 0
+    assert stats.protected_units == 1
+    assert stats.changed_pixels == 16
+    assert stats.max_delta == 1
+    with pytest.raises(texture_bake.TextureBakeAnalysisError) as error:
+        texture_bake._validate_patched_alpha(
+            original, candidate, layout, (bytearray([1]),))
+    assert error.value.code == "texture_validation_failed"
+
+
+def _coupled_prepared(source, layout, safe_masks, pixel_masks, tex_key):
+    selected = {"semantic_key": "Body-1", "tex_key": tex_key}
+    return SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        selected_pixels=SimpleNamespace(mask=pixel_masks[0].mask),
+        selected_pixel_coverages=tuple(pixel_masks),
+        safe_masks=tuple(safe_masks),
+        shared_masks=tuple(bytearray(len(mask)) for mask in safe_masks),
+        entries=(selected,), unresolved=(),
+    )
+
+
+def test_bc1_bake_patches_compatible_blocks_and_protects_the_rest(
+        tmp_path, monkeypatch):
+    source = tmp_path / "bc1-partial.dds"
+    original = _dx10_dds(
+        _bc1_block(0, 0) + _bc1_block(0, 0, 0xffffffff),
+        71, width=8, height=4)
+    candidate = _dx10_dds(
+        _bc1_block(0x7bef, 0) + _bc1_block(0xffff, 0),
+        71, width=8, height=4)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    pixel_masks = (SimpleNamespace(mask=bytearray([1] * 32)),)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1, 1]),), pixel_masks,
+        "diffuse::bc1-partial.dds")
+    monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
+                        lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(
+        texture_bake, "_decode_alpha_coupled_mip_rgba",
+        lambda *_args: Image.new("RGBA", (8, 4), (10, 20, 30, 128)))
+
+    def encode(_png, output, _format, mip_count, **_kwargs):
+        assert mip_count == 1
+        candidate_path = Path(output) / "bake-mip-0.dds"
         candidate_path.write_bytes(candidate)
         return str(candidate_path)
 
     monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
     result = texture_bake.bake_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
-        "diffuse::bc7-candidate.dds", [
-            {"semantic_key": "Body-1", "tex_key": "diffuse::bc7-candidate.dds"},
+        "diffuse::bc1-partial.dds", [
+            {"semantic_key": "Body-1", "tex_key": "diffuse::bc1-partial.dds"},
         ], {"hue": 30})
 
-    assert result["code"] == "alpha_preservation_unsupported"
-    assert source.read_bytes() == original
-    assert not _backups(tmp_path, "bc7-candidate")
+    updated = source.read_bytes()
+    assert result["status"] == "ok"
+    assert result["patched"]["mip0_units"] == 1
+    assert result["patched"]["total_units"] == 2
+    assert result["patched"]["alpha_protected_units"] == 1
+    assert result["patched"]["alpha_protected_mip0_units"] == 1
+    assert result["patched"]["alpha_protected_levels"] == [0]
+    assert updated[148:156] == candidate[148:156]
+    assert updated[156:164] == original[156:164]
+    assert _backups(tmp_path, "bc1-partial")
 
 
-def test_bc7_transparency_is_rejected_before_backup_or_encoder(
+def test_bc7_bake_processes_authored_mips_and_reports_protected_lower_mip(
         tmp_path, monkeypatch):
-    source = tmp_path / "transparent-bc7.dds"
-    source.write_bytes(_dx10_dds(bytes(16), 98))
-    layout = inspect_dds_layout(source)
-    prepared = SimpleNamespace(
-        selected_path=str(source), info=layout.info, layout=layout,
-        selected_pixels=SimpleNamespace(mask=bytearray(16)),
-        safe_masks=(bytearray([1]),), shared_masks=(bytearray([0]),),
-        entries=({"semantic_key": "Body-1", "tex_key": "diffuse::transparent-bc7.dds"},),
-        unresolved=(),
-    )
-    prepared.selected_pixels.mask[0] = 1
-    monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
-                        lambda *args, **kwargs: prepared)
-    monkeypatch.setattr(
-        texture_bake, "load_texture_image_full",
-        lambda *_args, **_kwargs: Image.new("RGBA", (4, 4), (10, 20, 30, 128)))
-    monkeypatch.setattr(
-        texture_bake, "_decode_dds_mip_rgba",
-        lambda *_args: Image.new("RGBA", (4, 4), (10, 20, 30, 128)))
-    called = []
-    monkeypatch.setattr(
-        texture_bake, "encode_png_to_dds",
-        lambda *args, **kwargs: called.append((args, kwargs)))
-
-    result = texture_bake.bake_texture_color(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
-        "diffuse::transparent-bc7.dds", [
-            {"semantic_key": "Body-1", "tex_key": "diffuse::transparent-bc7.dds"},
-        ], {"hue": 30})
-
-    assert result["code"] == "alpha_preservation_unsupported"
-    assert called == []
-    assert not _backups(tmp_path, "transparent-bc7")
-
-
-def test_opaque_bc7_can_be_baked(tmp_path, monkeypatch):
-    source = tmp_path / "opaque-bc7.dds"
-    original = _dx10_dds(bytes(16), 98)
+    source = tmp_path / "bc7-mipped.dds"
+    original = _dx10_dds(
+        bytes([1]) * 16 + bytes([2]) * 16 + bytes([3]) * 16,
+        98, width=4, height=4, mip_count=3)
     source.write_bytes(original)
     layout = inspect_dds_layout(source)
-    prepared = SimpleNamespace(
-        selected_path=str(source), info=layout.info, layout=layout,
-        selected_pixels=SimpleNamespace(mask=bytearray([1] + [0] * 15)),
-        safe_masks=(bytearray([1]),), shared_masks=(bytearray([0]),),
-        entries=({"semantic_key": "Body-1", "tex_key": "diffuse::opaque-bc7.dds"},),
-        unresolved=(),
-    )
+    pixel_masks = tuple(
+        SimpleNamespace(mask=bytearray([1] * (mip.width * mip.height)))
+        for mip in layout.mips)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]), bytearray([1]), bytearray([1])),
+        pixel_masks, "diffuse::bc7-mipped.dds")
+    monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
+                        lambda *args, **kwargs: prepared)
+    encoded_sizes = []
+    adjust_inputs = []
+
+    def decode(data, _layout, mip):
+        marker = data[mip.offset]
+        alpha = 127 if data[mip.offset] == 12 else 128
+        return Image.new("RGBA", (mip.width, mip.height),
+                         (marker, 20, 30, alpha))
+
+    monkeypatch.setattr(texture_bake, "_decode_alpha_coupled_mip_rgba", decode)
+    def passthrough_adjustment(rgba, width, height, _adjustment, _mask):
+        adjust_inputs.append(Image.frombytes(
+            "RGBA", (width, height), rgba).getpixel((0, 0)))
+        return rgba
+
+    monkeypatch.setattr(texture_bake, "adjust_rgba_bytes",
+                        passthrough_adjustment)
+
+    def encode(png, output, _format, mip_count, **_kwargs):
+        assert mip_count == 1
+        level = int(Path(png).stem.rsplit("-", 1)[-1])
+        with Image.open(png) as image:
+            encoded_sizes.append((level, image.size))
+        candidate_path = Path(output) / f"candidate-{level}.dds"
+        candidate_path.write_bytes(_dx10_dds(
+            bytes([11 + level]) * 16, 98,
+            width=layout.mips[level].width, height=layout.mips[level].height))
+        return str(candidate_path)
+
+    monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
+    result = texture_bake.bake_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
+        "diffuse::bc7-mipped.dds", [
+            {"semantic_key": "Body-1", "tex_key": "diffuse::bc7-mipped.dds"},
+        ], {"hue": 30})
+
+    updated = source.read_bytes()
+    assert result["status"] == "ok"
+    assert result["patched"]["mip0_units"] == 1
+    assert result["patched"]["alpha_protected_units"] == 1
+    assert result["patched"]["alpha_protected_mip0_units"] == 0
+    assert result["patched"]["alpha_protected_levels"] == [1]
+    assert adjust_inputs == [(1, 20, 30, 128), (2, 20, 30, 128),
+                             (3, 20, 30, 128)]
+    assert encoded_sizes == [(0, (4, 4)), (1, (2, 2)), (2, (1, 1))]
+    assert updated[148:164] == bytes([11]) * 16
+    assert updated[164:180] == bytes([2]) * 16
+    assert updated[180:196] == bytes([13]) * 16
+    final_layout = inspect_dds_layout(source)
+    assert final_layout.info.format == "bc7_unorm"
+    assert final_layout.info.width == 4
+    assert final_layout.info.height == 4
+    assert final_layout.info.mip_count == 3
+    assert _backups(tmp_path, "bc7-mipped")
+
+
+def test_bc7_bake_with_no_compatible_mip0_does_not_write_or_backup(
+        tmp_path, monkeypatch):
+    source = tmp_path / "bc7-unsupported.dds"
+    original = _dx10_dds(bytes([1]) * 16, 98)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    pixel_masks = (SimpleNamespace(mask=bytearray([1] * 16)),)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]),), pixel_masks,
+        "diffuse::bc7-unsupported.dds")
     monkeypatch.setattr(texture_bake, "_prepare_texture_bake",
                         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
-        texture_bake, "load_texture_image_full",
-        lambda *_args, **_kwargs: Image.new("RGBA", (4, 4), (10, 20, 30, 255)))
-    monkeypatch.setattr(
-        texture_bake, "_decode_dds_mip_rgba",
-        lambda *_args: Image.new("RGBA", (4, 4), (10, 20, 30, 255)))
+        texture_bake, "_decode_alpha_coupled_mip_rgba",
+        lambda data, _layout, mip: Image.new(
+            "RGBA", (mip.width, mip.height), (10, 20, 30,
+                                                128 if data[mip.offset] == 1
+                                                else 127)))
+    called = []
 
     def encode(_png, output, _format, _mips, **_kwargs):
-        candidate = Path(output) / "bake.dds"
-        candidate.write_bytes(_dx10_dds(bytes(range(100, 116)), 98))
-        return str(candidate)
+        called.append(True)
+        candidate_path = Path(output) / "candidate.dds"
+        candidate_path.write_bytes(_dx10_dds(bytes([2]) * 16, 98))
+        return str(candidate_path)
 
     monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
-
     result = texture_bake.bake_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"}, "Body-1",
-        "diffuse::opaque-bc7.dds", [
-            {"semantic_key": "Body-1", "tex_key": "diffuse::opaque-bc7.dds"},
+        "diffuse::bc7-unsupported.dds", [
+            {"semantic_key": "Body-1", "tex_key": "diffuse::bc7-unsupported.dds"},
         ], {"hue": 30})
 
-    assert result["status"] == "ok"
+    assert result["code"] == "alpha_preservation_unsupported"
+    assert called == [True]
+    assert source.read_bytes() == original
+    assert not _backups(tmp_path, "bc7-unsupported")
 
 
 def test_bake_reports_committed_state_when_replace_raises_after_replacing(

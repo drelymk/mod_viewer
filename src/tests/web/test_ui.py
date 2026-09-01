@@ -1252,6 +1252,8 @@ def test_texture_bake_modal_blocks_dismissal_while_baking(
         page.locator(".draw-item").first.click()
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-confirm").wait_for()
+        assert "Alpha channel will be preserved exactly." in (
+            page.locator("#texture-bake-body").inner_text())
         page.evaluate("""() => {
           window.pywebview.api.bake_mesh_texture_color = async () =>
             new Promise(resolve => { window.__releaseTextureBake = resolve; });
@@ -1273,10 +1275,15 @@ def test_texture_bake_modal_blocks_dismissal_while_baking(
         page.evaluate("""() => window.__releaseTextureBake({
           status: 'ok', tex_key: %s, affected_tex_keys: [%s],
           texture: {file: 'BakeModal-bake.dds'},
-          patched: {mip0_units: 1, shared_units_preserved: 0},
+          patched: {mip0_units: 1, shared_units_preserved: 0,
+            alpha_protected_units: 2, alpha_protected_mip0_units: 1,
+            alpha_protected_levels: [0]},
           backup: {file: 'BakeModal-bake.dds.modviewer.bak'},
         })""" % (json.dumps(tex_key), json.dumps(tex_key)))
         page.locator("#texture-bake-body", has_text="TEXTURE BAKED").wait_for()
+        details = page.locator("#texture-bake-body").inner_text()
+        assert "Alpha-protected units" in details
+        assert "Some visible areas may keep their original color." in details
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
     finally:

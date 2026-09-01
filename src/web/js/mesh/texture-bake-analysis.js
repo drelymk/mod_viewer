@@ -5,6 +5,9 @@ import { activeMeshes } from './mesh-state.js';
 import { isAssetTextureKey, splitTextureKey } from '../textures/texture-key.js';
 
 let requestToken = 0;
+const ALPHA_COUPLED_FORMATS = new Set([
+  'bc1_unorm', 'bc1_srgb', 'bc7_unorm', 'bc7_srgb',
+]);
 
 const REASON_TEXT = Object.freeze({
   'asset-texture': 'Asset textures are read-only.',
@@ -174,6 +177,12 @@ export function formatBakeAnalysis(result, displayName = key => key) {
       warning += ` Some mip levels contain shared blocks, so appearance may `
         + `differ at farther viewing distances (levels ${levels.join(', ')}).`;
     }
+  }
+  if (ALPHA_COUPLED_FORMATS.has(result.texture?.format)) {
+    const alphaWarning = 'Alpha channel will be preserved exactly. '
+      + 'Compressed blocks that cannot reproduce the original alpha will be '
+      + 'left unchanged.';
+    warning = warning ? `${warning} ${alphaWarning}` : alphaWarning;
   }
   return {
     kind: result.safety === 'unknown' ? 'unknown' : 'ok',

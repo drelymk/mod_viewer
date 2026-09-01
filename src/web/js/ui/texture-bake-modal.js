@@ -109,9 +109,16 @@ function renderBakeSuccess(result) {
   body.appendChild(summary);
   const rows = document.createElement('dl');
   rows.className = 'texture-bake-details';
+  const alphaProtectedUnits = Number(
+    result.patched?.alpha_protected_units || 0);
   [
     ['Top-level units changed', result.patched?.mip0_units || 0],
     ['Shared units preserved', result.patched?.shared_units_preserved || 0],
+    ...(alphaProtectedUnits > 0
+      ? [['Alpha-protected units', alphaProtectedUnits],
+        ['Alpha-protected mip-0 units',
+          result.patched?.alpha_protected_mip0_units || 0]]
+      : []),
     ['Backup', result.backup?.file || 'Created'],
   ].forEach(([label, value]) => {
     const term = document.createElement('dt');
@@ -121,6 +128,23 @@ function renderBakeSuccess(result) {
     rows.append(term, description);
   });
   body.appendChild(rows);
+  if (alphaProtectedUnits > 0) {
+    const warning = document.createElement('p');
+    warning.className = 'texture-bake-warning texture-bake-warning-ok';
+    warning.textContent = 'Some compressed blocks were kept unchanged because '
+      + 'their alpha channel could not be reproduced exactly.';
+    const mip0Protected = Number(
+      result.patched?.alpha_protected_mip0_units || 0);
+    const levels = result.patched?.alpha_protected_levels || [];
+    if (mip0Protected > 0) {
+      warning.textContent += ' Some visible areas may keep their original '
+        + 'color.';
+    } else if (levels.length) {
+      warning.textContent += ' Some lower mip levels were preserved, so color '
+        + 'may differ slightly at farther viewing distances.';
+    }
+    body.appendChild(warning);
+  }
   setBakeAction();
 }
 
