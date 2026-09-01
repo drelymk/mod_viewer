@@ -20,6 +20,7 @@ def test_build_texconv_command_preserves_format_and_mip_count():
     assert command[command.index("-m") + 1] == "5"
     assert command[command.index("-if") + 1] == "LINEAR"
     assert "-srgb" in command
+    assert "-nogpu" not in command
     assert "-resize" not in command
     assert "-flip" not in command
 
@@ -45,6 +46,33 @@ def test_build_texconv_command_leaves_colorspace_unspecified_for_data():
     assert "-srgb" not in command
 
 
+@pytest.mark.parametrize(("backend", "present", "absent"), [
+    ("cpu", "-nogpu", "-gpu"),
+    ("auto", None, "-nogpu"),
+    ("gpu", "-gpu", "-nogpu"),
+])
+def test_build_texconv_command_selects_compression_backend(
+        backend, present, absent):
+    command = texconv.build_texconv_command(
+        "texconv.exe", "bake.png", "out", "bc7_unorm", 1,
+        compression_backend=backend)
+
+    if present == "-gpu":
+        assert command[command.index("-gpu") + 1] == "0"
+    elif present is not None:
+        assert present in command
+    assert absent not in command
+
+
+def test_build_texconv_command_exposes_bc_quality_options():
+    command = texconv.build_texconv_command(
+        "texconv.exe", "bake.png", "out", "bc7_unorm", 1,
+        compression_backend="auto", bc_flags="x", alpha_weight=2.0)
+
+    assert command[command.index("-bc") + 1] == "x"
+    assert command[command.index("-aw") + 1] == "2.0"
+
+
 def test_encode_png_to_dds_uses_no_shell_and_checks_candidate(tmp_path):
     source = tmp_path / "bake.png"
     source.write_bytes(b"png fixture")
@@ -68,6 +96,14 @@ def test_encode_png_to_dds_uses_no_shell_and_checks_candidate(tmp_path):
     assert kwargs["check"] is False
     assert kwargs["timeout"] == texconv.DEFAULT_TIMEOUT
     assert "-srgb" in command
+
+
+@pytest.mark.parametrize("argument", ["invalid", None])
+def test_build_texconv_command_rejects_invalid_backend(argument):
+    with pytest.raises(ValueError, match="backend"):
+        texconv.build_texconv_command(
+            "texconv.exe", "bake.png", "out", "bc7_unorm", 1,
+            compression_backend=argument)
 
 
 def test_encode_png_to_dds_reports_missing_encoder(monkeypatch, tmp_path):

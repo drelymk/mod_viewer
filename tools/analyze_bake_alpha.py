@@ -54,6 +54,9 @@ def main(argv=None):
     parser.add_argument(
         "--adjustment", nargs="*", default=[], metavar="FIELD=VALUE",
         help="representative RGB adjustment (default: hue=30)")
+    parser.add_argument(
+        "--compression-backend", choices=("auto", "cpu", "gpu"),
+        default="auto", help="texconv backend (default: auto)")
     args = parser.parse_args(argv)
 
     try:
@@ -78,35 +81,63 @@ def main(argv=None):
                 source_image = texture_bake._decode_alpha_coupled_mip_rgba(
                     original, layout, mip)
                 alpha = source_image.getchannel("A")
-                adjusted = texture_bake.adjust_rgba_bytes(
-                    source_image.tobytes(), mip.width, mip.height, adjustment,
-                    bytearray([1]) * (mip.width * mip.height))
+                safe_mask = bytearray([1]) * (mip.units_x * mip.units_y)
+                atlas_rgba, safe_indices, atlas_width, atlas_height = (
+                    texture_bake._build_safe_block_atlas(
+                        source_image, mip,
+                        bytearray([1]) * (mip.width * mip.height),
+                        safe_mask, adjustment))
                 png_path = os.path.join(workdir, f"analyze-mip-{mip.level}.png")
-                Image.frombytes(
-                    "RGBA", (mip.width, mip.height), adjusted).save(
-                        png_path, format="PNG")
+                target_image = Image.frombytes(
+                    "RGBA", (atlas_width, atlas_height), atlas_rgba)
+                target_image.save(png_path, format="PNG")
                 candidate_path = texture_bake.encode_png_to_dds(
-                    png_path, workdir, layout.info.format, 1, srgb=True)
+                    png_path, workdir, layout.info.format, 1, srgb=True,
+                    compression_backend=args.compression_backend)
                 candidate = _read(Path(candidate_path))
-                candidate_layout = texture_bake._validate_mip_candidate(
-                    layout, mip, candidate_path, candidate)
+                candidate_layout = texture_bake._validate_atlas_candidate(
+                    layout, atlas_width, atlas_height, candidate_path, candidate)
+                candidate_mip = candidate_layout.mips[0]
+                candidate_image = texture_bake._decode_alpha_coupled_mip_rgba(
+                    candidate, candidate_layout, candidate_mip)
+                candidate_indices = [0] * len(safe_mask)
+                for candidate_index, source_index in enumerate(safe_indices):
+                    candidate_indices[source_index] = candidate_index
                 compatible, stats = (
-                    texture_bake._alpha_compatibility_for_units(
+                    texture_bake._alpha_compatibility_for_mapping(
                         original, layout, mip, candidate, candidate_layout,
-                        candidate_layout.mips[0],
-                        bytearray([1]) * (mip.units_x * mip.units_y)))
+                        candidate_mip, safe_mask, candidate_indices,
+                        source_image=source_image,
+                        candidate_image=candidate_image))
+                target_rgba = target_image.tobytes()
+                candidate_rgba = candidate_image.tobytes()
+                rgb_squared_error = 0
+                rgb_absolute_error = 0
+                rgb_max_error = 0
+                for source_index in safe_indices:
+                    quality = texture_bake._block_candidate_quality(
+                        target_rgba, candidate_rgba, mip, candidate_mip,
+                        source_index,
+                        candidate_indices[source_index],
+                        compatible[source_index])
+                    rgb_squared_error += quality.rgb_squared_error
+                    rgb_absolute_error += quality.rgb_absolute_error
+                    rgb_max_error = max(rgb_max_error, quality.rgb_max_error)
                 compatible_count = sum(compatible)
                 total_units = mip.units_x * mip.units_y
                 alpha_min, alpha_max = alpha.getextrema()
                 print(
                     f"mip {mip.level}: {layout.info.format} "
                     f"{mip.width}x{mip.height}; "
+                    f"atlas {atlas_width}x{atlas_height}; "
                     f"safe/all blocks {stats.tested_units}/{total_units}; "
                     f"source alpha {alpha_min}..{alpha_max}; "
                     f"candidate-compatible {compatible_count}; "
                     f"incompatible {total_units - compatible_count}; "
                     f"changed alpha pixels {stats.changed_pixels}; "
-                    f"max alpha delta {stats.max_delta}")
+                    f"max alpha delta {stats.max_delta}; "
+                    f"RGB squared/absolute/max "
+                    f"{rgb_squared_error}/{rgb_absolute_error}/{rgb_max_error}")
     except (OSError, ValueError, texture_bake.TextureBakeAnalysisError) as error:
         print(f"analysis failed: {error}", file=sys.stderr)
         return 2

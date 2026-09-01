@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ FORMAT_TO_TEXCONV = {
 }
 
 DEFAULT_TIMEOUT = 120
+_COMPRESSION_BACKENDS = frozenset({"auto", "cpu", "gpu"})
 
 
 class TexconvError(RuntimeError):
@@ -48,7 +50,9 @@ def texconv_path():
 
 
 def build_texconv_command(executable, input_png, output_dir, format_name,
-                          mip_count, *, srgb=False):
+                          mip_count, *, srgb=False,
+                          compression_backend="auto", bc_flags=None,
+                          alpha_weight=None):
     """Build the no-shell command for an exact-format DDS conversion."""
     dxgi_format = FORMAT_TO_TEXCONV.get(format_name)
     if dxgi_format is None:
@@ -59,12 +63,35 @@ def build_texconv_command(executable, input_png, output_dir, format_name,
         raise ValueError("DDS mip count is invalid") from None
     if mip_count <= 0:
         raise ValueError("DDS mip count is invalid")
+    if (not isinstance(compression_backend, str)
+            or compression_backend not in _COMPRESSION_BACKENDS):
+        raise ValueError("invalid compression backend")
+    if bc_flags is not None and (
+            not isinstance(bc_flags, str) or not bc_flags):
+        raise ValueError("BC compression flags are invalid")
+    if alpha_weight is not None:
+        try:
+            alpha_weight = float(alpha_weight)
+        except (TypeError, ValueError):
+            raise ValueError("BC7 alpha weight is invalid") from None
+        if not math.isfinite(alpha_weight) or alpha_weight < 0:
+            raise ValueError("BC7 alpha weight is invalid")
     command = [
         os.fspath(executable), "-nologo", "-y", "-ft", "DDS",
         "-f", dxgi_format, "-m", str(mip_count), "-if", "LINEAR",
-        "-sepalpha", "-nogpu", "-o", os.fspath(output_dir),
+        "-sepalpha", "-o", os.fspath(output_dir),
         os.fspath(input_png),
     ]
+    if compression_backend == "cpu":
+        command.insert(command.index("-o"), "-nogpu")
+    elif compression_backend == "gpu":
+        command[command.index("-o"):command.index("-o")] = ["-gpu", "0"]
+    if bc_flags is not None:
+        command[command.index("-o"):command.index("-o")] = [
+            "-bc", bc_flags]
+    if alpha_weight is not None:
+        command[command.index("-o"):command.index("-o")] = [
+            "-aw", str(alpha_weight)]
     if srgb:
         # LINEAR selects the resize filter; it does not select the colorspace
         # used while filtering. Diffuse bake PNGs contain editor-sRGB bytes,
@@ -85,7 +112,9 @@ def _hidden_startupinfo():
 
 def encode_png_to_dds(input_png, output_dir, format_name, mip_count,
                       *, executable=None, runner=None,
-                      timeout=DEFAULT_TIMEOUT, srgb=False):
+                      timeout=DEFAULT_TIMEOUT, srgb=False,
+                      compression_backend="auto", bc_flags=None,
+                      alpha_weight=None):
     """Encode a PNG and return its candidate DDS path.
 
     The runner is injectable so command construction and failure handling can
@@ -95,7 +124,9 @@ def encode_png_to_dds(input_png, output_dir, format_name, mip_count,
     if not executable:
         raise TexconvUnavailableError("texconv.exe is unavailable")
     command = build_texconv_command(
-        executable, input_png, output_dir, format_name, mip_count, srgb=srgb)
+        executable, input_png, output_dir, format_name, mip_count, srgb=srgb,
+        compression_backend=compression_backend, bc_flags=bc_flags,
+        alpha_weight=alpha_weight)
     runner = subprocess.run if runner is None else runner
     kwargs = {
         "shell": False,

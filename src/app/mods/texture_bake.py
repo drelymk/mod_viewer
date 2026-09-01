@@ -6,9 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import hashlib
 import io
+import logging
+import math
 import os
 import struct
 import tempfile
+import time
 
 from core.geometry.buffers import BufferStore
 from core.geometry.conventions import geometry_convention_for
@@ -58,6 +61,7 @@ _TEXTURE_ROLE_LABELS = {
     "material_map": "Material Map",
     "emission_map": "Emission Map",
 }
+_LOGGER = logging.getLogger(__name__)
 
 
 class TextureBakeAnalysisError(ValueError):
@@ -94,6 +98,19 @@ class AlphaCompatibilityStats:
     protected_units: int
     changed_pixels: int
     max_delta: int
+    rgb_squared_error: int = 0
+    rgb_absolute_error: int = 0
+    rgb_max_error: int = 0
+
+
+@dataclass(frozen=True)
+class BlockCandidateQuality:
+    """RGB error for one authored block against its intended bake target."""
+
+    alpha_exact: bool
+    rgb_squared_error: int
+    rgb_absolute_error: int
+    rgb_max_error: int
 
 
 @dataclass(frozen=True)
@@ -937,6 +954,36 @@ def _validate_mip_candidate(source_layout, source_mip, candidate_path,
     return candidate_layout
 
 
+def _validate_atlas_candidate(source_layout, atlas_width, atlas_height,
+                              candidate_path, candidate_bytes):
+    """Validate one DDS candidate whose pixels are packed safe source blocks."""
+    candidate_layout = inspect_dds_layout(candidate_path)
+    if candidate_layout is None:
+        raise TextureBakeAnalysisError(
+            "texconv_output_invalid",
+            "The DDS encoder produced an invalid atlas candidate.")
+    candidate_mip = candidate_layout.mips[0] if candidate_layout.mips else None
+    expected_units_x = (atlas_width + 3) // 4
+    expected_units_y = (atlas_height + 3) // 4
+    if (candidate_layout.info.format != source_layout.info.format
+            or candidate_layout.info.compressed != source_layout.info.compressed
+            or candidate_layout.info.mip_count != 1
+            or candidate_layout.info.width != atlas_width
+            or candidate_layout.info.height != atlas_height
+            or candidate_mip is None
+            or candidate_mip.width != atlas_width
+            or candidate_mip.height != atlas_height
+            or candidate_mip.units_x != expected_units_x
+            or candidate_mip.units_y != expected_units_y
+            or candidate_mip.bytes_per_unit
+            != source_layout.mips[0].bytes_per_unit
+            or len(candidate_bytes) < candidate_layout.payload_end):
+        raise TextureBakeAnalysisError(
+            "texconv_output_invalid",
+            "The DDS encoder changed the safe-block atlas layout.")
+    return candidate_layout
+
+
 def _alpha_preservation_error():
     return TextureBakeAnalysisError(
         "alpha_preservation_unsupported",
@@ -1003,21 +1050,25 @@ def _unit_bounds(mip, index):
             min(4, mip.height - unit_y))
 
 
-def _alpha_compatibility_for_units(
+def _alpha_compatibility_for_mapping(
         original, original_layout, source_mip, candidate, candidate_layout,
-        candidate_mip, safe_mask):
-    """Compare decoded alpha for safe units and return mask plus statistics."""
+        candidate_mip, safe_mask, candidate_indices=None, source_image=None,
+        candidate_image=None):
+    """Compare source blocks with same-sized or compact-atlas candidates."""
+    if candidate_indices is None:
+        candidate_indices = tuple(range(len(safe_mask)))
     if (original_layout.info.format not in _ALPHA_COUPLED_FORMATS
             or candidate_layout.info.format != original_layout.info.format
             or len(safe_mask) != source_mip.units_x * source_mip.units_y
+            or len(candidate_indices) != len(safe_mask)
             or candidate_mip is None
-            or source_mip.width != candidate_mip.width
-            or source_mip.height != candidate_mip.height
-            or source_mip.units_x != candidate_mip.units_x
-            or source_mip.units_y != candidate_mip.units_y
             or source_mip.bytes_per_unit != candidate_mip.bytes_per_unit
             or len(original) < source_mip.offset + source_mip.length
             or len(candidate) < candidate_mip.offset + candidate_mip.length):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "DDS payload layout is invalid.")
+    if any(index < 0 or index >= candidate_mip.units_x * candidate_mip.units_y
+           for index in candidate_indices):
         raise TextureBakeAnalysisError(
             "texture_validation_failed", "DDS payload layout is invalid.")
 
@@ -1033,15 +1084,15 @@ def _alpha_compatibility_for_units(
                 continue
             tested_units += 1
             source_start = source_mip.offset + index * source_mip.bytes_per_unit
-            candidate_start = (
-                candidate_mip.offset + index * candidate_mip.bytes_per_unit)
+            candidate_index = candidate_indices[index]
+            candidate_start = (candidate_mip.offset
+                               + candidate_index * candidate_mip.bytes_per_unit)
             source_alpha = _bc1_block_alpha_mask(
                 original[source_start:source_start + source_mip.bytes_per_unit])
             candidate_alpha = _bc1_block_alpha_mask(
                 candidate[candidate_start:
                           candidate_start + candidate_mip.bytes_per_unit])
-            _, _, unit_width, unit_height = _unit_bounds(
-                source_mip, index)
+            _, _, unit_width, unit_height = _unit_bounds(source_mip, index)
             matches = True
             for row in range(unit_height):
                 for column in range(unit_width):
@@ -1055,29 +1106,38 @@ def _alpha_compatibility_for_units(
                 compatible[index] = 1
                 compatible_units += 1
     else:
-        source_image = _decode_alpha_coupled_mip_rgba(
-            original, original_layout, source_mip)
-        candidate_image = _decode_alpha_coupled_mip_rgba(
-            candidate, candidate_layout, candidate_mip)
-        source_alpha = source_image.getchannel("A").tobytes()
-        candidate_alpha = candidate_image.getchannel("A").tobytes()
-        expected_alpha_bytes = source_mip.width * source_mip.height
-        if (len(source_alpha) != expected_alpha_bytes
-                or len(candidate_alpha) != expected_alpha_bytes):
+        if source_image is None:
+            source_image = _decode_alpha_coupled_mip_rgba(
+                original, original_layout, source_mip)
+        if candidate_image is None:
+            candidate_image = _decode_alpha_coupled_mip_rgba(
+                candidate, candidate_layout, candidate_mip)
+        if (source_image.size != (source_mip.width, source_mip.height)
+                or candidate_image.size != (candidate_mip.width,
+                                             candidate_mip.height)):
             raise TextureBakeAnalysisError(
                 "texture_validation_failed",
                 "Decoded DDS alpha dimensions are invalid.")
+        source_alpha = source_image.getchannel("A").tobytes()
+        candidate_alpha = candidate_image.getchannel("A").tobytes()
         for index, selected in enumerate(safe_mask):
             if not selected:
                 continue
             tested_units += 1
-            unit_x, unit_y, unit_width, unit_height = _unit_bounds(
+            source_x, source_y, unit_width, unit_height = _unit_bounds(
                 source_mip, index)
+            candidate_index = candidate_indices[index]
+            candidate_x, candidate_y, _, _ = _unit_bounds(
+                candidate_mip, candidate_index)
             matches = True
             for row in range(unit_height):
                 for column in range(unit_width):
-                    pixel = (unit_y + row) * source_mip.width + unit_x + column
-                    delta = abs(source_alpha[pixel] - candidate_alpha[pixel])
+                    source_pixel = ((source_y + row) * source_mip.width
+                                    + source_x + column)
+                    candidate_pixel = ((candidate_y + row) * candidate_mip.width
+                                       + candidate_x + column)
+                    delta = abs(source_alpha[source_pixel]
+                                - candidate_alpha[candidate_pixel])
                     if delta:
                         matches = False
                         changed_pixels += 1
@@ -1094,6 +1154,22 @@ def _alpha_compatibility_for_units(
         max_delta=max_delta)
 
 
+def _alpha_compatibility_for_units(
+        original, original_layout, source_mip, candidate, candidate_layout,
+        candidate_mip, safe_mask):
+    """Compare decoded alpha for safe units and return mask plus statistics."""
+    if (candidate_mip is None
+            or source_mip.width != candidate_mip.width
+            or source_mip.height != candidate_mip.height
+            or source_mip.units_x != candidate_mip.units_x
+            or source_mip.units_y != candidate_mip.units_y):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "DDS payload layout is invalid.")
+    return _alpha_compatibility_for_mapping(
+        original, original_layout, source_mip, candidate, candidate_layout,
+        candidate_mip, safe_mask)
+
+
 def _alpha_compatible_units(
         original, original_layout, source_mip, candidate, candidate_layout,
         candidate_mip, safe_mask):
@@ -1105,7 +1181,7 @@ def _alpha_compatible_units(
 
 
 def _validate_patched_alpha(original, final, layout, writable_masks):
-    """Enforce exact decoded alpha for every compressed unit being replaced."""
+    """Exhaustively validate decoded alpha for tests and debug tooling."""
     if layout.info.format not in _ALPHA_COUPLED_FORMATS:
         return
     try:
@@ -1165,10 +1241,148 @@ def _replacement_completed(source_path, temporary_path, final):
         return False
 
 
-def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir):
-    """Encode selected BC1/BC7 RGB independently from every authored mip."""
+def _build_safe_block_atlas(source_image, source_mip, pixel_mask, safe_mask,
+                            adjustment):
+    """Pack safe source blocks into a compact 4x4-cell RGBA bake image."""
+    source_width, source_height = source_mip.width, source_mip.height
+    if source_image.size != (source_width, source_height):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Decoded DDS source dimensions are invalid.")
+    source_rgba = source_image.tobytes()
+    safe_indices = tuple(
+        index for index, selected in enumerate(safe_mask) if selected)
+    if not safe_indices:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "No safe blocks were provided.")
+    if len(pixel_mask) != source_width * source_height:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Selected pixel coverage does not match the DDS mip size.")
+
+    atlas_columns = max(1, math.isqrt(len(safe_indices)))
+    if atlas_columns * atlas_columns < len(safe_indices):
+        atlas_columns += 1
+    atlas_rows = (len(safe_indices) + atlas_columns - 1) // atlas_columns
+    atlas_width, atlas_height = atlas_columns * 4, atlas_rows * 4
+    atlas_rgba = bytearray(atlas_width * atlas_height * 4)
+    atlas_mask = bytearray(atlas_width * atlas_height)
+
+    for atlas_index, source_index in enumerate(safe_indices):
+        source_x, source_y, unit_width, unit_height = _unit_bounds(
+            source_mip, source_index)
+        atlas_x = (atlas_index % atlas_columns) * 4
+        atlas_y = (atlas_index // atlas_columns) * 4
+        for row in range(4):
+            source_row = min(source_y + row, source_height - 1)
+            for column in range(4):
+                source_column = min(source_x + column, source_width - 1)
+                source_pixel = (source_row * source_width + source_column) * 4
+                atlas_pixel = ((atlas_y + row) * atlas_width
+                               + atlas_x + column) * 4
+                atlas_rgba[atlas_pixel:atlas_pixel + 4] = source_rgba[
+                    source_pixel:source_pixel + 4]
+                if row < unit_height and column < unit_width:
+                    atlas_mask[(atlas_y + row) * atlas_width
+                               + atlas_x + column] = pixel_mask[
+                        (source_y + row) * source_width
+                        + source_x + column]
+
+    adjusted_atlas = adjust_rgba_bytes(
+        bytes(atlas_rgba), atlas_width, atlas_height, adjustment, atlas_mask)
+    if adjusted_atlas[3::4] != atlas_rgba[3::4]:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Color adjustment changed the source alpha channel.")
+    return adjusted_atlas, safe_indices, atlas_width, atlas_height
+
+
+def _block_candidate_quality(target_rgba, candidate_rgba,
+                             source_mip, candidate_mip, source_index,
+                             candidate_index, alpha_exact):
+    """Measure decoded RGB error against one block's intended target."""
+    if (len(target_rgba) != candidate_mip.width * candidate_mip.height * 4
+            or len(candidate_rgba)
+            != candidate_mip.width * candidate_mip.height * 4):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Decoded DDS candidate dimensions are invalid.")
+    _source_x, source_y, unit_width, unit_height = _unit_bounds(
+        source_mip, source_index)
+    candidate_x, candidate_y, _, _ = _unit_bounds(
+        candidate_mip, candidate_index)
+    squared_error = 0
+    absolute_error = 0
+    max_error = 0
+    for row in range(unit_height):
+        for column in range(unit_width):
+            candidate_pixel = ((candidate_y + row) * candidate_mip.width
+                               + candidate_x + column) * 4
+            for channel in range(3):
+                delta = (candidate_rgba[candidate_pixel + channel]
+                         - target_rgba[candidate_pixel + channel])
+                squared_error += delta * delta
+                absolute_error += abs(delta)
+                max_error = max(max_error, abs(delta))
+    return BlockCandidateQuality(
+        alpha_exact=bool(alpha_exact),
+        rgb_squared_error=squared_error,
+        rgb_absolute_error=absolute_error,
+        rgb_max_error=max_error)
+
+
+def _validate_patched_units(original, final, source_layout, writable_masks,
+                            candidate, candidate_layout):
+    """Assert that every final unit came from its allowed source or candidate."""
+    if (len(original) < source_layout.payload_end
+            or len(final) < source_layout.payload_end
+            or len(candidate) < candidate_layout.payload_end
+            or len(writable_masks) != len(source_layout.mips)
+            or len(candidate_layout.mips) != len(source_layout.mips)):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "DDS payload layout is invalid.")
+    for source_mip, candidate_mip, mask in zip(
+            source_layout.mips, candidate_layout.mips, writable_masks):
+        if (source_mip.width != candidate_mip.width
+                or source_mip.height != candidate_mip.height
+                or source_mip.units_x != candidate_mip.units_x
+                or source_mip.units_y != candidate_mip.units_y
+                or source_mip.bytes_per_unit != candidate_mip.bytes_per_unit
+                or len(mask) != source_mip.units_x * source_mip.units_y):
+            raise TextureBakeAnalysisError(
+                "texture_validation_failed", "DDS payload layout is invalid.")
+        for index, selected in enumerate(mask):
+            source_start = source_mip.offset + index * source_mip.bytes_per_unit
+            candidate_start = (candidate_mip.offset
+                               + index * candidate_mip.bytes_per_unit)
+            if not selected:
+                expected = original[
+                    source_start:source_start + source_mip.bytes_per_unit]
+            else:
+                candidate_unit = candidate[
+                    candidate_start:
+                    candidate_start + candidate_mip.bytes_per_unit]
+                if source_layout.info.format in {"rgba8", "bgra8"}:
+                    expected = candidate_unit[:3] + original[
+                        source_start + 3:source_start + 4]
+                elif source_layout.info.format.startswith(("bc2", "bc3")):
+                    expected = original[source_start:source_start + 8] + (
+                        candidate_unit[8:])
+                else:
+                    expected = candidate_unit
+            actual = final[source_start:source_start + source_mip.bytes_per_unit]
+            if actual != expected:
+                raise TextureBakeAnalysisError(
+                    "texture_validation_failed",
+                    "The patched DDS changed an unauthorized unit.")
+
+
+def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
+                               timings=None):
+    """Encode selected BC1/BC7 RGB in compact, independent block atlases."""
     from PIL import Image
 
+    timings = {} if timings is None else timings
     pixel_coverages = getattr(
         prepared, "selected_pixel_coverages", (prepared.selected_pixels,))
     if len(pixel_coverages) != len(prepared.layout.mips):
@@ -1194,56 +1408,103 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir):
             stats.append(AlphaCompatibilityStats(0, 0, 0, 0, 0))
             continue
 
+        started = time.perf_counter()
         source_image = _decode_alpha_coupled_mip_rgba(
             original, prepared.layout, source_mip)
-        source_rgba = source_image.tobytes()
+        timings["decode"] = timings.get("decode", 0.0) + (
+            time.perf_counter() - started)
+
         pixel_mask = pixel_coverages[level].mask
-        if len(pixel_mask) != source_mip.width * source_mip.height:
-            raise TextureBakeAnalysisError(
-                "texture_validation_failed",
-                "Selected pixel coverage does not match the DDS mip size.")
-        adjusted_rgba = adjust_rgba_bytes(
-            source_rgba, source_mip.width, source_mip.height, adjustment,
-            pixel_mask)
-        if adjusted_rgba[3::4] != source_rgba[3::4]:
-            raise TextureBakeAnalysisError(
-                "texture_validation_failed",
-                "Color adjustment changed the source alpha channel.")
+        started = time.perf_counter()
+        atlas_rgba, safe_indices, atlas_width, atlas_height = (
+            _build_safe_block_atlas(
+                source_image, source_mip, pixel_mask, safe_mask, adjustment))
+        target_image = Image.frombytes(
+            "RGBA", (atlas_width, atlas_height), atlas_rgba)
+        timings["color_adjust"] = timings.get("color_adjust", 0.0) + (
+            time.perf_counter() - started)
 
         png_path = os.path.join(workdir, f"bake-mip-{level}.png")
-        Image.frombytes(
-            "RGBA", (source_mip.width, source_mip.height),
-            adjusted_rgba).save(png_path, format="PNG")
+        target_image.save(png_path, format="PNG")
+        started = time.perf_counter()
         try:
             candidate_path = encode_png_to_dds(
-                png_path, workdir, prepared.info.format, 1, srgb=True)
+                png_path, workdir, prepared.info.format, 1, srgb=True,
+                compression_backend="auto")
         except TexconvUnavailableError as error:
             raise TextureBakeAnalysisError(
                 "texconv_unavailable", str(error)) from error
         except TexconvError as error:
             raise TextureBakeAnalysisError(
                 "texconv_failed", str(error)) from error
+        timings["encode"] = timings.get("encode", 0.0) + (
+            time.perf_counter() - started)
+
+        started = time.perf_counter()
         try:
             candidate = _read_source(candidate_path)
         except TextureBakeAnalysisError as error:
             raise TextureBakeAnalysisError(
                 "texconv_output_invalid",
                 "The DDS encoder produced an invalid mip candidate.") from error
-        candidate_layout = _validate_mip_candidate(
-            prepared.layout, source_mip, candidate_path, candidate)
+        candidate_layout = _validate_atlas_candidate(
+            prepared.layout, atlas_width, atlas_height, candidate_path, candidate)
         candidate_mip = candidate_layout.mips[0]
-        compatible, comparison = _alpha_compatibility_for_units(
+        candidate_image = _decode_alpha_coupled_mip_rgba(
+            candidate, candidate_layout, candidate_mip)
+        candidate_indices = [0] * len(safe_mask)
+        for candidate_index, source_index in enumerate(safe_indices):
+            candidate_indices[source_index] = candidate_index
+        compatible, comparison = _alpha_compatibility_for_mapping(
             original, prepared.layout, source_mip, candidate, candidate_layout,
-            candidate_mip, safe_mask)
+            candidate_mip, safe_mask, candidate_indices,
+            source_image=source_image, candidate_image=candidate_image)
+
+        target_rgba = target_image.tobytes()
+        candidate_rgba = candidate_image.tobytes()
+        rgb_squared_error = 0
+        rgb_absolute_error = 0
+        rgb_max_error = 0
+        for source_index in safe_indices:
+            quality = _block_candidate_quality(
+                target_rgba, candidate_rgba, source_mip, candidate_mip,
+                source_index,
+                candidate_indices[source_index],
+                compatible[source_index])
+            rgb_squared_error += quality.rgb_squared_error
+            rgb_absolute_error += quality.rgb_absolute_error
+            rgb_max_error = max(rgb_max_error, quality.rgb_max_error)
+        comparison = AlphaCompatibilityStats(
+            tested_units=comparison.tested_units,
+            compatible_units=comparison.compatible_units,
+            protected_units=comparison.protected_units,
+            changed_pixels=comparison.changed_pixels,
+            max_delta=comparison.max_delta,
+            rgb_squared_error=rgb_squared_error,
+            rgb_absolute_error=rgb_absolute_error,
+            rgb_max_error=rgb_max_error)
+        timings["candidate_validation"] = (
+            timings.get("candidate_validation", 0.0)
+            + time.perf_counter() - started)
+
         writable = bytearray(
             selected and compatible[index]
             for index, selected in enumerate(safe_mask))
         protected = bytearray(
             selected and not compatible[index]
             for index, selected in enumerate(safe_mask))
-        candidate_payloads.append(
-            candidate[candidate_mip.offset:
-                      candidate_mip.offset + candidate_mip.length])
+        mapped_payload = bytearray(source_payload)
+        for source_index in safe_indices:
+            if not writable[source_index]:
+                continue
+            source_candidate_start = (candidate_mip.offset
+                                       + candidate_indices[source_index]
+                                       * candidate_mip.bytes_per_unit)
+            target_start = source_index * source_mip.bytes_per_unit
+            mapped_payload[target_start:target_start + source_mip.bytes_per_unit] = (
+                candidate[source_candidate_start:
+                          source_candidate_start + candidate_mip.bytes_per_unit])
+        candidate_payloads.append(bytes(mapped_payload))
         writable_masks.append(writable)
         alpha_protected_masks.append(protected)
         stats.append(comparison)
@@ -1265,13 +1526,16 @@ def bake_texture_color(
     """Safely bake a non-neutral adjustment into unique DDS units only."""
     committed = False
     success_result = None
+    timings = {}
     try:
         # Preparation includes the independent mod-root/Asset check and must be
         # repeated for the destructive request, even after a prior analysis.
+        started = time.perf_counter()
         prepared = _prepare_texture_bake(
             context, overrides, active_mesh_keys, selected_semantic_key,
             selected_texture_key, texture_usage, require_file_layout=True,
             require_complete_roles=True, metadata_key=metadata_key)
+        timings["prepare"] = time.perf_counter() - started
         normalized = normalize_color_adjustment(
             adjustment, reject_invalid=True)
         if normalized is None:
@@ -1294,16 +1558,18 @@ def bake_texture_color(
         original_hash = _sha256_bytes(original)
         # Resolve all post-commit metadata before the destructive boundary.
         affected = _affected_texture_keys(context, prepared)
+        alpha_stats = ()
 
         with tempfile.TemporaryDirectory(prefix="modviewer-bake-") as workdir:
             if prepared.info.format in _ALPHA_COUPLED_FORMATS:
                 (candidate, writable_masks, alpha_protected_masks,
-                 _alpha_stats) = _encode_alpha_coupled_mips(
-                    original, prepared, normalized, workdir)
+                 alpha_stats) = _encode_alpha_coupled_mips(
+                    original, prepared, normalized, workdir, timings)
                 if not any(writable_masks[0]):
                     raise _alpha_preservation_error()
                 patch_candidate_layout = prepared.layout
             else:
+                started = time.perf_counter()
                 image = load_texture_image_full(
                     prepared.selected_path, preserve_alpha=True)
                 if image is None or image.size != (
@@ -1312,6 +1578,9 @@ def bake_texture_color(
                         "texture_decode_failed",
                         "The source DDS could not be decoded at full resolution.")
                 rgba = image.convert("RGBA")
+                timings["decode"] = timings.get("decode", 0.0) + (
+                    time.perf_counter() - started)
+                started = time.perf_counter()
                 masked_rgba = adjust_rgba_bytes(
                     rgba.tobytes(), rgba.width, rgba.height, normalized,
                     prepared.selected_pixels.mask)
@@ -1319,16 +1588,23 @@ def bake_texture_color(
                 png_path = os.path.join(workdir, "bake.png")
                 Image.frombytes(
                     "RGBA", rgba.size, masked_rgba).save(png_path, format="PNG")
+                timings["color_adjust"] = timings.get("color_adjust", 0.0) + (
+                    time.perf_counter() - started)
+                started = time.perf_counter()
                 try:
                     candidate_path = encode_png_to_dds(
                         png_path, workdir, prepared.info.format,
-                        prepared.info.mip_count, srgb=True)
+                        prepared.info.mip_count, srgb=True,
+                        compression_backend="cpu")
                 except TexconvUnavailableError as error:
                     raise TextureBakeAnalysisError(
                         "texconv_unavailable", str(error)) from error
                 except TexconvError as error:
                     raise TextureBakeAnalysisError(
                         "texconv_failed", str(error)) from error
+                timings["encode"] = timings.get("encode", 0.0) + (
+                    time.perf_counter() - started)
+                started = time.perf_counter()
                 try:
                     candidate = _read_source(candidate_path)
                 except TextureBakeAnalysisError as error:
@@ -1341,10 +1617,19 @@ def bake_texture_color(
                 alpha_protected_masks = tuple(
                     bytearray(len(mask)) for mask in prepared.safe_masks)
                 patch_candidate_layout = candidate_layout
+                timings["candidate_validation"] = (
+                    timings.get("candidate_validation", 0.0)
+                    + time.perf_counter() - started)
+            started = time.perf_counter()
             final = _patch_dds_units(
                 original, candidate, prepared.layout,
                 writable_masks, patch_candidate_layout)
+            timings["patch"] = time.perf_counter() - started
+            _validate_patched_units(
+                original, final, prepared.layout, writable_masks, candidate,
+                patch_candidate_layout)
 
+            started = time.perf_counter()
             temporary = _write_temp(prepared.selected_path, final)
             try:
                 final_layout = inspect_dds_layout(temporary)
@@ -1353,8 +1638,6 @@ def bake_texture_color(
                         "texture_validation_failed",
                         "The patched DDS failed validation.")
                 _validate_candidate(prepared.layout, temporary, final)
-                _validate_patched_alpha(
-                    original, final, final_layout, writable_masks)
                 # The backup is deliberately created only after the complete
                 # temporary candidate has passed validation. If a later source
                 # race or replace failure occurs, that backup remains useful.
@@ -1400,6 +1683,23 @@ def bake_texture_color(
             finally:
                 if temporary and os.path.exists(temporary):
                     os.remove(temporary)
+            timings["write"] = time.perf_counter() - started
+        _LOGGER.debug(
+            "texture bake timing_ms=%s",
+            {key: round(value * 1000.0, 2)
+             for key, value in timings.items()})
+        if alpha_stats:
+            _LOGGER.debug(
+                "texture bake alpha_quality=%s",
+                [{"tested_units": item.tested_units,
+                  "compatible_units": item.compatible_units,
+                  "protected_units": item.protected_units,
+                  "changed_pixels": item.changed_pixels,
+                  "max_delta": item.max_delta,
+                  "rgb_squared_error": item.rgb_squared_error,
+                  "rgb_absolute_error": item.rgb_absolute_error,
+                  "rgb_max_error": item.rgb_max_error}
+                 for item in alpha_stats])
         return success_result
     except TextureBakeAnalysisError as error:
         if committed and success_result is not None:

@@ -95,6 +95,30 @@ def test_bake_replaces_only_safe_units_and_keeps_backup(tmp_path, monkeypatch):
     assert backups[0].read_bytes() == original
 
 
+def test_structural_patch_validation_rejects_unauthorized_unit_change(tmp_path):
+    source = tmp_path / "source.dds"
+    original = _rgba8_dds([10, 20, 30, 40, 50, 60, 70, 80])
+    candidate = _rgba8_dds([200, 201, 202, 203, 50, 60, 70, 81])
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    candidate_path = tmp_path / "candidate.dds"
+    candidate_path.write_bytes(candidate)
+    candidate_layout = inspect_dds_layout(candidate_path)
+    masks = (bytearray([1, 0]),)
+    final = texture_bake._patch_dds_units(
+        original, candidate, layout, masks, candidate_layout)
+
+    texture_bake._validate_patched_units(
+        original, final, layout, masks, candidate, candidate_layout)
+    tampered = bytearray(final)
+    tampered[132] ^= 1
+    with pytest.raises(texture_bake.TextureBakeAnalysisError) as error:
+        texture_bake._validate_patched_units(
+            original, bytes(tampered), layout, masks, candidate,
+            candidate_layout)
+    assert error.value.code == "texture_validation_failed"
+
+
 def test_bake_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatch):
     source = tmp_path / "body.dds"
     original = _rgba8_dds([10, 20, 30, 40, 50, 60, 70, 80])
@@ -331,6 +355,42 @@ def _coupled_prepared(source, layout, safe_masks, pixel_masks, tex_key):
     )
 
 
+def test_safe_block_atlas_preserves_unselected_pixels_and_measures_rgb_error(
+        tmp_path):
+    source = tmp_path / "atlas-source.dds"
+    source.write_bytes(_dx10_dds(bytes([1]) * 32, 98, width=8, height=4))
+    layout = inspect_dds_layout(source)
+    image = Image.new("RGBA", (8, 4), (0, 0, 0, 255))
+    for y in range(4):
+        for x in range(4, 8):
+            image.putpixel((x, y), (10, 20, 30, 100))
+    pixel_mask = bytearray(8 * 4)
+    for y in range(4):
+        for x in range(5, 8):
+            pixel_mask[y * 8 + x] = 1
+
+    atlas_rgba, safe_indices, atlas_width, atlas_height = (
+        texture_bake._build_safe_block_atlas(
+            image, layout.mips[0], pixel_mask, bytearray([0, 1]),
+            {"brightness": 2}))
+
+    assert safe_indices == (1,)
+    assert (atlas_width, atlas_height) == (4, 4)
+    target = Image.frombytes("RGBA", (atlas_width, atlas_height), atlas_rgba)
+    assert target.getpixel((0, 0)) == (10, 20, 30, 100)
+    assert target.getpixel((1, 0)) == (20, 40, 60, 100)
+
+    candidate = Image.new("RGBA", (4, 4), (11, 20, 30, 100))
+    candidate_mip = SimpleNamespace(
+        width=4, height=4, units_x=1, units_y=1)
+    quality = texture_bake._block_candidate_quality(
+        target.tobytes(), candidate.tobytes(), layout.mips[0], candidate_mip,
+        1, 0, True)
+    assert quality.alpha_exact is True
+    assert quality.rgb_absolute_error > 0
+    assert quality.rgb_max_error == 30
+
+
 def test_bc1_bake_patches_compatible_blocks_and_protects_the_rest(
         tmp_path, monkeypatch):
     source = tmp_path / "bc1-partial.dds"
@@ -395,6 +455,7 @@ def test_bc7_bake_processes_authored_mips_and_reports_protected_lower_mip(
                         lambda *args, **kwargs: prepared)
     encoded_sizes = []
     adjust_inputs = []
+    compression_backends = []
 
     def decode(data, _layout, mip):
         marker = data[mip.offset]
@@ -413,13 +474,14 @@ def test_bc7_bake_processes_authored_mips_and_reports_protected_lower_mip(
 
     def encode(png, output, _format, mip_count, **_kwargs):
         assert mip_count == 1
+        compression_backends.append(_kwargs.get("compression_backend"))
         level = int(Path(png).stem.rsplit("-", 1)[-1])
         with Image.open(png) as image:
             encoded_sizes.append((level, image.size))
         candidate_path = Path(output) / f"candidate-{level}.dds"
         candidate_path.write_bytes(_dx10_dds(
             bytes([11 + level]) * 16, 98,
-            width=layout.mips[level].width, height=layout.mips[level].height))
+            width=4, height=4))
         return str(candidate_path)
 
     monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
@@ -437,7 +499,8 @@ def test_bc7_bake_processes_authored_mips_and_reports_protected_lower_mip(
     assert result["patched"]["alpha_protected_levels"] == [1]
     assert adjust_inputs == [(1, 20, 30, 128), (2, 20, 30, 128),
                              (3, 20, 30, 128)]
-    assert encoded_sizes == [(0, (4, 4)), (1, (2, 2)), (2, (1, 1))]
+    assert encoded_sizes == [(0, (4, 4)), (1, (4, 4)), (2, (4, 4))]
+    assert compression_backends == ["auto", "auto", "auto"]
     assert updated[148:164] == bytes([11]) * 16
     assert updated[164:180] == bytes([2]) * 16
     assert updated[180:196] == bytes([13]) * 16
