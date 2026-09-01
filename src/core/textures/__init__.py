@@ -17,6 +17,7 @@ from .pipeline import (
     texture_key,
     texture_key_for_role,
 )
+from .uv_coverage import UVCoverage, UVCoverageError, rasterize_uv_coverage
 
 __all__ = [
     "TEXTURE_ROLES",
@@ -34,4 +35,7 @@ __all__ = [
     "split_texture_key",
     "texture_key",
     "texture_key_for_role",
+    "UVCoverage",
+    "UVCoverageError",
+    "rasterize_uv_coverage",
 ]

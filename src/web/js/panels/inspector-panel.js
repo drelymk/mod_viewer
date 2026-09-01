@@ -7,6 +7,8 @@ import {
   canEditMeshColor, getMeshColorAdjustment, resetMeshColorAdjustment,
   setMeshColorAdjustment,
 } from '../mesh/mesh-color-state.js';
+import { canAnalyzeTextureBake } from '../mesh/texture-bake-analysis.js';
+import { openTextureBakeModal } from '../ui/texture-bake-modal.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -272,6 +274,29 @@ function updateColorAdjustment(mesh, field, controlValue, persist = false) {
   setMeshColorAdjustment(mesh, next, { persist, render: true });
 }
 
+function buildTextureBakeAction(section, mesh) {
+  const eligibility = canAnalyzeTextureBake(mesh);
+  if (eligibility.editable) {
+    const analyze = document.createElement('button');
+    analyze.type = 'button';
+    analyze.className = 'ui-button inspector-texture-bake';
+    analyze.textContent = 'Analyze Texture Coverage';
+    analyze.addEventListener('click', async () => {
+      analyze.disabled = true;
+      try {
+        await openTextureBakeModal(mesh, {
+          isCurrent: () => current?.type === 'mesh' && current.mesh === mesh,
+        });
+      } finally {
+        analyze.disabled = false;
+      }
+    });
+    section.appendChild(analyze);
+  } else if (eligibility.reason === 'unsupported-texture-type') {
+    addText(section, 'inspector-texture-bake-hint', eligibility.message);
+  }
+}
+
 function buildColorSection(content, mesh) {
   const section = document.createElement('section');
   section.className = 'inspector-section inspector-color-section';
@@ -354,6 +379,7 @@ function buildColorSection(content, mesh) {
     updateColorControlState(content, mesh);
   });
   section.appendChild(reset);
+  buildTextureBakeAction(section, mesh);
   content.appendChild(section);
   return section;
 }

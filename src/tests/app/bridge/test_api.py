@@ -29,6 +29,7 @@ EXPECTED_API_METHODS = {
     "get_diagnostics",
     "get_ini_text",
     "get_mesh_semantics",
+    "analyze_mesh_texture_bake",
     "get_mod_folders",
     "get_panel_opacity",
     "get_present_state",
@@ -164,3 +165,19 @@ def test_load_mod_forwards_disabled_ini_flag(monkeypatch):
 
     assert api.load_mod("mod", True) == {"ok": True}
     assert calls == [("mod", True)]
+
+
+def test_texture_bake_analysis_forwards_semantic_snapshot(monkeypatch):
+    api = ModViewerAPI()
+    calls = []
+    monkeypatch.setattr(
+        api._mod_preview, "analyze_mesh_texture_bake",
+        lambda *args: calls.append(args) or {"status": "ok"},
+    )
+
+    usage = [{"semantic_key": "Body-1", "tex_key": "diffuse::body.dds"}]
+    result = api.analyze_mesh_texture_bake(
+        "mod", "Body-1", "diffuse::body.dds", usage)
+
+    assert result == {"status": "ok"}
+    assert calls == [("mod", "Body-1", "diffuse::body.dds", usage)]

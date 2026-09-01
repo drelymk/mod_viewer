@@ -157,6 +157,11 @@ class ModViewerAPI:
     def get_mesh_semantics(self, folder_path):
         return self._mod_preview.get_mesh_semantics(folder_path)
 
+    def analyze_mesh_texture_bake(
+            self, folder_path, semantic_key, tex_key, texture_usage):
+        return self._mod_preview.analyze_mesh_texture_bake(
+            folder_path, semantic_key, tex_key, texture_usage)
+
     def get_model_skinning_preview(self, folder_path):
         return self._mod_preview.get_model_skinning_preview(folder_path)
 

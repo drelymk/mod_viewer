@@ -711,6 +711,27 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; border: 1px solid var(--border);
 }
 #asset-folder-modal-backdrop .modal { width: 360px; }
+.texture-bake-modal { width: min(520px, calc(100vw - 40px)); }
+.texture-bake-title-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+}
+.texture-bake-title-row h4 { margin-bottom: 0; }
+.texture-bake-body { min-height: 58px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.texture-bake-loading { padding: 12px 0; }
+.texture-bake-state { color: var(--success); font-size: 12px; font-weight: 600; }
+.texture-bake-state-unknown { color: var(--warning); }
+.texture-bake-summary { margin: 7px 0 10px; }
+.texture-bake-details {
+  display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr);
+  gap: 5px 12px; margin: 0;
+}
+.texture-bake-details dt { color: var(--text-muted); }
+.texture-bake-details dd { margin: 0; color: var(--text); text-align: right; overflow-wrap: anywhere; }
+.texture-bake-warning { margin: 12px 0 0; padding: 7px 8px; border-radius: 5px; }
+.texture-bake-warning-shared { color: var(--warning); background: rgba(210,153,34,.1); }
+.texture-bake-warning-unknown { color: var(--warning); background: rgba(210,153,34,.1); }
+.inspector-texture-bake { width: 100%; margin-top: 2px; }
+.inspector-texture-bake-hint { color: var(--text-muted); font-size: 10px; line-height: 1.35; }
 #mfm-cancel { background: var(--bg-control); color: var(--text); }
 #mfm-cancel:hover { background: var(--border); }
 #mfm-save { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }
