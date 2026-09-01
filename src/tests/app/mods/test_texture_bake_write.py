@@ -391,7 +391,7 @@ def test_safe_block_atlas_preserves_unselected_pixels_and_measures_rgb_error(
     assert quality.rgb_max_error == 30
 
 
-def test_bc1_bake_patches_compatible_blocks_and_protects_the_rest(
+def test_bc1_bake_rejects_protected_mip0_blocks(
         tmp_path, monkeypatch):
     source = tmp_path / "bc1-partial.dds"
     original = _dx10_dds(
@@ -426,15 +426,9 @@ def test_bc1_bake_patches_compatible_blocks_and_protects_the_rest(
         ], {"hue": 30})
 
     updated = source.read_bytes()
-    assert result["status"] == "ok"
-    assert result["patched"]["mip0_units"] == 1
-    assert result["patched"]["total_units"] == 2
-    assert result["patched"]["alpha_protected_units"] == 1
-    assert result["patched"]["alpha_protected_mip0_units"] == 1
-    assert result["patched"]["alpha_protected_levels"] == [0]
-    assert updated[148:156] == candidate[148:156]
-    assert updated[156:164] == original[156:164]
-    assert _backups(tmp_path, "bc1-partial")
+    assert result["code"] == "alpha_preservation_unsupported"
+    assert updated == original
+    assert not _backups(tmp_path, "bc1-partial")
 
 
 def test_bc7_bake_processes_authored_mips_and_reports_protected_lower_mip(
@@ -456,6 +450,8 @@ def test_bc7_bake_processes_authored_mips_and_reports_protected_lower_mip(
     encoded_sizes = []
     adjust_inputs = []
     compression_backends = []
+    alpha_weights = []
+    bc_flags = []
 
     def decode(data, _layout, mip):
         marker = data[mip.offset]
@@ -475,7 +471,9 @@ def test_bc7_bake_processes_authored_mips_and_reports_protected_lower_mip(
     def encode(png, output, _format, mip_count, **_kwargs):
         assert mip_count == 1
         compression_backends.append(_kwargs.get("compression_backend"))
-        level = int(Path(png).stem.rsplit("-", 1)[-1])
+        alpha_weights.append(_kwargs.get("alpha_weight"))
+        bc_flags.append(_kwargs.get("bc_flags"))
+        level = int(Path(png).stem.split("-")[2])
         with Image.open(png) as image:
             encoded_sizes.append((level, image.size))
         candidate_path = Path(output) / f"candidate-{level}.dds"
@@ -497,10 +495,17 @@ def test_bc7_bake_processes_authored_mips_and_reports_protected_lower_mip(
     assert result["patched"]["alpha_protected_units"] == 1
     assert result["patched"]["alpha_protected_mip0_units"] == 0
     assert result["patched"]["alpha_protected_levels"] == [1]
-    assert adjust_inputs == [(1, 20, 30, 128), (2, 20, 30, 128),
-                             (3, 20, 30, 128)]
-    assert encoded_sizes == [(0, (4, 4)), (1, (4, 4)), (2, (4, 4))]
-    assert compression_backends == ["auto", "auto", "auto"]
+    assert adjust_inputs == [(1, 20, 30, 128), (2, 20, 30, 128)] + [
+        (2, 20, 30, 128)] * 5 + [(3, 20, 30, 128)]
+    assert encoded_sizes == [
+        (0, (4, 4)), (1, (4, 4)),
+        (1, (4, 4)), (1, (4, 4)), (1, (4, 4)),
+        (1, (4, 4)), (1, (4, 4)),
+        (2, (4, 4)),
+    ]
+    assert compression_backends == ["auto"] * 8
+    assert alpha_weights == [None, None, 2.0, 4.0, 8.0, 16.0, 32.0, None]
+    assert bc_flags == [None] * 8
     assert updated[148:164] == bytes([11]) * 16
     assert updated[164:180] == bytes([2]) * 16
     assert updated[180:196] == bytes([13]) * 16
@@ -510,6 +515,116 @@ def test_bc7_bake_processes_authored_mips_and_reports_protected_lower_mip(
     assert final_layout.info.height == 4
     assert final_layout.info.mip_count == 3
     assert _backups(tmp_path, "bc7-mipped")
+
+
+def test_bc7_retries_choose_lowest_rgb_error_alpha_exact_candidate(
+        tmp_path, monkeypatch):
+    source = tmp_path / "bc7-quality.dds"
+    original = _dx10_dds(bytes([1]) * 16, 98)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]),),
+        (SimpleNamespace(mask=bytearray([1] * 16)),),
+        "diffuse::bc7-quality.dds")
+    encoded = []
+
+    def decode(data, _layout, mip):
+        marker = data[mip.offset]
+        alpha = 127 if marker == 12 else 128
+        return Image.new("RGBA", (mip.width, mip.height),
+                         (marker, 20, 30, alpha))
+
+    monkeypatch.setattr(texture_bake, "_decode_alpha_coupled_mip_rgba", decode)
+    monkeypatch.setattr(texture_bake, "adjust_rgba_bytes",
+                        lambda rgba, *_args: rgba)
+
+    def encode(_png, output, _format, _mips, **kwargs):
+        weight = kwargs.get("alpha_weight")
+        encoded.append((kwargs.get("compression_backend"),
+                        kwargs.get("bc_flags"), weight))
+        marker = {
+            None: 12,
+            2.0: 20,
+            4.0: 3,
+            8.0: 4,
+            16.0: 5,
+            32.0: 6,
+        }[weight]
+        candidate_path = Path(output) / "candidate.dds"
+        candidate_path.write_bytes(_dx10_dds(bytes([marker]) * 16, 98))
+        return str(candidate_path)
+
+    monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
+    candidate, writable, protected, stats = (
+        texture_bake._encode_alpha_coupled_mips(
+            original, prepared, {"hue": 30}, str(tmp_path)))
+
+    assert encoded == [
+        ("auto", None, None), ("auto", None, 2.0),
+        ("auto", None, 4.0), ("auto", None, 8.0),
+        ("auto", None, 16.0), ("auto", None, 32.0),
+    ]
+    assert candidate[148:164] == bytes([3]) * 16
+    assert list(writable[0]) == [1]
+    assert list(protected[0]) == [0]
+    assert stats[0].compatible_units == 1
+    assert stats[0].source_mode6_tested == 0
+
+
+def test_bc7_mode6_retry_uses_q_flag_and_reports_compatibility(
+        tmp_path, monkeypatch):
+    source = tmp_path / "bc7-mode6.dds"
+    original = _dx10_dds(bytes([0x40]) * 16, 98)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]),),
+        (SimpleNamespace(mask=bytearray([1] * 16)),),
+        "diffuse::bc7-mode6.dds")
+    encoded = []
+
+    def decode(data, _layout, mip):
+        marker = data[mip.offset]
+        alpha = 127 if marker == 12 else 128
+        return Image.new("RGBA", (mip.width, mip.height),
+                         (marker, 20, 30, alpha))
+
+    monkeypatch.setattr(texture_bake, "_decode_alpha_coupled_mip_rgba", decode)
+    monkeypatch.setattr(texture_bake, "adjust_rgba_bytes",
+                        lambda rgba, *_args: rgba)
+
+    def encode(_png, output, _format, _mips, **kwargs):
+        encoded.append((kwargs.get("bc_flags"), kwargs.get("alpha_weight")))
+        marker = 3 if kwargs.get("bc_flags") == "q" else 12
+        candidate_path = Path(output) / "candidate.dds"
+        candidate_path.write_bytes(_dx10_dds(bytes([marker]) * 16, 98))
+        return str(candidate_path)
+
+    monkeypatch.setattr(texture_bake, "encode_png_to_dds", encode)
+    candidate, writable, protected, stats = (
+        texture_bake._encode_alpha_coupled_mips(
+            original, prepared, {"hue": 30}, str(tmp_path)))
+
+    assert encoded == [
+        (None, None), (None, 2.0), (None, 4.0),
+        (None, 8.0), (None, 16.0), (None, 32.0),
+        ("q", 2.0), ("q", 4.0), ("q", 8.0),
+        ("q", 16.0), ("q", 32.0),
+    ]
+    assert candidate[148:164] == bytes([3]) * 16
+    assert list(writable[0]) == [1]
+    assert list(protected[0]) == [0]
+    assert stats[0].source_mode6_tested == 1
+    assert stats[0].source_mode6_compatible == 1
+
+
+def test_bc7_mode_mask_identifies_unary_prefix_mode():
+    assert texture_bake._bc7_block_mode(bytes([0x40]) + bytes(15)) == 6
+    assert texture_bake._bc7_block_mode(bytes([0x02]) + bytes(15)) == 1
+    with pytest.raises(texture_bake.TextureBakeAnalysisError) as error:
+        texture_bake._bc7_block_mode(bytes(16))
+    assert error.value.code == "texture_validation_failed"
 
 
 def test_bc7_bake_with_no_compatible_mip0_does_not_write_or_backup(
@@ -546,7 +661,7 @@ def test_bc7_bake_with_no_compatible_mip0_does_not_write_or_backup(
         ], {"hue": 30})
 
     assert result["code"] == "alpha_preservation_unsupported"
-    assert called == [True]
+    assert called == [True] * 6
     assert source.read_bytes() == original
     assert not _backups(tmp_path, "bc7-unsupported")
 
