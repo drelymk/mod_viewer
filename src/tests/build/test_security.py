@@ -109,6 +109,14 @@ def test_sky_mesh_is_pinned_in_the_vendor_manifest():
         "a44cb7c543d04b2690b0079b8b473da9a36660629b2eb091f7eab8b4111d7b7a")
 
 
+def test_texconv_is_pinned_as_a_runtime_tool():
+    spec = build.RUNTIME_TOOL_FILES["texconv.exe"]
+
+    assert spec["url"].endswith("/DirectXTex/releases/download/may2026/texconv.exe")
+    assert spec["sha256"] == (
+        "dcfdec10244e02cf5037fba089c55fb7e1326b1c8181742d77d15fa5cb5eef06")
+
+
 def test_verify_web_uses_refactored_frontend_paths(tmp_path, monkeypatch):
     for relative_path in (
         "index.html",

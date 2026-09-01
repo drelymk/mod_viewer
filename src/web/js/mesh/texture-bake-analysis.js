@@ -119,6 +119,7 @@ export function formatBakeAnalysis(result, displayName = key => key) {
     ['Texture', result.texture?.file || 'Unknown'],
     ['Format', result.texture?.format || 'Unknown'],
     ['Texture size', `${result.texture?.width || 0} × ${result.texture?.height || 0}`],
+    ['Mip levels', result.mip_summary?.levels || result.texture?.mip_count || 1],
     ['Selected coverage', `${coverage.selected_percent?.toFixed?.(1) ?? 0}% (${coverage.selected_units || 0} ${coverage.unit || 'units'})`],
     ['Unique coverage', uniqueUnits],
     ['Shared coverage', `${coverage.shared_percent_of_selected?.toFixed?.(1) ?? 0}% (${coverage.shared_units || 0} ${coverage.unit || 'units'})`],
@@ -135,6 +136,10 @@ export function formatBakeAnalysis(result, displayName = key => key) {
     warning = shared.length
       ? `Coverage overlaps: ${shared.join(', ')}.`
       : 'Coverage overlaps another active draw using this texture.';
+    const levels = result.mip_summary?.shared_levels || [];
+    if (levels.length) {
+      warning += ` Shared units were found at mip level${levels.length === 1 ? '' : 's'} ${levels.join(', ')}.`;
+    }
   }
   return {
     kind: result.safety === 'unknown' ? 'unknown' : 'ok',

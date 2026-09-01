@@ -1,0 +1,83 @@
+[
+  {
+    "name": "black",
+    "rgb": [0.0, 0.0, 0.0],
+    "adjustment": {"hue": 180, "brightness": 2},
+    "expected": [0.0, 0.0, 0.0]
+  },
+  {
+    "name": "white",
+    "rgb": [1.0, 1.0, 1.0],
+    "adjustment": {"saturation": 0, "contrast": 2},
+    "expected": [1.0, 1.0, 1.0]
+  },
+  {
+    "name": "gray",
+    "rgb": [0.4, 0.4, 0.4],
+    "adjustment": {"hue": -180},
+    "expected": [0.4, 0.4, 0.4]
+  },
+  {
+    "name": "neutral",
+    "rgb": [0.1, 0.5, 0.9],
+    "adjustment": {},
+    "expected": [0.1, 0.5, 0.9]
+  },
+  {
+    "name": "hue-red-to-green",
+    "rgb": [1.0, 0.0, 0.0],
+    "adjustment": {"hue": 120},
+    "expected": [0.0, 1.0, 0.0]
+  },
+  {
+    "name": "hue-plus-minus-180",
+    "rgb": [1.0, 0.0, 0.0],
+    "adjustment": {"hue": -180},
+    "expected": [0.0, 1.0, 1.0]
+  },
+  {
+    "name": "saturation-to-gray",
+    "rgb": [0.2, 0.4, 0.8],
+    "adjustment": {"saturation": 0},
+    "expected": [0.8, 0.8, 0.8]
+  },
+  {
+    "name": "brightness-half",
+    "rgb": [0.2, 0.4, 0.8],
+    "adjustment": {"brightness": 0.5},
+    "expected": [0.1, 0.2, 0.4]
+  },
+  {
+    "name": "contrast-zero",
+    "rgb": [0.2, 0.4, 0.8],
+    "adjustment": {"contrast": 0},
+    "expected": [0.5, 0.5, 0.5]
+  },
+  {
+    "name": "channel-multipliers",
+    "rgb": [0.2, 0.4, 0.6],
+    "adjustment": {"red": 2, "green": 0.5, "blue": 0},
+    "expected": [0.4, 0.2, 0.0]
+  },
+  {
+    "name": "half-blue-tint",
+    "rgb": [1.0, 0.0, 0.0],
+    "adjustment": {"tint": "#0000ff", "tint_strength": 0.5},
+    "expected": [0.5, 0.0, 0.5]
+  },
+  {
+    "name": "full-green-tint",
+    "rgb": [1.0, 0.0, 0.0],
+    "adjustment": {"tint": "#00ff00", "tint_strength": 1},
+    "expected": [0.0, 1.0, 0.0]
+  },
+  {
+    "name": "combined-controls",
+    "rgb": [0.2, 0.4, 0.6],
+    "adjustment": {"hue": 60, "saturation": 1.5,
+                   "brightness": 0.75, "contrast": 1.2,
+                   "red": 1.2, "green": 0.8, "blue": 0.5,
+                   "tint": "#ff8000", "tint_strength": 0.25},
+    "expected": [0.403, 0.1254901961, 0.165]
+  }
+]

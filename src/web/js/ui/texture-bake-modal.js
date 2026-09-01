@@ -1,15 +1,26 @@
-// Read-only texture coverage result modal.
+// Coverage preflight and the destructive Safe Bake confirmation.
 
 import { bindModalDismiss, setModalError } from './modal-shell.js';
 import {
-  analyzeMeshTextureBake, cancelTextureBakeAnalysis, formatBakeAnalysis,
+  analyzeMeshTextureBake, buildTextureUsageSnapshot,
+  cancelTextureBakeAnalysis, formatBakeAnalysis,
 } from '../mesh/texture-bake-analysis.js';
 import { activeMeshes } from '../mesh/mesh-state.js';
+import {
+  getMeshColorAdjustment, resetMeshColorAdjustment,
+} from '../mesh/mesh-color-state.js';
+import { isNeutralColorAdjustment } from '../mesh/color-adjustment.js';
+import { reloadTextures } from '../mesh/mesh-factory.js';
+import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 
 const $ = id => document.getElementById(id);
 const backdrop = $('texture-bake-modal-backdrop');
 const body = $('texture-bake-body');
 const error = $('texture-bake-error');
+const bakeButton = $('texture-bake-confirm');
+
+let pendingBake = null;
+let baking = false;
 
 function displayNameForSemanticKey(semanticKey) {
   const mesh = activeMeshes.find(item =>
@@ -18,19 +29,27 @@ function displayNameForSemanticKey(semanticKey) {
 }
 
 function closeTextureBakeModal() {
-  cancelTextureBakeAnalysis();
+  if (!baking) {
+    cancelTextureBakeAnalysis();
+    pendingBake = null;
+  }
   backdrop?.classList.remove('show');
 }
 
-function setLoading(loading) {
+function setLoading(message = 'Analyzing texture coverage…') {
   if (!body) return;
   body.replaceChildren();
-  if (loading) {
-    const message = document.createElement('div');
-    message.className = 'texture-bake-loading';
-    message.textContent = 'Analyzing texture coverage…';
-    body.appendChild(message);
-  }
+  const node = document.createElement('div');
+  node.className = 'texture-bake-loading';
+  node.textContent = message;
+  body.appendChild(node);
+}
+
+function setBakeAction({visible = false, disabled = true, label = 'Bake Color'} = {}) {
+  if (!bakeButton) return;
+  bakeButton.hidden = !visible;
+  bakeButton.disabled = disabled;
+  bakeButton.textContent = label;
 }
 
 function renderResult(result, displayName = displayNameForSemanticKey) {
@@ -38,7 +57,8 @@ function renderResult(result, displayName = displayNameForSemanticKey) {
   body.replaceChildren();
   const formatted = formatBakeAnalysis(result, displayName);
   if (!formatted) return false;
-  if (formatted.kind === 'error') {
+  setBakeAction();
+  if (formatted.kind === 'error' || formatted.kind === 'unsupported') {
     setModalError(error, formatted.summary);
     return true;
   }
@@ -70,16 +90,109 @@ function renderResult(result, displayName = displayNameForSemanticKey) {
   return true;
 }
 
-/** Open the read-only analysis modal and resolve after the request settles. */
+function renderBakeSuccess(result) {
+  setModalError(error, '');
+  body.replaceChildren();
+  const state = document.createElement('div');
+  state.className = 'texture-bake-state';
+  state.textContent = 'TEXTURE BAKED';
+  body.appendChild(state);
+  const summary = document.createElement('p');
+  summary.className = 'texture-bake-summary';
+  summary.textContent = `${result.texture?.file || 'Texture'} was updated. `
+    + 'The viewer-only Color adjustment was reset.';
+  body.appendChild(summary);
+  const rows = document.createElement('dl');
+  rows.className = 'texture-bake-details';
+  [
+    ['Top-level units changed', result.patched?.mip0_units || 0],
+    ['Shared units preserved', result.patched?.shared_units_preserved || 0],
+    ['Backup', result.backup?.file || 'Created'],
+  ].forEach(([label, value]) => {
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const description = document.createElement('dd');
+    description.textContent = String(value);
+    rows.append(term, description);
+  });
+  body.appendChild(rows);
+  setBakeAction();
+}
+
+function bakeRequestFor(mesh) {
+  const adjustment = getMeshColorAdjustment(mesh);
+  return {
+    semanticKey: mesh.userData?.semanticKey,
+    metadataKey: mesh.userData?.metadataKey,
+    texKey: mesh.userData?.texKey || null,
+    textureUsage: buildTextureUsageSnapshot(),
+    adjustment: {
+      hue: adjustment.hue,
+      saturation: adjustment.saturation,
+      brightness: adjustment.brightness,
+      contrast: adjustment.contrast,
+      red: adjustment.red,
+      green: adjustment.green,
+      blue: adjustment.blue,
+      tint: adjustment.tint,
+      tint_strength: adjustment.tintStrength,
+    },
+  };
+}
+
+async function runBake(mesh, isCurrent) {
+  const request = bakeRequestFor(mesh);
+  const api = window.pywebview?.api?.bake_mesh_texture_color;
+  if (typeof api !== 'function') {
+    setModalError(error, 'Texture baking is unavailable.');
+    setBakeAction({visible: true, disabled: false, label: 'Bake Color'});
+    return null;
+  }
+  baking = true;
+  setBakeAction({visible: true, disabled: true, label: 'Baking…'});
+  setLoading(`Baking color into ${request.texKey || 'the texture'}…`);
+  let result;
+  try {
+    result = await api(
+      mesh.userData.modPath, request.semanticKey, request.metadataKey,
+      request.texKey, request.textureUsage, request.adjustment);
+  } catch (_requestError) {
+    result = {status: 'error', error: 'Texture baking failed.'};
+  }
+  baking = false;
+  if (typeof isCurrent === 'function' && !isCurrent()) {
+    closeTextureBakeModal();
+    return null;
+  }
+  if (result?.status !== 'ok') {
+    setModalError(error, result?.error || 'Texture baking failed.');
+    setBakeAction({visible: true, disabled: false,
+      label: 'Bake Color'});
+    return result;
+  }
+  resetMeshColorAdjustment(mesh, {persist: false, render: false});
+  if (result.warning === 'color_state_reset_failed') {
+    // Retry through the normal persistence boundary; texture_bake.py never
+    // edits viewer metadata directly.
+    resetMeshColorAdjustment(mesh, {persist: true, render: false});
+  }
+  reloadTextures(result.affected_tex_keys || [result.tex_key]);
+  notifyMeshStateChanged([mesh]);
+  renderBakeSuccess(result);
+  return result;
+}
+
+/** Open the bake preflight modal and wait for analysis to settle. */
 export async function openTextureBakeModal(mesh, { isCurrent } = {}) {
   if (!backdrop || !body) return null;
   setModalError(error, '');
-  setLoading(true);
+  setBakeAction();
+  setLoading();
   backdrop.classList.add('show');
   let result;
   try {
-    result = await analyzeMeshTextureBake(mesh, { isCurrent });
-  } catch (requestError) {
+    result = await analyzeMeshTextureBake(mesh, {isCurrent});
+  } catch (_requestError) {
     result = {
       status: 'error',
       error: 'Texture coverage could not be analyzed safely.',
@@ -90,8 +203,26 @@ export async function openTextureBakeModal(mesh, { isCurrent } = {}) {
     return null;
   }
   renderResult(result);
+  if (result.status === 'ok' && (result.safety === 'safe'
+      || result.safety === 'shared')) {
+    if (!isNeutralColorAdjustment(getMeshColorAdjustment(mesh))) {
+      pendingBake = {mesh, isCurrent};
+      setBakeAction({
+        visible: true, disabled: false,
+        label: result.safety === 'shared'
+          ? 'Bake Unique Areas Only' : 'Bake Color',
+      });
+    }
+  }
   return result;
 }
+
+bakeButton?.addEventListener('click', async () => {
+  if (!pendingBake || baking) return;
+  const job = pendingBake;
+  pendingBake = null;
+  await runBake(job.mesh, job.isCurrent);
+});
 
 bindModalDismiss({
   backdrop,
@@ -100,7 +231,9 @@ bindModalDismiss({
 });
 
 window.addEventListener('mod-viewer-mesh-selected', () => {
-  if (backdrop?.classList.contains('show')) closeTextureBakeModal();
+  if (backdrop?.classList.contains('show') && !baking) {
+    closeTextureBakeModal();
+  }
 });
 
 export { closeTextureBakeModal };

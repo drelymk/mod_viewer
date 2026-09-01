@@ -2,6 +2,7 @@
 /build/
 /dist/
 /src/assets/
+/src/runtime_tools/texconv.exe
 /src/build/
 /src/dist/
 *.spec

@@ -9,6 +9,7 @@ import {
 } from '../mesh/mesh-color-state.js';
 import { canAnalyzeTextureBake } from '../mesh/texture-bake-analysis.js';
 import { openTextureBakeModal } from '../ui/texture-bake-modal.js';
+import { isNeutralColorAdjustment } from '../mesh/color-adjustment.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -272,26 +273,36 @@ function updateColorAdjustment(mesh, field, controlValue, persist = false) {
   const next = getMeshColorAdjustment(mesh);
   next[field] = colorAdjustmentValue(field, controlValue);
   setMeshColorAdjustment(mesh, next, { persist, render: true });
+  const action = document.querySelector('.inspector-texture-bake');
+  if (action) {
+    const neutral = isNeutralColorAdjustment(getMeshColorAdjustment(mesh));
+    action.disabled = neutral;
+    action.title = neutral ? 'Adjust the mesh color before baking.' : '';
+  }
 }
 
 function buildTextureBakeAction(section, mesh) {
   const eligibility = canAnalyzeTextureBake(mesh);
   if (eligibility.editable) {
-    const analyze = document.createElement('button');
-    analyze.type = 'button';
-    analyze.className = 'ui-button inspector-texture-bake';
-    analyze.textContent = 'Analyze Texture Coverage';
-    analyze.addEventListener('click', async () => {
-      analyze.disabled = true;
+    const bake = document.createElement('button');
+    bake.type = 'button';
+    bake.className = 'ui-button inspector-texture-bake';
+    bake.textContent = 'Bake to Texture…';
+    const neutral = isNeutralColorAdjustment(getMeshColorAdjustment(mesh));
+    bake.disabled = neutral;
+    if (neutral) bake.title = 'Adjust the mesh color before baking.';
+    bake.addEventListener('click', async () => {
+      bake.disabled = true;
       try {
         await openTextureBakeModal(mesh, {
           isCurrent: () => current?.type === 'mesh' && current.mesh === mesh,
         });
       } finally {
-        analyze.disabled = false;
+        bake.disabled = isNeutralColorAdjustment(
+          getMeshColorAdjustment(mesh));
       }
     });
-    section.appendChild(analyze);
+    section.appendChild(bake);
   } else if (eligibility.reason === 'unsupported-texture-type') {
     addText(section, 'inspector-texture-bake-hint', eligibility.message);
   }
@@ -362,6 +373,12 @@ function buildColorSection(content, mesh) {
     const next = getMeshColorAdjustment(mesh);
     next.tint = tintInput.value;
     setMeshColorAdjustment(mesh, next, { persist, render: true });
+    const action = section.querySelector('.inspector-texture-bake');
+    if (action) {
+      const neutral = isNeutralColorAdjustment(getMeshColorAdjustment(mesh));
+      action.disabled = neutral;
+      action.title = neutral ? 'Adjust the mesh color before baking.' : '';
+    }
   };
   tintInput.addEventListener('input', () => applyTint(false));
   tintInput.addEventListener('change', () => applyTint(true));

@@ -76,6 +76,23 @@ export function removeTextures(keys) {
   return removed;
 }
 
+/** Invalidate only baked texture loaders while preserving registry users. */
+export function reloadTextures(keys) {
+  const users = new Set();
+  for (const key of keys || []) {
+    if (!Object.hasOwn(registry, key)) continue;
+    for (const mesh of textureUsers.get(key) || []) users.add(mesh);
+    disposeTexture(loaders[key]);
+    delete loaders[key];
+    readyTextures.delete(key);
+    failedTextures.delete(key);
+    nativeDDSFallbacks.delete(key);
+  }
+  for (const mesh of users) refreshMeshTexture(mesh, { render: false });
+  if ([...users].some(mesh => mesh.visible)) requestRender();
+  return users.size;
+}
+
 export function hasTexture(key) {
   return !!(splitTextureKey(key) && registry[key]
     && !failedTextures.has(key));

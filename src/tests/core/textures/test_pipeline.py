@@ -97,6 +97,22 @@ def test_typed_srgb_retry_does_not_read_failed_non_dds(tmp_path, monkeypatch):
     assert textures.load_texture_image(path) is None
 
 
+def test_full_texture_decode_keeps_authored_dimensions_and_alpha(monkeypatch):
+    from PIL import Image
+
+    source = Image.new("RGBA", (4096, 1), (1, 2, 3, 129))
+    monkeypatch.setattr(
+        "core.textures.pipeline._open_texture_image",
+        lambda *_args: source,
+    )
+
+    image = textures.load_texture_image_full("fixture.dds")
+
+    assert image.size == (4096, 1)
+    assert image.mode == "RGBA"
+    assert image.getpixel((0, 0)) == (1, 2, 3, 129)
+
+
 def test_texture_module_does_not_depend_on_mesh_builder():
     root = Path(__file__).resolve().parents[4]
     texture_result = subprocess.run(

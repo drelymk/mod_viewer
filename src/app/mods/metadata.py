@@ -1,9 +1,7 @@
 """Viewer-only mesh labels and texture choices stored beside a mod."""
 from collections import Counter
 import json
-import math
 import os
-import re
 import threading
 from copy import deepcopy
 
@@ -14,34 +12,16 @@ from core.geometry.skinning import (
     normalize_skinning_source_file, skinning_source_key,
 )
 from core.textures.profiles import texture_profile_for
+from core.textures.color_adjustment import (
+    normalize_color_adjustment as _normalize_mesh_color_adjustment,
+    is_neutral_color_adjustment as _is_neutral_mesh_color_adjustment,
+)
 
 METADATA_NAME = ".mod_viewer.json"
 PRESENT_NAMES_KEY = "__all__"
 _LOCK = threading.RLock()
 
 MESH_COLOR_ADJUSTMENTS_KEY = "mesh_color_adjustments"
-_COLOR_DEFAULTS = {
-    "hue": 0,
-    "saturation": 1.0,
-    "brightness": 1.0,
-    "contrast": 1.0,
-    "red": 1.0,
-    "green": 1.0,
-    "blue": 1.0,
-    "tint": "#ffffff",
-    "tint_strength": 0.0,
-}
-_COLOR_RANGES = {
-    "hue": (-180.0, 180.0),
-    "saturation": (0.0, 2.0),
-    "brightness": (0.0, 2.0),
-    "contrast": (0.0, 2.0),
-    "red": (0.0, 2.0),
-    "green": (0.0, 2.0),
-    "blue": (0.0, 2.0),
-    "tint_strength": (0.0, 1.0),
-}
-_TINT_PATTERN = re.compile(r"^#[0-9a-f]{6}$", re.IGNORECASE)
 
 
 def _legacy_mesh_key(name, entry):
@@ -109,38 +89,6 @@ def _save(folder_path, data):
         fh.write("\n")
     os.replace(temp_path, path)
     return {"saved": True, "path": path}
-
-
-def _normalize_mesh_color_adjustment(value, *, reject_invalid=False):
-    """Normalize one sparse viewer color state, or reject malformed input."""
-    if not isinstance(value, dict):
-        return None
-    result = {}
-    for field, default in _COLOR_DEFAULTS.items():
-        raw = value.get(field, default)
-        if field == "tint":
-            if not isinstance(raw, str) or not _TINT_PATTERN.fullmatch(raw):
-                if reject_invalid:
-                    return None
-                raw = default
-            result[field] = raw.lower()
-            continue
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-            if reject_invalid:
-                return None
-            raw = default
-        elif not math.isfinite(raw):
-            if reject_invalid:
-                return None
-            raw = default
-        minimum, maximum = _COLOR_RANGES[field]
-        result[field] = min(maximum, max(minimum, float(raw)))
-    result["hue"] = int(result["hue"]) if result["hue"].is_integer() else result["hue"]
-    return result
-
-
-def _is_neutral_mesh_color_adjustment(value):
-    return value == _COLOR_DEFAULTS
 
 
 def mesh_color_adjustments(folder_path=None, data=None):

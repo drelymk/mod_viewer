@@ -30,6 +30,7 @@ EXPECTED_API_METHODS = {
     "get_ini_text",
     "get_mesh_semantics",
     "analyze_mesh_texture_bake",
+    "bake_mesh_texture_color",
     "get_mod_folders",
     "get_panel_opacity",
     "get_present_state",

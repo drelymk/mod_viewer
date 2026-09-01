@@ -1,14 +1,29 @@
-"""Read-only DDS coverage analysis for the future texture baker."""
+"""Authoritative analysis and safe, unit-preserving DDS color baking."""
 
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
 import os
 import struct
+import tempfile
 
 from core.geometry.buffers import BufferStore
 from core.geometry.conventions import geometry_convention_for
 from core.geometry.packing import pack_draw_geometry
 from core.resource_paths import _canonical, safe_resource_path
 from core.textures import split_texture_key
-from core.textures.dds import inspect_dds
+from core.textures.color_adjustment import (
+    adjust_rgba_bytes, is_neutral_color_adjustment,
+    normalize_color_adjustment,
+)
+from core.textures.dds import (
+    dds_layout_for_info, inspect_dds, inspect_dds_layout,
+)
+from core.textures.pipeline import load_texture_image_full
+from core.textures.texconv import (
+    TexconvError, TexconvUnavailableError, encode_png_to_dds,
+)
 from core.textures.uv_coverage import UVCoverageError, rasterize_uv_coverage
 
 from app.assets.textures import is_asset_texture_key
@@ -27,13 +42,50 @@ _UNSUPPORTED_COLOR_FORMATS = frozenset({
 
 
 class TextureBakeAnalysisError(ValueError):
-    """An expected, stable failure from a coverage analysis request."""
+    """An expected, stable failure from a coverage or bake request."""
 
     def __init__(self, code, message, status="error"):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status = status
+
+
+@dataclass(frozen=True)
+class _PreparedGeometry:
+    indices: tuple
+    source_uvs: tuple
+    triangle_count: int
+    degenerate_triangle_count: int
+
+
+@dataclass(frozen=True)
+class _PreparedConsumer:
+    semantic_key: str
+    geometry: _PreparedGeometry
+    coverages: tuple
+
+
+@dataclass(frozen=True)
+class _PreparedTextureBake:
+    entries: tuple
+    selected_path: str
+    info: object
+    layout: object
+    selected_pixels: object
+    selected_consumer: _PreparedConsumer
+    other_consumers: tuple
+    safe_masks: tuple
+    shared_masks: tuple
+    shared_with: tuple
+    unresolved: tuple
+    unresolved_details: tuple
+
+    @property
+    def safety(self):
+        if self.unresolved:
+            return "unknown"
+        return "shared" if any(sum(mask) for mask in self.shared_masks) else "safe"
 
 
 def _error(code, message, status="error", **details):
@@ -163,10 +215,13 @@ def _unpack_source_uvs(raw):
             "mesh_has_no_uv", "The mesh has no UV coordinates.")
     values = struct.unpack(f"<{len(raw) // 4}f", raw)
     # pack_draw_geometry stores viewer-space V = 1 - source V for Three.js.
-    return [(u, 1.0 - v) for u, v in zip(values[::2], values[1::2])]
+    return tuple((u, 1.0 - v)
+                 for u, v in zip(values[::2], values[1::2]))
 
 
-def _coverage(draw, group, mod_dir, info, buffers, sparse_shape_cache, convention):
+def _prepare_uv_geometry(draw, group, mod_dir, buffers, sparse_shape_cache,
+                         convention):
+    """Pack one draw once and retain source-orientation UV triangles."""
     try:
         packed = _draw_geometry(
             draw, group, mod_dir, buffers, sparse_shape_cache, convention)
@@ -174,21 +229,36 @@ def _coverage(draw, group, mod_dir, info, buffers, sparse_shape_cache, conventio
             raise TextureBakeAnalysisError(
                 "geometry_not_available",
                 "The rendered draw geometry could not be prepared.")
-        unit = 4 if info.compressed else 1
-        return rasterize_uv_coverage(
-            _unpack_indices(packed.indices),
-            _unpack_source_uvs(packed.texcoords) if packed.texcoords is not None
-            else None,
-            info.width, info.height,
-            unit_width=unit, unit_height=unit)
-    except UVCoverageError as error:
-        raise TextureBakeAnalysisError(error.code, error.message) from error
+        indices = _unpack_indices(packed.indices)
+        source_uvs = _unpack_source_uvs(packed.texcoords)
+        return _PreparedGeometry(
+            indices=indices, source_uvs=source_uvs,
+            triangle_count=len(indices) // 3,
+            degenerate_triangle_count=0)
     except TextureBakeAnalysisError:
         raise
     except Exception as error:
         raise TextureBakeAnalysisError(
             "geometry_not_available",
             "The rendered draw geometry could not be prepared.") from error
+
+
+def _rasterize_geometry(geometry, width, height, unit_width, unit_height):
+    try:
+        return rasterize_uv_coverage(
+            geometry.indices, geometry.source_uvs, width, height,
+            unit_width=unit_width, unit_height=unit_height)
+    except UVCoverageError as error:
+        raise TextureBakeAnalysisError(error.code, error.message) from error
+
+
+def _coverage(draw, group, mod_dir, info, buffers, sparse_shape_cache, convention):
+    """Compatibility helper for the original mip-0 analysis contract."""
+    geometry = _prepare_uv_geometry(
+        draw, group, mod_dir, buffers, sparse_shape_cache, convention)
+    unit = 4 if info.compressed else 1
+    return _rasterize_geometry(
+        geometry, info.width, info.height, unit, unit)
 
 
 def _validate_usage(active_mesh_keys, selected_semantic_key, selected_texture_key,
@@ -209,10 +279,20 @@ def _validate_usage(active_mesh_keys, selected_semantic_key, selected_texture_ke
             raise TextureBakeAnalysisError(
                 "stale_mesh_state",
                 "The model changed before texture coverage could be analyzed.")
+        texture_key = item.get("tex_key")
+        if texture_key is not None and not isinstance(texture_key, str):
+            raise TextureBakeAnalysisError(
+                "stale_mesh_state",
+                "The model changed before texture coverage could be analyzed.")
         keys.append(key)
-        entries.append({"semantic_key": key, "tex_key": item.get("tex_key")})
+        entries.append({"semantic_key": key, "tex_key": texture_key})
     expected = set(active_mesh_keys or ())
     if set(keys) != expected or len(keys) != len(expected):
+        raise TextureBakeAnalysisError(
+            "stale_mesh_state",
+            "The model changed before texture coverage could be analyzed.")
+    if selected_texture_key is not None and not isinstance(
+            selected_texture_key, str):
         raise TextureBakeAnalysisError(
             "stale_mesh_state",
             "The model changed before texture coverage could be analyzed.")
@@ -222,113 +302,273 @@ def _validate_usage(active_mesh_keys, selected_semantic_key, selected_texture_ke
         raise TextureBakeAnalysisError(
             "stale_mesh_state",
             "The model changed before texture coverage could be analyzed.")
-    return entries
+    return tuple(entries)
+
+
+def _resolve_request(context, overrides, active_mesh_keys, selected_semantic_key,
+                     selected_texture_key, texture_usage):
+    entries = _validate_usage(
+        active_mesh_keys, selected_semantic_key, selected_texture_key,
+        texture_usage)
+    selected_path = _texture_path(
+        context.mod_dir, selected_texture_key, selected=True)
+    info = _inspect_color_texture(selected_path)
+    parsed, draws = resolved_draws(context, overrides)
+    selected_draw = draws.get(selected_semantic_key)
+    if selected_draw is None:
+        raise TextureBakeAnalysisError(
+            "mesh_not_found", "The selected mesh is no longer available.")
+    selected_identity = _physical_identity(selected_path)
+    consumers = []
+    for entry in entries:
+        if entry["semantic_key"] == selected_semantic_key:
+            continue
+        path = _texture_path(context.mod_dir, entry["tex_key"])
+        if path and _physical_identity(path) == selected_identity:
+            consumers.append((entry["semantic_key"], draws.get(entry["semantic_key"])))
+        elif entry["tex_key"] == selected_texture_key:
+            # A consumer claiming the selected key but lacking a resolvable
+            # source cannot be safely excluded from the sharing analysis.
+            consumers.append((entry["semantic_key"], None))
+    return entries, selected_path, info, parsed, selected_draw, tuple(consumers)
+
+
+def _unit_size(info):
+    """Return the source-pixel span represented by one edit unit."""
+    return (4, 4) if info.compressed else (1, 1)
+
+
+def _prepare_texture_bake(context, overrides, active_mesh_keys,
+                          selected_semantic_key, selected_texture_key,
+                          texture_usage, *, require_file_layout=True):
+    """Resolve geometry and all per-mip masks for one authoritative request."""
+    (entries, selected_path, info, parsed, selected_draw,
+     consumers) = _resolve_request(
+         context, overrides, active_mesh_keys, selected_semantic_key,
+         selected_texture_key, texture_usage)
+    layout = inspect_dds_layout(selected_path)
+    if layout is None:
+        if require_file_layout:
+            raise TextureBakeAnalysisError(
+                "invalid_dds", "The selected texture is not a valid supported DDS.")
+        layout = dds_layout_for_info(info)
+
+    buffers = BufferStore()
+    sparse_shape_cache = {}
+    convention = geometry_convention_for(parsed.game.game)
+    selected_geometry = _prepare_uv_geometry(
+        selected_draw[0], selected_draw[1], context.mod_dir, buffers,
+        sparse_shape_cache, convention)
+    selected_pixels = _rasterize_geometry(
+        selected_geometry, layout.mips[0].width, layout.mips[0].height, 1, 1)
+    selected_coverages = tuple(
+        _rasterize_geometry(
+            selected_geometry, mip.width, mip.height, *_unit_size(info))
+        for mip in layout.mips)
+    selected_consumer = _PreparedConsumer(
+        selected_semantic_key, selected_geometry, selected_coverages)
+
+    other_consumers = []
+    unresolved = []
+    unresolved_details = []
+    for semantic_key, consumer in consumers:
+        try:
+            if consumer is None:
+                raise TextureBakeAnalysisError(
+                    "geometry_not_available",
+                    "The rendered draw geometry could not be prepared.")
+            geometry = _prepare_uv_geometry(
+                consumer[0], consumer[1], context.mod_dir, buffers,
+                sparse_shape_cache, convention)
+            coverages = tuple(
+                _rasterize_geometry(
+                    geometry, mip.width, mip.height, *_unit_size(info))
+                for mip in layout.mips)
+        except TextureBakeAnalysisError as error:
+            unresolved.append(semantic_key)
+            unresolved_details.append({
+                "semantic_key": semantic_key,
+                "code": error.code,
+                "error": error.message,
+            })
+            continue
+        other_consumers.append(_PreparedConsumer(
+            semantic_key, geometry, coverages))
+
+    safe_masks = []
+    shared_masks = []
+    shared_with = []
+    for level, selected in enumerate(selected_coverages):
+        union = bytearray(len(selected.mask))
+        for other in other_consumers:
+            other_mask = other.coverages[level].mask
+            overlap = sum(left and right
+                          for left, right in zip(selected.mask, other_mask))
+            if level == 0 and overlap:
+                shared_with.append({
+                    "semantic_key": other.semantic_key,
+                    "shared_units": overlap,
+                })
+            for index, value in enumerate(other_mask):
+                union[index] = union[index] or value
+        shared = bytearray(
+            left and right for left, right in zip(selected.mask, union))
+        safe = bytearray(
+            value and not shared[index]
+            for index, value in enumerate(selected.mask))
+        safe_masks.append(safe)
+        shared_masks.append(shared)
+    return _PreparedTextureBake(
+        entries=entries, selected_path=selected_path, info=info, layout=layout,
+        selected_pixels=selected_pixels, selected_consumer=selected_consumer,
+        other_consumers=tuple(other_consumers), safe_masks=tuple(safe_masks),
+        shared_masks=tuple(shared_masks), shared_with=tuple(shared_with),
+        unresolved=tuple(unresolved), unresolved_details=tuple(unresolved_details))
+
+
+def _analysis_result(prepared):
+    selected = prepared.selected_consumer.coverages[0]
+    shared = prepared.shared_masks[0]
+    selected_units = selected.count
+    shared_units = sum(shared)
+    total_units = len(selected.mask)
+    mip_shared_levels = [
+        level for level, mask in enumerate(prepared.shared_masks) if sum(mask)]
+    return {
+        "status": "ok",
+        "safety": prepared.safety,
+        "semantic_key": prepared.selected_consumer.semantic_key,
+        "tex_key": next(item["tex_key"] for item in prepared.entries
+                         if item["semantic_key"] == prepared.selected_consumer.semantic_key),
+        "texture": _texture_details(prepared.selected_path, prepared.info),
+        "coverage": {
+            "mip_level": 0,
+            "unit": "block" if prepared.info.compressed else "pixel",
+            "unit_width": 4 if prepared.info.compressed else 1,
+            "unit_height": 4 if prepared.info.compressed else 1,
+            "total_units": total_units,
+            "selected_units": selected_units,
+            "unique_units": (
+                None if prepared.unresolved else selected_units - shared_units),
+            "shared_units": shared_units,
+            "selected_percent": 100 * selected_units / total_units,
+            "shared_percent_of_selected": (
+                100 * shared_units / selected_units if selected_units else 0),
+        },
+        "mip_summary": {
+            "levels": len(prepared.layout.mips),
+            "shared_levels": mip_shared_levels,
+            "safe_units": sum(sum(mask) for mask in prepared.safe_masks),
+            "shared_units": sum(sum(mask) for mask in prepared.shared_masks),
+        },
+        "shared_with": list(prepared.shared_with),
+        "unresolved_consumers": list(prepared.unresolved),
+        "diagnostics": {
+            "triangles": prepared.selected_consumer.geometry.triangle_count,
+            "degenerate_uv_triangles": (
+                selected.degenerate_triangle_count),
+        },
+        "unresolved_consumer_details": list(prepared.unresolved_details),
+    }
+
+
+def _legacy_analysis(context, overrides, active_mesh_keys, selected_semantic_key,
+                     selected_texture_key, texture_usage):
+    """Keep direct mocked analysis fixtures compatible with the PR 72 API."""
+    (entries, selected_path, info, parsed, selected_draw,
+     consumers) = _resolve_request(
+         context, overrides, active_mesh_keys, selected_semantic_key,
+         selected_texture_key, texture_usage)
+    buffers = BufferStore()
+    sparse_shape_cache = {}
+    convention = geometry_convention_for(parsed.game.game)
+    selected_coverage = _coverage(
+        selected_draw[0], selected_draw[1], context.mod_dir, info,
+        buffers, sparse_shape_cache, convention)
+    union = bytearray(len(selected_coverage.mask))
+    shared_with = []
+    unresolved = []
+    unresolved_details = []
+    for semantic_key, consumer in consumers:
+        try:
+            if consumer is None:
+                raise TextureBakeAnalysisError(
+                    "geometry_not_available",
+                    "The rendered draw geometry could not be prepared.")
+            other = _coverage(
+                consumer[0], consumer[1], context.mod_dir, info,
+                buffers, sparse_shape_cache, convention)
+        except TextureBakeAnalysisError as error:
+            unresolved.append(semantic_key)
+            unresolved_details.append({
+                "semantic_key": semantic_key,
+                "code": error.code,
+                "error": error.message,
+            })
+            continue
+        overlap = sum(left and right
+                      for left, right in zip(selected_coverage.mask, other.mask))
+        if overlap:
+            shared_with.append({"semantic_key": semantic_key, "shared_units": overlap})
+        for index, value in enumerate(other.mask):
+            union[index] = union[index] or value
+    shared_mask = bytearray(
+        left and right for left, right in zip(selected_coverage.mask, union))
+    safe_mask = bytearray(
+        value and not shared_mask[index]
+        for index, value in enumerate(selected_coverage.mask))
+    return {
+        "status": "ok",
+        "safety": "unknown" if unresolved else ("shared" if sum(shared_mask) else "safe"),
+        "semantic_key": selected_semantic_key,
+        "tex_key": selected_texture_key,
+        "texture": _texture_details(selected_path, info),
+        "coverage": {
+            "mip_level": 0,
+            "unit": "block" if info.compressed else "pixel",
+            "unit_width": 4 if info.compressed else 1,
+            "unit_height": 4 if info.compressed else 1,
+            "total_units": len(selected_coverage.mask),
+            "selected_units": selected_coverage.count,
+            "unique_units": (None if unresolved
+                              else selected_coverage.count - sum(shared_mask)),
+            "shared_units": sum(shared_mask),
+            "selected_percent": 100 * selected_coverage.count / len(selected_coverage.mask),
+            "shared_percent_of_selected": (
+                100 * sum(shared_mask) / selected_coverage.count
+                if selected_coverage.count else 0),
+        },
+        "mip_summary": {
+            "levels": 1, "shared_levels": [0] if sum(shared_mask) else [],
+            "safe_units": sum(safe_mask), "shared_units": sum(shared_mask),
+        },
+        "shared_with": shared_with,
+        "unresolved_consumers": unresolved,
+        "diagnostics": {
+            "triangles": selected_coverage.triangle_count,
+            "degenerate_uv_triangles": selected_coverage.degenerate_triangle_count,
+        },
+        "unresolved_consumer_details": unresolved_details,
+    }
 
 
 def analyze_texture_bake(
         context, overrides, active_mesh_keys, selected_semantic_key,
         selected_texture_key, texture_usage):
-    """Analyze selected and same-source draws without opening texture data."""
+    """Analyze selected and same-source draws without modifying the texture."""
     try:
-        entries = _validate_usage(
-            active_mesh_keys, selected_semantic_key, selected_texture_key,
-            texture_usage)
-        selected_path = _texture_path(
-            context.mod_dir, selected_texture_key, selected=True)
-        info = _inspect_color_texture(selected_path)
-        parsed, draws = resolved_draws(context, overrides)
-        selected_draw = draws.get(selected_semantic_key)
-        if selected_draw is None:
-            raise TextureBakeAnalysisError(
-                "mesh_not_found", "The selected mesh is no longer available.")
-
-        selected_identity = _physical_identity(selected_path)
-        consumers = []
-        for entry in entries:
-            if entry["semantic_key"] == selected_semantic_key:
-                continue
-            path = _texture_path(context.mod_dir, entry["tex_key"])
-            if path and _physical_identity(path) == selected_identity:
-                consumers.append((entry["semantic_key"], draws.get(entry["semantic_key"])))
-
-        buffers = BufferStore()
-        sparse_shape_cache = {}
-        convention = geometry_convention_for(parsed.game.game)
-        try:
-            selected_coverage = _coverage(
-                selected_draw[0], selected_draw[1], context.mod_dir, info,
-                buffers, sparse_shape_cache, convention)
-        except TextureBakeAnalysisError as error:
-            return _error(error.code, error.message, error.status)
-
-        union = bytearray(len(selected_coverage.mask))
-        shared_with = []
-        unresolved = []
-        unresolved_details = []
-        for semantic_key, consumer in consumers:
-            try:
-                if consumer is None:
-                    raise TextureBakeAnalysisError(
-                        "geometry_not_available",
-                        "The rendered draw geometry could not be prepared.")
-                other = _coverage(
-                    consumer[0], consumer[1], context.mod_dir, info,
-                    buffers, sparse_shape_cache, convention)
-            except TextureBakeAnalysisError as error:
-                unresolved.append(semantic_key)
-                unresolved_details.append({
-                    "semantic_key": semantic_key,
-                    "code": error.code,
-                    "error": error.message,
-                })
-                continue
-            overlap = sum(
-                left and right
-                for left, right in zip(selected_coverage.mask, other.mask))
-            if overlap:
-                shared_with.append({
-                    "semantic_key": semantic_key,
-                    "shared_units": overlap,
-                })
-            for index, value in enumerate(other.mask):
-                union[index] = union[index] or value
-
-        shared_units = sum(
-            left and right
-            for left, right in zip(selected_coverage.mask, union))
-        selected_units = selected_coverage.count
-        total_units = len(selected_coverage.mask)
-        unit = 4 if info.compressed else 1
-        return {
-            "status": "ok",
-            "safety": "unknown" if unresolved else (
-                "shared" if shared_units else "safe"),
-            "semantic_key": selected_semantic_key,
-            "tex_key": selected_texture_key,
-            "texture": _texture_details(selected_path, info),
-            "coverage": {
-                "unit": "block" if info.compressed else "pixel",
-                "unit_width": unit,
-                "unit_height": unit,
-                "total_units": total_units,
-                "selected_units": selected_units,
-                "unique_units": (
-                    None if unresolved else selected_units - shared_units),
-                "shared_units": shared_units,
-                "selected_percent": 100 * selected_units / total_units,
-                "shared_percent_of_selected": (
-                    100 * shared_units / selected_units
-                    if selected_units else 0),
-            },
-            "shared_with": shared_with,
-            "unresolved_consumers": unresolved,
-            "diagnostics": {
-                "triangles": selected_coverage.triangle_count,
-                "degenerate_uv_triangles": (
-                    selected_coverage.degenerate_triangle_count),
-            },
-            "unresolved_consumer_details": unresolved_details,
-        }
+        _entries, selected_path, _info, _parsed, _draw, _consumers = \
+            _resolve_request(
+                context, overrides, active_mesh_keys, selected_semantic_key,
+                selected_texture_key, texture_usage)
+        if inspect_dds_layout(selected_path) is None:
+            return _legacy_analysis(
+                context, overrides, active_mesh_keys, selected_semantic_key,
+                selected_texture_key, texture_usage)
+        prepared = _prepare_texture_bake(
+            context, overrides, active_mesh_keys, selected_semantic_key,
+            selected_texture_key, texture_usage, require_file_layout=False)
+        return _analysis_result(prepared)
     except TextureBakeAnalysisError as error:
         return _error(error.code, error.message, error.status)
     except Exception:
@@ -337,4 +577,245 @@ def analyze_texture_bake(
             "Texture coverage could not be analyzed safely.")
 
 
-__all__ = ["TextureBakeAnalysisError", "analyze_texture_bake"]
+def _sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _read_source(path):
+    try:
+        with open(path, "rb") as stream:
+            return stream.read()
+    except OSError as error:
+        raise TextureBakeAnalysisError(
+            "texture_read_failed", "The source DDS could not be read.") from error
+
+
+def _assert_source_unchanged(path, original_hash):
+    try:
+        current_hash = _sha256_bytes(_read_source(path))
+    except TextureBakeAnalysisError as error:
+        raise TextureBakeAnalysisError(
+            "texture_changed_during_bake",
+            "The DDS changed while it was being baked.") from error
+    if current_hash != original_hash:
+        raise TextureBakeAnalysisError(
+            "texture_changed_during_bake",
+            "The DDS changed while it was being baked.")
+
+
+def _write_backup(path, original):
+    directory = os.path.dirname(path)
+    stem = os.path.basename(path) + ".modviewer"
+    for index in range(1, 10000):
+        suffix = ".bak" if index == 1 else f".{index}.bak"
+        backup = os.path.join(directory, stem + suffix)
+        try:
+            with open(backup, "xb") as stream:
+                stream.write(original)
+                stream.flush()
+                os.fsync(stream.fileno())
+            return backup
+        except FileExistsError:
+            continue
+        except OSError as error:
+            raise TextureBakeAnalysisError(
+                "backup_failed", "The DDS backup could not be created.") from error
+    raise TextureBakeAnalysisError(
+        "backup_failed", "The DDS backup could not be created.")
+
+
+def _write_temp(path, data):
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="wb", dir=os.path.dirname(path),
+                prefix=f".{os.path.basename(path)}.", suffix=".tmp",
+                delete=False) as stream:
+            temporary = stream.name
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return temporary
+    except OSError as error:
+        if temporary and os.path.exists(temporary):
+            os.remove(temporary)
+        raise TextureBakeAnalysisError(
+            "texture_write_failed", "The DDS temporary file could not be written.") from error
+
+
+def _patch_dds_units(original, candidate, layout, safe_masks, candidate_layout=None):
+    """Copy only selected-and-unique edit units from candidate DDS bytes."""
+    candidate_layout = candidate_layout or layout
+    if (len(original) < layout.payload_end
+            or len(candidate) < candidate_layout.payload_end
+            or len(safe_masks) != len(layout.mips)):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "DDS payload layout is invalid.")
+    result = bytearray(original)
+    for mip, candidate_mip, mask in zip(
+            layout.mips, candidate_layout.mips, safe_masks):
+        if (mip.width != candidate_mip.width
+                or mip.height != candidate_mip.height
+                or mip.units_x != candidate_mip.units_x
+                or mip.units_y != candidate_mip.units_y
+                or mip.bytes_per_unit != candidate_mip.bytes_per_unit
+                or len(mask) != mip.units_x * mip.units_y):
+            raise TextureBakeAnalysisError(
+                "texture_validation_failed", "DDS payload layout is invalid.")
+        for index, selected in enumerate(mask):
+            if not selected:
+                continue
+            source_start = candidate_mip.offset + index * candidate_mip.bytes_per_unit
+            target_start = mip.offset + index * mip.bytes_per_unit
+            result[target_start:target_start + mip.bytes_per_unit] = candidate[
+                source_start:source_start + candidate_mip.bytes_per_unit]
+    return bytes(result)
+
+
+def _validate_candidate(source_layout, candidate_path, candidate_bytes):
+    candidate_layout = inspect_dds_layout(candidate_path)
+    if candidate_layout is None:
+        raise TextureBakeAnalysisError(
+            "texconv_output_invalid", "The DDS encoder produced an invalid candidate.")
+    if (candidate_layout.info.width != source_layout.info.width
+            or candidate_layout.info.height != source_layout.info.height
+            or candidate_layout.info.format != source_layout.info.format
+            or candidate_layout.info.compressed != source_layout.info.compressed
+            or candidate_layout.info.mip_count != source_layout.info.mip_count
+            or len(candidate_bytes) < candidate_layout.payload_end):
+        raise TextureBakeAnalysisError(
+            "texconv_output_invalid", "The DDS encoder changed the source texture layout.")
+    return candidate_layout
+
+
+def bake_texture_color(
+        context, overrides, active_mesh_keys, selected_semantic_key,
+        selected_texture_key, texture_usage, adjustment):
+    """Safely bake a non-neutral adjustment into unique DDS units only."""
+    try:
+        # Preparation includes the independent mod-root/Asset check and must be
+        # repeated for the destructive request, even after a prior analysis.
+        prepared = _prepare_texture_bake(
+            context, overrides, active_mesh_keys, selected_semantic_key,
+            selected_texture_key, texture_usage, require_file_layout=True)
+        normalized = normalize_color_adjustment(
+            adjustment, reject_invalid=True)
+        if normalized is None:
+            raise TextureBakeAnalysisError(
+                "invalid_color_adjustment", "The color adjustment is invalid.")
+        if is_neutral_color_adjustment(normalized):
+            raise TextureBakeAnalysisError(
+                "no_color_adjustment", "Adjust the mesh color before baking.")
+        if prepared.unresolved:
+            raise TextureBakeAnalysisError(
+                "unknown_texture_coverage",
+                "Texture coverage could not be determined safely.")
+        mip0_safe = sum(prepared.safe_masks[0])
+        if not mip0_safe:
+            raise TextureBakeAnalysisError(
+                "no_unique_texture_coverage",
+                "The selected mesh has no unique texture coverage to bake.")
+
+        original = _read_source(prepared.selected_path)
+        original_hash = _sha256_bytes(original)
+        image = load_texture_image_full(prepared.selected_path, preserve_alpha=True)
+        if image is None or image.size != (
+                prepared.info.width, prepared.info.height):
+            raise TextureBakeAnalysisError(
+                "texture_decode_failed", "The source DDS could not be decoded at full resolution.")
+        rgba = image.convert("RGBA")
+        masked_rgba = adjust_rgba_bytes(
+            rgba.tobytes(), rgba.width, rgba.height, normalized,
+            prepared.selected_pixels.mask)
+
+        with tempfile.TemporaryDirectory(prefix="modviewer-bake-") as workdir:
+            from PIL import Image
+            png_path = os.path.join(workdir, "bake.png")
+            Image.frombytes("RGBA", rgba.size, masked_rgba).save(png_path, format="PNG")
+            try:
+                candidate_path = encode_png_to_dds(
+                    png_path, workdir, prepared.info.format,
+                    prepared.info.mip_count)
+            except TexconvUnavailableError as error:
+                raise TextureBakeAnalysisError(
+                    "texconv_unavailable", str(error)) from error
+            except TexconvError as error:
+                raise TextureBakeAnalysisError(
+                    "texconv_failed", str(error)) from error
+            try:
+                candidate = _read_source(candidate_path)
+            except TextureBakeAnalysisError as error:
+                raise TextureBakeAnalysisError(
+                    "texconv_output_invalid",
+                    "The DDS encoder produced an invalid candidate.") from error
+            candidate_layout = _validate_candidate(
+                prepared.layout, candidate_path, candidate)
+            final = _patch_dds_units(
+                original, candidate, prepared.layout,
+                prepared.safe_masks, candidate_layout)
+
+            # Check immediately before backup, and again after the backup has
+            # been created. A valid backup may remain if the source went stale.
+            _assert_source_unchanged(prepared.selected_path, original_hash)
+            backup_path = _write_backup(prepared.selected_path, original)
+            _assert_source_unchanged(prepared.selected_path, original_hash)
+            temporary = _write_temp(prepared.selected_path, final)
+            try:
+                final_layout = inspect_dds_layout(temporary)
+                if final_layout is None:
+                    raise TextureBakeAnalysisError(
+                        "texture_validation_failed",
+                        "The patched DDS failed validation.")
+                _validate_candidate(prepared.layout, temporary, final)
+                _assert_source_unchanged(
+                    prepared.selected_path, original_hash)
+                try:
+                    os.replace(temporary, prepared.selected_path)
+                except OSError as error:
+                    raise TextureBakeAnalysisError(
+                        "texture_write_failed", "The DDS could not be replaced safely.") from error
+                temporary = None
+            finally:
+                if temporary and os.path.exists(temporary):
+                    os.remove(temporary)
+
+        selected_identity = _physical_identity(prepared.selected_path)
+        affected = []
+        seen_keys = set()
+        for entry in prepared.entries:
+            key = entry["tex_key"]
+            path = _texture_path(context.mod_dir, key) if key else None
+            if (not key or not path or key in seen_keys
+                    or _physical_identity(path) != selected_identity):
+                continue
+            seen_keys.add(key)
+            affected.append(key)
+        return {
+            "status": "ok",
+            "tex_key": selected_texture_key,
+            "affected_tex_keys": affected,
+            "texture": _texture_details(prepared.selected_path, prepared.info),
+            "patched": {
+                "mip0_units": mip0_safe,
+                "total_units": sum(len(mask) for mask in prepared.safe_masks),
+                "shared_units_preserved": sum(
+                    sum(mask) for mask in prepared.shared_masks),
+            },
+            "backup": {"file": os.path.basename(backup_path)},
+        }
+    except TextureBakeAnalysisError as error:
+        return _error(error.code, error.message, error.status)
+    except Exception:
+        return _error(
+            "texture_write_failed", "The DDS could not be baked safely.")
+
+
+def bake_mesh_texture_color(*args, **kwargs):
+    """Compatibility name for callers that use the public bake operation name."""
+    return bake_texture_color(*args, **kwargs)
+
+
+__all__ = [
+    "TextureBakeAnalysisError", "analyze_texture_bake",
+    "bake_mesh_texture_color", "bake_texture_color", "_patch_dds_units",
+]

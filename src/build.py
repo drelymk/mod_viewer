@@ -7,7 +7,7 @@ Three.js is vendored, no internet connection.
     py -3 build.py                # single-file portable .exe (default)
     py -3 build.py --onedir       # folder build (much faster startup)
     py -3 build.py --skip-deps    # don't touch pip
-    py -3 build.py --refresh-assets   # re-download Three.js
+    py -3 build.py --refresh-assets   # re-download pinned assets and tools
     py -3 build.py --rebuild-bootloader   # recompile PyInstaller's bootloader
 
 --rebuild-bootloader compiles PyInstaller's bootloader from source in an
@@ -100,6 +100,14 @@ ASSET_FILES = {
     "addons/tsl/display/BloomNode.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/tsl/display/BloomNode.js",
         "sha256": "f80f40d013f4d94aa089c68c673cae6a8ab45fb290970a696bc1dded312e3fc8",
+    },
+}
+
+RUNTIME_TOOLS = os.path.join(HERE, "runtime_tools")
+RUNTIME_TOOL_FILES = {
+    "texconv.exe": {
+        "url": "https://github.com/microsoft/DirectXTex/releases/download/may2026/texconv.exe",
+        "sha256": "dcfdec10244e02cf5037fba089c55fb7e1326b1c8181742d77d15fa5cb5eef06",
     },
 }
 
@@ -326,47 +334,78 @@ def prepare_bootloader_venv(force=False):
     return py
 
 
+def download_verified_file(dest, spec, *, refresh=False, label=None):
+    """Download one pinned artifact with atomic replacement and hash checks."""
+    label = label or os.path.basename(dest)
+    if os.path.isfile(dest) and not refresh:
+        actual = sha256_file(dest)
+        if actual != spec["sha256"]:
+            raise RuntimeError(
+                f"asset {label} SHA-256 mismatch: expected "
+                f"{spec['sha256']}, got {actual}; use --refresh-assets "
+                "if replacement is intentional")
+        log(f"asset verified: {label}")
+        return
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    log(f"downloading {label}")
+    with urllib.request.urlopen(spec["url"], timeout=60) as resp:
+        data = resp.read()
+    if len(data) < 1024:
+        raise RuntimeError(f"suspiciously small download for {label} ({len(data)} bytes)")
+    actual = sha256_bytes(data)
+    if actual != spec["sha256"]:
+        raise RuntimeError(
+            f"downloaded asset {label} SHA-256 mismatch: expected "
+            f"{spec['sha256']}, got {actual}; existing asset was not "
+            "replaced")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="wb", dir=os.path.dirname(dest),
+                prefix=f".{os.path.basename(dest)}.",
+                suffix=".tmp", delete=False) as fh:
+            temporary = fh.name
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temporary, dest)
+        temporary = None
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.remove(temporary)
+    log(f"  {len(data):,} bytes")
+
+
 def fetch_assets(refresh=False):
     """Download Three.js so the built app runs fully offline."""
     for rel, spec in ASSET_FILES.items():
         dest = os.path.join(ASSETS, *rel.split("/"))
-        if os.path.isfile(dest) and not refresh:
-            actual = sha256_file(dest)
+        download_verified_file(dest, spec, refresh=refresh, label=rel)
+
+
+def fetch_runtime_tools(refresh=False):
+    """Download pinned runtime tools used by the packaged application."""
+    for rel, spec in RUNTIME_TOOL_FILES.items():
+        dest = os.path.join(RUNTIME_TOOLS, *rel.split("/"))
+        download_verified_file(dest, spec, refresh=refresh, label=rel)
+
+
+def verify_runtime_tools():
+    missing = []
+    mismatched = []
+    for rel, spec in RUNTIME_TOOL_FILES.items():
+        path = os.path.join(RUNTIME_TOOLS, *rel.split("/"))
+        if not os.path.isfile(path):
+            missing.append(rel)
+        else:
+            actual = sha256_file(path)
             if actual != spec["sha256"]:
-                raise RuntimeError(
-                    f"asset {rel} SHA-256 mismatch: expected "
-                    f"{spec['sha256']}, got {actual}; use --refresh-assets "
-                    "if replacement is intentional")
-            log(f"asset verified: {rel}")
-            continue
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        log(f"downloading {rel}")
-        with urllib.request.urlopen(spec["url"], timeout=60) as resp:
-            data = resp.read()
-        if len(data) < 1024:
-            raise RuntimeError(f"suspiciously small download for {rel} ({len(data)} bytes)")
-        actual = sha256_bytes(data)
-        if actual != spec["sha256"]:
-            raise RuntimeError(
-                f"downloaded asset {rel} SHA-256 mismatch: expected "
-                f"{spec['sha256']}, got {actual}; existing asset was not "
-                "replaced")
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                    mode="wb", dir=os.path.dirname(dest),
-                    prefix=f".{os.path.basename(dest)}.",
-                    suffix=".tmp", delete=False) as fh:
-                temporary = fh.name
-                fh.write(data)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(temporary, dest)
-            temporary = None
-        finally:
-            if temporary and os.path.exists(temporary):
-                os.remove(temporary)
-        log(f"  {len(data):,} bytes")
+                mismatched.append(
+                    f"{rel} (expected {spec['sha256']}, got {actual})")
+    if missing:
+        raise RuntimeError(f"missing runtime tools: {missing}")
+    if mismatched:
+        raise RuntimeError(f"runtime tool SHA-256 mismatch: {mismatched}")
 
 
 def verify_assets():
@@ -544,6 +583,8 @@ def build(onedir=False, console=False, python=None):
             "--noupx",
             # Three.js, served to the webview from a localhost port at runtime.
             "--add-data", f"{ASSETS}{os.pathsep}assets",
+            # DirectXTex is a runtime encoder, never browser-served data.
+            "--add-binary", f"{os.path.join(RUNTIME_TOOLS, 'texconv.exe')}{os.pathsep}runtime_tools",
             # The HTML/CSS/JS UI, served from that same port.
             "--add-data", f"{WEB}{os.pathsep}web",
             # Pulled in dynamically by the WebView2 backend, so PyInstaller's static
@@ -586,7 +627,8 @@ def main():
     ap.add_argument("--console", action="store_true",
                     help="keep a console window open (useful for debugging)")
     ap.add_argument("--skip-deps", action="store_true", help="skip pip install")
-    ap.add_argument("--refresh-assets", action="store_true", help="re-download Three.js")
+    ap.add_argument("--refresh-assets", action="store_true",
+                    help="re-download pinned assets and runtime tools")
     ap.add_argument("--rebuild-bootloader", action="store_true",
                     help="recompile PyInstaller's bootloader in an isolated venv "
                          "(clears most antivirus false positives; needs a C compiler). "
@@ -605,6 +647,8 @@ def main():
         install_deps()
     fetch_assets(refresh=args.refresh_assets)
     verify_assets()
+    fetch_runtime_tools(refresh=args.refresh_assets)
+    verify_runtime_tools()
     verify_web()
     verify_features()
     clean()

@@ -956,6 +956,9 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
 def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         edge_browser, frontend_url):
     payload = _payload("Bake")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Bake::3,0,0": {"hue": 30},
+    }
     first = payload["meshes"]["Body-Bake-0"]
     old_key = first["tex_key"]
     dds_key = "diffuse::Bake-one.dds"
@@ -1004,6 +1007,9 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         assert page.locator("#texture-bake-body").inner_text().find(
             "Coverage overlaps") >= 0
         assert "Friendly Face" in page.locator("#texture-bake-body").inner_text()
+        assert page.locator("#texture-bake-confirm").inner_text() == \
+            "Bake Unique Areas Only"
+        assert page.locator("#texture-bake-confirm").is_visible()
         usage = page.evaluate("window.__fakeApi.calls.analyzeTextureBake[0][3]")
         assert len(usage) == 2
         assert {item["semantic_key"] for item in usage} == {
@@ -1019,6 +1025,9 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
 def test_texture_coverage_unknown_state_does_not_claim_unique_units(
         edge_browser, frontend_url):
     payload = _payload("Unknown")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Unknown::3,0,0": {"hue": 30},
+    }
     old_key = payload["meshes"]["Body-Unknown-0"]["tex_key"]
     dds_key = "diffuse::Unknown-one.dds"
     payload["meshes"]["Body-Unknown-0"]["tex_key"] = dds_key
@@ -1045,6 +1054,89 @@ def test_texture_coverage_unknown_state_does_not_claim_unique_units(
         details = page.locator("#texture-bake-body").inner_text()
         assert "Safety is unknown" in details
         assert "Unknown" in details
+        assert page.locator("#texture-bake-confirm").is_hidden()
+    finally:
+        context.close()
+
+
+def test_texture_bake_action_is_disabled_for_neutral_color_state(
+        edge_browser, frontend_url):
+    payload = _payload("NeutralBake")
+    first = payload["meshes"]["Body-NeutralBake-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::NeutralBake-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    context, page = _page(edge_browser, frontend_url, {"NeutralBake": payload})
+    try:
+        _open(page, "NeutralBake")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        button = page.locator(".inspector-texture-bake")
+        assert button.is_disabled()
+        assert button.get_attribute("title") == \
+            "Adjust the mesh color before baking."
+        assert page.evaluate(
+            "window.__fakeApi.calls.analyzeTextureBake.length") == 0
+    finally:
+        context.close()
+
+
+def test_texture_bake_confirmation_resets_color_and_refreshes_affected_keys(
+        edge_browser, frontend_url):
+    payload = _payload("BakeConfirm")
+    first = payload["meshes"]["Body-BakeConfirm-0"]
+    old_key = first["tex_key"]
+    dds_key = "diffuse::BakeConfirm-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(old_key)
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body BakeConfirm::3,0,0": {"hue": 30},
+    }
+    payload["textureBakeResponse"] = {
+        "status": "ok", "safety": "safe",
+        "texture": {"file": "BakeConfirm-one.dds", "width": 8,
+                     "height": 8, "format": "bc7_unorm"},
+        "coverage": {"unit": "block", "selected_units": 1,
+                     "total_units": 4, "unique_units": 1, "shared_units": 0,
+                     "selected_percent": 25, "shared_percent_of_selected": 0},
+        "shared_with": [], "unresolved_consumers": [],
+    }
+    payload["textureBakeResult"] = {
+        "status": "ok", "tex_key": dds_key,
+        "affected_tex_keys": [dds_key],
+        "texture": {"file": "BakeConfirm-one.dds"},
+        "patched": {"mip0_units": 1, "shared_units_preserved": 0},
+        "backup": {"file": "BakeConfirm-one.dds.modviewer.bak"},
+    }
+    context, page = _page(edge_browser, frontend_url, {"BakeConfirm": payload})
+    try:
+        _open(page, "BakeConfirm")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        bake = page.locator(".inspector-texture-bake")
+        assert bake.is_enabled()
+        bake.click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.locator("#texture-bake-confirm").click()
+        page.locator("#texture-bake-body", has_text="TEXTURE BAKED").wait_for()
+        assert page.evaluate(
+            "window.__fakeApi.calls.bakeMeshTextureColor[0]") == [
+                "BakeConfirm", "Body-BakeConfirm-0",
+                "Body BakeConfirm::3,0,0", dds_key,
+                [{"semantic_key": "Body-BakeConfirm-0", "tex_key": dds_key}],
+                {"hue": 30, "saturation": 1, "brightness": 1, "contrast": 1,
+                 "red": 1, "green": 1, "blue": 1, "tint": "#ffffff",
+                 "tint_strength": 0},
+            ]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue") == 0
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
     finally:
         context.close()
 
@@ -1052,6 +1144,9 @@ def test_texture_coverage_unknown_state_does_not_claim_unique_units(
 def test_texture_coverage_error_clears_loading_message(
         edge_browser, frontend_url):
     payload = _payload("Error")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Error::3,0,0": {"hue": 30},
+    }
     old_key = payload["meshes"]["Body-Error-0"]["tex_key"]
     dds_key = "diffuse::Error-one.dds"
     payload["meshes"]["Body-Error-0"]["tex_key"] = dds_key
@@ -1096,6 +1191,9 @@ def test_texture_coverage_action_explains_non_dds_without_backend_call(
 def test_texture_coverage_stale_response_is_discarded(
         edge_browser, frontend_url):
     payload = _payload("Stale")
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body Stale::3,0,0": {"hue": 30},
+    }
     key = "diffuse::Stale-one.dds"
     old_key = payload["meshes"]["Body-Stale-0"]["tex_key"]
     payload["meshes"]["Body-Stale-0"]["tex_key"] = key

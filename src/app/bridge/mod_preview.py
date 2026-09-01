@@ -16,7 +16,9 @@ from core.textures import encode_texture_file
 from core.mod_discovery import discover_ini_paths
 from core.ini.health import analyze_mod
 from app.mods.analysis import resolved_draws
-from app.mods.texture_bake import analyze_texture_bake
+from app.mods.texture_bake import (
+    analyze_texture_bake, bake_mesh_texture_color,
+)
 from core.textures.profiles import texture_profile_for
 
 from app.assets import folders as asset_folders
@@ -160,6 +162,30 @@ class ModPreview:
             return analyze_texture_bake(
                 context, overrides, self._active_mesh_keys.get(folder_path),
                 semantic_key, tex_key, texture_usage)
+        except Exception:
+            return self._semantic_read_error()
+
+    def bake_mesh_texture_color(
+            self, folder_path, semantic_key, metadata_key, tex_key,
+            texture_usage, adjustment):
+        """Bake selected-mesh color into safe units of its mod DDS."""
+        try:
+            folder_path, overrides, _pending, context = \
+                self.authoritative_context(folder_path)
+            result = bake_mesh_texture_color(
+                context, overrides, self._active_mesh_keys.get(folder_path),
+                semantic_key, tex_key, texture_usage, adjustment)
+            if result.get("status") != "ok":
+                return result
+            try:
+                from core.textures.color_adjustment import COLOR_DEFAULTS
+                reset = metadata.save_mesh_color_adjustment(
+                    folder_path, metadata_key, dict(COLOR_DEFAULTS))
+                if reset.get("error"):
+                    result["warning"] = "color_state_reset_failed"
+            except Exception:
+                result["warning"] = "color_state_reset_failed"
+            return result
         except Exception:
             return self._semantic_read_error()
 

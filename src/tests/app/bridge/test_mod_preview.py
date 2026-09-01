@@ -272,3 +272,50 @@ def test_semantic_control_read_reuses_active_mesh_keys(monkeypatch):
 
     assert result["controls"]["present"] == {}
     assert captured[0][1]["active_mesh_keys"] == {"Body-1"}
+
+
+def test_bake_resets_metadata_only_after_success(monkeypatch):
+    preview = ModPreview(_Access())
+    context = _context()
+    captured = []
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {"override": 1}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.bake_mesh_texture_color",
+        lambda *args: captured.append(args) or {
+            "status": "ok", "tex_key": "diffuse::body.dds",
+        })
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.save_mesh_color_adjustment",
+        lambda *args: captured.append(("reset", args)) or {"saved": True})
+
+    result = preview.bake_mesh_texture_color(
+        "mod", "Body-1", "Body::3,0,0", "diffuse::body.dds",
+        [{"semantic_key": "Body-1", "tex_key": "diffuse::body.dds"}],
+        {"hue": 30})
+
+    assert result["status"] == "ok"
+    assert captured[0][1:]
+    assert captured[1][0] == "reset"
+
+
+def test_bake_does_not_reset_metadata_on_write_failure(monkeypatch):
+    preview = ModPreview(_Access())
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {}, {}, _context()))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.bake_mesh_texture_color",
+        lambda *args: {"status": "error", "code": "texconv_failed"})
+    reset = []
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.save_mesh_color_adjustment",
+        lambda *args: reset.append(args) or {"saved": True})
+
+    result = preview.bake_mesh_texture_color(
+        "mod", "Body-1", "Body::3,0,0", "diffuse::body.dds", [],
+        {"hue": 30})
+
+    assert result["code"] == "texconv_failed"
+    assert reset == []
