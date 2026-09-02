@@ -483,6 +483,50 @@ def test_record_uses_source_conditions_for_deduplicated_meshes(
         context.close()
 
 
+@pytest.mark.parametrize("other_value", ["0", "1"])
+def test_record_ignores_unrelated_outer_conditions_for_initial_sources(
+        edge_browser, frontend_url, other_value):
+    payload = _payload("RecordNested")
+    body = payload["meshes"]["Body-RecordNested-0"]
+    body["conditions"] = [[
+        {"var": "other", "value": "1", "negate": False},
+        {"var": "toggle", "value": "0", "negate": False},
+    ]]
+    body["sources"] = [{
+        "ini": "RecordNested.ini", "line": 10,
+        "section": "TextureOverrideBody",
+        "occurrence": {
+            "section": "TextureOverrideBody", "ordinal": 0, "path": [],
+        },
+        "conditions": body["conditions"],
+    }]
+    payload["state"]["defaults"]["other"] = other_value
+    context, page = _page(
+        edge_browser, frontend_url, {"RecordNested": payload})
+    try:
+        _open(page, "RecordNested")
+        page.locator(".draw-item").first.wait_for()
+        page.evaluate("""
+          () => {
+            window.pywebview.api.get_record_positions = async () => ({
+              positions: 2, vars: ['toggle'],
+            });
+          }
+        """)
+
+        page.locator(".toggle-item").first.locator(
+            "[title^='Record']").click()
+        page.locator(".toggle-row.recording").wait_for()
+        page.locator(".toggle-item:has(.toggle-row.recording) .toggle-record-save").click()
+        page.wait_for_function("window.__fakeApi.calls.recordToggle.length === 1")
+
+        call = page.evaluate("window.__fakeApi.calls.recordToggle[0]")
+        assert call[3] == {"0": [10], "1": []}
+        assert [ref["line"] for ref in call[4]] == [10]
+    finally:
+        context.close()
+
+
 def test_add_toggle_refreshes_mesh_provenance_before_record(
         edge_browser, frontend_url):
     payload = _payload("RecordAdd")

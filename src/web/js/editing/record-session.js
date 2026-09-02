@@ -48,8 +48,16 @@ function sourceUsesVars(mesh, source, writableNames) {
   return [...used].some(variable => writableNames.has(variable));
 }
 
-function sourceVisible(mesh, source) {
-  return dnfSatisfied(sourceConditions(mesh, source));
+function recordSourceConditions(mesh, source, recordVars) {
+  return sourceConditions(mesh, source).map(group =>
+    group.filter(condition => recordVars.has(condition.var)));
+}
+
+function sourceVisible(mesh, source, recordVars = null) {
+  const conditions = recordVars
+    ? recordSourceConditions(mesh, source, recordVars)
+    : sourceConditions(mesh, source);
+  return dnfSatisfied(conditions);
 }
 
 /** {mesh -> visible} exactly as currently shown — the pre-population for
@@ -108,6 +116,7 @@ export async function startRecordSession(info, ctx, ui) {
     }
 
     const writableNames = new Set(writable.map(v => v.var));
+    const recordVars = new Set(previewVars.map(v => v.var));
     const initialSources = new Set();
     const initialSourceMeshes = new Map();
     for (const mesh of activeMeshes) {
@@ -136,7 +145,10 @@ export async function startRecordSession(info, ctx, ui) {
       snapshots.push(snapshotVisibility());
       const sourceSnap = new Map();
       for (const [source, mesh] of initialSourceMeshes) {
-        sourceSnap.set(source, sourceVisible(mesh, source));
+        // An untouched source should contribute only the selected key's own
+        // visibility gate. Unrelated outer conditions describe the current
+        // scene, not what this Record session is authoring.
+        sourceSnap.set(source, sourceVisible(mesh, source, recordVars));
       }
       sourceSnapshots.push(sourceSnap);
     }
