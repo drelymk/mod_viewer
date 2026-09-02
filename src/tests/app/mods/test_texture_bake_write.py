@@ -115,8 +115,13 @@ def _bc7_mode7_block(partition, pbits, endpoints, indices):
     """Build a valid BC7 mode-7 block for a fixed partition."""
     assert 0 <= partition < 64
     assert len(pbits) == 4
+    assert all(pbit in {0, 1} for pbit in pbits)
     assert len(endpoints) == 4
+    assert all(len(endpoint) == 4 for endpoint in endpoints)
+    assert all(0 <= value <= 31
+               for endpoint in endpoints for value in endpoint)
     assert len(indices) == 16
+    assert all(0 <= value <= 3 for value in indices)
     anchor = texture_bake._bc7_codec._PARTITION_2_ANCHORS[partition]
     assert indices[0] < 2 and indices[anchor] < 2
     bits = 1 << 7
@@ -821,8 +826,8 @@ def test_bc7_mode7_fallback_preserves_partition_indices_pbits_and_alpha(
     indices[anchor] = 1
     block = _bc7_mode7_block(
         partition, (0, 1, 1, 0),
-        ((3, 6, 9, 4), (22, 18, 25, 60),
-         (8, 15, 5, 30), (28, 26, 30, 110)), indices)
+        ((3, 6, 9, 4), (22, 18, 25, 30),
+         (8, 15, 5, 20), (28, 26, 30, 31)), indices)
     source = tmp_path / f"bc7-mode7-{partition}.dds"
     original = _dx10_dds(block, 98)
     source.write_bytes(original)
@@ -870,6 +875,65 @@ def test_bc7_mode7_fallback_preserves_partition_indices_pbits_and_alpha(
         texture_bake._bc7_mode7_decode_block(block))
 
 
+@pytest.mark.parametrize("p0,p1", [(0, 0), (0, 1), (1, 0), (1, 1)])
+@pytest.mark.parametrize(
+    "targets",
+    [(96, 128, 160, 96, 160, 128, 96, 160),
+     (160, 96, 128, 160, 96, 128, 160, 96)])
+def test_bc7_mode7_channel_fit_matches_exhaustive_reference(
+        p0, p1, targets):
+    indices = (0, 1, 2, 3, 3, 2, 1, 0)
+    expected = min(
+        (texture_bake._bc7_codec._mode7_channel_error(
+            raw0, raw1, p0, p1, targets, indices), raw0, raw1)
+        for raw0 in range(32)
+        for raw1 in range(32))
+
+    actual = texture_bake._bc7_codec._fit_mode7_channel(
+        targets, indices, p0, p1)
+
+    assert actual == expected[1:]
+    assert texture_bake._bc7_codec._mode7_channel_error(
+        *actual, p0, p1, targets, indices) == expected[0]
+
+
+def test_bc7_source_fallback_rejects_worse_rgb_candidate(
+        tmp_path, monkeypatch):
+    indices = [0, 1, 2, 3] * 4
+    indices[texture_bake._bc7_codec._PARTITION_2_ANCHORS[13]] = 1
+    block = _bc7_mode7_block(
+        13, (0, 1, 1, 0),
+        ((3, 6, 9, 4), (22, 18, 25, 30),
+         (8, 15, 5, 20), (28, 26, 30, 31)), indices)
+    source = tmp_path / "bc7-worse-fallback.dds"
+    original = _dx10_dds(block, 98)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]),),
+        (SimpleNamespace(mask=bytearray([1] * 16)),),
+        "diffuse::bc7-worse-fallback.dds")
+    source_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        original, layout, layout.mips[0])
+    bad_bits = int.from_bytes(block, "little")
+    for channel in range(3):
+        bad_bits = texture_bake._bc7_set_bits(
+            bad_bits, 14 + channel * 20, 10, 0)
+    bad_block = bad_bits.to_bytes(16, "little")
+    monkeypatch.setattr(
+        texture_bake, "_recolor_bc7_mode7_block",
+        lambda *_args: (
+            bad_block, texture_bake._bc7_mode7_decode_block(bad_block)))
+
+    with pytest.raises(texture_bake.TextureBakeAnalysisError,
+                       match="worse RGB result"):
+        texture_bake._encode_bc7_source_fallback(
+            original, prepared, layout.mips[0], source_image,
+            bytearray([1] * 16), bytearray([1]),
+            {"hue": 120, "saturation": 2}, {}, (7,),
+            "bc7_source_fallback")
+
+
 def test_bc7_coupled_bake_dispatches_all_alpha_modes(
         tmp_path, monkeypatch):
     first_indices = [0, 1, 2, 3] * 4
@@ -884,8 +948,8 @@ def test_bc7_coupled_bake_dispatches_all_alpha_modes(
     mode7_indices[texture_bake._bc7_codec._PARTITION_2_ANCHORS[13]] = 1
     mode7 = _bc7_mode7_block(
         13, (0, 1, 1, 0),
-        ((3, 6, 9, 4), (22, 18, 25, 60),
-         (8, 15, 5, 30), (28, 26, 30, 110)),
+        ((3, 6, 9, 4), (22, 18, 25, 30),
+         (8, 15, 5, 20), (28, 26, 30, 31)),
         mode7_indices)
     source = tmp_path / "bc7-all-alpha-modes.dds"
     original = _dx10_dds(

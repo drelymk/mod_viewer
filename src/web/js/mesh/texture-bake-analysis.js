@@ -179,9 +179,9 @@ export function formatBakeAnalysis(result, displayName = key => key) {
     }
   }
   if (ALPHA_COUPLED_FORMATS.has(result.texture?.format)) {
-    const alphaWarning = 'Alpha channel will be preserved exactly. '
-      + 'Compressed blocks that cannot reproduce the original alpha will be '
-      + 'left unchanged.';
+    const alphaWarning = 'Alpha channel will be preserved exactly. All '
+      + 'top-level blocks must be recolorable without changing alpha; '
+      + 'unresolved lower-mip blocks will be left unchanged.';
     warning = warning ? `${warning} ${alphaWarning}` : alphaWarning;
   }
   return {

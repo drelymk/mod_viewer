@@ -397,36 +397,20 @@ def _mode7_channel_error(raw0, raw1, p0, p1, targets, indices):
 
 
 def _fit_mode7_channel(targets, indices, p0, p1):
+    """Find the best legal endpoint pair for one mode-7 channel.
+
+    Mode 7 has only 32 possible values for each five-bit endpoint field.
+    Exhaustive search keeps the effective six-bit quantization scale exact and
+    makes the result deterministic for the fixed index stream.
+    """
     if not targets:
         return 0, 0
-    fractions = tuple(WEIGHTS_2[index] / 64.0 for index in indices)
-    bb = sum(fraction ** 2 for fraction in fractions)
-
-    def quantize(value, pbit):
-        return max(0, min(31, int(round((value - pbit) / 2.0))))
-
-    best = None
-    for raw0 in range(32):
-        endpoint0 = _unquantize((raw0 << 1) | p0, 6)
-        if bb:
-            endpoint1 = sum(
-                fraction * (target - endpoint0 * (1.0 - fraction))
-                for fraction, target in zip(fractions, targets)) / bb
-        else:
-            endpoint1 = sum(targets) / len(targets)
-        center1 = quantize(endpoint1, p1)
-        candidates1 = {
-            max(0, min(31, center1 + delta))
-            for delta in range(-4, 5)
-        }
-        candidates1.update((0, 31, quantize(min(targets), p1),
-                            quantize(max(targets), p1)))
-        for raw1 in candidates1:
-            key = (_mode7_channel_error(
-                raw0, raw1, p0, p1, targets, indices), raw0, raw1)
-            if best is None or key < best[0]:
-                best = (key, (raw0, raw1))
-    return best[1]
+    best = min(
+        (_mode7_channel_error(raw0, raw1, p0, p1, targets, indices),
+         raw0, raw1)
+        for raw0 in range(32)
+        for raw1 in range(32))
+    return best[1], best[2]
 
 
 def recolor_mode7(block, target_pixels, valid_width, valid_height):

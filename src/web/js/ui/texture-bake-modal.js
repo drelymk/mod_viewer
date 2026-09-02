@@ -138,9 +138,7 @@ function renderBakeSuccess(result) {
     ['Top-level units changed', result.patched?.mip0_units || 0],
     ['Shared units preserved', result.patched?.shared_units_preserved || 0],
     ...(alphaProtectedUnits > 0
-      ? [['Alpha-protected units', alphaProtectedUnits],
-        ['Alpha-protected mip-0 units',
-          result.patched?.alpha_protected_mip0_units || 0]]
+      ? [['Alpha-protected lower-mip units', alphaProtectedUnits]]
       : []),
     ['Backup', result.backup?.file || 'Created'],
   ].forEach(([label, value]) => {
@@ -154,18 +152,10 @@ function renderBakeSuccess(result) {
   if (alphaProtectedUnits > 0) {
     const warning = document.createElement('p');
     warning.className = 'texture-bake-warning texture-bake-warning-ok';
-    warning.textContent = 'Some compressed blocks were kept unchanged because '
+    warning.textContent = 'Some lower mip levels were kept unchanged because '
       + 'their alpha channel could not be reproduced exactly.';
-    const mip0Protected = Number(
-      result.patched?.alpha_protected_mip0_units || 0);
     const levels = result.patched?.alpha_protected_levels || [];
-    if (mip0Protected > 0) {
-      warning.textContent += ' Some visible areas may keep their original '
-        + 'color.';
-    } else if (levels.length) {
-      warning.textContent += ' Some lower mip levels were preserved, so color '
-        + 'may differ slightly at farther viewing distances.';
-    }
+    if (levels.length) warning.textContent += ` Affected levels: ${levels.join(', ')}.`;
     body.appendChild(warning);
   }
   setBakeAction();

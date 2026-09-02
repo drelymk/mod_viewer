@@ -1155,19 +1155,21 @@ def _recolor_bc7_mode7_block(block, target_pixels, valid_width,
         valid_width, valid_height)
 
 
-def _bc7_candidate_strategy_groups(format_name):
+def _bc7_candidate_strategy_groups(format_name, compression_backend="auto"):
     """Return candidate passes, ordered from default to targeted fallbacks."""
-    default = _BC7CandidateStrategy("default")
+    default = _BC7CandidateStrategy(
+        "default", compression_backend=compression_backend)
     if not format_name.startswith("bc7"):
         return ((default,),)
     weighted = tuple(
         _BC7CandidateStrategy(
-            f"alpha-weight-{weight:g}", alpha_weight=weight)
+            f"alpha-weight-{weight:g}",
+            compression_backend=compression_backend, alpha_weight=weight)
         for weight in _BC7_ALPHA_WEIGHT_CANDIDATES)
     mode6_weighted = tuple(
         _BC7CandidateStrategy(
             f"mode6-alpha-weight-{weight:g}", bc_flags="q",
-            alpha_weight=weight)
+            compression_backend=compression_backend, alpha_weight=weight)
         for weight in _BC7_ALPHA_WEIGHT_CANDIDATES)
     return ((default,), weighted, mode6_weighted)
 
@@ -1616,8 +1618,20 @@ def _encode_bc7_source_fallback(
             raise TextureBakeAnalysisError(
                 "texture_validation_failed",
                 "The BC7 fallback changed source alpha.")
+        source_pixels = tuple(
+            tuple(source_image.getpixel((source_x + column, source_y + row)))
+            for row in range(unit_height)
+            for column in range(unit_width))
+        source_quality = _bc7_candidate_quality(
+            target_pixels, source_pixels, unit_width, unit_height, True)
         quality = _bc7_candidate_quality(
             target_pixels, candidate_pixels, unit_width, unit_height, True)
+        if _candidate_quality_key(quality) > _candidate_quality_key(
+                source_quality):
+            raise TextureBakeAnalysisError(
+                "texture_validation_failed",
+                "The BC7 fallback produced a worse RGB result than the "
+                "source block.")
         candidate_blocks[source_index] = (candidate_block, quality)
         rgb_squared_error += quality.rgb_squared_error
         rgb_absolute_error += quality.rgb_absolute_error
@@ -1783,7 +1797,7 @@ def _encode_alpha_candidate(
 
 
 def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
-                               timings=None):
+                               timings=None, compression_backend="auto"):
     """Encode selected BC1/BC7 RGB in compact, independent block atlases."""
     timings = {} if timings is None else timings
     pixel_coverages = getattr(
@@ -1797,7 +1811,8 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
     writable_masks = []
     alpha_protected_masks = []
     stats = []
-    strategy_groups = _bc7_candidate_strategy_groups(prepared.info.format)
+    strategy_groups = _bc7_candidate_strategy_groups(
+        prepared.info.format, compression_backend)
     for level, source_mip in enumerate(prepared.layout.mips):
         safe_mask = prepared.safe_masks[level]
         if len(safe_mask) != source_mip.units_x * source_mip.units_y:
