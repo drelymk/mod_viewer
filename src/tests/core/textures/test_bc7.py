@@ -185,3 +185,18 @@ def test_recolor_uses_source_block_when_target_cannot_improve_it():
     assert result.block == block
     assert result.candidate_pixels == result.source_pixels
     assert result.candidate_error == result.source_error == 0
+
+
+def test_recolor_can_reuse_decoded_source_pixels(monkeypatch):
+    block = _mode7_block()
+    source = bc7.decode_block(block)
+    target = tuple((red + 5, green, blue, alpha)
+                   for red, green, blue, alpha in source)
+
+    def decode_must_not_run(_block):
+        raise AssertionError("source BC7 block was decoded twice")
+
+    monkeypatch.setattr(bc7, "decode_block", decode_must_not_run)
+    result = bc7.recolor_block(block, target, source_pixels=source)
+
+    assert result.source_pixels == source

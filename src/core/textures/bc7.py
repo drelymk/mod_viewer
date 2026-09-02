@@ -701,6 +701,7 @@ def _fit_fixed_index_endpoints(targets, indices, weights, endpoint_codec,
              for fraction, target in zip(fractions, targets))
     bt = sum(fraction * target
              for fraction, target in zip(fractions, targets))
+    tt = sum(target * target for target in targets)
     determinant = aa * bb - ab * ab
     if determinant > 1e-9:
         estimate0 = (at * bb - bt * ab) / determinant
@@ -726,10 +727,12 @@ def _fit_fixed_index_endpoints(targets, indices, weights, endpoint_codec,
     def error(raw0, raw1):
         endpoint0 = endpoint_codec.decode(raw0, pbit0)
         endpoint1 = endpoint_codec.decode(raw1, pbit1)
-        return sum(
-            (((endpoint0 * (64 - weights[index])
-               + endpoint1 * weights[index] + 32) >> 6) - target) ** 2
-            for target, index in zip(targets, indices))
+        return (aa * endpoint0 * endpoint0
+                + 2.0 * ab * endpoint0 * endpoint1
+                + bb * endpoint1 * endpoint1
+                - 2.0 * at * endpoint0
+                - 2.0 * bt * endpoint1
+                + tt)
 
     best = (error(*original_raw), original_raw[0], original_raw[1])
     for raw0 in sorted(raw0_values):
@@ -849,7 +852,8 @@ def _rgb_error(source_pixels, target_pixels, valid_width, valid_height):
         for channel in range(3))
 
 
-def recolor_block(block, target_pixels, valid_width=4, valid_height=4):
+def recolor_block(block, target_pixels, valid_width=4, valid_height=4,
+                  source_pixels=None):
     """Refit one block's RGB endpoints while preserving its BC7 structure."""
     _require_block(block)
     if not 1 <= valid_width <= 4 or not 1 <= valid_height <= 4:
@@ -857,7 +861,10 @@ def recolor_block(block, target_pixels, valid_width=4, valid_height=4):
     _validate_target_pixels(target_pixels)
     source_block = bytes(block)
     mode = block_mode(source_block)
-    source_pixels = decode_block(source_block)
+    if source_pixels is None:
+        source_pixels = decode_block(source_block)
+    else:
+        _validate_target_pixels(source_pixels)
     if mode in _COLOR_MODE_SPECS:
         candidate_block, candidate_pixels = _recolor_color_mode(
             source_block, target_pixels, valid_width, valid_height)

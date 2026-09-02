@@ -24,8 +24,10 @@ from .uv_coverage import (
 )
 from .color_adjustment import (
     COLOR_DEFAULTS, COLOR_RANGES, adjust_rgba_bytes,
-    apply_color_adjustment, is_neutral_color_adjustment,
-    normalize_color_adjustment,
+    apply_color_adjustment, apply_prepared_color_adjustment,
+    apply_prepared_color_u8, is_neutral_color_adjustment,
+    normalize_color_adjustment, prepare_color_adjustment,
+    PreparedColorAdjustment,
 )
 
 __all__ = [
@@ -54,6 +56,10 @@ __all__ = [
     "COLOR_RANGES",
     "adjust_rgba_bytes",
     "apply_color_adjustment",
+    "apply_prepared_color_adjustment",
+    "apply_prepared_color_u8",
     "is_neutral_color_adjustment",
     "normalize_color_adjustment",
+    "prepare_color_adjustment",
+    "PreparedColorAdjustment",
 ]

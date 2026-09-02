@@ -8,7 +8,7 @@ import {
 } from './material-profile.js';
 import { syncMeshColorAdjustment } from './mesh-color-state.js';
 import { getMeshView } from './mesh-view-bindings.js';
-import { loadDDSTexture } from '../textures/dds-loader.js';
+import { loadDDSTexture, reloadDDSTexture } from '../textures/dds-loader.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { supportsBCTextureCompression } from '../scene/renderer-capabilities.js';
 import { splitTextureKey } from '../textures/texture-key.js';
@@ -22,6 +22,7 @@ const readyTextures = new Set();
 const failedTextures = new Set();
 const nativeDDSFallbacks = new Set();
 const textureUsers = new Map();
+const reloadTokens = new Map();
 // all: every authored map; diffuse-normal: color + the material's actual
 // normal source; diffuse: color only; none: flat colour.
 let textureMode = 'all';
@@ -42,6 +43,7 @@ export function setTextures(textures) {
   failedTextures.clear();
   readyTextures.clear();
   nativeDDSFallbacks.clear();
+  reloadTokens.clear();
   textureUsers.clear();
 }
 
@@ -56,6 +58,7 @@ export function addTexture(key, uri) {
   readyTextures.delete(key);
   failedTextures.delete(key);
   nativeDDSFallbacks.delete(key);
+  reloadTokens.delete(key);
   textureUsers.delete(key);
   return true;
 }
@@ -70,27 +73,198 @@ export function removeTextures(keys) {
     readyTextures.delete(key);
     failedTextures.delete(key);
     nativeDDSFallbacks.delete(key);
+    reloadTokens.delete(key);
     textureUsers.delete(key);
     removed += 1;
   }
   return removed;
 }
 
-/** Invalidate only baked texture loaders while preserving registry users. */
-export function reloadTextures(keys) {
+/** Reload only baked textures while preserving registry users and bindings. */
+function reloadUri(uri, token) {
+  if (typeof uri !== 'string' || uri.startsWith('data:')) return uri;
+  const hashIndex = uri.indexOf('#');
+  const base = hashIndex < 0 ? uri : uri.slice(0, hashIndex);
+  const hash = hashIndex < 0 ? '' : uri.slice(hashIndex);
+  const separator = base.includes('?')
+    ? (base.endsWith('?') || base.endsWith('&') ? '' : '&') : '?';
+  return `${base}${separator}reload=${token}${hash}`;
+}
+
+function loadPngReload(key, uri, requestUri, oldTexture, token,
+                       keepOld) {
+  return new Promise((resolve, reject) => {
+    let replacement;
+    let loadedBeforeAssignment = false;
+    let errorBeforeAssignment = null;
+    const finishReady = () => {
+      if (reloadTokens.get(key) !== token || registry[key] !== uri) {
+        disposeTexture(replacement);
+        resolve(false);
+        return;
+      }
+      loaders[key] = replacement;
+      readyTextures.add(key);
+      failedTextures.delete(key);
+      if (oldTexture && oldTexture !== replacement) {
+        disposeTexture(oldTexture);
+      }
+      handleTextureReady(key, replacement, uri);
+      resolve(true);
+    };
+    const finishError = error => {
+      if (reloadTokens.get(key) !== token || registry[key] !== uri) {
+        disposeTexture(replacement);
+        resolve(false);
+        return;
+      }
+      if (keepOld && oldTexture && loaders[key] === oldTexture
+          && readyTextures.has(key)) {
+        reject(error);
+        return;
+      }
+      loaders[key] = replacement;
+      handleTextureError(key, replacement, uri);
+      reject(error);
+    };
+    const onLoad = () => {
+      if (!replacement) {
+        loadedBeforeAssignment = true;
+        return;
+      }
+      finishReady();
+    };
+    const onError = error => {
+      if (!replacement) {
+        errorBeforeAssignment = error;
+        return;
+      }
+      finishError(error);
+    };
+    replacement = new THREE.TextureLoader().load(
+      requestUri, onLoad, undefined, onError);
+    replacement.colorSpace = splitTextureKey(key)?.role === 'diffuse'
+      ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    if (!keepOld) loaders[key] = replacement;
+    if (loadedBeforeAssignment) finishReady();
+    if (errorBeforeAssignment) finishError(errorBeforeAssignment);
+  });
+}
+
+function reloadNativeTexture(key, uri, requestUri, texture, token) {
+  return new Promise((resolve, reject) => {
+    let fallbackPromise = null;
+    let errorHandled = false;
+    const onLoad = () => {
+      if (reloadTokens.get(key) !== token || registry[key] !== uri) {
+        resolve(false);
+        return;
+      }
+      handleTextureReady(key, texture, uri);
+      resolve(true);
+    };
+    const onError = () => {
+      errorHandled = true;
+      if (reloadTokens.get(key) !== token || registry[key] !== uri) {
+        resolve(false);
+        return;
+      }
+      nativeDDSFallbacks.add(key);
+      readyTextures.delete(key);
+      if (loaders[key] === texture) delete loaders[key];
+      disposeTexture(texture);
+      fallbackPromise = loadPngReload(
+        key, uri, reloadUri(pngFallbackUri(uri), token), null, token, false);
+      fallbackPromise.then(resolve, reject);
+    };
+    reloadDDSTexture(texture, requestUri, onLoad, onError).catch(error => {
+      if (!errorHandled) reject(error);
+    });
+  });
+}
+
+function loadNativeReload(key, uri, requestUri, token) {
+  return new Promise((resolve, reject) => {
+    let texture;
+    let loadedBeforeAssignment = false;
+    let errorBeforeAssignment = false;
+    const finishReady = () => {
+      if (reloadTokens.get(key) !== token || registry[key] !== uri) {
+        disposeTexture(texture);
+        resolve(false);
+        return;
+      }
+      handleTextureReady(key, texture, uri);
+      resolve(true);
+    };
+    const finishError = () => {
+      if (reloadTokens.get(key) !== token || registry[key] !== uri) {
+        disposeTexture(texture);
+        resolve(false);
+        return;
+      }
+      nativeDDSFallbacks.add(key);
+      readyTextures.delete(key);
+      if (loaders[key] === texture) delete loaders[key];
+      disposeTexture(texture);
+      loadPngReload(
+        key, uri, reloadUri(pngFallbackUri(uri), token), null, token, false)
+        .then(resolve, reject);
+    };
+    texture = loadDDSTexture(
+      requestUri,
+      () => {
+        if (!texture) loadedBeforeAssignment = true;
+        else finishReady();
+      },
+      () => {
+        if (!texture) errorBeforeAssignment = true;
+        else finishError();
+      });
+    loaders[key] = texture;
+    if (loadedBeforeAssignment) finishReady();
+    if (errorBeforeAssignment) finishError();
+  });
+}
+
+export function reloadTextures(keys, {force = false} = {}) {
   const users = new Set();
+  const reloads = [];
   for (const key of keys || []) {
     if (!Object.hasOwn(registry, key)) continue;
     for (const mesh of textureUsers.get(key) || []) users.add(mesh);
-    disposeTexture(loaders[key]);
-    delete loaders[key];
-    readyTextures.delete(key);
-    failedTextures.delete(key);
-    nativeDDSFallbacks.delete(key);
+    const uri = registry[key];
+    const token = (reloadTokens.get(key) || 0) + 1;
+    reloadTokens.set(key, token);
+    const oldTexture = loaders[key];
+    const nativeDDS = isDDSUri(uri)
+      && supportsBCTextureCompression()
+      && !nativeDDSFallbacks.has(key);
+    if (nativeDDS) {
+      reloads.push(oldTexture?.isCompressedTexture
+        ? reloadNativeTexture(
+          key, uri, force ? reloadUri(uri, token) : uri, oldTexture, token)
+        : loadNativeReload(
+          key, uri, force ? reloadUri(uri, token) : uri, token));
+      continue;
+    }
+
+    const requestUri = reloadUri(
+      isDDSUri(uri) ? pngFallbackUri(uri) : uri, token);
+    if (!force) {
+      disposeTexture(oldTexture);
+      delete loaders[key];
+      readyTextures.delete(key);
+      failedTextures.delete(key);
+      nativeDDSFallbacks.delete(key);
+    }
+    reloads.push(loadPngReload(
+      key, uri, requestUri, force ? oldTexture : null, token, force));
   }
-  for (const mesh of users) refreshMeshTexture(mesh, { render: false });
-  if ([...users].some(mesh => mesh.visible)) requestRender();
-  return users.size;
+  return Promise.all(reloads).then(results => {
+    if ([...users].some(mesh => mesh.visible)) requestRender();
+    return {users: users.size, reloaded: results.filter(Boolean).length};
+  });
 }
 
 export function hasTexture(key) {
@@ -122,6 +296,7 @@ function handleTextureReady(key, texture, uri) {
     return;
   }
   readyTextures.add(key);
+  failedTextures.delete(key);
   texture.needsUpdate = true;
   for (const mesh of textureUsers.get(key) || []) refreshMeshTexture(mesh);
 }

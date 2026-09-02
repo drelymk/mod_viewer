@@ -8,7 +8,9 @@ import pytest
 from core.textures import color_adjustment
 from core.textures.color_adjustment import (
     COLOR_DEFAULTS, adjust_rgba_bytes, apply_color_adjustment,
+    apply_prepared_color_adjustment, apply_prepared_color_u8,
     is_neutral_color_adjustment, normalize_color_adjustment,
+    prepare_color_adjustment,
 )
 
 
@@ -35,6 +37,23 @@ def test_neutral_state_is_identity():
     assert is_neutral_color_adjustment(COLOR_DEFAULTS)
     assert apply_color_adjustment((0.23, 0.45, 0.91), COLOR_DEFAULTS) == \
         pytest.approx((0.23, 0.45, 0.91))
+
+
+def test_prepared_adjustment_matches_validated_transform(vectors):
+    for vector in vectors:
+        prepared = prepare_color_adjustment(vector["adjustment"])
+        actual = apply_prepared_color_adjustment(vector["rgb"], prepared)
+        assert actual == pytest.approx(vector["expected"], abs=1e-7), vector["name"]
+        bytes_result = apply_prepared_color_u8(
+            tuple(round(channel * 255) for channel in vector["rgb"]),
+            prepared)
+        source_bytes = tuple(round(channel * 255)
+                             for channel in vector["rgb"])
+        expected_bytes = tuple(round(channel * 255) for channel in
+                               apply_color_adjustment(
+                                   tuple(channel / 255 for channel in source_bytes),
+                                   vector["adjustment"]))
+        assert bytes_result == expected_bytes
 
 
 def test_adjust_rgba_preserves_alpha_and_only_changes_selected_pixels():

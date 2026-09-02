@@ -98,6 +98,13 @@ function formatSaveError(result) {
   return `${message} Conflicting meshes: ${meshes.join(', ')}.`;
 }
 
+function affectedTextureKeys(result) {
+  const reported = Array.isArray(result?.affected_tex_keys)
+    && result.affected_tex_keys.length
+    ? result.affected_tex_keys : [result?.tex_key];
+  return [...new Set(reported.filter(key => typeof key === 'string' && key))];
+}
+
 function renderSaveError(result) {
   body.replaceChildren();
   setModalError(error, formatSaveError(result));
@@ -155,12 +162,12 @@ async function synchronizeCommittedSave(state, result) {
   meshes.forEach(mesh => resetMeshColorAdjustment(
     mesh, {persist: true, render: false}));
   await Promise.all(meshes.map(mesh => flushMeshColorAdjustmentPersistence(mesh)));
-  reloadTextures(result.affected_tex_keys || [result.tex_key]);
+  await reloadTextures(affectedTextureKeys(result), {force: true});
   notifyMeshStateChanged(meshes);
   window.dispatchEvent(new CustomEvent('mod-viewer-texture-saved', {
     detail: {
       texKey: result.tex_key,
-      affectedTexKeys: result.affected_tex_keys || [],
+      affectedTexKeys: affectedTextureKeys(result),
       savedMeshes: saved,
     },
   }));
@@ -205,7 +212,15 @@ async function runSave(job) {
     renderSaveError(result);
     return result;
   }
-  await synchronizeCommittedSave(job.state, result);
+  try {
+    await synchronizeCommittedSave(job.state, result);
+  } catch (_refreshError) {
+    renderSaveError({
+      status: 'error',
+      error: 'Texture saved, but the viewer could not refresh it.',
+    });
+    return result;
+  }
   if (typeof job.isCurrent === 'function' && !job.isCurrent()) {
     closeTextureSaveModal();
     return result;

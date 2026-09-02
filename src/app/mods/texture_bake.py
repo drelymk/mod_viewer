@@ -24,9 +24,11 @@ from core.resource_paths import _canonical, safe_resource_path
 from core.textures import TEXTURE_ROLES, split_texture_key
 from core.textures import bc7 as _bc7_codec
 from core.textures.color_adjustment import (
-    adjust_rgba_bytes, apply_color_adjustment,
+    PreparedColorAdjustment, adjust_rgba_bytes,
+    apply_color_adjustment,
+    apply_prepared_color_adjustment, apply_prepared_color_u8,
     is_neutral_color_adjustment,
-    normalize_color_adjustment,
+    normalize_color_adjustment, prepare_color_adjustment,
 )
 from core.textures.dds import (
     dds_layout_for_info, inspect_dds, inspect_dds_layout,
@@ -114,6 +116,7 @@ class _PreparedTextureSave:
     unresolved_details: tuple
     mip0_claims: object
     intent_adjustments: tuple
+    mip0_affected_blocks: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -871,6 +874,7 @@ def _bc7_intent_level(prepared):
         "max_count": 1,
         "parent_width": None,
         "parent_height": None,
+        "affected_blocks": getattr(prepared, "mip0_affected_blocks", None),
     }
 
 
@@ -904,6 +908,7 @@ def _bc7_next_intent_level(state, target_width, target_height, class_count):
         "max_count": max_count,
         "parent_width": source_width,
         "parent_height": source_height,
+        "affected_blocks": None,
     }
 
 
@@ -935,10 +940,8 @@ def _bc7_intent_rgb(source_rgb, state, pixel, adjustments):
                 "Mip-0 color intent contains an invalid class.")
         if not intent_class:
             return source_rgb
-        adjusted = apply_color_adjustment(
-            base, adjustments[intent_class])
-        return tuple(min(255, max(0, round(value * 255.0)))
-                      for value in adjusted)
+        return apply_prepared_color_u8(
+            source_rgb, adjustments[intent_class])
 
     if state["single"]:
         changed_count = state["changed"][pixel]
@@ -949,7 +952,7 @@ def _bc7_intent_rgb(source_rgb, state, pixel, adjustments):
         source_y0, source_y1 = _intent_region_bounds(
             pixel // state["width"], state["parent_height"], state["height"])
         total_count = (source_x1 - source_x0) * (source_y1 - source_y0)
-        adjusted = apply_color_adjustment(base, adjustments[1])
+        adjusted = apply_prepared_color_adjustment(base, adjustments[1])
         return tuple(min(255, max(0, round(value * 255.0)))
                       for value in (
                           (base[channel] * (total_count - changed_count)
@@ -965,7 +968,8 @@ def _bc7_intent_rgb(source_rgb, state, pixel, adjustments):
     for intent_class, count in enumerate(counts[1:], 1):
         if not count:
             continue
-        adjusted = apply_color_adjustment(base, adjustments[intent_class])
+        adjusted = apply_prepared_color_adjustment(
+            base, adjustments[intent_class])
         for channel in range(3):
             weighted[channel] += adjusted[channel] * count
     return tuple(min(255, max(0, round(
@@ -990,7 +994,7 @@ def _bc7_target_block_pixels(source_block, mip, block_index, state,
             rgb = _bc7_intent_rgb(
                 source_pixels[local][:3], state, pixel, adjustments)
             target_pixels[local] = rgb + (source_pixels[local][3],)
-    return tuple(target_pixels), valid_width, valid_height
+    return (source_pixels, tuple(target_pixels), valid_width, valid_height)
 
 
 def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
@@ -1002,10 +1006,15 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
     if len(original) < prepared.layout.payload_end:
         raise TextureBakeAnalysisError(
             "texture_validation_failed", "DDS payload layout is invalid.")
-    adjustments = getattr(prepared, "intent_adjustments", None)
-    if not adjustments:
+    raw_adjustments = getattr(prepared, "intent_adjustments", None)
+    if not raw_adjustments:
         raise TextureBakeAnalysisError(
             "texture_validation_failed", "Color intent is missing.")
+    adjustments = tuple(
+        None if adjustment is None
+        else adjustment if isinstance(adjustment, PreparedColorAdjustment)
+        else prepare_color_adjustment(adjustment)
+        for adjustment in raw_adjustments)
     final = bytearray(original)
     writable_masks = []
     state = _bc7_intent_level(prepared)
@@ -1019,8 +1028,10 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
                 state, mip.width, mip.height, len(adjustments))
             timings["intent"] = timings.get("intent", 0.0) + (
                 time.perf_counter() - started)
-        affected = _bc7_affected_blocks(
-            state["changed"], mip.width, mip.height, mip)
+        affected = state["affected_blocks"]
+        if affected is None:
+            affected = _bc7_affected_blocks(
+                state["changed"], mip.width, mip.height, mip)
         writable = bytearray(mip.units_x * mip.units_y)
         started = time.perf_counter()
         if stage_callback is not None:
@@ -1028,12 +1039,12 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
         for block_index in affected:
             start = mip.offset + block_index * mip.bytes_per_unit
             source_block = bytes(original[start:start + 16])
-            target_pixels, valid_width, valid_height = (
+            source_pixels, target_pixels, valid_width, valid_height = (
                 _bc7_target_block_pixels(
                     source_block, mip, block_index, state, adjustments))
             result = _bc7_codec_call(
                 _bc7_codec.recolor_block, source_block, target_pixels,
-                valid_width, valid_height)
+                valid_width, valid_height, source_pixels)
             final[start:start + 16] = result.block
             writable[block_index] = 1
             touched += 1
@@ -1170,9 +1181,13 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     # Keep no geometry for those consumers: this also avoids turning an
     # unresolvable neutral draw into a false coverage failure.
     intent_adjustments = [None]
+    prepared_intent_adjustments = [None]
     intent_classes = {}
     intent_sources = [None]
     mip0_claims = bytearray(base_mip.width * base_mip.height)
+    mip0_affected_mask = (
+        bytearray(base_mip.units_x * base_mip.units_y)
+        if info.format.startswith("bc7") else None)
     claims_need_wide_values = False
     for target in prepared_targets:
         signature = _adjustment_signature(target.adjustment)
@@ -1185,6 +1200,8 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
                     "Too many distinct Color adjustments were submitted.")
             intent_classes[signature] = intent_class
             intent_adjustments.append(target.adjustment)
+            prepared_intent_adjustments.append(
+                prepare_color_adjustment(target.adjustment))
             intent_sources.append(target.semantic_key)
             if intent_class > 0xFF and not claims_need_wide_values:
                 mip0_claims = array("H", mip0_claims)
@@ -1202,6 +1219,10 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
                 raise _texture_save_conflict(
                     intent_sources[previous], target.semantic_key)
             mip0_claims[index] = intent_class
+            if mip0_affected_mask is not None:
+                x = index % base_mip.width
+                y = index // base_mip.width
+                mip0_affected_mask[(y // 4) * base_mip.units_x + x // 4] = 1
 
     if info.format.startswith("bc7"):
         target_pixel_masks = None
@@ -1253,7 +1274,13 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
         unresolved=tuple(unresolved),
         unresolved_details=tuple(unresolved_details),
         mip0_claims=mip0_claims,
-        intent_adjustments=tuple(intent_adjustments))
+        intent_adjustments=tuple(
+            prepared_intent_adjustments
+            if info.format.startswith("bc7") else intent_adjustments),
+        mip0_affected_blocks=(
+            tuple(index for index, selected in enumerate(mip0_affected_mask)
+                  if selected)
+            if mip0_affected_mask is not None else None))
 
 
 def _analysis_result(prepared):
