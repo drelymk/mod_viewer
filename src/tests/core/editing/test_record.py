@@ -119,6 +119,32 @@ endif
 SAME_TRIPLE_TARGETS = SHIFTED_TARGETS.replace(
     "drawindexed = 200,0,0", "drawindexed = 100,0,0")
 
+COMMAND_LIST_RECORD = """[Constants]
+global persist $a = 0
+global persist $b = 0
+
+[KeyA]
+key = 1
+type = cycle
+$a = 0,1
+
+[KeyB]
+key = 2
+type = cycle
+$b = 0,1
+
+[TextureOverrideBody]
+if $a == 0
+run = CommandListShared
+endif
+if $b == 1
+run = CommandListShared
+endif
+
+[CommandListShared]
+drawindexed = 100,0,0
+"""
+
 CHAIN3 = """[Constants]
 global persist $swap = 0
 
@@ -394,6 +420,50 @@ def test_record_resolves_same_triple_by_draw_occurrence():
     assert report["skipped"] == []
     assert d.to_string().count("if $new == 0") == 1
     assert d.to_string().count("if $new == 1") == 1
+
+
+def test_record_refuses_path_owned_target_without_mutation():
+    d = doc(COMMAND_LIST_RECORD)
+    line = dline(d, "100,0,0")
+    ref = target_refs(d, line.no + 1)[0]
+    ref["occurrence"]["path"] = [["TextureOverrideBody", 0]]
+    before = d.to_string()
+
+    report = re_.record_toggle(
+        d, "KeyA", {0: [line.no + 1], 1: []}, [ref])
+
+    assert report["chains_rewritten"] == 0
+    assert report["wraps_added"] == 0
+    assert report["skipped"] == [{
+        "var": "a", "line": line.no + 1,
+        "reason": "draw is reached through a run= command-list execution "
+                  "path without a physical owner for this variable; edit the "
+                  "caller branch manually",
+    }]
+    assert d.to_string() == before
+
+
+def test_record_accepts_repeated_commandlist_sources_conservatively():
+    d = doc(COMMAND_LIST_RECORD)
+    line = dline(d, "100,0,0")
+    first = target_refs(d, line.no + 1)[0]
+    first["occurrence"]["path"] = [["TextureOverrideBody", 0]]
+    second = {
+        **first,
+        "occurrence": {
+            **first["occurrence"],
+            "path": [["TextureOverrideBody", 1]],
+        },
+    }
+    before = d.to_string()
+
+    report = re_.record_toggle(
+        d, "KeyA", {0: [line.no + 1], 1: []}, [first, second])
+
+    assert report["skipped"]
+    assert report["chains_rewritten"] == 0
+    assert report["wraps_added"] == 0
+    assert d.to_string() == before
 
 
 def test_record_out_of_range_target_uses_stale_error_path():

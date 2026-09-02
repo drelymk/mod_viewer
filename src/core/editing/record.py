@@ -249,7 +249,7 @@ def _regenerate_chain(doc, var, values, branches, endif_line, desired, all_posit
 
 
 def _analyze_var(doc, var, values, desired, report, unsafe_sections,
-                 max_positions, target_owners=None):
+                 max_positions, target_owners=None, target_paths=None):
     """Everything this var's recorded data implies, without mutating `doc`.
 
     Returns (chain_edits, bare_edits, verified):
@@ -270,6 +270,7 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
     """
     all_positions = frozenset(range(max_positions))
     target_owners = target_owners or {}
+    target_paths = target_paths or {}
     chain_leaders = {}     # leader.no -> Line
     leader_lines = {}      # leader.no -> [desired line_no, ...]
     bare_targets = []      # Lines with no ancestor referencing var
@@ -280,6 +281,13 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
     for line_no in sorted(desired):
         line = doc.lines[line_no]
         owners = target_owners.get(line_no, set())
+        if target_paths.get(line_no) and var not in owners:
+            report["skipped"].append({
+                "var": var, "line": line.no + 1,
+                "reason": "draw is reached through a run= command-list "
+                          "execution path without a physical owner for this "
+                          "variable; edit the caller branch manually"})
+            continue
         if owners and var not in owners:
             continue
         if line.section is not None and line.section.name.lower() in unsafe_sections:
@@ -416,6 +424,12 @@ def record_toggle(doc, section_name, position_lines, target_lines,
             f"expected recorded data for positions 0..{max_positions - 1}, got {sorted(got)}")
 
     target_numbers = set(target_line_map.values())
+    target_paths = {}
+    for raw_ref in target_lines or []:
+        line_no = target_line_map[int(raw_ref["line"])]
+        path = _target_path(raw_ref)
+        if path:
+            target_paths.setdefault(line_no, []).append(path)
     normalized_visible = {}
     for pos, line_nos in normalized_positions.items():
         normalized_visible[pos] = []
@@ -455,7 +469,7 @@ def record_toggle(doc, section_name, position_lines, target_lines,
     for var, values in writable.items():
         chain_edits, bare_edits, verified = _analyze_var(
             doc, var, values, desired, report, unsafe_sections, max_positions,
-            target_owners)
+            target_owners, target_paths)
         all_chain_edits.extend(chain_edits)
         for line_no, expr in bare_edits.items():
             all_bare_claims.setdefault(line_no, []).append((var, expr))
@@ -615,6 +629,12 @@ def _target_identity(ref, target_ini=None):
             raise ValueError
         occurrence_section = occurrence["section"]
         occurrence_ordinal = int(occurrence["ordinal"])
+        occurrence_path = occurrence.get("path", [])
+        if not isinstance(occurrence_path, list):
+            raise ValueError
+        if any(not isinstance(item, list) or len(item) != 2
+               for item in occurrence_path):
+            raise ValueError
         if not isinstance(occurrence_section, str):
             raise ValueError
     except (KeyError, TypeError, ValueError) as exc:
@@ -634,6 +654,10 @@ def _target_identity(ref, target_ini=None):
     return line_no, (section.casefold(), *triple, occurrence_ordinal)
 
 
+def _target_path(ref):
+    return ref["occurrence"].get("path") or []
+
+
 def _resolve_target_refs(doc, target_lines, target_ini=None):
     """Resolve submitted source lines to the current staged draw lines.
 
@@ -645,6 +669,7 @@ def _resolve_target_refs(doc, target_lines, target_ini=None):
     """
     resolved = {}
     used_current = {}
+    seen_submitted = {}
     lines_by_identity = {}
     for line in doc.lines:
         identity = _draw_identity(doc, line.no)
@@ -652,9 +677,14 @@ def _resolve_target_refs(doc, target_lines, target_ini=None):
             lines_by_identity.setdefault(identity, []).append(line.no)
     for raw_ref in target_lines or []:
         submitted_line, expected = _target_identity(raw_ref, target_ini)
-        if submitted_line in resolved:
-            raise te.ToggleEditError(
-                f"Record target line {submitted_line} was submitted more than once")
+        path = _target_path(raw_ref)
+        previous_submission = seen_submitted.get(submitted_line)
+        if previous_submission is not None:
+            if (previous_submission["expected"] != expected
+                    or any(previous_path == path
+                           for previous_path in previous_submission["paths"])):
+                raise te.ToggleEditError(
+                    f"Record target line {submitted_line} was submitted more than once")
 
         current_line = submitted_line - 1
         if _draw_identity(doc, current_line) == expected:
@@ -674,12 +704,20 @@ def _resolve_target_refs(doc, target_lines, target_ini=None):
             resolved_line = candidates[0]
 
         previous = used_current.get(resolved_line)
-        if previous is not None:
+        if (previous is not None
+                and previous["submitted"] != submitted_line):
             raise te.ToggleEditError(
-                f"Record targets {previous} and {submitted_line} resolve to the "
+                f"Record targets {previous['submitted']} and {submitted_line} resolve to the "
                 "same staged draw")
         resolved[submitted_line] = resolved_line
-        used_current[resolved_line] = submitted_line
+        if previous is None:
+            used_current[resolved_line] = {"submitted": submitted_line}
+        if previous_submission is None:
+            seen_submitted[submitted_line] = {
+                "expected": expected, "paths": [path],
+            }
+        else:
+            previous_submission["paths"].append(path)
     return resolved
 
 
