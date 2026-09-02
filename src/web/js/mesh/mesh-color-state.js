@@ -9,6 +9,7 @@ import {
 import { requestRender } from '../scene/render-scheduler.js';
 
 const persistenceTails = new WeakMap();
+const persistenceResults = new WeakMap();
 
 export function getMeshColorAdjustment(mesh) {
   return normalizeColorAdjustment(mesh?.userData?.colorAdjustment);
@@ -37,15 +38,20 @@ function persistMeshColorAdjustment(mesh, adjustment = getMeshColorAdjustment(me
   const previous = persistenceTails.get(mesh) || Promise.resolve();
   const request = previous
     .catch(() => {})
-    .then(() => save(path, key, value));
+    .then(() => save(path, key, value))
+    .then(result => {
+      if (result?.error) throw new Error(result.error);
+      return result;
+    });
   const settled = request.catch(() => {});
   persistenceTails.set(mesh, settled);
+  persistenceResults.set(mesh, request);
   return request;
 }
 
-/** Wait until all queued color writes for this mesh have settled. */
+/** Wait for queued color writes and propagate failures to destructive flows. */
 export function flushMeshColorAdjustmentPersistence(mesh) {
-  return (persistenceTails.get(mesh) || Promise.resolve()).catch(() => {});
+  return persistenceResults.get(mesh) || Promise.resolve();
 }
 
 /** Return the active diffuse editability and the reason when it is blocked. */

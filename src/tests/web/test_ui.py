@@ -968,7 +968,7 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         context.close()
 
 
-def test_color_persistence_serializes_updates_and_flushes_before_bake(
+def test_color_persistence_serializes_updates_and_flushes_before_texture_save(
         edge_browser, frontend_url):
     payload = _payload("ColorQueue")
     first = payload["meshes"]["Body-ColorQueue-0"]
@@ -1028,7 +1028,7 @@ def test_color_persistence_serializes_updates_and_flushes_before_bake(
         context.close()
 
 
-def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
+def test_texture_save_modal_opens_without_analysis_and_lists_changed_meshes(
         edge_browser, frontend_url):
     payload = _payload("Bake")
     payload["metadata"]["mesh_color_adjustments"] = {
@@ -1044,18 +1044,10 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
     second["component"] = "Face Bake"
     second["display_name"] = "Friendly Face"
     payload["meshes"]["Face-Bake-0"] = second
-    response = {
-        "status": "ok", "safety": "shared",
-        "texture": {"file": "Bake-one.dds", "width": 8, "height": 8,
-                     "format": "bc7_unorm"},
-        "coverage": {"unit": "block", "selected_units": 2,
-                     "total_units": 4, "unique_units": 1, "shared_units": 1,
-                     "selected_percent": 50, "shared_percent_of_selected": 50},
-        "shared_with": [{"semantic_key": "Face-Bake-0", "shared_units": 1}],
-        "unresolved_consumers": [],
-    }
+    payload["metadata"]["mesh_color_adjustments"][
+        "Face Bake::3,0,0"] = {"hue": 45}
     context, page = _page(edge_browser, frontend_url, {"Bake": {
-        **payload, "textureBakeResponse": response,
+        **payload,
     }})
     try:
         _open(page, "Bake")
@@ -1063,49 +1055,48 @@ def test_texture_coverage_action_is_read_only_and_includes_hidden_meshes(
         page.evaluate("""() => {
           window.modViewer.activeMeshes[1].visible = false;
         }""")
-        page.evaluate("""async () => {
-          const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
-          setMeshTextureState(window.modViewer.activeMeshes[1], {
-            diffuse: 'diffuse::Bake-two.dds',
-          });
-        }""")
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
         button = page.locator(".inspector-texture-bake")
         assert button.count() == 1
         button.click()
         page.locator("#texture-bake-modal-backdrop.show").wait_for()
-        assert page.locator("#texture-bake-body").inner_text().find(
-            "Texture Coverage Results") >= 0
+        assert "SAVE TO TEXTURE" in page.locator("#texture-bake-body").inner_text()
         assert page.locator("#texture-bake-close").count() == 1
         assert page.locator("#texture-bake-close-x").count() == 1
-        assert page.locator("#texture-bake-body").inner_text().find(
-            "Shared blocks will remain unchanged") >= 0
         assert "Friendly Face" in page.locator("#texture-bake-body").inner_text()
-        assert page.locator("#texture-bake-confirm").inner_text() == \
-            "Bake Unique Areas Only"
+        assert "Body-Bake-0" in page.locator("#texture-bake-body").inner_text()
+        assert page.locator("#texture-bake-confirm").inner_text() == "Save"
         assert page.locator("#texture-bake-confirm").is_visible()
-        usage = page.evaluate("window.__fakeApi.calls.analyzeTextureBake[0][3]")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.saveTextureColor.length === 1")
+        request = page.evaluate("window.__fakeApi.calls.saveTextureColor[0]")
+        assert request[1] == dds_key
+        targets = request[2]
+        assert [item["semantic_key"] for item in targets] == [
+            "Body-Bake-0", "Face-Bake-0"]
+        usage = request[3]
         assert len(usage) == 2
         assert {item["semantic_key"] for item in usage} == {
             "Body-Bake-0", "Face-Bake-0"}
-        assert usage[1]["tex_key"] == "diffuse::Bake-two.dds"
         assert usage[1]["texture_keys"] == {
-            "diffuse": "diffuse::Bake-two.dds",
+            "diffuse": dds_key,
             "normal_map": None,
             "normal_data": None,
             "light_map": None,
             "material_map": None,
             "emission_map": None,
         }
-        assert page.evaluate("window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
     finally:
         context.close()
 
 
-def test_texture_coverage_unknown_state_does_not_claim_unique_units(
+def test_texture_save_modal_does_not_show_coverage_or_analysis_state(
         edge_browser, frontend_url):
     payload = _payload("Unknown")
     payload["metadata"]["mesh_color_adjustments"] = {
@@ -1116,16 +1107,6 @@ def test_texture_coverage_unknown_state_does_not_claim_unique_units(
     payload["meshes"]["Body-Unknown-0"]["tex_key"] = dds_key
     payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
     payload["textures"][dds_key] = payload["textures"].pop(old_key)
-    payload["textureBakeResponse"] = {
-        "status": "ok", "safety": "unknown",
-        "texture": {"file": "Unknown-one.dds", "width": 8, "height": 8,
-                     "format": "bc7_unorm"},
-        "coverage": {"unit": "block", "selected_units": 4,
-                     "total_units": 4, "unique_units": None,
-                     "shared_units": 1, "selected_percent": 100,
-                     "shared_percent_of_selected": 25},
-        "shared_with": [], "unresolved_consumers": ["Other-0"],
-    }
     context, page = _page(edge_browser, frontend_url, {"Unknown": payload})
     try:
         _open(page, "Unknown")
@@ -1135,14 +1116,14 @@ def test_texture_coverage_unknown_state_does_not_claim_unique_units(
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-modal-backdrop.show").wait_for()
         details = page.locator("#texture-bake-body").inner_text()
-        assert "Safety is unknown" in details
-        assert "Unknown" in details
-        assert page.locator("#texture-bake-confirm").is_hidden()
+        assert "SAVE TO TEXTURE" in details
+        assert "coverage" not in details.lower()
+        assert page.locator("#texture-bake-confirm").is_visible()
     finally:
         context.close()
 
 
-def test_texture_bake_action_is_disabled_for_neutral_color_state(
+def test_texture_save_action_is_disabled_for_neutral_color_state(
         edge_browser, frontend_url):
     payload = _payload("NeutralBake")
     first = payload["meshes"]["Body-NeutralBake-0"]
@@ -1160,14 +1141,12 @@ def test_texture_bake_action_is_disabled_for_neutral_color_state(
         button = page.locator(".inspector-texture-bake")
         assert button.is_disabled()
         assert button.get_attribute("title") == \
-            "Adjust the mesh color before baking."
-        assert page.evaluate(
-            "window.__fakeApi.calls.analyzeTextureBake.length") == 0
+            "Adjust a mesh color before saving."
     finally:
         context.close()
 
 
-def test_texture_coverage_cross_role_usage_keeps_bake_unavailable(
+def test_texture_save_cross_role_usage_is_rejected_by_save_request(
         edge_browser, frontend_url):
     payload = _payload("CrossRole")
     payload["metadata"]["mesh_color_adjustments"] = {
@@ -1184,10 +1163,11 @@ def test_texture_coverage_cross_role_usage_keeps_bake_unavailable(
     second["display_name"] = "Friendly Face"
     second["normal_map_key"] = dds_key.replace("diffuse::", "normal_map::")
     payload["meshes"]["Face-CrossRole-0"] = second
-    payload["textureBakeResponse"] = {
+    payload["textureSaveResult"] = {
         "status": "unsupported",
         "code": "cross_role_texture_usage",
         "error": "This DDS is also used as a Normal Map by Face-CrossRole-0.",
+        "details": {},
     }
     context, page = _page(edge_browser, frontend_url, {"CrossRole": payload})
     try:
@@ -1197,16 +1177,18 @@ def test_texture_coverage_cross_role_usage_keeps_bake_unavailable(
         page.locator(".draw-item").first.click()
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-modal-backdrop.show").wait_for()
+        assert page.locator("#texture-bake-confirm").is_visible()
+        page.locator("#texture-bake-confirm").click()
+        page.locator("#texture-bake-error").wait_for()
         assert page.locator("#texture-bake-error").inner_text() == (
             "This DDS is also used as a Normal Map by Face-CrossRole-0.")
-        assert page.locator("#texture-bake-confirm").is_hidden()
-        usage = page.evaluate("window.__fakeApi.calls.analyzeTextureBake[0][3]")
+        usage = page.evaluate("window.__fakeApi.calls.saveTextureColor[0][3]")
         face = next(item for item in usage
                     if item["semantic_key"] == "Face-CrossRole-0")
         assert face["texture_keys"]["normal_map"] == (
             "normal_map::CrossRole-one.dds")
         assert page.evaluate(
-            "window.__fakeApi.calls.bakeMeshTextureColor.length") == 0
+            "window.__fakeApi.calls.saveTextureColor.length") == 1
     finally:
         context.close()
 
@@ -1222,26 +1204,20 @@ def _bake_test_payload(label, texture_uri, hue=30):
     payload["metadata"]["mesh_color_adjustments"] = {
         f"Body {label}::3,0,0": {"hue": hue},
     }
-    payload["textureBakeResponse"] = {
-        "status": "ok", "safety": "safe",
-        "texture": {"file": f"{label}-bake.dds", "width": 8,
-                     "height": 8, "format": "bc7_unorm"},
-        "coverage": {"unit": "block", "selected_units": 1,
-                     "total_units": 4, "unique_units": 1, "shared_units": 0,
-                     "selected_percent": 25, "shared_percent_of_selected": 0},
-        "shared_with": [], "unresolved_consumers": [],
-    }
-    payload["textureBakeResult"] = {
+    payload["textureSaveResult"] = {
         "status": "ok", "tex_key": tex_key,
         "affected_tex_keys": [tex_key],
+        "saved_meshes": [{
+            "semantic_key": f"Body-{label}-0",
+            "metadata_key": f"Body {label}::3,0,0",
+        }],
         "texture": {"file": f"{label}-bake.dds"},
-        "patched": {"mip0_units": 1, "shared_units_preserved": 0},
         "backup": {"file": f"{label}-bake.dds.modviewer.bak"},
     }
     return payload, tex_key
 
 
-def test_texture_bake_modal_blocks_dismissal_while_baking(
+def test_texture_save_modal_blocks_dismissal_while_saving(
         edge_browser, frontend_url):
     payload, tex_key = _bake_test_payload("BakeModal", _PNG_URI)
     context, page = _page(edge_browser, frontend_url, {"BakeModal": payload})
@@ -1252,12 +1228,13 @@ def test_texture_bake_modal_blocks_dismissal_while_baking(
         page.locator(".draw-item").first.click()
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-confirm").wait_for()
+        assert "Saving" not in page.locator("#texture-bake-body").inner_text()
         page.evaluate("""() => {
-          window.pywebview.api.bake_mesh_texture_color = async () =>
-            new Promise(resolve => { window.__releaseTextureBake = resolve; });
+          window.pywebview.api.save_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureSave = resolve; });
         }""")
         page.locator("#texture-bake-confirm").click()
-        page.wait_for_function("window.__releaseTextureBake !== undefined")
+        page.wait_for_function("window.__releaseTextureSave !== undefined")
 
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
@@ -1270,20 +1247,23 @@ def test_texture_bake_modal_blocks_dismissal_while_baking(
             new MouseEvent('click', {bubbles: true}))""")
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 1
 
-        page.evaluate("""() => window.__releaseTextureBake({
+        page.evaluate("""() => window.__releaseTextureSave({
           status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          saved_meshes: [{semantic_key: 'Body-BakeModal-0',
+            metadata_key: 'Body BakeModal::3,0,0'}],
           texture: {file: 'BakeModal-bake.dds'},
-          patched: {mip0_units: 1, shared_units_preserved: 0},
           backup: {file: 'BakeModal-bake.dds.modviewer.bak'},
         })""" % (json.dumps(tex_key), json.dumps(tex_key)))
-        page.locator("#texture-bake-body", has_text="TEXTURE BAKED").wait_for()
+        page.locator("#texture-bake-body", has_text="TEXTURE SAVED").wait_for()
+        details = page.locator("#texture-bake-body").inner_text()
+        assert "Color metadata" not in details
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
     finally:
         context.close()
 
 
-def test_texture_bake_requires_fresh_confirmation_after_color_change(
+def test_texture_save_refreshes_targets_after_color_change(
         edge_browser, frontend_url):
     payload, _tex_key = _bake_test_payload("BakeStale", _PNG_URI)
     context, page = _page(edge_browser, frontend_url, {"BakeStale": payload})
@@ -1303,15 +1283,15 @@ def test_texture_bake_requires_fresh_confirmation_after_color_change(
         }""")
         page.locator("#texture-bake-confirm").click()
         page.wait_for_function(
-            "window.__fakeApi.calls.analyzeTextureBake.length === 2")
-        assert page.evaluate(
-            "window.__fakeApi.calls.bakeMeshTextureColor.length") == 0
+            "window.__fakeApi.calls.saveTextureColor.length === 0")
+        assert "Save to Texture" in page.locator(
+            "#texture-bake-title").inner_text()
         assert page.locator("#texture-bake-confirm").is_visible()
     finally:
         context.close()
 
 
-def test_texture_bake_error_hides_consumed_bake_action(
+def test_texture_save_error_hides_consumed_save_action(
         edge_browser, frontend_url):
     payload, _tex_key = _bake_test_payload("BakeFailure", _PNG_URI)
     context, page = _page(edge_browser, frontend_url,
@@ -1324,30 +1304,31 @@ def test_texture_bake_error_hides_consumed_bake_action(
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-confirm").wait_for()
         page.evaluate("""() => {
-          window.pywebview.api.bake_mesh_texture_color = async () => ({
-            status: 'error', error: 'Temporary bake failure.',
+          window.pywebview.api.save_texture_color = async () => ({
+            status: 'error',
+            error: 'The texture could not be saved safely.',
           });
         }""")
         page.locator("#texture-bake-confirm").click()
         page.wait_for_function("""() => document.querySelector(
-          '#texture-bake-error').textContent === 'Temporary bake failure.'""")
+          '#texture-bake-error').textContent.includes('could not be saved')""")
         assert page.locator("#texture-bake-confirm").is_hidden()
 
         page.locator("#texture-bake-close").click()
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-confirm").wait_for()
         page.evaluate("""() => {
-          window.pywebview.api.bake_mesh_texture_color = undefined;
+          window.pywebview.api.save_texture_color = undefined;
         }""")
         page.locator("#texture-bake-confirm").click()
         page.wait_for_function("""() => document.querySelector(
-          '#texture-bake-error').textContent === 'Texture baking is unavailable.'""")
+            '#texture-bake-error').textContent === 'Texture saving is unavailable.'""")
         assert page.locator("#texture-bake-confirm").is_hidden()
     finally:
         context.close()
 
 
-def test_successful_bake_syncs_stale_mesh_after_selection_changes(
+def test_successful_texture_save_syncs_stale_mesh_after_selection_changes(
         edge_browser, frontend_url):
     payload, tex_key = _bake_test_payload(
         "BakeSelectionRace", f"{frontend_url}/bake-selection-race.png")
@@ -1383,20 +1364,21 @@ def test_successful_bake_syncs_stale_mesh_after_selection_changes(
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-confirm").wait_for()
         page.evaluate("""() => {
-          window.pywebview.api.bake_mesh_texture_color = async () =>
-            new Promise(resolve => { window.__releaseTextureBake = resolve; });
+          window.pywebview.api.save_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureSave = resolve; });
         }""")
         page.locator("#texture-bake-confirm").click()
-        page.wait_for_function("window.__releaseTextureBake !== undefined")
+        page.wait_for_function("window.__releaseTextureSave !== undefined")
         page.evaluate("import('./js/scene/selection.js').then(({selectMesh}) => "
                       "selectMesh(window.modViewer.activeMeshes[1]))")
         assert "Face BakeSelectionRace" in page.locator(
             "#selected-mesh-status").inner_text()
 
-        page.evaluate("""() => window.__releaseTextureBake({
+        page.evaluate("""() => window.__releaseTextureSave({
           status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          saved_meshes: [{semantic_key: 'Body-BakeSelectionRace-0',
+            metadata_key: 'Body BakeSelectionRace::3,0,0'}],
           texture: {file: 'BakeSelectionRace-bake.dds'},
-          patched: {mip0_units: 1, shared_units_preserved: 0},
           backup: {file: 'BakeSelectionRace-bake.dds.modviewer.bak'},
         })""" % (json.dumps(tex_key), json.dumps(tex_key)))
         page.wait_for_function(
@@ -1414,7 +1396,7 @@ def test_successful_bake_syncs_stale_mesh_after_selection_changes(
         context.close()
 
 
-def test_successful_bake_does_not_reload_a_new_mod_after_switch(
+def test_successful_texture_save_does_not_reload_a_new_mod_after_switch(
         edge_browser, frontend_url):
     first_payload, first_key = _bake_test_payload(
         "BakeSwitchA", f"{frontend_url}/bake-switch-a.png")
@@ -1442,13 +1424,13 @@ def test_successful_bake_does_not_reload_a_new_mod_after_switch(
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
         page.evaluate("""() => {
-          window.pywebview.api.bake_mesh_texture_color = async () =>
-            new Promise(resolve => { window.__releaseTextureBake = resolve; });
+          window.pywebview.api.save_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureSave = resolve; });
         }""")
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-confirm").wait_for()
         page.locator("#texture-bake-confirm").click()
-        page.wait_for_function("window.__releaseTextureBake !== undefined")
+        page.wait_for_function("window.__releaseTextureSave !== undefined")
 
         page.evaluate("""async () => {
           await window.modViewer.switchMod('BakeSwitchB');
@@ -1459,10 +1441,11 @@ def test_successful_bake_does_not_reload_a_new_mod_after_switch(
         assert page.evaluate("window.modViewer.getCurrentSource().path") == (
             "BakeSwitchB")
 
-        page.evaluate("""() => window.__releaseTextureBake({
+        page.evaluate("""() => window.__releaseTextureSave({
           status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          saved_meshes: [{semantic_key: 'Body-BakeSwitchA-0',
+            metadata_key: 'Body BakeSwitchA::3,0,0'}],
           texture: {file: 'BakeSwitchA-bake.dds'},
-          patched: {mip0_units: 1, shared_units_preserved: 0},
           backup: {file: 'BakeSwitchA-bake.dds.modviewer.bak'},
         })""" % (json.dumps(first_key), json.dumps(first_key)))
         page.wait_for_function(
@@ -1473,7 +1456,7 @@ def test_successful_bake_does_not_reload_a_new_mod_after_switch(
         context.close()
 
 
-def test_texture_bake_confirmation_resets_color_and_refreshes_affected_keys(
+def test_texture_save_resets_all_committed_meshes_and_refreshes_affected_keys(
         edge_browser, frontend_url):
     payload = _payload("BakeConfirm")
     first = payload["meshes"]["Body-BakeConfirm-0"]
@@ -1485,20 +1468,24 @@ def test_texture_bake_confirmation_resets_color_and_refreshes_affected_keys(
     payload["metadata"]["mesh_color_adjustments"] = {
         "Body BakeConfirm::3,0,0": {"hue": 30},
     }
-    payload["textureBakeResponse"] = {
-        "status": "ok", "safety": "safe",
-        "texture": {"file": "BakeConfirm-one.dds", "width": 8,
-                     "height": 8, "format": "bc7_unorm"},
-        "coverage": {"unit": "block", "selected_units": 1,
-                     "total_units": 4, "unique_units": 1, "shared_units": 0,
-                     "selected_percent": 25, "shared_percent_of_selected": 0},
-        "shared_with": [], "unresolved_consumers": [],
-    }
-    payload["textureBakeResult"] = {
-        "status": "ok", "tex_key": dds_key,
+    second = copy.deepcopy(first)
+    second["component"] = "Face BakeConfirm"
+    second["display_name"] = "Face Confirm"
+    payload["meshes"]["Face-BakeConfirm-0"] = second
+    payload["metadata"]["mesh_color_adjustments"][
+        "Face BakeConfirm::3,0,0"] = {"hue": 45}
+    payload["textureSaveResult"] = {
+        "status": "ok", "warning": "color_state_reset_failed",
+        "tex_key": dds_key,
         "affected_tex_keys": [dds_key],
+        "saved_meshes": [{
+            "semantic_key": "Body-BakeConfirm-0",
+            "metadata_key": "Body BakeConfirm::3,0,0",
+        }, {
+            "semantic_key": "Face-BakeConfirm-0",
+            "metadata_key": "Face BakeConfirm::3,0,0",
+        }],
         "texture": {"file": "BakeConfirm-one.dds"},
-        "patched": {"mip0_units": 1, "shared_units_preserved": 0},
         "backup": {"file": "BakeConfirm-one.dds.modviewer.bak"},
     }
     context, page = _page(edge_browser, frontend_url, {"BakeConfirm": payload})
@@ -1512,13 +1499,39 @@ def test_texture_bake_confirmation_resets_color_and_refreshes_affected_keys(
         bake.click()
         page.locator("#texture-bake-confirm").wait_for()
         page.locator("#texture-bake-confirm").click()
-        page.locator("#texture-bake-body", has_text="TEXTURE BAKED").wait_for()
+        page.locator("#texture-bake-body", has_text="TEXTURE SAVED").wait_for()
         assert page.evaluate(
-            "window.__fakeApi.calls.bakeMeshTextureColor[0]") == [
-                "BakeConfirm", "Body-BakeConfirm-0",
-                "Body BakeConfirm::3,0,0", dds_key,
+            "window.__fakeApi.calls.saveTextureColor[0]") == [
+                "BakeConfirm", dds_key,
                 [{
-                    "semantic_key": "Body-BakeConfirm-0", "tex_key": dds_key,
+                    "semantic_key": "Body-BakeConfirm-0",
+                    "metadata_key": "Body BakeConfirm::3,0,0",
+                    "adjustment": {
+                        "hue": 30, "saturation": 1, "brightness": 1, "contrast": 1,
+                        "red": 1, "green": 1, "blue": 1, "tint": "#ffffff",
+                        "tint_strength": 0,
+                    },
+                }, {
+                    "semantic_key": "Face-BakeConfirm-0",
+                    "metadata_key": "Face BakeConfirm::3,0,0",
+                    "adjustment": {
+                        "hue": 45, "saturation": 1, "brightness": 1, "contrast": 1,
+                        "red": 1, "green": 1, "blue": 1, "tint": "#ffffff",
+                        "tint_strength": 0,
+                    },
+                }],
+                [{
+                    "semantic_key": "Body-BakeConfirm-0",
+                    "texture_keys": {
+                        "diffuse": dds_key,
+                        "normal_map": None,
+                        "normal_data": None,
+                        "light_map": None,
+                        "material_map": None,
+                        "emission_map": None,
+                    },
+                }, {
+                    "semantic_key": "Face-BakeConfirm-0",
                     "texture_keys": {
                         "diffuse": dds_key,
                         "normal_map": None,
@@ -1528,16 +1541,49 @@ def test_texture_bake_confirmation_resets_color_and_refreshes_affected_keys(
                         "emission_map": None,
                     },
                 }],
-                {"hue": 30, "saturation": 1, "brightness": 1, "contrast": 1,
-                 "red": 1, "green": 1, "blue": 1, "tint": "#ffffff",
-                 "tint_strength": 0},
             ]
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue") == 0
         assert page.evaluate(
-            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+            "window.modViewer.activeMeshes[1].userData.colorAdjustment.hue") == 0
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 2
+        assert "Color metadata" not in page.locator(
+            "#texture-bake-body").inner_text()
         page.wait_for_function(
             "window.__fakeApi.calls.diagnostics.length >= 2")
+    finally:
+        context.close()
+
+
+def test_texture_save_keeps_warning_when_metadata_recovery_fails(
+        edge_browser, frontend_url):
+    payload, _tex_key = _bake_test_payload("BakeCleanupFailure", _PNG_URI)
+    payload["textureSaveResult"]["warning"] = "color_state_reset_failed"
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakeCleanupFailure": payload})
+    try:
+        _open(page, "BakeCleanupFailure")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.evaluate("""() => {
+          window.pywebview.api.save_mesh_color_adjustment = async (...args) => {
+              window.__fakeApi.calls.saveMeshColorAdjustment.push(args);
+              return {error: 'metadata write failed'};
+            };
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.saveTextureColor.length === 1")
+        page.locator("#texture-bake-body", has_text="TEXTURE SAVED").wait_for()
+        details = page.locator("#texture-bake-body").inner_text()
+        assert "Color metadata" in details
+        assert "Resolve the metadata write failure" in details
+        assert "Reopen the mod to retry" not in details
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 1
     finally:
         context.close()
 
@@ -1593,7 +1639,7 @@ def test_forced_health_refresh_keeps_newer_backup_report(
         context.close()
 
 
-def test_texture_coverage_error_clears_loading_message(
+def test_texture_save_error_clears_saving_message(
         edge_browser, frontend_url):
     payload = _payload("Error")
     payload["metadata"]["mesh_color_adjustments"] = {
@@ -1604,9 +1650,9 @@ def test_texture_coverage_error_clears_loading_message(
     payload["meshes"]["Body-Error-0"]["tex_key"] = dds_key
     payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
     payload["textures"][dds_key] = payload["textures"].pop(old_key)
-    payload["textureBakeResponse"] = {
+    payload["textureSaveResult"] = {
         "status": "error", "code": "coverage_incomplete",
-        "error": "Texture coverage could not be analyzed safely.",
+        "error": "Texture save could not be completed safely.",
     }
     context, page = _page(edge_browser, frontend_url, {"Error": payload})
     try:
@@ -1615,10 +1661,11 @@ def test_texture_coverage_error_clears_loading_message(
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
         page.locator(".inspector-texture-bake").click()
-        page.locator("#texture-bake-error").wait_for()
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("document.querySelector('#texture-bake-error').textContent.length > 0")
         assert page.locator("#texture-bake-error").inner_text() == (
-            "Texture coverage could not be analyzed safely.")
-        assert "Analyzing texture coverage" not in page.locator(
+            "Texture save could not be completed safely.")
+        assert "Saving color changes" not in page.locator(
             "#texture-bake-body").inner_text()
     finally:
         context.close()
@@ -1635,12 +1682,11 @@ def test_texture_coverage_action_explains_non_dds_without_backend_call(
         color = page.locator(".inspector-color-section")
         assert color.locator(".inspector-texture-bake").count() == 0
         assert "requires a DDS source" in color.inner_text()
-        assert page.evaluate("window.__fakeApi.calls.analyzeTextureBake.length") == 0
     finally:
         context.close()
 
 
-def test_texture_coverage_stale_response_is_discarded(
+def test_texture_save_does_not_call_analysis_api(
         edge_browser, frontend_url):
     payload = _payload("Stale")
     payload["metadata"]["mesh_color_adjustments"] = {
@@ -1657,18 +1703,10 @@ def test_texture_coverage_stale_response_is_discarded(
         page.locator(".draw-item").first.wait_for()
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
-        page.evaluate("""() => {
-          window.pywebview.api.analyze_mesh_texture_bake = async () =>
-            new Promise(resolve => { window.__releaseBake = resolve; });
-        }""")
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-modal-backdrop.show").wait_for()
-        page.wait_for_function("window.__releaseBake !== undefined")
-        page.evaluate("import('./js/scene/selection.js').then(({clearSelection}) => clearSelection())")
-        page.evaluate("window.__releaseBake({status: 'ok', safety: 'safe', coverage: {}})")
-        page.wait_for_function(
-            "document.querySelector('#texture-bake-modal-backdrop').classList.contains('show') === false")
-        assert page.locator("#texture-bake-state").count() == 0
+        assert "SAVE TO TEXTURE" in page.locator(
+            "#texture-bake-body").inner_text()
     finally:
         context.close()
 

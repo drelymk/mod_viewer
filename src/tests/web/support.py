@@ -336,8 +336,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
                    "deleteToggle": [], "exportChanges": [],
-                   "saveMeshColorAdjustment": [], "analyzeTextureBake": [],
-                   "bakeMeshTextureColor": []},
+                   "saveMeshColorAdjustment": [], "saveTextureColor": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -445,35 +444,18 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   ?? payload.asset_resolution ?? null,
               });
             },
-            analyze_mesh_texture_bake: async (path, semanticKey, texKey, usage) => {
-              state.calls.analyzeTextureBake.push([path, semanticKey, texKey, usage]);
-              return copy(state.responses[path]?.textureBakeResponse || {
+            save_texture_color: async (path, texKey, targets, usage) => {
+              state.calls.saveTextureColor.push([path, texKey, targets, usage]);
+              return copy(state.responses[path]?.textureSaveResult || {
                 status: 'ok',
-                safety: 'safe',
-                semantic_key: semanticKey,
-                tex_key: texKey,
-                texture: {file: 'body.dds', width: 8, height: 8, format: 'bc7_unorm'},
-                coverage: {
-                  unit: 'block', unit_width: 4, unit_height: 4,
-                  total_units: 4, selected_units: 1, unique_units: 1,
-                  shared_units: 0, selected_percent: 25,
-                  shared_percent_of_selected: 0,
-                },
-                shared_with: [], unresolved_consumers: [],
-              });
-            },
-            bake_mesh_texture_color: async (path, semanticKey, metadataKey,
-                                             texKey, usage, adjustment) => {
-              state.calls.bakeMeshTextureColor.push([
-                path, semanticKey, metadataKey, texKey, usage, adjustment]);
-              return copy(state.responses[path]?.textureBakeResult || {
-                status: 'ok',
-                semantic_key: semanticKey,
                 tex_key: texKey,
                 affected_tex_keys: texKey ? [texKey] : [],
+                saved_meshes: (targets || []).map(target => ({
+                  semantic_key: target.semantic_key,
+                  metadata_key: target.metadata_key,
+                })),
                 texture: {file: 'body.dds'},
-                patched: {mip0_units: 1, shared_units_preserved: 0},
-                backup: {file: 'body.dds.modviewer.bak'},
+                backup: {file: 'body.modviewer.bak'},
               });
             },
             get_model_skinning_preview: async path => {

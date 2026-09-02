@@ -274,48 +274,43 @@ def test_semantic_control_read_reuses_active_mesh_keys(monkeypatch):
     assert captured[0][1]["active_mesh_keys"] == {"Body-1"}
 
 
-def test_bake_resets_metadata_only_after_success(monkeypatch):
+def test_save_texture_color_forwards_complete_target_request(monkeypatch):
     preview = ModPreview(_Access())
+    preview._active_mesh_keys["mod"] = {"Body-1", "Body-2"}
     context = _context()
     captured = []
+    cleared = []
     monkeypatch.setattr(
         preview, "authoritative_context",
         lambda _folder: ("mod", {"override": 1}, {}, context))
     monkeypatch.setattr(
-        "app.bridge.mod_preview.bake_mesh_texture_color",
+        "app.bridge.mod_preview.save_texture_color",
         lambda *args: captured.append(args) or {
             "status": "ok", "tex_key": "diffuse::body.dds",
+            "saved_meshes": [{
+                "semantic_key": "Body-1", "metadata_key": "Body::one",
+            }],
         })
     monkeypatch.setattr(
-        "app.bridge.mod_preview.metadata.save_mesh_color_adjustment",
-        lambda *args: captured.append(("reset", args)) or {"saved": True})
+        "app.bridge.mod_preview.metadata.clear_mesh_color_adjustments",
+        lambda folder, keys: cleared.append((folder, keys)) or {"saved": True})
 
-    result = preview.bake_mesh_texture_color(
-        "mod", "Body-1", "Body::3,0,0", "diffuse::body.dds",
-        [{"semantic_key": "Body-1", "tex_key": "diffuse::body.dds"}],
-        {"hue": 30})
+    targets = [{
+        "semantic_key": "Body-1", "metadata_key": "Request::not-committed",
+        "adjustment": {"hue": 30},
+    }]
+    usage = [{
+        "semantic_key": "Body-1",
+        "texture_keys": {
+            "diffuse": "diffuse::body.dds", "normal_map": None,
+            "normal_data": None, "light_map": None,
+            "material_map": None, "emission_map": None,
+        },
+    }]
+    result = preview.save_texture_color(
+        "mod", "diffuse::body.dds", targets, usage)
 
     assert result["status"] == "ok"
-    assert captured[0][1:]
-    assert captured[1][0] == "reset"
-
-
-def test_bake_does_not_reset_metadata_on_write_failure(monkeypatch):
-    preview = ModPreview(_Access())
-    monkeypatch.setattr(
-        preview, "authoritative_context",
-        lambda _folder: ("mod", {}, {}, _context()))
-    monkeypatch.setattr(
-        "app.bridge.mod_preview.bake_mesh_texture_color",
-        lambda *args: {"status": "error", "code": "texconv_failed"})
-    reset = []
-    monkeypatch.setattr(
-        "app.bridge.mod_preview.metadata.save_mesh_color_adjustment",
-        lambda *args: reset.append(args) or {"saved": True})
-
-    result = preview.bake_mesh_texture_color(
-        "mod", "Body-1", "Body::3,0,0", "diffuse::body.dds", [],
-        {"hue": 30})
-
-    assert result["code"] == "texconv_failed"
-    assert reset == []
+    assert captured == [(context, {"override": 1}, {"Body-1", "Body-2"},
+                         "diffuse::body.dds", targets, usage)]
+    assert cleared == [("mod", ["Body::one"])]

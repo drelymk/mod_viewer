@@ -34,7 +34,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt "pytest>=8.0"
+          python -m pip install -r requirements-dev.txt
 
       - name: Run test suite
-        run: python -m pytest -q --ignore=src/tests/web
+        run: python -m pytest -q

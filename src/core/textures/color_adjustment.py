@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
 
 
 COLOR_DEFAULTS = {
@@ -30,6 +31,23 @@ COLOR_RANGES = {
 }
 
 _TINT_PATTERN = re.compile(r"^#[0-9a-f]{6}$", re.IGNORECASE)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedColorAdjustment:
+    """Numeric color state ready for repeated per-pixel application."""
+
+    hue_offset: float
+    saturation: float
+    brightness: float
+    contrast: float
+    red: float
+    green: float
+    blue: float
+    tint_red: float
+    tint_green: float
+    tint_blue: float
+    tint_strength: float
 
 
 def _number(value, default, *, reject_invalid):
@@ -87,6 +105,27 @@ def tint_rgb(value):
         normalized = COLOR_DEFAULTS["tint"]
     return tuple(int(normalized[index:index + 2], 16) / 255.0
                  for index in (1, 3, 5))
+
+
+def prepare_color_adjustment(adjustment):
+    """Validate and precompute color state for repeated pixel transforms."""
+    normalized = normalize_color_adjustment(adjustment, reject_invalid=True)
+    if normalized is None:
+        raise ValueError("invalid color adjustment")
+    tint_red, tint_green, tint_blue = tint_rgb(normalized["tint"])
+    return PreparedColorAdjustment(
+        hue_offset=normalized["hue"] / 360.0,
+        saturation=normalized["saturation"],
+        brightness=normalized["brightness"],
+        contrast=normalized["contrast"],
+        red=normalized["red"],
+        green=normalized["green"],
+        blue=normalized["blue"],
+        tint_red=tint_red,
+        tint_green=tint_green,
+        tint_blue=tint_blue,
+        tint_strength=normalized["tint_strength"],
+    )
 
 
 def _rgb_to_hsv(red, green, blue):
@@ -154,6 +193,34 @@ def _apply_normalized(rgb, normalized):
                  for channel in (red, green, blue))
 
 
+def _apply_prepared(rgb, prepared):
+    """Apply a prepared state without validation or dictionary lookups."""
+    try:
+        red, green, blue = (float(channel) for channel in rgb)
+    except (TypeError, ValueError):
+        raise ValueError("RGB must contain three numeric channels") from None
+    hue, saturation, value = _rgb_to_hsv(red, green, blue)
+    hue = (hue + prepared.hue_offset) % 1.0
+    saturation = min(1.0, max(0.0, saturation * prepared.saturation))
+    value = min(1.0, max(0.0, value * prepared.brightness))
+    red, green, blue = _hsv_to_rgb(hue, saturation, value)
+    red = (red - 0.5) * prepared.contrast + 0.5
+    green = (green - 0.5) * prepared.contrast + 0.5
+    blue = (blue - 0.5) * prepared.contrast + 0.5
+    red *= prepared.red
+    green *= prepared.green
+    blue *= prepared.blue
+    red = min(1.0, max(0.0, red))
+    green = min(1.0, max(0.0, green))
+    blue = min(1.0, max(0.0, blue))
+    strength = prepared.tint_strength
+    red = red * (1.0 - strength) + prepared.tint_red * strength
+    green = green * (1.0 - strength) + prepared.tint_green * strength
+    blue = blue * (1.0 - strength) + prepared.tint_blue * strength
+    return tuple(min(1.0, max(0.0, channel))
+                 for channel in (red, green, blue))
+
+
 def apply_color_adjustment(rgb, adjustment):
     """Apply the viewer's operation order to raw sRGB RGB floats.
 
@@ -165,6 +232,20 @@ def apply_color_adjustment(rgb, adjustment):
     if normalized is None:
         raise ValueError("invalid color adjustment")
     return _apply_normalized(rgb, normalized)
+
+
+def apply_prepared_color_adjustment(rgb, prepared):
+    """Apply a state returned by :func:`prepare_color_adjustment`."""
+    if not isinstance(prepared, PreparedColorAdjustment):
+        raise ValueError("prepared color adjustment is invalid")
+    return _apply_prepared(rgb, prepared)
+
+
+def apply_prepared_color_u8(rgb, prepared):
+    """Apply prepared color state to an RGB byte triplet."""
+    adjusted = _apply_prepared((channel / 255.0 for channel in rgb), prepared)
+    return tuple(min(255, max(0, round(channel * 255.0)))
+                 for channel in adjusted)
 
 
 def adjust_rgba_bytes(data, width, height, adjustment, pixel_mask=None):
@@ -201,7 +282,9 @@ def adjust_rgba_bytes(data, width, height, adjustment, pixel_mask=None):
 
 
 __all__ = [
-    "COLOR_DEFAULTS", "COLOR_RANGES", "adjust_rgba_bytes",
-    "apply_color_adjustment", "is_neutral_color_adjustment",
-    "normalize_color_adjustment", "tint_rgb",
+    "COLOR_DEFAULTS", "COLOR_RANGES", "PreparedColorAdjustment",
+    "adjust_rgba_bytes", "apply_color_adjustment",
+    "apply_prepared_color_adjustment", "apply_prepared_color_u8",
+    "is_neutral_color_adjustment", "normalize_color_adjustment",
+    "prepare_color_adjustment", "tint_rgb",
 ]

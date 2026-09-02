@@ -4205,6 +4205,96 @@ def test_native_dds_failure_falls_back_without_black_frame(
     finally:
         context.close()
 
+def test_texture_save_awaits_in_place_native_dds_reload(
+        edge_browser, frontend_url):
+    texture_uri = f"{frontend_url}/BakeNativeReload-bake.dds"
+    payload = _payload("BakeNativeReload")
+    entry = payload["meshes"]["Body-BakeNativeReload-0"]
+    key = "diffuse::BakeNativeReload-bake.dds"
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["tex_key"] = key
+    payload["texture_pools"]["p0"][0]["tex_key"] = key
+    payload["textures"] = {key: texture_uri}
+    payload["metadata"]["mesh_color_adjustments"] = {
+        "Body BakeNativeReload::3,0,0": {"hue": 30},
+    }
+    first_dds = _bc7_dds_bytes(width=4, height=4, mip_count=1)
+    second_dds = bytearray(first_dds)
+    second_dds[148] = 0x22
+    first_dds = bytearray(first_dds)
+    first_dds[148] = 0x11
+    requests = []
+    context, page = _page(
+        edge_browser, frontend_url, {"BakeNativeReload": payload})
+    try:
+        supported = page.evaluate("""
+          async () => {
+            const {supportsBCTextureCompression} =
+              await import('./js/scene/renderer-capabilities.js');
+            return supportsBCTextureCompression();
+          }
+        """)
+        if not supported:
+            pytest.skip("native DDS is not supported by the test renderer")
+
+        def fulfill_dds(route):
+            requests.append(route.request.url)
+            body = first_dds if len(requests) == 1 else second_dds
+            route.fulfill(
+                status=200, content_type="application/octet-stream",
+                body=bytes(body),
+                headers={"Cache-Control": "no-store"})
+
+        page.route("**/BakeNativeReload-bake.dds**", fulfill_dds)
+        _open(page, "BakeNativeReload")
+        page.wait_for_function("""
+          () => {
+            const binding = window.modViewer.activeMeshes[0]?.material
+              ?.userData?.gameMaterial?.bindings?.diffuse;
+            return binding?.textureNode?.value?.isCompressedTexture === true
+              && binding.textureNode.value.mipmaps?.[0]?.data?.[0] === 0x11;
+          }
+        """)
+        before = page.evaluate("""
+          () => {
+            const mesh = window.modViewer.activeMeshes[0];
+            const binding = mesh.material.userData.gameMaterial.bindings.diffuse;
+            const texture = binding.textureNode.value;
+            return {
+              textureUuid: texture.uuid,
+              textureVersion: texture.version,
+            };
+          }
+        """)
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").click()
+        page.locator("#texture-bake-body", has_text="TEXTURE SAVED").wait_for()
+
+        after = page.evaluate("""
+          () => {
+            const mesh = window.modViewer.activeMeshes[0];
+            const binding = mesh.material.userData.gameMaterial.bindings.diffuse;
+            const texture = binding.textureNode.value;
+            return {
+              textureUuid: texture.uuid,
+              textureVersion: texture.version,
+              marker: texture.mipmaps[0].data[0],
+              loadModCalls: window.__fakeApi.calls.loadMod.length,
+            };
+          }
+        """)
+        assert len(requests) == 2
+        assert requests[1] != requests[0]
+        assert "reload=" in requests[1]
+        assert after["textureUuid"] == before["textureUuid"]
+        assert after["textureVersion"] > before["textureVersion"]
+        assert after["marker"] == 0x22
+        assert after["loadModCalls"] == 1
+    finally:
+        context.close()
+
 def test_replaced_pending_texture_ignores_stale_completion(
         edge_browser, frontend_url):
     payload = _payload("Replacement")

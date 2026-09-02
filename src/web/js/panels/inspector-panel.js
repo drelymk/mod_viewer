@@ -7,9 +7,10 @@ import {
   canEditMeshColor, getMeshColorAdjustment, resetMeshColorAdjustment,
   setMeshColorAdjustment,
 } from '../mesh/mesh-color-state.js';
-import { canAnalyzeTextureBake } from '../mesh/texture-bake-analysis.js';
-import { openTextureBakeModal } from '../ui/texture-bake-modal.js';
-import { isNeutralColorAdjustment } from '../mesh/color-adjustment.js';
+import {
+  canSaveTexture, getTextureSaveTargets,
+} from '../mesh/texture-save-state.js';
+import { openTextureSaveModal } from '../ui/texture-save-modal.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -269,12 +270,12 @@ function buildRangeControl({
   return row;
 }
 
-function syncTextureBakeAction(section, mesh) {
+function syncTextureSaveAction(section, mesh) {
   const action = section?.querySelector('.inspector-texture-bake');
   if (!action) return;
-  const neutral = isNeutralColorAdjustment(getMeshColorAdjustment(mesh));
-  action.disabled = neutral;
-  action.title = neutral ? 'Adjust the mesh color before baking.' : '';
+  const hasTargets = getTextureSaveTargets(mesh).length > 0;
+  action.disabled = !hasTargets;
+  action.title = hasTargets ? '' : 'Adjust a mesh color before saving.';
 }
 
 function updateColorAdjustment(section, mesh, field, controlValue,
@@ -282,32 +283,31 @@ function updateColorAdjustment(section, mesh, field, controlValue,
   const next = getMeshColorAdjustment(mesh);
   next[field] = colorAdjustmentValue(field, controlValue);
   setMeshColorAdjustment(mesh, next, { persist, render: true });
-  syncTextureBakeAction(section, mesh);
+  syncTextureSaveAction(section, mesh);
 }
 
-function buildTextureBakeAction(section, mesh) {
-  const eligibility = canAnalyzeTextureBake(mesh);
+function buildTextureSaveAction(section, mesh) {
+  const eligibility = canSaveTexture(mesh);
   if (eligibility.editable) {
     const bake = document.createElement('button');
     bake.type = 'button';
     bake.className = 'ui-button inspector-texture-bake';
-    bake.textContent = 'Bake to Texture…';
-    const neutral = isNeutralColorAdjustment(getMeshColorAdjustment(mesh));
-    bake.disabled = neutral;
-    if (neutral) bake.title = 'Adjust the mesh color before baking.';
+    bake.textContent = 'Save to Texture...';
+    const hasTargets = getTextureSaveTargets(mesh).length > 0;
+    bake.disabled = !hasTargets;
+    if (!hasTargets) bake.title = 'Adjust a mesh color before saving.';
     bake.addEventListener('click', async () => {
       bake.disabled = true;
       try {
-        await openTextureBakeModal(mesh, {
+        await openTextureSaveModal(mesh, {
           isCurrent: () => current?.type === 'mesh' && current.mesh === mesh,
         });
       } finally {
-        bake.disabled = isNeutralColorAdjustment(
-          getMeshColorAdjustment(mesh));
+        bake.disabled = getTextureSaveTargets(mesh).length === 0;
       }
     });
     section.appendChild(bake);
-    syncTextureBakeAction(section, mesh);
+    syncTextureSaveAction(section, mesh);
   } else if (eligibility.reason === 'unsupported-texture-type') {
     addText(section, 'inspector-texture-bake-hint', eligibility.message);
   }
@@ -379,7 +379,7 @@ function buildColorSection(content, mesh) {
     const next = getMeshColorAdjustment(mesh);
     next.tint = tintInput.value;
     setMeshColorAdjustment(mesh, next, { persist, render: true });
-    syncTextureBakeAction(section, mesh);
+    syncTextureSaveAction(section, mesh);
   };
   tintInput.addEventListener('input', () => applyTint(false));
   tintInput.addEventListener('change', () => applyTint(true));
@@ -397,7 +397,7 @@ function buildColorSection(content, mesh) {
     updateColorControlState(content, mesh);
   });
   section.appendChild(reset);
-  buildTextureBakeAction(section, mesh);
+  buildTextureSaveAction(section, mesh);
   content.appendChild(section);
   return section;
 }
@@ -426,7 +426,7 @@ function updateColorControlState(content, mesh) {
   const tintValue = section.querySelector('[data-color-tint-value]');
   if (tintInput) tintInput.value = adjustment.tint;
   if (tintValue) tintValue.textContent = adjustment.tint.toUpperCase();
-  syncTextureBakeAction(section, mesh);
+  syncTextureSaveAction(section, mesh);
   return true;
 }
 
