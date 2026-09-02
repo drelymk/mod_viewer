@@ -104,7 +104,12 @@ def _payload(label="A"):
                     "pos": _f32(0, 0, 0, 1.2, 0, 0, 0, 1.2, 0),
                 }],
                 "conditions": [],
-                "sources": [{"ini": f"{label}.ini", "line": 10}],
+                "sources": [{"ini": f"{label}.ini", "line": 10,
+                              "section": "TextureOverrideBody",
+                              "occurrence": {
+                                  "section": "TextureOverrideBody",
+                                  "ordinal": 0, "path": [],
+                              }}],
             },
         },
         "texture_pools": {"p0": texture_pool},
@@ -222,7 +227,11 @@ def _construction_failure_payload():
         "pos": "!",  # invalid base64: decodeF32 must reject this buffer
         "idx": _u32(0, 1, 2),
         "conditions": [],
-        "sources": [{"ini": "Broken.ini", "line": 20}],
+        "sources": [{"ini": "Broken.ini", "line": 20,
+                      "occurrence": {
+                          "section": "TextureOverrideBody",
+                          "ordinal": 1, "path": [],
+                      }}],
     }
     return payload
 
@@ -335,7 +344,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "consumeStartupRequest": [],
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
-                   "deleteToggle": [], "exportChanges": [],
+                   "deleteToggle": [], "recordToggle": [], "exportChanges": [],
                    "saveMeshColorAdjustment": [], "saveTextureColor": []},
     }
     encoded_state = json.dumps(json.dumps(state))
@@ -600,6 +609,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             save_component_material_kind: async () => ({}),
             pick_texture_file: async () => copy(state.picks.shift() || null),
             get_record_positions: async () => ({positions: 2, vars: ['toggle']}),
+            record_toggle: async (path, ini, section, positionLines, targetLines) => {
+              state.calls.recordToggle.push(
+                [path, ini, section, positionLines, targetLines]);
+              return copy({ok: true, result: {}});
+            },
           }};
           if (!state.panelOpacityApi) {
             delete window.pywebview.api.get_panel_opacity;

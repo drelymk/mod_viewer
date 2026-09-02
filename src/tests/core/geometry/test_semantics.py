@@ -159,3 +159,44 @@ def test_texture_only_draws_keep_distinct_displayed_mesh_identities(tmp_path):
     assert len(keys) == len(set(keys)) == 2
     assert {entry["identity"]["occurrence"]["ordinal"]
             for entry in result.values()} == {0, 1}
+
+
+def test_deduplicated_sources_keep_individual_conditions_and_occurrences(tmp_path):
+    draws = [
+        DrawCall(
+            label="Body-1", count=3, start=0, base=0,
+            conditions=[[{"var": "swap", "value": "0", "negate": False}]],
+            sources=[{
+                "ini_path": str(tmp_path / "Root.ini"),
+                "line_no": 10, "section": "TextureOverrideBody",
+                "occurrence": {
+                    "section": "TextureOverrideBody", "ordinal": 0,
+                    "path": [],
+                },
+            }],
+        ),
+        DrawCall(
+            label="Body-2", count=3, start=0, base=0,
+            conditions=[[{"var": "other", "value": "1", "negate": False}]],
+            sources=[{
+                "ini_path": str(tmp_path / "Root.ini"),
+                "line_no": 20, "section": "TextureOverrideBody",
+                "occurrence": {
+                    "section": "TextureOverrideBody", "ordinal": 1,
+                    "path": [],
+                },
+            }],
+        ),
+    ]
+    result = build_mesh_semantics([{
+        "name": "Body", "display_name": "Body", "source": "Root.ini",
+        "draws": draws,
+    }], str(tmp_path))
+
+    assert len(result) == 1
+    sources = result["Body-1"]["sources"]
+    assert [source["line"] for source in sources] == [10, 20]
+    assert [source["conditions"][0][0]["var"] for source in sources] == [
+        "swap", "other",
+    ]
+    assert [source["occurrence"]["ordinal"] for source in sources] == [0, 1]

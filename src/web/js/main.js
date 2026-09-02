@@ -78,7 +78,17 @@ function modelHandlers() {
 }
 
 async function handlePresentChange(change = {}) {
-  return refreshPresentStateFlow(change, semanticHandlers());
+  const presentRefreshed = await refreshPresentStateFlow(change, semanticHandlers());
+  if (!presentRefreshed) return false;
+  // PRESENT authoring can insert or remove lines in every participating INI,
+  // shifting draw provenance just like toggle Add/Edit. Refresh only the
+  // geometry-free semantics; the rendered meshes and their geometry survive.
+  if (['add-key', 'complete-key', 'edit-key', 'delete-key',
+       'new-position', 'update-position', 'delete-position']
+      .includes(change.type)) {
+    return refreshMeshSemanticsFlow(semanticHandlers());
+  }
+  return true;
 }
 
 async function handleToggleChange(change = {}) {
@@ -93,6 +103,12 @@ async function handleToggleChange(change = {}) {
     // label can survive while its geometry identity changes, so semantic
     // patching is not safe here; rebuild from the authoritative session.
     return reloadCurrentMod();
+  }
+  if (change.type === 'add' || change.type === 'edit') {
+    const meshesRefreshed =
+      await refreshMeshSemanticsFlow(semanticHandlers());
+    return meshesRefreshed
+      ? refreshControlSemanticsFlow(semanticHandlers()) : false;
   }
   return refreshControlSemanticsFlow(semanticHandlers());
 }

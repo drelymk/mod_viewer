@@ -4,10 +4,12 @@
 A cycle toggle steps through positions 0..N-1; at each position every var the
 section cycles uses its value at that row. If its list is shorter than the
 section's longest list, 3Dmigoto keeps its final value for the remaining rows.
-The caller
-(the frontend, which already has the mesh payload's `conditions`) decides,
-per position, which drawindexed *lines* should be visible -- this module
-only has to make the ini agree.
+The caller (the frontend, which already has the mesh payload's `conditions`)
+decides both the explicit set of drawindexed *sources* owned by the recording
+and, per position, which of those sources should be visible. Each source
+carries its originating ini, original line number, and stable
+section/occurrence/drawindexed identity; this module resolves that identity
+against the authoritative staged document.
 
 This is deliberately conservative: only a well-defined "safe pattern" is
 rewritten automatically; everything else is refused and reported rather than
@@ -98,6 +100,21 @@ def _ancestors(doc, line):
     return out
 
 
+def _existing_owners(doc, line, writable_names):
+    """Return selected writable vars already gating ``line``.
+
+    Record must preserve an existing owner in a multi-variable Key section;
+    a co-driven variable that merely has the same cycle length must not also
+    be offered a bare-wrap claim for that line.
+    """
+    owners = set()
+    for ancestor in _ancestors(doc, line):
+        for var in writable_names:
+            if _refs(doc, ancestor, var):
+                owners.add(var)
+    return owners
+
+
 def _chain_leader(doc, branch_line):
     """The `if` line that opens `branch_line`'s chain (itself, if it already
     is one)."""
@@ -176,7 +193,12 @@ def _cycle_value(values, position):
 
 def _or_expr(var, values, pos_set, all_positions):
     if not pos_set:
-        return "0"   # permanently false — mirrors toggle_editor's own convention
+        # A bare numeric condition is treated as an unknown runtime expression
+        # by the read-path DNF parser and therefore fails open. Use a
+        # same-variable contradiction so both the runtime and the viewer's
+        # condition model represent a target hidden at every position.
+        value = values[0]
+        return f"${var} == {value} && ${var} != {value}"
     by_value = {}
     for position in all_positions:
         by_value.setdefault(_cycle_value(values, position), set()).add(position)
@@ -227,7 +249,7 @@ def _regenerate_chain(doc, var, values, branches, endif_line, desired, all_posit
 
 
 def _analyze_var(doc, var, values, desired, report, unsafe_sections,
-                 max_positions):
+                 max_positions, target_owners=None, target_paths=None):
     """Everything this var's recorded data implies, without mutating `doc`.
 
     Returns (chain_edits, bare_edits, verified):
@@ -247,6 +269,8 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
     Anything refused is appended to `report["skipped"]`.
     """
     all_positions = frozenset(range(max_positions))
+    target_owners = target_owners or {}
+    target_paths = target_paths or {}
     chain_leaders = {}     # leader.no -> Line
     leader_lines = {}      # leader.no -> [desired line_no, ...]
     bare_targets = []      # Lines with no ancestor referencing var
@@ -256,6 +280,16 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
 
     for line_no in sorted(desired):
         line = doc.lines[line_no]
+        owners = target_owners.get(line_no, set())
+        if target_paths.get(line_no) and var not in owners:
+            report["skipped"].append({
+                "var": var, "line": line.no + 1,
+                "reason": "draw is reached through a run= command-list "
+                          "execution path without a physical owner for this "
+                          "variable; edit the caller branch manually"})
+            continue
+        if owners and var not in owners:
+            continue
         if line.section is not None and line.section.name.lower() in unsafe_sections:
             report["skipped"].append({
                 "var": var, "line": line.no + 1,
@@ -346,15 +380,24 @@ def writable_cycle_vars(doc, section_name):
     return writable, max(len(v) for v in cvars.values())
 
 
-def record_toggle(doc, section_name, position_lines):
-    """Rewrite `doc`'s gates so every position's recorded set of drawindexed
-    lines matches what's actually visible.
+def record_toggle(doc, section_name, position_lines, target_lines,
+                  target_ini=None):
+    """Rewrite `doc`'s gates for an explicit Record target scope.
 
-    `position_lines`: {position (0-based, possibly a JSON string key): [ini
-    line number (1-based), ...]}. Every reachable position should be
-    present, even one that just repeats what's already on disk -- a
-    position missing from the input is indistinguishable from "not visible
-    there". See `writable_cycle_vars` for how many positions that is.
+    `target_lines` is the complete set of target mappings owned by this
+    recording, including draws hidden at every position. Each mapping has the
+    shape ``{"ini": relative ini path, "line": 1-based source line,
+    "section": section name, "occurrence": {"section", "ordinal", "path"},
+    "drawindexed": [count, start, base]}``. The line is only a hint for the
+    current staged document; the occurrence and drawindexed tuple are the
+    stable identity used to resolve it after earlier staged edits have shifted
+    lines.
+    `position_lines` is {position (0-based, possibly a JSON string key): [ini
+    line number (1-based), ...]} and may contain only visible target lines.
+    Every reachable position should be present, even one that just repeats
+    what's already on disk -- a position missing from the input is
+    indistinguishable from "not visible there". See `writable_cycle_vars` for
+    how many positions that is.
 
     Returns {"vars_updated": [...], "chains_rewritten": N, "wraps_added": N,
     "skipped": [{"var", "line", "reason"}, ...], "verify": {var: {"values":
@@ -365,27 +408,58 @@ def record_toggle(doc, section_name, position_lines):
     regeneration can shift line numbers.
     """
     writable, max_positions = writable_cycle_vars(doc, section_name)
-    got = {int(pos) for pos in (position_lines or {})}
+    target_line_map = _resolve_target_refs(doc, target_lines, target_ini)
+    try:
+        normalized_positions = {
+            int(pos): line_nos
+            for pos, line_nos in (position_lines or {}).items()
+        }
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise te.ToggleEditError(
+            "recorded positions and target lines must be numeric") from exc
+
+    got = set(normalized_positions)
     if got != set(range(max_positions)):
         raise te.ToggleEditError(
             f"expected recorded data for positions 0..{max_positions - 1}, got {sorted(got)}")
 
-    desired = {}   # 0-based line no -> set of 0-based positions
-    for pos, line_nos in (position_lines or {}).items():
+    target_numbers = set(target_line_map.values())
+    target_paths = {}
+    for raw_ref in target_lines or []:
+        line_no = target_line_map[int(raw_ref["line"])]
+        path = _target_path(raw_ref)
+        if path:
+            target_paths.setdefault(line_no, []).append(path)
+    normalized_visible = {}
+    for pos, line_nos in normalized_positions.items():
+        normalized_visible[pos] = []
         for ln in line_nos or []:
-            desired.setdefault(int(ln) - 1, set()).add(int(pos))
+            try:
+                submitted_line_no = int(ln)
+            except (TypeError, ValueError) as exc:
+                raise te.ToggleEditError(
+                    "recorded positions and target lines must be numeric") from exc
+            line_no = target_line_map.get(submitted_line_no)
+            if line_no is None:
+                raise te.ToggleEditError(
+                    f"line {submitted_line_no} is visible at position {pos} but is not "
+                    "an explicit Record target")
+            normalized_visible[pos].append(line_no)
+
+    # Initialize every explicit target first so a line hidden at every
+    # position remains a real editing input rather than disappearing from the
+    # desired map.
+    desired = {line_no: set() for line_no in target_numbers}
+    for pos, line_nos in normalized_visible.items():
+        for line_no in line_nos:
+            desired[line_no].add(pos)
 
     report = {"vars_updated": [], "chains_rewritten": 0, "wraps_added": 0, "skipped": []}
 
-    # A line the caller claims is drawindexed but the document disagrees
-    # (stale payload, section edited on disk since it was loaded, or simply
-    # out of range) is dropped once here — every var's analysis can then
-    # assume every line in `desired` genuinely is an in-range DRAW line.
-    for no in [n for n in desired if n < 0 or n >= len(doc.lines) or doc.lines[n].kind != DRAW]:
-        report["skipped"].append({
-            "var": None, "line": no + 1,
-            "reason": "not a drawindexed line in the current ini (stale data?)"})
-        del desired[no]
+    target_owners = {
+        no: _existing_owners(doc, doc.lines[no], writable)
+        for no in desired
+    }
 
     unsafe_sections = {p["section"].lower() for p in doc.structure_errors() if p["section"]}
 
@@ -394,7 +468,8 @@ def record_toggle(doc, section_name, position_lines):
     per_var_verify = {}    # var -> (values, {line_no: [position, ...]})
     for var, values in writable.items():
         chain_edits, bare_edits, verified = _analyze_var(
-            doc, var, values, desired, report, unsafe_sections, max_positions)
+            doc, var, values, desired, report, unsafe_sections, max_positions,
+            target_owners, target_paths)
         all_chain_edits.extend(chain_edits)
         for line_no, expr in bare_edits.items():
             all_bare_claims.setdefault(line_no, []).append((var, expr))
@@ -406,9 +481,8 @@ def record_toggle(doc, section_name, position_lines):
     # (var, line_no) pairs whose *bare-wrap* claim was refused here — scoped
     # per-var (not a flat set of lines) because a refused claim from one var
     # must never disqualify a *different* var's own, separately-successful
-    # chain rewrite of that same physical line (see OVERLAP-shaped fixtures:
-    # $upper's chain genuinely gets regenerated while $tt's bare-wrap attempt
-    # on the very same lines is refused for overlapping it).
+    # chain rewrite of that same physical line. Existing selected-variable
+    # owners normally prevent those competing claims before this pass.
     refused = set()
     for line_no, claims in all_bare_claims.items():
         if len(claims) > 1:
@@ -489,13 +563,162 @@ def _draw_key(doc, line_no):
     itself (unlike the line number, the drawindexed args never change).
     None if the line isn't a recognizable drawindexed line inside a section.
     """
+    if not 0 <= line_no < len(doc.lines):
+        return None
     line = doc.lines[line_no]
-    if line.section is None:
+    if line.kind != DRAW or line.section is None:
         return None
     m = _DRAW_RE.search(line.text)
     if not m:
         return None
     return (line.section.name, int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def _draw_occurrence(doc, line_no):
+    """Return the authored draw ordinal for a staged document line."""
+    if not 0 <= line_no < len(doc.lines):
+        return None
+    line = doc.lines[line_no]
+    if _draw_key(doc, line_no) is None or line.section is None:
+        return None
+    ordinal = sum(
+        1 for item in doc.lines[line.section.start:line.no + 1]
+        if _draw_key(doc, item.no) is not None
+    ) - 1
+    return {
+        "section": line.section.name,
+        "ordinal": ordinal,
+        "path": [],
+    }
+
+
+def _draw_identity(doc, line_no):
+    """Case-insensitive section, drawindexed tuple, and authored ordinal."""
+    key = _draw_key(doc, line_no)
+    occurrence = _draw_occurrence(doc, line_no)
+    if key is None or occurrence is None:
+        return None
+    return (key[0].casefold(), *key[1:], occurrence["ordinal"])
+
+
+def _ini_identity(value):
+    return str(value).replace("\\", "/").strip().casefold()
+
+
+def _target_identity(ref, target_ini=None):
+    """Normalize one browser-supplied target reference."""
+    if not isinstance(ref, dict):
+        raise te.ToggleEditError(
+            "Record targets must include their source line, section, and "
+            "drawindexed identity")
+    try:
+        ini = ref["ini"]
+        if not isinstance(ini, str) or not ini.strip():
+            raise TypeError
+        line_no = int(ref["line"])
+        section = ref["section"]
+        if not isinstance(section, str):
+            raise TypeError
+        section = section.strip()
+        drawindexed = ref["drawindexed"]
+        if isinstance(drawindexed, (str, bytes)) or len(drawindexed) != 3:
+            raise ValueError
+        triple = tuple(int(value) for value in drawindexed)
+        occurrence = ref["occurrence"]
+        if not isinstance(occurrence, dict):
+            raise ValueError
+        occurrence_section = occurrence["section"]
+        occurrence_ordinal = int(occurrence["ordinal"])
+        occurrence_path = occurrence.get("path", [])
+        if not isinstance(occurrence_path, list):
+            raise ValueError
+        if any(not isinstance(item, list) or len(item) != 2
+               for item in occurrence_path):
+            raise ValueError
+        if not isinstance(occurrence_section, str):
+            raise ValueError
+    except (KeyError, TypeError, ValueError) as exc:
+        raise te.ToggleEditError(
+            "Record targets must include a numeric source line, section, and "
+            "three numeric drawindexed values plus draw occurrence") from exc
+    if (line_no < 1 or not section or occurrence_ordinal < 0
+            or not occurrence_section.strip()
+            or occurrence_section.casefold() != section.casefold()):
+        raise te.ToggleEditError(
+            "Record targets must include a positive source line, matching "
+            "section, and non-negative draw occurrence")
+    if target_ini is not None and _ini_identity(ini) != _ini_identity(target_ini):
+        raise te.ToggleEditError(
+            f"Record target ini {ini!r} does not match the edited ini "
+            f"{target_ini!r}")
+    return line_no, (section.casefold(), *triple, occurrence_ordinal)
+
+
+def _target_path(ref):
+    return ref["occurrence"].get("path") or []
+
+
+def _resolve_target_refs(doc, target_lines, target_ini=None):
+    """Resolve submitted source lines to the current staged draw lines.
+
+    A line number from a mesh payload can be stale after Add/Edit inserts text
+    before the draw. The section and literal drawindexed tuple identify the
+    authored draw across that shift. Missing or ambiguous identities are fatal:
+    silently skipping one target could let another stale line land on a
+    neighboring draw and produce a partial, incorrect recording.
+    """
+    resolved = {}
+    used_current = {}
+    seen_submitted = {}
+    lines_by_identity = {}
+    for line in doc.lines:
+        identity = _draw_identity(doc, line.no)
+        if identity is not None:
+            lines_by_identity.setdefault(identity, []).append(line.no)
+    for raw_ref in target_lines or []:
+        submitted_line, expected = _target_identity(raw_ref, target_ini)
+        path = _target_path(raw_ref)
+        previous_submission = seen_submitted.get(submitted_line)
+        if previous_submission is not None:
+            if (previous_submission["expected"] != expected
+                    or any(previous_path == path
+                           for previous_path in previous_submission["paths"])):
+                raise te.ToggleEditError(
+                    f"Record target line {submitted_line} was submitted more than once")
+
+        current_line = submitted_line - 1
+        if _draw_identity(doc, current_line) == expected:
+            resolved_line = current_line
+        else:
+            candidates = lines_by_identity.get(expected, [])
+            if len(candidates) != 1:
+                if not candidates:
+                    detail = "the expected draw is not present in the staged ini"
+                else:
+                    detail = ("the expected draw appears at multiple staged lines: "
+                              + ", ".join(str(no + 1) for no in candidates))
+                raise te.ToggleEditError(
+                    f"Record target line {submitted_line} is stale: expected "
+                    f"[{expected[0]}] drawindexed = {expected[1]}, {expected[2]}, "
+                    f"{expected[3]} (occurrence {expected[4]}); {detail}")
+            resolved_line = candidates[0]
+
+        previous = used_current.get(resolved_line)
+        if (previous is not None
+                and previous["submitted"] != submitted_line):
+            raise te.ToggleEditError(
+                f"Record targets {previous['submitted']} and {submitted_line} resolve to the "
+                "same staged draw")
+        resolved[submitted_line] = resolved_line
+        if previous is None:
+            used_current[resolved_line] = {"submitted": submitted_line}
+        if previous_submission is None:
+            seen_submitted[submitted_line] = {
+                "expected": expected, "paths": [path],
+            }
+        else:
+            previous_submission["paths"].append(path)
+    return resolved
 
 
 def _dnf_satisfied(conds, bindings):

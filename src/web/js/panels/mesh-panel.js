@@ -24,6 +24,7 @@ import {
 } from './asset-diagnostics.js';
 import { normalizeColorAdjustment } from '../mesh/color-adjustment.js';
 import { syncMeshColorAdjustment } from '../mesh/mesh-color-state.js';
+import { noteRecordMeshEdit } from '../editing/record-session.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
@@ -186,6 +187,7 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     mesh.userData.manualVisible = nextVisible;
     const automaticVisible = conditionsSatisfied(mesh);
     mesh.userData.manuallyToggled = nextVisible !== automaticVisible;
+    noteRecordMeshEdit(mesh);
     applyMeshVisibility(mesh);
     updateStateIndicator(mesh);
     const any = itemCbs.some(c => c.checked);
@@ -490,6 +492,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
           c.checked = v;
           itemObjs[i].userData.manualVisible = v;
           itemObjs[i].userData.manuallyToggled = true;
+          noteRecordMeshEdit(itemObjs[i]);
           applyMeshVisibility(itemObjs[i], { notify: false });
           getMeshView(itemObjs[i])?.syncStateIndicator?.();
         });

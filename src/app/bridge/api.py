@@ -273,7 +273,8 @@ class ModViewerAPI:
         return toggle_api.get_record_positions(
             self._access.mod_folder(folder_path), ini_rel, section_name)
 
-    def record_toggle(self, folder_path, ini_rel, section_name, position_lines):
+    def record_toggle(self, folder_path, ini_rel, section_name,
+                      position_lines, target_lines):
         return toggle_api.record_toggle(
             self._access.mod_folder(folder_path), ini_rel, section_name,
-            position_lines)
+            position_lines, target_lines)

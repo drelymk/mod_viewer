@@ -129,6 +129,10 @@ def test_merge_keeps_every_source():
         assert (lines == [14, 16, 18]), (f"all three contributing lines survive the merge: {lines}")
         alts = merged[0]["conditions"]
         assert (len(alts) == 3), (f"and all three conditions are OR'd (got {len(alts)})")
+        assert [source["occurrence"]["ordinal"]
+                for source in merged[0]["sources"]] == [0, 1, 2]
+        assert [source["conditions"][0][0]["value"]
+                for source in merged[0]["sources"]] == ["0", "1", "2"]
 
 
 def test_merge_across_files():

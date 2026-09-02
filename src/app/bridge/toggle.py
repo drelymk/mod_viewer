@@ -179,9 +179,9 @@ def discard_changes(mod_dir):
 
 # -- record mode (Phase 4) -------------------------------------------------
 #
-# The frontend already holds the full mesh payload (conditions + sources)
-# and the Toggle panel model, so it derives per-position visibility and the
-# position_lines map to send back entirely on its own. This layer only
+# The frontend already holds the full mesh payload (conditions + source
+# identities) and the Toggle panel model, so it derives per-position visibility
+# and the position_lines/target_lines maps to send back entirely on its own. This layer only
 # answers "how many positions do you need to record" up front (get_record_
 # positions) and applies the recorded result (record_toggle) — it never
 # computes visibility itself.
@@ -207,21 +207,27 @@ def get_record_positions(mod_dir, ini_rel, section_name):
         return _unexpected_error()
 
 
-def record_toggle(mod_dir, ini_rel, section_name, position_lines):
-    """Rewrite section_name's gates so each recorded position's set of
-    drawindexed lines (position_lines: {position: [ini line number, ...]})
-    matches what's actually visible. Stages the result like add/edit/delete
-    above, then immediately re-checks the mutated text against what was
-    recorded (record_editor.verify_recording). On any mismatch the pending
-    edit is rolled back and {"error": ...} is returned instead of {"ok":
-    True, ...}. Returns record_editor.record_toggle's report dict
+def record_toggle(mod_dir, ini_rel, section_name, position_lines, target_lines):
+    """Rewrite section_name's gates from an explicit Record scope.
+
+    ``target_lines`` owns every draw source intentionally included in the
+    recording. Each target includes its ini, source line, section, draw
+    occurrence, and literal ``drawindexed`` triple so the core can resolve
+    stale line numbers against the staged document. ``position_lines`` contains only the owned lines
+    visible at each position. Stages the result like add/edit/delete above, then
+    immediately re-checks the mutated text against what was recorded
+    (record_editor.verify_recording). On any mismatch the pending edit is
+    rolled back and {"error": ...} is returned instead of {"ok": True, ...}.
+    Returns record_editor.record_toggle's report dict
     (vars_updated/chains_rewritten/wraps_added/skipped) under "result".
     """
     try:
         path = _ini_path(mod_dir, ini_rel)
         sess, key, doc, was_pending, snapshot = edit_session.begin(mod_dir, path)
         try:
-            result = record_editor.record_toggle(doc, section_name, position_lines)
+            result = record_editor.record_toggle(
+                doc, section_name, position_lines, target_lines,
+                target_ini=ini_rel)
             # Pass the authoritative staged text; verify_recording converts it
             # to an IniDocument projection instead of invoking parse_sections.
             mismatches = record_editor.verify_recording(path, result,
