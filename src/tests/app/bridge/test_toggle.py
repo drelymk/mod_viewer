@@ -154,7 +154,8 @@ def _swap_positions(tmp, ini_rel):
     ini_path = os.path.join(tmp, ini_rel)
     result = toggle_api.record_toggle(
         tmp, ini_rel, "KeyUpper",
-        {0: [line_200], 1: [line_100], 2: [line_100], 3: [line_100]})
+        {0: [line_200], 1: [line_100], 2: [line_100], 3: [line_100]},
+        [line_100, line_200])
     return ini_path, result
 
 
@@ -220,7 +221,8 @@ def test_new_toggle_blocks_export_until_recorded(wirable_mod):
 
     pending_text = edit_session.peek(tmp, ini_path).to_string()
     line_100 = next(i for i, l in enumerate(pending_text.splitlines(), 1) if "100,0,0" in l)
-    record_result = toggle_api.record_toggle(tmp, ini_rel, "KeyExtra", {0: [line_100], 1: []})
+    record_result = toggle_api.record_toggle(
+        tmp, ini_rel, "KeyExtra", {0: [line_100], 1: []}, [line_100])
     assert record_result["ok"] is True
 
     export_result = toggle_api.export_changes(tmp)
@@ -232,6 +234,22 @@ def test_new_toggle_blocks_export_until_recorded(wirable_mod):
         assert "$Extra == 0" in fh.read()
 
 
+
+
+def test_record_bridge_stages_target_hidden_at_every_position(toggle_mod):
+    tmp, ini_path = toggle_mod
+    line_100 = next(i for i, l in enumerate(FIXTURE.splitlines(), 1)
+                    if "100,0,0" in l)
+
+    result = toggle_api.record_toggle(
+        tmp, "mod.ini", "KeyUpper",
+        {0: [], 1: [], 2: [], 3: []}, [line_100])
+
+    assert result["ok"] is True
+    assert result["result"]["skipped"] == []
+    pending = edit_session.peek(tmp, ini_path).to_string()
+    assert "$Upper == 0 && $Upper != 0" in pending
+    assert "drawindexed = 200,0,0" in pending
 
 
 def test_record_toggle_rolls_back_pending_on_verify_mismatch(toggle_mod):

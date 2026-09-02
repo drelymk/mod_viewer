@@ -4,10 +4,10 @@
 A cycle toggle steps through positions 0..N-1; at each position every var the
 section cycles uses its value at that row. If its list is shorter than the
 section's longest list, 3Dmigoto keeps its final value for the remaining rows.
-The caller
-(the frontend, which already has the mesh payload's `conditions`) decides,
-per position, which drawindexed *lines* should be visible -- this module
-only has to make the ini agree.
+The caller (the frontend, which already has the mesh payload's `conditions`)
+decides both the explicit set of drawindexed *lines* owned by the recording
+and, per position, which of those lines should be visible. This module only
+has to make the ini agree.
 
 This is deliberately conservative: only a well-defined "safe pattern" is
 rewritten automatically; everything else is refused and reported rather than
@@ -98,6 +98,21 @@ def _ancestors(doc, line):
     return out
 
 
+def _existing_owners(doc, line, writable_names):
+    """Return selected writable vars already gating ``line``.
+
+    Record must preserve an existing owner in a multi-variable Key section;
+    a co-driven variable that merely has the same cycle length must not also
+    be offered a bare-wrap claim for that line.
+    """
+    owners = set()
+    for ancestor in _ancestors(doc, line):
+        for var in writable_names:
+            if _refs(doc, ancestor, var):
+                owners.add(var)
+    return owners
+
+
 def _chain_leader(doc, branch_line):
     """The `if` line that opens `branch_line`'s chain (itself, if it already
     is one)."""
@@ -176,7 +191,12 @@ def _cycle_value(values, position):
 
 def _or_expr(var, values, pos_set, all_positions):
     if not pos_set:
-        return "0"   # permanently false — mirrors toggle_editor's own convention
+        # A bare numeric condition is treated as an unknown runtime expression
+        # by the read-path DNF parser and therefore fails open. Use a
+        # same-variable contradiction so both the runtime and the viewer's
+        # condition model represent a target hidden at every position.
+        value = values[0]
+        return f"${var} == {value} && ${var} != {value}"
     by_value = {}
     for position in all_positions:
         by_value.setdefault(_cycle_value(values, position), set()).add(position)
@@ -227,7 +247,7 @@ def _regenerate_chain(doc, var, values, branches, endif_line, desired, all_posit
 
 
 def _analyze_var(doc, var, values, desired, report, unsafe_sections,
-                 max_positions):
+                 max_positions, target_owners=None):
     """Everything this var's recorded data implies, without mutating `doc`.
 
     Returns (chain_edits, bare_edits, verified):
@@ -247,6 +267,7 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
     Anything refused is appended to `report["skipped"]`.
     """
     all_positions = frozenset(range(max_positions))
+    target_owners = target_owners or {}
     chain_leaders = {}     # leader.no -> Line
     leader_lines = {}      # leader.no -> [desired line_no, ...]
     bare_targets = []      # Lines with no ancestor referencing var
@@ -256,6 +277,9 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
 
     for line_no in sorted(desired):
         line = doc.lines[line_no]
+        owners = target_owners.get(line_no, set())
+        if owners and var not in owners:
+            continue
         if line.section is not None and line.section.name.lower() in unsafe_sections:
             report["skipped"].append({
                 "var": var, "line": line.no + 1,
@@ -346,15 +370,17 @@ def writable_cycle_vars(doc, section_name):
     return writable, max(len(v) for v in cvars.values())
 
 
-def record_toggle(doc, section_name, position_lines):
-    """Rewrite `doc`'s gates so every position's recorded set of drawindexed
-    lines matches what's actually visible.
+def record_toggle(doc, section_name, position_lines, target_lines):
+    """Rewrite `doc`'s gates for an explicit Record target scope.
 
-    `position_lines`: {position (0-based, possibly a JSON string key): [ini
-    line number (1-based), ...]}. Every reachable position should be
-    present, even one that just repeats what's already on disk -- a
-    position missing from the input is indistinguishable from "not visible
-    there". See `writable_cycle_vars` for how many positions that is.
+    `target_lines` is the complete set of 1-based draw line numbers owned by
+    this recording, including lines hidden at every position.
+    `position_lines` is {position (0-based, possibly a JSON string key): [ini
+    line number (1-based), ...]} and may contain only visible target lines.
+    Every reachable position should be present, even one that just repeats
+    what's already on disk -- a position missing from the input is
+    indistinguishable from "not visible there". See `writable_cycle_vars` for
+    how many positions that is.
 
     Returns {"vars_updated": [...], "chains_rewritten": N, "wraps_added": N,
     "skipped": [{"var", "line", "reason"}, ...], "verify": {var: {"values":
@@ -365,15 +391,44 @@ def record_toggle(doc, section_name, position_lines):
     regeneration can shift line numbers.
     """
     writable, max_positions = writable_cycle_vars(doc, section_name)
-    got = {int(pos) for pos in (position_lines or {})}
+    try:
+        normalized_positions = {
+            int(pos): line_nos
+            for pos, line_nos in (position_lines or {}).items()
+        }
+        normalized_targets = {int(line_no) for line_no in (target_lines or [])}
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise te.ToggleEditError(
+            "recorded positions and target lines must be numeric") from exc
+
+    got = set(normalized_positions)
     if got != set(range(max_positions)):
         raise te.ToggleEditError(
             f"expected recorded data for positions 0..{max_positions - 1}, got {sorted(got)}")
 
-    desired = {}   # 0-based line no -> set of 0-based positions
-    for pos, line_nos in (position_lines or {}).items():
+    target_numbers = {line_no - 1 for line_no in normalized_targets}
+    normalized_visible = {}
+    for pos, line_nos in normalized_positions.items():
+        normalized_visible[pos] = []
         for ln in line_nos or []:
-            desired.setdefault(int(ln) - 1, set()).add(int(pos))
+            try:
+                line_no = int(ln) - 1
+            except (TypeError, ValueError) as exc:
+                raise te.ToggleEditError(
+                    "recorded positions and target lines must be numeric") from exc
+            if line_no not in target_numbers:
+                raise te.ToggleEditError(
+                    f"line {line_no + 1} is visible at position {pos} but is not "
+                    "an explicit Record target")
+            normalized_visible[pos].append(line_no)
+
+    # Initialize every explicit target first so a line hidden at every
+    # position remains a real editing input rather than disappearing from the
+    # desired map.
+    desired = {line_no: set() for line_no in target_numbers}
+    for pos, line_nos in normalized_visible.items():
+        for line_no in line_nos:
+            desired[line_no].add(pos)
 
     report = {"vars_updated": [], "chains_rewritten": 0, "wraps_added": 0, "skipped": []}
 
@@ -387,6 +442,11 @@ def record_toggle(doc, section_name, position_lines):
             "reason": "not a drawindexed line in the current ini (stale data?)"})
         del desired[no]
 
+    target_owners = {
+        no: _existing_owners(doc, doc.lines[no], writable)
+        for no in desired
+    }
+
     unsafe_sections = {p["section"].lower() for p in doc.structure_errors() if p["section"]}
 
     all_chain_edits = []
@@ -394,7 +454,8 @@ def record_toggle(doc, section_name, position_lines):
     per_var_verify = {}    # var -> (values, {line_no: [position, ...]})
     for var, values in writable.items():
         chain_edits, bare_edits, verified = _analyze_var(
-            doc, var, values, desired, report, unsafe_sections, max_positions)
+            doc, var, values, desired, report, unsafe_sections, max_positions,
+            target_owners)
         all_chain_edits.extend(chain_edits)
         for line_no, expr in bare_edits.items():
             all_bare_claims.setdefault(line_no, []).append((var, expr))
@@ -406,9 +467,8 @@ def record_toggle(doc, section_name, position_lines):
     # (var, line_no) pairs whose *bare-wrap* claim was refused here — scoped
     # per-var (not a flat set of lines) because a refused claim from one var
     # must never disqualify a *different* var's own, separately-successful
-    # chain rewrite of that same physical line (see OVERLAP-shaped fixtures:
-    # $upper's chain genuinely gets regenerated while $tt's bare-wrap attempt
-    # on the very same lines is refused for overlapping it).
+    # chain rewrite of that same physical line. Existing selected-variable
+    # owners normally prevent those competing claims before this pass.
     refused = set()
     for line_no, claims in all_bare_claims.items():
         if len(claims) > 1:

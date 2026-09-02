@@ -275,18 +275,23 @@ endif
 def test_record_toggle_validates_section_and_positions():
     d = doc(BARE)
     line = dline(d, "500,0,0")
-    fails(lambda: re_.record_toggle(d, "KeyNope", {0: [], 1: [], 2: []}),
+    fails(lambda: re_.record_toggle(d, "KeyNope", {0: [], 1: [], 2: []},
+                                    [line.no + 1]),
           "recording a nonexistent section raises")
-    fails(lambda: re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1]}),
+    fails(lambda: re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1]},
+                                    [line.no + 1]),
           "a position map missing a position raises")
-    fails(lambda: re_.record_toggle(d, "KeySwap", {0: [], 1: [], 2: [], 3: []}),
+    fails(lambda: re_.record_toggle(d, "KeySwap", {0: [], 1: [], 2: [], 3: []},
+                                    [line.no + 1]),
           "a position map with an extra position raises")
 
 
 def test_record_toggle_accepts_string_position_keys():
     d = doc(BARE)
     line = dline(d, "500,0,0")
-    report = re_.record_toggle(d, "KeySwap", {"0": [], "1": [line.no + 1], "2": []})
+    report = re_.record_toggle(
+        d, "KeySwap", {"0": [], "1": [line.no + 1], "2": []},
+        [line.no + 1])
     assert (report["wraps_added"] == 1), (f"string position keys (as pywebview/JSON would deliver) are accepted ({report})")
 
 
@@ -294,10 +299,44 @@ def test_record_toggle_accepts_string_position_keys():
 
 # â”€â”€ bare (previously unconditional) lines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+def test_record_target_hidden_at_every_position_is_processed():
+    d = doc(SINGLE_IF)
+    line = dline(d, "100,0,0")
+    report = re_.record_toggle(d, "KeySwap", {0: [], 1: []}, [line.no + 1])
+
+    assert report["chains_rewritten"] == 1
+    assert report["skipped"] == []
+    assert "if $swap == 0 && $swap != 0" in d.to_string()
+    assert report["verify"]["swap"]["draws"][0]["positions"] == []
+    assert re_.verify_recording("<mem>", report, document=d) == []
+
+
+def test_record_visible_line_must_be_an_explicit_target():
+    d = doc(BARE)
+    line = dline(d, "500,0,0")
+    fails(lambda: re_.record_toggle(
+        d, "KeySwap", {0: [line.no + 1], 1: [], 2: []}, []),
+        "visible lines cannot expand the explicit target scope")
+
+
+def test_record_leaves_unrelated_draws_byte_exact():
+    text = SINGLE_IF + "\n[TextureOverrideOther]\ndrawindexed = 900,0,0\n"
+    d = doc(text)
+    selected = dline(d, "100,0,0")
+    unrelated_before = d.section("TextureOverrideOther").lines[0].raw
+
+    re_.record_toggle(
+        d, "KeySwap", {0: [], 1: [selected.no + 1]}, [selected.no + 1])
+
+    assert d.section("TextureOverrideOther").lines[0].raw == unrelated_before
+    assert "drawindexed = 900,0,0" in d.to_string()
+
+
 def test_bare_line_wrapped_when_partially_visible():
     d = doc(BARE)
     line = dline(d, "500,0,0")
-    report = re_.record_toggle(d, "KeySwap", {0: [], 1: [line.no + 1], 2: []})
+    report = re_.record_toggle(
+        d, "KeySwap", {0: [], 1: [line.no + 1], 2: []}, [line.no + 1])
     assert (report["vars_updated"] == ["swap"] and report["chains_rewritten"] == 0
           and report["wraps_added"] == 1 and report["skipped"] == []), (f"clean private wrap, no refusals ({report})")
     gate = d.lines[dline(d, "500,0,0").no - 1]
@@ -315,7 +354,8 @@ def test_two_variables_claiming_same_bare_line_refused():
     d = doc(TWO_VAR_BARE)
     before = d.to_string()
     line = dline(d, "999,0,0")
-    report = re_.record_toggle(d, "KeyMulti", {0: [], 1: [line.no + 1]})
+    report = re_.record_toggle(
+        d, "KeyMulti", {0: [], 1: [line.no + 1]}, [line.no + 1])
     assert (report["wraps_added"] == 0), (f"neither variable claims a line both could equally explain ({report})")
     assert (len(report["skipped"]) == 1
           and "more than one variable" in report["skipped"][0]["reason"]), (f"the ambiguity is reported ({report['skipped']})")
@@ -328,7 +368,7 @@ def test_mismatched_cycle_lengths_hold_last_value_and_refuse_ambiguity():
     line = dline(d, "999,0,-4")
     report = re_.record_toggle(d, "KeyMulti", {
         0: [], 1: [], 2: [line.no + 1],
-    })
+    }, [line.no + 1])
     # $short is 1 at both positions 1 and 2, so it cannot encode visibility
     # at position 2 alone. $long can, and should own the safe wrapper.
     assert any(item["var"] == "short" and "same value" in item["reason"]
@@ -357,7 +397,7 @@ def test_elif_chain_value_reshuffle_matches_intent():
         0: [l700.no + 1],
         1: [l600.no + 1],
         2: [l800.no + 1],
-    })
+    }, [l600.no + 1, l700.no + 1, l800.no + 1])
     assert (report["chains_rewritten"] == 1 and report["skipped"] == []), (f"whole chain regenerated as one unit ({report})")
 
     sec = d.section("TextureOverrideBody2")
@@ -381,16 +421,15 @@ def test_elif_chain_value_reshuffle_matches_intent():
 def test_bare_wrap_overlapping_another_vars_chain_refused():
     d = doc(OVERLAP)
     l100, l200 = dline(d, "100,0,0"), dline(d, "200,0,0")
-    # $upper's chain genuinely needs reshuffling; $tt's recorded data (same
-    # shared position->line map) makes both of its lines look like bare
-    # candidates for $tt too, but both sit inside the span $upper's chain
-    # edit is about to replace â€” must be refused, not silently dropped or
-    # (worse) spliced into a stale line range.
-    report = re_.record_toggle(d, "KeyMulti", {0: [l200.no + 1], 1: [l100.no + 1]})
+    # The explicit target scope plus existing-owner detection means $upper's
+    # chain is the only candidate. $tt shares the cycle but does not claim the
+    # same already-controlled lines.
+    report = re_.record_toggle(
+        d, "KeyMulti", {0: [l200.no + 1], 1: [l100.no + 1]},
+        [l100.no + 1, l200.no + 1])
     assert (report["chains_rewritten"] == 1), (f"upper's chain is regenerated ({report})")
-    assert (report["wraps_added"] == 0), (f"tt's bare-wrap candidates inside upper's chain are refused, not applied ({report})")
-    overlap_skips = [s for s in report["skipped"] if s["var"] == "tt"]
-    assert (len(overlap_skips) == 2 and all("same save" in s["reason"] for s in overlap_skips)), (f"both of tt's candidate lines are refused with the overlap reason ({overlap_skips})")
+    assert (report["wraps_added"] == 0), (f"no extra variable claims an owned line ({report})")
+    assert (report["skipped"] == []), (f"the unrelated co-driven variable does not create a false warning ({report})")
     assert ("$tt ==" not in d.to_string()), ("no $tt gate was actually written")
 
 
@@ -417,7 +456,9 @@ def _assert_refusal_case(case):
     if name == "ambiguous-nesting":
         assert (d.structure_errors() != []), ("fixture really is structurally ambiguous")
     before = d.to_string()
-    report = re_.record_toggle(d, "KeySwap", positions_fn(d))
+    positions = positions_fn(d)
+    targets = sorted({line for lines in positions.values() for line in lines})
+    report = re_.record_toggle(d, "KeySwap", positions, targets)
     assert (report["chains_rewritten"] == 0), (f"{name}: unsafe shape is never auto-rewritten ({report})")
     assert (report["wraps_added"] == 0), (f"{name}: unsafe shape does not add a partial wrapper ({report})")
     assert (any(reason in skipped["reason"] for skipped in report["skipped"])), (f"{name}: refusal explains the unsafe shape ({report['skipped']})")
@@ -462,7 +503,7 @@ def test_record_rewrite_produces_verifiable_contract():
     l600, l700, l800 = dline(d, "600,0,0"), dline(d, "700,0,0"), dline(d, "800,0,0")
     report = re_.record_toggle(d, "KeySwap", {
         0: [l700.no + 1], 1: [l600.no + 1], 2: [l800.no + 1],
-    })
+    }, [l600.no + 1, l700.no + 1, l800.no + 1])
     verify = report["verify"]
     assert (set(verify) == {"swap"}), (f"verify is keyed by the rewritten var ({verify})")
     assert (verify["swap"]["values"] == ["0", "1", "2"]), (f"the var's own values list is included ({verify['swap']})")
@@ -504,15 +545,19 @@ def test_verify_report_excludes_lines_refused_for_any_reason():
     ]
     for text, section, positions_fn in cases:
         d = doc(text)
-        report = re_.record_toggle(d, section, positions_fn(d))
+        positions = positions_fn(d)
+        targets = sorted({line for lines in positions.values() for line in lines})
+        report = re_.record_toggle(d, section, positions, targets)
         assert (report["verify"] == {}), (f"a fully-refused recording leaves verify empty ({section}: {report['verify']})")
 
-    # OVERLAP: $upper's chain genuinely succeeds (and must stay verified)
-    # while $tt's bare-wrap on the very same two lines is refused for
-    # overlapping it (and must be excluded) â€” both at once.
+    # OVERLAP: $upper's chain genuinely succeeds and stays verified while
+    # $tt, which shares the Key section but owns neither line, is not offered
+    # a competing rewrite.
     d = doc(OVERLAP)
     l100, l200 = dline(d, "100,0,0"), dline(d, "200,0,0")
-    report = re_.record_toggle(d, "KeyMulti", {0: [l200.no + 1], 1: [l100.no + 1]})
+    report = re_.record_toggle(
+        d, "KeyMulti", {0: [l200.no + 1], 1: [l100.no + 1]},
+        [l100.no + 1, l200.no + 1])
     assert (set(report["verify"]) == {"upper"}), (f"only upper's successful chain is verified; tt's refused, overlapping "
           f"wrap is excluded, not just silently omitted from a wrong var ({report['verify']})")
     assert (_draws_by_key(report["verify"]["upper"]["draws"]) == {(100, 0, 0): [1], (200, 0, 0): [0]}), (f"upper's own rewritten draws are both still verified despite tt's "

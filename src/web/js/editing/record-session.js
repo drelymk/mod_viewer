@@ -9,7 +9,7 @@
 
 import {
   activeMeshes, conditionsSatisfied, getToggleValue, setToggleValue,
-  applyMeshVisibility, syncCheckboxes, refreshAll,
+  applyMeshVisibility, syncCheckboxes, refreshAll, variablesFromConditions,
 } from '../mesh/visibility.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import { alertDialog } from '../ui/dialogs.js';
@@ -20,6 +20,11 @@ let starting = false; // true from the first click until active is set (or the a
 
 export function isRecording() {
   return active !== null;
+}
+
+/** Mark one mesh as an explicit Record target after a user visibility edit. */
+export function noteRecordMeshEdit(mesh) {
+  if (active && mesh) active.touchedTargets.add(mesh);
 }
 
 /** Match the API's writable raw names to the source-scoped panel variables. */
@@ -51,8 +56,10 @@ function applySnapshot(snap) {
 }
 
 function positionLabel() {
-  const { current, positions, vars } = active;
-  const values = vars.map((v) => `${v.var.split('::').pop()}=${cycleValueAt(v, current)}`).join(', ');
+  const { current, positions, previewVars } = active;
+  const values = previewVars
+    .map((v) => `${v.var.split('::').pop()}=${cycleValueAt(v, current)}`)
+    .join(', ');
   return `Position ${current + 1} of ${positions} — ${values}`;
 }
 
@@ -73,33 +80,42 @@ export async function startRecordSession(info, ctx, ui) {
       await alertDialog('Could not start recording:\n\n' + posInfo.error);
       return;
     }
-    const vars = info.cycle_vars || info.vars;
-    const writable = writableVars(vars, posInfo.vars || []);
-    if (!writable.length || !vars.length || !posInfo.positions) {
+    const previewVars = info.cycle_vars || info.vars;
+    const writable = writableVars(previewVars, posInfo.vars || []);
+    if (!writable.length || !previewVars.length || !posInfo.positions) {
       await alertDialog('This toggle has no variable this app can record automatically.');
       return;
     }
 
+    const writableNames = new Set(writable.map(v => v.var));
+    const initialTargets = new Set(activeMeshes.filter(mesh => {
+      const used = variablesFromConditions(mesh.userData.conditions);
+      return [...used].some(variable => writableNames.has(variable));
+    }));
+
     // Undo target for Cancel: every var this section drives, at whatever value
     // it had when recording started (not just the writable ones — a namespaced
     // var in the same section is read-only but still affects visibility).
-    const before = vars.map((v) => ({ var: v.var, value: getToggleValue(v.var) }));
+    const before = previewVars.map((v) => ({
+      var: v.var, value: getToggleValue(v.var),
+    }));
 
     // Pre-populate every position up front from the file's own current
     // combined visibility, never a partial map — an unvisited position must
     // still default to matching what's already on disk.
     const snapshots = [];
     for (let p = 0; p < posInfo.positions; p++) {
-      for (const v of vars) setToggleValue(v.var, cycleValueAt(v, p));
+      for (const v of previewVars) setToggleValue(v.var, cycleValueAt(v, p));
       snapshots.push(snapshotVisibility());
     }
 
     active = {
-      info, ctx, ui, vars,
+      info, ctx, ui, previewVars, writableVars: writable,
       positions: posInfo.positions, current: 0, snapshots, before,
+      initialTargets, touchedTargets: new Set(),
     };
 
-    for (const v of vars) setToggleValue(v.var, v.values[0]);
+    for (const v of previewVars) setToggleValue(v.var, v.values[0]);
     applySnapshot(snapshots[0]);
     enterRecordingUI();
   } finally {
@@ -157,7 +173,9 @@ function captureCurrent() {
 function advance() {
   captureCurrent();
   active.current = (active.current + 1) % active.positions;
-  for (const v of active.vars) setToggleValue(v.var, cycleValueAt(v, active.current));
+  for (const v of active.previewVars) {
+    setToggleValue(v.var, cycleValueAt(v, active.current));
+  }
   applySnapshot(active.snapshots[active.current]);
   active.ui.valSpan.textContent = positionLabel();
 }
@@ -174,24 +192,38 @@ async function save() {
   captureCurrent();
   const { info, ctx, snapshots, ui } = active;
 
-  // Every checked mesh's sources belonging to *this* ini file contribute
-  // their line number to that position — a source in some other file is
-  // untouched by editing this one, so it's simply not this section's to claim.
+  const targets = new Set([
+    ...active.initialTargets,
+    ...active.touchedTargets,
+  ]);
+  const targetLines = new Set();
+  for (const mesh of targets) {
+    for (const src of mesh.userData.sources || []) {
+      if (src.ini === info.ini) targetLines.add(src.line);
+    }
+  }
+
+  // Only visible target meshes contribute their source lines at a position.
+  // A source in some other file is untouched by editing this one, so it is
+  // never part of this section's target scope.
   const positionLines = {};
   for (let p = 0; p < snapshots.length; p++) {
     const lines = new Set();
-    for (const [mesh, visible] of snapshots[p]) {
+    for (const mesh of targets) {
+      const visible = snapshots[p].get(mesh);
       if (!visible) continue;
       for (const src of mesh.userData.sources || []) {
         if (src.ini === info.ini) lines.add(src.line);
       }
     }
-    positionLines[p] = [...lines];
+    positionLines[p] = [...lines].sort((a, b) => a - b);
   }
+  const sortedTargetLines = [...targetLines].sort((a, b) => a - b);
 
   ui.saveBtn.disabled = true;
   try {
-    const result = await window.pywebview.api.record_toggle(ctx.modPath, info.ini, info.section, positionLines);
+    const result = await window.pywebview.api.record_toggle(
+      ctx.modPath, info.ini, info.section, positionLines, sortedTargetLines);
     if (result.error) {
       await alertDialog('Could not save recording:\n\n' + result.error);
       return;

@@ -335,7 +335,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "consumeStartupRequest": [],
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
-                   "deleteToggle": [], "exportChanges": [],
+                   "deleteToggle": [], "recordToggle": [], "exportChanges": [],
                    "saveMeshColorAdjustment": [], "saveTextureColor": []},
     }
     encoded_state = json.dumps(json.dumps(state))
@@ -600,6 +600,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             save_component_material_kind: async () => ({}),
             pick_texture_file: async () => copy(state.picks.shift() || null),
             get_record_positions: async () => ({positions: 2, vars: ['toggle']}),
+            record_toggle: async (path, ini, section, positionLines, targetLines) => {
+              state.calls.recordToggle.push(
+                [path, ini, section, positionLines, targetLines]);
+              return copy({ok: true, result: {}});
+            },
           }};
           if (!state.panelOpacityApi) {
             delete window.pywebview.api.get_panel_opacity;

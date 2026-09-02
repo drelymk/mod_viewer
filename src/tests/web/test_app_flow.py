@@ -339,6 +339,70 @@ def test_record_advances_read_only_vars_across_complete_cycle(
     finally:
         context.close()
 
+
+def test_record_scopes_targets_and_keeps_touched_mesh_snapshots(
+        edge_browser, frontend_url):
+    payload = _payload("RecordScope")
+    body_name = "Body-RecordScope-0"
+    body = payload["meshes"][body_name]
+    body["conditions"] = [[{
+        "var": "toggle", "value": "0", "negate": False,
+    }]]
+    body["sources"] = [{"ini": "RecordScope.ini", "line": 10}]
+
+    for name, component, line, conditions in [
+        ("Face-RecordScope-0", "Face RecordScope", 20, []),
+        ("Weapon-RecordScope-0", "Weapon RecordScope", 30, [[{
+            "var": "weapon", "value": "1", "negate": False,
+        }]]),
+    ]:
+        entry = copy.deepcopy(body)
+        entry["component"] = component
+        entry["conditions"] = conditions
+        entry["sources"] = [{"ini": "RecordScope.ini", "line": line}]
+        entry["texture_variants"] = []
+        entry["shape_targets"] = []
+        payload["meshes"][name] = entry
+
+    payload["controls"]["toggles"]["KeyWeapon"] = {
+        "name": "Weapon", "ini": "RecordScope.ini", "section": "KeyWeapon",
+        "wired": True,
+        "vars": [{"var": "weapon", "default": "1", "values": ["0", "1"]}],
+    }
+    payload["state"]["defaults"]["weapon"] = "1"
+    context, page = _page(
+        edge_browser, frontend_url, {"RecordScope": payload})
+    try:
+        _open(page, "RecordScope")
+        page.locator(".draw-item").first.wait_for()
+        page.evaluate("""
+          () => {
+            window.pywebview.api.get_record_positions = async () => ({
+              positions: 3, vars: ['toggle'],
+            });
+          }
+        """)
+
+        page.locator(".toggle-item").first.locator(
+            "[title^='Record']").click()
+        page.locator(".toggle-row.recording").wait_for()
+
+        cycle = page.locator(".toggle-row.recording .toggle-cycle-btn")
+        cycle.click()
+        page.locator(".draw-item .mesh-state-btn").nth(1).click()
+        assert page.locator(".toggle-row.recording").count() == 1
+        cycle.click()
+        assert page.locator(".toggle-row.recording").count() == 1
+        page.locator(".toggle-item:has(.toggle-row.recording) .toggle-record-save").click()
+        page.wait_for_function("window.__fakeApi.calls.recordToggle.length === 1")
+
+        call = page.evaluate("window.__fakeApi.calls.recordToggle[0]")
+        assert call[0:3] == ["RecordScope", "RecordScope.ini", "KeyRecordScope"]
+        assert call[3] == {"0": [10, 20], "1": [], "2": [20]}
+        assert call[4] == [10, 20]
+    finally:
+        context.close()
+
 def test_reload_preserves_camera_but_switching_mod_resets_it(
         edge_browser, frontend_url):
     context, page = _page(
