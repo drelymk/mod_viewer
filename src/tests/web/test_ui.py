@@ -1332,12 +1332,17 @@ def test_texture_bake_error_hides_consumed_bake_action(
         page.locator("#texture-bake-confirm").wait_for()
         page.evaluate("""() => {
           window.pywebview.api.bake_mesh_texture_color = async () => ({
-            status: 'error', error: 'Temporary bake failure.',
+            status: 'error',
+            error: 'The texture could not be recolored uniformly while preserving alpha.',
+            details: {mip: 0, unresolved_units: 47, bc7_modes: {'7': 47}},
           });
         }""")
         page.locator("#texture-bake-confirm").click()
         page.wait_for_function("""() => document.querySelector(
-          '#texture-bake-error').textContent === 'Temporary bake failure.'""")
+          '#texture-bake-error').textContent.includes(
+            'Unresolved mip-0 blocks: 47')""")
+        assert "BC7 modes:\n  Mode 7: 47" in (
+            page.locator("#texture-bake-error").inner_text())
         assert page.locator("#texture-bake-confirm").is_hidden()
 
         page.locator("#texture-bake-close").click()

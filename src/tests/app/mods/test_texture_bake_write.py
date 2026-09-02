@@ -111,6 +111,37 @@ def _bc7_separate_block(mode, rotation, index_mode, endpoints,
     return bits.to_bytes(16, "little")
 
 
+def _bc7_mode7_block(partition, pbits, endpoints, indices):
+    """Build a valid BC7 mode-7 block for a fixed partition."""
+    assert 0 <= partition < 64
+    assert len(pbits) == 4
+    assert len(endpoints) == 4
+    assert len(indices) == 16
+    anchor = texture_bake._bc7_codec._PARTITION_2_ANCHORS[partition]
+    assert indices[0] < 2 and indices[anchor] < 2
+    bits = 1 << 7
+
+    def put(start, count, value):
+        nonlocal bits
+        bits = texture_bake._bc7_set_bits(bits, start, count, value)
+
+    put(8, 6, partition)
+    start = 14
+    for channel in range(4):
+        for endpoint in range(4):
+            put(start, 5, endpoints[endpoint][channel])
+            start += 5
+    for pbit in pbits:
+        put(start, 1, pbit)
+        start += 1
+    for pixel, value in enumerate(indices):
+        width = 1 if pixel in {0, anchor} else 2
+        put(start, width, value)
+        start += width
+    assert start == 128
+    return bits.to_bytes(16, "little")
+
+
 def _prepared(path):
     layout = inspect_dds_layout(path)
     selected_pixels = SimpleNamespace(mask=bytearray([1, 1]))
@@ -771,6 +802,112 @@ def test_bc7_coupled_bake_dispatches_mode4_and_mode5_fallback(
     assert list(writable[0]) == [1, 1]
     assert list(protected[0]) == [0, 0]
     assert stats[0].compatible_units == 2
+    assert stats[0].protected_mode_counts == ()
+    candidate_layout = inspect_dds_layout(source)
+    candidate_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        candidate, candidate_layout, candidate_layout.mips[0])
+    source_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        original, layout, layout.mips[0])
+    assert (candidate_image.getchannel("A").tobytes()
+            == source_image.getchannel("A").tobytes())
+
+
+@pytest.mark.parametrize("partition", [1, 13, 14, 15])
+def test_bc7_mode7_fallback_preserves_partition_indices_pbits_and_alpha(
+        tmp_path, partition):
+    anchor = texture_bake._bc7_codec._PARTITION_2_ANCHORS[partition]
+    indices = [0, 1, 2, 3] * 4
+    indices[0] = 0
+    indices[anchor] = 1
+    block = _bc7_mode7_block(
+        partition, (0, 1, 1, 0),
+        ((3, 6, 9, 4), (22, 18, 25, 60),
+         (8, 15, 5, 30), (28, 26, 30, 110)), indices)
+    source = tmp_path / f"bc7-mode7-{partition}.dds"
+    original = _dx10_dds(block, 98)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]),),
+        (SimpleNamespace(mask=bytearray([1] * 16)),),
+        f"diffuse::bc7-mode7-{partition}.dds")
+    source_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        original, layout, layout.mips[0])
+    target_rgba, _safe_indices, target_width, target_height = (
+        texture_bake._build_safe_block_atlas(
+            source_image, layout.mips[0], bytearray([1] * 16),
+            bytearray([1]), {"hue": 120, "saturation": 2}))
+    target_pixels = tuple(
+        tuple(target_rgba[index:index + 4])
+        for index in range(0, len(target_rgba), 4))
+    candidate_block, candidate_pixels = texture_bake._recolor_bc7_mode7_block(
+        block, target_pixels, 4, 4)
+
+    source_parameters = texture_bake._bc7_mode7_parameters(block)
+    candidate_parameters = texture_bake._bc7_mode7_parameters(candidate_block)
+    assert candidate_parameters[0] == source_parameters[0]
+    assert candidate_parameters[3:] == source_parameters[3:]
+    assert [endpoint[3] for endpoint in candidate_parameters[1]] == [
+        endpoint[3] for endpoint in source_parameters[1]]
+    assert candidate_pixels != texture_bake._bc7_mode7_decode_block(block)
+    assert [pixel[3] for pixel in candidate_pixels] == [
+        pixel[3] for pixel in texture_bake._bc7_mode7_decode_block(block)]
+
+    candidate = _dx10_dds(candidate_block, 98)
+    candidate_path = tmp_path / "candidate.dds"
+    candidate_path.write_bytes(candidate)
+    candidate_layout = inspect_dds_layout(candidate_path)
+    candidate_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        candidate, candidate_layout, candidate_layout.mips[0])
+    assert (candidate_image.getchannel("A").tobytes()
+            == source_image.getchannel("A").tobytes())
+
+    def rgb_error(pixels):
+        return sum((pixels[index][channel] - target_pixels[index][channel]) ** 2
+                   for index in range(16) for channel in range(3))
+
+    assert rgb_error(candidate_pixels) < rgb_error(
+        texture_bake._bc7_mode7_decode_block(block))
+
+
+def test_bc7_coupled_bake_dispatches_all_alpha_modes(
+        tmp_path, monkeypatch):
+    first_indices = [0, 1, 2, 3] * 4
+    mode4 = _bc7_separate_block(
+        4, 2, 0, ((4, 24), (8, 28), (12, 31), (3, 57)),
+        first_indices, [0, 1, 2, 3, 4, 5, 6, 7] * 2)
+    mode5 = _bc7_separate_block(
+        5, 3, 0, ((18, 92), (28, 104), (38, 116), (32, 224)),
+        first_indices, [0, 1, 2, 3] * 4)
+    mode6 = _bc7_mode6_block(0, 255, [0, 15] * 8)
+    mode7_indices = [0, 1, 2, 3] * 4
+    mode7_indices[texture_bake._bc7_codec._PARTITION_2_ANCHORS[13]] = 1
+    mode7 = _bc7_mode7_block(
+        13, (0, 1, 1, 0),
+        ((3, 6, 9, 4), (22, 18, 25, 60),
+         (8, 15, 5, 30), (28, 26, 30, 110)),
+        mode7_indices)
+    source = tmp_path / "bc7-all-alpha-modes.dds"
+    original = _dx10_dds(
+        mode4 + mode5 + mode6 + mode7, 98, width=16, height=4)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1, 1, 1, 1]),),
+        (SimpleNamespace(mask=bytearray([1] * 64)),),
+        "diffuse::bc7-all-alpha-modes.dds")
+    monkeypatch.setattr(
+        texture_bake, "_encode_alpha_candidate",
+        lambda *_args, **_kwargs: (
+            {}, texture_bake.AlphaCompatibilityStats(0, 0, 0, 0, 0)))
+
+    candidate, writable, protected, stats = (
+        texture_bake._encode_alpha_coupled_mips(
+            original, prepared, {"hue": 120, "saturation": 2},
+            str(tmp_path)))
+
+    assert list(writable[0]) == [1, 1, 1, 1]
+    assert list(protected[0]) == [0, 0, 0, 0]
     assert stats[0].protected_mode_counts == ()
     candidate_layout = inspect_dds_layout(source)
     candidate_image = texture_bake._decode_alpha_coupled_mip_rgba(

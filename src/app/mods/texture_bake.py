@@ -21,6 +21,7 @@ from core.geometry.semantics import (
 )
 from core.resource_paths import _canonical, safe_resource_path
 from core.textures import TEXTURE_ROLES, split_texture_key
+from core.textures import bc7 as _bc7_codec
 from core.textures.color_adjustment import (
     adjust_rgba_bytes, is_neutral_color_adjustment,
     normalize_color_adjustment,
@@ -62,10 +63,9 @@ _TEXTURE_ROLE_LABELS = {
     "emission_map": "Emission Map",
 }
 _BC7_ALPHA_WEIGHT_CANDIDATES = (2.0, 4.0, 8.0, 16.0, 32.0)
-_BC7_MODE4_WEIGHTS = (0, 9, 18, 27, 37, 46, 55, 64)
-_BC7_MODE2_WEIGHTS = (0, 21, 43, 64)
-_BC7_MODE6_WEIGHTS = (0, 4, 9, 13, 17, 21, 26, 30,
-                      34, 38, 43, 47, 51, 55, 60, 64)
+_BC7_MODE4_WEIGHTS = _bc7_codec.WEIGHTS_3
+_BC7_MODE2_WEIGHTS = _bc7_codec.WEIGHTS_2
+_BC7_MODE6_WEIGHTS = _bc7_codec.WEIGHTS_4
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -1087,314 +1087,72 @@ def _bc7_modes_mask(original, source_mip, pending_mask, modes):
     return result
 
 
+def _bc7_codec_call(function, *args):
+    """Translate codec validation failures into the bake API error type."""
+    try:
+        return function(*args)
+    except _bc7_codec.BC7Error as error:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", str(error)) from error
+
+
 def _bc7_get_bits(bits, start, count):
-    """Read little-endian BC7 bit fields from a 128-bit block integer."""
-    return (bits >> start) & ((1 << count) - 1)
+    """Read a little-endian BC7 bit field for legacy test helpers."""
+    return _bc7_codec.get_bits(bits, start, count)
 
 
 def _bc7_set_bits(bits, start, count, value):
-    """Replace a little-endian BC7 bit field in a 128-bit block integer."""
-    mask = ((1 << count) - 1) << start
-    return (bits & ~mask) | ((value & ((1 << count) - 1)) << start)
+    """Replace a little-endian BC7 bit field for legacy test helpers."""
+    return _bc7_codec.set_bits(bits, start, count, value)
 
 
 def _bc7_mode6_parameters(block):
-    """Read mode-6 endpoints, p-bits, and shared color/alpha indices."""
-    if _bc7_block_mode(block) != 6:
-        raise TextureBakeAnalysisError(
-            "texture_validation_failed", "DDS block is not BC7 mode 6.")
-    bits = int.from_bytes(block, "little")
-    pbits = (_bc7_get_bits(bits, 63, 1), _bc7_get_bits(bits, 64, 1))
-    endpoints = [[0, 0, 0, 0], [0, 0, 0, 0]]
-    for channel in range(4):
-        for endpoint in range(2):
-            base = _bc7_get_bits(bits, 7 + channel * 14 + endpoint * 7, 7)
-            endpoints[endpoint][channel] = (base << 1) | pbits[endpoint]
-    indices = [_bc7_get_bits(bits, 65, 3)]
-    indices.extend(
-        _bc7_get_bits(bits, 68 + (index - 1) * 4, 4)
-        for index in range(1, 16))
-    return (tuple(pbits), tuple(tuple(endpoint) for endpoint in endpoints),
-            tuple(indices))
+    return _bc7_codec_call(_bc7_codec.mode6_parameters, block)
 
 
 def _bc7_mode6_decode_block(block):
-    """Decode one mode-6 block using its exact integer interpolation rules."""
-    _pbits, endpoints, indices = _bc7_mode6_parameters(block)
-    pixels = []
-    for index in indices:
-        weight = _BC7_MODE6_WEIGHTS[index]
-        pixels.append(tuple(
-            (endpoints[0][channel] * (64 - weight)
-             + endpoints[1][channel] * weight + 32) >> 6
-            for channel in range(4)))
-    return tuple(pixels)
-
-
-def _mode6_channel_error(base0, base1, p0, p1, targets, indices):
-    endpoint0 = (base0 << 1) | p0
-    endpoint1 = (base1 << 1) | p1
-    return sum(
-        (((endpoint0 * (64 - _BC7_MODE6_WEIGHTS[index])
-           + endpoint1 * _BC7_MODE6_WEIGHTS[index] + 32) >> 6) - target) ** 2
-        for target, index in zip(targets, indices))
-
-
-def _fit_mode6_channel(targets, indices, p0, p1):
-    """Fit two 7-bit endpoint fields while retaining their source p-bits."""
-    if not targets:
-        return 0, 0
-    fractions = tuple(_BC7_MODE6_WEIGHTS[index] / 64.0 for index in indices)
-    bb = sum(fraction ** 2 for fraction in fractions)
-
-    def quantize(value, pbit):
-        return max(0, min(127, int(round((value - pbit) / 2.0))))
-
-    best = None
-    for base0 in range(128):
-        endpoint0 = (base0 << 1) | p0
-        if bb:
-            endpoint1 = sum(
-                fraction * (target - endpoint0 * (1.0 - fraction))
-                for fraction, target in zip(fractions, targets)) / bb
-        else:
-            endpoint1 = sum(targets) / len(targets)
-        center1 = quantize(endpoint1, p1)
-        candidates1 = {
-            max(0, min(127, center1 + delta))
-            for delta in range(-4, 5)
-        }
-        candidates1.update((0, 127, quantize(min(targets), p1),
-                            quantize(max(targets), p1)))
-        for base1 in candidates1:
-            key = (_mode6_channel_error(
-                base0, base1, p0, p1, targets, indices), base0, base1)
-            if best is None or key < best[0]:
-                best = (key, (base0, base1))
-    return best[1]
+    return _bc7_codec_call(_bc7_codec.mode6_decode_block, block)
 
 
 def _recolor_mode6_block(block, target_pixels, valid_width, valid_height):
-    """Change only mode-6 RGB endpoints and preserve alpha-bearing bits."""
-    pbits, _endpoints, indices = _bc7_mode6_parameters(block)
-    targets_by_channel = [[], [], []]
-    index_values = []
-    for row in range(valid_height):
-        for column in range(valid_width):
-            pixel_index = row * 4 + column
-            index_values.append(indices[pixel_index])
-            for channel in range(3):
-                targets_by_channel[channel].append(
-                    target_pixels[pixel_index][channel])
-
-    bits = int.from_bytes(block, "little")
-    for channel in range(3):
-        base0, base1 = _fit_mode6_channel(
-            targets_by_channel[channel], index_values, pbits[0], pbits[1])
-        bits = _bc7_set_bits(bits, 7 + channel * 14, 7, base0)
-        bits = _bc7_set_bits(bits, 14 + channel * 14, 7, base1)
-    candidate = bits.to_bytes(16, "little")
-    return candidate, _bc7_mode6_decode_block(candidate)
-
-
-def _bc7_unquantize(value, precision):
-    """Expand one BC7 endpoint field to its decoded 8-bit value."""
-    shifted = value << (8 - precision)
-    return shifted | (shifted >> precision)
-
-
-def _bc7_read_index_set(bits, start, precision):
-    """Read one single-subset BC7 index set, including its fix-up bit."""
-    values = [_bc7_get_bits(bits, start, precision - 1)]
-    start += precision - 1
-    for _index in range(1, 16):
-        values.append(_bc7_get_bits(bits, start, precision))
-        start += precision
-    return tuple(values), start
+    return _bc7_codec_call(
+        _bc7_codec.recolor_mode6, block, target_pixels,
+        valid_width, valid_height)
 
 
 def _bc7_separate_parameters(block):
-    """Read the rotation-aware endpoint and index fields of mode 4 or 5."""
-    mode = _bc7_block_mode(block)
-    if mode not in {4, 5}:
-        raise TextureBakeAnalysisError(
-            "texture_validation_failed",
-            "DDS block is not a separate-alpha BC7 mode.")
-    bits = int.from_bytes(block, "little")
-    start = mode + 1
-    rotation = _bc7_get_bits(bits, start, 2)
-    start += 2
-    index_mode = _bc7_get_bits(bits, start, 1) if mode == 4 else 0
-    if mode == 4:
-        start += 1
-    precisions = (5, 5, 5, 6) if mode == 4 else (7, 7, 7, 8)
-    raw_endpoints = [[0, 0, 0, 0], [0, 0, 0, 0]]
-    endpoints = [[0, 0, 0, 0], [0, 0, 0, 0]]
-    for channel, precision in enumerate(precisions):
-        for endpoint in range(2):
-            value = _bc7_get_bits(bits, start, precision)
-            start += precision
-            raw_endpoints[endpoint][channel] = value
-            endpoints[endpoint][channel] = _bc7_unquantize(value, precision)
-    first_indices, start = _bc7_read_index_set(bits, start, 2)
-    second_precision = 3 if mode == 4 else 2
-    second_indices, start = _bc7_read_index_set(
-        bits, start, second_precision)
-    if start != 128:
-        raise TextureBakeAnalysisError(
-            "texture_validation_failed", "DDS BC7 index layout is invalid.")
-    return (mode, rotation, index_mode,
-            tuple(tuple(endpoint) for endpoint in raw_endpoints),
-            tuple(tuple(endpoint) for endpoint in endpoints),
-            first_indices, second_indices)
+    return _bc7_codec_call(_bc7_codec.separate_parameters, block)
 
 
 def _bc7_separate_decode_block(block):
-    """Decode one mode-4/5 block with its separate-alpha rotation applied."""
-    (mode, rotation, index_mode, _raw_endpoints, endpoints,
-     first_indices, second_indices) = _bc7_separate_parameters(block)
-    if mode == 4:
-        vector_indices = second_indices if index_mode else first_indices
-        scalar_indices = first_indices if index_mode else second_indices
-        vector_precision = 3 if index_mode else 2
-        scalar_precision = 2 if index_mode else 3
-    else:
-        vector_indices = first_indices
-        scalar_indices = second_indices
-        vector_precision = scalar_precision = 2
-    vector_weights = (_BC7_MODE4_WEIGHTS if vector_precision == 3
-                      else _BC7_MODE2_WEIGHTS)
-    scalar_weights = (_BC7_MODE4_WEIGHTS if scalar_precision == 3
-                      else _BC7_MODE2_WEIGHTS)
-    pixels = []
-    for pixel_index in range(16):
-        internal = [
-            ((endpoints[0][channel] *
-              (64 - vector_weights[vector_indices[pixel_index]])
-              + endpoints[1][channel] *
-              vector_weights[vector_indices[pixel_index]] + 32) >> 6)
-            for channel in range(3)
-        ]
-        scalar_index = scalar_indices[pixel_index]
-        internal.append(
-            (endpoints[0][3] * (64 - scalar_weights[scalar_index])
-             + endpoints[1][3] * scalar_weights[scalar_index] + 32) >> 6)
-        if rotation:
-            internal[3], internal[rotation - 1] = (
-                internal[rotation - 1], internal[3])
-        pixels.append(tuple(internal))
-    return tuple(pixels)
-
-
-def _bc7_separate_channel_error(
-        raw0, raw1, endpoint_precision, targets, indices, index_precision):
-    endpoint0 = _bc7_unquantize(raw0, endpoint_precision)
-    endpoint1 = _bc7_unquantize(raw1, endpoint_precision)
-    weights = (_BC7_MODE4_WEIGHTS if index_precision == 3
-               else _BC7_MODE2_WEIGHTS)
-    return sum(
-        (((endpoint0 * (64 - weights[index])
-           + endpoint1 * weights[index] + 32) >> 6) - target) ** 2
-        for target, index in zip(targets, indices))
-
-
-def _fit_bc7_separate_channel(
-        targets, indices, endpoint_precision, index_precision):
-    """Fit separate-alpha mode endpoint fields using fixed source indices."""
-    if not targets:
-        return 0, 0
-    weights = (_BC7_MODE4_WEIGHTS if index_precision == 3
-               else _BC7_MODE2_WEIGHTS)
-    fractions = tuple(weights[index] / 64.0 for index in indices)
-    bb = sum(fraction ** 2 for fraction in fractions)
-    max_value = (1 << endpoint_precision) - 1
-
-    def quantize(value):
-        return max(0, min(max_value, int(round(
-            value * max_value / 255.0))))
-
-    best = None
-    for raw0 in range(max_value + 1):
-        endpoint0 = _bc7_unquantize(raw0, endpoint_precision)
-        if bb:
-            endpoint1 = sum(
-                fraction * (target - endpoint0 * (1.0 - fraction))
-                for fraction, target in zip(fractions, targets)) / bb
-        else:
-            endpoint1 = sum(targets) / len(targets)
-        center1 = quantize(endpoint1)
-        candidates1 = {
-            max(0, min(max_value, center1 + delta))
-            for delta in range(-4, 5)
-        }
-        candidates1.update((0, max_value, quantize(min(targets)),
-                            quantize(max(targets))))
-        for raw1 in candidates1:
-            key = (_bc7_separate_channel_error(
-                raw0, raw1, endpoint_precision, targets, indices,
-                index_precision), raw0, raw1)
-            if best is None or key < best[0]:
-                best = (key, (raw0, raw1))
-    return best[1]
-
-
-def _bc7_rotation_output_channel(internal_channel, rotation):
-    """Map an encoded mode-4/5 channel to its decoded RGBA channel."""
-    if not rotation:
-        return internal_channel
-    if internal_channel == 3:
-        return rotation - 1
-    if internal_channel == rotation - 1:
-        return 3
-    return internal_channel
+    return _bc7_codec_call(_bc7_codec.separate_decode_block, block)
 
 
 def _recolor_bc7_separate_block(block, target_pixels, valid_width,
                                  valid_height):
-    """Refit mode-4/5 RGB fields while freezing the decoded alpha path."""
-    (mode, rotation, index_mode, raw_endpoints, _endpoints,
-     first_indices, second_indices) = _bc7_separate_parameters(block)
-    if mode == 4:
-        vector_indices = second_indices if index_mode else first_indices
-        scalar_indices = first_indices if index_mode else second_indices
-        vector_precision = 3 if index_mode else 2
-        scalar_precision = 2 if index_mode else 3
-        precisions = (5, 5, 5, 6)
-    else:
-        vector_indices = first_indices
-        scalar_indices = second_indices
-        vector_precision = scalar_precision = 2
-        precisions = (7, 7, 7, 8)
-    alpha_internal = 3 if not rotation else rotation - 1
-    targets_by_channel = [[] for _channel in range(4)]
-    indices_by_channel = [vector_indices] * 3 + [scalar_indices]
-    for row in range(valid_height):
-        for column in range(valid_width):
-            pixel_index = row * 4 + column
-            for channel in range(4):
-                output_channel = _bc7_rotation_output_channel(
-                    channel, rotation)
-                targets_by_channel[channel].append(
-                    target_pixels[pixel_index][output_channel])
+    return _bc7_codec_call(
+        _bc7_codec.recolor_separate, block, target_pixels,
+        valid_width, valid_height)
 
-    bits = int.from_bytes(block, "little")
-    endpoint_start = mode + 1 + 2 + (1 if mode == 4 else 0)
-    endpoint_offset = endpoint_start
-    for channel, precision in enumerate(precisions):
-        if channel == alpha_internal:
-            endpoint_offset += precision * 2
-            continue
-        index_precision = (vector_precision if channel < 3
-                           else scalar_precision)
-        raw0, raw1 = _fit_bc7_separate_channel(
-            targets_by_channel[channel], indices_by_channel[channel],
-            precision, index_precision)
-        bits = _bc7_set_bits(bits, endpoint_offset, precision, raw0)
-        bits = _bc7_set_bits(
-            bits, endpoint_offset + precision, precision, raw1)
-        endpoint_offset += precision * 2
-    candidate = bits.to_bytes(16, "little")
-    return candidate, _bc7_separate_decode_block(candidate)
+
+def _bc7_mode7_parameters(block):
+    return _bc7_codec_call(_bc7_codec.mode7_parameters, block)
+
+
+def _bc7_mode7_subset_for_pixel(partition, pixel):
+    return _bc7_codec_call(
+        _bc7_codec.mode7_subset_for_pixel, partition, pixel)
+
+
+def _bc7_mode7_decode_block(block):
+    return _bc7_codec_call(_bc7_codec.mode7_decode_block, block)
+
+
+def _recolor_bc7_mode7_block(block, target_pixels, valid_width,
+                             valid_height):
+    return _bc7_codec_call(
+        _bc7_codec.recolor_mode7, block, target_pixels,
+        valid_width, valid_height)
 
 
 def _bc7_candidate_strategy_groups(format_name):
@@ -1841,6 +1599,9 @@ def _encode_bc7_source_fallback(
         elif mode in {4, 5}:
             candidate_block, candidate_pixels = _recolor_bc7_separate_block(
                 source_block, target_pixels, unit_width, unit_height)
+        elif mode == 7:
+            candidate_block, candidate_pixels = _recolor_bc7_mode7_block(
+                source_block, target_pixels, unit_width, unit_height)
         else:
             raise TextureBakeAnalysisError(
                 "texture_validation_failed",
@@ -2102,7 +1863,7 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
         if prepared.info.format.startswith("bc7") and any(pending):
             fallback_blocks, fallback_stats = _encode_bc7_source_fallback(
                 original, prepared, source_mip, source_image, pixel_mask,
-                pending, adjustment, timings, (4, 5, 6),
+                pending, adjustment, timings, (4, 5, 6, 7),
                 "bc7_source_fallback")
             tested_units += fallback_stats.tested_units
             rgb_squared_error += fallback_stats.rgb_squared_error

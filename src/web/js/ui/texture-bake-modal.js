@@ -50,6 +50,29 @@ function setLoading(message = 'Analyzing texture coverage…') {
   body.appendChild(node);
 }
 
+function formatBakeError(result) {
+  const message = result?.error || 'Texture baking failed.';
+  const details = result?.details;
+  const mip = Number(details?.mip);
+  const unresolvedUnits = Number(details?.unresolved_units);
+  if (!Number.isInteger(mip) || mip < 0
+      || !Number.isInteger(unresolvedUnits) || unresolvedUnits < 0) {
+    return message;
+  }
+  const modes = Object.entries(details.bc7_modes || {})
+    .map(([mode, count]) => ({mode: Number(mode), count: Number(count)}))
+    .filter(item => Number.isInteger(item.mode) && item.mode >= 0
+      && item.mode <= 7 && Number.isInteger(item.count) && item.count >= 0)
+    .sort((left, right) => left.mode - right.mode);
+  const lines = [message, '',
+    `Unresolved mip-${mip} blocks: ${unresolvedUnits}`];
+  if (modes.length) {
+    lines.push('BC7 modes:');
+    modes.forEach(item => lines.push(`  Mode ${item.mode}: ${item.count}`));
+  }
+  return lines.join('\n');
+}
+
 function setBakeAction({visible = false, disabled = true, label = 'Bake Color'} = {}) {
   if (!bakeButton) return;
   bakeButton.hidden = !visible;
@@ -250,7 +273,7 @@ async function runBake(job) {
   }
   if (result?.status !== 'ok') {
     body.replaceChildren();
-    setModalError(error, result?.error || 'Texture baking failed.');
+    setModalError(error, formatBakeError(result));
     // A failed destructive request must go through a fresh preflight. The
     // captured job has been consumed, so an enabled action here would be
     // misleading and inert; the user can close and start analysis again.
