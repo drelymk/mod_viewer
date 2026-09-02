@@ -19,7 +19,19 @@ def _rel_source(src, mod_dir):
             path = os.path.relpath(path, mod_dir).replace(os.sep, "/")
         except ValueError:
             path = os.path.basename(path)
-    return {"ini": path, "line": src.get("line_no"), "section": src.get("section")}
+    result = {
+        "ini": path,
+        "line": src.get("line_no"),
+        "section": src.get("section"),
+    }
+    if src.get("occurrence") is not None:
+        occurrence = src["occurrence"]
+        if hasattr(occurrence, "to_dict"):
+            occurrence = occurrence.to_dict()
+        result["occurrence"] = occurrence
+    if "conditions" in src:
+        result["conditions"] = src["conditions"]
+    return result
 
 
 def deduplicate_draws(group, max_draws=0):
@@ -34,8 +46,10 @@ def deduplicate_draws(group, max_draws=0):
             order.append(key)
         entry = merged[key]
         for source in draw.sources:
-            if source not in entry["sources"]:
-                entry["sources"].append(source)
+            source_entry = dict(source)
+            source_entry["conditions"] = draw.conditions
+            if source_entry not in entry["sources"]:
+                entry["sources"].append(source_entry)
         cond_groups = draw.conditions
         if not cond_groups:
             if [] not in entry["alts"]:

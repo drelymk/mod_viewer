@@ -45,6 +45,7 @@ import pytest
 from app.session import edit as edit_session
 from app.bridge import toggle as toggle_api
 from core.ini.document import IniDocument
+from core.editing import record as record_editor
 
 
 # A section with one writable var (2 values) and one namespaced var declared
@@ -138,10 +139,13 @@ def _target_refs(text, *line_numbers):
     for line_number in line_numbers:
         line = document.lines[line_number - 1]
         draw = line.text.split("=", 1)[1].split(",")
+        occurrence = record_editor._draw_occurrence(document, line_number - 1)
         refs.append({
+            "ini": "mod.ini",
             "line": line_number,
             "section": line.section.name,
             "drawindexed": [int(value.strip()) for value in draw],
+            "occurrence": occurrence,
         })
     return refs
 

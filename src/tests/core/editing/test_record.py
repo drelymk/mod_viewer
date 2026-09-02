@@ -46,10 +46,14 @@ def target_refs(d, *line_numbers):
     for line_number in line_numbers:
         key = re_._draw_key(d, line_number - 1)
         assert key is not None, f"expected a drawindexed line at {line_number}"
+        occurrence = re_._draw_occurrence(d, line_number - 1)
+        assert occurrence is not None
         refs.append({
+            "ini": "mod.ini",
             "line": line_number,
             "section": key[0],
             "drawindexed": list(key[1:]),
+            "occurrence": occurrence,
         })
     return refs
 
@@ -111,6 +115,9 @@ if $swap == 1
 drawindexed = 200,0,0
 endif
 """
+
+SAME_TRIPLE_TARGETS = SHIFTED_TARGETS.replace(
+    "drawindexed = 200,0,0", "drawindexed = 100,0,0")
 
 CHAIN3 = """[Constants]
 global persist $swap = 0
@@ -367,6 +374,40 @@ def test_record_resolves_original_targets_after_staged_toggle_insert():
     assert "if $new == 0" in d.to_string()
     assert "if $new == 1" in d.to_string()
     assert dline(d, "100,0,0").no != dline(d, "200,0,0").no
+
+
+def test_record_resolves_same_triple_by_draw_occurrence():
+    d = doc(SAME_TRIPLE_TARGETS)
+    draws = [line for line in d.lines if line.kind == re_.DRAW]
+    assert len(draws) == 2
+    first_line, second_line = draws[0].no + 1, draws[1].no + 1
+    refs = target_refs(d, first_line, second_line)
+
+    te.add_toggle(d, "New", "2", "new", ["0", "1"])
+
+    # The old second source line now points at the first identical draw. The
+    # ordinal in the target identity must still select the second occurrence.
+    assert d.lines[second_line - 1].text == "drawindexed = 100,0,0"
+    report = re_.record_toggle(
+        d, "KeyNew", {0: [first_line], 1: [second_line]}, refs)
+
+    assert report["skipped"] == []
+    assert d.to_string().count("if $new == 0") == 1
+    assert d.to_string().count("if $new == 1") == 1
+
+
+def test_record_out_of_range_target_uses_stale_error_path():
+    d = doc(SINGLE_IF)
+    line = dline(d, "100,0,0")
+    ref = target_refs(d, line.no + 1)[0]
+    ref["line"] = len(d.lines) + 100
+    ref["drawindexed"] = [999, 0, 0]
+    before = d.to_string()
+
+    assert re_._draw_key(d, len(d.lines)) is None
+    with pytest.raises(te.ToggleEditError, match="stale"):
+        re_.record_toggle(d, "KeySwap", {0: [], 1: []}, [ref])
+    assert d.to_string() == before
 
 
 def test_record_rejects_stale_target_identity_without_mutating_document():

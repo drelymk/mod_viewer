@@ -211,9 +211,9 @@ def record_toggle(mod_dir, ini_rel, section_name, position_lines, target_lines):
     """Rewrite section_name's gates from an explicit Record scope.
 
     ``target_lines`` owns every draw source intentionally included in the
-    recording. Each target includes its source line, section, and literal
-    ``drawindexed`` triple so the core can resolve stale line numbers against
-    the staged document. ``position_lines`` contains only the owned lines
+    recording. Each target includes its ini, source line, section, draw
+    occurrence, and literal ``drawindexed`` triple so the core can resolve
+    stale line numbers against the staged document. ``position_lines`` contains only the owned lines
     visible at each position. Stages the result like add/edit/delete above, then
     immediately re-checks the mutated text against what was recorded
     (record_editor.verify_recording). On any mismatch the pending edit is
@@ -226,7 +226,8 @@ def record_toggle(mod_dir, ini_rel, section_name, position_lines, target_lines):
         sess, key, doc, was_pending, snapshot = edit_session.begin(mod_dir, path)
         try:
             result = record_editor.record_toggle(
-                doc, section_name, position_lines, target_lines)
+                doc, section_name, position_lines, target_lines,
+                target_ini=ini_rel)
             # Pass the authoritative staged text; verify_recording converts it
             # to an IniDocument projection instead of invoking parse_sections.
             mismatches = record_editor.verify_recording(path, result,

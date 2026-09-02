@@ -7,8 +7,9 @@ section's longest list, 3Dmigoto keeps its final value for the remaining rows.
 The caller (the frontend, which already has the mesh payload's `conditions`)
 decides both the explicit set of drawindexed *sources* owned by the recording
 and, per position, which of those sources should be visible. Each source
-carries its original line number plus a stable section/drawindexed identity;
-this module resolves that identity against the authoritative staged document.
+carries its originating ini, original line number, and stable
+section/occurrence/drawindexed identity; this module resolves that identity
+against the authoritative staged document.
 
 This is deliberately conservative: only a well-defined "safe pattern" is
 rewritten automatically; everything else is refused and reported rather than
@@ -371,15 +372,18 @@ def writable_cycle_vars(doc, section_name):
     return writable, max(len(v) for v in cvars.values())
 
 
-def record_toggle(doc, section_name, position_lines, target_lines):
+def record_toggle(doc, section_name, position_lines, target_lines,
+                  target_ini=None):
     """Rewrite `doc`'s gates for an explicit Record target scope.
 
     `target_lines` is the complete set of target mappings owned by this
     recording, including draws hidden at every position. Each mapping has the
-    shape ``{"line": 1-based source line, "section": section name,
+    shape ``{"ini": relative ini path, "line": 1-based source line,
+    "section": section name, "occurrence": {"section", "ordinal", "path"},
     "drawindexed": [count, start, base]}``. The line is only a hint for the
-    current staged document; the section and drawindexed tuple are the stable
-    identity used to resolve it after earlier staged edits have shifted lines.
+    current staged document; the occurrence and drawindexed tuple are the
+    stable identity used to resolve it after earlier staged edits have shifted
+    lines.
     `position_lines` is {position (0-based, possibly a JSON string key): [ini
     line number (1-based), ...]} and may contain only visible target lines.
     Every reachable position should be present, even one that just repeats
@@ -396,7 +400,7 @@ def record_toggle(doc, section_name, position_lines, target_lines):
     regeneration can shift line numbers.
     """
     writable, max_positions = writable_cycle_vars(doc, section_name)
-    target_line_map = _resolve_target_refs(doc, target_lines)
+    target_line_map = _resolve_target_refs(doc, target_lines, target_ini)
     try:
         normalized_positions = {
             int(pos): line_nos
@@ -545,8 +549,10 @@ def _draw_key(doc, line_no):
     itself (unlike the line number, the drawindexed args never change).
     None if the line isn't a recognizable drawindexed line inside a section.
     """
+    if not 0 <= line_no < len(doc.lines):
+        return None
     line = doc.lines[line_no]
-    if line.section is None:
+    if line.kind != DRAW or line.section is None:
         return None
     m = _DRAW_RE.search(line.text)
     if not m:
@@ -554,21 +560,47 @@ def _draw_key(doc, line_no):
     return (line.section.name, int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
-def _draw_identity(doc, line_no):
-    """Case-insensitive section plus literal drawindexed identity."""
-    key = _draw_key(doc, line_no)
-    if key is None:
+def _draw_occurrence(doc, line_no):
+    """Return the authored draw ordinal for a staged document line."""
+    if not 0 <= line_no < len(doc.lines):
         return None
-    return (key[0].casefold(), *key[1:])
+    line = doc.lines[line_no]
+    if _draw_key(doc, line_no) is None or line.section is None:
+        return None
+    ordinal = sum(
+        1 for item in doc.lines[line.section.start:line.no + 1]
+        if _draw_key(doc, item.no) is not None
+    ) - 1
+    return {
+        "section": line.section.name,
+        "ordinal": ordinal,
+        "path": [],
+    }
 
 
-def _target_identity(ref):
+def _draw_identity(doc, line_no):
+    """Case-insensitive section, drawindexed tuple, and authored ordinal."""
+    key = _draw_key(doc, line_no)
+    occurrence = _draw_occurrence(doc, line_no)
+    if key is None or occurrence is None:
+        return None
+    return (key[0].casefold(), *key[1:], occurrence["ordinal"])
+
+
+def _ini_identity(value):
+    return str(value).replace("\\", "/").strip().casefold()
+
+
+def _target_identity(ref, target_ini=None):
     """Normalize one browser-supplied target reference."""
     if not isinstance(ref, dict):
         raise te.ToggleEditError(
             "Record targets must include their source line, section, and "
             "drawindexed identity")
     try:
+        ini = ref["ini"]
+        if not isinstance(ini, str) or not ini.strip():
+            raise TypeError
         line_no = int(ref["line"])
         section = ref["section"]
         if not isinstance(section, str):
@@ -578,17 +610,31 @@ def _target_identity(ref):
         if isinstance(drawindexed, (str, bytes)) or len(drawindexed) != 3:
             raise ValueError
         triple = tuple(int(value) for value in drawindexed)
+        occurrence = ref["occurrence"]
+        if not isinstance(occurrence, dict):
+            raise ValueError
+        occurrence_section = occurrence["section"]
+        occurrence_ordinal = int(occurrence["ordinal"])
+        if not isinstance(occurrence_section, str):
+            raise ValueError
     except (KeyError, TypeError, ValueError) as exc:
         raise te.ToggleEditError(
             "Record targets must include a numeric source line, section, and "
-            "three numeric drawindexed values") from exc
-    if line_no < 1 or not section:
+            "three numeric drawindexed values plus draw occurrence") from exc
+    if (line_no < 1 or not section or occurrence_ordinal < 0
+            or not occurrence_section.strip()
+            or occurrence_section.casefold() != section.casefold()):
         raise te.ToggleEditError(
-            "Record targets must include a positive source line and section")
-    return line_no, (section.casefold(), *triple)
+            "Record targets must include a positive source line, matching "
+            "section, and non-negative draw occurrence")
+    if target_ini is not None and _ini_identity(ini) != _ini_identity(target_ini):
+        raise te.ToggleEditError(
+            f"Record target ini {ini!r} does not match the edited ini "
+            f"{target_ini!r}")
+    return line_no, (section.casefold(), *triple, occurrence_ordinal)
 
 
-def _resolve_target_refs(doc, target_lines):
+def _resolve_target_refs(doc, target_lines, target_ini=None):
     """Resolve submitted source lines to the current staged draw lines.
 
     A line number from a mesh payload can be stale after Add/Edit inserts text
@@ -605,7 +651,7 @@ def _resolve_target_refs(doc, target_lines):
         if identity is not None:
             lines_by_identity.setdefault(identity, []).append(line.no)
     for raw_ref in target_lines or []:
-        submitted_line, expected = _target_identity(raw_ref)
+        submitted_line, expected = _target_identity(raw_ref, target_ini)
         if submitted_line in resolved:
             raise te.ToggleEditError(
                 f"Record target line {submitted_line} was submitted more than once")
@@ -624,7 +670,7 @@ def _resolve_target_refs(doc, target_lines):
                 raise te.ToggleEditError(
                     f"Record target line {submitted_line} is stale: expected "
                     f"[{expected[0]}] drawindexed = {expected[1]}, {expected[2]}, "
-                    f"{expected[3]}; {detail}")
+                    f"{expected[3]} (occurrence {expected[4]}); {detail}")
             resolved_line = candidates[0]
 
         previous = used_current.get(resolved_line)

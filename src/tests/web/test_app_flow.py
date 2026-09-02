@@ -349,7 +349,11 @@ def test_record_scopes_targets_and_keeps_touched_mesh_snapshots(
         "var": "toggle", "value": "0", "negate": False,
     }]]
     body["sources"] = [{"ini": "RecordScope.ini", "line": 10,
-                         "section": "TextureOverrideBody"}]
+                         "section": "TextureOverrideBody",
+                         "occurrence": {
+                             "section": "TextureOverrideBody",
+                             "ordinal": 0, "path": [],
+                         }}]
 
     for name, component, line, conditions in [
         ("Face-RecordScope-0", "Face RecordScope", 20, []),
@@ -361,7 +365,12 @@ def test_record_scopes_targets_and_keeps_touched_mesh_snapshots(
         entry["component"] = component
         entry["conditions"] = conditions
         entry["sources"] = [{"ini": "RecordScope.ini", "line": line,
-                              "section": "TextureOverrideBody"}]
+                              "section": "TextureOverrideBody",
+                              "occurrence": {
+                                  "section": "TextureOverrideBody",
+                                  "ordinal": (1 if line == 20 else 2),
+                                  "path": [],
+                              }}]
         entry["texture_variants"] = []
         entry["shape_targets"] = []
         payload["meshes"][name] = entry
@@ -402,9 +411,74 @@ def test_record_scopes_targets_and_keeps_touched_mesh_snapshots(
         assert call[0:3] == ["RecordScope", "RecordScope.ini", "KeyRecordScope"]
         assert call[3] == {"0": [10, 20], "1": [], "2": [20]}
         assert call[4] == [
-            {"line": 10, "section": "TextureOverrideBody", "drawindexed": [3, 0, 0]},
-            {"line": 20, "section": "TextureOverrideBody", "drawindexed": [3, 0, 0]},
+            {"ini": "RecordScope.ini", "line": 10, "section": "TextureOverrideBody", "drawindexed": [3, 0, 0],
+             "occurrence": {"section": "TextureOverrideBody", "ordinal": 0, "path": []}},
+            {"ini": "RecordScope.ini", "line": 20, "section": "TextureOverrideBody", "drawindexed": [3, 0, 0],
+             "occurrence": {"section": "TextureOverrideBody", "ordinal": 1, "path": []}},
         ]
+    finally:
+        context.close()
+
+
+def test_record_uses_source_conditions_for_deduplicated_meshes(
+        edge_browser, frontend_url):
+    payload = _payload("RecordSources")
+    body = payload["meshes"]["Body-RecordSources-0"]
+    body["conditions"] = [
+        [{"var": "toggle", "value": "0", "negate": False}],
+        [{"var": "other", "value": "1", "negate": False}],
+    ]
+    body["sources"] = [
+        {
+            "ini": "RecordSources.ini", "line": 10,
+            "section": "TextureOverrideBody",
+            "occurrence": {
+                "section": "TextureOverrideBody", "ordinal": 0, "path": [],
+            },
+            "conditions": [[{
+                "var": "toggle", "value": "0", "negate": False,
+            }]],
+        },
+        {
+            "ini": "RecordSources.ini", "line": 20,
+            "section": "TextureOverrideBody",
+            "occurrence": {
+                "section": "TextureOverrideBody", "ordinal": 1, "path": [],
+            },
+            "conditions": [[{
+                "var": "other", "value": "1", "negate": False,
+            }]],
+        },
+    ]
+    payload["controls"]["toggles"]["KeyOther"] = {
+        "name": "Other", "ini": "RecordSources.ini", "section": "KeyOther",
+        "wired": True,
+        "vars": [{"var": "other", "default": "1", "values": ["0", "1"]}],
+    }
+    payload["state"]["defaults"]["other"] = "1"
+    context, page = _page(
+        edge_browser, frontend_url, {"RecordSources": payload})
+    try:
+        _open(page, "RecordSources")
+        page.locator(".draw-item").first.wait_for()
+        page.evaluate("""
+          () => {
+            window.pywebview.api.get_record_positions = async () => ({
+              positions: 2, vars: ['toggle'],
+            });
+          }
+        """)
+
+        page.locator(".toggle-item").first.locator(
+            "[title^='Record']").click()
+        page.locator(".toggle-row.recording").wait_for()
+        page.locator(".toggle-item:has(.toggle-row.recording) .toggle-record-save").click()
+        page.wait_for_function("window.__fakeApi.calls.recordToggle.length === 1")
+
+        call = page.evaluate("window.__fakeApi.calls.recordToggle[0]")
+        assert call[3] == {"0": [10], "1": []}
+        assert [ref["line"] for ref in call[4]] == [10]
+        assert call[4][0]["occurrence"]["ordinal"] == 0
     finally:
         context.close()
 
@@ -417,6 +491,7 @@ def test_add_toggle_refreshes_mesh_provenance_before_record(
     body["sources"] = [{
         "ini": "RecordAdd.ini", "line": 10,
         "section": "TextureOverrideBody",
+        "occurrence": {"section": "TextureOverrideBody", "ordinal": 0, "path": []},
     }]
     context, page = _page(
         edge_browser, frontend_url, {"RecordAdd": payload})
@@ -439,6 +514,7 @@ def test_add_toggle_refreshes_mesh_provenance_before_record(
                 sources: [{
                   ini: 'RecordAdd.ini', line: 17,
                   section: 'TextureOverrideBody',
+                  occurrence: {section: 'TextureOverrideBody', ordinal: 0, path: []},
                 }],
                 identity: response.meshes['Body-RecordAdd-0'].identity || null,
               },
@@ -474,8 +550,106 @@ def test_add_toggle_refreshes_mesh_provenance_before_record(
         assert call[4][0]["line"] == 17
         assert call[4][0]["section"] == "TextureOverrideBody"
         assert call[4][0]["drawindexed"] == [3, 0, 0]
+        assert call[4][0]["occurrence"]["ordinal"] == 0
     finally:
         context.close()
+
+
+def test_edit_toggle_refreshes_mesh_provenance_before_record(
+        edge_browser, frontend_url):
+    payload = _payload("RecordEdit")
+    context, page = _page(
+        edge_browser, frontend_url, {"RecordEdit": payload})
+    try:
+        _open(page, "RecordEdit")
+        page.locator(".draw-item").first.wait_for()
+        page.evaluate("""
+          () => {
+            const state = window.__fakeApi;
+            const response = state.responses.RecordEdit;
+            response.meshSemantics = {
+              ["Body-RecordEdit-0"]: {
+                conditions: [],
+                sources: [{
+                  ini: 'RecordEdit.ini', line: 17,
+                  section: 'TextureOverrideBody',
+                  occurrence: {section: 'TextureOverrideBody', ordinal: 0, path: []},
+                }],
+              },
+            };
+            state.editToggleCalls = [];
+            window.pywebview.api.get_toggle_details = async () => ({
+              name: 'Toggle RecordEdit', key: '1', back: '',
+              vars: {toggle: ['0', '1']},
+            });
+            window.pywebview.api.edit_toggle = async (...args) => {
+              state.editToggleCalls.push(args);
+              return {ok: true};
+            };
+          }
+        """)
+
+        page.locator("#toggle-list [title='Edit toggle']").click()
+        page.locator("#toggle-modal-backdrop.show").wait_for()
+        page.wait_for_function("document.querySelector('#tm-name').value !== ''")
+        page.locator("#tm-name").fill("Edited")
+        page.locator("#tm-save").click()
+
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].userData.sources[0].line === 17")
+        assert page.evaluate("window.__fakeApi.editToggleCalls.length") == 1
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == [
+            "RecordEdit"]
+    finally:
+        context.close()
+
+
+def test_present_delete_refreshes_mesh_provenance_without_reload(
+        edge_browser, frontend_url):
+    payload = _present_payload("PresentDelete")
+    context, page = _page(
+        edge_browser, frontend_url, {"PresentDelete": payload})
+    try:
+        _open(page, "PresentDelete")
+        page.locator(".draw-item").first.wait_for()
+        page.evaluate("""
+          () => {
+            const state = window.__fakeApi;
+            const response = state.responses.PresentDelete;
+            response.controls.present.item = null;
+            response.meshSemantics = {
+              ["Body-PresentDelete-0"]: {
+                conditions: [],
+                sources: [{
+                  ini: 'PresentDelete.ini', line: 17,
+                  section: 'TextureOverrideBody',
+                  occurrence: {section: 'TextureOverrideBody', ordinal: 0, path: []},
+                }],
+              },
+            };
+            state.deletePresentCalls = [];
+            window.pywebview.api.delete_present = async path => {
+              state.deletePresentCalls.push(path);
+              return {ok: true};
+            };
+          }
+        """)
+        page.locator("#present-action-btn").click()
+        page.locator("#present-key-remove").click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
+
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].userData.sources[0].line === 17")
+        assert page.evaluate("window.__fakeApi.deletePresentCalls") == [
+            "PresentDelete"]
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == [
+            "PresentDelete"]
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == [
+            "PresentDelete"]
+    finally:
+        context.close()
+
 
 def test_reload_preserves_camera_but_switching_mod_resets_it(
         edge_browser, frontend_url):

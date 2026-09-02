@@ -105,7 +105,11 @@ def _payload(label="A"):
                 }],
                 "conditions": [],
                 "sources": [{"ini": f"{label}.ini", "line": 10,
-                              "section": "TextureOverrideBody"}],
+                              "section": "TextureOverrideBody",
+                              "occurrence": {
+                                  "section": "TextureOverrideBody",
+                                  "ordinal": 0, "path": [],
+                              }}],
             },
         },
         "texture_pools": {"p0": texture_pool},
@@ -223,7 +227,11 @@ def _construction_failure_payload():
         "pos": "!",  # invalid base64: decodeF32 must reject this buffer
         "idx": _u32(0, 1, 2),
         "conditions": [],
-        "sources": [{"ini": "Broken.ini", "line": 20}],
+        "sources": [{"ini": "Broken.ini", "line": 20,
+                      "occurrence": {
+                          "section": "TextureOverrideBody",
+                          "ordinal": 1, "path": [],
+                      }}],
     }
     return payload
 

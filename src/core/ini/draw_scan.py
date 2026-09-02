@@ -360,10 +360,16 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 for frame in cond_stack:
                     combined = dnf_and(combined, frame["cur"])
                 conditions = normalize_dnf(combined, toggle_vars, var_prefix)
+                source = line_source(raw)
+                if source:
+                    source = {
+                        **source,
+                        "occurrence": occurrence.to_dict(),
+                    }
                 info["draws"].append(AuthoredDrawCall(
                     count=int(match.group(1)), start=int(match.group(2)),
                     base=int(match.group(3)), conditions=conditions,
-                    source=line_source(raw),
+                    source=source,
                     occurrence=occurrence,
                     index_resource=info.get("_cur_ib"),
                     diffuse_variants=_effective_role_assignments(
