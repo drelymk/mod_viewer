@@ -206,13 +206,13 @@ function applyParsedTexture(texture, parsed) {
   texture.needsUpdate = true;
 }
 
-function fetchDDSIntoTexture(texture, url, onLoad, onError) {
+function fetchDDSIntoTexture(texture, url, onLoad, onError, shouldApply) {
   return fetch(url, {cache: 'no-store'}).then(response => {
     if (!response.ok) throw new Error(`DDS request failed (${response.status})`);
     return response.arrayBuffer();
   }).then(bytes => {
     const parsed = parseDDS(bytes);
-    applyParsedTexture(texture, parsed);
+    if (!shouldApply || shouldApply()) applyParsedTexture(texture, parsed);
     onLoad?.(texture);
     return texture;
   }).catch(error => {
@@ -235,6 +235,8 @@ export function loadDDSTexture(url, onLoad, onError) {
 }
 
 /** Fetch a fresh DDS into an existing texture object. */
-export function reloadDDSTexture(texture, url, onLoad, onError) {
-  return fetchDDSIntoTexture(texture, url, onLoad, onError);
+export function reloadDDSTexture(
+    texture, url, onLoad, onError, shouldApply) {
+  return fetchDDSIntoTexture(
+    texture, url, onLoad, onError, shouldApply);
 }

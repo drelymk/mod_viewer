@@ -177,7 +177,10 @@ function reloadNativeTexture(key, uri, requestUri, texture, token) {
         key, uri, reloadUri(pngFallbackUri(uri), token), null, token, false);
       fallbackPromise.then(resolve, reject);
     };
-    reloadDDSTexture(texture, requestUri, onLoad, onError).catch(error => {
+    reloadDDSTexture(
+      texture, requestUri, onLoad, onError,
+      () => reloadTokens.get(key) === token && registry[key] === uri,
+    ).catch(error => {
       if (!errorHandled) reject(error);
     });
   });
