@@ -136,7 +136,8 @@ function renderSaveSuccess(result, targetCount) {
     const warning = document.createElement('p');
     warning.className = 'texture-bake-warning texture-bake-warning-unknown';
     warning.textContent = 'The texture was saved, but its Color metadata could '
-      + 'not be cleared. Reopen the mod to retry the cleanup.';
+      + 'not be cleared. Resolve the metadata write failure before reopening '
+      + 'the mod.';
     body.appendChild(warning);
   }
   setSaveAction();
@@ -157,8 +158,19 @@ async function synchronizeCommittedSave(state, result) {
     && samePath(viewerState.currentModPath, state.modPath);
   if (!sameLoadedMod) return false;
 
+  const retryMetadataClear = result.warning === 'color_state_reset_failed';
   meshes.forEach(mesh => resetMeshColorAdjustment(
-    mesh, {persist: false, render: false}));
+    mesh, {persist: retryMetadataClear, render: false}));
+  if (retryMetadataClear) {
+    try {
+      await Promise.all(meshes.map(mesh =>
+        flushMeshColorAdjustmentPersistence(mesh)));
+      if (meshes.length) delete result.warning;
+    } catch (_metadataError) {
+      // Keep the warning visible when the per-mesh recovery write also fails.
+      result.warning = 'color_state_reset_failed';
+    }
+  }
   await reloadTextures(affectedKeys, {force: true});
   notifyMeshStateChanged(meshes);
   window.dispatchEvent(new CustomEvent('mod-viewer-texture-saved', {

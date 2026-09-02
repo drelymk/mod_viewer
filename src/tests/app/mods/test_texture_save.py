@@ -6,7 +6,9 @@ import struct
 import pytest
 
 from app.mods import texture_save
-from core.textures.color_adjustment import prepare_color_adjustment
+from core.textures.color_adjustment import (
+    apply_prepared_color_adjustment, prepare_color_adjustment,
+)
 from core.textures.dds import inspect_dds_layout
 from core.textures.uv_coverage import UVCoverage
 
@@ -62,7 +64,7 @@ def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatc
         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
         texture_save, "_save_bc7_blocks",
-        lambda *args, **kwargs: (original, (bytearray([1]),), stats))
+        lambda *args, **kwargs: (original, stats))
 
     result = texture_save.save_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"},
@@ -107,8 +109,7 @@ def test_save_preparation_keeps_only_bc7_intent_and_target_coverage(
     group = {}
     parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"), groups=())
     geometry = SimpleNamespace(
-        indices=(0, 1, 2), source_uvs=(), triangle_count=1,
-        degenerate_triangle_count=0)
+        indices=(0, 1, 2), source_uvs=())
     coverage = UVCoverage(
         4, 4, bytearray([1] + [0] * 15), 1, (0, 0, 0, 0), 1, 0)
     monkeypatch.setattr(
@@ -133,6 +134,56 @@ def test_save_preparation_keeps_only_bc7_intent_and_target_coverage(
     assert prepared.targets[0].pixel_coverage is coverage
     assert not hasattr(prepared, "safe_masks")
     assert not hasattr(prepared, "target_pixel_masks")
+
+
+def _single_intent_claims(width, height, selected):
+    return [
+        1 if (x, y) in selected else 0
+        for y in range(height)
+        for x in range(width)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "selected", "expected_changed", "expected_total"),
+    [
+        (8, 8, {(x, y) for y in range(8) for x in range(8)}, 64, 64),
+        (8, 8, {(x, y) for y in range(4) for x in range(4)}, 16, 64),
+        (15, 9, {(x, y) for y in range(9) for x in range(15)}, 135, 135),
+    ],
+)
+def test_single_intent_mip_counts_keep_exact_weighting(
+        width, height, selected, expected_changed, expected_total):
+    adjustment = prepare_color_adjustment({"brightness": 1.5})
+    prepared = SimpleNamespace(
+        layout=SimpleNamespace(mips=(SimpleNamespace(
+            width=width, height=height),)),
+        mip0_claims=_single_intent_claims(width, height, selected),
+        intent_adjustments=(None, adjustment),
+    )
+    state = texture_save._bc7_intent_level(prepared)
+    base = (100, 100, 100)
+    base_float = tuple(channel / 255.0 for channel in base)
+    adjusted = apply_prepared_color_adjustment(
+        base_float, adjustment)
+    target_width, target_height = width, height
+    while (target_width, target_height) != (1, 1):
+        target_width = max(1, target_width // 2)
+        target_height = max(1, target_height // 2)
+        state = texture_save._bc7_next_intent_level(
+            state, target_width, target_height, 2)
+        assert all(0 <= changed <= total for changed, total in zip(
+            state["changed_counts"], state["total_counts"]))
+
+    changed = state["changed_counts"][0]
+    total = state["total_counts"][0]
+    assert (changed, total) == (expected_changed, expected_total)
+    expected = tuple(min(255, max(0, round(
+        (base_float[channel] * (total - changed)
+         + adjusted[channel] * changed) / total * 255.0)))
+                      for channel in range(3))
+    assert texture_save._bc7_intent_rgb(
+        base, state, 0, (None, adjustment)) == expected
 
 
 def test_save_rejects_non_bc7_dds(tmp_path):

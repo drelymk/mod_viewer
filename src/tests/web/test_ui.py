@@ -1475,7 +1475,8 @@ def test_texture_save_resets_all_committed_meshes_and_refreshes_affected_keys(
     payload["metadata"]["mesh_color_adjustments"][
         "Face BakeConfirm::3,0,0"] = {"hue": 45}
     payload["textureSaveResult"] = {
-        "status": "ok", "tex_key": dds_key,
+        "status": "ok", "warning": "color_state_reset_failed",
+        "tex_key": dds_key,
         "affected_tex_keys": [dds_key],
         "saved_meshes": [{
             "semantic_key": "Body-BakeConfirm-0",
@@ -1546,9 +1547,43 @@ def test_texture_save_resets_all_committed_meshes_and_refreshes_affected_keys(
         assert page.evaluate(
             "window.modViewer.activeMeshes[1].userData.colorAdjustment.hue") == 0
         assert page.evaluate(
-            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 2
+        assert "Color metadata" not in page.locator(
+            "#texture-bake-body").inner_text()
         page.wait_for_function(
             "window.__fakeApi.calls.diagnostics.length >= 2")
+    finally:
+        context.close()
+
+
+def test_texture_save_keeps_warning_when_metadata_recovery_fails(
+        edge_browser, frontend_url):
+    payload, _tex_key = _bake_test_payload("BakeCleanupFailure", _PNG_URI)
+    payload["textureSaveResult"]["warning"] = "color_state_reset_failed"
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakeCleanupFailure": payload})
+    try:
+        _open(page, "BakeCleanupFailure")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.evaluate("""() => {
+          window.pywebview.api.save_mesh_color_adjustment = async (...args) => {
+              window.__fakeApi.calls.saveMeshColorAdjustment.push(args);
+              return {error: 'metadata write failed'};
+            };
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.saveTextureColor.length === 1")
+        page.locator("#texture-bake-body", has_text="TEXTURE SAVED").wait_for()
+        details = page.locator("#texture-bake-body").inner_text()
+        assert "Color metadata" in details
+        assert "Resolve the metadata write failure" in details
+        assert "Reopen the mod to retry" not in details
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 1
     finally:
         context.close()
 

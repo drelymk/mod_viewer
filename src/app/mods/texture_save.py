@@ -62,8 +62,6 @@ class TextureSaveError(ValueError):
 class _PreparedGeometry:
     indices: tuple
     source_uvs: tuple
-    triangle_count: int
-    degenerate_triangle_count: int
 
 
 @dataclass(frozen=True)
@@ -249,9 +247,7 @@ def _prepare_uv_geometry(draw, group, mod_dir, buffers, sparse_shape_cache,
         indices = _unpack_indices(packed.indices)
         source_uvs = _unpack_source_uvs(packed.texcoords)
         return _PreparedGeometry(
-            indices=indices, source_uvs=source_uvs,
-            triangle_count=len(indices) // 3,
-            degenerate_triangle_count=0)
+            indices=indices, source_uvs=source_uvs)
     except TextureSaveError:
         raise
     except Exception as error:
@@ -339,8 +335,7 @@ def _resolve_save_request(context, overrides, active_mesh_keys,
         context.mod_dir, selected_texture_key, selected=True)
     info = _inspect_save_texture(selected_path)
     parsed, draws = resolved_draws(context, overrides)
-    selected_draw = draws.get(selected_semantic_key)
-    if selected_draw is None:
+    if draws.get(selected_semantic_key) is None:
         raise TextureSaveError(
             "mesh_not_found", "The selected mesh is no longer available.")
     selected_identity = _physical_identity(selected_path)
@@ -390,7 +385,7 @@ def _resolve_save_request(context, overrides, active_mesh_keys,
             message += f", and {uses[-1]}."
         raise TextureSaveError(
             "cross_role_texture_usage", message, "unsupported")
-    return entries, selected_path, info, parsed, selected_draw, draws
+    return entries, selected_path, info, parsed, draws
 
 
 def _draw_metadata_key(draw, group):
@@ -400,11 +395,6 @@ def _draw_metadata_key(draw, group):
         return mesh_identity_for_draw(draw, group).key
     except AttributeError:
         return None
-
-
-def _save_target_value(target, key):
-    """Read one field from the strict snake-case Save request schema."""
-    return target.get(key)
 
 
 def _adjustment_signature(adjustment):
@@ -485,33 +475,49 @@ def _downsample_intent_counts(claims, counts, source_width, source_height,
     return result
 
 
-def _downsample_single_intent_counts(changed, source_width, source_height,
-                                     target_width, target_height,
-                                     source_max_count=1):
-    """Downsample only changed coverage for the common one-adjustment case."""
+def _downsample_single_intent_counts(
+        changed_counts, total_counts, source_width, source_height,
+        target_width, target_height):
+    """Downsample changed and total mip-0 weights for one adjustment."""
     source_pixels = source_width * source_height
-    if len(changed) != source_pixels:
+    if (len(changed_counts) != source_pixels
+            or len(total_counts) != source_pixels):
         raise TextureSaveError(
             "texture_validation_failed",
             "Mip color intent does not match the source texture size.")
+    if any(changed > total for changed, total in zip(
+            changed_counts, total_counts)):
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Changed color intent exceeds total mip weight.")
     max_region_width = (source_width + target_width - 1) // target_width
     max_region_height = (source_height + target_height - 1) // target_height
-    max_count = source_max_count * max_region_width * max_region_height
+    max_count = (max(total_counts, default=0) * max_region_width
+                 * max_region_height)
     typecode = "H" if max_count <= 0xFFFF else "I"
-    result = array(typecode, [0]) * (target_width * target_height)
+    changed_result = array(typecode, [0]) * (target_width * target_height)
+    total_result = array(typecode, [0]) * (target_width * target_height)
     for y in range(target_height):
         source_y0, source_y1 = _intent_region_bounds(
             y, source_height, target_height)
         for x in range(target_width):
             source_x0, source_x1 = _intent_region_bounds(
                 x, source_width, target_width)
+            changed = 0
             total = 0
             for source_y in range(source_y0, source_y1):
                 start = source_y * source_width + source_x0
                 end = source_y * source_width + source_x1
-                total += sum(changed[start:end])
-            result[y * target_width + x] = total
-    return result, max_count
+                changed += sum(changed_counts[start:end])
+                total += sum(total_counts[start:end])
+            if changed > total:
+                raise TextureSaveError(
+                    "texture_validation_failed",
+                    "Changed color intent exceeds total mip weight.")
+            target_index = y * target_width + x
+            changed_result[target_index] = changed
+            total_result[target_index] = total
+    return changed_result, total_result
 
 
 def _bc7_intent_level(prepared):
@@ -525,18 +531,18 @@ def _bc7_intent_level(prepared):
             "texture_validation_failed",
             "Mip-0 color intent does not match the source texture size.")
     class_count = len(adjustments)
-    changed = bytearray(1 if value else 0 for value in claims)
+    changed_counts = bytearray(1 if value else 0 for value in claims)
+    total_counts = bytearray(b"\x01") * len(claims)
     return {
         "level": 0,
         "width": base_mip.width,
         "height": base_mip.height,
         "claims": claims,
-        "changed": changed,
+        "changed_counts": changed_counts,
+        "total_counts": total_counts,
         "single": class_count == 2,
         "counts": None,
         "max_count": 1,
-        "parent_width": None,
-        "parent_height": None,
         "affected_blocks": getattr(prepared, "mip0_affected_blocks", None),
     }
 
@@ -545,16 +551,18 @@ def _bc7_next_intent_level(state, target_width, target_height, class_count):
     """Advance direct-save intent by exactly one authored mip."""
     source_width, source_height = state["width"], state["height"]
     if state["single"]:
-        changed, max_count = _downsample_single_intent_counts(
-            state["changed"], source_width, source_height,
-            target_width, target_height, state["max_count"])
+        changed_counts, total_counts = _downsample_single_intent_counts(
+            state["changed_counts"], state["total_counts"], source_width,
+            source_height, target_width, target_height)
         counts = None
+        max_count = None
     else:
+        total_counts = None
         counts = _downsample_intent_counts(
             state["claims"] if state["counts"] is None else None,
             state["counts"], source_width, source_height,
             target_width, target_height, class_count, state["max_count"])
-        changed = bytearray(
+        changed_counts = bytearray(
             1 if any(count[index] for count in counts[1:]) else 0
             for index in range(target_width * target_height))
         max_count = state["max_count"] * (
@@ -565,12 +573,11 @@ def _bc7_next_intent_level(state, target_width, target_height, class_count):
         "width": target_width,
         "height": target_height,
         "claims": None,
-        "changed": changed,
+        "changed_counts": changed_counts,
+        "total_counts": total_counts if state["single"] else None,
         "single": state["single"],
         "counts": counts,
         "max_count": max_count,
-        "parent_width": source_width,
-        "parent_height": source_height,
         "affected_blocks": None,
     }
 
@@ -607,14 +614,14 @@ def _bc7_intent_rgb(source_rgb, state, pixel, adjustments):
             source_rgb, adjustments[intent_class])
 
     if state["single"]:
-        changed_count = state["changed"][pixel]
-        if not changed_count:
+        changed_count = state["changed_counts"][pixel]
+        total_count = state["total_counts"][pixel]
+        if changed_count > total_count:
+            raise TextureSaveError(
+                "texture_validation_failed",
+                "Changed color intent exceeds total mip weight.")
+        if not changed_count or not total_count:
             return source_rgb
-        source_x0, source_x1 = _intent_region_bounds(
-            pixel % state["width"], state["parent_width"], state["width"])
-        source_y0, source_y1 = _intent_region_bounds(
-            pixel // state["width"], state["parent_height"], state["height"])
-        total_count = (source_x1 - source_x0) * (source_y1 - source_y0)
         adjusted = apply_prepared_color_adjustment(base, adjustments[1])
         return tuple(min(255, max(0, round(value * 255.0)))
                       for value in (
@@ -679,7 +686,6 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
         else prepare_color_adjustment(adjustment)
         for adjustment in raw_adjustments)
     final = bytearray(original)
-    writable_masks = []
     state = _bc7_intent_level(prepared)
     touched = improved = unchanged = 0
     source_error = final_error = 0
@@ -694,8 +700,7 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
         affected = state["affected_blocks"]
         if affected is None:
             affected = _bc7_affected_blocks(
-                state["changed"], mip.width, mip.height, mip)
-        writable = bytearray(mip.units_x * mip.units_y)
+                state["changed_counts"], mip.width, mip.height, mip)
         started = time.perf_counter()
         if stage_callback is not None:
             stage_callback("bc7_decode_fit")
@@ -709,7 +714,6 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
                 _bc7_codec.recolor_block, source_block, target_pixels,
                 valid_width, valid_height, source_pixels)
             final[start:start + 16] = result.block
-            writable[block_index] = 1
             touched += 1
             improved += result.candidate_error < result.source_error
             unchanged += result.candidate_error == result.source_error
@@ -722,8 +726,7 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
             "texture save bc7 mip=%s size=%sx%s affected_blocks=%s "
             "improved_blocks=%s",
             level, mip.width, mip.height, len(affected),
-            sum(1 for index in affected if writable[index]))
-        writable_masks.append(writable)
+            len(affected))
     stats = BC7SaveStats(
         touched_blocks=touched, improved_blocks=improved,
         unchanged_blocks=unchanged, source_rgb_error=source_error,
@@ -743,7 +746,7 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
                 "source_rgb_error": source_error,
                 "final_rgb_error": final_error,
             })
-    return bytes(final), tuple(writable_masks), stats
+    return bytes(final), stats
 
 
 def _prepare_texture_save(context, overrides, active_mesh_keys,
@@ -755,8 +758,8 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     if any(not isinstance(target, dict) for target in targets):
         raise TextureSaveError(
             "stale_mesh_state", "The model changed before the texture save started.")
-    first_semantic_key = _save_target_value(targets[0], "semantic_key")
-    entries, selected_path, info, parsed, selected_draw, draws = \
+    first_semantic_key = targets[0].get("semantic_key")
+    entries, selected_path, info, parsed, draws = \
         _resolve_save_request(
             context, overrides, active_mesh_keys, first_semantic_key,
             selected_texture_key, texture_usage)
@@ -766,12 +769,11 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
             "invalid_dds", "The selected texture is not a valid supported DDS.")
 
     entry_by_key = {entry["semantic_key"]: entry for entry in entries}
-    draw_by_key = draws
     target_keys = set()
     requested_targets = []
     for target in targets:
-        semantic_key = _save_target_value(target, "semantic_key")
-        metadata_key = _save_target_value(target, "metadata_key")
+        semantic_key = target.get("semantic_key")
+        metadata_key = target.get("metadata_key")
         if (not isinstance(semantic_key, str) or not semantic_key
                 or semantic_key in target_keys
                 or not isinstance(metadata_key, str) or not metadata_key):
@@ -780,7 +782,7 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
                 "The texture save target identity is invalid.")
         target_keys.add(semantic_key)
         entry = entry_by_key.get(semantic_key)
-        draw_pair = draw_by_key.get(semantic_key)
+        draw_pair = draws.get(semantic_key)
         target_path = _texture_path(
             context.mod_dir,
             entry["texture_keys"]["diffuse"] if entry else None)
@@ -1035,7 +1037,7 @@ def save_texture_color(
             nonlocal stage
             stage = value
 
-        candidate, _writable_masks, bc7_stats = _save_bc7_blocks(
+        candidate, bc7_stats = _save_bc7_blocks(
             original, prepared, timings, stage_callback=set_stage)
         stage = "write"
         temporary = _write_temp(prepared.selected_path, candidate)

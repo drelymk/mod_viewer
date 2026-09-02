@@ -162,9 +162,9 @@ class ModPreview:
                 tex_key, targets, texture_usage)
             if result.get("status") == "ok":
                 keys = [
-                    target.get("metadata_key")
-                    for target in (targets if isinstance(targets, list) else [])
-                    if isinstance(target, dict)
+                    item.get("metadata_key")
+                    for item in (result.get("saved_meshes") or [])
+                    if isinstance(item, dict)
                 ]
                 try:
                     cleared = metadata.clear_mesh_color_adjustments(

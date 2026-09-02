@@ -287,13 +287,16 @@ def test_save_texture_color_forwards_complete_target_request(monkeypatch):
         "app.bridge.mod_preview.save_texture_color",
         lambda *args: captured.append(args) or {
             "status": "ok", "tex_key": "diffuse::body.dds",
+            "saved_meshes": [{
+                "semantic_key": "Body-1", "metadata_key": "Body::one",
+            }],
         })
     monkeypatch.setattr(
         "app.bridge.mod_preview.metadata.clear_mesh_color_adjustments",
         lambda folder, keys: cleared.append((folder, keys)) or {"saved": True})
 
     targets = [{
-        "semantic_key": "Body-1", "metadata_key": "Body::one",
+        "semantic_key": "Body-1", "metadata_key": "Request::not-committed",
         "adjustment": {"hue": 30},
     }]
     usage = [{
