@@ -16,9 +16,7 @@ from core.textures import encode_texture_file
 from core.mod_discovery import discover_ini_paths
 from core.ini.health import analyze_mod
 from app.mods.analysis import resolved_draws
-from app.mods.texture_bake import (
-    analyze_texture_bake, bake_mesh_texture_color, save_texture_color,
-)
+from app.mods.texture_save import save_texture_color
 from core.textures.profiles import texture_profile_for
 
 from app.assets import folders as asset_folders
@@ -153,52 +151,29 @@ class ModPreview:
         except Exception:
             return self._semantic_read_error()
 
-    def analyze_mesh_texture_bake(
-            self, folder_path, semantic_key, tex_key, texture_usage):
-        """Analyze selected-mesh DDS coverage without modifying the mod."""
-        try:
-            folder_path, overrides, _pending, context = \
-                self.authoritative_context(folder_path)
-            return analyze_texture_bake(
-                context, overrides, self._active_mesh_keys.get(folder_path),
-                semantic_key, tex_key, texture_usage)
-        except Exception:
-            return self._semantic_read_error()
-
-    def bake_mesh_texture_color(
-            self, folder_path, semantic_key, metadata_key, tex_key,
-            texture_usage, adjustment):
-        """Bake selected-mesh color into safe units of its mod DDS."""
-        try:
-            folder_path, overrides, _pending, context = \
-                self.authoritative_context(folder_path)
-            result = bake_mesh_texture_color(
-                context, overrides, self._active_mesh_keys.get(folder_path),
-                semantic_key, tex_key, texture_usage, adjustment,
-                metadata_key)
-            if result.get("status") != "ok":
-                return result
-            try:
-                from core.textures.color_adjustment import COLOR_DEFAULTS
-                reset = metadata.save_mesh_color_adjustment(
-                    folder_path, metadata_key, dict(COLOR_DEFAULTS))
-                if reset.get("error"):
-                    result["warning"] = "color_state_reset_failed"
-            except Exception:
-                result["warning"] = "color_state_reset_failed"
-            return result
-        except Exception:
-            return self._semantic_read_error()
-
     def save_texture_color(
             self, folder_path, tex_key, targets, texture_usage):
         """Save all captured Color changes that target one physical DDS."""
         try:
             folder_path, overrides, _pending, context = \
                 self.authoritative_context(folder_path)
-            return save_texture_color(
+            result = save_texture_color(
                 context, overrides, self._active_mesh_keys.get(folder_path),
                 tex_key, targets, texture_usage)
+            if result.get("status") == "ok":
+                keys = [
+                    target.get("metadata_key")
+                    for target in (targets if isinstance(targets, list) else [])
+                    if isinstance(target, dict)
+                ]
+                try:
+                    cleared = metadata.clear_mesh_color_adjustments(
+                        folder_path, keys)
+                    if cleared.get("error"):
+                        result["warning"] = "color_state_reset_failed"
+                except Exception:
+                    result["warning"] = "color_state_reset_failed"
+            return result
         except Exception:
             return self._semantic_read_error()
 

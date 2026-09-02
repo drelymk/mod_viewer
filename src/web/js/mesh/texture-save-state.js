@@ -61,8 +61,6 @@ export function buildTextureUsageSnapshot() {
       };
       return {
         semantic_key: data.semanticKey || '',
-        // Keep the legacy alias for older bridge callers.
-        tex_key: textureKeys.diffuse,
         texture_keys: textureKeys,
       };
     });
@@ -138,16 +136,15 @@ function comparableState(state) {
     modPath: state?.modPath || null,
     texKey: state?.texKey || null,
     targets: publicTargets(state?.targets),
-    textureUsage: state?.textureUsage || [],
   };
 }
 
 /** Check that every identity and adjustment captured by the modal is current. */
-export function textureSaveStateMatches(mesh, snapshot) {
+export function textureSaveStateMatches(mesh, snapshot, current = null) {
   if (!snapshot || !activeMeshes.includes(mesh)) return false;
-  const current = captureTextureSaveState(mesh);
-  return samePath(current.modPath, snapshot.modPath)
-    && JSON.stringify(comparableState(current))
+  const actual = current || captureTextureSaveState(mesh);
+  return samePath(actual.modPath, snapshot.modPath)
+    && JSON.stringify(comparableState(actual))
       === JSON.stringify(comparableState(snapshot));
 }
 

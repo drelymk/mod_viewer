@@ -143,6 +143,32 @@ def save_mesh_color_adjustment(folder_path, mesh_key, adjustment):
         return _save(folder_path, data)
 
 
+def clear_mesh_color_adjustments(folder_path, mesh_keys):
+    """Atomically remove saved Color states for a completed texture save."""
+    if (not isinstance(mesh_keys, (list, tuple, set))
+            or any(not isinstance(key, str) or not key for key in mesh_keys)):
+        return {"saved": False, "error": "Invalid mesh metadata keys."}
+    keys = set(mesh_keys)
+    if not keys:
+        return {"saved": False}
+    with _LOCK:
+        data = load(folder_path)
+        raw_adjustments = data.get(MESH_COLOR_ADJUSTMENTS_KEY)
+        if not isinstance(raw_adjustments, dict):
+            return {"saved": False}
+        adjustments = mesh_color_adjustments(data=data)
+        existed = any(key in raw_adjustments or key in adjustments for key in keys)
+        for key in keys:
+            adjustments.pop(key, None)
+        if adjustments:
+            data[MESH_COLOR_ADJUSTMENTS_KEY] = adjustments
+        else:
+            data.pop(MESH_COLOR_ADJUSTMENTS_KEY, None)
+        if not existed:
+            return {"saved": False}
+        return _save(folder_path, data)
+
+
 def hydrate_mesh_color_adjustments(payload, data=None):
     """Project saved color state through canonical/legacy mesh identities."""
     saved = mesh_color_adjustments(data=data)

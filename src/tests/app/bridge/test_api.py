@@ -29,8 +29,6 @@ EXPECTED_API_METHODS = {
     "get_diagnostics",
     "get_ini_text",
     "get_mesh_semantics",
-    "analyze_mesh_texture_bake",
-    "bake_mesh_texture_color",
     "save_texture_color",
     "get_mod_folders",
     "get_panel_opacity",
@@ -169,22 +167,6 @@ def test_load_mod_forwards_disabled_ini_flag(monkeypatch):
     assert calls == [("mod", True)]
 
 
-def test_texture_bake_analysis_forwards_semantic_snapshot(monkeypatch):
-    api = ModViewerAPI()
-    calls = []
-    monkeypatch.setattr(
-        api._mod_preview, "analyze_mesh_texture_bake",
-        lambda *args: calls.append(args) or {"status": "ok"},
-    )
-
-    usage = [{"semantic_key": "Body-1", "tex_key": "diffuse::body.dds"}]
-    result = api.analyze_mesh_texture_bake(
-        "mod", "Body-1", "diffuse::body.dds", usage)
-
-    assert result == {"status": "ok"}
-    assert calls == [("mod", "Body-1", "diffuse::body.dds", usage)]
-
-
 def test_texture_save_forwards_targets_and_usage(monkeypatch):
     api = ModViewerAPI()
     calls = []
@@ -194,7 +176,14 @@ def test_texture_save_forwards_targets_and_usage(monkeypatch):
     )
     targets = [{"semantic_key": "Body-1", "metadata_key": "Body::one",
                 "adjustment": {"hue": 30}}]
-    usage = [{"semantic_key": "Body-1", "tex_key": "diffuse::body.dds"}]
+    usage = [{
+        "semantic_key": "Body-1",
+        "texture_keys": {
+            "diffuse": "diffuse::body.dds", "normal_map": None,
+            "normal_data": None, "light_map": None,
+            "material_map": None, "emission_map": None,
+        },
+    }]
 
     result = api.save_texture_color(
         "mod", "diffuse::body.dds", targets, usage)

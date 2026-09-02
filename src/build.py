@@ -7,7 +7,7 @@ Three.js is vendored, no internet connection.
     py -3 build.py                # single-file portable .exe (default)
     py -3 build.py --onedir       # folder build (much faster startup)
     py -3 build.py --skip-deps    # don't touch pip
-    py -3 build.py --refresh-assets   # re-download pinned assets and tools
+    py -3 build.py --refresh-assets   # re-download pinned browser assets
     py -3 build.py --rebuild-bootloader   # recompile PyInstaller's bootloader
 
 --rebuild-bootloader compiles PyInstaller's bootloader from source in an
@@ -103,15 +103,6 @@ ASSET_FILES = {
         "sha256": "f80f40d013f4d94aa089c68c673cae6a8ab45fb290970a696bc1dded312e3fc8",
     },
 }
-
-RUNTIME_TOOLS = os.path.join(HERE, "runtime_tools")
-RUNTIME_TOOL_FILES = {
-    "texconv.exe": {
-        "url": "https://github.com/microsoft/DirectXTex/releases/download/may2026/texconv.exe",
-        "sha256": "dcfdec10244e02cf5037fba089c55fb7e1326b1c8181742d77d15fa5cb5eef06",
-    },
-}
-
 
 def log(msg):
     print(f"[build] {msg}", flush=True)
@@ -384,31 +375,6 @@ def fetch_assets(refresh=False):
         download_verified_file(dest, spec, refresh=refresh, label=rel)
 
 
-def fetch_runtime_tools(refresh=False):
-    """Download pinned runtime tools used by the packaged application."""
-    for rel, spec in RUNTIME_TOOL_FILES.items():
-        dest = os.path.join(RUNTIME_TOOLS, *rel.split("/"))
-        download_verified_file(dest, spec, refresh=refresh, label=rel)
-
-
-def verify_runtime_tools():
-    missing = []
-    mismatched = []
-    for rel, spec in RUNTIME_TOOL_FILES.items():
-        path = os.path.join(RUNTIME_TOOLS, *rel.split("/"))
-        if not os.path.isfile(path):
-            missing.append(rel)
-        else:
-            actual = sha256_file(path)
-            if actual != spec["sha256"]:
-                mismatched.append(
-                    f"{rel} (expected {spec['sha256']}, got {actual})")
-    if missing:
-        raise RuntimeError(f"missing runtime tools: {missing}")
-    if mismatched:
-        raise RuntimeError(f"runtime tool SHA-256 mismatch: {mismatched}")
-
-
 def verify_assets():
     missing = []
     mismatched = []
@@ -584,10 +550,8 @@ def build(onedir=False, console=False, python=None):
             "--noupx",
             # Three.js, served to the webview from a localhost port at runtime.
             "--add-data", f"{ASSETS}{os.pathsep}assets",
-            # DirectXTex is a runtime encoder, never browser-served data.
-            "--add-binary", f"{os.path.join(RUNTIME_TOOLS, 'texconv.exe')}{os.pathsep}runtime_tools",
-            # Make the licenses for bundled runtime tools available beside the
-            # packaged application rather than only in the source checkout.
+            # Make the third-party license notice available beside the packaged
+            # application rather than only in the source checkout.
             "--add-data", f"{THIRD_PARTY_NOTICES}{os.pathsep}.",
             # The HTML/CSS/JS UI, served from that same port.
             "--add-data", f"{WEB}{os.pathsep}web",
@@ -632,7 +596,7 @@ def main():
                     help="keep a console window open (useful for debugging)")
     ap.add_argument("--skip-deps", action="store_true", help="skip pip install")
     ap.add_argument("--refresh-assets", action="store_true",
-                    help="re-download pinned assets and runtime tools")
+                    help="re-download pinned browser assets")
     ap.add_argument("--rebuild-bootloader", action="store_true",
                     help="recompile PyInstaller's bootloader in an isolated venv "
                          "(clears most antivirus false positives; needs a C compiler). "
@@ -651,8 +615,6 @@ def main():
         install_deps()
     fetch_assets(refresh=args.refresh_assets)
     verify_assets()
-    fetch_runtime_tools(refresh=args.refresh_assets)
-    verify_runtime_tools()
     verify_web()
     verify_features()
     clean()

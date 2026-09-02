@@ -270,7 +270,7 @@ function buildRangeControl({
   return row;
 }
 
-function syncTextureBakeAction(section, mesh) {
+function syncTextureSaveAction(section, mesh) {
   const action = section?.querySelector('.inspector-texture-bake');
   if (!action) return;
   const hasTargets = getTextureSaveTargets(mesh).length > 0;
@@ -283,7 +283,7 @@ function updateColorAdjustment(section, mesh, field, controlValue,
   const next = getMeshColorAdjustment(mesh);
   next[field] = colorAdjustmentValue(field, controlValue);
   setMeshColorAdjustment(mesh, next, { persist, render: true });
-  syncTextureBakeAction(section, mesh);
+  syncTextureSaveAction(section, mesh);
 }
 
 function buildTextureSaveAction(section, mesh) {
@@ -307,7 +307,7 @@ function buildTextureSaveAction(section, mesh) {
       }
     });
     section.appendChild(bake);
-    syncTextureBakeAction(section, mesh);
+    syncTextureSaveAction(section, mesh);
   } else if (eligibility.reason === 'unsupported-texture-type') {
     addText(section, 'inspector-texture-bake-hint', eligibility.message);
   }
@@ -379,7 +379,7 @@ function buildColorSection(content, mesh) {
     const next = getMeshColorAdjustment(mesh);
     next.tint = tintInput.value;
     setMeshColorAdjustment(mesh, next, { persist, render: true });
-    syncTextureBakeAction(section, mesh);
+    syncTextureSaveAction(section, mesh);
   };
   tintInput.addEventListener('input', () => applyTint(false));
   tintInput.addEventListener('change', () => applyTint(true));
@@ -426,7 +426,7 @@ function updateColorControlState(content, mesh) {
   const tintValue = section.querySelector('[data-color-tint-value]');
   if (tintInput) tintInput.value = adjustment.tint;
   if (tintValue) tintValue.textContent = adjustment.tint.toUpperCase();
-  syncTextureBakeAction(section, mesh);
+  syncTextureSaveAction(section, mesh);
   return true;
 }
 

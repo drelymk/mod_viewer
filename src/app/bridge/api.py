@@ -157,18 +157,6 @@ class ModViewerAPI:
     def get_mesh_semantics(self, folder_path):
         return self._mod_preview.get_mesh_semantics(folder_path)
 
-    def analyze_mesh_texture_bake(
-            self, folder_path, semantic_key, tex_key, texture_usage):
-        return self._mod_preview.analyze_mesh_texture_bake(
-            folder_path, semantic_key, tex_key, texture_usage)
-
-    def bake_mesh_texture_color(
-            self, folder_path, semantic_key, metadata_key, tex_key,
-            texture_usage, adjustment):
-        return self._mod_preview.bake_mesh_texture_color(
-            folder_path, semantic_key, metadata_key, tex_key,
-            texture_usage, adjustment)
-
     def save_texture_color(self, folder_path, tex_key, targets, texture_usage):
         return self._mod_preview.save_texture_color(
             folder_path, tex_key, targets, texture_usage)

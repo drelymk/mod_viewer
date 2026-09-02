@@ -55,16 +55,6 @@ def vendor_dir():
     return os.path.join(app_root(), "assets")
 
 
-def runtime_tools_dir():
-    """Directory containing bundled non-browser runtime executables."""
-    return os.path.join(app_root(), "runtime_tools")
-
-
-def texconv_path():
-    """Return the bundled texconv path when it is present."""
-    return os.path.join(runtime_tools_dir(), "texconv.exe")
-
-
 def has_vendored_three():
     required = (
         "three.core.js",

@@ -132,20 +132,18 @@ function renderSaveSuccess(result, targetCount) {
   rows.className = 'texture-bake-details';
   addDetail(rows, 'Backup', result.backup?.file || 'Created');
   body.appendChild(rows);
-  const protectedUnits = Number(result.patched?.alpha_protected_units || 0);
-  if (protectedUnits > 0) {
+  if (result.warning === 'color_state_reset_failed') {
     const warning = document.createElement('p');
-    warning.className = 'texture-bake-warning texture-bake-warning-ok';
-    warning.textContent = 'Some lower mip levels were kept unchanged because '
-      + 'their alpha channel could not be reproduced exactly.';
-    const levels = result.patched?.alpha_protected_levels || [];
-    if (levels.length) warning.textContent += ` Affected levels: ${levels.join(', ')}.`;
+    warning.className = 'texture-bake-warning texture-bake-warning-unknown';
+    warning.textContent = 'The texture was saved, but its Color metadata could '
+      + 'not be cleared. Reopen the mod to retry the cleanup.';
     body.appendChild(warning);
   }
   setSaveAction();
 }
 
 async function synchronizeCommittedSave(state, result) {
+  const affectedKeys = affectedTextureKeys(result);
   const saved = Array.isArray(result.saved_meshes) ? result.saved_meshes : [];
   const savedKeys = new Set(saved.map(item =>
     `${item?.semantic_key || ''}\u0000${item?.metadata_key || ''}`));
@@ -160,14 +158,13 @@ async function synchronizeCommittedSave(state, result) {
   if (!sameLoadedMod) return false;
 
   meshes.forEach(mesh => resetMeshColorAdjustment(
-    mesh, {persist: true, render: false}));
-  await Promise.all(meshes.map(mesh => flushMeshColorAdjustmentPersistence(mesh)));
-  await reloadTextures(affectedTextureKeys(result), {force: true});
+    mesh, {persist: false, render: false}));
+  await reloadTextures(affectedKeys, {force: true});
   notifyMeshStateChanged(meshes);
   window.dispatchEvent(new CustomEvent('mod-viewer-texture-saved', {
     detail: {
       texKey: result.tex_key,
-      affectedTexKeys: affectedTextureKeys(result),
+      affectedTexKeys: affectedKeys,
       savedMeshes: saved,
     },
   }));
@@ -188,16 +185,29 @@ async function runSave(job) {
   loading.textContent = 'Saving color changes to the texture…';
   body.appendChild(loading);
 
-  await Promise.all((job.state.targets || []).map(target =>
-    flushMeshColorAdjustmentPersistence(target.mesh)));
-  if ((typeof job.isCurrent === 'function' && !job.isCurrent())
-      || !textureSaveStateMatches(job.mesh, job.state)) {
+  try {
+    await Promise.all((job.state.targets || []).map(target =>
+      flushMeshColorAdjustmentPersistence(target.mesh)));
+  } catch (_persistenceError) {
     saving = false;
-    const refreshed = captureTextureSaveState(job.mesh);
-    pendingSave = {mesh: job.mesh, isCurrent: job.isCurrent, state: refreshed};
-    renderSavePrompt(refreshed);
+    renderSaveError({
+      status: 'error',
+      error: 'The pending Color metadata could not be saved. '
+        + 'Texture saving was cancelled.',
+    });
     return null;
   }
+  const currentState = captureTextureSaveState(job.mesh);
+  if ((typeof job.isCurrent === 'function' && !job.isCurrent())
+      || !textureSaveStateMatches(job.mesh, job.state, currentState)) {
+    saving = false;
+    pendingSave = {mesh: job.mesh, isCurrent: job.isCurrent, state: currentState};
+    renderSavePrompt(currentState);
+    return null;
+  }
+  // The usage snapshot is informational for confirmation; always send the
+  // fresh role snapshot captured immediately before the destructive request.
+  job.state = currentState;
 
   let result;
   try {
@@ -207,8 +217,8 @@ async function runSave(job) {
   } catch (_requestError) {
     result = {status: 'error', error: 'Texture save failed.'};
   }
-  saving = false;
   if (result?.status !== 'ok') {
+    saving = false;
     renderSaveError(result);
     return result;
   }
@@ -220,6 +230,8 @@ async function runSave(job) {
       error: 'Texture saved, but the viewer could not refresh it.',
     });
     return result;
+  } finally {
+    saving = false;
   }
   if (typeof job.isCurrent === 'function' && !job.isCurrent()) {
     closeTextureSaveModal();
