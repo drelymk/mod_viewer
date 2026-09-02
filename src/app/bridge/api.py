@@ -169,6 +169,10 @@ class ModViewerAPI:
             folder_path, semantic_key, metadata_key, tex_key,
             texture_usage, adjustment)
 
+    def save_texture_color(self, folder_path, tex_key, targets, texture_usage):
+        return self._mod_preview.save_texture_color(
+            folder_path, tex_key, targets, texture_usage)
+
     def get_model_skinning_preview(self, folder_path):
         return self._mod_preview.get_model_skinning_preview(folder_path)
 

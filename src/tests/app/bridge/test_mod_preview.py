@@ -319,3 +319,30 @@ def test_bake_does_not_reset_metadata_on_write_failure(monkeypatch):
 
     assert result["code"] == "texconv_failed"
     assert reset == []
+
+
+def test_save_texture_color_forwards_complete_target_request(monkeypatch):
+    preview = ModPreview(_Access())
+    preview._active_mesh_keys["mod"] = {"Body-1", "Body-2"}
+    context = _context()
+    captured = []
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {"override": 1}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.save_texture_color",
+        lambda *args: captured.append(args) or {
+            "status": "ok", "tex_key": "diffuse::body.dds",
+        })
+
+    targets = [{
+        "semantic_key": "Body-1", "metadata_key": "Body::one",
+        "adjustment": {"hue": 30},
+    }]
+    usage = [{"semantic_key": "Body-1", "tex_key": "diffuse::body.dds"}]
+    result = preview.save_texture_color(
+        "mod", "diffuse::body.dds", targets, usage)
+
+    assert result["status"] == "ok"
+    assert captured == [(context, {"override": 1}, {"Body-1", "Body-2"},
+                         "diffuse::body.dds", targets, usage)]

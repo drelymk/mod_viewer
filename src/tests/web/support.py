@@ -337,7 +337,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "controlState": [], "meshSemantics": [],
                    "deleteToggle": [], "exportChanges": [],
                    "saveMeshColorAdjustment": [], "analyzeTextureBake": [],
-                   "bakeMeshTextureColor": []},
+                   "bakeMeshTextureColor": [], "saveTextureColor": []},
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -474,6 +474,21 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                 texture: {file: 'body.dds'},
                 patched: {mip0_units: 1, shared_units_preserved: 0},
                 backup: {file: 'body.dds.modviewer.bak'},
+              });
+            },
+            save_texture_color: async (path, texKey, targets, usage) => {
+              state.calls.saveTextureColor.push([path, texKey, targets, usage]);
+              return copy(state.responses[path]?.textureSaveResult || {
+                status: 'ok',
+                tex_key: texKey,
+                affected_tex_keys: texKey ? [texKey] : [],
+                saved_meshes: (targets || []).map(target => ({
+                  semantic_key: target.semantic_key,
+                  metadata_key: target.metadata_key,
+                })),
+                texture: {file: 'body.dds'},
+                patched: {mip0_units: 1, shared_units_preserved: 0},
+                backup: {file: 'body.modviewer.bak'},
               });
             },
             get_model_skinning_preview: async path => {

@@ -252,6 +252,9 @@ bindModalDismiss({
   buttons: [$('health-close'), $('health-close-x')],
 });
 
-window.addEventListener('mod-viewer-texture-baked', () => {
+function refreshAfterTextureSave() {
   void refreshHealthReport({force: true});
-});
+}
+
+window.addEventListener('mod-viewer-texture-baked', refreshAfterTextureSave);
+window.addEventListener('mod-viewer-texture-saved', refreshAfterTextureSave);

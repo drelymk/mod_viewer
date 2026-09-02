@@ -17,7 +17,7 @@ from core.mod_discovery import discover_ini_paths
 from core.ini.health import analyze_mod
 from app.mods.analysis import resolved_draws
 from app.mods.texture_bake import (
-    analyze_texture_bake, bake_mesh_texture_color,
+    analyze_texture_bake, bake_mesh_texture_color, save_texture_color,
 )
 from core.textures.profiles import texture_profile_for
 
@@ -187,6 +187,18 @@ class ModPreview:
             except Exception:
                 result["warning"] = "color_state_reset_failed"
             return result
+        except Exception:
+            return self._semantic_read_error()
+
+    def save_texture_color(
+            self, folder_path, tex_key, targets, texture_usage):
+        """Save all captured Color changes that target one physical DDS."""
+        try:
+            folder_path, overrides, _pending, context = \
+                self.authoritative_context(folder_path)
+            return save_texture_color(
+                context, overrides, self._active_mesh_keys.get(folder_path),
+                tex_key, targets, texture_usage)
         except Exception:
             return self._semantic_read_error()
 

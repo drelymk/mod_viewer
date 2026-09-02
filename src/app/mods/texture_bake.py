@@ -93,6 +93,25 @@ class _PreparedConsumer:
     semantic_key: str
     geometry: _PreparedGeometry
     coverages: tuple
+    metadata_key: str | None = None
+    adjustment: object = None
+    changed: bool = False
+    pixel_coverages: tuple = ()
+
+
+@dataclass(frozen=True)
+class _PreparedTextureSave:
+    entries: tuple
+    selected_path: str
+    info: object
+    layout: object
+    targets: tuple
+    preservation_consumers: tuple
+    target_pixel_masks: tuple
+    safe_masks: tuple
+    preserved_masks: tuple
+    unresolved: tuple
+    unresolved_details: tuple
 
 
 @dataclass(frozen=True)
@@ -565,6 +584,29 @@ def _protected_consumer_coverages(geometry, layout, info):
     return tuple(coverages)
 
 
+def _protected_pixel_coverages(geometry, layout):
+    """Return one-pixel-dilated pixel masks for preservation checks."""
+    coverages = []
+    for mip in layout.mips:
+        pixels = _rasterize_geometry(
+            geometry, mip.width, mip.height, 1, 1)
+        mask = dilate_pixel_mask(
+            pixels.mask, mip.width, mip.height, radius=1)
+        used = [index for index, value in enumerate(mask) if value]
+        bounds = None
+        if used:
+            bounds = (
+                min(index % mip.width for index in used),
+                min(index // mip.width for index in used),
+                max(index % mip.width for index in used),
+                max(index // mip.width for index in used),
+            )
+        coverages.append(UVCoverage(
+            mip.width, mip.height, mask, sum(mask), bounds,
+            pixels.triangle_count, pixels.degenerate_triangle_count))
+    return tuple(coverages)
+
+
 def _prepare_texture_bake(context, overrides, active_mesh_keys,
                           selected_semantic_key, selected_texture_key,
                           texture_usage, *, require_file_layout=True,
@@ -667,6 +709,254 @@ def _prepare_texture_bake(context, overrides, active_mesh_keys,
         other_consumers=tuple(other_consumers), safe_masks=tuple(safe_masks),
         shared_masks=tuple(shared_masks), shared_with=tuple(shared_with),
         unresolved=tuple(unresolved), unresolved_details=tuple(unresolved_details))
+
+
+def _draw_metadata_key(draw, group):
+    """Resolve the durable metadata identity for one resolved draw."""
+    from core.geometry.identity import mesh_identity_for_draw
+    try:
+        return mesh_identity_for_draw(draw, group).key
+    except AttributeError:
+        return None
+
+
+def _save_target_value(target, key):
+    """Read a save-target field while tolerating the browser's JS spelling."""
+    return target.get(key) if key in target else target.get({
+        "semantic_key": "semanticKey", "metadata_key": "metadataKey",
+    }.get(key, key))
+
+
+def _adjustment_signature(adjustment):
+    return tuple(sorted(adjustment.items()))
+
+
+def _texture_save_conflict(target_key, other_key, *, neutral=False):
+    relation = "a neutral consumer" if neutral else "another color adjustment"
+    message = (
+        f"Mesh {target_key} overlaps {relation} on the selected texture; "
+        "the texture cannot preserve both colors.")
+    return TextureBakeAnalysisError(
+        "incompatible_texture_color_usage", message, "unsupported", {
+            "meshes": [target_key, other_key],
+            "target_semantic_key": target_key,
+            "conflicting_semantic_key": other_key,
+            "conflict": "neutral" if neutral else "adjustment",
+        })
+
+
+def _prepare_texture_save(context, overrides, active_mesh_keys,
+                          selected_texture_key, targets, texture_usage,
+                          *, require_file_layout=True):
+    """Resolve all changed consumers and preservation constraints for one DDS."""
+    if not isinstance(targets, list) or not targets:
+        raise TextureBakeAnalysisError(
+            "no_color_adjustment", "Adjust a mesh color before saving.")
+    if any(not isinstance(target, dict) for target in targets):
+        raise TextureBakeAnalysisError(
+            "stale_mesh_state", "The model changed before the texture save started.")
+    first_semantic_key = _save_target_value(targets[0], "semantic_key")
+    entries, selected_path, info, parsed, selected_draw, consumers = \
+        _resolve_request(
+            context, overrides, active_mesh_keys, first_semantic_key,
+            selected_texture_key, texture_usage, require_complete_roles=True)
+    layout = inspect_dds_layout(selected_path)
+    if layout is None:
+        if require_file_layout:
+            raise TextureBakeAnalysisError(
+                "invalid_dds", "The selected texture is not a valid supported DDS.")
+        layout = dds_layout_for_info(info)
+
+    entry_by_key = {entry["semantic_key"]: entry for entry in entries}
+    draw_by_key = {first_semantic_key: selected_draw}
+    draw_by_key.update({key: value for key, value in consumers if value is not None})
+    target_keys = set()
+    requested_targets = []
+    for target in targets:
+        semantic_key = _save_target_value(target, "semantic_key")
+        metadata_key = _save_target_value(target, "metadata_key")
+        if (not isinstance(semantic_key, str) or not semantic_key
+                or semantic_key in target_keys
+                or not isinstance(metadata_key, str) or not metadata_key):
+            raise TextureBakeAnalysisError(
+                "stale_mesh_state",
+                "The texture save target identity is invalid.")
+        target_keys.add(semantic_key)
+        entry = entry_by_key.get(semantic_key)
+        draw_pair = draw_by_key.get(semantic_key)
+        target_path = _texture_path(
+            context.mod_dir, entry["tex_key"] if entry else None)
+        if (entry is None or draw_pair is None or target_path is None
+                or _physical_identity(target_path)
+                != _physical_identity(selected_path)):
+            raise TextureBakeAnalysisError(
+                "stale_mesh_state",
+                "A texture save target no longer belongs to the selected DDS.")
+        actual_metadata_key = _draw_metadata_key(draw_pair[0], draw_pair[1])
+        if actual_metadata_key != metadata_key:
+            raise TextureBakeAnalysisError(
+                "stale_mesh_state",
+                "A texture save target identity changed before the save started.")
+        adjustment = normalize_color_adjustment(
+            target.get("adjustment"), reject_invalid=True)
+        if adjustment is None:
+            raise TextureBakeAnalysisError(
+                "invalid_color_adjustment", "The color adjustment is invalid.")
+        if is_neutral_color_adjustment(adjustment):
+            raise TextureBakeAnalysisError(
+                "no_color_adjustment", "Adjust a mesh color before saving.")
+        requested_targets.append((semantic_key, metadata_key, draw_pair,
+                                  adjustment))
+
+    buffers = BufferStore()
+    sparse_shape_cache = {}
+    convention = geometry_convention_for(parsed.game.game)
+    prepared_targets = []
+    unresolved = []
+    unresolved_details = []
+    for semantic_key, metadata_key, draw_pair, adjustment in requested_targets:
+        try:
+            geometry = _prepare_uv_geometry(
+                draw_pair[0], draw_pair[1], context.mod_dir, buffers,
+                sparse_shape_cache, convention)
+            pixel_coverages = tuple(
+                _rasterize_geometry(
+                    geometry, mip.width, mip.height, 1, 1)
+                for mip in layout.mips)
+            coverages = tuple(
+                _rasterize_geometry(
+                    geometry, mip.width, mip.height, *_unit_size(info))
+                for mip in layout.mips)
+        except TextureBakeAnalysisError as error:
+            unresolved.append(semantic_key)
+            unresolved_details.append({
+                "semantic_key": semantic_key,
+                "code": error.code,
+                "error": error.message,
+            })
+            continue
+        prepared_targets.append(_PreparedConsumer(
+            semantic_key, geometry, coverages, metadata_key, adjustment, True,
+            pixel_coverages))
+
+    # Every same-DDS consumer absent from the target list is a preservation
+    # constraint. This includes hidden active draws and authored conditional
+    # variants returned by _resolve_request.
+    preservation_consumers = []
+    for semantic_key, consumer in consumers:
+        if semantic_key in target_keys:
+            continue
+        try:
+            if consumer is None:
+                raise TextureBakeAnalysisError(
+                    "geometry_not_available",
+                    "The rendered draw geometry could not be prepared.")
+            geometry = _prepare_uv_geometry(
+                consumer[0], consumer[1], context.mod_dir, buffers,
+                sparse_shape_cache, convention)
+            coverages = _protected_consumer_coverages(geometry, layout, info)
+            pixel_coverages = _protected_pixel_coverages(geometry, layout)
+        except TextureBakeAnalysisError as error:
+            unresolved.append(semantic_key)
+            unresolved_details.append({
+                "semantic_key": semantic_key,
+                "code": error.code,
+                "error": error.message,
+            })
+            continue
+        preservation_consumers.append(_PreparedConsumer(
+            semantic_key, geometry, coverages, pixel_coverages=pixel_coverages))
+
+    target_pixel_masks = []
+    safe_masks = []
+    preserved_masks = []
+    for level, mip in enumerate(layout.mips):
+        pixel_count = mip.width * mip.height
+        target_union = bytearray(pixel_count)
+        target_claims = [None] * pixel_count
+        for target in prepared_targets:
+            mask = target.pixel_coverages[level].mask
+            signature = _adjustment_signature(target.adjustment)
+            for index, selected in enumerate(mask):
+                if not selected:
+                    continue
+                previous = target_claims[index]
+                if previous is not None and previous[0] != signature:
+                    raise _texture_save_conflict(
+                        previous[1], target.semantic_key)
+                target_claims[index] = (signature, target.semantic_key)
+                target_union[index] = 1
+
+        neutral_union = bytearray(pixel_count)
+        for consumer in preservation_consumers:
+            for index, selected in enumerate(
+                    consumer.pixel_coverages[level].mask):
+                if selected:
+                    neutral_union[index] = 1
+        for target in prepared_targets:
+            actual = target.pixel_coverages[level].mask
+            overlap = next((index for index, selected in enumerate(actual)
+                            if selected and neutral_union[index]), None)
+            if overlap is not None:
+                consumer = next(
+                    item for item in preservation_consumers
+                    if item.pixel_coverages[level].mask[overlap])
+                raise _texture_save_conflict(
+                    target.semantic_key, consumer.semantic_key, neutral=True)
+            for consumer in preservation_consumers:
+                target_units = target.coverages[level].mask
+                preserved_units = consumer.coverages[level].mask
+                if any(left and right for left, right in zip(
+                        target_units, preserved_units)):
+                    raise _texture_save_conflict(
+                        target.semantic_key, consumer.semantic_key, neutral=True)
+
+        target_units = bytearray()
+        for target in prepared_targets:
+            target_mask = target.coverages[level].mask
+            if not target_units:
+                target_units = bytearray(len(target_mask))
+            for index, selected in enumerate(target_mask):
+                target_units[index] = target_units[index] or selected
+        preserved = bytearray()
+        for consumer in preservation_consumers:
+            mask = consumer.coverages[level].mask
+            if not preserved:
+                preserved = bytearray(len(mask))
+            for index, selected in enumerate(mask):
+                preserved[index] = preserved[index] or selected
+        if not target_units:
+            target_units = bytearray(mip.units_x * mip.units_y)
+        if not preserved:
+            preserved = bytearray(mip.units_x * mip.units_y)
+        safe = bytearray(
+            selected and not preserved[index]
+            for index, selected in enumerate(target_units))
+        target_pixel_masks.append(bytearray(target_union))
+        safe_masks.append(safe)
+        preserved_masks.append(preserved)
+
+    if unresolved:
+        # Preparation is still useful for diagnostics, but Save cannot safely
+        # proceed when any same-DDS consumer is unknown.
+        raise TextureBakeAnalysisError(
+            "unknown_texture_coverage",
+            "Texture coverage could not be determined safely.",
+            details={"unresolved_consumers": list(unresolved),
+                     "consumers": list(unresolved_details)})
+    if not any(safe_masks[0]):
+        raise TextureBakeAnalysisError(
+            "incompatible_texture_color_usage",
+            "The changed meshes have no writable texture units after preserving "
+            "other consumers.", "unsupported",
+            {"meshes": [target.semantic_key for target in prepared_targets]})
+    return _PreparedTextureSave(
+        entries=entries, selected_path=selected_path, info=info, layout=layout,
+        targets=tuple(prepared_targets),
+        preservation_consumers=tuple(preservation_consumers),
+        target_pixel_masks=tuple(target_pixel_masks), safe_masks=tuple(safe_masks),
+        preserved_masks=tuple(preserved_masks), unresolved=tuple(unresolved),
+        unresolved_details=tuple(unresolved_details))
 
 
 def _analysis_result(prepared):
@@ -1410,7 +1700,7 @@ def _replacement_completed(source_path, temporary_path, final):
 
 
 def _build_safe_block_atlas(source_image, source_mip, pixel_mask, safe_mask,
-                            adjustment):
+                            adjustment=None, target_image=None):
     """Pack safe source blocks into a compact 4x4-cell RGBA bake image."""
     source_width, source_height = source_mip.width, source_mip.height
     if source_image.size != (source_width, source_height):
@@ -1418,6 +1708,11 @@ def _build_safe_block_atlas(source_image, source_mip, pixel_mask, safe_mask,
             "texture_validation_failed",
             "Decoded DDS source dimensions are invalid.")
     source_rgba = source_image.tobytes()
+    target_rgba = target_image.tobytes() if target_image is not None else None
+    if target_image is not None and target_image.size != source_image.size:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Composited DDS target dimensions are invalid.")
     safe_indices = tuple(
         index for index, selected in enumerate(safe_mask) if selected)
     if not safe_indices:
@@ -1448,16 +1743,24 @@ def _build_safe_block_atlas(source_image, source_mip, pixel_mask, safe_mask,
                 source_pixel = (source_row * source_width + source_column) * 4
                 atlas_pixel = ((atlas_y + row) * atlas_width
                                + atlas_x + column) * 4
-                atlas_rgba[atlas_pixel:atlas_pixel + 4] = source_rgba[
-                    source_pixel:source_pixel + 4]
+                if (target_rgba is not None and row < unit_height
+                        and column < unit_width
+                        and pixel_mask[source_row * source_width + source_column]):
+                    atlas_rgba[atlas_pixel:atlas_pixel + 4] = target_rgba[
+                        source_pixel:source_pixel + 4]
+                else:
+                    atlas_rgba[atlas_pixel:atlas_pixel + 4] = source_rgba[
+                        source_pixel:source_pixel + 4]
                 if row < unit_height and column < unit_width:
                     atlas_mask[(atlas_y + row) * atlas_width
                                + atlas_x + column] = pixel_mask[
                         (source_y + row) * source_width
                         + source_x + column]
 
-    adjusted_atlas = adjust_rgba_bytes(
-        bytes(atlas_rgba), atlas_width, atlas_height, adjustment, atlas_mask)
+    adjusted_atlas = (bytes(atlas_rgba) if target_rgba is not None else
+                      adjust_rgba_bytes(
+                          bytes(atlas_rgba), atlas_width, atlas_height,
+                          adjustment, atlas_mask))
     if adjusted_atlas[3::4] != atlas_rgba[3::4]:
         raise TextureBakeAnalysisError(
             "texture_validation_failed",
@@ -1561,7 +1864,8 @@ def _log_alpha_quality(alpha_stats):
 
 def _encode_bc7_source_fallback(
         original, prepared, source_mip, source_image, pixel_mask,
-        pending_mask, adjustment, timings, modes, timing_key):
+        pending_mask, adjustment, timings, modes, timing_key,
+        target_image=None):
     """Recolor supported BC7 modes while preserving source alpha exactly."""
     fallback_mask = _bc7_modes_mask(
         original, source_mip, pending_mask, modes)
@@ -1573,7 +1877,8 @@ def _encode_bc7_source_fallback(
     started = time.perf_counter()
     atlas_rgba, safe_indices, atlas_width, _atlas_height = (
         _build_safe_block_atlas(
-            source_image, source_mip, pixel_mask, fallback_mask, adjustment))
+            source_image, source_mip, pixel_mask, fallback_mask, adjustment,
+            target_image=target_image))
     target_image = Image.frombytes(
         "RGBA", (atlas_width, _atlas_height), atlas_rgba)
     target_rgba = target_image.tobytes()
@@ -1706,7 +2011,7 @@ def _validate_patched_units(original, final, source_layout, writable_masks,
 
 def _encode_alpha_candidate(
         original, prepared, source_mip, source_image, pixel_mask, pending_mask,
-        adjustment, workdir, level, strategy, timings):
+        adjustment, workdir, level, strategy, timings, target_image=None):
     """Encode one compact atlas and return only its alpha-exact blocks."""
     from PIL import Image
 
@@ -1716,7 +2021,8 @@ def _encode_alpha_candidate(
     started = time.perf_counter()
     atlas_rgba, safe_indices, atlas_width, atlas_height = (
         _build_safe_block_atlas(
-            source_image, source_mip, pixel_mask, pending_mask, adjustment))
+            source_image, source_mip, pixel_mask, pending_mask, adjustment,
+            target_image=target_image))
     target_image = Image.frombytes(
         "RGBA", (atlas_width, atlas_height), atlas_rgba)
     timings["color_adjust"] = timings.get("color_adjust", 0.0) + (
@@ -1797,22 +2103,37 @@ def _encode_alpha_candidate(
 
 
 def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
-                               timings=None, compression_backend="auto"):
+                               timings=None, compression_backend="auto",
+                               target_images=None, source_images=None,
+                               allow_quality_retries=True):
     """Encode selected BC1/BC7 RGB in compact, independent block atlases."""
     timings = {} if timings is None else timings
-    pixel_coverages = getattr(
-        prepared, "selected_pixel_coverages", (prepared.selected_pixels,))
+    pixel_coverages = getattr(prepared, "target_pixel_masks", None)
+    if pixel_coverages is None:
+        pixel_coverages = getattr(
+            prepared, "selected_pixel_coverages", (prepared.selected_pixels,))
     if len(pixel_coverages) != len(prepared.layout.mips):
         raise TextureBakeAnalysisError(
             "texture_validation_failed",
             "Selected pixel coverage does not match the DDS mip chain.")
+    if target_images is not None and len(target_images) != len(prepared.layout.mips):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Composited color targets do not match the DDS mip chain.")
+    if source_images is not None and len(source_images) != len(prepared.layout.mips):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Decoded DDS mips do not match the DDS mip chain.")
 
     candidate_payloads = []
     writable_masks = []
     alpha_protected_masks = []
     stats = []
-    strategy_groups = _bc7_candidate_strategy_groups(
+    strategy_groups = (_bc7_candidate_strategy_groups(
         prepared.info.format, compression_backend)
+        if allow_quality_retries else ((
+            _BC7CandidateStrategy(
+                "default", compression_backend=compression_backend),),))
     for level, source_mip in enumerate(prepared.layout.mips):
         safe_mask = prepared.safe_masks[level]
         if len(safe_mask) != source_mip.units_x * source_mip.units_y:
@@ -1828,11 +2149,16 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
             continue
 
         started = time.perf_counter()
-        source_image = _decode_alpha_coupled_mip_rgba(
-            original, prepared.layout, source_mip)
-        timings["decode"] = timings.get("decode", 0.0) + (
-            time.perf_counter() - started)
-        pixel_mask = pixel_coverages[level].mask
+        if source_images is None:
+            source_image = _decode_alpha_coupled_mip_rgba(
+                original, prepared.layout, source_mip)
+            timings["decode"] = timings.get("decode", 0.0) + (
+                time.perf_counter() - started)
+        else:
+            source_image = source_images[level]
+        pixel_mask = (pixel_coverages[level].mask
+                      if hasattr(pixel_coverages[level], "mask")
+                      else pixel_coverages[level])
         pending = bytearray(safe_mask)
         winners = {}
         tested_units = 0
@@ -1851,9 +2177,13 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
                 continue
             group_winners = {}
             for strategy in group:
+                candidate_kwargs = {}
+                if target_images is not None:
+                    candidate_kwargs["target_image"] = target_images[level]
                 candidate_blocks, comparison = _encode_alpha_candidate(
                     original, prepared, source_mip, source_image, pixel_mask,
-                    retry_mask, adjustment, workdir, level, strategy, timings)
+                    retry_mask, adjustment, workdir, level, strategy, timings,
+                    **candidate_kwargs)
                 tested_units += comparison.tested_units
                 changed_pixels += comparison.changed_pixels
                 max_delta = max(max_delta, comparison.max_delta)
@@ -1876,10 +2206,13 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
 
         fallback_stats = AlphaCompatibilityStats(0, 0, 0, 0, 0)
         if prepared.info.format.startswith("bc7") and any(pending):
+            fallback_kwargs = {}
+            if target_images is not None:
+                fallback_kwargs["target_image"] = target_images[level]
             fallback_blocks, fallback_stats = _encode_bc7_source_fallback(
                 original, prepared, source_mip, source_image, pixel_mask,
                 pending, adjustment, timings, (4, 5, 6, 7),
-                "bc7_source_fallback")
+                "bc7_source_fallback", **fallback_kwargs)
             tested_units += fallback_stats.tested_units
             rgb_squared_error += fallback_stats.rgb_squared_error
             rgb_absolute_error += fallback_stats.rgb_absolute_error
@@ -2138,6 +2471,194 @@ def bake_texture_color(
             "texture_write_failed", "The DDS could not be baked safely.")
 
 
+def _compose_texture_save_image(source_image, prepared, level):
+    """Compose all target adjustments over one decoded DDS mip."""
+    source_image = source_image.convert("RGBA")
+    width, height = source_image.size
+    source_rgba = source_image.tobytes()
+    composed = bytearray(source_rgba)
+    pixel_mask = prepared.target_pixel_masks[level]
+    for target in prepared.targets:
+        mask = target.pixel_coverages[level].mask
+        adjusted = adjust_rgba_bytes(
+            source_rgba, width, height, target.adjustment, mask)
+        for index, selected in enumerate(mask):
+            if not selected:
+                continue
+            start = index * 4
+            composed[start:start + 4] = adjusted[start:start + 4]
+    if composed[3::4] != source_rgba[3::4]:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Color adjustment changed the source alpha channel.")
+    if len(pixel_mask) != width * height:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Composited pixel coverage does not match the DDS mip size.")
+    from PIL import Image
+    return Image.frombytes("RGBA", (width, height), bytes(composed))
+
+
+def save_texture_color(
+        context, overrides, active_mesh_keys, selected_texture_key, targets,
+        texture_usage):
+    """Save all non-neutral Color changes that target one physical DDS."""
+    committed = False
+    success_result = None
+    timings = {}
+    try:
+        started = time.perf_counter()
+        prepared = _prepare_texture_save(
+            context, overrides, active_mesh_keys, selected_texture_key, targets,
+            texture_usage, require_file_layout=True)
+        timings["prepare"] = time.perf_counter() - started
+        original = _read_source(prepared.selected_path)
+        original_hash = _sha256_bytes(original)
+        affected = _affected_texture_keys(context, prepared)
+        alpha_stats = ()
+
+        with tempfile.TemporaryDirectory(prefix="modviewer-save-") as workdir:
+            if prepared.info.format in _ALPHA_COUPLED_FORMATS:
+                source_images = []
+                target_images = []
+                for level, source_mip in enumerate(prepared.layout.mips):
+                    started = time.perf_counter()
+                    source_image = _decode_alpha_coupled_mip_rgba(
+                        original, prepared.layout, source_mip)
+                    timings["decode"] = timings.get("decode", 0.0) + (
+                        time.perf_counter() - started)
+                    source_images.append(source_image)
+                    target_images.append(
+                        _compose_texture_save_image(source_image, prepared, level))
+                (candidate, writable_masks, alpha_protected_masks,
+                 alpha_stats) = _encode_alpha_coupled_mips(
+                    original, prepared, None, workdir, timings,
+                    target_images=tuple(target_images),
+                    source_images=tuple(source_images),
+                    allow_quality_retries=False)
+                _log_alpha_quality(alpha_stats)
+                if not any(writable_masks[0]):
+                    raise _alpha_preservation_error(stats=alpha_stats[0])
+                if any(alpha_protected_masks[0]):
+                    raise _alpha_preservation_error(
+                        mip0_protected=True, stats=alpha_stats[0])
+                patch_candidate_layout = prepared.layout
+            else:
+                started = time.perf_counter()
+                image = load_texture_image_full(
+                    prepared.selected_path, preserve_alpha=True)
+                if image is None or image.size != (
+                        prepared.info.width, prepared.info.height):
+                    raise TextureBakeAnalysisError(
+                        "texture_decode_failed",
+                        "The source DDS could not be decoded at full resolution.")
+                target_image = _compose_texture_save_image(image, prepared, 0)
+                timings["decode"] = timings.get("decode", 0.0) + (
+                    time.perf_counter() - started)
+                png_path = os.path.join(workdir, "save.png")
+                target_image.save(png_path, format="PNG")
+                started = time.perf_counter()
+                try:
+                    candidate_path = encode_png_to_dds(
+                        png_path, workdir, prepared.info.format,
+                        prepared.info.mip_count, srgb=True,
+                        compression_backend="cpu")
+                except TexconvUnavailableError as error:
+                    raise TextureBakeAnalysisError(
+                        "texconv_unavailable", str(error)) from error
+                except TexconvError as error:
+                    raise TextureBakeAnalysisError(
+                        "texconv_failed", str(error)) from error
+                timings["encode"] = timings.get("encode", 0.0) + (
+                    time.perf_counter() - started)
+                started = time.perf_counter()
+                candidate = _read_source(candidate_path)
+                candidate_layout = _validate_candidate(
+                    prepared.layout, candidate_path, candidate)
+                writable_masks = prepared.safe_masks
+                alpha_protected_masks = tuple(
+                    bytearray(len(mask)) for mask in prepared.safe_masks)
+                patch_candidate_layout = candidate_layout
+                timings["candidate_validation"] = (
+                    timings.get("candidate_validation", 0.0)
+                    + time.perf_counter() - started)
+
+            final = _patch_dds_units(
+                original, candidate, prepared.layout,
+                writable_masks, patch_candidate_layout)
+            _validate_patched_units(
+                original, final, prepared.layout, writable_masks, candidate,
+                patch_candidate_layout)
+            temporary = _write_temp(prepared.selected_path, final)
+            try:
+                if inspect_dds_layout(temporary) is None:
+                    raise TextureBakeAnalysisError(
+                        "texture_validation_failed",
+                        "The patched DDS failed validation.")
+                _validate_candidate(prepared.layout, temporary, final)
+                _assert_source_unchanged(prepared.selected_path, original_hash)
+                backup_path = _write_backup(prepared.selected_path, original)
+                _assert_source_unchanged(prepared.selected_path, original_hash)
+                success_result = {
+                    "status": "ok",
+                    "tex_key": selected_texture_key,
+                    "affected_tex_keys": affected,
+                    "saved_meshes": [
+                        {"semantic_key": target.semantic_key,
+                         "metadata_key": target.metadata_key}
+                        for target in prepared.targets],
+                    "texture": _texture_details(
+                        prepared.selected_path, prepared.info),
+                    "patched": {
+                        "mip0_units": sum(writable_masks[0]),
+                        "total_units": sum(sum(mask) for mask in writable_masks),
+                        "shared_units_preserved": sum(
+                            sum(mask) for mask in prepared.preserved_masks),
+                        "alpha_protected_units": sum(
+                            sum(mask) for mask in alpha_protected_masks),
+                        "alpha_protected_mip0_units": sum(
+                            alpha_protected_masks[0]),
+                        "alpha_protected_levels": [
+                            level for level, mask in enumerate(
+                                alpha_protected_masks) if any(mask)],
+                    },
+                    "backup": {"file": os.path.basename(backup_path)},
+                }
+                try:
+                    os.replace(temporary, prepared.selected_path)
+                except OSError as error:
+                    if not _replacement_completed(
+                            prepared.selected_path, temporary, final):
+                        raise TextureBakeAnalysisError(
+                            "texture_write_failed",
+                            "The DDS could not be replaced safely.") from error
+                    committed = True
+                    temporary = None
+                else:
+                    committed = True
+                    temporary = None
+            finally:
+                if temporary and os.path.exists(temporary):
+                    os.remove(temporary)
+        _LOGGER.debug(
+            "texture save timing_ms=%s",
+            {key: round(value * 1000.0, 2)
+             for key, value in timings.items()})
+        return success_result
+    except TextureBakeAnalysisError as error:
+        if committed and success_result is not None:
+            success_result["warning"] = "post_save_cleanup_failed"
+            return success_result
+        return _error(error.code, error.message, error.status,
+                      **({"details": error.details} if error.details else {}))
+    except Exception:
+        if committed and success_result is not None:
+            success_result["warning"] = "post_save_cleanup_failed"
+            return success_result
+        return _error(
+            "texture_write_failed", "The DDS could not be saved safely.")
+
+
 def bake_mesh_texture_color(*args, **kwargs):
     """Compatibility name for callers that use the public bake operation name."""
     return bake_texture_color(*args, **kwargs)
@@ -2145,5 +2666,6 @@ def bake_mesh_texture_color(*args, **kwargs):
 
 __all__ = [
     "TextureBakeAnalysisError", "analyze_texture_bake",
-    "bake_mesh_texture_color", "bake_texture_color", "_patch_dds_units",
+    "bake_mesh_texture_color", "bake_texture_color", "save_texture_color",
+    "_patch_dds_units",
 ]

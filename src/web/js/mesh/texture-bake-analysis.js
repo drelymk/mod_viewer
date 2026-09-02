@@ -3,6 +3,7 @@
 import { viewerState, samePath } from '../app/state.js';
 import { activeMeshes } from './mesh-state.js';
 import { isAssetTextureKey, splitTextureKey } from '../textures/texture-key.js';
+import { buildTextureUsageSnapshot } from './texture-save-state.js';
 
 let requestToken = 0;
 const ALPHA_COUPLED_FORMATS = new Set([
@@ -21,28 +22,7 @@ function reasonText(reason) {
   return REASON_TEXT[reason] || 'Texture coverage is unavailable for this mesh.';
 }
 
-/** Return the current normal-mesh texture identities used by the backend. */
-export function buildTextureUsageSnapshot() {
-  return activeMeshes
-    .filter(mesh => mesh?.userData?.assetFill !== true)
-    .map(mesh => {
-      const data = mesh.userData || {};
-      const textureKeys = {
-        diffuse: data.texKey || null,
-        normal_map: data.normalMapKey || null,
-        normal_data: data.normalDataKey || null,
-        light_map: data.lightMapKey || null,
-        material_map: data.materialMapKey || null,
-        emission_map: data.emissionMapKey || null,
-      };
-      return {
-        semantic_key: data.semanticKey || '',
-        // Keep the legacy alias for callers that only consume diffuse usage.
-        tex_key: textureKeys.diffuse,
-        texture_keys: textureKeys,
-      };
-    });
-}
+export { buildTextureUsageSnapshot };
 
 /** Capture every identity and role binding used by a bake request. */
 export function captureTextureBakeState(mesh) {

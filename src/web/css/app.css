@@ -721,6 +721,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .texture-bake-state { color: var(--success); font-size: 12px; font-weight: 600; }
 .texture-bake-state-unknown { color: var(--warning); }
 .texture-bake-summary { margin: 7px 0 10px; }
+.texture-bake-targets { margin: 0 0 12px; padding-left: 18px; color: var(--text); }
 .texture-bake-details {
   display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr);
   gap: 5px 12px; margin: 0;
