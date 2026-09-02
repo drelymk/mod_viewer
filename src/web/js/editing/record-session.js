@@ -188,6 +188,14 @@ function summarizeSkips(report) {
   return shown.join('\n');
 }
 
+function recordTargetRef(mesh, src) {
+  return {
+    line: src.line,
+    section: src.section,
+    drawindexed: mesh.userData.assetEntry?.drawindexed,
+  };
+}
+
 async function save() {
   captureCurrent();
   const { info, ctx, snapshots, ui } = active;
@@ -196,10 +204,12 @@ async function save() {
     ...active.initialTargets,
     ...active.touchedTargets,
   ]);
-  const targetLines = new Set();
+  const targetRefs = new Map();
   for (const mesh of targets) {
     for (const src of mesh.userData.sources || []) {
-      if (src.ini === info.ini) targetLines.add(src.line);
+      if (src.ini === info.ini) {
+        targetRefs.set(src.line, recordTargetRef(mesh, src));
+      }
     }
   }
 
@@ -218,12 +228,13 @@ async function save() {
     }
     positionLines[p] = [...lines].sort((a, b) => a - b);
   }
-  const sortedTargetLines = [...targetLines].sort((a, b) => a - b);
+  const sortedTargetRefs = [...targetRefs.values()].sort(
+    (a, b) => Number(a.line) - Number(b.line));
 
   ui.saveBtn.disabled = true;
   try {
     const result = await window.pywebview.api.record_toggle(
-      ctx.modPath, info.ini, info.section, positionLines, sortedTargetLines);
+      ctx.modPath, info.ini, info.section, positionLines, sortedTargetRefs);
     if (result.error) {
       await alertDialog('Could not save recording:\n\n' + result.error);
       return;

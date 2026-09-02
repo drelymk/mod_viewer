@@ -348,7 +348,8 @@ def test_record_scopes_targets_and_keeps_touched_mesh_snapshots(
     body["conditions"] = [[{
         "var": "toggle", "value": "0", "negate": False,
     }]]
-    body["sources"] = [{"ini": "RecordScope.ini", "line": 10}]
+    body["sources"] = [{"ini": "RecordScope.ini", "line": 10,
+                         "section": "TextureOverrideBody"}]
 
     for name, component, line, conditions in [
         ("Face-RecordScope-0", "Face RecordScope", 20, []),
@@ -359,7 +360,8 @@ def test_record_scopes_targets_and_keeps_touched_mesh_snapshots(
         entry = copy.deepcopy(body)
         entry["component"] = component
         entry["conditions"] = conditions
-        entry["sources"] = [{"ini": "RecordScope.ini", "line": line}]
+        entry["sources"] = [{"ini": "RecordScope.ini", "line": line,
+                              "section": "TextureOverrideBody"}]
         entry["texture_variants"] = []
         entry["shape_targets"] = []
         payload["meshes"][name] = entry
@@ -399,7 +401,79 @@ def test_record_scopes_targets_and_keeps_touched_mesh_snapshots(
         call = page.evaluate("window.__fakeApi.calls.recordToggle[0]")
         assert call[0:3] == ["RecordScope", "RecordScope.ini", "KeyRecordScope"]
         assert call[3] == {"0": [10, 20], "1": [], "2": [20]}
-        assert call[4] == [10, 20]
+        assert call[4] == [
+            {"line": 10, "section": "TextureOverrideBody", "drawindexed": [3, 0, 0]},
+            {"line": 20, "section": "TextureOverrideBody", "drawindexed": [3, 0, 0]},
+        ]
+    finally:
+        context.close()
+
+
+def test_add_toggle_refreshes_mesh_provenance_before_record(
+        edge_browser, frontend_url):
+    payload = _payload("RecordAdd")
+    mesh_name = "Body-RecordAdd-0"
+    body = payload["meshes"][mesh_name]
+    body["sources"] = [{
+        "ini": "RecordAdd.ini", "line": 10,
+        "section": "TextureOverrideBody",
+    }]
+    context, page = _page(
+        edge_browser, frontend_url, {"RecordAdd": payload})
+    try:
+        _open(page, "RecordAdd")
+        page.locator(".draw-item").first.wait_for()
+        page.evaluate("""
+          () => {
+            const state = window.__fakeApi;
+            const response = state.responses.RecordAdd;
+            response.controls.toggles.KeyAdded = {
+              name: 'Added', ini: 'RecordAdd.ini', section: 'KeyAdded',
+              wired: false,
+              vars: [{var: 'added', default: '0', values: ['0', '1']}],
+            };
+            response.state.defaults.added = '0';
+            response.meshSemantics = {
+              ["Body-RecordAdd-0"]: {
+                conditions: [[{var: 'added', value: '0', negate: false}]],
+                sources: [{
+                  ini: 'RecordAdd.ini', line: 17,
+                  section: 'TextureOverrideBody',
+                }],
+                identity: response.meshes['Body-RecordAdd-0'].identity || null,
+              },
+            };
+            state.addToggleCalls = [];
+            window.pywebview.api.add_toggle = async (...args) => {
+              state.addToggleCalls.push(args);
+              return {ok: true};
+            };
+            window.pywebview.api.get_record_positions = async () => ({
+              positions: 2, vars: ['added'],
+            });
+          }
+        """)
+
+        page.locator("#toggle-add-btn").click()
+        page.locator("#toggle-modal-backdrop.show").wait_for()
+        page.locator("#tm-name").fill("Added")
+        page.locator("#tm-key").fill("2")
+        page.locator("#tm-var").fill("added")
+        page.locator("#tm-values").fill("0,1")
+        page.locator("#tm-save").click()
+
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].userData.sources[0].line === 17")
+        added_row = page.locator(".toggle-item").filter(has_text="Added")
+        added_row.locator("[title^='Record']").click()
+        page.locator(".toggle-row.recording").wait_for()
+        added_row.locator(".toggle-record-save").click()
+        page.wait_for_function("window.__fakeApi.calls.recordToggle.length === 1")
+
+        call = page.evaluate("window.__fakeApi.calls.recordToggle[0]")
+        assert call[4][0]["line"] == 17
+        assert call[4][0]["section"] == "TextureOverrideBody"
+        assert call[4][0]["drawindexed"] == [3, 0, 0]
     finally:
         context.close()
 

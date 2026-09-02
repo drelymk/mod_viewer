@@ -44,6 +44,7 @@ import pytest
 
 from app.session import edit as edit_session
 from app.bridge import toggle as toggle_api
+from core.ini.document import IniDocument
 
 
 # A section with one writable var (2 values) and one namespaced var declared
@@ -107,6 +108,43 @@ filename = tc.buf
 stride = 20
 """
 
+SHIFTED_FIXTURE = """[Constants]
+global persist $Upper = 0
+global $object_detected = 0
+
+[KeyUpper]
+key = 1
+type = cycle
+$Upper = 0,1
+
+[TextureOverrideBody]
+if $Upper == 0
+drawindexed = 100,0,0
+endif
+; gap one
+; gap two
+; gap three
+; gap four
+if $Upper == 1
+drawindexed = 200,0,0
+endif
+"""
+
+
+def _target_refs(text, *line_numbers):
+    """Build target identities from the pre-edit mesh payload provenance."""
+    document = IniDocument.from_string(text)
+    refs = []
+    for line_number in line_numbers:
+        line = document.lines[line_number - 1]
+        draw = line.text.split("=", 1)[1].split(",")
+        refs.append({
+            "line": line_number,
+            "section": line.section.name,
+            "drawindexed": [int(value.strip()) for value in draw],
+        })
+    return refs
+
 
 def _fixture(tmp, name, text):
     path = os.path.join(tmp, name)
@@ -155,7 +193,7 @@ def _swap_positions(tmp, ini_rel):
     result = toggle_api.record_toggle(
         tmp, ini_rel, "KeyUpper",
         {0: [line_200], 1: [line_100], 2: [line_100], 3: [line_100]},
-        [line_100, line_200])
+        _target_refs(FIXTURE, line_100, line_200))
     return ini_path, result
 
 
@@ -219,10 +257,11 @@ def test_new_toggle_blocks_export_until_recorded(wirable_mod):
     with open(ini_path, encoding="utf-8") as fh:
         assert fh.read() == WIRABLE_FIXTURE
 
-    pending_text = edit_session.peek(tmp, ini_path).to_string()
-    line_100 = next(i for i, l in enumerate(pending_text.splitlines(), 1) if "100,0,0" in l)
+    line_100 = next(i for i, l in enumerate(WIRABLE_FIXTURE.splitlines(), 1)
+                    if "100,0,0" in l)
     record_result = toggle_api.record_toggle(
-        tmp, ini_rel, "KeyExtra", {0: [line_100], 1: []}, [line_100])
+        tmp, ini_rel, "KeyExtra", {0: [line_100], 1: []},
+        _target_refs(WIRABLE_FIXTURE, line_100))
     assert record_result["ok"] is True
 
     export_result = toggle_api.export_changes(tmp)
@@ -234,6 +273,32 @@ def test_new_toggle_blocks_export_until_recorded(wirable_mod):
         assert "$Extra == 0" in fh.read()
 
 
+def test_record_after_add_resolves_original_mesh_source_lines(api_root):
+    ini_rel = "mod.ini"
+    ini_path = _fixture(api_root, ini_rel, SHIFTED_FIXTURE)
+    first_line = next(i for i, line in enumerate(SHIFTED_FIXTURE.splitlines(), 1)
+                      if "100,0,0" in line)
+    second_line = next(i for i, line in enumerate(SHIFTED_FIXTURE.splitlines(), 1)
+                       if "200,0,0" in line)
+
+    added = toggle_api.add_toggle(
+        api_root, ini_rel, "New", "2", "New", ["0", "1"])
+    assert added["ok"] is True
+
+    pending = edit_session.peek(api_root, ini_path)
+    assert pending.lines[second_line - 1].text == "drawindexed = 100,0,0"
+    result = toggle_api.record_toggle(
+        api_root, ini_rel, "KeyNew",
+        {0: [first_line], 1: [second_line]},
+        _target_refs(SHIFTED_FIXTURE, first_line, second_line))
+
+    assert result["ok"] is True
+    assert result["result"]["skipped"] == []
+    recorded = edit_session.peek(api_root, ini_path).to_string()
+    assert "if $New == 0" in recorded
+    assert "if $New == 1" in recorded
+
+
 
 
 def test_record_bridge_stages_target_hidden_at_every_position(toggle_mod):
@@ -243,13 +308,30 @@ def test_record_bridge_stages_target_hidden_at_every_position(toggle_mod):
 
     result = toggle_api.record_toggle(
         tmp, "mod.ini", "KeyUpper",
-        {0: [], 1: [], 2: [], 3: []}, [line_100])
+        {0: [], 1: [], 2: [], 3: []}, _target_refs(FIXTURE, line_100))
 
     assert result["ok"] is True
     assert result["result"]["skipped"] == []
     pending = edit_session.peek(tmp, ini_path).to_string()
     assert "$Upper == 0 && $Upper != 0" in pending
     assert "drawindexed = 200,0,0" in pending
+
+
+def test_stale_record_target_rolls_back_without_pending_changes(toggle_mod):
+    tmp, ini_path = toggle_mod
+    line_100 = next(i for i, line in enumerate(FIXTURE.splitlines(), 1)
+                    if "100,0,0" in line)
+    stale = _target_refs(FIXTURE, line_100)[0]
+    stale["drawindexed"] = [999, 0, 0]
+
+    result = toggle_api.record_toggle(
+        tmp, "mod.ini", "KeyUpper",
+        {0: [], 1: [], 2: [], 3: []}, [stale])
+
+    assert "stale" in result["error"]
+    assert not toggle_api.has_pending_changes(tmp)
+    with open(ini_path, encoding="utf-8") as fh:
+        assert fh.read() == FIXTURE
 
 
 def test_record_toggle_rolls_back_pending_on_verify_mismatch(toggle_mod):
