@@ -584,29 +584,6 @@ def _protected_consumer_coverages(geometry, layout, info):
     return tuple(coverages)
 
 
-def _protected_pixel_coverages(geometry, layout):
-    """Return one-pixel-dilated pixel masks for preservation checks."""
-    coverages = []
-    for mip in layout.mips:
-        pixels = _rasterize_geometry(
-            geometry, mip.width, mip.height, 1, 1)
-        mask = dilate_pixel_mask(
-            pixels.mask, mip.width, mip.height, radius=1)
-        used = [index for index, value in enumerate(mask) if value]
-        bounds = None
-        if used:
-            bounds = (
-                min(index % mip.width for index in used),
-                min(index // mip.width for index in used),
-                max(index % mip.width for index in used),
-                max(index // mip.width for index in used),
-            )
-        coverages.append(UVCoverage(
-            mip.width, mip.height, mask, sum(mask), bounds,
-            pixels.triangle_count, pixels.degenerate_triangle_count))
-    return tuple(coverages)
-
-
 def _prepare_texture_bake(context, overrides, active_mesh_keys,
                           selected_semantic_key, selected_texture_key,
                           texture_usage, *, require_file_layout=True,
@@ -854,8 +831,14 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
             geometry = _prepare_uv_geometry(
                 consumer[0], consumer[1], context.mod_dir, buffers,
                 sparse_shape_cache, convention)
-            coverages = _protected_consumer_coverages(geometry, layout, info)
-            pixel_coverages = _protected_pixel_coverages(geometry, layout)
+            coverages = tuple(
+                _rasterize_geometry(
+                    geometry, mip.width, mip.height, *_unit_size(info))
+                for mip in layout.mips)
+            pixel_coverages = tuple(
+                _rasterize_geometry(
+                    geometry, mip.width, mip.height, 1, 1)
+                for mip in layout.mips)
         except TextureBakeAnalysisError as error:
             unresolved.append(semantic_key)
             unresolved_details.append({
@@ -903,21 +886,11 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
                     if item.pixel_coverages[level].mask[overlap])
                 raise _texture_save_conflict(
                     target.semantic_key, consumer.semantic_key, neutral=True)
-            for consumer in preservation_consumers:
-                target_units = target.coverages[level].mask
-                preserved_units = consumer.coverages[level].mask
-                if any(left and right for left, right in zip(
-                        target_units, preserved_units)):
-                    raise _texture_save_conflict(
-                        target.semantic_key, consumer.semantic_key, neutral=True)
-
-        target_units = bytearray()
-        for target in prepared_targets:
-            target_mask = target.coverages[level].mask
-            if not target_units:
-                target_units = bytearray(len(target_mask))
-            for index, selected in enumerate(target_mask):
-                target_units[index] = target_units[index] or selected
+        try:
+            target_units = collapse_pixel_mask_to_units(
+                target_union, mip.width, mip.height, *_unit_size(info))
+        except UVCoverageError as error:
+            raise TextureBakeAnalysisError(error.code, error.message) from error
         preserved = bytearray()
         for consumer in preservation_consumers:
             mask = consumer.coverages[level].mask
@@ -929,9 +902,10 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
             target_units = bytearray(mip.units_x * mip.units_y)
         if not preserved:
             preserved = bytearray(mip.units_x * mip.units_y)
-        safe = bytearray(
-            selected and not preserved[index]
-            for index, selected in enumerate(target_units))
+        # A block may contain both changed and neutral pixels. The composite
+        # target preserves the neutral pixels inside that block, so block
+        # overlap alone must not turn into a logical color conflict.
+        safe = bytearray(target_units)
         target_pixel_masks.append(bytearray(target_union))
         safe_masks.append(safe)
         preserved_masks.append(preserved)
@@ -947,8 +921,7 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     if not any(safe_masks[0]):
         raise TextureBakeAnalysisError(
             "incompatible_texture_color_usage",
-            "The changed meshes have no writable texture units after preserving "
-            "other consumers.", "unsupported",
+            "The changed meshes have no writable texture units.", "unsupported",
             {"meshes": [target.semantic_key for target in prepared_targets]})
     return _PreparedTextureSave(
         entries=entries, selected_path=selected_path, info=info, layout=layout,

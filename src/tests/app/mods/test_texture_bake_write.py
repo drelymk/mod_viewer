@@ -338,6 +338,79 @@ def test_texture_save_classifies_overlapping_adjustments(
         assert list(prepared.safe_masks[0]) == expected
 
 
+@pytest.mark.parametrize("neutral_pixel", [1, 15])
+def test_texture_save_allows_neutral_pixels_in_changed_bc7_block(
+        tmp_path, monkeypatch, neutral_pixel):
+    source = tmp_path / "body.dds"
+    source.write_bytes(_dx10_dds(bytes(16), 98, width=4, height=4))
+    info = inspect_dds_layout(source).info
+    parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"))
+    draws = {
+        "Body-1": SimpleNamespace(label="Body-1"),
+        "Body-2": SimpleNamespace(label="Body-2"),
+    }
+    groups = {key: {} for key in draws}
+    role_keys = {
+        "diffuse": "diffuse::body.dds", "normal_map": None,
+        "normal_data": None, "light_map": None,
+        "material_map": None, "emission_map": None,
+    }
+    usage = [
+        {"semantic_key": key, "tex_key": role_keys["diffuse"],
+         "texture_keys": dict(role_keys)}
+        for key in draws
+    ]
+    monkeypatch.setattr(
+        texture_bake, "_resolve_request",
+        lambda *_args, **_kwargs: (
+            tuple(entry for entry in usage), str(source), info, parsed,
+            (draws["Body-1"], groups["Body-1"]),
+            (("Body-2", (draws["Body-2"], groups["Body-2"])),)))
+    monkeypatch.setattr(
+        texture_bake, "_prepare_uv_geometry",
+        lambda draw, *_args: SimpleNamespace(label=draw.label,
+                                              triangle_count=1,
+                                              degenerate_triangle_count=0))
+    monkeypatch.setattr(
+        texture_bake, "_draw_metadata_key",
+        lambda draw, _group: f"{draw.label}::metadata")
+
+    def rasterize(geometry, width, height, unit_width, unit_height):
+        if unit_width == unit_height == 1:
+            mask = bytearray(width * height)
+            mask[0 if geometry.label == "Body-1" else neutral_pixel] = 1
+        else:
+            mask = bytearray([1])
+        return UVCoverage(width, height, mask, sum(mask), (0, 0, 0, 0), 1, 0)
+
+    monkeypatch.setattr(texture_bake, "_rasterize_geometry", rasterize)
+    prepared = texture_bake._prepare_texture_save(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, set(draws),
+        "diffuse::body.dds", [{
+            "semantic_key": "Body-1", "metadata_key": "Body-1::metadata",
+            "adjustment": {"hue": 30},
+        }], usage)
+
+    expected_pixels = bytearray(16)
+    expected_pixels[0] = 1
+    assert list(prepared.target_pixel_masks[0]) == list(expected_pixels)
+    assert list(prepared.safe_masks[0]) == [1]
+    assert list(prepared.preserved_masks[0]) == [1]
+
+    both_targets = texture_bake._prepare_texture_save(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, set(draws),
+        "diffuse::body.dds", [{
+            "semantic_key": "Body-1", "metadata_key": "Body-1::metadata",
+            "adjustment": {"hue": 30},
+        }, {
+            "semantic_key": "Body-2", "metadata_key": "Body-2::metadata",
+            "adjustment": {"hue": 60},
+        }], usage)
+    expected_pixels[neutral_pixel] = 1
+    assert list(both_targets.target_pixel_masks[0]) == list(expected_pixels)
+    assert list(both_targets.safe_masks[0]) == [1]
+
+
 def test_structural_patch_validation_rejects_unauthorized_unit_change(tmp_path):
     source = tmp_path / "source.dds"
     original = _rgba8_dds([10, 20, 30, 40, 50, 60, 70, 80])
