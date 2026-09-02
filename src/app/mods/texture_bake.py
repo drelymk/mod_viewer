@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from array import array
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import hashlib
@@ -23,7 +24,8 @@ from core.resource_paths import _canonical, safe_resource_path
 from core.textures import TEXTURE_ROLES, split_texture_key
 from core.textures import bc7 as _bc7_codec
 from core.textures.color_adjustment import (
-    adjust_rgba_bytes, is_neutral_color_adjustment,
+    adjust_rgba_bytes, apply_color_adjustment,
+    is_neutral_color_adjustment,
     normalize_color_adjustment,
 )
 from core.textures.dds import (
@@ -112,6 +114,8 @@ class _PreparedTextureSave:
     preserved_masks: tuple
     unresolved: tuple
     unresolved_details: tuple
+    mip0_claims: object
+    intent_adjustments: tuple
 
 
 @dataclass(frozen=True)
@@ -708,24 +712,53 @@ def _adjustment_signature(adjustment):
     return tuple(sorted(adjustment.items()))
 
 
-def _texture_save_conflict(target_key, other_key, *, neutral=False):
-    relation = "a neutral consumer" if neutral else "another color adjustment"
+def _texture_save_conflict(target_key, other_key):
     message = (
-        f"Mesh {target_key} overlaps {relation} on the selected texture; "
-        "the texture cannot preserve both colors.")
+        f"Mesh {target_key} overlaps another color adjustment on the selected "
+        "texture; the texture cannot represent both colors.")
     return TextureBakeAnalysisError(
         "incompatible_texture_color_usage", message, "unsupported", {
             "meshes": [target_key, other_key],
             "target_semantic_key": target_key,
             "conflicting_semantic_key": other_key,
-            "conflict": "neutral" if neutral else "adjustment",
+            "conflict": "adjustment",
         })
+
+
+def _intent_region_bounds(index, source_size, target_size):
+    """Return the source-pixel range represented by one lower-mip pixel."""
+    start = (index * source_size) // target_size
+    end = ((index + 1) * source_size) // target_size
+    return start, max(start + 1, end)
+
+
+def _downsample_intent_mask(claims, source_width, source_height,
+                            target_width, target_height):
+    """Project mip-0 ownership into a lower-mip pixel mask."""
+    if len(claims) != source_width * source_height:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Mip-0 color intent does not match the source texture size.")
+    mask = bytearray(target_width * target_height)
+    for y in range(target_height):
+        source_y0, source_y1 = _intent_region_bounds(
+            y, source_height, target_height)
+        for x in range(target_width):
+            source_x0, source_x1 = _intent_region_bounds(
+                x, source_width, target_width)
+            for source_y in range(source_y0, source_y1):
+                start = source_y * source_width + source_x0
+                end = source_y * source_width + source_x1
+                if any(claims[start:end]):
+                    mask[y * target_width + x] = 1
+                    break
+    return mask
 
 
 def _prepare_texture_save(context, overrides, active_mesh_keys,
                           selected_texture_key, targets, texture_usage,
                           *, require_file_layout=True):
-    """Resolve all changed consumers and preservation constraints for one DDS."""
+    """Resolve changed consumers and mip-0 Color intent for one DDS."""
     if not isinstance(targets, list) or not targets:
         raise TextureBakeAnalysisError(
             "no_color_adjustment", "Adjust a mesh color before saving.")
@@ -791,19 +824,16 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     prepared_targets = []
     unresolved = []
     unresolved_details = []
+    base_mip = layout.mips[0]
     for semantic_key, metadata_key, draw_pair, adjustment in requested_targets:
         try:
             geometry = _prepare_uv_geometry(
                 draw_pair[0], draw_pair[1], context.mod_dir, buffers,
                 sparse_shape_cache, convention)
-            pixel_coverages = tuple(
-                _rasterize_geometry(
-                    geometry, mip.width, mip.height, 1, 1)
-                for mip in layout.mips)
-            coverages = tuple(
-                _rasterize_geometry(
-                    geometry, mip.width, mip.height, *_unit_size(info))
-                for mip in layout.mips)
+            pixel_coverages = (_rasterize_geometry(
+                geometry, base_mip.width, base_mip.height, 1, 1),)
+            coverages = (_rasterize_geometry(
+                geometry, base_mip.width, base_mip.height, *_unit_size(info)),)
         except TextureBakeAnalysisError as error:
             unresolved.append(semantic_key)
             unresolved_details.append({
@@ -816,103 +846,69 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
             semantic_key, geometry, coverages, metadata_key, adjustment, True,
             pixel_coverages))
 
-    # Every same-DDS consumer absent from the target list is a preservation
-    # constraint. This includes hidden active draws and authored conditional
-    # variants returned by _resolve_request.
-    preservation_consumers = []
-    for semantic_key, consumer in consumers:
-        if semantic_key in target_keys:
-            continue
-        try:
-            if consumer is None:
+    # Save represents only explicit Color intentions. A neutral same-diffuse
+    # consumer has no independent desired output and must not block a write.
+    # Keep no geometry for those consumers: this also avoids turning an
+    # unresolvable neutral draw into a false coverage failure.
+    preservation_consumers = ()
+
+    intent_adjustments = [None]
+    intent_classes = {}
+    mip0_claims = array("H", [0]) * (base_mip.width * base_mip.height)
+    mip0_sources = [None] * len(mip0_claims)
+    for target in prepared_targets:
+        signature = _adjustment_signature(target.adjustment)
+        intent_class = intent_classes.get(signature)
+        if intent_class is None:
+            intent_class = len(intent_adjustments)
+            if intent_class > 0xFFFF:
                 raise TextureBakeAnalysisError(
-                    "geometry_not_available",
-                    "The rendered draw geometry could not be prepared.")
-            geometry = _prepare_uv_geometry(
-                consumer[0], consumer[1], context.mod_dir, buffers,
-                sparse_shape_cache, convention)
-            coverages = tuple(
-                _rasterize_geometry(
-                    geometry, mip.width, mip.height, *_unit_size(info))
-                for mip in layout.mips)
-            pixel_coverages = tuple(
-                _rasterize_geometry(
-                    geometry, mip.width, mip.height, 1, 1)
-                for mip in layout.mips)
-        except TextureBakeAnalysisError as error:
-            unresolved.append(semantic_key)
-            unresolved_details.append({
-                "semantic_key": semantic_key,
-                "code": error.code,
-                "error": error.message,
-            })
-            continue
-        preservation_consumers.append(_PreparedConsumer(
-            semantic_key, geometry, coverages, pixel_coverages=pixel_coverages))
+                    "texture_validation_failed",
+                    "Too many distinct Color adjustments were submitted.")
+            intent_classes[signature] = intent_class
+            intent_adjustments.append(target.adjustment)
+        mask = target.pixel_coverages[0].mask
+        if len(mask) != len(mip0_claims):
+            raise TextureBakeAnalysisError(
+                "texture_validation_failed",
+                "Target pixel coverage does not match the source texture size.")
+        for index, selected in enumerate(mask):
+            if not selected:
+                continue
+            previous = mip0_claims[index]
+            if previous and previous != intent_class:
+                raise _texture_save_conflict(
+                    mip0_sources[index], target.semantic_key)
+            mip0_claims[index] = intent_class
+            if mip0_sources[index] is None:
+                mip0_sources[index] = target.semantic_key
 
     target_pixel_masks = []
     safe_masks = []
     preserved_masks = []
     for level, mip in enumerate(layout.mips):
-        pixel_count = mip.width * mip.height
-        target_union = bytearray(pixel_count)
-        target_claims = [None] * pixel_count
-        for target in prepared_targets:
-            mask = target.pixel_coverages[level].mask
-            signature = _adjustment_signature(target.adjustment)
-            for index, selected in enumerate(mask):
-                if not selected:
-                    continue
-                previous = target_claims[index]
-                if previous is not None and previous[0] != signature:
-                    raise _texture_save_conflict(
-                        previous[1], target.semantic_key)
-                target_claims[index] = (signature, target.semantic_key)
-                target_union[index] = 1
-
-        neutral_union = bytearray(pixel_count)
-        for consumer in preservation_consumers:
-            for index, selected in enumerate(
-                    consumer.pixel_coverages[level].mask):
-                if selected:
-                    neutral_union[index] = 1
-        for target in prepared_targets:
-            actual = target.pixel_coverages[level].mask
-            overlap = next((index for index, selected in enumerate(actual)
-                            if selected and neutral_union[index]), None)
-            if overlap is not None:
-                consumer = next(
-                    item for item in preservation_consumers
-                    if item.pixel_coverages[level].mask[overlap])
-                raise _texture_save_conflict(
-                    target.semantic_key, consumer.semantic_key, neutral=True)
+        target_pixels = (bytearray(1 if claim else 0 for claim in mip0_claims)
+                         if level == 0 else _downsample_intent_mask(
+                             mip0_claims, base_mip.width, base_mip.height,
+                             mip.width, mip.height))
         try:
             target_units = collapse_pixel_mask_to_units(
-                target_union, mip.width, mip.height, *_unit_size(info))
+                target_pixels, mip.width, mip.height, *_unit_size(info))
         except UVCoverageError as error:
             raise TextureBakeAnalysisError(error.code, error.message) from error
-        preserved = bytearray()
-        for consumer in preservation_consumers:
-            mask = consumer.coverages[level].mask
-            if not preserved:
-                preserved = bytearray(len(mask))
-            for index, selected in enumerate(mask):
-                preserved[index] = preserved[index] or selected
         if not target_units:
             target_units = bytearray(mip.units_x * mip.units_y)
-        if not preserved:
-            preserved = bytearray(mip.units_x * mip.units_y)
-        # A block may contain both changed and neutral pixels. The composite
-        # target preserves the neutral pixels inside that block, so block
+        # A block may contain both claimed and unclaimed pixels. The composite
+        # target preserves the source RGB for unclaimed pixels, so block
         # overlap alone must not turn into a logical color conflict.
         safe = bytearray(target_units)
-        target_pixel_masks.append(bytearray(target_union))
+        target_pixel_masks.append(target_pixels)
         safe_masks.append(safe)
-        preserved_masks.append(preserved)
+        preserved_masks.append(bytearray(mip.units_x * mip.units_y))
 
     if unresolved:
         # Preparation is still useful for diagnostics, but Save cannot safely
-        # proceed when any same-DDS consumer is unknown.
+        # proceed when an explicit changed target is unknown.
         raise TextureBakeAnalysisError(
             "unknown_texture_coverage",
             "Texture coverage could not be determined safely.",
@@ -926,10 +922,12 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     return _PreparedTextureSave(
         entries=entries, selected_path=selected_path, info=info, layout=layout,
         targets=tuple(prepared_targets),
-        preservation_consumers=tuple(preservation_consumers),
+        preservation_consumers=preservation_consumers,
         target_pixel_masks=tuple(target_pixel_masks), safe_masks=tuple(safe_masks),
         preserved_masks=tuple(preserved_masks), unresolved=tuple(unresolved),
-        unresolved_details=tuple(unresolved_details))
+        unresolved_details=tuple(unresolved_details),
+        mip0_claims=array("H", mip0_claims),
+        intent_adjustments=tuple(intent_adjustments))
 
 
 def _analysis_result(prepared):
@@ -2445,21 +2443,88 @@ def bake_texture_color(
 
 
 def _compose_texture_save_image(source_image, prepared, level):
-    """Compose all target adjustments over one decoded DDS mip."""
+    """Compose one authored mip from mip-0 Color-intent ownership."""
     source_image = source_image.convert("RGBA")
     width, height = source_image.size
+    mip = prepared.layout.mips[level]
+    if source_image.size != (mip.width, mip.height):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Decoded DDS source dimensions are invalid.")
     source_rgba = source_image.tobytes()
     composed = bytearray(source_rgba)
     pixel_mask = prepared.target_pixel_masks[level]
-    for target in prepared.targets:
-        mask = target.pixel_coverages[level].mask
-        adjusted = adjust_rgba_bytes(
-            source_rgba, width, height, target.adjustment, mask)
-        for index, selected in enumerate(mask):
-            if not selected:
-                continue
-            start = index * 4
-            composed[start:start + 4] = adjusted[start:start + 4]
+    claims = getattr(prepared, "mip0_claims", None)
+    adjustments = getattr(prepared, "intent_adjustments", None)
+    if claims is None or adjustments is None:
+        # Keep direct low-level test fixtures that predate the intent map
+        # source-compatible; authoritative Save preparations always include it.
+        for target in prepared.targets:
+            mask = target.pixel_coverages[level].mask
+            adjusted = adjust_rgba_bytes(
+                source_rgba, width, height, target.adjustment, mask)
+            for index, selected in enumerate(mask):
+                if not selected:
+                    continue
+                start = index * 4
+                composed[start:start + 4] = adjusted[start:start + 4]
+    else:
+        base_mip = prepared.layout.mips[0]
+        if (len(claims) != base_mip.width * base_mip.height
+                or not adjustments):
+            raise TextureBakeAnalysisError(
+                "texture_validation_failed",
+                "Mip-0 color intent does not match the source texture size.")
+        if level == 0:
+            if len(claims) != width * height:
+                raise TextureBakeAnalysisError(
+                    "texture_validation_failed",
+                    "Mip-0 color intent does not match the decoded image.")
+            for index, intent_class in enumerate(claims):
+                if not intent_class:
+                    continue
+                start = index * 4
+                red, green, blue = (
+                    channel / 255.0 for channel in source_rgba[start:start + 3])
+                adjusted = apply_color_adjustment(
+                    (red, green, blue), adjustments[intent_class])
+                composed[start:start + 3] = bytes(
+                    min(255, max(0, round(channel * 255.0)))
+                    for channel in adjusted)
+        else:
+            for y in range(height):
+                source_y0, source_y1 = _intent_region_bounds(
+                    y, base_mip.height, height)
+                for x in range(width):
+                    source_x0, source_x1 = _intent_region_bounds(
+                        x, base_mip.width, width)
+                    counts = [0] * len(adjustments)
+                    for source_y in range(source_y0, source_y1):
+                        start = source_y * base_mip.width + source_x0
+                        end = source_y * base_mip.width + source_x1
+                        for intent_class in claims[start:end]:
+                            counts[int(intent_class)] += 1
+                    changed_count = sum(counts[1:])
+                    if not changed_count:
+                        continue
+                    total_count = sum(counts)
+                    pixel = (y * width + x) * 4
+                    base_rgb = tuple(
+                        channel / 255.0
+                        for channel in source_rgba[pixel:pixel + 3])
+                    weighted = [
+                        base_rgb[channel] * counts[0]
+                        for channel in range(3)]
+                    for intent_class, count in enumerate(counts[1:], 1):
+                        if not count:
+                            continue
+                        adjusted = apply_color_adjustment(
+                            base_rgb, adjustments[intent_class])
+                        for channel in range(3):
+                            weighted[channel] += adjusted[channel] * count
+                    composed[pixel:pixel + 3] = bytes(
+                        min(255, max(0, round(value / total_count * 255.0)))
+                        for value in weighted)
     if composed[3::4] != source_rgba[3::4]:
         raise TextureBakeAnalysisError(
             "texture_validation_failed",
