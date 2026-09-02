@@ -68,8 +68,6 @@ class _PreparedGeometry:
 class _PreparedSaveTarget:
     semantic_key: str
     metadata_key: str
-    adjustment: object
-    pixel_coverage: object
 
 
 @dataclass(frozen=True)
@@ -265,8 +263,7 @@ def _rasterize_geometry(geometry, width, height, unit_width, unit_height):
         raise TextureSaveError(error.code, error.message) from error
 
 
-def _validate_usage(active_mesh_keys, selected_semantic_key, selected_texture_key,
-                    texture_usage):
+def _validate_usage(active_mesh_keys, texture_usage):
     if not isinstance(texture_usage, list):
         raise TextureSaveError(
             "stale_mesh_state",
@@ -312,33 +309,33 @@ def _validate_usage(active_mesh_keys, selected_semantic_key, selected_texture_ke
         raise TextureSaveError(
             "stale_mesh_state",
             "The model changed before the texture save started.")
-    if not isinstance(selected_texture_key, str):
-        raise TextureSaveError(
-            "stale_mesh_state",
-            "The model changed before the texture save started.")
-    selected = next((item for item in entries
-                     if item["semantic_key"] == selected_semantic_key), None)
-    if selected is None or selected["texture_keys"]["diffuse"] != selected_texture_key:
-        raise TextureSaveError(
-            "stale_mesh_state",
-            "The model changed before the texture save started.")
     return tuple(entries)
 
 
 def _resolve_save_request(context, overrides, active_mesh_keys,
-                          selected_semantic_key, selected_texture_key,
-                          texture_usage):
-    entries = _validate_usage(
-        active_mesh_keys, selected_semantic_key, selected_texture_key,
-        texture_usage)
+                          selected_texture_key, texture_usage):
+    entries = _validate_usage(active_mesh_keys, texture_usage)
+    if not isinstance(selected_texture_key, str):
+        raise TextureSaveError(
+            "stale_mesh_state",
+            "The model changed before the texture save started.")
     selected_path = _texture_path(
         context.mod_dir, selected_texture_key, selected=True)
     info = _inspect_save_texture(selected_path)
     parsed, draws = resolved_draws(context, overrides)
-    if draws.get(selected_semantic_key) is None:
-        raise TextureSaveError(
-            "mesh_not_found", "The selected mesh is no longer available.")
     selected_identity = _physical_identity(selected_path)
+    has_active_selected_diffuse = False
+    for entry in entries:
+        diffuse_path = _texture_path(
+            context.mod_dir, entry["texture_keys"]["diffuse"])
+        if (diffuse_path
+                and _physical_identity(diffuse_path) == selected_identity):
+            has_active_selected_diffuse = True
+            break
+    if not has_active_selected_diffuse:
+        raise TextureSaveError(
+            "stale_mesh_state",
+            "The model changed before the texture save started.")
     cross_role_usage = []
     cross_role_seen = set()
     for entry in entries:
@@ -723,10 +720,8 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
         timings["bc7_decode_fit"] = timings.get("bc7_decode_fit", 0.0) + (
             time.perf_counter() - started)
         _LOGGER.debug(
-            "texture save bc7 mip=%s size=%sx%s affected_blocks=%s "
-            "improved_blocks=%s",
-            level, mip.width, mip.height, len(affected),
-            len(affected))
+            "texture save bc7 mip=%s size=%sx%s affected_blocks=%s",
+            level, mip.width, mip.height, len(affected))
     stats = BC7SaveStats(
         touched_blocks=touched, improved_blocks=improved,
         unchanged_blocks=unchanged, source_rgb_error=source_error,
@@ -758,10 +753,9 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     if any(not isinstance(target, dict) for target in targets):
         raise TextureSaveError(
             "stale_mesh_state", "The model changed before the texture save started.")
-    first_semantic_key = targets[0].get("semantic_key")
     entries, selected_path, info, parsed, draws = \
         _resolve_save_request(
-            context, overrides, active_mesh_keys, first_semantic_key,
+            context, overrides, active_mesh_keys,
             selected_texture_key, texture_usage)
     layout = inspect_dds_layout(selected_path)
     if layout is None:
@@ -815,6 +809,14 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     unresolved = []
     unresolved_details = []
     base_mip = layout.mips[0]
+    intent_adjustments = [None]
+    prepared_intent_adjustments = [None]
+    intent_classes = {}
+    intent_sources = [None]
+    mip0_claims = bytearray(base_mip.width * base_mip.height)
+    mip0_affected_mask = bytearray(
+        base_mip.units_x * base_mip.units_y)
+    claims_need_wide_values = False
     for semantic_key, metadata_key, draw_pair, adjustment in requested_targets:
         try:
             geometry = _prepare_uv_geometry(
@@ -831,20 +833,8 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
             })
             continue
         prepared_targets.append(_PreparedSaveTarget(
-            semantic_key, metadata_key, adjustment, pixel_coverage))
-
-    # Save represents only explicit Color intentions. A neutral same-diffuse
-    # consumer has no independent desired output and must not block a write.
-    intent_adjustments = [None]
-    prepared_intent_adjustments = [None]
-    intent_classes = {}
-    intent_sources = [None]
-    mip0_claims = bytearray(base_mip.width * base_mip.height)
-    mip0_affected_mask = bytearray(
-        base_mip.units_x * base_mip.units_y)
-    claims_need_wide_values = False
-    for target in prepared_targets:
-        signature = _adjustment_signature(target.adjustment)
+            semantic_key, metadata_key))
+        signature = _adjustment_signature(adjustment)
         intent_class = intent_classes.get(signature)
         if intent_class is None:
             intent_class = len(intent_adjustments)
@@ -853,14 +843,14 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
                     "texture_validation_failed",
                     "Too many distinct Color adjustments were submitted.")
             intent_classes[signature] = intent_class
-            intent_adjustments.append(target.adjustment)
-            prepared_intent_adjustments.append(
-                prepare_color_adjustment(target.adjustment))
-            intent_sources.append(target.semantic_key)
+            intent_adjustments.append(adjustment)
+            prepared_intent_adjustments.append(prepare_color_adjustment(
+                adjustment))
+            intent_sources.append(semantic_key)
             if intent_class > 0xFF and not claims_need_wide_values:
                 mip0_claims = array("H", mip0_claims)
                 claims_need_wide_values = True
-        mask = target.pixel_coverage.mask
+        mask = pixel_coverage.mask
         if len(mask) != len(mip0_claims):
             raise TextureSaveError(
                 "texture_validation_failed",
@@ -871,7 +861,7 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
             previous = mip0_claims[index]
             if previous and previous != intent_class:
                 raise _texture_save_conflict(
-                    intent_sources[previous], target.semantic_key)
+                    intent_sources[previous], semantic_key)
             mip0_claims[index] = intent_class
             x = index % base_mip.width
             y = index // base_mip.width
