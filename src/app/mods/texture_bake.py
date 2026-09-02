@@ -108,8 +108,8 @@ class _PreparedTextureSave:
     info: object
     layout: object
     targets: tuple
-    target_pixel_masks: tuple
-    safe_masks: tuple
+    target_pixel_masks: tuple | None
+    safe_masks: tuple | None
     unresolved: tuple
     unresolved_details: tuple
     mip0_claims: object
@@ -131,6 +131,18 @@ class AlphaCompatibilityStats:
     source_mode6_tested: int = 0
     source_mode6_compatible: int = 0
     protected_mode_counts: tuple = ()
+
+
+@dataclass(frozen=True)
+class BC7SaveStats:
+    """Quality and workload measurements for a direct BC7 Save."""
+
+    touched_blocks: int
+    improved_blocks: int
+    unchanged_blocks: int
+    source_rgb_error: int
+    final_rgb_error: int
+    modes: dict
 
 
 @dataclass(frozen=True)
@@ -807,6 +819,259 @@ def _downsample_intent_counts(claims, counts, source_width, source_height,
     return result
 
 
+def _downsample_single_intent_counts(changed, source_width, source_height,
+                                     target_width, target_height,
+                                     source_max_count=1):
+    """Downsample only changed coverage for the common one-adjustment case."""
+    source_pixels = source_width * source_height
+    if len(changed) != source_pixels:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Mip color intent does not match the source texture size.")
+    max_region_width = (source_width + target_width - 1) // target_width
+    max_region_height = (source_height + target_height - 1) // target_height
+    max_count = source_max_count * max_region_width * max_region_height
+    typecode = "H" if max_count <= 0xFFFF else "I"
+    result = array(typecode, [0]) * (target_width * target_height)
+    for y in range(target_height):
+        source_y0, source_y1 = _intent_region_bounds(
+            y, source_height, target_height)
+        for x in range(target_width):
+            source_x0, source_x1 = _intent_region_bounds(
+                x, source_width, target_width)
+            total = 0
+            for source_y in range(source_y0, source_y1):
+                start = source_y * source_width + source_x0
+                end = source_y * source_width + source_x1
+                total += sum(changed[start:end])
+            result[y * target_width + x] = total
+    return result, max_count
+
+
+def _bc7_intent_level(prepared):
+    """Create the level-zero intent state used by direct BC7 Save."""
+    base_mip = prepared.layout.mips[0]
+    claims = getattr(prepared, "mip0_claims", None)
+    adjustments = getattr(prepared, "intent_adjustments", None)
+    if claims is None or not adjustments or len(claims) != (
+            base_mip.width * base_mip.height):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Mip-0 color intent does not match the source texture size.")
+    class_count = len(adjustments)
+    changed = bytearray(1 if value else 0 for value in claims)
+    return {
+        "level": 0,
+        "width": base_mip.width,
+        "height": base_mip.height,
+        "claims": claims,
+        "changed": changed,
+        "single": class_count == 2,
+        "counts": None,
+        "max_count": 1,
+        "parent_width": None,
+        "parent_height": None,
+    }
+
+
+def _bc7_next_intent_level(state, target_width, target_height, class_count):
+    """Advance direct-save intent by exactly one authored mip."""
+    source_width, source_height = state["width"], state["height"]
+    if state["single"]:
+        changed, max_count = _downsample_single_intent_counts(
+            state["changed"], source_width, source_height,
+            target_width, target_height, state["max_count"])
+        counts = None
+    else:
+        counts = _downsample_intent_counts(
+            state["claims"] if state["counts"] is None else None,
+            state["counts"], source_width, source_height,
+            target_width, target_height, class_count, state["max_count"])
+        changed = bytearray(
+            1 if any(count[index] for count in counts[1:]) else 0
+            for index in range(target_width * target_height))
+        max_count = state["max_count"] * (
+            (source_width + target_width - 1) // target_width) * (
+            (source_height + target_height - 1) // target_height)
+    return {
+        "level": state["level"] + 1,
+        "width": target_width,
+        "height": target_height,
+        "claims": None,
+        "changed": changed,
+        "single": state["single"],
+        "counts": counts,
+        "max_count": max_count,
+        "parent_width": source_width,
+        "parent_height": source_height,
+    }
+
+
+def _bc7_affected_blocks(changed, width, height, mip):
+    """Return only BC7 blocks containing changed intent pixels."""
+    if len(changed) != width * height:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Mip color intent does not match the source texture size.")
+    affected = set()
+    for pixel, selected in enumerate(changed):
+        if not selected:
+            continue
+        x = pixel % width
+        y = pixel // width
+        affected.add((y // 4) * mip.units_x + x // 4)
+    return sorted(affected)
+
+
+def _bc7_intent_rgb(source_rgb, state, pixel, adjustments):
+    """Resolve one target RGB value from the current mip's intent state."""
+    base = tuple(channel / 255.0 for channel in source_rgb)
+    if state["level"] == 0:
+        intent_class = state["claims"][pixel]
+        if not isinstance(intent_class, int) or not (
+                0 <= intent_class < len(adjustments)):
+            raise TextureBakeAnalysisError(
+                "texture_validation_failed",
+                "Mip-0 color intent contains an invalid class.")
+        if not intent_class:
+            return source_rgb
+        adjusted = apply_color_adjustment(
+            base, adjustments[intent_class])
+        return tuple(min(255, max(0, round(value * 255.0)))
+                      for value in adjusted)
+
+    if state["single"]:
+        changed_count = state["changed"][pixel]
+        if not changed_count:
+            return source_rgb
+        source_x0, source_x1 = _intent_region_bounds(
+            pixel % state["width"], state["parent_width"], state["width"])
+        source_y0, source_y1 = _intent_region_bounds(
+            pixel // state["width"], state["parent_height"], state["height"])
+        total_count = (source_x1 - source_x0) * (source_y1 - source_y0)
+        adjusted = apply_color_adjustment(base, adjustments[1])
+        return tuple(min(255, max(0, round(value * 255.0)))
+                      for value in (
+                          (base[channel] * (total_count - changed_count)
+                           + adjusted[channel] * changed_count) / total_count
+                          for channel in range(3)))
+
+    counts = [count[pixel] for count in state["counts"]]
+    total_count = sum(counts)
+    changed_count = sum(counts[1:])
+    if not changed_count or not total_count:
+        return source_rgb
+    weighted = [base[channel] * counts[0] for channel in range(3)]
+    for intent_class, count in enumerate(counts[1:], 1):
+        if not count:
+            continue
+        adjusted = apply_color_adjustment(base, adjustments[intent_class])
+        for channel in range(3):
+            weighted[channel] += adjusted[channel] * count
+    return tuple(min(255, max(0, round(
+        value / total_count * 255.0))) for value in weighted)
+
+
+def _bc7_target_block_pixels(source_block, mip, block_index, state,
+                             adjustments):
+    """Build one sixteen-pixel BC7 target without a reconstructed image."""
+    try:
+        source_pixels = _bc7_codec.decode_block(source_block)
+    except _bc7_codec.BC7Error as error:
+        raise TextureBakeAnalysisError(
+            "invalid_bc7", "The texture contains invalid BC7 data.") from error
+    source_x, source_y, valid_width, valid_height = _unit_bounds(
+        mip, block_index)
+    target_pixels = list(source_pixels)
+    for row in range(valid_height):
+        for column in range(valid_width):
+            local = row * 4 + column
+            pixel = ((source_y + row) * mip.width + source_x + column)
+            rgb = _bc7_intent_rgb(
+                source_pixels[local][:3], state, pixel, adjustments)
+            target_pixels[local] = rgb + (source_pixels[local][3],)
+    return tuple(target_pixels), valid_width, valid_height
+
+
+def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
+    """Edit authorized BC7 blocks in-place while preserving all other bytes."""
+    timings = {} if timings is None else timings
+    if not prepared.info.format.startswith("bc7"):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "Direct BC7 Save received another format.")
+    if len(original) < prepared.layout.payload_end:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "DDS payload layout is invalid.")
+    adjustments = getattr(prepared, "intent_adjustments", None)
+    if not adjustments:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "Color intent is missing.")
+    final = bytearray(original)
+    writable_masks = []
+    state = _bc7_intent_level(prepared)
+    touched = improved = unchanged = 0
+    source_error = final_error = 0
+    modes = {}
+    for level, mip in enumerate(prepared.layout.mips):
+        if level:
+            started = time.perf_counter()
+            state = _bc7_next_intent_level(
+                state, mip.width, mip.height, len(adjustments))
+            timings["intent"] = timings.get("intent", 0.0) + (
+                time.perf_counter() - started)
+        affected = _bc7_affected_blocks(
+            state["changed"], mip.width, mip.height, mip)
+        writable = bytearray(mip.units_x * mip.units_y)
+        started = time.perf_counter()
+        if stage_callback is not None:
+            stage_callback("bc7_decode_fit")
+        for block_index in affected:
+            start = mip.offset + block_index * mip.bytes_per_unit
+            source_block = bytes(original[start:start + 16])
+            target_pixels, valid_width, valid_height = (
+                _bc7_target_block_pixels(
+                    source_block, mip, block_index, state, adjustments))
+            result = _bc7_codec_call(
+                _bc7_codec.recolor_block, source_block, target_pixels,
+                valid_width, valid_height)
+            final[start:start + 16] = result.block
+            writable[block_index] = 1
+            touched += 1
+            improved += result.candidate_error < result.source_error
+            unchanged += result.candidate_error == result.source_error
+            source_error += result.source_error
+            final_error += result.candidate_error
+            modes[result.mode] = modes.get(result.mode, 0) + 1
+        timings["bc7_decode_fit"] = timings.get("bc7_decode_fit", 0.0) + (
+            time.perf_counter() - started)
+        _LOGGER.debug(
+            "texture save bc7 mip=%s size=%sx%s affected_blocks=%s "
+            "improved_blocks=%s",
+            level, mip.width, mip.height, len(affected),
+            sum(1 for index in affected if writable[index]))
+        writable_masks.append(writable)
+    stats = BC7SaveStats(
+        touched_blocks=touched, improved_blocks=improved,
+        unchanged_blocks=unchanged, source_rgb_error=source_error,
+        final_rgb_error=final_error, modes=dict(sorted(modes.items())))
+    if not touched:
+        raise TextureBakeAnalysisError(
+            "incompatible_texture_color_usage",
+            "The changed meshes have no writable texture units.",
+            "unsupported")
+    if final_error >= source_error:
+        raise TextureBakeAnalysisError(
+            "texture_color_not_representable",
+            "The requested Color change could not be represented safely in "
+            "the source BC7 blocks.", "unsupported", {
+                "touched_blocks": touched,
+                "improved_blocks": improved,
+                "source_rgb_error": source_error,
+                "final_rgb_error": final_error,
+            })
+    return bytes(final), tuple(writable_masks), stats
+
+
 def _prepare_texture_save(context, overrides, active_mesh_keys,
                           selected_texture_key, targets, texture_usage,
                           *, require_file_layout=True):
@@ -884,8 +1149,10 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
                 sparse_shape_cache, convention)
             pixel_coverages = (_rasterize_geometry(
                 geometry, base_mip.width, base_mip.height, 1, 1),)
-            coverages = (_rasterize_geometry(
-                geometry, base_mip.width, base_mip.height, *_unit_size(info)),)
+            coverages = (() if info.format.startswith("bc7") else
+                         (_rasterize_geometry(
+                             geometry, base_mip.width, base_mip.height,
+                             *_unit_size(info)),))
         except TextureBakeAnalysisError as error:
             unresolved.append(semantic_key)
             unresolved_details.append({
@@ -905,7 +1172,8 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     intent_adjustments = [None]
     intent_classes = {}
     intent_sources = [None]
-    mip0_claims = array("H", [0]) * (base_mip.width * base_mip.height)
+    mip0_claims = bytearray(base_mip.width * base_mip.height)
+    claims_need_wide_values = False
     for target in prepared_targets:
         signature = _adjustment_signature(target.adjustment)
         intent_class = intent_classes.get(signature)
@@ -918,6 +1186,9 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
             intent_classes[signature] = intent_class
             intent_adjustments.append(target.adjustment)
             intent_sources.append(target.semantic_key)
+            if intent_class > 0xFF and not claims_need_wide_values:
+                mip0_claims = array("H", mip0_claims)
+                claims_need_wide_values = True
         mask = target.pixel_coverages[0].mask
         if len(mask) != len(mip0_claims):
             raise TextureBakeAnalysisError(
@@ -932,29 +1203,32 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
                     intent_sources[previous], target.semantic_key)
             mip0_claims[index] = intent_class
 
-    target_pixel_masks = []
-    safe_masks = []
-    target_pixels = bytearray(1 if claim else 0 for claim in mip0_claims)
-    previous_width, previous_height = base_mip.width, base_mip.height
-    for level, mip in enumerate(layout.mips):
-        if level:
-            target_pixels = _downsample_intent_mask(
-                target_pixels, previous_width, previous_height,
-                mip.width, mip.height)
-            previous_width, previous_height = mip.width, mip.height
-        try:
-            target_units = collapse_pixel_mask_to_units(
-                target_pixels, mip.width, mip.height, *_unit_size(info))
-        except UVCoverageError as error:
-            raise TextureBakeAnalysisError(error.code, error.message) from error
-        if not target_units:
-            target_units = bytearray(mip.units_x * mip.units_y)
-        # A block may contain both claimed and unclaimed pixels. The composite
-        # target preserves the source RGB for unclaimed pixels, so block
-        # overlap alone must not turn into a logical color conflict.
-        safe = bytearray(target_units)
-        target_pixel_masks.append(target_pixels)
-        safe_masks.append(safe)
+    if info.format.startswith("bc7"):
+        target_pixel_masks = None
+        safe_masks = None
+    else:
+        target_pixel_masks = []
+        safe_masks = []
+        target_pixels = bytearray(1 if claim else 0 for claim in mip0_claims)
+        previous_width, previous_height = base_mip.width, base_mip.height
+        for level, mip in enumerate(layout.mips):
+            if level:
+                target_pixels = _downsample_intent_mask(
+                    target_pixels, previous_width, previous_height,
+                    mip.width, mip.height)
+                previous_width, previous_height = mip.width, mip.height
+            try:
+                target_units = collapse_pixel_mask_to_units(
+                    target_pixels, mip.width, mip.height, *_unit_size(info))
+            except UVCoverageError as error:
+                raise TextureBakeAnalysisError(error.code, error.message) from error
+            if not target_units:
+                target_units = bytearray(mip.units_x * mip.units_y)
+            # A block may contain both claimed and unclaimed pixels. The
+            # composite target preserves source RGB for unclaimed pixels.
+            safe = bytearray(target_units)
+            target_pixel_masks.append(target_pixels)
+            safe_masks.append(safe)
 
     if unresolved:
         # Preparation is still useful for diagnostics, but Save cannot safely
@@ -964,7 +1238,8 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
             "Texture coverage could not be determined safely.",
             details={"unresolved_consumers": list(unresolved),
                      "consumers": list(unresolved_details)})
-    if not any(safe_masks[0]):
+    if (not any(mip0_claims) if info.format.startswith("bc7")
+            else not any(safe_masks[0])):
         raise TextureBakeAnalysisError(
             "incompatible_texture_color_usage",
             "The changed meshes have no writable texture units.", "unsupported",
@@ -972,10 +1247,12 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     return _PreparedTextureSave(
         entries=entries, selected_path=selected_path, info=info, layout=layout,
         targets=tuple(prepared_targets),
-        target_pixel_masks=tuple(target_pixel_masks), safe_masks=tuple(safe_masks),
+        target_pixel_masks=(None if target_pixel_masks is None
+                            else tuple(target_pixel_masks)),
+        safe_masks=(None if safe_masks is None else tuple(safe_masks)),
         unresolved=tuple(unresolved),
         unresolved_details=tuple(unresolved_details),
-        mip0_claims=array("H", mip0_claims),
+        mip0_claims=mip0_claims,
         intent_adjustments=tuple(intent_adjustments))
 
 
@@ -2706,9 +2983,22 @@ def save_texture_color(
         original_hash = _sha256_bytes(original)
         affected = _affected_texture_keys(context, prepared)
         alpha_stats = ()
+        bc7_stats = None
 
         with tempfile.TemporaryDirectory(prefix="modviewer-save-") as workdir:
-            if prepared.info.format in _ALPHA_COUPLED_FORMATS:
+            if prepared.info.format.startswith("bc7"):
+                stage = "bc7_decode_fit"
+
+                def set_stage(value):
+                    nonlocal stage
+                    stage = value
+
+                candidate, writable_masks, bc7_stats = _save_bc7_blocks(
+                    original, prepared, timings, stage_callback=set_stage)
+                alpha_protected_masks = tuple(
+                    bytearray(len(mask)) for mask in writable_masks)
+                patch_candidate_layout = prepared.layout
+            elif prepared.info.format in _ALPHA_COUPLED_FORMATS:
                 stage = "compose_mips"
                 intent_state = {"level": -1}
 
@@ -2778,9 +3068,12 @@ def save_texture_color(
                     + time.perf_counter() - started)
 
             stage = "patch"
-            final = _patch_dds_units(
-                original, candidate, prepared.layout,
-                writable_masks, patch_candidate_layout)
+            if prepared.info.format.startswith("bc7"):
+                final = candidate
+            else:
+                final = _patch_dds_units(
+                    original, candidate, prepared.layout,
+                    writable_masks, patch_candidate_layout)
             stage = "validate"
             _validate_patched_units(
                 original, final, prepared.layout, writable_masks, candidate,
@@ -2819,6 +3112,19 @@ def save_texture_color(
                         "alpha_protected_levels": [
                             level for level, mask in enumerate(
                                 alpha_protected_masks) if any(mask)],
+                        **({
+                            "bc7": {
+                                "touched_blocks": bc7_stats.touched_blocks,
+                                "improved_blocks": bc7_stats.improved_blocks,
+                                "unchanged_blocks": bc7_stats.unchanged_blocks,
+                                "source_rgb_error": bc7_stats.source_rgb_error,
+                                "final_rgb_error": bc7_stats.final_rgb_error,
+                                "modes": {
+                                    str(mode): count
+                                    for mode, count in bc7_stats.modes.items()
+                                },
+                            }
+                        } if bc7_stats is not None else {}),
                     },
                     "backup": {"file": os.path.basename(backup_path)},
                 }

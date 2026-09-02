@@ -426,8 +426,9 @@ def test_texture_save_allows_neutral_pixels_in_changed_bc7_block(
 
     expected_pixels = bytearray(16)
     expected_pixels[0] = 1
-    assert list(prepared.target_pixel_masks[0]) == list(expected_pixels)
-    assert list(prepared.safe_masks[0]) == [1]
+    assert prepared.target_pixel_masks is None
+    assert prepared.safe_masks is None
+    assert list(prepared.mip0_claims) == list(expected_pixels)
 
     if not neutral_resolvable:
         assert prepared_labels == ["Body-1"]
@@ -442,9 +443,12 @@ def test_texture_save_allows_neutral_pixels_in_changed_bc7_block(
             "semantic_key": "Body-2", "metadata_key": "Body-2::metadata",
             "adjustment": {"hue": 60},
         }], usage)
-    expected_pixels[neutral_pixel] = 1
-    assert list(both_targets.target_pixel_masks[0]) == list(expected_pixels)
-    assert list(both_targets.safe_masks[0]) == [1]
+    expected_claims = bytearray(16)
+    expected_claims[0] = 1
+    expected_claims[neutral_pixel] = 2
+    assert both_targets.target_pixel_masks is None
+    assert both_targets.safe_masks is None
+    assert list(both_targets.mip0_claims) == list(expected_claims)
 
 
 def test_texture_save_derives_lower_mip_intent_from_mip0(
@@ -1213,6 +1217,12 @@ def test_texture_save_processes_sub_four_bc7_mips(
     )
     monkeypatch.setattr(texture_bake, "_prepare_texture_save",
                         lambda *args, **kwargs: prepared)
+
+    def texconv_must_not_run(*_args, **_kwargs):
+        raise AssertionError("BC7 Save must not invoke texconv")
+
+    monkeypatch.setattr(texture_bake, "encode_png_to_dds",
+                        texconv_must_not_run)
     monkeypatch.setattr(
         texture_bake, "_encode_alpha_candidate",
         lambda *_args, **_kwargs: (
@@ -1228,7 +1238,55 @@ def test_texture_save_processes_sub_four_bc7_mips(
     assert result["status"] == "ok"
     assert result["patched"]["mip0_units"] == 1
     assert result["patched"]["alpha_protected_units"] == 0
+    assert result["patched"]["bc7"]["touched_blocks"] == 3
+    assert result["patched"]["bc7"]["improved_blocks"] >= 1
     assert len(_backups(tmp_path, "bc7-save-edge-mips")) == 1
+
+
+def test_direct_bc7_save_keeps_unaffected_blocks_byte_identical(
+        tmp_path, monkeypatch):
+    anchor = texture_bake._bc7_codec._PARTITION_2_ANCHORS[13]
+    indices = [0, 1, 2, 3] * 4
+    indices[0] = 0
+    indices[anchor] = 1
+    block = _bc7_mode7_block(
+        13, (0, 1, 1, 0),
+        ((3, 6, 9, 4), (22, 18, 25, 30),
+         (8, 15, 5, 20), (28, 26, 30, 31)), indices)
+    source = tmp_path / "bc7-direct-sparse.dds"
+    original = _dx10_dds(block + block, 98, width=8, height=4)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        targets=(SimpleNamespace(
+            semantic_key="Body-1", metadata_key="Body-1::metadata"),),
+        entries=({"semantic_key": "Body-1",
+                  "tex_key": "diffuse::bc7-direct-sparse.dds"},),
+        unresolved=(), mip0_claims=([1] + [0] * 31),
+        intent_adjustments=(None, {"hue": 120}),)
+    monkeypatch.setattr(texture_bake, "_prepare_texture_save",
+                        lambda *args, **kwargs: prepared)
+
+    def texconv_must_not_run(*_args, **_kwargs):
+        raise AssertionError("BC7 Save must not invoke texconv")
+
+    monkeypatch.setattr(texture_bake, "encode_png_to_dds",
+                        texconv_must_not_run)
+    result = texture_bake.save_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"},
+        "diffuse::bc7-direct-sparse.dds", [{
+            "semantic_key": "Body-1", "metadata_key": "Body-1::metadata",
+            "adjustment": {"hue": 120},
+        }], [])
+
+    assert result["status"] == "ok"
+    final = source.read_bytes()
+    assert final[:layout.data_offset] == original[:layout.data_offset]
+    assert final[layout.mips[0].offset + 16:] == original[
+        layout.mips[0].offset + 16:]
+    assert final[layout.mips[0].offset:layout.mips[0].offset + 16] != (
+        original[layout.mips[0].offset:layout.mips[0].offset + 16])
 
 
 def test_bc7_coupled_bake_dispatches_mode4_and_mode5_fallback(
