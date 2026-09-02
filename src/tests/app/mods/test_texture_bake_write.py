@@ -72,6 +72,45 @@ def _bc7_mode6_block(alpha0, alpha1, indices, rgb0=(40, 60, 80),
     return bits.to_bytes(16, "little")
 
 
+def _bc7_separate_block(mode, rotation, index_mode, endpoints,
+                        first_indices, second_indices):
+    """Build a valid single-subset BC7 mode-4 or mode-5 block."""
+    assert mode in {4, 5}
+    assert rotation in range(4)
+    assert len(first_indices) == len(second_indices) == 16
+    bits = 1 << mode
+
+    def put(start, count, value):
+        nonlocal bits
+        bits = texture_bake._bc7_set_bits(bits, start, count, value)
+
+    start = mode + 1
+    put(start, 2, rotation)
+    start += 2
+    if mode == 4:
+        put(start, 1, index_mode)
+        start += 1
+    precisions = (5, 5, 5, 6) if mode == 4 else (7, 7, 7, 8)
+    for channel, precision in enumerate(precisions):
+        for endpoint in range(2):
+            put(start, precision, endpoints[channel][endpoint])
+            start += precision
+
+    put(start, 1, first_indices[0])
+    start += 1
+    for value in first_indices[1:]:
+        put(start, 2, value)
+        start += 2
+    second_precision = 3 if mode == 4 else 2
+    put(start, second_precision - 1, second_indices[0])
+    start += second_precision - 1
+    for value in second_indices[1:]:
+        put(start, second_precision, value)
+        start += second_precision
+    assert start == 128
+    return bits.to_bytes(16, "little")
+
+
 def _prepared(path):
     layout = inspect_dds_layout(path)
     selected_pixels = SimpleNamespace(mask=bytearray([1, 1]))
@@ -645,6 +684,103 @@ def test_bc7_mode6_retry_uses_q_flag_and_reports_compatibility(
     assert stats[0].source_mode6_compatible == 1
 
 
+@pytest.mark.parametrize("mode,rotation,index_mode", [
+    (4, 0, 0), (4, 1, 1), (4, 2, 0), (4, 3, 1),
+    (5, 0, 0), (5, 1, 0), (5, 2, 0), (5, 3, 0),
+])
+def test_bc7_separate_fallback_preserves_alpha_for_rotations(
+        tmp_path, mode, rotation, index_mode):
+    first_indices = [0, 1, 2, 3] * 4
+    second_indices = ([0, 1, 2, 3, 4, 5, 6, 7] * 2
+                      if mode == 4 else [0, 1, 2, 3] * 4)
+    block = _bc7_separate_block(
+        mode, rotation, index_mode,
+        ((4, 24), (8, 28), (12, 31), (3, 57))
+        if mode == 4 else
+        ((18, 92), (28, 104), (38, 116), (32, 224)),
+        first_indices, second_indices)
+    source = tmp_path / f"bc7-mode-{mode}-{rotation}.dds"
+    original = _dx10_dds(block, 98)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]),),
+        (SimpleNamespace(mask=bytearray([1] * 16)),),
+        f"diffuse::bc7-mode-{mode}-{rotation}.dds")
+    source_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        original, layout, layout.mips[0])
+    timings = {}
+    candidate_blocks, stats = texture_bake._encode_bc7_source_fallback(
+        original, prepared, layout.mips[0], source_image,
+        bytearray([1] * 16), bytearray([1]),
+        {"hue": 120, "saturation": 2}, timings, (mode,), "test_fallback")
+
+    assert set(candidate_blocks) == {0}
+    assert stats.compatible_units == 1
+    candidate_block = candidate_blocks[0][0]
+    source_parameters = texture_bake._bc7_separate_parameters(block)
+    candidate_parameters = texture_bake._bc7_separate_parameters(candidate_block)
+    assert candidate_parameters[:3] == source_parameters[:3]
+    assert candidate_parameters[5:] == source_parameters[5:]
+    alpha_internal = 3 if rotation == 0 else rotation - 1
+    assert candidate_parameters[3][0][alpha_internal] == (
+        source_parameters[3][0][alpha_internal])
+    assert candidate_parameters[3][1][alpha_internal] == (
+        source_parameters[3][1][alpha_internal])
+
+    candidate = _dx10_dds(candidate_block, 98)
+    candidate_path = tmp_path / "candidate.dds"
+    candidate_path.write_bytes(candidate)
+    candidate_layout = inspect_dds_layout(candidate_path)
+    candidate_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        candidate, candidate_layout, candidate_layout.mips[0])
+    assert (candidate_image.getchannel("A").tobytes()
+            == source_image.getchannel("A").tobytes())
+    assert candidate_image.convert("RGB").tobytes() != (
+        source_image.convert("RGB").tobytes())
+    assert timings["test_fallback"] >= 0
+
+
+def test_bc7_coupled_bake_dispatches_mode4_and_mode5_fallback(
+        tmp_path, monkeypatch):
+    first_indices = [0, 1, 2, 3] * 4
+    mode4 = _bc7_separate_block(
+        4, 2, 0, ((4, 24), (8, 28), (12, 31), (3, 57)),
+        first_indices, [0, 1, 2, 3, 4, 5, 6, 7] * 2)
+    mode5 = _bc7_separate_block(
+        5, 3, 0, ((18, 92), (28, 104), (38, 116), (32, 224)),
+        first_indices, [0, 1, 2, 3] * 4)
+    source = tmp_path / "bc7-separate-dispatch.dds"
+    original = _dx10_dds(mode4 + mode5, 98, width=8, height=4)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1, 1]),),
+        (SimpleNamespace(mask=bytearray([1] * 32)),),
+        "diffuse::bc7-separate-dispatch.dds")
+    monkeypatch.setattr(
+        texture_bake, "_encode_alpha_candidate",
+        lambda *_args, **_kwargs: (
+            {}, texture_bake.AlphaCompatibilityStats(0, 0, 0, 0, 0)))
+
+    candidate, writable, protected, stats = (
+        texture_bake._encode_alpha_coupled_mips(
+            original, prepared, {"hue": 120, "saturation": 2},
+            str(tmp_path)))
+
+    assert list(writable[0]) == [1, 1]
+    assert list(protected[0]) == [0, 0]
+    assert stats[0].compatible_units == 2
+    assert stats[0].protected_mode_counts == ()
+    candidate_layout = inspect_dds_layout(source)
+    candidate_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        candidate, candidate_layout, candidate_layout.mips[0])
+    source_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        original, layout, layout.mips[0])
+    assert (candidate_image.getchannel("A").tobytes()
+            == source_image.getchannel("A").tobytes())
+
+
 def test_mode6_fallback_preserves_alpha_and_recolors_source_blocks(
         tmp_path, monkeypatch):
     blocks = (
@@ -810,6 +946,11 @@ def test_bc7_bake_with_no_compatible_mip0_does_not_write_or_backup(
 
     assert result["code"] == "alpha_preservation_unsupported"
     assert "any unique color blocks" in result["error"]
+    assert result["details"] == {
+        "mip": 0,
+        "unresolved_units": 1,
+        "bc7_modes": {"0": 1},
+    }
     assert "protected_mode_counts': {0: 1}" in caplog.text
     assert called == [True] * 6
     assert source.read_bytes() == original
