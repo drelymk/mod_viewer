@@ -108,10 +108,8 @@ class _PreparedTextureSave:
     info: object
     layout: object
     targets: tuple
-    preservation_consumers: tuple
     target_pixel_masks: tuple
     safe_masks: tuple
-    preserved_masks: tuple
     unresolved: tuple
     unresolved_details: tuple
     mip0_claims: object
@@ -755,6 +753,60 @@ def _downsample_intent_mask(claims, source_width, source_height,
     return mask
 
 
+def _downsample_intent_counts(claims, counts, source_width, source_height,
+                              target_width, target_height, class_count,
+                              source_max_count=1):
+    """Aggregate mip-0 adjustment weights into one lower-mip level."""
+    source_pixels = source_width * source_height
+    target_pixels = target_width * target_height
+    if counts is None:
+        if len(claims) != source_pixels:
+            raise TextureBakeAnalysisError(
+                "texture_validation_failed",
+                "Mip-0 color intent does not match the source texture size.")
+    elif (len(counts) != class_count
+          or any(len(item) != source_pixels for item in counts)):
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Lower-mip color intent does not match the source texture size.")
+    if class_count <= 0 or target_width <= 0 or target_height <= 0:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed", "DDS mip dimensions are invalid.")
+    max_region_width = (source_width + target_width - 1) // target_width
+    max_region_height = (source_height + target_height - 1) // target_height
+    max_count = source_max_count * max_region_width * max_region_height
+    typecode = "H" if max_count <= 0xFFFF else "I"
+    result = tuple(
+        array(typecode, [0]) * target_pixels for _ in range(class_count))
+    for y in range(target_height):
+        source_y0, source_y1 = _intent_region_bounds(
+            y, source_height, target_height)
+        for x in range(target_width):
+            source_x0, source_x1 = _intent_region_bounds(
+                x, source_width, target_width)
+            target_index = y * target_width + x
+            if counts is None:
+                for source_y in range(source_y0, source_y1):
+                    start = source_y * source_width + source_x0
+                    end = source_y * source_width + source_x1
+                    for intent_class in claims[start:end]:
+                        if not isinstance(intent_class, int) or not (
+                                0 <= intent_class < class_count):
+                            raise TextureBakeAnalysisError(
+                                "texture_validation_failed",
+                                "Mip-0 color intent contains an invalid class.")
+                        result[intent_class][target_index] += 1
+            else:
+                for intent_class, source_counts in enumerate(counts):
+                    total = 0
+                    for source_y in range(source_y0, source_y1):
+                        start = source_y * source_width + source_x0
+                        end = source_y * source_width + source_x1
+                        total += sum(source_counts[start:end])
+                    result[intent_class][target_index] = total
+    return result
+
+
 def _prepare_texture_save(context, overrides, active_mesh_keys,
                           selected_texture_key, targets, texture_usage,
                           *, require_file_layout=True):
@@ -850,12 +902,10 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     # consumer has no independent desired output and must not block a write.
     # Keep no geometry for those consumers: this also avoids turning an
     # unresolvable neutral draw into a false coverage failure.
-    preservation_consumers = ()
-
     intent_adjustments = [None]
     intent_classes = {}
+    intent_sources = [None]
     mip0_claims = array("H", [0]) * (base_mip.width * base_mip.height)
-    mip0_sources = [None] * len(mip0_claims)
     for target in prepared_targets:
         signature = _adjustment_signature(target.adjustment)
         intent_class = intent_classes.get(signature)
@@ -867,6 +917,7 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
                     "Too many distinct Color adjustments were submitted.")
             intent_classes[signature] = intent_class
             intent_adjustments.append(target.adjustment)
+            intent_sources.append(target.semantic_key)
         mask = target.pixel_coverages[0].mask
         if len(mask) != len(mip0_claims):
             raise TextureBakeAnalysisError(
@@ -878,19 +929,19 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
             previous = mip0_claims[index]
             if previous and previous != intent_class:
                 raise _texture_save_conflict(
-                    mip0_sources[index], target.semantic_key)
+                    intent_sources[previous], target.semantic_key)
             mip0_claims[index] = intent_class
-            if mip0_sources[index] is None:
-                mip0_sources[index] = target.semantic_key
 
     target_pixel_masks = []
     safe_masks = []
-    preserved_masks = []
+    target_pixels = bytearray(1 if claim else 0 for claim in mip0_claims)
+    previous_width, previous_height = base_mip.width, base_mip.height
     for level, mip in enumerate(layout.mips):
-        target_pixels = (bytearray(1 if claim else 0 for claim in mip0_claims)
-                         if level == 0 else _downsample_intent_mask(
-                             mip0_claims, base_mip.width, base_mip.height,
-                             mip.width, mip.height))
+        if level:
+            target_pixels = _downsample_intent_mask(
+                target_pixels, previous_width, previous_height,
+                mip.width, mip.height)
+            previous_width, previous_height = mip.width, mip.height
         try:
             target_units = collapse_pixel_mask_to_units(
                 target_pixels, mip.width, mip.height, *_unit_size(info))
@@ -904,7 +955,6 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
         safe = bytearray(target_units)
         target_pixel_masks.append(target_pixels)
         safe_masks.append(safe)
-        preserved_masks.append(bytearray(mip.units_x * mip.units_y))
 
     if unresolved:
         # Preparation is still useful for diagnostics, but Save cannot safely
@@ -922,9 +972,8 @@ def _prepare_texture_save(context, overrides, active_mesh_keys,
     return _PreparedTextureSave(
         entries=entries, selected_path=selected_path, info=info, layout=layout,
         targets=tuple(prepared_targets),
-        preservation_consumers=preservation_consumers,
         target_pixel_masks=tuple(target_pixel_masks), safe_masks=tuple(safe_masks),
-        preserved_masks=tuple(preserved_masks), unresolved=tuple(unresolved),
+        unresolved=tuple(unresolved),
         unresolved_details=tuple(unresolved_details),
         mip0_claims=array("H", mip0_claims),
         intent_adjustments=tuple(intent_adjustments))
@@ -1791,6 +1840,19 @@ def _atlas_block_pixels(atlas_rgba, atlas_width, atlas_index):
         for row in range(4) for column in range(4))
 
 
+def _image_block_pixels(image, x, y):
+    """Return one edge-padded image block as sixteen RGBA pixel tuples."""
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise TextureBakeAnalysisError(
+            "texture_validation_failed",
+            "Decoded DDS image dimensions are invalid.")
+    return tuple(
+        tuple(image.getpixel((min(x + column, width - 1),
+                              min(y + row, height - 1))))
+        for row in range(4) for column in range(4))
+
+
 def _bc7_candidate_quality(target_pixels, candidate_pixels,
                            valid_width, valid_height, alpha_exact):
     """Measure RGB error for a decoded BC7 fallback block."""
@@ -1894,10 +1956,7 @@ def _encode_bc7_source_fallback(
             raise TextureBakeAnalysisError(
                 "texture_validation_failed",
                 "The BC7 fallback changed source alpha.")
-        source_pixels = tuple(
-            tuple(source_image.getpixel((source_x + column, source_y + row)))
-            for row in range(unit_height)
-            for column in range(unit_width))
+        source_pixels = _image_block_pixels(source_image, source_x, source_y)
         source_quality = _bc7_candidate_quality(
             target_pixels, source_pixels, unit_width, unit_height, True)
         quality = _bc7_candidate_quality(
@@ -2076,7 +2135,9 @@ def _encode_alpha_candidate(
 def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
                                timings=None, compression_backend="auto",
                                target_images=None, source_images=None,
-                               allow_quality_retries=True):
+                               target_image_factory=None,
+                               allow_quality_retries=True,
+                               stage_callback=None):
     """Encode selected BC1/BC7 RGB in compact, independent block atlases."""
     timings = {} if timings is None else timings
     pixel_coverages = getattr(prepared, "target_pixel_masks", None)
@@ -2121,12 +2182,25 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
 
         started = time.perf_counter()
         if source_images is None:
+            if stage_callback is not None:
+                stage_callback("decode_mip")
             source_image = _decode_alpha_coupled_mip_rgba(
                 original, prepared.layout, source_mip)
             timings["decode"] = timings.get("decode", 0.0) + (
                 time.perf_counter() - started)
         else:
             source_image = source_images[level]
+        target_image = None
+        if target_image_factory is not None:
+            if stage_callback is not None:
+                stage_callback("compose_mip")
+            target_image = target_image_factory(source_image, level)
+            if target_image is None:
+                raise TextureBakeAnalysisError(
+                    "texture_validation_failed",
+                    "Composited DDS target dimensions are invalid.")
+        elif target_images is not None:
+            target_image = target_images[level]
         pixel_mask = (pixel_coverages[level].mask
                       if hasattr(pixel_coverages[level], "mask")
                       else pixel_coverages[level])
@@ -2148,9 +2222,11 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
                 continue
             group_winners = {}
             for strategy in group:
+                if stage_callback is not None:
+                    stage_callback("encode")
                 candidate_kwargs = {}
-                if target_images is not None:
-                    candidate_kwargs["target_image"] = target_images[level]
+                if target_image is not None:
+                    candidate_kwargs["target_image"] = target_image
                 candidate_blocks, comparison = _encode_alpha_candidate(
                     original, prepared, source_mip, source_image, pixel_mask,
                     retry_mask, adjustment, workdir, level, strategy, timings,
@@ -2177,9 +2253,11 @@ def _encode_alpha_coupled_mips(original, prepared, adjustment, workdir,
 
         fallback_stats = AlphaCompatibilityStats(0, 0, 0, 0, 0)
         if prepared.info.format.startswith("bc7") and any(pending):
+            if stage_callback is not None:
+                stage_callback("bc7_fallback")
             fallback_kwargs = {}
-            if target_images is not None:
-                fallback_kwargs["target_image"] = target_images[level]
+            if target_image is not None:
+                fallback_kwargs["target_image"] = target_image
             fallback_blocks, fallback_stats = _encode_bc7_source_fallback(
                 original, prepared, source_mip, source_image, pixel_mask,
                 pending, adjustment, timings, (4, 5, 6, 7),
@@ -2442,9 +2520,11 @@ def bake_texture_color(
             "texture_write_failed", "The DDS could not be baked safely.")
 
 
-def _compose_texture_save_image(source_image, prepared, level):
+def _compose_texture_save_image(source_image, prepared, level,
+                                intent_state=None):
     """Compose one authored mip from mip-0 Color-intent ownership."""
-    source_image = source_image.convert("RGBA")
+    if source_image.mode != "RGBA":
+        source_image = source_image.convert("RGBA")
     width, height = source_image.size
     mip = prepared.layout.mips[level]
     if source_image.size != (mip.width, mip.height):
@@ -2483,6 +2563,11 @@ def _compose_texture_save_image(source_image, prepared, level):
             for index, intent_class in enumerate(claims):
                 if not intent_class:
                     continue
+                if not isinstance(intent_class, int) or not (
+                        0 <= intent_class < len(adjustments)):
+                    raise TextureBakeAnalysisError(
+                        "texture_validation_failed",
+                        "Mip-0 color intent contains an invalid class.")
                 start = index * 4
                 red, green, blue = (
                     channel / 255.0 for channel in source_rgba[start:start + 3])
@@ -2491,31 +2576,55 @@ def _compose_texture_save_image(source_image, prepared, level):
                 composed[start:start + 3] = bytes(
                     min(255, max(0, round(channel * 255.0)))
                     for channel in adjusted)
+            if intent_state is not None:
+                if intent_state.get("level", -1) != -1:
+                    raise TextureBakeAnalysisError(
+                        "texture_validation_failed",
+                        "Mip color intent was composed out of order.")
+                intent_state.update(
+                    level=0, width=width, height=height, counts=None)
         else:
-            for y in range(height):
-                source_y0, source_y1 = _intent_region_bounds(
-                    y, base_mip.height, height)
-                for x in range(width):
-                    source_x0, source_x1 = _intent_region_bounds(
-                        x, base_mip.width, width)
-                    counts = [0] * len(adjustments)
-                    for source_y in range(source_y0, source_y1):
-                        start = source_y * base_mip.width + source_x0
-                        end = source_y * base_mip.width + source_x1
-                        for intent_class in claims[start:end]:
-                            counts[int(intent_class)] += 1
-                    changed_count = sum(counts[1:])
+            counts_by_class = None
+            if intent_state is not None:
+                expected_level = intent_state.get("level", -1) + 1
+                if level != expected_level:
+                    raise TextureBakeAnalysisError(
+                        "texture_validation_failed",
+                        "Mip color intent was composed out of order.")
+                previous_counts = intent_state.get("counts")
+                previous_width = intent_state.get("width", base_mip.width)
+                previous_height = intent_state.get(
+                    "height", base_mip.height)
+                previous_max_count = intent_state.get("max_count", 1)
+                counts_by_class = _downsample_intent_counts(
+                    claims if previous_counts is None else None,
+                    previous_counts, previous_width, previous_height,
+                    width, height, len(adjustments), previous_max_count)
+                region_width = (previous_width + width - 1) // width
+                region_height = (previous_height + height - 1) // height
+                intent_state.update(
+                    level=level, width=width, height=height,
+                    counts=counts_by_class,
+                    max_count=previous_max_count * region_width * region_height)
+            if counts_by_class is not None:
+                for index in range(width * height):
+                    changed_count = sum(
+                        counts_by_class[intent_class][index]
+                        for intent_class in range(1, len(adjustments)))
                     if not changed_count:
                         continue
-                    total_count = sum(counts)
-                    pixel = (y * width + x) * 4
+                    total_count = sum(
+                        counts_by_class[intent_class][index]
+                        for intent_class in range(len(adjustments)))
+                    pixel = index * 4
                     base_rgb = tuple(
                         channel / 255.0
                         for channel in source_rgba[pixel:pixel + 3])
                     weighted = [
-                        base_rgb[channel] * counts[0]
+                        base_rgb[channel] * counts_by_class[0][index]
                         for channel in range(3)]
-                    for intent_class, count in enumerate(counts[1:], 1):
+                    for intent_class in range(1, len(adjustments)):
+                        count = counts_by_class[intent_class][index]
                         if not count:
                             continue
                         adjusted = apply_color_adjustment(
@@ -2523,8 +2632,49 @@ def _compose_texture_save_image(source_image, prepared, level):
                         for channel in range(3):
                             weighted[channel] += adjusted[channel] * count
                     composed[pixel:pixel + 3] = bytes(
-                        min(255, max(0, round(value / total_count * 255.0)))
+                        min(255, max(0, round(
+                            value / total_count * 255.0)))
                         for value in weighted)
+            else:
+                for y in range(height):
+                    source_y0, source_y1 = _intent_region_bounds(
+                        y, base_mip.height, height)
+                    for x in range(width):
+                        source_x0, source_x1 = _intent_region_bounds(
+                            x, base_mip.width, width)
+                        counts = [0] * len(adjustments)
+                        for source_y in range(source_y0, source_y1):
+                            start = source_y * base_mip.width + source_x0
+                            end = source_y * base_mip.width + source_x1
+                            for intent_class in claims[start:end]:
+                                if not isinstance(intent_class, int) or not (
+                                        0 <= intent_class < len(adjustments)):
+                                    raise TextureBakeAnalysisError(
+                                        "texture_validation_failed",
+                                        "Mip color intent contains an invalid class.")
+                                counts[intent_class] += 1
+                        changed_count = sum(counts[1:])
+                        if not changed_count:
+                            continue
+                        total_count = sum(counts)
+                        pixel = (y * width + x) * 4
+                        base_rgb = tuple(
+                            channel / 255.0
+                            for channel in source_rgba[pixel:pixel + 3])
+                        weighted = [
+                            base_rgb[channel] * counts[0]
+                            for channel in range(3)]
+                        for intent_class, count in enumerate(counts[1:], 1):
+                            if not count:
+                                continue
+                            adjusted = apply_color_adjustment(
+                                base_rgb, adjustments[intent_class])
+                            for channel in range(3):
+                                weighted[channel] += adjusted[channel] * count
+                        composed[pixel:pixel + 3] = bytes(
+                            min(255, max(0, round(
+                                value / total_count * 255.0)))
+                            for value in weighted)
     if composed[3::4] != source_rgba[3::4]:
         raise TextureBakeAnalysisError(
             "texture_validation_failed",
@@ -2544,12 +2694,14 @@ def save_texture_color(
     committed = False
     success_result = None
     timings = {}
+    stage = "prepare"
     try:
         started = time.perf_counter()
         prepared = _prepare_texture_save(
             context, overrides, active_mesh_keys, selected_texture_key, targets,
             texture_usage, require_file_layout=True)
         timings["prepare"] = time.perf_counter() - started
+        stage = "read"
         original = _read_source(prepared.selected_path)
         original_hash = _sha256_bytes(original)
         affected = _affected_texture_keys(context, prepared)
@@ -2557,22 +2709,23 @@ def save_texture_color(
 
         with tempfile.TemporaryDirectory(prefix="modviewer-save-") as workdir:
             if prepared.info.format in _ALPHA_COUPLED_FORMATS:
-                source_images = []
-                target_images = []
-                for level, source_mip in enumerate(prepared.layout.mips):
-                    started = time.perf_counter()
-                    source_image = _decode_alpha_coupled_mip_rgba(
-                        original, prepared.layout, source_mip)
-                    timings["decode"] = timings.get("decode", 0.0) + (
-                        time.perf_counter() - started)
-                    source_images.append(source_image)
-                    target_images.append(
-                        _compose_texture_save_image(source_image, prepared, level))
+                stage = "compose_mips"
+                intent_state = {"level": -1}
+
+                def set_stage(value):
+                    nonlocal stage
+                    stage = value
+
+                def compose_mip(source_image, level):
+                    return _compose_texture_save_image(
+                        source_image, prepared, level,
+                        intent_state=intent_state)
+
                 (candidate, writable_masks, alpha_protected_masks,
                  alpha_stats) = _encode_alpha_coupled_mips(
                     original, prepared, None, workdir, timings,
-                    target_images=tuple(target_images),
-                    source_images=tuple(source_images),
+                    target_image_factory=compose_mip,
+                    stage_callback=set_stage,
                     allow_quality_retries=False)
                 _log_alpha_quality(alpha_stats)
                 if not any(writable_masks[0]):
@@ -2582,6 +2735,7 @@ def save_texture_color(
                         mip0_protected=True, stats=alpha_stats[0])
                 patch_candidate_layout = prepared.layout
             else:
+                stage = "decode"
                 started = time.perf_counter()
                 image = load_texture_image_full(
                     prepared.selected_path, preserve_alpha=True)
@@ -2595,6 +2749,7 @@ def save_texture_color(
                     time.perf_counter() - started)
                 png_path = os.path.join(workdir, "save.png")
                 target_image.save(png_path, format="PNG")
+                stage = "encode"
                 started = time.perf_counter()
                 try:
                     candidate_path = encode_png_to_dds(
@@ -2609,6 +2764,7 @@ def save_texture_color(
                         "texconv_failed", str(error)) from error
                 timings["encode"] = timings.get("encode", 0.0) + (
                     time.perf_counter() - started)
+                stage = "validate"
                 started = time.perf_counter()
                 candidate = _read_source(candidate_path)
                 candidate_layout = _validate_candidate(
@@ -2621,12 +2777,15 @@ def save_texture_color(
                     timings.get("candidate_validation", 0.0)
                     + time.perf_counter() - started)
 
+            stage = "patch"
             final = _patch_dds_units(
                 original, candidate, prepared.layout,
                 writable_masks, patch_candidate_layout)
+            stage = "validate"
             _validate_patched_units(
                 original, final, prepared.layout, writable_masks, candidate,
                 patch_candidate_layout)
+            stage = "write"
             temporary = _write_temp(prepared.selected_path, final)
             try:
                 if inspect_dds_layout(temporary) is None:
@@ -2651,7 +2810,8 @@ def save_texture_color(
                         "mip0_units": sum(writable_masks[0]),
                         "total_units": sum(sum(mask) for mask in writable_masks),
                         "shared_units_preserved": sum(
-                            sum(mask) for mask in prepared.preserved_masks),
+                            sum(mask) for mask in getattr(
+                                prepared, "preserved_masks", ())),
                         "alpha_protected_units": sum(
                             sum(mask) for mask in alpha_protected_masks),
                         "alpha_protected_mip0_units": sum(
@@ -2693,8 +2853,11 @@ def save_texture_color(
         if committed and success_result is not None:
             success_result["warning"] = "post_save_cleanup_failed"
             return success_result
+        _LOGGER.exception("Unexpected error while saving texture (stage=%s)",
+                          stage)
         return _error(
-            "texture_write_failed", "The DDS could not be saved safely.")
+            "texture_write_failed", "The DDS could not be saved safely.",
+            details={"stage": stage})
 
 
 def bake_mesh_texture_color(*args, **kwargs):

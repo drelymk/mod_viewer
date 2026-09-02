@@ -254,6 +254,32 @@ def test_texture_save_commits_all_targets_with_one_backup(tmp_path, monkeypatch)
         [200, 201, 202, 40, 210, 211, 212, 80])
 
 
+def test_texture_save_logs_unexpected_failure_stage(tmp_path, monkeypatch,
+                                                    caplog):
+    caplog.set_level(logging.ERROR, logger=texture_bake.__name__)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        texture_bake, "_prepare_texture_save", fail)
+
+    result = texture_bake.save_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"},
+        "diffuse::body.dds", [{
+            "semantic_key": "Body-1", "metadata_key": "Body-1::metadata",
+            "adjustment": {"hue": 30},
+        }], [])
+
+    assert result == {
+        "status": "error",
+        "code": "texture_write_failed",
+        "error": "The DDS could not be saved safely.",
+        "details": {"stage": "prepare"},
+    }
+    assert "Unexpected error while saving texture (stage=prepare)" in caplog.text
+
+
 @pytest.mark.parametrize(("second_adjustment", "include_second_target",
                           "overlap", "conflicts"), [
     ({"hue": 60}, True, True, True),
@@ -402,7 +428,6 @@ def test_texture_save_allows_neutral_pixels_in_changed_bc7_block(
     expected_pixels[0] = 1
     assert list(prepared.target_pixel_masks[0]) == list(expected_pixels)
     assert list(prepared.safe_masks[0]) == [1]
-    assert list(prepared.preserved_masks[0]) == [0]
 
     if not neutral_resolvable:
         assert prepared_labels == ["Body-1"]
@@ -488,8 +513,12 @@ def test_texture_save_derives_lower_mip_intent_from_mip0(
     assert list(prepared.target_pixel_masks[1]) == [1, 1, 1, 1]
     assert list(prepared.target_pixel_masks[2]) == [1]
     assert list(prepared.safe_masks[2]) == [1]
-    lower = Image.new("RGBA", (1, 1), (100, 100, 100, 255))
-    composed = texture_bake._compose_texture_save_image(lower, prepared, 2)
+    intent_state = {"level": -1}
+    for level, size in enumerate(((4, 4), (2, 2), (1, 1))):
+        composed = texture_bake._compose_texture_save_image(
+            Image.new("RGBA", size, (100, 100, 100, 255)), prepared, level,
+            intent_state=intent_state)
+    assert intent_state["level"] == 2
     assert composed.getpixel((0, 0)) == (150, 100, 150, 255)
 
 
@@ -1072,6 +1101,134 @@ def test_bc7_separate_fallback_preserves_alpha_for_rotations(
     assert candidate_image.convert("RGB").tobytes() != (
         source_image.convert("RGB").tobytes())
     assert timings["test_fallback"] >= 0
+
+
+@pytest.mark.parametrize("size", [
+    (4, 4), (3, 4), (4, 3), (3, 2),
+    (2, 2), (2, 1), (1, 2), (1, 1),
+])
+@pytest.mark.parametrize("mode", [4, 7])
+def test_bc7_source_fallback_edge_mips_use_padded_source_pixels(
+        tmp_path, mode, size):
+    width, height = size
+    if mode == 4:
+        block = _bc7_separate_block(
+            4, 2, 0, ((4, 24), (8, 28), (12, 31), (3, 57)),
+            [0, 1, 2, 3] * 4, [0, 1, 2, 3, 4, 5, 6, 7] * 2)
+    else:
+        anchor = texture_bake._bc7_codec._PARTITION_2_ANCHORS[13]
+        indices = [0, 1, 2, 3] * 4
+        indices[0] = 0
+        indices[anchor] = 1
+        block = _bc7_mode7_block(
+            13, (0, 1, 1, 0),
+            ((3, 6, 9, 4), (22, 18, 25, 30),
+             (8, 15, 5, 20), (28, 26, 30, 31)), indices)
+    source = tmp_path / f"bc7-edge-{mode}-{width}x{height}.dds"
+    original = _dx10_dds(block, 98, width=width, height=height)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]),),
+        (SimpleNamespace(mask=bytearray([1] * (width * height))),),
+        f"diffuse::bc7-edge-{mode}-{width}x{height}.dds")
+    source_image = texture_bake._decode_alpha_coupled_mip_rgba(
+        original, layout, layout.mips[0])
+
+    candidate_blocks, stats = texture_bake._encode_bc7_source_fallback(
+        original, prepared, layout.mips[0], source_image,
+        bytearray([1] * (width * height)), bytearray([1]),
+        {"hue": 120, "saturation": 2}, {}, (mode,), "edge_fallback")
+
+    assert set(candidate_blocks) == {0}
+    assert stats.compatible_units == 1
+
+
+def test_bc7_coupled_fallback_processes_sub_four_mip_chain(
+        tmp_path, monkeypatch):
+    anchor = texture_bake._bc7_codec._PARTITION_2_ANCHORS[13]
+    indices = [0, 1, 2, 3] * 4
+    indices[0] = 0
+    indices[anchor] = 1
+    block = _bc7_mode7_block(
+        13, (0, 1, 1, 0),
+        ((3, 6, 9, 4), (22, 18, 25, 30),
+         (8, 15, 5, 20), (28, 26, 30, 31)), indices)
+    source = tmp_path / "bc7-edge-mips.dds"
+    original = _dx10_dds(block * 3, 98, width=4, height=4, mip_count=3)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _coupled_prepared(
+        source, layout, (bytearray([1]), bytearray([1]), bytearray([1])),
+        tuple(SimpleNamespace(mask=bytearray([1] * (mip.width * mip.height)))
+              for mip in layout.mips),
+        "diffuse::bc7-edge-mips.dds")
+    monkeypatch.setattr(
+        texture_bake, "_encode_alpha_candidate",
+        lambda *_args, **_kwargs: (
+            {}, texture_bake.AlphaCompatibilityStats(0, 0, 0, 0, 0)))
+
+    candidate, writable, protected, stats = (
+        texture_bake._encode_alpha_coupled_mips(
+            original, prepared, {"hue": 120, "saturation": 2},
+            str(tmp_path)))
+
+    assert len(candidate) == len(original)
+    assert [list(mask) for mask in writable] == [[1], [1], [1]]
+    assert [list(mask) for mask in protected] == [[0], [0], [0]]
+    assert [item.compatible_units for item in stats] == [1, 1, 1]
+
+
+def test_texture_save_processes_sub_four_bc7_mips(
+        tmp_path, monkeypatch):
+    anchor = texture_bake._bc7_codec._PARTITION_2_ANCHORS[13]
+    indices = [0, 1, 2, 3] * 4
+    indices[0] = 0
+    indices[anchor] = 1
+    block = _bc7_mode7_block(
+        13, (0, 1, 1, 0),
+        ((3, 6, 9, 4), (22, 18, 25, 30),
+         (8, 15, 5, 20), (28, 26, 30, 31)), indices)
+    source = tmp_path / "bc7-save-edge-mips.dds"
+    source.write_bytes(_dx10_dds(
+        block * 3, 98, width=4, height=4, mip_count=3))
+    layout = inspect_dds_layout(source)
+    prepared = SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        targets=(SimpleNamespace(
+            semantic_key="Body-1", metadata_key="Body-1::metadata",
+            adjustment={"hue": 120},
+            pixel_coverages=(
+                SimpleNamespace(mask=bytearray([1] + [0] * 15)),
+                SimpleNamespace(mask=bytearray([1] * 4)),
+                SimpleNamespace(mask=bytearray([1])),)),),
+        target_pixel_masks=(
+            bytearray([1] + [0] * 15), bytearray([1] * 4), bytearray([1])),
+        safe_masks=(bytearray([1]), bytearray([1]), bytearray([1])),
+        entries=({"semantic_key": "Body-1",
+                  "tex_key": "diffuse::bc7-save-edge-mips.dds"},),
+        unresolved=(),
+        mip0_claims=([1] + [0] * 15),
+        intent_adjustments=(None, {"hue": 120}),
+    )
+    monkeypatch.setattr(texture_bake, "_prepare_texture_save",
+                        lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(
+        texture_bake, "_encode_alpha_candidate",
+        lambda *_args, **_kwargs: (
+            {}, texture_bake.AlphaCompatibilityStats(0, 0, 0, 0, 0)))
+
+    result = texture_bake.save_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"},
+        "diffuse::bc7-save-edge-mips.dds", [{
+            "semantic_key": "Body-1", "metadata_key": "Body-1::metadata",
+            "adjustment": {"hue": 120},
+        }], [])
+
+    assert result["status"] == "ok"
+    assert result["patched"]["mip0_units"] == 1
+    assert result["patched"]["alpha_protected_units"] == 0
+    assert len(_backups(tmp_path, "bc7-save-edge-mips")) == 1
 
 
 def test_bc7_coupled_bake_dispatches_mode4_and_mode5_fallback(
