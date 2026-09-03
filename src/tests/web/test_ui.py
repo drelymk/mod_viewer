@@ -37,7 +37,7 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
         page.locator("#right-dock.ui-visible").wait_for()
         assert page.locator(".right-dock-tabs > button").evaluate_all(
             "tabs => tabs.map(tab => tab.id)") == [
-                "controls-tab", "inspector-tab", "weight-tab"]
+                "controls-tab", "inspector-tab", "weight-tab", "rig-tab"]
         assert page.locator("#controls-tab").get_attribute("aria-selected") == "true"
         assert page.locator("#controls-panel").is_visible()
         assert page.locator("#inspector-panel").is_hidden()

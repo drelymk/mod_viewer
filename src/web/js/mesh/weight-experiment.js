@@ -255,6 +255,7 @@ function newState() {
     poseRotations: new Map(),
     poseActiveVertices: null,
     poseBoundsDirty: false,
+    posePreFrustumCulled: null,
     skinningSourceKey: '',
     skinningSourceFile: '',
     skinningBoneOffset: 0,
@@ -347,6 +348,27 @@ function rigSourceSnapshot(rig, {debug = false} = {}) {
     depthById: {...component.depthById},
     maxDepth: component.maxDepth,
   }));
+  const nodes = (rig.influenceGraph?.nodes || []).map(node => ({
+    boneId: node.boneId,
+    weightedCenter: [...(node.weightedCenter || [0, 0, 0])],
+  }));
+  const jointPivotByBoneId = Object.fromEntries(
+    [...(rig.jointPivotByBoneId || [])].map(([boneId, pivot]) => [
+      boneId, [...pivot]]));
+  const forestEdges = components.flatMap(component =>
+    Object.entries(component.parentById || {}).flatMap(([childId, parentId]) => {
+      if (parentId === null || parentId === undefined) return [];
+      const child = Number(childId);
+      const parent = Number(parentId);
+      return [{
+        boneA: parent,
+        boneB: child,
+        parentId: parent,
+        childId: child,
+        jointCenter: jointPivotByBoneId[child]
+          ? [...jointPivotByBoneId[child]] : null,
+      }];
+    }));
   const source = {
     sourceKey: rig.sourceKey,
     sourceFile: rig.sourceFile,
@@ -354,10 +376,16 @@ function rigSourceSnapshot(rig, {debug = false} = {}) {
     boneCount: rig.influenceGraph?.nodes?.length || 0,
     boneIds: (rig.influenceGraph?.nodes || []).map(node => node.boneId),
     components,
+    nodes,
+    forestEdges,
+    jointPivotByBoneId,
     selectedBoneId: modelRigState.selectedBoneBySource.get(rig.sourceKey) ?? null,
     poseBoneIds: [...rig.poseRotationByBoneId.entries()]
       .filter(([, quaternion]) => !quaternionIsIdentity(quaternion))
       .map(([boneId]) => boneId),
+    poseRotationByBoneId: Object.fromEntries(
+      [...rig.poseRotationByBoneId.entries()].map(([boneId, quaternion]) => [
+        boneId, quaternion.toArray()])),
     physicsActive: !!rig.physicsRig?.physicsState,
   };
   if (debug) {
@@ -365,9 +393,6 @@ function rigSourceSnapshot(rig, {debug = false} = {}) {
       ...node,
       weightedCenter: [...(node.weightedCenter || [0, 0, 0])],
     }));
-    source.jointPivotByBoneId = Object.fromEntries(
-      [...(rig.jointPivotByBoneId || [])].map(([boneId, pivot]) => [
-        boneId, [...pivot]]));
     source.poseRotationByBoneId = Object.fromEntries(
       [...rig.poseRotationByBoneId.entries()].map(([boneId, quaternion]) => [
         boneId, quaternion.toArray()]));
@@ -420,6 +445,19 @@ function notifyModelRigChanged() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('mod-viewer-model-rig-changed', {
       detail: rigSnapshot(),
+    }));
+  }
+}
+
+function notifyModelRigPoseChanged(rig, boneId) {
+  if (typeof window !== 'undefined') {
+    const quaternion = rig?.poseRotationByBoneId?.get(boneId);
+    window.dispatchEvent(new CustomEvent('mod-viewer-model-rig-pose-changed', {
+      detail: {
+        sourceKey: rig?.sourceKey || null,
+        boneId,
+        quaternion: quaternion ? quaternion.toArray() : [0, 0, 0, 1],
+      },
     }));
   }
 }
@@ -1413,6 +1451,8 @@ function createSourceSkinningRig(sourceKey, members) {
     poseRotations: new Map(),
     poseTransformCache: new Map(),
     poseActiveVerticesByMesh: new Map(),
+    poseAffectedBoneIds: new Set(),
+    poseActiveBoneKey: '',
     poseRootOverrides: new Map(),
     physicsRig: null,
   };
@@ -1428,6 +1468,8 @@ function resetSourceSkinningPose(rig, {preserveActive = false} = {}) {
   rig.poseTransforms.clear();
   rig.poseRotations.clear();
   rig.poseTransformCache.clear();
+  rig.poseAffectedBoneIds = new Set();
+  rig.poseActiveBoneKey = '';
   if (!preserveActive) rig.poseActiveVerticesByMesh.clear();
 }
 
@@ -1904,23 +1946,72 @@ function buildSourcePoseTransforms(rig) {
   return rig.poseTransforms;
 }
 
-function applySourcePose(rig, {request = true} = {}) {
+function vertexDifference(previousVertices, currentVertices) {
+  if (!previousVertices?.length) return new Uint32Array();
+  const current = new Set(currentVertices || []);
+  const removed = [];
+  for (const vertex of previousVertices) {
+    if (!current.has(vertex)) removed.push(vertex);
+  }
+  return Uint32Array.from(removed);
+}
+
+function markPoseBoundsDirty(mesh, state) {
+  if (state.posePreFrustumCulled === null
+      || state.posePreFrustumCulled === undefined) {
+    state.posePreFrustumCulled = mesh.frustumCulled;
+  }
+  mesh.frustumCulled = false;
+  state.poseBoundsDirty = true;
+}
+
+function finalizeSourcePoseBounds(rig) {
+  let finalized = false;
+  forEachRigMesh(rig, (mesh, state) => {
+    if (!state.poseBoundsDirty) return;
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.computeBoundingSphere();
+    state.poseBoundsDirty = false;
+    if (state.posePreFrustumCulled !== null
+        && state.posePreFrustumCulled !== undefined) {
+      mesh.frustumCulled = state.posePreFrustumCulled;
+      state.posePreFrustumCulled = null;
+    }
+    finalized = true;
+  });
+  if (finalized) invalidateCharacterShadowGeometry({request: false});
+  return finalized;
+}
+
+function applySourcePose(rig, {request = true, dragging = false} = {}) {
   if (!rig || rig.physicsRig?.physicsState) return false;
   const transforms = buildSourcePoseTransforms(rig);
   const posedBones = [...rig.poseRotationByBoneId.entries()]
     .filter(([, quaternion]) => !quaternionIsIdentity(quaternion))
     .map(([boneId]) => boneId);
-  const affectedBoneIds = poseDescendantIds(rig, posedBones);
+  const poseBoneKey = posedBones.map(Number).sort((left, right) => left - right)
+    .join(',');
+  const affectedBoneIds = rig.poseActiveBoneKey === poseBoneKey
+    ? rig.poseAffectedBoneIds : poseDescendantIds(rig, posedBones);
+  const affectedSetChanged = rig.poseActiveBoneKey !== poseBoneKey;
   const deformStarted = performanceNow();
   let changed = false;
   let deformedVertexCount = 0;
   forEachRigMesh(rig, (mesh, state) => {
     const previousVertices = rig.poseActiveVerticesByMesh.get(mesh)
       || state.poseActiveVertices || new Uint32Array();
-    const activeVertices = affectedBoneIds.size
-      ? poseVerticesForState(state, affectedBoneIds) : new Uint32Array();
-    const restoreSet = new Set([...previousVertices, ...activeVertices]);
-    restorePoseVertices(mesh, state, Uint32Array.from(restoreSet));
+    const hasCachedVertices = rig.poseActiveVerticesByMesh.has(mesh);
+    const activeVertices = !affectedSetChanged && hasCachedVertices
+      ? rig.poseActiveVerticesByMesh.get(mesh)
+      : affectedBoneIds.size
+        ? poseVerticesForState(state, affectedBoneIds) : new Uint32Array();
+    const removedVertices = affectedSetChanged
+      ? vertexDifference(previousVertices, activeVertices) : new Uint32Array();
+    if (removedVertices.length) {
+      restorePoseVertices(mesh, state, removedVertices);
+      markPoseBoundsDirty(mesh, state);
+      changed = true;
+    }
     if (activeVertices.length) {
       deformedVertexCount += applyWeightedTransformDeformationInto(
         mesh.geometry.attributes.position.array, state.baselinePositions,
@@ -1934,14 +2025,7 @@ function applySourcePose(rig, {request = true} = {}) {
           state.influenceCount, rig.poseRotations, activeVertices);
         normal.needsUpdate = true;
       }
-      state.poseBoundsDirty = true;
-      mesh.geometry.computeBoundingBox();
-      mesh.geometry.computeBoundingSphere();
-      changed = true;
-    } else if (previousVertices.length) {
-      state.poseBoundsDirty = true;
-      mesh.geometry.computeBoundingBox();
-      mesh.geometry.computeBoundingSphere();
+      markPoseBoundsDirty(mesh, state);
       changed = true;
     }
     mesh.geometry.attributes.position.needsUpdate = true;
@@ -1951,11 +2035,13 @@ function applySourcePose(rig, {request = true} = {}) {
     rig.poseActiveVerticesByMesh.set(mesh, activeVertices);
   });
   rig.poseAffectedBoneIds = affectedBoneIds;
+  rig.poseActiveBoneKey = poseBoneKey;
   modelRigState.rigDeformMs = performanceNow() - deformStarted;
   modelRigState.rigDeformedVertexCount = deformedVertexCount;
   addWeightPhysicsPerformance('rigDeformMs', modelRigState.rigDeformMs);
   addWeightPhysicsPerformance('rigDeformedVertexCount', deformedVertexCount);
   if (changed) invalidateCharacterShadowGeometry({request: false});
+  if (!dragging) finalizeSourcePoseBounds(rig);
   if (request) requestRender();
   return changed;
 }
@@ -2059,7 +2145,7 @@ export function setRigComponentRoot(sourceKey, boneId) {
   return true;
 }
 
-export function setRigBoneRotation(sourceKey, boneId, quaternion) {
+export function setRigBoneRotation(sourceKey, boneId, quaternion, options = {}) {
   const rig = rigSourceFor(sourceKey);
   const id = Number(boneId);
   const component = rigComponentForBone(rig, id);
@@ -2077,10 +2163,29 @@ export function setRigBoneRotation(sourceKey, boneId, quaternion) {
   rig.poseRotationByBoneId.set(id, cloneRigQuaternion(quaternion));
   modelRigState.activeSourceKey = rig.sourceKey;
   modelRigState.selectedBoneBySource.set(rig.sourceKey, id);
-  applySourcePose(rig);
+  const dragging = options?.dragging === true;
+  applySourcePose(rig, {dragging});
   modelRigState.pickStatus = '';
-  notifyModelRigChanged();
+  if (dragging) notifyModelRigPoseChanged(rig, id);
+  else notifyModelRigChanged();
   return true;
+}
+
+export function finishRigPose(sourceKey, boneId) {
+  const rig = rigSourceFor(sourceKey);
+  const id = Number(boneId);
+  if (!rig || !Number.isInteger(id) || !rig.boneIds.includes(id)) return false;
+  if (rig.physicsRig?.physicsState) return false;
+  finalizeSourcePoseBounds(rig);
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
+export function setRigPoseControlStatus(message = '') {
+  modelRigState.pickStatus = String(message || '');
+  notifyModelRigChanged();
+  return modelRigState.pickStatus;
 }
 
 export function resetRigBone(sourceKey, boneId) {
@@ -2269,535 +2374,6 @@ export function buildBoneIds(indices, weights, influenceCount) {
   return [...result].sort((a, b) => a - b);
 }
 
-/*
- * Historical topology helper implementations are kept in this source file
- * only as an archival block below.  Public exports and all runtime callers
- * use the source-scoped implementations from weight-rig.js above.
- */
-/*
-function compactVertexCount(indices, weights, influenceCount) {
-  if (!indices || !weights || !Number.isInteger(influenceCount)
-      || influenceCount <= 0) return 0;
-  return Math.floor(Math.min(indices.length, weights.length) / influenceCount);
-}
-
-function positiveInfluencesForVertex(
-    indices, weights, influenceCount, vertexIndex) {
-  const result = new Map();
-  const start = vertexIndex * influenceCount;
-  for (let influence = 0; influence < influenceCount; influence += 1) {
-    const boneId = Number(indices[start + influence]);
-    const weight = weights[start + influence];
-    if (!Number.isFinite(weight) || weight <= 0) continue;
-    result.set(boneId, (result.get(boneId) || 0) + weight);
-  }
-  return result;
-}
-
-export function buildInfluenceNodes(
-    baselinePositions, indices, weights, influenceCount, boneIds = null) {
-  return buildRigInfluenceNodes(
-    baselinePositions, indices, weights, influenceCount, boneIds);
-  const vertexCount = compactVertexCount(indices, weights, influenceCount);
-  const requested = boneIds === null || boneIds === undefined
-    ? null : new Set([...boneIds].map(Number));
-  const entries = new Map();
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const influences = positiveInfluencesForVertex(
-      indices, weights, influenceCount, vertex);
-    influences.forEach((weight, boneId) => {
-      if (requested && !requested.has(boneId)) return;
-      const entry = entries.get(boneId) || {
-        boneId,
-        totalWeight: 0,
-        affectedVertexCount: 0,
-        maxVertexWeight: 0,
-        weightedX: 0,
-        weightedY: 0,
-        weightedZ: 0,
-        squaredPositionWeight: 0,
-        positionWeight: 0,
-      };
-      entry.totalWeight += weight;
-      entry.affectedVertexCount += 1;
-      entry.maxVertexWeight = Math.max(entry.maxVertexWeight, weight);
-      if (baselinePositions
-          && baselinePositions.length >= vertex * 3 + 3) {
-        const offset = vertex * 3;
-        const x = baselinePositions[offset];
-        const y = baselinePositions[offset + 1];
-        const z = baselinePositions[offset + 2];
-        entry.weightedX += x * weight;
-        entry.weightedY += y * weight;
-        entry.weightedZ += z * weight;
-        entry.squaredPositionWeight += (x * x + y * y + z * z) * weight;
-        entry.positionWeight += weight;
-      }
-      entries.set(boneId, entry);
-    });
-  }
-
-  const orderedIds = requested ? [...requested] : [...entries.keys()];
-  return orderedIds.filter(boneId => entries.has(boneId)).map(boneId => {
-    const entry = entries.get(boneId);
-    const nodeCenter = entry.positionWeight > 0
-      ? [entry.weightedX / entry.positionWeight,
-        entry.weightedY / entry.positionWeight,
-        entry.weightedZ / entry.positionWeight]
-      : [0, 0, 0];
-    const weightedRadius = entry.positionWeight > 0
-      ? Math.sqrt(Math.max(0,
-        entry.squaredPositionWeight / entry.positionWeight
-        - (nodeCenter[0] ** 2 + nodeCenter[1] ** 2
-          + nodeCenter[2] ** 2)))
-      : null;
-    return {
-      boneId: entry.boneId,
-      totalWeight: entry.totalWeight,
-      affectedVertexCount: entry.affectedVertexCount,
-      maxVertexWeight: entry.maxVertexWeight,
-      weightedCenter: nodeCenter,
-      weightedRadius,
-    };
-  });
-}
-
-function pairKey(boneA, boneB) {
-  return boneA < boneB ? `${boneA}:${boneB}` : `${boneB}:${boneA}`;
-}
-
-function pairIds(boneA, boneB) {
-  return boneA < boneB ? [boneA, boneB] : [boneB, boneA];
-}
-
-function centerDistance(centerA, centerB) {
-  if (!centerA || !centerB
-      || centerA.length < 3 || centerB.length < 3) return null;
-  const dx = centerA[0] - centerB[0];
-  const dy = centerA[1] - centerB[1];
-  const dz = centerA[2] - centerB[2];
-  return Math.hypot(dx, dy, dz);
-}
-
-export function buildInfluenceRelationships(
-    baselinePositions, indices, weights, influenceCount, nodes,
-    boundingSphereRadius = null) {
-  return buildRigInfluenceRelationships(
-    baselinePositions, indices, weights, influenceCount, nodes,
-    boundingSphereRadius);
-  const nodeById = new Map((nodes || []).map(node => [
-    Number(node.boneId), node]));
-  const vertexCount = compactVertexCount(indices, weights, influenceCount);
-  const relationships = new Map();
-  const ids = [];
-  const mergedWeights = [];
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    ids.length = 0;
-    mergedWeights.length = 0;
-    const start = vertex * influenceCount;
-    for (let influence = 0; influence < influenceCount; influence += 1) {
-      const boneId = Number(indices[start + influence]);
-      const weight = Number(weights[start + influence]);
-      if (!nodeById.has(boneId) || !Number.isFinite(weight) || weight <= 0) {
-        continue;
-      }
-      const existing = ids.indexOf(boneId);
-      if (existing >= 0) mergedWeights[existing] += weight;
-      else {
-        ids.push(boneId);
-        mergedWeights.push(weight);
-      }
-    }
-    for (let left = 0; left < ids.length; left += 1) {
-      for (let right = left + 1; right < ids.length; right += 1) {
-        const [boneA, boneB] = pairIds(ids[left], ids[right]);
-        const key = pairKey(boneA, boneB);
-        const weightA = mergedWeights[left];
-        const weightB = mergedWeights[right];
-        const relationship = relationships.get(key) || {
-          boneA,
-          boneB,
-          sharedVertexCount: 0,
-          minOverlap: 0,
-          productOverlap: 0,
-        };
-        relationship.sharedVertexCount += 1;
-        relationship.minOverlap += Math.min(weightA, weightB);
-        relationship.productOverlap += weightA * weightB;
-        relationships.set(key, relationship);
-      }
-    }
-  }
-
-  const radius = Number(boundingSphereRadius);
-  return [...relationships.values()].map(relationship => {
-    const nodeA = nodeById.get(relationship.boneA);
-    const nodeB = nodeById.get(relationship.boneB);
-    const supportA = Number(nodeA?.totalWeight) || 0;
-    const supportB = Number(nodeB?.totalWeight) || 0;
-    const containmentDenominator = Math.min(supportA, supportB);
-    const jaccardDenominator = supportA + supportB
-      - relationship.minOverlap;
-    const distance = centerDistance(
-      nodeA?.weightedCenter, nodeB?.weightedCenter);
-    return {
-      ...relationship,
-      containment: containmentDenominator > 0
-        ? relationship.minOverlap / containmentDenominator : 0,
-      jaccard: jaccardDenominator > 0
-        ? relationship.minOverlap / jaccardDenominator : 0,
-      centerDistance: distance,
-      normalizedDistance: distance !== null && radius > 0
-        ? distance / radius : null,
-    };
-  });
-}
-
-function relationshipSort(a, b) {
-  return (Number(b.containment) || 0) - (Number(a.containment) || 0)
-    || (Number(b.jaccard) || 0) - (Number(a.jaccard) || 0)
-    || (Number(a.normalizedDistance ?? Infinity)
-      - Number(b.normalizedDistance ?? Infinity))
-    || String(a.boneA).localeCompare(String(b.boneA))
-    || String(a.boneB).localeCompare(String(b.boneB));
-}
-
-export function candidateRelationshipEdges(graph, options = {}) {
-  const minSharedVertexCount = Number(
-    options.minSharedVertexCount ?? 1);
-  const containmentThreshold = Number(
-    options.containmentThreshold ?? CANDIDATE_CONTAINMENT_THRESHOLD);
-  const jaccardThreshold = Number(
-    options.jaccardThreshold ?? CANDIDATE_JACCARD_THRESHOLD);
-  return (graph?.relationships || [])
-    .filter(relationship => relationship.sharedVertexCount
-      >= minSharedVertexCount
-      && (relationship.containment >= containmentThreshold
-        || relationship.jaccard >= jaccardThreshold))
-    .map(relationship => {
-      const normalizedDistance = Number(relationship.normalizedDistance);
-      const distancePenalty = Number.isFinite(normalizedDistance)
-        ? 1 / (1 + Math.max(0, normalizedDistance)) : 1;
-      return {
-        ...relationship,
-        treeEdgeScore: relationship.containment * distancePenalty,
-      };
-    })
-    .sort(relationshipSort);
-}
-
-function treeEdgeScore(edge) {
-  return Number(edge.treeEdgeScore ?? edge.score
-    ?? edge.containment ?? edge.jaccard ?? 0) || 0;
-}
-
-function treeEdgeCompare(a, b) {
-  return treeEdgeScore(b) - treeEdgeScore(a)
-    || relationshipSort(a, b);
-}
-
-function treeSideForEdge(edges, startId, skippedEdge) {
-  const adjacency = new Map();
-  for (const edge of edges || []) {
-    if (edge === skippedEdge) continue;
-    const boneA = Number(edge.boneA);
-    const boneB = Number(edge.boneB);
-    if (!Number.isFinite(boneA) || !Number.isFinite(boneB)) continue;
-    if (!adjacency.has(boneA)) adjacency.set(boneA, []);
-    if (!adjacency.has(boneB)) adjacency.set(boneB, []);
-    adjacency.get(boneA).push(boneB);
-    adjacency.get(boneB).push(boneA);
-  }
-  const side = new Set([startId]);
-  const pending = [startId];
-  while (pending.length) {
-    const boneId = pending.pop();
-    for (const neighbor of adjacency.get(boneId) || []) {
-      if (side.has(neighbor)) continue;
-      side.add(neighbor);
-      pending.push(neighbor);
-    }
-  }
-  return side;
-}
-
-function bestStaticAttachment(side, relationships, selected) {
-  return selectAttachmentRelationship((relationships || []).filter(edge => {
-    const boneA = Number(edge.boneA);
-    const boneB = Number(edge.boneB);
-    const leftInside = side.has(boneA);
-    const rightInside = side.has(boneB);
-    if (leftInside === rightInside) return false;
-    const outside = leftInside ? boneB : boneA;
-    return !selected.has(outside);
-  }));
-}
-
-export function pruneSelectedRelationshipEdges(
-    treeEdges, relationships = [], selectedBoneIds = []) {
-  const edges = [...treeEdges || []];
-  const selected = new Set(normalizeSelectedBoneIds(selectedBoneIds));
-  if (!selected.size) {
-    edges.forEach(edge => {
-      selected.add(Number(edge.boneA));
-      selected.add(Number(edge.boneB));
-    });
-  }
-  return edges.filter(edge => {
-    const boneA = Number(edge.boneA);
-    const boneB = Number(edge.boneB);
-    const left = treeSideForEdge(edges, boneA, edge);
-    const right = treeSideForEdge(edges, boneB, edge);
-    const leftAttachment = bestStaticAttachment(
-      left, relationships, selected);
-    const rightAttachment = bestStaticAttachment(
-      right, relationships, selected);
-    const bridgeOverlap = Number(edge.minOverlap) || 0;
-    return !(leftAttachment && rightAttachment
-      && Number(leftAttachment.minOverlap) > bridgeOverlap
-      && Number(rightAttachment.minOverlap) > bridgeOverlap);
-  });
-}
-
-export function buildMaximumSpanningTree(nodes, edges) {
-  const nodeIds = [...new Set((nodes || []).map(node => Number(node.boneId)))];
-  const parent = new Map(nodeIds.map(id => [id, id]));
-  const rank = new Map(nodeIds.map(id => [id, 0]));
-  const find = id => {
-    let root = id;
-    while (parent.get(root) !== root) root = parent.get(root);
-    while (parent.get(id) !== id) {
-      const next = parent.get(id);
-      parent.set(id, root);
-      id = next;
-    }
-    return root;
-  };
-  const union = (left, right) => {
-    let rootLeft = find(left);
-    let rootRight = find(right);
-    if (rootLeft === rootRight) return false;
-    if (rank.get(rootLeft) < rank.get(rootRight)) {
-      [rootLeft, rootRight] = [rootRight, rootLeft];
-    }
-    parent.set(rootRight, rootLeft);
-    if (rank.get(rootLeft) === rank.get(rootRight)) {
-      rank.set(rootLeft, rank.get(rootLeft) + 1);
-    }
-    return true;
-  };
-  const orderedEdges = [...edges || []].sort(treeEdgeCompare);
-  const selected = [];
-  for (const edge of orderedEdges) {
-    const boneA = Number(edge.boneA);
-    const boneB = Number(edge.boneB);
-    if (!parent.has(boneA) || !parent.has(boneB) || boneA === boneB) {
-      continue;
-    }
-    if (union(boneA, boneB)) selected.push(edge);
-  }
-  const components = new Map();
-  nodeIds.forEach(id => {
-    const root = find(id);
-    const component = components.get(root) || [];
-    component.push(id);
-    components.set(root, component);
-  });
-  return {edges: selected, components: [...components.values()]};
-}
-
-export function orientTree(treeEdges, rootId) {
-  const adjacency = new Map();
-  const add = (from, to) => {
-    const neighbors = adjacency.get(from) || [];
-    neighbors.push(to);
-    adjacency.set(from, neighbors);
-  };
-  (treeEdges || []).forEach(edge => {
-    const boneA = Number(edge.boneA);
-    const boneB = Number(edge.boneB);
-    if (!Number.isFinite(boneA) || !Number.isFinite(boneB)) return;
-    add(boneA, boneB);
-    add(boneB, boneA);
-  });
-  const root = Number(rootId);
-  if (Number.isFinite(root) && !adjacency.has(root)) adjacency.set(root, []);
-  const parentById = {};
-  const childrenById = {};
-  const depthById = {};
-  adjacency.forEach((neighbors, boneId) => {
-    parentById[boneId] = null;
-    childrenById[boneId] = [];
-    depthById[boneId] = null;
-  });
-  if (Number.isFinite(root)) {
-    const queue = [root];
-    depthById[root] = 0;
-    while (queue.length) {
-      const current = queue.shift();
-      const depth = depthById[current];
-      (adjacency.get(current) || []).forEach(neighbor => {
-        if (depthById[neighbor] !== null) return;
-        parentById[neighbor] = current;
-        childrenById[current].push(neighbor);
-        depthById[neighbor] = depth + 1;
-        queue.push(neighbor);
-      });
-    }
-  }
-  return {rootId: root, parentById, childrenById, depthById};
-}
-
-function normalizedNodeIds(nodes) {
-  return [...new Set((nodes || []).map(node => Number(
-    node?.boneId ?? node)).filter(Number.isFinite))];
-}
-
-function connectedNodeComponents(nodes, edges) {
-  const nodeIds = normalizedNodeIds(nodes);
-  const nodeSet = new Set(nodeIds);
-  const adjacency = new Map(nodeIds.map(id => [id, []]));
-  (edges || []).forEach(edge => {
-    const boneA = Number(edge.boneA);
-    const boneB = Number(edge.boneB);
-    if (!nodeSet.has(boneA) || !nodeSet.has(boneB) || boneA === boneB) {
-      return;
-    }
-    adjacency.get(boneA).push(boneB);
-    adjacency.get(boneB).push(boneA);
-  });
-  const seen = new Set();
-  const components = [];
-  nodeIds.forEach(start => {
-    if (seen.has(start)) return;
-    const component = [];
-    const queue = [start];
-    seen.add(start);
-    while (queue.length) {
-      const current = queue.shift();
-      component.push(current);
-      adjacency.get(current).forEach(neighbor => {
-        if (seen.has(neighbor)) return;
-        seen.add(neighbor);
-        queue.push(neighbor);
-      });
-    }
-    components.push(component);
-  });
-  return components;
-}
-
-function graphNodeList(graph) {
-  return Array.isArray(graph) ? graph : graph?.nodes || [];
-}
-
-export function chooseSecondaryComponentRoot(
-    component, graph, primaryComponent, primaryRootId) {
-  const componentIds = normalizedNodeIds(component?.nodeIds || component);
-  if (!componentIds.length) return null;
-  const nodes = graphNodeList(graph);
-  const nodeById = new Map(nodes.map(node => [Number(node.boneId), node]));
-  const primaryIds = normalizedNodeIds(
-    primaryComponent?.nodeIds || primaryComponent);
-  const primaryNodes = primaryIds.map(id => nodeById.get(id)).filter(Boolean);
-  if (!primaryNodes.length && nodeById.has(Number(primaryRootId))) {
-    primaryNodes.push(nodeById.get(Number(primaryRootId)));
-  }
-  if (!primaryNodes.length) return componentIds[0];
-
-  let bestId = componentIds[0];
-  let bestDistance = Infinity;
-  componentIds.forEach((id, index) => {
-    const node = nodeById.get(id);
-    let nearest = Infinity;
-    primaryNodes.forEach(primary => {
-      const distance = centerDistance(
-        node?.weightedCenter, primary?.weightedCenter);
-      if (distance !== null) nearest = Math.min(nearest, distance);
-    });
-    // Preserve component input order for an exact-distance tie.  The
-    // distance, rather than the numeric ID, chooses the attachment side.
-    if (nearest < bestDistance || (nearest === bestDistance && index === 0)) {
-      bestId = id;
-      bestDistance = nearest;
-    }
-  });
-  return bestId;
-}
-
-function completeOrientation(nodeIds, orientation) {
-  nodeIds.forEach(id => {
-    if (!Object.prototype.hasOwnProperty.call(orientation.parentById, id)) {
-      orientation.parentById[id] = null;
-      orientation.childrenById[id] = [];
-      orientation.depthById[id] = null;
-    }
-  });
-  return orientation;
-}
-
-export function orientForest(nodes, treeEdges, primaryRootId, options = {}) {
-  const supplied = options.components;
-  const rawComponents = supplied?.length
-    ? supplied.map(component => component.nodeIds || component)
-    : connectedNodeComponents(nodes, treeEdges);
-  const components = rawComponents.map(component => normalizedNodeIds(component));
-  const requestedRoot = Number(primaryRootId);
-  let primaryComponentId = components.findIndex(component =>
-    component.includes(requestedRoot));
-  if (primaryComponentId < 0 && components.length) primaryComponentId = 0;
-
-  const componentByBoneId = {};
-  components.forEach((nodeIds, componentId) => {
-    nodeIds.forEach(id => { componentByBoneId[id] = componentId; });
-  });
-
-  const rootOverrides = options.secondaryRootByComponent;
-  const forestComponents = components.map((nodeIds, componentId) => {
-    const primary = componentId === primaryComponentId;
-    let rootId = primary && nodeIds.includes(requestedRoot)
-      ? requestedRoot : null;
-    if (rootId === null && primary) rootId = nodeIds[0] ?? null;
-    if (rootId === null) {
-      const override = rootOverrides instanceof Map
-        ? Number(rootOverrides.get(componentId))
-        : Number(rootOverrides?.[componentId]);
-      rootId = nodeIds.includes(override) ? override
-        : chooseSecondaryComponentRoot(
-          nodeIds,
-          nodes,
-          components[primaryComponentId] || [],
-          requestedRoot);
-    }
-    const nodeSet = new Set(nodeIds);
-    const componentEdges = (treeEdges || []).filter(edge =>
-      nodeSet.has(Number(edge.boneA)) && nodeSet.has(Number(edge.boneB)));
-    const orientation = completeOrientation(
-      nodeIds, orientTree(componentEdges, rootId));
-    const depths = Object.values(orientation.depthById)
-      .filter(depth => depth !== null).map(Number);
-    return {
-      componentId,
-      nodeIds,
-      rootId,
-      parentById: orientation.parentById,
-      childrenById: orientation.childrenById,
-      depthById: orientation.depthById,
-      edgeCount: componentEdges.length,
-      maxDepth: Math.max(0, ...depths),
-      primary,
-    };
-  });
-  const primary = forestComponents[primaryComponentId];
-  return {
-    primaryRootId: primary?.rootId ?? null,
-    primaryComponentId: primaryComponentId < 0 ? null : primaryComponentId,
-    components: forestComponents,
-    componentByBoneId,
-  };
-}
-
-*/
 
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {

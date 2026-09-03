@@ -25,8 +25,10 @@ import {
   ensureModelRigLoaded, ensureModelWeightsLoaded,
   getModelPhysicsState, getModelRigDebugState, getModelRigState, getModelWeightState,
   getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
-  resetModelPhysicsMotion, resetRigBone, resetRigPose, selectRigBone,
+  finishRigPose, resetModelPhysicsMotion, resetRigBone, resetRigPose,
+  selectRigBone,
   setActiveRigSource, setRigBoneRotation, setRigComponentRoot, setRigVisible,
+  setRigPoseControlStatus,
   beginRigPicking, cancelRigPicking, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
@@ -256,6 +258,9 @@ rendererReady.then(ready => {
     getRigState: getModelRigState,
     getRigDebugState: getModelRigDebugState,
     setRigBoneRotation,
+    finishRigPose,
+    onTransformControlsUnavailable: () => setRigPoseControlStatus(
+      'Pose gizmo is unavailable in this build.'),
     requestRender,
   });
   initRigPanel();
@@ -400,6 +405,7 @@ rendererReady.then(ready => {
     selectRigBone: {value: selectRigBone},
     setRigComponentRoot: {value: setRigComponentRoot},
     setRigBoneRotation: {value: setRigBoneRotation},
+    finishRigPose: {value: finishRigPose},
     resetRigBone: {value: resetRigBone},
     resetRigPose: {value: resetRigPose},
   });

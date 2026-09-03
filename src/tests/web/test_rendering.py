@@ -1009,17 +1009,38 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           const weightBefore = experiment.getModelWeightState();
           const quaternion = [0, 0, Math.sin(Math.PI / 4),
             Math.cos(Math.PI / 4)];
+          let boundsCalls = 0;
+          let sphereCalls = 0;
+          const originalBoundingBox = mesh.geometry.computeBoundingBox;
+          const originalBoundingSphere = mesh.geometry.computeBoundingSphere;
+          mesh.geometry.computeBoundingBox = () => {
+            boundsCalls += 1;
+            return originalBoundingBox.call(mesh.geometry);
+          };
+          mesh.geometry.computeBoundingSphere = () => {
+            sphereCalls += 1;
+            return originalBoundingSphere.call(mesh.geometry);
+          };
           const posed = experiment.setRigBoneRotation(
-            source.sourceKey, poseBone, quaternion);
+            source.sourceKey, poseBone, quaternion, {dragging: true});
+          const boundsDuringDrag = {boundsCalls, sphereCalls};
           const after = [...mesh.geometry.attributes.position.array];
+          const finished = experiment.finishRigPose(
+            source.sourceKey, poseBone);
+          const boundsAfterDrag = {boundsCalls, sphereCalls};
           const reset = experiment.resetRigPose(source.sourceKey);
           const restored = [...mesh.geometry.attributes.position.array];
+          mesh.geometry.computeBoundingBox = originalBoundingBox;
+          mesh.geometry.computeBoundingSphere = originalBoundingSphere;
           return {
             calls: window.__rigPanelPreviewCalls,
             sourceKey: source.sourceKey,
             poseBone,
             weightBefore: weightBefore.selectedBones,
             posed,
+            boundsDuringDrag,
+            finished,
+            boundsAfterDrag,
             changed: after.some((value, index) =>
               Math.abs(value - before[index]) > 1e-5),
             reset,
@@ -1032,6 +1053,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["sourceKey"] == "test/bodyblend.buf|offset=0"
         assert result["weightBefore"] == []
         assert result["posed"]
+        assert result["boundsDuringDrag"] == {"boundsCalls": 0, "sphereCalls": 0}
+        assert result["finished"]
+        assert result["boundsAfterDrag"]["boundsCalls"] == 1
+        assert result["boundsAfterDrag"]["sphereCalls"] == 1
         assert result["changed"]
         assert result["reset"]
         assert result["restored"]

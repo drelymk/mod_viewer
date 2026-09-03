@@ -295,16 +295,6 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
   max-height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
   display: flex; flex-direction: column; align-items: stretch; gap: 10px;
 }
-.right-dock-rig-tab-wrap {
-  position: absolute; top: 0; right: calc(100% + 8px); width: 72px;
-  display: flex; padding: 3px;
-  background: rgba(13,17,23,var(--panel-opacity));
-  border: 1px solid rgba(139,148,158,.45);
-  border-radius: var(--radius-md); backdrop-filter: blur(var(--panel-blur));
-  box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
-}
-.right-dock-rig-tab-wrap .right-dock-tab { width: 100%; }
-
 /* ── shared floating panel chrome ────────────────────────────────────────── */
 #sidebar, #camera-panel, #present-panel, #toggle-panel, #tool-panel, #menu-panel {
   display: none; background: rgba(13,17,23,.88); border: 1px solid var(--border);
@@ -1012,7 +1002,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 #right-dock.ui-visible { display: flex; }
 .right-dock-tabs {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 3px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; padding: 3px;
   background: rgba(13,17,23,var(--panel-opacity));
   border: 1px solid rgba(139,148,158,.45);
   border-radius: var(--radius-md); backdrop-filter: blur(var(--panel-blur));

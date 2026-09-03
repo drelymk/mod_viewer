@@ -5,6 +5,131 @@ import math
 import pytest
 
 
+def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const model = new THREE.Object3D();
+      scene.add(model);
+      let state = {
+        visible: true, activeSourceKey: 'source', selectedBoneId: null,
+        sources: [{
+          sourceKey: 'source', boneIds: [1, 2, 3],
+          nodes: [
+            {boneId: 1, weightedCenter: [0, 0, 0]},
+            {boneId: 2, weightedCenter: [1, 0, 0]},
+            {boneId: 3, weightedCenter: [2, 0, 0]},
+          ],
+          components: [{componentId: 0, rootId: 1, nodeIds: [1, 2, 3]}],
+          forestEdges: [
+            {boneA: 1, boneB: 2, childId: 2, jointCenter: [.5, 0, 0]},
+            {boneA: 2, boneB: 3, childId: 3, jointCenter: [1.5, 0, 0]},
+          ],
+          jointPivotByBoneId: {2: [.5, 0, 0], 3: [1.5, 0, 0]},
+          poseRotationByBoneId: {},
+        }],
+      };
+      const controller = createRigOverlayController({
+        scene, getMeshes: () => [model], getRigState: () => state,
+        getRigDebugState: () => { throw new Error('raw graph was requested'); },
+      });
+      controller.refresh(state);
+      const initial = controller.getDebugState();
+      state = {...state, selectedBoneId: 1};
+      controller.refresh(state);
+      const selectedRoot = controller.getDebugState();
+      model.position.x = 4;
+      window.dispatchEvent(new CustomEvent(
+        'mod-viewer-model-transform-changed', {detail: {}}));
+      const afterTransform = controller.getDebugState();
+      state = {...state, visible: false, selectedBoneId: null};
+      controller.refresh(state);
+      state = {...state, visible: true};
+      controller.refresh(state);
+      const shownAgain = controller.getDebugState();
+      controller.dispose();
+      return {initial, selectedRoot, afterTransform, shownAgain};
+    }""")
+    assert result["initial"]["staticObjectCount"] == 3
+    assert result["initial"]["nodeCount"] == 3
+    assert result["initial"]["edgeCount"] == 2
+    assert result["initial"]["jointCount"] == 2
+    assert result["initial"]["rebuildCount"] == 1
+    assert result["selectedRoot"]["selectedBoneId"] == 1
+    assert result["selectedRoot"]["rebuildCount"] == 1
+    assert result["afterTransform"]["rebuildCount"] == 1
+    assert result["afterTransform"]["modelFrameUpdateCount"] == \
+        result["initial"]["modelFrameUpdateCount"] + 2
+    assert result["shownAgain"]["rebuildCount"] == 1
+    assert result["shownAgain"]["selectedBoneId"] is None
+
+
+def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera();
+      const canvas = document.createElement('canvas');
+      const source = {
+        sourceKey: 'source', boneIds: [1, 2],
+        nodes: [
+          {boneId: 1, weightedCenter: [0, 0, 0]},
+          {boneId: 2, weightedCenter: [1, 0, 0]},
+        ],
+        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2]}],
+        forestEdges: [{boneA: 1, boneB: 2, childId: 2,
+          jointCenter: [.5, 0, 0]}],
+        jointPivotByBoneId: {2: [.5, 0, 0]},
+        poseRotationByBoneId: {},
+      };
+      let state = {visible: true, activeSourceKey: 'source',
+        selectedBoneId: null, sources: [source]};
+      let unavailable = 0;
+      const controller = createRigOverlayController({
+        scene, camera, canvas, getRigState: () => state,
+        getMeshes: () => [],
+        onTransformControlsUnavailable: () => { unavailable += 1; },
+      });
+      controller.refresh(state);
+      const noSelection = controller.getDebugState();
+      state = {...state, selectedBoneId: 1};
+      controller.refresh(state);
+      await controller.ensureTransformControls();
+      const root = controller.getDebugState();
+      state = {...state, selectedBoneId: 2};
+      controller.refresh(state);
+      await controller.ensureTransformControls();
+      const nonRoot = controller.getDebugState();
+      state = {...state, selectedBoneId: 1};
+      controller.refresh(state);
+      const rootAgain = controller.getDebugState();
+      state = {...state, visible: false, selectedBoneId: 2};
+      controller.refresh(state);
+      const hidden = controller.getDebugState();
+      state = {...state, visible: true};
+      controller.refresh(state);
+      const shown = controller.getDebugState();
+      controller.dispose();
+      return {noSelection, root, nonRoot, rootAgain, hidden, shown, unavailable};
+    }""")
+    assert result["noSelection"]["controlsCreated"] is False
+    assert result["root"]["controlsAttached"] is False
+    assert result["rootAgain"]["controlsAttached"] is False
+    assert result["hidden"]["controlsAttached"] is False
+    assert result["shown"]["controlsCreated"] == result["nonRoot"]["controlsCreated"]
+    if result["shown"]["controlsCreated"]:
+        assert result["nonRoot"]["controlsAttached"]
+        assert result["shown"]["controlsAttached"]
+    else:
+        assert result["unavailable"] == 1
+
+
 def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_page):
     page = module_page
     result = page.evaluate("""async () => {
