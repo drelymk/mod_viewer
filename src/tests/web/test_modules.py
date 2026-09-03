@@ -5,6 +5,80 @@ import math
 import pytest
 
 
+def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const nodes = rig.buildInfluenceNodes(
+        new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0]),
+        new Uint32Array([1, 2, 1, 2, 1, 2, 1, 2, 1, 2]),
+        new Float32Array([1, 0, .75, .25, .5, .5, .25, .75, 0, 1]), 2);
+      const relationships = rig.buildInfluenceRelationships(
+        new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0]),
+        new Uint32Array([1, 2, 1, 2, 1, 2, 1, 2, 1, 2]),
+        new Float32Array([1, 0, .75, .25, .5, .5, .25, .75, 0, 1]), 2,
+        nodes, 4);
+      const aggregate = rig.aggregateInfluenceGraphs([
+        {nodes, relationships},
+        {nodes, relationships: relationships.map(edge => ({...edge,
+          jointCenter: [edge.jointCenter[0] + 10, 0, 0]}))},
+      ]);
+      const forest = rig.buildInferredRigForest({
+        nodes: [{boneId: 1}, {boneId: 2}, {boneId: 3}, {boneId: 4}, {boneId: 5}],
+        relationships: [
+          {boneA: 1, boneB: 2, sharedVertexCount: 2,
+            containment: .8, jaccard: .3, treeEdgeScore: .8},
+          {boneA: 2, boneB: 3, sharedVertexCount: 2,
+            containment: .7, jaccard: .2, treeEdgeScore: .7},
+          {boneA: 4, boneB: 5, sharedVertexCount: 2,
+            containment: .9, jaccard: .4, treeEdgeScore: .9},
+        ],
+      });
+      return {
+        pivot: relationships[0].jointCenter,
+        jointWeight: relationships[0].jointWeightTotal,
+        aggregatePivot: aggregate.relationships[0].jointCenter,
+        components: forest.components.map(component => component.nodeIds),
+        roots: forest.components.map(component => component.rootId),
+      };
+    }""")
+    assert result["pivot"] == pytest.approx([2, 0, 0])
+    assert result["jointWeight"] == pytest.approx(.625)
+    assert result["aggregatePivot"] == pytest.approx([7, 0, 0])
+    assert sorted(result["components"]) == [[1, 2, 3], [4, 5]]
+    assert len(set(result["roots"])) == 2
+
+
+def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three');
+      const deformation = await import('./js/mesh/weight-deformation.js');
+      const forest = {components: [{rootId: 0, nodeIds: [0, 1],
+        childrenById: {0: [1]}}]};
+      const rotation = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1), Math.PI / 2);
+      const transforms = deformation.buildForestTransformsFromLocalRotations(
+        forest, new Map([[0, [0, 0, 0]], [1, [1, 0, 0]]]), {
+          quaternionByBoneId: new Map([[1, rotation]]),
+          jointPivotByBoneId: new Map([[1, [1, 0, 0]]]),
+        });
+      const positions = new Float32Array([2, 0, 0, 0, 0, 0]);
+      const normals = new Float32Array([1, 0, 0, 0, 0, 1]);
+      const indices = new Uint32Array([1, 0, 0, 0]);
+      const weights = new Float32Array([1, 0, 1, 0]);
+      deformation.applyWeightedTransformDeformationInto(
+        positions, positions.slice(), indices, weights, 2, transforms,
+        new Uint32Array([0]));
+      deformation.applyWeightedNormalDeformationInto(
+        normals, new Float32Array([1, 0, 0, 0, 0, 1]), indices, weights, 2,
+        new Map([[1, rotation]]), new Uint32Array([0]));
+      return {position: [...positions], normal: [...normals]};
+    }""")
+    assert result["position"] == pytest.approx([1, 1, 0, 0, 0, 0])
+    assert result["normal"] == pytest.approx([0, 1, 0, 0, 0, 1])
+
+
 def test_skinning_physics_solver_uses_true_3d_vectors_and_quaternions(module_page):
     page = module_page
     result = page.evaluate("""async () => {

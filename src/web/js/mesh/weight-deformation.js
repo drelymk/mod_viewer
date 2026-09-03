@@ -24,6 +24,13 @@ function centerFromCollection(nodeCenters, boneId) {
   return nodeCenters?.[boneId];
 }
 
+function valueFromCollection(collection, boneId) {
+  if (collection instanceof Map) {
+    return collection.get(boneId) ?? collection.get(String(boneId));
+  }
+  return collection?.[boneId];
+}
+
 function rotationFromCollection(rotationByBoneId, boneId) {
   const value = rotationByBoneId instanceof Map
     ? rotationByBoneId.get(boneId) ?? rotationByBoneId.get(String(boneId))
@@ -53,6 +60,18 @@ function quaternionFromRotationVector(rotationVector) {
     vector.clone().multiplyScalar(1 / angle), angle);
 }
 
+function quaternionFromCollection(quaternionByBoneId, boneId) {
+  const value = valueFromCollection(quaternionByBoneId, boneId);
+  const quaternion = value?.quaternion ?? value;
+  if (quaternion?.isQuaternion) return quaternion.clone().normalize();
+  const values = quaternion?.length >= 4
+    ? quaternion.slice(0, 4).map(Number)
+    : [quaternion?.x, quaternion?.y, quaternion?.z, quaternion?.w]
+      .map(Number);
+  return values.length === 4 && values.every(Number.isFinite)
+    ? new THREE.Quaternion(...values).normalize() : new THREE.Quaternion();
+}
+
 export function buildForestTransformsFromLocalRotations(
     forest, nodeCenters, options = {}) {
   const transforms = new Map();
@@ -71,6 +90,11 @@ export function buildForestTransformsFromLocalRotations(
   const getRotation = typeof options.getRotation === 'function'
     ? options.getRotation : boneId => rotationFromCollection(
       rotationByBoneId, boneId);
+  const getQuaternion = typeof options.getQuaternion === 'function'
+    ? options.getQuaternion : options.quaternionByBoneId
+      ? boneId => quaternionFromCollection(options.quaternionByBoneId, boneId)
+      : null;
+  const jointPivotByBoneId = options.jointPivotByBoneId || null;
 
   (forest?.components || []).forEach(component => {
     const rootId = Number(component.rootId);
@@ -89,20 +113,27 @@ export function buildForestTransformsFromLocalRotations(
         || new THREE.Quaternion();
       const parentCenter = vectorFromCenter(
         centerFromCollection(nodeCenters, parentId));
-      const pivot = parentCenter.clone().applyMatrix4(parentTransform);
       const children = component.childrenById?.[parentId] || [];
       children.forEach(childValue => {
         const childId = Number(childValue);
         if (!Number.isFinite(childId) || visited.has(childId)) return;
         visited.add(childId);
-        const localRotation = quaternionFromRotationVector(
-          getRotation(childId));
+        const localRotation = getQuaternion
+          ? (getQuaternion(childId)?.clone?.() || new THREE.Quaternion())
+          : quaternionFromRotationVector(getRotation(childId));
+        localRotation.normalize();
         // The local rotation vector is expressed in the parent frame. Convert
         // it to a world-space rotation around the already transformed pivot,
         // then inherit the parent's affine transform.
         const worldRotation = parentRotation.clone()
           .multiply(localRotation)
           .multiply(parentRotation.clone().invert());
+        const jointCenter = vectorFromCenter(
+          valueFromCollection(jointPivotByBoneId, childId));
+        const pivot = jointPivotByBoneId
+          && valueFromCollection(jointPivotByBoneId, childId)
+          ? jointCenter.applyMatrix4(parentTransform)
+          : parentCenter.clone().applyMatrix4(parentTransform);
         const aroundPivot = rotationAroundPivot(
           pivot, worldRotation);
         const childEntry = entryFor(childId);

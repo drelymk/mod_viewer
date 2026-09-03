@@ -1,6 +1,7 @@
 // Entry point: composes frontend application flows and initializes the UI.
 
 import {
+  camera, renderer, scene,
   getAmbientOcclusionStrength, getBloomEnabled, getEnvironmentPreset, getRenderCount,
   isRendererAvailable, rendererReady,
   resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
@@ -21,13 +22,18 @@ import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-prof
 import { requestRender } from './scene/render-scheduler.js';
 import {
   disableModelPhysics, enableModelPhysics,
-  ensureModelWeightsLoaded, getModelPhysicsState, getModelWeightState,
+  ensureModelRigLoaded, ensureModelWeightsLoaded,
+  getModelPhysicsState, getModelRigDebugState, getModelRigState, getModelWeightState,
   getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
-  resetModelPhysicsMotion, setModelWeightHeatmap,
+  resetModelPhysicsMotion, resetRigBone, resetRigPose, selectRigBone,
+  setActiveRigSource, setRigBoneRotation, setRigComponentRoot, setRigVisible,
+  beginRigPicking, cancelRigPicking, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
+import { initRigPanel } from './panels/rig-panel.js';
 import { initWeightPanel } from './panels/weight-panel.js';
+import { createRigOverlayController } from './scene/rig-overlay-controller.js';
 import { initPanelOpacityControl } from './ui/appearance.js';
 import { alertDialog } from './ui/dialogs.js';
 import {
@@ -244,6 +250,15 @@ rendererReady.then(ready => {
   initLeftDock();
   initWeightPanel();
   initRightDock();
+  createRigOverlayController({
+    scene, camera, canvas: renderer.domElement,
+    getMeshes: () => activeMeshes,
+    getRigState: getModelRigState,
+    getRigDebugState: getModelRigDebugState,
+    setRigBoneRotation,
+    requestRender,
+  });
+  initRigPanel();
   initInspectorPanel();
   initSelection();
   const viewportCameraButtons = $('viewport-camera-buttons');
@@ -374,6 +389,20 @@ rendererReady.then(ready => {
     getCurrentSource: () => viewerState.currentSource
       ? { ...viewerState.currentSource } : null,
   };
+  Object.defineProperties(window.modViewer, {
+    getModelRigState: {value: getModelRigState},
+    getModelRigDebugState: {value: getModelRigDebugState},
+    ensureModelRigLoaded: {value: ensureModelRigLoaded},
+    setRigVisible: {value: setRigVisible},
+    setActiveRigSource: {value: setActiveRigSource},
+    beginRigPicking: {value: beginRigPicking},
+    cancelRigPicking: {value: cancelRigPicking},
+    selectRigBone: {value: selectRigBone},
+    setRigComponentRoot: {value: setRigComponentRoot},
+    setRigBoneRotation: {value: setRigBoneRotation},
+    resetRigBone: {value: resetRigBone},
+    resetRigPose: {value: resetRigPose},
+  });
 
   void openStartupMod().then(apiReady => {
     if (!apiReady) {

@@ -967,6 +967,79 @@ def test_weight_load_rejects_missing_source_identity(
         context.close()
 
 
+def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"RigPanel": _payload("RigPanel")})
+    try:
+        _open(page, "RigPanel")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__rigPanelPreviewCalls = 0;
+          window.__testSkinningPreview = async () => {
+            window.__rigPanelPreviewCalls += 1;
+            return {
+              status: 'ok', vertex_count: 3, influence_count: 2,
+              bone_ids: [0, 1, 2], encoding: 'test', source: {
+                key: 'test/bodyblend.buf|offset=0',
+                file: 'Test/BodyBlend.buf', bone_id_offset: 0,
+              },
+              data: {
+                url, length: 48,
+                indices: {offset: 0, length: 24, type: 'u32'},
+                weights: {offset: 24, length: 24, type: 'f32'},
+              }, diagnostics: {},
+            };
+          };
+        }""")
+        assert page.evaluate("window.__rigPanelPreviewCalls") == 0
+        page.locator("#rig-tab").click()
+        page.wait_for_function("window.modViewer.getModelRigState().loaded")
+        result = page.evaluate("""async () => {
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const source = experiment.getModelRigState().sources[0];
+          const component = source.components[0];
+          const poseBone = component.nodeIds.find(id => id !== component.rootId);
+          const mesh = window.modViewer.activeMeshes[0];
+          const before = [...mesh.geometry.attributes.position.array];
+          const weightBefore = experiment.getModelWeightState();
+          const quaternion = [0, 0, Math.sin(Math.PI / 4),
+            Math.cos(Math.PI / 4)];
+          const posed = experiment.setRigBoneRotation(
+            source.sourceKey, poseBone, quaternion);
+          const after = [...mesh.geometry.attributes.position.array];
+          const reset = experiment.resetRigPose(source.sourceKey);
+          const restored = [...mesh.geometry.attributes.position.array];
+          return {
+            calls: window.__rigPanelPreviewCalls,
+            sourceKey: source.sourceKey,
+            poseBone,
+            weightBefore: weightBefore.selectedBones,
+            posed,
+            changed: after.some((value, index) =>
+              Math.abs(value - before[index]) > 1e-5),
+            reset,
+            restored: restored.every((value, index) =>
+              Math.abs(value - before[index]) < 1e-5),
+            weightAfter: experiment.getModelWeightState(),
+          };
+        }""")
+        assert result["calls"] == 1
+        assert result["sourceKey"] == "test/bodyblend.buf|offset=0"
+        assert result["weightBefore"] == []
+        assert result["posed"]
+        assert result["changed"]
+        assert result["reset"]
+        assert result["restored"]
+        assert result["weightAfter"]["selectedBones"] == []
+    finally:
+        context.close()
+
+
 def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
         edge_browser, frontend_url):
     context, page = _page(
