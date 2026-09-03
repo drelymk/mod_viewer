@@ -8,6 +8,7 @@ import pytest
 
 from app.mods import texture_save
 from core.geometry.draw_call import DrawCall
+from core.textures import bc7
 from core.textures.color_adjustment import (
     apply_prepared_color_adjustment, prepare_color_adjustment,
 )
@@ -25,6 +26,22 @@ def _dx10_dds(payload, dxgi_format=98, width=4, height=4, mip_count=1):
     struct.pack_into("<II", header, 80, 4, int.from_bytes(b"DX10", "little"))
     struct.pack_into("<IIIII", header, 128, dxgi_format, 3, 0, 1, 0)
     return bytes(header) + bytes(payload)
+
+
+def _mode6_block(endpoints=((20, 110), (40, 140), (60, 170))):
+    bits = 1 << 6
+    for channel, (low, high) in enumerate(endpoints):
+        bits = bc7.set_bits(bits, 7 + channel * 14, 7, low >> 1)
+        bits = bc7.set_bits(bits, 14 + channel * 14, 7, high >> 1)
+    bits = bc7.set_bits(bits, 49, 7, 0)
+    bits = bc7.set_bits(bits, 56, 7, 127)
+    bits = bc7.set_bits(bits, 63, 1, 0)
+    bits = bc7.set_bits(bits, 64, 1, 1)
+    indices = [0, 1, 2, 3] * 4
+    bits = bc7.set_bits(bits, 65, 3, indices[0])
+    for pixel, index in enumerate(indices[1:], 1):
+        bits = bc7.set_bits(bits, 68 + (pixel - 1) * 4, 4, index)
+    return bits.to_bytes(16, "little")
 
 
 def _role_keys(diffuse="diffuse::body.dds"):
@@ -408,6 +425,183 @@ def _single_intent_claims(width, height, selected):
         for y in range(height)
         for x in range(width)
     ]
+
+
+def _bc7_block_state(width, height, claims, adjustments=None):
+    if adjustments is None:
+        adjustments = (None, prepare_color_adjustment({"brightness": 1.5}))
+    prepared = SimpleNamespace(
+        layout=SimpleNamespace(mips=(SimpleNamespace(
+            width=width, height=height,
+            units_x=(width + 3) // 4),)),
+        mip0_claims=claims,
+        intent_adjustments=adjustments,
+    )
+    return texture_save._bc7_intent_level(prepared)
+
+
+def test_bc7_block_intent_classes_only_report_explicit_mip0_claims():
+    claims = bytearray([0] * 16)
+    claims[5] = 1
+    claims[6] = 1
+    claims[9] = 2
+    original = claims[:]
+    state = _bc7_block_state(
+        4, 4, claims,
+        (None, prepare_color_adjustment({"hue": 30}),
+         prepare_color_adjustment({"hue": 120})))
+    mip = SimpleNamespace(
+        width=4, height=4, units_x=1)
+
+    assert texture_save._bc7_block_intent_classes(
+        state, mip, 0) == {1, 2}
+    assert claims == original
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "selected"),
+    [
+        (4, 4, {(1, 1)}),
+        (4, 4, {(0, 1), (1, 1), (2, 1), (3, 1)}),
+        (4, 4, {(0, 0), (1, 0), (0, 1)}),
+        (4, 4, {(0, 0), (1, 0), (0, 1), (1, 1)}),
+        (2, 2, {(0, 0)}),
+        (1, 1, {(0, 0)}),
+    ],
+)
+def test_single_intent_partial_block_pads_valid_rgb_without_changing_alpha(
+        width, height, selected):
+    source_block = _mode6_block()
+    source_pixels = bc7.decode_block(source_block)
+    adjustment = prepare_color_adjustment({"brightness": 1.5})
+    state = _bc7_block_state(
+        width, height, bytearray(_single_intent_claims(
+            width, height, selected)), (None, adjustment))
+    mip = SimpleNamespace(
+        width=width, height=height, units_x=1)
+
+    _source, target, valid_width, valid_height = \
+        texture_save._bc7_target_block_pixels(
+            source_block, mip, 0, state, (None, adjustment))
+
+    assert (valid_width, valid_height) == (width, height)
+    expected_rgb = {
+        (x, y): texture_save.apply_prepared_color_u8(
+            source_pixels[y * 4 + x][:3], adjustment)
+        for y in range(height)
+        for x in range(width)
+    }
+    for y in range(height):
+        for x in range(width):
+            pixel = target[y * 4 + x]
+            assert pixel[:3] == expected_rgb[(x, y)]
+            assert pixel[3] == source_pixels[y * 4 + x][3]
+    for y in range(height, 4):
+        for x in range(4):
+            assert target[y * 4 + x] == source_pixels[y * 4 + x]
+    for y in range(height):
+        for x in range(width, 4):
+            assert target[y * 4 + x] == source_pixels[y * 4 + x]
+
+
+def test_multi_intent_block_keeps_per_pixel_logical_targets_and_no_padding():
+    source_block = _mode6_block()
+    source_pixels = bc7.decode_block(source_block)
+    adjustments = (
+        None,
+        prepare_color_adjustment({"brightness": 1.5}),
+        prepare_color_adjustment({"hue": 120}),
+    )
+    claims = bytearray([0] * 16)
+    claims[5] = 1
+    claims[6] = 2
+    state = _bc7_block_state(4, 4, claims, adjustments)
+    mip = SimpleNamespace(width=4, height=4, units_x=1)
+
+    _source, target, valid_width, valid_height = \
+        texture_save._bc7_target_block_pixels(
+            source_block, mip, 0, state, adjustments)
+
+    assert (valid_width, valid_height) == (4, 4)
+    for pixel, claim in enumerate(claims):
+        expected = texture_save._bc7_intent_rgb(
+            source_pixels[pixel][:3], state, pixel, adjustments)
+        assert target[pixel][:3] == expected
+        assert target[pixel][3] == source_pixels[pixel][3]
+    assert target[0][:3] == source_pixels[0][:3]
+
+
+def test_bc7_save_pads_single_intent_block_and_preserves_unrelated_blocks(
+        tmp_path, monkeypatch):
+    first = _mode6_block()
+    second = _mode6_block(((30, 120), (50, 150), (70, 180)))
+    original = _dx10_dds(first + second, width=8, height=4)
+    source = tmp_path / "body.dds"
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    adjustment = prepare_color_adjustment({"hue": 120})
+    claims = bytearray([0] * 32)
+    claims[1] = 1
+    prepared = SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        entries=({
+            "semantic_key": "Anchor", "texture_keys": _role_keys(),
+        },),
+        targets=(SimpleNamespace(
+            semantic_key="Anchor", metadata_key="Anchor::one"),),
+        mip0_claims=claims, intent_adjustments=(None, adjustment),
+        mip0_affected_blocks=(0,))
+    monkeypatch.setattr(
+        texture_save, "_prepare_texture_save",
+        lambda *args, **kwargs: prepared)
+
+    result = texture_save.save_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+        "diffuse::body.dds", [], [])
+
+    assert result["status"] == "ok"
+    candidate = source.read_bytes()
+    assert candidate[layout.mips[0].offset:layout.mips[0].offset + 16] != first
+    assert candidate[layout.mips[0].offset + 16:
+                     layout.mips[0].offset + 32] == second
+    assert inspect_dds_layout(source) == layout
+    stats = result["diagnostics"]["bc7"]
+    assert stats["touched_blocks"] == 1
+    assert stats["partial_blocks"] == 1
+    assert stats["full_blocks"] == 0
+    assert stats["single_intent_partial_blocks"] == 1
+    assert stats["multi_intent_blocks"] == 0
+    assert stats["source_blocks_kept"] == 0
+    source_pixels = bc7.decode_block(first)
+    candidate_pixels = bc7.decode_block(candidate[layout.mips[0].offset:
+                                                    layout.mips[0].offset + 16])
+    assert [pixel[3] for pixel in candidate_pixels] == [
+        pixel[3] for pixel in source_pixels]
+
+
+def test_bc7_stats_count_source_blocks_by_block_identity(tmp_path, monkeypatch):
+    source_block = _mode6_block()
+    source = tmp_path / "body.dds"
+    source.write_bytes(_dx10_dds(source_block))
+    layout = inspect_dds_layout(source)
+    adjustment = prepare_color_adjustment({"hue": 30})
+    claims = bytearray([1] * 16)
+    prepared = SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        mip0_claims=claims, intent_adjustments=(None, adjustment),
+        mip0_affected_blocks=(0,))
+
+    monkeypatch.setattr(
+        texture_save._bc7_codec, "recolor_block",
+        lambda *_args: SimpleNamespace(
+            block=source_block, source_error=10, candidate_error=1, mode=6))
+
+    _candidate, stats = texture_save._save_bc7_blocks(
+        source.read_bytes(), prepared)
+
+    assert stats.source_blocks_kept == 1
+    assert stats.improved_blocks == 1
+    assert stats.unchanged_blocks == 0
 
 
 @pytest.mark.parametrize(

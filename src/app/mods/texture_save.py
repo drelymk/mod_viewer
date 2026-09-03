@@ -92,6 +92,22 @@ class BC7SaveStats:
     source_rgb_error: int
     final_rgb_error: int
     modes: dict
+    source_blocks_kept: int = 0
+    partial_blocks: int = 0
+    full_blocks: int = 0
+    single_intent_partial_blocks: int = 0
+    multi_intent_blocks: int = 0
+
+
+@dataclass(frozen=True)
+class _BC7BlockIntent:
+    """Logical intent classification shared by BC7 fitting and diagnostics."""
+
+    classes: tuple
+    partial: bool
+    full: bool
+    single_intent_partial: bool
+    multi_intent: bool
 
 
 def _error(code, message, status="error", **details):
@@ -534,6 +550,7 @@ def _bc7_intent_level(prepared):
         "level": 0,
         "width": base_mip.width,
         "height": base_mip.height,
+        "class_count": class_count,
         "claims": claims,
         "changed_counts": changed_counts,
         "total_counts": total_counts,
@@ -569,6 +586,7 @@ def _bc7_next_intent_level(state, target_width, target_height, class_count):
         "level": state["level"] + 1,
         "width": target_width,
         "height": target_height,
+        "class_count": class_count,
         "claims": None,
         "changed_counts": changed_counts,
         "total_counts": total_counts if state["single"] else None,
@@ -643,8 +661,96 @@ def _bc7_intent_rgb(source_rgb, state, pixel, adjustments):
         value / total_count * 255.0))) for value in weighted)
 
 
+def _bc7_block_intent_classes(state, mip, block_index):
+    """Return explicit mip-0 Color intents in one valid BC7 block."""
+    if state.get("level") != 0:
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "BC7 block intent classes are only defined for mip 0.")
+    return set(_bc7_block_intent_info(state, mip, block_index).classes)
+
+
+def _bc7_block_intent_info(state, mip, block_index):
+    """Classify one block's logical intent without changing the claims."""
+    if state.get("level") != 0:
+        return _bc7_weighted_block_intent_info(state, mip, block_index)
+    claims = state.get("claims")
+    width, height = state.get("width"), state.get("height")
+    class_count = state.get("class_count")
+    if (claims is None or width != mip.width or height != mip.height
+            or len(claims) != width * height
+            or (class_count is not None
+                and (not isinstance(class_count, int) or class_count <= 0))):
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Mip-0 color intent does not match the source texture size.")
+    source_x, source_y, valid_width, valid_height = _unit_bounds(
+        mip, block_index)
+    classes = set()
+    first = None
+    all_same = True
+    for row in range(valid_height):
+        for column in range(valid_width):
+            value = claims[(source_y + row) * width + source_x + column]
+            if (not isinstance(value, int) or value < 0
+                    or (class_count is not None and value >= class_count)):
+                raise TextureSaveError(
+                    "texture_validation_failed",
+                    "Mip-0 color intent contains an invalid class.")
+            if value:
+                classes.add(value)
+                if first is None:
+                    first = value
+                elif value != first:
+                    all_same = False
+            else:
+                all_same = False
+    full = bool(classes) and len(classes) == 1 and all_same
+    ordered_classes = tuple(sorted(classes))
+    return _BC7BlockIntent(
+        classes=ordered_classes, partial=bool(classes) and not full,
+        full=full,
+        single_intent_partial=len(ordered_classes) == 1 and not full,
+        multi_intent=len(ordered_classes) > 1)
+
+
+def _bc7_weighted_block_intent_info(state, mip, block_index):
+    """Classify one lower-mip block's weighted logical intent."""
+    source_x, source_y, valid_width, valid_height = _unit_bounds(
+        mip, block_index)
+    classes = set()
+    full = True
+    for row in range(valid_height):
+        for column in range(valid_width):
+            pixel = ((source_y + row) * mip.width + source_x + column)
+            if state["single"]:
+                changed = state["changed_counts"][pixel]
+                total = state["total_counts"][pixel]
+                if changed:
+                    classes.add(1)
+                if not changed or changed != total:
+                    full = False
+                continue
+            pixel_class_count = 0
+            for intent_class, count_values in enumerate(
+                    state["counts"][1:], 1):
+                if count_values[pixel]:
+                    classes.add(intent_class)
+                    pixel_class_count += 1
+            if (not pixel_class_count or state["counts"][0][pixel]
+                    or pixel_class_count != 1):
+                full = False
+    if not classes:
+        return _BC7BlockIntent((), False, False, False, False)
+    ordered_classes = tuple(sorted(classes))
+    return _BC7BlockIntent(
+        classes=ordered_classes, partial=not full, full=full,
+        single_intent_partial=len(ordered_classes) == 1 and not full,
+        multi_intent=len(ordered_classes) > 1)
+
+
 def _bc7_target_block_pixels(source_block, mip, block_index, state,
-                             adjustments):
+                             adjustments, block_intent=None):
     """Build one sixteen-pixel BC7 target without a reconstructed image."""
     try:
         source_pixels = _bc7_codec.decode_block(source_block)
@@ -654,12 +760,24 @@ def _bc7_target_block_pixels(source_block, mip, block_index, state,
     source_x, source_y, valid_width, valid_height = _unit_bounds(
         mip, block_index)
     target_pixels = list(source_pixels)
+    single_intent_class = None
+    if state["level"] == 0:
+        if block_intent is None:
+            block_intent = _bc7_block_intent_info(
+                state, mip, block_index)
+        if len(block_intent.classes) == 1:
+            single_intent_class = block_intent.classes[0]
     for row in range(valid_height):
         for column in range(valid_width):
             local = row * 4 + column
             pixel = ((source_y + row) * mip.width + source_x + column)
-            rgb = _bc7_intent_rgb(
-                source_pixels[local][:3], state, pixel, adjustments)
+            if single_intent_class is not None:
+                rgb = apply_prepared_color_u8(
+                    source_pixels[local][:3],
+                    adjustments[single_intent_class])
+            else:
+                rgb = _bc7_intent_rgb(
+                    source_pixels[local][:3], state, pixel, adjustments)
             target_pixels[local] = rgb + (source_pixels[local][3],)
     return (source_pixels, tuple(target_pixels), valid_width, valid_height)
 
@@ -684,7 +802,8 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
         for adjustment in raw_adjustments)
     final = bytearray(original)
     state = _bc7_intent_level(prepared)
-    touched = improved = unchanged = 0
+    touched = improved = unchanged = source_blocks_kept = 0
+    partial = full = single_intent_partial = multi_intent = 0
     source_error = final_error = 0
     modes = {}
     for level, mip in enumerate(prepared.layout.mips):
@@ -701,12 +820,25 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
         started = time.perf_counter()
         if stage_callback is not None:
             stage_callback("bc7_decode_fit")
+        mip_partial = mip_full = mip_single_intent_partial = 0
+        mip_multi_intent = mip_source_blocks_kept = 0
         for block_index in affected:
             start = mip.offset + block_index * mip.bytes_per_unit
             source_block = bytes(original[start:start + 16])
+            block_intent = _bc7_block_intent_info(
+                state, mip, block_index)
+            partial += block_intent.partial
+            full += block_intent.full
+            single_intent_partial += block_intent.single_intent_partial
+            multi_intent += block_intent.multi_intent
+            mip_partial += block_intent.partial
+            mip_full += block_intent.full
+            mip_single_intent_partial += block_intent.single_intent_partial
+            mip_multi_intent += block_intent.multi_intent
             source_pixels, target_pixels, valid_width, valid_height = (
                 _bc7_target_block_pixels(
-                    source_block, mip, block_index, state, adjustments))
+                    source_block, mip, block_index, state, adjustments,
+                    block_intent))
             result = _bc7_codec_call(
                 _bc7_codec.recolor_block, source_block, target_pixels,
                 valid_width, valid_height, source_pixels)
@@ -714,18 +846,28 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
             touched += 1
             improved += result.candidate_error < result.source_error
             unchanged += result.candidate_error == result.source_error
+            source_kept = int(result.block == source_block)
+            source_blocks_kept += source_kept
+            mip_source_blocks_kept += source_kept
             source_error += result.source_error
             final_error += result.candidate_error
             modes[result.mode] = modes.get(result.mode, 0) + 1
         timings["bc7_decode_fit"] = timings.get("bc7_decode_fit", 0.0) + (
             time.perf_counter() - started)
         _LOGGER.debug(
-            "texture save bc7 mip=%s size=%sx%s affected_blocks=%s",
-            level, mip.width, mip.height, len(affected))
+            "texture save bc7 mip=%s %sx%s affected=%s partial=%s full=%s "
+            "single_intent_partial=%s multi_intent=%s source_kept=%s",
+            level, mip.width, mip.height, len(affected), mip_partial,
+            mip_full, mip_single_intent_partial, mip_multi_intent,
+            mip_source_blocks_kept)
     stats = BC7SaveStats(
         touched_blocks=touched, improved_blocks=improved,
         unchanged_blocks=unchanged, source_rgb_error=source_error,
-        final_rgb_error=final_error, modes=dict(sorted(modes.items())))
+        final_rgb_error=final_error, modes=dict(sorted(modes.items())),
+        source_blocks_kept=source_blocks_kept, partial_blocks=partial,
+        full_blocks=full,
+        single_intent_partial_blocks=single_intent_partial,
+        multi_intent_blocks=multi_intent)
     if not touched:
         raise TextureSaveError(
             "incompatible_texture_color_usage",
@@ -738,6 +880,11 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
             "the source BC7 blocks.", "unsupported", {
                 "touched_blocks": touched,
                 "improved_blocks": improved,
+                "source_blocks_kept": source_blocks_kept,
+                "partial_blocks": partial,
+                "full_blocks": full,
+                "single_intent_partial_blocks": single_intent_partial,
+                "multi_intent_blocks": multi_intent,
                 "source_rgb_error": source_error,
                 "final_rgb_error": final_error,
             })
@@ -1055,6 +1202,12 @@ def save_texture_color(
                         "touched_blocks": bc7_stats.touched_blocks,
                         "improved_blocks": bc7_stats.improved_blocks,
                         "unchanged_blocks": bc7_stats.unchanged_blocks,
+                        "source_blocks_kept": bc7_stats.source_blocks_kept,
+                        "partial_blocks": bc7_stats.partial_blocks,
+                        "full_blocks": bc7_stats.full_blocks,
+                        "single_intent_partial_blocks": (
+                            bc7_stats.single_intent_partial_blocks),
+                        "multi_intent_blocks": bc7_stats.multi_intent_blocks,
                         "source_rgb_error": bc7_stats.source_rgb_error,
                         "final_rgb_error": bc7_stats.final_rgb_error,
                         "modes": {
