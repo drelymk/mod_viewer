@@ -145,8 +145,11 @@ def test_decode_and_recolor_supports_every_bc7_mode(
              _separate_block(mode, 1) if mode in {4, 5} else
              _mode6_block() if mode == 6 else _mode7_block())
     source = bc7.decode_block(block)
+    if mode < 4:
+        assert all(pixel[3] == 255 for pixel in source)
     target = tuple(
-        (min(255, red + 31), max(0, green - 17), min(255, blue + 23), alpha)
+        (min(255, red + 31), max(0, green - 17), min(255, blue + 23),
+         0 if mode < 4 else alpha)
         for red, green, blue, alpha in source)
 
     result = bc7.recolor_block(
@@ -158,17 +161,6 @@ def test_decode_and_recolor_supports_every_bc7_mode(
     assert result.candidate_error <= result.source_error
     assert [pixel[3] for pixel in result.candidate_pixels] == [
         pixel[3] for pixel in source]
-
-
-@pytest.mark.parametrize("mode", range(4))
-def test_rgb_only_modes_have_implicit_opaque_alpha(mode):
-    block = _color_block(mode)
-    source = bc7.decode_block(block)
-    target = tuple((pixel[0], pixel[1], pixel[2], 0) for pixel in source)
-    result = bc7.recolor_block(block, target, valid_width=3, valid_height=2)
-
-    assert all(pixel[3] == 255 for pixel in source)
-    assert all(pixel[3] == 255 for pixel in result.candidate_pixels)
 
 
 def test_invalid_unary_prefix_is_reported_as_corrupt_bc7():

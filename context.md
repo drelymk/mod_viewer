@@ -1,411 +1,275 @@
 # 3DMigoto Mod Viewer - Project Context
 
-This is a pywebview desktop viewer for 3DMigoto character mods. It reads INI
-files, buffers and textures from a mod folder, builds meshes, renders them with
-Three.js/WebGPU, previews menu state, and stages INI edits until Export.
-Supported families include ZZZ/ZZMI, Genshin/GIMI, WuWa/WWMI and HSR/SRMI.
+A pywebview desktop viewer for ZZZ/ZZMI, Genshin/GIMI, WuWa/WWMI and HSR/SRMI
+mods: Three.js/WebGPU rendering, menu previews and staged INI editing.
 
-Keep this file focused on durable invariants and the failure each one prevents.
-Do not add implementation inventories, historical explanations, test output,
-machine-specific paths or facts that are obvious from the source.
+Keep this file limited to durable contracts and non-obvious failure modes.
+Use source and README for implementation details and usage. Keep credentials,
+private environment details, machine-specific paths and local test results out
+of documentation, comments and tests; use portable fixtures instead.
 
-## Working rules
+## Trust boundaries and shared state
 
-- Never put credentials, tokens, private URLs, usernames, hostnames, absolute
-  local paths or environment dumps here.
-- Keep code comments and test cases portable: do not embed developer- or
-  machine-specific paths, environment details or local-only results; use
-  generic fixtures or temporary directories instead.
-- Read-only analysis may use the lossy parser. Any user-visible edit must use
-  the lossless document and shared edit session described below.
-- Preserve the existing trust boundaries and execution-order semantics even if
-  a simpler implementation appears equivalent.
+- Keep core analysis GUI-free. The bridge authorizes native-picker paths and
+  canonical descendants of registered Mod Folder roots before loading, metadata
+  writes or export. Browser-invented paths are never authorization. Promoted
+  exact session paths survive registry edits/removal; adding or changing a root
+  path requires the native picker. Keep the native window private at `_window`.
+- Keep three distinct boundaries: picker/root authorization,
+  `core.resource_paths.safe_resource_path()` for mod resources, and the server's
+  static-root join. Do not duplicate their rules or merge their responsibilities.
+  Mod resource resolution rejects absolute/drive paths and excessive traversal.
+- Serve the privileged UI from ephemeral `127.0.0.1`; no `NavigateToString`,
+  runtime CDN or third-party scripts. Publish geometry through one shared
+  localhost blob, without base64 round trips or internal builder keys in payloads.
+- Share one canonical analysis per INI across controls, draws, shapes and
+  resources. Never share discovery state across sibling INIs or repeat semantic
+  stages on the normal load path.
+- Diagnostics are lazy, read-only, detached reports cached by edit-session
+  revision. Commits invalidate them; diagnostic failures must not fail mod loads.
+- App config is versioned and atomically replaced. Missing config uses defaults;
+  malformed/unsupported files remain untouched. Panel opacity is omitted until
+  changed, then persists explicitly even if restored to its default.
+- Mod Folder browsing lists immediate directory children deterministically and
+  skips symlink escapes. Navigation must not load/validate mods, discover INIs
+  or expose root Edit/Delete actions on ordinary children.
 
-## Repository map and data flow
+## Lossless INI editing
 
-- `src/core/` contains GUI-free parsing, analysis, geometry, texture and
-  editing logic. `src/app/` owns the pywebview bridge, sessions and payload
-  orchestration. `src/web/` contains the localhost-served frontend.
-- `core.ini.parser` is the read/analysis path. `core.ini.document.IniDocument`
-  and `app.session.edit` are the authoritative staged write path. Never write
-  through the parser.
-- `app.bridge.api` loads the active INIs through `app.mods.loader.load_mod()`.
-  The loader
-  parses each INI independently, consumes staged text when present, and returns
-  named payload fields for meshes, textures, texture pools, controls, state,
-  geometry, metadata and health.
-- `app.settings.mod_folders` owns the optional versioned app config, including
-  the Mod Folder registry and global panel opacity. A missing config uses defaults;
-  valid writes use an atomic replace, while malformed or unsupported config
-  must remain untouched. Untouched panel opacity is omitted from the file;
-  once changed, its explicit value remains persisted even when it equals the
-  default.
-- Geometry is published through one shared localhost blob. The normal load path
-  must not base64 round-trip geometry or rediscover semantic stages. Direct
-  low-level fixtures may retain their older representation, but reserved
-  builder keys must not cross the public application payload boundary.
-- One active INI produces one canonical analysis shared by its controls, draw
-  groups, shapes and resources. Sibling INIs must not share resource discovery
-  state.
-- Diagnostics are read-only, lazy and cached by the edit-session revision.
-  Authoritative commits invalidate the cache, and returned reports must be
-  detached from mutable internal state. A diagnostics failure must not turn a
-  loadable mod into a load failure.
+- `core.ini.parser` is read-only analysis. All INI edits use `IniDocument` and
+  the shared `app.session.edit` session. Preserve BOM, mixed line terminators
+  and absent final newline byte-for-byte on untouched round trips.
+- Report ambiguous/malformed structure through `structure_errors()` instead
+  of guessing rewrites. Single-section accessors select the first duplicate;
+  operations needing all duplicates must iterate the document.
+- Reload, diagnostics, Toggle CRUD and Record consume staged documents.
+  Reopening the current mod must not overwrite them from disk. `peek()` exposes
+  live staged state; all edits use begin/commit/rollback, atomically across INIs.
+- INI writes happen only at Export: write each dirty document once, create its
+  timestamped `.BAK`, leave failures pending, and exclude backups from discovery.
+  A confirmed mod switch or restart discards the session; there is no standalone
+  Discard action. Viewer metadata and confirmed texture saves have separate writes.
+- Namespaced globals are cross-INI and read-only. Toggle CRUD targets only plain
+  variables declared in that INI. Existing unwired utility keys stay hidden;
+  newly added unwired keys appear only while session-pending and block Export.
+- Toggle identity is its `[Key...]` section and complete variable tuple, never
+  one variable. Resolve duplicate tuples to their last cycle position.
+  `[KeyModViewerPresent]` is one aligned mod-wide cycle with atomic fan-out;
+  incomplete/misaligned state stays visible but unapplied.
+- Record regenerates only provably safe single-variable if/elif chains. Refuse
+  ambiguous or partially observed cases, independently reparse the result and
+  roll back failed verification. Toggle controls use assignable `.onclick` so
+  Record can replace and restore exactly one handler.
 
-## Lossless editing and staging
+## Parsing, execution order and identity
 
-- Real INIs may contain CRLF, LF, mixed terminators, UTF-8 BOMs and no final
-  newline. Every line owns its terminator and untouched round trips must be
-  byte exact.
-- Malformed or ambiguous `if`/`elif`/`else` nesting, headers, conditions or
-  branch content is reported by `structure_errors()` and is not rewritten by
-  guessing. `section()` and similar single-section accessors intentionally use
-  the first duplicate; callers that need all duplicates must iterate the full
-  document.
-- Reload, diagnostics, Toggle CRUD, Record and INI editing all read the same
-  staged `IniDocument`s. Reopening the current mod must not reread disk over
-  staged state. A confirmed mod switch or restart discards the session.
-- All edits use `begin`/`commit`/`rollback`. `peek()` exposes the live staged
-  document so a subsequent edit sees earlier unexported changes.
-- Nothing reaches disk before Export. Export writes each dirty INI once,
-  creates one timestamped `.BAK` backup per file, and leaves failed documents
-  pending. Backup names must not be discovered as loadable INIs.
-- Namespaced globals are cross-INI and read-only. Add/edit/delete operations
-  target only plain variables declared in the edited INI.
-- Existing wired Toggle sections are shown normally. A newly added unwired
-  section is shown only while it is tracked as pending in the current session;
-  old unwired utility keys stay hidden. Export must also reject a still-unwired
-  newly added section.
-- `[Key...]` is the identity of a toggle, not an individual variable. A key
-  may cycle several variables in lockstep, so the UI and editor resolve a
-  position from the complete variable tuple. Duplicate tuples retain their
-  last-position tie break.
-- `[KeyModViewerPresent]` is one mod-wide, logically aligned cycle. Its edits
-  fan out atomically across participating INIs through the same edit session;
-  misaligned or incomplete state is visible but not applied.
-- Record rewrites only a provably safe single-variable if/elif shape. It
-  regenerates a whole chain, refuses ambiguous or partially observed cases,
-  reparses independently, and rolls back when verification fails.
+- `canonical_var_names()` governs case-insensitive spelling in toggles,
+  defaults, menu state and DNF. Partial normalization can make gates fail open.
+- Preserve `SrcLine` provenance through `line_source()` and every merged draw's
+  full `sources` list; edits fan out to all authored sources. Draw labels are
+  unique across all active INIs and distinct from UI display names.
+- Recognize `elif` and `else if`. Draw DNF preserves contradictions and treats
+  empty DNF as true; only state-rule DNF may discard contradictory groups.
+- Menu recognition requires nested self-assignment structure and outer guards.
+  Increment/modulo cycles expose all `0..N-1` positions. Unsupported `&&` forms
+  may weaken a guard rather than hide geometry; do not guess menu structure.
+- Texture bindings are per-draw execution-order state: retain the latest
+  applicable assignment, conditional alternatives and no-map fallbacks for
+  every role. Never collapse bindings to a component-level texture.
+- A direct root INI anchors bounded depth/count discovery; do not merge unrelated
+  library/category folders. Resolve resources relative to the declaring INI,
+  but publish resource/editor identities relative to the selected mod root.
 
-## Parsing and mod state
+## Geometry and texture loading
 
-- Variable names are case-insensitive. `canonical_var_names()` is the source
-  of truth for spelling and must feed toggle extraction, defaults, menu state
-  and DNF normalization. Partial canonicalization can make an untracked gate
-  fail open and incorrectly show every mesh.
-- `SrcLine` retains source INI, line number and section metadata; use
-  `line_source()` instead of losing provenance. Every draw has a `sources`
-  list because merged payload entries can represent several authored lines or
-  files, and edits must fan out to every source.
-- Draw labels are unique payload identities; display names are UI text. Share
-  the seen-label map across all active INIs so same-named components cannot
-  overwrite one another.
-- Recognize both `elif` and `else if`. Draw DNF preserves contradictions and
-  treats an empty DNF as true. State-rule DNF may remove contradictory groups;
-  never apply that simplification to draw visibility.
-- Clickable menus are recognized from structural nested branches that assign
-  variables back to themselves. Track outer guards, and do not infer a menu
-  from a branch that merely resembles one. Increment/modulo cycles expose the
-  full `0..N-1` range.
-- Diffuse, NormalMap, LightMap and MaterialMap bindings are execution-order
-  state. Each draw uses the most recent applicable assignment; conditional
-  alternatives and no-map fallbacks remain per draw. Do not collapse them to
-  one component-level texture.
-- Discover INIs with the existing bounded rules: a direct root INI establishes
-  the mod, nested INIs are added only within the configured depth/count bounds,
-  and unrelated library/category folders must not be merged. Resource paths
-  stay relative to the INI that declares them; published/editor identities are
-  relative to the selected mod root.
+- Decode conservatively by supported format; reject malformed, unknown or tiny
+  buffers safely. New explicit/typed geometry recognition must not erase
+  previously supported geometry merely because recognition fails. Validate
+  geometry changes against representative compatibility cases; unexplained
+  geometry loss is a regression.
+- Preserve authored normals; reconstruct only as fallback and never weld solely
+  for smoothing. Normalize winding independently of authored normal direction.
+- Deduplicate normalized effective buffer/material state. Classify new draw
+  fields explicitly as render identity, visibility or provenance; do not derive
+  identity reflectively from every field. Preserve numeric VB slots and the
+  distinction between untouched and explicit null; VB changes need no IB change.
+- An IB section without `drawindexed` may emit one synthetic whole-buffer draw;
+  `handling=skip` without an explicit draw emits none. Authored rows retain
+  `count,start,base`; only synthetic rows receive generated display markers.
+- Apply shapes only with complete recognized buffer layouts. Other slider-like
+  variables remain controls; shape targets cannot leak between position buffers.
+- Resource identity is mod-relative, never basename-only. Texture keys are
+  `role::mod-relative-path` for `diffuse`, `normal_map`, `normal_data`, `light_map`,
+  `material_map` and `emission_map`. Diffuse is sRGB; auxiliary roles are non-color
+  data. Normalize legacy path-only keys using the caller's known role.
+- Candidate discovery supplies viewer choices without inferring semantic
+  bindings. Keep texture processing independent of game/material interpretation.
+- Texture pools and backend loading must not eagerly decode/render sources.
+  Production texture rendering stays at two concurrent jobs unless controlled
+  benchmarks justify changing it. Native DDS uses validated eligibility only;
+  unsupported, transformed, oversized or malformed sources use PNG fallback
+  with the same orientation and role-based color space.
 
-## Geometry and texture invariants
+## Asset loading and composition
 
-- Geometry detection is conservative and format-specific. Do not infer a game
-  or material meaning from a filename alone. Unknown, malformed or too-small
-  buffers must be rejected or dropped safely rather than read beyond bounds.
-- Geometry resolution is compatibility-first. New typed or explicit geometry
-  knowledge may improve decoding when positively identified, but failure to
-  recognize it must not by itself make previously supported geometry
-  disappear.
-- Geometry-affecting changes require representative compatibility validation in
-  addition to unit tests. New load failures or unexplained geometry loss are
-  regressions.
-- Authored vertex normals are render geometry and must be preserved when a
-  supported source is available. Geometric normal reconstruction is a fallback
-  only; never weld vertices solely to improve smoothing. Normalize the
-  source/game triangle winding to the viewer convention independently of
-  authored normals. Face-normal agreement must not rewrite authored normal
-  direction.
-- Draw deduplication uses normalized effective buffer and material state.
-  Classify each new draw field explicitly as render identity, visibility or
-  provenance; never derive identity reflectively from every dictionary field.
-- Authored draw state preserves vertex-buffer bindings by numeric slot and
-  distinguishes an untouched slot from an explicit `null`. Resolve effective
-  files per draw before deduplication; an IB change must not be required for a
-  VB change to take effect.
-- An `ib` section without `drawindexed` may produce one synthetic whole-buffer
-  draw. A `handling=skip` section without an explicit draw produces nothing.
-  Real draw rows retain authored `count,start,base`; synthetic rows are the
-  only ones allowed a generated display marker.
-- Shape sliders affect geometry only when a complete recognized buffer layout
-  is present. Slider-looking variables without valid geometry targets remain
-  controls, and an override for one position buffer must not inherit another
-  buffer's shape target.
-- Resource filenames are mod-relative paths, never basenames. Rendered
-  texture identity is `role::mod-relative-path`; the roles are `diffuse`,
-  `normal_map`, `normal_data`, `light_map` and `material_map`. Diffuse is sRGB;
-  auxiliary roles are non-color data. A legacy path-only key is normalized
-  using the caller's known role, never guessed in the browser.
-- Heuristic texture candidate discovery populates viewer choices only; it must
-  not infer or mutate semantic texture bindings.
-- `core.resource_paths.safe_resource_path()` is the single sandbox for
-  mod-authored geometry, manual texture selection and diagnostics. Reject
-  absolute/drive paths and excessive parent traversal. The server's separate
-  static-web-root join protects a different boundary and must not be merged
-  with this rule.
-- Asset indexing remains metadata-only. Heavy Asset geometry and texture files
-  are read only after an explicitly selected, indexed Asset is loaded.
-- Direct Asset loading never synthesizes a mod or INI. GIMI, ZZMI and WWMI
-  adapters normalize source geometry into the shared viewer payload, and
-  Asset source paths remain confined to their registered root.
-- Direct Asset preview never modifies source files or creates
-  `.mod_viewer.json` inside an Asset folder. Asset texture choices are
-  session-only, and ambiguous texture discovery may populate candidates but
-  must not create semantic role bindings.
-- Missing original Asset parts are loaded only through an explicit viewer
-  action; normal mod loading must not read heavy Asset geometry solely for
-  composition.
-- Mod/Asset coverage is determined from authored geometry override identities
-  across every discovered INI, including staged documents and
-  `handling=skip`, not from rendered draw output. A hash-only geometry-bearing
-  override conservatively covers every Asset range under that hash; a
-  texture-only hash binding identifies an Asset but does not claim geometry.
-- Automatic original-part filling requires one uniquely resolved original
-  Asset. Ambiguous identity never triggers composition. Filled geometry is
-  viewer-session state, retains Asset provenance, and is removed on mod reload
-  or switch without modifying the mod or Asset.
-- Direct Asset geometry retains Asset/component/range provenance so later
-  mod/Asset composition can compare coverage without reparsing viewer labels.
-- GIMI face geometry may be head-local. When native full-body Eyes and a
-  usable Face/FaceEye anchor are available, the Asset adapter may derive one
-  geometry-based rigid face-to-character transform and apply it to local face
-  components before payload construction; native Eyes remain untransformed.
-  Alignment transforms positions and authored normals together, preserve UVs
-  and triangle winding, and use no character-specific offsets. Selective Asset
-  loading may read Eyes and FaceEye as alignment dependencies without emitting
-  them unless independently selected.
-- Direct Asset UVs are canonical viewer-space Float32 UVs (V is flipped exactly
-  once). GIMI/ZZMI index ranges resolve against parsed IB header identity;
-  WWMI metadata offsets remain provenance while `Component N.fmt/.vb/.ib`
-  provide component-local geometry.
-- GIMI/ZZMI may recover missing texture records only from a unique
-  range-matched IB dump family; authored texture-hash records remain
-  authoritative and ambiguous families stay unbound.
-- GIMI/ZZMI parent Asset records may include validated `hash.json` metadata
-  from immediate component subfolders; each nested record remains rooted at
-  the selected Asset path and keeps its own metadata provenance.
-- GIMI/ZZMI geometry dumps require their authored buffer hash; a same-label
-  filename is never a geometry fallback. Same-hash IB candidates are parsed
-  independently, so malformed siblings cannot discard valid ranges, and a
-  missing authored count uses the resolved IB header count.
-- WWMI metadata files are independently recoverable components, and candidate
-  texture identity is rooted at the registered Asset Folder rather than an
-  object subdirectory. Direct WWMI candidate pools use only the filename's
-  `Components-N...` ordinal association; unknown filenames are excluded and
-  the association remains candidate-only without assigning material roles.
-- Recoverable Asset part failures are reported as Asset warnings and do not
-  discard otherwise renderable components; a load fails only when no parts
-  survive.
-- `core.textures` owns role-aware keys, PNG fallback, transforms, caching and
-  texture profiling. `core.geometry.mesh_builder` owns geometry/payload assembly.
-  Keep texture processing independent from game/material interpretation.
-- Load texture sources lazily. Publishing or hydrating a texture pool must not
-  decode/render every source, and backend model loading must not eagerly render
-  textures. Production texture rendering is bounded at two concurrent jobs
-  unless controlled benchmark evidence justifies a change.
-- Native DDS delivery is allowed only for the existing validated eligibility
-  path. Unsupported, transformed, oversized or malformed sources use PNG
-  fallback. Compressed DDS and fallback PNG must share the same orientation;
-  color-space rules remain role-based.
+- Index Assets through metadata only. Heavy geometry/textures require explicit
+  indexed-Asset loading or the explicit missing-original-parts action.
+  Direct Assets never synthesize INIs/mods, modify sources or write
+  `.mod_viewer.json`; source paths stay within registered roots and texture
+  choices remain session-only. Ambiguity may yield candidates, never bindings.
+- Compute coverage from authored geometry override identities across all INIs,
+  including staged documents and `handling=skip`, rather than rendered draws.
+  Hash-only geometry overrides cover every range under that hash; texture-only
+  hashes identify Assets without claiming geometry. Automatic filling requires
+  one unique Asset and retains component/range provenance; filled geometry is
+  session-only and removed on reload/switch.
+- GIMI head-local faces may use one geometry-derived rigid alignment from native
+  full-body Eyes and a Face/FaceEye anchor. Transform positions and normals,
+  preserve UVs/winding, leave native Eyes untouched and use no character offsets.
+  Selective loads may read alignment dependencies without emitting them.
+- Asset UVs are viewer-space Float32 with V flipped exactly once. GIMI/ZZMI
+  ranges resolve by parsed IB header identity; WWMI `Component N.fmt/.vb/.ib`
+  supplies local geometry while metadata offsets remain provenance.
+- GIMI/ZZMI missing texture records may use only a unique range-matched IB dump
+  family; authored hashes win and ambiguous families stay unbound. Validated
+  immediate-component `hash.json` records retain their own metadata provenance
+  and the selected Asset root.
+- GIMI/ZZMI geometry dumps require authored hashes, never same-label fallbacks.
+  Parse same-hash IB candidates independently so malformed siblings cannot
+  discard valid ranges; missing counts use the resolved IB header count.
+- WWMI metadata components recover independently. Texture candidates are rooted
+  at the registered Asset Folder, using only `Components-N...` ordinal matching;
+  exclude unknown filenames and never infer roles from that association.
+- Report recoverable part failures as Asset warnings; fail the load only when
+  no renderable parts survive.
 
-## Weight and secondary-motion invariants
+## Texture color preview and saving
 
-- Normal model loading only advertises whether a draw has a usable skinning
-  stream. Weight decoding is lazy: the first Weight access performs one
-  model-wide backend analysis and publishes one concatenated binary blob with
-  per-mesh ranges. Weight decode failures are partial feature failures and must
-  not turn an otherwise loadable model into a model-load failure.
-- Skin weights come from the authored Blend vertex stream; the index buffer is
-  used only to preserve the same compact rendered-vertex mapping as geometry.
-  A Bone ID is not model-global. Its durable identity is the normalized
-  mod-relative Blend source plus the resolved skinning Bone offset. Framework-
-  specific offset handling belongs in backend decoding, never in browser code.
-- The Weight selection is model-wide but source-scoped. Selecting Bone 38 from
-  one Blend source must not select Bone 38 from another source. Meshes that use
-  the exact same skinning source key share that selection. Saved selections use
-  the same source-scoped identity in `.mod_viewer.json` and preserve unrelated
-  metadata; picker filters never change hidden selections.
-- Pick-from-model is discovery only. It samples a small neighborhood on the
-  exact hit mesh, using a radius of two percent of the model bounding-sphere
-  radius with distance-weighted authored influences and an exact triangle
-  interpolation fallback. The result is scoped to the hit mesh's Blend source,
-  must not select Bones automatically, and must not alter physics until the
-  user changes the actual selection.
-- Character physics is selection-driven and model-scoped: a non-empty selected
-  Bone set enables the session, an empty set disables it, and settings are not
-  owned by any mesh. Unselected authored influence remains at the baseline
-  pose; selected influence receives the dynamic Bone transform. Never
-  renormalize selected weights or reintroduce depth-derived mobility.
-- Physics ownership is one source rig per exact skinning source key, not one
-  simulation per mesh and not one simulation for the entire model. All loaded
-  meshes sharing a source contribute authored evidence to one canonical set of
-  Bone centers and relationships, even when some member meshes are hidden.
-  The source rig owns one inferred forest, one physics state and one transform
-  per Bone; each member mesh consumes those shared transforms with its own
-  authored weights. This prevents seams from tearing when one authored Bone
-  spans several rendered draw sections.
-- Source topology is inferred only from authored influence overlap and weighted
-  centers; Blend data does not provide Bone names, a canonical skeleton,
-  hierarchy, bind pose or animation. Keep the maximum-spanning relationship
-  selection, weak-bridge pruning and meaningful static-boundary attachment
-  semantics conservative; do not infer semantic labels such as hair or skirt.
-- The solver remains fixed-step at 1/120 second with bounded catch-up. A source
-  rig is stepped and its transforms built once, then visible member meshes
-  deform only vertices touched by the current selected-weight mask. Authored
-  baseline normals are transformed with the same selected influence instead of
-  recomputing every face normal on each frame.
-- Continuous physics frames must avoid whole-model maintenance work. Exact
-  bounding volumes and shadow-camera fitting are deferred until motion settles;
-  source-member frustum behavior must remain conservative while bounds are
-  stale. The character shadow map, however, must update on every visible
-  deformation frame so current geometry is never rendered against a stale
-  physics shadow. Do not trade that synchronization for a lower shadow update
-  frequency; reduce dynamic shadow cost by another means if profiling requires
-  it.
-- Shape changes re-baseline loaded positions/normals and invalidate the
-  affected source rig because canonical centers/topology may have changed.
-  Material, texture and ordinary visibility changes must not reload skinning
-  data or redefine the source rig. Model teardown releases source participants
-  before member geometry is disposed.
+- Inspector Color adjustments are per-mesh diffuse previews persisted under the
+  mesh's metadata identity in `.mod_viewer.json`; preserve unrelated metadata
+  and remove neutral entries. Disable editing without a diffuse texture or for
+  Asset textures. Reset Color clears the preview, not a previously saved DDS.
+- CPU saving and GPU preview share normalization and operation order for hue,
+  saturation, brightness, contrast, RGB multipliers and tint strength. Adjust in
+  editor-sRGB, preserving alpha; convert at shader boundaries and do not run
+  picker hex values through Three.js's implicit linear color conversion.
+  Preview changes update stable material nodes without recreating textures.
+- Save to Texture has its own confirmation and immediately writes one mod-owned
+  BC7 UNORM/sRGB DDS, independently of INI Export. Include every changed mesh
+  sharing that texture, including hidden meshes. Flush queued preview metadata
+  before saving; changed targets require renewed review and pending saves block
+  modal dismissal and duplicate submission.
+- The backend authorizes the mod, validates canonical texture/mesh/metadata
+  identities and the complete model-wide role snapshot, and derives UV coverage
+  from resolved authored geometry. Never accept browser-supplied paths or UVs as
+  authority. Reject Asset sources, stale identities, non-BC7 DDS, unknown target
+  coverage and overlaps with different adjustments. The same physical DDS used
+  in any auxiliary role is unsupported, including inactive authored variants.
+- Recolor affected BC7 blocks while preserving layout, headers, decoded alpha
+  and unrelated blocks. A partially covered block with one color intent pads
+  that intent across valid pixels; multiple intents retain per-pixel targets.
+  Propagate weighted intent through authored mips. Preserve BC7 structure and
+  keep the source block if refitting worsens RGB error.
+- Validate the temporary DDS layout, check source hashes around backup creation,
+  create a collision-safe timestamped sibling DDS backup, then atomically replace
+  the source. Abort stale-source writes. Report an actual replacement as committed
+  even if later cleanup fails; never invite a second application of the color.
+- After commit, clear only saved preview metadata and reload affected texture
+  keys in place. A metadata-reset failure remains a committed save with a visible
+  warning and recovery attempt. Async completion must check the current mod and
+  target identity/state before clearing live previews; refresh failures must
+  disclose that the file was saved. Recovery uses the backup, not Reset Color.
 
-## Game and material interpretation
+## Material interpretation and rendering
 
-- Game, runtime, texture API and material kind are separate concepts. Resolve a
-  material profile per mesh from structural evidence and `(game, texture_api,
-  material_kind)`, falling back to the validated base profile. Weak component
-  names and texture filenames must never activate specialized semantics.
-- Profile metadata is deduplicated in the payload and referenced by immutable
-  `material_profile_id`. A profile ID collision with different metadata is a
-  programming error.
-- Packed maps retain their authored RGBA data and stable role binding. They are
-  not treated as generic Three.js AO/roughness/metalness maps without evidence.
-  Binding changes update stable texture and enabled nodes with valid
-  placeholders; they must not rebuild materials or patch generated shader
-  source.
-- Genshin uses the validated LightMap R response and G toon-shadow input;
-  LightMap B gates the toon-specular area and A classifies authored regions.
-  ZZZ uses LightMap G for conservative metalness and MaterialMap B for
-  specular response; MaterialMap R remains material-ID data and MaterialMap G
-  must remain packed because its meaning varies by character.
-- WuWa `normal_data` preserves the authored normal source and reconstructs RG
-  in TSL; B/A are diagnostic or profile-specific data, not stock PBR maps.
-  RabbitFX LightMap G is the validated shadow-mask input. The base RabbitFX
-  profile is shadow-only; the body specialization requires reliable exact body
-  evidence, and only that profile gives Normalmap B/A response semantics.
-- Unsupported diagnostic modes are capability-gated per material and leave
-  normal rendering unchanged. A diagnostic-only packed channel must not create
-  a new startup texture request.
+- Use vendored Three.js WebGPURenderer/TSL Node Materials; verify the initialized
+  backend and never silently fall back to WebGL2. Game, runtime, texture API and
+  material kind are distinct. Resolve per-mesh profiles from structural evidence
+  and `(game, texture_api, material_kind)`, with validated base fallback; weak
+  component names or filenames cannot activate specialized semantics.
+- Deduplicate immutable `material_profile_id` metadata; conflicting IDs are
+  programming errors. Keep packed RGBA and role bindings intact, without mapping
+  channels to stock PBR inputs absent evidence. Binding updates use stable
+  texture/enabled nodes and valid placeholders, never material rebuilds or
+  generated-shader patches.
+- Genshin LightMap R controls response, G toon shadow, B specular area and A
+  regions. ZZZ LightMap G supplies conservative metalness and MaterialMap B
+  specular response; MaterialMap R stays ID data and G stays packed/unknown.
+- WuWa reconstructs authored `normal_data` RG in TSL; B/A remain diagnostic or
+  profile-specific. RabbitFX uses LightMap G for shadow; its base is shadow-only
+  and Normalmap B/A response requires reliable exact body-profile evidence.
+- Gate diagnostic modes by material capability; unsupported modes preserve
+  normal rendering. Diagnostic-only channels must not trigger startup requests.
 
-## Frontend, hosting and security
+## Weight and secondary motion
 
-- The frontend uses the vendored Three.js `0.185.0` WebGPURenderer and TSL
-  Node Materials. WebGPU is required; verify the initialized backend and never
-  silently fall back to WebGL2. The default material is DoubleSide, roughness
-  1 and smooth shading. Viewer-only render modes, including glossy materials,
-  must not alter INI state.
-- The UI is served from an ephemeral `127.0.0.1` origin. Do not use
-  `NavigateToString`, runtime CDNs or third-party scripts in the privileged
-  page. Geometry uses the one-shot localhost blob transport.
-- Bridge filesystem operations accept exact native-picker paths or canonical
-  descendants of persisted Mod Folder roots. Browser-invented paths must never
-  reach loaders, metadata or export. Descendants promoted to exact session
-  authorization remain usable after their registry root is edited or removed.
-  Adding a root or changing an edit path still requires a native picker result;
-  keep the native window at the private `_window` bridge attribute.
-- Mod Folder browsing is read-only filesystem navigation: list only immediate
-  directory children of a registered root, sort deterministically, and skip
-  symlink escapes. It must not load mods, discover INIs, validate mod shape or
-  expose Edit/Delete actions for non-root children.
-- Keep the existing separation between native file-picker authorization,
-  `safe_resource_path()` for mod resources and the server's static-root join;
-  do not duplicate or weaken any of the three boundaries.
-- The Toggle cycle control uses assignable `.onclick`, not an added listener,
-  so Record can capture, replace and restore exactly one handler.
-- Mesh and Toggle panels group by source: subfolder, root INI stem or `None`
-  for a single INI. Mesh source rows must retain their originating INI.
-- Manual mesh texture selection is viewer-only state in `.mod_viewer.json`.
-  `undefined` means automatic, `null` means none, and a texture key means a
-  sticky selection. Clearing returns to the immutable draw default; automatic
+- Normal loading only advertises usable skinning streams. First Weight access
+  lazily decodes model-wide into one binary blob with per-mesh ranges; failures
+  degrade the feature without failing model load.
+- Weights come from authored Blend streams; IBs only preserve compact vertex
+  mapping. Bone identity is normalized mod-relative Blend source plus resolved
+  bone offset, with framework handling in the backend. Model-wide selections
+  remain source-scoped, shared only by exact source keys, and persist in
+  `.mod_viewer.json` without losing unrelated metadata or filtered selections.
+- Pick-from-model discovers influences on the exact hit mesh within 2% of model
+  bounding-sphere radius, distance-weighted with exact-triangle fallback. Keep
+  results source-scoped; discovery never selects bones or enables physics.
+- A nonempty bone selection enables model-scoped physics; empty disables it.
+  Unselected influence stays at baseline, selected influence receives the bone
+  transform; never renormalize selected weights or add depth-derived mobility.
+- One rig per exact skinning source owns canonical centers, topology, physics
+  state and bone transforms. All loaded members, including hidden meshes,
+  contribute evidence; member meshes consume shared transforms with their own
+  authored weights to avoid seams tearing.
+- Infer topology only from influence overlap and weighted centers. Blend data
+  supplies no names, canonical skeleton, hierarchy, bind pose or animation.
+  Keep maximum-spanning relationships, weak-bridge pruning and static-boundary
+  attachments conservative; never infer semantic labels such as hair or skirt.
+- Step each source rig once at fixed 1/120 second with bounded catch-up; deform
+  visible members only at selected-weight vertices and transform baseline normals
+  with the same influence. Defer exact bounds and shadow-camera fitting until
+  settling, retaining conservative frustum behavior. Update character shadows
+  on every visible deformation frame; optimize cost without lowering frequency.
+- Shape changes rebaseline positions/normals and invalidate affected rigs.
+  Material, texture and visibility changes must not reload weights or redefine
+  rigs. Release participants before disposing member geometry.
+
+## Frontend ownership
+
+- Manual textures persist as viewer metadata: undefined is automatic, null is
+  none, a key is sticky. Clearing restores the immutable draw default; automatic
   highlighting follows the live resolved key.
-- Environment presets, outlines and toolbar render modes are viewer-owned.
-  They must not reinterpret INI materials or become part of staged edits.
-  Outlines remain child inverted-hull passes sharing base geometry, and
-  wireframe/debug suppression must not change the user's outline preference.
-- Inspector/Controls tab choice, panel collapse state and Mod Library expansion
-  are presentation preferences stored in browser localStorage only. They are
-  not mod state, are not loaded from or written to INI/session edits, and must
-  never affect geometry, materials or export. Global panel opacity is the one
-  app-config preference; it is omitted until changed and then retained as an
-  explicit value.
-- MESHES is the navigation surface: component and mesh selection should not
-  duplicate editing controls there. Inspector owns material kind, texture pool
-  management, per-mesh texture overrides and draw details; Controls owns
-  Present, Toggle and Menu state. Keep selection changes event-driven so the
-  Inspector follows the selected component or mesh without taking ownership of
-  mesh creation or texture state.
-- Authoritative mesh visibility, reset, refresh and texture-override mutations
-  must publish one shared frontend state notification so Inspector values cannot
-  drift from the rendered model or MESHES state.
-- Viewport camera actions (Reset, Turn and Tilt) belong in the compact viewport
-  toolbar with the render and navigation tools. Do not restore a separate
-  Orientation panel when changing camera behavior.
-- Model orientation is persistent display state: auto-upright, game/base-facing
-  rotation and manual Turn/Tilt are applied in that order to late-adopted
-  meshes. Reset View retains the original base transform, and removed meshes
-  must be removed from that reset baseline.
+- Environment, outlines and render modes are viewer state, never staged INI or
+  material reinterpretation. Outlines use child inverted hulls sharing geometry;
+  wireframe/debug suppression retains the user's preference.
+- MESHES provides navigation, Inspector owns mesh/material/texture/color editing,
+  and Controls owns Present/Toggle/Menu. Group Meshes/Toggles by subfolder, root
+  INI stem or None for a single INI; retain source INI rows. Selection is
+  event-driven. Visibility, reset, refresh and texture mutations publish shared
+  state notifications so Inspector and rendering stay synchronized.
+- Tabs, panel collapse and library expansion live only in localStorage and
+  cannot affect mod state, geometry, materials or Export. Global panel opacity
+  belongs to app config under the persistence rule above.
+- Reset/Turn/Tilt stay in the viewport toolbar. Apply auto-upright, game/base
+  facing and manual rotation in that order, including late-adopted meshes.
+  Reset retains the base transform; removed meshes leave the reset baseline.
 
-## Feature flags and test strategy
+## Builds and test discipline
 
-- `features.ini` is build-time input only. `build.py` bakes its booleans into a
-  temporary generated module and removes that module afterward. Source
-  checkouts show all features; frozen builds may hide Export or Toggle CRUD in
-  the UI, but backend authorization remains authoritative. Missing or malformed
-  values default to enabled.
-- Tests are pytest-discovered from `src/tests` and run from the repository
-  root. Install `requirements-dev.txt`, then use `pytest`; use
-  `pytest --collect-only -q` to inspect the current suite rather than relying
-  on a hard-coded count.
-- The reduced suite is intentionally focused on representative boundaries and
-  regressions. Keep future coverage behavior-based and do not add a test when a
-  simpler existing case already proves the same contract.
-- Frontend tests use Playwright against the real local server and vendored
-  Three.js assets with a compatible Edge browser runtime. They may skip when Edge or
-  the assets are unavailable. Mock only `window.pywebview.api` for UI-state
-  tests; do not import `app.bridge.api` into a bare browser fixture because it pulls in
-  GUI webview state.
-- Real-mod corpus checks, if added again, must be explicitly opt-in through
-  `MOD_VIEWER_TEST_CORPUS`; the default suite must remain self-contained.
-  Add new regression coverage to the nearest existing test module and avoid
-  restoring tests that only repeat a simpler case.
-- Use `tools/benchmark_texture_pipeline.py` when changing texture concurrency,
-  lazy loading or transport. Keep deterministic formatting and mechanical
-  checks in CI; code review should focus on behavior and these invariants.
-
-## Known intentional limitations
-
-- Menu-guard parsing does not fully model every `&&` form; unsupported cases
-  weaken a guard rather than hide geometry.
-- There is no standalone Discard button; switching mods with confirmation or
-  restarting drops staged edits.
-- Record mode refuses ambiguous real-world gating instead of guessing.
-- Complex or unsupported mod layouts may fail to load; conservative omission is
-  preferable to silently displaying incorrect geometry or material semantics.
+- `features.ini` is build-time only: bake a temporary module and remove it after
+  building. Source enables all features; frozen UI gates never replace backend
+  authorization. Missing/malformed values default to enabled.
+- Keep the default pytest suite self-contained; real-mod corpus checks are
+  opt-in via `MOD_VIEWER_TEST_CORPUS`. Follow AGENTS.md for the test environment.
+  Use one scenario for consecutive lifecycle states and parametrized tables for
+  pure input/output matrices. Avoid duplicate coverage and tests that merely
+  mirror constants; retain independent security, atomicity, race, public-contract,
+  corpus and rendering regressions in the nearest existing test module.
+- Browser UI/rendering tests use the real local server, vendored assets and
+  compatible Edge, with generic skips when unavailable. Pure JS contracts use
+  the lightweight module fixture. Bypass ambient proxies for loopback traffic;
+  prefer observable readiness over fixed sleeps. Mock `window.pywebview.api`
+  for UI state without importing GUI-bound `app.bridge.api` into browser fixtures.
+- Benchmark texture concurrency, lazy loading or transport changes with
+  `tools/benchmark_texture_pipeline.py`. Keep formatting/lint/mechanical checks
+  in CI and focus review on consequential behavior and these contracts.

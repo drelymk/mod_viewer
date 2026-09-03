@@ -17,6 +17,7 @@ def test_zzz_uses_light_map_g_for_metalness_and_material_map_b_for_specular():
     assert profile.specular == ChannelRef("material_map", "b")
     assert profile.material_id == ChannelRef("material_map", "r")
     assert profile.shadow_mask is None
+    assert profile.emission_source is None
     assert profile.direct_shadow_model == "zzz_toon"
     assert profile.shadow_level == pytest.approx(0.35)
     assert (profile.shadow_threshold, profile.shadow_softness,
@@ -30,6 +31,7 @@ def test_genshin_uses_light_map_r_response_and_g_toon_shadow():
     profile = material_profile_for("genshin", "gimi")
 
     assert profile.id == "genshin:gimi"
+    assert profile.emission_source is None
     assert profile.shadow_mask == ChannelRef("light_map", "g")
     assert profile.material_id == ChannelRef("light_map", "a")
     assert profile.material_id_decoder == "genshin_5_region"
@@ -108,11 +110,19 @@ def test_wuwa_rabbitfx_alone_enables_validated_shadow_semantics():
     assert profile.emission_source == "emission_map_rgb"
     assert profile.emission_strength == 1.0
     assert profile.to_metadata()["emission_source"] == "emission_map_rgb"
-
-
-def test_other_profiles_do_not_infer_emission_from_packed_channels():
-    assert material_profile_for("genshin", "gimi").emission_source is None
-    assert material_profile_for("zzz", "zzmi").emission_source is None
+    assert (profile.wuwa_shadow_process,
+            profile.wuwa_shadow_front_offset,
+            profile.wuwa_shadow_width,
+            profile.wuwa_shadow_mask_cutoff,
+            profile.wuwa_shadow_mask_endpoint_tolerance,
+            profile.wuwa_shadow_influence) == (
+                0.55, 0.4, 0.01, 0.1, 0.01, 1.0)
+    metadata = profile.to_metadata()
+    assert metadata["direct_shadow_model"] == "wuwa_base"
+    assert metadata["wuwa_shadow_width"] == 0.01
+    assert metadata["wuwa_shadow_mask_cutoff"] == 0.1
+    assert metadata["wuwa_shadow_mask_endpoint_tolerance"] == 0.01
+    assert metadata["shadow_threshold"] == 0.5
 
 
 def test_wuwa_rabbitfx_body_is_the_only_first_specialized_profile():
@@ -139,26 +149,6 @@ def test_wuwa_rabbitfx_body_is_the_only_first_specialized_profile():
         "wuwa:rabbitfx")
     assert material_profile_for("wuwa", "raw", "body").id == "wuwa:raw"
     assert material_profile_for("unknown", "unknown", "body").id == "none"
-
-
-
-
-def test_wuwa_shadow_tuning_is_serialized_without_genshin_reuse():
-    profile = material_profile_for("wuwa", "rabbitfx")
-
-    assert (profile.wuwa_shadow_process,
-            profile.wuwa_shadow_front_offset,
-            profile.wuwa_shadow_width,
-            profile.wuwa_shadow_mask_cutoff,
-            profile.wuwa_shadow_mask_endpoint_tolerance,
-            profile.wuwa_shadow_influence) == (
-                0.55, 0.4, 0.01, 0.1, 0.01, 1.0)
-    metadata = profile.to_metadata()
-    assert metadata["direct_shadow_model"] == "wuwa_base"
-    assert metadata["wuwa_shadow_width"] == 0.01
-    assert metadata["wuwa_shadow_mask_cutoff"] == 0.1
-    assert metadata["wuwa_shadow_mask_endpoint_tolerance"] == 0.01
-    assert metadata["shadow_threshold"] == 0.5
 
 
 

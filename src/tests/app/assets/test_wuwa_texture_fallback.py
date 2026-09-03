@@ -39,58 +39,33 @@ def _files(group):
     return [item["file"] for item in group["discovered_textures"]]
 
 
-def test_filename_exact_association_discovers_without_mutating_draw(tmp_path):
-    replacement = _replacement(
-        tmp_path, "aaaaaaaa", "Components-2 t=A.dds")
-    draw = DrawCall()
-    group = _group("Component2", TextureOverrideIndex(
-        replacements_by_hash={"aaaaaaaa": (replacement,)}), [draw])
-
-    apply([group], str(tmp_path))
-
-    assert _files(group) == [replacement.file]
-    assert draw.texture_default("diffuse") is None
-    assert draw.texture_provenance == {}
-
-
-def test_filename_shared_association_is_included(tmp_path):
-    replacement = _replacement(
-        tmp_path, "aaaaaaaa", "Components-0-1-2-3 t=A.dds")
-    group = _group("Component2", TextureOverrideIndex(
-        replacements_by_hash={"aaaaaaaa": (replacement,)}))
-
-    apply([group], str(tmp_path))
-
-    assert _files(group) == [replacement.file]
-
-
-def test_all_matching_filenames_are_retained(tmp_path):
+def test_filename_candidates_are_filtered_without_decoding_or_mutating_draws(
+        tmp_path, monkeypatch):
     replacements = [
         _replacement(tmp_path, "aaaaaaaa", "Components-2 t=A.dds"),
         _replacement(tmp_path, "bbbbbbbb", "Components-2-3 t=B.dds"),
         _replacement(tmp_path, "cccccccc", "Components-0-1-2 t=C.dds"),
     ]
+    other = _replacement(tmp_path, "dddddddd", "Components-3-4 t=Other.dds")
+    draw = DrawCall()
     group = _group("Component2", TextureOverrideIndex(
         replacements_by_hash={
             "aaaaaaaa": (replacements[0],),
             "bbbbbbbb": (replacements[1],),
             "cccccccc": (replacements[2],),
-        }))
+            "dddddddd": (other,),
+        }), [draw])
+
+    def classify(_path):
+        raise AssertionError("classifier must not be called")
+
+    monkeypatch.setattr("app.assets.enrichment.classify_dds", classify)
 
     apply([group], str(tmp_path))
 
     assert _files(group) == [item.file for item in replacements]
-
-
-def test_nonmatching_filename_is_excluded(tmp_path):
-    replacement = _replacement(
-        tmp_path, "aaaaaaaa", "Components-3-4 t=A.dds")
-    group = _group("Component2", TextureOverrideIndex(
-        replacements_by_hash={"aaaaaaaa": (replacement,)}))
-
-    apply([group], str(tmp_path))
-
-    assert group["discovered_textures"] == []
+    assert draw.texture_default("diffuse") is None
+    assert draw.texture_provenance == {}
 
 
 def test_matching_replacement_survives_mixed_hash_family(tmp_path):
@@ -106,22 +81,6 @@ def test_matching_replacement_survives_mixed_hash_family(tmp_path):
     assert _files(group) == [matching.file]
 
 
-def test_dds_classifier_is_not_called_by_discovery(tmp_path, monkeypatch):
-    replacement = _replacement(
-        tmp_path, "aaaaaaaa", "Components-2 t=A.dds")
-
-    def classify(_path):
-        raise AssertionError("classifier must not be called")
-
-    monkeypatch.setattr("app.assets.enrichment.classify_dds", classify)
-    group = _group("Component2", TextureOverrideIndex(
-        replacements_by_hash={"aaaaaaaa": (replacement,)}))
-
-    apply([group], str(tmp_path))
-
-    assert _files(group) == [replacement.file]
-
-
 def test_slot_candidates_union_effective_bindings_across_draws(tmp_path):
     for filename in ("A.dds", "B.dds", "C.dds"):
         (tmp_path / filename).write_bytes(b"synthetic texture")
@@ -129,6 +88,7 @@ def test_slot_candidates_union_effective_bindings_across_draws(tmp_path):
         DrawCall(slot_textures=[
             SlotTextureBinding(0, "ResourceA", file="A.dds"),
             SlotTextureBinding(1, "ResourceB", file="B.dds"),
+            SlotTextureBinding(3, "ResourceA", file="A.dds"),
         ]),
         DrawCall(slot_textures=[
             SlotTextureBinding(0, "ResourceC", file="C.dds"),
@@ -139,20 +99,7 @@ def test_slot_candidates_union_effective_bindings_across_draws(tmp_path):
 
     apply([group], str(tmp_path))
 
-    assert set(_files(group)) == {"A.dds", "B.dds", "C.dds"}
-
-
-def test_duplicate_slot_files_are_recorded_once(tmp_path):
-    (tmp_path / "A.dds").write_bytes(b"synthetic texture")
-    draw = DrawCall(slot_textures=[
-        SlotTextureBinding(0, "ResourceA", file="A.dds"),
-        SlotTextureBinding(3, "ResourceA", file="A.dds"),
-    ])
-    group = _group("Component2", draws=[draw])
-
-    apply([group], str(tmp_path))
-
-    assert _files(group) == ["A.dds"]
+    assert _files(group) == ["A.dds", "B.dds", "C.dds"]
 
 
 def test_filename_and_slot_duplicate_is_recorded_once(tmp_path):

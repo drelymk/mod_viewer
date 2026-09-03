@@ -11,9 +11,6 @@ _DXGI = {
     "bc1_unorm": 71, "bc2_unorm": 74, "bc3_unorm": 77,
     "bc7_unorm": 98, "bc7_srgb": 99,
 }
-_LEGACY = {
-    "DXT1": "bc1_unorm",
-}
 
 
 def _level_size(width, height, format_name):
@@ -27,9 +24,9 @@ def _level_size(width, height, format_name):
 
 
 def _dds(width=4, height=4, format_name="bc7_unorm", mip_count=1,
-         array_size=1, cube=False, volume=False, payload=True):
+         array_size=1, cube=False, volume=False, payload=True, fourcc=None):
     compressed = format_name.startswith("bc")
-    is_dx10 = compressed and format_name not in _LEGACY
+    is_dx10 = compressed and fourcc is None
     header_size = 148 if is_dx10 else 128
     data = bytearray(header_size)
     data[:4] = b"DDS "
@@ -43,10 +40,8 @@ def _dds(width=4, height=4, format_name="bc7_unorm", mip_count=1,
         struct.pack_into("<IIIII", data, 128, _DXGI[format_name], 3,
                          4 if cube else 0, array_size, 0)
     elif compressed:
-        legacy_code = next(code for code, value in _LEGACY.items()
-                           if value == format_name)
         struct.pack_into("<II", data, 80, 4,
-                         int.from_bytes(legacy_code.encode("ascii"), "little"))
+                         int.from_bytes(fourcc.encode("ascii"), "little"))
     else:
         struct.pack_into("<II", data, 80, 0x41, 0)
         struct.pack_into("<I", data, 88, 32)
@@ -77,20 +72,11 @@ def test_dx10_formats_are_reported_with_canonical_ids(tmp_path, format_name):
     assert native_dds_info(path).format == format_name
 
 
-@pytest.mark.parametrize("fourcc, expected", list(_LEGACY.items()))
-def test_legacy_compressed_formats_are_supported(tmp_path, fourcc, expected):
-    path = tmp_path / f"{fourcc}.dds"
-    path.write_bytes(_dds(format_name=expected))
-    assert inspect_dds(path).format == expected
-
-
-@pytest.mark.parametrize("format_name", ["rgba8"])
-def test_32_bit_rgba_layouts_do_not_require_bc(tmp_path, format_name):
-    path = tmp_path / f"{format_name}.dds"
-    path.write_bytes(_dds(format_name=format_name))
-    info = inspect_dds(path)
-    assert info.format == format_name
-    assert not info.compressed and not info.requires_bc
+def test_legacy_compressed_formats_are_supported(tmp_path):
+    path = tmp_path / "DXT1.dds"
+    path.write_bytes(_dds(format_name="bc1_unorm", fourcc="DXT1"))
+    assert inspect_dds(path).format == "bc1_unorm"
+    assert inspect_dds_layout(path).data_offset == 128
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -120,16 +106,6 @@ def test_typeless_dxgi_is_rejected(tmp_path):
     assert inspect_dds(path) is None
 
 
-def test_ordinary_dx10_header_uses_zero_misc_flag_and_one_array(tmp_path):
-    path = tmp_path / "ordinary.dds"
-    path.write_bytes(_dds(format_name="bc7_unorm"))
-    raw = path.read_bytes()
-
-    assert struct.unpack_from("<I", raw, 136)[0] == 0
-    assert struct.unpack_from("<I", raw, 140)[0] == 1
-    assert native_dds_info(path) is not None
-
-
 @pytest.mark.parametrize(("format_name", "width", "height", "expected"), [
     ("rgba8", 3, 5, [(3, 5, 60, 128), (1, 2, 8, 188), (1, 1, 4, 196)]),
     ("bc1_unorm", 5, 7, [(5, 7, 32, 148), (2, 3, 8, 180), (1, 1, 8, 188)]),
@@ -155,6 +131,9 @@ def test_layout_uses_format_specific_unit_sizes(tmp_path, format_name):
     path.write_bytes(_dds(5, 7, format_name, mip_count=2))
 
     layout = inspect_dds_layout(path)
+    assert layout.info.format == format_name
+    assert layout.info.compressed is format_name.startswith("bc")
+    assert layout.info.requires_bc is format_name.startswith("bc")
     bytes_per_unit = (4 if not format_name.startswith("bc")
                       else 8 if format_name.startswith("bc1") else 16)
 

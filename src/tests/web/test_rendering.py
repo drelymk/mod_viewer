@@ -32,10 +32,11 @@ def _set_ao_level(page, level):
 
 
 def _set_test_key_light(page, x=1.0, z=0.25):
-    page.evaluate("""async ({x, z}) => {
+    before = page.evaluate("""async ({x, z}) => {
       const THREE = await import('three');
       const {scene, controls} = await import('./js/scene/scene.js');
       const {requestRender} = await import('./js/scene/render-scheduler.js');
+      const before = window.modViewer.getRenderCount();
       let key = null;
       scene.traverse(object => {
         if (object.isAmbientLight || object.isHemisphereLight) {
@@ -51,8 +52,10 @@ def _set_test_key_light(page, x=1.0, z=0.25):
       key.position.copy(controls.target).add(new THREE.Vector3(x, 0, z));
       key.intensity = 1;
       requestRender();
+      return before;
     }""", {"x": x, "z": z})
-    page.wait_for_timeout(400)
+    page.wait_for_function(
+        "before => window.modViewer.getRenderCount() > before", arg=before)
 
 
 def _wait_for_environment_preparation(page):
@@ -834,429 +837,6 @@ def test_environment_preparation_notifies_only_for_active_visual_upgrade(
         context.close()
 
 
-def test_skinning_physics_solver_uses_true_3d_vectors_and_quaternions(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"Physics3D": _payload("Physics3D")})
-    try:
-        result = page.evaluate("""async () => {
-          const physics = await import('./js/mesh/weight-physics.js');
-          const deformation = await import('./js/mesh/weight-deformation.js');
-          const THREE = await import('three');
-          const forest = {
-            components: [{
-              componentId: 0, rootId: 0, nodeIds: [0, 1, 2, 3],
-              maxDepth: 2, depthById: {0: 0, 1: 1, 2: 2, 3: 2},
-              childrenById: {0: [1], 1: [2, 3]},
-            }],
-          };
-          const initial = physics.initializePhysicsState(forest);
-          const initialShape = [...initial.joints.values()].map(joint => ({
-            rotationVector: joint.rotationVector,
-            angularVelocity: joint.angularVelocity,
-          }));
-          const targets = physics.buildPhysicsTargetRotations(
-            forest, [.4, .2, -.2]);
-          const kicked = physics.initializePhysicsState(forest);
-          physics.applyReferenceFrameAngularDelta(
-            kicked, forest, [.3, .4, .5], 1);
-          physics.applyPhysicsKick(kicked, forest, [1, 2, 3]);
-          const spring = physics.initializePhysicsState(forest);
-          const targetRotationByBoneId = new Map([
-            [1, [.15, .1, -.05]], [2, [.15, .1, -.05]], [3, [.15, .1, -.05]],
-          ]);
-          for (let index = 0; index < 1800; index += 1) {
-            physics.stepSpringPhysics(spring, forest, 1 / 120, {
-              targetRotationByBoneId, frequencyHz: 2, dampingRatio: 1,
-            });
-          }
-          const settled = physics.isPhysicsSettled(
-            spring, forest, [0, 0, 0], {
-              targetRotationByBoneId, rotationTolerance: .002,
-              velocityTolerance: .002,
-            });
-
-          const centers = new Map([
-            [0, [0, 0, 0]], [1, [1, 1, 0]],
-            [2, [2, 1, 0]], [3, [1, 2, 0]],
-          ]);
-          const translated = physics.initializePhysicsState(forest);
-          const translationDiagnostics = {};
-          physics.applyReferenceFrameTranslationDelta(
-            translated, forest, centers, [.2, .1, .3], 1,
-            translationDiagnostics);
-          const velocity = physics.initializePhysicsState(forest);
-          const velocityDiagnostics = {};
-          physics.applyReferenceFrameLinearVelocityDelta(
-            velocity, forest, centers, [.2, .1, .3], 1,
-            velocityDiagnostics);
-
-          const gravityForest = {
-            components: [{rootId: 0, nodeIds: [0, 1], maxDepth: 1,
-              depthById: {0: 0, 1: 1}}],
-          };
-          const gravity = physics.buildGravityAngularAccelerations(
-            gravityForest,
-            new Map([[0, [0, 0, 0]], [1, [0, 1, 0]]]),
-            [1, 0, 0], {referenceRadius: 1});
-          const limits = new Map([[1, .5]]);
-          const limited = physics.initializePhysicsState(gravityForest);
-          limited.joints.get(1).rotationVector = [.4, .3, 0];
-          limited.joints.get(1).angularVelocity = [.8, .6, 1];
-          physics.applyPhysicsJointLimits(limited, limits);
-          const zeroLimited = physics.initializePhysicsState(gravityForest);
-          zeroLimited.joints.get(1).rotationVector = [.1, .2, .3];
-          zeroLimited.joints.get(1).angularVelocity = [1, 2, 3];
-          physics.applyPhysicsJointLimits(zeroLimited, new Map([[1, 0]]));
-
-          const rotations = new Map([
-            [1, [0, 0, Math.PI / 2]],
-            [2, [Math.PI / 2, 0, 0]],
-          ]);
-          const transforms = deformation.buildForestTransformsFromLocalRotations(
-            forest, centers, {rotationByBoneId: rotations});
-          const opposite = physics.rotationVectorBetween([1, 1, 0], [-1, -1, 0]);
-          return {
-            initialShape,
-            targets: [...targets.entries()],
-            kicked: [...kicked.joints.values()],
-            spring: [...spring.joints.values()],
-            settled,
-            translated: [...translated.joints.values()]
-              .map(joint => joint.rotationVector),
-            translationDiagnostics,
-            velocity: [...velocity.joints.values()]
-              .map(joint => joint.angularVelocity),
-            velocityDiagnostics,
-            gravity: gravity.accelerationByBoneId.get(1),
-            gravityDiagnostic: gravity.diagnostics.components[0],
-            limited: limited.joints.get(1),
-            zeroLimited: zeroLimited.joints.get(1),
-            opposite,
-            rootIdentity: transforms.get(0).equals(new THREE.Matrix4()),
-            childMatrix: transforms.get(1).elements,
-            grandchildMatrix: transforms.get(2).elements,
-          };
-        }""")
-        assert all(
-            entry["rotationVector"] == [0, 0, 0]
-            and entry["angularVelocity"] == [0, 0, 0]
-            for entry in result["initialShape"])
-        assert [entry[0] for entry in result["targets"]] == [1, 2, 3]
-        assert result["targets"][0][1] == pytest.approx([.2, .1, -.1])
-        assert result["targets"][1][1] == pytest.approx([.2, .1, -.1])
-        assert result["kicked"][0]["rotationVector"] == pytest.approx(
-            [-.15, -.2, -.25])
-        assert result["kicked"][1]["angularVelocity"] == pytest.approx(
-            [1, 2, 3])
-        assert result["spring"][0]["rotationVector"] == pytest.approx(
-            [.15, .1, -.05], abs=.002)
-        assert result["settled"]
-        assert any(
-            abs(value) > 1e-4
-            for value in result["translated"][0])
-        assert all(abs(value) > 1e-4 for value in result["velocity"][0])
-        assert result["gravity"] == pytest.approx([0, 0, -9.81])
-        assert result["gravityDiagnostic"]["totalAngularAccelerationVector"] == pytest.approx(
-            [0, 0, -9.81])
-        limited = result["limited"]
-        assert math.sqrt(sum(value * value for value in limited["rotationVector"])) == pytest.approx(.5)
-        assert limited["angularVelocity"][2] == pytest.approx(1)
-        assert limited["angularVelocity"][0] == pytest.approx(0)
-        assert limited["angularVelocity"][1] == pytest.approx(0)
-        assert result["zeroLimited"] == {
-            "rotationVector": [0, 0, 0], "angularVelocity": [0, 0, 0]}
-        assert math.sqrt(sum(value * value for value in result["opposite"])) == pytest.approx(
-            math.pi)
-        assert result["rootIdentity"]
-        assert result["childMatrix"] != result["grandchildMatrix"]
-    finally:
-        context.close()
-
-
-def test_skinning_physics_drag_controller_owns_only_rmb(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"PhysicsDrag": _payload("PhysicsDrag")})
-    try:
-        result = page.evaluate("""async () => {
-          const THREE = await import('three');
-          const controllerModule = await import(
-            './js/scene/physics-drag-controller.js');
-          const canvas = document.createElement('canvas');
-          canvas.width = 100;
-          canvas.height = 100;
-          canvas.getBoundingClientRect = () => ({
-            left: 0, top: 0, width: 100, height: 100,
-          });
-          document.body.appendChild(canvas);
-          const camera = new THREE.PerspectiveCamera();
-          const actions = [];
-          const motions = [];
-          const controls = {
-            unsetMouseAction: button => actions.push(['unset', button]),
-            setMouseAction: (action, button) =>
-              actions.push(['set', action, button]),
-          };
-          const controller = controllerModule.createPhysicsDragController({
-            canvas, camera, controls,
-            onMotion: detail => motions.push(detail),
-          });
-          const timestamped = (type, init, timeStamp) => {
-            const event = new PointerEvent(type, {
-              bubbles: true, ...init,
-            });
-            Object.defineProperty(event, 'timeStamp', {value: timeStamp});
-            return event;
-          };
-          const dispatch = event => canvas.dispatchEvent(event);
-          controller.setEnabled(true);
-          dispatch(timestamped('pointerdown', {
-            pointerId: 3, button: 2, clientX: 30, clientY: 30,
-          }, 2000));
-          dispatch(timestamped('pointerup', {
-            pointerId: 3, button: 2, clientX: 30, clientY: 30,
-          }, 2010));
-          const plainClickMotionCount = motions.length;
-          dispatch(timestamped('pointerdown', {
-            pointerId: 1, button: 0, clientX: 10, clientY: 10,
-          }, 0));
-          dispatch(timestamped('pointerdown', {
-            pointerId: 2, button: 2, clientX: 10, clientY: 10,
-          }, 0));
-          dispatch(timestamped('pointermove', {
-            pointerId: 2, buttons: 2, clientX: 11, clientY: 11,
-          }, 10));
-          dispatch(timestamped('pointermove', {
-            pointerId: 2, buttons: 2, clientX: 20, clientY: 0,
-          }, 30));
-          dispatch(timestamped('pointerup', {
-            pointerId: 2, button: 2, clientX: 20, clientY: 0,
-          }, 1020));
-          const activeMotions = motions.filter(motion => motion.active);
-          const release = motions[motions.length - 1];
-          controller.setEnabled(false);
-          const disabledActions = actions.slice();
-          controller.dispose();
-          canvas.remove();
-          return {
-            actions, disabledActions, activeMotions, release,
-            plainClickMotionCount,
-            lmbActive: motions.some(motion => motion.source !== 'rmb-drag'),
-          };
-        }""")
-        assert result["actions"][0] == ["unset", 2]
-        assert result["disabledActions"][-1] == ["set", "PAN", 2]
-        assert result["activeMotions"]
-        assert result["plainClickMotionCount"] == 0
-        velocity = result["activeMotions"][0]["normalizedLinearVelocityWorld"]
-        assert math.hypot(velocity[0], velocity[1]) == pytest.approx(4)
-        assert velocity[0] > 0 and velocity[1] > 0 and velocity[2] == 0
-        assert result["release"]["active"] is False
-        assert result["release"]["normalizedLinearVelocityWorld"] == [0, 0, 0]
-        assert result["lmbActive"] is False
-    finally:
-        context.close()
-
-
-def test_active_vertex_deformation_updates_positions_and_authored_normals(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"ActiveDeform": _payload("ActiveDeform")})
-    try:
-        result = page.evaluate("""async () => {
-          const deformation = await import('./js/mesh/weight-deformation.js');
-          const THREE = await import('three');
-          const baselinePositions = new Float32Array([
-            1, 0, 0, 2, 0, 0, 3, 0, 0,
-          ]);
-          const outputPositions = new Float32Array(baselinePositions);
-          const baselineNormals = new Float32Array([
-            1, 0, 0, 1, 0, 0, 1, 0, 0,
-          ]);
-          const outputNormals = new Float32Array(baselineNormals);
-          const indices = new Uint32Array([1, 2, 1, 2, 2, 0]);
-          const weights = new Float32Array([1, 0, .5, .5, 1, 0]);
-          const matrix = new THREE.Matrix4().makeRotationZ(Math.PI / 2)
-            .setPosition(5, 7, 0);
-          const rotation = new THREE.Quaternion().setFromAxisAngle(
-            new THREE.Vector3(0, 0, 1), Math.PI / 2);
-          const active = new Uint32Array([0, 1]);
-          const positionCount = deformation.applyWeightedTransformDeformationInto(
-            outputPositions, baselinePositions, indices, weights, 2,
-            new Map([[1, matrix]]), active);
-          const normalCount = deformation.applyWeightedNormalDeformationInto(
-            outputNormals, baselineNormals, indices, weights, 2,
-            new Map([[1, rotation]]), active);
-          return {
-            positions: [...outputPositions], normals: [...outputNormals],
-            positionCount, normalCount,
-          };
-        }""")
-        assert result["positionCount"] == 2
-        assert result["normalCount"] == 2
-        assert result["positions"][:3] == pytest.approx([5, 8, 0])
-        assert result["positions"][3:6] == pytest.approx([3.5, 4.5, 0])
-        assert result["positions"][6:] == [3, 0, 0]
-        assert result["normals"][:3] == pytest.approx([0, 1, 0], abs=1e-6)
-        assert result["normals"][3:6] == pytest.approx(
-            [math.sqrt(.5), math.sqrt(.5), 0], abs=1e-6)
-        assert result["normals"][6:] == [1, 0, 0]
-    finally:
-        context.close()
-
-
-def test_model_physics_session_owns_fixed_clock_and_generation(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"PhysicsSession": _payload("PhysicsSession")})
-    try:
-        result = page.evaluate("""async () => {
-          const {createModelPhysicsSession} = await import(
-            './js/mesh/model-physics-session.js');
-          const callbacks = [];
-          const canceled = [];
-          const events = [];
-          const session = createModelPhysicsSession({
-            requestAnimationFrame: callback => {
-              callbacks.push(callback);
-              return callback;
-            },
-            cancelAnimationFrame: callback => {
-              canceled.push(callback);
-              const index = callbacks.indexOf(callback);
-              if (index >= 0) callbacks.splice(index, 1);
-            },
-            onInputOwnershipChanged: value => events.push(['input', value]),
-          });
-          const mesh = {};
-          let steps = 0;
-          let motions = 0;
-          let detached = 0;
-          let settledUpdates = 0;
-          const participant = {
-            mesh,
-            onSessionDetached: () => { detached += 1; },
-            onModelMotion: () => { motions += 1; return true; },
-            step: () => { steps += 1; },
-            updateSettled: () => { settledUpdates += 1; },
-            isSettled: () => false,
-            isVisible: () => false,
-          };
-          const transform = {
-            orientation: [0, 0, 0, 1], translation: [0, 0, 0],
-          };
-          const generation = session.enable(transform);
-          session.attach(participant);
-          const firstFrame = callbacks.shift();
-          firstFrame(0);
-          const fixedFrame = callbacks.shift();
-          fixedFrame(1000);
-          session.handleModelTransform({
-            modelTransform: {
-              orientation: [0, .2, 0, .98], translation: [.1, 0, 0],
-            },
-          });
-          const active = session.getState();
-          session.disable();
-          return {
-            generation, activeGeneration: active.generation,
-            steps, settledUpdates, motions, participantCount: active.participantCount,
-            detached, canceled: canceled.length,
-            disabled: session.getState(),
-            inputEvents: events,
-          };
-        }""")
-        assert result["generation"] == 1
-        assert result["activeGeneration"] == 1
-        assert result["steps"] == 6
-        assert result["settledUpdates"] == 1
-        assert result["motions"] == 1
-        assert result["participantCount"] == 1
-        assert result["detached"] == 1
-        assert result["canceled"] >= 1
-        assert result["disabled"]["enabled"] is False
-        assert result["disabled"]["participantCount"] == 0
-        assert result["disabled"]["generation"] == 2
-        assert result["inputEvents"] == [["input", True], ["input", False]]
-    finally:
-        context.close()
-
-
-def test_model_physics_reset_updates_numeric_defaults_once_and_keeps_toggles(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"PhysicsReset": _payload("PhysicsReset")})
-    try:
-        result = page.evaluate("""async () => {
-          const physics = await import('./js/mesh/model-physics-session.js');
-          let notifications = 0;
-          let participantSettings = null;
-          const session = physics.createModelPhysicsSession({
-            onStateChanged: () => { notifications += 1; },
-          });
-          const transform = {
-            orientation: [0, 0, 0, 1], translation: [0, 0, 0],
-          };
-          session.enable(transform);
-          session.attach({
-            mesh: {}, reset: settings => { participantSettings = {...settings}; },
-            isSettled: () => true,
-          });
-          session.setSettings({
-            frequencyHz: 7, dampingRatio: 1.2, angularResponse: .9,
-            translationResponse: .8, velocityResponse: .7,
-            gravityEnabled: true, gravityScale: 1.8,
-            constraintsEnabled: true, maxBendDegrees: 12,
-          });
-          const before = notifications;
-          const defaults = physics.DEFAULT_MODEL_PHYSICS_SETTINGS;
-          const settingsPatch = {
-            frequencyHz: defaults.frequencyHz,
-            dampingRatio: defaults.dampingRatio,
-            angularResponse: defaults.angularResponse,
-            translationResponse: defaults.translationResponse,
-            velocityResponse: defaults.velocityResponse,
-            gravityScale: defaults.gravityScale,
-            maxBendDegrees: defaults.maxBendDegrees,
-          };
-          session.reset(transform, {settingsPatch});
-          const state = session.getState();
-          const activeNotificationCount = notifications - before;
-          session.disable();
-          session.setSettings({frequencyHz: 7, dampingRatio: 1.2});
-          const beforeDisabledReset = notifications;
-          session.reset(transform, {settingsPatch});
-          const disabledResetState = session.getState();
-          const disabledResetNotifications = notifications - beforeDisabledReset;
-          session.setSettings({frequencyHz: 7, gravityEnabled: true});
-          session.destroy();
-          return {
-            notificationCount: activeNotificationCount,
-            state, participantSettings, defaults,
-            disabledResetNotifications, disabledResetState,
-            destroyedState: session.getState(),
-          };
-        }""")
-        assert result["notificationCount"] == 1
-        assert result["state"]["gravityEnabled"] is True
-        assert result["state"]["constraintsEnabled"] is True
-        assert result["disabledResetNotifications"] == 1
-        assert result["disabledResetState"]["enabled"] is False
-        assert result["disabledResetState"]["frequencyHz"] == 2
-        assert result["disabledResetState"]["dampingRatio"] == pytest.approx(.35)
-        assert result["destroyedState"]["frequencyHz"] == 2
-        assert result["destroyedState"]["gravityEnabled"] is False
-        for key in (
-                "frequencyHz", "dampingRatio", "angularResponse",
-                "translationResponse", "velocityResponse", "gravityScale",
-                "maxBendDegrees"):
-            assert result["state"][key] == result["defaults"][key]
-            assert result["participantSettings"][key] == result["defaults"][key]
-    finally:
-        context.close()
-
-
 def test_physics_drag_preserves_arcball_camera_and_lmb_control(
         edge_browser, frontend_url):
     context, page = _page(
@@ -1383,51 +963,6 @@ def test_weight_load_rejects_missing_source_identity(
         assert result["state"]["loaded"] is False
         assert result["model"]["sources"] == []
         assert "legacy/model/weights.buf" not in str(result)
-    finally:
-        context.close()
-
-
-def test_selected_weight_mask_aggregates_authored_influences(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"Weights": _payload("Weights")})
-    try:
-        result = page.evaluate("""async () => {
-          const selection = await import('./js/mesh/weight-selection.js');
-          const mask = selection.buildSelectedWeightMask(
-            new Uint32Array([0, 1, 2, 3, 4, 5]),
-            new Float32Array([.2, .3, .5, .6, .1, .9]), 2, [1, 2]);
-          return [...mask];
-        }""")
-        assert result == pytest.approx([.3, .5, 0])
-    finally:
-        context.close()
-
-
-def test_weight_picker_sampling_uses_smooth_distance_falloff_and_exact_fallback(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"WeightSampling": _payload("WeightSampling")})
-    try:
-        result = page.evaluate("""async () => {
-          const selection = await import('./js/mesh/weight-selection.js');
-          const nearby = selection.sampleNearbyBoneWeights(
-            new Float32Array([0, 0, 0, .5, 0, 0, 1, 0, 0]),
-            new Uint32Array([1, 2, 1, 2, 1, 2]),
-            new Float32Array([.8, .2, .4, .6, .1, .9]), 2,
-            [0, 0, 0], 1);
-          const exact = selection.interpolateTriangleBoneWeights(
-            new Uint32Array([1, 2, 1, 2, 1, 2]),
-            new Float32Array([.8, .2, .4, .6, .1, .9]), 2,
-            [0, 1, 2], [0.25, 0.5, 0.25]);
-          return {nearby, exact};
-        }""")
-        assert [entry["boneId"] for entry in result["nearby"]] == [1, 2]
-        assert [entry["weight"] for entry in result["nearby"]] == pytest.approx(
-            [.6666667, .3333333])
-        assert [entry["boneId"] for entry in result["exact"]] == [2, 1]
-        assert [entry["weight"] for entry in result["exact"]] == pytest.approx(
-            [.575, .425])
     finally:
         context.close()
 
@@ -1831,6 +1366,12 @@ def test_control_refresh_updates_only_affected_mesh_categories(
           const refs = meshes.map(mesh => ({
             mesh, geometry: mesh.geometry, material: mesh.material,
           }));
+          const pool = meshes[0].userData.texturePool;
+          const refresh = () => {
+            pool[0].light_map = 'light::reconciliation-marker';
+            const result = refreshAll();
+            return {...result, poolUntouched: Object.hasOwn(pool[0], 'light_map')};
+          };
           const capture = () => meshes.map(mesh => ({
             name: mesh.userData.semanticKey,
             visible: mesh.visible,
@@ -1838,19 +1379,19 @@ def test_control_refresh_updates_only_affected_mesh_categories(
             resolved: mesh.userData.resolvedTexKey,
           }));
           const initial = capture();
-          const stable = refreshAll();
+          const stable = refresh();
           const noOp = capture();
 
           setControlValue('visibleA', '0');
-          const visibility = refreshAll();
+          const visibility = refresh();
           const afterVisibility = capture();
 
           setControlValue('shapeA', '1');
-          const shape = refreshAll();
+          const shape = refresh();
           const afterShape = capture();
 
           setControlValue('textureB', '1');
-          const texture = refreshAll();
+          const texture = refresh();
           const afterTexture = capture();
           const sameObjects = refs.every((ref, index) =>
             meshes[index] === ref.mesh && meshes[index].geometry === ref.geometry
@@ -1868,6 +1409,8 @@ def test_control_refresh_updates_only_affected_mesh_categories(
             },
             shape: {names: names(shape), state: afterShape},
             texture: {names: names(texture), state: afterTexture},
+            poolUntouched: [stable, visibility, shape, texture]
+              .map(result => result.poolUntouched),
             initial, sameObjects,
           };
         }""")
@@ -1890,6 +1433,7 @@ def test_control_refresh_updates_only_affected_mesh_categories(
         assert [item["positionVersion"] for item in result["texture"]["state"]] == [
             item["positionVersion"] for item in result["shape"]["state"]]
         assert result["sameObjects"]
+        assert result["poolUntouched"] == [True, True, True, False]
         assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Invalidation"]
     finally:
         context.close()
@@ -1969,41 +1513,6 @@ def test_noop_control_refresh_does_not_request_render(edge_browser, frontend_url
             mesh.geometry.attributes.position.version),
         })""")
         assert after == before
-    finally:
-        context.close()
-
-
-def test_clean_control_refresh_skips_texture_run_reconciliation(
-        edge_browser, frontend_url):
-    payload = _invalidation_payload()
-    context, page = _page(
-        edge_browser, frontend_url, {"TextureRuns": payload})
-    try:
-        _open(page, "TextureRuns")
-        page.locator(".draw-item").nth(2).wait_for()
-        result = page.evaluate("""async () => {
-          const {setControlValue} = await import('./js/editing/control-state.js');
-          const {refreshAll} = await import('./js/mesh/visibility.js');
-          const pool = window.modViewer.activeMeshes[0].userData.texturePool;
-          const marker = 'light::reconciliation-marker';
-          const markAndRefresh = () => {
-            pool[0].light_map = marker;
-            refreshAll();
-            return Object.hasOwn(pool[0], 'light_map');
-          };
-          const noOp = markAndRefresh();
-          setControlValue('visibleA', '0');
-          const visibility = markAndRefresh();
-          setControlValue('shapeA', '1');
-          const shape = markAndRefresh();
-          setControlValue('textureB', '1');
-          const texture = markAndRefresh();
-          return {noOp, visibility, shape, texture};
-        }""")
-        assert result == {
-            "noOp": True, "visibility": True, "shape": True,
-            "texture": False,
-        }
     finally:
         context.close()
 
@@ -3547,28 +3056,6 @@ def test_viewport_bloom_selects_only_its_required_render_graph(
         context.close()
 
 
-def test_bloom_control_is_hidden_without_supported_emission(
-        edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {"Plain": _payload("Plain")})
-    try:
-        _open(page, "Plain")
-        page.locator(".draw-item").wait_for()
-        button = page.locator("#bloom-btn")
-        assert button.is_hidden()
-        assert button.is_disabled()
-        state = page.evaluate("""async () => {
-          const {getViewportRenderPipelineDebugState} =
-            await import('./js/scene/scene.js');
-          return getViewportRenderPipelineDebugState();
-        }""")
-        assert not state["bloomAvailable"]
-        assert not state["bloomEffective"]
-        assert button.get_attribute("aria-label") == (
-            "Emission bloom unavailable: no GlowMap detected")
-    finally:
-        context.close()
-
-
 def test_bloom_availability_suppresses_pipeline_and_restores_preference(
         edge_browser, frontend_url):
     supported = _packed_material_payload("wuwa:rabbitfx")
@@ -3617,6 +3104,9 @@ def test_bloom_availability_suppresses_pipeline_and_restores_preference(
         assert not unsupported["bloomAvailable"]
         assert not unsupported["bloomEffective"]
         assert page.locator("#bloom-btn").is_hidden()
+        assert page.locator("#bloom-btn").is_disabled()
+        assert page.locator("#bloom-btn").get_attribute("aria-label") == (
+            "Emission bloom unavailable: no GlowMap detected")
 
         _open(page, "Bloom")
         page.wait_for_function("""async () => {
@@ -3780,10 +3270,7 @@ def test_direct_dds_matches_png_orientation_and_diffuse_color(
             "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
             "?.bindings?.diffuse?.textureNode?.value?.image?.width === 4")
         page.wait_for_timeout(250)
-        direct_pixels = [
-            _sample_mesh_pixel_at(page, 0, 0.65),
-            _sample_mesh_pixel_at(page, 0, -0.65),
-        ]
+        direct_pixels = _sample_mesh_pixels_at(page, [(0, 0.65), (0, -0.65)])
 
         page.evaluate("""async ({key, uri}) => {
           const {refreshMeshTexture, setTextures} = await import('./js/mesh/mesh-factory.js');
@@ -3797,10 +3284,7 @@ def test_direct_dds_matches_png_orientation_and_diffuse_color(
             " && window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial"
             "?.bindings?.diffuse?.textureNode?.value?.isCompressedTexture !== true")
         page.wait_for_timeout(250)
-        png_pixels = [
-            _sample_mesh_pixel_at(page, 0, 0.65),
-            _sample_mesh_pixel_at(page, 0, -0.65),
-        ]
+        png_pixels = _sample_mesh_pixels_at(page, [(0, 0.65), (0, -0.65)])
 
         assert all(
             max(abs(left - right) for left, right in zip(direct, fallback)) <= 40
@@ -4499,26 +3983,6 @@ def test_packed_material_profile_uses_tsl_nodes_and_stable_bindings(
                          "sameShadowThresholdNode": True,
                          "sameVersion": True, "mapEnabled": False,
                          "usesPlaceholder": True}
-    finally:
-        context.close()
-
-
-def test_asset_texture_identity_is_reserved_to_the_canonical_namespace(
-        edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {})
-    try:
-        result = page.evaluate("""async () => {
-          const {isAssetTextureKey} = await import('./js/textures/texture-key.js');
-          return [
-            isAssetTextureKey('diffuse::BodyDiffuse.dds'),
-            isAssetTextureKey('diffuse::Textures/Body.dds'),
-            isAssetTextureKey('diffuse::asset/abc123/BodyDiffuse.dds'),
-            isAssetTextureKey('normal_map::asset/abc123/BodyNormal.dds'),
-            isAssetTextureKey('diffuse::textures/my_asset_copy.dds'),
-            isAssetTextureKey('invalid'),
-          ];
-        }""")
-        assert result == [False, False, True, True, False, False]
     finally:
         context.close()
 
@@ -5945,8 +5409,8 @@ def test_wuwa_body_b_threshold_controls_toon_classification(
           }
         """)
         page.wait_for_timeout(400)
-        low_pixels = [_sample_mesh_pixel_at(page, x, 0.1)
-                      for x in (0.1, 0.3, 0.5, 0.7, 0.9)]
+        points = [(x, 0.1) for x in (0.1, 0.3, 0.5, 0.7, 0.9)]
+        low_pixels = _sample_mesh_pixels_at(page, points)
         page.evaluate("""async key => {
           const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
@@ -5959,8 +5423,7 @@ def test_wuwa_body_b_threshold_controls_toon_classification(
           });
         }""", high_key)
         page.wait_for_timeout(400)
-        high_pixels = [_sample_mesh_pixel_at(page, x, 0.1)
-                       for x in (0.1, 0.3, 0.5, 0.7, 0.9)]
+        high_pixels = _sample_mesh_pixels_at(page, points)
         assert any(sum(high) != sum(low)
                    for low, high in zip(low_pixels, high_pixels)), (
                        low_pixels, high_pixels)
@@ -6071,11 +5534,10 @@ def test_wuwa_packed_rg_normal_matches_derived_reference_and_y_sign(
         page.wait_for_timeout(400)
 
     def sample_quad(page):
-        return [
-            _sample_mesh_pixel_at(page, x, y)
-            for x, y in ((0.15, 0.15), (0.5, 0.15), (0.85, 0.15),
-                         (0.15, 0.85), (0.85, 0.85))
-        ]
+        return _sample_mesh_pixels_at(page, [
+            (0.15, 0.15), (0.5, 0.15), (0.85, 0.15),
+            (0.15, 0.85), (0.85, 0.85),
+        ])
 
     reference = _parity_payload(diffuse_uri)
     reference_entry = reference["meshes"]["Body-Parity-0"]
@@ -6834,36 +6296,6 @@ def test_conditional_only_texture_survives_component_run_reconciliation(
     finally:
         context.close()
 
-
-def test_cached_model_bounds_do_not_rescan_positions(edge_browser, frontend_url):
-    context = edge_browser.new_context(bypass_csp=True)
-    page = context.new_page()
-    try:
-        page.goto(frontend_url)
-        page.locator("#open-btn:not([disabled])").wait_for(timeout=10000)
-        state = page.evaluate("""async () => {
-          const THREE = await import('three');
-          const {expandByModelMesh} = await import('./js/scene/model-bounds.js');
-          const geometry = new THREE.BufferGeometry();
-          const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-          geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-          const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
-          const initial = new THREE.Box3();
-          expandByModelMesh(initial, mesh);
-          positions[0] = Infinity;
-          const cached = new THREE.Box3();
-          expandByModelMesh(cached, mesh);
-          return {
-            initialEmpty: initial.isEmpty(),
-            cachedEmpty: cached.isEmpty(),
-            boundsShared: cached.equals(initial),
-          };
-        }""")
-        assert state == {
-            "initialEmpty": False, "cachedEmpty": False, "boundsShared": True,
-        }
-    finally:
-        context.close()
 
 def test_character_shadows_are_on_demand_and_visibility_keeps_stable_ground(
         edge_browser, frontend_url):

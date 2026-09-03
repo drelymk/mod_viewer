@@ -35,7 +35,12 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
     try:
         _open(page, path)
         page.locator("#right-dock.ui-visible").wait_for()
+        assert page.locator(".right-dock-tabs > button").evaluate_all(
+            "tabs => tabs.map(tab => tab.id)") == [
+                "controls-tab", "inspector-tab", "weight-tab"]
+        assert page.locator("#controls-tab").get_attribute("aria-selected") == "true"
         assert page.locator("#controls-panel").is_visible()
+        assert page.locator("#inspector-panel").is_hidden()
         assert page.locator("body.right-dock-visible").count() == 1
         assert page.locator("body.right-dock-mounted").count() == 1
         page.locator("#controls-tab").click()
@@ -60,6 +65,15 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
         assert page.locator("#controls-panel").is_hidden()
         assert page.locator("#controls-tab").get_attribute("aria-selected") == "false"
         assert page.locator("#inspector-tab").get_attribute("aria-expanded") == "false"
+
+        page.locator("#inspector-tab").click()
+        page.reload()
+        page.wait_for_function("window.modViewer !== undefined")
+        _open(page, path)
+        page.locator(".draw-item").wait_for()
+        assert page.locator("#inspector-tab").get_attribute("aria-selected") == "true"
+        assert page.locator("#inspector-panel").is_visible()
+        assert page.locator("#controls-panel").is_hidden()
     finally:
         context.close()
 
@@ -143,32 +157,6 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
         final_count = page.evaluate("window.modViewer.getRenderCount()")
         page.wait_for_timeout(200)
         assert page.evaluate("window.modViewer.getRenderCount()") == final_count
-    finally:
-        context.close()
-
-def test_controls_precede_inspector_and_are_the_default_right_dock_tab(
-        edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
-    try:
-        _open(page, "A")
-        page.locator(".draw-item").wait_for()
-        assert page.locator(".right-dock-tabs > button").evaluate_all(
-            "tabs => tabs.map(tab => tab.id)") == [
-                "controls-tab", "inspector-tab", "weight-tab"]
-        assert page.locator("#controls-tab").get_attribute(
-            "aria-selected") == "true"
-        assert page.locator("#controls-panel").is_visible()
-        assert page.locator("#inspector-panel").is_hidden()
-
-        page.locator("#inspector-tab").click()
-        page.reload()
-        page.wait_for_function("window.modViewer !== undefined")
-        _open(page, "A")
-        page.locator(".draw-item").wait_for()
-        assert page.locator("#inspector-tab").get_attribute(
-            "aria-selected") == "true"
-        assert page.locator("#inspector-panel").is_visible()
-        assert page.locator("#controls-panel").is_hidden()
     finally:
         context.close()
 
@@ -1031,9 +1019,6 @@ def test_color_persistence_serializes_updates_and_flushes_before_texture_save(
 def test_texture_save_modal_opens_without_analysis_and_lists_changed_meshes(
         edge_browser, frontend_url):
     payload = _payload("Bake")
-    payload["metadata"]["mesh_color_adjustments"] = {
-        "Body Bake::3,0,0": {"hue": 30},
-    }
     first = payload["meshes"]["Body-Bake-0"]
     old_key = first["tex_key"]
     dds_key = "diffuse::Bake-one.dds"
@@ -1044,11 +1029,7 @@ def test_texture_save_modal_opens_without_analysis_and_lists_changed_meshes(
     second["component"] = "Face Bake"
     second["display_name"] = "Friendly Face"
     payload["meshes"]["Face-Bake-0"] = second
-    payload["metadata"]["mesh_color_adjustments"][
-        "Face Bake::3,0,0"] = {"hue": 45}
-    context, page = _page(edge_browser, frontend_url, {"Bake": {
-        **payload,
-    }})
+    context, page = _page(edge_browser, frontend_url, {"Bake": payload})
     try:
         _open(page, "Bake")
         page.locator(".draw-item").first.wait_for()
@@ -1059,9 +1040,22 @@ def test_texture_save_modal_opens_without_analysis_and_lists_changed_meshes(
         page.locator(".draw-item").first.click()
         button = page.locator(".inspector-texture-bake")
         assert button.count() == 1
+        assert button.is_disabled()
+        assert button.get_attribute("title") == "Adjust a mesh color before saving."
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} =
+            await import('./js/mesh/mesh-color-state.js');
+          const meshes = window.modViewer.activeMeshes;
+          setMeshColorAdjustment(meshes[0], {hue: 30});
+          setMeshColorAdjustment(meshes[1], {hue: 45});
+          window.dispatchEvent(new CustomEvent('mod-viewer-mesh-state-changed', {
+            detail: {meshes},
+          }));
+        }""")
         button.click()
         page.locator("#texture-bake-modal-backdrop.show").wait_for()
         assert "SAVE TO TEXTURE" in page.locator("#texture-bake-body").inner_text()
+        assert "coverage" not in page.locator("#texture-bake-body").inner_text().lower()
         assert page.locator("#texture-bake-close").count() == 1
         assert page.locator("#texture-bake-close-x").count() == 1
         assert "Friendly Face" in page.locator("#texture-bake-body").inner_text()
@@ -1092,56 +1086,6 @@ def test_texture_save_modal_opens_without_analysis_and_lists_changed_meshes(
             "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
-    finally:
-        context.close()
-
-
-def test_texture_save_modal_does_not_show_coverage_or_analysis_state(
-        edge_browser, frontend_url):
-    payload = _payload("Unknown")
-    payload["metadata"]["mesh_color_adjustments"] = {
-        "Body Unknown::3,0,0": {"hue": 30},
-    }
-    old_key = payload["meshes"]["Body-Unknown-0"]["tex_key"]
-    dds_key = "diffuse::Unknown-one.dds"
-    payload["meshes"]["Body-Unknown-0"]["tex_key"] = dds_key
-    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
-    payload["textures"][dds_key] = payload["textures"].pop(old_key)
-    context, page = _page(edge_browser, frontend_url, {"Unknown": payload})
-    try:
-        _open(page, "Unknown")
-        page.locator(".draw-item").first.wait_for()
-        page.locator("#inspector-tab").click()
-        page.locator(".draw-item").first.click()
-        page.locator(".inspector-texture-bake").click()
-        page.locator("#texture-bake-modal-backdrop.show").wait_for()
-        details = page.locator("#texture-bake-body").inner_text()
-        assert "SAVE TO TEXTURE" in details
-        assert "coverage" not in details.lower()
-        assert page.locator("#texture-bake-confirm").is_visible()
-    finally:
-        context.close()
-
-
-def test_texture_save_action_is_disabled_for_neutral_color_state(
-        edge_browser, frontend_url):
-    payload = _payload("NeutralBake")
-    first = payload["meshes"]["Body-NeutralBake-0"]
-    old_key = first["tex_key"]
-    dds_key = "diffuse::NeutralBake-one.dds"
-    first["tex_key"] = dds_key
-    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
-    payload["textures"][dds_key] = payload["textures"].pop(old_key)
-    context, page = _page(edge_browser, frontend_url, {"NeutralBake": payload})
-    try:
-        _open(page, "NeutralBake")
-        page.locator(".draw-item").first.wait_for()
-        page.locator("#inspector-tab").click()
-        page.locator(".draw-item").first.click()
-        button = page.locator(".inspector-texture-bake")
-        assert button.is_disabled()
-        assert button.get_attribute("title") == \
-            "Adjust a mesh color before saving."
     finally:
         context.close()
 
@@ -1306,13 +1250,18 @@ def test_texture_save_error_hides_consumed_save_action(
         page.evaluate("""() => {
           window.pywebview.api.save_texture_color = async () => ({
             status: 'error',
+            code: 'coverage_incomplete',
             error: 'The texture could not be saved safely.',
           });
         }""")
         page.locator("#texture-bake-confirm").click()
         page.wait_for_function("""() => document.querySelector(
           '#texture-bake-error').textContent.includes('could not be saved')""")
+        assert page.locator("#texture-bake-error").inner_text() == (
+            "The texture could not be saved safely.")
         assert page.locator("#texture-bake-confirm").is_hidden()
+        assert "Saving color changes" not in page.locator(
+            "#texture-bake-body").inner_text()
 
         page.locator("#texture-bake-close").click()
         page.locator(".inspector-texture-bake").click()
@@ -1639,38 +1588,6 @@ def test_forced_health_refresh_keeps_newer_backup_report(
         context.close()
 
 
-def test_texture_save_error_clears_saving_message(
-        edge_browser, frontend_url):
-    payload = _payload("Error")
-    payload["metadata"]["mesh_color_adjustments"] = {
-        "Body Error::3,0,0": {"hue": 30},
-    }
-    old_key = payload["meshes"]["Body-Error-0"]["tex_key"]
-    dds_key = "diffuse::Error-one.dds"
-    payload["meshes"]["Body-Error-0"]["tex_key"] = dds_key
-    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
-    payload["textures"][dds_key] = payload["textures"].pop(old_key)
-    payload["textureSaveResult"] = {
-        "status": "error", "code": "coverage_incomplete",
-        "error": "Texture save could not be completed safely.",
-    }
-    context, page = _page(edge_browser, frontend_url, {"Error": payload})
-    try:
-        _open(page, "Error")
-        page.locator(".draw-item").first.wait_for()
-        page.locator("#inspector-tab").click()
-        page.locator(".draw-item").first.click()
-        page.locator(".inspector-texture-bake").click()
-        page.locator("#texture-bake-confirm").click()
-        page.wait_for_function("document.querySelector('#texture-bake-error').textContent.length > 0")
-        assert page.locator("#texture-bake-error").inner_text() == (
-            "Texture save could not be completed safely.")
-        assert "Saving color changes" not in page.locator(
-            "#texture-bake-body").inner_text()
-    finally:
-        context.close()
-
-
 def test_texture_coverage_action_explains_non_dds_without_backend_call(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"NonDDS": _payload("NonDDS")})
@@ -1682,31 +1599,6 @@ def test_texture_coverage_action_explains_non_dds_without_backend_call(
         color = page.locator(".inspector-color-section")
         assert color.locator(".inspector-texture-bake").count() == 0
         assert "requires a DDS source" in color.inner_text()
-    finally:
-        context.close()
-
-
-def test_texture_save_does_not_call_analysis_api(
-        edge_browser, frontend_url):
-    payload = _payload("Stale")
-    payload["metadata"]["mesh_color_adjustments"] = {
-        "Body Stale::3,0,0": {"hue": 30},
-    }
-    key = "diffuse::Stale-one.dds"
-    old_key = payload["meshes"]["Body-Stale-0"]["tex_key"]
-    payload["meshes"]["Body-Stale-0"]["tex_key"] = key
-    payload["texture_pools"]["p0"][0]["tex_key"] = key
-    payload["textures"][key] = payload["textures"].pop(old_key)
-    context, page = _page(edge_browser, frontend_url, {"Stale": payload})
-    try:
-        _open(page, "Stale")
-        page.locator(".draw-item").first.wait_for()
-        page.locator("#inspector-tab").click()
-        page.locator(".draw-item").first.click()
-        page.locator(".inspector-texture-bake").click()
-        page.locator("#texture-bake-modal-backdrop.show").wait_for()
-        assert "SAVE TO TEXTURE" in page.locator(
-            "#texture-bake-body").inner_text()
     finally:
         context.close()
 

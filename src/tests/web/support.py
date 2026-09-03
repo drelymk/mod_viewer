@@ -5,8 +5,10 @@ import copy
 import io
 import json
 import math
+import re
 import struct
 import zlib
+from urllib.request import urlopen
 
 import pytest
 from PIL import Image
@@ -305,11 +307,42 @@ def frontend_url():
 def edge_browser():
     with playwright.sync_playwright() as runtime:
         try:
-            browser = runtime.chromium.launch(channel="msedge", headless=True)
+            # Tests use the local server directly. Ambient proxy discovery can
+            # otherwise delay the first request in every isolated context.
+            browser = runtime.chromium.launch(
+                channel="msedge", headless=True, args=["--no-proxy-server"])
         except playwright.Error:
             pytest.skip("frontend smoke tests require a compatible browser runtime")
         yield browser
         browser.close()
+
+
+@pytest.fixture(scope="session")
+def module_document(frontend_url):
+    """Reuse the served import map without duplicating vendor URL rules."""
+    with urlopen(frontend_url, timeout=5) as response:
+        html = response.read().decode("utf-8")
+    import_map = re.search(
+        r'<script type="importmap"[^>]*>.*?</script>', html, re.DOTALL)
+    assert import_map, "The frontend must provide its vendored module import map"
+    return f"<!doctype html><html><head>{import_map[0]}</head><body></body></html>"
+
+
+@pytest.fixture
+def module_page(edge_browser, frontend_url, module_document):
+    """Isolate module contracts without starting the viewer or its GPU scene."""
+    context = edge_browser.new_context(bypass_csp=True)
+    try:
+        page = context.new_page()
+        # Import subjects explicitly on the real server's origin, with no app
+        # entrypoint, editor scripts, UI stylesheet, or renderer startup.
+        url = frontend_url.rstrip("/") + "/__module_test__.html"
+        page.route(url, lambda route: route.fulfill(
+            status=200, content_type="text/html", body=module_document))
+        page.goto(url)
+        yield page
+    finally:
+        context.close()
 
 
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
@@ -646,25 +679,33 @@ def _sample_mesh_pixel(page):
 
 
 def _sample_mesh_pixel_at(page, x, y):
-    point = page.evaluate("""
-      async ({x, y}) => {
+    return _sample_mesh_pixels_at(page, [(x, y)])[0]
+
+
+def _sample_mesh_pixels_at(page, coordinates):
+    """Read all comparison points from the same captured frame."""
+    points = page.evaluate("""
+      async coordinates => {
         const THREE = await import('three');
         const {camera, renderer} = await import('./js/scene/scene.js');
         const mesh = window.modViewer.activeMeshes[0];
-        const projected = new THREE.Vector3(x, y, 0)
-          .applyMatrix4(mesh.matrixWorld).project(camera);
         const rect = renderer.domElement.getBoundingClientRect();
-        return {
-          x: Math.round(rect.left + (projected.x + 1) * rect.width / 2),
-          y: Math.round(rect.top + (1 - projected.y) * rect.height / 2),
-        };
+        return coordinates.map(([x, y]) => {
+          const projected = new THREE.Vector3(x, y, 0)
+            .applyMatrix4(mesh.matrixWorld).project(camera);
+          return {
+            x: Math.round(rect.left + (projected.x + 1) * rect.width / 2),
+            y: Math.round(rect.top + (1 - projected.y) * rect.height / 2),
+          };
+        });
       }
-    """, {"x": x, "y": y})
+    """, coordinates)
     image = Image.open(io.BytesIO(page.screenshot())).convert("RGB")
-    return image.getpixel((point["x"], point["y"]))
+    return [image.getpixel((point["x"], point["y"])) for point in points]
 
 
 __all__ = [
     name for name in globals()
-    if not name.startswith('__') and name not in {"edge_browser", "frontend_url"}
+    if not name.startswith('__')
+    and name not in {"edge_browser", "frontend_url", "module_document", "module_page"}
 ]
