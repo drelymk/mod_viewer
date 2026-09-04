@@ -102,6 +102,132 @@ def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
     }
 
 
+def test_rig_constraints_validate_resolve_and_clamp_local_swing_twist(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const constraints = await import(
+        './js/mesh/weight-rig-constraints.js');
+      const signature = value => JSON.stringify([value]);
+      const q = (x, y, z, degrees) => {
+        const radians = degrees * Math.PI / 180 / 2;
+        const sine = Math.sin(radians);
+        return [x * sine, y * sine, z * sine, Math.cos(radians)];
+      };
+      const multiply = (left, right) => [
+        left[3] * right[0] + left[0] * right[3]
+          + left[1] * right[2] - left[2] * right[1],
+        left[3] * right[1] - left[0] * right[2]
+          + left[1] * right[3] + left[2] * right[0],
+        left[3] * right[2] + left[0] * right[1]
+          - left[1] * right[0] + left[2] * right[3],
+        left[3] * right[3] - left[0] * right[0]
+          - left[1] * right[1] - left[2] * right[2],
+      ];
+      const limited = {
+        joint_signature: signature('arm'), enabled: true,
+        mode: 'swing_twist', swing_x: [-30, 30], swing_z: [-30, 30],
+        twist: [-30, 45],
+      };
+      const disabled = {...limited, enabled: false};
+      const qx = q(1, 0, 0, 90);
+      const qz = q(0, 0, 1, 90);
+      const qy = q(0, 1, 0, 90);
+      const combined = multiply(qz, multiply(qx, qy));
+      const qMinusIdentity = [0, 0, 0, -1];
+      const modelRig = {
+        joints: [
+          {jointId: 7, signature: signature('arm')},
+          {jointId: 8, signature: signature('arm')},
+          {jointId: 9, signature: signature('leg')},
+        ],
+      };
+      const resolved = constraints.resolveRigConstraints(modelRig, [
+        limited,
+        {...limited, joint_signature: signature('leg')},
+        {...limited, joint_signature: signature('missing')},
+        {...limited, mode: 'unknown', joint_signature: signature('other')},
+      ]);
+      const normalized = constraints.normalizeRigConstraint(limited);
+      const serialized = constraints.serializeRigConstraints(modelRig,
+        new Map([[9, resolved.constraintByJointId.get(9)]]));
+      const nearHalfTurn = constraints.constrainLocalPoseQuaternion(
+        [1, 0, 0, 1e-14], limited);
+      const clamp = quaternion => constraints.clampSwingTwist(
+        quaternion, limited);
+      return {
+        normalized,
+        validNeutral: constraints.validateRigConstraint(limited).valid,
+        invalidNeutral: constraints.validateRigConstraint({
+          ...limited, twist: [10, 80],
+        }).error,
+        identity: constraints.decomposeSwingTwist([0, 0, 0, 1]),
+        noConstraint: constraints.constrainLocalPoseQuaternion(qx),
+        disabled: constraints.constrainLocalPoseQuaternion(qx, disabled),
+        qMinusIdentity: constraints.constrainLocalPoseQuaternion(
+          qMinusIdentity, limited),
+        twistPositive: constraints.decomposeSwingTwist(
+          constraints.constrainLocalPoseQuaternion(qy, limited)),
+        twistNegative: constraints.decomposeSwingTwist(
+          constraints.constrainLocalPoseQuaternion(q(0, 1, 0, -90),
+            {...limited, twist: [-30, 30]})),
+        swingX: constraints.decomposeSwingTwist(
+          constraints.constrainLocalPoseQuaternion(qx, limited)),
+        swingZ: constraints.decomposeSwingTwist(
+          constraints.constrainLocalPoseQuaternion(qz, limited)),
+        combined: clamp(combined),
+        nearHalfTurn,
+        invalidQuaternion: constraints.constrainLocalPoseQuaternion(
+          [0, 0, 0, 0]),
+        resolved: {
+          appliedCount: resolved.appliedCount,
+          skipped: resolved.skipped,
+          joints: resolved.constraints,
+        },
+        serialized,
+      };
+    }""")
+    assert result["normalized"] == {
+        "jointSignature": '["arm"]', "enabled": True,
+        "mode": "swing_twist", "swingXMin": -30, "swingXMax": 30,
+        "swingZMin": -30, "swingZMax": 30, "twistMin": -30,
+        "twistMax": 45,
+    }
+    assert result["validNeutral"] is True
+    assert result["invalidNeutral"] == "invalid_twist"
+    assert result["identity"]["swingX"] == 0
+    assert result["identity"]["swingZ"] == 0
+    assert result["identity"]["twistAngle"] == 0
+    assert result["noConstraint"] == pytest.approx(
+        [2 ** -0.5, 0, 0, 2 ** -0.5])
+    assert result["disabled"] == pytest.approx(
+        [2 ** -0.5, 0, 0, 2 ** -0.5])
+    assert result["qMinusIdentity"] == [0, 0, 0, 1]
+    assert result["twistPositive"]["twistAngle"] == pytest.approx(45)
+    assert result["twistNegative"]["twistAngle"] == pytest.approx(-30)
+    assert result["swingX"]["swingX"] == pytest.approx(30)
+    assert result["swingX"]["swingZ"] == pytest.approx(0)
+    assert result["swingZ"]["swingZ"] == pytest.approx(30)
+    assert result["swingZ"]["swingX"] == pytest.approx(0)
+    assert result["combined"]["success"] is True
+    assert result["combined"]["output"]["swingX"] <= 30 + 1e-6
+    assert result["combined"]["output"]["swingX"] >= -30 - 1e-6
+    assert result["combined"]["output"]["swingZ"] <= 30 + 1e-6
+    assert result["combined"]["output"]["swingZ"] >= -30 - 1e-6
+    assert result["combined"]["output"]["twistAngle"] == pytest.approx(45)
+    assert all(math.isfinite(value) for value in result["nearHalfTurn"])
+    assert result["invalidQuaternion"] is None
+    assert result["resolved"]["appliedCount"] == 1
+    assert {item["reason"] for item in result["resolved"]["skipped"]} == {
+        "ambiguous_joint_signature", "joint_not_found",
+        "unsupported_constraint_mode",
+    }
+    assert result["serialized"] == [{
+        "joint_signature": '["leg"]', "enabled": True,
+        "mode": "swing_twist", "swing_x": [-30, 30],
+        "swing_z": [-30, 30], "twist": [-30, 45],
+    }]
+
+
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page
     result = page.evaluate("""async () => {
