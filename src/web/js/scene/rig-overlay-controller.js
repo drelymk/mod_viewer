@@ -157,6 +157,10 @@ export function createRigOverlayController({
   let nodeBoneIds = [];
   let rebuildCount = 0;
   let modelFrameUpdateCount = 0;
+  let poseDragActive = false;
+  let dragSourceKey = null;
+  let dragBoneId = null;
+  let dragParentRotation = null;
   let disposed = false;
 
   function setArcballDragState(dragging) {
@@ -175,6 +179,10 @@ export function createRigOverlayController({
   function detachControls() {
     transformControls?.detach?.();
     setArcballDragState(false);
+    poseDragActive = false;
+    dragSourceKey = null;
+    dragBoneId = null;
+    dragParentRotation = null;
     rigTransformInteractionActive = false;
   }
 
@@ -242,6 +250,11 @@ export function createRigOverlayController({
       proxy.visible = false;
       return;
     }
+    if (poseDragActive && source?.sourceKey === dragSourceKey
+        && boneId === dragBoneId) {
+      proxy.visible = group.visible;
+      return;
+    }
     const poseFrame = getRigBonePoseFrame?.(source.sourceKey, boneId);
     const pivot = poseFrame?.pivot || pivotFor(source, boneId);
     if (pivot) proxy.position.copy(vector(pivot));
@@ -259,6 +272,13 @@ export function createRigOverlayController({
     if (disposed || detail?.sourceKey !== activeSourceKey) return;
     const id = Number(detail.boneId);
     if (!Number.isInteger(id)) return;
+    if (poseDragActive && detail?.sourceKey === dragSourceKey
+        && id === dragBoneId) {
+      // TransformControls owns the proxy until the gesture ends. The model
+      // still updates from every pose event, but its canonical state must not
+      // overwrite the control's cached drag transform.
+      return;
+    }
     selectedBoneId = id;
     const poseFrame = getRigBonePoseFrame?.(detail.sourceKey, id);
     if (poseFrame?.boneRotation?.length === 4) {
@@ -297,35 +317,56 @@ export function createRigOverlayController({
           requestRender?.();
         });
         transformControls.addEventListener?.('objectChange', () => {
-          const source = currentSource;
-          const boneId = selectedBoneFor(currentSnapshot);
-          if (!canPose(currentSnapshot, source, boneId)) return;
-          const poseFrame = getRigBonePoseFrame?.(source.sourceKey, boneId);
+          if (!poseDragActive) return;
+          const sourceKey = dragSourceKey;
+          const boneId = dragBoneId;
+          if (!sourceKey || boneId === null) return;
           const localRotation = proxy.quaternion.clone();
-          if (poseFrame?.parentRotation?.length === 4) {
-            const parentRotation = new THREE.Quaternion(
-              ...poseFrame.parentRotation).normalize();
-            localRotation.premultiply(parentRotation.invert()).normalize();
+          if (dragParentRotation) {
+            localRotation
+              .premultiply(dragParentRotation.clone().invert())
+              .normalize();
           }
           setRigBoneRotation?.(
-            source.sourceKey, boneId, localRotation, {dragging: true});
+            sourceKey, boneId, localRotation, {dragging: true});
         });
         transformControls.addEventListener?.('dragging-changed', event => {
           if (event.value !== undefined && canvas?.style) {
             canvas.style.cursor = event.value ? 'grabbing' : '';
           }
           if (event.value) {
+            const source = currentSource;
+            const boneId = selectedBoneFor(currentSnapshot);
+            if (!canPose(currentSnapshot, source, boneId)) return;
+            poseDragActive = true;
+            dragSourceKey = source.sourceKey;
+            dragBoneId = boneId;
+            const poseFrame = getRigBonePoseFrame?.(
+              dragSourceKey, dragBoneId);
+            dragParentRotation = poseFrame?.parentRotation?.length === 4
+              ? new THREE.Quaternion(
+                ...poseFrame.parentRotation).normalize()
+              : new THREE.Quaternion();
             setArcballDragState(true);
             rigTransformInteractionActive = true;
           } else if (event.value === false) {
             setArcballDragState(false);
+            const sourceKey = dragSourceKey;
+            const boneId = dragBoneId;
+            poseDragActive = false;
+            dragSourceKey = null;
+            dragBoneId = null;
+            dragParentRotation = null;
             queueMicrotask(() => {
               rigTransformInteractionActive = false;
             });
-            const source = currentSource;
-            const boneId = selectedBoneFor(currentSnapshot);
-            if (source && boneId !== null) {
-              finishRigPose?.(source.sourceKey, boneId);
+            if (sourceKey && boneId !== null) {
+              finishRigPose?.(sourceKey, boneId);
+              const snapshot = getRigState?.();
+              currentSnapshot = snapshot || currentSnapshot;
+              currentSource = sourceFor(currentSnapshot);
+              activeSourceKey = currentSource?.sourceKey || null;
+              updateProxy(currentSource, currentSnapshot);
             }
           }
         });
@@ -388,6 +429,7 @@ export function createRigOverlayController({
         helperInScene: !!transformHelper && transformHelper.parent === scene,
         arcballEnabled: arcballControls?.enabled,
         arcballWasEnabled,
+        poseDragActive,
       };
     },
     dispose() {

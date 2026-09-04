@@ -154,14 +154,14 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
       const nonRoot = controller.getDebugState();
       controls.dispatchEvent({type: 'change'});
       const hoverPoseCount = poseCalls.length;
+      controls.dispatchEvent({type: 'dragging-changed', value: true});
+      const dragStarted = controller.getDebugState();
+      const interactionDuringGizmo = isRigTransformInteractionActive();
       controls.object.quaternion.setFromAxisAngle(
         new THREE.Vector3(0, 0, 1), Math.PI * 2 / 3);
       controls.dispatchEvent({type: 'objectChange'});
       const objectChangePoseCount = poseCalls.length;
       const objectChangeLocal = poseCalls[0][2].toArray();
-      controls.dispatchEvent({type: 'dragging-changed', value: true});
-      const dragStarted = controller.getDebugState();
-      const interactionDuringGizmo = isRigTransformInteractionActive();
       controls.dispatchEvent({type: 'mouseUp'});
       controls.dispatchEvent({type: 'dragging-changed', value: false});
       await Promise.resolve();
@@ -223,6 +223,7 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
     assert result["poseCalls"][0][3] == {"dragging": True}
     assert result["dragStarted"]["arcballEnabled"] is False
     assert result["dragStarted"]["arcballWasEnabled"] is True
+    assert result["dragStarted"]["poseDragActive"] is True
     assert result["dragFinished"]["arcballEnabled"] is True
     assert result["dragFinished"]["arcballWasEnabled"] is None
     assert len(result["finishCalls"]) == 1

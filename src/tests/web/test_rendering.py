@@ -1170,6 +1170,135 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
         context.close()
 
 
+def test_rig_overlay_real_controls_deform_without_proxy_feedback(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"RigControls": _payload("RigControls")})
+    try:
+        _open(page, "RigControls")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 1, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__rigControlsUrl = url;
+          window.__testSkinningPreview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0',
+              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
+            },
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+        }""")
+        page.locator("#rig-tab").click()
+        page.wait_for_function("window.modViewer.getModelRigState().loaded")
+        result = page.evaluate("""async () => {
+          const THREE = await import('three/webgpu');
+          const {scene, camera} = await import('./js/scene/scene.js');
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const {createRigOverlayController} = await import(
+            './js/scene/rig-overlay-controller.js');
+          let source = experiment.getModelRigState().sources[0];
+          const sourceKey = source.sourceKey;
+          experiment.setRigComponentRoot(sourceKey, 0);
+          experiment.setRigVisible(true);
+          source = experiment.getModelRigState().sources.find(item =>
+            item.sourceKey === sourceKey);
+          const component = source.components.find(item =>
+            item.rootId === 0 && item.nodeIds.includes(0));
+          const bone1 = Number(component.childrenById[0][0]);
+          const bone2 = Number(component.childrenById[bone1][0]);
+          const canvas = document.querySelector('#canvas-container canvas');
+          const controller = createRigOverlayController({
+            scene, camera, canvas,
+            getMeshes: () => window.modViewer.activeMeshes,
+            getRigState: experiment.getModelRigState,
+            getRigBonePoseFrame: experiment.getRigBonePoseFrame,
+            setRigBoneRotation: experiment.setRigBoneRotation,
+            finishRigPose: experiment.finishRigPose,
+            requestRender: () => {},
+          });
+          const select = boneId => {
+            experiment.selectRigBone(sourceKey, boneId);
+            controller.refresh(experiment.getModelRigState());
+          };
+          const mesh = window.modViewer.activeMeshes[0];
+          const positions = () => [...mesh.geometry.attributes.position.array];
+          const changed = (before, after) => after.some((value, index) =>
+            Math.abs(value - before[index]) > 1e-5);
+          const q90 = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 0, 1), Math.PI / 2);
+          const q120 = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 0, 1), Math.PI * 2 / 3);
+
+          select(bone1);
+          const controls = await controller.ensureTransformControls();
+          const beforeParent = positions();
+          controls.dispatchEvent({type: 'dragging-changed', value: true});
+          const parentDragStarted = controller.getDebugState();
+          controls.object.quaternion.copy(q90);
+          controls.dispatchEvent({type: 'objectChange'});
+          const afterParent = positions();
+          const parentProxyDuringDrag = controls.object.quaternion.toArray();
+          controls.dispatchEvent({type: 'dragging-changed', value: false});
+          await Promise.resolve();
+
+          select(bone2);
+          const childFrame = experiment.getRigBonePoseFrame(sourceKey, bone2);
+          const childProxyAtSelect = controls.object.quaternion.toArray();
+          const beforeChild = positions();
+          controls.dispatchEvent({type: 'dragging-changed', value: true});
+          controls.object.quaternion.copy(q120);
+          controls.dispatchEvent({type: 'objectChange'});
+          const afterChild = positions();
+          const childProxyDuringDrag = controls.object.quaternion.toArray();
+          const stateAfterChild = experiment.getModelRigState().sources.find(
+            item => item.sourceKey === sourceKey);
+          const childLocal = stateAfterChild.poseRotationByBoneId[bone2];
+          const childDragStarted = controller.getDebugState();
+          controls.dispatchEvent({type: 'dragging-changed', value: false});
+          await Promise.resolve();
+          controller.dispose();
+          return {
+            bone1, bone2, parentDragStarted, childDragStarted,
+            parentProxyDuringDrag, childProxyAtSelect, childProxyDuringDrag,
+            childFrame, childLocal,
+            parentChanged: changed(beforeParent, afterParent),
+            childChanged: changed(beforeChild, afterChild),
+          };
+        }""")
+        assert result["bone1"] == 1
+        assert result["bone2"] == 2
+        assert result["parentDragStarted"]["poseDragActive"] is True
+        assert result["childDragStarted"]["poseDragActive"] is True
+        assert result["parentChanged"]
+        assert result["childChanged"]
+        assert result["parentProxyDuringDrag"] == pytest.approx(
+            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
+        assert result["childProxyAtSelect"] == pytest.approx(
+            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
+        assert result["childProxyDuringDrag"] == pytest.approx(
+            [0, 0, math.sin(math.pi / 3), math.cos(math.pi / 3)], abs=1e-5)
+        assert result["childFrame"]["parentRotation"] == pytest.approx(
+            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
+        assert result["childLocal"] == pytest.approx(
+            [0, 0, math.sin(math.pi / 12), math.cos(math.pi / 12)], abs=1e-5)
+    finally:
+        page.evaluate("""() => {
+          if (window.__rigControlsUrl) {
+            URL.revokeObjectURL(window.__rigControlsUrl);
+            window.__rigControlsUrl = null;
+          }
+        }""")
+        context.close()
+
+
 def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
         edge_browser, frontend_url):
     context, page = _page(
