@@ -1120,6 +1120,9 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const THREE = await import('three/webgpu');
+          const {scene, camera} = await import('./js/scene/scene.js');
+          const {createRigOverlayController} = await import(
+            './js/scene/rig-overlay-controller.js');
           const experiment = await import('./js/mesh/weight-experiment.js');
           const state = experiment.getModelRigState();
           const sourceA = state.sources.find(source =>
@@ -1148,6 +1151,39 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             sourceA.sourceKey, child, q, {dragging: true});
           const after = window.modViewer.activeMeshes.map(mesh =>
             [...mesh.geometry.attributes.position.array]);
+          experiment.setRigVisible(true);
+          const controller = createRigOverlayController({
+            scene, camera,
+            canvas: document.querySelector('#canvas-container canvas'),
+            getMeshes: () => window.modViewer.activeMeshes,
+            getRigState: experiment.getModelRigState,
+            getRigBonePoseFrame: experiment.getRigBonePoseFrame,
+            getRigJointPoseFrame: experiment.getRigJointPoseFrame,
+            setRigBoneRotation: experiment.setRigBoneRotation,
+            setRigJointRotation: experiment.setRigJointRotation,
+            finishRigPose: experiment.finishRigPose,
+            requestRender: () => {},
+          });
+          experiment.setSelectedBones([{
+            sourceKey: sourceB.sourceKey,
+            sourceFile: sourceB.sourceFile,
+            boneIdOffset: sourceB.boneIdOffset,
+            boneIds: [4],
+          }]);
+          const physicsState = experiment.getModelPhysicsState();
+          const afterPhysics = experiment.getModelRigState();
+          controller.refresh(afterPhysics);
+          const physicsControls = await controller.ensureTransformControls();
+          const physicsOverlay = controller.getDebugState();
+          const rejectedBone = experiment.setRigBoneRotation(
+            sourceA.sourceKey, child, q, {dragging: true});
+          const rejectedJoint = experiment.setRigJointRotation(
+            jointA, q, {dragging: true});
+          const rejectedRoot = experiment.setRigComponentRoot(
+            sourceA.sourceKey, child);
+          const rejectedReset = experiment.resetRigBone(
+            sourceA.sourceKey, child);
+          controller.dispose();
           return {
             modelJointCount: state.model.joints.length,
             equivalent: jointA === jointB && jointA === jointC,
@@ -1160,6 +1196,13 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
               '.rig-connection-value')?.textContent || '',
             changed: after.map((values, index) => values.some((value, offset) =>
               Math.abs(value - before[index][offset]) > 1e-5)),
+            physicsEnabled: physicsState.enabled,
+            physicsParticipants: physicsState.participantCount,
+            manualPoseCleared: afterPhysics.model.poseJointIds.length === 0,
+            physicsGizmoUnavailable: physicsControls === null
+              && !physicsOverlay.proxyVisible
+              && !physicsOverlay.controlsAttached,
+            rejectedBone, rejectedJoint, rejectedRoot, rejectedReset,
           };
         }""")
         assert result.get("modelJointCount") == 2, result
@@ -1170,6 +1213,14 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         assert "Components 1" in result["reconciliation"]
         assert result["connection"] == "equivalence"
         assert result["changed"] == [True, True, True]
+        assert result["physicsEnabled"]
+        assert result["physicsParticipants"] == 1
+        assert result["manualPoseCleared"]
+        assert result["physicsGizmoUnavailable"]
+        assert not result["rejectedBone"]
+        assert not result["rejectedJoint"]
+        assert not result["rejectedRoot"]
+        assert not result["rejectedReset"]
     finally:
         page.evaluate("""() => {
           (window.__crossSourceRigUrls || []).forEach(url =>
@@ -1248,10 +1299,45 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
             new Float32Array([.8, .2, .7, .3, .6, .4]), 2, transforms);
           const actual = [...window.modViewer.activeMeshes[0]
             .geometry.attributes.position.array];
+          const beforeReroot = experiment.getModelRigState().model;
+          const sourceBeforeReroot = experiment.getModelRigState().sources.find(
+            item => item.sourceKey === sourceKey);
+          const jointIds = [0, 1, 2].map(boneId => Number(
+            sourceBeforeReroot.modelJointIds[boneId]));
+          const oldPivots = new Map(beforeReroot.joints.map(joint => [
+            joint.jointId, joint.restPivot]));
+          const rerooted = experiment.setRigComponentRoot(sourceKey, bone2);
+          const afterReroot = experiment.getModelRigState().model;
+          const rerootedComponent = afterReroot.components.find(component =>
+            component.nodeIds.includes(jointIds[2]));
+          const centersAfterReroot = new Map(afterReroot.joints.map(joint => [
+            joint.jointId, joint.restCenter]));
+          const pivotsAfterReroot = new Map(afterReroot.joints.map(joint => [
+            joint.jointId, joint.restPivot]));
+          const {buildInferredRigRestFrames} = await import(
+            './js/mesh/weight-rig-frames.js');
+          const expectedFrames = buildInferredRigRestFrames(
+            {components: afterReroot.components}, centersAfterReroot,
+            pivotsAfterReroot);
+          const frameMatches = afterReroot.joints.every(joint =>
+            joint.restFrame.every((value, index) => Math.abs(value
+              - expectedFrames.frameByBoneId.get(joint.jointId).toArray()[index])
+              < 1e-6));
           return {
             rooted, bone1, bone2, frameBefore, frameAfterParent,
             frameAfterChild, parentPosed, childPosed, storedLocal,
-            expected: [...expected], actual,
+            expected: [...expected], actual, rerooted,
+            jointIds,
+            rerootRoot: rerootedComponent?.rootId,
+            rerootParentOfBone1: rerootedComponent?.parentById[jointIds[1]],
+            rerootParentOfBone0: rerootedComponent?.parentById[jointIds[0]],
+            pivotOfBone1: afterReroot.joints.find(joint =>
+              joint.jointId === jointIds[1])?.restPivot,
+            pivotOfBone2Before: oldPivots.get(jointIds[2]),
+            pivotOfBone0: afterReroot.joints.find(joint =>
+              joint.jointId === jointIds[0])?.restPivot,
+            pivotOfBone1Before: oldPivots.get(jointIds[1]),
+            frameMatches,
           };
         }""")
         assert result["rooted"]
@@ -1274,6 +1360,15 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
         assert result["storedLocal"] == pytest.approx(
             [0, 0, math.sin(math.pi / 12), math.cos(math.pi / 12)], abs=1e-5)
         assert result["actual"] == pytest.approx(result["expected"], abs=1e-5)
+        assert result["rerooted"]
+        assert result["rerootRoot"] == result["jointIds"][2]
+        assert result["rerootParentOfBone1"] == result["jointIds"][2]
+        assert result["rerootParentOfBone0"] == result["jointIds"][1]
+        assert result["pivotOfBone1"] == pytest.approx(
+            result["pivotOfBone2Before"], abs=1e-5)
+        assert result["pivotOfBone0"] == pytest.approx(
+            result["pivotOfBone1Before"], abs=1e-5)
+        assert result["frameMatches"]
     finally:
         page.evaluate("""() => {
           if (window.__rigHierarchyUrl) {

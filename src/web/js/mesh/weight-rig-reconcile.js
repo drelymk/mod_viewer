@@ -276,53 +276,70 @@ function cellKey(point, cellSize) {
     Math.floor(value / cellSize)).join(':');
 }
 
-function crossSourceWeightEvidence(leftRig, rightRig, referenceRadius) {
-  const leftSamples = vertexSamplesForRig(leftRig);
-  const rightSamples = vertexSamplesForRig(rightRig);
-  if (!leftSamples.length || !rightSamples.length) return new Map();
-  const cellSize = Math.max(referenceRadius * 0.01, EPSILON);
+function nearestSample(sample, cells, cellSize, matchDistance) {
+  const [x, y, z] = cellKey(sample.point, cellSize).split(':').map(Number);
+  let best = null;
+  for (let dx = -1; dx <= 1; dx += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dz = -1; dz <= 1; dz += 1) {
+        const entries = cells.get(`${x + dx}:${y + dy}:${z + dz}`) || [];
+        entries.forEach(candidate => {
+          const distance = sample.point.distanceTo(candidate.point);
+          if (distance > matchDistance) return;
+          if (!best || distance < best.distance
+              || distance === best.distance
+                && candidate.sampleKey.localeCompare(
+                  best.sample.sampleKey) < 0) {
+            best = {sample: candidate, distance};
+          }
+        });
+      }
+    }
+  }
+  return best;
+}
+
+export function crossSourceWeightEvidence(
+    leftRig, rightRig, referenceRadius, leftSamples = null,
+    rightSamples = null) {
+  const leftSampleList = leftSamples || vertexSamplesForRig(leftRig);
+  const rightSampleList = rightSamples || vertexSamplesForRig(rightRig);
+  if (!leftSampleList.length || !rightSampleList.length) return new Map();
   const matchDistance = Math.max(referenceRadius * 0.02, EPSILON);
+  // The search examines one neighboring cell in each axis, so each cell must
+  // cover the full match radius to avoid missing a valid pair at a boundary.
+  const cellSize = matchDistance;
   const leftCells = new Map();
-  leftSamples.forEach(sample => {
+  leftSampleList.forEach(sample => {
     const key = cellKey(sample.point, cellSize);
     const entries = leftCells.get(key) || [];
     entries.push(sample);
     leftCells.set(key, entries);
   });
+  const rightCells = new Map();
+  rightSampleList.forEach(sample => {
+    const key = cellKey(sample.point, cellSize);
+    const entries = rightCells.get(key) || [];
+    entries.push(sample);
+    rightCells.set(key, entries);
+  });
   const nearestLeftByRight = new Map();
   const nearestRightByLeft = new Map();
-  rightSamples.forEach(rightSample => {
-    const [x, y, z] = cellKey(rightSample.point, cellSize)
-      .split(':').map(Number);
-    let best = null;
-    for (let dx = -1; dx <= 1; dx += 1) {
-      for (let dy = -1; dy <= 1; dy += 1) {
-        for (let dz = -1; dz <= 1; dz += 1) {
-          const entries = leftCells.get(`${x + dx}:${y + dy}:${z + dz}`) || [];
-          entries.forEach(leftSample => {
-            const distance = rightSample.point.distanceTo(leftSample.point);
-            if (distance > matchDistance) return;
-            if (!best || distance < best.distance
-                || distance === best.distance
-                  && leftSample.sampleKey.localeCompare(
-                    best.leftSample.sampleKey) < 0) {
-              best = {leftSample, distance};
-            }
-          });
-        }
-      }
-    }
+  rightSampleList.forEach(rightSample => {
+    const best = nearestSample(rightSample, leftCells, cellSize,
+      matchDistance);
     if (!best) return;
-    nearestLeftByRight.set(rightSample, best);
-    const previous = nearestRightByLeft.get(best.leftSample);
-    if (!previous || best.distance < previous.distance
-        || best.distance === previous.distance
-          && rightSample.sampleKey.localeCompare(
-            previous.rightSample.sampleKey) < 0) {
-      nearestRightByLeft.set(best.leftSample, {
-        rightSample, distance: best.distance,
-      });
-    }
+    nearestLeftByRight.set(rightSample, {
+      leftSample: best.sample, distance: best.distance,
+    });
+  });
+  leftSampleList.forEach(leftSample => {
+    const best = nearestSample(leftSample, rightCells, cellSize,
+      matchDistance);
+    if (!best) return;
+    nearestRightByLeft.set(leftSample, {
+      rightSample: best.sample, distance: best.distance,
+    });
   });
 
   const evidence = new Map();
@@ -666,9 +683,16 @@ function buildCrossSourceWeightEvidence(sourceRigs, referenceRadius) {
   const evidence = new Map();
   const rigs = [...sourceRigs].sort((left, right) =>
     String(left.sourceKey).localeCompare(String(right.sourceKey)));
+  const samplesBySourceKey = new Map(rigs.map(rig => [
+    String(rig.sourceKey), vertexSamplesForRig(rig),
+  ]));
   for (let leftIndex = 0; leftIndex < rigs.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < rigs.length; rightIndex += 1) {
-      crossSourceWeightEvidence(rigs[leftIndex], rigs[rightIndex], referenceRadius)
+      const leftRig = rigs[leftIndex];
+      const rightRig = rigs[rightIndex];
+      crossSourceWeightEvidence(leftRig, rightRig, referenceRadius,
+        samplesBySourceKey.get(String(leftRig.sourceKey)),
+        samplesBySourceKey.get(String(rightRig.sourceKey)))
         .forEach((record, key) => evidence.set(key, record));
     }
   }
@@ -1174,6 +1198,7 @@ function buildModelJoints(unionFind, evidenceByKey, strengthByKey,
   const joints = clusters.map((memberKeys, jointId) => {
     memberKeys.forEach(key => keyToJoint.set(key, jointId));
     const members = memberKeys.map(key => evidenceByKey.get(key)).filter(Boolean);
+    const signature = JSON.stringify(memberKeys);
     const center = weightedAverage(members.map(evidence => ({
       point: vectorFrom(evidence.weightedCenter)?.toArray(),
       weight: Math.max(evidence.totalWeight, evidence.affectedVertexCount, 1),
@@ -1197,6 +1222,7 @@ function buildModelJoints(unionFind, evidenceByKey, strengthByKey,
     return {
       jointId,
       jointKey: `joint=${jointId}`,
+      signature,
       members: members.map(evidence => ({
         sourceKey: evidence.sourceKey,
         boneId: evidence.boneId,

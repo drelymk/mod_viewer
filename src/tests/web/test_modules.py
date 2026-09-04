@@ -538,6 +538,11 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
           result.sourceBoneToModelJointId['body#bone=0'] !==
           result.sourceBoneToModelJointId['far#bone=0'],
         clusterSizes: result.joints.map(joint => joint.members.length),
+        jointSignatures: result.joints.map(joint => [
+          joint.signature,
+          JSON.stringify(joint.members.map(member => member.sourceBoneKey)
+            .sort()),
+        ]),
         rejected: result.reconciliation.rejectedCandidates
           .map(item => item.rejectionReason).filter(Boolean),
         sourceEdgeSupport: result.edges.filter(edge =>
@@ -550,6 +555,43 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
     assert sorted(result["clusterSizes"], reverse=True)[:2] == [2, 2]
     assert "topology_conflict" in result["rejected"] or "not_mutual" in result["rejected"]
     assert 2 in result["sourceEdgeSupport"]
+    assert all(signature == expected
+               for signature, expected in result["jointSignatures"])
+
+
+def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {crossSourceWeightEvidence} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (sourceKey, positions, ids) => ({
+        sourceKey,
+        vertexEvidence: [{
+          meshKey: `${sourceKey}/neutral`,
+          positions: new Float32Array(positions),
+          indices: new Uint32Array(ids),
+          weights: new Float32Array(ids.map(() => 1)),
+          influenceCount: 1,
+        }],
+      });
+      const spatial = crossSourceWeightEvidence(
+        make('left', [.0099, 0, 0], [0]),
+        make('right', [.0201, 0, 0], [1]), 1);
+      const mutual = crossSourceWeightEvidence(
+        make('mutual-left', [0, 0, 0, 0, .018, 0], [10, 11]),
+        make('mutual-right', [-.018, 0, 0, 0, .0095, 0], [20, 21]), 1);
+      return {
+        spatialMatches: spatial.get('left#bone=0|right#bone=1')
+          ?.matchedVertexCount || 0,
+        mutualPairs: [...mutual.values()].map(item => [
+          item.leftSourceBoneKey, item.rightSourceBoneKey,
+        ]).sort(),
+      };
+    }""")
+    assert result["spatialMatches"] == 1
+    assert result["mutualPairs"] == [[
+        "mutual-left#bone=11", "mutual-right#bone=21"]]
 
 
 def test_cross_source_reconciliation_keeps_accessory_root_as_attachment(module_page):

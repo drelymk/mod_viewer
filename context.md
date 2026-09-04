@@ -233,12 +233,15 @@ of documentation, comments and tests; use portable fixtures instead.
   mutual-best equivalences, guarded one-member-per-source clusters,
   topology-assisted propagation and ambiguity rejection. Collapse source edges
   into a model-level maximum-spanning forest, then add only conservative,
-  cycle-free cross-source attachment edges between source/component roots.
+  cycle-free cross-source attachment edges between component/boundary joints.
 - Cross-source reconciliation connects multiple skinning palettes for inferred
   posing. Because the model-wide inferred hierarchy may differ from each source
   palette's original weighting topology, some cross-source weighted regions can
   stretch during rotation. This is currently accepted as an experimental Rig
   limitation.
+- Each ModelJoint exposes a stable signature made from its sorted canonical
+  source-bone keys. Runtime joint, component and root indices are ephemeral and
+  must not be persisted as preset identities.
 - Normalize reconciliation distances by model reference radius with candidate,
   strict, propagation and attachment gates; retain candidate evidence and
   rejection reasons for diagnostics. Model joints own rest center/pivot/frame,

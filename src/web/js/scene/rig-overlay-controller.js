@@ -66,8 +66,16 @@ function topologyKey(source) {
   ]);
 }
 
+function modelRigHasActivePhysics(snapshot, source = null) {
+  return !!snapshot?.physicsActive
+    || (snapshot?.model && (snapshot.sources || []).some(source =>
+      source.physicsActive))
+    || !!source?.physicsActive;
+}
+
 function canPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
-  if (!snapshot?.visible || snapshot.picking || !source || boneId === null) {
+  if (!snapshot?.visible || snapshot.picking || !source || boneId === null
+      || modelRigHasActivePhysics(snapshot, source)) {
     return false;
   }
   const component = componentFor(source, boneId);
@@ -585,6 +593,7 @@ export function createRigOverlayController({
         jointCount: jointPoints.geometry.getAttribute('position')?.count || 0,
         edgeCount: lineSegments.geometry.getAttribute('position')?.count / 2 || 0,
         selectedBoneId,
+        proxyVisible: proxy.visible,
         controlsCreated: !!transformControls,
         controlsCreateCount,
         controlsAttached: transformControls?.object === proxy,

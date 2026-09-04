@@ -271,7 +271,7 @@ function buildPanel() {
 
   const poseSection = section('Pose');
   addText(poseSection, 'rig-hint',
-    'Rotate the selected non-root joint with the viewport gizmo. Pose is source-local and is not saved.');
+    'Rotate the selected non-root inferred model joint with the viewport gizmo. Pose is temporary and is not saved.');
   const snapRow = document.createElement('label');
   snapRow.className = 'rig-row';
   addText(snapRow, 'rig-label', 'Rotation snap');
