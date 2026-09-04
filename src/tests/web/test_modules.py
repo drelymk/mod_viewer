@@ -34,6 +34,65 @@ def test_vendored_transform_controls_exposes_scene_helper(module_page):
     }
 
 
+def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const presets = await import('./js/mesh/weight-rig-presets.js');
+      const first = '["body|offset=0#bone=7"]';
+      const second = '["body|offset=0#bone=8","legs|offset=0#bone=1"]';
+      const rig = {
+        joints: [{jointId: 41, signature: first},
+          {jointId: 9, signature: second}],
+        poseRotationByJointId: new Map([
+          [41, [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)]],
+          [9, [0, 0, 0, 1]],
+        ]),
+      };
+      const serialized = presets.serializeRigPose(rig,
+        {explicitRootSignatures: new Set([first])});
+      const resolved = presets.resolveRigPreset({
+        joints: [{jointId: 100, signature: first},
+          {jointId: 200, signature: second}],
+      }, {
+        id: 'pose-1', name: 'Look Left',
+        roots: [{joint_signature: first},
+          {joint_signature: '["missing|offset=0#bone=4"]'}],
+        joints: [
+          {joint_signature: first, rotation: [0, 0, 2, 0]},
+          {joint_signature: second, rotation: [NaN, 0, 0, 1]},
+        ],
+      });
+      return {
+        serialized,
+        resolved: {
+          roots: resolved.roots,
+          joints: resolved.joints,
+          skipped: resolved.skipped,
+        },
+      };
+    }""")
+    assert result["serialized"] == {
+        "roots": [{"joint_signature":
+                   '["body|offset=0#bone=7"]'}],
+        "joints": [{"joint_signature":
+                    '["body|offset=0#bone=7"]',
+                    "rotation": pytest.approx(
+                        [0, 0, 2 ** -0.5, 2 ** -0.5])}],
+    }
+    assert result["resolved"]["roots"] == [{
+        "jointId": 100,
+        "jointSignature": '["body|offset=0#bone=7"]',
+    }]
+    assert result["resolved"]["joints"] == [{
+        "jointId": 100,
+        "jointSignature": '["body|offset=0#bone=7"]',
+        "rotation": [0, 0, 1, 0],
+    }]
+    assert {item["reason"] for item in result["resolved"]["skipped"]} == {
+        "root_not_found", "invalid_rotation",
+    }
+
+
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page
     result = page.evaluate("""async () => {

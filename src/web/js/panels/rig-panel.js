@@ -9,7 +9,10 @@ import {
   selectRigJoint,
   setRigComponentRoot, setRigRotationSnapDegrees,
   setRigVisible,
+  applySavedRigPosePreset, deleteRigPosePreset, renameRigPosePreset,
+  saveRigPosePreset, selectRigPosePreset,
 } from '../mesh/weight-experiment.js';
+import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 
 let panel = null;
 let ui = null;
@@ -320,6 +323,87 @@ function buildPanel() {
   actions.className = 'rig-actions';
   actions.append(ui.resetBone, ui.resetPose);
   poseSection.appendChild(actions);
+
+  const presetTitle = addText(poseSection, 'rig-readout-title', 'Pose presets');
+  presetTitle.classList.add('rig-preset-title');
+  ui.preset = document.createElement('select');
+  ui.preset.className = 'rig-preset-select';
+  ui.preset.setAttribute('aria-label', 'Saved rig pose');
+  ui.preset.addEventListener('change', () => {
+    selectRigPosePreset(ui.preset.value || null);
+  });
+  poseSection.appendChild(ui.preset);
+  const presetActions = document.createElement('div');
+  presetActions.className = 'rig-actions';
+  ui.applyPreset = document.createElement('button');
+  ui.applyPreset.type = 'button';
+  ui.applyPreset.className = 'ui-button rig-apply-preset';
+  ui.applyPreset.textContent = 'Apply';
+  ui.applyPreset.addEventListener('click', () => {
+    const result = applySavedRigPosePreset(ui.preset.value || null);
+    const name = latestState?.rigPresets?.presets?.find(item =>
+      item.id === ui.preset.value)?.name || 'pose';
+    if (!result?.success) {
+      ui.presetStatus.textContent = result?.skipped?.[0]?.reason === 'physics_active'
+        ? 'Disable Character Physics before applying a pose preset.'
+        : result?.failureReason === 'no_matches'
+          ? `Could not apply "${name}". No saved joints matched the current inferred rig.`
+          : 'This saved pose is invalid and could not be applied.';
+      return;
+    }
+    const skippedJoints = Number(result.skippedJointCount) || 0;
+    ui.presetStatus.textContent = skippedJoints
+      ? `Applied "${name}" — ${result.appliedJointCount} joints. `
+        + `${skippedJoints} saved joints were unavailable in the current inferred rig.`
+      : `Applied "${name}" — ${result.appliedJointCount} joints.`;
+  });
+  ui.savePreset = document.createElement('button');
+  ui.savePreset.type = 'button';
+  ui.savePreset.className = 'ui-button rig-save-preset';
+  ui.savePreset.textContent = 'Save New';
+  ui.savePreset.addEventListener('click', async () => {
+    const name = await inputConfirmDialog('Save pose preset as:', '');
+    if (!name) return;
+    const result = await saveRigPosePreset(name);
+    if (!result?.saved) {
+      ui.presetStatus.textContent = result?.error || 'The pose was not saved.';
+    } else {
+      ui.presetStatus.textContent = `Saved "${result.preset.name}".`;
+    }
+  });
+  presetActions.append(ui.applyPreset, ui.savePreset);
+  poseSection.appendChild(presetActions);
+  const presetManageActions = document.createElement('div');
+  presetManageActions.className = 'rig-actions';
+  ui.renamePreset = document.createElement('button');
+  ui.renamePreset.type = 'button';
+  ui.renamePreset.className = 'ui-button rig-rename-preset';
+  ui.renamePreset.textContent = 'Rename';
+  ui.renamePreset.addEventListener('click', async () => {
+    const current = latestState?.rigPresets?.presets?.find(item =>
+      item.id === ui.preset.value);
+    if (!current) return;
+    const name = await inputConfirmDialog('Rename pose preset:', current.name);
+    if (!name) return;
+    const result = await renameRigPosePreset(current.id, name);
+    ui.presetStatus.textContent = result?.saved
+      ? 'Pose renamed.' : result?.error || 'The pose was not renamed.';
+  });
+  ui.deletePreset = document.createElement('button');
+  ui.deletePreset.type = 'button';
+  ui.deletePreset.className = 'ui-button rig-delete-preset';
+  ui.deletePreset.textContent = 'Delete';
+  ui.deletePreset.addEventListener('click', async () => {
+    const current = latestState?.rigPresets?.presets?.find(item =>
+      item.id === ui.preset.value);
+    if (!current || !await confirmDialog(`Delete pose preset "${current.name}"?`)) return;
+    const result = await deleteRigPosePreset(current.id);
+    ui.presetStatus.textContent = result?.saved
+      ? 'Pose deleted.' : result?.error || 'The pose was not deleted.';
+  });
+  presetManageActions.append(ui.renamePreset, ui.deletePreset);
+  poseSection.appendChild(presetManageActions);
+  ui.presetStatus = addText(poseSection, 'rig-hint');
 }
 
 function syncOptions(state) {
@@ -473,6 +557,47 @@ function syncPanel(state = getModelRigState()) {
   ui.setRoot.disabled = !source || physicsActive || !hasSelectedBone;
   ui.resetBone.disabled = !source || physicsActive || !hasSelectedBone;
   ui.resetPose.disabled = !state.loaded || physicsActive;
+  syncPresetControls(state, physicsActive);
+}
+
+function syncPresetControls(state, physicsActive) {
+  if (!ui?.preset) return;
+  const presetState = state?.rigPresets || {};
+  const presets = presetState.presets || [];
+  const optionKey = JSON.stringify(presets.map(item => [item.id, item.name]));
+  if (optionKey !== ui.preset.dataset.optionKey) {
+    ui.preset.replaceChildren();
+    if (!presets.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No saved poses';
+      ui.preset.appendChild(option);
+    } else {
+      presets.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.name;
+        ui.preset.appendChild(option);
+      });
+    }
+    ui.preset.dataset.optionKey = optionKey;
+  }
+  ui.preset.value = presetState.selectedPresetId || '';
+  const hasPreset = presets.some(item => item.id === ui.preset.value);
+  ui.preset.disabled = !presets.length || !!presetState.loading;
+  ui.applyPreset.disabled = !state.loaded || !hasPreset || physicsActive;
+  ui.savePreset.disabled = !state.loaded || physicsActive || !!presetState.loading;
+  ui.renamePreset.disabled = !hasPreset || !!presetState.loading;
+  ui.deletePreset.disabled = !hasPreset || !!presetState.loading;
+  if (presetState.error) ui.presetStatus.textContent = presetState.error;
+  else if (presetState.lastApplyResult?.success
+      && presetState.lastApplyResult.preset?.name) {
+    const result = presetState.lastApplyResult;
+    ui.presetStatus.textContent = result.skippedJointCount
+      ? `Applied "${result.preset.name}" — ${result.appliedJointCount} joints; `
+        + `${result.skippedJointCount} unavailable.`
+      : `Applied "${result.preset.name}" — ${result.appliedJointCount} joints.`;
+  }
 }
 
 function modelStateHasPhysics(state) {

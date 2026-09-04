@@ -242,6 +242,23 @@ of documentation, comments and tests; use portable fixtures instead.
 - Each ModelJoint exposes a stable signature made from its sorted canonical
   source-bone keys. Runtime joint, component and root indices are ephemeral and
   must not be persisted as preset identities.
+- M3 Rig pose presets use the existing per-mod `.mod_viewer.json` under
+  `rig.version = 1` with an array of stable-ID records containing only a name,
+  explicit root signatures and normalized non-identity local joint quaternions.
+  Preset names are trimmed and bounded; IDs do not change on rename, and
+  unrelated metadata is preserved on save, rename and delete. Missing or
+  malformed preset metadata is a partial feature failure and must not prevent
+  the model from loading.
+- Preset resolution is exact by ModelJoint signature. Missing, ambiguous,
+  duplicate or malformed entries are reported and skipped individually; valid
+  entries still apply. Saved presets are never auto-applied after load or shape
+  rebaseline, and Reset Pose returns to the default inferred roots and identity
+  rotations without deleting saved presets.
+- Applying a preset is one batch transaction: restore valid model-root
+  overrides first, rebuild rest frames/caches once, install all valid local
+  rotations, run one model deformation/bounds pass, then notify and render once.
+  Character Physics blocks Apply and Save New without being disabled; Rename
+  and Delete remain metadata-only operations.
 - Normalize reconciliation distances by model reference radius with candidate,
   strict, propagation and attachment gates; retain candidate evidence and
   rejection reasons for diagnostics. Model joints own rest center/pivot/frame,

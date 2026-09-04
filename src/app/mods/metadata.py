@@ -1,6 +1,7 @@
 """Viewer-only mesh labels and texture choices stored beside a mod."""
 from collections import Counter
 import json
+import math
 import os
 import threading
 from copy import deepcopy
@@ -22,6 +23,9 @@ PRESENT_NAMES_KEY = "__all__"
 _LOCK = threading.RLock()
 
 MESH_COLOR_ADJUSTMENTS_KEY = "mesh_color_adjustments"
+RIG_METADATA_KEY = "rig"
+RIG_METADATA_VERSION = 1
+RIG_PRESET_NAME_MAX_LENGTH = 80
 
 
 def _legacy_mesh_key(name, entry):
@@ -267,6 +271,167 @@ def save_weight_selected_bones(folder_path, bones):
             **_save(folder_path, data),
             "selected_bones": normalized,
         }
+
+
+def _normalized_rig_rotation(value):
+    if (not isinstance(value, list) or len(value) != 4
+            or any(isinstance(item, bool) or not isinstance(item, (int, float))
+                   or not math.isfinite(item)
+                   for item in value)):
+        return None
+    length = sum(item * item for item in value) ** 0.5
+    if length <= 1e-12:
+        return None
+    return [item / length for item in value]
+
+
+def _normalized_rig_signature(value):
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _normalized_rig_entry(value, joint=False):
+    if not isinstance(value, dict):
+        return None
+    signature = _normalized_rig_signature(value.get("joint_signature"))
+    if signature is None:
+        return None
+    entry = {"joint_signature": signature}
+    if joint:
+        rotation = _normalized_rig_rotation(value.get("rotation"))
+        if rotation is None:
+            return None
+        entry["rotation"] = rotation
+    return entry
+
+
+def _normalized_rig_preset(value):
+    if not isinstance(value, dict):
+        return None
+    preset_id = value.get("id")
+    name = value.get("name")
+    if (not isinstance(preset_id, str) or not preset_id.strip()
+            or not isinstance(name, str)):
+        return None
+    name = name.strip()
+    if not name or len(name) > RIG_PRESET_NAME_MAX_LENGTH:
+        return None
+    roots = value.get("roots")
+    joints = value.get("joints")
+    if not isinstance(roots, list) or not isinstance(joints, list):
+        return None
+    normalized_roots = []
+    normalized_joints = []
+    for entry in roots:
+        normalized = _normalized_rig_entry(entry)
+        if normalized is None:
+            return None
+        normalized_roots.append(normalized)
+    for entry in joints:
+        normalized = _normalized_rig_entry(entry, joint=True)
+        if normalized is None:
+            return None
+        normalized_joints.append(normalized)
+    return {
+        "id": preset_id.strip(), "name": name,
+        "roots": normalized_roots, "joints": normalized_joints,
+    }
+
+
+def rig_pose_presets(folder_path=None, data=None):
+    """Return the versioned saved Rig presets without exposing runtime IDs."""
+    data = (load(folder_path) if data is None and folder_path is not None
+            else ({} if data is None else data))
+    rig = data.get(RIG_METADATA_KEY) if isinstance(data, dict) else None
+    if rig is None:
+        return {"version": RIG_METADATA_VERSION, "presets": [], "error": None}
+    if (not isinstance(rig, dict)
+            or rig.get("version") != RIG_METADATA_VERSION
+            or not isinstance(rig.get("presets"), list)):
+        return {"version": RIG_METADATA_VERSION, "presets": [],
+                "error": "Pose presets could not be loaded."}
+    presets = []
+    seen_ids = set()
+    malformed = False
+    for raw in rig["presets"]:
+        preset = _normalized_rig_preset(raw)
+        if preset is None or preset["id"] in seen_ids:
+            malformed = True
+            continue
+        seen_ids.add(preset["id"])
+        presets.append(preset)
+    return {
+        "version": RIG_METADATA_VERSION, "presets": presets,
+        "error": "Pose presets could not be loaded." if malformed else None,
+    }
+
+
+def _rig_data_for_update(data):
+    current = rig_pose_presets(data=data)
+    return current, {
+        "version": RIG_METADATA_VERSION,
+        "presets": deepcopy(current["presets"]),
+    }
+
+
+def save_rig_pose_preset(folder_path, preset):
+    """Atomically add one validated preset while preserving other metadata."""
+    normalized = _normalized_rig_preset(preset)
+    if normalized is None:
+        return {"saved": False, "error": "Invalid pose preset."}
+    with _LOCK:
+        data = load(folder_path)
+        current, rig = _rig_data_for_update(data)
+        if any(item["id"] == normalized["id"] for item in current["presets"]):
+            return {"saved": False, "error": "A pose with this ID already exists."}
+        if any(item["name"].casefold() == normalized["name"].casefold()
+               for item in current["presets"]):
+            return {"saved": False, "error": "A pose with this name already exists."}
+        rig["presets"].append(normalized)
+        data[RIG_METADATA_KEY] = rig
+        return {**_save(folder_path, data), "preset": normalized,
+                "presets": rig["presets"]}
+
+
+def rename_rig_pose_preset(folder_path, preset_id, name):
+    """Rename a preset by stable ID without changing its pose data."""
+    if not isinstance(preset_id, str) or not preset_id.strip():
+        return {"saved": False, "error": "Invalid pose preset ID."}
+    if not isinstance(name, str) or not name.strip() \
+            or len(name.strip()) > RIG_PRESET_NAME_MAX_LENGTH:
+        return {"saved": False, "error": "Invalid pose preset name."}
+    normalized_name = name.strip()
+    with _LOCK:
+        data = load(folder_path)
+        current, rig = _rig_data_for_update(data)
+        target = next((item for item in rig["presets"]
+                       if item["id"] == preset_id.strip()), None)
+        if target is None:
+            return {"saved": False, "error": "Pose preset was not found."}
+        if any(item["id"] != target["id"]
+               and item["name"].casefold() == normalized_name.casefold()
+               for item in rig["presets"]):
+            return {"saved": False, "error": "A pose with this name already exists."}
+        target["name"] = normalized_name
+        data[RIG_METADATA_KEY] = rig
+        return {**_save(folder_path, data), "preset": target,
+                "presets": rig["presets"]}
+
+
+def delete_rig_pose_preset(folder_path, preset_id):
+    """Delete one preset by stable ID and retain an empty rig section."""
+    if not isinstance(preset_id, str) or not preset_id.strip():
+        return {"saved": False, "error": "Invalid pose preset ID."}
+    with _LOCK:
+        data = load(folder_path)
+        current, rig = _rig_data_for_update(data)
+        before = len(rig["presets"])
+        rig["presets"] = [item for item in rig["presets"]
+                          if item["id"] != preset_id.strip()]
+        if len(rig["presets"]) == before:
+            return {"saved": False, "error": "Pose preset was not found."}
+        data[RIG_METADATA_KEY] = rig
+        return {**_save(folder_path, data), "deleted": True,
+                "presets": rig["presets"]}
 
 
 def hydrate_mesh_names(payload, data=None):

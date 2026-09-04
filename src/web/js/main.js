@@ -31,7 +31,9 @@ import {
   setActiveRigSource, setRigBoneRotation, setRigJointRotation,
   setRigComponentRoot,
   getRigRotationSnapDegrees, setRigRotationSnapDegrees, setRigVisible,
-  setRigPoseControlStatus,
+  setRigPoseControlStatus, applySavedRigPosePreset, deleteRigPosePreset,
+  getRigPresetState, renameRigPosePreset, saveRigPosePreset,
+  selectRigPosePreset,
   beginRigPicking, cancelRigPicking, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
@@ -427,6 +429,12 @@ rendererReady.then(ready => {
     finishRigPose: {value: finishRigPose},
     resetRigBone: {value: resetRigBone},
     resetRigPose: {value: resetRigPose},
+    getRigPresetState: {value: getRigPresetState},
+    applySavedRigPosePreset: {value: applySavedRigPosePreset},
+    saveRigPosePreset: {value: saveRigPosePreset},
+    renameRigPosePreset: {value: renameRigPosePreset},
+    deleteRigPosePreset: {value: deleteRigPosePreset},
+    selectRigPosePreset: {value: selectRigPosePreset},
   });
 
   void openStartupMod().then(apiReady => {

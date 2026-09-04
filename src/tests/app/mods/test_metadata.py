@@ -77,6 +77,50 @@ def test_save_weight_selected_bones_rejects_non_list(tmp_path):
     assert not (tmp_path / metadata.METADATA_NAME).exists()
 
 
+def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
+    preset = {
+        "id": "pose-1",
+        "name": "  Look Left ",
+        "roots": [{"joint_signature": '["body#bone=7"]'}],
+        "joints": [{"joint_signature": '["body#bone=8"]',
+                    "rotation": [0, 0, 2, 0]}],
+    }
+    result = metadata.save_rig_pose_preset(str(tmp_path), preset)
+    assert result["saved"] is True
+    assert result["preset"] == {
+        "id": "pose-1", "name": "Look Left",
+        "roots": [{"joint_signature": '["body#bone=7"]'}],
+        "joints": [{"joint_signature": '["body#bone=8"]',
+                    "rotation": [0, 0, 1, 0]}],
+    }
+
+    path = tmp_path / metadata.METADATA_NAME
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved["future"] = {"keep": True}
+    path.write_text(json.dumps(saved), encoding="utf-8")
+
+    renamed = metadata.rename_rig_pose_preset(
+        str(tmp_path), "pose-1", "  Turned  ")
+    assert renamed["saved"] is True
+    assert renamed["preset"]["id"] == "pose-1"
+    assert renamed["preset"]["name"] == "Turned"
+    deleted = metadata.delete_rig_pose_preset(str(tmp_path), "pose-1")
+    assert deleted["saved"] is True
+    final = json.loads(path.read_text(encoding="utf-8"))
+    assert final["future"] == {"keep": True}
+    assert final["rig"] == {"version": 1, "presets": []}
+
+
+def test_rig_pose_preset_metadata_reports_malformed_section_without_load_failure():
+    result = metadata.rig_pose_presets(data={
+        "rig": {"version": 2, "presets": []},
+    })
+    assert result == {
+        "version": 1, "presets": [],
+        "error": "Pose presets could not be loaded.",
+    }
+
+
 def test_mesh_color_adjustments_normalize_and_preserve_unrelated_metadata(
         tmp_path):
     path = tmp_path / metadata.METADATA_NAME

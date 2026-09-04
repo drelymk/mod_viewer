@@ -1090,6 +1090,8 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-nav-button { min-width: 28px; min-height: 24px; padding: 2px 6px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; font-family: ui-monospace, monospace; font-size: 11px; }
 .rig-nav-button:hover { background: var(--surface-active); border-color: var(--accent-soft); }
 .rig-snap-select { min-height: 26px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.rig-preset-select { width: 100%; min-height: 30px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.rig-preset-title { margin-top: 3px; }
 .rig-readout-title { color: var(--text-muted); font-size: 11px; }
 .rig-readout-row { min-height: 22px; }
 .rig-actions { display: flex; flex-wrap: wrap; gap: 5px; }
