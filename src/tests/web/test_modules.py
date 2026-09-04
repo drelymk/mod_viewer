@@ -687,6 +687,7 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
       const id = (result, key) => result.sourceBoneToModelJointId[key];
       const attachment = first.edges.find(edge =>
         edge.relationshipType === 'attachment');
+      const bodyRoot = id(first, 'main#bone=0');
       const attachmentBoundary = id(first, 'accessory#bone=20');
       const bodyTarget = id(first, 'main#bone=2');
       const mapKeys = [
@@ -710,9 +711,11 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
           survives: first.reconciliation.attachmentCount === 1,
           boundary: attachment.jointB === attachmentBoundary,
           target: attachment.jointA === bodyTarget,
+          componentIds: Number.isInteger(attachment.targetComponentId)
+            && Number.isInteger(attachment.accessoryComponentId),
         } : null,
         attachedRoot: first.components.length === 1
-          && first.components[0].rootId === bodyTarget,
+          && first.components[0].rootId === bodyRoot,
         orderInvariant: mapKeys.every(key =>
           id(first, key) === id(second, key))
           && JSON.stringify(first.edges.map(edge => [
@@ -731,6 +734,7 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
     assert result["attachment"]["survives"]
     assert result["attachment"]["boundary"]
     assert result["attachment"]["target"]
+    assert result["attachment"]["componentIds"]
     assert result["attachedRoot"]
     assert result["orderInvariant"]
 
@@ -1109,6 +1113,136 @@ def test_cross_source_reconciliation_aggregates_component_attachments(
     assert result["diagnostic"]["componentSupportedJointPairCount"] == 3
     assert result["diagnostic"]["endpointMatchedVertexCount"] == 3
     assert result["diagnostic"]["accessoryRoot"]
+
+
+def test_cross_source_attachments_preserve_trunk_root_and_rigid_motion(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three');
+      const deformation = await import('./js/mesh/weight-deformation.js');
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (sourceKey, entries, links, rootId) => {
+        const nodeIds = entries.map(([id]) => id);
+        const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+        links.forEach(([parent, child]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        return {
+          sourceKey, boneIds: nodeIds,
+          influenceGraph: {nodes: entries.map(([boneId, center]) => ({
+            boneId, weightedCenter: center, weightedRadius: .1,
+            totalWeight: 1, affectedVertexCount: 10,
+          }))},
+          centerByBoneId: new Map(entries),
+          jointPivotByBoneId: new Map(),
+          restDirectionByBoneId: new Map(entries.map(([id]) => [id,
+            [0, 1, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(entries.map(([id]) => [id, {
+            directionSource: 'child-weighted-center',
+          }])),
+          inferredForest: {
+            components: [{componentId: 0, rootId, nodeIds,
+              parentById, childrenById,
+              depthById: Object.fromEntries(nodeIds.map(id => [id, 0])),
+              edges: links.map(([boneA, boneB]) => ({
+                boneA, boneB, treeEdgeScore: 1,
+              }))}],
+            componentByBoneId: Object.fromEntries(nodeIds.map(id => [id, 0])),
+          },
+        };
+      };
+      const body = make('body', [
+        [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, 2, 0]],
+        [3, [0, 3, 0]],
+      ], [[0, 1], [1, 2], [2, 3]], 0);
+      const wings = make('wings', [
+        [10, [.045, 2, 0]], [11, [.045, 2.3, 0]],
+        [12, [.045, 2.6, 0]],
+      ], [[10, 11], [11, 12]], 10);
+      const hair = make('hair', [
+        [20, [-.09, 3.02, 0]], [21, [-.09, 3.35, 0]],
+      ], [[20, 21]], 20);
+      const model = buildModelRigReconciliation([body, wings, hair], {
+        modelReferenceRadius: 1,
+      });
+      const id = (sourceKey, boneId) => model.sourceBoneToModelJointId[
+        `${sourceKey}#bone=${boneId}`];
+      const bodyRoot = id('body', 0);
+      const bodyOne = id('body', 1);
+      const bodyTwo = id('body', 2);
+      const bodyThree = id('body', 3);
+      const wingRoot = id('wings', 10);
+      const wingMiddle = id('wings', 11);
+      const wingTip = id('wings', 12);
+      const component = model.components.find(item =>
+        item.nodeIds.includes(bodyRoot));
+      const centers = new Map(model.joints.map(joint => [
+        joint.jointId, joint.restCenter,
+      ]));
+      const rotation = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1), Math.PI / 2);
+      const transforms = deformation.buildForestTransformsFromLocalRotations(
+        {components: model.components}, centers, {
+          quaternionByBoneId: new Map([[bodyOne, rotation]]),
+        });
+      const bodyOneMatrix = transforms.get(bodyOne).elements;
+      const inheritedIds = [bodyTwo, bodyThree, wingRoot, wingMiddle, wingTip];
+      const inheritedRigidly = inheritedIds.every(jointId =>
+        transforms.get(jointId)?.elements.every((value, index) =>
+          Math.abs(value - bodyOneMatrix[index]) < 1e-6));
+      const baseline = new Float32Array([
+        .2, 2.5, 0, .2, 2.8, 0,
+      ]);
+      const posed = deformation.applyWeightedTransformDeformation(
+        baseline, new Uint32Array([
+          bodyOne, wingRoot, wingMiddle, wingTip,
+        ]), new Float32Array([.5, .5, .5, .5]), 2, transforms);
+      const distance = values => Math.hypot(
+        values[0] - values[3], values[1] - values[4], values[2] - values[5]);
+      const attachments = model.edges.filter(edge =>
+        edge.relationshipType === 'attachment');
+      return {
+        rootId: component?.rootId ?? null,
+        parentChain: [
+          component?.parentById?.[bodyOne],
+          component?.parentById?.[bodyTwo],
+          component?.parentById?.[bodyThree],
+          component?.parentById?.[wingRoot],
+          component?.parentById?.[wingMiddle],
+          component?.parentById?.[wingTip],
+        ],
+        expectedParentChain: [
+          bodyRoot, bodyOne, bodyTwo, bodyTwo, wingRoot, wingMiddle,
+        ],
+        attachmentCount: attachments.length,
+        attachmentTargetIds: attachments.map(edge => edge.jointA).sort(
+          (left, right) => left - right),
+        expectedAttachmentTargetIds: [bodyTwo, bodyThree].sort(
+          (left, right) => left - right),
+        attachmentMetadata: attachments.every(edge =>
+          Number.isInteger(edge.targetComponentId)
+          && Number.isInteger(edge.accessoryComponentId)),
+        highAttachmentScore: attachments.length === 2
+          && attachments[0].attachmentScore !== attachments[1].attachmentScore,
+        inheritedRigidly,
+        beforeDistance: distance(baseline),
+        afterDistance: distance(posed),
+      };
+    }""")
+    assert result["rootId"] == 0
+    assert result["parentChain"] == result["expectedParentChain"]
+    assert result["attachmentCount"] == 2
+    assert result["attachmentTargetIds"] == result["expectedAttachmentTargetIds"]
+    assert result["attachmentMetadata"]
+    assert result["highAttachmentScore"]
+    assert result["inheritedRigidly"]
+    assert result["afterDistance"] == pytest.approx(
+        result["beforeDistance"], abs=1e-5)
 
 
 def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):
