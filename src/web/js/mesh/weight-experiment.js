@@ -18,6 +18,7 @@ import {
   buildInferredRigRestFrames, eulerFromRestFrameDelta,
   poseToRestFrameDelta, restFrameDeltaToPose,
 } from './weight-rig-frames.js';
+import {buildSourceModelPoseConfiguration} from './weight-model-pose.js';
 import {
   buildModelRigReconciliation, orientModelRigForest, sourceBoneKey,
 } from './weight-rig-reconcile.js';
@@ -456,6 +457,33 @@ function rigSourceSnapshot(rig, {debug = false} = {}) {
           ? [...jointPivotByBoneId[child]] : null,
       }];
     }));
+  const modelPoseComponents = (rig.modelPoseForest?.components || []).map(
+    component => ({
+      componentId: component.componentId,
+      rootId: component.rootId,
+      nodeIds: [...(component.nodeIds || [])],
+      parentById: {...(component.parentById || {})},
+      childrenById: Object.fromEntries(Object.entries(
+        component.childrenById || {}).map(([id, children]) => [id, [...children]])),
+      depthById: {...(component.depthById || {})},
+      maxDepth: component.maxDepth,
+    }));
+  const modelPoseForestEdges = modelPoseComponents.flatMap(component =>
+    Object.entries(component.parentById || {}).flatMap(([childId, parentId]) => {
+      if (parentId === null || parentId === undefined) return [];
+      return [{
+        boneA: Number(parentId),
+        boneB: Number(childId),
+        parentId: Number(parentId),
+        childId: Number(childId),
+      }];
+    }));
+  const modelPoseJointPivotByBoneId = Object.fromEntries(
+    [...(rig.modelPoseJointPivotByBoneId || [])].map(([boneId, pivot]) => [
+      boneId, [...pivot]]));
+  const modelPoseRotationByBoneId = Object.fromEntries(
+    [...(rig.modelPoseRotationByBoneId || [])].map(([boneId, quaternion]) => [
+      boneId, quaternion.toArray()]));
   const source = {
     sourceKey: rig.sourceKey,
     sourceFile: rig.sourceFile,
@@ -466,6 +494,11 @@ function rigSourceSnapshot(rig, {debug = false} = {}) {
     components,
     nodes,
     forestEdges,
+    modelPoseComponents,
+    modelPoseForestEdges,
+    modelPoseJointPivotByBoneId,
+    modelPoseRotationByBoneId,
+    sourcePoseTopology: rig.modelPoseTopology || null,
     jointPivotByBoneId,
     selectedBoneId: modelRigState.selectedBoneBySource.get(rig.sourceKey) ?? null,
     selectedJointId: modelRigState.selectedJointId,
@@ -1654,10 +1687,15 @@ function createSourceSkinningRig(sourceKey, members) {
     }).filter(Boolean),
     structureRevision: 0,
     poseRotationByBoneId: new Map(),
+    modelPoseRotationByBoneId: new Map(),
     poseTransforms: new Map(),
     poseRotations: new Map(),
     poseTransformCache: new Map(),
     poseFrameCache: new Map(),
+    modelPoseForest: inferredForest,
+    modelPoseJointPivotByBoneId: jointPivotByBoneId,
+    modelPoseCarrierTargetByComponentId: new Map(),
+    modelPoseTopology: null,
     poseActiveVerticesByMesh: new Map(),
     poseAffectedBoneIds: new Set(),
     poseActiveBoneKey: '',
@@ -1675,6 +1713,7 @@ function sameMeshSet(left, right) {
 
 function resetSourceSkinningPose(rig, {preserveActive = false} = {}) {
   rig.poseRotationByBoneId.clear();
+  rig.modelPoseRotationByBoneId?.clear();
   rig.poseTransforms.clear();
   rig.poseRotations.clear();
   rig.poseTransformCache.clear();
@@ -1697,6 +1736,12 @@ function refreshSourceSkinningRig(rig, members, {resetPose = true} = {}) {
   rig.restDirectionByBoneId = refreshed.restDirectionByBoneId;
   rig.restFrameEvidenceByBoneId = refreshed.restFrameEvidenceByBoneId;
   rig.continuationChildByBoneId = refreshed.continuationChildByBoneId;
+  rig.modelPoseRotationByBoneId = refreshed.modelPoseRotationByBoneId;
+  rig.modelPoseForest = refreshed.modelPoseForest;
+  rig.modelPoseJointPivotByBoneId = refreshed.modelPoseJointPivotByBoneId;
+  rig.modelPoseCarrierTargetByComponentId =
+    refreshed.modelPoseCarrierTargetByComponentId;
+  rig.modelPoseTopology = refreshed.modelPoseTopology;
   rig.vertexEvidence = refreshed.vertexEvidence;
   rig.structureRevision = refreshed.structureRevision;
   rig.poseFrameCache = refreshed.poseFrameCache;
@@ -1749,6 +1794,26 @@ function modelJointForId(jointId) {
   return Number.isInteger(id) ? modelSkinningRig?.joints?.[id] || null : null;
 }
 
+function configureModelPoseForests(modelRig) {
+  const topologyBySource = {};
+  for (const sourceRig of modelRig?.sourceRigs || []) {
+    const configuration = buildSourceModelPoseConfiguration(sourceRig, modelRig);
+    sourceRig.modelPoseForest = configuration.modelPoseForest;
+    sourceRig.modelPoseJointPivotByBoneId =
+      configuration.modelPoseJointPivotByBoneId;
+    sourceRig.modelPoseCarrierTargetByComponentId =
+      configuration.modelPoseCarrierTargetByComponentId;
+    sourceRig.modelPoseTopology = configuration.modelPoseTopology;
+    topologyBySource[sourceRig.sourceKey] = {
+      ...configuration.modelPoseTopology,
+    };
+  }
+  if (modelRig?.reconciliation?.reconciliation) {
+    modelRig.reconciliation.reconciliation.sourcePoseTopology = topologyBySource;
+  }
+  modelRig.sourcePoseTopology = topologyBySource;
+}
+
 function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   const started = performanceNow();
   const previousSelectedJointId = modelRigState.selectedJointId;
@@ -1793,6 +1858,7 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     rig.sourceTransformAliases.set(sourceRig.sourceKey, new Map());
     rig.sourceRotationAliases.set(sourceRig.sourceKey, new Map());
     sourceRig.poseRotationByBoneId.clear();
+    sourceRig.modelPoseRotationByBoneId?.clear();
     sourceRig.poseTransforms = new Map();
     sourceRig.poseRotations = new Map();
     sourceRig.poseTransformCache.clear();
@@ -1802,6 +1868,7 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     sourceRig.poseActiveVerticesByMesh.clear();
   });
   modelSkinningRig = rig;
+  configureModelPoseForests(rig);
   if (!modelSkinningRig.joints[modelWeightState.weightViewJointId]) {
     modelWeightState.weightViewJointId = null;
   }
@@ -1872,12 +1939,9 @@ function updateModelSourceAliases(rig) {
     transforms.clear();
     rotations.clear();
     for (const boneId of sourceRig.boneIds || []) {
-      const jointId = rig.sourceBoneToModelJointId.get(
-        sourceBoneKey(sourceRig.sourceKey, boneId));
-      if (!Number.isInteger(jointId)) continue;
-      transforms.set(Number(boneId), rig.poseTransforms.get(jointId)
+      transforms.set(Number(boneId), sourceRig.poseTransforms.get(Number(boneId))
         || RIG_IDENTITY_MATRIX);
-      rotations.set(Number(boneId), rig.poseRotations.get(jointId)
+      rotations.set(Number(boneId), sourceRig.poseRotations.get(Number(boneId))
         || new THREE.Quaternion());
     }
     rig.sourceTransformAliases.set(sourceRig.sourceKey, transforms);
@@ -2367,10 +2431,58 @@ function buildModelPoseTransforms() {
     });
   updateModelPoseFrameCache(modelSkinningRig,
     modelSkinningRig.poseTransforms);
+  for (const sourceRig of modelSkinningRig.sourceRigs || []) {
+    syncDerivedSourcePose(sourceRig, modelSkinningRig);
+    buildSourceModelPoseTransforms(sourceRig, modelSkinningRig);
+  }
   updateModelSourceAliases(modelSkinningRig);
   modelRigState.rigTransformMs = performanceNow() - started;
   addWeightPhysicsPerformance('rigTransformMs', modelRigState.rigTransformMs);
   return modelSkinningRig.poseTransforms;
+}
+
+function buildSourceModelPoseTransforms(sourceRig, modelRig) {
+  const localRotations = new Map();
+  const localTransforms = buildForestTransformsFromLocalRotations(
+    sourceRig.modelPoseForest || sourceRig.inferredForest,
+    sourceRig.centerByBoneId, {
+      getQuaternion: boneId => sourceRig.modelPoseRotationByBoneId?.get(boneId)
+        || new THREE.Quaternion(),
+      jointPivotByBoneId: sourceRig.modelPoseJointPivotByBoneId
+        || sourceRig.jointPivotByBoneId,
+      rotationOutput: localRotations,
+      transformCache: sourceRig.poseTransformCache,
+    });
+  const transforms = sourceRig.poseTransforms instanceof Map
+    ? sourceRig.poseTransforms : new Map();
+  const rotations = sourceRig.poseRotations instanceof Map
+    ? sourceRig.poseRotations : new Map();
+  transforms.clear();
+  rotations.clear();
+  for (const boneId of sourceRig.boneIds || []) {
+    const id = Number(boneId);
+    if (!Number.isInteger(id)) continue;
+    const localTransform = localTransforms.get(id) || RIG_IDENTITY_MATRIX;
+    const componentId = sourceRig.modelPoseForest?.componentByBoneId?.[id];
+    const carrierTargetId = sourceRig.modelPoseCarrierTargetByComponentId
+      ?.get?.(Number(componentId));
+    const carrierTransform = Number.isInteger(Number(carrierTargetId))
+      ? modelRig.poseTransforms.get(Number(carrierTargetId))
+        || RIG_IDENTITY_MATRIX
+      : RIG_IDENTITY_MATRIX;
+    transforms.set(id, new THREE.Matrix4()
+      .copy(carrierTransform).multiply(localTransform));
+    const localRotation = localRotations.get(id)
+      || new THREE.Quaternion();
+    const carrierRotation = Number.isInteger(Number(carrierTargetId))
+      ? modelRig.poseRotations.get(Number(carrierTargetId))
+        || new THREE.Quaternion()
+      : new THREE.Quaternion();
+    rotations.set(id, carrierRotation.clone().multiply(localRotation).normalize());
+  }
+  sourceRig.poseTransforms = transforms;
+  sourceRig.poseRotations = rotations;
+  return transforms;
 }
 
 function modelPoseDescendantIds(rig, posedJointIds) {
@@ -2391,11 +2503,24 @@ function modelPoseDescendantIds(rig, posedJointIds) {
 }
 
 function sourceBoneIdsForModelJoints(sourceRig, jointIds) {
-  const affected = new Set();
+  const seeds = new Set();
   for (const boneId of sourceRig.boneIds || []) {
     const jointId = modelJointIdForSourceBone(sourceRig.sourceKey, boneId);
     if (Number.isInteger(jointId) && jointIds.has(jointId)) {
-      affected.add(Number(boneId));
+      seeds.add(Number(boneId));
+    }
+  }
+  const affected = new Set();
+  const pending = [...seeds];
+  while (pending.length) {
+    const boneId = pending.pop();
+    if (affected.has(boneId)) continue;
+    affected.add(boneId);
+    const componentId = sourceRig.modelPoseForest?.componentByBoneId?.[boneId];
+    const component = Number.isInteger(Number(componentId))
+      ? sourceRig.modelPoseForest?.components?.[Number(componentId)] : null;
+    for (const child of component?.childrenById?.[boneId] || []) {
+      pending.push(Number(child));
     }
   }
   return affected;
@@ -2407,24 +2532,33 @@ function sourceBoneKeyForSet(ids) {
 
 function syncDerivedSourcePose(sourceRig, modelRig) {
   sourceRig.poseRotationByBoneId.clear();
+  const projectedRotations = sourceRig.modelPoseRotationByBoneId
+    instanceof Map ? sourceRig.modelPoseRotationByBoneId : new Map();
+  projectedRotations.clear();
+  sourceRig.modelPoseRotationByBoneId = projectedRotations;
   for (const boneId of sourceRig.boneIds || []) {
     const jointId = modelJointIdForSourceBone(sourceRig.sourceKey, boneId);
-    const quaternion = Number.isInteger(jointId)
+    const modelPose = Number.isInteger(jointId)
       ? modelRig.poseRotationByJointId.get(jointId) : null;
-    if (quaternion && !quaternionIsIdentity(quaternion)) {
-      sourceRig.poseRotationByBoneId.set(Number(boneId), quaternion.clone());
+    if (modelPose && !quaternionIsIdentity(modelPose)) {
+      sourceRig.poseRotationByBoneId.set(Number(boneId), modelPose.clone());
+      const modelRestFrame = modelRig.restFrameByJointId.get(jointId)
+        || new THREE.Quaternion();
+      const sourceRestFrame = sourceRig.restFrameByBoneId.get(Number(boneId))
+        || new THREE.Quaternion();
+      const frameDelta = poseToRestFrameDelta(modelPose, modelRestFrame);
+      const sourcePose = restFrameDeltaToPose(frameDelta, sourceRestFrame);
+      if (!quaternionIsIdentity(sourcePose)) {
+        projectedRotations.set(Number(boneId), sourcePose);
+      }
     }
   }
-  sourceRig.poseTransforms = modelRig.sourceTransformAliases.get(
-    sourceRig.sourceKey) || new Map();
-  sourceRig.poseRotations = modelRig.sourceRotationAliases.get(
-    sourceRig.sourceKey) || new Map();
 }
 
 function applyModelPose({request = true, dragging = false} = {}) {
   const rig = modelSkinningRig;
   if (!rig) return false;
-  const transforms = buildModelPoseTransforms();
+  buildModelPoseTransforms();
   const posedJointIds = [...rig.poseRotationByJointId.entries()]
     .filter(([, quaternion]) => !quaternionIsIdentity(quaternion))
     .map(([jointId]) => Number(jointId));
@@ -2436,7 +2570,6 @@ function applyModelPose({request = true, dragging = false} = {}) {
   let changed = false;
   let deformedVertexCount = 0;
   for (const sourceRig of rig.sourceRigs || []) {
-    syncDerivedSourcePose(sourceRig, rig);
     const transformsByBoneId = rig.sourceTransformAliases.get(
       sourceRig.sourceKey) || new Map();
     const rotationsByBoneId = rig.sourceRotationAliases.get(
@@ -2810,6 +2943,7 @@ export function setRigComponentRoot(sourceKey, boneId) {
     components: modelForest.components,
     componentByBoneId: modelForest.componentByJointId,
   };
+  configureModelPoseForests(modelSkinningRig);
   modelSkinningRig.poseTransformCache.clear();
   modelSkinningRig.poseFrameCache.clear();
   modelSkinningRig.structureRevision = ++nextRigStructureRevision;

@@ -1245,6 +1245,97 @@ def test_cross_source_attachments_preserve_trunk_root_and_rigid_motion(
         result["beforeDistance"], abs=1e-5)
 
 
+def test_model_pose_forest_preserves_cyclic_source_edges(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const {buildSourceModelPoseConfiguration} = await import(
+        './js/mesh/weight-model-pose.js');
+      const make = (sourceKey, ids, links) => {
+        const nodeIds = [...ids];
+        const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+        links.forEach(([parent, child]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        const centers = new Map(nodeIds.map((id, index) => [
+          id, [0, index, 0],
+        ]));
+        const relationships = links.map(([boneA, boneB]) => ({
+          boneA, boneB, treeEdgeScore: 1,
+          jointCenter: centers.get(boneB),
+        }));
+        return {
+          sourceKey, boneIds: nodeIds,
+          influenceGraph: {
+            nodes: nodeIds.map(boneId => ({
+              boneId, weightedCenter: centers.get(boneId),
+              weightedRadius: .1, totalWeight: 10,
+              affectedVertexCount: 10,
+            })),
+            relationships,
+          },
+          centerByBoneId: centers,
+          jointPivotByBoneId: new Map(links.map(([, child]) => [
+            child, centers.get(child),
+          ])),
+          restDirectionByBoneId: new Map(nodeIds.map(id => [
+            id, [0, 1, 0],
+          ])),
+          restFrameByBoneId: new Map(nodeIds.map(id => [
+            id, [0, 0, 0, 1],
+          ])),
+          restFrameEvidenceByBoneId: new Map(nodeIds.map(id => [id, {
+            directionSource: 'child-weighted-center',
+          }])),
+          inferredForest: {
+            components: [{componentId: 0, rootId: nodeIds[0], nodeIds,
+              parentById, childrenById,
+              depthById: Object.fromEntries(nodeIds.map((id, index) => [
+                id, index,
+              ])),
+              edges: links.map(([boneA, boneB]) => ({
+                boneA, boneB, treeEdgeScore: 1,
+              }))}],
+            componentByBoneId: Object.fromEntries(nodeIds.map(id => [id, 0])),
+          },
+        };
+      };
+      const chain = make('chain', [0, 1, 2, 3], [
+        [0, 1], [1, 2], [2, 3],
+      ]);
+      const star = make('star', [10, 11, 12, 13], [
+        [10, 11], [10, 12], [10, 13],
+      ]);
+      const reconciliation = buildModelRigReconciliation([chain, star], {
+        modelReferenceRadius: 1,
+      });
+      const modelRig = {
+        reconciliation,
+        components: reconciliation.components,
+        componentByJointId: reconciliation.componentByJointId,
+        sourceBoneToModelJointId: reconciliation.sourceBoneToModelJointMap,
+      };
+      const chainPose = buildSourceModelPoseConfiguration(chain, modelRig);
+      const starPose = buildSourceModelPoseConfiguration(star, modelRig);
+      return {
+        modelEdgeCount: reconciliation.sourceForest.edges.length,
+        chainTopology: chainPose.modelPoseTopology,
+        starTopology: starPose.modelPoseTopology,
+      };
+    }""")
+    assert result["modelEdgeCount"] == 3
+    for topology in (result["chainTopology"], result["starTopology"]):
+        assert topology == {
+            "sourceEdgeCount": 3,
+            "preservedEdgeCount": 3,
+            "brokenEdgeCount": 0,
+            "maxDetour": 1,
+        }
+
+
 def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):
     page = module_page
     result = page.evaluate("""async () => {

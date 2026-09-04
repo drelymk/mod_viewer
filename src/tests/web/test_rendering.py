@@ -1075,6 +1075,10 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
     first["component"] = "Cross source A"
     second["component"] = "Cross source B"
     third["component"] = "Cross source C"
+    for mesh in (first, second, third):
+        mesh["pos"] = _f32(
+            0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 3, 0)
+        mesh["drawindexed"] = [3, 0, 0]
     payload["meshes"] = {
         "CrossSourceRig-A-0": first,
         "CrossSourceRig-B-0": second,
@@ -1087,24 +1091,26 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         page.wait_for_function("window.modViewer.activeMeshes.length === 3")
         page.evaluate("""async () => {
           const makeUrl = indices => {
-            const bytes = new Uint8Array(48);
+            const bytes = new Uint8Array(64);
             new Uint32Array(bytes.buffer).set(indices);
-            new Float32Array(bytes.buffer, 24).set([.8, .2, .8, .2, 1, 0]);
+            new Float32Array(bytes.buffer, 32).set([
+              1, 0, 1, 0, 1, 0, .5, .5,
+            ]);
             return URL.createObjectURL(new Blob([bytes]));
           };
-          const urlA = makeUrl([0, 1, 0, 1, 1, 1]);
-          const urlB = makeUrl([4, 5, 4, 5, 5, 5]);
-          const urlC = makeUrl([8, 9, 8, 9, 9, 9]);
+          const urlA = makeUrl([1, 0, 1, 0, 1, 0, 0, 1]);
+          const urlB = makeUrl([5, 4, 5, 4, 5, 4, 4, 5]);
+          const urlC = makeUrl([9, 8, 9, 8, 9, 8, 8, 9]);
           window.__crossSourceRigUrls = [urlA, urlB, urlC];
           window.__testSkinningPreview = async (path, meshKey) => {
             const entry = (sourceKey, boneIds, url) => ({
-              status: 'ok', vertex_count: 3, influence_count: 2,
+              status: 'ok', vertex_count: 4, influence_count: 2,
               bone_ids: boneIds, encoding: 'test', source: {
                 key: sourceKey, file: sourceKey, bone_id_offset: 0,
               }, data: {
-                url, length: 48,
-                indices: {offset: 0, length: 24, type: 'u32'},
-                weights: {offset: 24, length: 24, type: 'f32'},
+                url, length: 64,
+                indices: {offset: 0, length: 32, type: 'u32'},
+                weights: {offset: 32, length: 32, type: 'f32'},
               }, diagnostics: {},
             });
             if (meshKey.includes('-A-')) {
@@ -1133,13 +1139,17 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
           }
           const before = window.modViewer.activeMeshes.map(mesh =>
             [...mesh.geometry.attributes.position.array]);
-          const child = sourceA.boneIds.find(id =>
-            id !== sourceA.components[0].rootId);
-          const jointA = state.model.sourceBoneToModelJointId[
+          experiment.setRigComponentRoot(sourceA.sourceKey, 0);
+          const refreshedState = experiment.getModelRigState();
+          const refreshedSourceA = refreshedState.sources.find(source =>
+            source.sourceKey === sourceA.sourceKey);
+          const child = refreshedSourceA.boneIds.find(id =>
+            id !== refreshedSourceA.components[0].rootId);
+          const jointA = refreshedState.model.sourceBoneToModelJointId[
             `cross/a.buf|offset=0#bone=${child}`];
-          const jointB = state.model.sourceBoneToModelJointId[
+          const jointB = refreshedState.model.sourceBoneToModelJointId[
             `cross/b.buf|offset=0#bone=${child + 4}`];
-          const jointC = state.model.sourceBoneToModelJointId[
+          const jointC = refreshedState.model.sourceBoneToModelJointId[
             `cross/c.buf|offset=0#bone=${child + 8}`];
           const q = new THREE.Quaternion().setFromAxisAngle(
             new THREE.Vector3(0, 0, 1), Math.PI / 2);
@@ -1148,10 +1158,21 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             sourceA.sourceKey, child, q, {dragging: true});
           const after = window.modViewer.activeMeshes.map(mesh =>
             [...mesh.geometry.attributes.position.array]);
+          const distance = (values, left, right) => Math.hypot(
+            values[left * 3] - values[right * 3],
+            values[left * 3 + 1] - values[right * 3 + 1],
+            values[left * 3 + 2] - values[right * 3 + 2]);
+          const pairs = [[0, 1], [0, 2], [1, 2]];
+          const beforeDistances = pairs.map(([left, right]) =>
+            distance(before[0], left, right));
+          const afterDistances = after.map(values => pairs.map(([left, right]) =>
+            distance(values, left, right)));
+          const topology = refreshedState.sources.map(source =>
+            source.sourcePoseTopology);
           return {
-            modelJointCount: state.model.joints.length,
+            modelJointCount: refreshedState.model.joints.length,
             equivalent: jointA === jointB && jointA === jointC,
-            members: state.model.joints.find(joint => joint.jointId === jointA)
+            members: refreshedState.model.joints.find(joint => joint.jointId === jointA)
               ?.members?.length || 0,
             posed,
             reconciliation: document.querySelector(
@@ -1160,6 +1181,9 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
               '.rig-connection-value')?.textContent || '',
             changed: after.map((values, index) => values.some((value, offset) =>
               Math.abs(value - before[index][offset]) > 1e-5)),
+            beforeDistances,
+            afterDistances,
+            topology,
           };
         }""")
         assert result.get("modelJointCount") == 2, result
@@ -1170,6 +1194,11 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         assert "Components 1" in result["reconciliation"]
         assert result["connection"] == "equivalence"
         assert result["changed"] == [True, True, True]
+        for distances in result["afterDistances"]:
+            assert distances == pytest.approx(result["beforeDistances"], abs=1e-5)
+        for source_topology in result["topology"]:
+            assert source_topology["brokenEdgeCount"] == 0
+            assert source_topology["preservedEdgeCount"] == 1
     finally:
         page.evaluate("""() => {
           (window.__crossSourceRigUrls || []).forEach(url =>
@@ -1232,14 +1261,18 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
           const after = experiment.getModelRigState().sources.find(item =>
             item.sourceKey === sourceKey);
           const storedLocal = after.poseRotationByBoneId[bone2];
-          const forest = {components: after.components};
+          const forest = {components: after.modelPoseComponents};
           const centers = new Map(after.nodes.map(node => [
             Number(node.boneId), node.weightedCenter]));
-          const pivots = new Map(Object.entries(after.jointPivotByBoneId).map(
-            ([id, pivot]) => [Number(id), pivot]));
+          const pivots = new Map(Object.entries(
+            after.modelPoseJointPivotByBoneId).map(([id, pivot]) => [
+              Number(id), pivot]));
+          const modelPoseRotations = new Map(
+            Object.entries(after.modelPoseRotationByBoneId).map(
+              ([id, rotation]) => [Number(id), rotation]));
           const transforms = experiment.buildForestTransformsFromLocalRotations(
             forest, centers, {
-              quaternionByBoneId: new Map([[bone1, q90], [bone2, q30]]),
+              quaternionByBoneId: modelPoseRotations,
               jointPivotByBoneId: pivots,
             });
           const expected = experiment.applyWeightedTransformDeformation(
