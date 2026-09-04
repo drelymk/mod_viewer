@@ -9,6 +9,8 @@ export const CROSS_SOURCE_STRICT_DISTANCE = 0.04;
 export const CROSS_SOURCE_PROPAGATION_DISTANCE = 0.06;
 export const CROSS_SOURCE_AMBIGUITY_MARGIN = 0.05;
 export const CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN = 0.08;
+export const CROSS_SOURCE_STRONG_VERTEX_COUNT = 8;
+export const CROSS_SOURCE_STRONG_WEIGHT_STRENGTH = 0.5;
 
 const EPSILON = 1e-8;
 
@@ -312,10 +314,15 @@ function crossSourceWeightEvidence(leftRig, rightRig, referenceRadius) {
           weightedMatchStrength: 0,
           leftMass: 0,
           rightMass: 0,
+          matchedVertexKeys: new Set(),
         };
         const leftMass = leftInfluence.weight * confidence;
         const rightMass = rightInfluence.weight * confidence;
-        record.matchedVertexCount += 1;
+        const vertexPairKey = `${leftSample.sampleKey}|${rightSample.sampleKey}`;
+        if (!record.matchedVertexKeys.has(vertexPairKey)) {
+          record.matchedVertexKeys.add(vertexPairKey);
+          record.matchedVertexCount += 1;
+        }
         record.weightedMatchStrength += leftInfluence.weight
           * rightInfluence.weight * confidence;
         record.leftMass += leftMass;
@@ -334,6 +341,11 @@ function crossSourceWeightEvidence(leftRig, rightRig, referenceRadius) {
     record.crossJaccard = clamp(record.weightedMatchStrength / unionMass);
     record.overlapScore = clamp(record.crossContainment * .55
       + record.crossJaccard * .45);
+    record.supportReliability = Math.min(
+      clamp(record.matchedVertexCount / CROSS_SOURCE_STRONG_VERTEX_COUNT),
+      clamp(record.weightedMatchStrength
+        / CROSS_SOURCE_STRONG_WEIGHT_STRENGTH));
+    delete record.matchedVertexKeys;
   });
   return evidence;
 }
@@ -362,18 +374,37 @@ function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
   const topology = topologyFeature(left, right);
   const crossEvidence = crossEvidenceByPair.get(crossPairKey(
     left.sourceBoneKey, right.sourceBoneKey)) || null;
-  const crossScore = crossEvidence?.overlapScore ?? null;
-  const features = [
+  const crossQuality = crossEvidence?.overlapScore ?? null;
+  const geometryFeatures = [
     {value: clamp(1 - normalizedDistance / CROSS_SOURCE_CANDIDATE_DISTANCE), weight: .34},
-    {value: crossScore, weight: .36},
     {value: directionAlignment, weight: .1},
     {value: radiusRatio, weight: .05},
     {value: topology.value, weight: .1},
     {value: incomingAlignment, weight: .05},
   ].filter(item => item.value !== null && item.value !== undefined);
-  const weightTotal = features.reduce((sum, item) => sum + item.weight, 0);
-  const score = features.reduce((sum, item) => sum + item.value * item.weight, 0)
-    / Math.max(EPSILON, weightTotal);
+  const geometryWeightTotal = geometryFeatures.reduce(
+    (sum, item) => sum + item.weight, 0);
+  const geometryConfidence = geometryFeatures.reduce(
+    (sum, item) => sum + item.value * item.weight, 0)
+    / Math.max(EPSILON, geometryWeightTotal);
+  const supportReliability = crossEvidence?.supportReliability || 0;
+  const crossConfidence = crossQuality === null
+    ? 0 : crossQuality * supportReliability;
+  // Cross-source evidence is corroborating evidence. This combination is
+  // monotonic in both inputs, so partial overlap cannot punish a good shape
+  // and a one-vertex coincidence cannot become a seed by itself.
+  const combinedConfidence = 1 - (1 - geometryConfidence)
+    * (1 - crossConfidence);
+  const strongCrossEvidence = !!crossEvidence
+    && crossEvidence.matchedVertexCount >= CROSS_SOURCE_STRONG_VERTEX_COUNT
+    && crossEvidence.weightedMatchStrength
+      >= CROSS_SOURCE_STRONG_WEIGHT_STRENGTH
+    && crossQuality >= .7;
+  const geometrySeed = normalizedDistance <= CROSS_SOURCE_STRICT_DISTANCE
+    && geometryConfidence >= .7
+    && !topology.rootConflict
+    && (directionAlignment === null || directionAlignment >= .55);
+  const confidenceClass = strongCrossEvidence ? 2 : geometrySeed ? 1 : 0;
   return {
     left: {sourceKey: left.sourceKey, boneId: left.boneId,
       sourceBoneKey: left.sourceBoneKey},
@@ -385,16 +416,30 @@ function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
     radiusRatio,
     incomingAlignment,
     crossEvidence,
-    crossScore,
+    crossScore: crossQuality,
+    crossQuality,
+    supportReliability,
+    matchedVertexCount: crossEvidence?.matchedVertexCount || 0,
+    weightedMatchStrength: crossEvidence?.weightedMatchStrength || 0,
+    geometryConfidence,
+    crossConfidence,
+    combinedConfidence,
+    strongCrossEvidence,
+    geometrySeed,
+    confidenceClass,
     matchedParent: false,
     matchedChildCount: 0,
-    score,
+    score: combinedConfidence,
     topology,
   };
 }
 
 function compareCandidate(left, right) {
-  return left.score - right.score
+  return (left.confidenceClass || 0) - (right.confidenceClass || 0)
+    || left.combinedConfidence - right.combinedConfidence
+    || left.supportReliability - right.supportReliability
+    || (left.crossQuality || 0) - (right.crossQuality || 0)
+    || left.geometryConfidence - right.geometryConfidence
     || right.normalizedDistance - left.normalizedDistance
     || right.left.sourceBoneKey.localeCompare(left.left.sourceBoneKey)
     || right.right.sourceBoneKey.localeCompare(left.right.sourceBoneKey);
@@ -402,7 +447,10 @@ function compareCandidate(left, right) {
 
 function candidateAmbiguous(best, second) {
   return !!best && !!second
-    && best.score - second.score < CROSS_SOURCE_AMBIGUITY_MARGIN;
+    && (best.confidenceClass || 0) === (second.confidenceClass || 0)
+    && (best.propagationScore ?? best.combinedConfidence ?? best.score)
+      - (second.propagationScore ?? second.combinedConfidence ?? second.score)
+      < CROSS_SOURCE_AMBIGUITY_MARGIN;
 }
 
 class GuardedUnionFind {
@@ -481,14 +529,24 @@ function diagnosticCandidate(candidate, decision, rejectionReason = null) {
     mutualBest: !!candidate.mutualBest,
     directionAlignment: candidate.directionAlignment,
     radiusRatio: candidate.radiusRatio,
+    geometryConfidence: candidate.geometryConfidence,
+    crossScore: candidate.crossQuality ?? candidate.crossScore ?? null,
+    crossQuality: candidate.crossQuality,
+    crossConfidence: candidate.crossConfidence,
+    supportReliability: candidate.supportReliability,
     matchedParent: !!candidate.matchedParent,
     matchedChildCount: candidate.matchedChildCount || 0,
-    crossScore: candidate.crossScore,
-    matchedVertexCount: candidate.crossEvidence?.matchedVertexCount || 0,
-    weightedMatchStrength: candidate.crossEvidence?.weightedMatchStrength || 0,
+    matchedVertexCount: candidate.matchedVertexCount
+      ?? candidate.crossEvidence?.matchedVertexCount ?? 0,
+    weightedMatchStrength: candidate.weightedMatchStrength
+      ?? candidate.crossEvidence?.weightedMatchStrength ?? 0,
     crossContainment: candidate.crossEvidence?.crossContainment ?? null,
     crossJaccard: candidate.crossEvidence?.crossJaccard ?? null,
-    score: candidate.score,
+    strongCrossEvidence: !!candidate.strongCrossEvidence,
+    geometrySeed: !!candidate.geometrySeed,
+    confidenceClass: candidate.confidenceClass || 0,
+    rootConflict: !!candidate.topology?.rootConflict,
+    score: candidate.combinedConfidence ?? candidate.score,
     decision,
     rejectionReason,
   };
@@ -538,39 +596,53 @@ function buildCandidates(evidenceByKey, referenceRadius, sourceRigs = []) {
 
 function markSpatialRelationships(candidates) {
   const endpointMap = new Map();
+  const competitionKey = (endpoint, otherSource) => JSON.stringify([
+    endpoint, String(otherSource),
+  ]);
+  const endpointDescriptor = (candidate, endpoint) =>
+    candidate.left.sourceBoneKey === endpoint
+      ? {otherSource: candidate.right.sourceKey,
+        otherKey: candidate.right.sourceBoneKey}
+      : {otherSource: candidate.left.sourceKey,
+        otherKey: candidate.left.sourceBoneKey};
   candidates.forEach(candidate => {
     for (const endpoint of [candidate.left.sourceBoneKey,
       candidate.right.sourceBoneKey]) {
-      const incident = endpointMap.get(endpoint) || [];
+      const descriptor = endpointDescriptor(candidate, endpoint);
+      const key = competitionKey(endpoint, descriptor.otherSource);
+      const incident = endpointMap.get(key) || [];
       incident.push(candidate);
-      endpointMap.set(endpoint, incident);
+      endpointMap.set(key, incident);
     }
   });
-  const otherEndpoint = (candidate, endpoint) =>
-    candidate.left.sourceBoneKey === endpoint
-      ? candidate.right.sourceBoneKey : candidate.left.sourceBoneKey;
-  const bestFor = (endpoint, incident) => [...incident].sort((left, right) =>
-    left.normalizedDistance - right.normalizedDistance
-      || right.score - left.score
-      || otherEndpoint(left, endpoint).localeCompare(
-        otherEndpoint(right, endpoint)))[0] || null;
+  const rankFor = (endpoint, candidatesForEndpoint) => {
+    const ranked = [...candidatesForEndpoint];
+    ranked.sort((left, right) => {
+      const leftDescriptor = endpointDescriptor(left, endpoint);
+      const rightDescriptor = endpointDescriptor(right, endpoint);
+      return (right.confidenceClass || 0) - (left.confidenceClass || 0)
+        || right.combinedConfidence - left.combinedConfidence
+        || right.supportReliability - left.supportReliability
+        || (right.crossQuality || 0) - (left.crossQuality || 0)
+        || right.geometryConfidence - left.geometryConfidence
+        || left.normalizedDistance - right.normalizedDistance
+        || leftDescriptor.otherKey.localeCompare(rightDescriptor.otherKey);
+    });
+    return ranked;
+  };
   candidates.forEach(candidate => {
-    const leftCandidates = [...(endpointMap.get(candidate.left.sourceBoneKey)
-      || [])].sort((left, right) => left.normalizedDistance
-      - right.normalizedDistance || right.score - left.score
-      || otherEndpoint(left, candidate.left.sourceBoneKey).localeCompare(
-        otherEndpoint(right, candidate.left.sourceBoneKey)));
-    const rightCandidates = [...(endpointMap.get(candidate.right.sourceBoneKey)
-      || [])].sort((left, right) => left.normalizedDistance
-      - right.normalizedDistance || right.score - left.score
-      || otherEndpoint(left, candidate.right.sourceBoneKey).localeCompare(
-        otherEndpoint(right, candidate.right.sourceBoneKey)));
-    candidate.mutualBest = otherEndpoint(
-      bestFor(candidate.left.sourceBoneKey, leftCandidates),
-      candidate.left.sourceBoneKey) === candidate.right.sourceBoneKey
-      && otherEndpoint(
-        bestFor(candidate.right.sourceBoneKey, rightCandidates),
-        candidate.right.sourceBoneKey) === candidate.left.sourceBoneKey;
+    const leftDescriptor = endpointDescriptor(
+      candidate, candidate.left.sourceBoneKey);
+    const rightDescriptor = endpointDescriptor(
+      candidate, candidate.right.sourceBoneKey);
+    const leftCandidates = rankFor(candidate.left.sourceBoneKey,
+      endpointMap.get(competitionKey(candidate.left.sourceBoneKey,
+        leftDescriptor.otherSource)) || []);
+    const rightCandidates = rankFor(candidate.right.sourceBoneKey,
+      endpointMap.get(competitionKey(candidate.right.sourceBoneKey,
+        rightDescriptor.otherSource)) || []);
+    candidate.mutualBest = leftCandidates[0] === candidate
+      && rightCandidates[0] === candidate;
     candidate.leftAmbiguous = candidateAmbiguous(
       leftCandidates[0], leftCandidates[1]);
     candidate.rightAmbiguous = candidateAmbiguous(
@@ -609,11 +681,6 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
   const correspondenceStrength = new Map();
   markSpatialRelationships(candidates);
   candidates.forEach(candidate => {
-    if (candidate.normalizedDistance > CROSS_SOURCE_STRICT_DISTANCE) {
-      diagnostics.push(diagnosticCandidate(
-        candidate, 'rejected', 'too_far'));
-      return;
-    }
     if (!candidate.mutualBest) {
       diagnostics.push(diagnosticCandidate(
         candidate, 'rejected', 'not_mutual'));
@@ -624,26 +691,19 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
         candidate, 'rejected', 'ambiguous'));
       return;
     }
-    // Root status is a heuristic for choosing a source-local forest root, not
-    // model-joint identity. A root may correspond to an internal joint in a
-    // partial source, but that claim needs neutral vertex/weight evidence so
-    // a nearby accessory root does not collapse into the body by proximity.
-    if (candidate.topology.rootConflict
-        && (candidate.crossScore === null || candidate.crossScore < .55)) {
+    // A source root is not an identity signal. Strong cross-source evidence
+    // may seed a root-to-internal match, while the close geometric lane keeps
+    // conservative old behavior for ordinary source-local matches.
+    if (!candidate.strongCrossEvidence && !candidate.geometrySeed) {
       diagnostics.push(diagnosticCandidate(
-        candidate, 'rejected', 'insufficient_cross_source_evidence'));
+        candidate, 'rejected', candidate.normalizedDistance
+          > CROSS_SOURCE_STRICT_DISTANCE
+          ? 'too_far' : 'insufficient_seed_evidence'));
       return;
     }
-    if (candidate.directionAlignment !== null
-        && candidate.directionAlignment < .55
-        && (candidate.crossScore === null || candidate.crossScore < .55)) {
+    if (candidate.combinedConfidence < .7) {
       diagnostics.push(diagnosticCandidate(
-        candidate, 'rejected', 'direction_conflict'));
-      return;
-    }
-    if (candidate.score < .7) {
-      diagnostics.push(diagnosticCandidate(
-        candidate, 'rejected', 'topology_conflict'));
+        candidate, 'rejected', 'insufficient_confidence'));
       return;
     }
     acceptedEquivalence(candidate, 'strict', unionFind, diagnostics,
@@ -670,28 +730,45 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
       return candidate.matchedParent || candidate.matchedChildCount > 0;
     });
     const endpointMap = new Map();
+    const competitionKey = (endpoint, otherSource) => JSON.stringify([
+      endpoint, String(otherSource),
+    ]);
+    const endpointDescriptor = (candidate, endpoint) =>
+      candidate.left.sourceBoneKey === endpoint
+        ? {otherSource: candidate.right.sourceKey,
+          otherKey: candidate.right.sourceBoneKey}
+        : {otherSource: candidate.left.sourceKey,
+          otherKey: candidate.left.sourceBoneKey};
     propagation.forEach(candidate => {
       for (const endpoint of [candidate.left.sourceBoneKey,
         candidate.right.sourceBoneKey]) {
-        const incident = endpointMap.get(endpoint) || [];
+        const descriptor = endpointDescriptor(candidate, endpoint);
+        const key = competitionKey(endpoint, descriptor.otherSource);
+        const incident = endpointMap.get(key) || [];
         incident.push(candidate);
-        endpointMap.set(endpoint, incident);
+        endpointMap.set(key, incident);
       }
     });
-    const otherEndpoint = (candidate, endpoint) =>
-      candidate.left.sourceBoneKey === endpoint
-        ? candidate.right.sourceBoneKey : candidate.left.sourceBoneKey;
     const rankedFor = (endpoint, candidatesForEndpoint) =>
       [...candidatesForEndpoint].sort((left, right) =>
         right.propagationScore - left.propagationScore
+        || (right.confidenceClass || 0) - (left.confidenceClass || 0)
+        || right.combinedConfidence - left.combinedConfidence
+        || right.supportReliability - left.supportReliability
         || left.normalizedDistance - right.normalizedDistance
-        || otherEndpoint(left, endpoint).localeCompare(
-          otherEndpoint(right, endpoint)));
+        || endpointDescriptor(left, endpoint).otherKey.localeCompare(
+          endpointDescriptor(right, endpoint).otherKey));
     const selected = propagation.filter(candidate => {
+      const leftDescriptor = endpointDescriptor(
+        candidate, candidate.left.sourceBoneKey);
+      const rightDescriptor = endpointDescriptor(
+        candidate, candidate.right.sourceBoneKey);
       const leftBest = rankedFor(candidate.left.sourceBoneKey,
-        endpointMap.get(candidate.left.sourceBoneKey) || []);
+        endpointMap.get(competitionKey(candidate.left.sourceBoneKey,
+          leftDescriptor.otherSource)) || []);
       const rightBest = rankedFor(candidate.right.sourceBoneKey,
-        endpointMap.get(candidate.right.sourceBoneKey) || []);
+        endpointMap.get(competitionKey(candidate.right.sourceBoneKey,
+          rightDescriptor.otherSource)) || []);
       const leftAmbiguous = candidateAmbiguous(
         leftBest[0] && {...leftBest[0], score: leftBest[0].propagationScore},
         leftBest[1] && {...leftBest[1], score: leftBest[1].propagationScore});

@@ -735,6 +735,185 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
     assert result["orderInvariant"]
 
 
+def test_cross_source_reconciliation_confidence_lanes_and_support(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (sourceKey, entries, vertexEntries = [], links = []) => {
+        const nodeIds = entries.map(([id]) => id);
+        const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+        links.forEach(([parent, child, score = 1]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        const roots = nodeIds.filter(id => parentById[id] === null);
+        const inComponent = root => {
+          const seen = new Set([root]);
+          const queue = [root];
+          while (queue.length) {
+            const parent = queue.shift();
+            (childrenById[parent] || []).forEach(child => {
+              if (!seen.has(child)) {
+                seen.add(child);
+                queue.push(child);
+              }
+            });
+          }
+          return [...seen];
+        };
+        const componentByBoneId = Object.fromEntries(nodeIds.map(id => [
+          id, roots.findIndex(root => inComponent(root).includes(id)),
+        ]));
+        return {
+          sourceKey, boneIds: nodeIds,
+          influenceGraph: {nodes: entries.map(([boneId, center]) => ({
+            boneId, weightedCenter: center, weightedRadius: .1,
+            totalWeight: 1, affectedVertexCount: 10,
+          }))},
+          centerByBoneId: new Map(entries),
+          jointPivotByBoneId: new Map(),
+          restDirectionByBoneId: new Map(entries.map(([id]) => [id,
+            [0, 1, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(entries.map(([id]) => [id, {
+            directionSource: 'child-weighted-center',
+          }])),
+          inferredForest: {
+            components: roots.map((rootId, componentId) => ({
+              componentId, rootId, nodeIds: inComponent(rootId),
+              parentById, childrenById,
+              depthById: Object.fromEntries(nodeIds.map(id => [id, 0])),
+              edges: links.map(([parent, child, score = 1]) => ({
+                boneA: parent, boneB: child, treeEdgeScore: score,
+              })),
+            })),
+            componentByBoneId,
+          },
+          vertexEvidence: vertexEntries.map(entry => ({
+            meshKey: entry.meshKey,
+            positions: new Float32Array(entry.positions.flat()),
+            indices: new Uint16Array(entry.ids),
+            weights: new Float32Array(entry.weights),
+            influenceCount: entry.influenceCount,
+          })),
+        };
+      };
+      const oneInfluence = (meshKey, positions, ids, weights = null) => ({
+        meshKey, positions, ids,
+        weights: weights || ids.map(() => 1), influenceCount: 1,
+      });
+      const repeated = (count, id, weight = 1) => ({
+        meshKey: 'neutral',
+        positions: Array.from({length: count}, (_, index) =>
+          [index * .001, 0, 0]),
+        ids: Array.from({length: count}, () => id),
+        weights: Array.from({length: count}, () => weight),
+        influenceCount: 1,
+      });
+      const moderate = buildModelRigReconciliation([
+        make('moderate-a', [[0, [0, 0, 0]]], [{
+          ...repeated(36, 0),
+          ids: Array.from({length: 36}, () => [0, 99]).flat(),
+          weights: Array.from({length: 36}, () => [.4, .6]).flat(),
+          influenceCount: 2,
+        }]),
+        make('moderate-b', [[1, [0, 0, 0]]], [{
+          ...repeated(36, 1),
+          ids: Array.from({length: 36}, () => [1, 98]).flat(),
+          weights: Array.from({length: 36}, () => [.4, .6]).flat(),
+          influenceCount: 2,
+        }]),
+      ], {modelReferenceRadius: 1});
+      const strongPositions = Array.from({length: 12}, (_, index) =>
+        [index * .001, 0, 0]);
+      const strongDistance = buildModelRigReconciliation([
+        make('strong-a', [[0, [0, 0, 0]]], [
+          oneInfluence('neutral', strongPositions, strongPositions.map(() => 0)),
+        ]),
+        make('strong-b', [[1, [.052, 0, 0]]], [
+          oneInfluence('neutral', strongPositions, strongPositions.map(() => 1)),
+        ]),
+      ], {modelReferenceRadius: 1});
+      const winnerPositions = Array.from({length: 23}, (_, index) =>
+        [index * .002, 0, 0]);
+      const nearPositions = winnerPositions.map(([x, y, z]) => [x + .015, y, z]);
+      const strongestEvidenceWins = buildModelRigReconciliation([
+        make('winner-a', [[0, [0, 0, 0]]], [
+          oneInfluence('neutral', winnerPositions,
+            winnerPositions.map(() => 0)),
+        ]),
+        make('winner-b', [[1, [.037, 0, 0]], [2, [.054, 0, 0]]], [
+          oneInfluence('near', nearPositions, nearPositions.map(() => 1)),
+          oneInfluence('strong', winnerPositions,
+            winnerPositions.map(() => 2)),
+        ]),
+      ], {modelReferenceRadius: 1});
+      const oneVertex = buildModelRigReconciliation([
+        make('single-a', [[0, [0, 0, 0]]], [
+          oneInfluence('neutral', [[0, 0, 0]], [0]),
+        ]),
+        make('single-b', [[1, [.052, 0, 0]]], [
+          oneInfluence('neutral', [[0, 0, 0]], [1]),
+        ]),
+      ], {modelReferenceRadius: 1});
+      const threeSources = buildModelRigReconciliation([
+        make('three-a', [[0, [0, 0, 0]]], [
+          oneInfluence('neutral', winnerPositions,
+            winnerPositions.map(() => 0)),
+        ]),
+        make('three-b', [[1, [0, 0, 0]]], [
+          oneInfluence('neutral', winnerPositions,
+            winnerPositions.map(() => 1)),
+        ]),
+        make('three-c', [[2, [0, 0, 0]]], [
+          oneInfluence('neutral', winnerPositions,
+            winnerPositions.map(() => 2)),
+        ]),
+      ], {modelReferenceRadius: 1});
+      const id = (value, key) => value.sourceBoneToModelJointId[key];
+      const accepted = value => value.reconciliation.acceptedEquivalences;
+      const oneVertexCandidate = oneVertex.reconciliation.rejectedCandidates
+        .find(item => item.left.sourceBoneKey === 'single-a#bone=0');
+      return {
+        moderateAccepted: id(moderate, 'moderate-a#bone=0') ===
+          id(moderate, 'moderate-b#bone=1'),
+        moderateEvidence: accepted(moderate).find(item =>
+          item.left.sourceBoneKey === 'moderate-a#bone=0'),
+        strongDistanceAccepted: id(strongDistance, 'strong-a#bone=0') ===
+          id(strongDistance, 'strong-b#bone=1'),
+        strongDistanceEvidence: accepted(strongDistance).find(item =>
+          item.left.sourceBoneKey === 'strong-a#bone=0'),
+        strongestEvidenceWins: id(strongestEvidenceWins, 'winner-a#bone=0') ===
+          id(strongestEvidenceWins, 'winner-b#bone=2')
+          && id(strongestEvidenceWins, 'winner-a#bone=0') !==
+            id(strongestEvidenceWins, 'winner-b#bone=1'),
+        oneVertexSeparated: id(oneVertex, 'single-a#bone=0') !==
+          id(oneVertex, 'single-b#bone=1'),
+        oneVertexReason: oneVertexCandidate?.rejectionReason || null,
+        threeSourceMembers: threeSources.joints.find(joint =>
+          joint.members.length === 3)?.members || [],
+      };
+    }""")
+    assert result["moderateAccepted"]
+    assert result["moderateEvidence"]["crossQuality"] < .7
+    assert result["moderateEvidence"]["matchedVertexCount"] == 36
+    assert result["strongDistanceAccepted"]
+    assert result["strongDistanceEvidence"]["normalizedDistance"] > .04
+    assert result["strongDistanceEvidence"]["strongCrossEvidence"]
+    assert result["strongDistanceEvidence"]["supportReliability"] == 1
+    assert result["strongestEvidenceWins"]
+    assert result["oneVertexSeparated"]
+    assert result["oneVertexReason"] in {
+        "too_far", "insufficient_seed_evidence", "insufficient_confidence",
+    }
+    assert sorted((member["sourceKey"], member["boneId"])
+                  for member in result["threeSourceMembers"]) == [
+        ("three-a", 0), ("three-b", 1), ("three-c", 2),
+    ]
+
+
 def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):
     page = module_page
     result = page.evaluate("""async () => {

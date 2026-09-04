@@ -1071,17 +1071,20 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
     template = next(iter(payload["meshes"].values()))
     first = copy.deepcopy(template)
     second = copy.deepcopy(template)
+    third = copy.deepcopy(template)
     first["component"] = "Cross source A"
     second["component"] = "Cross source B"
+    third["component"] = "Cross source C"
     payload["meshes"] = {
         "CrossSourceRig-A-0": first,
         "CrossSourceRig-B-0": second,
+        "CrossSourceRig-C-0": third,
     }
     context, page = _page(
         edge_browser, frontend_url, {"CrossSourceRig": payload})
     try:
         _open(page, "CrossSourceRig")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 3")
         page.evaluate("""async () => {
           const makeUrl = indices => {
             const bytes = new Uint8Array(48);
@@ -1091,7 +1094,8 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
           };
           const urlA = makeUrl([0, 1, 0, 1, 1, 1]);
           const urlB = makeUrl([4, 5, 4, 5, 5, 5]);
-          window.__crossSourceRigUrls = [urlA, urlB];
+          const urlC = makeUrl([8, 9, 8, 9, 9, 9]);
+          window.__crossSourceRigUrls = [urlA, urlB, urlC];
           window.__testSkinningPreview = async (path, meshKey) => {
             const entry = (sourceKey, boneIds, url) => ({
               status: 'ok', vertex_count: 3, influence_count: 2,
@@ -1103,9 +1107,13 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
                 weights: {offset: 24, length: 24, type: 'f32'},
               }, diagnostics: {},
             });
-            return meshKey.includes('-A-')
-              ? entry('cross/a.buf|offset=0', [0, 1], urlA)
-              : entry('cross/b.buf|offset=0', [4, 5], urlB);
+            if (meshKey.includes('-A-')) {
+              return entry('cross/a.buf|offset=0', [0, 1], urlA);
+            }
+            if (meshKey.includes('-B-')) {
+              return entry('cross/b.buf|offset=0', [4, 5], urlB);
+            }
+            return entry('cross/c.buf|offset=0', [8, 9], urlC);
           };
         }""")
         page.locator("#rig-tab").click()
@@ -1118,7 +1126,11 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             source.sourceKey === 'cross/a.buf|offset=0');
           const sourceB = state.sources.find(source =>
             source.sourceKey === 'cross/b.buf|offset=0');
-          if (!sourceA || !sourceB) return {sourceKeys: state.sources.map(source => source.sourceKey)};
+          const sourceC = state.sources.find(source =>
+            source.sourceKey === 'cross/c.buf|offset=0');
+          if (!sourceA || !sourceB || !sourceC) {
+            return {sourceKeys: state.sources.map(source => source.sourceKey)};
+          }
           const before = window.modViewer.activeMeshes.map(mesh =>
             [...mesh.geometry.attributes.position.array]);
           const child = sourceA.boneIds.find(id =>
@@ -1127,6 +1139,8 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             `cross/a.buf|offset=0#bone=${child}`];
           const jointB = state.model.sourceBoneToModelJointId[
             `cross/b.buf|offset=0#bone=${child + 4}`];
+          const jointC = state.model.sourceBoneToModelJointId[
+            `cross/c.buf|offset=0#bone=${child + 8}`];
           const q = new THREE.Quaternion().setFromAxisAngle(
             new THREE.Vector3(0, 0, 1), Math.PI / 2);
           const posed = experiment.setRigBoneRotation(
@@ -1135,7 +1149,7 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             [...mesh.geometry.attributes.position.array]);
           return {
             modelJointCount: state.model.joints.length,
-            equivalent: jointA === jointB,
+            equivalent: jointA === jointB && jointA === jointC,
             members: state.model.joints.find(joint => joint.jointId === jointA)
               ?.members?.length || 0,
             posed,
@@ -1145,9 +1159,9 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         }""")
         assert result.get("modelJointCount") == 2, result
         assert result["equivalent"], result
-        assert result["members"] == 2
+        assert result["members"] == 3
         assert result["posed"]
-        assert result["changed"] == [True, True]
+        assert result["changed"] == [True, True, True]
     finally:
         page.evaluate("""() => {
           (window.__crossSourceRigUrls || []).forEach(url =>
