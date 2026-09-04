@@ -126,6 +126,8 @@ const modelWeightState = {
   failedMeshCount: 0,
   pickedPoint: null,
   pickerViewMode: 'all',
+  weightViewMode: 'authored',
+  weightViewJointId: null,
   pickStatus: '',
   picking: false,
 };
@@ -331,6 +333,16 @@ function modelWeightSnapshot() {
           .map(influence => ({...influence}))}
       : null,
     pickerViewMode: modelWeightState.pickerViewMode,
+    weightViewMode: modelWeightState.weightViewMode,
+    weightViewJointId: modelWeightState.weightViewJointId,
+    modelJoints: modelWeightState.weightViewMode === 'model'
+      ? (modelSkinningRig?.joints || []).map(joint => ({
+        jointId: joint.jointId,
+        members: (joint.members || []).map(member => ({...member})),
+        restCenter: [...(joint.restCenter || [0, 0, 0])],
+      })) : [],
+    modelJointsLoading: modelWeightState.weightViewMode === 'model'
+      && modelRigState.loading,
     pickStatus: modelWeightState.pickStatus,
     picking: modelWeightState.picking,
     savedSelectionApplied: modelWeightState.savedSelectionApplied,
@@ -769,6 +781,33 @@ export function setWeightPickerViewMode(mode) {
   return mode;
 }
 
+/** Change only the Weight panel's inspection scope; authored selections stay source-scoped. */
+export function setWeightViewMode(mode) {
+  if (mode !== 'authored' && mode !== 'model') {
+    return modelWeightState.weightViewMode;
+  }
+  if (modelWeightState.weightViewMode === mode) return mode;
+  modelWeightState.weightViewMode = mode;
+  if (mode === 'authored') modelWeightState.weightViewJointId = null;
+  updateModelWeightHeatmap();
+  notifyModelWeightChanged();
+  requestRender();
+  return mode;
+}
+
+/** Select a reconciled model joint for visualization without changing authored weights. */
+export function setModelWeightViewJoint(jointId) {
+  const value = Number(jointId);
+  if (!Number.isInteger(value) || !modelSkinningRig?.joints?.[value]) {
+    return modelWeightState.weightViewJointId;
+  }
+  modelWeightState.weightViewJointId = value;
+  updateModelWeightHeatmap();
+  notifyModelWeightChanged();
+  requestRender();
+  return value;
+}
+
 function sourceDescriptorForEntry(entry) {
   const source = entry?.source;
   if (source && typeof source === 'object'
@@ -961,11 +1000,6 @@ export function getSelectedWeightMaskBuildCount() {
   return selectedWeightMaskBuildCount;
 }
 
-function selectedWeightPresent(state) {
-  return !!state?.selectedWeightMask
-    && state.selectedWeightMask.some(value => value > 0);
-}
-
 function setModelWeightLoadError(error) {
   modelWeightState.error = error instanceof Error
     ? error.message : String(error);
@@ -997,6 +1031,8 @@ function resetModelWeightState() {
   modelWeightState.failedMeshCount = 0;
   modelWeightState.pickedPoint = null;
   modelWeightState.pickerViewMode = 'all';
+  modelWeightState.weightViewMode = 'authored';
+  modelWeightState.weightViewJointId = null;
   modelWeightState.pickStatus = '';
   modelRigState.loaded = false;
   modelRigState.loading = false;
@@ -1606,6 +1642,16 @@ function createSourceSkinningRig(sourceKey, members) {
     restDirectionByBoneId: new Map(),
     restFrameEvidenceByBoneId: new Map(),
     continuationChildByBoneId: new Map(),
+    vertexEvidence: members.map(mesh => {
+      const state = states.get(mesh);
+      return state?.loaded ? {
+        meshKey: mesh.userData?.semanticKey || '',
+        positions: state.baselinePositions,
+        indices: state.indices,
+        weights: state.weights,
+        influenceCount: state.influenceCount,
+      } : null;
+    }).filter(Boolean),
     structureRevision: 0,
     poseRotationByBoneId: new Map(),
     poseTransforms: new Map(),
@@ -1651,6 +1697,7 @@ function refreshSourceSkinningRig(rig, members, {resetPose = true} = {}) {
   rig.restDirectionByBoneId = refreshed.restDirectionByBoneId;
   rig.restFrameEvidenceByBoneId = refreshed.restFrameEvidenceByBoneId;
   rig.continuationChildByBoneId = refreshed.continuationChildByBoneId;
+  rig.vertexEvidence = refreshed.vertexEvidence;
   rig.structureRevision = refreshed.structureRevision;
   rig.poseFrameCache = refreshed.poseFrameCache;
   rig.poseRootOverrides = refreshed.poseRootOverrides;
@@ -1755,6 +1802,10 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     sourceRig.poseActiveVerticesByMesh.clear();
   });
   modelSkinningRig = rig;
+  if (!modelSkinningRig.joints[modelWeightState.weightViewJointId]) {
+    modelWeightState.weightViewJointId = null;
+  }
+  updateModelWeightHeatmap();
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId = Number.isInteger(previousSelectedJointId)
     && joints[previousSelectedJointId] ? previousSelectedJointId : null;
@@ -3122,7 +3173,7 @@ export function refreshSkinningAfterShapeChange(mesh) {
     syncPhysicsParticipants(new Set([sourceKey]));
     modelPhysicsSession.wake();
   }
-  if (state.heatmapMode) updateHeatmap(mesh, state);
+  if (state.heatmapMode) updateModelWeightHeatmap(new Set([sourceKey]));
   return true;
 }
 
@@ -3207,13 +3258,13 @@ function finalizePhysicsGeometry(mesh, state) {
   }
 }
 
-function updateHeatmap(mesh, state) {
-  if (!state.heatmapMode || !state.selectedWeightMask) return;
+function updateHeatmap(mesh, state, selectedMask = state.selectedWeightMask) {
+  if (!state.heatmapMode || !selectedMask) return;
   const count = Math.floor(state.indices.length / state.influenceCount);
   const colors = new Float32Array(count * 3);
   for (let vertex = 0; vertex < count; vertex += 1) {
     const value = Math.max(0, Math.min(1,
-      Number(state.selectedWeightMask[vertex]) || 0));
+      Number(selectedMask[vertex]) || 0));
     const offset = vertex * 3;
     // Blue at zero, yellow/red at high influence for quick spatial reading.
     colors[offset] = value;
@@ -3231,15 +3282,41 @@ function updateHeatmap(mesh, state) {
   mesh.material = state.debugMaterial;
 }
 
+function modelJointWeightMask(state) {
+  if (modelWeightState.weightViewMode !== 'model'
+      || !modelSkinningRig
+      || !Number.isInteger(modelWeightState.weightViewJointId)) return null;
+  const joint = modelSkinningRig.joints?.[modelWeightState.weightViewJointId];
+  if (!joint) return null;
+  const selected = new Set((joint.members || [])
+    .filter(member => member.sourceKey === state.skinningSourceKey)
+    .map(member => Number(member.boneId))
+    .filter(Number.isInteger));
+  if (!selected.size) return null;
+  return buildSelectedWeightMask(
+    state.indices, state.weights, state.influenceCount, selected);
+}
+
+function heatmapMaskFor(state) {
+  return modelWeightState.weightViewMode === 'model'
+    ? modelJointWeightMask(state) : state.selectedWeightMask;
+}
+
+function selectedWeightPresent(mask) {
+  return !!mask && mask.some(value => value > 0);
+}
+
 function updateModelWeightHeatmap(changedSourceKeys = null) {
   knownMeshes.forEach(mesh => {
     const state = states.get(mesh);
     if (!state?.loaded) return;
     if (changedSourceKeys
         && !changedSourceKeys.has(state.skinningSourceKey)) return;
-    if (modelWeightState.heatmapEnabled && selectedWeightPresent(state)) {
-      state.heatmapMode = 'bone';
-      updateHeatmap(mesh, state);
+    const mask = heatmapMaskFor(state);
+    if (modelWeightState.heatmapEnabled && selectedWeightPresent(mask)) {
+      state.heatmapMode = modelWeightState.weightViewMode === 'model'
+        ? 'model-joint' : 'bone';
+      updateHeatmap(mesh, state, mask);
     } else if (state.heatmapMode) {
       disableHeatmap(mesh, state);
     }

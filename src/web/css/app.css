@@ -1134,6 +1134,21 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   color: var(--text); background: var(--surface-active);
 }
 .weight-picker-view-option:disabled { opacity: .45; cursor: default; }
+.weight-scope-view { margin-bottom: 1px; }
+.weight-model-joint-option {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  width: 100%; padding: 6px 5px; color: var(--text-muted);
+  background: transparent; border: 0; border-radius: var(--radius-sm);
+  text-align: left; cursor: pointer;
+}
+.weight-model-joint-option:hover { color: var(--text); background: var(--surface-active); }
+.weight-model-joint-option.active { color: var(--text); background: var(--surface-active); }
+.weight-model-joint-option[hidden] { display: none; }
+.weight-model-joint-id { color: var(--text); font-size: 12px; font-weight: 600; }
+.weight-model-joint-members {
+  color: var(--text-muted); font-size: 10px; line-height: 1.35;
+  overflow-wrap: anywhere;
+}
 .weight-pick-model { width: 100%; }
 .weight-pick-model.active {
   color: var(--text); background: var(--accent); border-color: var(--accent-soft);

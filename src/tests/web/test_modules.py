@@ -617,6 +617,124 @@ def test_cross_source_reconciliation_keeps_accessory_root_as_attachment(module_p
     assert result["componentCount"] == 1
 
 
+def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundary(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (sourceKey, entries, edgeList, rootId,
+          vertexPositions = null, vertexIds = null) => {
+        const nodeIds = entries.map(([id]) => id);
+        const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+        edgeList.forEach(([parent, child, score = 1]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        const rig = {
+          sourceKey, boneIds: nodeIds,
+          influenceGraph: {nodes: entries.map(([boneId, center]) => ({
+            boneId, weightedCenter: center, weightedRadius: .1,
+            totalWeight: 1, affectedVertexCount: 10,
+          }))},
+          centerByBoneId: new Map(entries),
+          // Deliberately make the source-root/internal-joint pivots disagree;
+          // neutral weighted centers and correspondence must carry identity.
+          jointPivotByBoneId: new Map(entries.filter(([id]) => id !== rootId)
+            .map(([id, center]) => [id, [center[0] + 4, center[1], center[2]]])),
+          restDirectionByBoneId: new Map(entries.map(([id]) => [id, [0, 1, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(entries.map(([id]) => [id, {
+            directionSource: 'child-weighted-center',
+          }])),
+          inferredForest: {
+            components: [{componentId: 0, rootId, nodeIds,
+              parentById, childrenById,
+              depthById: Object.fromEntries(nodeIds.map(id => [id, 0])),
+              edges: edgeList.map(([parent, child, score = 1]) => ({
+                boneA: parent, boneB: child, treeEdgeScore: score,
+              }))}],
+            componentByBoneId: Object.fromEntries(nodeIds.map(id => [id, 0])),
+          },
+        };
+        if (vertexPositions && vertexIds) {
+          rig.vertexEvidence = [{
+            meshKey: `${sourceKey}/neutral`,
+            positions: new Float32Array(vertexPositions.flat()),
+            indices: new Uint16Array(vertexIds),
+            weights: new Float32Array(vertexIds.map(() => 1)),
+            influenceCount: 1,
+          }];
+        }
+        return rig;
+      };
+      const main = make('main', [
+        [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, 2, 0]],
+        [3, [0, 3, 0]],
+      ], [[0, 1, .9], [1, 2, .9], [2, 3, .9]], 0,
+      [[0, 0, 0], [0, 1, 0], [0, 2, 0], [0, 3, 0]], [0, 1, 2, 3]);
+      const partial = make('partial', [
+        [7, [0, 1, 0]], [8, [0, 2, 0]], [9, [0, 3, 0]],
+      ], [[7, 8, .9], [8, 9, .9]], 7,
+      [[0, 1, 0], [0, 2, 0], [0, 3, 0]], [7, 8, 9]);
+      const accessory = make('accessory', [
+        [20, [0, 2.08, 0]], [21, [.3, 2.37, 0]],
+        [22, [.6, 2.67, 0]], [23, [.9, 2.97, 0]],
+      ], [[22, 21, .9], [21, 20, .9], [21, 23, .8]], 22);
+      const first = buildModelRigReconciliation([main, partial, accessory]);
+      const second = buildModelRigReconciliation([accessory, partial, main]);
+      const id = (result, key) => result.sourceBoneToModelJointId[key];
+      const attachment = first.edges.find(edge =>
+        edge.relationshipType === 'attachment');
+      const attachmentBoundary = id(first, 'accessory#bone=20');
+      const bodyTarget = id(first, 'main#bone=2');
+      const mapKeys = [
+        'main#bone=0', 'main#bone=1', 'main#bone=2', 'main#bone=3',
+        'partial#bone=7', 'partial#bone=8', 'partial#bone=9',
+        'accessory#bone=20', 'accessory#bone=21',
+        'accessory#bone=22', 'accessory#bone=23',
+      ];
+      return {
+        partialMatches: [
+          id(first, 'main#bone=1') === id(first, 'partial#bone=7'),
+          id(first, 'main#bone=2') === id(first, 'partial#bone=8'),
+          id(first, 'main#bone=3') === id(first, 'partial#bone=9'),
+        ],
+        rootInternalEvidence: first.reconciliation.acceptedEquivalences
+          .some(item => item.left.sourceBoneKey === 'main#bone=1'
+            && item.right.sourceBoneKey === 'partial#bone=7'),
+        attachment: attachment ? {
+          jointA: attachment.jointA,
+          jointB: attachment.jointB,
+          survives: first.reconciliation.attachmentCount === 1,
+          boundary: attachment.jointB === attachmentBoundary,
+          target: attachment.jointA === bodyTarget,
+        } : null,
+        attachedRoot: first.components.length === 1
+          && first.components[0].rootId === bodyTarget,
+        orderInvariant: mapKeys.every(key =>
+          id(first, key) === id(second, key))
+          && JSON.stringify(first.edges.map(edge => [
+            edge.relationshipType, edge.jointA, edge.jointB,
+          ])) === JSON.stringify(second.edges.map(edge => [
+            edge.relationshipType, edge.jointA, edge.jointB,
+          ])),
+        finalEdgeOrder: first.edges.map(edge => [
+          edge.relationshipType, edge.jointA, edge.jointB,
+        ]),
+      };
+    }""")
+    assert result["partialMatches"] == [True, True, True]
+    assert result["rootInternalEvidence"]
+    assert result["attachment"] is not None
+    assert result["attachment"]["survives"]
+    assert result["attachment"]["boundary"]
+    assert result["attachment"]["target"]
+    assert result["attachedRoot"]
+    assert result["orderInvariant"]
+
+
 def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):
     page = module_page
     result = page.evaluate("""async () => {

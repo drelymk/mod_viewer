@@ -2247,6 +2247,21 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         assert page.evaluate("""async () =>
           (await import('./js/mesh/weight-experiment.js'))
             .getModelBoneStatsBuildCount()""") == stats_build_count
+        page.locator(".weight-scope-option[data-mode='model']").click()
+        page.wait_for_function("window.modViewer.getModelWeightState().weightViewMode === 'model'")
+        page.wait_for_function("document.querySelectorAll('.weight-model-joint-option').length > 0")
+        selected_before_model_view = page.evaluate(
+            "window.modViewer.getModelWeightState().selectedBoneCount")
+        page.locator(".weight-bone-select").click()
+        assert page.locator(".weight-model-joint-option").count() > 0
+        page.locator(".weight-model-joint-option").first.click()
+        page.wait_for_function(
+            "Number.isInteger(window.modViewer.getModelWeightState().weightViewJointId)")
+        assert page.evaluate(
+            "window.modViewer.getModelWeightState().selectedBoneCount") == selected_before_model_view
+        page.locator(".weight-scope-option[data-mode='authored']").click()
+        assert page.evaluate(
+            "window.modViewer.getModelWeightState().weightViewMode") == "authored"
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
         physics = page.evaluate("""async () => {
           const {getSkinningState} = await import('./js/mesh/weight-experiment.js');

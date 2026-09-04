@@ -2,10 +2,12 @@
 // simulation and input events never interrupt an active picker or slider.
 
 import {
-  beginWeightPicking, clearSelectedBones, ensureModelWeightsLoaded,
+  beginWeightPicking, clearSelectedBones, ensureModelRigLoaded,
+  ensureModelWeightsLoaded,
   getModelPhysicsState,
   getModelWeightState, loadSavedBoneSelection,
   resetModelPhysics, saveModelWeightSelection, setModelWeightHeatmap,
+  setModelWeightViewJoint, setWeightViewMode,
   setWeightPickerViewMode,
   setPhysicsConstraintsEnabled,
   setPhysicsContinuousLinearResponse, setPhysicsDamping,
@@ -30,6 +32,10 @@ function addText(parent, className, value) {
 }
 
 function selectedLabel(state) {
+  if (state.weightViewMode === 'model') {
+    return Number.isInteger(state.weightViewJointId)
+      ? `Model joint ${state.weightViewJointId}` : 'Select model joint';
+  }
   const entries = state.selectedBones || [];
   if (!entries.length) return 'Select bones';
   const count = Number(state.selectedBoneCount)
@@ -89,6 +95,23 @@ function buildBonePicker(content) {
   title.className = 'weight-section-title';
   title.textContent = 'Selected bones';
   section.appendChild(title);
+
+  const scopeView = document.createElement('div');
+  scopeView.className = 'weight-picker-view weight-scope-view';
+  scopeView.setAttribute('role', 'group');
+  scopeView.setAttribute('aria-label', 'Weight inspection view');
+  const authoredSource = document.createElement('button');
+  authoredSource.type = 'button';
+  authoredSource.className = 'weight-picker-view-option weight-scope-option';
+  authoredSource.dataset.mode = 'authored';
+  authoredSource.textContent = 'Authored Source';
+  const modelJoint = document.createElement('button');
+  modelJoint.type = 'button';
+  modelJoint.className = 'weight-picker-view-option weight-scope-option';
+  modelJoint.dataset.mode = 'model';
+  modelJoint.textContent = 'Model Joint';
+  scopeView.append(authoredSource, modelJoint);
+  section.appendChild(scopeView);
 
   const picker = document.createElement('div');
   picker.className = 'weight-picker';
@@ -182,12 +205,15 @@ function buildBonePicker(content) {
   ui.pickModel = pickModel;
   ui.allBones = allBones;
   ui.pickedPoint = pickedPoint;
+  ui.authoredSource = authoredSource;
+  ui.modelJoint = modelJoint;
   ui.selectedOnly = selectedOnly;
   ui.boneList = list;
   ui.clearSelection = clear;
   ui.saveSelection = save;
   ui.loadSelection = load;
   ui.groupBySource = new Map();
+  ui.modelJointById = new Map();
   ui.optionKey = null;
 
   button.addEventListener('click', () => {
@@ -203,6 +229,13 @@ function buildBonePicker(content) {
   });
   pickedPoint.addEventListener('click', () => {
     setWeightPickerViewMode('picked');
+  });
+  authoredSource.addEventListener('click', () => {
+    setWeightViewMode('authored');
+  });
+  modelJoint.addEventListener('click', () => {
+    setWeightViewMode('model');
+    void ensureModelRigLoaded();
   });
 }
 
@@ -316,8 +349,20 @@ function buildPanel() {
 }
 
 function syncBoneFilter(weightState = latestWeightState || getModelWeightState()) {
-  if (!ui?.groupBySource) return;
+  if (!ui) return;
   const query = ui.search.value.trim().toLowerCase();
+  if (weightState.weightViewMode === 'model') {
+    ui.modelJointById?.forEach((option, jointId) => {
+      const text = option.textContent.toLowerCase();
+      option.hidden = !!query && !text.includes(query);
+      const active = Number.isInteger(weightState.weightViewJointId)
+        && Number(weightState.weightViewJointId) === Number(jointId);
+      option.classList.toggle('active', active);
+      option.setAttribute('aria-pressed', String(active));
+    });
+    return;
+  }
+  if (!ui.groupBySource) return;
   const selected = new Map((weightState.selectedBones || []).map(entry => [
     entry.sourceKey, new Set(entry.boneIds),
   ]));
@@ -334,6 +379,53 @@ function syncBoneFilter(weightState = latestWeightState || getModelWeightState()
 }
 
 function syncBoneOptions(state) {
+  if (state.weightViewMode === 'model') {
+    const joints = state.modelJoints || [];
+    const optionKey = JSON.stringify(['model', joints.map(joint => [
+      joint.jointId,
+      (joint.members || []).map(member => [
+        member.sourceKey, member.boneId,
+      ]),
+    ])]);
+    if (optionKey !== ui.optionKey) {
+      const scrollTop = ui.boneList.scrollTop;
+      ui.boneList.replaceChildren();
+      ui.empty = null;
+      ui.groupBySource = new Map();
+      ui.modelJointById = new Map();
+      joints.forEach(joint => {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'weight-model-joint-option';
+        option.dataset.jointId = String(joint.jointId);
+        option.setAttribute('role', 'option');
+        addText(option, 'weight-model-joint-id',
+          `Joint ${joint.jointId}`);
+        const members = (joint.members || []).map(member =>
+          `${member.sourceKey} · bone ${member.boneId}`);
+        addText(option, 'weight-model-joint-members',
+          members.length ? members.join('  |  ') : 'No source members');
+        option.addEventListener('click', () =>
+          setModelWeightViewJoint(joint.jointId));
+        ui.boneList.appendChild(option);
+        ui.modelJointById.set(joint.jointId, option);
+      });
+      ui.boneList.scrollTop = scrollTop;
+      ui.optionKey = optionKey;
+    }
+    if (!joints.length) {
+      if (!ui.empty) {
+        ui.empty = addText(ui.boneList, 'weight-empty',
+          state.modelJointsLoading
+            ? 'Loading model joints…' : 'No model joints available.');
+      }
+      ui.empty.hidden = false;
+    } else if (ui.empty) {
+      ui.empty.hidden = true;
+    }
+    syncBoneFilter(state);
+    return;
+  }
   const allSources = state.sources || [];
   const picked = state.pickerViewMode === 'picked' ? state.pickedPoint : null;
   const sources = picked
@@ -349,6 +441,7 @@ function syncBoneOptions(state) {
     ui.boneList.replaceChildren();
     ui.empty = null;
     ui.groupBySource = new Map();
+    ui.modelJointById = new Map();
     const basenames = new Map(sources.map(source => [
       source.key, String(source.file).split('/').pop().toLowerCase(),
     ]));
@@ -473,11 +566,19 @@ function syncWeightControls(weightState = getModelWeightState()) {
     || weightState.savingSelection;
   ui.loadSelection.disabled = !weightState.savedBones?.length;
   const pickedMode = weightState.pickerViewMode === 'picked';
+  const modelMode = weightState.weightViewMode === 'model';
+  ui.authoredSource.classList.toggle('active', !modelMode);
+  ui.authoredSource.setAttribute('aria-pressed', String(!modelMode));
+  ui.modelJoint.classList.toggle('active', modelMode);
+  ui.modelJoint.setAttribute('aria-pressed', String(modelMode));
   ui.allBones.classList.toggle('active', !pickedMode);
   ui.allBones.setAttribute('aria-pressed', String(!pickedMode));
+  ui.allBones.disabled = modelMode;
   ui.pickedPoint.classList.toggle('active', pickedMode);
   ui.pickedPoint.setAttribute('aria-pressed', String(pickedMode));
-  ui.pickedPoint.disabled = !weightState.pickedPoint;
+  ui.pickedPoint.disabled = modelMode || !weightState.pickedPoint;
+  ui.selectedOnly.disabled = modelMode;
+  ui.search.placeholder = modelMode ? 'Find model joint…' : 'Find bone ID…';
   ui.heatmap.checked = !!weightState.heatmapEnabled;
   ui.heatmap.disabled = !weightState.loaded;
   ui.physicsReset.disabled = !weightState.loaded;
@@ -523,6 +624,9 @@ export function initWeightPanel() {
   buildPanel();
   window.addEventListener('mod-viewer-model-weight-changed', event => {
     syncWeightControls(event.detail);
+  });
+  window.addEventListener('mod-viewer-model-rig-changed', () => {
+    syncWeightControls(getModelWeightState());
   });
   window.addEventListener('mod-viewer-model-physics-changed', event => {
     syncPhysicsControls(event.detail);
