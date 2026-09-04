@@ -623,6 +623,8 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
     result = page.evaluate("""async () => {
       const {buildModelRigReconciliation} = await import(
         './js/mesh/weight-rig-reconcile.js');
+      const {buildSourceModelPoseConfiguration} = await import(
+        './js/mesh/weight-model-pose.js');
       const make = (sourceKey, entries, edgeList, rootId,
           vertexPositions = null, vertexIds = null) => {
         const nodeIds = entries.map(([id]) => id);
@@ -684,6 +686,15 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
       ], [[22, 21, .9], [21, 20, .9], [21, 23, .8]], 22);
       const first = buildModelRigReconciliation([main, partial, accessory]);
       const second = buildModelRigReconciliation([accessory, partial, main]);
+      const modelRig = {
+        reconciliation: first,
+        components: first.components,
+        componentByJointId: first.componentByJointId,
+        sourceBoneToModelJointId: first.sourceBoneToModelJointMap,
+      };
+      const partialPose = buildSourceModelPoseConfiguration(partial, modelRig);
+      const accessoryPose = buildSourceModelPoseConfiguration(
+        accessory, modelRig);
       const id = (result, key) => result.sourceBoneToModelJointId[key];
       const attachment = first.edges.find(edge =>
         edge.relationshipType === 'attachment');
@@ -714,6 +725,16 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
           componentIds: Number.isInteger(attachment.targetComponentId)
             && Number.isInteger(attachment.accessoryComponentId),
         } : null,
+        partialEntryMatchesRoot: (() => {
+          const component = partialPose.modelPoseForest.components[0];
+          const entry = partialPose.modelPoseEntryJointByComponentId.get(
+            Number(component.componentId));
+          const expected = first.sourceBoneToModelJointMap.get(
+            `partial#bone=${component.rootId}`);
+          return entry === expected;
+        })(),
+        accessoryEntry: accessoryPose.modelPoseEntryJointByComponentId.get(0),
+        accessoryPoseRoot: accessoryPose.modelPoseForest.components[0]?.rootId,
         attachedRoot: first.components.length === 1
           && first.components[0].rootId === bodyRoot,
         orderInvariant: mapKeys.every(key =>
@@ -735,6 +756,9 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
     assert result["attachment"]["boundary"]
     assert result["attachment"]["target"]
     assert result["attachment"]["componentIds"]
+    assert result["partialEntryMatchesRoot"]
+    assert result["accessoryEntry"] == result["attachment"]["jointB"]
+    assert result["accessoryPoseRoot"] == 20
     assert result["attachedRoot"]
     assert result["orderInvariant"]
 
@@ -1320,10 +1344,20 @@ def test_model_pose_forest_preserves_cyclic_source_edges(module_page):
       };
       const chainPose = buildSourceModelPoseConfiguration(chain, modelRig);
       const starPose = buildSourceModelPoseConfiguration(star, modelRig);
+      const entryMatchesSelectedRoot = (pose, source) =>
+        pose.modelPoseForest.components.every(component => {
+          const entry = pose.modelPoseEntryJointByComponentId.get(
+            Number(component.componentId));
+          const expected = reconciliation.sourceBoneToModelJointMap.get(
+            `${source.sourceKey}#bone=${component.rootId}`);
+          return entry === expected;
+        });
       return {
         modelEdgeCount: reconciliation.sourceForest.edges.length,
         chainTopology: chainPose.modelPoseTopology,
         starTopology: starPose.modelPoseTopology,
+        chainEntryMatchesSelectedRoot: entryMatchesSelectedRoot(chainPose, chain),
+        starEntryMatchesSelectedRoot: entryMatchesSelectedRoot(starPose, star),
       };
     }""")
     assert result["modelEdgeCount"] == 3
@@ -1334,6 +1368,8 @@ def test_model_pose_forest_preserves_cyclic_source_edges(module_page):
             "brokenEdgeCount": 0,
             "maxDetour": 1,
         }
+    assert result["chainEntryMatchesSelectedRoot"]
+    assert result["starEntryMatchesSelectedRoot"]
 
 
 def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):

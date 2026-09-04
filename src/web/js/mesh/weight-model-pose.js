@@ -92,7 +92,7 @@ export function buildSourceModelPoseConfiguration(sourceRig, modelRig) {
   const sourceComponents = sourceRig?.inferredForest?.components || [];
   const sourceEdges = sourceForestEdges(sourceRig?.inferredForest);
   const rootByComponent = new Map();
-  const carrierTargetByComponent = new Map();
+  const entryJointByComponent = new Map();
   const modelDepth = jointId => {
     const componentId = modelRig?.componentByJointId?.get(Number(jointId));
     const depth = Number.isInteger(Number(componentId))
@@ -115,10 +115,6 @@ export function buildSourceModelPoseConfiguration(sourceRig, modelRig) {
     let selected = null;
     if (attachment) {
       selected = mapped.find(item => item.jointId === Number(attachment.jointB));
-      if (selected) {
-        carrierTargetByComponent.set(
-          Number(component.componentId), Number(attachment.jointA));
-      }
     }
     if (!selected) {
       const candidates = [...mapped].sort((left, right) => {
@@ -138,6 +134,10 @@ export function buildSourceModelPoseConfiguration(sourceRig, modelRig) {
     if (Number.isInteger(rootId)) {
       rootByComponent.set(Number(component.componentId), rootId);
     }
+    if (selected) {
+      entryJointByComponent.set(
+        Number(component.componentId), Number(selected.jointId));
+    }
   });
   const primaryComponent = sourceComponents[0];
   const primaryRoot = rootByComponent.get(Number(primaryComponent?.componentId))
@@ -154,7 +154,7 @@ export function buildSourceModelPoseConfiguration(sourceRig, modelRig) {
   return {
     modelPoseForest,
     modelPoseJointPivotByBoneId,
-    modelPoseCarrierTargetByComponentId: carrierTargetByComponent,
+    modelPoseEntryJointByComponentId: entryJointByComponent,
     modelPoseTopology,
   };
 }

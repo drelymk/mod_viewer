@@ -1694,7 +1694,7 @@ function createSourceSkinningRig(sourceKey, members) {
     poseFrameCache: new Map(),
     modelPoseForest: inferredForest,
     modelPoseJointPivotByBoneId: jointPivotByBoneId,
-    modelPoseCarrierTargetByComponentId: new Map(),
+    modelPoseEntryJointByComponentId: new Map(),
     modelPoseTopology: null,
     poseActiveVerticesByMesh: new Map(),
     poseAffectedBoneIds: new Set(),
@@ -1739,8 +1739,8 @@ function refreshSourceSkinningRig(rig, members, {resetPose = true} = {}) {
   rig.modelPoseRotationByBoneId = refreshed.modelPoseRotationByBoneId;
   rig.modelPoseForest = refreshed.modelPoseForest;
   rig.modelPoseJointPivotByBoneId = refreshed.modelPoseJointPivotByBoneId;
-  rig.modelPoseCarrierTargetByComponentId =
-    refreshed.modelPoseCarrierTargetByComponentId;
+  rig.modelPoseEntryJointByComponentId =
+    refreshed.modelPoseEntryJointByComponentId;
   rig.modelPoseTopology = refreshed.modelPoseTopology;
   rig.vertexEvidence = refreshed.vertexEvidence;
   rig.structureRevision = refreshed.structureRevision;
@@ -1801,8 +1801,8 @@ function configureModelPoseForests(modelRig) {
     sourceRig.modelPoseForest = configuration.modelPoseForest;
     sourceRig.modelPoseJointPivotByBoneId =
       configuration.modelPoseJointPivotByBoneId;
-    sourceRig.modelPoseCarrierTargetByComponentId =
-      configuration.modelPoseCarrierTargetByComponentId;
+    sourceRig.modelPoseEntryJointByComponentId =
+      configuration.modelPoseEntryJointByComponentId;
     sourceRig.modelPoseTopology = configuration.modelPoseTopology;
     topologyBySource[sourceRig.sourceKey] = {
       ...configuration.modelPoseTopology,
@@ -2464,21 +2464,21 @@ function buildSourceModelPoseTransforms(sourceRig, modelRig) {
     if (!Number.isInteger(id)) continue;
     const localTransform = localTransforms.get(id) || RIG_IDENTITY_MATRIX;
     const componentId = sourceRig.modelPoseForest?.componentByBoneId?.[id];
-    const carrierTargetId = sourceRig.modelPoseCarrierTargetByComponentId
+    const entryJointId = sourceRig.modelPoseEntryJointByComponentId
       ?.get?.(Number(componentId));
-    const carrierTransform = Number.isInteger(Number(carrierTargetId))
-      ? modelRig.poseTransforms.get(Number(carrierTargetId))
+    const entryTransform = Number.isInteger(Number(entryJointId))
+      ? modelRig.poseTransforms.get(Number(entryJointId))
         || RIG_IDENTITY_MATRIX
       : RIG_IDENTITY_MATRIX;
     transforms.set(id, new THREE.Matrix4()
-      .copy(carrierTransform).multiply(localTransform));
+      .copy(entryTransform).multiply(localTransform));
     const localRotation = localRotations.get(id)
       || new THREE.Quaternion();
-    const carrierRotation = Number.isInteger(Number(carrierTargetId))
-      ? modelRig.poseRotations.get(Number(carrierTargetId))
+    const entryRotation = Number.isInteger(Number(entryJointId))
+      ? modelRig.poseRotations.get(Number(entryJointId))
         || new THREE.Quaternion()
       : new THREE.Quaternion();
-    rotations.set(id, carrierRotation.clone().multiply(localRotation).normalize());
+    rotations.set(id, entryRotation.clone().multiply(localRotation).normalize());
   }
   sourceRig.poseTransforms = transforms;
   sourceRig.poseRotations = rotations;
