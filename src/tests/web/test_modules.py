@@ -289,6 +289,7 @@ def test_rig_constraints_half_turn_singularity_preserves_pose(module_page):
         mode: 'swing_twist', swing_x: [-45, 45], swing_z: [-45, 45],
         twist: [-45, 45],
       };
+      const disabled = {...limited, enabled: false};
       const singular = q(1, 0, 0, 180);
       const singularWithTwist = multiply(singular, q(0, 1, 0, 45));
       const inspect = quaternion => {
@@ -302,17 +303,25 @@ def test_rig_constraints_half_turn_singularity_preserves_pose(module_page):
         singular: inspect(singular),
         singularWithTwist: inspect(singularWithTwist),
         near: inspect([1, 0, 0, 1e-14]),
+        unrestricted: constraints.clampSwingTwist(singular, null),
+        disabled: constraints.clampSwingTwist(singular, disabled),
       };
     }""")
     for key in ("singular", "singularWithTwist", "near"):
         assert result[key]["decomposition"]["success"] is False
         assert result[key]["decomposition"]["diagnostic"] == \
             "swing_twist_singular"
-        assert result[key]["clamped"]["success"] is False
+        assert result[key]["clamped"]["success"] is True
         assert result[key]["clamped"]["diagnostic"] == \
             "swing_twist_singular"
         assert result[key]["constrained"] == pytest.approx(
             result[key]["decomposition"]["quaternion"])
+    assert result["unrestricted"]["success"] is True
+    assert result["unrestricted"]["diagnostic"] == "no_constraint"
+    assert result["unrestricted"]["clamped"] is False
+    assert result["disabled"]["success"] is True
+    assert result["disabled"]["diagnostic"] == "disabled"
+    assert result["disabled"]["clamped"] is False
 
 
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):

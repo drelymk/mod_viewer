@@ -396,22 +396,23 @@ export function clampSwingTwist(value, rawConstraint) {
       diagnostic: 'invalid_quaternion',
     };
   }
-  const input = decomposeSwingTwist(quaternion);
-  if (!input.success) {
-    return {success: false, quaternion, clamped: false,
-      diagnostic: input.diagnostic, input, output: input};
-  }
   const checked = rawConstraint === undefined || rawConstraint === null
     ? {valid: true, value: null}
     : checkConstraint(rawConstraint);
   if (!checked.valid) {
     return {success: true, quaternion, clamped: false,
-      diagnostic: checked.error, input, output: input};
+      diagnostic: checked.error};
   }
   if (!checked.value || !checked.value.enabled) {
+    const input = decomposeSwingTwist(quaternion);
     return {success: true, quaternion, clamped: false,
       diagnostic: checked.value ? 'disabled' : 'no_constraint',
       input, output: input};
+  }
+  const input = decomposeSwingTwist(quaternion);
+  if (!input.success) {
+    return {success: true, quaternion, clamped: false,
+      diagnostic: input.diagnostic, input, output: input};
   }
   const constraint = checked.value;
   const target = {
