@@ -23,7 +23,8 @@ import { requestRender } from './scene/render-scheduler.js';
 import {
   disableModelPhysics, enableModelPhysics,
   ensureModelRigLoaded, ensureModelWeightsLoaded,
-  getModelPhysicsState, getModelRigDebugState, getModelRigState, getModelWeightState,
+  getModelPhysicsState, getModelRigDebugState, getModelRigState,
+  getModelWeightState, getRigBonePoseFrame,
   getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
   finishRigPose, resetModelPhysicsMotion, resetRigBone, resetRigPose,
   selectRigBone,
@@ -258,6 +259,7 @@ rendererReady.then(ready => {
     getMeshes: () => activeMeshes,
     getRigState: getModelRigState,
     getRigDebugState: getModelRigDebugState,
+    getRigBonePoseFrame,
     setRigBoneRotation,
     finishRigPose,
     onTransformControlsUnavailable: () => setRigPoseControlStatus(
@@ -398,6 +400,7 @@ rendererReady.then(ready => {
   Object.defineProperties(window.modViewer, {
     getModelRigState: {value: getModelRigState},
     getModelRigDebugState: {value: getModelRigDebugState},
+    getRigBonePoseFrame: {value: getRigBonePoseFrame},
     ensureModelRigLoaded: {value: ensureModelRigLoaded},
     setRigVisible: {value: setRigVisible},
     setActiveRigSource: {value: setActiveRigSource},

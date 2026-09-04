@@ -89,7 +89,7 @@ function centerColor(component, boneId, selectedBoneId) {
 
 export function createRigOverlayController({
   scene, camera, canvas, getMeshes, getRigState, getRigDebugState,
-  arcballControls,
+  getRigBonePoseFrame, arcballControls,
   setRigBoneRotation, finishRigPose, onTransformControlsUnavailable,
   requestRender,
 } = {}) {
@@ -242,9 +242,10 @@ export function createRigOverlayController({
       proxy.visible = false;
       return;
     }
-    const pivot = pivotFor(source, boneId);
+    const poseFrame = getRigBonePoseFrame?.(source.sourceKey, boneId);
+    const pivot = poseFrame?.pivot || pivotFor(source, boneId);
     if (pivot) proxy.position.copy(vector(pivot));
-    const values = quaternionFor(source, boneId);
+    const values = poseFrame?.boneRotation || quaternionFor(source, boneId);
     if (values) proxy.quaternion.set(...values).normalize();
     else proxy.quaternion.identity();
     proxy.visible = group.visible;
@@ -259,7 +260,11 @@ export function createRigOverlayController({
     const id = Number(detail.boneId);
     if (!Number.isInteger(id)) return;
     selectedBoneId = id;
-    if (detail.quaternion?.length === 4) {
+    const poseFrame = getRigBonePoseFrame?.(detail.sourceKey, id);
+    if (poseFrame?.boneRotation?.length === 4) {
+      proxy.position.copy(vector(poseFrame.pivot));
+      proxy.quaternion.set(...poseFrame.boneRotation).normalize();
+    } else if (detail.quaternion?.length === 4) {
       proxy.quaternion.set(...detail.quaternion).normalize();
     }
     proxy.visible = group.visible && canPose(currentSnapshot, currentSource, id);
@@ -295,8 +300,15 @@ export function createRigOverlayController({
           const source = currentSource;
           const boneId = selectedBoneFor(currentSnapshot);
           if (!canPose(currentSnapshot, source, boneId)) return;
+          const poseFrame = getRigBonePoseFrame?.(source.sourceKey, boneId);
+          const localRotation = proxy.quaternion.clone();
+          if (poseFrame?.parentRotation?.length === 4) {
+            const parentRotation = new THREE.Quaternion(
+              ...poseFrame.parentRotation).normalize();
+            localRotation.premultiply(parentRotation.invert()).normalize();
+          }
           setRigBoneRotation?.(
-            source.sourceKey, boneId, proxy.quaternion.clone(), {dragging: true});
+            source.sourceKey, boneId, localRotation, {dragging: true});
         });
         transformControls.addEventListener?.('dragging-changed', event => {
           if (event.value !== undefined && canvas?.style) {

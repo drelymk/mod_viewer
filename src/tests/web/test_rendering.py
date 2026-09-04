@@ -1065,6 +1065,111 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         context.close()
 
 
+def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"RigHierarchy": _payload("RigHierarchy")})
+    try:
+        _open(page, "RigHierarchy")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 1, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__rigHierarchyUrl = url;
+          window.__testSkinningPreview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0',
+              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
+            },
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+        }""")
+        page.locator("#rig-tab").click()
+        page.wait_for_function("window.modViewer.getModelRigState().loaded")
+        result = page.evaluate("""async () => {
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          let source = experiment.getModelRigState().sources[0];
+          const sourceKey = source.sourceKey;
+          const rooted = experiment.setRigComponentRoot(sourceKey, 0);
+          source = experiment.getModelRigState().sources.find(item =>
+            item.sourceKey === sourceKey);
+          const component = source.components.find(item =>
+            item.rootId === 0 && item.nodeIds.includes(0));
+          const bone1 = Number(component.childrenById[0][0]);
+          const bone2 = Number(component.childrenById[bone1][0]);
+          const frameBefore = experiment.getRigBonePoseFrame(sourceKey, bone2);
+          const q90 = [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)];
+          const q30 = [0, 0, Math.sin(Math.PI / 12), Math.cos(Math.PI / 12)];
+          const parentPosed = experiment.setRigBoneRotation(
+            sourceKey, bone1, q90, {dragging: true});
+          const frameAfterParent = experiment.getRigBonePoseFrame(
+            sourceKey, bone2);
+          const childPosed = experiment.setRigBoneRotation(
+            sourceKey, bone2, q30, {dragging: true});
+          const frameAfterChild = experiment.getRigBonePoseFrame(
+            sourceKey, bone2);
+          const after = experiment.getModelRigState().sources.find(item =>
+            item.sourceKey === sourceKey);
+          const storedLocal = after.poseRotationByBoneId[bone2];
+          const forest = {components: after.components};
+          const centers = new Map(after.nodes.map(node => [
+            Number(node.boneId), node.weightedCenter]));
+          const pivots = new Map(Object.entries(after.jointPivotByBoneId).map(
+            ([id, pivot]) => [Number(id), pivot]));
+          const transforms = experiment.buildForestTransformsFromLocalRotations(
+            forest, centers, {
+              quaternionByBoneId: new Map([[bone1, q90], [bone2, q30]]),
+              jointPivotByBoneId: pivots,
+            });
+          const expected = experiment.applyWeightedTransformDeformation(
+            new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+            new Uint32Array([0, 1, 1, 2, 1, 2]),
+            new Float32Array([.8, .2, .7, .3, .6, .4]), 2, transforms);
+          const actual = [...window.modViewer.activeMeshes[0]
+            .geometry.attributes.position.array];
+          return {
+            rooted, bone1, bone2, frameBefore, frameAfterParent,
+            frameAfterChild, parentPosed, childPosed, storedLocal,
+            expected: [...expected], actual,
+          };
+        }""")
+        assert result["rooted"]
+        assert result["parentPosed"]
+        assert result["childPosed"]
+        assert result["bone1"] == 1
+        assert result["bone2"] == 2
+        rest_pivot = result["frameBefore"]["pivot"]
+        expected_parent_pivot = [-rest_pivot[1], rest_pivot[0], rest_pivot[2]]
+        assert result["frameAfterParent"]["pivot"] == pytest.approx(
+            expected_parent_pivot, abs=1e-5)
+        assert result["frameAfterParent"]["pivot"] != pytest.approx(
+            rest_pivot, abs=1e-5)
+        assert result["frameAfterParent"]["boneRotation"] == pytest.approx(
+            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
+        assert result["frameAfterChild"]["parentRotation"] == pytest.approx(
+            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
+        assert result["frameAfterChild"]["boneRotation"] == pytest.approx(
+            [0, 0, math.sin(math.pi / 3), math.cos(math.pi / 3)], abs=1e-5)
+        assert result["storedLocal"] == pytest.approx(
+            [0, 0, math.sin(math.pi / 12), math.cos(math.pi / 12)], abs=1e-5)
+        assert result["actual"] == pytest.approx(result["expected"], abs=1e-5)
+    finally:
+        page.evaluate("""() => {
+          if (window.__rigHierarchyUrl) {
+            URL.revokeObjectURL(window.__rigHierarchyUrl);
+            window.__rigHierarchyUrl = null;
+          }
+        }""")
+        context.close()
+
+
 def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
         edge_browser, frontend_url):
     context, page = _page(

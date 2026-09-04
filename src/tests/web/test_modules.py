@@ -131,6 +131,13 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
       const controller = createRigOverlayController({
         scene, camera, canvas, getRigState: () => state,
         getMeshes: () => [],
+        getRigBonePoseFrame: () => ({
+          pivot: [.5, .5, 0],
+          parentRotation: [0, 0, Math.sin(Math.PI / 4),
+            Math.cos(Math.PI / 4)],
+          boneRotation: [0, 0, Math.sin(Math.PI / 4),
+            Math.cos(Math.PI / 4)],
+        }),
         arcballControls,
         setRigBoneRotation: (...args) => poseCalls.push(args),
         finishRigPose: (...args) => finishCalls.push(args),
@@ -147,8 +154,11 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
       const nonRoot = controller.getDebugState();
       controls.dispatchEvent({type: 'change'});
       const hoverPoseCount = poseCalls.length;
+      controls.object.quaternion.setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1), Math.PI * 2 / 3);
       controls.dispatchEvent({type: 'objectChange'});
       const objectChangePoseCount = poseCalls.length;
+      const objectChangeLocal = poseCalls[0][2].toArray();
       controls.dispatchEvent({type: 'dragging-changed', value: true});
       const dragStarted = controller.getDebugState();
       const interactionDuringGizmo = isRigTransformInteractionActive();
@@ -193,7 +203,7 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
         picking, picked, dragStarted, dragFinished, duringPick, afterPick,
         pickerActions, arcballActions,
         hoverPoseCount, objectChangePoseCount, poseCalls, finishCalls,
-        interactionDuringGizmo, interactionAfterGizmo,
+        objectChangeLocal, interactionDuringGizmo, interactionAfterGizmo,
       };
     }""")
     assert result["noSelection"]["controlsCreated"] is False
@@ -208,6 +218,8 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
     assert result["hoverPoseCount"] == 0
     assert result["objectChangePoseCount"] == 1
     assert result["poseCalls"][0][0:2] == ["source", 2]
+    assert result["objectChangeLocal"] == pytest.approx(
+        [0, 0, math.sin(math.pi / 12), math.cos(math.pi / 12)])
     assert result["poseCalls"][0][3] == {"dragging": True}
     assert result["dragStarted"]["arcballEnabled"] is False
     assert result["dragStarted"]["arcballWasEnabled"] is True

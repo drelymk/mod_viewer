@@ -2059,6 +2059,41 @@ function rigSourceFor(sourceKey) {
   return sourceSkinningRigs.get(String(sourceKey)) || null;
 }
 
+function rigBonePoseFrame(rig, boneId) {
+  const id = Number(boneId);
+  if (!rig || !Number.isInteger(id)) return null;
+  const componentId = rig.inferredForest?.componentByBoneId?.[id];
+  const component = Number.isInteger(Number(componentId))
+    ? rig.inferredForest?.components?.[Number(componentId)] : null;
+  if (!component) return null;
+
+  const parentValue = component.parentById?.[id];
+  const parentId = parentValue !== null && parentValue !== undefined
+    && Number.isFinite(Number(parentValue))
+    ? Number(parentValue) : null;
+  const parentTransform = parentId === null
+    ? new THREE.Matrix4() : rig.poseTransforms.get(parentId)
+      || new THREE.Matrix4();
+  const pivotValues = rig.jointPivotByBoneId.get(id)
+    || (parentId !== null ? rig.centerByBoneId.get(parentId) : null)
+    || rig.centerByBoneId.get(id) || [0, 0, 0];
+  const pivot = new THREE.Vector3(...pivotValues).applyMatrix4(parentTransform);
+  const parentRotation = parentId === null
+    ? new THREE.Quaternion() : rig.poseRotations.get(parentId)
+      ?.clone() || new THREE.Quaternion();
+  const boneRotation = rig.poseRotations.get(id)?.clone()
+    || new THREE.Quaternion();
+  return {
+    pivot: pivot.toArray(),
+    parentRotation: parentRotation.normalize().toArray(),
+    boneRotation: boneRotation.normalize().toArray(),
+  };
+}
+
+export function getRigBonePoseFrame(sourceKey, boneId) {
+  return rigBonePoseFrame(rigSourceFor(sourceKey), boneId);
+}
+
 export function ensureModelRigLoaded() {
   if (modelRigState.loaded) return Promise.resolve(rigSnapshot());
   if (modelRigState.promise) return modelRigState.promise;
