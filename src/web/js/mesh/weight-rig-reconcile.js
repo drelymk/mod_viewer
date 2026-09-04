@@ -1381,36 +1381,6 @@ function componentSupport(component, joints) {
     sum + number(joints[id]?.evidence?.totalWeight, 0), 0);
 }
 
-function rootOverridesForFinalForest(finalComponents, sourceComponents,
-    joints, votes) {
-  const sourceComponentByJointId = new Map();
-  (sourceComponents || []).forEach(component => {
-    (component.nodeIds || []).forEach(jointId => {
-      sourceComponentByJointId.set(jointId, component);
-    });
-  });
-  const overrides = new Map();
-  (finalComponents || []).forEach(finalComponent => {
-    const sourceComponentsById = new Map();
-    (finalComponent.nodeIds || []).forEach(jointId => {
-      const sourceComponent = sourceComponentByJointId.get(jointId);
-      if (sourceComponent) {
-        sourceComponentsById.set(sourceComponent.componentId, sourceComponent);
-      }
-    });
-    const trunk = [...sourceComponentsById.values()].sort((left, right) =>
-      componentSupport(right, joints) - componentSupport(left, joints)
-      || right.nodeIds.length - left.nodeIds.length
-      || (votes.get(right.rootId) || 0) - (votes.get(left.rootId) || 0)
-      || number(joints[right.rootId]?.evidence?.totalWeight, 0)
-        - number(joints[left.rootId]?.evidence?.totalWeight, 0)
-      || left.rootId - right.rootId
-      || left.componentId - right.componentId)[0];
-    if (trunk) overrides.set(finalComponent.componentId, trunk.rootId);
-  });
-  return overrides;
-}
-
 function jointPairKey(leftId, rightId) {
   return `${Math.min(leftId, rightId)}:${Math.max(leftId, rightId)}`;
 }
@@ -1687,8 +1657,6 @@ function addAttachments(joints, sourceEdges, forest, referenceRadius,
     const edge = {
       jointA: best.jointA,
       jointB: best.jointB,
-      targetComponentId: best.targetComponentId,
-      accessoryComponentId: best.accessoryComponentId,
       sourceSupportCount: 0,
       sourceEdges: [],
       combinedTreeScore: best.score,
@@ -1748,12 +1716,18 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
     model.joints, sourceForestEdges, sourceForest, referenceRadius,
     candidateBuild.crossEvidenceByPair);
   const finalEdges = maximumSpanningForest(model.joints, attachments.edges);
-  // Attachments define the boundary between pre-oriented forests. They must
-  // never choose the global posing root: preserve the dominant pre-attachment
-  // component's root so every attached branch inherits the trunk transform.
-  const finalRootOverrides = rootOverridesForFinalForest(
-    orientModelForest(model.joints, finalEdges, votes).components,
-    sourceForest.components, model.joints, votes);
+  const initialFinalForest = orientModelForest(model.joints, finalEdges, votes);
+  const finalRootOverrides = new Map();
+  initialFinalForest.components.forEach(component => {
+    const members = new Set(component.nodeIds);
+    const attachment = finalEdges.filter(edge =>
+      edge.relationshipType === 'attachment'
+      && members.has(edge.jointA) && members.has(edge.jointB))
+      .sort((left, right) => right.attachmentScore - left.attachmentScore
+        || left.jointA - right.jointA || left.jointB - right.jointB)[0];
+    if (attachment) finalRootOverrides.set(
+      component.componentId, attachment.jointA);
+  });
   const finalForest = orientModelForest(
     model.joints, finalEdges, votes, finalRootOverrides);
   const survivingAttachments = finalEdges.filter(edge =>
