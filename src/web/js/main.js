@@ -1,7 +1,7 @@
 // Entry point: composes frontend application flows and initializes the UI.
 
 import {
-  camera, renderer, scene,
+  camera, controls, renderer, scene,
   getAmbientOcclusionStrength, getBloomEnabled, getEnvironmentPreset, getRenderCount,
   isRendererAvailable, rendererReady,
   resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
@@ -254,6 +254,7 @@ rendererReady.then(ready => {
   initRightDock();
   createRigOverlayController({
     scene, camera, canvas: renderer.domElement,
+    arcballControls: controls,
     getMeshes: () => activeMeshes,
     getRigState: getModelRigState,
     getRigDebugState: getModelRigDebugState,

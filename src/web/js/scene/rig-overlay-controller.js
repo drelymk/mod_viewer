@@ -53,9 +53,17 @@ function topologyKey(source) {
 }
 
 function canPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
-  if (!snapshot?.visible || !source || boneId === null) return false;
+  if (!snapshot?.visible || snapshot.picking || !source || boneId === null) {
+    return false;
+  }
   const component = componentFor(source, boneId);
   return !!component && component.rootId !== boneId;
+}
+
+let rigTransformInteractionActive = false;
+
+export function isRigTransformInteractionActive() {
+  return rigTransformInteractionActive;
 }
 
 function setGeometry(object, positions, colors = null) {
@@ -81,6 +89,7 @@ function centerColor(component, boneId, selectedBoneId) {
 
 export function createRigOverlayController({
   scene, camera, canvas, getMeshes, getRigState, getRigDebugState,
+  arcballControls,
   setRigBoneRotation, finishRigPose, onTransformControlsUnavailable,
   requestRender,
 } = {}) {
@@ -136,7 +145,10 @@ export function createRigOverlayController({
   group.add(proxy);
 
   let transformControls = null;
+  let transformHelper = null;
   let transformControlsReady = null;
+  let controlsCreateCount = 0;
+  let arcballMouseOwned = false;
   let activeSourceKey = null;
   let selectedBoneId = null;
   let currentSnapshot = null;
@@ -147,8 +159,17 @@ export function createRigOverlayController({
   let modelFrameUpdateCount = 0;
   let disposed = false;
 
+  function setArcballMouseOwnership(owned) {
+    if (!arcballControls || arcballMouseOwned === owned) return;
+    if (owned) arcballControls.unsetMouseAction?.(0);
+    else arcballControls.setMouseAction?.('ROTATE', 0);
+    arcballMouseOwned = owned;
+  }
+
   function detachControls() {
     transformControls?.detach?.();
+    setArcballMouseOwnership(false);
+    rigTransformInteractionActive = false;
   }
 
   function updateModelFrame() {
@@ -163,6 +184,7 @@ export function createRigOverlayController({
     group.quaternion.copy(mesh.quaternion);
     group.scale.copy(mesh.scale);
     modelFrameUpdateCount += 1;
+    transformControls?.update?.();
   }
 
   function updateCenterColors(source = currentSource) {
@@ -220,7 +242,11 @@ export function createRigOverlayController({
     if (values) proxy.quaternion.set(...values).normalize();
     else proxy.quaternion.identity();
     proxy.visible = group.visible;
-    transformControls?.attach?.(proxy);
+    if (transformControls) {
+      transformControls.attach?.(proxy);
+      transformControls.update?.();
+      setArcballMouseOwnership(true);
+    }
   }
 
   function updatePoseFromEvent(detail) {
@@ -233,6 +259,11 @@ export function createRigOverlayController({
     }
     proxy.visible = group.visible && canPose(currentSnapshot, currentSource, id);
     if (!proxy.visible) detachControls();
+    else {
+      transformControls?.attach?.(proxy);
+      transformControls?.update?.();
+      if (transformControls) setArcballMouseOwnership(true);
+    }
   }
 
   async function ensureTransformControls() {
@@ -242,8 +273,18 @@ export function createRigOverlayController({
       .then(module => {
         if (disposed || !module?.TransformControls) return null;
         transformControls = new module.TransformControls(camera, canvas);
+        transformHelper = transformControls.getHelper();
+        transformHelper.userData.isViewerRigTransformHelper = true;
+        scene?.add(transformHelper);
+        controlsCreateCount += 1;
         transformControls.setMode?.('rotate');
         transformControls.setSpace?.('local');
+        transformControls.addEventListener?.('mouseDown', () => {
+          rigTransformInteractionActive = true;
+        });
+        transformControls.addEventListener?.('mouseUp', () => {
+          rigTransformInteractionActive = false;
+        });
         transformControls.addEventListener?.('change', () => {
           const source = currentSource;
           const boneId = selectedBoneFor(currentSnapshot);
@@ -264,7 +305,6 @@ export function createRigOverlayController({
             }
           }
         });
-        scene?.add(transformControls);
         updateProxy(currentSource, currentSnapshot);
         return transformControls;
       })
@@ -319,7 +359,10 @@ export function createRigOverlayController({
         edgeCount: lineSegments.geometry.getAttribute('position')?.count / 2 || 0,
         selectedBoneId,
         controlsCreated: !!transformControls,
+        controlsCreateCount,
         controlsAttached: transformControls?.object === proxy,
+        helperInScene: !!transformHelper && transformHelper.parent === scene,
+        arcballMouseOwned,
       };
     },
     dispose() {
@@ -329,9 +372,10 @@ export function createRigOverlayController({
       window.removeEventListener('mod-viewer-model-transform-changed', onModelTransformChanged);
       detachControls();
       if (transformControls) {
-        scene?.remove(transformControls);
+        scene?.remove(transformHelper);
         transformControls.dispose?.();
         transformControls = null;
+        transformHelper = null;
       }
       lineSegments.geometry.dispose();
       centerPoints.geometry.dispose();

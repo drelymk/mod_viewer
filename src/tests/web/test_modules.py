@@ -5,6 +5,35 @@ import math
 import pytest
 
 
+def test_vendored_transform_controls_exposes_scene_helper(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {TransformControls} = await import(
+        'three/addons/controls/TransformControls.js');
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera();
+      const canvas = document.createElement('canvas');
+      const controls = new TransformControls(camera, canvas);
+      const helper = controls.getHelper();
+      scene.add(helper);
+      const attached = helper.parent === scene;
+      const api = {
+        hasGetHelper: typeof controls.getHelper === 'function',
+        helperIsObject3D: helper.isObject3D === true,
+        attached,
+      };
+      controls.dispose();
+      scene.remove(helper);
+      return api;
+    }""")
+    assert result == {
+        "hasGetHelper": True,
+        "helperIsObject3D": True,
+        "attached": True,
+    }
+
+
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -71,11 +100,17 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
     page = module_page
     result = page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
-      const {createRigOverlayController} = await import(
+      const {createRigOverlayController, isRigTransformInteractionActive} = await import(
         './js/scene/rig-overlay-controller.js');
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera();
       const canvas = document.createElement('canvas');
+      const arcballActions = [];
+      const arcballControls = {
+        unsetMouseAction: button => arcballActions.push(['unset', button]),
+        setMouseAction: (action, button) =>
+          arcballActions.push(['set', action, button]),
+      };
       const source = {
         sourceKey: 'source', boneIds: [1, 2],
         nodes: [
@@ -89,12 +124,11 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
         poseRotationByBoneId: {},
       };
       let state = {visible: true, activeSourceKey: 'source',
-        selectedBoneId: null, sources: [source]};
-      let unavailable = 0;
+        selectedBoneId: null, picking: false, sources: [source]};
       const controller = createRigOverlayController({
         scene, camera, canvas, getRigState: () => state,
         getMeshes: () => [],
-        onTransformControlsUnavailable: () => { unavailable += 1; },
+        arcballControls,
       });
       controller.refresh(state);
       const noSelection = controller.getDebugState();
@@ -104,8 +138,12 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
       const root = controller.getDebugState();
       state = {...state, selectedBoneId: 2};
       controller.refresh(state);
-      await controller.ensureTransformControls();
+      const controls = await controller.ensureTransformControls();
       const nonRoot = controller.getDebugState();
+      controls.dispatchEvent({type: 'mouseDown'});
+      const interactionDuringGizmo = isRigTransformInteractionActive();
+      controls.dispatchEvent({type: 'mouseUp'});
+      const interactionAfterGizmo = isRigTransformInteractionActive();
       state = {...state, selectedBoneId: 1};
       controller.refresh(state);
       const rootAgain = controller.getDebugState();
@@ -115,19 +153,38 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
       state = {...state, visible: true};
       controller.refresh(state);
       const shown = controller.getDebugState();
+      state = {...state, picking: true, selectedBoneId: 2};
+      controller.refresh(state);
+      const picking = controller.getDebugState();
+      state = {...state, picking: false};
+      controller.refresh(state);
+      const picked = controller.getDebugState();
       controller.dispose();
-      return {noSelection, root, nonRoot, rootAgain, hidden, shown, unavailable};
+      return {
+        noSelection, root, nonRoot, rootAgain, hidden, shown,
+        picking, picked, arcballActions,
+        interactionDuringGizmo, interactionAfterGizmo,
+      };
     }""")
     assert result["noSelection"]["controlsCreated"] is False
     assert result["root"]["controlsAttached"] is False
     assert result["rootAgain"]["controlsAttached"] is False
     assert result["hidden"]["controlsAttached"] is False
-    assert result["shown"]["controlsCreated"] == result["nonRoot"]["controlsCreated"]
-    if result["shown"]["controlsCreated"]:
-        assert result["nonRoot"]["controlsAttached"]
-        assert result["shown"]["controlsAttached"]
-    else:
-        assert result["unavailable"] == 1
+    assert result["nonRoot"]["controlsCreated"] is True
+    assert result["nonRoot"]["controlsAttached"] is True
+    assert result["nonRoot"]["helperInScene"] is True
+    assert result["nonRoot"]["controlsCreateCount"] == 1
+    assert result["shown"]["controlsAttached"] is True
+    assert result["shown"]["helperInScene"] is True
+    assert result["shown"]["controlsCreateCount"] == 1
+    assert result["picking"]["controlsAttached"] is False
+    assert result["picking"]["arcballMouseOwned"] is False
+    assert result["picked"]["controlsAttached"] is True
+    assert result["picked"]["arcballMouseOwned"] is True
+    assert result["arcballActions"].count(["unset", 0]) == 3
+    assert result["arcballActions"].count(["set", "ROTATE", 0]) >= 2
+    assert result["interactionDuringGizmo"] is True
+    assert result["interactionAfterGizmo"] is False
 
 
 def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_page):
