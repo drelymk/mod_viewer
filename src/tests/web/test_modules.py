@@ -107,10 +107,13 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
       const canvas = document.createElement('canvas');
       const arcballActions = [];
       const arcballControls = {
+        enabled: true,
         unsetMouseAction: button => arcballActions.push(['unset', button]),
         setMouseAction: (action, button) =>
           arcballActions.push(['set', action, button]),
       };
+      const poseCalls = [];
+      const finishCalls = [];
       const source = {
         sourceKey: 'source', boneIds: [1, 2],
         nodes: [
@@ -129,6 +132,8 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
         scene, camera, canvas, getRigState: () => state,
         getMeshes: () => [],
         arcballControls,
+        setRigBoneRotation: (...args) => poseCalls.push(args),
+        finishRigPose: (...args) => finishCalls.push(args),
       });
       controller.refresh(state);
       const noSelection = controller.getDebugState();
@@ -140,10 +145,33 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
       controller.refresh(state);
       const controls = await controller.ensureTransformControls();
       const nonRoot = controller.getDebugState();
-      controls.dispatchEvent({type: 'mouseDown'});
+      controls.dispatchEvent({type: 'change'});
+      const hoverPoseCount = poseCalls.length;
+      controls.dispatchEvent({type: 'objectChange'});
+      const objectChangePoseCount = poseCalls.length;
+      controls.dispatchEvent({type: 'dragging-changed', value: true});
+      const dragStarted = controller.getDebugState();
       const interactionDuringGizmo = isRigTransformInteractionActive();
       controls.dispatchEvent({type: 'mouseUp'});
+      controls.dispatchEvent({type: 'dragging-changed', value: false});
+      await Promise.resolve();
+      const dragFinished = controller.getDebugState();
       const interactionAfterGizmo = isRigTransformInteractionActive();
+      const {createWeightPickController} = await import(
+        './js/scene/weight-pick-controller.js');
+      const picker = createWeightPickController({
+        canvas, camera, controls: arcballControls, getMeshes: () => [],
+        onStateChanged: picking => {
+          state = {...state, picking};
+          controller.refresh(state);
+        },
+      });
+      picker.begin();
+      const duringPick = controller.getDebugState();
+      const pickerActions = arcballActions.slice();
+      picker.cancel();
+      const afterPick = controller.getDebugState();
+      picker.dispose();
       state = {...state, selectedBoneId: 1};
       controller.refresh(state);
       const rootAgain = controller.getDebugState();
@@ -162,7 +190,9 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
       controller.dispose();
       return {
         noSelection, root, nonRoot, rootAgain, hidden, shown,
-        picking, picked, arcballActions,
+        picking, picked, dragStarted, dragFinished, duringPick, afterPick,
+        pickerActions, arcballActions,
+        hoverPoseCount, objectChangePoseCount, poseCalls, finishCalls,
         interactionDuringGizmo, interactionAfterGizmo,
       };
     }""")
@@ -174,17 +204,75 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
     assert result["nonRoot"]["controlsAttached"] is True
     assert result["nonRoot"]["helperInScene"] is True
     assert result["nonRoot"]["controlsCreateCount"] == 1
+    assert result["nonRoot"]["arcballEnabled"] is True
+    assert result["hoverPoseCount"] == 0
+    assert result["objectChangePoseCount"] == 1
+    assert result["poseCalls"][0][0:2] == ["source", 2]
+    assert result["poseCalls"][0][3] == {"dragging": True}
+    assert result["dragStarted"]["arcballEnabled"] is False
+    assert result["dragStarted"]["arcballWasEnabled"] is True
+    assert result["dragFinished"]["arcballEnabled"] is True
+    assert result["dragFinished"]["arcballWasEnabled"] is None
+    assert len(result["finishCalls"]) == 1
+    assert result["duringPick"]["controlsAttached"] is False
+    assert result["duringPick"]["arcballEnabled"] is True
+    assert result["pickerActions"] == [["unset", 0]]
+    assert result["afterPick"]["controlsAttached"] is True
+    assert result["afterPick"]["arcballEnabled"] is True
+    assert result["arcballActions"] == [["unset", 0], ["set", "ROTATE", 0]]
     assert result["shown"]["controlsAttached"] is True
     assert result["shown"]["helperInScene"] is True
     assert result["shown"]["controlsCreateCount"] == 1
     assert result["picking"]["controlsAttached"] is False
-    assert result["picking"]["arcballMouseOwned"] is False
+    assert result["picking"]["arcballEnabled"] is True
     assert result["picked"]["controlsAttached"] is True
-    assert result["picked"]["arcballMouseOwned"] is True
-    assert result["arcballActions"].count(["unset", 0]) == 3
-    assert result["arcballActions"].count(["set", "ROTATE", 0]) >= 2
+    assert result["picked"]["arcballEnabled"] is True
     assert result["interactionDuringGizmo"] is True
     assert result["interactionAfterGizmo"] is False
+
+
+def test_model_picker_blocks_view_selection_before_bubble_listener(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const canvasContainer = document.createElement('div');
+      canvasContainer.id = 'canvas-container';
+      const openButton = document.createElement('button');
+      openButton.id = 'open-btn';
+      const rendererError = document.createElement('div');
+      rendererError.id = 'renderer-error';
+      rendererError.innerHTML = '<span class="renderer-error-detail"></span>';
+      const viewGizmo = document.createElement('div');
+      viewGizmo.id = 'view-gizmo';
+      viewGizmo.innerHTML = '<svg></svg>';
+      document.body.append(
+        canvasContainer, openButton, rendererError, viewGizmo);
+      const {renderer, camera, controls} = await import('./js/scene/scene.js');
+      const {createWeightPickController} = await import(
+        './js/scene/weight-pick-controller.js');
+      const {initSelection} = await import('./js/scene/selection.js');
+      const canvas = renderer.domElement;
+      const picker = createWeightPickController({
+        canvas, camera, controls, getMeshes: () => [],
+      });
+      initSelection();
+      let selectionEvents = 0;
+      const onSelection = () => { selectionEvents += 1; };
+      window.addEventListener('mod-viewer-mesh-selected', onSelection);
+      picker.begin();
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, button: 0, pointerId: 12, clientX: 20, clientY: 20,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true, button: 0, pointerId: 12, clientX: 20, clientY: 20,
+      }));
+      const duringPicker = {selectionEvents};
+      window.removeEventListener('mod-viewer-mesh-selected', onSelection);
+      picker.dispose();
+      return duringPicker;
+    }""")
+    assert result == {
+        "selectionEvents": 0,
+    }
 
 
 def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_page):

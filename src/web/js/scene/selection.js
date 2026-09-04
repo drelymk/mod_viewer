@@ -86,6 +86,6 @@ function onPointerUp(e) {
 }
 
 export function initSelection() {
-  renderer.domElement.addEventListener('pointerdown', onPointerDown, true);
-  renderer.domElement.addEventListener('pointerup', onPointerUp, true);
+  renderer.domElement.addEventListener('pointerdown', onPointerDown);
+  renderer.domElement.addEventListener('pointerup', onPointerUp);
 }

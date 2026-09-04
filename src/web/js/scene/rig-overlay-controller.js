@@ -148,7 +148,7 @@ export function createRigOverlayController({
   let transformHelper = null;
   let transformControlsReady = null;
   let controlsCreateCount = 0;
-  let arcballMouseOwned = false;
+  let arcballWasEnabled = null;
   let activeSourceKey = null;
   let selectedBoneId = null;
   let currentSnapshot = null;
@@ -159,16 +159,22 @@ export function createRigOverlayController({
   let modelFrameUpdateCount = 0;
   let disposed = false;
 
-  function setArcballMouseOwnership(owned) {
-    if (!arcballControls || arcballMouseOwned === owned) return;
-    if (owned) arcballControls.unsetMouseAction?.(0);
-    else arcballControls.setMouseAction?.('ROTATE', 0);
-    arcballMouseOwned = owned;
+  function setArcballDragState(dragging) {
+    if (!arcballControls) return;
+    if (dragging) {
+      if (arcballWasEnabled === null) {
+        arcballWasEnabled = arcballControls.enabled;
+        arcballControls.enabled = false;
+      }
+    } else if (arcballWasEnabled !== null) {
+      arcballControls.enabled = arcballWasEnabled;
+      arcballWasEnabled = null;
+    }
   }
 
   function detachControls() {
     transformControls?.detach?.();
-    setArcballMouseOwnership(false);
+    setArcballDragState(false);
     rigTransformInteractionActive = false;
   }
 
@@ -245,7 +251,6 @@ export function createRigOverlayController({
     if (transformControls) {
       transformControls.attach?.(proxy);
       transformControls.update?.();
-      setArcballMouseOwnership(true);
     }
   }
 
@@ -262,7 +267,6 @@ export function createRigOverlayController({
     else {
       transformControls?.attach?.(proxy);
       transformControls?.update?.();
-      if (transformControls) setArcballMouseOwnership(true);
     }
   }
 
@@ -279,25 +283,33 @@ export function createRigOverlayController({
         controlsCreateCount += 1;
         transformControls.setMode?.('rotate');
         transformControls.setSpace?.('local');
-        transformControls.addEventListener?.('mouseDown', () => {
-          rigTransformInteractionActive = true;
-        });
         transformControls.addEventListener?.('mouseUp', () => {
-          rigTransformInteractionActive = false;
+          queueMicrotask(() => {
+            rigTransformInteractionActive = false;
+          });
         });
         transformControls.addEventListener?.('change', () => {
+          requestRender?.();
+        });
+        transformControls.addEventListener?.('objectChange', () => {
           const source = currentSource;
           const boneId = selectedBoneFor(currentSnapshot);
           if (!canPose(currentSnapshot, source, boneId)) return;
           setRigBoneRotation?.(
             source.sourceKey, boneId, proxy.quaternion.clone(), {dragging: true});
-          requestRender?.();
         });
         transformControls.addEventListener?.('dragging-changed', event => {
           if (event.value !== undefined && canvas?.style) {
             canvas.style.cursor = event.value ? 'grabbing' : '';
           }
-          if (event.value === false) {
+          if (event.value) {
+            setArcballDragState(true);
+            rigTransformInteractionActive = true;
+          } else if (event.value === false) {
+            setArcballDragState(false);
+            queueMicrotask(() => {
+              rigTransformInteractionActive = false;
+            });
             const source = currentSource;
             const boneId = selectedBoneFor(currentSnapshot);
             if (source && boneId !== null) {
@@ -362,7 +374,8 @@ export function createRigOverlayController({
         controlsCreateCount,
         controlsAttached: transformControls?.object === proxy,
         helperInScene: !!transformHelper && transformHelper.parent === scene,
-        arcballMouseOwned,
+        arcballEnabled: arcballControls?.enabled,
+        arcballWasEnabled,
       };
     },
     dispose() {
