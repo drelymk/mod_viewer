@@ -1828,11 +1828,6 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
   };
   return {
     modelReferenceRadius: referenceRadius,
-    sourceForest: {
-      components: sourceForest.components,
-      componentByJointId: sourceForest.componentByJointId,
-      edges: sourceForestEdges,
-    },
     sourceBoneEvidence: evidenceSnapshot(evidenceByKey),
     restAnchorBySourceBoneKey: Object.fromEntries(
       [...evidenceByKey.entries()].map(([key, item]) => [
