@@ -28,7 +28,8 @@ import {
   getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
   finishRigPose, resetModelPhysicsMotion, resetRigBone, resetRigPose,
   selectRigBone,
-  setActiveRigSource, setRigBoneRotation, setRigComponentRoot, setRigVisible,
+  setActiveRigSource, setRigBoneRotation, setRigComponentRoot,
+  getRigRotationSnapDegrees, setRigRotationSnapDegrees, setRigVisible,
   setRigPoseControlStatus,
   beginRigPicking, cancelRigPicking, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
@@ -403,6 +404,8 @@ rendererReady.then(ready => {
     getRigBonePoseFrame: {value: getRigBonePoseFrame},
     ensureModelRigLoaded: {value: ensureModelRigLoaded},
     setRigVisible: {value: setRigVisible},
+    getRigRotationSnapDegrees: {value: getRigRotationSnapDegrees},
+    setRigRotationSnapDegrees: {value: setRigRotationSnapDegrees},
     setActiveRigSource: {value: setActiveRigSource},
     beginRigPicking: {value: beginRigPicking},
     cancelRigPicking: {value: cancelRigPicking},

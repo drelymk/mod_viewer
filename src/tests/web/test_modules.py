@@ -127,17 +127,20 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
         poseRotationByBoneId: {},
       };
       let state = {visible: true, activeSourceKey: 'source',
-        selectedBoneId: null, picking: false, sources: [source]};
+        selectedBoneId: null, rotationSnapDegrees: 15, picking: false,
+        sources: [source]};
       const controller = createRigOverlayController({
         scene, camera, canvas, getRigState: () => state,
         getMeshes: () => [],
-        getRigBonePoseFrame: () => ({
-          pivot: [.5, .5, 0],
-          parentRotation: [0, 0, Math.sin(Math.PI / 4),
-            Math.cos(Math.PI / 4)],
-          boneRotation: [0, 0, Math.sin(Math.PI / 4),
-            Math.cos(Math.PI / 4)],
-        }),
+          getRigBonePoseFrame: () => ({
+            pivot: [.5, .5, 0],
+            parentRotation: [0, 0, Math.sin(Math.PI / 8),
+              Math.cos(Math.PI / 8)],
+            boneRotation: [0, 0, Math.sin(Math.PI / 8),
+              Math.cos(Math.PI / 8)],
+            restRotation: [0, 0, Math.sin(Math.PI / 8),
+              Math.cos(Math.PI / 8)],
+          }),
         arcballControls,
         setRigBoneRotation: (...args) => poseCalls.push(args),
         finishRigPose: (...args) => finishCalls.push(args),
@@ -204,6 +207,7 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
         pickerActions, arcballActions,
         hoverPoseCount, objectChangePoseCount, poseCalls, finishCalls,
         objectChangeLocal, interactionDuringGizmo, interactionAfterGizmo,
+        rotationSnap: controls.rotationSnap,
       };
     }""")
     assert result["noSelection"]["controlsCreated"] is False
@@ -217,6 +221,7 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
     assert result["nonRoot"]["arcballEnabled"] is True
     assert result["hoverPoseCount"] == 0
     assert result["objectChangePoseCount"] == 1
+    assert result["rotationSnap"] == pytest.approx(math.radians(15))
     assert result["poseCalls"][0][0:2] == ["source", 2]
     assert result["objectChangeLocal"] == pytest.approx(
         [0, 0, math.sin(math.pi / 12), math.cos(math.pi / 12)])
@@ -242,6 +247,80 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
     assert result["picked"]["arcballEnabled"] is True
     assert result["interactionDuringGizmo"] is True
     assert result["interactionAfterGizmo"] is False
+
+
+def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const pose = {
+        1: {center: [0, 0, 0], pivot: [0, 0, 0]},
+        2: {center: [1, 0, 0], pivot: [.5, 0, 0]},
+      };
+      const source = {
+        sourceKey: 'source', structureRevision: 4, boneIds: [1, 2],
+        nodes: [
+          {boneId: 1, weightedCenter: [0, 0, 0]},
+          {boneId: 2, weightedCenter: [1, 0, 0]},
+        ],
+        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2]}],
+        forestEdges: [{boneA: 1, boneB: 2, childId: 2,
+          jointCenter: [.5, 0, 0]}],
+        jointPivotByBoneId: {2: [.5, 0, 0]},
+        poseRotationByBoneId: {},
+      };
+      const state = {visible: true, activeSourceKey: 'source',
+        selectedBoneId: 2, picking: false, sources: [source]};
+      const controller = createRigOverlayController({
+        scene, getRigState: () => state, getMeshes: () => [],
+        getRigBonePoseFrame: (sourceKey, boneId) => pose[boneId],
+      });
+      controller.refresh(state);
+      const staticGroup = controller.group.children[0];
+      const line = staticGroup.children[0];
+      const centers = staticGroup.children[1];
+      const joints = staticGroup.children[2];
+      const initial = {
+        rebuildCount: controller.getDebugState().rebuildCount,
+        centerAttribute: centers.geometry.getAttribute('position'),
+        lineAttribute: line.geometry.getAttribute('position'),
+        jointAttribute: joints.geometry.getAttribute('position'),
+      };
+      pose[2] = {center: [1, 2, 0], pivot: [.5, 1, 0]};
+      window.dispatchEvent(new CustomEvent(
+        'mod-viewer-model-rig-pose-changed',
+        {detail: {sourceKey: 'source', boneId: 2,
+          quaternion: [0, 0, 0, 1]}}));
+      const after = controller.getDebugState();
+      return {
+        rebuildCount: after.rebuildCount,
+        posedUpdates: after.posedOverlayUpdateCount,
+        sameCenterAttribute: initial.centerAttribute ===
+          centers.geometry.getAttribute('position'),
+        sameLineAttribute: initial.lineAttribute ===
+          line.geometry.getAttribute('position'),
+        sameJointAttribute: initial.jointAttribute ===
+          joints.geometry.getAttribute('position'),
+        center: [...initial.centerAttribute.array],
+        line: [...initial.lineAttribute.array],
+        joint: [...initial.jointAttribute.array],
+        dynamicUsage: initial.centerAttribute.usage === THREE.DynamicDrawUsage
+          && initial.lineAttribute.usage === THREE.DynamicDrawUsage
+          && initial.jointAttribute.usage === THREE.DynamicDrawUsage,
+      };
+    }""")
+    assert result["rebuildCount"] == 1
+    assert result["posedUpdates"] >= 2
+    assert result["sameCenterAttribute"]
+    assert result["sameLineAttribute"]
+    assert result["sameJointAttribute"]
+    assert result["center"] == pytest.approx([0, 0, 0, 1, 2, 0])
+    assert result["line"] == pytest.approx([0, 0, 0, 1, 2, 0])
+    assert result["joint"] == pytest.approx([.5, 1, 0])
+    assert result["dynamicUsage"]
 
 
 def test_model_picker_blocks_view_selection_before_bubble_listener(module_page):
@@ -330,6 +409,67 @@ def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_p
     assert result["aggregatePivot"] == pytest.approx([7, 0, 0])
     assert sorted(result["components"]) == [[1, 2, 3], [4, 5]]
     assert len(set(result["roots"])) == 2
+
+
+def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three');
+      const frames = await import('./js/mesh/weight-rig-frames.js');
+      const forest = {components: [{
+        componentId: 0, rootId: 0, nodeIds: [0, 1, 2, 3],
+        parentById: {0: null, 1: 0, 2: 1, 3: 1},
+        childrenById: {0: [1], 1: [2, 3], 2: [], 3: []},
+        edges: [
+          {boneA: 0, boneB: 1, treeEdgeScore: .9},
+          {boneA: 1, boneB: 2, treeEdgeScore: .8},
+          {boneA: 1, boneB: 3, treeEdgeScore: .7},
+        ],
+      }]};
+      const centers = new Map([
+        [0, [0, 0, 0]], [1, [0, 1, 0]],
+        [2, [0, 3, 0]], [3, [-1, 1, 0]],
+      ]);
+      const pivots = new Map([
+        [1, [0, 1, 0]], [2, [0, 3, 0]], [3, [-1, 1, 0]],
+      ]);
+      const first = frames.buildInferredRigRestFrames(
+        forest, centers, pivots);
+      const second = frames.buildInferredRigRestFrames(
+        forest, centers, pivots);
+      const yFor = id => new THREE.Vector3(0, 1, 0)
+        .applyQuaternion(first.frameByBoneId.get(id)).toArray();
+      const xFor = id => new THREE.Vector3(1, 0, 0)
+        .applyQuaternion(first.frameByBoneId.get(id)).toArray();
+      const rest = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1), Math.PI / 2);
+      const pose = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(1, 0, 0), Math.PI / 3);
+      const delta = frames.poseToRestFrameDelta(pose, rest);
+      const roundTrip = frames.restFrameDeltaToPose(delta, rest);
+      return {
+        directions: [0, 1, 2, 3].map(yFor),
+        continuation: [...first.continuationChildByBoneId.entries()],
+        evidence: [...first.evidenceByBoneId.entries()],
+        xDot: xFor(1).reduce((sum, value, index) =>
+          sum + value * xFor(0)[index], 0),
+        normalized: [0, 1, 2, 3].map(id =>
+          first.frameByBoneId.get(id).length()),
+        deterministic: [0, 1, 2, 3].every(id =>
+          first.frameByBoneId.get(id).equals(second.frameByBoneId.get(id))),
+        deltaRoundTrip: roundTrip.toArray(),
+      };
+    }""")
+    assert result["directions"][0] == pytest.approx([0, 1, 0])
+    assert result["directions"][1] == pytest.approx([0, 1, 0])
+    assert result["directions"][2] == pytest.approx([0, 1, 0])
+    assert result["directions"][3] == pytest.approx([-1, 0, 0])
+    assert result["continuation"] == [[0, 1], [1, 2], [2, None], [3, None]]
+    assert result["xDot"] > 0
+    assert result["normalized"] == pytest.approx([1, 1, 1, 1])
+    assert result["deterministic"]
+    assert result["deltaRoundTrip"] == pytest.approx(
+        [math.sin(math.pi / 6), 0, 0, math.cos(math.pi / 6)])
 
 
 def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):

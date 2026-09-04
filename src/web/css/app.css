@@ -1085,6 +1085,13 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-influence input { margin: 0; }
 .rig-influence-id { color: var(--text); font-family: ui-monospace, monospace; }
 .rig-influence-weight { margin-left: auto; color: var(--accent-soft); font-variant-numeric: tabular-nums; }
+.rig-nav-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-height: 26px; }
+.rig-nav-values { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.rig-nav-button { min-width: 28px; min-height: 24px; padding: 2px 6px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; font-family: ui-monospace, monospace; font-size: 11px; }
+.rig-nav-button:hover { background: var(--surface-active); border-color: var(--accent-soft); }
+.rig-snap-select { min-height: 26px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.rig-readout-title { color: var(--text-muted); font-size: 11px; }
+.rig-readout-row { min-height: 22px; }
 .rig-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .rig-actions .ui-button { flex: 1 1 0; min-width: 110px; }
 .rig-hint { color: var(--text-muted); font-size: 11px; line-height: 1.4; }

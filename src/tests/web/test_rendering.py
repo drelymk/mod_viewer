@@ -1252,6 +1252,10 @@ def test_rig_overlay_real_controls_deform_without_proxy_feedback(
           select(bone2);
           const childFrame = experiment.getRigBonePoseFrame(sourceKey, bone2);
           const childProxyAtSelect = controls.object.quaternion.toArray();
+          const expectedChildLocal = new THREE.Quaternion(
+            ...childFrame.parentRotation).invert().multiply(q120)
+            .multiply(new THREE.Quaternion(...childFrame.restRotation)
+              .invert()).normalize().toArray();
           const beforeChild = positions();
           controls.dispatchEvent({type: 'dragging-changed', value: true});
           controls.object.quaternion.copy(q120);
@@ -1268,7 +1272,7 @@ def test_rig_overlay_real_controls_deform_without_proxy_feedback(
           return {
             bone1, bone2, parentDragStarted, childDragStarted,
             parentProxyDuringDrag, childProxyAtSelect, childProxyDuringDrag,
-            childFrame, childLocal,
+            childFrame, childLocal, expectedChildLocal,
             parentChanged: changed(beforeParent, afterParent),
             childChanged: changed(beforeChild, afterChild),
           };
@@ -1282,13 +1286,13 @@ def test_rig_overlay_real_controls_deform_without_proxy_feedback(
         assert result["parentProxyDuringDrag"] == pytest.approx(
             [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
         assert result["childProxyAtSelect"] == pytest.approx(
-            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
+            result["childFrame"]["gizmoRotation"], abs=1e-5)
         assert result["childProxyDuringDrag"] == pytest.approx(
             [0, 0, math.sin(math.pi / 3), math.cos(math.pi / 3)], abs=1e-5)
-        assert result["childFrame"]["parentRotation"] == pytest.approx(
-            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
+        assert len(result["childFrame"]["parentRotation"]) == 4
+        assert len(result["childFrame"]["restRotation"]) == 4
         assert result["childLocal"] == pytest.approx(
-            [0, 0, math.sin(math.pi / 12), math.cos(math.pi / 12)], abs=1e-5)
+            result["expectedChildLocal"], abs=1e-5)
     finally:
         page.evaluate("""() => {
           if (window.__rigControlsUrl) {

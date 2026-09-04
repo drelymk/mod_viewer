@@ -15,6 +15,10 @@ import {
   buildForestTransformsFromLocalRotations,
 } from './weight-deformation.js';
 import {
+  buildInferredRigRestFrames, eulerFromRestFrameDelta,
+  poseToRestFrameDelta, restFrameDeltaToPose,
+} from './weight-rig-frames.js';
+import {
   GRAVITY_WORLD_DIRECTION, MIN_GRAVITY_LEVER_RATIO, STANDARD_GRAVITY,
   applyReferenceFrameAngularDelta,
   applyReferenceFrameLinearVelocityDelta,
@@ -56,6 +60,10 @@ import {
 export {
   buildForestTransformsFromLocalRotations, applyWeightedTransformDeformation,
 } from './weight-deformation.js';
+export {
+  buildInferredRigRestFrames, eulerFromRestFrameDelta,
+  poseToRestFrameDelta, restFrameDeltaToPose,
+} from './weight-rig-frames.js';
 export {
   getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
 };
@@ -130,7 +138,13 @@ const modelRigState = {
   rigTransformMs: 0,
   rigDeformMs: 0,
   rigDeformedVertexCount: 0,
+  rotationSnapDegrees: 0,
 };
+
+const RIG_ROTATION_SNAP_DEGREES = Object.freeze([0, 5, 15, 30]);
+
+let nextRigStructureRevision = 0;
+const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
 
 const PHYSICS_DIAGNOSTIC_VECTOR_KEYS = Object.freeze([
   'lastRootAngularDeltaVector', 'lastRootTranslationDeltaWorld',
@@ -332,8 +346,55 @@ function quaternionIsIdentity(value) {
 
 function rigComponentForBone(rig, boneId) {
   const componentId = rig?.inferredForest?.componentByBoneId?.[boneId];
-  return rig?.inferredForest?.components?.find(component =>
-    component.componentId === componentId) || null;
+  return Number.isInteger(Number(componentId))
+    ? rig?.inferredForest?.components?.[Number(componentId)] || null : null;
+}
+
+function rigParentForBone(rig, boneId) {
+  const component = rigComponentForBone(rig, boneId);
+  const value = component?.parentById?.[boneId];
+  if (value === null || value === undefined) return null;
+  const parentId = Number(value);
+  return Number.isFinite(parentId) ? parentId : null;
+}
+
+function rebuildSourceRigRestFrames(rig) {
+  const frames = buildInferredRigRestFrames(
+    rig.inferredForest, rig.centerByBoneId, rig.jointPivotByBoneId);
+  rig.restFrameByBoneId = frames.frameByBoneId;
+  rig.restDirectionByBoneId = frames.directionByBoneId;
+  rig.restFrameEvidenceByBoneId = frames.evidenceByBoneId;
+  rig.continuationChildByBoneId = frames.continuationChildByBoneId;
+  rig.poseFrameCache?.clear();
+  rig.structureRevision = ++nextRigStructureRevision;
+  return frames;
+}
+
+function updateSourcePoseFrameCache(rig, transforms) {
+  const seen = new Set();
+  for (const boneId of rig.boneIds || []) {
+    const id = Number(boneId);
+    if (!Number.isInteger(id)) continue;
+    const parentId = rigParentForBone(rig, id);
+    const parentTransform = parentId === null
+      ? RIG_IDENTITY_MATRIX : transforms.get(parentId) || RIG_IDENTITY_MATRIX;
+    const pivotValues = rig.jointPivotByBoneId.get(id)
+      || (parentId !== null ? rig.centerByBoneId.get(parentId) : null)
+      || rig.centerByBoneId.get(id) || [0, 0, 0];
+    const centerValues = rig.centerByBoneId.get(id) || [0, 0, 0];
+    const frame = rig.poseFrameCache.get(id) || {
+      center: new THREE.Vector3(),
+      pivot: new THREE.Vector3(),
+    };
+    frame.center.fromArray(centerValues).applyMatrix4(
+      transforms.get(id) || RIG_IDENTITY_MATRIX);
+    frame.pivot.fromArray(pivotValues).applyMatrix4(parentTransform);
+    rig.poseFrameCache.set(id, frame);
+    seen.add(id);
+  }
+  for (const id of rig.poseFrameCache.keys()) {
+    if (!seen.has(id)) rig.poseFrameCache.delete(id);
+  }
 }
 
 function rigSourceSnapshot(rig, {debug = false} = {}) {
@@ -373,6 +434,7 @@ function rigSourceSnapshot(rig, {debug = false} = {}) {
     sourceKey: rig.sourceKey,
     sourceFile: rig.sourceFile,
     boneIdOffset: rig.boneIdOffset,
+    structureRevision: rig.structureRevision,
     boneCount: rig.influenceGraph?.nodes?.length || 0,
     boneIds: (rig.influenceGraph?.nodes || []).map(node => node.boneId),
     components,
@@ -425,6 +487,7 @@ function rigSnapshot() {
     selectedBoneId: modelRigState.activeSourceKey
       ? modelRigState.selectedBoneBySource.get(modelRigState.activeSourceKey)
         ?? null : null,
+    rotationSnapDegrees: modelRigState.rotationSnapDegrees,
     pickedPoint: modelRigState.pickedPoint
       ? {...modelRigState.pickedPoint,
         point: [...modelRigState.pickedPoint.point],
@@ -865,6 +928,7 @@ function resetModelWeightState() {
   modelRigState.rigTransformMs = 0;
   modelRigState.rigDeformMs = 0;
   modelRigState.rigDeformedVertexCount = 0;
+  modelRigState.rotationSnapDegrees = 0;
   notifyModelWeightChanged();
   notifyModelRigChanged();
 }
@@ -1432,7 +1496,9 @@ function createSourceSkinningRig(sourceKey, members) {
   const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
   const influenceGraph = aggregateSourceInfluenceGraph(members);
   const inferredForest = buildInferredRigForest(influenceGraph);
-  return {
+  const jointPivotByBoneId = jointPivotMap(
+    inferredForest, influenceGraph.relationships);
+  const rig = {
     key: sourceKey,
     sourceKey,
     sourceFile: descriptor?.sourceFile || '',
@@ -1444,18 +1510,25 @@ function createSourceSkinningRig(sourceKey, members) {
     centerByBoneId: new Map((influenceGraph.nodes || []).map(node => [
       node.boneId, node.weightedCenter])),
     inferredForest,
-    jointPivotByBoneId: jointPivotMap(
-      inferredForest, influenceGraph.relationships),
+    jointPivotByBoneId,
+    restFrameByBoneId: new Map(),
+    restDirectionByBoneId: new Map(),
+    restFrameEvidenceByBoneId: new Map(),
+    continuationChildByBoneId: new Map(),
+    structureRevision: 0,
     poseRotationByBoneId: new Map(),
     poseTransforms: new Map(),
     poseRotations: new Map(),
     poseTransformCache: new Map(),
+    poseFrameCache: new Map(),
     poseActiveVerticesByMesh: new Map(),
     poseAffectedBoneIds: new Set(),
     poseActiveBoneKey: '',
     poseRootOverrides: new Map(),
     physicsRig: null,
   };
+  rebuildSourceRigRestFrames(rig);
+  return rig;
 }
 
 function sameMeshSet(left, right) {
@@ -1468,6 +1541,7 @@ function resetSourceSkinningPose(rig, {preserveActive = false} = {}) {
   rig.poseTransforms.clear();
   rig.poseRotations.clear();
   rig.poseTransformCache.clear();
+  rig.poseFrameCache.clear();
   rig.poseAffectedBoneIds = new Set();
   rig.poseActiveBoneKey = '';
   if (!preserveActive) rig.poseActiveVerticesByMesh.clear();
@@ -1482,6 +1556,12 @@ function refreshSourceSkinningRig(rig, members, {resetPose = true} = {}) {
   rig.centerByBoneId = refreshed.centerByBoneId;
   rig.inferredForest = refreshed.inferredForest;
   rig.jointPivotByBoneId = refreshed.jointPivotByBoneId;
+  rig.restFrameByBoneId = refreshed.restFrameByBoneId;
+  rig.restDirectionByBoneId = refreshed.restDirectionByBoneId;
+  rig.restFrameEvidenceByBoneId = refreshed.restFrameEvidenceByBoneId;
+  rig.continuationChildByBoneId = refreshed.continuationChildByBoneId;
+  rig.structureRevision = refreshed.structureRevision;
+  rig.poseFrameCache = refreshed.poseFrameCache;
   rig.poseRootOverrides = refreshed.poseRootOverrides;
   if (resetPose) resetSourceSkinningPose(rig);
   return rig;
@@ -1941,6 +2021,7 @@ function buildSourcePoseTransforms(rig) {
       rotationOutput: rig.poseRotations,
       transformCache: rig.poseTransformCache,
     });
+  updateSourcePoseFrameCache(rig, rig.poseTransforms);
   modelRigState.rigTransformMs = performanceNow() - started;
   addWeightPhysicsPerformance('rigTransformMs', modelRigState.rigTransformMs);
   return rig.poseTransforms;
@@ -2067,26 +2148,35 @@ function rigBonePoseFrame(rig, boneId) {
     ? rig.inferredForest?.components?.[Number(componentId)] : null;
   if (!component) return null;
 
-  const parentValue = component.parentById?.[id];
-  const parentId = parentValue !== null && parentValue !== undefined
-    && Number.isFinite(Number(parentValue))
-    ? Number(parentValue) : null;
+  const cache = rig.poseFrameCache.get(id);
+  const parentId = rigParentForBone(rig, id);
   const parentTransform = parentId === null
-    ? new THREE.Matrix4() : rig.poseTransforms.get(parentId)
-      || new THREE.Matrix4();
+    ? RIG_IDENTITY_MATRIX : rig.poseTransforms.get(parentId)
+      || RIG_IDENTITY_MATRIX;
   const pivotValues = rig.jointPivotByBoneId.get(id)
     || (parentId !== null ? rig.centerByBoneId.get(parentId) : null)
     || rig.centerByBoneId.get(id) || [0, 0, 0];
-  const pivot = new THREE.Vector3(...pivotValues).applyMatrix4(parentTransform);
+  const pivot = cache?.pivot?.clone() || new THREE.Vector3(...pivotValues)
+    .applyMatrix4(parentTransform);
+  const centerValues = cache?.center?.toArray()
+    || new THREE.Vector3(...(rig.centerByBoneId.get(id) || [0, 0, 0]))
+      .applyMatrix4(rig.poseTransforms.get(id) || RIG_IDENTITY_MATRIX)
+      .toArray();
   const parentRotation = parentId === null
     ? new THREE.Quaternion() : rig.poseRotations.get(parentId)
       ?.clone() || new THREE.Quaternion();
   const boneRotation = rig.poseRotations.get(id)?.clone()
     || new THREE.Quaternion();
+  const restRotation = rig.restFrameByBoneId.get(id)?.clone()
+    || new THREE.Quaternion();
+  const gizmoRotation = boneRotation.clone().multiply(restRotation).normalize();
   return {
     pivot: pivot.toArray(),
+    center: centerValues,
     parentRotation: parentRotation.normalize().toArray(),
     boneRotation: boneRotation.normalize().toArray(),
+    restRotation: restRotation.normalize().toArray(),
+    gizmoRotation: gizmoRotation.toArray(),
   };
 }
 
@@ -2134,6 +2224,20 @@ export function setRigVisible(enabled) {
   return modelRigState.visible;
 }
 
+export function getRigRotationSnapDegrees() {
+  return modelRigState.rotationSnapDegrees;
+}
+
+export function setRigRotationSnapDegrees(value) {
+  const degrees = Number(value);
+  const next = RIG_ROTATION_SNAP_DEGREES.includes(degrees) ? degrees : 0;
+  if (next === modelRigState.rotationSnapDegrees) return next;
+  modelRigState.rotationSnapDegrees = next;
+  notifyModelRigChanged();
+  requestRender();
+  return next;
+}
+
 export function setActiveRigSource(sourceKey) {
   const rig = rigSourceFor(sourceKey);
   if (!rig) return false;
@@ -2174,6 +2278,7 @@ export function setRigComponentRoot(sourceKey, boneId) {
   });
   rig.jointPivotByBoneId = jointPivotMap(
     rig.inferredForest, rig.influenceGraph.relationships);
+  rebuildSourceRigRestFrames(rig);
   rig.poseRootOverrides = overrides;
   selectRigBone(sourceKey, id);
   applySourcePose(rig);
