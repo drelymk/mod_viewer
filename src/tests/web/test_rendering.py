@@ -1065,6 +1065,98 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         context.close()
 
 
+def test_model_rig_pose_deforms_equivalent_source_meshes_together(
+        edge_browser, frontend_url):
+    payload = _payload("CrossSourceRig")
+    template = next(iter(payload["meshes"].values()))
+    first = copy.deepcopy(template)
+    second = copy.deepcopy(template)
+    first["component"] = "Cross source A"
+    second["component"] = "Cross source B"
+    payload["meshes"] = {
+        "CrossSourceRig-A-0": first,
+        "CrossSourceRig-B-0": second,
+    }
+    context, page = _page(
+        edge_browser, frontend_url, {"CrossSourceRig": payload})
+    try:
+        _open(page, "CrossSourceRig")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
+        page.evaluate("""async () => {
+          const makeUrl = indices => {
+            const bytes = new Uint8Array(48);
+            new Uint32Array(bytes.buffer).set(indices);
+            new Float32Array(bytes.buffer, 24).set([.8, .2, .8, .2, 1, 0]);
+            return URL.createObjectURL(new Blob([bytes]));
+          };
+          const urlA = makeUrl([0, 1, 0, 1, 1, 1]);
+          const urlB = makeUrl([4, 5, 4, 5, 5, 5]);
+          window.__crossSourceRigUrls = [urlA, urlB];
+          window.__testSkinningPreview = async (path, meshKey) => {
+            const entry = (sourceKey, boneIds, url) => ({
+              status: 'ok', vertex_count: 3, influence_count: 2,
+              bone_ids: boneIds, encoding: 'test', source: {
+                key: sourceKey, file: sourceKey, bone_id_offset: 0,
+              }, data: {
+                url, length: 48,
+                indices: {offset: 0, length: 24, type: 'u32'},
+                weights: {offset: 24, length: 24, type: 'f32'},
+              }, diagnostics: {},
+            });
+            return meshKey.includes('-A-')
+              ? entry('cross/a.buf|offset=0', [0, 1], urlA)
+              : entry('cross/b.buf|offset=0', [4, 5], urlB);
+          };
+        }""")
+        page.locator("#rig-tab").click()
+        page.wait_for_function("window.modViewer.getModelRigState().loaded")
+        result = page.evaluate("""async () => {
+          const THREE = await import('three/webgpu');
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const state = experiment.getModelRigState();
+          const sourceA = state.sources.find(source =>
+            source.sourceKey === 'cross/a.buf|offset=0');
+          const sourceB = state.sources.find(source =>
+            source.sourceKey === 'cross/b.buf|offset=0');
+          if (!sourceA || !sourceB) return {sourceKeys: state.sources.map(source => source.sourceKey)};
+          const before = window.modViewer.activeMeshes.map(mesh =>
+            [...mesh.geometry.attributes.position.array]);
+          const child = sourceA.boneIds.find(id =>
+            id !== sourceA.components[0].rootId);
+          const jointA = state.model.sourceBoneToModelJointId[
+            `cross/a.buf|offset=0#bone=${child}`];
+          const jointB = state.model.sourceBoneToModelJointId[
+            `cross/b.buf|offset=0#bone=${child + 4}`];
+          const q = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 0, 1), Math.PI / 2);
+          const posed = experiment.setRigBoneRotation(
+            sourceA.sourceKey, child, q, {dragging: true});
+          const after = window.modViewer.activeMeshes.map(mesh =>
+            [...mesh.geometry.attributes.position.array]);
+          return {
+            modelJointCount: state.model.joints.length,
+            equivalent: jointA === jointB,
+            members: state.model.joints.find(joint => joint.jointId === jointA)
+              ?.members?.length || 0,
+            posed,
+            changed: after.map((values, index) => values.some((value, offset) =>
+              Math.abs(value - before[index][offset]) > 1e-5)),
+          };
+        }""")
+        assert result.get("modelJointCount") == 2, result
+        assert result["equivalent"], result
+        assert result["members"] == 2
+        assert result["posed"]
+        assert result["changed"] == [True, True]
+    finally:
+        page.evaluate("""() => {
+          (window.__crossSourceRigUrls || []).forEach(url =>
+            URL.revokeObjectURL(url));
+          window.__crossSourceRigUrls = null;
+        }""")
+        context.close()
+
+
 def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
         edge_browser, frontend_url):
     context, page = _page(

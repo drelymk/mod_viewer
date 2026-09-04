@@ -24,11 +24,12 @@ import {
   disableModelPhysics, enableModelPhysics,
   ensureModelRigLoaded, ensureModelWeightsLoaded,
   getModelPhysicsState, getModelRigDebugState, getModelRigState,
-  getModelWeightState, getRigBonePoseFrame,
+  getModelWeightState, getRigBonePoseFrame, getRigJointPoseFrame,
   getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
   finishRigPose, resetModelPhysicsMotion, resetRigBone, resetRigPose,
-  selectRigBone,
-  setActiveRigSource, setRigBoneRotation, setRigComponentRoot,
+  selectRigBone, selectRigJoint,
+  setActiveRigSource, setRigBoneRotation, setRigJointRotation,
+  setRigComponentRoot,
   getRigRotationSnapDegrees, setRigRotationSnapDegrees, setRigVisible,
   setRigPoseControlStatus,
   beginRigPicking, cancelRigPicking, setModelWeightHeatmap,
@@ -261,8 +262,16 @@ rendererReady.then(ready => {
     getRigState: getModelRigState,
     getRigDebugState: getModelRigDebugState,
     getRigBonePoseFrame,
+    getRigJointPoseFrame,
     setRigBoneRotation,
+    setRigJointRotation,
     finishRigPose,
+    finishRigJointPose: jointId => {
+      const joint = getModelRigState().model?.joints?.find(item =>
+        item.jointId === Number(jointId));
+      const member = joint?.representativeMember || joint?.members?.[0];
+      return member ? finishRigPose(member.sourceKey, member.boneId) : false;
+    },
     onTransformControlsUnavailable: () => setRigPoseControlStatus(
       'Pose gizmo is unavailable in this build.'),
     requestRender,
@@ -402,6 +411,7 @@ rendererReady.then(ready => {
     getModelRigState: {value: getModelRigState},
     getModelRigDebugState: {value: getModelRigDebugState},
     getRigBonePoseFrame: {value: getRigBonePoseFrame},
+    getRigJointPoseFrame: {value: getRigJointPoseFrame},
     ensureModelRigLoaded: {value: ensureModelRigLoaded},
     setRigVisible: {value: setRigVisible},
     getRigRotationSnapDegrees: {value: getRigRotationSnapDegrees},
@@ -410,8 +420,10 @@ rendererReady.then(ready => {
     beginRigPicking: {value: beginRigPicking},
     cancelRigPicking: {value: cancelRigPicking},
     selectRigBone: {value: selectRigBone},
+    selectRigJoint: {value: selectRigJoint},
     setRigComponentRoot: {value: setRigComponentRoot},
     setRigBoneRotation: {value: setRigBoneRotation},
+    setRigJointRotation: {value: setRigJointRotation},
     finishRigPose: {value: finishRigPose},
     resetRigBone: {value: resetRigBone},
     resetRigPose: {value: resetRigPose},

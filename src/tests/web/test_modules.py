@@ -472,6 +472,151 @@ def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_pa
         [math.sin(math.pi / 6), 0, 0, math.cos(math.pi / 6)])
 
 
+def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const rig = (sourceKey, entries, edges = []) => {
+        const nodeIds = entries.map(item => item[0]);
+        const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+        edges.forEach(([parent, child, score = 1]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        const roots = nodeIds.filter(id => parentById[id] === null);
+        return {
+          sourceKey, boneIds: nodeIds,
+          influenceGraph: {nodes: entries.map(([boneId, center, radius = .1]) => ({
+            boneId, weightedCenter: center, weightedRadius: radius,
+            totalWeight: 1, affectedVertexCount: 10,
+          }))},
+          centerByBoneId: new Map(entries.map(([id, center]) => [id, center])),
+          jointPivotByBoneId: new Map(entries
+            .filter(([id]) => parentById[id] !== null)
+            .map(([id, center]) => [id, center])),
+          restDirectionByBoneId: new Map(entries.map(([id, center]) => [
+            id, id === nodeIds[0] ? [0, 1, 0] : [0, 1, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(entries.map(([id]) => [id, {
+            directionSource: 'child-weighted-center',
+          }])),
+          inferredForest: {
+            components: roots.map((rootId, componentId) => ({
+              componentId, rootId, nodeIds: nodeIds.filter(id => {
+                let current = id;
+                while (parentById[current] !== null) current = parentById[current];
+                return current === rootId;
+              }), parentById, childrenById,
+              depthById: Object.fromEntries(nodeIds.map(id => [id, 0])),
+              edges: edges.map(([parent, child, score = 1]) => ({
+                boneA: parent, boneB: child, treeEdgeScore: score,
+              })),
+            })),
+            componentByBoneId: Object.fromEntries(nodeIds.map(id => [id, 0])),
+          },
+        };
+      };
+      const body = rig('body', [
+        [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [.02, 0, 0]],
+      ], [[0, 1, .9], [0, 2, .2]]);
+      const legs = rig('legs', [
+        [4, [0, 0, 0]], [43, [0, 1.01, 0]],
+      ], [[4, 43, .8]]);
+      const far = rig('far', [[0, [10, 0, 0]]]);
+      const result = buildModelRigReconciliation([body, legs, far]);
+      const bodyJoint = result.sourceBoneToModelJointId['body#bone=0'];
+      const legsJoint = result.sourceBoneToModelJointId['legs#bone=4'];
+      const bodyChild = result.sourceBoneToModelJointId['body#bone=1'];
+      const legsChild = result.sourceBoneToModelJointId['legs#bone=43'];
+      return {
+        bodyJoint, legsJoint, bodyChild, legsChild,
+        sameRoot: bodyJoint === legsJoint,
+        sameChild: bodyChild === legsChild,
+        numericCollisionSeparate:
+          result.sourceBoneToModelJointId['body#bone=0'] !==
+          result.sourceBoneToModelJointId['far#bone=0'],
+        clusterSizes: result.joints.map(joint => joint.members.length),
+        rejected: result.reconciliation.rejectedCandidates
+          .map(item => item.rejectionReason).filter(Boolean),
+        sourceEdgeSupport: result.edges.filter(edge =>
+          edge.relationshipType === 'source').map(edge => edge.sourceSupportCount),
+      };
+    }""")
+    assert result["sameRoot"]
+    assert result["sameChild"]
+    assert result["numericCollisionSeparate"]
+    assert sorted(result["clusterSizes"], reverse=True)[:2] == [2, 2]
+    assert "topology_conflict" in result["rejected"] or "not_mutual" in result["rejected"]
+    assert 2 in result["sourceEdgeSupport"]
+
+
+def test_cross_source_reconciliation_keeps_accessory_root_as_attachment(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (sourceKey, entries, rootId, edgeList) => {
+        const parentById = Object.fromEntries(entries.map(([id]) => [id, null]));
+        const childrenById = Object.fromEntries(entries.map(([id]) => [id, []]));
+        edgeList.forEach(([parent, child, score = 1]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        return {
+          sourceKey, boneIds: entries.map(([id]) => id),
+          influenceGraph: {nodes: entries.map(([boneId, center]) => ({
+            boneId, weightedCenter: center, weightedRadius: .2,
+            totalWeight: 10, affectedVertexCount: 20,
+          }))},
+          centerByBoneId: new Map(entries),
+          jointPivotByBoneId: new Map(entries.filter(([id]) => id !== rootId)),
+          restDirectionByBoneId: new Map(entries.map(([id]) => [id,
+            id === rootId ? [1, 0, 0] : [1, 0, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(entries.map(([id]) => [id, {
+            directionSource: 'child-weighted-center',
+          }])),
+          inferredForest: {
+            components: [{componentId: 0, rootId,
+              nodeIds: entries.map(([id]) => id), parentById, childrenById,
+              depthById: Object.fromEntries(entries.map(([id]) => [id, 0])),
+              edges: edgeList.map(([parent, child, score = 1]) => ({
+                boneA: parent, boneB: child, treeEdgeScore: score,
+              }))}],
+            componentByBoneId: Object.fromEntries(entries.map(([id]) => [id, 0])),
+          },
+        };
+      };
+      const body = make('body', [[0, [0, 0, 0]], [1, [0, 1, 0]]],
+        0, [[0, 1, .9]]);
+      const wing = make('wing', [[7, [.02, 1, 0]], [8, [1.02, 1, 0]]],
+        7, [[7, 8, .8]]);
+      const result = buildModelRigReconciliation([body, wing]);
+      const wingJoint = result.sourceBoneToModelJointId['wing#bone=7'];
+      const bodyJoint = result.sourceBoneToModelJointId['body#bone=1'];
+      const attachment = result.edges.find(edge =>
+        edge.relationshipType === 'attachment');
+      return {
+        jointCount: result.joints.length,
+        attachment: attachment ? {
+          relationshipType: attachment.relationshipType,
+          jointA: attachment.jointA, jointB: attachment.jointB,
+        } : null,
+        distinct: wingJoint !== bodyJoint,
+        forestEdgeCount: result.forestEdges.length,
+        componentCount: result.components.length,
+      };
+    }""")
+    assert result["jointCount"] == 4
+    assert result["distinct"]
+    assert result["attachment"] is not None
+    assert result["attachment"]["relationshipType"] == "attachment"
+    assert result["forestEdgeCount"] == 3
+    assert result["componentCount"] == 1
+
+
 def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):
     page = module_page
     result = page.evaluate("""async () => {

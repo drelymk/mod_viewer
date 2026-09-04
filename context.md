@@ -225,6 +225,30 @@ of documentation, comments and tests; use portable fixtures instead.
   supplies no names, canonical skeleton, hierarchy, bind pose or animation.
   Keep maximum-spanning relationships, weak-bridge pruning and static-boundary
   attachments conservative; never infer semantic labels such as hair or skirt.
+- Cross-source Rig/Pose reconciliation is a viewer-owned model graph layered
+  over the source rigs. Preserve `SourceBoneRef {sourceKey,boneId}` and the
+  canonical `${sourceKey}#bone=${boneId}` key; equal numeric IDs from different
+  sources never merge without geometry/topology evidence, and authored indices
+  and weight buffers are never rewritten. Build model joints from strict
+  mutual-best equivalences, guarded one-member-per-source clusters,
+  topology-assisted propagation and ambiguity rejection. Collapse source edges
+  into a model-level maximum-spanning forest, then add only conservative,
+  cycle-free cross-source attachment edges between source/component roots.
+- Normalize reconciliation distances by model reference radius with candidate,
+  strict, propagation and attachment gates; retain candidate evidence and
+  rejection reasons for diagnostics. Model joints own rest center/pivot/frame,
+  source members, model parent/children and the representative member.
+  `ModelSkinningRig.poseRotationByJointId` is authoritative for manual pose;
+  source pose maps are derived aliases only. Reuse the forest transform builder,
+  alias model transforms back to each source's authored IDs, preserve affected
+  vertex caching and baseline restoration, and keep Character Physics
+  source-scoped and separate.
+- The Rig picker maps source influences to model joints. The Rig panel selects
+  model joints and displays membership/topology without semantic labels; the
+  combined overlay renders model joints, source edges and distinguishable
+  attachment edges with O(1) Three.js objects. Reconciliation rebuilds on
+  source membership/shape changes and resets pose; model structure revisions
+  do not change for pose, materials, textures, visibility or model turns.
 - Step each source rig once at fixed 1/120 second with bounded catch-up; deform
   visible members only at selected-weight vertices and transform baseline normals
   with the same influence. Defer exact bounds and shadow-camera fitting until

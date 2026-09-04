@@ -13,11 +13,16 @@ function vector(value) {
 }
 
 function sourceFor(snapshot) {
+  if (snapshot?.model) return snapshot.model;
   return (snapshot?.sources || []).find(source =>
     source.sourceKey === snapshot.activeSourceKey) || null;
 }
 
 function selectedBoneFor(snapshot) {
+  if (snapshot?.model && snapshot.selectedJointId !== null
+      && snapshot.selectedJointId !== undefined) {
+    return Number(snapshot.selectedJointId);
+  }
   const value = snapshot?.selectedBoneId;
   if (value === null || value === undefined || value === '') return null;
   const id = Number(value);
@@ -31,11 +36,16 @@ function componentFor(source, boneId) {
 }
 
 function pivotFor(source, boneId) {
+  const joint = source?.joints?.find(item => item.jointId === Number(boneId));
+  if (joint?.restPivot) return joint.restPivot;
   const pivots = source?.jointPivotByBoneId;
   return pivots?.[boneId] || pivots?.get?.(boneId) || null;
 }
 
 function quaternionFor(source, boneId) {
+  const jointRotation = source?.poseRotationByJointId?.[boneId]
+    || source?.poseRotationByJointId?.get?.(boneId);
+  if (jointRotation) return jointRotation;
   const rotations = source?.poseRotationByBoneId;
   return rotations?.[boneId] || rotations?.get?.(boneId) || null;
 }
@@ -94,13 +104,33 @@ function centerColor(component, boneId, selectedBoneId) {
 
 export function createRigOverlayController({
   scene, camera, canvas, getMeshes, getRigState, getRigDebugState,
-  getRigBonePoseFrame, arcballControls,
-  setRigBoneRotation, finishRigPose, onTransformControlsUnavailable,
+  getRigBonePoseFrame, getRigJointPoseFrame, arcballControls,
+  setRigBoneRotation, setRigJointRotation, finishRigPose,
+  finishRigJointPose, onTransformControlsUnavailable,
   requestRender,
 } = {}) {
   // getRigDebugState is intentionally not used by the render path. It remains
   // an explicit diagnostic hook for callers that need the raw graph.
   void getRigDebugState;
+
+  const sourceForController = snapshot => {
+    if (snapshot?.model && (typeof getRigJointPoseFrame !== 'function'
+        || typeof setRigJointRotation !== 'function')) {
+      return (snapshot.sources || []).find(source =>
+        source.sourceKey === snapshot.activeSourceKey) || null;
+    }
+    return sourceFor(snapshot);
+  };
+  const selectedIdFor = (snapshot, source) => {
+    if (source?.joints && snapshot?.selectedJointId !== null
+        && snapshot?.selectedJointId !== undefined) {
+      return Number(snapshot.selectedJointId);
+    }
+    const value = snapshot?.selectedBoneId;
+    if (value === null || value === undefined || value === '') return null;
+    const id = Number(value);
+    return Number.isInteger(id) ? id : null;
+  };
 
   const group = new THREE.Group();
   group.name = 'viewer-inferred-rig-overlay';
@@ -122,7 +152,8 @@ export function createRigOverlayController({
     color: 0xfacc15, depthTest: false, depthWrite: false,
   });
   const lineMaterial = new THREE.LineBasicMaterial({
-    color: 0x60a5fa, depthTest: false, depthWrite: false,
+    color: 0x60a5fa, vertexColors: true,
+    depthTest: false, depthWrite: false,
   });
   const lineSegments = new THREE.LineSegments(
     new THREE.BufferGeometry(), lineMaterial);
@@ -175,6 +206,7 @@ export function createRigOverlayController({
   let dragBoneId = null;
   let dragParentRotation = null;
   let dragRestRotation = null;
+  let dragJointId = null;
   let disposed = false;
 
   function setArcballDragState(dragging) {
@@ -198,6 +230,7 @@ export function createRigOverlayController({
     dragBoneId = null;
     dragParentRotation = null;
     dragRestRotation = null;
+    dragJointId = null;
     rigTransformInteractionActive = false;
   }
 
@@ -208,7 +241,7 @@ export function createRigOverlayController({
     mesh.updateWorldMatrix?.(true, false);
     // Active model meshes are direct scene children. Copying this transform
     // keeps overlay points in model space when the user moves the model;
-    // pose quaternions remain source-local.
+    // pose quaternions remain in the inferred model frame.
     group.position.copy(mesh.position);
     group.quaternion.copy(mesh.quaternion);
     group.scale.copy(mesh.scale);
@@ -228,9 +261,13 @@ export function createRigOverlayController({
   }
 
   function rebuildOverlay(source) {
-    nodeByBoneId = new Map((source?.nodes || []).map(node => [
-      Number(node.boneId), node.weightedCenter,
-    ]).filter(([boneId, center]) => Number.isInteger(boneId) && center));
+    const modelNodes = (source?.joints || []).map(joint => [
+      Number(joint.jointId), joint.restCenter,
+    ]);
+    nodeByBoneId = new Map((modelNodes.length ? modelNodes
+      : (source?.nodes || []).map(node => [
+        Number(node.boneId), node.weightedCenter,
+      ])).filter(([boneId, center]) => Number.isInteger(boneId) && center));
     nodeBoneIds = [...nodeByBoneId.keys()];
     nodeIndexByBoneId = new Map(nodeBoneIds.map((boneId, index) => [
       boneId, index]));
@@ -247,13 +284,19 @@ export function createRigOverlayController({
     });
 
     const linePositions = [];
+    const lineColors = [];
     const jointPositions = [];
     (source?.forestEdges || []).forEach(edge => {
-      const parentId = Number(edge.parentId ?? edge.boneA);
-      const childId = Number(edge.childId ?? edge.boneB);
+      const parentId = Number(edge.parentId ?? edge.jointA ?? edge.boneA);
+      const childId = Number(edge.childId ?? edge.jointB ?? edge.boneB);
       const first = nodeByBoneId.get(parentId);
       const second = nodeByBoneId.get(childId);
-      if (first && second) linePositions.push(...first, ...second);
+      if (first && second) {
+        linePositions.push(...first, ...second);
+        const color = edge.relationshipType === 'attachment'
+          ? [1, .48, .15] : [.38, .65, 1];
+        lineColors.push(...color, ...color);
+      }
       if (first && second) lineBonePairs.push([parentId, childId]);
       const joint = edge.jointCenter || pivotFor(source, childId);
       if (joint) {
@@ -261,7 +304,15 @@ export function createRigOverlayController({
         jointPositions.push(...joint);
       }
     });
-    setGeometry(lineSegments, linePositions);
+    if (source?.joints?.length) {
+      jointChildBoneIds = source.joints.map(joint => Number(joint.jointId));
+      jointPositions.length = 0;
+      source.joints.forEach(joint => {
+        const pivot = joint.restPivot || joint.restCenter;
+        if (pivot) jointPositions.push(...pivot);
+      });
+    }
+    setGeometry(lineSegments, linePositions, lineColors);
     setGeometry(centerPoints, nodePositions, nodeColors);
     setGeometry(jointPoints, jointPositions);
     updatePosedOverlay(source);
@@ -275,7 +326,9 @@ export function createRigOverlayController({
     nodeBoneIds.forEach(boneId => {
       const index = nodeIndexByBoneId.get(boneId);
       if (!Number.isInteger(index)) return;
-      const frame = getRigBonePoseFrame?.(source.sourceKey, boneId);
+      const frame = source?.joints
+        ? getRigJointPoseFrame?.(boneId)
+        : getRigBonePoseFrame?.(source.sourceKey, boneId);
       const center = frame?.center || nodeByBoneId.get(boneId);
       if (!center || !centerAttribute) return;
       const value = vector(center);
@@ -297,7 +350,9 @@ export function createRigOverlayController({
     const jointAttribute = jointPoints.geometry.getAttribute('position');
     jointChildBoneIds.forEach((childId, index) => {
       if (!jointAttribute) return;
-      const frame = getRigBonePoseFrame?.(source.sourceKey, childId);
+      const frame = source?.joints
+        ? getRigJointPoseFrame?.(childId)
+        : getRigBonePoseFrame?.(source.sourceKey, childId);
       const value = frame?.pivot || pivotFor(source, childId);
       if (!value) return;
       const joint = vector(value);
@@ -308,19 +363,21 @@ export function createRigOverlayController({
   }
 
   function updateProxy(source = currentSource, snapshot = currentSnapshot) {
-    const boneId = selectedBoneFor(snapshot);
+    const boneId = selectedIdFor(snapshot, source);
     selectedBoneId = boneId;
     if (!canPose(snapshot, source, boneId)) {
       detachControls();
       proxy.visible = false;
       return;
     }
-    if (poseDragActive && source?.sourceKey === dragSourceKey
-        && boneId === dragBoneId) {
+    if (poseDragActive && boneId === dragBoneId
+        && (source?.joints || source?.sourceKey === dragSourceKey)) {
       proxy.visible = group.visible;
       return;
     }
-    const poseFrame = getRigBonePoseFrame?.(source.sourceKey, boneId);
+    const poseFrame = source?.joints
+      ? getRigJointPoseFrame?.(boneId)
+      : getRigBonePoseFrame?.(source.sourceKey, boneId);
     const pivot = poseFrame?.pivot || pivotFor(source, boneId);
     if (pivot) proxy.position.copy(vector(pivot));
     const values = poseFrame?.gizmoRotation || poseFrame?.boneRotation
@@ -341,19 +398,22 @@ export function createRigOverlayController({
   }
 
   function updatePoseFromEvent(detail) {
-    if (disposed || detail?.sourceKey !== activeSourceKey) return;
-    const id = Number(detail.boneId);
+    const modelMode = !!currentSource?.joints;
+    if (disposed || (!modelMode && detail?.sourceKey !== activeSourceKey)) return;
+    const id = Number(modelMode ? detail.jointId : detail.boneId);
     if (!Number.isInteger(id)) return;
     updatePosedOverlay(currentSource);
-    if (poseDragActive && detail?.sourceKey === dragSourceKey
-        && id === dragBoneId) {
+    if (poseDragActive && id === dragBoneId
+        && (modelMode || detail?.sourceKey === dragSourceKey)) {
       // TransformControls owns the proxy until the gesture ends. The model
       // still updates from every pose event, but its canonical state must not
       // overwrite the control's cached drag transform.
       return;
     }
     selectedBoneId = id;
-    const poseFrame = getRigBonePoseFrame?.(detail.sourceKey, id);
+    const poseFrame = modelMode
+      ? getRigJointPoseFrame?.(id)
+      : getRigBonePoseFrame?.(detail.sourceKey, id);
     if (poseFrame?.gizmoRotation?.length === 4) {
       proxy.position.copy(vector(poseFrame.pivot));
       proxy.quaternion.set(...poseFrame.gizmoRotation).normalize();
@@ -372,7 +432,8 @@ export function createRigOverlayController({
   }
 
   async function ensureTransformControls() {
-    if (!canPose(currentSnapshot, currentSource)) return null;
+    if (!canPose(currentSnapshot, currentSource,
+      selectedIdFor(currentSnapshot, currentSource))) return null;
     if (transformControlsReady) return transformControlsReady;
     transformControlsReady = import('three/addons/controls/TransformControls.js')
       .then(module => {
@@ -396,7 +457,7 @@ export function createRigOverlayController({
           if (!poseDragActive) return;
           const sourceKey = dragSourceKey;
           const boneId = dragBoneId;
-          if (!sourceKey || boneId === null) return;
+          if (boneId === null) return;
           let localRotation = proxy.quaternion.clone();
           if (dragParentRotation) {
             localRotation = dragParentRotation.clone().invert()
@@ -407,8 +468,12 @@ export function createRigOverlayController({
               .multiply(dragRestRotation.clone().invert())
               .normalize();
           }
-          setRigBoneRotation?.(
-            sourceKey, boneId, localRotation, {dragging: true});
+          if (currentSource?.joints) {
+            setRigJointRotation?.(boneId, localRotation, {dragging: true});
+          } else if (sourceKey) {
+            setRigBoneRotation?.(
+              sourceKey, boneId, localRotation, {dragging: true});
+          }
         });
         transformControls.addEventListener?.('dragging-changed', event => {
           if (event.value !== undefined && canvas?.style) {
@@ -416,20 +481,23 @@ export function createRigOverlayController({
           }
           if (event.value) {
             const source = currentSource;
-            const boneId = selectedBoneFor(currentSnapshot);
+            const boneId = selectedIdFor(currentSnapshot, source);
             if (!canPose(currentSnapshot, source, boneId)) return;
             poseDragActive = true;
-            dragSourceKey = source.sourceKey;
+            dragSourceKey = source?.joints ? null : source.sourceKey;
             dragBoneId = boneId;
+            dragJointId = source?.joints ? boneId : null;
             const poseFrame = getRigBonePoseFrame?.(
               dragSourceKey, dragBoneId);
-            dragParentRotation = poseFrame?.parentRotation?.length === 4
+            const modelPoseFrame = source?.joints
+              ? getRigJointPoseFrame?.(dragJointId) : poseFrame;
+            dragParentRotation = modelPoseFrame?.parentRotation?.length === 4
               ? new THREE.Quaternion(
-                ...poseFrame.parentRotation).normalize()
+                ...modelPoseFrame.parentRotation).normalize()
               : new THREE.Quaternion();
-            dragRestRotation = poseFrame?.restRotation?.length === 4
+            dragRestRotation = modelPoseFrame?.restRotation?.length === 4
               ? new THREE.Quaternion(
-                ...poseFrame.restRotation).normalize()
+                ...modelPoseFrame.restRotation).normalize()
               : new THREE.Quaternion();
             setArcballDragState(true);
             rigTransformInteractionActive = true;
@@ -445,11 +513,12 @@ export function createRigOverlayController({
             queueMicrotask(() => {
               rigTransformInteractionActive = false;
             });
-            if (sourceKey && boneId !== null) {
-              finishRigPose?.(sourceKey, boneId);
+            if (boneId !== null) {
+              if (dragJointId !== null) finishRigJointPose?.(dragJointId);
+              else if (sourceKey) finishRigPose?.(sourceKey, boneId);
               const snapshot = getRigState?.();
               currentSnapshot = snapshot || currentSnapshot;
-              currentSource = sourceFor(currentSnapshot);
+              currentSource = sourceForController(currentSnapshot);
               activeSourceKey = currentSource?.sourceKey || null;
               updatePosedOverlay(currentSource);
               updateProxy(currentSource, currentSnapshot);
@@ -470,9 +539,9 @@ export function createRigOverlayController({
   function refresh(snapshot = getRigState?.()) {
     if (disposed) return;
     currentSnapshot = snapshot || {};
-    currentSource = sourceFor(currentSnapshot);
+    currentSource = sourceForController(currentSnapshot);
     activeSourceKey = currentSource?.sourceKey || null;
-    selectedBoneId = selectedBoneFor(currentSnapshot);
+    selectedBoneId = selectedIdFor(currentSnapshot, currentSource);
     const nextTopologyKey = topologyKey(currentSource);
     if (nextTopologyKey !== currentTopologyKey) {
       currentTopologyKey = nextTopologyKey;
@@ -485,7 +554,10 @@ export function createRigOverlayController({
     updateCenterColors();
     updateProxy(currentSource, currentSnapshot);
     syncRotationSnap(currentSnapshot);
-    if (canPose(currentSnapshot, currentSource)) void ensureTransformControls();
+    if (canPose(currentSnapshot, currentSource,
+      selectedIdFor(currentSnapshot, currentSource))) {
+      void ensureTransformControls();
+    }
     requestRender?.();
   }
 

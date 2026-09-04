@@ -1,11 +1,13 @@
-// Experimental inferred Rig/Pose panel.  It exposes source-scoped IDs and
-// evidence only; it never edits Weight/Physics selection state.
+// Experimental inferred Rig/Pose panel. It exposes canonical model joints
+// and source membership without editing Weight/Physics selection state.
 
 import {
   beginRigPicking, cancelRigPicking, ensureModelRigLoaded,
   eulerFromRestFrameDelta, getModelRigState, getRigBonePoseFrame,
+  getRigJointPoseFrame,
   resetRigBone, resetRigPose, selectRigBone,
-  setActiveRigSource, setRigComponentRoot, setRigRotationSnapDegrees,
+  selectRigJoint,
+  setRigComponentRoot, setRigRotationSnapDegrees,
   setRigVisible,
 } from '../mesh/weight-experiment.js';
 
@@ -37,16 +39,16 @@ function selectedSource(state = latestState) {
     source.sourceKey === state.activeSourceKey) || state?.sources?.[0] || null;
 }
 
+function selectedJoint(state = latestState) {
+  const id = Number(state?.selectedJointId);
+  return state?.model?.joints?.find(joint => joint.jointId === id) || null;
+}
+
 function componentFor(source, boneId) {
   if (boneId === null || boneId === undefined
       || !Number.isInteger(Number(boneId))) return null;
   return source?.components?.find(component =>
     component.nodeIds.includes(Number(boneId))) || null;
-}
-
-function sourceLabel(source) {
-  const file = String(source?.sourceFile || source?.sourceKey || 'Source');
-  return `${file} · offset +${Number(source?.boneIdOffset) || 0}`;
 }
 
 function addNavigationButton(parent, sourceKey, boneId) {
@@ -55,12 +57,31 @@ function addNavigationButton(parent, sourceKey, boneId) {
   button.className = 'rig-nav-button';
   button.textContent = String(boneId);
   button.dataset.boneId = String(boneId);
-  button.addEventListener('click', () => selectRigBone(sourceKey, boneId));
+  button.addEventListener('click', () => sourceKey === null
+    ? selectRigJoint(boneId) : selectRigBone(sourceKey, boneId));
   parent.appendChild(button);
 }
 
 function syncRotationReadout(state = latestState, localOverride = null) {
   if (!ui?.rotationValues) return;
+  const joint = selectedJoint(state);
+  if (joint) {
+    const id = Number(joint.jointId);
+    const frame = getRigJointPoseFrame(id);
+    const local = localOverride?.length === 4
+      ? localOverride : state.model?.poseRotationByJointId?.[id]
+        || [0, 0, 0, 1];
+    if (!frame?.restRotation) {
+      ui.rotationValues.forEach(value => { value.textContent = '—'; });
+      return;
+    }
+    const euler = eulerFromRestFrameDelta(local, frame.restRotation, 'XYZ');
+    [euler.x, euler.y, euler.z].forEach((value, index) => {
+      ui.rotationValues[index].textContent =
+        `${(value * 180 / Math.PI).toFixed(1)}°`;
+    });
+    return;
+  }
   const source = selectedSource(state);
   const selectedId = source?.selectedBoneId ?? state?.selectedBoneId;
   const id = Number(selectedId);
@@ -101,20 +122,19 @@ function buildPanel() {
   addText(visibleLabel, 'weight-label', 'Show inferred rig');
   display.appendChild(visibleLabel);
 
-  const sourceSection = section('Source');
-  ui.source = document.createElement('select');
-  ui.source.className = 'rig-source-select';
-  ui.source.setAttribute('aria-label', 'Rig source');
-  ui.source.addEventListener('change', () => setActiveRigSource(ui.source.value));
-  sourceSection.appendChild(ui.source);
+  const sourceSection = section('Model');
+  ui.modelSummary = addText(sourceSection, 'rig-value', '—');
 
-  const boneSection = section('Selected Bone');
+  const boneSection = section('Selected Joint');
   ui.bone = document.createElement('select');
   ui.bone.className = 'rig-bone-select';
-  ui.bone.setAttribute('aria-label', 'Selected rig bone');
+  ui.bone.setAttribute('aria-label', 'Selected model joint');
   ui.bone.addEventListener('change', () => {
-    const source = selectedSource();
-    if (source) selectRigBone(source.sourceKey, Number(ui.bone.value));
+    if (latestState?.model) selectRigJoint(Number(ui.bone.value));
+    else {
+      const source = selectedSource();
+      if (source) selectRigBone(source.sourceKey, Number(ui.bone.value));
+    }
   });
   boneSection.appendChild(ui.bone);
   ui.influences = document.createElement('div');
@@ -160,8 +180,13 @@ function buildPanel() {
   ui.setRoot.className = 'ui-button rig-set-root';
   ui.setRoot.textContent = 'Set selected as root';
   ui.setRoot.addEventListener('click', () => {
-    const source = selectedSource();
-    if (source) setRigComponentRoot(source.sourceKey, Number(ui.bone.value));
+    const joint = selectedJoint();
+    const member = joint?.representativeMember || joint?.members?.[0];
+    if (member) setRigComponentRoot(member.sourceKey, member.boneId);
+    else {
+      const source = selectedSource();
+      if (source) setRigComponentRoot(source.sourceKey, Number(ui.bone.value));
+    }
   });
   componentSection.appendChild(ui.setRoot);
 
@@ -199,8 +224,13 @@ function buildPanel() {
   ui.resetBone.className = 'ui-button rig-reset-bone';
   ui.resetBone.textContent = 'Reset Bone';
   ui.resetBone.addEventListener('click', () => {
-    const source = selectedSource();
-    if (source) resetRigBone(source.sourceKey, Number(ui.bone.value));
+    const joint = selectedJoint();
+    const member = joint?.representativeMember || joint?.members?.[0];
+    if (member) resetRigBone(member.sourceKey, member.boneId);
+    else {
+      const source = selectedSource();
+      if (source) resetRigBone(source.sourceKey, Number(ui.bone.value));
+    }
   });
   ui.resetPose = document.createElement('button');
   ui.resetPose.type = 'button';
@@ -214,21 +244,63 @@ function buildPanel() {
 }
 
 function syncOptions(state) {
-  const source = selectedSource(state);
-  const sourceKey = JSON.stringify((state.sources || []).map(item => [
-    item.sourceKey, item.boneIds, item.sourceFile, item.boneIdOffset,
-  ]));
-  if (sourceKey !== ui.source.dataset.optionKey) {
-    ui.source.replaceChildren();
-    (state.sources || []).forEach(item => {
-      const option = document.createElement('option');
-      option.value = item.sourceKey;
-      option.textContent = sourceLabel(item);
-      ui.source.appendChild(option);
-    });
-    ui.source.dataset.optionKey = sourceKey;
+  const model = state.model;
+  if (model) {
+    ui.modelSummary.textContent = `${model.joints.length} model joint${
+      model.joints.length === 1 ? '' : 's'} · ${(state.sources || []).length} source${
+      (state.sources || []).length === 1 ? '' : 's'}`;
+    const jointKey = JSON.stringify(model.joints.map(joint => [
+      joint.jointId, joint.members,
+    ]));
+    if (jointKey !== ui.bone.dataset.optionKey) {
+      ui.bone.replaceChildren();
+      model.joints.forEach(joint => {
+        const option = document.createElement('option');
+        option.value = String(joint.jointId);
+        option.textContent = String(joint.jointId);
+        ui.bone.appendChild(option);
+      });
+      ui.bone.dataset.optionKey = jointKey;
+    }
+    const joint = selectedJoint(state);
+    const selectedId = joint?.jointId ?? state.selectedJointId;
+    if (selectedId !== null && selectedId !== undefined) {
+      ui.bone.value = String(selectedId);
+    }
+    ui.influences.replaceChildren();
+    if (joint?.members?.length) {
+      joint.members.forEach(member => {
+        const row = document.createElement('div');
+        row.className = 'rig-influence';
+        addText(row, 'rig-influence-id',
+          `${member.sourceKey} · bone ${member.boneId}`);
+        ui.influences.appendChild(row);
+      });
+    }
+    const component = model.components?.find(item =>
+      item.nodeIds.includes(Number(selectedId))) || null;
+    ui.root.textContent = component ? String(component.rootId) : '—';
+    ui.depth.textContent = component
+      ? String(component.depthById?.[selectedId] ?? '—') : '—';
+    ui.parent.replaceChildren();
+    ui.children.replaceChildren();
+    if (component && Number.isInteger(Number(selectedId))) {
+      const parentId = component.parentById?.[selectedId];
+      if (parentId !== null && parentId !== undefined) {
+        addNavigationButton(ui.parent, null, Number(parentId));
+      } else addText(ui.parent, 'rig-value', '—');
+      const children = component.childrenById?.[selectedId] || [];
+      if (children.length) children.forEach(childId =>
+        addNavigationButton(ui.children, null, Number(childId)));
+      else addText(ui.children, 'rig-value', '—');
+    } else {
+      addText(ui.parent, 'rig-value', '—');
+      addText(ui.children, 'rig-value', '—');
+    }
+    syncRotationReadout(state);
+    return;
   }
-  if (source) ui.source.value = source.sourceKey;
+  const source = selectedSource(state);
   const boneKey = JSON.stringify(source?.boneIds || []);
   if (boneKey !== ui.bone.dataset.optionKey) {
     ui.bone.replaceChildren();
@@ -300,7 +372,9 @@ function syncPanel(state = getModelRigState()) {
   else if (state.error) ui.status.textContent = state.error;
   else if (!state.loaded) ui.status.textContent = 'Open this panel to load authored weights.';
   else if (!state.sources?.length) ui.status.textContent = 'No usable Blend skinning data found.';
-  else ui.status.textContent = `${state.sources.length} source rig${state.sources.length === 1 ? '' : 's'}`;
+  else ui.status.textContent = state.model
+    ? `${state.model.joints.length} model joint${state.model.joints.length === 1 ? '' : 's'}`
+    : `${state.sources.length} source rig${state.sources.length === 1 ? '' : 's'}`;
   if (state.pickStatus) ui.status.textContent = state.pickStatus;
   syncOptions(state);
   ui.visible.checked = !!state.visible;
@@ -311,12 +385,17 @@ function syncPanel(state = getModelRigState()) {
   ui.snap.value = String(state.rotationSnapDegrees ?? 0);
   ui.snap.disabled = !state.loaded || !state.sources?.length;
   const source = selectedSource(state);
-  const physicsActive = !!source?.physicsActive;
-  const hasSelectedBone = state.selectedBoneId !== null
-    && state.selectedBoneId !== undefined;
+  const physicsActive = modelStateHasPhysics(state);
+  const hasSelectedBone = state.model
+    ? state.selectedJointId !== null && state.selectedJointId !== undefined
+    : state.selectedBoneId !== null && state.selectedBoneId !== undefined;
   ui.setRoot.disabled = !source || physicsActive || !hasSelectedBone;
   ui.resetBone.disabled = !source || physicsActive || !hasSelectedBone;
   ui.resetPose.disabled = !state.loaded || physicsActive;
+}
+
+function modelStateHasPhysics(state) {
+  return (state.sources || []).some(source => source.physicsActive);
 }
 
 function loadOnDemand() {
@@ -332,7 +411,10 @@ export function initRigPanel() {
   window.addEventListener('mod-viewer-model-rig-changed', event =>
     syncPanel(event.detail));
   window.addEventListener('mod-viewer-model-rig-pose-changed', event => {
-    if (event.detail?.sourceKey === latestState?.activeSourceKey
+    if (latestState?.model
+        && Number(event.detail?.jointId) === Number(latestState?.selectedJointId)) {
+      syncRotationReadout(latestState, event.detail?.quaternion);
+    } else if (event.detail?.sourceKey === latestState?.activeSourceKey
         && Number(event.detail?.boneId) === Number(latestState?.selectedBoneId)) {
       syncRotationReadout(latestState, event.detail?.quaternion);
     }
