@@ -396,12 +396,20 @@ def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_p
             containment: .9, jaccard: .4, treeEdgeScore: .9},
         ],
       });
+      const nonZeroRootPivots = rig.jointPivotMap({components: [{
+        rootId: 1,
+        parentById: {1: null, 0: 1, 2: 1},
+      }]}, [
+        {boneA: 0, boneB: 1, jointCenter: [.5, 0, 0]},
+        {boneA: 1, boneB: 2, jointCenter: [1.5, 0, 0]},
+      ]);
       return {
         pivot: relationships[0].jointCenter,
         jointWeight: relationships[0].jointWeightTotal,
         aggregatePivot: aggregate.relationships[0].jointCenter,
         components: forest.components.map(component => component.nodeIds),
         roots: forest.components.map(component => component.rootId),
+        nonZeroRootPivotKeys: [...nonZeroRootPivots.keys()],
       };
     }""")
     assert result["pivot"] == pytest.approx([2, 0, 0])
@@ -409,6 +417,7 @@ def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_p
     assert result["aggregatePivot"] == pytest.approx([7, 0, 0])
     assert sorted(result["components"]) == [[1, 2, 3], [4, 5]]
     assert len(set(result["roots"])) == 2
+    assert result["nonZeroRootPivotKeys"] == [0, 2]
 
 
 def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_page):
@@ -437,6 +446,50 @@ def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_pa
         forest, centers, pivots);
       const second = frames.buildInferredRigRestFrames(
         forest, centers, pivots);
+      const modelForest = {components: [{
+        componentId: 0, rootId: 0, nodeIds: [0, 1, 2, 3],
+        parentById: {0: null, 1: 0, 2: 1, 3: 1},
+        childrenById: {0: [1], 1: [2, 3], 2: [], 3: []},
+        edges: [
+          {jointA: 0, jointB: 1, combinedTreeScore: .9},
+          {jointA: 1, jointB: 2, combinedTreeScore: .2},
+          {jointA: 1, jointB: 3, combinedTreeScore: .9},
+        ],
+      }]};
+      const modelCenters = new Map([
+        [0, [0, 0, 0]], [1, [0, 1, 0]],
+        [2, [0, 3, 0]], [3, [0, 3, 0]],
+      ]);
+      const modelPivots = new Map([
+        [1, [0, 1, 0]], [2, [0, 3, 0]], [3, [0, 3, 0]],
+      ]);
+      const modelFrames = frames.buildInferredRigRestFrames(
+        modelForest, modelCenters, modelPivots);
+      const disconnected = {
+        componentId: 1, rootId: 4, nodeIds: [4, 5],
+        parentById: {4: null, 5: 4}, childrenById: {4: [5], 5: []},
+        edges: [{jointA: 4, jointB: 5, combinedTreeScore: .5}],
+      };
+      const twoComponentCenters = new Map([
+        ...modelCenters, [4, [10, 0, 0]], [5, [10, 1, 0]],
+      ]);
+      const twoComponentPivots = new Map([
+        ...modelPivots, [5, [10, 1, 0]],
+      ]);
+      const disconnectedBefore = frames.buildInferredRigRestFrames({
+        components: [modelForest.components[0], disconnected],
+      }, twoComponentCenters, twoComponentPivots);
+      const rerootedModelComponent = {
+        ...modelForest.components[0], rootId: 3,
+        parentById: {3: null, 1: 3, 0: 1, 2: 1},
+        childrenById: {3: [1], 1: [0, 2], 0: [], 2: []},
+      };
+      const disconnectedAfter = frames.buildInferredRigRestFrames({
+        components: [rerootedModelComponent, disconnected],
+      }, twoComponentCenters, twoComponentPivots);
+      const disconnectedStable = [4, 5].every(id =>
+        disconnectedBefore.frameByBoneId.get(id).equals(
+          disconnectedAfter.frameByBoneId.get(id)));
       const yFor = id => new THREE.Vector3(0, 1, 0)
         .applyQuaternion(first.frameByBoneId.get(id)).toArray();
       const xFor = id => new THREE.Vector3(1, 0, 0)
@@ -450,6 +503,8 @@ def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_pa
       return {
         directions: [0, 1, 2, 3].map(yFor),
         continuation: [...first.continuationChildByBoneId.entries()],
+        modelContinuation: [...modelFrames.continuationChildByBoneId.entries()],
+        disconnectedStable,
         evidence: [...first.evidenceByBoneId.entries()],
         xDot: xFor(1).reduce((sum, value, index) =>
           sum + value * xFor(0)[index], 0),
@@ -465,6 +520,8 @@ def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_pa
     assert result["directions"][2] == pytest.approx([0, 1, 0])
     assert result["directions"][3] == pytest.approx([-1, 0, 0])
     assert result["continuation"] == [[0, 1], [1, 2], [2, None], [3, None]]
+    assert result["modelContinuation"] == [[0, 1], [1, 3], [2, None], [3, None]]
+    assert result["disconnectedStable"]
     assert result["xDot"] > 0
     assert result["normalized"] == pytest.approx([1, 1, 1, 1])
     assert result["deterministic"]

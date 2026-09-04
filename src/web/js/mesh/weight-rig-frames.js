@@ -43,8 +43,8 @@ function childrenFor(component, boneId) {
 
 function edgeFor(component, parentId, childId) {
   return (component?.edges || []).find(edge => {
-    const left = Number(edge.boneA);
-    const right = Number(edge.boneB);
+    const left = Number(edge.boneA ?? edge.jointA);
+    const right = Number(edge.boneB ?? edge.jointB);
     return (left === parentId && right === childId)
       || (left === childId && right === parentId);
   }) || null;
@@ -52,6 +52,7 @@ function edgeFor(component, parentId, childId) {
 
 function edgeStrength(edge) {
   return Number(edge?.treeEdgeScore ?? edge?.score
+    ?? edge?.combinedTreeScore ?? edge?.attachmentScore
     ?? edge?.containment ?? edge?.jaccard ?? 0) || 0;
 }
 

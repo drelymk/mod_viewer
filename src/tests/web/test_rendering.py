@@ -1337,6 +1337,10 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
             pivotOfBone0: afterReroot.joints.find(joint =>
               joint.jointId === jointIds[0])?.restPivot,
             pivotOfBone1Before: oldPivots.get(jointIds[1]),
+            rootPivotAfter: afterReroot.joints.find(joint =>
+              joint.jointId === jointIds[2])?.restPivot,
+            rootCenterAfter: afterReroot.joints.find(joint =>
+              joint.jointId === jointIds[2])?.restCenter,
             frameMatches,
           };
         }""")
@@ -1368,6 +1372,8 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
             result["pivotOfBone2Before"], abs=1e-5)
         assert result["pivotOfBone0"] == pytest.approx(
             result["pivotOfBone1Before"], abs=1e-5)
+        assert result["rootPivotAfter"] == pytest.approx(
+            result["rootCenterAfter"], abs=1e-5)
         assert result["frameMatches"]
     finally:
         page.evaluate("""() => {

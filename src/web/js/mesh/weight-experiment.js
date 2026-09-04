@@ -1804,8 +1804,11 @@ function rebuildModelRestFrames(rig, forest) {
   const edgePivots = rig.jointPivotByEdgeKey
     || buildModelJointPivotByEdgeKey(rig);
   const pivots = new Map();
+  const rootIds = new Set((forest?.components || []).map(component =>
+    Number(component.rootId)).filter(Number.isInteger));
   (forest?.components || []).forEach(component => {
     Object.entries(component.parentById || {}).forEach(([childValue, parentValue]) => {
+      if (parentValue === null || parentValue === undefined) return;
       const childId = Number(childValue);
       const parentId = Number(parentValue);
       if (!Number.isInteger(childId) || !Number.isInteger(parentId)) return;
@@ -1815,6 +1818,11 @@ function rebuildModelRestFrames(rig, forest) {
   });
   (rig.joints || []).forEach(joint => {
     const jointId = Number(joint.jointId);
+    if (rootIds.has(jointId)) {
+      pivots.set(jointId, finiteVectorArray(joint.restCenter)
+        || [0, 0, 0]);
+      return;
+    }
     if (!pivots.has(jointId)) {
       pivots.set(jointId, finiteVectorArray(joint.restPivot)
         || finiteVectorArray(joint.restCenter) || [0, 0, 0]);

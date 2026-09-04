@@ -746,6 +746,7 @@ export function jointPivotMap(forest, relationships) {
   const pivots = new Map();
   (forest?.components || []).forEach(component => {
     Object.entries(component.parentById || {}).forEach(([childValue, parentValue]) => {
+      if (parentValue === null || parentValue === undefined) return;
       const childId = Number(childValue);
       const parentId = Number(parentValue);
       if (!Number.isFinite(childId) || !Number.isFinite(parentId)) return;
