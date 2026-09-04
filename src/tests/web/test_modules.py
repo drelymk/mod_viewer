@@ -50,6 +50,13 @@ def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
       };
       const serialized = presets.serializeRigPose(rig,
         {explicitRootSignatures: new Set([first])});
+      const identitySerialized = presets.serializeRigPose({
+        joints: [{jointId: 1, signature: first},
+          {jointId: 2, signature: second}],
+        poseRotationByJointId: new Map([
+          [1, [0, 0, 0, 1]], [2, [0, 0, 0, -1]],
+        ]),
+      });
       const resolved = presets.resolveRigPreset({
         joints: [{jointId: 100, signature: first},
           {jointId: 200, signature: second}],
@@ -64,6 +71,7 @@ def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
       });
       return {
         serialized,
+        identitySerialized,
         resolved: {
           roots: resolved.roots,
           joints: resolved.joints,
@@ -79,6 +87,7 @@ def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
                     "rotation": pytest.approx(
                         [0, 0, 2 ** -0.5, 2 ** -0.5])}],
     }
+    assert result["identitySerialized"] == {"roots": [], "joints": []}
     assert result["resolved"]["roots"] == [{
         "jointId": 100,
         "jointSignature": '["body|offset=0#bone=7"]',

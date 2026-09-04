@@ -1,7 +1,6 @@
 """Viewer-only mesh labels and texture choices stored beside a mod."""
 from collections import Counter
 import json
-import math
 import os
 import threading
 from copy import deepcopy
@@ -273,35 +272,9 @@ def save_weight_selected_bones(folder_path, bones):
         }
 
 
-def _normalized_rig_rotation(value):
-    if (not isinstance(value, list) or len(value) != 4
-            or any(isinstance(item, bool) or not isinstance(item, (int, float))
-                   or not math.isfinite(item)
-                   for item in value)):
-        return None
-    length = sum(item * item for item in value) ** 0.5
-    if length <= 1e-12:
-        return None
-    return [item / length for item in value]
-
-
-def _normalized_rig_signature(value):
-    return value.strip() if isinstance(value, str) and value.strip() else None
-
-
 def _normalized_rig_entry(value, joint=False):
-    if not isinstance(value, dict):
-        return None
-    signature = _normalized_rig_signature(value.get("joint_signature"))
-    if signature is None:
-        return None
-    entry = {"joint_signature": signature}
-    if joint:
-        rotation = _normalized_rig_rotation(value.get("rotation"))
-        if rotation is None:
-            return None
-        entry["rotation"] = rotation
-    return entry
+    """Keep entry-level data lossless; the browser resolves and normalizes it."""
+    return deepcopy(value)
 
 
 def _normalized_rig_preset(value):
@@ -319,18 +292,9 @@ def _normalized_rig_preset(value):
     joints = value.get("joints")
     if not isinstance(roots, list) or not isinstance(joints, list):
         return None
-    normalized_roots = []
-    normalized_joints = []
-    for entry in roots:
-        normalized = _normalized_rig_entry(entry)
-        if normalized is None:
-            return None
-        normalized_roots.append(normalized)
-    for entry in joints:
-        normalized = _normalized_rig_entry(entry, joint=True)
-        if normalized is None:
-            return None
-        normalized_joints.append(normalized)
+    normalized_roots = [_normalized_rig_entry(entry) for entry in roots]
+    normalized_joints = [_normalized_rig_entry(entry, joint=True)
+                         for entry in joints]
     return {
         "id": preset_id.strip(), "name": name,
         "roots": normalized_roots, "joints": normalized_joints,
@@ -366,11 +330,21 @@ def rig_pose_presets(folder_path=None, data=None):
 
 
 def _rig_data_for_update(data):
+    raw_rig = data.get(RIG_METADATA_KEY) if isinstance(data, dict) else None
+    if raw_rig is not None and not isinstance(raw_rig, dict):
+        return None, None, "Pose preset metadata uses an unsupported version."
+    if isinstance(raw_rig, dict):
+        if raw_rig.get("version") != RIG_METADATA_VERSION:
+            return None, None, "Pose preset metadata uses an unsupported version."
+        if not isinstance(raw_rig.get("presets"), list):
+            return None, None, "Pose preset metadata could not be updated."
     current = rig_pose_presets(data=data)
+    if current["error"]:
+        return None, None, "Pose preset metadata could not be updated."
     return current, {
         "version": RIG_METADATA_VERSION,
         "presets": deepcopy(current["presets"]),
-    }
+    }, None
 
 
 def save_rig_pose_preset(folder_path, preset):
@@ -380,7 +354,9 @@ def save_rig_pose_preset(folder_path, preset):
         return {"saved": False, "error": "Invalid pose preset."}
     with _LOCK:
         data = load(folder_path)
-        current, rig = _rig_data_for_update(data)
+        current, rig, error = _rig_data_for_update(data)
+        if error:
+            return {"saved": False, "error": error}
         if any(item["id"] == normalized["id"] for item in current["presets"]):
             return {"saved": False, "error": "A pose with this ID already exists."}
         if any(item["name"].casefold() == normalized["name"].casefold()
@@ -402,7 +378,9 @@ def rename_rig_pose_preset(folder_path, preset_id, name):
     normalized_name = name.strip()
     with _LOCK:
         data = load(folder_path)
-        current, rig = _rig_data_for_update(data)
+        current, rig, error = _rig_data_for_update(data)
+        if error:
+            return {"saved": False, "error": error}
         target = next((item for item in rig["presets"]
                        if item["id"] == preset_id.strip()), None)
         if target is None:
@@ -423,7 +401,9 @@ def delete_rig_pose_preset(folder_path, preset_id):
         return {"saved": False, "error": "Invalid pose preset ID."}
     with _LOCK:
         data = load(folder_path)
-        current, rig = _rig_data_for_update(data)
+        current, rig, error = _rig_data_for_update(data)
+        if error:
+            return {"saved": False, "error": error}
         before = len(rig["presets"])
         rig["presets"] = [item for item in rig["presets"]
                           if item["id"] != preset_id.strip()]

@@ -1385,6 +1385,212 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
         context.close()
 
 
+def test_rig_pose_preset_recomputes_descendants_after_root_change(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"RigPosePersistence":
+                                     _payload("RigPosePersistence")})
+    try:
+        _open(page, "RigPosePersistence")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 1, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__rigPosePersistenceUrl = url;
+          window.__testSkinningPreview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0',
+              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
+            },
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+        }""")
+        page.locator("#rig-tab").click()
+        page.wait_for_function("window.modViewer.getModelRigState().loaded")
+        result = page.evaluate("""async () => {
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const presets = await import('./js/mesh/weight-rig-presets.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const positions = () => [...mesh.geometry.attributes.position.array];
+          const differs = (left, right) => left.some((value, index) =>
+            Math.abs(value - right[index]) > 1e-5);
+          let state = experiment.getModelRigState();
+          const sourceKey = state.sources[0].sourceKey;
+          const source = state.sources[0];
+          const initialRoot = 0;
+          experiment.setRigComponentRoot(sourceKey, initialRoot);
+          state = experiment.getModelRigState();
+          const rootedSource = state.sources[0];
+          const rootedComponent = rootedSource.components.find(component =>
+            component.rootId === initialRoot);
+          const boneB = Number(rootedComponent.childrenById[initialRoot][0]);
+          const boneC = Number(rootedComponent.childrenById[boneB][0]);
+          const chain = [initialRoot, boneB, boneC];
+          const q = [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)];
+          const posed = experiment.setRigBoneRotation(sourceKey, boneB, q,
+            {dragging: true});
+          const beforeApply = positions();
+          state = experiment.getModelRigState();
+          const model = state.model;
+          const signatureForBone = boneId => model.joints.find(joint =>
+            Number(state.sources[0].modelJointIds[boneId]) === joint.jointId
+          )?.signature;
+          const preset = {
+            id: 'root-c-pose-b', name: 'Root C / Pose B',
+            roots: [{joint_signature: signatureForBone(boneC)}],
+            joints: [{joint_signature: signatureForBone(boneB), rotation: q}],
+          };
+          const resolved = presets.resolveRigPreset(
+            {joints: model.joints}, preset);
+          const position = mesh.geometry.attributes.position;
+          const versionBefore = position.version;
+          const applied = experiment.applyRigPosePreset(resolved);
+          const afterApply = positions();
+          const applyVersionDelta = position.version - versionBefore;
+          experiment.resetRigPose();
+          experiment.setRigComponentRoot(sourceKey, boneC);
+          experiment.setRigBoneRotation(sourceKey, boneB, q,
+            {dragging: true});
+          const fresh = positions();
+          return {
+            appliedRootCount: applied.appliedRootCount,
+            skippedRootCount: applied.skippedRootCount,
+            appliedJointCount: applied.appliedJointCount,
+            posed, initialRoot, chain,
+            applyVersionDelta,
+            beforeChanged: differs(beforeApply, [0, 0, 0, 1, 0, 0, 0, 1, 0]),
+            matchesFresh: afterApply.every((value, index) =>
+              Math.abs(value - fresh[index]) < 1e-5),
+            freshChanged: differs(fresh, [0, 0, 0, 1, 0, 0, 0, 1, 0]),
+          };
+        }""")
+        assert result["appliedRootCount"] == 1
+        assert result["skippedRootCount"] == 0
+        assert result["appliedJointCount"] == 1
+        assert result["applyVersionDelta"] == 1
+        assert result["beforeChanged"], json.dumps(result)
+        assert result["matchesFresh"]
+        assert result["freshChanged"]
+    finally:
+        page.evaluate("""() => {
+          if (window.__rigPosePersistenceUrl) {
+            URL.revokeObjectURL(window.__rigPosePersistenceUrl);
+            window.__rigPosePersistenceUrl = null;
+          }
+        }""")
+        context.close()
+
+
+def test_rig_pose_preset_restores_roots_for_disconnected_components(
+        edge_browser, frontend_url):
+    payload = _payload("RigMultiRoot")
+    entry = next(iter(payload["meshes"].values()))
+    entry["drawindexed"] = [6, 0, 0]
+    entry["pos"] = _f32(
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        4, 0, 0, 5, 0, 0, 4, 1, 0,
+    )
+    entry["idx"] = _u32(0, 1, 2, 2, 3, 0)
+    context, page = _page(
+        edge_browser, frontend_url, {"RigMultiRoot": payload})
+    try:
+        _open(page, "RigMultiRoot")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(96);
+          new Uint32Array(bytes.buffer).set([
+            0, 1, 0, 1, 6, 7, 6, 7, 6, 7, 0, 1,
+          ]);
+          new Float32Array(bytes.buffer, 48).set([
+            .8, .2, .7, .3, .8, .2, .7, .3,
+            .8, .2, .7, .3,
+          ]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__rigMultiRootUrl = url;
+          window.__testSkinningPreview = async () => ({
+            status: 'ok', vertex_count: 6, influence_count: 2,
+            bone_ids: [0, 1, 6, 7], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0',
+              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
+            },
+            data: {
+              url, length: 96,
+              indices: {offset: 0, length: 48, type: 'u32'},
+              weights: {offset: 48, length: 48, type: 'f32'},
+            }, diagnostics: {},
+          });
+        }""")
+        page.locator("#rig-tab").click()
+        page.wait_for_function("window.modViewer.getModelRigState().loaded")
+        result = page.evaluate("""async () => {
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const presets = await import('./js/mesh/weight-rig-presets.js');
+          let state = experiment.getModelRigState();
+          const sourceKey = state.sources[0].sourceKey;
+          const source = state.sources[0];
+          const components = source.components.filter(component =>
+            component.nodeIds.includes(0) || component.nodeIds.includes(6));
+          const roots = components.map(component =>
+            component.nodeIds.includes(0) ? 1 : 7);
+          if (components.length !== 2) {
+            return {componentCount: components.length};
+          }
+          roots.forEach(root => experiment.setRigComponentRoot(sourceKey, root));
+          state = experiment.getModelRigState();
+          const rootsBeforeApply = state.model.explicitRootSignatures;
+          const model = state.model;
+          const jointIdForBone = boneId => Number(
+            state.sources[0].modelJointIds[boneId]);
+          const signatureForBone = boneId => model.joints.find(joint =>
+            joint.jointId === jointIdForBone(boneId))?.signature;
+          const q = [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)];
+          experiment.setRigBoneRotation(sourceKey, 0, q, {dragging: true});
+          const preset = {
+            id: 'two-roots', name: 'Two roots',
+            roots: roots.map(root => ({joint_signature: signatureForBone(root)})),
+            joints: [{joint_signature: signatureForBone(0), rotation: q}],
+          };
+          const resolved = presets.resolveRigPreset({joints: model.joints}, preset);
+          experiment.resetRigPose();
+          const position = window.modViewer.activeMeshes[0]
+            .geometry.attributes.position;
+          const versionBefore = position.version;
+          const applied = experiment.applyRigPosePreset(resolved);
+          state = experiment.getModelRigState();
+          return {
+            componentCount: state.model.components.length,
+            explicitRootCount: state.model.explicitRootSignatures.length,
+            rootsBeforeApply,
+            appliedRootCount: applied.appliedRootCount,
+            skippedRootCount: applied.skippedRootCount,
+            appliedJointCount: applied.appliedJointCount,
+            applyVersionDelta: position.version - versionBefore,
+          };
+        }""")
+        assert result["componentCount"] == 2, result
+        assert len(result["rootsBeforeApply"]) == 2, result
+        assert result["explicitRootCount"] == 2, result
+        assert result["appliedRootCount"] == 2, result
+        assert result["skippedRootCount"] == 0, result
+        assert result["appliedJointCount"] == 1, result
+        assert result["applyVersionDelta"] == 1, result
+    finally:
+        page.evaluate("""() => {
+          if (window.__rigMultiRootUrl) {
+            URL.revokeObjectURL(window.__rigMultiRootUrl);
+            window.__rigMultiRootUrl = null;
+          }
+        }""")
+        context.close()
+
+
 def test_rig_overlay_real_controls_deform_without_proxy_feedback(
         edge_browser, frontend_url):
     context, page = _page(

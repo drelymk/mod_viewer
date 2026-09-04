@@ -65,6 +65,26 @@ function addNavigationButton(parent, sourceKey, boneId) {
   parent.appendChild(button);
 }
 
+function rigPresetApplyMessage(name, result) {
+  const appliedJoints = Number(result?.appliedJointCount) || 0;
+  const appliedRoots = Number(result?.appliedRootCount) || 0;
+  const skippedJoints = Number(result?.skippedJointCount) || 0;
+  const skippedRoots = Number(result?.skippedRootCount) || 0;
+  const parts = [`Applied "${name}" — ${appliedJoints} joints.`];
+  if (appliedRoots) {
+    parts.push(`${appliedRoots} root${appliedRoots === 1 ? '' : 's'} restored.`);
+  }
+  if (skippedJoints) {
+    parts.push(`${skippedJoints} saved joint${skippedJoints === 1 ? '' : 's'} `
+      + 'were unavailable in the current inferred rig.');
+  }
+  if (skippedRoots) {
+    parts.push(`${skippedRoots} saved root${skippedRoots === 1 ? '' : 's'} `
+      + 'were unavailable in the current inferred rig.');
+  }
+  return parts.join(' ');
+}
+
 function syncReconciliationReadout(state, joint) {
   const model = state?.model;
   const reconciliation = model?.reconciliation;
@@ -274,7 +294,7 @@ function buildPanel() {
 
   const poseSection = section('Pose');
   addText(poseSection, 'rig-hint',
-    'Rotate the selected non-root inferred model joint with the viewport gizmo. Pose is temporary and is not saved.');
+    'Rotate the selected non-root inferred model joint with the viewport gizmo. The active pose is temporary until saved as a preset.');
   const snapRow = document.createElement('label');
   snapRow.className = 'rig-row';
   addText(snapRow, 'rig-label', 'Rotation snap');
@@ -351,11 +371,7 @@ function buildPanel() {
           : 'This saved pose is invalid and could not be applied.';
       return;
     }
-    const skippedJoints = Number(result.skippedJointCount) || 0;
-    ui.presetStatus.textContent = skippedJoints
-      ? `Applied "${name}" — ${result.appliedJointCount} joints. `
-        + `${skippedJoints} saved joints were unavailable in the current inferred rig.`
-      : `Applied "${name}" — ${result.appliedJointCount} joints.`;
+    ui.presetStatus.textContent = rigPresetApplyMessage(name, result);
   });
   ui.savePreset = document.createElement('button');
   ui.savePreset.type = 'button';
@@ -593,10 +609,8 @@ function syncPresetControls(state, physicsActive) {
   else if (presetState.lastApplyResult?.success
       && presetState.lastApplyResult.preset?.name) {
     const result = presetState.lastApplyResult;
-    ui.presetStatus.textContent = result.skippedJointCount
-      ? `Applied "${result.preset.name}" — ${result.appliedJointCount} joints; `
-        + `${result.skippedJointCount} unavailable.`
-      : `Applied "${result.preset.name}" — ${result.appliedJointCount} joints.`;
+    ui.presetStatus.textContent = rigPresetApplyMessage(
+      result.preset.name, result);
   }
 }
 

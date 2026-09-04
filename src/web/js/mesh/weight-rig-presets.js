@@ -32,14 +32,22 @@ function quaternionValues(value) {
         || !Number.isFinite(item))) return null;
   const length = Math.hypot(...values);
   if (!Number.isFinite(length) || length <= 1e-12) return null;
-  return values.map(item => item / length);
+  const normalized = values.map(item => item / length);
+  // q and -q represent the same rotation. Persist one deterministic
+  // hemisphere so a full turn does not become a saved neutral pose.
+  const firstNonZero = normalized.find(value => Math.abs(value) > 1e-12);
+  if (normalized[3] < 0
+      || Math.abs(normalized[3]) <= 1e-12 && firstNonZero < 0) {
+    return normalized.map(item => -item);
+  }
+  return normalized;
 }
 
 function isIdentity(values) {
   return Math.abs(values[0]) < IDENTITY_TOLERANCE
     && Math.abs(values[1]) < IDENTITY_TOLERANCE
     && Math.abs(values[2]) < IDENTITY_TOLERANCE
-    && Math.abs(values[3] - 1) < IDENTITY_TOLERANCE;
+    && Math.abs(Math.abs(values[3]) - 1) < IDENTITY_TOLERANCE;
 }
 
 function entriesFrom(value) {

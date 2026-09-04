@@ -91,7 +91,7 @@ def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
         "id": "pose-1", "name": "Look Left",
         "roots": [{"joint_signature": '["body#bone=7"]'}],
         "joints": [{"joint_signature": '["body#bone=8"]',
-                    "rotation": [0, 0, 1, 0]}],
+                    "rotation": [0, 0, 2, 0]}],
     }
 
     path = tmp_path / metadata.METADATA_NAME
@@ -118,6 +118,46 @@ def test_rig_pose_preset_metadata_reports_malformed_section_without_load_failure
     assert result == {
         "version": 1, "presets": [],
         "error": "Pose presets could not be loaded.",
+    }
+
+
+def test_rig_pose_preset_metadata_preserves_malformed_entries_for_frontend():
+    stored = {
+        "rig": {"version": 1, "presets": [{
+            "id": "pose-1", "name": "Partial",
+            "roots": [None, {"joint_signature": "not-json"}],
+            "joints": [{"joint_signature": "[]", "rotation": [1, 2]}],
+        }]},
+    }
+
+    result = metadata.rig_pose_presets(data=stored)
+
+    assert result["error"] is None
+    assert result["presets"] == stored["rig"]["presets"]
+
+
+@pytest.mark.parametrize("operation", [
+    lambda path: metadata.save_rig_pose_preset(path, {
+        "id": "pose-2", "name": "New", "roots": [], "joints": [],
+    }),
+    lambda path: metadata.rename_rig_pose_preset(path, "pose-1", "Renamed"),
+    lambda path: metadata.delete_rig_pose_preset(path, "pose-1"),
+])
+def test_rig_pose_preset_writes_reject_unsupported_metadata_version(
+        tmp_path, operation):
+    path = tmp_path / metadata.METADATA_NAME
+    path.write_text(json.dumps({
+        "rig": {"version": 2, "presets": []}, "future": {"keep": True},
+    }), encoding="utf-8")
+
+    result = operation(str(tmp_path))
+
+    assert result == {
+        "saved": False,
+        "error": "Pose preset metadata uses an unsupported version.",
+    }
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "rig": {"version": 2, "presets": []}, "future": {"keep": True},
     }
 
 

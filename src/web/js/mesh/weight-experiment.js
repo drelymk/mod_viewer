@@ -113,6 +113,8 @@ let rigPresetGeneration = 0;
 let selectedWeightMaskBuildCount = 0;
 let modelBoneStatsBuildCount = 0;
 let selectionSavePromise = null;
+let rigPresetWriteQueue = Promise.resolve();
+let rigPresetWriteToken = 0;
 const modelWeightState = {
   loaded: false,
   loading: false,
@@ -380,10 +382,16 @@ function cloneRigQuaternion(value) {
 }
 
 function quaternionIsIdentity(value) {
-  return Math.abs(Number(value?.x) || 0) < 1e-8
-    && Math.abs(Number(value?.y) || 0) < 1e-8
-    && Math.abs(Number(value?.z) || 0) < 1e-8
-    && Math.abs((Number(value?.w) || 1) - 1) < 1e-8;
+  const x = Number(value?.x);
+  const y = Number(value?.y);
+  const z = Number(value?.z);
+  const w = Number(value?.w);
+  return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)
+    && Number.isFinite(w)
+    && Math.abs(x) < 1e-8
+    && Math.abs(y) < 1e-8
+    && Math.abs(z) < 1e-8
+    && Math.abs(Math.abs(w) - 1) < 1e-8;
 }
 
 function rigComponentForBone(rig, boneId) {
@@ -1707,6 +1715,9 @@ function createSourceSkinningRig(sourceKey, members) {
     physicsRig: null,
   };
   rebuildSourceRigRestFrames(rig);
+  rig.defaultInferredForest = cloneSourceForest(rig.inferredForest);
+  rig.defaultJointPivotByBoneId = new Map([...rig.jointPivotByBoneId]
+    .map(([boneId, pivot]) => [boneId, [...pivot]]));
   return rig;
 }
 
@@ -1735,6 +1746,10 @@ function refreshSourceSkinningRig(rig, members, {resetPose = true} = {}) {
   rig.centerByBoneId = refreshed.centerByBoneId;
   rig.inferredForest = refreshed.inferredForest;
   rig.jointPivotByBoneId = refreshed.jointPivotByBoneId;
+  rig.defaultInferredForest = cloneSourceForest(refreshed.defaultInferredForest);
+  rig.defaultJointPivotByBoneId = new Map(
+    [...refreshed.defaultJointPivotByBoneId]
+      .map(([boneId, pivot]) => [boneId, [...pivot]]));
   rig.restFrameByBoneId = refreshed.restFrameByBoneId;
   rig.restDirectionByBoneId = refreshed.restDirectionByBoneId;
   rig.restFrameEvidenceByBoneId = refreshed.restFrameEvidenceByBoneId;
@@ -1897,6 +1912,31 @@ function cloneModelComponent(component) {
   };
 }
 
+function cloneSourceForest(forest) {
+  return {
+    ...forest,
+    components: (forest?.components || []).map(cloneModelComponent),
+    componentByBoneId: {...(forest?.componentByBoneId || {})},
+    edges: (forest?.edges || []).map(edge => ({...edge})),
+    nodeIds: [...(forest?.nodeIds || [])],
+  };
+}
+
+function restoreDefaultSourceRigOrientation(rig) {
+  if (!rig?.defaultInferredForest) return false;
+  rig.inferredForest = cloneSourceForest(rig.defaultInferredForest);
+  rig.jointPivotByBoneId = new Map([...rig.defaultJointPivotByBoneId]
+    .map(([boneId, pivot]) => [boneId, [...pivot]]));
+  rig.poseRootOverrides = new Map();
+  rebuildSourceRigRestFrames(rig);
+  return true;
+}
+
+function restoreDefaultSourceRigOrientations() {
+  return (modelSkinningRig?.sourceRigs || [])
+    .map(restoreDefaultSourceRigOrientation).some(Boolean);
+}
+
 function defaultRootOverrides(rig) {
   return new Map((rig.defaultComponents || []).map(component => [
     Number(component.componentId), Number(component.rootId),
@@ -1906,6 +1946,7 @@ function defaultRootOverrides(rig) {
 function modelForestWithRootSignatures(rig, signatures = []) {
   const overrides = defaultRootOverrides(rig);
   const usedComponents = new Set();
+  const appliedRoots = [];
   const skipped = [];
   const signatureIndex = buildJointSignatureIndex(rig);
   for (const signature of signatures) {
@@ -1929,9 +1970,10 @@ function modelForestWithRootSignatures(rig, signatures = []) {
     }
     usedComponents.add(Number(componentId));
     overrides.set(Number(componentId), jointId);
+    appliedRoots.push(signature);
   }
   return {forest: orientModelRigForest(rig.joints, rig.edges, overrides),
-    overrides, skipped};
+    overrides, appliedRoots, skipped};
 }
 
 function installModelForest(rig, forest, {restoreDefaults = false} = {}) {
@@ -1959,6 +2001,8 @@ function installModelForest(rig, forest, {restoreDefaults = false} = {}) {
   }
   rig.poseTransformCache.clear();
   rig.poseFrameCache.clear();
+  rig.poseActiveJointKey = null;
+  rig.poseAffectedJointIds = new Set();
 }
 
 function restoreDefaultModelRigOrientation(rig) {
@@ -2738,6 +2782,7 @@ function resetModelPose({request = true} = {}) {
   if (modelRigHasActivePhysics()) return false;
   const hadRootOverrides = modelRigState.explicitRootSignatures.size > 0;
   modelSkinningRig.poseRotationByJointId.clear();
+  restoreDefaultSourceRigOrientations();
   restoreDefaultModelRigOrientation(modelSkinningRig);
   modelRigState.explicitRootSignatures.clear();
   if (hadRootOverrides) {
@@ -2832,7 +2877,7 @@ export function applyRigPosePreset(resolvedPreset, options = {}) {
     .some(componentId => oldRoots.get(componentId) !== newRoots.get(componentId));
   installModelForest(rig, rootRestore.forest);
   const currentJointIndex = buildJointSignatureIndex(rig).resolvedBySignature;
-  modelRigState.explicitRootSignatures = new Set(rootSignatures.filter(signature => {
+  modelRigState.explicitRootSignatures = new Set(rootRestore.appliedRoots.filter(signature => {
     const jointId = currentJointIndex.get(signature);
     const componentId = rig.defaultComponentByJointId.get(jointId);
     return Number.isInteger(Number(componentId))
@@ -2858,7 +2903,7 @@ export function applyRigPosePreset(resolvedPreset, options = {}) {
     preset: resolved.preset,
     appliedJointCount: resolved.joints?.length || 0,
     skippedJointCount: resolved.skippedJointCount || 0,
-    appliedRootCount: rootSignatures.length - rootRestore.skipped.length,
+    appliedRootCount: rootRestore.appliedRoots.length,
     skippedRootCount: (resolved.skippedRootCount || 0)
       + rootRestore.skipped.length,
     skipped,
@@ -3075,6 +3120,23 @@ function currentRigModPath() {
     ?.userData?.modPath || null;
 }
 
+function queueRigPresetWrite(operation) {
+  const token = ++rigPresetWriteToken;
+  rigPresetState.loading = true;
+  rigPresetState.error = null;
+  notifyModelRigChanged();
+  const queued = rigPresetWriteQueue.then(operation, operation);
+  rigPresetWriteQueue = queued.catch(() => {});
+  return queued.catch(error => ({saved: false,
+    error: error instanceof Error ? error.message : String(error)}))
+    .finally(() => {
+      if (token === rigPresetWriteToken) {
+        rigPresetState.loading = false;
+        notifyModelRigChanged();
+      }
+    });
+}
+
 export function applySavedRigPosePreset(presetId = rigPresetState.selectedPresetId) {
   const preset = rigPresetState.presets.find(item => item.id === presetId);
   if (!preset) {
@@ -3122,24 +3184,15 @@ export function saveRigPosePreset(name) {
   if (typeof api !== 'function' || !path) {
     return Promise.resolve({saved: false, error: 'Pose presets are unavailable.'});
   }
-  rigPresetState.loading = true;
-  rigPresetState.error = null;
   const generation = rigPresetGeneration;
-  notifyModelRigChanged();
-  return Promise.resolve(api(path, preset)).then(result => {
+  return queueRigPresetWrite(async () => {
+    const result = await api(path, preset);
     if (!result?.saved) throw new Error(result?.error || 'The pose was not saved.');
     if (generation !== rigPresetGeneration) return {saved: true, preset, stale: true};
     setRigPresetList(result.presets || [...rigPresetState.presets, preset]);
     rigPresetState.selectedPresetId = preset.id;
     return {saved: true, preset, presets: rigPresetState.presets};
-  }).catch(error => ({saved: false,
-    error: error instanceof Error ? error.message : String(error)}))
-    .finally(() => {
-      if (generation === rigPresetGeneration) {
-        rigPresetState.loading = false;
-        notifyModelRigChanged();
-      }
-    });
+  });
 }
 
 export function renameRigPosePreset(presetId, name) {
@@ -3158,15 +3211,14 @@ export function renameRigPosePreset(presetId, name) {
     return Promise.resolve({saved: false, error: 'Pose presets are unavailable.'});
   }
   const generation = rigPresetGeneration;
-  return Promise.resolve(api(path, preset.id, checked.value)).then(result => {
+  return queueRigPresetWrite(async () => {
+    const result = await api(path, preset.id, checked.value);
     if (!result?.saved) throw new Error(result?.error || 'The pose was not renamed.');
     if (generation !== rigPresetGeneration) return {saved: true, stale: true};
     setRigPresetList(result.presets || rigPresetState.presets);
     rigPresetState.selectedPresetId = preset.id;
     return {saved: true, presets: rigPresetState.presets};
-  }).catch(error => ({saved: false,
-    error: error instanceof Error ? error.message : String(error)}))
-    .finally(() => notifyModelRigChanged());
+  });
 }
 
 export function deleteRigPosePreset(presetId) {
@@ -3178,7 +3230,8 @@ export function deleteRigPosePreset(presetId) {
     return Promise.resolve({saved: false, error: 'Pose presets are unavailable.'});
   }
   const generation = rigPresetGeneration;
-  return Promise.resolve(api(path, preset.id)).then(result => {
+  return queueRigPresetWrite(async () => {
+    const result = await api(path, preset.id);
     if (!result?.saved) throw new Error(result?.error || 'The pose was not deleted.');
     if (generation !== rigPresetGeneration) return {saved: true, stale: true};
     setRigPresetList(result.presets || rigPresetState.presets.filter(item =>
@@ -3187,9 +3240,7 @@ export function deleteRigPosePreset(presetId) {
       rigPresetState.selectedPresetId = null;
     }
     return {saved: true, presets: rigPresetState.presets};
-  }).catch(error => ({saved: false,
-    error: error instanceof Error ? error.message : String(error)}))
-    .finally(() => notifyModelRigChanged());
+  });
 }
 
 export function ensureModelRigLoaded() {
@@ -3299,7 +3350,7 @@ export function setRigComponentRoot(sourceKey, boneId) {
   }
   const jointId = modelJointIdForSourceBone(sourceKey, id);
   if (!Number.isInteger(jointId) || !modelSkinningRig) return false;
-  resetModelPose({request: false});
+  clearModelManualPose({request: false});
   resetSourceSkinningPose(rig);
   const overrides = new Map(rig.inferredForest.components.map(item => [
     item.componentId, item.rootId]));
@@ -3311,18 +3362,39 @@ export function setRigComponentRoot(sourceKey, boneId) {
     rig.inferredForest, rig.influenceGraph.relationships);
   rebuildSourceRigRestFrames(rig);
   rig.poseRootOverrides = overrides;
-  const modelForest = modelForestWithRootSignatures(modelSkinningRig, [
-    modelSkinningRig.joints[jointId]?.signature,
-  ]).forest;
-  installModelForest(modelSkinningRig, modelForest);
   const signature = modelSkinningRig.joints[jointId]?.signature;
+  const targetComponentId = modelSkinningRig.defaultComponentByJointId
+    .get(jointId);
+  const currentIndex = buildJointSignatureIndex(modelSkinningRig)
+    .resolvedBySignature;
+  const desiredRootSignatures = [...modelRigState.explicitRootSignatures]
+    .filter(existingSignature => {
+      const existingJointId = currentIndex.get(existingSignature);
+      const existingComponentId = modelSkinningRig.defaultComponentByJointId
+        .get(existingJointId);
+      return Number(existingComponentId) !== Number(targetComponentId);
+    });
+  if (signature && modelSkinningRig.defaultRootIdByComponent.get(
+      Number(targetComponentId)) !== jointId) {
+    desiredRootSignatures.push(signature);
+  }
+  const rootRestore = modelForestWithRootSignatures(
+    modelSkinningRig, desiredRootSignatures);
+  installModelForest(modelSkinningRig, rootRestore.forest);
   const defaultComponentId = modelSkinningRig.defaultComponentByJointId
     .get(jointId);
-  if (signature && modelSkinningRig.defaultRootIdByComponent.get(
-      Number(defaultComponentId)) === jointId) {
+  const appliedSignatures = new Set(rootRestore.appliedRoots);
+  modelRigState.explicitRootSignatures = new Set(
+    rootRestore.appliedRoots.filter(appliedSignature => {
+      const appliedJointId = currentIndex.get(appliedSignature);
+      const appliedComponentId = modelSkinningRig.defaultComponentByJointId
+        .get(appliedJointId);
+      return modelSkinningRig.defaultRootIdByComponent.get(
+        Number(appliedComponentId)) !== appliedJointId;
+    }));
+  if (signature && Number(defaultComponentId) === Number(targetComponentId)
+      && !appliedSignatures.has(signature)) {
     modelRigState.explicitRootSignatures.delete(signature);
-  } else if (signature) {
-    modelRigState.explicitRootSignatures.add(signature);
   }
   modelSkinningRig.structureRevision = ++nextRigStructureRevision;
   modelRigState.structureRevision = modelSkinningRig.structureRevision;
