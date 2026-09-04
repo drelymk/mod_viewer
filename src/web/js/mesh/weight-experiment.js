@@ -2864,6 +2864,7 @@ export function applyRigPosePreset(resolvedPreset, options = {}) {
     return result;
   }
 
+  restoreDefaultSourceRigOrientations();
   const rootSignatures = (resolved.roots || [])
     .map(root => root.jointSignature).filter(Boolean);
   const rootRestore = modelForestWithRootSignatures(rig, rootSignatures);

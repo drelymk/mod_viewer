@@ -1424,6 +1424,7 @@ def test_rig_pose_preset_recomputes_descendants_after_root_change(
           let state = experiment.getModelRigState();
           const sourceKey = state.sources[0].sourceKey;
           const source = state.sources[0];
+          const defaultSourceRoot = source.components[0].rootId;
           const initialRoot = 0;
           experiment.setRigComponentRoot(sourceKey, initialRoot);
           state = experiment.getModelRigState();
@@ -1454,6 +1455,14 @@ def test_rig_pose_preset_recomputes_descendants_after_root_change(
           const applied = experiment.applyRigPosePreset(resolved);
           const afterApply = positions();
           const applyVersionDelta = position.version - versionBefore;
+          state = experiment.getModelRigState();
+          const sourceAfterApply = state.sources.find(item =>
+            item.sourceKey === sourceKey);
+          const sourceRootAfterApply = sourceAfterApply.components.find(component =>
+            component.nodeIds.includes(boneC))?.rootId;
+          const modelJointC = Number(sourceAfterApply.modelJointIds[boneC]);
+          const modelRootAfterApply = state.model.components.find(component =>
+            component.nodeIds.includes(modelJointC))?.rootId;
           experiment.resetRigPose();
           experiment.setRigComponentRoot(sourceKey, boneC);
           experiment.setRigBoneRotation(sourceKey, boneB, q,
@@ -1465,6 +1474,8 @@ def test_rig_pose_preset_recomputes_descendants_after_root_change(
             appliedJointCount: applied.appliedJointCount,
             posed, initialRoot, chain,
             applyVersionDelta,
+            defaultSourceRoot, sourceRootAfterApply, modelJointC,
+            modelRootAfterApply,
             beforeChanged: differs(beforeApply, [0, 0, 0, 1, 0, 0, 0, 1, 0]),
             matchesFresh: afterApply.every((value, index) =>
               Math.abs(value - fresh[index]) < 1e-5),
@@ -1475,6 +1486,8 @@ def test_rig_pose_preset_recomputes_descendants_after_root_change(
         assert result["skippedRootCount"] == 0
         assert result["appliedJointCount"] == 1
         assert result["applyVersionDelta"] == 1
+        assert result["sourceRootAfterApply"] == result["defaultSourceRoot"]
+        assert result["modelRootAfterApply"] == result["modelJointC"]
         assert result["beforeChanged"], json.dumps(result)
         assert result["matchesFresh"]
         assert result["freshChanged"]
