@@ -1143,6 +1143,7 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             `cross/c.buf|offset=0#bone=${child + 8}`];
           const q = new THREE.Quaternion().setFromAxisAngle(
             new THREE.Vector3(0, 0, 1), Math.PI / 2);
+          experiment.selectRigBone(sourceA.sourceKey, child);
           const posed = experiment.setRigBoneRotation(
             sourceA.sourceKey, child, q, {dragging: true});
           const after = window.modViewer.activeMeshes.map(mesh =>
@@ -1153,6 +1154,10 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             members: state.model.joints.find(joint => joint.jointId === jointA)
               ?.members?.length || 0,
             posed,
+            reconciliation: document.querySelector(
+              '.rig-reconciliation-summary')?.textContent || '',
+            connection: document.querySelector(
+              '.rig-connection-value')?.textContent || '',
             changed: after.map((values, index) => values.some((value, offset) =>
               Math.abs(value - before[index][offset]) > 1e-5)),
           };
@@ -1161,6 +1166,9 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         assert result["equivalent"], result
         assert result["members"] == 3
         assert result["posed"]
+        assert "Sources 3" in result["reconciliation"]
+        assert "Components 1" in result["reconciliation"]
+        assert result["connection"] == "equivalence"
         assert result["changed"] == [True, True, True]
     finally:
         page.evaluate("""() => {

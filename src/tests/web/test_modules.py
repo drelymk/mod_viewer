@@ -914,6 +914,203 @@ def test_cross_source_reconciliation_confidence_lanes_and_support(module_page):
     ]
 
 
+def test_cross_source_reconciliation_aligns_undirected_palette_graphs(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (sourceKey, entries, links) => {
+        const nodeIds = entries.map(([id]) => id);
+        const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+        links.forEach(([parent, child]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        const roots = nodeIds.filter(id => parentById[id] === null);
+        return {
+          sourceKey, boneIds: nodeIds,
+          influenceGraph: {nodes: entries.map(([boneId, center]) => ({
+            boneId, weightedCenter: center, weightedRadius: .1,
+            totalWeight: 1, affectedVertexCount: 10,
+          }))},
+          centerByBoneId: new Map(entries),
+          jointPivotByBoneId: new Map(entries.filter(([id]) =>
+            parentById[id] !== null)),
+          restDirectionByBoneId: new Map(entries.map(([id]) => [id,
+            [0, 1, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(entries.map(([id]) => [id, {
+            directionSource: 'child-weighted-center',
+          }])),
+          inferredForest: {
+            components: roots.map((rootId, componentId) => ({
+              componentId, rootId, nodeIds, parentById, childrenById,
+              depthById: Object.fromEntries(nodeIds.map(id => [id, 0])),
+              edges: links.map(([boneA, boneB]) => ({
+                boneA, boneB, treeEdgeScore: 1,
+              })),
+            })),
+            componentByBoneId: Object.fromEntries(nodeIds.map(id => [id, 0])),
+          },
+        };
+      };
+      const chainA = make('chain-a', [
+        [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, 2, 0]],
+      ], [[0, 1], [1, 2]]);
+      const reversedChain = make('chain-b', [
+        [10, [0, 2, 0]], [11, [.09, 1, 0]], [12, [0, 0, 0]],
+      ], [[10, 11], [11, 12]]);
+      const twoAnchors = buildModelRigReconciliation(
+        [chainA, reversedChain], {modelReferenceRadius: 1});
+      const centerA = make('center-a', [
+        [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, 2, 0]],
+      ], [[0, 1], [1, 2]]);
+      const centerB = make('center-b', [
+        [10, [0, 0, 0]], [11, [.09, 1, 0]],
+      ], [[10, 11]]);
+      const oneAnchor = buildModelRigReconciliation(
+        [centerA, centerB], {modelReferenceRadius: 1});
+      const pathA = make('path-a', [
+        [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, 2, 0]],
+        [3, [0, 3, 0]],
+      ], [[0, 1], [1, 2], [2, 3]]);
+      const pathB = make('path-b', [
+        [10, [0, 0, 0]], [11, [.09, 1, 0]], [12, [.09, 2, 0]],
+        [13, [0, 3, 0]], [14, [.09, 1, 0]], [15, [.09, 2, 0]],
+      ], [[10, 11], [11, 12], [12, 13], [10, 14], [13, 15]]);
+      const pathAligned = buildModelRigReconciliation(
+        [pathA, pathB], {modelReferenceRadius: 1});
+      const key = (sourceKey, boneId) => `${sourceKey}#bone=${boneId}`;
+      const id = (value, sourceKey, boneId) =>
+        value.sourceBoneToModelJointId[key(sourceKey, boneId)];
+      const graphAccepted = value => value.reconciliation.acceptedEquivalences
+        .filter(item => item.pass?.startsWith('graph-alignment'));
+      const middle = graphAccepted(twoAnchors).find(item =>
+        item.left.sourceBoneKey === key('chain-a', 1));
+      const leaf = graphAccepted(oneAnchor).find(item =>
+        item.left.sourceBoneKey === key('center-a', 1));
+      const pathMiddle = graphAccepted(pathAligned).find(item =>
+        item.left.sourceBoneKey === key('path-a', 1));
+      const pathEnd = graphAccepted(pathAligned).find(item =>
+        item.left.sourceBoneKey === key('path-a', 2));
+      return {
+        middleMerged: id(twoAnchors, 'chain-a', 1) ===
+          id(twoAnchors, 'chain-b', 11),
+        middle,
+        middleDistance: middle?.normalizedDistance || 0,
+        leafMerged: id(oneAnchor, 'center-a', 1) ===
+          id(oneAnchor, 'center-b', 11),
+        leaf,
+        leafDistance: leaf?.normalizedDistance || 0,
+        pathMerged: id(pathAligned, 'path-a', 1) ===
+          id(pathAligned, 'path-b', 11)
+          && id(pathAligned, 'path-a', 2) ===
+            id(pathAligned, 'path-b', 12),
+        pathMiddle,
+        pathEnd,
+      };
+    }""")
+    assert result["middleMerged"]
+    assert result["middle"]["pass"] == "graph-alignment-1"
+    assert result["middle"]["matchedNeighborCount"] == 2
+    assert result["middleDistance"] > .06
+    assert result["leafMerged"]
+    assert result["leaf"]["pass"] == "graph-alignment-2"
+    assert result["leaf"]["matchedNeighborCount"] == 1
+    assert result["leafDistance"] > .06
+    assert result["pathMerged"]
+    assert result["pathMiddle"]["pass"] == "graph-alignment-3"
+    assert result["pathEnd"]["pass"] == "graph-alignment-3"
+
+
+def test_cross_source_reconciliation_aggregates_component_attachments(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (sourceKey, entries, links, vertexEntries = []) => {
+        const nodeIds = entries.map(([id]) => id);
+        const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+        links.forEach(([parent, child]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        const roots = nodeIds.filter(id => parentById[id] === null);
+        return {
+          sourceKey, boneIds: nodeIds,
+          influenceGraph: {nodes: entries.map(([boneId, center]) => ({
+            boneId, weightedCenter: center, weightedRadius: .1,
+            totalWeight: 1, affectedVertexCount: 10,
+          }))},
+          centerByBoneId: new Map(entries),
+          jointPivotByBoneId: new Map(),
+          restDirectionByBoneId: new Map(entries.map(([id]) => [id,
+            [0, 1, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(entries.map(([id]) => [id, {
+            directionSource: 'child-weighted-center',
+          }])),
+          inferredForest: {
+            components: roots.map((rootId, componentId) => ({
+              componentId, rootId, nodeIds, parentById, childrenById,
+              depthById: Object.fromEntries(nodeIds.map(id => [id, 0])),
+              edges: links.map(([boneA, boneB]) => ({
+                boneA, boneB, treeEdgeScore: 1,
+              })),
+            })),
+            componentByBoneId: Object.fromEntries(nodeIds.map(id => [id, 0])),
+          },
+          vertexEvidence: vertexEntries.map(entry => ({
+            meshKey: entry.meshKey,
+            positions: new Float32Array(entry.positions.flat()),
+            indices: new Uint16Array(entry.ids),
+            weights: new Float32Array(entry.ids.map(() => 1)),
+            influenceCount: 1,
+          })),
+        };
+      };
+      const positions = Array.from({length: 9}, (_, index) =>
+        [index * .001, 0, 0]);
+      const target = make('target', [
+        [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, 2, 0]],
+        [3, [0, 3, 0]],
+      ], [[0, 1], [1, 2], [2, 3]], [{
+        meshKey: 'target/neutral', positions, ids: positions.map(() => 0),
+      }]);
+      const wings = make('wings', [
+        [10, [.08, 0, 0]], [11, [.08, .01, 0]], [12, [.08, .02, 0]],
+      ], [[10, 11], [11, 12]], [{
+        meshKey: 'wings/neutral', positions,
+        ids: [10, 10, 10, 11, 11, 11, 12, 12, 12],
+      }]);
+      const value = buildModelRigReconciliation([target, wings], {
+        modelReferenceRadius: 1,
+      });
+      const targetJoint = value.sourceBoneToModelJointId['target#bone=0'];
+      const wingJoint = value.sourceBoneToModelJointId['wings#bone=10'];
+      const attachment = value.edges.find(edge =>
+        edge.relationshipType === 'attachment');
+      const diagnostic = value.reconciliation.rejectedCandidates.find(item =>
+        item.decision === 'accepted' && item.left?.jointId === targetJoint
+        && item.right?.jointId === wingJoint);
+      return {
+        equivalent: targetJoint === wingJoint,
+        attachment: attachment ? [attachment.jointA, attachment.jointB] : null,
+        diagnostic,
+      };
+    }""")
+    assert not result["equivalent"]
+    assert result["attachment"] == [0, 4]
+    assert result["diagnostic"]["componentMatchedVertexCount"] == 9
+    assert result["diagnostic"]["componentSupportedJointPairCount"] == 3
+    assert result["diagnostic"]["endpointMatchedVertexCount"] == 3
+    assert result["diagnostic"]["accessoryRoot"]
+
+
 def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):
     page = module_page
     result = page.evaluate("""async () => {

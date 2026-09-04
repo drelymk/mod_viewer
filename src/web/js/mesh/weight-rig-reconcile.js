@@ -11,6 +11,8 @@ export const CROSS_SOURCE_AMBIGUITY_MARGIN = 0.05;
 export const CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN = 0.08;
 export const CROSS_SOURCE_STRONG_VERTEX_COUNT = 8;
 export const CROSS_SOURCE_STRONG_WEIGHT_STRENGTH = 0.5;
+export const CROSS_SOURCE_GRAPH_ALIGNMENT_MARGIN = 0.1;
+export const CROSS_SOURCE_GRAPH_ALIGNMENT_MIN_SCORE = 0.6;
 
 const EPSILON = 1e-8;
 
@@ -104,8 +106,34 @@ function anchorFor(parentId, center, pivot) {
   return parentId === null ? center : pivot || center;
 }
 
+function sourceAdjacencyByBoneId(rig) {
+  const adjacency = new Map();
+  const addEdge = (left, right) => {
+    const leftNeighbors = adjacency.get(left) || new Set();
+    const rightNeighbors = adjacency.get(right) || new Set();
+    leftNeighbors.add(right);
+    rightNeighbors.add(left);
+    adjacency.set(left, leftNeighbors);
+    adjacency.set(right, rightNeighbors);
+  };
+  (rig?.inferredForest?.components || []).forEach(component => {
+    Object.entries(component.parentById || {}).forEach(([childId, parentId]) => {
+      if (parentId !== null && parentId !== undefined) {
+        addEdge(Number(childId), Number(parentId));
+      }
+    });
+    Object.entries(component.childrenById || {}).forEach(([parentId, children]) =>
+      (children || []).forEach(childId => addEdge(Number(parentId), Number(childId))));
+  });
+  return new Map([...adjacency.entries()].map(([boneId, neighbors]) => [
+    Number(boneId), [...neighbors].filter(Number.isFinite)
+      .sort((left, right) => left - right),
+  ]));
+}
+
 function collectSourceBoneEvidence(rig) {
   const result = new Map();
+  const sourceAdjacency = sourceAdjacencyByBoneId(rig);
   const boneIds = [...(rig?.boneIds || rig?.influenceGraph?.nodes || [])]
     .map(value => Number(value?.boneId ?? value)).filter(Number.isFinite)
     .sort((left, right) => left - right);
@@ -116,6 +144,7 @@ function collectSourceBoneEvidence(rig) {
     const component = componentFor(rig, boneId);
     const parentBoneId = parentFor(component, boneId);
     const childBoneIds = childrenFor(component, boneId);
+    const neighborBoneIds = sourceAdjacency.get(boneId) || [];
     const node = nodes.get(boneId);
     const center = vectorArray(
       mapValue(rig?.centerByBoneId, boneId) || node?.weightedCenter);
@@ -136,6 +165,7 @@ function collectSourceBoneEvidence(rig) {
       restFrame: quaternionArray(mapValue(rig?.restFrameByBoneId, boneId)),
       parentBoneId,
       childBoneIds,
+      neighborBoneIds,
       depth: number(mapValue(component?.depthById, boneId)),
       degree: childBoneIds.length + (parentBoneId === null ? 0 : 1),
       isRoot: parentBoneId === null,
@@ -400,9 +430,13 @@ function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
     && crossEvidence.weightedMatchStrength
       >= CROSS_SOURCE_STRONG_WEIGHT_STRENGTH
     && crossQuality >= .7;
+  const exactRootAnchor = normalizedDistance <= .01
+    && geometryConfidence >= .8
+    && topology.degree >= .75
+    && (directionAlignment === null || directionAlignment >= .75);
   const geometrySeed = normalizedDistance <= CROSS_SOURCE_STRICT_DISTANCE
     && geometryConfidence >= .7
-    && !topology.rootConflict
+    && (!topology.rootConflict || exactRootAnchor)
     && (directionAlignment === null || directionAlignment >= .55);
   const confidenceClass = strongCrossEvidence ? 2 : geometrySeed ? 1 : 0;
   return {
@@ -427,8 +461,6 @@ function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
     strongCrossEvidence,
     geometrySeed,
     confidenceClass,
-    matchedParent: false,
-    matchedChildCount: 0,
     score: combinedConfidence,
     topology,
   };
@@ -451,6 +483,18 @@ function candidateAmbiguous(best, second) {
     && (best.propagationScore ?? best.combinedConfidence ?? best.score)
       - (second.propagationScore ?? second.combinedConfidence ?? second.score)
       < CROSS_SOURCE_AMBIGUITY_MARGIN;
+}
+
+function endpointDescriptor(candidate, endpoint) {
+  return candidate.left.sourceBoneKey === endpoint
+    ? {otherSource: candidate.right.sourceKey,
+      otherKey: candidate.right.sourceBoneKey}
+    : {otherSource: candidate.left.sourceKey,
+      otherKey: candidate.left.sourceBoneKey};
+}
+
+function endpointCompetitionKey(endpoint, otherSource) {
+  return JSON.stringify([endpoint, String(otherSource)]);
 }
 
 class GuardedUnionFind {
@@ -501,23 +545,84 @@ class GuardedUnionFind {
   }
 }
 
-function refFor(evidence, boneId) {
-  return boneId === null || boneId === undefined
-    ? null : sourceBoneKey(evidence.sourceKey, boneId);
-}
-
 function neighborMatches(candidate, evidenceByKey, unionFind) {
   const left = evidenceByKey.get(candidate.left.sourceBoneKey);
   const right = evidenceByKey.get(candidate.right.sourceBoneKey);
-  if (!left || !right) return {matchedParent: false, matchedChildCount: 0};
-  const leftParent = refFor(left, left.parentBoneId);
-  const rightParent = refFor(right, right.parentBoneId);
-  const matchedParent = !!leftParent && !!rightParent
-    && unionFind.same(leftParent, rightParent);
-  const matchedChildCount = left.childBoneIds.filter(leftChild =>
-    right.childBoneIds.some(rightChild => unionFind.same(
-      refFor(left, leftChild), refFor(right, rightChild)))).length;
-  return {matchedParent, matchedChildCount};
+  if (!left || !right) {
+    return {matchedNeighborCount: 0, matchedNeighborPairs: []};
+  }
+  const leftNeighbors = left.neighborBoneIds || [];
+  const rightNeighbors = right.neighborBoneIds || [];
+  const usedRightNeighbors = new Set();
+  const matchedNeighborPairs = [];
+  leftNeighbors.forEach(leftNeighborId => {
+    const rightNeighborId = rightNeighbors.find(candidateId =>
+      !usedRightNeighbors.has(candidateId)
+      && unionFind.same(sourceBoneKey(left.sourceKey, leftNeighborId),
+        sourceBoneKey(right.sourceKey, candidateId)));
+    if (rightNeighborId === undefined) return;
+    usedRightNeighbors.add(rightNeighborId);
+    matchedNeighborPairs.push({leftBoneId: leftNeighborId, rightBoneId: rightNeighborId});
+  });
+  return {
+    matchedNeighborCount: matchedNeighborPairs.length,
+    matchedNeighborPairs,
+  };
+}
+
+function average(values, fallback = null) {
+  return values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : fallback;
+}
+
+function graphAlignmentFeatures(candidate, evidenceByKey, unionFind) {
+  const matches = neighborMatches(candidate, evidenceByKey, unionFind);
+  const left = evidenceByKey.get(candidate.left.sourceBoneKey);
+  const right = evidenceByKey.get(candidate.right.sourceBoneKey);
+  const edgeAlignments = [];
+  const edgeLengthRatios = [];
+  matches.matchedNeighborPairs.forEach(pair => {
+    const leftNeighbor = evidenceByKey.get(sourceBoneKey(
+      left.sourceKey, pair.leftBoneId));
+    const rightNeighbor = evidenceByKey.get(sourceBoneKey(
+      right.sourceKey, pair.rightBoneId));
+    const leftVector = vectorFrom(leftNeighbor?.weightedCenter)
+      ?.sub(vectorFrom(left.weightedCenter));
+    const rightVector = vectorFrom(rightNeighbor?.weightedCenter)
+      ?.sub(vectorFrom(right.weightedCenter));
+    if (!leftVector || !rightVector
+        || leftVector.length() <= EPSILON || rightVector.length() <= EPSILON) {
+      return;
+    }
+    const leftLength = leftVector.length();
+    const rightLength = rightVector.length();
+    edgeAlignments.push(Math.abs(leftVector.normalize().dot(
+      rightVector.normalize())));
+    edgeLengthRatios.push(Math.min(leftLength, rightLength)
+      / Math.max(leftLength, rightLength));
+  });
+  const relativeEdgeAlignment = average(edgeAlignments, .5);
+  const edgeLengthRatio = average(edgeLengthRatios, .5);
+  const distanceQuality = clamp(1 - candidate.normalizedDistance
+    / CROSS_SOURCE_CANDIDATE_DISTANCE);
+  const crossSignal = candidate.crossQuality === null
+    ? .5 : candidate.crossConfidence;
+  const graphAlignmentScore = clamp(
+    clamp(matches.matchedNeighborCount / 2) * .4
+    + crossSignal * .15
+    + (candidate.directionAlignment ?? .5) * .1
+    + relativeEdgeAlignment * .15
+    + edgeLengthRatio * .1
+    + distanceQuality * .05
+    + (candidate.topology?.degree ?? .5) * .05);
+  return {
+    matchedNeighborCount: matches.matchedNeighborCount,
+    matchedNeighborPairs: matches.matchedNeighborPairs,
+    relativeEdgeAlignment,
+    edgeLengthRatio,
+    graphAlignmentScore,
+  };
 }
 
 function diagnosticCandidate(candidate, decision, rejectionReason = null) {
@@ -534,8 +639,13 @@ function diagnosticCandidate(candidate, decision, rejectionReason = null) {
     crossQuality: candidate.crossQuality,
     crossConfidence: candidate.crossConfidence,
     supportReliability: candidate.supportReliability,
-    matchedParent: !!candidate.matchedParent,
-    matchedChildCount: candidate.matchedChildCount || 0,
+    matchedNeighborCount: candidate.matchedNeighborCount || 0,
+    matchedNeighborPairs: (candidate.matchedNeighborPairs || [])
+      .map(pair => ({...pair})),
+    relativeEdgeAlignment: candidate.relativeEdgeAlignment,
+    edgeLengthRatio: candidate.edgeLengthRatio,
+    graphAlignmentScore: candidate.graphAlignmentScore,
+    graphAlignmentPathLength: candidate.graphAlignmentPathLength || null,
     matchedVertexCount: candidate.matchedVertexCount
       ?? candidate.crossEvidence?.matchedVertexCount ?? 0,
     weightedMatchStrength: candidate.weightedMatchStrength
@@ -668,11 +778,228 @@ function acceptedEquivalence(candidate, pass, unionFind, diagnostics,
   const record = diagnosticCandidate(candidate, 'accepted', null);
   record.pass = pass;
   accepted.push(record);
+  const strength = Math.max(candidate.score || 0,
+    candidate.propagationScore || 0, candidate.graphAlignmentScore || 0);
   correspondenceStrength.set(left, Math.max(
-    correspondenceStrength.get(left) || 0, candidate.score));
+    correspondenceStrength.get(left) || 0, strength));
   correspondenceStrength.set(right, Math.max(
-    correspondenceStrength.get(right) || 0, candidate.score));
+    correspondenceStrength.get(right) || 0, strength));
   return true;
+}
+
+function compareGraphAlignmentCandidate(left, right) {
+  return right.matchedNeighborCount - left.matchedNeighborCount
+    || right.crossConfidence - left.crossConfidence
+    || (right.directionAlignment ?? .5) - (left.directionAlignment ?? .5)
+    || right.relativeEdgeAlignment - left.relativeEdgeAlignment
+    || right.edgeLengthRatio - left.edgeLengthRatio
+    || right.graphAlignmentScore - left.graphAlignmentScore
+    || right.topology.degree - left.topology.degree
+    || right.geometryConfidence - left.geometryConfidence
+    || left.normalizedDistance - right.normalizedDistance
+    || left.left.sourceBoneKey.localeCompare(right.left.sourceBoneKey)
+    || left.right.sourceBoneKey.localeCompare(right.right.sourceBoneKey);
+}
+
+function graphAlignmentCandidatesFor(candidates, endpoint, otherSource,
+    unionFind) {
+  return candidates.filter(candidate => {
+    if (unionFind.same(candidate.left.sourceBoneKey,
+      candidate.right.sourceBoneKey)) return false;
+    const descriptor = endpointDescriptor(candidate, endpoint);
+    return descriptor.otherSource === otherSource
+      && descriptor.otherKey !== endpoint
+      && candidate.matchedNeighborCount > 0
+      && candidate.graphAlignmentScore
+        >= CROSS_SOURCE_GRAPH_ALIGNMENT_MIN_SCORE
+      && candidate.topology.degree >= .5;
+  }).sort(compareGraphAlignmentCandidate);
+}
+
+function uniqueGraphWinner(candidate, ranked, tier) {
+  if (ranked[0] !== candidate) return false;
+  const second = ranked[1];
+  if (!second) return true;
+  if (tier === 1 && candidate.matchedNeighborCount
+      > second.matchedNeighborCount) return true;
+  return candidate.graphAlignmentScore - second.graphAlignmentScore
+    >= CROSS_SOURCE_GRAPH_ALIGNMENT_MARGIN;
+}
+
+function graphEvidenceContradicts(candidate) {
+  return candidate.crossQuality !== null
+    && candidate.supportReliability >= .75
+    && candidate.crossQuality < .35;
+}
+
+function runGraphAlignment(candidates, evidenceByKey, unionFind,
+    diagnostics, accepted, correspondenceStrength) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    candidates.forEach(candidate => Object.assign(candidate,
+      graphAlignmentFeatures(candidate, evidenceByKey, unionFind)));
+    const available = candidates.filter(candidate =>
+      !graphEvidenceContradicts(candidate)
+      && candidate.matchedNeighborCount > 0
+      && candidate.graphAlignmentScore >= CROSS_SOURCE_GRAPH_ALIGNMENT_MIN_SCORE
+      && candidate.topology.degree >= .5
+      && !unionFind.same(candidate.left.sourceBoneKey,
+        candidate.right.sourceBoneKey));
+    const rankFor = candidate => {
+      const leftDescriptor = endpointDescriptor(
+        candidate, candidate.left.sourceBoneKey);
+      const rightDescriptor = endpointDescriptor(
+        candidate, candidate.right.sourceBoneKey);
+      return {
+        left: graphAlignmentCandidatesFor(available,
+          candidate.left.sourceBoneKey, leftDescriptor.otherSource, unionFind),
+        right: graphAlignmentCandidatesFor(available,
+          candidate.right.sourceBoneKey, rightDescriptor.otherSource, unionFind),
+      };
+    };
+    const selected = available.filter(candidate => {
+      const ranked = rankFor(candidate);
+      const tier = candidate.matchedNeighborCount >= 2 ? 1 : 2;
+      return uniqueGraphWinner(candidate, ranked.left, tier)
+        && uniqueGraphWinner(candidate, ranked.right, tier);
+    }).sort(compareGraphAlignmentCandidate);
+    for (const candidate of selected) {
+      const tier = candidate.matchedNeighborCount >= 2 ? 1 : 2;
+      if (acceptedEquivalence(candidate, `graph-alignment-${tier}`,
+        unionFind, diagnostics, accepted, correspondenceStrength)) {
+        changed = true;
+      }
+    }
+  }
+}
+
+function sourceKeyFromBoneKey(key) {
+  return String(key).split('#bone=')[0];
+}
+
+function pathBetweenSourceBones(startKey, endKey, evidenceByKey) {
+  if (sourceKeyFromBoneKey(startKey) !== sourceKeyFromBoneKey(endKey)) {
+    return null;
+  }
+  const previous = new Map([[startKey, null]]);
+  const queue = [startKey];
+  while (queue.length) {
+    const current = queue.shift();
+    if (current === endKey) break;
+    const evidence = evidenceByKey.get(current);
+    for (const neighborId of evidence?.neighborBoneIds || []) {
+      const neighborKey = sourceBoneKey(evidence.sourceKey, neighborId);
+      if (previous.has(neighborKey)) continue;
+      previous.set(neighborKey, current);
+      queue.push(neighborKey);
+    }
+  }
+  if (!previous.has(endKey)) return null;
+  const path = [];
+  for (let current = endKey; current !== null;
+       current = previous.get(current)) path.push(current);
+  return path.reverse();
+}
+
+function matchedSourcePairs(unionFind) {
+  const result = new Map();
+  unionFind.clusters().forEach(members => {
+    const bySource = new Map();
+    members.forEach(key => {
+      const sourceKey = sourceKeyFromBoneKey(key);
+      const entries = bySource.get(sourceKey) || [];
+      entries.push(key);
+      bySource.set(sourceKey, entries);
+    });
+    const sources = [...bySource.keys()].sort();
+    for (let leftIndex = 0; leftIndex < sources.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1;
+           rightIndex < sources.length; rightIndex += 1) {
+        const left = bySource.get(sources[leftIndex])?.[0];
+        const right = bySource.get(sources[rightIndex])?.[0];
+        if (!left || !right) continue;
+        const key = [sources[leftIndex], sources[rightIndex]].join('|');
+        const pairs = result.get(key) || [];
+        pairs.push({left, right});
+        result.set(key, pairs);
+      }
+    }
+  });
+  return result;
+}
+
+function runPathAlignment(candidates, evidenceByKey, unionFind,
+    diagnostics, accepted, correspondenceStrength) {
+  const candidateByPair = new Map(candidates.map(candidate => [
+    crossPairKey(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey),
+    candidate,
+  ]));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const alignments = new Map();
+    matchedSourcePairs(unionFind).forEach(anchors => {
+      for (let leftIndex = 0; leftIndex < anchors.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1;
+             rightIndex < anchors.length; rightIndex += 1) {
+          const first = anchors[leftIndex];
+          const second = anchors[rightIndex];
+          const leftPath = pathBetweenSourceBones(
+            first.left, second.left, evidenceByKey);
+          const rightPath = pathBetweenSourceBones(
+            first.right, second.right, evidenceByKey);
+          if (!leftPath || !rightPath || leftPath.length !== rightPath.length
+              || leftPath.length < 3) continue;
+          const internal = [];
+          for (let index = 1; index < leftPath.length - 1; index += 1) {
+            const candidate = candidateByPair.get(crossPairKey(
+              leftPath[index], rightPath[index]));
+            if (!candidate || graphEvidenceContradicts(candidate)
+                || unionFind.same(candidate.left.sourceBoneKey,
+                  candidate.right.sourceBoneKey)) {
+              internal.length = 0;
+              break;
+            }
+            internal.push(candidate);
+          }
+          if (!internal.length) continue;
+          const alignmentKey = internal.map(candidate => crossPairKey(
+            candidate.left.sourceBoneKey, candidate.right.sourceBoneKey))
+            .join('|');
+          if (alignments.has(alignmentKey)) continue;
+          alignments.set(alignmentKey, {
+            candidates: internal,
+            pathLength: leftPath.length,
+            score: average(internal.map(candidate =>
+              candidate.graphAlignmentScore ?? candidate.combinedConfidence), 0),
+            leftAnchor: first.left,
+            rightAnchor: first.right,
+          });
+        }
+      }
+    });
+    const ordered = [...alignments.values()].sort((left, right) =>
+      right.pathLength - left.pathLength || right.score - left.score
+      || left.leftAnchor.localeCompare(right.leftAnchor)
+      || left.rightAnchor.localeCompare(right.rightAnchor));
+    for (const alignment of ordered) {
+      if (alignment.candidates.some(candidate => unionFind.same(
+        candidate.left.sourceBoneKey, candidate.right.sourceBoneKey))) continue;
+      let acceptedPath = false;
+      for (const candidate of alignment.candidates) {
+        candidate.graphAlignmentPathLength = alignment.pathLength;
+        candidate.graphAlignmentScore = Math.max(
+          candidate.graphAlignmentScore || 0, alignment.score);
+        if (acceptedEquivalence(candidate, 'graph-alignment-3', unionFind,
+          diagnostics, accepted, correspondenceStrength)) {
+          acceptedPath = true;
+          changed = true;
+        }
+      }
+      if (acceptedPath) break;
+    }
+  }
 }
 
 function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
@@ -714,12 +1041,11 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
   while (changed) {
     changed = false;
     const propagation = candidates.map(candidate => {
-      const matches = neighborMatches(candidate, evidenceByKey, unionFind);
-      candidate.matchedParent = matches.matchedParent;
-      candidate.matchedChildCount = matches.matchedChildCount;
+      const matches = graphAlignmentFeatures(
+        candidate, evidenceByKey, unionFind);
+      Object.assign(candidate, matches);
       const score = Math.min(1, candidate.score
-        + (matches.matchedParent ? .2 : 0)
-        + Math.min(.2, matches.matchedChildCount * .1));
+        + Math.min(.3, matches.matchedNeighborCount * .15));
       return {...candidate, propagationScore: score};
     }).filter(candidate => {
       if (unionFind.same(candidate.left.sourceBoneKey,
@@ -727,7 +1053,7 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
       if (candidate.normalizedDistance > CROSS_SOURCE_PROPAGATION_DISTANCE) {
         return false;
       }
-      return candidate.matchedParent || candidate.matchedChildCount > 0;
+      return candidate.matchedNeighborCount > 0;
     });
     const endpointMap = new Map();
     const competitionKey = (endpoint, otherSource) => JSON.stringify([
@@ -780,7 +1106,8 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
         && candidate.propagationScore >= .7
         && (candidate.directionAlignment === null
           || candidate.directionAlignment >= .55
-          || candidate.crossScore >= .55);
+          || candidate.crossScore >= .55
+          || candidate.relativeEdgeAlignment >= .6);
     }).sort((left, right) => right.propagationScore - left.propagationScore
       || compareCandidate(right, left));
     selected.forEach(candidate => {
@@ -788,6 +1115,10 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
         diagnostics, accepted, correspondenceStrength)) changed = true;
     });
   }
+  runGraphAlignment(candidates, evidenceByKey, unionFind, diagnostics,
+    accepted, correspondenceStrength);
+  runPathAlignment(candidates, evidenceByKey, unionFind, diagnostics,
+    accepted, correspondenceStrength);
   return {accepted, diagnostics, correspondenceStrength};
 }
 
@@ -1050,9 +1381,96 @@ function componentSupport(component, joints) {
     sum + number(joints[id]?.evidence?.totalWeight, 0), 0);
 }
 
-function attachmentCandidates(joints, forest, referenceRadius) {
+function jointPairKey(leftId, rightId) {
+  return `${Math.min(leftId, rightId)}:${Math.max(leftId, rightId)}`;
+}
+
+function aggregateJointCrossEvidence(left, right, crossEvidenceByPair) {
+  const records = [];
+  (left?.members || []).forEach(leftMember => {
+    (right?.members || []).forEach(rightMember => {
+      if (leftMember.sourceKey === rightMember.sourceKey) return;
+      const record = crossEvidenceByPair.get(crossPairKey(
+        leftMember.sourceBoneKey, rightMember.sourceBoneKey));
+      if (record) records.push(record);
+    });
+  });
+  if (!records.length) {
+    return {
+      matchedVertexCount: 0,
+      weightedMatchStrength: 0,
+      crossQuality: 0,
+      supportedPairCount: 0,
+    };
+  }
+  const totalWeight = records.reduce((sum, record) => sum
+    + Math.max(EPSILON, record.weightedMatchStrength), 0);
+  return {
+    matchedVertexCount: records.reduce((sum, record) =>
+      sum + record.matchedVertexCount, 0),
+    weightedMatchStrength: records.reduce((sum, record) =>
+      sum + record.weightedMatchStrength, 0),
+    crossQuality: records.reduce((sum, record) => sum
+      + record.overlapScore * Math.max(EPSILON, record.weightedMatchStrength), 0)
+      / totalWeight,
+    supportedPairCount: records.filter(record =>
+      record.matchedVertexCount > 0).length,
+  };
+}
+
+function aggregateComponentCrossEvidence(component, target, joints,
+    crossEvidenceByPair, referenceRadius) {
+  const jointEvidence = [];
+  component.nodeIds.forEach(accessoryId => {
+    target.nodeIds.forEach(targetId => {
+      const evidence = aggregateJointCrossEvidence(joints[accessoryId],
+        joints[targetId], crossEvidenceByPair);
+      const accessoryCenter = vectorFrom(joints[accessoryId]?.restCenter);
+      const targetCenter = vectorFrom(joints[targetId]?.restCenter);
+      const distance = accessoryCenter && targetCenter
+        ? accessoryCenter.distanceTo(targetCenter) / referenceRadius : Infinity;
+      if (evidence.matchedVertexCount > 0 || Number.isFinite(distance)) {
+        jointEvidence.push({accessoryId, targetId, distance, evidence});
+      }
+    });
+  });
+  const supported = jointEvidence.filter(item =>
+    item.evidence.matchedVertexCount > 0);
+  const supportedTargetCountByAccessory = new Map();
+  supported.forEach(item => supportedTargetCountByAccessory.set(item.accessoryId,
+    (supportedTargetCountByAccessory.get(item.accessoryId) || 0) + 1));
+  const totalWeight = supported.reduce((sum, item) => sum
+    + Math.max(EPSILON, item.evidence.weightedMatchStrength), 0);
+  return {
+    matchedVertexCount: supported.reduce((sum, item) =>
+      sum + item.evidence.matchedVertexCount, 0),
+    weightedMatchStrength: supported.reduce((sum, item) =>
+      sum + item.evidence.weightedMatchStrength, 0),
+    crossQuality: totalWeight > EPSILON
+      ? supported.reduce((sum, item) => sum
+        + item.evidence.crossQuality
+        * Math.max(EPSILON, item.evidence.weightedMatchStrength), 0)
+        / totalWeight : 0,
+    supportedJointPairCount: supported.length,
+    nearestSupportedDistance: supported.length
+      ? Math.min(...supported.map(item => item.distance)) : null,
+    supportedTargetCountByAccessory,
+  };
+}
+
+function attachmentCandidates(joints, forest, referenceRadius,
+    crossEvidenceByPair = new Map()) {
   const candidates = [];
   const components = forest.components;
+  const componentEvidenceByPair = new Map();
+  const componentEvidenceFor = (accessory, target) => {
+    const key = `${accessory.componentId}:${target.componentId}`;
+    if (!componentEvidenceByPair.has(key)) {
+      componentEvidenceByPair.set(key, aggregateComponentCrossEvidence(
+        accessory, target, joints, crossEvidenceByPair, referenceRadius));
+    }
+    return componentEvidenceByPair.get(key);
+  };
   const directions = new Map(joints.map(joint => [joint.jointId,
     vectorFrom(joint.restDirection)]));
   // The model joint direction is represented by the selected source member's
@@ -1078,6 +1496,7 @@ function attachmentCandidates(joints, forest, referenceRadius) {
           || targetSupport === accessorySupport
             && target.nodeIds.length === accessory.nodeIds.length
             && target.componentId > accessory.componentId) continue;
+      const componentEvidence = componentEvidenceFor(accessory, target);
       for (const targetId of target.nodeIds) {
         const targetJoint = joints[targetId];
         const targetAnchor = vectorFrom(targetJoint?.restCenter);
@@ -1095,16 +1514,36 @@ function attachmentCandidates(joints, forest, referenceRadius) {
           const directionAlignment = accessoryDirection
             ? Math.abs(accessoryDirection.dot(towardAccessory.normalize()))
             : null;
-          if (directionAlignment !== null && directionAlignment < .1) continue;
+          const pairEvidence = aggregateJointCrossEvidence(targetJoint,
+            accessoryJoint, crossEvidenceByPair);
+          const nearbyTargetAgreement = Math.max(0,
+            (componentEvidence.supportedTargetCountByAccessory.get(accessoryId)
+              || 0) - (pairEvidence.matchedVertexCount > 0 ? 1 : 0));
           const targetChildren = targetJoint.childrenIds || [];
           const targetDirection = directions.get(targetId);
           const targetTopology = targetChildren.length ? 1 : .5;
           const supportScore = targetSupport / Math.max(
             targetSupport, accessorySupport, EPSILON);
-          const score = clamp(1 - normalizedDistance
-            / CROSS_SOURCE_CANDIDATE_DISTANCE) * .55
+          const distanceScore = clamp(1 - normalizedDistance
+            / CROSS_SOURCE_CANDIDATE_DISTANCE);
+          const componentSupportScore = clamp(
+            componentEvidence.matchedVertexCount / 32) * .35
+            + clamp(componentEvidence.weightedMatchStrength / 2) * .25
+            + componentEvidence.crossQuality * .2
+            + clamp(componentEvidence.supportedJointPairCount / 3) * .2;
+          const endpointEvidenceScore = clamp(pairEvidence.matchedVertexCount
+            / 8) * .35
+            + clamp(pairEvidence.weightedMatchStrength / .5) * .25
+            + pairEvidence.crossQuality * .2
+            + clamp(nearbyTargetAgreement / 3) * .2;
+          const endpointScore = distanceScore * .55
             + (directionAlignment ?? .5) * .3
-            + supportScore * .1 + targetTopology * .05;
+            + supportScore * .1 + targetTopology * .05
+            + (accessory.rootId === accessoryId ? .15 : 0);
+          const endpointCombinedScore = endpointScore * .65
+            + endpointEvidenceScore * .35;
+          const score = componentSupportScore * .45
+            + endpointCombinedScore * .55;
           candidates.push({
             targetComponentId: target.componentId,
             accessoryComponentId: accessory.componentId,
@@ -1115,7 +1554,22 @@ function attachmentCandidates(joints, forest, referenceRadius) {
             normalizedDistance,
             directionAlignment,
             score,
+            componentScore: componentSupportScore,
+            endpointScore: endpointCombinedScore,
+            endpointEvidenceScore,
             targetDirection: targetDirection?.toArray() || null,
+            componentMatchedVertexCount: componentEvidence.matchedVertexCount,
+            componentWeightedMatchStrength:
+              componentEvidence.weightedMatchStrength,
+            componentCrossQuality: componentEvidence.crossQuality,
+            componentSupportedJointPairCount:
+              componentEvidence.supportedJointPairCount,
+            nearestSupportedDistance: componentEvidence.nearestSupportedDistance,
+            accessoryRoot: accessory.rootId === accessoryId,
+            endpointMatchedVertexCount: pairEvidence.matchedVertexCount,
+            endpointWeightedMatchStrength: pairEvidence.weightedMatchStrength,
+            endpointCrossQuality: pairEvidence.crossQuality,
+            nearbyTargetAgreement,
           });
         }
       }
@@ -1128,52 +1582,98 @@ function attachmentCandidates(joints, forest, referenceRadius) {
     || left.targetComponentId - right.targetComponentId);
 }
 
-function addAttachments(joints, sourceEdges, forest, referenceRadius) {
-  const candidates = attachmentCandidates(joints, forest, referenceRadius);
+function addAttachments(joints, sourceEdges, forest, referenceRadius,
+    crossEvidenceByPair = new Map()) {
+  const candidates = attachmentCandidates(joints, forest, referenceRadius,
+    crossEvidenceByPair);
   const diagnostics = [];
   const accepted = [];
   const usedAccessoryComponents = new Set();
   const candidatesByAccessory = new Map();
   candidates.forEach(candidate => {
-    const entries = candidatesByAccessory.get(candidate.accessoryComponentId) || [];
+    const byTarget = candidatesByAccessory.get(
+      candidate.accessoryComponentId) || new Map();
+    const entries = byTarget.get(candidate.targetComponentId) || [];
     entries.push(candidate);
-    candidatesByAccessory.set(candidate.accessoryComponentId, entries);
+    byTarget.set(candidate.targetComponentId, entries);
+    candidatesByAccessory.set(candidate.accessoryComponentId, byTarget);
   });
-  for (const candidate of candidates) {
-    if (usedAccessoryComponents.has(candidate.accessoryComponentId)) {
-      diagnostics.push({...candidate, decision: 'rejected',
-        rejectionReason: 'attachment_cycle'});
+  const compareEndpoint = (left, right) =>
+    right.endpointEvidenceScore - left.endpointEvidenceScore
+    || right.nearbyTargetAgreement - left.nearbyTargetAgreement
+    || right.endpointScore - left.endpointScore
+    || right.score - left.score
+    || left.normalizedDistance - right.normalizedDistance
+    || left.jointA - right.jointA || left.jointB - right.jointB;
+  const compareComponent = (left, right) =>
+    right.componentScore - left.componentScore
+    || right.componentMatchedVertexCount - left.componentMatchedVertexCount
+    || right.componentWeightedMatchStrength
+      - left.componentWeightedMatchStrength
+    || compareEndpoint(left, right);
+  const groupScore = group => [...group].sort(compareComponent)[0];
+  for (const [accessoryComponentId, byTarget] of candidatesByAccessory) {
+    const groups = [...byTarget.entries()].map(([targetComponentId, group]) => ({
+      targetComponentId,
+      candidates: group,
+      best: groupScore(group),
+    })).sort((left, right) => compareComponent(left.best, right.best)
+      || left.targetComponentId - right.targetComponentId);
+    const bestGroup = groups[0];
+    if (!bestGroup) continue;
+    if (usedAccessoryComponents.has(accessoryComponentId)) {
+      bestGroup.candidates.forEach(candidate => diagnostics.push({...candidate,
+        decision: 'rejected', rejectionReason: 'attachment_cycle'}));
       continue;
     }
-    const competing = candidatesByAccessory.get(candidate.accessoryComponentId)
-      || [];
+    const secondGroup = groups[1];
+    if (secondGroup
+        && bestGroup.best.componentScore - secondGroup.best.componentScore
+          < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN
+        && bestGroup.best.score - secondGroup.best.score
+          < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN) {
+      groups.flatMap(group => group.candidates).forEach(candidate =>
+        diagnostics.push({...candidate, decision: 'rejected',
+          rejectionReason: candidate === bestGroup.best
+            ? 'attachment_ambiguous' : 'attachment_component_competition'}));
+      continue;
+    }
+    const competing = [...bestGroup.candidates].sort(compareEndpoint);
     const best = competing[0];
-    if (best !== candidate) {
-      diagnostics.push({...candidate, decision: 'rejected',
-        rejectionReason: 'attachment_competition'});
-      continue;
-    }
     const second = competing[1];
-    if (second && candidate.score - second.score
-        < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN) {
-      diagnostics.push({...candidate, decision: 'rejected',
-        rejectionReason: 'attachment_ambiguous'});
+    const evidenceWinner = second && (
+      best.endpointMatchedVertexCount > second.endpointMatchedVertexCount
+      || best.nearbyTargetAgreement > second.nearbyTargetAgreement
+      || best.endpointEvidenceScore - second.endpointEvidenceScore >= .1
+      || best.accessoryRoot && !second.accessoryRoot
+        && best.componentMatchedVertexCount >= 8);
+    if (second && best.score - second.score
+        < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN && !evidenceWinner) {
+      competing.forEach(candidate => diagnostics.push({...candidate,
+        decision: 'rejected', rejectionReason: candidate === best
+          ? 'attachment_ambiguous' : 'attachment_competition'}));
       continue;
     }
     const edge = {
-      jointA: candidate.jointA,
-      jointB: candidate.jointB,
+      jointA: best.jointA,
+      jointB: best.jointB,
       sourceSupportCount: 0,
       sourceEdges: [],
-      combinedTreeScore: candidate.score,
+      combinedTreeScore: best.score,
       relationshipType: 'attachment',
-      weight: candidate.score,
-      attachmentScore: candidate.score,
+      weight: best.score,
+      attachmentScore: best.score,
     };
     accepted.push(edge);
-    usedAccessoryComponents.add(candidate.accessoryComponentId);
-    diagnostics.push({...candidate, decision: 'accepted',
-      rejectionReason: null, survivedFinalForest: false});
+    usedAccessoryComponents.add(accessoryComponentId);
+    candidates.forEach(candidate => {
+      if (candidate.accessoryComponentId !== accessoryComponentId) return;
+      diagnostics.push({...candidate, decision: candidate === best
+        ? 'accepted' : 'rejected', rejectionReason: candidate === best
+        ? null : candidate.targetComponentId === best.targetComponentId
+          ? 'attachment_competition' : 'attachment_component_competition',
+        survivedFinalForest: false});
+    });
   }
   return {edges: [...sourceEdges, ...accepted], accepted, diagnostics};
 }
@@ -1213,7 +1713,8 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
   const votes = rootVotes(rigs, model.keyToJoint);
   const sourceForest = orientModelForest(model.joints, sourceForestEdges, votes);
   const attachments = addAttachments(
-    model.joints, sourceForestEdges, sourceForest, referenceRadius);
+    model.joints, sourceForestEdges, sourceForest, referenceRadius,
+    candidateBuild.crossEvidenceByPair);
   const finalEdges = maximumSpanningForest(model.joints, attachments.edges);
   const initialFinalForest = orientModelForest(model.joints, finalEdges, votes);
   const finalRootOverrides = new Map();
@@ -1242,7 +1743,19 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
       left: {jointId: item.jointA}, right: {jointId: item.jointB},
       normalizedDistance: item.normalizedDistance,
       directionAlignment: item.directionAlignment,
-      score: item.score, decision: item.decision,
+      score: item.score,
+      componentScore: item.componentScore,
+      componentMatchedVertexCount: item.componentMatchedVertexCount,
+      componentWeightedMatchStrength: item.componentWeightedMatchStrength,
+      componentCrossQuality: item.componentCrossQuality,
+      componentSupportedJointPairCount: item.componentSupportedJointPairCount,
+      accessoryRoot: item.accessoryRoot,
+      endpointScore: item.endpointScore,
+      endpointMatchedVertexCount: item.endpointMatchedVertexCount,
+      endpointWeightedMatchStrength: item.endpointWeightedMatchStrength,
+      endpointCrossQuality: item.endpointCrossQuality,
+      nearbyTargetAgreement: item.nearbyTargetAgreement,
+      decision: item.decision,
       rejectionReason: item.rejectionReason,
     }))];
   const sourceBoneToModelJointId = Object.fromEntries(
@@ -1252,6 +1765,16 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
   const ambiguousCount = rejectedCandidates.filter(item =>
     item.rejectionReason === 'ambiguous'
       || item.rejectionReason === 'attachment_ambiguous').length;
+  const mainComponent = [...finalForest.components].sort((left, right) =>
+    componentSupport(right, model.joints) - componentSupport(left, model.joints)
+    || right.nodeIds.length - left.nodeIds.length
+    || left.componentId - right.componentId)[0] || null;
+  const mainComponentId = mainComponent?.componentId ?? null;
+  const unresolvedComponents = finalForest.components.filter(component =>
+    component.componentId !== mainComponentId);
+  const unresolvedSourceKeys = [...new Set(unresolvedComponents.flatMap(component =>
+    component.nodeIds.flatMap(jointId => (model.joints[jointId]?.members || [])
+      .map(member => member.sourceKey))))].sort();
   const reconciliation = {
     sourceCount: rigs.length,
     sourceBoneCount: evidenceByKey.size,
@@ -1265,6 +1788,12 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
     attachmentCount: survivingAttachments.length,
     unmatchedCount,
     ambiguousCount,
+    componentCount: finalForest.components.length,
+    mainComponentId,
+    unresolvedComponentCount: unresolvedComponents.length,
+    unresolvedJointCount: unresolvedComponents.reduce((sum, component) =>
+      sum + component.nodeIds.length, 0),
+    unresolvedSourceKeys,
     modelReferenceRadius: referenceRadius,
     joints: model.joints,
     acceptedEquivalences,

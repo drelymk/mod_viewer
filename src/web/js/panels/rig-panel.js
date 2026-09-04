@@ -62,6 +62,68 @@ function addNavigationButton(parent, sourceKey, boneId) {
   parent.appendChild(button);
 }
 
+function syncReconciliationReadout(state, joint) {
+  const model = state?.model;
+  const reconciliation = model?.reconciliation;
+  if (!model || !reconciliation) {
+    ui.reconciliationSummary.textContent = '—';
+    ui.connection.textContent = '—';
+    ui.confidence.textContent = '—';
+    ui.connectionDetail.textContent = '';
+    return;
+  }
+  ui.reconciliationSummary.textContent = [
+    `Sources ${reconciliation.sourceCount ?? state.sources?.length ?? 0}`,
+    `Source bones ${reconciliation.sourceBoneCount ?? 0}`,
+    `Model joints ${reconciliation.modelJointCount ?? model.joints.length}`,
+    `Equivalent clusters ${reconciliation.equivalenceClusterCount ?? 0}`,
+    `Attachments ${reconciliation.attachmentCount ?? 0}`,
+    `Components ${reconciliation.componentCount ?? model.components?.length ?? 0}`,
+  ].join(' · ');
+  if (!joint) {
+    ui.connection.textContent = '—';
+    ui.confidence.textContent = '—';
+    ui.connectionDetail.textContent = '';
+    return;
+  }
+  const memberKeys = new Set((joint.members || []).map(member =>
+    member.sourceBoneKey));
+  const equivalences = (reconciliation.acceptedEquivalences || []).filter(item =>
+    memberKeys.has(item.left?.sourceBoneKey)
+    || memberKeys.has(item.right?.sourceBoneKey));
+  const attachment = (model.forestEdges || []).find(edge =>
+    edge.relationshipType === 'attachment'
+    && (Number(edge.jointA) === Number(joint.jointId)
+      || Number(edge.jointB) === Number(joint.jointId)));
+  const confidence = equivalences.length
+    ? Math.max(...equivalences.map(item => Number(item.score) || 0))
+    : attachment ? Number(attachment.attachmentScore ?? attachment.weight) : null;
+  ui.connection.textContent = equivalences.length ? 'equivalence'
+    : attachment ? 'attachment' : 'unresolved';
+  ui.confidence.textContent = Number.isFinite(confidence)
+    ? confidence.toFixed(3) : '—';
+  if (equivalences.length || attachment) {
+    ui.connectionDetail.textContent = '';
+    return;
+  }
+  const bestAttachment = (reconciliation.rejectedCandidates || []).filter(item =>
+    item.left?.jointId !== undefined && item.right?.jointId !== undefined
+    && (Number(item.left.jointId) === Number(joint.jointId)
+      || Number(item.right.jointId) === Number(joint.jointId))
+    && String(item.rejectionReason || '').startsWith('attachment_'))
+    .sort((left, right) => (Number(right.score) || 0)
+      - (Number(left.score) || 0))[0];
+  if (!bestAttachment) {
+    ui.connectionDetail.textContent = 'No attachment candidate';
+    return;
+  }
+  const otherJointId = Number(bestAttachment.left.jointId) === Number(joint.jointId)
+    ? bestAttachment.right.jointId : bestAttachment.left.jointId;
+  ui.connectionDetail.textContent = `Best attachment: Joint ${otherJointId}`
+    + ` · ${(Number(bestAttachment.score) || 0).toFixed(3)}`
+    + ` · ${bestAttachment.rejectionReason}`;
+}
+
 function syncRotationReadout(state = latestState, localOverride = null) {
   if (!ui?.rotationValues) return;
   const joint = selectedJoint(state);
@@ -124,6 +186,10 @@ function buildPanel() {
 
   const sourceSection = section('Model');
   ui.modelSummary = addText(sourceSection, 'rig-value', '—');
+  const reconciliationSection = section('Reconciliation');
+  ui.reconciliationSummary = document.createElement('div');
+  ui.reconciliationSummary.className = 'rig-value rig-reconciliation-summary';
+  reconciliationSection.appendChild(ui.reconciliationSummary);
 
   const boneSection = section('Selected Joint');
   ui.bone = document.createElement('select');
@@ -154,6 +220,19 @@ function buildPanel() {
   ui.children.className = 'rig-nav-values';
   childrenRow.appendChild(ui.children);
   boneSection.appendChild(childrenRow);
+  const connectionRow = document.createElement('div');
+  connectionRow.className = 'rig-row';
+  addText(connectionRow, 'rig-label', 'Connection');
+  ui.connection = addText(connectionRow, 'rig-value', '—');
+  ui.connection.classList.add('rig-connection-value');
+  boneSection.appendChild(connectionRow);
+  const confidenceRow = document.createElement('div');
+  confidenceRow.className = 'rig-row';
+  addText(confidenceRow, 'rig-label', 'Confidence');
+  ui.confidence = addText(confidenceRow, 'rig-value', '—');
+  ui.confidence.classList.add('rig-confidence-value');
+  boneSection.appendChild(confidenceRow);
+  ui.connectionDetail = addText(boneSection, 'rig-hint');
   ui.pick = document.createElement('button');
   ui.pick.type = 'button';
   ui.pick.className = 'ui-button rig-pick-model';
@@ -279,6 +358,7 @@ function syncOptions(state) {
     }
     const component = model.components?.find(item =>
       item.nodeIds.includes(Number(selectedId))) || null;
+    syncReconciliationReadout(state, joint);
     ui.root.textContent = component ? String(component.rootId) : '—';
     ui.depth.textContent = component
       ? String(component.depthById?.[selectedId] ?? '—') : '—';
@@ -301,6 +381,7 @@ function syncOptions(state) {
     return;
   }
   const source = selectedSource(state);
+  syncReconciliationReadout(state, null);
   const boneKey = JSON.stringify(source?.boneIds || []);
   if (boneKey !== ui.bone.dataset.optionKey) {
     ui.bone.replaceChildren();
