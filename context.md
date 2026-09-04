@@ -234,6 +234,11 @@ of documentation, comments and tests; use portable fixtures instead.
   topology-assisted propagation and ambiguity rejection. Collapse source edges
   into a model-level maximum-spanning forest, then add only conservative,
   cycle-free cross-source attachment edges between source/component roots.
+- Cross-source reconciliation connects multiple skinning palettes for inferred
+  posing. Because the model-wide inferred hierarchy may differ from each source
+  palette's original weighting topology, some cross-source weighted regions can
+  stretch during rotation. This is currently accepted as an experimental Rig
+  limitation.
 - Normalize reconciliation distances by model reference radius with candidate,
   strict, propagation and attachment gates; retain candidate evidence and
   rejection reasons for diagnostics. Model joints own rest center/pivot/frame,
