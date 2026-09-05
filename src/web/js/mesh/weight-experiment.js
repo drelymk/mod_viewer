@@ -1847,7 +1847,7 @@ function buildModelJointPivotByEdgeKey(rig) {
   return pivots;
 }
 
-function rebuildModelRestFrames(rig, forest) {
+export function rebuildModelRestFrames(rig, forest) {
   const edgePivots = rig.jointPivotByEdgeKey
     || buildModelJointPivotByEdgeKey(rig);
   const pivots = new Map();
@@ -2046,6 +2046,9 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     structureRevision: ++nextRigStructureRevision,
   };
   rig.jointPivotByEdgeKey = buildModelJointPivotByEdgeKey(rig);
+  // Install provenance-derived edge pivots before capturing the default
+  // orientation. Reset Pose must restore the same pivots used on first load.
+  rebuildModelRestFrames(rig, rig.inferredForest);
   rig.defaultComponents = rig.components.map(cloneModelComponent);
   rig.defaultComponentByJointId = new Map(rig.componentByJointId);
   rig.defaultRootIdByComponent = new Map(rig.defaultComponents.map(component => [
@@ -3679,6 +3682,10 @@ export function refreshSkinningAfterShapeChange(mesh) {
     normal.array.set(shapedNormals);
     normal.needsUpdate = true;
   }
+  // resetModelPose() may have recomputed bounds for the old baseline. Restore
+  // the bounds for the shaped arrays before publishing the new baseline.
+  mesh.geometry.computeBoundingBox();
+  mesh.geometry.computeBoundingSphere();
   state.baselinePositions = new Float32Array(position.array);
   state.baselineNormals = normal ? new Float32Array(normal.array) : null;
   state.influenceNodes = buildRigInfluenceNodes(

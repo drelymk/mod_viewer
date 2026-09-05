@@ -1407,6 +1407,87 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
         context.close()
 
 
+def test_model_rest_frames_use_oriented_edge_pivots(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"RigEdgePivots": _payload("RigEdgePivots")})
+    try:
+        _open(page, "RigEdgePivots")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        result = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const joints = [0, 1, 2].map((jointId, index) => ({
+            jointId,
+            restCenter: [index * 5, 0, 0],
+            restPivot: [99, 99, 99],
+            restFrame: [0, 0, 0, 1],
+          }));
+          const edgePivots = [
+            {jointA: 0, jointB: 1, sourceEdges: [{
+              jointCenter: [1, 0, 0], jointWeightTotal: 2,
+            }]},
+            {jointA: 1, jointB: 2, sourceEdges: [{
+              jointCenter: [4, 0, 0], jointWeightTotal: 3,
+            }]},
+          ];
+          const forest = {
+            components: [{componentId: 0, rootId: 2, nodeIds: [0, 1, 2],
+              parentById: {0: 1, 1: 2, 2: null},
+              childrenById: {0: [], 1: [0], 2: [1]}}],
+          };
+          const rig = {
+            joints, edges: edgePivots, components: forest.components,
+            inferredForest: forest,
+            centerByJointId: new Map(joints.map(joint => [
+              joint.jointId, joint.restCenter])),
+          };
+          experiment.rebuildModelRestFrames(rig, forest);
+          const q = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 0, 1), Math.PI / 2);
+          const transforms = experiment.buildForestTransformsFromLocalRotations(
+            forest, rig.centerByJointId, {
+              quaternionByBoneId: new Map([[1, q]]),
+              jointPivotByBoneId: rig.jointPivotByJointId,
+            });
+          const rotatedProbe = new THREE.Vector3(4, 1, 0)
+            .applyMatrix4(transforms.get(1)).toArray();
+          const initialPivots = [0, 1, 2].map(id =>
+            [...rig.jointPivotByJointId.get(id)]);
+          const initialJointPivots = joints.map(joint => [...joint.restPivot]);
+          const rerooted = {
+            components: [{componentId: 0, rootId: 0, nodeIds: [0, 1, 2],
+              parentById: {0: null, 1: 0, 2: 1},
+              childrenById: {0: [1], 1: [2], 2: []}}],
+          };
+          experiment.rebuildModelRestFrames(rig, rerooted);
+          const rerootedTransforms =
+            experiment.buildForestTransformsFromLocalRotations(
+              rerooted, rig.centerByJointId, {
+                quaternionByBoneId: new Map([[1, q]]),
+                jointPivotByBoneId: rig.jointPivotByJointId,
+              });
+          const rerootedProbe = new THREE.Vector3(1, 1, 0)
+            .applyMatrix4(rerootedTransforms.get(1)).toArray();
+          return {
+            initialPivots, initialJointPivots,
+            rotatedProbe, rerootedProbe,
+            rerootedPivots: [0, 1, 2].map(id =>
+              rig.jointPivotByJointId.get(id)),
+          };
+        }""")
+        assert result["initialPivots"] == [
+            [1, 0, 0], [4, 0, 0], [10, 0, 0]]
+        assert result["initialJointPivots"] == [
+            [1, 0, 0], [4, 0, 0], [10, 0, 0]]
+        assert result["rotatedProbe"] == pytest.approx([3, 0, 0])
+        assert result["rerootedPivots"] == [
+            [0, 0, 0], [1, 0, 0], [4, 0, 0]]
+        assert result["rerootedProbe"] == pytest.approx([0, 0, 0])
+    finally:
+        context.close()
+
+
 def test_rig_pose_preset_recomputes_descendants_after_root_change(
         edge_browser, frontend_url):
     context, page = _page(
@@ -1987,11 +2068,19 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           refreshMeshes();
           const state = experiment.getSkinningState(mesh);
           const after = [...mesh.geometry.attributes.position.array];
+          const box = mesh.geometry.boundingBox;
+          const sphere = mesh.geometry.boundingSphere;
           URL.revokeObjectURL(url);
           return {
             loaded: state.loaded,
             baseline: [...state.baselinePositions],
             before, after,
+            bounds: {
+              min: box.min.toArray(), max: box.max.toArray(),
+            },
+            sphere: {
+              center: sphere.center.toArray(), radius: sphere.radius,
+            },
             graph: state.influenceGraph,
           };
         }""")
@@ -2000,6 +2089,19 @@ def test_loaded_skinning_rebaselines_after_shape_change(
         assert result["after"][3] == pytest.approx(1.2)
         assert result["after"][7] == pytest.approx(1.2)
         assert result["baseline"] == pytest.approx(result["after"])
+        assert result["bounds"]["min"] == pytest.approx([0, 0, 0])
+        assert result["bounds"]["max"] == pytest.approx([1.2, 1.2, 0])
+        assert result["sphere"]["center"] == pytest.approx([.6, .6, 0])
+        assert result["sphere"]["radius"] == pytest.approx(math.sqrt(.72))
+        for offset in range(0, len(result["after"]), 3):
+            point = result["after"][offset:offset + 3]
+            assert all(result["bounds"]["min"][axis] - 1e-6 <= point[axis]
+                       <= result["bounds"]["max"][axis] + 1e-6
+                       for axis in range(3))
+            distance = math.sqrt(sum((point[axis]
+                                      - result["sphere"]["center"][axis]) ** 2
+                                     for axis in range(3)))
+            assert distance <= result["sphere"]["radius"] + 1e-6
         assert result["graph"] is None
     finally:
         context.close()
