@@ -555,6 +555,7 @@ function modelRigSnapshot() {
     sourceEdges: (edge.sourceEdges || []).map(sourceEdge => ({...sourceEdge})),
   }));
   return {
+    key: modelSkinningRig.key || 'model-rig',
     structureRevision: modelSkinningRig.structureRevision,
     joints,
     forestEdges,
@@ -648,6 +649,7 @@ function rigPresetSnapshot() {
             right: [...(preset.diagnostics.semanticFrame.right || [])],
             forward: [...(preset.diagnostics.semanticFrame.forward || [])],
           } : null,
+        semantic: preset.diagnostics?.semantic || null,
         bodyFrame: preset.diagnostics?.bodyFrame
           ? {...preset.diagnostics.bodyFrame} : null,
         candidateCounts: preset.diagnostics?.candidateCounts

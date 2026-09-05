@@ -312,6 +312,174 @@ def test_builtin_arms_up_pose_is_symmetric_deterministic_and_fail_closed(
     assert result["rotations"]["positiveTarget"][2] > 0
 
 
+def test_rig_semantics_detects_bilateral_finger_fans(module_page):
+    result = module_page.evaluate("""async () => {
+      const {analyzeRigSemantics} = await import(
+        './js/mesh/weight-rig-semantics.js');
+      const {analyzeHumanoidRestPose} = await import(
+        './js/mesh/weight-rig-procedural-poses.js');
+      const joints = [];
+      const parentById = {};
+      const childrenById = {};
+      const pivots = {};
+      const add = (jointId, center, parentId = null) => {
+        joints.push({jointId, signature: `[\"semantic#bone=${jointId}\"]`,
+          restCenter: center, restPivot: center});
+        parentById[jointId] = parentId;
+        childrenById[jointId] = [];
+        pivots[jointId] = center;
+        if (parentId !== null) childrenById[parentId].push(jointId);
+      };
+      add(0, [0, 0, 0]);
+      add(1, [0, 6, 0], 0);
+      add(2, [0, 12, 0], 1);
+      add(10, [-2, 7, 0], 0);
+      add(11, [-3.1, 5.7, 0], 10);
+      add(12, [-4.1, 4.5, 0], 11);
+      add(20, [2, 7, 0], 0);
+      add(21, [3.1, 5.7, 0], 20);
+      add(22, [4.1, 4.5, 0], 21);
+      const tips = [
+        [-.65, .9, -.2], [-.8, .5, .1], [-.85, .1, .35],
+        [-.8, -.35, .25], [-.55, -.75, -.1],
+      ];
+      tips.forEach((offset, index) => {
+        const leftFirst = [12, 100 + index * 2];
+        const rightFirst = [22, 200 + index * 2];
+        const left = [-4.1 + offset[0] * .5, 4.5 + offset[1] * .5,
+          offset[2] * .5];
+        const right = [4.1 - offset[0] * .5, 4.5 + offset[1] * .5,
+          offset[2] * .5];
+        add(leftFirst[1], left, leftFirst[0]);
+        add(leftFirst[1] + 1,
+          [-4.1 + offset[0], 4.5 + offset[1], offset[2]], leftFirst[1]);
+        add(rightFirst[1], right, rightFirst[0]);
+        add(rightFirst[1] + 1,
+          [4.1 - offset[0], 4.5 + offset[1], offset[2]], rightFirst[1]);
+      });
+      add(30, [-.8, 1, 0], 0);
+      add(31, [.8, 1, 0], 0);
+      const component = {componentId: 0, rootId: 0,
+        nodeIds: joints.map(joint => joint.jointId), parentById,
+        childrenById,
+        depthById: Object.fromEntries(joints.map(joint => [joint.jointId, 1]))};
+      component.depthById[0] = 0;
+      const rig = {joints, components: [component],
+        defaultComponents: [component],
+        defaultRestPivotByJointId: pivots};
+      const transformRig = (source, frame, scale = 1) => {
+        const transform = values => [
+          (frame.right[0] * values[0] + frame.up[0] * values[1]
+            + frame.forward[0] * values[2]) * scale,
+          (frame.right[1] * values[0] + frame.up[1] * values[1]
+            + frame.forward[1] * values[2]) * scale,
+          (frame.right[2] * values[0] + frame.up[2] * values[1]
+            + frame.forward[2] * values[2]) * scale,
+        ];
+        return {
+          ...source,
+          joints: source.joints.map(joint => ({...joint,
+            restCenter: transform(joint.restCenter),
+            restPivot: transform(joint.restPivot),
+          })),
+          defaultRestPivotByJointId: Object.fromEntries(
+            Object.entries(source.defaultRestPivotByJointId)
+              .map(([id, value]) => [id, transform(value)])),
+        };
+      };
+      const zUpFrame = {up: [0, 0, 1], right: [1, 0, 0],
+        forward: [0, -1, 0]};
+      const small = analyzeRigSemantics(transformRig(rig,
+        {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]}, .1));
+      const large = analyzeRigSemantics(transformRig(rig,
+        {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]}, 10));
+      const brokenChildren = Object.fromEntries(Object.entries(childrenById)
+        .map(([id, children]) => [id, [...children]]));
+      const brokenParentById = {...parentById};
+      delete brokenParentById[11];
+      brokenChildren[10] = [];
+      const brokenComponent = {...component, parentById: brokenParentById,
+        childrenById: brokenChildren};
+      const brokenRig = {...rig, components: [brokenComponent],
+        defaultComponents: [brokenComponent]};
+      const wingJoints = rig.joints.map(joint => ({...joint,
+        restCenter: [...joint.restCenter], restPivot: [...joint.restPivot]}));
+      const wingParentById = {...parentById};
+      const wingChildrenById = Object.fromEntries(Object.entries(childrenById)
+        .map(([id, children]) => [id, [...children]]));
+      const wingPivots = {...pivots};
+      const addWing = (jointId, center, parentId) => {
+        wingJoints.push({jointId, signature: `[\"wing#bone=${jointId}\"]`,
+          restCenter: center, restPivot: center});
+        wingParentById[jointId] = parentId;
+        wingChildrenById[jointId] = [];
+        wingChildrenById[parentId].push(jointId);
+        wingPivots[jointId] = center;
+      };
+      [-1, 1].forEach(side => {
+        const palmId = side < 0 ? 400 : 500;
+        const palm = [side * 7, 6, 8];
+        addWing(palmId, palm, 0);
+        [[-.8, .8], [-.95, .4], [-1.05, 0], [-.95, -.4],
+          [-.8, -.8]].forEach(([lateral, vertical], index) => {
+          const firstId = palmId + 1 + index * 2;
+          addWing(firstId, [side * 7 + side * lateral * .5,
+            6 + vertical * .5, 8], palmId);
+          addWing(firstId + 1, [side * 7 + side * lateral,
+            6 + vertical, 8], firstId);
+        });
+      });
+      const wingComponent = {...component,
+        nodeIds: wingJoints.map(joint => joint.jointId),
+        parentById: wingParentById, childrenById: wingChildrenById};
+      const wingRig = {...rig, joints: wingJoints,
+        components: [wingComponent], defaultComponents: [wingComponent],
+        defaultRestPivotByJointId: wingPivots};
+      return {
+        semantic: analyzeRigSemantics(rig),
+        pose: analyzeHumanoidRestPose(rig),
+        zUp: analyzeRigSemantics(transformRig(rig, zUpFrame),
+          {semanticFrame: zUpFrame}),
+        small,
+        large,
+        broken: {
+          semantic: analyzeRigSemantics(brokenRig),
+          pose: analyzeHumanoidRestPose(brokenRig),
+        },
+        wings: analyzeRigSemantics(wingRig),
+      };
+    }""")
+    semantic = result["semantic"]
+    assert semantic["available"], result
+    assert semantic["landmarks"]["negativeHand"]["fingerCount"] >= 4
+    assert semantic["landmarks"]["positiveHand"]["fingerCount"] >= 4
+    assert semantic["landmarks"]["negativeArm"]["shoulder"]["jointId"] == 10
+    assert semantic["landmarks"]["positiveArm"]["shoulder"]["jointId"] == 20
+    assert semantic["landmarks"]["negativeArm"]["hand"]["jointId"] == 12
+    assert semantic["landmarks"]["positiveArm"]["hand"]["jointId"] == 22
+    assert result["pose"]["available"], result["pose"]
+    assert result["pose"]["diagnostics"]["detector"] == "semantic-hands"
+    assert [item["joint_signature"]
+            for item in result["pose"]["preset"]["joints"]] == [
+        '["semantic#bone=10"]', '["semantic#bone=20"]']
+    assert result["pose"]["arms"]["negativeX"]["targetDirection"][1] > .9
+    assert result["pose"]["arms"]["positiveX"]["targetDirection"][1] > .9
+    assert result["zUp"]["available"]
+    assert result["zUp"]["landmarks"]["negativeHand"]["jointId"] == 12
+    assert result["zUp"]["landmarks"]["positiveHand"]["jointId"] == 22
+    assert result["small"]["available"] and result["large"]["available"]
+    assert result["small"]["landmarks"]["negativeHand"]["jointId"] == 12
+    assert result["large"]["landmarks"]["positiveHand"]["jointId"] == 22
+    assert result["broken"]["semantic"]["available"]
+    assert not result["broken"]["semantic"]["landmarks"]["negativeArm"][
+        "poseConnectivity"]["connected"]
+    assert "negative_arm_pose_disconnected" in result["broken"]["semantic"]["issues"]
+    assert result["broken"]["pose"]["available"]
+    assert result["wings"]["available"]
+    assert result["wings"]["landmarks"]["negativeHand"]["jointId"] == 12
+    assert result["wings"]["landmarks"]["positiveHand"]["jointId"] == 22
+
+
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page
     result = page.evaluate("""async () => {

@@ -121,6 +121,7 @@ function rigPresetUnavailableMessage(reason, diagnostics = {}, confidence = null
     arm_pair_ambiguous: 'Arms Up found more than one plausible arm pair.',
     hierarchy_orientation_incompatible: 'Arms Up found arm geometry but its hierarchy runs inward.',
     invalid_rest_direction: 'Arms Up could not determine stable rest directions.',
+    semantic_pose_validation_failed: 'Arms Up found hands but its target pose failed hand validation.',
   }[reason] || 'Arms Up is unavailable for this inferred Rig.';
   const counts = diagnostics?.candidateCounts;
   const details = [];
@@ -139,6 +140,11 @@ function rigPresetUnavailableMessage(reason, diagnostics = {}, confidence = null
       && semanticUp.slice(0, 3).every(Number.isFinite)) {
     details.push(`Semantic up: [${semanticUp.slice(0, 3).map(value =>
       Number(value).toFixed(2)).join(', ')}].`);
+  }
+  const hands = diagnostics?.semantic?.hands;
+  if (hands?.negative && hands?.positive) {
+    details.push(`Hand rays: ${hands.negative.fingerCount} / `
+      + `${hands.positive.fingerCount}.`);
   }
   return [message, ...details].join(' ');
 }

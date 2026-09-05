@@ -1,8 +1,12 @@
 import {Quaternion, Vector3} from 'three';
+import {
+  analyzeRigSemantics, normalizeSemanticFrame, serializeSemanticFrame,
+} from './weight-rig-semantics.js';
 
 const EPSILON = 1e-8;
 const DEFAULT_OUTWARD_ANGLE_DEGREES = 10;
 const MIN_CONFIDENCE = 0.75;
+const MIN_SEMANTIC_CONFIDENCE = 0.7;
 const MIN_PAIR_MARGIN = 0.1;
 const MIN_ARM_Y = 0.45;
 const MAX_ARM_Y = 0.9;
@@ -49,34 +53,8 @@ function normalize(value) {
   return result.normalize();
 }
 
-function semanticFrame(value = {}) {
-  const source = value || {};
-  const up = normalize(source.up) || new Vector3(0, 1, 0);
-  let right = normalize(source.right) || new Vector3(1, 0, 0);
-  right.addScaledVector(up, -right.dot(up));
-  if (right.lengthSq() <= EPSILON) {
-    right = Math.abs(up.x) < 0.9
-      ? new Vector3(1, 0, 0) : new Vector3(0, 0, 1);
-    right.addScaledVector(up, -right.dot(up));
-  }
-  right.normalize();
-  let forward = normalize(source.forward) || new Vector3(0, 0, 1);
-  forward.addScaledVector(up, -forward.dot(up))
-    .addScaledVector(right, -forward.dot(right));
-  if (forward.lengthSq() <= EPSILON) {
-    forward = new Vector3().crossVectors(right, up);
-  }
-  forward.normalize();
-  return {up, right, forward};
-}
-
-function serializedSemanticFrame(frame) {
-  return {
-    up: frame.up.toArray(),
-    right: frame.right.toArray(),
-    forward: frame.forward.toArray(),
-  };
-}
+const semanticFrame = normalizeSemanticFrame;
+const serializedSemanticFrame = serializeSemanticFrame;
 
 function lateralCoordinate(point, frame) {
   return point.dot(frame.right);
@@ -439,6 +417,52 @@ function armResult(candidate, semantic, outwardAngleDegrees) {
     targetDirection: targetDirection.toArray(),
     rotation: rotation.toArray(),
     pathIds: [...candidate.pathIds],
+    validation: candidate.handCenter ? {
+      predictedHand: new Vector3(...candidate.handCenter)
+        .sub(new Vector3(...candidate.anchor))
+        .applyQuaternion(rotation)
+        .add(new Vector3(...candidate.anchor)).toArray(),
+    } : null,
+  };
+}
+
+function candidateFromSemanticArm(arm, side, semantic, frame) {
+  const shoulder = arm?.shoulder;
+  const hand = arm?.hand;
+  const direction = normalize(arm?.restDirection);
+  if (!shoulder || !hand || !direction) return null;
+  const pathIds = arm.poseConnectivity?.pathIds?.length
+    ? [...arm.poseConnectivity.pathIds]
+    : [shoulder.jointId, hand.jointId];
+  const chainLength = new Vector3(...shoulder.pivot)
+    .distanceTo(new Vector3(...hand.center));
+  const sideOffset = side * (shoulder.lateral - frame.centerLateral);
+  return {
+    jointId: shoulder.jointId,
+    signature: shoulder.signature,
+    side,
+    anchor: [...shoulder.pivot],
+    direction: direction.toArray(),
+    normalizedY: shoulder.height01,
+    height: shoulder.height,
+    lateral: shoulder.lateral,
+    depthCoordinate: shoulder.depth,
+    directionLateral: direction.dot(semantic.right),
+    semanticDirection: [
+      direction.dot(semantic.right), direction.dot(semantic.up),
+      direction.dot(semantic.forward),
+    ],
+    sideOffset,
+    pathIds,
+    // Semantic landmarks are intentionally allowed to report disconnected
+    // pose topology; connectivity is surfaced in diagnostics separately.
+    orientationCompatible: true,
+    chainLength,
+    outwardExtent: Math.max(0, side * (hand.lateral - shoulder.lateral)),
+    handCenter: [...hand.center],
+    depth: shoulder.depthIndex,
+    degree: 1,
+    score: arm.confidence,
   };
 }
 
@@ -456,10 +480,14 @@ function unavailable(reason, confidence = 0, diagnostics = {}) {
 export function analyzeHumanoidRestPose(modelRig, options = {}) {
   const data = rigData(modelRig);
   const semantic = semanticFrame(options?.semanticFrame);
+  const semanticAnalysis = analyzeRigSemantics(modelRig, {
+    semanticFrame: options?.semanticFrame,
+  });
   if (data.joints.length < 4 || !data.components.length) {
     return unavailable('insufficient_rig', 0, {
       jointCount: data.joints.length,
       semanticFrame: serializedSemanticFrame(semantic),
+      semantic: semanticAnalysis.diagnostics || null,
     });
   }
   const frame = bodyFrame(data, semantic);
@@ -468,15 +496,30 @@ export function analyzeHumanoidRestPose(modelRig, options = {}) {
       ...diagnostics,
       semanticFrame: serializedSemanticFrame(semantic),
     });
-  const geometryCandidates = [-1, 1].map(side => data.joints.map(joint =>
+  let geometryCandidates = [-1, 1].map(side => data.joints.map(joint =>
     candidateFor(data, joint, side, frame, semantic)).filter(Boolean));
-  const candidates = geometryCandidates.map(collapseSameChainCandidates);
+  let candidates = geometryCandidates.map(collapseSameChainCandidates);
+  let detector = 'legacy-geometry';
+  if (semanticAnalysis.available) {
+    const semanticCandidates = [-1, 1].map(side => candidateFromSemanticArm(
+      side < 0 ? semanticAnalysis.landmarks.negativeArm
+        : semanticAnalysis.landmarks.positiveArm, side, semantic,
+      semanticAnalysis.bodyFrame));
+    if (semanticCandidates[0] && semanticCandidates[1]) {
+      geometryCandidates = semanticCandidates.map(candidate => [candidate]);
+      candidates = semanticCandidates.map(candidate => [candidate]);
+      detector = 'semantic-hands';
+    }
+  }
+  const selectedFrame = detector === 'semantic-hands'
+    ? semanticAnalysis.bodyFrame : frame;
   if (!candidates[0].length || !candidates[1].length) {
     if (data.invalidRestDirectionIds.size) {
       return fail('invalid_rest_direction', 0, {
         invalidJointIds: [...data.invalidRestDirectionIds].sort((left, right) => left - right),
         candidateCounts: {negativeX: candidates[0].length, positiveX: candidates[1].length},
         bodyFrame: {...frame},
+        semantic: semanticAnalysis.diagnostics || null,
       });
     }
     return fail('arm_pair_not_found', 0, {
@@ -486,11 +529,12 @@ export function analyzeHumanoidRestPose(modelRig, options = {}) {
         positiveX: geometryCandidates[1].length,
       },
       bodyFrame: {...frame},
+      semantic: semanticAnalysis.diagnostics || null,
     });
   }
   const pairs = [];
   candidates[0].forEach(negativeX => candidates[1].forEach(positiveX => {
-    const pairing = pairScore(negativeX, positiveX, frame);
+    const pairing = pairScore(negativeX, positiveX, selectedFrame);
     const score = pairing.score * .7
       + (negativeX.score + positiveX.score) * .15;
     pairs.push({negativeX, positiveX, score, features: pairing.features});
@@ -500,21 +544,27 @@ export function analyzeHumanoidRestPose(modelRig, options = {}) {
     || left.positiveX.jointId - right.positiveX.jointId);
   const best = pairs[0];
   const runnerUpScore = pairs[1]?.score ?? 0;
-  const confidence = clamp(best.score);
+  const confidence = detector === 'semantic-hands'
+    ? clamp(semanticAnalysis.confidence)
+    : clamp(best.score);
   const diagnostics = {
     semanticFrame: serializedSemanticFrame(semantic),
-    bodyFrame: {...frame},
+    bodyFrame: {...selectedFrame},
     candidateCounts: {negativeX: candidates[0].length, positiveX: candidates[1].length},
     geometryCandidateCounts: {
       negativeX: geometryCandidates[0].length,
       positiveX: geometryCandidates[1].length,
     },
+    detector,
+    semantic: semanticAnalysis.diagnostics || null,
     negativeXCandidates: candidates[0],
     positiveXCandidates: candidates[1],
     runnerUpScore,
     pairFeatures: best.features,
   };
-  if (confidence < MIN_CONFIDENCE) {
+  const minimumConfidence = detector === 'semantic-hands'
+    ? MIN_SEMANTIC_CONFIDENCE : MIN_CONFIDENCE;
+  if (confidence < minimumConfidence) {
     return fail('arm_pair_low_confidence', confidence, diagnostics);
   }
   if (confidence - runnerUpScore < MIN_PAIR_MARGIN) {
@@ -537,6 +587,31 @@ export function analyzeHumanoidRestPose(modelRig, options = {}) {
     negativeX: armResult(best.negativeX, semantic, DEFAULT_OUTWARD_ANGLE_DEGREES),
     positiveX: armResult(best.positiveX, semantic, DEFAULT_OUTWARD_ANGLE_DEGREES),
   };
+  if (detector === 'semantic-hands') {
+    const poseValidation = {};
+    for (const [name, arm] of Object.entries(arms)) {
+      const candidate = name === 'negativeX' ? best.negativeX : best.positiveX;
+      const predicted = new Vector3(...arm.validation.predictedHand);
+      const restHand = new Vector3(...candidate.handCenter);
+      const restHeight = heightCoordinate(restHand, semantic);
+      const targetHeight = heightCoordinate(predicted, semantic);
+      const targetLateral = lateralCoordinate(predicted, semantic);
+      const heightGain = (targetHeight - restHeight) / selectedFrame.height;
+      const sidePreserved = candidate.side
+        * (targetLateral - selectedFrame.centerLateral) > 0;
+      poseValidation[name] = {
+        heightGain,
+        sidePreserved,
+        predictedHand: predicted.toArray(),
+      };
+      arm.validation = {...arm.validation, heightGain, sidePreserved};
+    }
+    diagnostics.poseValidation = poseValidation;
+    if (Object.values(poseValidation).some(item => item.heightGain < .08
+        || !item.sidePreserved)) {
+      return fail('semantic_pose_validation_failed', confidence, diagnostics);
+    }
+  }
   const preset = {
     id: BUILTIN_ARMS_UP_ID,
     name: BUILTIN_ARMS_UP_NAME,
@@ -571,11 +646,11 @@ export function generateArmsUpPreset(modelRig, options = {}) {
     negativeX: armResult({
       ...result.diagnostics.negativeXCandidates.find(item =>
         item.jointId === result.arms.negativeX.jointId),
-    }, semantic, outwardAngleDegrees),
+    }, semantic, outwardAngleDegrees, result.diagnostics.bodyFrame),
     positiveX: armResult({
       ...result.diagnostics.positiveXCandidates.find(item =>
         item.jointId === result.arms.positiveX.jointId),
-    }, semantic, outwardAngleDegrees),
+    }, semantic, outwardAngleDegrees, result.diagnostics.bodyFrame),
   };
   return {
     ...result,
@@ -597,6 +672,7 @@ export function getBuiltInRigPoseDescriptors(modelRig, options = {}) {
   const diagnostics = analysis.diagnostics || {};
   const summary = {
     semanticFrame: diagnostics.semanticFrame || null,
+    semantic: diagnostics.semantic || null,
     bodyFrame: diagnostics.bodyFrame || null,
     candidateCounts: diagnostics.candidateCounts || null,
     geometryCandidateCounts: diagnostics.geometryCandidateCounts || null,
