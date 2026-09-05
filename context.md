@@ -225,6 +225,68 @@ of documentation, comments and tests; use portable fixtures instead.
   supplies no names, canonical skeleton, hierarchy, bind pose or animation.
   Keep maximum-spanning relationships, weak-bridge pruning and static-boundary
   attachments conservative; never infer semantic labels such as hair or skirt.
+- Cross-source Rig/Pose reconciliation is a viewer-owned model graph layered
+  over the source rigs. Preserve `SourceBoneRef {sourceKey,boneId}` and the
+  canonical `${sourceKey}#bone=${boneId}` key; equal numeric IDs from different
+  sources never merge without geometry/topology evidence, and authored indices
+  and weight buffers are never rewritten. Build model joints from strict
+  mutual-best equivalences, guarded one-member-per-source clusters,
+  topology-assisted propagation and ambiguity rejection. Collapse source edges
+  into a model-level maximum-spanning forest, then add only conservative,
+  cycle-free cross-source attachment edges between component/boundary joints.
+- Cross-source reconciliation connects multiple skinning palettes for inferred
+  posing. Because the model-wide inferred hierarchy may differ from each source
+  palette's original weighting topology, some cross-source weighted regions can
+  stretch during rotation. This is currently accepted as an experimental Rig
+  limitation.
+- Each ModelJoint exposes a stable signature made from its sorted canonical
+  source-bone keys. Runtime joint, component and root indices are ephemeral and
+  must not be persisted as preset identities.
+- M3 Rig pose presets use the existing per-mod `.mod_viewer.json` under
+  `rig.version = 1` with an array of stable-ID records containing only a name,
+  explicit root signatures and normalized non-identity local joint quaternions.
+  Preset names are trimmed and bounded; IDs do not change on rename, and
+  unrelated metadata is preserved on save, rename and delete. Missing or
+  malformed preset metadata is a partial feature failure and must not prevent
+  the model from loading.
+- Preset resolution is exact by ModelJoint signature. Missing, ambiguous,
+  duplicate or malformed entries are reported and skipped individually; valid
+  entries still apply. Saved presets are never auto-applied after load or shape
+  rebaseline, and Reset Pose returns to the default inferred roots and identity
+ rotations without deleting saved presets.
+- Built-in procedural Rig poses are frontend-only descriptors regenerated from
+  the current default model Rig. They are never persisted or renamed/deleted;
+  applying one generates a schema-compatible transient preset and uses the same
+  exact-signature resolver as saved poses. Semantic detection projects default
+  rest geometry through the non-user model orientation so raw Y-up/Z-up assets
+  share one basis; uncertain detection fails closed with a diagnostic reason.
+- Spatial semantic analysis keeps anatomy separate from deformation topology:
+  rest centers identify compact bilateral landmarks such as hands and finger
+  rays, rest pivots drive posing, and component connectivity is reported as
+  poseConnectivity evidence rather than repaired or mutated. Arms Up requires
+  directed pose descendants from each shoulder to its wrist/hand; disconnected
+  semantic landmarks remain diagnostic-only. Results are partial,
+  confidence-scored and cached by model-Rig structure revision.
+- Applying a preset is one batch transaction: restore valid model-root
+  overrides first, rebuild rest frames/caches once, install all valid local
+  rotations, run one model deformation/bounds pass, then notify and render once.
+  Character Physics blocks Apply and Save New without being disabled; Rename
+  and Delete remain metadata-only operations.
+- Normalize reconciliation distances by model reference radius with candidate,
+  strict, propagation and attachment gates; retain candidate evidence and
+  rejection reasons for diagnostics. Model joints own rest center/pivot/frame,
+  source members, model parent/children and the representative member.
+  `ModelSkinningRig.poseRotationByJointId` is authoritative for manual pose;
+  source pose maps are derived aliases only. Reuse the forest transform builder,
+  alias model transforms back to each source's authored IDs, preserve affected
+  vertex caching and baseline restoration, and keep Character Physics
+  source-scoped and separate.
+- The Rig picker maps source influences to model joints. The Rig panel selects
+  model joints and displays membership/topology without semantic labels; the
+  combined overlay renders model joints, source edges and distinguishable
+  attachment edges with O(1) Three.js objects. Reconciliation rebuilds on
+  source membership/shape changes and resets pose; model structure revisions
+  do not change for pose, materials, textures, visibility or model turns.
 - Step each source rig once at fixed 1/120 second with bounded catch-up; deform
   visible members only at selected-weight vertices and transform baseline normals
   with the same influence. Defer exact bounds and shadow-camera fitting until

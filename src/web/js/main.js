@@ -1,6 +1,7 @@
 // Entry point: composes frontend application flows and initializes the UI.
 
 import {
+  camera, controls, renderer, scene,
   getAmbientOcclusionStrength, getBloomEnabled, getEnvironmentPreset, getRenderCount,
   isRendererAvailable, rendererReady,
   resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
@@ -21,13 +22,27 @@ import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-prof
 import { requestRender } from './scene/render-scheduler.js';
 import {
   disableModelPhysics, enableModelPhysics,
-  ensureModelWeightsLoaded, getModelPhysicsState, getModelWeightState,
+  ensureModelRigLoaded, ensureModelWeightsLoaded,
+  getModelPhysicsState, getModelRigDebugState, getModelRigState,
+  getModelWeightState, getRigBonePoseFrame, getRigJointPoseFrame,
   getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
-  resetModelPhysicsMotion, setModelWeightHeatmap,
+  finishRigPose, resetModelPhysicsMotion, resetRigBone, resetRigPose,
+  selectRigBone, selectRigJoint,
+  setActiveRigSource, setRigBoneRotation, setRigJointRotation,
+  setRigComponentRoot,
+  getRigRotationSnapDegrees, setRigRotationSnapDegrees, setRigVisible,
+  setRigOverlayScope,
+  setRigPoseControlStatus, applySavedRigPosePreset, deleteRigPosePreset,
+  applyRigPosePresetById,
+  getRigPresetState, renameRigPosePreset, saveRigPosePreset,
+  selectRigPosePreset,
+  beginRigPicking, cancelRigPicking, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
+import { initRigPanel } from './panels/rig-panel.js';
 import { initWeightPanel } from './panels/weight-panel.js';
+import { createRigOverlayController } from './scene/rig-overlay-controller.js';
 import { initPanelOpacityControl } from './ui/appearance.js';
 import { alertDialog } from './ui/dialogs.js';
 import {
@@ -244,6 +259,28 @@ rendererReady.then(ready => {
   initLeftDock();
   initWeightPanel();
   initRightDock();
+  createRigOverlayController({
+    scene, camera, canvas: renderer.domElement,
+    arcballControls: controls,
+    getMeshes: () => activeMeshes,
+    getRigState: getModelRigState,
+    getRigDebugState: getModelRigDebugState,
+    getRigBonePoseFrame,
+    getRigJointPoseFrame,
+    setRigBoneRotation,
+    setRigJointRotation,
+    finishRigPose,
+    finishRigJointPose: jointId => {
+      const joint = getModelRigState().model?.joints?.find(item =>
+        item.jointId === Number(jointId));
+      const member = joint?.representativeMember || joint?.members?.[0];
+      return member ? finishRigPose(member.sourceKey, member.boneId) : false;
+    },
+    onTransformControlsUnavailable: () => setRigPoseControlStatus(
+      'Pose gizmo is unavailable in this build.'),
+    requestRender,
+  });
+  initRigPanel();
   initInspectorPanel();
   initSelection();
   const viewportCameraButtons = $('viewport-camera-buttons');
@@ -374,6 +411,35 @@ rendererReady.then(ready => {
     getCurrentSource: () => viewerState.currentSource
       ? { ...viewerState.currentSource } : null,
   };
+  Object.defineProperties(window.modViewer, {
+    getModelRigState: {value: getModelRigState},
+    getModelRigDebugState: {value: getModelRigDebugState},
+    getRigBonePoseFrame: {value: getRigBonePoseFrame},
+    getRigJointPoseFrame: {value: getRigJointPoseFrame},
+    ensureModelRigLoaded: {value: ensureModelRigLoaded},
+    setRigVisible: {value: setRigVisible},
+    setRigOverlayScope: {value: setRigOverlayScope},
+    getRigRotationSnapDegrees: {value: getRigRotationSnapDegrees},
+    setRigRotationSnapDegrees: {value: setRigRotationSnapDegrees},
+    setActiveRigSource: {value: setActiveRigSource},
+    beginRigPicking: {value: beginRigPicking},
+    cancelRigPicking: {value: cancelRigPicking},
+    selectRigBone: {value: selectRigBone},
+    selectRigJoint: {value: selectRigJoint},
+    setRigComponentRoot: {value: setRigComponentRoot},
+    setRigBoneRotation: {value: setRigBoneRotation},
+    setRigJointRotation: {value: setRigJointRotation},
+    finishRigPose: {value: finishRigPose},
+    resetRigBone: {value: resetRigBone},
+    resetRigPose: {value: resetRigPose},
+    getRigPresetState: {value: getRigPresetState},
+    applySavedRigPosePreset: {value: applySavedRigPosePreset},
+    applyRigPosePresetById: {value: applyRigPosePresetById},
+    saveRigPosePreset: {value: saveRigPosePreset},
+    renameRigPosePreset: {value: renameRigPosePreset},
+    deleteRigPosePreset: {value: deleteRigPosePreset},
+    selectRigPosePreset: {value: selectRigPosePreset},
+  });
 
   void openStartupMod().then(apiReady => {
     if (!apiReady) {

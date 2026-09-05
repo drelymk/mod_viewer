@@ -17,6 +17,15 @@ const STAT_NAMES = Object.freeze([
   'sourceTransformBuildCount',
   'sourceTransformMs',
   'participatingPhysicsMeshCount',
+  'rigAnalysisMs',
+  'rigReconcileMs',
+  'rigCandidateCount',
+  'rigEquivalentClusterCount',
+  'rigAttachmentCount',
+  'rigAmbiguousCount',
+  'rigTransformMs',
+  'rigDeformMs',
+  'rigDeformedVertexCount',
 ]);
 
 const stats = Object.fromEntries(STAT_NAMES.map(name => [name, 0]));

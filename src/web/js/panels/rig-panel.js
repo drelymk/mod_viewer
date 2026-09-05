@@ -1,0 +1,864 @@
+// Experimental inferred Rig/Pose panel. It exposes canonical model joints
+// and source membership without editing Weight/Physics selection state.
+
+import {
+  beginRigPicking, cancelRigPicking, ensureModelRigLoaded,
+  eulerFromRestFrameDelta, getModelRigState, getRigBonePoseFrame,
+  getRigJointPoseFrame,
+  resetRigBone, resetRigPose, selectRigBone,
+  selectRigJoint,
+  setRigComponentRoot, setRigRotationSnapDegrees,
+  setRigVisible,
+  applyRigPosePresetById, deleteRigPosePreset, renameRigPosePreset,
+  saveRigPosePreset, selectRigPosePreset,
+  setRigOverlayScope,
+} from '../mesh/weight-experiment.js';
+import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
+
+let panel = null;
+let ui = null;
+let loadingPromise = null;
+let latestState = null;
+
+const $ = id => document.getElementById(id);
+
+function addText(parent, className, value = '') {
+  const node = document.createElement('span');
+  node.className = className;
+  node.textContent = value;
+  parent.appendChild(node);
+  return node;
+}
+
+function section(title) {
+  const node = document.createElement('section');
+  node.className = 'rig-section';
+  addText(node, 'rig-section-title', title);
+  panel.appendChild(node);
+  return node;
+}
+
+function selectedSource(state = latestState) {
+  return (state?.sources || []).find(source =>
+    source.sourceKey === state.activeSourceKey) || state?.sources?.[0] || null;
+}
+
+function selectedJoint(state = latestState) {
+  const rawId = state?.selectedJointId;
+  if (!Number.isInteger(rawId) || rawId < 0) return null;
+  const id = rawId;
+  return state?.model?.joints?.find(joint => joint.jointId === id) || null;
+}
+
+function componentFor(source, boneId) {
+  if (boneId === null || boneId === undefined
+      || !Number.isInteger(Number(boneId))) return null;
+  return source?.components?.find(component =>
+    component.nodeIds.includes(Number(boneId))) || null;
+}
+
+function addNavigationButton(parent, sourceKey, boneId) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'rig-nav-button';
+  button.textContent = String(boneId);
+  button.dataset.boneId = String(boneId);
+  button.addEventListener('click', () => sourceKey === null
+    ? selectRigJoint(boneId) : selectRigBone(sourceKey, boneId));
+  parent.appendChild(button);
+}
+
+function addFilterSelect(parent, className, ariaLabel) {
+  const select = document.createElement('select');
+  select.className = className;
+  select.setAttribute('aria-label', ariaLabel);
+  parent.appendChild(select);
+  return select;
+}
+
+function jointSearchText(joint) {
+  return [joint?.jointId, joint?.signature,
+    ...(joint?.members || []).flatMap(member => [
+      member.sourceKey, member.sourceBoneKey, member.boneId,
+    ])].join(' ').toLowerCase();
+}
+
+function jointMatchesFilters(joint, model, filters) {
+  const sourceFilter = filters.source;
+  if (sourceFilter && !(joint.members || []).some(member =>
+    member.sourceKey === sourceFilter)) return false;
+  if (filters.component !== '' && !model.components?.some(component =>
+    Number(component.componentId) === Number(filters.component)
+      && component.nodeIds.includes(Number(joint.jointId)))) return false;
+  return !filters.search || jointSearchText(joint).includes(filters.search);
+}
+
+function rigPresetApplyMessage(name, result) {
+  const appliedJoints = Number(result?.appliedJointCount) || 0;
+  const appliedRoots = Number(result?.appliedRootCount) || 0;
+  const skippedJoints = Number(result?.skippedJointCount) || 0;
+  const skippedRoots = Number(result?.skippedRootCount) || 0;
+  const parts = [`Applied "${name}" — ${appliedJoints} joints.`];
+  if (appliedRoots) {
+    parts.push(`${appliedRoots} root${appliedRoots === 1 ? '' : 's'} restored.`);
+  }
+  if (skippedJoints) {
+    parts.push(`${skippedJoints} saved joint${skippedJoints === 1 ? '' : 's'} `
+      + 'were unavailable in the current inferred rig.');
+  }
+  if (skippedRoots) {
+    parts.push(`${skippedRoots} saved root${skippedRoots === 1 ? '' : 's'} `
+      + 'were unavailable in the current inferred rig.');
+  }
+  return parts.join(' ');
+}
+
+function rigPresetUnavailableMessage(reason, diagnostics = {}, confidence = null) {
+  const message = {
+    insufficient_rig: 'Arms Up needs a larger inferred Rig.',
+    arm_pair_not_found: 'Arms Up could not find a confident left/right arm pair.',
+    arm_pair_low_confidence: 'Arms Up could not identify the arms with enough confidence.',
+    arm_pair_ambiguous: 'Arms Up found more than one plausible arm pair.',
+    hierarchy_orientation_incompatible: 'Arms Up found arm geometry but its hierarchy runs inward.',
+    invalid_rest_direction: 'Arms Up could not determine stable rest directions.',
+    semantic_pose_validation_failed: 'Arms Up found hands but its target pose failed hand validation.',
+    semantic_landmarks_incomplete: 'Arms Up found partial hand landmarks but could not identify both arms.',
+    arm_pose_connectivity_insufficient: 'Arms Up found the arms but their pose topology is disconnected.',
+  }[reason] || 'Arms Up is unavailable for this inferred Rig.';
+  const counts = diagnostics?.candidateCounts;
+  const details = [];
+  if (counts && Number.isFinite(counts.negativeX)
+      && Number.isFinite(counts.positiveX)) {
+    details.push(`Candidates: ${counts.negativeX} / ${counts.positiveX}.`);
+  }
+  if (Number.isFinite(confidence)) {
+    details.push(`Confidence: ${(confidence * 100).toFixed(0)}%.`);
+  }
+  if (Number.isFinite(diagnostics?.runnerUpScore)) {
+    details.push(`Runner-up: ${(diagnostics.runnerUpScore * 100).toFixed(0)}%.`);
+  }
+  const semanticUp = diagnostics.semanticFrame?.up;
+  if (Array.isArray(semanticUp) && semanticUp.length >= 3
+      && semanticUp.slice(0, 3).every(Number.isFinite)) {
+    details.push(`Semantic up: [${semanticUp.slice(0, 3).map(value =>
+      Number(value).toFixed(2)).join(', ')}].`);
+  }
+  const hands = diagnostics?.semantic?.hands;
+  if (hands?.negative && hands?.positive) {
+    details.push(`Hand rays: ${hands.negative.fingerCount} / `
+      + `${hands.positive.fingerCount}.`);
+  }
+  return [message, ...details].join(' ');
+}
+
+function selectedPreset(state = latestState, id = ui?.preset?.value) {
+  const presetState = state?.rigPresets || {};
+  return (presetState.builtInPresets || []).find(item => item.id === id)
+    || (presetState.presets || []).find(item => item.id === id) || null;
+}
+
+function syncReconciliationReadout(state, joint) {
+  const model = state?.model;
+  const reconciliation = model?.reconciliation;
+  if (!model || !reconciliation) {
+    ui.reconciliationSummary.textContent = '—';
+    ui.connection.textContent = '—';
+    ui.confidence.textContent = '—';
+    ui.connectionDetail.textContent = '';
+    return;
+  }
+  ui.reconciliationSummary.textContent = [
+    `Sources ${reconciliation.sourceCount ?? state.sources?.length ?? 0}`,
+    `Source bones ${reconciliation.sourceBoneCount ?? 0}`,
+    `Model joints ${reconciliation.modelJointCount ?? model.joints.length}`,
+    `Equivalent clusters ${reconciliation.equivalenceClusterCount ?? 0}`,
+    `Attachments ${reconciliation.attachmentCount ?? 0}`,
+    `Components ${reconciliation.componentCount ?? model.components?.length ?? 0}`,
+  ].join(' · ');
+  if (!joint) {
+    ui.connection.textContent = '—';
+    ui.confidence.textContent = '—';
+    ui.connectionDetail.textContent = '';
+    return;
+  }
+  const memberKeys = new Set((joint.members || []).map(member =>
+    member.sourceBoneKey));
+  const equivalences = (reconciliation.acceptedEquivalences || []).filter(item =>
+    memberKeys.has(item.left?.sourceBoneKey)
+    || memberKeys.has(item.right?.sourceBoneKey));
+  const attachment = (model.forestEdges || []).find(edge =>
+    edge.relationshipType === 'attachment'
+    && (Number(edge.jointA) === Number(joint.jointId)
+      || Number(edge.jointB) === Number(joint.jointId)));
+  const confidence = equivalences.length
+    ? Math.max(...equivalences.map(item => Number(item.score) || 0))
+    : attachment ? Number(attachment.attachmentScore ?? attachment.weight) : null;
+  ui.connection.textContent = equivalences.length ? 'equivalence'
+    : attachment ? 'attachment' : 'unresolved';
+  ui.confidence.textContent = Number.isFinite(confidence)
+    ? confidence.toFixed(3) : '—';
+  if (equivalences.length || attachment) {
+    ui.connectionDetail.textContent = '';
+    return;
+  }
+  const bestAttachment = (reconciliation.rejectedCandidates || []).filter(item =>
+    item.left?.jointId !== undefined && item.right?.jointId !== undefined
+    && (Number(item.left.jointId) === Number(joint.jointId)
+      || Number(item.right.jointId) === Number(joint.jointId))
+    && String(item.rejectionReason || '').startsWith('attachment_'))
+    .sort((left, right) => (Number(right.score) || 0)
+      - (Number(left.score) || 0))[0];
+  if (!bestAttachment) {
+    ui.connectionDetail.textContent = 'No attachment candidate';
+    return;
+  }
+  const otherJointId = Number(bestAttachment.left.jointId) === Number(joint.jointId)
+    ? bestAttachment.right.jointId : bestAttachment.left.jointId;
+  ui.connectionDetail.textContent = `Best attachment: Joint ${otherJointId}`
+    + ` · ${(Number(bestAttachment.score) || 0).toFixed(3)}`
+    + ` · ${bestAttachment.rejectionReason}`;
+}
+
+function syncRotationReadout(state = latestState, localOverride = null) {
+  if (!ui?.rotationValues) return;
+  const joint = selectedJoint(state);
+  if (joint) {
+    const id = Number(joint.jointId);
+    const frame = getRigJointPoseFrame(id);
+    const local = localOverride?.length === 4
+      ? localOverride : state.model?.poseRotationByJointId?.[id]
+        || [0, 0, 0, 1];
+    if (!frame?.restRotation) {
+      ui.rotationValues.forEach(value => { value.textContent = '—'; });
+      return;
+    }
+    const euler = eulerFromRestFrameDelta(local, frame.restRotation, 'XYZ');
+    [euler.x, euler.y, euler.z].forEach((value, index) => {
+      ui.rotationValues[index].textContent =
+        `${(value * 180 / Math.PI).toFixed(1)}°`;
+    });
+    return;
+  }
+  const source = selectedSource(state);
+  const selectedId = source?.selectedBoneId ?? state?.selectedBoneId;
+  const id = Number(selectedId);
+  const frame = source && Number.isInteger(id)
+    ? getRigBonePoseFrame(source.sourceKey, id) : null;
+  const local = localOverride?.length === 4
+    ? localOverride : source?.poseRotationByBoneId?.[id]
+      || [0, 0, 0, 1];
+  if (!frame?.restRotation || !Number.isInteger(id)) {
+    ui.rotationValues.forEach(value => { value.textContent = '—'; });
+    return;
+  }
+  const euler = eulerFromRestFrameDelta(local, frame.restRotation, 'XYZ');
+  [euler.x, euler.y, euler.z].forEach((value, index) => {
+    ui.rotationValues[index].textContent =
+      `${(value * 180 / Math.PI).toFixed(1)}°`;
+  });
+}
+
+function buildPanel() {
+  panel.replaceChildren();
+  ui = {};
+  const header = document.createElement('div');
+  header.className = 'rig-header';
+  const heading = document.createElement('h3');
+  heading.textContent = 'RIG';
+  header.appendChild(heading);
+  ui.status = addText(header, 'rig-status');
+  panel.appendChild(header);
+
+  const display = section('Display');
+  const visibleLabel = document.createElement('label');
+  visibleLabel.className = 'weight-checkbox';
+  ui.visible = document.createElement('input');
+  ui.visible.type = 'checkbox';
+  ui.visible.addEventListener('change', () => setRigVisible(ui.visible.checked));
+  visibleLabel.appendChild(ui.visible);
+  addText(visibleLabel, 'weight-label', 'Show inferred rig');
+  display.appendChild(visibleLabel);
+
+  const sourceSection = section('Model');
+  ui.modelSummary = addText(sourceSection, 'rig-value', '—');
+  const reconciliationSection = section('Reconciliation');
+  ui.reconciliationSummary = document.createElement('div');
+  ui.reconciliationSummary.className = 'rig-value rig-reconciliation-summary';
+  reconciliationSection.appendChild(ui.reconciliationSummary);
+
+  const boneSection = section('Selected Joint');
+  const browser = document.createElement('div');
+  browser.className = 'rig-joint-browser';
+  ui.search = document.createElement('input');
+  ui.search.type = 'search';
+  ui.search.className = 'rig-joint-search';
+  ui.search.placeholder = 'Search signature or member';
+  ui.search.setAttribute('aria-label', 'Search model joints');
+  ui.search.addEventListener('input', () => syncOptions(latestState));
+  browser.appendChild(ui.search);
+  ui.sourceFilter = addFilterSelect(
+    browser, 'rig-source-filter', 'Filter model joints by source');
+  ui.sourceFilter.addEventListener('change', () => syncOptions(latestState));
+  ui.componentFilter = addFilterSelect(
+    browser, 'rig-component-filter', 'Filter model joints by component');
+  ui.componentFilter.addEventListener('change', () => syncOptions(latestState));
+  boneSection.appendChild(browser);
+  ui.bone = document.createElement('select');
+  ui.bone.className = 'rig-bone-select';
+  ui.bone.setAttribute('aria-label', 'Selected model joint');
+  ui.bone.addEventListener('change', () => {
+    if (latestState?.model) {
+      if (ui.bone.value === '') return;
+      selectRigJoint(Number(ui.bone.value));
+    }
+    else {
+      const source = selectedSource();
+      if (source) selectRigBone(source.sourceKey, Number(ui.bone.value));
+    }
+  });
+  boneSection.appendChild(ui.bone);
+  const overlayLabel = document.createElement('label');
+  overlayLabel.className = 'weight-checkbox';
+  ui.showAll = document.createElement('input');
+  ui.showAll.type = 'checkbox';
+  ui.showAll.className = 'rig-panel-show-all';
+  ui.showAll.checked = false;
+  ui.showAll.addEventListener('change', () =>
+    setRigOverlayScope(ui.showAll.checked ? 'all' : 'selection'));
+  overlayLabel.appendChild(ui.showAll);
+  addText(overlayLabel, 'weight-label', 'Show all overlay joints');
+  boneSection.appendChild(overlayLabel);
+  ui.influences = document.createElement('div');
+  ui.influences.className = 'rig-influences';
+  boneSection.appendChild(ui.influences);
+  const parentRow = document.createElement('div');
+  parentRow.className = 'rig-nav-row';
+  addText(parentRow, 'rig-label', 'Parent');
+  ui.parent = document.createElement('div');
+  ui.parent.className = 'rig-nav-values';
+  parentRow.appendChild(ui.parent);
+  boneSection.appendChild(parentRow);
+  const childrenRow = document.createElement('div');
+  childrenRow.className = 'rig-nav-row';
+  addText(childrenRow, 'rig-label', 'Children');
+  ui.children = document.createElement('div');
+  ui.children.className = 'rig-nav-values';
+  childrenRow.appendChild(ui.children);
+  boneSection.appendChild(childrenRow);
+  const connectionRow = document.createElement('div');
+  connectionRow.className = 'rig-row';
+  addText(connectionRow, 'rig-label', 'Connection');
+  ui.connection = addText(connectionRow, 'rig-value', '—');
+  ui.connection.classList.add('rig-connection-value');
+  boneSection.appendChild(connectionRow);
+  const confidenceRow = document.createElement('div');
+  confidenceRow.className = 'rig-row';
+  addText(confidenceRow, 'rig-label', 'Confidence');
+  ui.confidence = addText(confidenceRow, 'rig-value', '—');
+  ui.confidence.classList.add('rig-confidence-value');
+  boneSection.appendChild(confidenceRow);
+  ui.connectionDetail = addText(boneSection, 'rig-hint');
+  ui.pick = document.createElement('button');
+  ui.pick.type = 'button';
+  ui.pick.className = 'ui-button rig-pick-model';
+  ui.pick.textContent = 'Pick from model';
+  ui.pick.addEventListener('click', () => {
+    if (latestState?.picking) cancelRigPicking();
+    else beginRigPicking();
+  });
+  boneSection.appendChild(ui.pick);
+
+  const componentSection = section('Component');
+  const rootRow = document.createElement('div');
+  rootRow.className = 'rig-row';
+  addText(rootRow, 'rig-label', 'Root');
+  ui.root = addText(rootRow, 'rig-value');
+  componentSection.appendChild(rootRow);
+  const depthRow = document.createElement('div');
+  depthRow.className = 'rig-row';
+  addText(depthRow, 'rig-label', 'Depth');
+  ui.depth = addText(depthRow, 'rig-value');
+  componentSection.appendChild(depthRow);
+  ui.setRoot = document.createElement('button');
+  ui.setRoot.type = 'button';
+  ui.setRoot.className = 'ui-button rig-set-root';
+  ui.setRoot.textContent = 'Set selected as root';
+  ui.setRoot.addEventListener('click', () => {
+    const joint = selectedJoint();
+    const member = joint?.representativeMember || joint?.members?.[0];
+    if (member) setRigComponentRoot(member.sourceKey, member.boneId);
+    else {
+      const source = selectedSource();
+      if (source) setRigComponentRoot(source.sourceKey, Number(ui.bone.value));
+    }
+  });
+  componentSection.appendChild(ui.setRoot);
+
+  const poseSection = section('Pose');
+  addText(poseSection, 'rig-hint',
+    'Rotate the selected non-root inferred model joint with the viewport gizmo. The active pose is temporary until saved as a preset.');
+  const snapRow = document.createElement('label');
+  snapRow.className = 'rig-row';
+  addText(snapRow, 'rig-label', 'Rotation snap');
+  ui.snap = document.createElement('select');
+  ui.snap.className = 'rig-snap-select';
+  ui.snap.setAttribute('aria-label', 'Rig rotation snap');
+  [[0, 'Off'], [5, '5°'], [15, '15°'], [30, '30°']].forEach(([value, label]) => {
+    const option = document.createElement('option');
+    option.value = String(value);
+    option.textContent = label;
+    ui.snap.appendChild(option);
+  });
+  ui.snap.addEventListener('change', () =>
+    setRigRotationSnapDegrees(Number(ui.snap.value)));
+  snapRow.appendChild(ui.snap);
+  poseSection.appendChild(snapRow);
+  addText(poseSection, 'rig-readout-title',
+    'Rotation in inferred Bone frame');
+  ui.rotationValues = [];
+  ['X', 'Y', 'Z'].forEach(axis => {
+    const row = document.createElement('div');
+    row.className = 'rig-row rig-readout-row';
+    addText(row, 'rig-label', axis);
+    ui.rotationValues.push(addText(row, 'rig-value', '—'));
+    poseSection.appendChild(row);
+  });
+  ui.resetBone = document.createElement('button');
+  ui.resetBone.type = 'button';
+  ui.resetBone.className = 'ui-button rig-reset-bone';
+  ui.resetBone.textContent = 'Reset Bone';
+  ui.resetBone.addEventListener('click', () => {
+    const joint = selectedJoint();
+    const member = joint?.representativeMember || joint?.members?.[0];
+    if (member) resetRigBone(member.sourceKey, member.boneId);
+    else {
+      const source = selectedSource();
+      if (source) resetRigBone(source.sourceKey, Number(ui.bone.value));
+    }
+  });
+  ui.resetPose = document.createElement('button');
+  ui.resetPose.type = 'button';
+  ui.resetPose.className = 'ui-button rig-reset-pose';
+  ui.resetPose.textContent = 'Reset Pose';
+  ui.resetPose.addEventListener('click', () => resetRigPose());
+  const actions = document.createElement('div');
+  actions.className = 'rig-actions';
+  actions.append(ui.resetBone, ui.resetPose);
+  poseSection.appendChild(actions);
+
+  const presetTitle = addText(poseSection, 'rig-readout-title', 'Pose presets');
+  presetTitle.classList.add('rig-preset-title');
+  ui.preset = document.createElement('select');
+  ui.preset.className = 'rig-preset-select';
+  ui.preset.setAttribute('aria-label', 'Rig pose preset');
+  ui.preset.addEventListener('change', () => {
+    selectRigPosePreset(ui.preset.value || null);
+  });
+  poseSection.appendChild(ui.preset);
+  const presetActions = document.createElement('div');
+  presetActions.className = 'rig-actions';
+  ui.applyPreset = document.createElement('button');
+  ui.applyPreset.type = 'button';
+  ui.applyPreset.className = 'ui-button rig-apply-preset';
+  ui.applyPreset.textContent = 'Apply';
+  ui.applyPreset.addEventListener('click', () => {
+    const selected = selectedPreset(latestState, ui.preset.value);
+    const result = applyRigPosePresetById(ui.preset.value || null);
+    const name = selected?.name || 'pose';
+    if (!result?.success) {
+      ui.presetStatus.textContent = result?.skipped?.[0]?.reason === 'physics_active'
+          ? 'Disable Character Physics before applying a pose preset.'
+          : result?.failureReason === 'builtin_unavailable'
+          ? rigPresetUnavailableMessage(result?.skipped?.[0]?.reason,
+            result?.diagnostics, result?.confidence)
+        : result?.failureReason === 'no_matches'
+          ? `Could not apply "${name}". No saved joints matched the current inferred rig.`
+          : 'This saved pose is invalid and could not be applied.';
+      return;
+    }
+    ui.presetStatus.textContent = rigPresetApplyMessage(name, result);
+  });
+  ui.savePreset = document.createElement('button');
+  ui.savePreset.type = 'button';
+  ui.savePreset.className = 'ui-button rig-save-preset';
+  ui.savePreset.textContent = 'Save New';
+  ui.savePreset.addEventListener('click', async () => {
+    const name = await inputConfirmDialog('Save pose preset as:', '');
+    if (!name) return;
+    const result = await saveRigPosePreset(name);
+    if (!result?.saved) {
+      ui.presetStatus.textContent = result?.error || 'The pose was not saved.';
+    } else {
+      ui.presetStatus.textContent = `Saved "${result.preset.name}".`;
+    }
+  });
+  presetActions.append(ui.applyPreset, ui.savePreset);
+  poseSection.appendChild(presetActions);
+  const presetManageActions = document.createElement('div');
+  presetManageActions.className = 'rig-actions';
+  ui.renamePreset = document.createElement('button');
+  ui.renamePreset.type = 'button';
+  ui.renamePreset.className = 'ui-button rig-rename-preset';
+  ui.renamePreset.textContent = 'Rename';
+  ui.renamePreset.addEventListener('click', async () => {
+    const current = latestState?.rigPresets?.presets?.find(item =>
+      item.id === ui.preset.value);
+    if (!current) return;
+    const name = await inputConfirmDialog('Rename pose preset:', current.name);
+    if (!name) return;
+    const result = await renameRigPosePreset(current.id, name);
+    ui.presetStatus.textContent = result?.saved
+      ? 'Pose renamed.' : result?.error || 'The pose was not renamed.';
+  });
+  ui.deletePreset = document.createElement('button');
+  ui.deletePreset.type = 'button';
+  ui.deletePreset.className = 'ui-button rig-delete-preset';
+  ui.deletePreset.textContent = 'Delete';
+  ui.deletePreset.addEventListener('click', async () => {
+    const current = latestState?.rigPresets?.presets?.find(item =>
+      item.id === ui.preset.value);
+    if (!current || !await confirmDialog(`Delete pose preset "${current.name}"?`)) return;
+    const result = await deleteRigPosePreset(current.id);
+    ui.presetStatus.textContent = result?.saved
+      ? 'Pose deleted.' : result?.error || 'The pose was not deleted.';
+  });
+  presetManageActions.append(ui.renamePreset, ui.deletePreset);
+  poseSection.appendChild(presetManageActions);
+  ui.presetStatus = addText(poseSection, 'rig-hint');
+}
+
+function syncOptions(state) {
+  const model = state.model;
+  if (model) {
+    const previousSource = ui.sourceFilter.value;
+    const sourceOptions = [...new Set(model.joints.flatMap(joint =>
+      (joint.members || []).map(member => member.sourceKey)))]
+      .filter(Boolean).sort((left, right) => left.localeCompare(right));
+    const sourceKey = JSON.stringify(sourceOptions);
+    if (sourceKey !== ui.sourceFilter.dataset.optionKey) {
+      ui.sourceFilter.replaceChildren();
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'All sources';
+      ui.sourceFilter.appendChild(option);
+      sourceOptions.forEach(value => {
+        const item = document.createElement('option');
+        item.value = value;
+        item.textContent = value;
+        ui.sourceFilter.appendChild(item);
+      });
+      ui.sourceFilter.dataset.optionKey = sourceKey;
+    }
+    ui.sourceFilter.value = sourceOptions.includes(previousSource)
+      ? previousSource : '';
+    const previousComponent = ui.componentFilter.value;
+    const componentOptions = (model.components || [])
+      .map(component => ({
+        id: Number(component.componentId), root: Number(component.rootId),
+        count: component.nodeIds?.length || 0,
+      }))
+      .filter(component => Number.isInteger(component.id));
+    const componentKey = JSON.stringify(componentOptions);
+    if (componentKey !== ui.componentFilter.dataset.optionKey) {
+      ui.componentFilter.replaceChildren();
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'All components';
+      ui.componentFilter.appendChild(option);
+      componentOptions.forEach(component => {
+        const item = document.createElement('option');
+        item.value = String(component.id);
+        item.textContent = `Component ${component.id} · root ${component.root}`
+          + ` · ${component.count} joints`;
+        ui.componentFilter.appendChild(item);
+      });
+      ui.componentFilter.dataset.optionKey = componentKey;
+    }
+    ui.componentFilter.value = componentOptions.some(component =>
+      String(component.id) === previousComponent) ? previousComponent : '';
+    const filters = {
+      source: ui.sourceFilter.value,
+      component: ui.componentFilter.value,
+      search: ui.search.value.trim().toLowerCase(),
+    };
+    const matchingJoints = model.joints.filter(joint =>
+      jointMatchesFilters(joint, model, filters));
+    const selected = selectedJoint(state);
+    const visibleJoints = matchingJoints.slice();
+    if (selected && !visibleJoints.some(joint =>
+      joint.jointId === selected.jointId)) visibleJoints.unshift(selected);
+    ui.modelSummary.textContent = `${visibleJoints.length} of ${model.joints.length}`
+      + ` model joint${model.joints.length === 1 ? '' : 's'} · `
+      + `${(state.sources || []).length} source${
+        (state.sources || []).length === 1 ? '' : 's'}`;
+    const jointKey = JSON.stringify([filters, visibleJoints.map(joint => [
+      joint.jointId, joint.members,
+    ])]);
+    if (jointKey !== ui.bone.dataset.optionKey) {
+      ui.bone.replaceChildren();
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = visibleJoints.length
+        ? 'Select a joint' : 'No matching joints';
+      placeholder.disabled = true;
+      ui.bone.appendChild(placeholder);
+      visibleJoints.forEach(joint => {
+        const option = document.createElement('option');
+        option.value = String(joint.jointId);
+        const member = joint.members?.[0];
+        option.textContent = member
+          ? `Joint ${joint.jointId} · ${member.sourceKey}#${member.boneId}`
+          : `Joint ${joint.jointId}`;
+        ui.bone.appendChild(option);
+      });
+      ui.bone.dataset.optionKey = jointKey;
+    }
+    const joint = selected;
+    const selectedId = joint?.jointId ?? null;
+    ui.bone.value = selectedId === null ? '' : String(selectedId);
+    ui.search.disabled = false;
+    ui.sourceFilter.disabled = false;
+    ui.componentFilter.disabled = false;
+    ui.showAll.checked = state.overlayScope !== 'selection';
+    ui.influences.replaceChildren();
+    if (joint?.members?.length) {
+      joint.members.forEach(member => {
+        const row = document.createElement('div');
+        row.className = 'rig-influence';
+        addText(row, 'rig-influence-id',
+          `${member.sourceKey} · bone ${member.boneId}`);
+        ui.influences.appendChild(row);
+      });
+    }
+    const component = model.components?.find(item =>
+      item.nodeIds.includes(Number(selectedId))) || null;
+    syncReconciliationReadout(state, joint);
+    ui.root.textContent = component ? String(component.rootId) : '—';
+    ui.depth.textContent = component
+      ? String(component.depthById?.[selectedId] ?? '—') : '—';
+    ui.parent.replaceChildren();
+    ui.children.replaceChildren();
+    if (component && Number.isInteger(Number(selectedId))) {
+      const parentId = component.parentById?.[selectedId];
+      if (parentId !== null && parentId !== undefined) {
+        addNavigationButton(ui.parent, null, Number(parentId));
+      } else addText(ui.parent, 'rig-value', '—');
+      const children = component.childrenById?.[selectedId] || [];
+      if (children.length) children.forEach(childId =>
+        addNavigationButton(ui.children, null, Number(childId)));
+      else addText(ui.children, 'rig-value', '—');
+    } else {
+      addText(ui.parent, 'rig-value', '—');
+      addText(ui.children, 'rig-value', '—');
+    }
+    syncRotationReadout(state);
+    return;
+  }
+  const source = selectedSource(state);
+  ui.search.value = '';
+  ui.search.disabled = true;
+  ui.sourceFilter.replaceChildren();
+  ui.sourceFilter.dataset.optionKey = '';
+  ui.sourceFilter.disabled = true;
+  ui.componentFilter.replaceChildren();
+  ui.componentFilter.dataset.optionKey = '';
+  ui.componentFilter.disabled = true;
+  ui.showAll.checked = true;
+  syncReconciliationReadout(state, null);
+  const boneKey = JSON.stringify(source?.boneIds || []);
+  if (boneKey !== ui.bone.dataset.optionKey) {
+    ui.bone.replaceChildren();
+    (source?.boneIds || []).forEach(id => {
+      const option = document.createElement('option');
+      option.value = String(id);
+      option.textContent = String(id);
+      ui.bone.appendChild(option);
+    });
+    ui.bone.dataset.optionKey = boneKey;
+  }
+  const selectedId = source?.selectedBoneId ?? state.selectedBoneId;
+  if (selectedId !== null && selectedId !== undefined) {
+    ui.bone.value = String(selectedId);
+  }
+  ui.influences.replaceChildren();
+  const picked = state.pickedPoint?.sourceKey === source?.sourceKey
+    ? state.pickedPoint : null;
+  if (picked) {
+    picked.influences.forEach(influence => {
+      const label = document.createElement('label');
+      label.className = 'rig-influence';
+      label.classList.toggle('selected', Number(selectedId) === influence.boneId);
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'rig-picked-influence';
+      radio.checked = Number(selectedId) === influence.boneId;
+      radio.addEventListener('change', () =>
+        selectRigBone(source.sourceKey, influence.boneId));
+      label.append(radio);
+      addText(label, 'rig-influence-id', String(influence.boneId));
+      addText(label, 'rig-influence-weight',
+        `${Math.round(Number(influence.weight) * 100)}%`);
+      ui.influences.appendChild(label);
+    });
+  }
+  const component = componentFor(source, selectedId);
+  ui.root.textContent = component ? String(component.rootId) : '—';
+  ui.depth.textContent = component
+    ? String(component.depthById?.[selectedId] ?? '—') : '—';
+  ui.parent.replaceChildren();
+  ui.children.replaceChildren();
+  const id = Number(selectedId);
+  if (component && Number.isInteger(id)) {
+    const parentId = component.parentById?.[id];
+    if (parentId !== null && parentId !== undefined) {
+      addNavigationButton(ui.parent, source.sourceKey, Number(parentId));
+    } else {
+      addText(ui.parent, 'rig-value', '—');
+    }
+    const children = component.childrenById?.[id] || [];
+    if (children.length) {
+      children.forEach(childId =>
+        addNavigationButton(ui.children, source.sourceKey, Number(childId)));
+    } else {
+      addText(ui.children, 'rig-value', '—');
+    }
+  } else {
+    addText(ui.parent, 'rig-value', '—');
+    addText(ui.children, 'rig-value', '—');
+  }
+  syncRotationReadout(state);
+}
+
+function syncPanel(state = getModelRigState()) {
+  if (!ui) return;
+  latestState = state;
+  if (state.loading) ui.status.textContent = 'Inferring source-local rig…';
+  else if (state.error) ui.status.textContent = state.error;
+  else if (!state.loaded) ui.status.textContent = 'Open this panel to load authored weights.';
+  else if (!state.sources?.length) ui.status.textContent = 'No usable Blend skinning data found.';
+  else ui.status.textContent = state.model
+    ? `${state.model.joints.length} model joint${state.model.joints.length === 1 ? '' : 's'}`
+    : `${state.sources.length} source rig${state.sources.length === 1 ? '' : 's'}`;
+  if (state.pickStatus) ui.status.textContent = state.pickStatus;
+  syncOptions(state);
+  ui.visible.checked = !!state.visible;
+  ui.visible.disabled = !state.loaded || !state.sources?.length;
+  ui.pick.disabled = !state.loaded || !state.sources?.length;
+  ui.pick.classList.toggle('active', !!state.picking);
+  ui.pick.textContent = state.picking ? 'Cancel picking' : 'Pick from model';
+  ui.showAll.disabled = !state.loaded || !state.model;
+  ui.snap.value = String(state.rotationSnapDegrees ?? 0);
+  ui.snap.disabled = !state.loaded || !state.sources?.length;
+  const source = selectedSource(state);
+  const physicsActive = modelStateHasPhysics(state);
+  const hasSelectedBone = state.model
+    ? state.selectedJointId !== null && state.selectedJointId !== undefined
+    : state.selectedBoneId !== null && state.selectedBoneId !== undefined;
+  ui.setRoot.disabled = !source || physicsActive || !hasSelectedBone;
+  ui.resetBone.disabled = !source || physicsActive || !hasSelectedBone;
+  ui.resetPose.disabled = !state.loaded || physicsActive;
+  syncPresetControls(state, physicsActive);
+}
+
+function syncPresetControls(state, physicsActive) {
+  if (!ui?.preset) return;
+  const presetState = state?.rigPresets || {};
+  const presets = presetState.presets || [];
+  const builtIns = presetState.builtInPresets || [];
+  const optionKey = JSON.stringify({
+    builtIns: builtIns.map(item => [item.id, item.name, item.available, item.reason]),
+    presets: presets.map(item => [item.id, item.name]),
+  });
+  if (optionKey !== ui.preset.dataset.optionKey) {
+    ui.preset.replaceChildren();
+    if (builtIns.length) {
+      const group = document.createElement('optgroup');
+      group.label = 'Built-in';
+      builtIns.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.available
+          ? item.name : `${item.name} — unavailable`;
+        option.disabled = !item.available;
+        group.appendChild(option);
+      });
+      ui.preset.appendChild(group);
+    }
+    const group = document.createElement('optgroup');
+    group.label = 'My Poses';
+    if (!presets.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No saved poses';
+      option.disabled = true;
+      group.appendChild(option);
+    } else {
+      presets.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.name;
+        group.appendChild(option);
+      });
+    }
+    ui.preset.appendChild(group);
+    ui.preset.dataset.optionKey = optionKey;
+  }
+  ui.preset.value = presetState.selectedPresetId || '';
+  const current = selectedPreset(state, ui.preset.value);
+  const hasPreset = !!current;
+  const isBuiltin = current?.kind === 'builtin';
+  const isAvailable = !isBuiltin || current.available;
+  const hasOptions = builtIns.length > 0 || presets.length > 0;
+  ui.preset.disabled = !hasOptions || !!presetState.loading;
+  ui.applyPreset.disabled = !state.loaded || !hasPreset || !isAvailable || physicsActive;
+  ui.savePreset.disabled = !state.loaded || physicsActive || !!presetState.loading;
+  ui.renamePreset.disabled = !hasPreset || isBuiltin || !!presetState.loading;
+  ui.deletePreset.disabled = !hasPreset || isBuiltin || !!presetState.loading;
+  if (current?.kind === 'builtin' && !current.available) {
+    ui.presetStatus.textContent = rigPresetUnavailableMessage(
+      current.reason, current.diagnostics, current.confidence);
+  } else if (presetState.error) ui.presetStatus.textContent = presetState.error;
+  else if (presetState.lastApplyResult?.success
+      && presetState.lastApplyResult.preset?.name) {
+    const result = presetState.lastApplyResult;
+    ui.presetStatus.textContent = rigPresetApplyMessage(
+      result.preset.name, result);
+  }
+}
+
+function modelStateHasPhysics(state) {
+  return (state.sources || []).some(source => source.physicsActive);
+}
+
+function loadOnDemand() {
+  if (loadingPromise) return loadingPromise;
+  loadingPromise = ensureModelRigLoaded().finally(() => { loadingPromise = null; });
+  return loadingPromise;
+}
+
+export function initRigPanel() {
+  panel = $('rig-panel');
+  if (!panel) return;
+  buildPanel();
+  window.addEventListener('mod-viewer-model-rig-changed', event => {
+    const state = event.detail;
+    // A model switch or shape refresh invalidates the backend promise. Drop
+    // the panel's wrapper too, so reopening the tab can start the new Rig.
+    if (!state?.loading && !state?.loaded) loadingPromise = null;
+    syncPanel(state);
+  });
+  window.addEventListener('mod-viewer-model-rig-pose-changed', event => {
+    if (latestState?.model
+        && Number(event.detail?.jointId) === Number(latestState?.selectedJointId)) {
+      syncRotationReadout(latestState, event.detail?.quaternion);
+    } else if (event.detail?.sourceKey === latestState?.activeSourceKey
+        && Number(event.detail?.boneId) === Number(latestState?.selectedBoneId)) {
+      syncRotationReadout(latestState, event.detail?.quaternion);
+    }
+  });
+  window.addEventListener('mod-viewer-right-dock-tab-changed', event => {
+    if (event.detail?.tab === 'rig' && event.detail?.open) void loadOnDemand();
+    if (event.detail?.tab !== 'rig' && latestState?.picking) cancelRigPicking();
+  });
+  syncPanel();
+}
