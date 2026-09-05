@@ -253,7 +253,12 @@ of documentation, comments and tests; use portable fixtures instead.
   duplicate or malformed entries are reported and skipped individually; valid
   entries still apply. Saved presets are never auto-applied after load or shape
   rebaseline, and Reset Pose returns to the default inferred roots and identity
-  rotations without deleting saved presets.
+ rotations without deleting saved presets.
+- Built-in procedural Rig poses are frontend-only descriptors regenerated from
+  the current default model Rig. They are never persisted or renamed/deleted;
+  applying one generates a schema-compatible transient preset and uses the same
+  exact-signature resolver as saved poses. Uncertain semantic detection fails
+  closed with a diagnostic reason.
 - Applying a preset is one batch transaction: restore valid model-root
   overrides first, rebuild rest frames/caches once, install all valid local
   rotations, run one model deformation/bounds pass, then notify and render once.

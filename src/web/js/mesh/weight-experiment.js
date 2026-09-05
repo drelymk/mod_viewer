@@ -64,6 +64,10 @@ import {
   buildJointSignatureIndex, createRigPreset, normalizeRigPreset,
   resolveRigPreset, serializeRigPose, validateRigPresetName,
 } from './weight-rig-presets.js';
+import {
+  BUILTIN_ARMS_UP_ID, generateArmsUpPreset,
+  getBuiltInRigPoseDescriptors,
+} from './weight-rig-procedural-poses.js';
 export {
   buildForestTransformsFromLocalRotations, applyWeightedTransformDeformation,
 } from './weight-deformation.js';
@@ -119,6 +123,7 @@ let modelBoneStatsBuildCount = 0;
 let selectionSavePromise = null;
 let rigPresetWriteQueue = Promise.resolve();
 let rigPresetWriteToken = 0;
+let proceduralRigPoseCache = null;
 const modelWeightState = {
   loaded: false,
   loading: false,
@@ -175,6 +180,7 @@ const rigPresetState = {
   loading: false,
   error: null,
   presets: [],
+  builtInPresets: [],
   selectedPresetId: null,
   lastApplyResult: null,
 };
@@ -519,6 +525,17 @@ function modelRigSnapshot() {
     depthById: {...(component.depthById || {})},
     maxDepth: component.maxDepth,
   }));
+  const defaultComponents = (modelSkinningRig.defaultComponents || [])
+    .map(component => ({
+      componentId: component.componentId,
+      rootId: component.rootId,
+      nodeIds: [...(component.nodeIds || [])],
+      parentById: {...(component.parentById || {})},
+      childrenById: Object.fromEntries(Object.entries(
+        component.childrenById || {}).map(([id, children]) => [id, [...children]])),
+      depthById: {...(component.depthById || {})},
+      maxDepth: component.maxDepth,
+    }));
   const joints = (modelSkinningRig.joints || []).map(joint => ({
     jointId: joint.jointId,
     jointKey: joint.jointKey,
@@ -542,6 +559,18 @@ function modelRigSnapshot() {
     joints,
     forestEdges,
     components,
+    defaultComponents,
+    defaultRestPivotByJointId: Object.fromEntries(
+      [...(modelSkinningRig.defaultJointPivotByJointId || new Map())]
+        .map(([jointId, pivot]) => [jointId, [...pivot]])),
+    defaultRestDirectionByJointId: Object.fromEntries(
+      [...(modelSkinningRig.defaultRestDirectionByJointId || new Map())]
+        .map(([jointId, direction]) => [jointId,
+          direction ? [...direction] : null])),
+    defaultRestFrameByJointId: Object.fromEntries(
+      [...(modelSkinningRig.defaultRestFrameByJointId || new Map())]
+        .map(([jointId, frame]) => [jointId,
+          frame ? (frame.toArray?.() || [...frame]) : null])),
     sourceBoneToModelJointId: Object.fromEntries(
       modelSkinningRig.sourceBoneToModelJointId || []),
     poseRotationByJointId: Object.fromEntries(
@@ -556,6 +585,26 @@ function modelRigSnapshot() {
   };
 }
 
+function refreshBuiltInRigPresets(rig = modelSkinningRig) {
+  if (!rig) {
+    proceduralRigPoseCache = null;
+    rigPresetState.builtInPresets = [];
+    return [];
+  }
+  if (proceduralRigPoseCache?.rig === rig
+      && proceduralRigPoseCache.revision === rig.structureRevision) {
+    return proceduralRigPoseCache.descriptors;
+  }
+  const descriptors = getBuiltInRigPoseDescriptors(modelRigSnapshot());
+  proceduralRigPoseCache = {
+    rig,
+    revision: rig.structureRevision,
+    descriptors,
+  };
+  rigPresetState.builtInPresets = descriptors;
+  return descriptors;
+}
+
 function rigPresetSnapshot() {
   return {
     loaded: rigPresetState.loaded,
@@ -564,6 +613,25 @@ function rigPresetSnapshot() {
     presets: rigPresetState.presets.map(preset => ({
       id: preset.id,
       name: preset.name,
+    })),
+    builtInPresets: rigPresetState.builtInPresets.map(preset => ({
+      id: preset.id,
+      name: preset.name,
+      kind: preset.kind,
+      available: !!preset.available,
+      confidence: Number.isFinite(preset.confidence) ? preset.confidence : 0,
+      reason: preset.reason || null,
+      diagnostics: {
+        bodyFrame: preset.diagnostics?.bodyFrame
+          ? {...preset.diagnostics.bodyFrame} : null,
+        candidateCounts: preset.diagnostics?.candidateCounts
+          ? {...preset.diagnostics.candidateCounts} : null,
+        runnerUpScore: Number.isFinite(preset.diagnostics?.runnerUpScore)
+          ? preset.diagnostics.runnerUpScore : null,
+        pairFeatures: preset.diagnostics?.pairFeatures
+          ? {...preset.diagnostics.pairFeatures} : null,
+        selectedJointIds: [...(preset.diagnostics?.selectedJointIds || [])],
+      },
     })),
     selectedPresetId: rigPresetState.selectedPresetId,
     lastApplyResult: rigPresetState.lastApplyResult,
@@ -1037,6 +1105,7 @@ function resetModelWeightState() {
   sourcePhysicsRigs.clear();
   sourceSkinningRigs.clear();
   modelSkinningRig = null;
+  proceduralRigPoseCache = null;
   modelWeightState.loaded = false;
   modelWeightState.loading = false;
   modelWeightState.promise = null;
@@ -1086,6 +1155,7 @@ function resetModelWeightState() {
   rigPresetState.loading = false;
   rigPresetState.error = null;
   rigPresetState.presets = [];
+  rigPresetState.builtInPresets = [];
   rigPresetState.selectedPresetId = null;
   rigPresetState.lastApplyResult = null;
   notifyModelWeightChanged();
@@ -2073,6 +2143,7 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     sourceRig.poseFrameCache.clear();
   });
   modelSkinningRig = rig;
+  refreshBuiltInRigPresets(rig);
   if (!modelSkinningRig.joints[modelWeightState.weightViewJointId]) {
     modelWeightState.weightViewJointId = null;
   }
@@ -3008,7 +3079,10 @@ export function getRigPresetState() {
 
 export function selectRigPosePreset(presetId) {
   const id = String(presetId || '');
-  if (!rigPresetState.presets.some(preset => preset.id === id)) return false;
+  if (!rigPresetState.presets.some(preset => preset.id === id)
+      && !rigPresetState.builtInPresets.some(preset => preset.id === id)) {
+    return false;
+  }
   rigPresetState.selectedPresetId = id;
   notifyModelRigChanged();
   return true;
@@ -3048,6 +3122,30 @@ export function applySavedRigPosePreset(presetId = rigPresetState.selectedPreset
     presetId: preset.id,
   });
   return result;
+}
+
+/** Apply either a saved preset or a transient built-in preset by stable ID. */
+export function applyRigPosePresetById(
+    presetId = rigPresetState.selectedPresetId) {
+  const id = String(presetId || '');
+  if (id === BUILTIN_ARMS_UP_ID) {
+    const generated = generateArmsUpPreset(modelRigSnapshot());
+    if (!generated.available) {
+      const result = unavailableRigPresetResult(
+        generated.reason || 'arm_pair_not_found', generated.preset);
+      result.presetId = id;
+      result.failureReason = 'builtin_unavailable';
+      result.confidence = generated.confidence;
+      result.diagnostics = generated.diagnostics;
+      rigPresetState.lastApplyResult = result;
+      notifyModelRigChanged();
+      return result;
+    }
+    return applyRigPosePreset(resolveRigPreset(modelSkinningRig, generated.preset), {
+      presetId: id,
+    });
+  }
+  return applySavedRigPosePreset(id);
 }
 
 export function saveRigPosePreset(name) {
@@ -3095,7 +3193,12 @@ export function saveRigPosePreset(name) {
 }
 
 export function renameRigPosePreset(presetId, name) {
-  const preset = rigPresetState.presets.find(item => item.id === presetId);
+  const id = String(presetId || '');
+  if (rigPresetState.builtInPresets.some(item => item.id === id)) {
+    return Promise.resolve({saved: false,
+      error: 'Built-in pose presets cannot be renamed.'});
+  }
+  const preset = rigPresetState.presets.find(item => item.id === id);
   const checked = validateRigPresetName(name);
   if (!preset) return Promise.resolve({saved: false, error: 'Pose preset was not found.'});
   if (!checked.valid) return Promise.resolve({saved: false, error: checked.error});
@@ -3121,7 +3224,12 @@ export function renameRigPosePreset(presetId, name) {
 }
 
 export function deleteRigPosePreset(presetId) {
-  const preset = rigPresetState.presets.find(item => item.id === presetId);
+  const id = String(presetId || '');
+  if (rigPresetState.builtInPresets.some(item => item.id === id)) {
+    return Promise.resolve({saved: false,
+      error: 'Built-in pose presets cannot be deleted.'});
+  }
+  const preset = rigPresetState.presets.find(item => item.id === id);
   if (!preset) return Promise.resolve({saved: false, error: 'Pose preset was not found.'});
   const api = window.pywebview?.api?.delete_rig_pose_preset;
   const path = currentRigModPath();
@@ -3665,6 +3773,7 @@ export function refreshSkinningAfterShapeChange(mesh) {
   state.poseActiveVertices = null;
   modelRigState.loaded = false;
   modelSkinningRig = null;
+  proceduralRigPoseCache = null;
   modelRigState.selectedJointId = null;
   modelRigState.structureRevision = 0;
   modelRigState.visible = false;
@@ -3673,6 +3782,7 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelRigState.explicitRootSignatures = new Set();
   modelRigState.overlayScope = 'selection';
   rigPresetState.lastApplyResult = null;
+  rigPresetState.builtInPresets = [];
   modelRigState.pickedPoint = null;
   modelRigState.pickStatus = '';
   notifyModelRigChanged();

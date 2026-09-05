@@ -9,7 +9,7 @@ import {
   selectRigJoint,
   setRigComponentRoot, setRigRotationSnapDegrees,
   setRigVisible,
-  applySavedRigPosePreset, deleteRigPosePreset, renameRigPosePreset,
+  applyRigPosePresetById, deleteRigPosePreset, renameRigPosePreset,
   saveRigPosePreset, selectRigPosePreset,
   setRigOverlayScope,
 } from '../mesh/weight-experiment.js';
@@ -111,6 +111,23 @@ function rigPresetApplyMessage(name, result) {
       + 'were unavailable in the current inferred rig.');
   }
   return parts.join(' ');
+}
+
+function rigPresetUnavailableMessage(reason) {
+  return {
+    insufficient_rig: 'Arms Up needs a larger inferred Rig.',
+    arm_pair_not_found: 'Arms Up could not find a confident left/right arm pair.',
+    arm_pair_low_confidence: 'Arms Up could not identify the arms with enough confidence.',
+    arm_pair_ambiguous: 'Arms Up found more than one plausible arm pair.',
+    hierarchy_orientation_incompatible: 'Arms Up found arm geometry but its hierarchy runs inward.',
+    invalid_rest_direction: 'Arms Up could not determine stable rest directions.',
+  }[reason] || 'Arms Up is unavailable for this inferred Rig.';
+}
+
+function selectedPreset(state = latestState, id = ui?.preset?.value) {
+  const presetState = state?.rigPresets || {};
+  return (presetState.builtInPresets || []).find(item => item.id === id)
+    || (presetState.presets || []).find(item => item.id === id) || null;
 }
 
 function syncReconciliationReadout(state, joint) {
@@ -406,7 +423,7 @@ function buildPanel() {
   presetTitle.classList.add('rig-preset-title');
   ui.preset = document.createElement('select');
   ui.preset.className = 'rig-preset-select';
-  ui.preset.setAttribute('aria-label', 'Saved rig pose');
+  ui.preset.setAttribute('aria-label', 'Rig pose preset');
   ui.preset.addEventListener('change', () => {
     selectRigPosePreset(ui.preset.value || null);
   });
@@ -418,12 +435,14 @@ function buildPanel() {
   ui.applyPreset.className = 'ui-button rig-apply-preset';
   ui.applyPreset.textContent = 'Apply';
   ui.applyPreset.addEventListener('click', () => {
-    const result = applySavedRigPosePreset(ui.preset.value || null);
-    const name = latestState?.rigPresets?.presets?.find(item =>
-      item.id === ui.preset.value)?.name || 'pose';
+    const selected = selectedPreset(latestState, ui.preset.value);
+    const result = applyRigPosePresetById(ui.preset.value || null);
+    const name = selected?.name || 'pose';
     if (!result?.success) {
       ui.presetStatus.textContent = result?.skipped?.[0]?.reason === 'physics_active'
         ? 'Disable Character Physics before applying a pose preset.'
+        : result?.failureReason === 'builtin_unavailable'
+          ? rigPresetUnavailableMessage(result?.skipped?.[0]?.reason)
         : result?.failureReason === 'no_matches'
           ? `Could not apply "${name}". No saved joints matched the current inferred rig.`
           : 'This saved pose is invalid and could not be applied.';
@@ -717,32 +736,59 @@ function syncPresetControls(state, physicsActive) {
   if (!ui?.preset) return;
   const presetState = state?.rigPresets || {};
   const presets = presetState.presets || [];
-  const optionKey = JSON.stringify(presets.map(item => [item.id, item.name]));
+  const builtIns = presetState.builtInPresets || [];
+  const optionKey = JSON.stringify({
+    builtIns: builtIns.map(item => [item.id, item.name, item.available, item.reason]),
+    presets: presets.map(item => [item.id, item.name]),
+  });
   if (optionKey !== ui.preset.dataset.optionKey) {
     ui.preset.replaceChildren();
+    if (builtIns.length) {
+      const group = document.createElement('optgroup');
+      group.label = 'Built-in';
+      builtIns.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.available
+          ? item.name : `${item.name} — unavailable`;
+        option.disabled = !item.available;
+        group.appendChild(option);
+      });
+      ui.preset.appendChild(group);
+    }
+    const group = document.createElement('optgroup');
+    group.label = 'My Poses';
     if (!presets.length) {
       const option = document.createElement('option');
       option.value = '';
       option.textContent = 'No saved poses';
-      ui.preset.appendChild(option);
+      option.disabled = true;
+      group.appendChild(option);
     } else {
       presets.forEach(item => {
         const option = document.createElement('option');
         option.value = item.id;
         option.textContent = item.name;
-        ui.preset.appendChild(option);
+        group.appendChild(option);
       });
     }
+    ui.preset.appendChild(group);
     ui.preset.dataset.optionKey = optionKey;
   }
   ui.preset.value = presetState.selectedPresetId || '';
-  const hasPreset = presets.some(item => item.id === ui.preset.value);
-  ui.preset.disabled = !presets.length || !!presetState.loading;
-  ui.applyPreset.disabled = !state.loaded || !hasPreset || physicsActive;
+  const current = selectedPreset(state, ui.preset.value);
+  const hasPreset = !!current;
+  const isBuiltin = current?.kind === 'builtin';
+  const isAvailable = !isBuiltin || current.available;
+  const hasOptions = builtIns.length > 0 || presets.length > 0;
+  ui.preset.disabled = !hasOptions || !!presetState.loading;
+  ui.applyPreset.disabled = !state.loaded || !hasPreset || !isAvailable || physicsActive;
   ui.savePreset.disabled = !state.loaded || physicsActive || !!presetState.loading;
-  ui.renamePreset.disabled = !hasPreset || !!presetState.loading;
-  ui.deletePreset.disabled = !hasPreset || !!presetState.loading;
-  if (presetState.error) ui.presetStatus.textContent = presetState.error;
+  ui.renamePreset.disabled = !hasPreset || isBuiltin || !!presetState.loading;
+  ui.deletePreset.disabled = !hasPreset || isBuiltin || !!presetState.loading;
+  if (current?.kind === 'builtin' && !current.available) {
+    ui.presetStatus.textContent = rigPresetUnavailableMessage(current.reason);
+  } else if (presetState.error) ui.presetStatus.textContent = presetState.error;
   else if (presetState.lastApplyResult?.success
       && presetState.lastApplyResult.preset?.name) {
     const result = presetState.lastApplyResult;

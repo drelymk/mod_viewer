@@ -101,6 +101,108 @@ def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
         "root_not_found", "invalid_rotation",
     }
 
+
+def test_builtin_arms_up_pose_is_symmetric_deterministic_and_fail_closed(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const poses = await import('./js/mesh/weight-rig-procedural-poses.js');
+      const makeRig = includeRight => {
+        const entries = [
+          [0, [0, 0, 0]], [1, [0, -2, 0]], [2, [0, 10, 0]],
+          [10, [-2, 6, 0]], [11, [-3.2, 4, 0]], [12, [-3.7, 3, 0]],
+          ...(includeRight ? [[20, [2, 6, 0]], [21, [3.2, 4, 0]],
+            [22, [3.7, 3, 0]]] : []),
+          [30, [.7, -4, 0]], [31, [.7, -6, 0]],
+        ];
+        const parents = {0: null, 1: 0, 2: 0, 10: 0, 11: 10, 12: 11,
+          30: 1, 31: 30};
+        const children = {0: [1, 2, 10, 30], 1: [31], 2: [], 10: [11],
+          11: [12], 12: [], 30: [31], 31: []};
+        if (includeRight) {
+          Object.assign(parents, {20: 0, 21: 20, 22: 21});
+          Object.assign(children, {0: [1, 2, 10, 20, 30], 20: [21],
+            21: [22], 22: []});
+        }
+        const components = [{componentId: 0, rootId: 0,
+          nodeIds: entries.map(([id]) => id), parentById: parents,
+          childrenById: children,
+          depthById: Object.fromEntries(entries.map(([id]) => [id,
+            id === 0 ? 0 : id === 1 || id === 2 || id === 10 || id === 20
+              ? 1 : id === 30 ? 2 : id === 31 ? 3 : 2]))}];
+        const joints = entries.map(([jointId, restCenter]) => ({
+          jointId, signature: `["source#bone=${jointId}"]`, restCenter,
+          restPivot: restCenter,
+        }));
+        const directions = {
+          10: [-1, -.8, .15], 20: [1, -.8, .15],
+        };
+        return {
+          joints, components, defaultComponents: components,
+          defaultRestPivotByJointId: Object.fromEntries(entries),
+          defaultRestDirectionByJointId: directions,
+          forestEdges: [],
+        };
+      };
+      const rig = makeRig(true);
+      const analysis = poses.analyzeHumanoidRestPose(rig);
+      const permuted = {...rig, joints: [...rig.joints].reverse()};
+      const permutedAnalysis = poses.analyzeHumanoidRestPose(permuted);
+      const reversed = makeRig(true);
+      Object.assign(reversed.defaultComponents[0].parentById,
+        {10: 11, 11: 12, 12: 0, 20: 21, 21: 22, 22: 0});
+      Object.assign(reversed.defaultComponents[0].childrenById,
+        {0: [1, 2, 12, 22, 30], 10: [], 11: [10], 12: [11],
+          20: [], 21: [20], 22: [21]});
+      const reversedAnalysis = poses.analyzeHumanoidRestPose(reversed);
+      const invalid = makeRig(true);
+      invalid.defaultRestDirectionByJointId[10] = [0, 0, 0];
+      const invalidAnalysis = poses.analyzeHumanoidRestPose(invalid);
+      const unavailable = poses.analyzeHumanoidRestPose(makeRig(false));
+      const descriptor = poses.getBuiltInRigPoseDescriptors(rig)[0];
+      return {
+        available: analysis.available,
+        confidence: analysis.confidence,
+        signatures: analysis.preset?.joints.map(item => item.joint_signature),
+        rotations: analysis.arms && {
+          negativeX: analysis.arms.negativeX.rotation,
+          positiveX: analysis.arms.positiveX.rotation,
+          negativeTarget: analysis.arms.negativeX.targetDirection,
+          positiveTarget: analysis.arms.positiveX.targetDirection,
+        },
+        deterministic: JSON.stringify(analysis.preset)
+          === JSON.stringify(permutedAnalysis.preset),
+        reversedReason: reversedAnalysis.reason,
+        invalidReason: invalidAnalysis.reason,
+        missingReason: unavailable.reason,
+        descriptor: {id: descriptor.id, name: descriptor.name,
+          kind: descriptor.kind, available: descriptor.available},
+      };
+    }""")
+    assert result["available"] is True
+    assert result["confidence"] >= 0.75
+    assert result["signatures"] == [
+        '["source#bone=10"]', '["source#bone=20"]']
+    assert result["deterministic"] is True
+    assert result["missingReason"] == "arm_pair_not_found"
+    assert result["reversedReason"] == "hierarchy_orientation_incompatible"
+    assert result["invalidReason"] == "invalid_rest_direction"
+    assert result["descriptor"] == {
+        "id": "builtin:arms-up", "name": "Arms Up", "kind": "builtin",
+        "available": True,
+    }
+    for rotation in (result["rotations"]["negativeX"],
+                     result["rotations"]["positiveX"]):
+        assert math.isfinite(rotation[0])
+        assert math.isfinite(rotation[1])
+        assert math.isfinite(rotation[2])
+        assert math.isfinite(rotation[3])
+    assert result["rotations"]["negativeTarget"][1] > 0.9
+    assert result["rotations"]["positiveTarget"][1] > 0.9
+    assert result["rotations"]["negativeTarget"][0] < 0
+    assert result["rotations"]["positiveTarget"][0] > 0
+    assert result["rotations"]["negativeTarget"][2] > 0
+    assert result["rotations"]["positiveTarget"][2] > 0
+
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page
     result = page.evaluate("""async () => {

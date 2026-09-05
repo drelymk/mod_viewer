@@ -1002,7 +1002,15 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         result = page.evaluate("""async () => {
           const experiment = await import('./js/mesh/weight-experiment.js');
           const source = experiment.getModelRigState().sources[0];
+          const rigState = experiment.getModelRigState();
           const component = source.components[0];
+          const selectedBuiltin = experiment.selectRigPosePreset('builtin:arms-up');
+          const builtinApply = experiment.applyRigPosePresetById('builtin:arms-up');
+          const presetSelect = document.querySelector('.rig-preset-select');
+          const builtInOption = [...presetSelect.options].find(option =>
+            option.value === 'builtin:arms-up');
+          const presetGroups = [...presetSelect.querySelectorAll('optgroup')]
+            .map(group => group.label);
           const initialJointSelectValue =
             document.querySelector('.rig-bone-select')?.value;
           const initialJointSelectText = document.querySelector(
@@ -1048,6 +1056,22 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           return {
             calls: window.__rigPanelPreviewCalls,
             sourceKey: source.sourceKey,
+            builtInPresets: rigState.rigPresets.builtInPresets,
+            builtInOption: builtInOption ? {
+              text: builtInOption.textContent, disabled: builtInOption.disabled,
+            } : null,
+            selectedBuiltin, builtinApply: {
+              success: builtinApply.success,
+              failureReason: builtinApply.failureReason,
+              reason: builtinApply.skipped?.[0]?.reason,
+            },
+            presetGroups,
+            applyPresetDisabled: document.querySelector(
+              '.rig-apply-preset')?.disabled,
+            renamePresetDisabled: document.querySelector(
+              '.rig-rename-preset')?.disabled,
+            deletePresetDisabled: document.querySelector(
+              '.rig-delete-preset')?.disabled,
             jointSelectValue: initialJointSelectValue,
             jointSelectText: initialJointSelectText,
             initialShowAll,
@@ -1068,6 +1092,19 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         }""")
         assert result["calls"] == 1
         assert result["sourceKey"] == "test/bodyblend.buf|offset=0"
+        assert result["builtInPresets"][0]["id"] == "builtin:arms-up"
+        assert result["builtInPresets"][0]["available"] is False
+        assert result["builtInPresets"][0]["reason"] == "insufficient_rig"
+        assert result["builtInOption"] == {
+            "text": "Arms Up — unavailable", "disabled": True}
+        assert result["selectedBuiltin"] is True
+        assert result["builtinApply"] == {
+            "success": False, "failureReason": "builtin_unavailable",
+            "reason": "insufficient_rig"}
+        assert result["presetGroups"] == ["Built-in", "My Poses"]
+        assert result["applyPresetDisabled"] is True
+        assert result["renamePresetDisabled"] is True
+        assert result["deletePresetDisabled"] is True
         assert result["jointSelectValue"] == ""
         assert result["jointSelectText"] == "Select a joint"
         assert result["initialShowAll"] is False
