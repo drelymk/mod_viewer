@@ -263,8 +263,10 @@ of documentation, comments and tests; use portable fixtures instead.
 - Spatial semantic analysis keeps anatomy separate from deformation topology:
   rest centers identify compact bilateral landmarks such as hands and finger
   rays, rest pivots drive posing, and component connectivity is reported as
-  poseConnectivity evidence rather than repaired or mutated. Results are
-  partial, confidence-scored and cached by model-Rig structure revision.
+  poseConnectivity evidence rather than repaired or mutated. Arms Up requires
+  directed pose descendants from each shoulder to its wrist/hand; disconnected
+  semantic landmarks remain diagnostic-only. Results are partial,
+  confidence-scored and cached by model-Rig structure revision.
 - Applying a preset is one batch transaction: restore valid model-root
   overrides first, rebuild rest frames/caches once, install all valid local
   rotations, run one model deformation/bounds pass, then notify and render once.

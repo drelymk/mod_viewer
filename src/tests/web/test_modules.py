@@ -435,6 +435,36 @@ def test_rig_semantics_detects_bilateral_finger_fans(module_page):
       const wingRig = {...rig, joints: wingJoints,
         components: [wingComponent], defaultComponents: [wingComponent],
         defaultRestPivotByJointId: wingPivots};
+      const helperJoints = rig.joints.map(joint => ({...joint,
+        restCenter: [...joint.restCenter], restPivot: [...joint.restPivot]}));
+      const helperParentById = {...parentById};
+      const helperChildrenById = Object.fromEntries(Object.entries(childrenById)
+        .map(([id, children]) => [id, [...children]]));
+      const helperPivots = {...pivots};
+      const addHelper = (jointId, center, parentId) => {
+        helperJoints.push({jointId, signature: `["helper#bone=${jointId}"]`,
+          restCenter: center, restPivot: center});
+        helperParentById[jointId] = parentId;
+        helperChildrenById[jointId] = [];
+        helperChildrenById[parentId].push(jointId);
+        helperPivots[jointId] = center;
+      };
+      [-1, 1].forEach(side => {
+        const palmId = side < 0 ? 600 : 700;
+        addHelper(palmId, [side * 3.2, 5.2, 0], 0);
+        [[-.18, .18], [-.2, .06], [-.2, -.06], [-.16, -.18]]
+          .forEach(([lateral, vertical], index) => {
+            const branchId = palmId + 1 + index;
+            addHelper(branchId, [side * 3.2 + side * lateral,
+              5.2 + vertical, 0], palmId);
+          });
+      });
+      const helperComponent = {...component,
+        nodeIds: helperJoints.map(joint => joint.jointId),
+        parentById: helperParentById, childrenById: helperChildrenById};
+      const helperRig = {...rig, joints: helperJoints,
+        components: [helperComponent], defaultComponents: [helperComponent],
+        defaultRestPivotByJointId: helperPivots};
       return {
         semantic: analyzeRigSemantics(rig),
         pose: analyzeHumanoidRestPose(rig),
@@ -447,6 +477,7 @@ def test_rig_semantics_detects_bilateral_finger_fans(module_page):
           pose: analyzeHumanoidRestPose(brokenRig),
         },
         wings: analyzeRigSemantics(wingRig),
+        helpers: analyzeRigSemantics(helperRig),
       };
     }""")
     semantic = result["semantic"]
@@ -457,6 +488,8 @@ def test_rig_semantics_detects_bilateral_finger_fans(module_page):
     assert semantic["landmarks"]["positiveArm"]["shoulder"]["jointId"] == 20
     assert semantic["landmarks"]["negativeArm"]["hand"]["jointId"] == 12
     assert semantic["landmarks"]["positiveArm"]["hand"]["jointId"] == 22
+    assert semantic["landmarks"]["negativeArm"]["semanticPathIds"] == [10, 11, 12]
+    assert semantic["landmarks"]["positiveArm"]["semanticPathIds"] == [20, 21, 22]
     assert result["pose"]["available"], result["pose"]
     assert result["pose"]["diagnostics"]["detector"] == "semantic-hands"
     assert [item["joint_signature"]
@@ -464,6 +497,8 @@ def test_rig_semantics_detects_bilateral_finger_fans(module_page):
         '["semantic#bone=10"]', '["semantic#bone=20"]']
     assert result["pose"]["arms"]["negativeX"]["targetDirection"][1] > .9
     assert result["pose"]["arms"]["positiveX"]["targetDirection"][1] > .9
+    assert result["pose"]["diagnostics"]["poseValidation"]["negativeX"]["heightGain"] > .08
+    assert result["pose"]["diagnostics"]["poseValidation"]["positiveX"]["sidePreserved"]
     assert result["zUp"]["available"]
     assert result["zUp"]["landmarks"]["negativeHand"]["jointId"] == 12
     assert result["zUp"]["landmarks"]["positiveHand"]["jointId"] == 22
@@ -474,10 +509,16 @@ def test_rig_semantics_detects_bilateral_finger_fans(module_page):
     assert not result["broken"]["semantic"]["landmarks"]["negativeArm"][
         "poseConnectivity"]["connected"]
     assert "negative_arm_pose_disconnected" in result["broken"]["semantic"]["issues"]
-    assert result["broken"]["pose"]["available"]
+    assert not result["broken"]["pose"]["available"]
+    assert result["broken"]["pose"]["reason"] == "arm_pose_connectivity_insufficient"
     assert result["wings"]["available"]
     assert result["wings"]["landmarks"]["negativeHand"]["jointId"] == 12
     assert result["wings"]["landmarks"]["positiveHand"]["jointId"] == 22
+    assert result["helpers"]["available"]
+    assert result["helpers"]["landmarks"]["negativeHand"]["jointId"] == 12
+    assert result["helpers"]["landmarks"]["positiveHand"]["jointId"] == 22
+    assert result["helpers"]["landmarks"]["negativeArm"]["shoulder"]["jointId"] == 10
+    assert result["helpers"]["landmarks"]["positiveArm"]["shoulder"]["jointId"] == 20
 
 
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):

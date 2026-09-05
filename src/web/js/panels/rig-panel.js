@@ -122,6 +122,8 @@ function rigPresetUnavailableMessage(reason, diagnostics = {}, confidence = null
     hierarchy_orientation_incompatible: 'Arms Up found arm geometry but its hierarchy runs inward.',
     invalid_rest_direction: 'Arms Up could not determine stable rest directions.',
     semantic_pose_validation_failed: 'Arms Up found hands but its target pose failed hand validation.',
+    semantic_landmarks_incomplete: 'Arms Up found partial hand landmarks but could not identify both arms.',
+    arm_pose_connectivity_insufficient: 'Arms Up found the arms but their pose topology is disconnected.',
   }[reason] || 'Arms Up is unavailable for this inferred Rig.';
   const counts = diagnostics?.candidateCounts;
   const details = [];

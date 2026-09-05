@@ -549,6 +549,10 @@ function modelRigSnapshot() {
     childrenIds: [...(joint.childrenIds || [])],
     representativeMember: joint.representativeMember
       ? {...joint.representativeMember} : null,
+    affectedVertexCount: Number(joint.evidence?.affectedVertexCount
+      ?? joint.affectedVertexCount ?? 0),
+    totalWeight: Number(joint.evidence?.totalWeight
+      ?? joint.totalWeight ?? 0),
     evidence: {...(joint.evidence || {})},
   }));
   const forestEdges = (modelSkinningRig.edges || []).map(edge => ({...edge,

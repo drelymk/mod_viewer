@@ -275,7 +275,17 @@ function semanticData(modelRig, semantic) {
     record.depth01 = (record.depth - centerDepth) / height;
     record.sideOffset = side => side * (record.lateral - centerLateral);
   });
-  return {joints, records, bodyFrame, topology, semantic};
+  const sideExtents = {};
+  for (const side of [-1, 1]) {
+    const offsets = records.filter(record => record.height01 >= .18
+      && record.height01 <= .9
+      && Math.abs(record.depth - centerDepth) <= height * .25)
+      .map(record => record.sideOffset(side))
+      .filter(offset => offset >= height * .08);
+    sideExtents[side < 0 ? 'negative' : 'positive'] = percentile(
+      offsets, .9, height * .35);
+  }
+  return {joints, records, bodyFrame, topology, semantic, sideExtents};
 }
 
 function recordView(record) {
@@ -306,9 +316,34 @@ function distanceToSegment(point, start, end) {
   return point.distanceTo(start.clone().addScaledVector(segment, t));
 }
 
-function directionGroups(palm, nearby, height, side, semantic) {
+function topologyDistance(topology, startId, targetId, maximumDepth = 3) {
+  if (!Number.isInteger(startId) || !Number.isInteger(targetId)) return null;
+  if (startId === targetId) return 0;
+  const queue = [{id: startId, depth: 0}];
+  const visited = new Set([startId]);
+  while (queue.length) {
+    const current = queue.shift();
+    if (current.depth >= maximumDepth) continue;
+    for (const child of topology.childrenById.get(current.id) || []) {
+      if (visited.has(child)) continue;
+      if (child === targetId) return current.depth + 1;
+      visited.add(child);
+      queue.push({id: child, depth: current.depth + 1});
+    }
+  }
+  return null;
+}
+
+function directionGroups(palm, nearby, height, side, semantic, topology) {
+  const topologyNearby = nearby.filter(record => topologyDistance(
+    topology, palm.jointId, record.jointId) !== null);
+  // Prefer direct/short descendant rays. Spatial neighbors are a controlled
+  // fallback for inferred topology gaps, rather than the normal definition of
+  // a finger.
+  const source = topologyNearby.length >= MIN_FINGER_RAYS
+    ? topologyNearby : nearby;
   const groups = [];
-  nearby.forEach(record => {
+  source.forEach(record => {
     const radial = record.center.clone().sub(palm.center);
     const distance = radial.length();
     if (distance < height * MIN_FINGER_LENGTH_RATIO) return;
@@ -366,8 +401,18 @@ function handCandidate(data, palm, side) {
   const nearby = records.filter(record => record.jointId !== palm.jointId
     && record.center.distanceTo(palm.center) <= radius);
   const fingerBranches = directionGroups(
-    palm, nearby, bodyFrame.height, side, data.semantic);
+    palm, nearby, bodyFrame.height, side, data.semantic, data.topology);
   if (fingerBranches.length < MIN_FINGER_RAYS) return null;
+  const directChildren = new Set(palm.childrenIds || []);
+  const directBranchCount = fingerBranches.filter(branch =>
+    directChildren.has(branch.jointIds[0])).length;
+  // A distal finger control can see the other fingers in the radius and look
+  // like a palm. If topology is present, require multiple rays to originate
+  // directly at this candidate before accepting that interpretation.
+  if ((directChildren.size && directBranchCount < 2)
+      || (!directChildren.size && data.topology.parentById.has(palm.jointId))) {
+    return null;
+  }
   const fingerCount = fingerBranches.length;
   const fingerScore = fingerCount === 5 ? 1
     : fingerCount === 4 ? .84 : fingerCount === 6 ? .9
@@ -383,11 +428,38 @@ function handCandidate(data, palm, side) {
   const wrist = wristFor(data, palm, side, excluded, bodyFrame.height);
   const fingertipCandidates = fingerBranches.map(branch => branch.fingertipJointId);
   const handLength = median(fingerBranches.map(branch => branch.length), 0);
-  const branchingScore = palm.childrenIds.length
-    ? clamp(palm.childrenIds.length / 4) : .5;
-  const confidence = clamp(fingerScore * .4 + compactnessScore * .12
-    + lateralScore * .08 + heightScore * .06 + (wrist ? .04 : 0)
-    + branchingScore * .3);
+  const branchLengths = fingerBranches.map(branch => branch.length);
+  const lengthDeviation = handLength > EPSILON
+    ? median(branchLengths.map(length => Math.abs(length - handLength)), 0)
+      / handLength : 1;
+  const lengthConsistency = clamp(1 - lengthDeviation / .7);
+  let angularSeparation = 0;
+  let angularPairs = 0;
+  for (let index = 0; index < fingerBranches.length; index += 1) {
+    const left = normalize(fingerBranches[index].direction);
+    if (!left) continue;
+    for (let other = index + 1; other < fingerBranches.length; other += 1) {
+      const right = normalize(fingerBranches[other].direction);
+      if (!right) continue;
+      angularSeparation += 1 - clamp(left.dot(right), -1, 1);
+      angularPairs += 1;
+    }
+  }
+  const fanSpread = angularPairs
+    ? clamp((angularSeparation / angularPairs) / .65) : 0;
+  const rayLengthScore = clamp(handLength / (bodyFrame.height * .06))
+    * lengthConsistency;
+  const sideExtent = data.sideExtents[side < 0 ? 'negative' : 'positive']
+    || bodyFrame.height * .35;
+  const distalness = clamp(sideOffset / Math.max(sideExtent, bodyFrame.height * .2));
+  // Child count is weak evidence on inferred Rigs: helper hubs can have many
+  // children too. Distal reach and a consistent fan carry most of the weight.
+  const branchingScore = directChildren.size
+    ? clamp(Math.min(directBranchCount, 6) / 5) : .35;
+  const confidence = clamp(fingerScore * .28 + compactnessScore * .06
+    + lateralScore * .04 + heightScore * .04 + (wrist ? .04 : 0)
+    + branchingScore * .06 + distalness * .28 + rayLengthScore * .12
+    + fanSpread * .08);
   return {
     palm: recordView(palm),
     palmRecord: palm,
@@ -400,6 +472,7 @@ function handCandidate(data, palm, side) {
     handLength,
     side,
     sideOffset,
+    distalness,
     confidence,
     evidence: {
       fingerBranchCount: fingerCount,
@@ -408,6 +481,11 @@ function handCandidate(data, palm, side) {
       lateralScore,
       heightScore,
       branchingScore,
+      directBranchCount,
+      distalness,
+      rayLengthScore,
+      lengthConsistency,
+      fanSpread,
       wristFound: !!wrist,
     },
   };
@@ -434,15 +512,16 @@ function handPair(data, negativeHands, positiveHands) {
         - data.bodyFrame.centerDepth) / (data.bodyFrame.height * .18))) / 2;
     const branching = (negative.evidence.branchingScore
       + positive.evidence.branchingScore) / 2;
-    const symmetry = height * .16 + lateral * .14 + depth * .12
-      + radius * .1 + fingers * .1 + length * .1 + plane * .18
-      + branching * .1;
-    const planeWeight = .45 + .55 * plane;
-    const confidence = clamp(symmetry * planeWeight * .7
-      + (negative.confidence + positive.confidence) * .15);
-    pairs.push({negative, positive, score: symmetry, confidence,
+    const symmetry = height * .2 + lateral * .16 + depth * .14
+      + radius * .1 + fingers * .1 + length * .1 + plane * .2;
+    const anatomy = (negative.confidence + positive.confidence) / 2;
+    const distalness = (negative.distalness + positive.distalness) / 2;
+    const score = symmetry * .35 + anatomy * .35 + distalness * .2
+      + plane * .1;
+    const confidence = clamp(score * .8 + anatomy * .2);
+    pairs.push({negative, positive, score, confidence,
       evidence: {height, lateral, depth, radius, fingers, length, plane,
-        branching}});
+        branching, anatomy, distalness, symmetry}});
   }));
   return pairs.sort((left, right) => right.score - left.score
     || left.negative.palm.jointId - right.negative.palm.jointId
@@ -455,6 +534,16 @@ function shoulderFor(data, hand) {
   const excluded = new Set([palm.jointId,
     ...hand.fingerBranches.flatMap(branch => branch.jointIds)]);
   if (hand.wristRecord) excluded.add(hand.wristRecord.jointId);
+  const ancestorIds = new Set();
+  let ancestor = palm.jointId;
+  const seenAncestors = new Set();
+  while (Number.isInteger(ancestor) && !seenAncestors.has(ancestor)) {
+    seenAncestors.add(ancestor);
+    const parent = data.topology.parentById.get(ancestor);
+    if (!Number.isInteger(parent)) break;
+    ancestorIds.add(parent);
+    ancestor = parent;
+  }
   const torsoTarget = data.semantic.up.clone().multiplyScalar(
     palm.height + data.bodyFrame.height * .24)
     .addScaledVector(data.semantic.right, data.bodyFrame.centerLateral)
@@ -469,16 +558,22 @@ function shoulderFor(data, hand) {
     const sideOffset = record.sideOffset(side);
     const corridor = 1 - clamp(distanceToSegment(
       record.center, palm.center, torsoTarget) / (data.bodyFrame.height * .2));
-    const inward = 1 - clamp(Math.abs(
-      sideOffset - hand.sideOffset * .45) / (data.bodyFrame.height * .3));
+    const minimumOffset = data.bodyFrame.height * .08;
+    const inward = 1 - clamp((sideOffset - minimumOffset) / Math.max(
+      data.bodyFrame.height * .75, hand.sideOffset - minimumOffset));
     const height = 1 - clamp(Math.abs(record.height01 - .66) / .28);
     const support = clamp(Math.log1p(record.support) / 8);
-    const score = corridor * .34 + inward * .32 + height * .24 + support * .1;
-    return {record, score, sideOffset, corridor, inward, height};
-  }).sort((left, right) => right.score - left.score
+    const topology = ancestorIds.has(record.jointId) ? 1 : 0;
+    const score = corridor * .2 + inward * .4 + height * .2
+      + support * .1 + topology * .1;
+    return {record, score, sideOffset, corridor, inward, height, topology};
+  });
+  const topologyCandidates = candidates.filter(item => item.topology);
+  const ranked = (topologyCandidates.length ? topologyCandidates : candidates)
+    .sort((left, right) => right.score - left.score
     || left.sideOffset - right.sideOffset
     || left.record.jointId - right.record.jointId);
-  const selected = candidates[0];
+  const selected = ranked[0];
   if (!selected || selected.score < MIN_ARM_CONFIDENCE) return null;
   return {
     ...recordView(selected.record),
@@ -488,6 +583,7 @@ function shoulderFor(data, hand) {
       corridorScore: selected.corridor,
       inwardScore: selected.inward,
       heightScore: selected.height,
+      topologyPath: !!selected.topology,
     },
   };
 }
@@ -559,14 +655,53 @@ function pathBetween(data, startId, endIds) {
   };
 }
 
+function directedPathBetween(data, startId, endIds) {
+  const targets = new Set(endIds.filter(Number.isInteger));
+  if (!Number.isInteger(startId) || !targets.size) {
+    return {connected: false, pathIds: [], components: [], gaps: ['missing_landmark']};
+  }
+  const queue = [startId];
+  const previous = new Map([[startId, null]]);
+  while (queue.length) {
+    const current = queue.shift();
+    if (targets.has(current)) {
+      const pathIds = [];
+      let cursor = current;
+      while (cursor !== null) {
+        pathIds.push(cursor);
+        cursor = previous.get(cursor);
+      }
+      pathIds.reverse();
+      return {connected: true, pathIds, components: [], gaps: []};
+    }
+    for (const child of data.topology.childrenById.get(current) || []) {
+      if (previous.has(child)) continue;
+      previous.set(child, current);
+      queue.push(child);
+    }
+  }
+  const start = data.records.find(record => record.jointId === startId);
+  const targetsFound = data.records.filter(record => targets.has(record.jointId));
+  return {
+    connected: false,
+    pathIds: [],
+    components: [...new Set([start?.componentId,
+      ...targetsFound.map(record => record.componentId)])]
+      .filter(value => value !== null && value !== undefined),
+    gaps: ['no_directed_pose_path'],
+  };
+}
+
 function armLandmark(data, hand, shoulder) {
   if (!hand || !shoulder) return null;
   const elbow = elbowFor(data, shoulder, hand);
   const wrist = hand.wrist || null;
-  const connectivity = pathBetween(data, shoulder.jointId,
+  const semanticPath = pathBetween(data, shoulder.jointId,
+    [hand.palm?.jointId].filter(Number.isInteger));
+  const connectivity = directedPathBetween(data, shoulder.jointId,
     [hand.palm?.jointId].filter(Number.isInteger));
   const wristConnectivity = wrist
-    ? pathBetween(data, shoulder.jointId, [wrist.jointId]) : connectivity;
+    ? directedPathBetween(data, shoulder.jointId, [wrist.jointId]) : connectivity;
   connectivity.connected = connectivity.connected && wristConnectivity.connected;
   connectivity.gaps = [...new Set([
     ...connectivity.gaps, ...wristConnectivity.gaps,
@@ -581,6 +716,9 @@ function armLandmark(data, hand, shoulder) {
   // the pose; it must not lower spatial landmark confidence or hide a useful
   // semantic result when the graph has a gap.
   const confidence = clamp((hand.confidence + shoulder.confidence) * .5);
+  const semanticPathIds = semanticPath.pathIds.length
+    ? semanticPath.pathIds : [shoulder.jointId, elbow?.jointId, wrist?.jointId,
+      hand.palm?.jointId].filter(Number.isInteger);
   return {
     shoulder: recordView(shoulder.record),
     elbow,
@@ -588,11 +726,13 @@ function armLandmark(data, hand, shoulder) {
     hand: hand.palm,
     fingers: hand.fingerBranches,
     restDirection: direction.toArray(),
+    semanticPathIds,
     confidence,
     evidence: {
       handConfidence: hand.confidence,
       shoulderConfidence: shoulder.confidence,
       fingerBranchCount: hand.fingerCount,
+      semanticPathIds: [...semanticPathIds],
       connectivity,
     },
     poseConnectivity: connectivity,
@@ -649,6 +789,7 @@ function handSummary(hand) {
     clusterRadius: hand.clusterRadius,
     handLength: hand.handLength,
     sideOffset: hand.sideOffset,
+    distalness: hand.distalness,
     confidence: hand.confidence,
     evidence: {...hand.evidence},
   };
@@ -662,6 +803,7 @@ function handCandidateSummary(candidate) {
     fingerCount: candidate.fingerCount,
     clusterRadius: candidate.clusterRadius,
     handLength: candidate.handLength,
+    distalness: candidate.distalness,
     evidence: {...candidate.evidence},
   };
 }

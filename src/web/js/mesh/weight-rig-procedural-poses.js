@@ -454,9 +454,8 @@ function candidateFromSemanticArm(arm, side, semantic, frame) {
     ],
     sideOffset,
     pathIds,
-    // Semantic landmarks are intentionally allowed to report disconnected
-    // pose topology; connectivity is surfaced in diagnostics separately.
-    orientationCompatible: true,
+    orientationCompatible: arm.poseConnectivity?.connected === true,
+    poseConnectivity: arm.poseConnectivity || null,
     chainLength,
     outwardExtent: Math.max(0, side * (hand.lateral - shoulder.lateral)),
     handCenter: [...hand.center],
@@ -498,18 +497,56 @@ export function analyzeHumanoidRestPose(modelRig, options = {}) {
     });
   let geometryCandidates = [-1, 1].map(side => data.joints.map(joint =>
     candidateFor(data, joint, side, frame, semantic)).filter(Boolean));
+  const legacyCandidateCounts = {
+    negativeX: geometryCandidates[0].length,
+    positiveX: geometryCandidates[1].length,
+  };
   let candidates = geometryCandidates.map(collapseSameChainCandidates);
   let detector = 'legacy-geometry';
   if (semanticAnalysis.available) {
+    const semanticArms = [semanticAnalysis.landmarks.negativeArm,
+      semanticAnalysis.landmarks.positiveArm];
     const semanticCandidates = [-1, 1].map(side => candidateFromSemanticArm(
       side < 0 ? semanticAnalysis.landmarks.negativeArm
         : semanticAnalysis.landmarks.positiveArm, side, semantic,
       semanticAnalysis.bodyFrame));
+    if (semanticCandidates.some(candidate => !candidate)) {
+      return fail('semantic_landmarks_incomplete', semanticAnalysis.confidence, {
+        detector: 'semantic-hands',
+        legacyComparison: {
+          ...legacyCandidateCounts,
+        },
+        semantic: semanticAnalysis.diagnostics || null,
+      });
+    }
+    if (semanticArms.some(arm => !arm?.poseConnectivity?.connected)) {
+      return fail('arm_pose_connectivity_insufficient', semanticAnalysis.confidence, {
+        detector: 'semantic-hands',
+        semantic: semanticAnalysis.diagnostics || null,
+        poseConnectivity: {
+          negativeArm: semanticArms[0]?.poseConnectivity || null,
+          positiveArm: semanticArms[1]?.poseConnectivity || null,
+        },
+        legacyComparison: {
+          ...legacyCandidateCounts,
+        },
+      });
+    }
     if (semanticCandidates[0] && semanticCandidates[1]) {
       geometryCandidates = semanticCandidates.map(candidate => [candidate]);
       candidates = semanticCandidates.map(candidate => [candidate]);
       detector = 'semantic-hands';
     }
+  }
+  const semanticCounts = semanticAnalysis.diagnostics?.handCandidateCounts || {};
+  if (!semanticAnalysis.available
+      && (Number(semanticCounts.negativeLateral) > 0
+        || Number(semanticCounts.positiveLateral) > 0)) {
+    return fail('semantic_landmarks_incomplete', semanticAnalysis.confidence, {
+      detector: 'semantic-hands',
+      legacyComparison: {...legacyCandidateCounts},
+      semantic: semanticAnalysis.diagnostics || null,
+    });
   }
   const selectedFrame = detector === 'semantic-hands'
     ? semanticAnalysis.bodyFrame : frame;
@@ -557,6 +594,9 @@ export function analyzeHumanoidRestPose(modelRig, options = {}) {
     },
     detector,
     semantic: semanticAnalysis.diagnostics || null,
+    legacyComparison: {
+      ...legacyCandidateCounts,
+    },
     negativeXCandidates: candidates[0],
     positiveXCandidates: candidates[1],
     runnerUpScore,
@@ -676,9 +716,11 @@ export function getBuiltInRigPoseDescriptors(modelRig, options = {}) {
     bodyFrame: diagnostics.bodyFrame || null,
     candidateCounts: diagnostics.candidateCounts || null,
     geometryCandidateCounts: diagnostics.geometryCandidateCounts || null,
+    legacyComparison: diagnostics.legacyComparison || null,
     runnerUpScore: Number.isFinite(diagnostics.runnerUpScore)
       ? diagnostics.runnerUpScore : null,
     pairFeatures: diagnostics.pairFeatures || null,
+    poseValidation: diagnostics.poseValidation || null,
     selectedJointIds: analysis.arms
       ? [analysis.arms.negativeX.jointId, analysis.arms.positiveX.jointId]
       : [],
