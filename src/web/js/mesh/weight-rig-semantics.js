@@ -143,7 +143,17 @@ function componentData(modelRig, joints) {
       addEdge(childId, parentId);
     });
     Object.entries(component.childrenById || {}).forEach(([parentValue, children]) =>
-      (children || []).forEach(childValue => addEdge(parentValue, childValue)));
+      (children || []).forEach(childValue => {
+        const parentId = Number(parentValue);
+        const childId = Number(childValue);
+        if (Number.isInteger(parentId) && Number.isInteger(childId)) {
+          if (!parentById.has(childId)) parentById.set(childId, parentId);
+          const childList = childrenById.get(parentId) || [];
+          if (!childList.includes(childId)) childList.push(childId);
+          childrenById.set(parentId, childList);
+        }
+        addEdge(parentValue, childValue);
+      }));
     Object.entries(component.depthById || {}).forEach(([id, depth]) => {
       if (Number.isInteger(Number(id)) && Number.isFinite(Number(depth))) {
         depthById.set(Number(id), Number(depth));
@@ -194,7 +204,6 @@ function semanticData(modelRig, semantic) {
     ...joint,
     jointId: Number(joint.jointId),
   })).filter(joint => Number.isInteger(joint.jointId));
-  const byId = new Map(joints.map(joint => [joint.jointId, joint]));
   const topology = componentData(modelRig, joints);
   const pivots = modelRig?.defaultRestPivotByJointId
     || modelRig?.restPivotByJointId;
@@ -266,7 +275,7 @@ function semanticData(modelRig, semantic) {
     record.depth01 = (record.depth - centerDepth) / height;
     record.sideOffset = side => side * (record.lateral - centerLateral);
   });
-  return {joints, byId, records, bodyFrame, topology, semantic};
+  return {joints, records, bodyFrame, topology, semantic};
 }
 
 function recordView(record) {
