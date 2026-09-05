@@ -11,6 +11,7 @@ import {
   setRigVisible,
   applySavedRigPosePreset, deleteRigPosePreset, renameRigPosePreset,
   saveRigPosePreset, selectRigPosePreset,
+  setRigOverlayScope,
 } from '../mesh/weight-experiment.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 
@@ -43,7 +44,9 @@ function selectedSource(state = latestState) {
 }
 
 function selectedJoint(state = latestState) {
-  const id = Number(state?.selectedJointId);
+  const rawId = state?.selectedJointId;
+  if (!Number.isInteger(rawId) || rawId < 0) return null;
+  const id = rawId;
   return state?.model?.joints?.find(joint => joint.jointId === id) || null;
 }
 
@@ -63,6 +66,31 @@ function addNavigationButton(parent, sourceKey, boneId) {
   button.addEventListener('click', () => sourceKey === null
     ? selectRigJoint(boneId) : selectRigBone(sourceKey, boneId));
   parent.appendChild(button);
+}
+
+function addFilterSelect(parent, className, ariaLabel) {
+  const select = document.createElement('select');
+  select.className = className;
+  select.setAttribute('aria-label', ariaLabel);
+  parent.appendChild(select);
+  return select;
+}
+
+function jointSearchText(joint) {
+  return [joint?.jointId, joint?.signature,
+    ...(joint?.members || []).flatMap(member => [
+      member.sourceKey, member.sourceBoneKey, member.boneId,
+    ])].join(' ').toLowerCase();
+}
+
+function jointMatchesFilters(joint, model, filters) {
+  const sourceFilter = filters.source;
+  if (sourceFilter && !(joint.members || []).some(member =>
+    member.sourceKey === sourceFilter)) return false;
+  if (filters.component !== '' && !model.components?.some(component =>
+    Number(component.componentId) === Number(filters.component)
+      && component.nodeIds.includes(Number(joint.jointId)))) return false;
+  return !filters.search || jointSearchText(joint).includes(filters.search);
 }
 
 function rigPresetApplyMessage(name, result) {
@@ -215,17 +243,47 @@ function buildPanel() {
   reconciliationSection.appendChild(ui.reconciliationSummary);
 
   const boneSection = section('Selected Joint');
+  const browser = document.createElement('div');
+  browser.className = 'rig-joint-browser';
+  ui.search = document.createElement('input');
+  ui.search.type = 'search';
+  ui.search.className = 'rig-joint-search';
+  ui.search.placeholder = 'Search signature or member';
+  ui.search.setAttribute('aria-label', 'Search model joints');
+  ui.search.addEventListener('input', () => syncOptions(latestState));
+  browser.appendChild(ui.search);
+  ui.sourceFilter = addFilterSelect(
+    browser, 'rig-source-filter', 'Filter model joints by source');
+  ui.sourceFilter.addEventListener('change', () => syncOptions(latestState));
+  ui.componentFilter = addFilterSelect(
+    browser, 'rig-component-filter', 'Filter model joints by component');
+  ui.componentFilter.addEventListener('change', () => syncOptions(latestState));
+  boneSection.appendChild(browser);
   ui.bone = document.createElement('select');
   ui.bone.className = 'rig-bone-select';
   ui.bone.setAttribute('aria-label', 'Selected model joint');
   ui.bone.addEventListener('change', () => {
-    if (latestState?.model) selectRigJoint(Number(ui.bone.value));
+    if (latestState?.model) {
+      if (ui.bone.value === '') return;
+      selectRigJoint(Number(ui.bone.value));
+    }
     else {
       const source = selectedSource();
       if (source) selectRigBone(source.sourceKey, Number(ui.bone.value));
     }
   });
   boneSection.appendChild(ui.bone);
+  const overlayLabel = document.createElement('label');
+  overlayLabel.className = 'weight-checkbox';
+  ui.showAll = document.createElement('input');
+  ui.showAll.type = 'checkbox';
+  ui.showAll.className = 'rig-panel-show-all';
+  ui.showAll.checked = false;
+  ui.showAll.addEventListener('change', () =>
+    setRigOverlayScope(ui.showAll.checked ? 'all' : 'selection'));
+  overlayLabel.appendChild(ui.showAll);
+  addText(overlayLabel, 'weight-label', 'Show all overlay joints');
+  boneSection.appendChild(overlayLabel);
   ui.influences = document.createElement('div');
   ui.influences.className = 'rig-influences';
   boneSection.appendChild(ui.influences);
@@ -425,27 +483,96 @@ function buildPanel() {
 function syncOptions(state) {
   const model = state.model;
   if (model) {
-    ui.modelSummary.textContent = `${model.joints.length} model joint${
-      model.joints.length === 1 ? '' : 's'} · ${(state.sources || []).length} source${
-      (state.sources || []).length === 1 ? '' : 's'}`;
-    const jointKey = JSON.stringify(model.joints.map(joint => [
+    const previousSource = ui.sourceFilter.value;
+    const sourceOptions = [...new Set(model.joints.flatMap(joint =>
+      (joint.members || []).map(member => member.sourceKey)))]
+      .filter(Boolean).sort((left, right) => left.localeCompare(right));
+    const sourceKey = JSON.stringify(sourceOptions);
+    if (sourceKey !== ui.sourceFilter.dataset.optionKey) {
+      ui.sourceFilter.replaceChildren();
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'All sources';
+      ui.sourceFilter.appendChild(option);
+      sourceOptions.forEach(value => {
+        const item = document.createElement('option');
+        item.value = value;
+        item.textContent = value;
+        ui.sourceFilter.appendChild(item);
+      });
+      ui.sourceFilter.dataset.optionKey = sourceKey;
+    }
+    ui.sourceFilter.value = sourceOptions.includes(previousSource)
+      ? previousSource : '';
+    const previousComponent = ui.componentFilter.value;
+    const componentOptions = (model.components || [])
+      .map(component => ({
+        id: Number(component.componentId), root: Number(component.rootId),
+        count: component.nodeIds?.length || 0,
+      }))
+      .filter(component => Number.isInteger(component.id));
+    const componentKey = JSON.stringify(componentOptions);
+    if (componentKey !== ui.componentFilter.dataset.optionKey) {
+      ui.componentFilter.replaceChildren();
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'All components';
+      ui.componentFilter.appendChild(option);
+      componentOptions.forEach(component => {
+        const item = document.createElement('option');
+        item.value = String(component.id);
+        item.textContent = `Component ${component.id} · root ${component.root}`
+          + ` · ${component.count} joints`;
+        ui.componentFilter.appendChild(item);
+      });
+      ui.componentFilter.dataset.optionKey = componentKey;
+    }
+    ui.componentFilter.value = componentOptions.some(component =>
+      String(component.id) === previousComponent) ? previousComponent : '';
+    const filters = {
+      source: ui.sourceFilter.value,
+      component: ui.componentFilter.value,
+      search: ui.search.value.trim().toLowerCase(),
+    };
+    const matchingJoints = model.joints.filter(joint =>
+      jointMatchesFilters(joint, model, filters));
+    const selected = selectedJoint(state);
+    const visibleJoints = matchingJoints.slice();
+    if (selected && !visibleJoints.some(joint =>
+      joint.jointId === selected.jointId)) visibleJoints.unshift(selected);
+    ui.modelSummary.textContent = `${visibleJoints.length} of ${model.joints.length}`
+      + ` model joint${model.joints.length === 1 ? '' : 's'} · `
+      + `${(state.sources || []).length} source${
+        (state.sources || []).length === 1 ? '' : 's'}`;
+    const jointKey = JSON.stringify([filters, visibleJoints.map(joint => [
       joint.jointId, joint.members,
-    ]));
+    ])]);
     if (jointKey !== ui.bone.dataset.optionKey) {
       ui.bone.replaceChildren();
-      model.joints.forEach(joint => {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = visibleJoints.length
+        ? 'Select a joint' : 'No matching joints';
+      placeholder.disabled = true;
+      ui.bone.appendChild(placeholder);
+      visibleJoints.forEach(joint => {
         const option = document.createElement('option');
         option.value = String(joint.jointId);
-        option.textContent = String(joint.jointId);
+        const member = joint.members?.[0];
+        option.textContent = member
+          ? `Joint ${joint.jointId} · ${member.sourceKey}#${member.boneId}`
+          : `Joint ${joint.jointId}`;
         ui.bone.appendChild(option);
       });
       ui.bone.dataset.optionKey = jointKey;
     }
-    const joint = selectedJoint(state);
-    const selectedId = joint?.jointId ?? state.selectedJointId;
-    if (selectedId !== null && selectedId !== undefined) {
-      ui.bone.value = String(selectedId);
-    }
+    const joint = selected;
+    const selectedId = joint?.jointId ?? null;
+    ui.bone.value = selectedId === null ? '' : String(selectedId);
+    ui.search.disabled = false;
+    ui.sourceFilter.disabled = false;
+    ui.componentFilter.disabled = false;
+    ui.showAll.checked = state.overlayScope !== 'selection';
     ui.influences.replaceChildren();
     if (joint?.members?.length) {
       joint.members.forEach(member => {
@@ -481,6 +608,15 @@ function syncOptions(state) {
     return;
   }
   const source = selectedSource(state);
+  ui.search.value = '';
+  ui.search.disabled = true;
+  ui.sourceFilter.replaceChildren();
+  ui.sourceFilter.dataset.optionKey = '';
+  ui.sourceFilter.disabled = true;
+  ui.componentFilter.replaceChildren();
+  ui.componentFilter.dataset.optionKey = '';
+  ui.componentFilter.disabled = true;
+  ui.showAll.checked = true;
   syncReconciliationReadout(state, null);
   const boneKey = JSON.stringify(source?.boneIds || []);
   if (boneKey !== ui.bone.dataset.optionKey) {
@@ -563,6 +699,7 @@ function syncPanel(state = getModelRigState()) {
   ui.pick.disabled = !state.loaded || !state.sources?.length;
   ui.pick.classList.toggle('active', !!state.picking);
   ui.pick.textContent = state.picking ? 'Cancel picking' : 'Pick from model';
+  ui.showAll.disabled = !state.loaded || !state.model;
   ui.snap.value = String(state.rotationSnapDegrees ?? 0);
   ui.snap.disabled = !state.loaded || !state.sources?.length;
   const source = selectedSource(state);
@@ -628,8 +765,13 @@ export function initRigPanel() {
   panel = $('rig-panel');
   if (!panel) return;
   buildPanel();
-  window.addEventListener('mod-viewer-model-rig-changed', event =>
-    syncPanel(event.detail));
+  window.addEventListener('mod-viewer-model-rig-changed', event => {
+    const state = event.detail;
+    // A model switch or shape refresh invalidates the backend promise. Drop
+    // the panel's wrapper too, so reopening the tab can start the new Rig.
+    if (!state?.loading && !state?.loaded) loadingPromise = null;
+    syncPanel(state);
+  });
   window.addEventListener('mod-viewer-model-rig-pose-changed', event => {
     if (latestState?.model
         && Number(event.detail?.jointId) === Number(latestState?.selectedJointId)) {

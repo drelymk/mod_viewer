@@ -35,6 +35,44 @@ function componentFor(source, boneId) {
     component.nodeIds.includes(boneId)) || null;
 }
 
+function selectedOverlayId(source, snapshot) {
+  if (source?.joints) return selectedBoneFor(snapshot);
+  const value = snapshot?.selectedBoneId;
+  if (value === null || value === undefined || value === '') return null;
+  const id = Number(value);
+  return Number.isInteger(id) ? id : null;
+}
+
+function overlayNodeIds(source, snapshot) {
+  const allIds = source?.joints?.length
+    ? source.joints.map(joint => Number(joint.jointId))
+    : (source?.nodes || []).map(node => Number(node.boneId));
+  if (snapshot?.overlayScope !== 'selection') return new Set(allIds);
+  const selected = selectedOverlayId(source, snapshot);
+  const component = componentFor(source, selected);
+  if (!component || !Number.isInteger(selected)) return new Set(allIds);
+  const ids = new Set([selected]);
+  let current = selected;
+  while (component.parentById?.[current] !== null
+      && component.parentById?.[current] !== undefined) {
+    current = Number(component.parentById[current]);
+    if (!Number.isInteger(current)) break;
+    ids.add(current);
+  }
+  (component.childrenById?.[selected] || []).forEach(child => {
+    const id = Number(child);
+    if (Number.isInteger(id)) ids.add(id);
+  });
+  return ids;
+}
+
+function overlayPresentationKey(snapshot, source) {
+  const scope = snapshot?.overlayScope === 'selection' ? 'selection' : 'all';
+  const selected = scope === 'selection'
+    ? selectedOverlayId(source, snapshot) : '';
+  return `${topologyKey(source)}|overlay=${scope}:${selected ?? ''}`;
+}
+
 function pivotFor(source, boneId) {
   const joint = source?.joints?.find(item => item.jointId === Number(boneId));
   if (joint?.restPivot) return joint.restPivot;
@@ -269,13 +307,15 @@ export function createRigOverlayController({
   }
 
   function rebuildOverlay(source) {
+    const visibleIds = overlayNodeIds(source, currentSnapshot);
     const modelNodes = (source?.joints || []).map(joint => [
       Number(joint.jointId), joint.restCenter,
-    ]);
+    ]).filter(([boneId]) => visibleIds.has(boneId));
     nodeByBoneId = new Map((modelNodes.length ? modelNodes
       : (source?.nodes || []).map(node => [
         Number(node.boneId), node.weightedCenter,
-      ])).filter(([boneId, center]) => Number.isInteger(boneId) && center));
+      ])).filter(([boneId, center]) => visibleIds.has(boneId)
+        && Number.isInteger(boneId) && center));
     nodeBoneIds = [...nodeByBoneId.keys()];
     nodeIndexByBoneId = new Map(nodeBoneIds.map((boneId, index) => [
       boneId, index]));
@@ -307,15 +347,18 @@ export function createRigOverlayController({
       }
       if (first && second) lineBonePairs.push([parentId, childId]);
       const joint = edge.jointCenter || pivotFor(source, childId);
-      if (joint) {
+      if (first && second && joint) {
         jointChildBoneIds.push(childId);
         jointPositions.push(...joint);
       }
     });
     if (source?.joints?.length) {
-      jointChildBoneIds = source.joints.map(joint => Number(joint.jointId));
+      jointChildBoneIds = source.joints
+        .map(joint => Number(joint.jointId))
+        .filter(jointId => visibleIds.has(jointId));
       jointPositions.length = 0;
       source.joints.forEach(joint => {
+        if (!visibleIds.has(Number(joint.jointId))) return;
         const pivot = joint.restPivot || joint.restCenter;
         if (pivot) jointPositions.push(...pivot);
       });
@@ -550,7 +593,7 @@ export function createRigOverlayController({
     currentSource = sourceForController(currentSnapshot);
     activeSourceKey = currentSource?.sourceKey || null;
     selectedBoneId = selectedIdFor(currentSnapshot, currentSource);
-    const nextTopologyKey = topologyKey(currentSource);
+    const nextTopologyKey = overlayPresentationKey(currentSnapshot, currentSource);
     if (nextTopologyKey !== currentTopologyKey) {
       currentTopologyKey = nextTopologyKey;
       rebuildOverlay(currentSource);

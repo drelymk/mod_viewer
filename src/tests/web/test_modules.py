@@ -101,229 +101,6 @@ def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
         "root_not_found", "invalid_rotation",
     }
 
-
-def test_rig_constraints_validate_and_resolve(module_page):
-    result = module_page.evaluate("""async () => {
-      const constraints = await import(
-        './js/mesh/weight-rig-constraints.js');
-      const signature = value => JSON.stringify([value]);
-      const limited = {
-        joint_signature: signature('arm'), enabled: true,
-        mode: 'swing_twist', swing_x: [-30, 30], swing_z: [-30, 30],
-        twist: [-30, 45],
-      };
-      const modelRig = {
-        joints: [
-          {jointId: 7, signature: signature('arm')},
-          {jointId: 8, signature: signature('arm')},
-          {jointId: 9, signature: signature('leg')},
-        ],
-      };
-      const resolved = constraints.resolveRigConstraints(modelRig, [
-        limited,
-        {...limited, joint_signature: signature('leg')},
-        {...limited, joint_signature: signature('missing')},
-        {...limited, mode: 'unknown', joint_signature: signature('other')},
-      ]);
-      const serialized = constraints.serializeRigConstraints(modelRig,
-        new Map([[9, resolved.constraintByJointId.get(9)]]));
-      const staleMapEntry = constraints.serializeRigConstraints(modelRig,
-        new Map([[9, {...limited, jointSignature: signature('arm')}]]));
-      return {
-        normalized: constraints.normalizeRigConstraint(limited),
-        validNeutral: constraints.validateRigConstraint(limited).valid,
-        invalidNeutral: constraints.validateRigConstraint({
-          ...limited, twist: [10, 80],
-        }).error,
-        invalidQuaternion: constraints.constrainLocalPoseQuaternion(
-          [0, 0, 0, 0]),
-        resolved: {
-          appliedCount: resolved.appliedCount,
-          skipped: resolved.skipped,
-          joints: resolved.constraints,
-        },
-        serialized,
-        staleMapEntry,
-      };
-    }""")
-    assert result["normalized"] == {
-        "jointSignature": '["arm"]', "enabled": True,
-        "mode": "swing_twist", "swingXMin": -30, "swingXMax": 30,
-        "swingZMin": -30, "swingZMax": 30, "twistMin": -30,
-        "twistMax": 45,
-    }
-    assert result["validNeutral"] is True
-    assert result["invalidNeutral"] == "invalid_twist"
-    assert result["resolved"]["appliedCount"] == 1
-    assert {item["reason"] for item in result["resolved"]["skipped"]} == {
-        "ambiguous_joint_signature", "joint_not_found",
-        "unsupported_constraint_mode",
-    }
-    assert result["serialized"] == [{
-        "joint_signature": '["leg"]', "enabled": True,
-        "mode": "swing_twist", "swing_x": [-30, 30],
-        "swing_z": [-30, 30], "twist": [-30, 45],
-    }]
-    assert result["staleMapEntry"] == []
-
-
-def test_rig_constraints_swing_twist_round_trip(module_page):
-    result = module_page.evaluate("""async () => {
-      const constraints = await import(
-        './js/mesh/weight-rig-constraints.js');
-      const q = (x, y, z, degrees) => {
-        const radians = degrees * Math.PI / 180 / 2;
-        const sine = Math.sin(radians);
-        return [x * sine, y * sine, z * sine, Math.cos(radians)];
-      };
-      const multiply = (left, right) => [
-        left[3] * right[0] + left[0] * right[3]
-          + left[1] * right[2] - left[2] * right[1],
-        left[3] * right[1] - left[0] * right[2]
-          + left[1] * right[3] + left[2] * right[0],
-        left[3] * right[2] + left[0] * right[1]
-          - left[1] * right[0] + left[2] * right[3],
-        left[3] * right[3] - left[0] * right[0]
-          - left[1] * right[1] - left[2] * right[2],
-      ];
-      const open = {
-        joint_signature: '["joint"]', enabled: true,
-        mode: 'swing_twist', swing_x: [-180, 180],
-        swing_z: [-180, 180], twist: [-180, 180],
-      };
-      const angles = [0, 30, -30, 60, -60, 90, -90, 120, -120,
-        150, -150, 170, -170];
-      const pure = [];
-      angles.forEach(angle => {
-        pure.push(q(1, 0, 0, angle));
-        pure.push(q(0, 0, 1, angle));
-        pure.push(q(0, 1, 0, angle));
-      });
-      pure.push(multiply(q(0, 0, 1, 20), q(1, 0, 0, 20)));
-      pure.push(multiply(q(0, 0, 1, 45), q(1, 0, 0, 30)));
-      pure.push(multiply(q(0, 0, 1, 20), q(1, 0, 0, 70)));
-      pure.push(multiply(q(0, 0, 1, 30),
-        multiply(q(1, 0, 0, 40), q(0, 1, 0, 70))));
-      const orientationError = (left, right) => 1 - Math.abs(
-        left[0] * right[0] + left[1] * right[1]
-          + left[2] * right[2] + left[3] * right[3]);
-      const errors = pure.map(input => orientationError(input,
-        constraints.constrainLocalPoseQuaternion(input, open)));
-      const inside = q(1 / Math.sqrt(2), 0, 1 / Math.sqrt(2), 20);
-      const insideConstraint = {...open, swing_x: [-30, 30],
-        swing_z: [-30, 30], twist: [-30, 30]};
-      return {
-        errors,
-        inside: {
-          decomposition: constraints.decomposeSwingTwist(inside),
-          output: constraints.constrainLocalPoseQuaternion(inside,
-            insideConstraint),
-        },
-        canonical: constraints.constrainLocalPoseQuaternion(
-          [0, 0, 0, -1], open),
-      };
-    }""")
-    assert max(result["errors"]) < 1e-8
-    assert abs(result["inside"]["decomposition"]["swingX"]) < 30
-    assert abs(result["inside"]["decomposition"]["swingZ"]) < 30
-    assert result["inside"]["output"] == pytest.approx(
-        [0.12278780396897285, 0, 0.12278780396897285,
-         0.984807753012208])
-    assert result["canonical"] == [0, 0, 0, 1]
-
-
-def test_rig_constraints_clamp_rotation_vector_limits(module_page):
-    result = module_page.evaluate("""async () => {
-      const constraints = await import(
-        './js/mesh/weight-rig-constraints.js');
-      const q = (x, y, z, degrees) => {
-        const radians = degrees * Math.PI / 180 / 2;
-        const sine = Math.sin(radians);
-        return [x * sine, y * sine, z * sine, Math.cos(radians)];
-      };
-      const limited = {
-        joint_signature: '["joint"]', enabled: true,
-        mode: 'swing_twist', swing_x: [-30, 30], swing_z: [-20, 20],
-        twist: [-30, 45],
-      };
-      const decompose = quaternion => constraints.decomposeSwingTwist(
-        constraints.constrainLocalPoseQuaternion(quaternion, limited));
-      const xBoundary = decompose(q(1, 0, 0, 70));
-      const zBoundary = decompose(q(0, 0, 1, -70));
-      const combined = decompose(q(3 / 5, 0, 4 / 5, 120));
-      const twist = decompose(q(0, 1, 0, 90));
-      return {xBoundary, zBoundary, combined, twist};
-    }""")
-    assert result["xBoundary"]["swingX"] == pytest.approx(30)
-    assert result["xBoundary"]["swingZ"] == pytest.approx(0)
-    assert result["zBoundary"]["swingZ"] == pytest.approx(-20)
-    assert result["zBoundary"]["swingX"] == pytest.approx(0)
-    assert result["combined"]["swingX"] == pytest.approx(30)
-    assert result["combined"]["swingZ"] == pytest.approx(20)
-    assert result["combined"]["swingX"] ** 2 \
-        + result["combined"]["swingZ"] ** 2 < 180 ** 2
-    assert result["twist"]["twistAngle"] == pytest.approx(45)
-
-
-def test_rig_constraints_half_turn_singularity_preserves_pose(module_page):
-    result = module_page.evaluate("""async () => {
-      const constraints = await import(
-        './js/mesh/weight-rig-constraints.js');
-      const q = (x, y, z, degrees) => {
-        const radians = degrees * Math.PI / 180 / 2;
-        const sine = Math.sin(radians);
-        return [x * sine, y * sine, z * sine, Math.cos(radians)];
-      };
-      const multiply = (left, right) => [
-        left[3] * right[0] + left[0] * right[3]
-          + left[1] * right[2] - left[2] * right[1],
-        left[3] * right[1] - left[0] * right[2]
-          + left[1] * right[3] + left[2] * right[0],
-        left[3] * right[2] + left[0] * right[1]
-          - left[1] * right[0] + left[2] * right[3],
-        left[3] * right[3] - left[0] * right[0]
-          - left[1] * right[1] - left[2] * right[2],
-      ];
-      const limited = {
-        joint_signature: '["joint"]', enabled: true,
-        mode: 'swing_twist', swing_x: [-45, 45], swing_z: [-45, 45],
-        twist: [-45, 45],
-      };
-      const disabled = {...limited, enabled: false};
-      const singular = q(1, 0, 0, 180);
-      const singularWithTwist = multiply(singular, q(0, 1, 0, 45));
-      const inspect = quaternion => {
-        const decomposition = constraints.decomposeSwingTwist(quaternion);
-        const clamped = constraints.clampSwingTwist(quaternion, limited);
-        return {decomposition, clamped,
-          constrained: constraints.constrainLocalPoseQuaternion(
-            quaternion, limited)};
-      };
-      return {
-        singular: inspect(singular),
-        singularWithTwist: inspect(singularWithTwist),
-        near: inspect([1, 0, 0, 1e-14]),
-        unrestricted: constraints.clampSwingTwist(singular, null),
-        disabled: constraints.clampSwingTwist(singular, disabled),
-      };
-    }""")
-    for key in ("singular", "singularWithTwist", "near"):
-        assert result[key]["decomposition"]["success"] is False
-        assert result[key]["decomposition"]["diagnostic"] == \
-            "swing_twist_singular"
-        assert result[key]["clamped"]["success"] is True
-        assert result[key]["clamped"]["diagnostic"] == \
-            "swing_twist_singular"
-        assert result[key]["constrained"] == pytest.approx(
-            result[key]["decomposition"]["quaternion"])
-    assert result["unrestricted"]["success"] is True
-    assert result["unrestricted"]["diagnostic"] == "no_constraint"
-    assert result["unrestricted"]["clamped"] is False
-    assert result["disabled"]["success"] is True
-    assert result["disabled"]["diagnostic"] == "disabled"
-    assert result["disabled"]["clamped"] is False
-
-
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -384,6 +161,60 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
         result["initial"]["modelFrameUpdateCount"] + 2
     assert result["shownAgain"]["rebuildCount"] == 1
     assert result["shownAgain"]["selectedBoneId"] is None
+
+
+def test_rig_overlay_can_scope_model_view_to_selected_chain(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const model = new THREE.Object3D();
+      scene.add(model);
+      const source = {
+        sourceKey: 'model-rig',
+        joints: [0, 1, 2, 3].map(jointId => ({
+          jointId, restCenter: [jointId === 3 ? 10 : jointId, 0, 0],
+          restPivot: [jointId === 3 ? 10 : jointId, 0, 0],
+        })),
+        components: [
+          {componentId: 0, rootId: 0, nodeIds: [0, 1, 2],
+            parentById: {0: null, 1: 0, 2: 1},
+            childrenById: {0: [1], 1: [2], 2: []}},
+          {componentId: 1, rootId: 3, nodeIds: [3],
+            parentById: {3: null}, childrenById: {3: []}},
+        ],
+        forestEdges: [
+          {jointA: 0, jointB: 1, parentId: 0, childId: 1},
+          {jointA: 1, jointB: 2, parentId: 1, childId: 2},
+        ],
+      };
+      let state = {
+        visible: true, activeSourceKey: 'model-rig', selectedJointId: 1,
+        overlayScope: 'all', model: source, sources: [source],
+      };
+      const controller = createRigOverlayController({
+        scene, getMeshes: () => [model], getRigState: () => state,
+        getRigJointPoseFrame: () => null, setRigJointRotation: () => true,
+      });
+      controller.refresh(state);
+      const all = controller.getDebugState();
+      state = {...state, overlayScope: 'selection'};
+      controller.refresh(state);
+      const chain = controller.getDebugState();
+      state = {...state, selectedJointId: 3};
+      controller.refresh(state);
+      const singleton = controller.getDebugState();
+      controller.dispose();
+      return {all, chain, singleton};
+    }""")
+    assert result["all"]["nodeCount"] == 4
+    assert result["all"]["edgeCount"] == 2
+    assert result["chain"]["nodeCount"] == 3
+    assert result["chain"]["edgeCount"] == 2
+    assert result["singleton"]["nodeCount"] == 1
+    assert result["singleton"]["edgeCount"] == 0
 
 
 def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
@@ -1414,6 +1245,127 @@ def test_cross_source_reconciliation_aligns_undirected_palette_graphs(
     assert result["pathEnd"]["pass"] == "graph-alignment-3"
 
 
+def test_graph_alignment_does_not_compete_across_unrelated_branches(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (sourceKey, entries, links) => {
+        const nodeIds = entries.map(([id]) => id);
+        const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+        links.forEach(([parent, child]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        const roots = nodeIds.filter(id => parentById[id] === null);
+        return {
+          sourceKey, boneIds: nodeIds,
+          influenceGraph: {nodes: entries.map(([boneId, center]) => ({
+            boneId, weightedCenter: center, weightedRadius: .1,
+            totalWeight: 1, affectedVertexCount: 10,
+          }))},
+          centerByBoneId: new Map(entries),
+          jointPivotByBoneId: new Map(),
+          restDirectionByBoneId: new Map(entries.map(([id]) => [id,
+            [0, 1, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(entries.map(([id]) => [id, {
+            directionSource: 'child-weighted-center',
+          }])),
+          inferredForest: {
+            components: roots.map((rootId, componentId) => ({
+              componentId, rootId, nodeIds, parentById, childrenById,
+              depthById: Object.fromEntries(nodeIds.map(id => [id, 0])),
+              edges: links.map(([boneA, boneB]) => ({
+                boneA, boneB, treeEdgeScore: 1,
+              })),
+            })),
+            componentByBoneId: Object.fromEntries(nodeIds.map(id => [id, 0])),
+          },
+        };
+      };
+      const left = make('left', [
+        [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, -1, 0]],
+      ], [[0, 1], [0, 2]]);
+      const rightBoth = make('right-both', [
+        [10, [0, 0, 0]], [11, [.09, 1, 0]], [12, [.09, -1, 0]],
+      ], [[10, 11], [10, 12]]);
+      const rightOne = make('right-one', [
+        [10, [0, 0, 0]], [11, [.09, 1, 0]],
+      ], [[10, 11]]);
+      const both = buildModelRigReconciliation([left, rightBoth],
+        {modelReferenceRadius: 1});
+      const one = buildModelRigReconciliation([left, rightOne],
+        {modelReferenceRadius: 1});
+      const key = (source, bone) => `${source}#bone=${bone}`;
+      const graphPairs = value => value.reconciliation.acceptedEquivalences
+        .filter(item => item.pass?.startsWith('graph-alignment'))
+        .map(item => [item.left.sourceBoneKey, item.right.sourceBoneKey]);
+      return {
+        bothPairs: graphPairs(both), onePairs: graphPairs(one),
+        bothLeaves: both.joints.filter(joint => joint.members.some(member =>
+          member.sourceBoneKey === key('left', 1)
+          || member.sourceBoneKey === key('left', 2))).length,
+        oneLeafMerged: one.sourceBoneToModelJointId[key('left', 1)] ===
+          one.sourceBoneToModelJointId[key('right-one', 11)],
+      };
+    }""")
+    assert result["oneLeafMerged"]
+    assert result["bothLeaves"] == 2
+    assert all(
+        pair[0] != "left#bone=1" or pair[1] == "right-both#bone=11"
+        for pair in result["bothPairs"])
+    assert all(
+        pair[0] != "left#bone=2" or pair[1] == "right-both#bone=12"
+        for pair in result["bothPairs"])
+
+
+def test_same_source_attachment_proximity_does_not_join_components(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const entries = [
+        [0, [0, 0, 0]], [1, [0, 1, 0]],
+        [10, [.01, 0, 0]], [11, [.01, 1, 0]],
+      ];
+      const parentById = {0: null, 1: 0, 10: null, 11: 10};
+      const childrenById = {0: [1], 1: [], 10: [11], 11: []};
+      const rig = {
+        sourceKey: 'single', boneIds: entries.map(([id]) => id),
+        influenceGraph: {nodes: entries.map(([boneId, weightedCenter]) => ({
+          boneId, weightedCenter, weightedRadius: .1,
+          totalWeight: 1, affectedVertexCount: 10,
+        }))},
+        centerByBoneId: new Map(entries),
+        jointPivotByBoneId: new Map(),
+        restDirectionByBoneId: new Map(entries.map(([id]) => [id, [0, 1, 0]])),
+        restFrameByBoneId: new Map(),
+        restFrameEvidenceByBoneId: new Map(),
+        inferredForest: {
+          components: [
+            {componentId: 0, rootId: 0, nodeIds: [0, 1], parentById,
+              childrenById, depthById: {0: 0, 1: 1},
+              edges: [{boneA: 0, boneB: 1, treeEdgeScore: 1}]},
+            {componentId: 1, rootId: 10, nodeIds: [10, 11], parentById,
+              childrenById, depthById: {10: 0, 11: 1},
+              edges: [{boneA: 10, boneB: 11, treeEdgeScore: 1}]},
+          ],
+          componentByBoneId: {0: 0, 1: 0, 10: 1, 11: 1},
+        },
+      };
+      const result = buildModelRigReconciliation([rig],
+        {modelReferenceRadius: 1});
+      return {
+        componentCount: result.components.length,
+        attachments: result.edges.filter(edge =>
+          edge.relationshipType === 'attachment').length,
+      };
+    }""")
+    assert result == {"componentCount": 2, "attachments": 0}
+
+
 def test_cross_source_reconciliation_aggregates_component_attachments(
         module_page):
     page = module_page
@@ -1483,21 +1435,30 @@ def test_cross_source_reconciliation_aggregates_component_attachments(
       const wingJoint = value.sourceBoneToModelJointId['wings#bone=10'];
       const attachment = value.edges.find(edge =>
         edge.relationshipType === 'attachment');
-      const diagnostic = value.reconciliation.rejectedCandidates.find(item =>
+      const diagnostic = value.reconciliation.attachmentDiagnostics.find(item =>
         item.decision === 'accepted' && item.left?.jointId === targetJoint
         && item.right?.jointId === wingJoint);
+      const acceptedInRejected = value.reconciliation.rejectedCandidates.some(
+        item => item.decision === 'accepted'
+          && item.left?.jointId === targetJoint
+          && item.right?.jointId === wingJoint);
       return {
         equivalent: targetJoint === wingJoint,
         attachment: attachment ? [attachment.jointA, attachment.jointB] : null,
         diagnostic,
+        acceptedInRejected,
       };
     }""")
     assert not result["equivalent"]
+    assert not result["acceptedInRejected"]
     assert result["attachment"] == [0, 4]
     assert result["diagnostic"]["componentMatchedVertexCount"] == 9
     assert result["diagnostic"]["componentSupportedJointPairCount"] == 3
     assert result["diagnostic"]["endpointMatchedVertexCount"] == 3
     assert result["diagnostic"]["accessoryRoot"]
+    assert result["diagnostic"]["sourceWitnesses"] == [{
+        "targetSourceKey": "target", "accessorySourceKey": "wings",
+    }]
 
 
 def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):

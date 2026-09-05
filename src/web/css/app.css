@@ -1078,6 +1078,8 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; }
 .rig-label { color: var(--text-muted); font-size: 11px; }
 .rig-value { color: var(--text); font-family: ui-monospace, monospace; text-align: right; overflow-wrap: anywhere; }
+.rig-joint-browser { display: flex; flex-direction: column; gap: 5px; }
+.rig-joint-search, .rig-source-filter, .rig-component-filter,
 .rig-source-select, .rig-bone-select { width: 100%; min-height: 30px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .rig-influences { display: flex; flex-direction: column; gap: 2px; }
 .rig-influence { display: flex; align-items: center; gap: 7px; min-height: 25px; padding: 2px 5px; color: var(--text-muted); border-radius: var(--radius-sm); cursor: pointer; }

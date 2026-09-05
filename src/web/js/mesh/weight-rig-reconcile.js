@@ -828,6 +828,10 @@ function compareGraphAlignmentCandidate(left, right) {
 function graphAlignmentCandidatesFor(candidates, endpoint, otherSource,
     unionFind) {
   return candidates.filter(candidate => {
+    // Rank only candidates incident to this endpoint. An unrelated branch
+    // must not compete with the endpoint's real correspondence.
+    if (candidate.left.sourceBoneKey !== endpoint
+        && candidate.right.sourceBoneKey !== endpoint) return false;
     if (unionFind.same(candidate.left.sourceBoneKey,
       candidate.right.sourceBoneKey)) return false;
     const descriptor = endpointDescriptor(candidate, endpoint);
@@ -1279,12 +1283,22 @@ function sourceModelEdges(sourceRigs, keyToJoint) {
           return (a === parentBoneId && b === childBoneId)
             || (a === childBoneId && b === parentBoneId);
         });
+        const sourceRelationship = (rig.influenceGraph?.relationships || [])
+          .find(candidate => {
+            const a = Number(candidate.boneA);
+            const b = Number(candidate.boneB);
+            return (a === parentBoneId && b === childBoneId)
+              || (a === childBoneId && b === parentBoneId);
+          });
         const treeScore = edgeScore(sourceEdge);
         edge.sourceEdges.push({
           sourceKey: String(rig.sourceKey),
           parentBoneId,
           childBoneId,
           treeEdgeScore: treeScore,
+          jointCenter: sourceRelationship?.jointCenter
+            ? [...sourceRelationship.jointCenter] : null,
+          jointWeightTotal: Number(sourceRelationship?.jointWeightTotal) || 0,
         });
         edge.combinedTreeScore += treeScore;
         edgeMap.set(key, edge);
@@ -1484,6 +1498,28 @@ function aggregateComponentCrossEvidence(component, target, joints,
   };
 }
 
+function sourceWitnessesForJoints(targetJoint, accessoryJoint) {
+  const witnesses = new Set();
+  for (const targetMember of targetJoint?.members || []) {
+    const targetSourceKey = String(targetMember.sourceKey ?? '');
+    if (!targetSourceKey) continue;
+    for (const accessoryMember of accessoryJoint?.members || []) {
+      const accessorySourceKey = String(accessoryMember.sourceKey ?? '');
+      if (!accessorySourceKey || targetSourceKey === accessorySourceKey) {
+        continue;
+      }
+      witnesses.add(`${targetSourceKey}\u0000${accessorySourceKey}`);
+    }
+  }
+  return [...witnesses].sort().map(value => {
+    const separator = value.indexOf('\u0000');
+    return {
+      targetSourceKey: value.slice(0, separator),
+      accessorySourceKey: value.slice(separator + 1),
+    };
+  });
+}
+
 function attachmentCandidates(joints, forest, referenceRadius,
     crossEvidenceByPair = new Map()) {
   const candidates = [];
@@ -1531,6 +1567,9 @@ function attachmentCandidates(joints, forest, referenceRadius,
           const accessoryJoint = joints[accessoryId];
           const accessoryAnchor = vectorFrom(accessoryJoint?.restCenter);
           if (!accessoryAnchor) continue;
+          const sourceWitnesses = sourceWitnessesForJoints(
+            targetJoint, accessoryJoint);
+          if (!sourceWitnesses.length) continue;
           const towardAccessory = accessoryAnchor.clone().sub(targetAnchor);
           const distance = towardAccessory.length();
           if (distance <= EPSILON) continue;
@@ -1596,6 +1635,7 @@ function attachmentCandidates(joints, forest, referenceRadius,
             endpointWeightedMatchStrength: pairEvidence.weightedMatchStrength,
             endpointCrossQuality: pairEvidence.crossQuality,
             nearbyTargetAgreement,
+            sourceWitnesses,
           });
         }
       }
@@ -1764,26 +1804,12 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
       edge.jointA === diagnostic.jointA && edge.jointB === diagnostic.jointB);
   });
   const acceptedEquivalences = equivalence.accepted.map(item => ({...item}));
+  const attachmentDiagnostics = attachments.diagnostics.map(item => ({
+    ...item,
+    left: {jointId: item.jointA}, right: {jointId: item.jointB},
+  }));
   const rejectedCandidates = [...equivalence.diagnostics,
-    ...attachments.diagnostics.map(item => ({
-      left: {jointId: item.jointA}, right: {jointId: item.jointB},
-      normalizedDistance: item.normalizedDistance,
-      directionAlignment: item.directionAlignment,
-      score: item.score,
-      componentScore: item.componentScore,
-      componentMatchedVertexCount: item.componentMatchedVertexCount,
-      componentWeightedMatchStrength: item.componentWeightedMatchStrength,
-      componentCrossQuality: item.componentCrossQuality,
-      componentSupportedJointPairCount: item.componentSupportedJointPairCount,
-      accessoryRoot: item.accessoryRoot,
-      endpointScore: item.endpointScore,
-      endpointMatchedVertexCount: item.endpointMatchedVertexCount,
-      endpointWeightedMatchStrength: item.endpointWeightedMatchStrength,
-      endpointCrossQuality: item.endpointCrossQuality,
-      nearbyTargetAgreement: item.nearbyTargetAgreement,
-      decision: item.decision,
-      rejectionReason: item.rejectionReason,
-    }))];
+    ...attachmentDiagnostics.filter(item => item.decision === 'rejected')];
   const sourceBoneToModelJointId = Object.fromEntries(
     [...model.keyToJoint.entries()]);
   const unmatchedCount = [...unionFind.clusters().values()]
@@ -1824,6 +1850,7 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
     joints: model.joints,
     acceptedEquivalences,
     acceptedAttachments: survivingAttachments,
+    attachmentDiagnostics,
     rejectedCandidates,
   };
   return {

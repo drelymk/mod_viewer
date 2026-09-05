@@ -1003,6 +1003,19 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           const experiment = await import('./js/mesh/weight-experiment.js');
           const source = experiment.getModelRigState().sources[0];
           const component = source.components[0];
+          const initialJointSelectValue =
+            document.querySelector('.rig-bone-select')?.value;
+          const initialJointSelectText = document.querySelector(
+            '.rig-bone-select option')?.textContent;
+          const initialShowAll = document.querySelector(
+            '.rig-panel-show-all')?.checked;
+          const jointSearch = document.querySelector('.rig-joint-search');
+          jointSearch.value = 'bone=1';
+          jointSearch.dispatchEvent(new Event('input', {bubbles: true}));
+          const filteredJointOptions = [...document.querySelector(
+            '.rig-bone-select').options].map(option => option.textContent);
+          jointSearch.value = '';
+          jointSearch.dispatchEvent(new Event('input', {bubbles: true}));
           const poseBone = component.nodeIds.find(id => id !== component.rootId);
           const mesh = window.modViewer.activeMeshes[0];
           const before = [...mesh.geometry.attributes.position.array];
@@ -1035,6 +1048,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           return {
             calls: window.__rigPanelPreviewCalls,
             sourceKey: source.sourceKey,
+            jointSelectValue: initialJointSelectValue,
+            jointSelectText: initialJointSelectText,
+            initialShowAll,
+            filteredJointOptions,
             poseBone,
             weightBefore: weightBefore.selectedBones,
             posed,
@@ -1051,6 +1068,11 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         }""")
         assert result["calls"] == 1
         assert result["sourceKey"] == "test/bodyblend.buf|offset=0"
+        assert result["jointSelectValue"] == ""
+        assert result["jointSelectText"] == "Select a joint"
+        assert result["initialShowAll"] is False
+        assert len(result["filteredJointOptions"]) == 2
+        assert "#1" in result["filteredJointOptions"][1]
         assert result["weightBefore"] == []
         assert result["posed"]
         assert result["boundsDuringDrag"] == {"boundsCalls": 0, "sphereCalls": 0}
@@ -1948,6 +1970,18 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           const {setControlValue} = await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
           await experiment.ensureModelWeightsLoaded();
+          await experiment.ensureModelRigLoaded();
+          const rigState = experiment.getModelRigState();
+          const posedJoint = rigState.model.joints.find(joint =>
+            rigState.model.components.some(component =>
+              component.nodeIds.includes(joint.jointId)
+              && component.rootId !== joint.jointId));
+          if (posedJoint) {
+            const THREE = await import('three');
+            experiment.setRigJointRotation(posedJoint.jointId,
+              new THREE.Quaternion().setFromAxisAngle(
+                new THREE.Vector3(0, 0, 1), Math.PI / 12));
+          }
           const before = [...mesh.geometry.attributes.position.array];
           setControlValue('shape', '1');
           refreshMeshes();
@@ -1963,8 +1997,76 @@ def test_loaded_skinning_rebaselines_after_shape_change(
         }""")
         assert result["loaded"]
         assert result["before"] != result["after"]
+        assert result["after"][3] == pytest.approx(1.2)
+        assert result["after"][7] == pytest.approx(1.2)
         assert result["baseline"] == pytest.approx(result["after"])
         assert result["graph"] is None
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("stale_failure", [False, True], ids=["success", "failure"])
+def test_stale_rig_load_cannot_publish_after_model_switch(
+        edge_browser, frontend_url, stale_failure):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"RigRaceA": _payload("RigRaceA"), "RigRaceB": _payload("RigRaceB")})
+    try:
+        _open(page, "RigRaceA")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        result = page.evaluate("""async staleFailure => {
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          let releaseA;
+          let rejectA;
+          const pendingA = new Promise((resolve, reject) => {
+            releaseA = resolve;
+            rejectA = reject;
+          });
+          const entry = (sourceKey, file) => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: sourceKey, file, bone_id_offset: 0,
+            }, data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+          window.__testSkinningPreview = async path =>
+            path === 'RigRaceA' ? pendingA : entry(
+              'test/race-b-bodyblend.buf|offset=0', 'RaceB/BodyBlend.buf');
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const loadA = experiment.ensureModelRigLoaded();
+          await window.modViewer.switchMod('RigRaceB');
+          await new Promise(resolve => setTimeout(resolve, 0));
+          const loadB = experiment.ensureModelRigLoaded();
+          const duringB = experiment.getModelRigState();
+          if (staleFailure) rejectA(new Error('stale request failed'));
+          else releaseA(entry(
+              'test/race-a-bodyblend.buf|offset=0', 'RaceA/BodyBlend.buf'));
+          const stale = await loadA;
+          const current = await loadB;
+          const state = experiment.getModelRigState();
+          URL.revokeObjectURL(url);
+          return {
+            staleLoaded: stale.loaded,
+            duringBLoading: duringB.loading,
+            currentLoaded: current.loaded,
+            currentSource: state.sources.map(source => source.sourceKey),
+            currentModelJoints: state.model?.joints?.length || 0,
+            currentError: state.error,
+          };
+        }""", stale_failure)
+        assert result["duringBLoading"]
+        assert result["staleLoaded"] is False
+        assert result["currentLoaded"]
+        assert result["currentSource"] == [
+            "test/race-b-bodyblend.buf|offset=0"]
+        assert result["currentModelJoints"] > 0
+        assert result["currentError"] is None
     finally:
         context.close()
 
