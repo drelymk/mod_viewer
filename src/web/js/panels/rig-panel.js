@@ -113,8 +113,8 @@ function rigPresetApplyMessage(name, result) {
   return parts.join(' ');
 }
 
-function rigPresetUnavailableMessage(reason) {
-  return {
+function rigPresetUnavailableMessage(reason, diagnostics = {}, confidence = null) {
+  const message = {
     insufficient_rig: 'Arms Up needs a larger inferred Rig.',
     arm_pair_not_found: 'Arms Up could not find a confident left/right arm pair.',
     arm_pair_low_confidence: 'Arms Up could not identify the arms with enough confidence.',
@@ -122,6 +122,25 @@ function rigPresetUnavailableMessage(reason) {
     hierarchy_orientation_incompatible: 'Arms Up found arm geometry but its hierarchy runs inward.',
     invalid_rest_direction: 'Arms Up could not determine stable rest directions.',
   }[reason] || 'Arms Up is unavailable for this inferred Rig.';
+  const counts = diagnostics?.candidateCounts;
+  const details = [];
+  if (counts && Number.isFinite(counts.negativeX)
+      && Number.isFinite(counts.positiveX)) {
+    details.push(`Candidates: ${counts.negativeX} / ${counts.positiveX}.`);
+  }
+  if (Number.isFinite(confidence)) {
+    details.push(`Confidence: ${(confidence * 100).toFixed(0)}%.`);
+  }
+  if (Number.isFinite(diagnostics?.runnerUpScore)) {
+    details.push(`Runner-up: ${(diagnostics.runnerUpScore * 100).toFixed(0)}%.`);
+  }
+  const semanticUp = diagnostics.semanticFrame?.up;
+  if (Array.isArray(semanticUp) && semanticUp.length >= 3
+      && semanticUp.slice(0, 3).every(Number.isFinite)) {
+    details.push(`Semantic up: [${semanticUp.slice(0, 3).map(value =>
+      Number(value).toFixed(2)).join(', ')}].`);
+  }
+  return [message, ...details].join(' ');
 }
 
 function selectedPreset(state = latestState, id = ui?.preset?.value) {
@@ -440,9 +459,10 @@ function buildPanel() {
     const name = selected?.name || 'pose';
     if (!result?.success) {
       ui.presetStatus.textContent = result?.skipped?.[0]?.reason === 'physics_active'
-        ? 'Disable Character Physics before applying a pose preset.'
-        : result?.failureReason === 'builtin_unavailable'
-          ? rigPresetUnavailableMessage(result?.skipped?.[0]?.reason)
+          ? 'Disable Character Physics before applying a pose preset.'
+          : result?.failureReason === 'builtin_unavailable'
+          ? rigPresetUnavailableMessage(result?.skipped?.[0]?.reason,
+            result?.diagnostics, result?.confidence)
         : result?.failureReason === 'no_matches'
           ? `Could not apply "${name}". No saved joints matched the current inferred rig.`
           : 'This saved pose is invalid and could not be applied.';
@@ -787,7 +807,8 @@ function syncPresetControls(state, physicsActive) {
   ui.renamePreset.disabled = !hasPreset || isBuiltin || !!presetState.loading;
   ui.deletePreset.disabled = !hasPreset || isBuiltin || !!presetState.loading;
   if (current?.kind === 'builtin' && !current.available) {
-    ui.presetStatus.textContent = rigPresetUnavailableMessage(current.reason);
+    ui.presetStatus.textContent = rigPresetUnavailableMessage(
+      current.reason, current.diagnostics, current.confidence);
   } else if (presetState.error) ui.presetStatus.textContent = presetState.error;
   else if (presetState.lastApplyResult?.success
       && presetState.lastApplyResult.preset?.name) {

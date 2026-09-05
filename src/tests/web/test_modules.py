@@ -145,8 +145,77 @@ def test_builtin_arms_up_pose_is_symmetric_deterministic_and_fail_closed(
       };
       const rig = makeRig(true);
       const analysis = poses.analyzeHumanoidRestPose(rig);
+      const nullFrameAnalysis = poses.analyzeHumanoidRestPose(rig,
+        {semanticFrame: null});
       const permuted = {...rig, joints: [...rig.joints].reverse()};
       const permutedAnalysis = poses.analyzeHumanoidRestPose(permuted);
+      const transformRig = (source, frame) => {
+        const transform = values => [
+          frame.right[0] * values[0] + frame.up[0] * values[1]
+            + frame.forward[0] * values[2],
+          frame.right[1] * values[0] + frame.up[1] * values[1]
+            + frame.forward[1] * values[2],
+          frame.right[2] * values[0] + frame.up[2] * values[1]
+            + frame.forward[2] * values[2],
+        ];
+        return {
+          ...source,
+          joints: source.joints.map(joint => ({...joint,
+            restCenter: transform(joint.restCenter),
+            restPivot: transform(joint.restPivot),
+          })),
+          defaultRestPivotByJointId: Object.fromEntries(
+            Object.entries(source.defaultRestPivotByJointId)
+              .map(([id, value]) => [id, transform(value)])),
+          defaultRestDirectionByJointId: Object.fromEntries(
+            Object.entries(source.defaultRestDirectionByJointId)
+              .map(([id, value]) => [id, transform(value)])),
+        };
+      };
+      const zUpFrame = {up: [0, 0, 1], right: [1, 0, 0],
+        forward: [0, -1, 0]};
+      const zUpAnalysis = poses.analyzeHumanoidRestPose(
+        transformRig(rig, zUpFrame), {semanticFrame: zUpFrame});
+      const zUpGenerated = poses.generateArmsUpPreset(
+        transformRig(rig, zUpFrame), {
+          semanticFrame: zUpFrame, outwardAngleDegrees: 0,
+        });
+      const facingFrame = {up: [0, 1, 0], right: [-1, 0, 0],
+        forward: [0, 0, -1]};
+      const facingAnalysis = poses.analyzeHumanoidRestPose(
+        transformRig(rig, facingFrame), {semanticFrame: facingFrame});
+      const longArms = makeRig(true);
+      [12, 22].forEach(jointId => {
+        const joint = longArms.joints.find(item => item.jointId === jointId);
+        joint.restCenter[0] = jointId === 12 ? -5.5 : 5.5;
+        joint.restPivot[0] = joint.restCenter[0];
+        longArms.defaultRestPivotByJointId[jointId] = joint.restCenter;
+      });
+      const longArmAnalysis = poses.analyzeHumanoidRestPose(longArms);
+      const decoyRig = makeRig(true);
+      const decoyEntries = [
+        [40, [-2, 6, 0]], [41, [-3.2, 4, 0]], [42, [-3.7, 3, 0]],
+        [50, [2, 6, 0]], [51, [3.2, 4, 0]], [52, [3.7, 3, 0]],
+      ];
+      decoyEntries.forEach(([jointId, restCenter]) => {
+        decoyRig.joints.push({jointId,
+          signature: `["source#bone=${jointId}"]`, restCenter,
+          restPivot: restCenter});
+        decoyRig.defaultRestPivotByJointId[jointId] = restCenter;
+      });
+      Object.assign(decoyRig.defaultRestDirectionByJointId, {
+        40: [-1, -.8, .15], 50: [1, -.8, .15],
+      });
+      const decoyComponent = decoyRig.defaultComponents[0];
+      decoyComponent.nodeIds.push(40, 41, 42, 50, 51, 52);
+      Object.assign(decoyComponent.parentById,
+        {40: 0, 41: 40, 42: 41, 50: 0, 51: 50, 52: 51});
+      Object.assign(decoyComponent.childrenById,
+        {0: [...decoyComponent.childrenById[0], 40, 50],
+          40: [41], 41: [42], 42: [], 50: [51], 51: [52], 52: []});
+      Object.assign(decoyComponent.depthById,
+        {40: 1, 41: 2, 42: 2, 50: 1, 51: 2, 52: 2});
+      const decoyAnalysis = poses.analyzeHumanoidRestPose(decoyRig);
       const reversed = makeRig(true);
       Object.assign(reversed.defaultComponents[0].parentById,
         {10: 11, 11: 12, 12: 0, 20: 21, 21: 22, 22: 0});
@@ -171,11 +240,34 @@ def test_builtin_arms_up_pose_is_symmetric_deterministic_and_fail_closed(
         },
         deterministic: JSON.stringify(analysis.preset)
           === JSON.stringify(permutedAnalysis.preset),
+        nullFrameSignatures: nullFrameAnalysis.preset?.joints.map(item =>
+          item.joint_signature),
+        zUpSignatures: zUpAnalysis.preset?.joints.map(item =>
+          item.joint_signature),
+        zUpTargets: zUpAnalysis.arms && {
+          negative: zUpAnalysis.arms.negativeX.targetDirection,
+          positive: zUpAnalysis.arms.positiveX.targetDirection,
+        },
+        zUpGeneratedTargets: zUpGenerated.arms && {
+          negative: zUpGenerated.arms.negativeX.targetDirection,
+          positive: zUpGenerated.arms.positiveX.targetDirection,
+        },
+        facingSignatures: facingAnalysis.preset?.joints.map(item =>
+          item.joint_signature),
+        longArmSignatures: longArmAnalysis.preset?.joints.map(item =>
+          item.joint_signature),
+        longArmCounts: longArmAnalysis.diagnostics && {
+          geometry: longArmAnalysis.diagnostics.geometryCandidateCounts,
+          collapsed: longArmAnalysis.diagnostics.candidateCounts,
+        },
+        decoyAvailable: decoyAnalysis.available,
+        decoyReason: decoyAnalysis.reason,
         reversedReason: reversedAnalysis.reason,
         invalidReason: invalidAnalysis.reason,
         missingReason: unavailable.reason,
         descriptor: {id: descriptor.id, name: descriptor.name,
-          kind: descriptor.kind, available: descriptor.available},
+          kind: descriptor.kind, available: descriptor.available,
+          semanticUp: descriptor.diagnostics.semanticFrame.up},
       };
     }""")
     assert result["available"] is True
@@ -183,12 +275,28 @@ def test_builtin_arms_up_pose_is_symmetric_deterministic_and_fail_closed(
     assert result["signatures"] == [
         '["source#bone=10"]', '["source#bone=20"]']
     assert result["deterministic"] is True
+    assert result["nullFrameSignatures"] == result["signatures"]
+    assert result["zUpSignatures"] == result["signatures"]
+    assert result["zUpTargets"]["negative"][2] > 0.9
+    assert result["zUpTargets"]["positive"][2] > 0.9
+    assert result["zUpGeneratedTargets"]["negative"] == pytest.approx(
+        [0, 0, 1])
+    assert result["zUpGeneratedTargets"]["positive"] == pytest.approx(
+        [0, 0, 1])
+    assert result["facingSignatures"] == result["signatures"]
+    assert result["longArmSignatures"] == result["signatures"]
+    assert result["longArmCounts"]["geometry"]["negativeX"] > \
+        result["longArmCounts"]["collapsed"]["negativeX"]
+    assert result["decoyAvailable"] is False
+    assert result["decoyReason"] in {
+        "arm_pair_ambiguous", "arm_pair_low_confidence", "arm_pair_not_found",
+    }
     assert result["missingReason"] == "arm_pair_not_found"
     assert result["reversedReason"] == "hierarchy_orientation_incompatible"
     assert result["invalidReason"] == "invalid_rest_direction"
     assert result["descriptor"] == {
         "id": "builtin:arms-up", "name": "Arms Up", "kind": "builtin",
-        "available": True,
+        "available": True, "semanticUp": [0, 1, 0],
     }
     for rotation in (result["rotations"]["negativeX"],
                      result["rotations"]["positiveX"]):
@@ -202,6 +310,7 @@ def test_builtin_arms_up_pose_is_symmetric_deterministic_and_fail_closed(
     assert result["rotations"]["positiveTarget"][0] > 0
     assert result["rotations"]["negativeTarget"][2] > 0
     assert result["rotations"]["positiveTarget"][2] > 0
+
 
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page

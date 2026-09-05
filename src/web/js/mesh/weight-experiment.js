@@ -595,7 +595,9 @@ function refreshBuiltInRigPresets(rig = modelSkinningRig) {
       && proceduralRigPoseCache.revision === rig.structureRevision) {
     return proceduralRigPoseCache.descriptors;
   }
-  const descriptors = getBuiltInRigPoseDescriptors(modelRigSnapshot());
+  const descriptors = getBuiltInRigPoseDescriptors(modelRigSnapshot(), {
+    semanticFrame: proceduralSemanticFrame(),
+  });
   proceduralRigPoseCache = {
     rig,
     revision: rig.structureRevision,
@@ -603,6 +605,24 @@ function refreshBuiltInRigPresets(rig = modelSkinningRig) {
   };
   rigPresetState.builtInPresets = descriptors;
   return descriptors;
+}
+
+// Rig coordinates remain untouched. Convert the viewer's semantic axes back
+// through only the non-user orientation so manual model turns cannot affect
+// procedural detection or pose generation.
+function proceduralSemanticFrame() {
+  const transform = getModelTransformState();
+  const orientation = transform?.orientation;
+  const userRotation = transform?.userRotation;
+  if (!orientation?.isQuaternion || !userRotation?.isQuaternion) return null;
+  const baseOrientation = userRotation.clone().invert()
+    .multiply(orientation).normalize();
+  const inverse = baseOrientation.clone().invert();
+  return {
+    up: new THREE.Vector3(0, 1, 0).applyQuaternion(inverse).toArray(),
+    right: new THREE.Vector3(1, 0, 0).applyQuaternion(inverse).toArray(),
+    forward: new THREE.Vector3(0, 0, 1).applyQuaternion(inverse).toArray(),
+  };
 }
 
 function rigPresetSnapshot() {
@@ -622,10 +642,18 @@ function rigPresetSnapshot() {
       confidence: Number.isFinite(preset.confidence) ? preset.confidence : 0,
       reason: preset.reason || null,
       diagnostics: {
+        semanticFrame: preset.diagnostics?.semanticFrame
+          ? {
+            up: [...(preset.diagnostics.semanticFrame.up || [])],
+            right: [...(preset.diagnostics.semanticFrame.right || [])],
+            forward: [...(preset.diagnostics.semanticFrame.forward || [])],
+          } : null,
         bodyFrame: preset.diagnostics?.bodyFrame
           ? {...preset.diagnostics.bodyFrame} : null,
         candidateCounts: preset.diagnostics?.candidateCounts
           ? {...preset.diagnostics.candidateCounts} : null,
+        geometryCandidateCounts: preset.diagnostics?.geometryCandidateCounts
+          ? {...preset.diagnostics.geometryCandidateCounts} : null,
         runnerUpScore: Number.isFinite(preset.diagnostics?.runnerUpScore)
           ? preset.diagnostics.runnerUpScore : null,
         pairFeatures: preset.diagnostics?.pairFeatures
@@ -3129,7 +3157,9 @@ export function applyRigPosePresetById(
     presetId = rigPresetState.selectedPresetId) {
   const id = String(presetId || '');
   if (id === BUILTIN_ARMS_UP_ID) {
-    const generated = generateArmsUpPreset(modelRigSnapshot());
+    const generated = generateArmsUpPreset(modelRigSnapshot(), {
+      semanticFrame: proceduralSemanticFrame(),
+    });
     if (!generated.available) {
       const result = unavailableRigPresetResult(
         generated.reason || 'arm_pair_not_found', generated.preset);

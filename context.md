@@ -257,8 +257,9 @@ of documentation, comments and tests; use portable fixtures instead.
 - Built-in procedural Rig poses are frontend-only descriptors regenerated from
   the current default model Rig. They are never persisted or renamed/deleted;
   applying one generates a schema-compatible transient preset and uses the same
-  exact-signature resolver as saved poses. Uncertain semantic detection fails
-  closed with a diagnostic reason.
+  exact-signature resolver as saved poses. Semantic detection projects default
+  rest geometry through the non-user model orientation so raw Y-up/Z-up assets
+  share one basis; uncertain detection fails closed with a diagnostic reason.
 - Applying a preset is one batch transaction: restore valid model-root
   overrides first, rebuild rest frames/caches once, install all valid local
   rotations, run one model deformation/bounds pass, then notify and render once.
