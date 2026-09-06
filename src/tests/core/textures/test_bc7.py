@@ -192,3 +192,172 @@ def test_recolor_can_reuse_decoded_source_pixels(monkeypatch):
     result = bc7.recolor_block(block, target, source_pixels=source)
 
     assert result.source_pixels == source
+
+
+def _reference_fit_fixed_index_endpoints(
+        targets, indices, weights, endpoint_codec, *, original_raw=(0, 0),
+        pbit0=None, pbit1=None, neighborhood=2):
+    if not targets:
+        return original_raw
+    fractions = tuple(weights[index] / 64.0 for index in indices)
+    aa = sum((1.0 - fraction) ** 2 for fraction in fractions)
+    ab = sum((1.0 - fraction) * fraction for fraction in fractions)
+    bb = sum(fraction ** 2 for fraction in fractions)
+    at = sum((1.0 - fraction) * target
+             for fraction, target in zip(fractions, targets))
+    bt = sum(fraction * target
+             for fraction, target in zip(fractions, targets))
+    tt = sum(target * target for target in targets)
+    determinant = aa * bb - ab * ab
+    if determinant > 1e-9:
+        estimate0 = (at * bb - bt * ab) / determinant
+        estimate1 = (bt * aa - at * ab) / determinant
+    else:
+        estimate0 = estimate1 = sum(targets) / len(targets)
+    center0 = bc7._quantize_endpoint(estimate0, endpoint_codec, pbit0)
+    center1 = bc7._quantize_endpoint(estimate1, endpoint_codec, pbit1)
+    raw0_values = {
+        max(0, min(endpoint_codec.raw_max, center0 + delta))
+        for delta in range(-neighborhood, neighborhood + 1)
+    }
+    raw1_values = {
+        max(0, min(endpoint_codec.raw_max, center1 + delta))
+        for delta in range(-neighborhood, neighborhood + 1)
+    }
+    raw0_values.update((0, endpoint_codec.raw_max, original_raw[0]))
+    raw1_values.update((0, endpoint_codec.raw_max, original_raw[1]))
+    for value in (min(targets), max(targets)):
+        raw0_values.add(bc7._quantize_endpoint(value, endpoint_codec, pbit0))
+        raw1_values.add(bc7._quantize_endpoint(value, endpoint_codec, pbit1))
+
+    def error(raw0, raw1):
+        endpoint0 = endpoint_codec.decode(raw0, pbit0)
+        endpoint1 = endpoint_codec.decode(raw1, pbit1)
+        return (aa * endpoint0 * endpoint0
+                + 2.0 * ab * endpoint0 * endpoint1
+                + bb * endpoint1 * endpoint1
+                - 2.0 * at * endpoint0
+                - 2.0 * bt * endpoint1
+                + tt)
+
+    best = (error(*original_raw), original_raw[0], original_raw[1])
+    for raw0 in sorted(raw0_values):
+        for raw1 in sorted(raw1_values):
+            candidate = (error(raw0, raw1), raw0, raw1)
+            if candidate < best:
+                best = candidate
+    return best[1], best[2]
+
+
+def _fitter_cases():
+    cases = []
+    patterns = {
+        "constant": lambda count, size: (0,) * count,
+        "alternating": lambda count, size: tuple(
+            index % 2 for index in range(count)),
+        "full_range": lambda count, size: tuple(
+            index % size for index in range(count)),
+        "reverse": lambda count, size: tuple(
+            (size - index - 1) % size for index in range(count)),
+    }
+    target_kinds = {
+        "black": lambda count: (0,) * count,
+        "white": lambda count: (255,) * count,
+        "grayscale": lambda count: tuple(
+            round(index * 255 / max(1, count - 1))
+            for index in range(count)),
+        "saturated": lambda count: tuple(
+            255 if index % 2 else 0 for index in range(count)),
+        "low_contrast": lambda count: tuple(
+            127 + (index % 3) for index in range(count)),
+        "high_contrast": lambda count: tuple(
+            8 if index % 2 else 247 for index in range(count)),
+        "random": lambda count: tuple(
+            (index * 73 + count * 19 + 11) & 0xff
+            for index in range(count)),
+    }
+    for weights_name, weights in (
+            ("weights2", bc7.WEIGHTS_2),
+            ("weights3", bc7.WEIGHTS_3),
+            ("weights4", bc7.WEIGHTS_4)):
+        for count in (1, 4, 8, 16):
+            for pattern_name, pattern in patterns.items():
+                indices = pattern(count, len(weights))
+                for target_name, target_factory in target_kinds.items():
+                    cases.append((
+                        f"{weights_name}-{count}-{pattern_name}-{target_name}",
+                        weights, indices, target_factory(count)))
+    return cases
+
+
+_ENDPOINT_CASES = (
+    ("raw5", bc7._EndpointCodec(
+        31, lambda raw, _pbit: bc7._unquantize(raw, 5)), None, None),
+    ("pbit5", bc7._EndpointCodec(
+        15, lambda raw, pbit: bc7._unquantize((raw << 1) | pbit, 5)), 0, 1),
+    ("raw6", bc7._EndpointCodec(
+        63, lambda raw, _pbit: bc7._unquantize(raw, 6)), None, None),
+    ("pbit6", bc7._EndpointCodec(
+        31, lambda raw, pbit: bc7._unquantize((raw << 1) | pbit, 6)), 1, 0),
+    ("raw7", bc7._EndpointCodec(
+        127, lambda raw, _pbit: bc7._unquantize(raw, 7)), None, None),
+    ("pbit7", bc7._EndpointCodec(
+        63, lambda raw, pbit: bc7._unquantize((raw << 1) | pbit, 7)), 0, 1),
+)
+
+
+@pytest.mark.parametrize(
+    "case", _fitter_cases(), ids=lambda case: case[0])
+def test_fixed_index_fitter_matches_reference(case):
+    _case_name, weights, indices, targets = case
+    for _codec_name, codec, pbit0, pbit1 in _ENDPOINT_CASES:
+        original_raw = (
+            min(codec.raw_max, len(targets) + 3),
+            min(codec.raw_max, len(targets) + 11))
+        expected = _reference_fit_fixed_index_endpoints(
+            targets, indices, weights, codec,
+            original_raw=original_raw, pbit0=pbit0, pbit1=pbit1)
+        actual = bc7._fit_fixed_index_endpoints(
+            targets, indices, weights, codec,
+            original_raw=original_raw, pbit0=pbit0, pbit1=pbit1)
+        assert actual == expected
+
+
+def test_fixed_index_fitter_empty_and_degenerate_inputs_match_reference():
+    codec = bc7._EndpointCodec(
+        31, lambda raw, _pbit: bc7._unquantize(raw, 5))
+    for targets, indices in (((), ()), ((0, 128, 255), (2, 2, 2))):
+        expected = _reference_fit_fixed_index_endpoints(
+            targets, indices, bc7.WEIGHTS_3, codec, original_raw=(7, 19))
+        actual = bc7._fit_fixed_index_endpoints(
+            targets, indices, bc7.WEIGHTS_3, codec, original_raw=(7, 19))
+        assert actual == expected
+
+
+@pytest.mark.parametrize("mode", range(8))
+@pytest.mark.parametrize("valid_width, valid_height", ((4, 4), (2, 3)))
+def test_recolor_block_matches_reference_fitter(
+        monkeypatch, mode, valid_width, valid_height):
+    block = (_color_block(mode) if mode < 4 else
+             _separate_block(mode, 1) if mode in {4, 5} else
+             _mode6_block() if mode == 6 else _mode7_block())
+    source = bc7.decode_block(block)
+    target = tuple(
+        (min(255, red + 31), max(0, green - 17), blue, alpha)
+        for red, green, blue, alpha in source)
+    optimized = bc7.recolor_block(
+        block, target, valid_width=valid_width, valid_height=valid_height)
+    monkeypatch.setattr(
+        bc7, "_fit_fixed_index_endpoints",
+        _reference_fit_fixed_index_endpoints)
+    reference = bc7.recolor_block(
+        block, target, valid_width=valid_width, valid_height=valid_height)
+
+    assert optimized.block == reference.block
+    assert optimized.source_pixels == reference.source_pixels
+    assert optimized.candidate_pixels == reference.candidate_pixels
+    assert optimized.source_error == reference.source_error
+    assert optimized.candidate_error == reference.candidate_error
+    assert optimized.mode == reference.mode
+    assert [pixel[3] for pixel in optimized.candidate_pixels] == [
+        pixel[3] for pixel in optimized.source_pixels]
