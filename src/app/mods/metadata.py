@@ -272,7 +272,7 @@ def save_weight_selected_bones(folder_path, bones):
         }
 
 
-def _normalized_rig_entry(value, joint=False):
+def _normalized_rig_entry(value):
     """Keep entry-level data lossless; the browser resolves and normalizes it."""
     return deepcopy(value)
 
@@ -293,8 +293,7 @@ def _normalized_rig_preset(value):
     if not isinstance(roots, list) or not isinstance(joints, list):
         return None
     normalized_roots = [_normalized_rig_entry(entry) for entry in roots]
-    normalized_joints = [_normalized_rig_entry(entry, joint=True)
-                         for entry in joints]
+    normalized_joints = [_normalized_rig_entry(entry) for entry in joints]
     return {
         "id": preset_id.strip(), "name": name,
         "roots": normalized_roots, "joints": normalized_joints,

@@ -91,19 +91,17 @@ export function modelRigSnapshot(modelSkinningRig, {
 } = {}) {
   if (!modelSkinningRig) return null;
   const components = (modelSkinningRig.components || []).map(componentSnapshot);
-  const defaultComponents = (modelSkinningRig.defaultComponents || [])
-    .map(componentSnapshot);
   const joints = (modelSkinningRig.joints || []).map(joint => ({
     jointId: joint.jointId,
-    jointKey: joint.jointKey,
-    signature: joint.signature,
     restCenter: [...(joint.restCenter || [0, 0, 0])],
     restPivot: [...(joint.restPivot || joint.restCenter || [0, 0, 0])],
-    restDirection: joint.restDirection ? [...joint.restDirection] : null,
-    restFrame: [...(joint.restFrame || [0, 0, 0, 1])],
-    parentId: joint.parentId,
-    childrenIds: [...(joint.childrenIds || [])],
     ...(debug ? {
+      jointKey: joint.jointKey,
+      signature: joint.signature,
+      restDirection: joint.restDirection ? [...joint.restDirection] : null,
+      restFrame: [...(joint.restFrame || [0, 0, 0, 1])],
+      parentId: joint.parentId,
+      childrenIds: [...(joint.childrenIds || [])],
       members: (joint.members || []).map(member => ({...member})),
       representativeMember: joint.representativeMember
         ? {...joint.representativeMember} : null,
@@ -119,10 +117,15 @@ export function modelRigSnapshot(modelSkinningRig, {
     if (debug) {
       copy.sourceEdges = (edge.sourceEdges || [])
         .map(sourceEdge => ({...sourceEdge}));
-    } else {
-      delete copy.sourceEdges;
+      return copy;
     }
-    return copy;
+    return {
+      jointA: edge.jointA,
+      jointB: edge.jointB,
+      parentId: edge.parentId ?? edge.jointA,
+      childId: edge.childId ?? edge.jointB,
+      relationshipType: edge.relationshipType,
+    };
   });
   const snapshot = {
     key: modelSkinningRig.key || 'model-rig',
@@ -138,7 +141,8 @@ export function modelRigSnapshot(modelSkinningRig, {
       .map(([jointId]) => jointId),
   };
   if (debug) {
-    snapshot.defaultComponents = defaultComponents;
+    snapshot.defaultComponents = (modelSkinningRig.defaultComponents || [])
+      .map(componentSnapshot);
     snapshot.explicitRootSignatures = [...modelRigState.explicitRootSignatures]
       .sort((left, right) => left.localeCompare(right));
     snapshot.defaultRestPivotByJointId = Object.fromEntries(

@@ -1097,14 +1097,17 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           mesh.geometry.computeBoundingBox = originalBoundingBox;
           mesh.geometry.computeBoundingSphere = originalBoundingSphere;
           const currentRig = experiment.getModelRigState();
+          const currentRigDebug = experiment.getModelRigDebugState();
           const poseJoint = currentRig.model.joints.find(joint =>
             currentRig.model.components.some(component =>
               component.rootId !== joint.jointId
               && component.nodeIds.includes(joint.jointId)));
+          const poseDebugJoint = currentRigDebug.joints.find(joint =>
+            joint.jointId === poseJoint?.jointId);
           const savedPreset = {
             id: 'saved:test-pose', name: 'Test Pose', roots: [],
             joints: [{
-              joint_signature: poseJoint?.signature,
+              joint_signature: poseDebugJoint?.signature,
               rotation: [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)],
             }],
           };
@@ -1234,7 +1237,7 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["presetBeforePose"] == []
         assert result["presetAfterPose"]
         assert result["presetApplySuccess"] is True
-        assert result["presetApplyEvents"] == 2
+        assert result["presetApplyEvents"] == 1
         assert result["resetAfterPreset"]
         assert result["resetAfterPresetJointId"] == result["resetSelectedJointId"]
         assert result["resetAfterPresetPose"] == []
@@ -1532,6 +1535,7 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
             joint.jointId, joint.restPivot]));
           const rerooted = experiment.setRigJointRoot(jointId(bone2));
           const afterReroot = experiment.getModelRigState().model;
+          const debugAfterReroot = experiment.getModelRigDebugState();
           const rerootedComponent = afterReroot.components.find(component =>
             component.nodeIds.includes(jointIds[2]));
           const centersAfterReroot = new Map(afterReroot.joints.map(joint => [
@@ -1543,7 +1547,7 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
           const expectedFrames = buildInferredRigRestFrames(
             {components: afterReroot.components}, centersAfterReroot,
             pivotsAfterReroot);
-          const frameMatches = afterReroot.joints.every(joint =>
+          const frameMatches = debugAfterReroot.joints.every(joint =>
             joint.restFrame.every((value, index) => Math.abs(value
               - expectedFrames.frameByBoneId.get(joint.jointId).toArray()[index])
               < 1e-6));
@@ -1748,8 +1752,8 @@ def test_rig_pose_preset_recomputes_descendants_after_root_change(
             {dragging: true});
           const beforeApply = positions();
           state = experiment.getModelRigState();
-          const model = state.model;
-          const signatureForBone = boneId => model.joints.find(joint =>
+          const debugModel = experiment.getModelRigDebugState();
+          const signatureForBone = boneId => debugModel.joints.find(joint =>
             Number(debug.sources[0].modelJointIds[boneId]) === joint.jointId
           )?.signature;
           const preset = {
@@ -1758,7 +1762,7 @@ def test_rig_pose_preset_recomputes_descendants_after_root_change(
             joints: [{joint_signature: signatureForBone(boneB), rotation: q}],
           };
           const resolved = presets.resolveRigPreset(
-            {joints: model.joints}, preset);
+            {joints: debugModel.joints}, preset);
           const position = mesh.geometry.attributes.position;
           const versionBefore = position.version;
           const applied = experiment.applyRigPosePreset(resolved);
@@ -1871,9 +1875,9 @@ def test_rig_pose_preset_restores_roots_for_disconnected_components(
           state = experiment.getModelRigState();
           debug = experiment.getModelRigDebugState();
           const rootsBeforeApply = debug.explicitRootSignatures;
-          const model = state.model;
+          const debugModel = experiment.getModelRigDebugState();
           const jointIdForBone = boneId => jointId(boneId);
-          const signatureForBone = boneId => model.joints.find(joint =>
+          const signatureForBone = boneId => debugModel.joints.find(joint =>
             joint.jointId === jointIdForBone(boneId))?.signature;
           const q = [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)];
           experiment.setRigJointRotation(jointId(0), q, {dragging: true});
@@ -1882,7 +1886,7 @@ def test_rig_pose_preset_restores_roots_for_disconnected_components(
             roots: roots.map(root => ({joint_signature: signatureForBone(root)})),
             joints: [{joint_signature: signatureForBone(0), rotation: q}],
           };
-          const resolved = presets.resolveRigPreset({joints: model.joints}, preset);
+          const resolved = presets.resolveRigPreset({joints: debugModel.joints}, preset);
           experiment.resetRigPose();
           const position = window.modViewer.activeMeshes[0]
             .geometry.attributes.position;
@@ -2873,10 +2877,11 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
               rotationVector: joint.rotationVector,
               angularVelocity: joint.angularVelocity,
             }));
-          experiment.resetModelPhysicsMotion();
+          experiment.resetModelPhysics();
           const reset = experiment.getSkinningState(mesh);
-          const resetJoints = [...experiment.getModelPhysicsDebugState()
-            .physicsState.joints.values()];
+          const resetPhysics = experiment.getModelPhysicsDebugState();
+          const resetSettings = experiment.getModelPhysicsState();
+          const resetJoints = [...resetPhysics.physicsState.joints.values()];
           const resetKeepsEnabled = reset.physicsEnabled;
           experiment.disableModelPhysics();
           const disabled = experiment.getSkinningState(mesh);
@@ -2893,6 +2898,10 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
             limits,
             beforeReset,
             reset: resetJoints,
+            resetGravityEnabled: resetSettings.gravityEnabled,
+            resetGravityScale: resetSettings.gravityScale,
+            resetConstraintsEnabled: resetSettings.constraintsEnabled,
+            resetMaxBendDegrees: resetSettings.maxBendDegrees,
             resetKeepsEnabled,
             disabled: {
               enabled: disabled.physicsEnabled,
@@ -2915,6 +2924,10 @@ def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
             and joint["angularVelocity"] == [0, 0, 0]
             for joint in result["reset"])
         assert result["resetKeepsEnabled"]
+        assert not result["resetGravityEnabled"]
+        assert result["resetGravityScale"] == 1
+        assert not result["resetConstraintsEnabled"]
+        assert result["resetMaxBendDegrees"] == 45
         assert result["disabled"] == {"enabled": False, "reference": None}
     finally:
         context.close()
@@ -4700,15 +4713,14 @@ def test_view_gizmo_snap_renders_only_during_animation(
               key: 'Enter', bubbles: true,
             }))
         """)
-        page.wait_for_timeout(500)
         page.wait_for_function(
-            "count => window.modViewer.getRenderCount() > count",
+            "count => window.modViewer.getRenderCount() >= count + 2",
             arg=idle_count)
         page.wait_for_timeout(350)
         settled_count = page.evaluate("window.modViewer.getRenderCount()")
         page.wait_for_timeout(200)
         assert page.evaluate("window.modViewer.getRenderCount()") == settled_count
-        assert settled_count >= idle_count + 1
+        assert settled_count > idle_count + 2
     finally:
         context.close()
 

@@ -34,7 +34,6 @@ import {
   setRigPoseControlStatus, deleteRigPosePreset,
   applyRigPosePresetById,
   getRigPresetState, renameRigPosePreset, saveRigPosePreset,
-  selectRigPosePreset,
   beginModelPicking, cancelModelPicking, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
 import {
@@ -425,7 +424,6 @@ rendererReady.then(ready => {
     saveRigPosePreset: {value: saveRigPosePreset},
     renameRigPosePreset: {value: renameRigPosePreset},
     deleteRigPosePreset: {value: deleteRigPosePreset},
-    selectRigPosePreset: {value: selectRigPosePreset},
   });
 
   void openStartupMod().then(apiReady => {

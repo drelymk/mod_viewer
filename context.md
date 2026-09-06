@@ -294,7 +294,7 @@ of documentation, comments and tests; use portable fixtures instead.
   source membership/shape changes and resets pose; model structure revisions
   do not change for pose, materials, textures, visibility or model turns.
 - Joint selection is independent from pose state: Clear removes the selected
-  ModelJoint and derived source-bone selection through the state API, leaving
+  ModelJoint through the state API, leaving
   manual pose, presets, Weight selection, Physics and overlay visibility
   unchanged. Reset Joint preserves the selected Joint; Reset Pose preserves
   it too, clears only the runtime selected-preset/apply-result state, and never

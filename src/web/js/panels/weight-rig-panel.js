@@ -7,7 +7,7 @@ import {
   getModelWeightState, getRigJointPoseFrame, loadSavedBoneSelection,
   clearRigJointSelection, resetModelPhysics, resetRigJoint, resetRigPose,
   saveModelWeightSelection,
-  selectRigJoint, selectRigPosePreset, setBoneSelected, setPhysicsConstraintsEnabled,
+  selectRigJoint, setBoneSelected, setPhysicsConstraintsEnabled,
   setPhysicsContinuousLinearResponse, setPhysicsDamping, setPhysicsFrequency,
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
   setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
@@ -352,7 +352,6 @@ function buildRigSection(parent) {
   preset.addEventListener('change', () => {
     const presetId = preset.value || null;
     if (!presetId) return;
-    selectRigPosePreset(presetId);
     applySelectedPreset(presetId);
   });
   section.appendChild(preset);
@@ -649,9 +648,10 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   const model = state?.model;
   const joints = model?.joints || [];
   const selected = selectedJoint(state);
-  const optionKey = JSON.stringify(joints.map(joint => [
-    joint.jointId, joint.signature,
-  ]));
+  const optionKey = JSON.stringify([
+    model?.structureRevision ?? state?.structureRevision ?? null,
+    joints.map(joint => joint.jointId),
+  ]);
   if (optionKey !== ui.joint.dataset.optionKey) {
     ui.joint.replaceChildren();
     const placeholder = document.createElement('option');

@@ -1676,7 +1676,6 @@ function resetModelPose({request = true} = {}) {
   const changed = applyModelPose({request});
   modelSkinningRig.poseActiveVerticesByMesh.clear();
   modelSkinningRig.poseSourceBoneIdsByMesh.clear();
-  if (modelRigHasActivePhysics()) modelPhysicsSession.wake();
   return changed;
 }
 
@@ -1789,7 +1788,6 @@ export function applyRigPosePreset(resolvedPreset, options = {}) {
   };
   rigPresetState.lastApplyResult = result;
   modelRigState.pickStatus = '';
-  if (modelRigHasActivePhysics()) modelPhysicsSession.wake();
   notifyModelRigChanged();
   requestRender();
   return result;
@@ -1873,16 +1871,6 @@ export function getRigPresetState() {
   return rigPresetSnapshotForState();
 }
 
-export function selectRigPosePreset(presetId) {
-  const id = String(presetId || '');
-  if (!rigPresetState.presets.some(preset => preset.id === id)) {
-    return false;
-  }
-  rigPresetState.selectedPresetId = id;
-  notifyModelRigChanged();
-  return true;
-}
-
 function currentRigModPath() {
   return [...knownMeshes].find(mesh => mesh.userData?.modPath)
     ?.userData?.modPath || null;
@@ -1914,6 +1902,7 @@ export function applyRigPosePresetById(
     notifyModelRigChanged();
     return result;
   }
+  rigPresetState.selectedPresetId = preset.id;
   const result = applyRigPosePreset(resolveRigPreset(modelSkinningRig, preset), {
     presetId: preset.id,
   });
@@ -2392,7 +2381,9 @@ export function resetModelPhysics() {
       angularResponse: defaults.angularResponse,
       translationResponse: defaults.translationResponse,
       velocityResponse: defaults.velocityResponse,
+      gravityEnabled: defaults.gravityEnabled,
       gravityScale: defaults.gravityScale,
+      constraintsEnabled: defaults.constraintsEnabled,
       maxBendDegrees: defaults.maxBendDegrees,
     },
   });
