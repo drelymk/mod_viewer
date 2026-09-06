@@ -327,7 +327,11 @@ function adjustColorChannel(channel, intensity, amount) {
 
 function createColorAdjustmentNode(state, baseColor) {
   const editorColor = colorMap(baseColor, linearToEditorSrgbChannel);
-  const hsv = rgbToHsv(editorColor);
+  const sourceIntensity = editorColor.r.max(editorColor.g).max(editorColor.b);
+  const tinted = state.colorTintNode.mul(sourceIntensity);
+  const adjustmentColor = state.colorTintEnabledNode.select(
+    tinted, editorColor);
+  const hsv = rgbToHsv(adjustmentColor);
   let hue = hsv.x.add(state.colorHueNode.div(360));
   hue = hue.lessThan(0).select(hue.add(1), hue);
   hue = hue.greaterThanEqual(1).select(hue.sub(1), hue);
@@ -344,9 +348,6 @@ function createColorAdjustmentNode(state, baseColor) {
     adjustColorChannel(result.g, intensity, state.colorGreenNode),
     adjustColorChannel(result.b, intensity, state.colorBlueNode),
   ).clamp(0, 1);
-  const tintIntensity = result.r.max(result.g).max(result.b);
-  const tinted = state.colorTintNode.mul(tintIntensity);
-  result = state.colorTintEnabledNode.select(tinted, result);
   result = result.clamp(0, 1);
   result = colorMap(result, editorSrgbToLinearChannel);
   return state.colorAdjustmentEnabledNode.select(result, baseColor);

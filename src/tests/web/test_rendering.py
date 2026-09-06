@@ -5571,6 +5571,56 @@ def test_mesh_color_tint_preserves_rendered_shading(
         context.close()
 
 
+def test_mesh_color_tint_keeps_adjustment_controls_active(
+        edge_browser, frontend_url):
+    payload = _payload("TintControlsRender")
+    entry = payload["meshes"]["Body-TintControlsRender-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, -1, 1, 0)
+    entry["idx"] = _u32(0, 1, 2)
+    entry["drawindexed"] = [3, 0, 0]
+    payload["textures"] = {
+        entry["tex_key"]: _flat_png_uri((180, 90, 45, 255)),
+    }
+    context, page = _page(edge_browser, frontend_url,
+                          {"TintControlsRender": payload})
+    try:
+        _open(page, "TintControlsRender")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.wait_for_function("""() => window.modViewer.activeMeshes[0]
+          ?.material?.userData?.gameMaterial?.bindings?.diffuse
+          ?.enabledNode?.value === true""")
+
+        adjustments = {
+            "base": {"tint": "#4080c0"},
+            "hue": {"tint": "#4080c0", "hue": 120},
+            "saturation": {"tint": "#4080c0", "saturation": 0},
+            "brightness": {"tint": "#4080c0", "brightness": 0.5},
+            "contrast": {"tint": "#4080c0", "contrast": 0.5},
+            "rgb-fill": {"tint": "#4080c0", "green": 2},
+        }
+        samples = {}
+        for name, adjustment in adjustments.items():
+            page.evaluate("""async (adjustment) => {
+              const {setMeshColorAdjustment} = await import(
+                './js/mesh/mesh-color-state.js');
+              setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+                hue: 0, saturation: 1, brightness: 1, contrast: 1,
+                red: 1, green: 1, blue: 1, ...adjustment,
+              });
+            }""", adjustment)
+            page.wait_for_timeout(150)
+            samples[name] = _sample_mesh_pixel_at(page, -0.5, -0.5)
+
+        baseline = samples.pop("base")
+        for name, sample in samples.items():
+            assert any(abs(actual - expected) > 4
+                       for actual, expected in zip(sample, baseline)), (
+                           name, baseline, sample)
+    finally:
+        context.close()
+
+
 def test_material_kind_refresh_hot_swaps_profile_without_reloading_model(
         edge_browser, frontend_url):
     payload = _packed_material_payload("wuwa:rabbitfx")

@@ -105,7 +105,7 @@ def test_rgb_channel_adjustments_fill_missing_channels_and_preserve_shading(
     assert prepared == pytest.approx(expected, abs=1e-7)
 
 
-def test_rgb_adjustment_uses_post_brightness_value_before_tint():
+def test_brightness_and_rgb_adjustments_are_applied_with_tint():
     assert apply_color_adjustment(
         (0.4, 0.0, 0.0),
         {"brightness": 1.5, "green": 2.0},
@@ -128,7 +128,7 @@ def test_rgb_adjustment_uses_post_brightness_value_before_tint():
         ((0.7, 0.2, 0.1), {"tint": "#000000"}, (0.0, 0.0, 0.0)),
         ((0.8, 0.0, 0.0),
          {"green": 2.0, "tint": "#ff8080"},
-         (0.8, 0.8 * 128 / 255, 0.8 * 128 / 255)),
+         (0.8, 0.8, 0.8 * 128 / 255)),
     ],
 )
 def test_tint_recolors_toward_target_while_preserving_intensity(
@@ -139,6 +139,30 @@ def test_tint_recolors_toward_target_while_preserving_intensity(
 
     assert actual == pytest.approx(expected, abs=1e-7)
     assert prepared == pytest.approx(expected, abs=1e-7)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("hue", 120),
+        ("saturation", 0),
+        ("brightness", 0.5),
+        ("contrast", 0.5),
+        ("green", 2),
+    ],
+)
+def test_tint_keeps_color_controls_active(field, value):
+    rgb = (0.8, 0.1, 0.05)
+    base_adjustment = {"tint": "#4080c0"}
+    changed_adjustment = {**base_adjustment, field: value}
+
+    base = apply_color_adjustment(rgb, base_adjustment)
+    changed = apply_color_adjustment(rgb, changed_adjustment)
+    prepared = apply_prepared_color_adjustment(
+        rgb, prepare_color_adjustment(changed_adjustment))
+
+    assert changed != pytest.approx(base, abs=1e-7)
+    assert prepared == pytest.approx(changed, abs=1e-7)
 
 
 def test_adjust_rgba_preserves_alpha_and_only_changes_selected_pixels():

@@ -202,11 +202,14 @@ def _apply_tint(red, green, blue, tint_red, tint_green, tint_blue,
 
 
 def _apply_normalized(rgb, normalized):
-    """Apply the operation order to RGB floats and a validated state."""
+    """Apply tint, then the normal color operation order to RGB floats."""
     try:
         red, green, blue = (float(channel) for channel in rgb)
     except (TypeError, ValueError):
         raise ValueError("RGB must contain three numeric channels") from None
+    red, green, blue = _apply_tint(
+        red, green, blue, *tint_rgb(normalized["tint"]),
+        normalized["tint"] is not None)
     hue, saturation, value = _rgb_to_hsv(red, green, blue)
     hue = (hue + normalized["hue"] / 360.0) % 1.0
     saturation = min(1.0, max(0.0, saturation * normalized["saturation"]))
@@ -222,9 +225,6 @@ def _apply_normalized(rgb, normalized):
     red = min(1.0, max(0.0, red))
     green = min(1.0, max(0.0, green))
     blue = min(1.0, max(0.0, blue))
-    red, green, blue = _apply_tint(
-        red, green, blue, *tint_rgb(normalized["tint"]),
-        normalized["tint"] is not None)
     return tuple(min(1.0, max(0.0, channel))
                  for channel in (red, green, blue))
 
@@ -235,6 +235,9 @@ def _apply_prepared(rgb, prepared):
         red, green, blue = (float(channel) for channel in rgb)
     except (TypeError, ValueError):
         raise ValueError("RGB must contain three numeric channels") from None
+    red, green, blue = _apply_tint(
+        red, green, blue, prepared.tint_red, prepared.tint_green,
+        prepared.tint_blue, prepared.tint_enabled)
     hue, saturation, value = _rgb_to_hsv(red, green, blue)
     hue = (hue + prepared.hue_offset) % 1.0
     saturation = min(1.0, max(0.0, saturation * prepared.saturation))
@@ -250,9 +253,6 @@ def _apply_prepared(rgb, prepared):
     red = min(1.0, max(0.0, red))
     green = min(1.0, max(0.0, green))
     blue = min(1.0, max(0.0, blue))
-    red, green, blue = _apply_tint(
-        red, green, blue, prepared.tint_red, prepared.tint_green,
-        prepared.tint_blue, prepared.tint_enabled)
     return tuple(min(1.0, max(0.0, channel))
                  for channel in (red, green, blue))
 
