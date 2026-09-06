@@ -36,12 +36,11 @@ import {
   applyRigPosePresetById,
   getRigPresetState, renameRigPosePreset, saveRigPosePreset,
   selectRigPosePreset,
-  beginRigPicking, cancelRigPicking, setModelWeightHeatmap,
+  beginModelPicking, cancelModelPicking, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
-import { initRigPanel } from './panels/rig-panel.js';
-import { initWeightPanel } from './panels/weight-panel.js';
+import { initWeightRigPanel } from './panels/weight-rig-panel.js';
 import { createRigOverlayController } from './scene/rig-overlay-controller.js';
 import { initPanelOpacityControl } from './ui/appearance.js';
 import { alertDialog } from './ui/dialogs.js';
@@ -257,8 +256,6 @@ rendererReady.then(ready => {
   $('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
   const applyEnvironmentPreset = initEnvironmentControl();
   initLeftDock();
-  initWeightPanel();
-  initRightDock();
   createRigOverlayController({
     scene, camera, canvas: renderer.domElement,
     arcballControls: controls,
@@ -280,7 +277,8 @@ rendererReady.then(ready => {
       'Pose gizmo is unavailable in this build.'),
     requestRender,
   });
-  initRigPanel();
+  initWeightRigPanel();
+  initRightDock();
   initInspectorPanel();
   initSelection();
   const viewportCameraButtons = $('viewport-camera-buttons');
@@ -422,8 +420,8 @@ rendererReady.then(ready => {
     getRigRotationSnapDegrees: {value: getRigRotationSnapDegrees},
     setRigRotationSnapDegrees: {value: setRigRotationSnapDegrees},
     setActiveRigSource: {value: setActiveRigSource},
-    beginRigPicking: {value: beginRigPicking},
-    cancelRigPicking: {value: cancelRigPicking},
+    beginModelPicking: {value: beginModelPicking},
+    cancelModelPicking: {value: cancelModelPicking},
     selectRigBone: {value: selectRigBone},
     selectRigJoint: {value: selectRigJoint},
     setRigComponentRoot: {value: setRigComponentRoot},

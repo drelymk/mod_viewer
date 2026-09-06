@@ -2,7 +2,7 @@
 // transient choice to have the dock open at all.
 
 const STORAGE_KEY = 'mod-viewer.right-dock-tab';
-const VALID_TABS = Object.freeze(['controls', 'inspector', 'weight', 'rig']);
+const VALID_TABS = Object.freeze(['controls', 'inspector', 'weight-rig']);
 
 let selectedTab = 'controls';
 let openTab = null;
@@ -93,13 +93,18 @@ export function setRightDockEnabled(enabled) {
 
 export function initRightDock() {
   const {tabs} = elements();
-  if (!tabs.controls || !tabs.inspector || !tabs.weight || !tabs.rig) return;
+  if (!tabs.controls || !tabs.inspector || !tabs['weight-rig']) return;
   VALID_TABS.forEach(tab =>
     tabs[tab].addEventListener('click', () => toggleRightDockTab(tab)));
   if (!ready) {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (validTab(stored)) selectedTab = stored;
+      const migrated = stored === 'weight' || stored === 'rig'
+        ? 'weight-rig' : stored;
+      if (validTab(migrated)) {
+        selectedTab = migrated;
+        if (migrated !== stored) localStorage.setItem(STORAGE_KEY, migrated);
+      }
     } catch (_) { /* private mode */ }
     ready = true;
   }

@@ -142,8 +142,6 @@ const modelWeightState = {
   failedMeshCount: 0,
   pickedPoint: null,
   pickerViewMode: 'all',
-  weightViewMode: 'authored',
-  weightViewJointId: null,
   pickStatus: '',
   picking: false,
 };
@@ -221,28 +219,19 @@ const modelPhysicsSession = createModelPhysicsSession({
     typeof window !== 'undefined' ? window.cancelAnimationFrame(frameId) : null,
 });
 
-const weightPickController = createWeightPickController({
+const modelPickController = createWeightPickController({
   canvas: renderer.domElement,
   camera,
   controls,
   getMeshes: modelPickMeshes,
-  onPick: handlePickedIntersection,
+  onPick: handleModelPickedIntersection,
   onStateChanged: (picking, {cancelled} = {}) => {
     modelWeightState.picking = picking;
-    if (picking || cancelled) notifyModelWeightChanged();
-  },
-  requestRender,
-});
-
-const rigPickController = createWeightPickController({
-  canvas: renderer.domElement,
-  camera,
-  controls,
-  getMeshes: modelPickMeshes,
-  onPick: handleRigPickedIntersection,
-  onStateChanged: (picking, {cancelled} = {}) => {
     modelRigState.picking = picking;
-    if (picking || cancelled) notifyModelRigChanged();
+    if (picking || cancelled) {
+      notifyModelWeightChanged();
+      notifyModelRigChanged();
+    }
   },
   requestRender,
 });
@@ -361,17 +350,6 @@ function modelWeightSnapshot() {
           .map(influence => ({...influence}))}
       : null,
     pickerViewMode: modelWeightState.pickerViewMode,
-    weightViewMode: modelWeightState.weightViewMode,
-    weightViewJointId: modelWeightState.weightViewJointId,
-    modelJoints: modelWeightState.weightViewMode === 'model'
-      ? (modelSkinningRig?.joints || []).map(joint => ({
-        jointId: joint.jointId,
-        signature: joint.signature,
-        members: (joint.members || []).map(member => ({...member})),
-        restCenter: [...(joint.restCenter || [0, 0, 0])],
-      })) : [],
-    modelJointsLoading: modelWeightState.weightViewMode === 'model'
-      && modelRigState.loading,
     pickStatus: modelWeightState.pickStatus,
     picking: modelWeightState.picking,
     savedSelectionApplied: modelWeightState.savedSelectionApplied,
@@ -777,7 +755,8 @@ function pickRadiusWorld() {
 
 function clearPickedPoint({notify = true} = {}) {
   if (!modelWeightState.pickedPoint && modelWeightState.pickerViewMode === 'all'
-      && !modelWeightState.pickStatus) return false;
+      && !modelWeightState.pickStatus && !modelPickController.isEnabled()) return false;
+  if (modelPickController.isEnabled()) modelPickController.cancel();
   modelWeightState.pickedPoint = null;
   modelWeightState.pickerViewMode = 'all';
   modelWeightState.pickStatus = '';
@@ -786,17 +765,21 @@ function clearPickedPoint({notify = true} = {}) {
   return true;
 }
 
-function handlePickedIntersection(intersection) {
+function handleModelPickedIntersection(intersection) {
   if (!intersection) {
     modelWeightState.pickStatus = 'No model surface was picked.';
+    modelRigState.pickStatus = 'No model surface was picked.';
     notifyModelWeightChanged();
+    notifyModelRigChanged();
     return null;
   }
   const mesh = intersection.object;
   const state = states.get(mesh);
   if (!state?.loaded || !state.skinningSourceKey) {
     modelWeightState.pickStatus = 'No skin weights are available for this part.';
+    modelRigState.pickStatus = 'No skin weights are available for this part.';
     notifyModelWeightChanged();
+    notifyModelRigChanged();
     return null;
   }
   const radiusWorld = pickRadiusWorld();
@@ -804,58 +787,24 @@ function handlePickedIntersection(intersection) {
     intersection, mesh, state, {radius: radiusWorld});
   if (!sampled) {
     modelWeightState.pickStatus = 'No skin weights are available for this part.';
+    modelRigState.pickStatus = 'No skin weights are available for this part.';
     notifyModelWeightChanged();
-    return null;
-  }
-  const source = modelWeightState.sourceDescriptors.get(
-    state.skinningSourceKey);
-  modelWeightState.pickedPoint = {
-    point: sampled.point,
-    sourceKey: state.skinningSourceKey,
-    sourceFile: source?.sourceFile || state.skinningSourceFile,
-    boneIdOffset: source?.boneIdOffset ?? state.skinningBoneOffset,
-    meshKey: mesh.userData?.semanticKey || null,
-    radiusWorld,
-    influences: sampled.influences,
-  };
-  modelWeightState.pickerViewMode = 'picked';
-  modelWeightState.pickStatus = '';
-  notifyModelWeightChanged();
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('mod-viewer-weight-point-picked', {
-      detail: modelWeightSnapshot(),
-    }));
-  }
-  return modelWeightState.pickedPoint;
-}
-
-function handleRigPickedIntersection(intersection) {
-  if (!intersection) {
-    modelRigState.pickStatus = 'No model surface was picked.';
-    notifyModelRigChanged();
-    return null;
-  }
-  const mesh = intersection.object;
-  const state = states.get(mesh);
-  if (!state?.loaded || !state.skinningSourceKey) {
-    modelRigState.pickStatus = 'No skin weights are available for this part.';
-    notifyModelRigChanged();
-    return null;
-  }
-  const sampled = sampleSkinningAtIntersection(
-    intersection, mesh, state, {radius: pickRadiusWorld()});
-  if (!sampled) {
-    modelRigState.pickStatus = 'No skin weights are available for this part.';
     notifyModelRigChanged();
     return null;
   }
   const source = modelWeightState.sourceDescriptors.get(state.skinningSourceKey);
   const pickedPoint = {
-    ...sampled,
+    point: sampled.point,
+    sourceKey: state.skinningSourceKey,
     sourceFile: source?.sourceFile || sampled.sourceFile,
     boneIdOffset: source?.boneIdOffset ?? sampled.boneIdOffset,
     meshKey: mesh.userData?.semanticKey || null,
+    radiusWorld,
+    influences: sampled.influences,
   };
+  modelWeightState.pickedPoint = pickedPoint;
+  modelWeightState.pickerViewMode = 'picked';
+  modelWeightState.pickStatus = '';
   modelRigState.pickedPoint = pickedPoint;
   modelRigState.activeSourceKey = sampled.sourceKey;
   const pickedBoneId = sampled.influences[0]?.boneId ?? null;
@@ -863,35 +812,35 @@ function handleRigPickedIntersection(intersection) {
   modelRigState.selectedJointId = Number.isInteger(Number(pickedBoneId))
     ? modelJointIdForSourceBone(sampled.sourceKey, pickedBoneId) ?? null : null;
   modelRigState.pickStatus = '';
+  notifyModelWeightChanged();
   notifyModelRigChanged();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('mod-viewer-model-point-picked', {
+      detail: {
+        weight: modelWeightSnapshot(),
+        rig: rigSnapshot(),
+      },
+    }));
+  }
   return pickedPoint;
 }
 
-export function beginWeightPicking() {
+export function beginModelPicking() {
   if (!modelWeightState.loaded) {
     modelWeightState.pickStatus = 'Load model weights before picking.';
     notifyModelWeightChanged();
     return false;
   }
-  return weightPickController.begin();
-}
-
-export function cancelWeightPicking() {
-  return weightPickController.cancel();
-}
-
-export function beginRigPicking() {
   if (!modelRigState.loaded) {
     modelRigState.pickStatus = 'Load the inferred rig before picking.';
     notifyModelRigChanged();
     return false;
   }
-  weightPickController.cancel();
-  return rigPickController.begin();
+  return modelPickController.begin();
 }
 
-export function cancelRigPicking() {
-  return rigPickController.cancel();
+export function cancelModelPicking() {
+  return modelPickController.cancel();
 }
 
 export function setWeightPickerViewMode(mode) {
@@ -903,33 +852,6 @@ export function setWeightPickerViewMode(mode) {
   modelWeightState.pickStatus = '';
   notifyModelWeightChanged();
   return mode;
-}
-
-/** Change only the Weight panel's inspection scope; authored selections stay source-scoped. */
-export function setWeightViewMode(mode) {
-  if (mode !== 'authored' && mode !== 'model') {
-    return modelWeightState.weightViewMode;
-  }
-  if (modelWeightState.weightViewMode === mode) return mode;
-  modelWeightState.weightViewMode = mode;
-  if (mode === 'authored') modelWeightState.weightViewJointId = null;
-  updateModelWeightHeatmap();
-  notifyModelWeightChanged();
-  requestRender();
-  return mode;
-}
-
-/** Select a reconciled model joint for visualization without changing authored weights. */
-export function setModelWeightViewJoint(jointId) {
-  const value = Number(jointId);
-  if (!Number.isInteger(value) || !modelSkinningRig?.joints?.[value]) {
-    return modelWeightState.weightViewJointId;
-  }
-  modelWeightState.weightViewJointId = value;
-  updateModelWeightHeatmap();
-  notifyModelWeightChanged();
-  requestRender();
-  return value;
 }
 
 function sourceDescriptorForEntry(entry) {
@@ -1135,7 +1057,7 @@ function resetModelWeightState() {
   modelWeightGeneration += 1;
   modelRigLoadToken = null;
   rigPresetGeneration += 1;
-  rigPickController.cancel();
+  modelPickController.cancel();
   sourcePhysicsRigs.clear();
   sourceSkinningRigs.clear();
   modelSkinningRig = null;
@@ -1158,8 +1080,6 @@ function resetModelWeightState() {
   modelWeightState.failedMeshCount = 0;
   modelWeightState.pickedPoint = null;
   modelWeightState.pickerViewMode = 'all';
-  modelWeightState.weightViewMode = 'authored';
-  modelWeightState.weightViewJointId = null;
   modelWeightState.pickStatus = '';
   modelRigState.loaded = false;
   modelRigState.loading = false;
@@ -2178,9 +2098,6 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   });
   modelSkinningRig = rig;
   refreshBuiltInRigPresets(rig);
-  if (!modelSkinningRig.joints[modelWeightState.weightViewJointId]) {
-    modelWeightState.weightViewJointId = null;
-  }
   updateModelWeightHeatmap();
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId = Number.isInteger(previousSelectedJointId)
@@ -2493,7 +2410,7 @@ export function getModelPhysicsState() {
 }
 
 export function destroyModelPhysicsSession() {
-  weightPickController.cancel();
+  modelPickController.cancel();
   modelPhysicsSession.destroy();
   knownMeshes.clear();
   resetModelWeightState();
@@ -3958,26 +3875,6 @@ function updateHeatmap(mesh, state, selectedMask = state.selectedWeightMask) {
   mesh.material = state.debugMaterial;
 }
 
-function modelJointWeightMask(state) {
-  if (modelWeightState.weightViewMode !== 'model'
-      || !modelSkinningRig
-      || !Number.isInteger(modelWeightState.weightViewJointId)) return null;
-  const joint = modelSkinningRig.joints?.[modelWeightState.weightViewJointId];
-  if (!joint) return null;
-  const selected = new Set((joint.members || [])
-    .filter(member => member.sourceKey === state.skinningSourceKey)
-    .map(member => Number(member.boneId))
-    .filter(Number.isInteger));
-  if (!selected.size) return null;
-  return buildSelectedWeightMask(
-    state.indices, state.weights, state.influenceCount, selected);
-}
-
-function heatmapMaskFor(state) {
-  return modelWeightState.weightViewMode === 'model'
-    ? modelJointWeightMask(state) : state.selectedWeightMask;
-}
-
 function selectedWeightPresent(mask) {
   return !!mask && mask.some(value => value > 0);
 }
@@ -3988,10 +3885,9 @@ function updateModelWeightHeatmap(changedSourceKeys = null) {
     if (!state?.loaded) return;
     if (changedSourceKeys
         && !changedSourceKeys.has(state.skinningSourceKey)) return;
-    const mask = heatmapMaskFor(state);
+    const mask = state.selectedWeightMask;
     if (modelWeightState.heatmapEnabled && selectedWeightPresent(mask)) {
-      state.heatmapMode = modelWeightState.weightViewMode === 'model'
-        ? 'model-joint' : 'bone';
+      state.heatmapMode = 'bone';
       updateHeatmap(mesh, state, mask);
     } else if (state.heatmapMode) {
       disableHeatmap(mesh, state);

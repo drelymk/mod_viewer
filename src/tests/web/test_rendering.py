@@ -997,7 +997,7 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           };
         }""")
         assert page.evaluate("window.__rigPanelPreviewCalls") == 0
-        page.locator("#rig-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const experiment = await import('./js/mesh/weight-experiment.js');
@@ -1096,7 +1096,7 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["builtInPresets"][0]["available"] is False
         assert result["builtInPresets"][0]["reason"] == "insufficient_rig"
         assert result["builtInOption"] == {
-            "text": "Arms Up — unavailable", "disabled": True}
+            "text": "Arms Up", "disabled": True}
         assert result["selectedBuiltin"] is True
         assert result["builtinApply"] == {
             "success": False, "failureReason": "builtin_unavailable",
@@ -1105,11 +1105,11 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["applyPresetDisabled"] is True
         assert result["renamePresetDisabled"] is True
         assert result["deletePresetDisabled"] is True
-        assert result["jointSelectValue"] == ""
+        assert result["jointSelectValue"] == "0"
         assert result["jointSelectText"] == "Select a joint"
         assert result["initialShowAll"] is False
-        assert len(result["filteredJointOptions"]) == 2
-        assert "#1" in result["filteredJointOptions"][1]
+        assert result["filteredJointOptions"] == [
+            "Select a joint", "Joint 0", "Joint 1"]
         assert result["weightBefore"] == []
         assert result["posed"]
         assert result["boundsDuringDrag"] == {"boundsCalls": 0, "sphereCalls": 0}
@@ -1175,7 +1175,7 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             return entry('cross/c.buf|offset=0', [8, 9], urlC);
           };
         }""")
-        page.locator("#rig-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const THREE = await import('three/webgpu');
@@ -1249,10 +1249,8 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             members: state.model.joints.find(joint => joint.jointId === jointA)
               ?.members?.length || 0,
             posed,
-            reconciliation: document.querySelector(
-              '.rig-reconciliation-summary')?.textContent || '',
-            connection: document.querySelector(
-              '.rig-connection-value')?.textContent || '',
+            diagnosticsVisible: !!document.querySelector(
+              '.rig-reconciliation-summary, .rig-connection-value, .rig-confidence-value'),
             changed: after.map((values, index) => values.some((value, offset) =>
               Math.abs(value - before[index][offset]) > 1e-5)),
             physicsEnabled: physicsState.enabled,
@@ -1268,9 +1266,7 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         assert result["equivalent"], result
         assert result["members"] == 3
         assert result["posed"]
-        assert "Sources 3" in result["reconciliation"]
-        assert "Components 1" in result["reconciliation"]
-        assert result["connection"] == "equivalence"
+        assert not result["diagnosticsVisible"]
         assert result["changed"] == [True, True, True]
         assert result["physicsEnabled"]
         assert result["physicsParticipants"] == 1
@@ -1315,7 +1311,7 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
             }, diagnostics: {},
           });
         }""")
-        page.locator("#rig-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const experiment = await import('./js/mesh/weight-experiment.js');
@@ -1552,7 +1548,7 @@ def test_rig_pose_preset_recomputes_descendants_after_root_change(
             }, diagnostics: {},
           });
         }""")
-        page.locator("#rig-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const experiment = await import('./js/mesh/weight-experiment.js');
@@ -1680,7 +1676,7 @@ def test_rig_pose_preset_restores_roots_for_disconnected_components(
             }, diagnostics: {},
           });
         }""")
-        page.locator("#rig-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const experiment = await import('./js/mesh/weight-experiment.js');
@@ -1770,7 +1766,7 @@ def test_rig_overlay_real_controls_deform_without_proxy_feedback(
             }, diagnostics: {},
           });
         }""")
-        page.locator("#rig-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const THREE = await import('three/webgpu');
@@ -2767,7 +2763,7 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
           };
         }""")
         assert page.evaluate("window.modViewer.getModelWeightState().selectedBoneCount") == 0
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.__weightPreviewCalls === 1")
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
         mask_count_before = page.evaluate("""async () =>
@@ -2787,9 +2783,9 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
             ["1", "2 verts · 45%"],
             ["2", "2 verts · 35%"],
         ]
-        assert page.locator("#weight-panel .inspector-label").count() == 0
-        assert page.locator("#weight-panel .inspector-value").count() == 0
-        assert page.locator("#weight-panel .inspector-section-title").count() == 0
+        assert page.locator("#weight-rig-panel .inspector-label").count() == 0
+        assert page.locator("#weight-rig-panel .inspector-value").count() == 0
+        assert page.locator("#weight-rig-panel .inspector-section-title").count() == 0
         stats_build_count = page.evaluate("""async () =>
           (await import('./js/mesh/weight-experiment.js'))
             .getModelBoneStatsBuildCount()""")
@@ -2808,14 +2804,16 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         assert mask == pytest.approx([.2, .7, 0])
 
         page.locator(".draw-item").click()
-        assert page.locator("#weight-tab").get_attribute("aria-selected") == "true"
+        if page.locator("#weight-rig-tab").get_attribute("aria-selected") != "true":
+            page.locator("#weight-rig-tab").click()
+        assert page.locator("#weight-rig-tab").get_attribute("aria-selected") == "true"
         page.locator(".weight-heatmap-enable").check()
         assert page.evaluate("window.modViewer.getModelWeightState().heatmapEnabled")
         mask_count_before = page.evaluate("""async () =>
           (await import('./js/mesh/weight-experiment.js'))
             .getSelectedWeightMaskBuildCount()""")
-        page.locator("#weight-tab").click()
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelWeightState().heatmapEnabled")
         page.locator(".weight-bone-select").click()
         page.locator('.weight-bone-option input[value="2"]').check()
@@ -2830,21 +2828,9 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         assert page.evaluate("""async () =>
           (await import('./js/mesh/weight-experiment.js'))
             .getModelBoneStatsBuildCount()""") == stats_build_count
-        page.locator(".weight-scope-option[data-mode='model']").click()
-        page.wait_for_function("window.modViewer.getModelWeightState().weightViewMode === 'model'")
-        page.wait_for_function("document.querySelectorAll('.weight-model-joint-option').length > 0")
-        selected_before_model_view = page.evaluate(
-            "window.modViewer.getModelWeightState().selectedBoneCount")
-        page.locator(".weight-bone-select").click()
-        assert page.locator(".weight-model-joint-option").count() > 0
-        page.locator(".weight-model-joint-option").first.click()
-        page.wait_for_function(
-            "Number.isInteger(window.modViewer.getModelWeightState().weightViewJointId)")
-        assert page.evaluate(
-            "window.modViewer.getModelWeightState().selectedBoneCount") == selected_before_model_view
-        page.locator(".weight-scope-option[data-mode='authored']").click()
-        assert page.evaluate(
-            "window.modViewer.getModelWeightState().weightViewMode") == "authored"
+        assert page.locator(".weight-scope-option").count() == 0
+        assert page.locator(".weight-model-joint-option").count() == 0
+        assert page.locator(".weight-rig-advanced").count() == 2
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
         physics = page.evaluate("""async () => {
           const {getSkinningState} = await import('./js/mesh/weight-experiment.js');
@@ -2854,6 +2840,7 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         }""")
         assert physics["enabled"]
         assert physics["dynamic"] == [1, 2]
+        page.locator(".weight-rig-advanced").first.locator("summary").click()
         page.locator(".weight-clear-selection").click()
         page.wait_for_function("!window.modViewer.getModelPhysicsState().enabled")
         assert page.evaluate("window.__weightPreviewCalls") == 1
@@ -2894,7 +2881,7 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
             }},
           });
         }""")
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
         page.locator(".weight-bone-select").click()
         page.locator('.weight-bone-option input[value="1"]').check()
@@ -2922,10 +2909,12 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         page.wait_for_function(
             "window.modViewer.getModelWeightState().pickerViewMode === 'picked'")
         result = page.evaluate("""() => {
-          const state = window.modViewer.getModelWeightState();
-          return {
-            selected: state.selectedBones,
-            picked: state.pickedPoint,
+            const state = window.modViewer.getModelWeightState();
+            const rig = window.modViewer.getModelRigState();
+            return {
+              selected: state.selectedBones,
+              picked: state.pickedPoint,
+              selectedJointId: rig.selectedJointId,
             mode: state.pickerViewMode,
             rows: [...document.querySelectorAll('.weight-bone-option')]
               .map(row => row.dataset.boneId),
@@ -2949,6 +2938,7 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         }]
         assert result["picked"]["sourceKey"] == "test/bodyblend.buf|offset=0"
         assert result["picked"]["influences"]
+        assert isinstance(result["selectedJointId"], int)
         assert result["mode"] == "picked"
         assert result["rows"]
         assert result["cursor"] in ("auto", "")
@@ -2969,6 +2959,13 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         assert page.locator(".weight-bone-popover").is_hidden()
         assert page.locator(".weight-pick-model").get_attribute(
             "aria-pressed") == "false"
+
+        page.locator(".weight-pick-model").click()
+        page.locator("#inspector-tab").click()
+        page.wait_for_function("!window.modViewer.getModelWeightState().picking")
+        assert page.evaluate(
+            "window.modViewer.getModelWeightState().pickedPoint") == previous_pick
+        page.locator("#weight-rig-tab").click()
 
         page.locator(".weight-pick-model").click()
         page.evaluate("""() => {
@@ -3019,7 +3016,7 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
             }},
           });
         }""")
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
         page.locator(".weight-bone-select").click()
         page.locator(".weight-bone-search").fill("1")
@@ -3060,10 +3057,11 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
         assert page.locator(".weight-bone-search").input_value() == "2"
         assert page.locator(".weight-selected-only").is_checked()
         assert page.locator(".weight-bone-option").evaluate_all(
-            "nodes => nodes.every(node => node.hidden && getComputedStyle(node).display === 'none')")
+            "nodes => nodes.filter(node => !node.hidden).map(node => node.dataset.boneId)" ) == []
         assert page.locator(".weight-bone-select").get_attribute("aria-expanded") == "true"
         page.locator(".weight-bone-select").click()
 
+        page.locator(".weight-rig-advanced").first.locator("summary").click()
         slider = page.locator(".weight-physics-frequency")
         page.evaluate("window.__weightSlider = document.querySelector('.weight-physics-frequency')")
         page.evaluate("""() => {
@@ -3097,7 +3095,7 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
         assert page.locator(".weight-bone-select").get_attribute("aria-expanded") == "true"
         page.locator("#inspector-tab").click()
         assert page.locator(".weight-bone-popover").is_hidden()
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
         assert page.evaluate("window.__weightPicker === document.querySelector('.weight-bone-popover')")
     finally:
         context.close()
@@ -3143,10 +3141,11 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
               return {saved: true, selected_bones: bones};
             };
         }""")
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("""() =>
           window.modViewer.getModelWeightState().selectedBoneCount === 1""")
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
+        page.locator(".weight-rig-advanced").first.locator("summary").click()
 
         page.locator(".weight-clear-selection").click()
         page.wait_for_function("!window.modViewer.getModelPhysicsState().enabled")
@@ -3171,8 +3170,8 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
         assert not page.evaluate("window.modViewer.getModelPhysicsState().enabled")
         assert page.evaluate(
             "window.modViewer.getModelWeightState().selectedBoneCount") == 0
-        page.locator("#weight-tab").click()
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
+        page.locator("#weight-rig-tab").click()
         assert page.evaluate(
             "window.modViewer.getModelWeightState().selectedBoneCount") == 0
 
@@ -3192,7 +3191,7 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
         page.locator(".weight-save-selection").click()
         page.wait_for_function("""() =>
           window.modViewer.getModelWeightState().selectionSaveError === 'disk full'""")
-        assert page.locator(".weight-status").inner_text() == (
+        assert page.locator(".weight-rig-status").inner_text() == (
             "Could not save bone selection: disk full")
     finally:
         context.close()
@@ -3239,7 +3238,7 @@ def test_weight_picker_ignores_mesh_selection(
             data: {url, length: 96}, meshes: entries,
           });
         }""")
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
         page.locator(".weight-bone-select").click()
         assert page.locator(".weight-bone-option").count() == 3
@@ -3253,6 +3252,12 @@ def test_weight_picker_ignores_mesh_selection(
         assert page.evaluate(
             "window.modViewer.getModelWeightState().selectedBoneCount") == 1
         page.locator(".draw-item").nth(1).click()
+        if page.locator("#weight-rig-tab").get_attribute(
+                "aria-selected") != "true":
+            page.locator("#weight-rig-tab").click()
+        if page.locator(".weight-bone-select").get_attribute(
+                "aria-expanded") != "true":
+            page.locator(".weight-bone-select").click()
         assert page.locator(".weight-bone-select").get_attribute(
             "aria-expanded") == "true"
         assert page.locator(".weight-bone-option").evaluate_all(
@@ -3315,7 +3320,7 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
             data: {url, length: 96}, meshes: entries,
           });
         }""")
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
         page.locator(".weight-bone-select").click()
         assert page.locator(".weight-bone-group").count() == 2
@@ -3341,6 +3346,7 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
         assert result["participants"] == [True, False]
         assert result["physics"]["participantCount"] == 1
 
+        page.locator(".weight-bone-select").click()
         page.locator(".weight-heatmap-enable").check()
         assert page.evaluate("""async () => {
           const {getSkinningState} = await import('./js/mesh/weight-experiment.js');
@@ -3411,7 +3417,7 @@ def test_weight_selection_shared_source_participates_per_mesh(
             data: {url, length: 96}, meshes: entries,
           });
         }""")
-        page.locator("#weight-tab").click()
+        page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
         page.locator(".weight-bone-select").click()
         assert page.locator(".weight-bone-group").count() == 1
