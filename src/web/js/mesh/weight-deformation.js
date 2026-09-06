@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
+
 function vectorFromCenter(center) {
   if (center?.isVector3) return center.clone();
   return new THREE.Vector3(
@@ -22,6 +24,13 @@ function centerFromCollection(nodeCenters, boneId) {
     return nodeCenters.get(boneId) ?? nodeCenters.get(String(boneId));
   }
   return nodeCenters?.[boneId];
+}
+
+function valueFromCollection(collection, boneId) {
+  if (collection instanceof Map) {
+    return collection.get(boneId) ?? collection.get(String(boneId));
+  }
+  return collection?.[boneId];
 }
 
 function rotationFromCollection(rotationByBoneId, boneId) {
@@ -53,6 +62,18 @@ function quaternionFromRotationVector(rotationVector) {
     vector.clone().multiplyScalar(1 / angle), angle);
 }
 
+function quaternionFromCollection(quaternionByBoneId, boneId) {
+  const value = valueFromCollection(quaternionByBoneId, boneId);
+  const quaternion = value?.quaternion ?? value;
+  if (quaternion?.isQuaternion) return quaternion.clone().normalize();
+  const values = quaternion?.length >= 4
+    ? quaternion.slice(0, 4).map(Number)
+    : [quaternion?.x, quaternion?.y, quaternion?.z, quaternion?.w]
+      .map(Number);
+  return values.length === 4 && values.every(Number.isFinite)
+    ? new THREE.Quaternion(...values).normalize() : new THREE.Quaternion();
+}
+
 export function buildForestTransformsFromLocalRotations(
     forest, nodeCenters, options = {}) {
   const transforms = new Map();
@@ -71,6 +92,11 @@ export function buildForestTransformsFromLocalRotations(
   const getRotation = typeof options.getRotation === 'function'
     ? options.getRotation : boneId => rotationFromCollection(
       rotationByBoneId, boneId);
+  const getQuaternion = typeof options.getQuaternion === 'function'
+    ? options.getQuaternion : options.quaternionByBoneId
+      ? boneId => quaternionFromCollection(options.quaternionByBoneId, boneId)
+      : null;
+  const jointPivotByBoneId = options.jointPivotByBoneId || null;
 
   (forest?.components || []).forEach(component => {
     const rootId = Number(component.rootId);
@@ -89,20 +115,27 @@ export function buildForestTransformsFromLocalRotations(
         || new THREE.Quaternion();
       const parentCenter = vectorFromCenter(
         centerFromCollection(nodeCenters, parentId));
-      const pivot = parentCenter.clone().applyMatrix4(parentTransform);
       const children = component.childrenById?.[parentId] || [];
       children.forEach(childValue => {
         const childId = Number(childValue);
         if (!Number.isFinite(childId) || visited.has(childId)) return;
         visited.add(childId);
-        const localRotation = quaternionFromRotationVector(
-          getRotation(childId));
+        const localRotation = getQuaternion
+          ? (getQuaternion(childId)?.clone?.() || new THREE.Quaternion())
+          : quaternionFromRotationVector(getRotation(childId));
+        localRotation.normalize();
         // The local rotation vector is expressed in the parent frame. Convert
         // it to a world-space rotation around the already transformed pivot,
         // then inherit the parent's affine transform.
         const worldRotation = parentRotation.clone()
           .multiply(localRotation)
           .multiply(parentRotation.clone().invert());
+        const jointCenter = vectorFromCenter(
+          valueFromCollection(jointPivotByBoneId, childId));
+        const pivot = jointPivotByBoneId
+          && valueFromCollection(jointPivotByBoneId, childId)
+          ? jointCenter.applyMatrix4(parentTransform)
+          : parentCenter.clone().applyMatrix4(parentTransform);
         const aroundPivot = rotationAroundPivot(
           pivot, worldRotation);
         const childEntry = entryFor(childId);
@@ -130,6 +163,168 @@ export function buildForestTransformsFromLocalRotations(
     options.rotationOutput.clear();
     rotations.forEach((rotation, boneId) => {
       options.rotationOutput.set(boneId, rotation);
+    });
+  }
+  return transforms;
+}
+
+/**
+ * Compose a source's manual cumulative transforms with secondary Physics
+ * offsets.  The manual maps are authoritative and may come from a model Rig
+ * whose hierarchy differs from the Physics forest, so this intentionally
+ * propagates only the Physics delta already accumulated at each parent.
+ */
+export function composeBasePoseWithPhysicsOffsets({
+  forest,
+  nodeCenters,
+  jointPivotByBoneId = null,
+  baseTransformByBoneId = null,
+  baseRotationByBoneId = null,
+  rotationByBoneId = null,
+  getOffsetRotation = null,
+  transformCache = new Map(),
+  rotationOutput = null,
+} = {}) {
+  const transforms = new Map();
+  const rotations = new Map();
+  const cache = transformCache instanceof Map ? transformCache : new Map();
+  const entryFor = boneId => {
+    const id = Number(boneId);
+    let entry = cache.get(id);
+    if (!entry) {
+      entry = {matrix: new THREE.Matrix4(), rotation: new THREE.Quaternion()};
+      cache.set(id, entry);
+    }
+    return entry;
+  };
+  const baseMatrixFor = boneId => {
+    const value = transformForBone(baseTransformByBoneId, boneId);
+    return value?.isMatrix4 ? value : null;
+  };
+  const baseRotationFor = boneId => {
+    const value = valueFromCollection(baseRotationByBoneId, boneId);
+    const quaternion = value?.quaternion ?? value;
+    if (quaternion?.isQuaternion) return quaternion.clone().normalize();
+    const matrix = baseMatrixFor(boneId);
+    return matrix
+      ? new THREE.Quaternion().setFromRotationMatrix(matrix).normalize()
+      : new THREE.Quaternion();
+  };
+  const offsetQuaternionFor = boneId => {
+    const callbackValue = typeof getOffsetRotation === 'function'
+      ? getOffsetRotation(boneId) : undefined;
+    const value = callbackValue ?? valueFromCollection(
+      rotationByBoneId, boneId);
+    if (value?.isQuaternion || value?.quaternion?.isQuaternion) {
+      return (value.quaternion || value).clone().normalize();
+    }
+    return quaternionFromRotationVector(value?.rotationVector ?? value);
+  };
+  const baseMatrixOrIdentity = boneId => baseMatrixFor(boneId)
+    || RIG_IDENTITY_MATRIX;
+  const parentDeltaMatrix = new THREE.Matrix4();
+  const baseInverseMatrix = new THREE.Matrix4();
+  const aroundPivot = new THREE.Matrix4();
+  const translationToPivot = new THREE.Matrix4();
+  const translationFromPivot = new THREE.Matrix4();
+  const rotationMatrix = new THREE.Matrix4();
+  const inheritedMatrix = new THREE.Matrix4();
+  const baseParentRotation = new THREE.Quaternion();
+  const baseChildRotation = new THREE.Quaternion();
+  const parentDeltaRotation = new THREE.Quaternion();
+  const inheritedRotation = new THREE.Quaternion();
+  const worldRotation = new THREE.Quaternion();
+  const inverseRotation = new THREE.Quaternion();
+  const pivot = new THREE.Vector3();
+
+  // Manual transforms remain available for every influence, including bones
+  // outside the selected Physics forest.
+  if (baseTransformByBoneId instanceof Map) {
+    baseTransformByBoneId.forEach((matrix, boneId) => {
+      if (!matrix?.isMatrix4) return;
+      const entry = entryFor(boneId);
+      entry.matrix.copy(matrix);
+      entry.rotation.copy(baseRotationFor(boneId));
+      transforms.set(Number(boneId), entry.matrix);
+      rotations.set(Number(boneId), entry.rotation);
+    });
+  }
+
+  (forest?.components || []).forEach(component => {
+    const rootId = Number(component.rootId);
+    if (!Number.isFinite(rootId)) return;
+    const rootEntry = entryFor(rootId);
+    rootEntry.matrix.copy(baseMatrixOrIdentity(rootId));
+    rootEntry.rotation.copy(baseRotationFor(rootId));
+    transforms.set(rootId, rootEntry.matrix);
+    rotations.set(rootId, rootEntry.rotation);
+    const queue = [rootId];
+    const visited = new Set([rootId]);
+    while (queue.length) {
+      const parentId = queue.shift();
+      const parentTransform = transforms.get(parentId) || RIG_IDENTITY_MATRIX;
+      const parentRotation = rotations.get(parentId)
+        || new THREE.Quaternion();
+      const baseParent = baseMatrixOrIdentity(parentId);
+      baseInverseMatrix.copy(baseParent).invert();
+      parentDeltaMatrix.copy(parentTransform).multiply(baseInverseMatrix);
+      baseParentRotation.copy(baseRotationFor(parentId));
+      parentDeltaRotation.copy(parentRotation)
+        .multiply(baseParentRotation.invert());
+      const children = component.childrenById?.[parentId] || [];
+      children.forEach(childValue => {
+        const childId = Number(childValue);
+        if (!Number.isFinite(childId) || visited.has(childId)) return;
+        visited.add(childId);
+        inheritedMatrix.copy(parentDeltaMatrix)
+          .multiply(baseMatrixOrIdentity(childId));
+        // Base rotations are cumulative, so inherit only the parent's
+        // composed delta before applying the child's cumulative base pose.
+        baseChildRotation.copy(baseRotationFor(childId));
+        inheritedRotation.copy(parentDeltaRotation)
+          .multiply(baseChildRotation);
+        const offset = offsetQuaternionFor(childId);
+        // Physics solver vectors are in the model reference frame.  The
+        // composed parent delta is the accumulated Physics change from that
+        // frame to the posed scene; manual model rotation must not redefine
+        // the solver vector's frame.
+        inverseRotation.copy(parentDeltaRotation).invert();
+        worldRotation.copy(parentDeltaRotation)
+          .multiply(offset)
+          .multiply(inverseRotation);
+        const pivotValue = valueFromCollection(
+          jointPivotByBoneId, childId)
+          || centerFromCollection(nodeCenters, parentId);
+        pivot.copy(vectorFromCenter(pivotValue)).applyMatrix4(parentTransform);
+        translationToPivot.makeTranslation(pivot.x, pivot.y, pivot.z);
+        rotationMatrix.makeRotationFromQuaternion(worldRotation);
+        translationFromPivot.makeTranslation(-pivot.x, -pivot.y, -pivot.z);
+        aroundPivot.copy(translationToPivot)
+          .multiply(rotationMatrix)
+          .multiply(translationFromPivot);
+        const entry = entryFor(childId);
+        entry.matrix.copy(aroundPivot).multiply(inheritedMatrix);
+        entry.rotation.copy(worldRotation).multiply(inheritedRotation).normalize();
+        transforms.set(childId, entry.matrix);
+        rotations.set(childId, entry.rotation);
+        queue.push(childId);
+      });
+    }
+    (component.nodeIds || []).forEach(nodeValue => {
+      const nodeId = Number(nodeValue);
+      if (Number.isFinite(nodeId) && !transforms.has(nodeId)) {
+        const entry = entryFor(nodeId);
+        entry.matrix.copy(baseMatrixOrIdentity(nodeId));
+        entry.rotation.copy(baseRotationFor(nodeId));
+        transforms.set(nodeId, entry.matrix);
+        rotations.set(nodeId, entry.rotation);
+      }
+    });
+  });
+  if (rotationOutput instanceof Map) {
+    rotationOutput.clear();
+    rotations.forEach((rotation, boneId) => {
+      rotationOutput.set(boneId, rotation);
     });
   }
   return transforms;

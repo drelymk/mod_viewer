@@ -225,6 +225,84 @@ of documentation, comments and tests; use portable fixtures instead.
   supplies no names, canonical skeleton, hierarchy, bind pose or animation.
   Keep maximum-spanning relationships, weak-bridge pruning and static-boundary
   attachments conservative; never infer semantic labels such as hair or skirt.
+- Cross-source Rig/Pose reconciliation is a viewer-owned model graph layered
+  over the source rigs. Preserve `SourceBoneRef {sourceKey,boneId}` and the
+  canonical `${sourceKey}#bone=${boneId}` key; equal numeric IDs from different
+  sources never merge without geometry/topology evidence, and authored indices
+  and weight buffers are never rewritten. Build model joints from strict
+  mutual-best equivalences, guarded one-member-per-source clusters,
+  topology-assisted propagation and ambiguity rejection. Collapse source edges
+  into a model-level maximum-spanning forest, then add only conservative,
+  cycle-free cross-source attachment edges between component/boundary joints.
+- Cross-source reconciliation connects multiple skinning palettes for inferred
+  posing. Because the model-wide inferred hierarchy may differ from each source
+  palette's original weighting topology, some cross-source weighted regions can
+  stretch during rotation. This remains a known Rig limitation.
+- Each ModelJoint exposes a stable signature made from its sorted canonical
+  source-bone keys. Runtime joint, component and root indices are ephemeral and
+  must not be persisted as preset identities.
+- M3 Rig pose presets use the existing per-mod `.mod_viewer.json` under
+  `rig.version = 1` with an array of stable-ID records containing only a name,
+  explicit root signatures and normalized non-identity local joint quaternions.
+  Preset names are trimmed and bounded; IDs do not change on rename, and
+  unrelated metadata is preserved on save, rename and delete. Missing or
+  malformed preset metadata is a partial feature failure and must not prevent
+  the model from loading.
+- Preset resolution is exact by ModelJoint signature. Missing, ambiguous,
+  duplicate or malformed entries are reported and skipped individually; valid
+  entries still apply. Saved presets are never auto-applied after load or shape
+  rebaseline, and Reset Pose returns to the default inferred roots and identity
+ rotations without deleting saved presets.
+- Applying a preset is one batch transaction: restore valid model-root
+  overrides first, rebuild rest frames/caches once, install all valid local
+  rotations, run one model deformation/bounds pass, then notify and render once.
+  Pose presets and manual Rig edits remain available while Character Physics is
+  active; Rename and Delete remain metadata-only operations.
+- Normalize reconciliation distances by model reference radius with candidate,
+  strict, propagation and attachment gates; retain candidate evidence and
+  rejection reasons for diagnostics. Model joints own rest center/pivot/frame,
+  source members, model parent/children and the representative member.
+  `ModelSkinningRig.poseRotationByJointId` is authoritative for manual pose;
+  source pose maps are derived aliases only. Reuse the forest transform builder,
+  alias model transforms back to each source's authored IDs, preserve affected
+  vertex caching and baseline restoration, and keep Character Physics
+  source-scoped secondary rotation/velocity offsets. Physics never clears or
+  overwrites the manual model pose.
+- Normal Rig snapshots contain only panel and overlay data. Source membership,
+  reconciliation evidence and performance diagnostics are available only from
+  the explicit Rig debug projection.
+- Final deformation composes manual source transforms with Physics offsets
+  before one authored-baseline skinning pass. Never skin already-deformed
+  geometry a second time. The final active vertex set is the union of manual
+  pose vertices and Physics-selected vertices; every influence receives its
+  manual transform, while selected influences additionally receive Physics,
+  without renormalizing weights. Positions and normals use the same composed
+  transform/rotation maps.
+- Physics solver angular, translation and velocity vectors are expressed in
+  the model reference frame. Composition applies an offset in that frame and
+  conjugates it only by the accumulated parent Physics delta, never by a
+  child's manual model rotation.
+- A nonempty Weight selection continues to enable model-scoped Physics and an
+  empty selection disables it. Starting, stopping or reconfiguring Physics
+  preserves manual pose. Manual pose changes, presets, Reset Joint and Reset
+  Pose preserve Physics rotation/velocity state, refresh pose-dependent
+  equilibrium, and wake the existing simulation rather than restarting it.
+  Reset Physics changes only secondary motion; Reset Pose changes only manual
+  pose/root state. Saved presets serialize manual Rig state only, never
+  instantaneous Physics offsets.
+- The Rig picker maps source influences to model joints. The Rig panel selects
+  model joints and displays topology without semantic labels; the
+  explicit Rig debug projection exposes source membership; the
+  combined overlay renders model joints, source edges and distinguishable
+  attachment edges with O(1) Three.js objects. Reconciliation rebuilds on
+  source membership/shape changes and resets pose; model structure revisions
+  do not change for pose, materials, textures, visibility or model turns.
+- Joint selection is independent from pose state: Clear removes the selected
+  ModelJoint through the state API, leaving
+  manual pose, presets, Weight selection, Physics and overlay visibility
+  unchanged. Reset Joint preserves the selected Joint; Reset Pose preserves
+  it too, clears only the runtime selected-preset/apply-result state, and never
+  deletes saved preset records.
 - Step each source rig once at fixed 1/120 second with bounded catch-up; deform
   visible members only at selected-weight vertices and transform baseline normals
   with the same influence. Defer exact bounds and shadow-camera fitting until

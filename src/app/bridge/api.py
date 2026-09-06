@@ -180,6 +180,16 @@ class ModViewerAPI:
     def save_weight_selection(self, folder_path, bones):
         return self._mod_preview.save_weight_selection(folder_path, bones)
 
+    def save_rig_pose_preset(self, folder_path, preset):
+        return self._mod_preview.save_rig_pose_preset(folder_path, preset)
+
+    def rename_rig_pose_preset(self, folder_path, preset_id, name):
+        return self._mod_preview.rename_rig_pose_preset(
+            folder_path, preset_id, name)
+
+    def delete_rig_pose_preset(self, folder_path, preset_id):
+        return self._mod_preview.delete_rig_pose_preset(folder_path, preset_id)
+
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):
         return self._mod_preview.save_component_material_kind(

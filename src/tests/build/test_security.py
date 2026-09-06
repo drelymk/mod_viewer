@@ -96,6 +96,16 @@ def test_hash_helpers_are_sha256(tmp_path):
     assert build.sha256_file(filename) == build.sha256_bytes(data)
 
 
+def test_transform_controls_is_pinned_in_asset_manifest():
+    spec = build.ASSET_FILES["addons/controls/TransformControls.js"]
+
+    assert spec["url"] == (
+        f"https://cdn.jsdelivr.net/npm/three@{build.THREE_VERSION}/"
+        "examples/jsm/controls/TransformControls.js")
+    assert spec["sha256"] == (
+        "151befe25bb0d68626f9a6b033625b7b0cf6848e39ba71623b7bed8e3df565d6")
+
+
 def test_pyinstaller_command_bundles_third_party_notices(monkeypatch):
     commands = []
     monkeypatch.setattr(build, "write_baked_features", lambda _features: None)

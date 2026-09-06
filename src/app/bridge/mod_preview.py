@@ -98,6 +98,8 @@ class ModPreview:
                 metadata.hydrate_mesh_names(result, saved_metadata)
             result["metadata"]["mesh_color_adjustments"] = \
                 metadata.hydrate_mesh_color_adjustments(result, saved_metadata)
+            result["metadata"]["rig"] = metadata.rig_pose_presets(
+                data=saved_metadata)
             game_metadata = result.get("metadata", {}).get("game", {})
             publication.set_game_profile(game_metadata.get("id"))
             metadata.hydrate_textures(
@@ -351,6 +353,18 @@ class ModPreview:
     def save_weight_selection(self, folder_path, bones):
         folder_path = self._access.mod_folder(folder_path)
         return metadata.save_weight_selected_bones(folder_path, bones)
+
+    def save_rig_pose_preset(self, folder_path, preset):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.save_rig_pose_preset(folder_path, preset)
+
+    def rename_rig_pose_preset(self, folder_path, preset_id, name):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.rename_rig_pose_preset(folder_path, preset_id, name)
+
+    def delete_rig_pose_preset(self, folder_path, preset_id):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.delete_rig_pose_preset(folder_path, preset_id)
 
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):

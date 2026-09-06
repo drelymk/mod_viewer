@@ -23,7 +23,7 @@ export function createViewGizmoController({ camera, controls, element, onChange 
       ? new THREE.Vector3(0, 0, sign > 0 ? -1 : 1)
       : new THREE.Vector3(0, 1, 0);
     snap = {
-      started: performance.now(),
+      started: null,
       duration: 190,
       distance: camera.position.distanceTo(controls.target),
       startDirection,
@@ -36,6 +36,7 @@ export function createViewGizmoController({ camera, controls, element, onChange 
 
   function updateSnap() {
     if (!snap) return false;
+    if (snap.started === null) snap.started = performance.now();
     const raw = Math.min(1, (performance.now() - snap.started) / snap.duration);
     const progress = 1 - Math.pow(1 - raw, 3);
     const rotation = new THREE.Quaternion().slerpQuaternions(

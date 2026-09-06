@@ -37,7 +37,7 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
         page.locator("#right-dock.ui-visible").wait_for()
         assert page.locator(".right-dock-tabs > button").evaluate_all(
             "tabs => tabs.map(tab => tab.id)") == [
-                "controls-tab", "inspector-tab", "weight-tab"]
+                "controls-tab", "inspector-tab", "weight-rig-tab"]
         assert page.locator("#controls-tab").get_attribute("aria-selected") == "true"
         assert page.locator("#controls-panel").is_visible()
         assert page.locator("#inspector-panel").is_hidden()
@@ -74,6 +74,28 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
         assert page.locator("#inspector-tab").get_attribute("aria-selected") == "true"
         assert page.locator("#inspector-panel").is_visible()
         assert page.locator("#controls-panel").is_hidden()
+    finally:
+        context.close()
+
+
+def test_right_dock_migrates_weight_and_rig_tab_preferences(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {
+        "DockMigration": _payload("DockMigration"),
+    })
+    try:
+        for stored in ("weight", "rig", "weight-rig"):
+            page.evaluate(
+                "value => localStorage.setItem('mod-viewer.right-dock-tab', value)",
+                stored)
+            page.reload()
+            page.wait_for_function("window.modViewer !== undefined")
+            _open(page, "DockMigration")
+            page.locator("#right-dock.ui-visible").wait_for()
+            assert page.locator("#weight-rig-tab").get_attribute(
+                "aria-selected") == "true"
+            assert page.evaluate(
+                "localStorage.getItem('mod-viewer.right-dock-tab')") == "weight-rig"
     finally:
         context.close()
 

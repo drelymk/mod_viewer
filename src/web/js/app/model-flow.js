@@ -23,6 +23,7 @@ import {
   refreshHealthReport, setAssetResolution, setHealthLoader,
   setHealthReport,
 } from '../panels/health-report.js';
+import { setRigPresetMetadata } from '../mesh/weight-experiment.js';
 import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
 import {
@@ -194,6 +195,7 @@ export async function displayMeshPayload(payload, {
     setSourceUi('asset');
   }
   const modelPath = assetMode ? null : viewerState.currentModPath;
+  setRigPresetMetadata(assetMode ? null : payload.metadata?.rig);
   viewerState.lastToggles = controls.toggles || {};
   setStateRules(state.rules || [], state.defaults || {}, {
     toggles: controls.toggles || {}, menu: controls.menu || {},

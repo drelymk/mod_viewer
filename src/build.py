@@ -90,6 +90,10 @@ ASSET_FILES = {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/ArcballControls.js",
         "sha256": "f80db7fe66685fc7f5438e3be44fed6684aed33a7b92b2442fe6958291156fb3",
     },
+    "addons/controls/TransformControls.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/TransformControls.js",
+        "sha256": "151befe25bb0d68626f9a6b033625b7b0cf6848e39ba71623b7bed8e3df565d6",
+    },
     "addons/objects/SkyMesh.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/objects/SkyMesh.js",
         "sha256": "a44cb7c543d04b2690b0079b8b473da9a36660629b2eb091f7eab8b4111d7b7a",

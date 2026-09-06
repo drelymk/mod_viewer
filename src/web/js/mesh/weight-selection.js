@@ -156,6 +156,96 @@ export function sampleNearbyBoneWeights(
   return sampleMass > 0 ? sortedInfluences(accumulator, sampleMass) : [];
 }
 
+function pointValues(value) {
+  if (value?.isVector3) return [value.x, value.y, value.z];
+  if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+    return [...value].slice(0, 3).map(Number);
+  }
+  return [Number(value?.x), Number(value?.y), Number(value?.z)];
+}
+
+function worldPositionArray(mesh) {
+  const position = mesh?.geometry?.attributes?.position;
+  if (!position?.array) return null;
+  mesh.updateWorldMatrix?.(true, false);
+  const elements = mesh.matrixWorld?.elements;
+  if (!elements || elements.length < 16) return new Float32Array(position.array);
+  const result = new Float32Array(position.array.length);
+  for (let offset = 0; offset < position.array.length; offset += 3) {
+    const x = Number(position.array[offset]);
+    const y = Number(position.array[offset + 1]);
+    const z = Number(position.array[offset + 2]);
+    result[offset] = elements[0] * x + elements[4] * y
+      + elements[8] * z + elements[12];
+    result[offset + 1] = elements[1] * x + elements[5] * y
+      + elements[9] * z + elements[13];
+    result[offset + 2] = elements[2] * x + elements[6] * y
+      + elements[10] * z + elements[14];
+  }
+  return result;
+}
+
+function triangleVertexIndices(mesh, faceIndex) {
+  const triangle = Number(faceIndex);
+  if (!Number.isInteger(triangle) || triangle < 0) return null;
+  const index = mesh.geometry?.index?.array;
+  const positions = mesh.geometry?.attributes?.position;
+  const start = triangle * 3;
+  if (index) {
+    if (start + 2 >= index.length) return null;
+    return [Number(index[start]), Number(index[start + 1]), Number(index[start + 2])];
+  }
+  if (!positions || start + 2 >= positions.count) return null;
+  return [start, start + 1, start + 2];
+}
+
+/**
+ * Share the Weight picker sampling contract with Rig.  This helper owns the
+ * world-space neighborhood and barycentric fallback; callers only decide how
+ * to use the source-scoped influences.
+ */
+export function sampleSkinningAtIntersection(
+    intersection, mesh, skinningState, modelBounds = null) {
+  const point = pointValues(intersection?.point);
+  if (point.length < 3 || !point.every(Number.isFinite)
+      || !mesh || !skinningState?.indices || !skinningState.weights) return null;
+  const radiusCandidate = typeof modelBounds === 'number'
+    ? modelBounds : Number(modelBounds?.radius ?? modelBounds?.pickRadius);
+  const radiusWorld = Number.isFinite(radiusCandidate) && radiusCandidate > 0
+    ? radiusCandidate : 0.0001;
+  const positions = worldPositionArray(mesh);
+  if (!positions || positions.length < 3) return null;
+  let influences = sampleNearbyBoneWeights(
+    positions, skinningState.indices, skinningState.weights,
+    skinningState.influenceCount, point, radiusWorld);
+  if (!influences.length) {
+    const vertices = triangleVertexIndices(mesh, intersection?.faceIndex);
+    if (vertices) {
+      const trianglePoint = vertex => {
+        const offset = vertices[vertex] * 3;
+        return [positions[offset], positions[offset + 1], positions[offset + 2]];
+      };
+      const barycentric = barycentricCoordinates(
+        point, trianglePoint(0), trianglePoint(1), trianglePoint(2));
+      if (barycentric) {
+        influences = interpolateTriangleBoneWeights(
+          skinningState.indices, skinningState.weights,
+          skinningState.influenceCount, vertices, barycentric);
+      }
+    }
+  }
+  if (!influences.length) return null;
+  return {
+    sourceKey: skinningState.skinningSourceKey || skinningState.sourceKey || '',
+    sourceFile: skinningState.skinningSourceFile || skinningState.sourceFile || '',
+    boneIdOffset: Number(skinningState.skinningBoneOffset
+      ?? skinningState.boneIdOffset ?? 0),
+    point,
+    radiusWorld,
+    influences,
+  };
+}
+
 function normalizedSourceFile(value) {
   if (typeof value !== 'string') return '';
   const normalized = value.trim().replaceAll('\\', '/')

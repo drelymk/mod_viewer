@@ -61,6 +61,7 @@ def has_vendored_three():
         "three.webgpu.js",
         "three.tsl.js",
         os.path.join("addons", "controls", "ArcballControls.js"),
+        os.path.join("addons", "controls", "TransformControls.js"),
         os.path.join("addons", "objects", "SkyMesh.js"),
         os.path.join("addons", "tsl", "display", "GTAONode.js"),
         os.path.join("addons", "tsl", "display", "BloomNode.js"),
