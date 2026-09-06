@@ -150,9 +150,11 @@ of documentation, comments and tests; use portable fixtures instead.
   and remove neutral entries. Disable editing without a diffuse texture or for
   Asset textures. Reset Color clears the preview, not a previously saved DDS.
 - CPU saving and GPU preview share normalization and operation order for hue,
-  saturation, brightness, contrast, RGB channel adjustments and tint strength. Adjust in
-  editor-sRGB, preserving alpha; convert at shader boundaries and do not run
-  picker hex values through Three.js's implicit linear color conversion.
+  saturation, brightness, contrast, RGB channel adjustments and optional
+  target-color tint. Tint preserves the current pixel intensity/shading, and
+  Brightness supports up to 400%. Adjust in editor-sRGB, preserving alpha;
+  convert at shader boundaries and do not run picker hex values through
+  Three.js's implicit linear color conversion.
   Preview changes update stable material nodes without recreating textures.
 - Save to Texture has its own confirmation and immediately writes one mod-owned
   BC7 UNORM/sRGB DDS, independently of INI Export. Include every changed mesh

@@ -344,7 +344,9 @@ function createColorAdjustmentNode(state, baseColor) {
     adjustColorChannel(result.g, intensity, state.colorGreenNode),
     adjustColorChannel(result.b, intensity, state.colorBlueNode),
   ).clamp(0, 1);
-  result = mix(result, state.colorTintNode, state.colorTintStrengthNode);
+  const tintIntensity = result.r.max(result.g).max(result.b);
+  const tinted = state.colorTintNode.mul(tintIntensity);
+  result = state.colorTintEnabledNode.select(tinted, result);
   result = result.clamp(0, 1);
   result = colorMap(result, editorSrgbToLinearChannel);
   return state.colorAdjustmentEnabledNode.select(result, baseColor);
@@ -914,7 +916,7 @@ export function configureGameMaterial(material, profile, options = {}) {
     // Picker values are raw editor-sRGB components. Do not use THREE.Color,
     // whose hex/CSS setters convert into the linear working color space.
     colorTintNode: uniform(new Vector3(1, 1, 1)),
-    colorTintStrengthNode: uniform(0),
+    colorTintEnabledNode: uniform(false),
     hasMaterialId,
     hasSpecularArea,
     hasShadowMask,
@@ -1059,7 +1061,7 @@ export function getMaterialDebugMode(material) {
 export function getGameMaterialColorAdjustment(material) {
   const state = material?.userData?.gameMaterial;
   if (!state) return {...DEFAULT_COLOR_ADJUSTMENT};
-  const tint = state.colorTintNode?.value;
+  const tintEnabled = state.colorTintEnabledNode?.value === true;
   return normalizeColorAdjustment({
     hue: state.colorHueNode?.value,
     saturation: state.colorSaturationNode?.value,
@@ -1068,8 +1070,7 @@ export function getGameMaterialColorAdjustment(material) {
     red: state.colorRedNode?.value,
     green: state.colorGreenNode?.value,
     blue: state.colorBlueNode?.value,
-    tint: tintHexFromRgb(tint),
-    tintStrength: state.colorTintStrengthNode?.value,
+    tint: tintEnabled ? tintHexFromRgb(state.colorTintNode?.value) : null,
   });
 }
 
@@ -1087,7 +1088,6 @@ export function setGameMaterialColorAdjustment(
     ['colorRedNode', value.red],
     ['colorGreenNode', value.green],
     ['colorBlueNode', value.blue],
-    ['colorTintStrengthNode', value.tintStrength],
   ];
   scalarNodes.forEach(([name, next]) => {
     const node = state[name];
@@ -1095,11 +1095,16 @@ export function setGameMaterialColorAdjustment(
     node.value = next;
   });
   const tintNode = state.colorTintNode;
-  const currentTint = tintHexFromRgb(tintNode.value);
+  const currentTint = state.colorTintEnabledNode.value
+    ? tintHexFromRgb(tintNode.value) : null;
   const tintRgb = tintRgbFromHex(value.tint);
   changed = currentTint !== value.tint || changed;
   if (tintNode.value?.set) tintNode.value.set(...tintRgb);
   else tintNode.value = new Vector3(...tintRgb);
+  const tintEnabled = value.tint !== null;
+  changed = !Object.is(state.colorTintEnabledNode.value, tintEnabled)
+    || changed;
+  state.colorTintEnabledNode.value = tintEnabled;
   const nextEnabled = enabled === true;
   changed = !Object.is(state.colorAdjustmentEnabledNode.value, nextEnabled)
     || changed;

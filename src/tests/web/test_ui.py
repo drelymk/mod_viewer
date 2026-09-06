@@ -909,7 +909,10 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
         color = page.locator(".inspector-color-section")
-        assert color.locator(".inspector-color-slider").count() == 8
+        assert color.locator(".inspector-color-slider").count() == 7
+        assert color.locator("[data-color-field='brightness'] .inspector-color-slider").get_attribute("max") == "400"
+        assert "Strength" not in color.inner_text()
+        assert color.locator(".inspector-color-tint-clear").is_disabled()
         hue = color.locator("[data-color-field='hue'] .inspector-color-slider")
         assert hue.input_value() == "30"
         assert color.locator("[data-color-field='saturation'] .inspector-color-value").inner_text() == "115%"
@@ -933,6 +936,39 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
             "window.__fakeApi.calls.saveMeshColorAdjustment.length === 1")
         assert page.evaluate(
             "window.__fakeApi.calls.saveMeshColorAdjustment[0][2].hue") == 55
+
+        page.evaluate("""() => {
+          const slider = document.querySelector(
+            '[data-color-field="brightness"] .inspector-color-slider');
+          slider.value = '250';
+          slider.dispatchEvent(new Event('input', {bubbles: true}));
+          slider.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        page.wait_for_function(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length === 2")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.brightness") == 2.5
+
+        page.evaluate("""() => {
+          const input = document.querySelector('.inspector-color-tint-input');
+          input.value = '#ffaaaa';
+          input.dispatchEvent(new Event('input', {bubbles: true}));
+          input.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        page.wait_for_function(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length === 3")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.tint") == "#ffaaaa"
+        assert not color.locator(".inspector-color-tint-clear").is_disabled()
+
+        color.locator(".inspector-color-tint-clear").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length === 4")
+        assert page.evaluate("""() => {
+          const adjustment = window.modViewer.activeMeshes[0].userData.colorAdjustment;
+          return {tint: adjustment.tint, brightness: adjustment.brightness};
+        }""") == {"tint": None, "brightness": 2.5}
+        assert color.locator(".inspector-color-tint-clear").is_disabled()
 
         page.evaluate("""async () => {
           const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
@@ -1478,17 +1514,15 @@ def test_texture_save_resets_all_committed_meshes_and_refreshes_affected_keys(
                     "semantic_key": "Body-BakeConfirm-0",
                     "metadata_key": "Body BakeConfirm::3,0,0",
                     "adjustment": {
-                        "hue": 30, "saturation": 1, "brightness": 1, "contrast": 1,
-                        "red": 1, "green": 1, "blue": 1, "tint": "#ffffff",
-                        "tint_strength": 0,
+                    "hue": 30, "saturation": 1, "brightness": 1, "contrast": 1,
+                        "red": 1, "green": 1, "blue": 1, "tint": None,
                     },
                 }, {
                     "semantic_key": "Face-BakeConfirm-0",
                     "metadata_key": "Face BakeConfirm::3,0,0",
                     "adjustment": {
-                        "hue": 45, "saturation": 1, "brightness": 1, "contrast": 1,
-                        "red": 1, "green": 1, "blue": 1, "tint": "#ffffff",
-                        "tint_strength": 0,
+                    "hue": 45, "saturation": 1, "brightness": 1, "contrast": 1,
+                        "red": 1, "green": 1, "blue": 1, "tint": None,
                     },
                 }],
                 [{

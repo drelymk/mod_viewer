@@ -153,10 +153,11 @@ that modifies the source texture file.
    `Automatic` if it resolves to one). Color editing is unavailable when the
    mesh has no diffuse texture or uses an Asset texture.
 3. In the `Color` section, adjust `Hue`, `Saturation`, `Brightness`, and
-   `Contrast`, then fine-tune `R`, `G`, `B`, `Tint`, and `Strength` as needed.
-   Choose a `Tint` color and increase `Strength` to blend it in. The model
-   updates immediately, and the preview settings are saved in `.mod_viewer.json`.
-   Use `Reset Color` to remove the preview adjustment.
+   `Contrast`, then fine-tune `R`, `G`, `B`, and `Tint` as needed. Choose a
+   `Tint` color to recolor the texture while preserving its shading; use
+   `Clear` to disable it. The model updates immediately, and the preview
+   settings are saved in `.mod_viewer.json`. Use `Reset Color` to remove the
+   preview adjustment.
 4. To bake the preview into a supported DDS texture, click `Save to Texture...`.
 5. Review the texture and the list of meshes with color changes. Saving
    includes the changed meshes sharing that texture. Click `Save` to write

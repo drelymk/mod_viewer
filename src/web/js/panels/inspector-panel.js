@@ -350,7 +350,7 @@ function buildColorSection(content, mesh) {
   };
   addSlider('hue', 'Hue', -180, 180, 1, formatHue);
   addSlider('saturation', 'Saturation', 0, 200, 1, formatPercent);
-  addSlider('brightness', 'Brightness', 0, 200, 1, formatPercent);
+  addSlider('brightness', 'Brightness', 0, 400, 1, formatPercent);
   addSlider('contrast', 'Contrast', 0, 200, 1, formatPercent);
 
   const rgbTitle = document.createElement('div');
@@ -361,32 +361,44 @@ function buildColorSection(content, mesh) {
   addSlider('green', 'G', 0, 200, 1, formatPercent);
   addSlider('blue', 'B', 0, 200, 1, formatPercent);
 
-  const tint = document.createElement('label');
+  const tint = document.createElement('div');
   tint.className = 'inspector-color-tint';
   const tintLabel = document.createElement('span');
   tintLabel.className = 'inspector-color-control-heading';
   tintLabel.textContent = 'Tint';
   const tintInput = document.createElement('input');
   tintInput.type = 'color';
+  tintInput.setAttribute('aria-label', 'Tint color');
   tintInput.className = 'inspector-color-tint-input';
-  tintInput.value = adjustment.tint;
+  tintInput.value = adjustment.tint || '#ffffff';
   const tintValue = document.createElement('span');
   tintValue.className = 'inspector-color-value';
   tintValue.dataset.colorTintValue = 'true';
-  tintValue.textContent = adjustment.tint.toUpperCase();
+  tintValue.textContent = adjustment.tint?.toUpperCase() || 'None';
+  const clearTint = document.createElement('button');
+  clearTint.type = 'button';
+  clearTint.className = 'ui-button inspector-color-tint-clear';
+  clearTint.textContent = 'Clear';
+  clearTint.disabled = adjustment.tint === null;
+  clearTint.setAttribute('aria-label', 'Clear tint');
   const applyTint = persist => {
     tintValue.textContent = tintInput.value.toUpperCase();
+    clearTint.disabled = false;
     const next = getMeshColorAdjustment(mesh);
-    next.tint = tintInput.value;
+    next.tint = tintInput.value.toLowerCase();
     setMeshColorAdjustment(mesh, next, { persist, render: true });
     syncTextureSaveAction(section, mesh);
   };
   tintInput.addEventListener('input', () => applyTint(false));
   tintInput.addEventListener('change', () => applyTint(true));
-  tint.append(tintLabel, tintInput, tintValue);
+  clearTint.addEventListener('click', () => {
+    const next = getMeshColorAdjustment(mesh);
+    next.tint = null;
+    setMeshColorAdjustment(mesh, next, { persist: true, render: true });
+    updateColorControlState(content, mesh);
+  });
+  tint.append(tintLabel, tintInput, tintValue, clearTint);
   section.appendChild(tint);
-
-  addSlider('tintStrength', 'Strength', 0, 100, 1, formatPercent);
 
   const reset = document.createElement('button');
   reset.type = 'button';
@@ -424,8 +436,10 @@ function updateColorControlState(content, mesh) {
   });
   const tintInput = section.querySelector('.inspector-color-tint-input');
   const tintValue = section.querySelector('[data-color-tint-value]');
-  if (tintInput) tintInput.value = adjustment.tint;
-  if (tintValue) tintValue.textContent = adjustment.tint.toUpperCase();
+  const clearTint = section.querySelector('.inspector-color-tint-clear');
+  if (tintInput) tintInput.value = adjustment.tint || '#ffffff';
+  if (tintValue) tintValue.textContent = adjustment.tint?.toUpperCase() || 'None';
+  if (clearTint) clearTint.disabled = adjustment.tint === null;
   syncTextureSaveAction(section, mesh);
   return true;
 }

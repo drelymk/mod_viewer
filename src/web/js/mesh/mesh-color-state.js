@@ -25,7 +25,6 @@ function persistenceValue(adjustment) {
     green: adjustment.green,
     blue: adjustment.blue,
     tint: adjustment.tint,
-    tint_strength: adjustment.tintStrength,
   };
 }
 

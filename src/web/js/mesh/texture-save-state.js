@@ -31,7 +31,6 @@ function copyAdjustment(adjustment) {
     green: normalized.green,
     blue: normalized.blue,
     tint: normalized.tint,
-    tint_strength: normalized.tintStrength,
   };
 }
 
