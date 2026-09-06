@@ -724,9 +724,7 @@ def _fit_fixed_index_endpoints(targets, indices, weights, endpoint_codec,
         raw0_values.add(_quantize_endpoint(value, endpoint_codec, pbit0))
         raw1_values.add(_quantize_endpoint(value, endpoint_codec, pbit1))
 
-    def error(raw0, raw1):
-        endpoint0 = endpoint_codec.decode(raw0, pbit0)
-        endpoint1 = endpoint_codec.decode(raw1, pbit1)
+    def error(endpoint0, endpoint1):
         return (aa * endpoint0 * endpoint0
                 + 2.0 * ab * endpoint0 * endpoint1
                 + bb * endpoint1 * endpoint1
@@ -734,10 +732,21 @@ def _fit_fixed_index_endpoints(targets, indices, weights, endpoint_codec,
                 - 2.0 * bt * endpoint1
                 + tt)
 
-    best = (error(*original_raw), original_raw[0], original_raw[1])
-    for raw0 in sorted(raw0_values):
-        for raw1 in sorted(raw1_values):
-            candidate = (error(raw0, raw1), raw0, raw1)
+    raw0_candidates = sorted(raw0_values)
+    raw1_candidates = sorted(raw1_values)
+    decoded0 = tuple(
+        (raw0, endpoint_codec.decode(raw0, pbit0))
+        for raw0 in raw0_candidates)
+    decoded1 = tuple(
+        (raw1, endpoint_codec.decode(raw1, pbit1))
+        for raw1 in raw1_candidates)
+    best = (
+        error(endpoint_codec.decode(original_raw[0], pbit0),
+              endpoint_codec.decode(original_raw[1], pbit1)),
+        original_raw[0], original_raw[1])
+    for raw0, endpoint0 in decoded0:
+        for raw1, endpoint1 in decoded1:
+            candidate = (error(endpoint0, endpoint1), raw0, raw1)
             if candidate < best:
                 best = candidate
     return best[1], best[2]
