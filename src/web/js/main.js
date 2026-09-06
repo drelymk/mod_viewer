@@ -24,13 +24,11 @@ import {
   disableModelPhysics, enableModelPhysics,
   ensureModelRigLoaded, ensureModelWeightsLoaded,
   getModelPhysicsState, getModelRigDebugState, getModelRigState,
-  getModelWeightState, getRigBonePoseFrame, getRigJointPoseFrame,
-  getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
-  clearRigJointSelection, finishRigPose, resetModelPhysicsMotion, resetRigBone,
+  getModelWeightState, getRigJointPoseFrame,
+  clearRigJointSelection, finishRigJointPose, resetModelPhysicsMotion,
+  resetRigJoint,
   resetRigPose,
-  selectRigBone, selectRigJoint,
-  setActiveRigSource, setRigBoneRotation, setRigJointRotation,
-  setRigComponentRoot,
+  selectRigJoint, setRigJointRotation, setRigJointRoot,
   getRigRotationSnapDegrees, setRigRotationSnapDegrees, setRigVisible,
   setRigOverlayScope,
   setRigPoseControlStatus, applySavedRigPosePreset, deleteRigPosePreset,
@@ -39,6 +37,9 @@ import {
   selectRigPosePreset,
   beginModelPicking, cancelModelPicking, setModelWeightHeatmap,
 } from './mesh/weight-experiment.js';
+import {
+  getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
+} from './mesh/weight-physics-performance.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
 import { initWeightRigPanel } from './panels/weight-rig-panel.js';
@@ -262,18 +263,9 @@ rendererReady.then(ready => {
     arcballControls: controls,
     getMeshes: () => activeMeshes,
     getRigState: getModelRigState,
-    getRigDebugState: getModelRigDebugState,
-    getRigBonePoseFrame,
     getRigJointPoseFrame,
-    setRigBoneRotation,
     setRigJointRotation,
-    finishRigPose,
-    finishRigJointPose: jointId => {
-      const joint = getModelRigState().model?.joints?.find(item =>
-        item.jointId === Number(jointId));
-      const member = joint?.representativeMember || joint?.members?.[0];
-      return member ? finishRigPose(member.sourceKey, member.boneId) : false;
-    },
+    finishRigJointPose,
     onTransformControlsUnavailable: () => setRigPoseControlStatus(
       'Pose gizmo is unavailable in this build.'),
     requestRender,
@@ -413,24 +405,20 @@ rendererReady.then(ready => {
   Object.defineProperties(window.modViewer, {
     getModelRigState: {value: getModelRigState},
     getModelRigDebugState: {value: getModelRigDebugState},
-    getRigBonePoseFrame: {value: getRigBonePoseFrame},
     getRigJointPoseFrame: {value: getRigJointPoseFrame},
     ensureModelRigLoaded: {value: ensureModelRigLoaded},
     setRigVisible: {value: setRigVisible},
     setRigOverlayScope: {value: setRigOverlayScope},
     getRigRotationSnapDegrees: {value: getRigRotationSnapDegrees},
     setRigRotationSnapDegrees: {value: setRigRotationSnapDegrees},
-    setActiveRigSource: {value: setActiveRigSource},
     beginModelPicking: {value: beginModelPicking},
     cancelModelPicking: {value: cancelModelPicking},
-    selectRigBone: {value: selectRigBone},
     selectRigJoint: {value: selectRigJoint},
     clearRigJointSelection: {value: clearRigJointSelection},
-    setRigComponentRoot: {value: setRigComponentRoot},
-    setRigBoneRotation: {value: setRigBoneRotation},
+    setRigJointRoot: {value: setRigJointRoot},
     setRigJointRotation: {value: setRigJointRotation},
-    finishRigPose: {value: finishRigPose},
-    resetRigBone: {value: resetRigBone},
+    finishRigJointPose: {value: finishRigJointPose},
+    resetRigJoint: {value: resetRigJoint},
     resetRigPose: {value: resetRigPose},
     getRigPresetState: {value: getRigPresetState},
     applySavedRigPosePreset: {value: applySavedRigPosePreset},

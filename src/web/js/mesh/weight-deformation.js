@@ -231,6 +231,9 @@ export function composeBasePoseWithPhysicsOffsets({
   const translationFromPivot = new THREE.Matrix4();
   const rotationMatrix = new THREE.Matrix4();
   const inheritedMatrix = new THREE.Matrix4();
+  const baseParentRotation = new THREE.Quaternion();
+  const baseChildRotation = new THREE.Quaternion();
+  const parentDeltaRotation = new THREE.Quaternion();
   const inheritedRotation = new THREE.Quaternion();
   const worldRotation = new THREE.Quaternion();
   const inverseRotation = new THREE.Quaternion();
@@ -272,6 +275,9 @@ export function composeBasePoseWithPhysicsOffsets({
       }
       cachedInverse.copy(baseParent).invert();
       parentDeltaMatrix.copy(parentTransform).multiply(cachedInverse);
+      baseParentRotation.copy(baseRotationFor(parentId));
+      parentDeltaRotation.copy(parentRotation)
+        .multiply(baseParentRotation.invert());
       const children = component.childrenById?.[parentId] || [];
       children.forEach(childValue => {
         const childId = Number(childValue);
@@ -279,8 +285,11 @@ export function composeBasePoseWithPhysicsOffsets({
         visited.add(childId);
         inheritedMatrix.copy(parentDeltaMatrix)
           .multiply(baseMatrixOrIdentity(childId));
-        inheritedRotation.copy(parentRotation)
-          .multiply(baseRotationFor(childId));
+        // Base rotations are cumulative, so inherit only the parent's
+        // composed delta before applying the child's cumulative base pose.
+        baseChildRotation.copy(baseRotationFor(childId));
+        inheritedRotation.copy(parentDeltaRotation)
+          .multiply(baseChildRotation);
         const offset = offsetQuaternionFor(childId);
         inverseRotation.copy(inheritedRotation).invert();
         worldRotation.copy(inheritedRotation)

@@ -5,18 +5,19 @@ import {
   beginModelPicking, cancelModelPicking, clearSelectedBones,
   ensureModelRigLoaded, getModelPhysicsState, getModelRigState,
   getModelWeightState, getRigJointPoseFrame, loadSavedBoneSelection,
-  clearRigJointSelection, resetModelPhysics, resetRigBone, resetRigPose,
+  clearRigJointSelection, resetModelPhysics, resetRigJoint, resetRigPose,
   saveModelWeightSelection,
   selectRigJoint, selectRigPosePreset, setBoneSelected, setPhysicsConstraintsEnabled,
   setPhysicsContinuousLinearResponse, setPhysicsDamping, setPhysicsFrequency,
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
   setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
-  setRigComponentRoot, setRigOverlayScope,
+  setRigJointRoot, setRigOverlayScope,
   setRigRotationSnapDegrees, setRigVisible, setWeightPickerViewMode,
   applyRigPosePresetById,
-  deleteRigPosePreset, eulerFromRestFrameDelta, renameRigPosePreset,
+  deleteRigPosePreset, renameRigPosePreset,
   saveRigPosePreset,
 } from '../mesh/weight-experiment.js';
+import {eulerFromRestFrameDelta} from '../mesh/weight-rig-frames.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 
 let panel = null;
@@ -331,8 +332,7 @@ function buildRigSection(parent) {
   resetJoint.textContent = 'Reset Joint';
   resetJoint.addEventListener('click', () => {
     const selected = selectedJoint();
-    const member = selected?.representativeMember || selected?.members?.[0];
-    if (member) resetRigBone(member.sourceKey, member.boneId);
+    if (selected) resetRigJoint(selected.jointId);
   });
   const resetPose = document.createElement('button');
   resetPose.type = 'button';
@@ -433,8 +433,7 @@ function buildRigSection(parent) {
   setRoot.textContent = 'Set selected as root';
   setRoot.addEventListener('click', () => {
     const selected = selectedJoint();
-    const member = selected?.representativeMember || selected?.members?.[0];
-    if (member) setRigComponentRoot(member.sourceKey, member.boneId);
+    if (selected) setRigJointRoot(selected.jointId);
   });
   hierarchy.appendChild(setRoot);
   ui.setRoot = setRoot;

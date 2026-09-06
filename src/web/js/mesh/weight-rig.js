@@ -113,41 +113,10 @@ function centerDistance(centerA, centerB) {
     Number(centerA[2]) - Number(centerB[2]));
 }
 
-function oldRelationshipArguments(
-    baselinePositions, indices, weights, influenceCount, nodes,
-    boundingSphereRadius) {
-  // Keep the old public helper signature usable for existing callers while
-  // making the new baseline-aware signature the canonical one.
-  if (Array.isArray(influenceCount) || influenceCount?.length !== undefined) {
-    return {
-      baselinePositions: null,
-      indices: baselinePositions,
-      weights: indices,
-      influenceCount: weights,
-      nodes: influenceCount,
-      boundingSphereRadius: nodes,
-    };
-  }
-  return {
-    baselinePositions, indices, weights, influenceCount, nodes,
-    boundingSphereRadius,
-  };
-}
-
 /** Build overlap evidence and an overlap-derived pivot for every bone pair. */
 export function buildInfluenceRelationships(
     baselinePositions, indices, weights, influenceCount, nodes,
     boundingSphereRadius = null) {
-  const args = oldRelationshipArguments(
-    baselinePositions, indices, weights, influenceCount, nodes,
-    boundingSphereRadius);
-  baselinePositions = args.baselinePositions;
-  indices = args.indices;
-  weights = args.weights;
-  influenceCount = args.influenceCount;
-  nodes = args.nodes;
-  boundingSphereRadius = args.boundingSphereRadius;
-
   const nodeById = new Map((nodes || []).map(node => [
     Number(node.boneId), node]));
   const vertexCount = compactVertexCount(indices, weights, influenceCount);

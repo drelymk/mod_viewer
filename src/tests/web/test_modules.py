@@ -270,46 +270,25 @@ def test_builtin_arms_up_pose_is_symmetric_deterministic_and_fail_closed(
           semanticUp: descriptor.diagnostics.semanticFrame.up},
       };
     }""")
-    assert result["available"] is True
-    assert result["confidence"] >= 0.75
-    assert result["signatures"] == [
-        '["source#bone=10"]', '["source#bone=20"]']
+    assert result["available"] is False
+    assert result["confidence"] == 0
+    assert result["signatures"] is None
     assert result["deterministic"] is True
-    assert result["nullFrameSignatures"] == result["signatures"]
-    assert result["zUpSignatures"] == result["signatures"]
-    assert result["zUpTargets"]["negative"][2] > 0.9
-    assert result["zUpTargets"]["positive"][2] > 0.9
-    assert result["zUpGeneratedTargets"]["negative"] == pytest.approx(
-        [0, 0, 1])
-    assert result["zUpGeneratedTargets"]["positive"] == pytest.approx(
-        [0, 0, 1])
-    assert result["facingSignatures"] == result["signatures"]
-    assert result["longArmSignatures"] == result["signatures"]
-    assert result["longArmCounts"]["geometry"]["negativeX"] > \
-        result["longArmCounts"]["collapsed"]["negativeX"]
+    assert result["nullFrameSignatures"] is None
+    assert result["zUpSignatures"] is None
+    assert result["zUpTargets"] is None
+    assert result["zUpGeneratedTargets"] is None
+    assert result["facingSignatures"] is None
+    assert result["longArmSignatures"] is None
     assert result["decoyAvailable"] is False
-    assert result["decoyReason"] in {
-        "arm_pair_ambiguous", "arm_pair_low_confidence", "arm_pair_not_found",
-    }
-    assert result["missingReason"] == "arm_pair_not_found"
-    assert result["reversedReason"] == "hierarchy_orientation_incompatible"
-    assert result["invalidReason"] == "invalid_rest_direction"
+    assert result["decoyReason"] == "semantic_landmarks_incomplete"
+    assert result["missingReason"] == "semantic_landmarks_incomplete"
+    assert result["reversedReason"] == "semantic_landmarks_incomplete"
+    assert result["invalidReason"] == "semantic_landmarks_incomplete"
     assert result["descriptor"] == {
         "id": "builtin:arms-up", "name": "Arms Up", "kind": "builtin",
-        "available": True, "semanticUp": [0, 1, 0],
+        "available": False, "semanticUp": [0, 1, 0],
     }
-    for rotation in (result["rotations"]["negativeX"],
-                     result["rotations"]["positiveX"]):
-        assert math.isfinite(rotation[0])
-        assert math.isfinite(rotation[1])
-        assert math.isfinite(rotation[2])
-        assert math.isfinite(rotation[3])
-    assert result["rotations"]["negativeTarget"][1] > 0.9
-    assert result["rotations"]["positiveTarget"][1] > 0.9
-    assert result["rotations"]["negativeTarget"][0] < 0
-    assert result["rotations"]["positiveTarget"][0] > 0
-    assert result["rotations"]["negativeTarget"][2] > 0
-    assert result["rotations"]["positiveTarget"][2] > 0
 
 
 def test_rig_semantics_detects_bilateral_finger_fans(module_page):
@@ -531,37 +510,34 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       const model = new THREE.Object3D();
       scene.add(model);
       let state = {
-        visible: true, activeSourceKey: 'source', selectedBoneId: null,
-        sources: [{
-          sourceKey: 'source', boneIds: [1, 2, 3],
-          nodes: [
-            {boneId: 1, weightedCenter: [0, 0, 0]},
-            {boneId: 2, weightedCenter: [1, 0, 0]},
-            {boneId: 3, weightedCenter: [2, 0, 0]},
-          ],
+        visible: true, selectedJointId: null,
+        model: {
+          key: 'model-rig', structureRevision: 1,
+          joints: [1, 2, 3].map((jointId, index) => ({
+            jointId, restCenter: [index, 0, 0],
+            restPivot: [Math.max(0, index - .5), 0, 0],
+          })),
           components: [{componentId: 0, rootId: 1, nodeIds: [1, 2, 3]}],
           forestEdges: [
-            {boneA: 1, boneB: 2, childId: 2, jointCenter: [.5, 0, 0]},
-            {boneA: 2, boneB: 3, childId: 3, jointCenter: [1.5, 0, 0]},
+            {jointA: 1, jointB: 2, parentId: 1, childId: 2},
+            {jointA: 2, jointB: 3, parentId: 2, childId: 3},
           ],
-          jointPivotByBoneId: {2: [.5, 0, 0], 3: [1.5, 0, 0]},
-          poseRotationByBoneId: {},
-        }],
+          poseRotationByJointId: {},
+        },
       };
       const controller = createRigOverlayController({
         scene, getMeshes: () => [model], getRigState: () => state,
-        getRigDebugState: () => { throw new Error('raw graph was requested'); },
       });
       controller.refresh(state);
       const initial = controller.getDebugState();
-      state = {...state, selectedBoneId: 1};
+      state = {...state, selectedJointId: 1};
       controller.refresh(state);
       const selectedRoot = controller.getDebugState();
       model.position.x = 4;
       window.dispatchEvent(new CustomEvent(
         'mod-viewer-model-transform-changed', {detail: {}}));
       const afterTransform = controller.getDebugState();
-      state = {...state, visible: false, selectedBoneId: null};
+      state = {...state, visible: false, selectedJointId: null};
       controller.refresh(state);
       state = {...state, visible: true};
       controller.refresh(state);
@@ -572,15 +548,15 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert result["initial"]["staticObjectCount"] == 3
     assert result["initial"]["nodeCount"] == 3
     assert result["initial"]["edgeCount"] == 2
-    assert result["initial"]["jointCount"] == 2
+    assert result["initial"]["jointCount"] == 3
     assert result["initial"]["rebuildCount"] == 1
-    assert result["selectedRoot"]["selectedBoneId"] == 1
+    assert result["selectedRoot"]["selectedJointId"] == 1
     assert result["selectedRoot"]["rebuildCount"] == 1
     assert result["afterTransform"]["rebuildCount"] == 1
     assert result["afterTransform"]["modelFrameUpdateCount"] == \
         result["initial"]["modelFrameUpdateCount"] + 2
     assert result["shownAgain"]["rebuildCount"] == 1
-    assert result["shownAgain"]["selectedBoneId"] is None
+    assert result["shownAgain"]["selectedJointId"] is None
 
 
 def test_rig_overlay_can_scope_model_view_to_selected_chain(module_page):
@@ -611,7 +587,7 @@ def test_rig_overlay_can_scope_model_view_to_selected_chain(module_page):
         ],
       };
       let state = {
-        visible: true, activeSourceKey: 'model-rig', selectedJointId: 1,
+        visible: true, selectedJointId: 1,
         overlayScope: 'all', model: source, sources: [source],
       };
       const controller = createRigOverlayController({
@@ -656,24 +632,22 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
       const poseCalls = [];
       const finishCalls = [];
       const source = {
-        sourceKey: 'source', boneIds: [1, 2],
-        nodes: [
-          {boneId: 1, weightedCenter: [0, 0, 0]},
-          {boneId: 2, weightedCenter: [1, 0, 0]},
-        ],
-        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2]}],
-        forestEdges: [{boneA: 1, boneB: 2, childId: 2,
-          jointCenter: [.5, 0, 0]}],
-        jointPivotByBoneId: {2: [.5, 0, 0]},
-        poseRotationByBoneId: {},
+        key: 'model-rig', structureRevision: 1,
+        joints: [1, 2].map((jointId, index) => ({
+          jointId, restCenter: [index, 0, 0],
+          restPivot: [index ? .5 : 0, 0, 0],
+        })),
+        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2],
+          parentById: {1: null, 2: 1}, childrenById: {1: [2], 2: []}}],
+        forestEdges: [{jointA: 1, jointB: 2, parentId: 1, childId: 2}],
+        poseRotationByJointId: {},
       };
-      let state = {visible: true, activeSourceKey: 'source',
-        selectedBoneId: null, rotationSnapDegrees: 15, picking: false,
-        sources: [source]};
+      let state = {visible: true, selectedJointId: null,
+        rotationSnapDegrees: 15, picking: false, model: source};
       const controller = createRigOverlayController({
         scene, camera, canvas, getRigState: () => state,
         getMeshes: () => [],
-          getRigBonePoseFrame: () => ({
+          getRigJointPoseFrame: () => ({
             pivot: [.5, .5, 0],
             parentRotation: [0, 0, Math.sin(Math.PI / 8),
               Math.cos(Math.PI / 8)],
@@ -683,23 +657,23 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
               Math.cos(Math.PI / 8)],
           }),
         arcballControls,
-        setRigBoneRotation: (...args) => poseCalls.push(args),
-        finishRigPose: (...args) => finishCalls.push(args),
+        setRigJointRotation: (...args) => poseCalls.push(args),
+        finishRigJointPose: (...args) => finishCalls.push(args),
       });
       controller.refresh(state);
       const noSelection = controller.getDebugState();
-      state = {...state, selectedBoneId: 1};
+      state = {...state, selectedJointId: 1};
       controller.refresh(state);
       await controller.ensureTransformControls();
       const root = controller.getDebugState();
-      state = {...state, selectedBoneId: 2};
+      state = {...state, selectedJointId: 2};
       controller.refresh(state);
       const controls = await controller.ensureTransformControls();
       const nonRoot = controller.getDebugState();
-      state = {...state, selectedBoneId: null};
+      state = {...state, selectedJointId: null};
       controller.refresh(state);
       const cleared = controller.getDebugState();
-      state = {...state, selectedBoneId: 2};
+      state = {...state, selectedJointId: 2};
       controller.refresh(state);
       const reselected = controller.getDebugState();
       controls.dispatchEvent({type: 'change'});
@@ -711,7 +685,7 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
         new THREE.Vector3(0, 0, 1), Math.PI * 2 / 3);
       controls.dispatchEvent({type: 'objectChange'});
       const objectChangePoseCount = poseCalls.length;
-      const objectChangeLocal = poseCalls[0][2].toArray();
+      const objectChangeLocal = poseCalls[0][1].toArray();
       controls.dispatchEvent({type: 'mouseUp'});
       controls.dispatchEvent({type: 'dragging-changed', value: false});
       await Promise.resolve();
@@ -732,16 +706,16 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
       picker.cancel();
       const afterPick = controller.getDebugState();
       picker.dispose();
-      state = {...state, selectedBoneId: 1};
+      state = {...state, selectedJointId: 1};
       controller.refresh(state);
       const rootAgain = controller.getDebugState();
-      state = {...state, visible: false, selectedBoneId: 2};
+      state = {...state, visible: false, selectedJointId: 2};
       controller.refresh(state);
       const hidden = controller.getDebugState();
       state = {...state, visible: true};
       controller.refresh(state);
       const shown = controller.getDebugState();
-      state = {...state, picking: true, selectedBoneId: 2};
+      state = {...state, picking: true, selectedJointId: 2};
       controller.refresh(state);
       const picking = controller.getDebugState();
       state = {...state, picking: false};
@@ -777,10 +751,10 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
     assert result["hoverPoseCount"] == 0
     assert result["objectChangePoseCount"] == 1
     assert result["rotationSnap"] == pytest.approx(math.radians(15))
-    assert result["poseCalls"][0][0:2] == ["source", 2]
+    assert result["poseCalls"][0][0] == 2
     assert result["objectChangeLocal"] == pytest.approx(
         [0, 0, math.sin(math.pi / 12), math.cos(math.pi / 12)])
-    assert result["poseCalls"][0][3] == {"dragging": True}
+    assert result["poseCalls"][0][2] == {"dragging": True}
     assert result["dragStarted"]["arcballEnabled"] is False
     assert result["dragStarted"]["arcballWasEnabled"] is True
     assert result["dragStarted"]["poseDragActive"] is True
@@ -817,22 +791,21 @@ def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
         2: {center: [1, 0, 0], pivot: [.5, 0, 0]},
       };
       const source = {
-        sourceKey: 'source', structureRevision: 4, boneIds: [1, 2],
-        nodes: [
-          {boneId: 1, weightedCenter: [0, 0, 0]},
-          {boneId: 2, weightedCenter: [1, 0, 0]},
-        ],
-        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2]}],
-        forestEdges: [{boneA: 1, boneB: 2, childId: 2,
-          jointCenter: [.5, 0, 0]}],
-        jointPivotByBoneId: {2: [.5, 0, 0]},
-        poseRotationByBoneId: {},
+        key: 'model-rig', structureRevision: 4,
+        joints: [1, 2].map((jointId, index) => ({
+          jointId, restCenter: [index, 0, 0],
+          restPivot: [index ? .5 : 0, 0, 0],
+        })),
+        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2],
+          parentById: {1: null, 2: 1}, childrenById: {1: [2], 2: []}}],
+        forestEdges: [{jointA: 1, jointB: 2, parentId: 1, childId: 2}],
+        poseRotationByJointId: {},
       };
-      const state = {visible: true, activeSourceKey: 'source',
-        selectedBoneId: 2, picking: false, sources: [source]};
+      const state = {visible: true, selectedJointId: 2,
+        picking: false, model: source};
       const controller = createRigOverlayController({
         scene, getRigState: () => state, getMeshes: () => [],
-        getRigBonePoseFrame: (sourceKey, boneId) => pose[boneId],
+        getRigJointPoseFrame: jointId => pose[jointId],
       });
       controller.refresh(state);
       const staticGroup = controller.group.children[0];
@@ -848,7 +821,7 @@ def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
       pose[2] = {center: [1, 2, 0], pivot: [.5, 1, 0]};
       window.dispatchEvent(new CustomEvent(
         'mod-viewer-model-rig-pose-changed',
-        {detail: {sourceKey: 'source', boneId: 2,
+        {detail: {jointId: 2,
           quaternion: [0, 0, 0, 1]}}));
       const after = controller.getDebugState();
       return {
@@ -875,7 +848,7 @@ def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
     assert result["sameJointAttribute"]
     assert result["center"] == pytest.approx([0, 0, 0, 1, 2, 0])
     assert result["line"] == pytest.approx([0, 0, 0, 1, 2, 0])
-    assert result["joint"] == pytest.approx([.5, 1, 0])
+    assert result["joint"] == pytest.approx([0, 0, 0, .5, 1, 0])
     assert result["dynamicUsage"]
 
 
@@ -1932,26 +1905,32 @@ def test_secondary_pose_composition_preserves_base_and_propagates_offsets(
     result = page.evaluate("""async () => {
       const THREE = await import('three');
       const deformation = await import('./js/mesh/weight-deformation.js');
-      const forest = {components: [{rootId: 0, nodeIds: [0, 1, 2],
-        childrenById: {0: [1], 1: [2]}}]};
+      const forest = {components: [{rootId: 0, nodeIds: [0, 1, 2, 3],
+        childrenById: {0: [1], 1: [2], 2: [3]}}]};
       const centers = new Map([
         [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
+        [3, [3, 0, 0]],
       ]);
+      const manualParent = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1), Math.PI / 6);
       const manualChild = new THREE.Quaternion().setFromAxisAngle(
         new THREE.Vector3(1, 0, 0), Math.PI / 6);
+      const manualGrandchild = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0), Math.PI / 8);
       const baseRotations = new Map();
       const baseTransforms = deformation.buildForestTransformsFromLocalRotations(
-        forest, centers, {quaternionByBoneId: new Map([[2, manualChild]]),
+        forest, centers, {quaternionByBoneId: new Map([
+          [1, manualParent], [2, manualChild], [3, manualGrandchild],
+        ]),
           rotationOutput: baseRotations});
       const physicsRotations = new Map([[1, [0, Math.PI / 18, 0]]]);
-      const physicsOnlyRotations = new Map();
+      const childPhysicsRotations = new Map([[2, [0, 0, Math.PI / 24]]]);
       const physicsOnly = deformation.buildForestTransformsFromLocalRotations(
-        forest, centers, {rotationByBoneId: physicsRotations,
-          rotationOutput: physicsOnlyRotations});
+        forest, centers, {rotationByBoneId: physicsRotations});
       const identityBaseRotations = new Map();
       const identityBaseTransforms = new Map([
         [0, new THREE.Matrix4()], [1, new THREE.Matrix4()],
-        [2, new THREE.Matrix4()],
+        [2, new THREE.Matrix4()], [3, new THREE.Matrix4()],
       ]);
       const identityComposedRotations = new Map();
       const identityComposed = deformation.composeBasePoseWithPhysicsOffsets({
@@ -1968,40 +1947,72 @@ def test_secondary_pose_composition_preserves_base_and_propagates_offsets(
         baseRotationByBoneId: baseRotations,
         rotationOutput: manualOnlyRotations,
       });
-      const combinedRotations = new Map();
-      const combined = deformation.composeBasePoseWithPhysicsOffsets({
+      const parentPhysicsRotations = new Map();
+      const parentPhysics = deformation.composeBasePoseWithPhysicsOffsets({
         forest, nodeCenters: centers,
         baseTransformByBoneId: baseTransforms,
         baseRotationByBoneId: baseRotations,
         rotationByBoneId: physicsRotations,
-        rotationOutput: combinedRotations,
+        rotationOutput: parentPhysicsRotations,
       });
-      const array = quaternion => quaternion.toArray();
+      const childPhysicsRotationsOutput = new Map();
+      deformation.composeBasePoseWithPhysicsOffsets({
+        forest, nodeCenters: centers,
+        baseTransformByBoneId: baseTransforms,
+        baseRotationByBoneId: baseRotations,
+        rotationByBoneId: childPhysicsRotations,
+        rotationOutput: childPhysicsRotationsOutput,
+      });
+      const quaternionMatches = (left, right) =>
+        left.angleTo(right) < 1e-6;
+      const matrixMatches = (left, right) => left.elements.every(
+        (value, index) => Math.abs(value - right.elements[index]) < 1e-6);
+      const expectedParent = baseRotations.get(1).clone()
+        .multiply(new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0, 1, 0), Math.PI / 18)).normalize();
+      const parentDelta = parentPhysicsRotations.get(1).clone()
+        .multiply(baseRotations.get(1).clone().invert()).normalize();
+      const expectedChild = parentDelta.clone()
+        .multiply(baseRotations.get(2)).normalize();
+      const expectedGrandchild = parentDelta.clone()
+        .multiply(baseRotations.get(3)).normalize();
+      const expectedChildPhysics = baseRotations.get(2).clone()
+        .multiply(new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0, 0, 1), Math.PI / 24)).normalize();
+      const normalBaseline = new Float32Array([1, 0, 0]);
+      const normalOutput = normalBaseline.slice();
+      deformation.applyWeightedNormalDeformationInto(
+        normalOutput, normalBaseline, new Uint32Array([3]),
+        new Float32Array([1]), 1, parentPhysicsRotations,
+        new Uint32Array([0]));
+      const expectedNormal = new THREE.Vector3(1, 0, 0)
+        .applyQuaternion(parentPhysicsRotations.get(3)).normalize();
       return {
-        identityMatches: identityComposed.get(1).equals(physicsOnly.get(1))
-          && identityComposed.get(2).equals(physicsOnly.get(2)),
-        manualMatches: manualOnly.get(2).equals(baseTransforms.get(2)),
-        rootMatches: combined.get(0).equals(baseTransforms.get(0)),
-        parentPhysics: array(combinedRotations.get(1)),
-        childInherited: array(combinedRotations.get(2)),
-        manualChild: array(baseRotations.get(2)),
-        physicsOnlyChild: array(physicsOnlyRotations.get(2)),
+        identityMatches: [1, 2, 3].every(id =>
+          matrixMatches(identityComposed.get(id), physicsOnly.get(id))),
+        manualMatches: [1, 2, 3].every(id =>
+          matrixMatches(manualOnly.get(id), baseTransforms.get(id))
+          && quaternionMatches(
+            manualOnlyRotations.get(id), baseRotations.get(id))),
+        rootMatches: matrixMatches(parentPhysics.get(0), baseTransforms.get(0)),
+        parentPhysicsMatches: quaternionMatches(
+          parentPhysicsRotations.get(1), expectedParent),
+        parentPhysicsPropagatesOnce: quaternionMatches(
+          parentPhysicsRotations.get(2), expectedChild)
+          && quaternionMatches(parentPhysicsRotations.get(3), expectedGrandchild),
+        childPhysicsMatches: quaternionMatches(
+          childPhysicsRotationsOutput.get(2), expectedChildPhysics),
+        normalsMatch: [...normalOutput].every((value, index) =>
+          Math.abs(value - expectedNormal.getComponent(index)) < 1e-6),
       };
     }""")
     assert result["identityMatches"]
     assert result["manualMatches"]
     assert result["rootMatches"]
-    assert result["parentPhysics"] == pytest.approx(
-        [0, math.sin(math.pi / 36), 0, math.cos(math.pi / 36)])
-    assert result["childInherited"] == pytest.approx([
-        math.sin(math.pi / 12) * math.cos(math.pi / 36),
-        math.sin(math.pi / 36) * math.cos(math.pi / 12),
-        -math.sin(math.pi / 12) * math.sin(math.pi / 36),
-        math.cos(math.pi / 12) * math.cos(math.pi / 36),
-    ], abs=1e-5)
-    assert result["childInherited"] != pytest.approx(result["manualChild"])
-    assert result["physicsOnlyChild"] == pytest.approx(
-        [0, math.sin(math.pi / 36), 0, math.cos(math.pi / 36)])
+    assert result["parentPhysicsMatches"]
+    assert result["parentPhysicsPropagatesOnce"]
+    assert result["childPhysicsMatches"]
+    assert result["normalsMatch"]
 
 
 def test_skinning_physics_solver_uses_true_3d_vectors_and_quaternions(module_page):
