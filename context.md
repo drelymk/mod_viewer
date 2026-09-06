@@ -270,8 +270,8 @@ of documentation, comments and tests; use portable fixtures instead.
 - Applying a preset is one batch transaction: restore valid model-root
   overrides first, rebuild rest frames/caches once, install all valid local
   rotations, run one model deformation/bounds pass, then notify and render once.
-  Character Physics blocks Apply and Save New without being disabled; Rename
-  and Delete remain metadata-only operations.
+  Pose presets and manual Rig edits remain available while Character Physics is
+  active; Rename and Delete remain metadata-only operations.
 - Normalize reconciliation distances by model reference radius with candidate,
   strict, propagation and attachment gates; retain candidate evidence and
   rejection reasons for diagnostics. Model joints own rest center/pivot/frame,
@@ -280,13 +280,35 @@ of documentation, comments and tests; use portable fixtures instead.
   source pose maps are derived aliases only. Reuse the forest transform builder,
   alias model transforms back to each source's authored IDs, preserve affected
   vertex caching and baseline restoration, and keep Character Physics
-  source-scoped and separate.
+  source-scoped secondary rotation/velocity offsets. Physics never clears or
+  overwrites the manual model pose.
+- Final deformation composes manual source transforms with Physics offsets
+  before one authored-baseline skinning pass. Never skin already-deformed
+  geometry a second time. The final active vertex set is the union of manual
+  pose vertices and Physics-selected vertices; every influence receives its
+  manual transform, while selected influences additionally receive Physics,
+  without renormalizing weights. Positions and normals use the same composed
+  transform/rotation maps.
+- A nonempty Weight selection continues to enable model-scoped Physics and an
+  empty selection disables it. Starting, stopping or reconfiguring Physics
+  preserves manual pose. Manual pose changes, presets, Reset Joint and Reset
+  Pose preserve Physics rotation/velocity state, refresh pose-dependent
+  equilibrium, and wake the existing simulation rather than restarting it.
+  Reset Physics changes only secondary motion; Reset Pose changes only manual
+  pose/root state. Saved presets serialize manual Rig state only, never
+  instantaneous Physics offsets.
 - The Rig picker maps source influences to model joints. The Rig panel selects
   model joints and displays membership/topology without semantic labels; the
   combined overlay renders model joints, source edges and distinguishable
   attachment edges with O(1) Three.js objects. Reconciliation rebuilds on
   source membership/shape changes and resets pose; model structure revisions
   do not change for pose, materials, textures, visibility or model turns.
+- Joint selection is independent from pose state: Clear removes the selected
+  ModelJoint and derived source-bone selection through the state API, leaving
+  manual pose, presets, Weight selection, Physics and overlay visibility
+  unchanged. Reset Joint preserves the selected Joint; Reset Pose preserves
+  it too, clears only the runtime selected-preset/apply-result state, and never
+  deletes saved or built-in preset records.
 - Step each source rig once at fixed 1/120 second with bounded catch-up; deform
   visible members only at selected-weight vertices and transform baseline normals
   with the same influence. Defer exact bounds and shadow-camera fitting until

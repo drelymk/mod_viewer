@@ -106,16 +106,8 @@ function topologyKey(source) {
   ]);
 }
 
-function modelRigHasActivePhysics(snapshot, source = null) {
-  return !!snapshot?.physicsActive
-    || (snapshot?.model && (snapshot.sources || []).some(source =>
-      source.physicsActive))
-    || !!source?.physicsActive;
-}
-
 function canPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
-  if (snapshot?.picking || !source || boneId === null
-      || modelRigHasActivePhysics(snapshot, source)) {
+  if (snapshot?.picking || !source || boneId === null) {
     return false;
   }
   const component = componentFor(source, boneId);

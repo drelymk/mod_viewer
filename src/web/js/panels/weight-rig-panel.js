@@ -5,7 +5,8 @@ import {
   beginModelPicking, cancelModelPicking, clearSelectedBones,
   ensureModelRigLoaded, getModelPhysicsState, getModelRigState,
   getModelWeightState, getRigJointPoseFrame, loadSavedBoneSelection,
-  resetModelPhysics, resetRigBone, resetRigPose, saveModelWeightSelection,
+  clearRigJointSelection, resetModelPhysics, resetRigBone, resetRigPose,
+  saveModelWeightSelection,
   selectRigJoint, selectRigPosePreset, setBoneSelected, setPhysicsConstraintsEnabled,
   setPhysicsContinuousLinearResponse, setPhysicsDamping, setPhysicsFrequency,
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
@@ -53,6 +54,14 @@ function addAdvanced(parent, title = 'Advanced Settings') {
   details.appendChild(content);
   parent.appendChild(details);
   return {details, content};
+}
+
+function addRigAdvancedGroup(parent, title) {
+  const group = document.createElement('div');
+  group.className = 'rig-advanced-group';
+  addText(group, 'weight-rig-advanced-title', title);
+  parent.appendChild(group);
+  return group;
 }
 
 function selectedLabel(state) {
@@ -282,13 +291,6 @@ function selectedJoint(state = latestRigState) {
     Number(joint.jointId) === id) || null;
 }
 
-function jointSearchText(joint) {
-  return [joint?.jointId, joint?.signature,
-    ...(joint?.members || []).flatMap(member => [
-      member.sourceKey, member.sourceBoneKey, member.boneId,
-    ])].join(' ').toLowerCase();
-}
-
 function componentForJoint(model, jointId) {
   return (model?.components || []).find(component =>
     (component.nodeIds || []).includes(Number(jointId))) || null;
@@ -307,7 +309,7 @@ function buildRigSection(parent) {
   ui.joint = joint;
 
   const visibleLabel = document.createElement('label');
-  visibleLabel.className = 'weight-checkbox';
+  visibleLabel.className = 'weight-checkbox rig-show-inferred';
   const visible = document.createElement('input');
   visible.type = 'checkbox';
   visible.addEventListener('change', () => setRigVisible(visible.checked));
@@ -315,6 +317,33 @@ function buildRigSection(parent) {
   addText(visibleLabel, 'weight-label', 'Show inferred rig');
   section.appendChild(visibleLabel);
   ui.visible = visible;
+
+  const jointActions = document.createElement('div');
+  jointActions.className = 'rig-actions rig-joint-actions';
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'ui-button rig-clear-joint';
+  clear.textContent = 'Clear';
+  clear.addEventListener('click', () => clearRigJointSelection());
+  const resetJoint = document.createElement('button');
+  resetJoint.type = 'button';
+  resetJoint.className = 'ui-button rig-reset-joint';
+  resetJoint.textContent = 'Reset Joint';
+  resetJoint.addEventListener('click', () => {
+    const selected = selectedJoint();
+    const member = selected?.representativeMember || selected?.members?.[0];
+    if (member) resetRigBone(member.sourceKey, member.boneId);
+  });
+  const resetPose = document.createElement('button');
+  resetPose.type = 'button';
+  resetPose.className = 'ui-button rig-reset-pose';
+  resetPose.textContent = 'Reset Pose';
+  resetPose.addEventListener('click', () => resetRigPose());
+  jointActions.append(clear, resetJoint, resetPose);
+  section.appendChild(jointActions);
+  ui.clearJoint = clear;
+  ui.resetJoint = resetJoint;
+  ui.resetPose = resetPose;
 
   addText(section, 'weight-rig-control-label', 'Pose presets');
   const preset = document.createElement('select');
@@ -353,16 +382,7 @@ function buildRigSection(parent) {
   ui.presetStatus = addText(section, 'rig-hint');
 
   const advanced = addAdvanced(parent);
-  const searchTitle = addText(advanced.content, 'weight-rig-advanced-title', 'Hierarchy');
-  searchTitle.setAttribute('aria-hidden', 'true');
-  const search = document.createElement('input');
-  search.type = 'search';
-  search.className = 'rig-joint-search';
-  search.placeholder = 'Search joints';
-  search.setAttribute('aria-label', 'Search model joints');
-  search.addEventListener('input', () => syncRigOptions(latestRigState));
-  advanced.content.appendChild(search);
-  ui.jointSearch = search;
+  const display = addRigAdvancedGroup(advanced.content, 'Display');
   const allLabel = document.createElement('label');
   allLabel.className = 'weight-checkbox';
   const all = document.createElement('input');
@@ -371,9 +391,10 @@ function buildRigSection(parent) {
   all.addEventListener('change', () => setRigOverlayScope(all.checked ? 'all' : 'selection'));
   allLabel.appendChild(all);
   addText(allLabel, 'weight-label', 'Show all overlay joints');
-  advanced.content.appendChild(allLabel);
+  display.appendChild(allLabel);
   ui.showAll = all;
 
+  const transform = addRigAdvancedGroup(advanced.content, 'Transform');
   const snapRow = document.createElement('label');
   snapRow.className = 'rig-row';
   addText(snapRow, 'rig-label', 'Rotation snap');
@@ -387,10 +408,10 @@ function buildRigSection(parent) {
   });
   snap.addEventListener('change', () => setRigRotationSnapDegrees(Number(snap.value)));
   snapRow.appendChild(snap);
-  advanced.content.appendChild(snapRow);
+  transform.appendChild(snapRow);
   ui.snap = snap;
 
-  const rotationTitle = addText(advanced.content, 'rig-readout-title', 'Rotation');
+  const rotationTitle = addText(transform, 'rig-readout-title', 'Rotation');
   rotationTitle.setAttribute('aria-hidden', 'true');
   ui.rotationValues = [];
   ['X', 'Y', 'Z'].forEach(axis => {
@@ -398,33 +419,14 @@ function buildRigSection(parent) {
     row.className = 'rig-row rig-readout-row';
     addText(row, 'rig-label', axis);
     ui.rotationValues.push(addText(row, 'rig-value', '—'));
-    advanced.content.appendChild(row);
+    transform.appendChild(row);
   });
-  const resetJoint = document.createElement('button');
-  resetJoint.type = 'button';
-  resetJoint.className = 'ui-button rig-reset-joint';
-  resetJoint.textContent = 'Reset Joint';
-  resetJoint.addEventListener('click', () => {
-    const selected = selectedJoint();
-    const member = selected?.representativeMember || selected?.members?.[0];
-    if (member) resetRigBone(member.sourceKey, member.boneId);
-  });
-  const resetPose = document.createElement('button');
-  resetPose.type = 'button';
-  resetPose.className = 'ui-button rig-reset-pose';
-  resetPose.textContent = 'Reset Pose';
-  resetPose.addEventListener('click', () => resetRigPose());
-  const resetActions = document.createElement('div');
-  resetActions.className = 'rig-actions';
-  resetActions.append(resetJoint, resetPose);
-  advanced.content.appendChild(resetActions);
-  ui.resetJoint = resetJoint;
-  ui.resetPose = resetPose;
 
-  ui.root = addAdvancedValue(advanced.content, 'Component root');
-  ui.depth = addAdvancedValue(advanced.content, 'Depth');
-  ui.parent = addAdvancedNavValue(advanced.content, 'Parent');
-  ui.children = addAdvancedNavValue(advanced.content, 'Children');
+  const hierarchy = addRigAdvancedGroup(advanced.content, 'Hierarchy');
+  ui.root = addAdvancedValue(hierarchy, 'Component root');
+  ui.parent = addAdvancedNavValue(hierarchy, 'Parent');
+  ui.children = addAdvancedNavValue(hierarchy, 'Children');
+  ui.depth = addAdvancedValue(hierarchy, 'Depth');
   const setRoot = document.createElement('button');
   setRoot.type = 'button';
   setRoot.className = 'ui-button rig-set-root';
@@ -434,7 +436,7 @@ function buildRigSection(parent) {
     const member = selected?.representativeMember || selected?.members?.[0];
     if (member) setRigComponentRoot(member.sourceKey, member.boneId);
   });
-  advanced.content.appendChild(setRoot);
+  hierarchy.appendChild(setRoot);
   ui.setRoot = setRoot;
 
 }
@@ -647,24 +649,19 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   latestRigState = state;
   const model = state?.model;
   const joints = model?.joints || [];
-  const query = ui.jointSearch.value.trim().toLowerCase();
-  const visible = joints.filter(joint => !query || jointSearchText(joint).includes(query));
   const selected = selectedJoint(state);
-  if (selected && !visible.some(item => item.jointId === selected.jointId)) {
-    visible.unshift(selected);
-  }
-  const optionKey = JSON.stringify([query, visible.map(joint => [
+  const optionKey = JSON.stringify(joints.map(joint => [
     joint.jointId, joint.signature,
-  ])]);
+  ]));
   if (optionKey !== ui.joint.dataset.optionKey) {
     ui.joint.replaceChildren();
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = visible.length ? 'Select a joint' : 'No matching joints';
+    placeholder.textContent = 'Select a joint';
     placeholder.disabled = true;
     placeholder.selected = true;
     ui.joint.appendChild(placeholder);
-    visible.forEach(item => {
+    joints.forEach(item => {
       const option = document.createElement('option');
       option.value = String(item.jointId);
       option.textContent = `Joint ${item.jointId}`;
@@ -680,14 +677,14 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   ui.showAll.disabled = !state?.loaded || !joints.length;
   ui.snap.value = String(state?.rotationSnapDegrees ?? 0);
   ui.snap.disabled = !state?.loaded || !joints.length;
-  const physicsActive = (state?.sources || []).some(source => source.physicsActive);
   const hasSelected = !!selected;
-  ui.setRoot.disabled = !hasSelected || physicsActive;
-  ui.resetJoint.disabled = !hasSelected || physicsActive;
-  ui.resetPose.disabled = !state?.loaded || physicsActive;
+  ui.clearJoint.disabled = !hasSelected;
+  ui.setRoot.disabled = !hasSelected;
+  ui.resetJoint.disabled = !hasSelected;
+  ui.resetPose.disabled = !state?.loaded;
   syncHierarchy(state, selected);
   syncRotationReadout(state);
-  syncPresetControls(state, physicsActive);
+  syncPresetControls(state);
 }
 
 function syncHierarchy(state, joint) {
@@ -753,7 +750,7 @@ function rigPresetUnavailableMessage(reason) {
   }[reason] || 'Arms Up is unavailable for this model.';
 }
 
-function syncPresetControls(state, physicsActive) {
+function syncPresetControls(state) {
   const presetState = state?.rigPresets || {};
   const builtIns = presetState.builtInPresets || [];
   const presets = presetState.presets || [];
@@ -763,6 +760,11 @@ function syncPresetControls(state, physicsActive) {
   });
   if (optionKey !== ui.preset.dataset.optionKey) {
     ui.preset.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Select a pose';
+    placeholder.disabled = true;
+    ui.preset.appendChild(placeholder);
     if (builtIns.length) {
       const group = document.createElement('optgroup');
       group.label = 'Built-in';
@@ -798,8 +800,8 @@ function syncPresetControls(state, physicsActive) {
   const isBuiltin = current?.kind === 'builtin';
   const hasUsablePreset = builtIns.some(item => item.available) || presets.length > 0;
   ui.preset.disabled = !state?.loaded || !hasUsablePreset
-    || !!presetState.loading || physicsActive;
-  ui.savePreset.disabled = !state?.loaded || physicsActive;
+    || !!presetState.loading;
+  ui.savePreset.disabled = !state?.loaded;
   ui.renamePreset.disabled = !hasPreset || isBuiltin;
   ui.deletePreset.disabled = !hasPreset || isBuiltin;
   if (current?.kind === 'builtin' && !current.available) {
@@ -815,9 +817,7 @@ function applySelectedPreset(presetId) {
     ui.presetStatus.textContent = '';
     return;
   }
-  ui.presetStatus.textContent = result?.skipped?.[0]?.reason === 'physics_active'
-    ? 'Disable Character Physics before applying a pose preset.'
-    : result?.failureReason === 'builtin_unavailable'
+  ui.presetStatus.textContent = result?.failureReason === 'builtin_unavailable'
       ? rigPresetUnavailableMessage(result?.skipped?.[0]?.reason)
       : result?.failureReason === 'no_matches'
         ? `Could not apply "${selected?.name || 'this pose'}" to this rig.`

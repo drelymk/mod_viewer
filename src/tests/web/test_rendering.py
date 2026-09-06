@@ -1017,13 +1017,9 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             '.rig-bone-select option')?.textContent;
           const initialShowAll = document.querySelector(
             '.rig-panel-show-all')?.checked;
-          const jointSearch = document.querySelector('.rig-joint-search');
-          jointSearch.value = 'bone=1';
-          jointSearch.dispatchEvent(new Event('input', {bubbles: true}));
-          const filteredJointOptions = [...document.querySelector(
+          const jointSearchAbsent = !document.querySelector('.rig-joint-search');
+          const allJointOptions = [...document.querySelector(
             '.rig-bone-select').options].map(option => option.textContent);
-          jointSearch.value = '';
-          jointSearch.dispatchEvent(new Event('input', {bubbles: true}));
           const initialPresetDisabled = presetSelect.disabled;
           const initialRenamePresetDisabled = document.querySelector(
             '.rig-rename-preset')?.disabled;
@@ -1037,6 +1033,33 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             sameRow: new Set(presetActionButtons.map(button =>
               Math.round(button.getBoundingClientRect().top))).size === 1,
           };
+          const jointActionRow = document.querySelector('.rig-joint-actions');
+          const jointActionButtons = [...jointActionRow.querySelectorAll('button')];
+          const jointActionsLayout = {
+            labels: jointActionButtons.map(button => button.textContent),
+            buttonCount: jointActionButtons.length,
+            sameRow: new Set(jointActionButtons.map(button =>
+              Math.round(button.getBoundingClientRect().top))).size === 1,
+            clearDisabled: document.querySelector('.rig-clear-joint')?.disabled,
+            resetJointDisabled: document.querySelector('.rig-reset-joint')?.disabled,
+            resetPoseDisabled: document.querySelector('.rig-reset-pose')?.disabled,
+          };
+          const rigSection = document.querySelector('.rig-bone-select')
+            .closest('.weight-rig-section');
+          const rigAdvanced = rigSection?.nextElementSibling;
+          const advancedGroups = [...rigAdvanced.querySelectorAll(
+            ':scope > .weight-rig-advanced-content > .rig-advanced-group')]
+            .map(group => group.querySelector('.weight-rig-advanced-title')
+              ?.textContent);
+          const primaryOrder = [
+            '.rig-bone-select', '.rig-show-inferred', '.rig-joint-actions',
+            '.rig-preset-select', '.rig-preset-actions',
+          ].map(selector => {
+            const node = rigSection.querySelector(selector);
+            return node;
+          });
+          const primaryOrderIndexes = primaryOrder.map(node =>
+            [...rigSection.children].indexOf(node));
           const poseBone = component.nodeIds.find(id => id !== component.rootId);
           const mesh = window.modViewer.activeMeshes[0];
           const before = [...mesh.geometry.attributes.position.array];
@@ -1062,8 +1085,21 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           const finished = experiment.finishRigPose(
             source.sourceKey, poseBone);
           const boundsAfterDrag = {boundsCalls, sphereCalls};
+          const resetJointChanged = experiment.resetRigBone(
+            source.sourceKey, poseBone);
+          const afterResetJoint = experiment.getModelRigState();
+          const posedAgain = experiment.setRigBoneRotation(
+            source.sourceKey, poseBone, quaternion, {dragging: true});
+          const selectedBeforeClear = experiment.getModelRigState();
+          const clearPresetId = selectedBeforeClear.rigPresets.selectedPresetId;
+          const clear = experiment.clearRigJointSelection();
+          const afterClear = experiment.getModelRigState();
+          const clearButtonAfter = document.querySelector('.rig-clear-joint')?.disabled;
+          const resetSelectionJointId = Number(source.modelJointIds[poseBone]);
+          experiment.selectRigJoint(resetSelectionJointId);
           const reset = experiment.resetRigPose(source.sourceKey);
           const restored = [...mesh.geometry.attributes.position.array];
+          const afterReset = experiment.getModelRigState();
           mesh.geometry.computeBoundingBox = originalBoundingBox;
           mesh.geometry.computeBoundingSphere = originalBoundingSphere;
           const currentRig = experiment.getModelRigState();
@@ -1090,6 +1126,8 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           const afterPreset = experiment.getModelRigState();
           window.removeEventListener(
             'mod-viewer-model-rig-changed', countPresetRigEvent);
+          const resetAfterPreset = experiment.resetRigPose(source.sourceKey);
+          const afterResetPreset = experiment.getModelRigState();
           return {
             calls: window.__rigPanelPreviewCalls,
             sourceKey: source.sourceKey,
@@ -1102,8 +1140,13 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
               failureReason: builtinApply.failureReason,
               reason: builtinApply.skipped?.[0]?.reason,
                 },
-                presetGroups,
-                presetDisabled: initialPresetDisabled,
+            presetGroups,
+            jointSearchAbsent,
+            allJointOptions,
+            jointActionsLayout,
+            advancedGroups,
+            primaryOrderIndexes,
+            presetDisabled: initialPresetDisabled,
             applyButtonCount: document.querySelectorAll(
               '.rig-apply-preset').length,
             weightActionsInsideAdvanced: !!document.querySelector(
@@ -1118,22 +1161,42 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             jointSelectValue: initialJointSelectValue,
             jointSelectText: initialJointSelectText,
             initialShowAll,
-            filteredJointOptions,
+            clear,
+            clearPresetId,
+            clearSelectedJointId: afterClear.selectedJointId,
+            clearSelectedBoneId: afterClear.selectedBoneId,
+            clearPoseJointIds: afterClear.model.poseJointIds,
+            clearPresetAfter: afterClear.rigPresets.selectedPresetId,
+            clearButtonAfter,
             poseBone,
             weightBefore: weightBefore.selectedBones,
             posed,
             boundsDuringDrag,
             finished,
             boundsAfterDrag,
+            resetJointChanged,
+            resetJointSelectedJointId: afterResetJoint.selectedJointId,
+            resetJointPoseJointIds: afterResetJoint.model.poseJointIds,
+            posedAgain,
             changed: after.some((value, index) =>
               Math.abs(value - before[index]) > 1e-5),
             reset,
             restored: restored.every((value, index) =>
               Math.abs(value - before[index]) < 1e-5),
+            resetSelectedJointId: afterReset.selectedJointId,
+            resetPresetId: afterReset.rigPresets.selectedPresetId,
             presetBeforePose: beforePreset.model.poseJointIds,
             presetAfterPose: afterPreset.model.poseJointIds,
             presetApplySuccess: afterPreset.rigPresets.lastApplyResult?.success,
             presetApplyEvents: presetRigEvents,
+            resetAfterPreset,
+            resetAfterPresetJointId: afterResetPreset.selectedJointId,
+            resetAfterPresetPose: afterResetPreset.model.poseJointIds,
+            resetAfterPresetSelection: afterResetPreset.rigPresets.selectedPresetId,
+            resetAfterPresetResult: afterResetPreset.rigPresets.lastApplyResult,
+            resetAfterPresetSelectValue: savedPresetSelect.value,
+            savedPresetsAfterReset: afterResetPreset.rigPresets.presets,
+            builtInsAfterReset: afterResetPreset.rigPresets.builtInPresets,
             weightAfter: experiment.getModelWeightState(),
           };
         }""")
@@ -1151,6 +1214,18 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["presetGroups"] == ["Built-in", "My Poses"]
         assert result["presetDisabled"] is True
         assert result["applyButtonCount"] == 0
+        assert result["jointSearchAbsent"]
+        assert result["allJointOptions"] == [
+            "Select a joint", "Joint 0", "Joint 1", "Joint 2"]
+        assert result["jointActionsLayout"] == {
+            "labels": ["Clear", "Reset Joint", "Reset Pose"],
+            "buttonCount": 3, "sameRow": True,
+            "clearDisabled": True, "resetJointDisabled": True,
+            "resetPoseDisabled": False,
+        }
+        assert result["advancedGroups"] == ["Display", "Transform", "Hierarchy"]
+        assert result["primaryOrderIndexes"] == sorted(
+            result["primaryOrderIndexes"])
         assert not result["weightActionsInsideAdvanced"]
         assert not result["rigActionsInsideAdvanced"]
         assert result["savePresetText"] == "Save"
@@ -1161,8 +1236,6 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["jointSelectValue"] == ""
         assert result["jointSelectText"] == "Select a joint"
         assert result["initialShowAll"] is False
-        assert result["filteredJointOptions"] == [
-            "Select a joint", "Joint 1"]
         assert result["weightBefore"] == []
         assert result["posed"]
         assert result["boundsDuringDrag"] == {"boundsCalls": 0, "sphereCalls": 0}
@@ -1170,12 +1243,34 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["boundsAfterDrag"]["boundsCalls"] == 1
         assert result["boundsAfterDrag"]["sphereCalls"] == 1
         assert result["changed"]
+        assert result["resetJointChanged"]
+        assert result["resetJointSelectedJointId"] is not None
+        assert result["resetJointPoseJointIds"] == []
+        assert result["posedAgain"]
         assert result["reset"]
         assert result["restored"]
+        assert result["clear"]
+        assert result["clearPresetId"] == "builtin:arms-up"
+        assert result["clearSelectedJointId"] is None
+        assert result["clearSelectedBoneId"] is None
+        assert result["clearPoseJointIds"]
+        assert result["clearPresetAfter"] == "builtin:arms-up"
+        assert result["clearButtonAfter"] is True
+        assert result["resetSelectedJointId"] is not None
+        assert result["resetPresetId"] is None
         assert result["presetBeforePose"] == []
         assert result["presetAfterPose"]
         assert result["presetApplySuccess"] is True
         assert result["presetApplyEvents"] == 2
+        assert result["resetAfterPreset"]
+        assert result["resetAfterPresetJointId"] == result["resetSelectedJointId"]
+        assert result["resetAfterPresetPose"] == []
+        assert result["resetAfterPresetSelection"] is None
+        assert result["resetAfterPresetResult"] is None
+        assert result["resetAfterPresetSelectValue"] == ""
+        assert [preset["id"] for preset in result["savedPresetsAfterReset"]] == [
+            "saved:test-pose"]
+        assert result["builtInsAfterReset"]
         assert result["weightAfter"]["selectedBones"] == []
     finally:
         context.close()
@@ -1291,23 +1386,40 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             [...mesh.geometry.attributes.position.array]);
           experiment.setRigVisible(true);
           experiment.setSelectedBones([{
-            sourceKey: sourceB.sourceKey,
-            sourceFile: sourceB.sourceFile,
-            boneIdOffset: sourceB.boneIdOffset,
-            boneIds: [4],
+            sourceKey: sourceA.sourceKey,
+            sourceFile: sourceA.sourceFile,
+            boneIdOffset: sourceA.boneIdOffset,
+            boneIds: [child],
           }]);
           const physicsState = experiment.getModelPhysicsState();
           const afterPhysics = experiment.getModelRigState();
+          const physicsMesh = window.modViewer.activeMeshes.find(mesh =>
+            experiment.getSkinningState(mesh).skinningSourceKey
+              === sourceA.sourceKey);
+          const physicsJoint = [...experiment.getSkinningState(
+            physicsMesh).physicsState.joints.values()][0];
+          physicsJoint.rotationVector = [.12, -.04, .08];
+          physicsJoint.angularVelocity = [.3, -.2, .1];
+          const physicsBeforeManual = [...experiment.getSkinningState(
+            physicsMesh).physicsState.joints.values()].map(joint => ({
+              rotationVector: [...joint.rotationVector],
+              angularVelocity: [...joint.angularVelocity],
+            }));
           controller.refresh(afterPhysics);
           const physicsControls = await controller.ensureTransformControls();
           const physicsOverlay = controller.getDebugState();
-          const rejectedBone = experiment.setRigBoneRotation(
+          const boneChanged = experiment.setRigBoneRotation(
             sourceA.sourceKey, child, q, {dragging: true});
-          const rejectedJoint = experiment.setRigJointRotation(
+          const jointChanged = experiment.setRigJointRotation(
             jointA, q, {dragging: true});
-          const rejectedRoot = experiment.setRigComponentRoot(
+          const physicsAfterManual = [...experiment.getSkinningState(
+            physicsMesh).physicsState.joints.values()].map(joint => ({
+              rotationVector: [...joint.rotationVector],
+              angularVelocity: [...joint.angularVelocity],
+            }));
+          const rootChanged = experiment.setRigComponentRoot(
             sourceA.sourceKey, child);
-          const rejectedReset = experiment.resetRigBone(
+          const resetChanged = experiment.resetRigBone(
             sourceA.sourceKey, child);
           controller.dispose();
           return {
@@ -1324,11 +1436,15 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
               Math.abs(value - before[index][offset]) > 1e-5)),
             physicsEnabled: physicsState.enabled,
             physicsParticipants: physicsState.participantCount,
-            manualPoseCleared: afterPhysics.model.poseJointIds.length === 0,
-            physicsGizmoUnavailable: physicsControls === null
-              && !physicsOverlay.proxyVisible
-              && !physicsOverlay.controlsAttached,
-            rejectedBone, rejectedJoint, rejectedRoot, rejectedReset,
+            physicsBeforeManual, physicsAfterManual,
+            manualPosePreserved: afterPhysics.model.poseJointIds.length > 0,
+            physicsGizmoAvailable: physicsControls !== null
+              && physicsOverlay.proxyVisible
+              && physicsOverlay.controlsAttached,
+            manualBoneEditable: boneChanged,
+            manualJointEditable: jointChanged,
+            rootChanged,
+            resetChanged,
           };
         }""")
         assert result.get("modelJointCount") == 2, result
@@ -1352,12 +1468,13 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         assert result["changed"] == [True, True, True]
         assert result["physicsEnabled"]
         assert result["physicsParticipants"] == 1
-        assert result["manualPoseCleared"]
-        assert result["physicsGizmoUnavailable"]
-        assert not result["rejectedBone"]
-        assert not result["rejectedJoint"]
-        assert not result["rejectedRoot"]
-        assert not result["rejectedReset"]
+        assert result["physicsAfterManual"] == result["physicsBeforeManual"]
+        assert result["manualPosePreserved"]
+        assert result["physicsGizmoAvailable"]
+        assert result["manualBoneEditable"]
+        assert result["manualJointEditable"]
+        assert result["rootChanged"]
+        assert result["resetChanged"]
     finally:
         page.evaluate("""() => {
           (window.__crossSourceRigUrls || []).forEach(url =>

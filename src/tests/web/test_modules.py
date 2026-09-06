@@ -696,6 +696,12 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
       controller.refresh(state);
       const controls = await controller.ensureTransformControls();
       const nonRoot = controller.getDebugState();
+      state = {...state, selectedBoneId: null};
+      controller.refresh(state);
+      const cleared = controller.getDebugState();
+      state = {...state, selectedBoneId: 2};
+      controller.refresh(state);
+      const reselected = controller.getDebugState();
       controls.dispatchEvent({type: 'change'});
       const hoverPoseCount = poseCalls.length;
       controls.dispatchEvent({type: 'dragging-changed', value: true});
@@ -743,7 +749,7 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
       const picked = controller.getDebugState();
       controller.dispose();
       return {
-        noSelection, root, nonRoot, rootAgain, hidden, shown,
+        noSelection, root, nonRoot, cleared, reselected, rootAgain, hidden, shown,
         picking, picked, dragStarted, dragFinished, duringPick, afterPick,
         pickerActions, arcballActions,
         hoverPoseCount, objectChangePoseCount, poseCalls, finishCalls,
@@ -761,6 +767,12 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
     assert result["nonRoot"]["controlsAttached"] is True
     assert result["nonRoot"]["helperInScene"] is True
     assert result["nonRoot"]["controlsCreateCount"] == 1
+    assert result["cleared"]["proxyVisible"] is False
+    assert result["cleared"]["controlsAttached"] is False
+    assert result["cleared"]["controlsCreateCount"] == 1
+    assert result["reselected"]["proxyVisible"] is True
+    assert result["reselected"]["controlsAttached"] is True
+    assert result["reselected"]["controlsCreateCount"] == 1
     assert result["nonRoot"]["arcballEnabled"] is True
     assert result["hoverPoseCount"] == 0
     assert result["objectChangePoseCount"] == 1
@@ -1912,6 +1924,84 @@ def test_pose_deformation_uses_joint_pivot_and_updates_normals(module_page):
     }""")
     assert result["position"] == pytest.approx([1, 1, 0, 0, 0, 0])
     assert result["normal"] == pytest.approx([0, 1, 0, 0, 0, 1])
+
+
+def test_secondary_pose_composition_preserves_base_and_propagates_offsets(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three');
+      const deformation = await import('./js/mesh/weight-deformation.js');
+      const forest = {components: [{rootId: 0, nodeIds: [0, 1, 2],
+        childrenById: {0: [1], 1: [2]}}]};
+      const centers = new Map([
+        [0, [0, 0, 0]], [1, [1, 0, 0]], [2, [2, 0, 0]],
+      ]);
+      const manualChild = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(1, 0, 0), Math.PI / 6);
+      const baseRotations = new Map();
+      const baseTransforms = deformation.buildForestTransformsFromLocalRotations(
+        forest, centers, {quaternionByBoneId: new Map([[2, manualChild]]),
+          rotationOutput: baseRotations});
+      const physicsRotations = new Map([[1, [0, Math.PI / 18, 0]]]);
+      const physicsOnlyRotations = new Map();
+      const physicsOnly = deformation.buildForestTransformsFromLocalRotations(
+        forest, centers, {rotationByBoneId: physicsRotations,
+          rotationOutput: physicsOnlyRotations});
+      const identityBaseRotations = new Map();
+      const identityBaseTransforms = new Map([
+        [0, new THREE.Matrix4()], [1, new THREE.Matrix4()],
+        [2, new THREE.Matrix4()],
+      ]);
+      const identityComposedRotations = new Map();
+      const identityComposed = deformation.composeBasePoseWithPhysicsOffsets({
+        forest, nodeCenters: centers,
+        baseTransformByBoneId: identityBaseTransforms,
+        baseRotationByBoneId: identityBaseRotations,
+        getOffsetRotation: boneId => physicsRotations.get(boneId),
+        rotationOutput: identityComposedRotations,
+      });
+      const manualOnlyRotations = new Map();
+      const manualOnly = deformation.composeBasePoseWithPhysicsOffsets({
+        forest, nodeCenters: centers,
+        baseTransformByBoneId: baseTransforms,
+        baseRotationByBoneId: baseRotations,
+        rotationOutput: manualOnlyRotations,
+      });
+      const combinedRotations = new Map();
+      const combined = deformation.composeBasePoseWithPhysicsOffsets({
+        forest, nodeCenters: centers,
+        baseTransformByBoneId: baseTransforms,
+        baseRotationByBoneId: baseRotations,
+        rotationByBoneId: physicsRotations,
+        rotationOutput: combinedRotations,
+      });
+      const array = quaternion => quaternion.toArray();
+      return {
+        identityMatches: identityComposed.get(1).equals(physicsOnly.get(1))
+          && identityComposed.get(2).equals(physicsOnly.get(2)),
+        manualMatches: manualOnly.get(2).equals(baseTransforms.get(2)),
+        rootMatches: combined.get(0).equals(baseTransforms.get(0)),
+        parentPhysics: array(combinedRotations.get(1)),
+        childInherited: array(combinedRotations.get(2)),
+        manualChild: array(baseRotations.get(2)),
+        physicsOnlyChild: array(physicsOnlyRotations.get(2)),
+      };
+    }""")
+    assert result["identityMatches"]
+    assert result["manualMatches"]
+    assert result["rootMatches"]
+    assert result["parentPhysics"] == pytest.approx(
+        [0, math.sin(math.pi / 36), 0, math.cos(math.pi / 36)])
+    assert result["childInherited"] == pytest.approx([
+        math.sin(math.pi / 12) * math.cos(math.pi / 36),
+        math.sin(math.pi / 36) * math.cos(math.pi / 12),
+        -math.sin(math.pi / 12) * math.sin(math.pi / 36),
+        math.cos(math.pi / 12) * math.cos(math.pi / 36),
+    ], abs=1e-5)
+    assert result["childInherited"] != pytest.approx(result["manualChild"])
+    assert result["physicsOnlyChild"] == pytest.approx(
+        [0, math.sin(math.pi / 36), 0, math.cos(math.pi / 36)])
 
 
 def test_skinning_physics_solver_uses_true_3d_vectors_and_quaternions(module_page):
