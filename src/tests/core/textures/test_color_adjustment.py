@@ -56,6 +56,51 @@ def test_prepared_adjustment_matches_validated_transform(vectors):
         assert bytes_result == expected_bytes
 
 
+@pytest.mark.parametrize(
+    ("rgb", "adjustment", "expected"),
+    [
+        ((1.0, 0.0, 0.0), {"green": 1.0}, (1.0, 0.0, 0.0)),
+        ((1.0, 0.0, 0.0), {"green": 1.5}, (1.0, 0.5, 0.0)),
+        ((1.0, 0.0, 0.0), {"green": 2.0}, (1.0, 1.0, 0.0)),
+        ((1.0, 0.0, 0.0), {"blue": 2.0}, (1.0, 0.0, 1.0)),
+        ((0.0, 1.0, 0.0), {"red": 2.0}, (1.0, 1.0, 0.0)),
+        ((0.0, 1.0, 0.0), {"blue": 2.0}, (0.0, 1.0, 1.0)),
+        ((0.0, 0.0, 1.0), {"red": 2.0}, (1.0, 0.0, 1.0)),
+        ((0.0, 0.0, 1.0), {"green": 2.0}, (0.0, 1.0, 1.0)),
+        ((0.8, 0.0, 0.0), {"green": 2.0}, (0.8, 0.8, 0.0)),
+        ((0.2, 0.0, 0.0), {"green": 2.0}, (0.2, 0.2, 0.0)),
+        ((0.8, 0.4, 0.2), {"green": 1.5}, (0.8, 0.6, 0.2)),
+        ((0.8, 0.4, 0.2), {"green": 2.0}, (0.8, 0.8, 0.2)),
+        ((0.8, 0.4, 0.2), {"red": 0.5, "blue": 0.0},
+         (0.4, 0.4, 0.0)),
+        ((0.5, 0.5, 0.5), {"red": 2.0}, (0.5, 0.5, 0.5)),
+        ((0.5, 0.5, 0.5), {"red": 0.0}, (0.0, 0.5, 0.5)),
+        ((0.8, 0.2, 0.0),
+         {"red": 0.5, "green": 2.0, "blue": 2.0},
+         (0.4, 0.8, 0.8)),
+    ],
+)
+def test_rgb_channel_adjustments_fill_missing_channels_and_preserve_shading(
+        rgb, adjustment, expected):
+    actual = apply_color_adjustment(rgb, adjustment)
+    prepared = apply_prepared_color_adjustment(
+        rgb, prepare_color_adjustment(adjustment))
+
+    assert actual == pytest.approx(expected, abs=1e-7)
+    assert prepared == pytest.approx(expected, abs=1e-7)
+
+
+def test_rgb_adjustment_uses_post_brightness_value_before_tint():
+    assert apply_color_adjustment(
+        (0.4, 0.0, 0.0),
+        {"brightness": 1.5, "green": 2.0},
+    ) == pytest.approx((0.6, 0.6, 0.0), abs=1e-7)
+    assert apply_color_adjustment(
+        (0.8, 0.0, 0.0),
+        {"green": 2.0, "tint": "#0000ff", "tint_strength": 0.5},
+    ) == pytest.approx((0.4, 0.4, 0.5), abs=1e-7)
+
+
 def test_adjust_rgba_preserves_alpha_and_only_changes_selected_pixels():
     source = bytes([255, 0, 0, 7, 0, 255, 0, 129])
 

@@ -164,6 +164,13 @@ def _hsv_to_rgb(hue, saturation, value):
     return value, p, q
 
 
+def _adjust_channel(channel, intensity, amount):
+    if amount <= 1.0:
+        return channel * amount
+    fill = amount - 1.0
+    return channel * (1.0 - fill) + intensity * fill
+
+
 def _apply_normalized(rgb, normalized):
     """Apply the operation order to RGB floats and a validated state."""
     try:
@@ -178,9 +185,10 @@ def _apply_normalized(rgb, normalized):
     red = (red - 0.5) * normalized["contrast"] + 0.5
     green = (green - 0.5) * normalized["contrast"] + 0.5
     blue = (blue - 0.5) * normalized["contrast"] + 0.5
-    red *= normalized["red"]
-    green *= normalized["green"]
-    blue *= normalized["blue"]
+    intensity = max(red, green, blue)
+    red = _adjust_channel(red, intensity, normalized["red"])
+    green = _adjust_channel(green, intensity, normalized["green"])
+    blue = _adjust_channel(blue, intensity, normalized["blue"])
     red = min(1.0, max(0.0, red))
     green = min(1.0, max(0.0, green))
     blue = min(1.0, max(0.0, blue))
@@ -207,9 +215,10 @@ def _apply_prepared(rgb, prepared):
     red = (red - 0.5) * prepared.contrast + 0.5
     green = (green - 0.5) * prepared.contrast + 0.5
     blue = (blue - 0.5) * prepared.contrast + 0.5
-    red *= prepared.red
-    green *= prepared.green
-    blue *= prepared.blue
+    intensity = max(red, green, blue)
+    red = _adjust_channel(red, intensity, prepared.red)
+    green = _adjust_channel(green, intensity, prepared.green)
+    blue = _adjust_channel(blue, intensity, prepared.blue)
     red = min(1.0, max(0.0, red))
     green = min(1.0, max(0.0, green))
     blue = min(1.0, max(0.0, blue))

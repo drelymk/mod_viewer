@@ -54,10 +54,10 @@
     "expected": [0.5, 0.5, 0.5]
   },
   {
-    "name": "channel-multipliers",
+    "name": "channel-adjustments",
     "rgb": [0.2, 0.4, 0.6],
     "adjustment": {"red": 2, "green": 0.5, "blue": 0},
-    "expected": [0.4, 0.2, 0.0]
+    "expected": [0.6, 0.2, 0.0]
   },
   {
     "name": "half-blue-tint",
@@ -78,6 +78,6 @@
                    "brightness": 0.75, "contrast": 1.2,
                    "red": 1.2, "green": 0.8, "blue": 0.5,
                    "tint": "#ff8000", "tint_strength": 0.25},
-    "expected": [0.403, 0.1254901961, 0.165]
+    "expected": [0.418, 0.1254901961, 0.165]
   }
 ]

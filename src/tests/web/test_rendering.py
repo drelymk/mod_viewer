@@ -5453,6 +5453,19 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].material.opacity") == opacity
 
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+            hue: 0, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 2, blue: 1, tint: '#ffffff', tintStrength: 0,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        filled = _sample_mesh_pixel_at(page, -0.5, -0.5)
+        assert filled[0] > filled[2], filled
+        assert filled[1] > filled[2], filled
+
         tints = page.evaluate("""async () => {
           const {setGameMaterialColorAdjustment,
             getGameMaterialColorAdjustment} = await import(

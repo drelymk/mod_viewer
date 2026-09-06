@@ -319,6 +319,12 @@ function hsvToRgb(hsv) {
             vec3(value, p, q))))));
 }
 
+function adjustColorChannel(channel, intensity, amount) {
+  const reduced = channel.mul(amount);
+  const filled = mix(channel, intensity, amount.sub(1));
+  return amount.lessThanEqual(1).select(reduced, filled);
+}
+
 function createColorAdjustmentNode(state, baseColor) {
   const editorColor = colorMap(baseColor, linearToEditorSrgbChannel);
   const hsv = rgbToHsv(editorColor);
@@ -332,10 +338,11 @@ function createColorAdjustmentNode(state, baseColor) {
   );
   let result = hsvToRgb(adjustedHsv);
   result = result.sub(0.5).mul(state.colorContrastNode).add(0.5);
+  const intensity = result.r.max(result.g).max(result.b);
   result = vec3(
-    result.r.mul(state.colorRedNode),
-    result.g.mul(state.colorGreenNode),
-    result.b.mul(state.colorBlueNode),
+    adjustColorChannel(result.r, intensity, state.colorRedNode),
+    adjustColorChannel(result.g, intensity, state.colorGreenNode),
+    adjustColorChannel(result.b, intensity, state.colorBlueNode),
   ).clamp(0, 1);
   result = mix(result, state.colorTintNode, state.colorTintStrengthNode);
   result = result.clamp(0, 1);
