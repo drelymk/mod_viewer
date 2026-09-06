@@ -230,17 +230,54 @@ function formatPercent(value) {
   return `${Math.round(value)}%`;
 }
 
+const BRIGHTNESS_SLIDER_NEUTRAL = 100;
+const BRIGHTNESS_SLIDER_MAX = 200;
+const BRIGHTNESS_MAX = 4;
+
+export function brightnessSliderPosition(brightness) {
+  const numeric = Number(brightness);
+  const value = Math.min(BRIGHTNESS_MAX,
+    Math.max(0, Number.isFinite(numeric) ? numeric : 1));
+  if (value <= 1) return value * BRIGHTNESS_SLIDER_NEUTRAL;
+  return BRIGHTNESS_SLIDER_NEUTRAL
+    + BRIGHTNESS_SLIDER_NEUTRAL * Math.log(value) / Math.log(BRIGHTNESS_MAX);
+}
+
+export function brightnessFromSliderPosition(position) {
+  const numeric = Number(position);
+  const value = Math.min(BRIGHTNESS_SLIDER_MAX,
+    Math.max(0, Number.isFinite(numeric) ? numeric : 100));
+  if (value <= BRIGHTNESS_SLIDER_NEUTRAL) {
+    return value / BRIGHTNESS_SLIDER_NEUTRAL;
+  }
+  return BRIGHTNESS_MAX ** (
+    (value - BRIGHTNESS_SLIDER_NEUTRAL) / BRIGHTNESS_SLIDER_NEUTRAL);
+}
+
 function colorControlValue(field, adjustment) {
-  return field === 'hue' ? adjustment.hue : adjustment[field] * 100;
+  if (field === 'hue') return adjustment.hue;
+  if (field === 'brightness') return brightnessSliderPosition(adjustment[field]);
+  return adjustment[field] * 100;
 }
 
 function colorAdjustmentValue(field, controlValue) {
-  return field === 'hue' ? controlValue : controlValue / 100;
+  if (field === 'hue') return controlValue;
+  if (field === 'brightness') return brightnessFromSliderPosition(controlValue);
+  return controlValue / 100;
+}
+
+function formatColorControlValue(field, controlValue) {
+  if (field === 'hue') return formatHue(controlValue);
+  const value = field === 'brightness'
+    ? brightnessFromSliderPosition(controlValue) * 100
+    : controlValue;
+  return formatPercent(value);
 }
 
 /** Build one range control shared by the Inspector's color sliders. */
 function buildRangeControl({
   field, label, min, max, step, value, formatValue, onInput, onChange,
+  neutralMarker = false,
 }) {
   const row = document.createElement('label');
   row.className = 'inspector-color-control';
@@ -266,7 +303,16 @@ function buildRangeControl({
   });
   slider.addEventListener('change', () => onChange(Number(slider.value)));
   syncValue();
-  row.append(heading, slider, valueNode);
+  const sliderWrap = document.createElement('span');
+  sliderWrap.className = 'inspector-color-slider-wrap';
+  sliderWrap.appendChild(slider);
+  if (neutralMarker) {
+    const marker = document.createElement('span');
+    marker.className = 'inspector-color-slider-neutral-marker';
+    marker.setAttribute('aria-hidden', 'true');
+    sliderWrap.appendChild(marker);
+  }
+  row.append(heading, sliderWrap, valueNode);
   return row;
 }
 
@@ -339,54 +385,68 @@ function buildColorSection(content, mesh) {
   }
 
   const adjustment = getMeshColorAdjustment(mesh);
-  const addSlider = (field, label, min, max, step, formatValue) => {
+  const addSlider = (field, label, min, max, step, neutralMarker = false) => {
     section.appendChild(buildRangeControl({
       field, label, min, max, step,
-      value: colorControlValue(field, adjustment), formatValue,
+      value: colorControlValue(field, adjustment),
+      formatValue: value => formatColorControlValue(field, value),
       onInput: value => updateColorAdjustment(section, mesh, field, value),
       onChange: value => updateColorAdjustment(
         section, mesh, field, value, true),
+      neutralMarker,
     }));
   };
-  addSlider('hue', 'Hue', -180, 180, 1, formatHue);
-  addSlider('saturation', 'Saturation', 0, 200, 1, formatPercent);
-  addSlider('brightness', 'Brightness', 0, 200, 1, formatPercent);
-  addSlider('contrast', 'Contrast', 0, 200, 1, formatPercent);
+  addSlider('hue', 'Hue', -180, 180, 1);
+  addSlider('saturation', 'Saturation', 0, 200, 1);
+  addSlider('brightness', 'Brightness', 0, 200, 1, true);
+  addSlider('contrast', 'Contrast', 0, 200, 1);
 
   const rgbTitle = document.createElement('div');
   rgbTitle.className = 'inspector-color-subtitle';
   rgbTitle.textContent = 'RGB';
   section.appendChild(rgbTitle);
-  addSlider('red', 'R', 0, 200, 1, formatPercent);
-  addSlider('green', 'G', 0, 200, 1, formatPercent);
-  addSlider('blue', 'B', 0, 200, 1, formatPercent);
+  addSlider('red', 'R', 0, 200, 1);
+  addSlider('green', 'G', 0, 200, 1);
+  addSlider('blue', 'B', 0, 200, 1);
 
-  const tint = document.createElement('label');
+  const tint = document.createElement('div');
   tint.className = 'inspector-color-tint';
   const tintLabel = document.createElement('span');
   tintLabel.className = 'inspector-color-control-heading';
   tintLabel.textContent = 'Tint';
   const tintInput = document.createElement('input');
   tintInput.type = 'color';
+  tintInput.setAttribute('aria-label', 'Tint color');
   tintInput.className = 'inspector-color-tint-input';
-  tintInput.value = adjustment.tint;
+  tintInput.value = adjustment.tint || '#ffffff';
   const tintValue = document.createElement('span');
   tintValue.className = 'inspector-color-value';
   tintValue.dataset.colorTintValue = 'true';
-  tintValue.textContent = adjustment.tint.toUpperCase();
+  tintValue.textContent = adjustment.tint?.toUpperCase() || 'None';
+  const clearTint = document.createElement('button');
+  clearTint.type = 'button';
+  clearTint.className = 'ui-button inspector-color-tint-clear';
+  clearTint.textContent = 'Clear';
+  clearTint.disabled = adjustment.tint === null;
+  clearTint.setAttribute('aria-label', 'Clear tint');
   const applyTint = persist => {
     tintValue.textContent = tintInput.value.toUpperCase();
+    clearTint.disabled = false;
     const next = getMeshColorAdjustment(mesh);
-    next.tint = tintInput.value;
+    next.tint = tintInput.value.toLowerCase();
     setMeshColorAdjustment(mesh, next, { persist, render: true });
     syncTextureSaveAction(section, mesh);
   };
   tintInput.addEventListener('input', () => applyTint(false));
   tintInput.addEventListener('change', () => applyTint(true));
-  tint.append(tintLabel, tintInput, tintValue);
+  clearTint.addEventListener('click', () => {
+    const next = getMeshColorAdjustment(mesh);
+    next.tint = null;
+    setMeshColorAdjustment(mesh, next, { persist: true, render: true });
+    updateColorControlState(content, mesh);
+  });
+  tint.append(tintLabel, tintInput, tintValue, clearTint);
   section.appendChild(tint);
-
-  addSlider('tintStrength', 'Strength', 0, 100, 1, formatPercent);
 
   const reset = document.createElement('button');
   reset.type = 'button';
@@ -419,13 +479,14 @@ function updateColorControlState(content, mesh) {
     if (!slider || !value || !Object.hasOwn(adjustment, field)) return;
     const controlValue = colorControlValue(field, adjustment);
     slider.value = String(controlValue);
-    value.textContent = field === 'hue'
-      ? formatHue(controlValue) : formatPercent(controlValue);
+    value.textContent = formatColorControlValue(field, controlValue);
   });
   const tintInput = section.querySelector('.inspector-color-tint-input');
   const tintValue = section.querySelector('[data-color-tint-value]');
-  if (tintInput) tintInput.value = adjustment.tint;
-  if (tintValue) tintValue.textContent = adjustment.tint.toUpperCase();
+  const clearTint = section.querySelector('.inspector-color-tint-clear');
+  if (tintInput) tintInput.value = adjustment.tint || '#ffffff';
+  if (tintValue) tintValue.textContent = adjustment.tint?.toUpperCase() || 'None';
+  if (clearTint) clearTint.disabled = adjustment.tint === null;
   syncTextureSaveAction(section, mesh);
   return true;
 }

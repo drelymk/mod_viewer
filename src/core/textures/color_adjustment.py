@@ -15,22 +15,22 @@ COLOR_DEFAULTS = {
     "red": 1.0,
     "green": 1.0,
     "blue": 1.0,
-    "tint": "#ffffff",
-    "tint_strength": 0.0,
+    "tint": None,
 }
 
 COLOR_RANGES = {
     "hue": (-180.0, 180.0),
     "saturation": (0.0, 2.0),
-    "brightness": (0.0, 2.0),
+    "brightness": (0.0, 4.0),
     "contrast": (0.0, 2.0),
     "red": (0.0, 2.0),
     "green": (0.0, 2.0),
     "blue": (0.0, 2.0),
-    "tint_strength": (0.0, 1.0),
 }
 
 _TINT_PATTERN = re.compile(r"^#[0-9a-f]{6}$", re.IGNORECASE)
+_MISSING = object()
+_INVALID = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,10 +44,10 @@ class PreparedColorAdjustment:
     red: float
     green: float
     blue: float
+    tint_enabled: bool
     tint_red: float
     tint_green: float
     tint_blue: float
-    tint_strength: float
 
 
 def _number(value, default, *, reject_invalid):
@@ -62,6 +62,30 @@ def _number(value, default, *, reject_invalid):
     return float(value)
 
 
+def _normalize_tint(value, *, reject_invalid):
+    raw_tint = value.get("tint")
+    if raw_tint is not None and (
+            not isinstance(raw_tint, str)
+            or not _TINT_PATTERN.fullmatch(raw_tint)):
+        if reject_invalid:
+            return _INVALID
+        raw_tint = None
+    legacy_strength = value.get(
+        "tintStrength", value.get("tint_strength", _MISSING))
+    if legacy_strength is not _MISSING:
+        strength = _number(legacy_strength, 0.0,
+                           reject_invalid=reject_invalid)
+        if strength is None:
+            return _INVALID
+        # Legacy partial tint had no exact equivalent. Preserve an explicit
+        # positive tint selection, while zero remains the old disabled state.
+        if strength <= 0.0:
+            return None
+    if raw_tint is None:
+        return None
+    return raw_tint.lower()
+
+
 def normalize_color_adjustment(value, *, reject_invalid=False):
     """Return the canonical color state, or ``None`` for malformed input.
 
@@ -71,17 +95,14 @@ def normalize_color_adjustment(value, *, reject_invalid=False):
     """
     if not isinstance(value, dict):
         return None
-    result = {}
+    tint = _normalize_tint(value, reject_invalid=reject_invalid)
+    if tint is _INVALID:
+        return None
+    result = {"tint": tint}
     for field, default in COLOR_DEFAULTS.items():
-        raw = value.get(field, value.get("tintStrength", default)
-                        if field == "tint_strength" else default)
         if field == "tint":
-            if not isinstance(raw, str) or not _TINT_PATTERN.fullmatch(raw):
-                if reject_invalid:
-                    return None
-                raw = default
-            result[field] = raw.lower()
             continue
+        raw = value.get(field, default)
         number = _number(raw, default, reject_invalid=reject_invalid)
         if number is None:
             return None
@@ -100,9 +121,9 @@ def is_neutral_color_adjustment(value):
 
 def tint_rgb(value):
     """Decode a canonical ``#rrggbb`` value into raw sRGB floats."""
-    normalized = value.lower() if isinstance(value, str) else COLOR_DEFAULTS["tint"]
+    normalized = value.lower() if isinstance(value, str) else "#ffffff"
     if not _TINT_PATTERN.fullmatch(normalized):
-        normalized = COLOR_DEFAULTS["tint"]
+        normalized = "#ffffff"
     return tuple(int(normalized[index:index + 2], 16) / 255.0
                  for index in (1, 3, 5))
 
@@ -121,10 +142,10 @@ def prepare_color_adjustment(adjustment):
         red=normalized["red"],
         green=normalized["green"],
         blue=normalized["blue"],
+        tint_enabled=normalized["tint"] is not None,
         tint_red=tint_red,
         tint_green=tint_green,
         tint_blue=tint_blue,
-        tint_strength=normalized["tint_strength"],
     )
 
 
@@ -164,12 +185,31 @@ def _hsv_to_rgb(hue, saturation, value):
     return value, p, q
 
 
+def _adjust_channel(channel, intensity, amount):
+    if amount <= 1.0:
+        return channel * amount
+    fill = amount - 1.0
+    return channel * (1.0 - fill) + intensity * fill
+
+
+def _apply_tint(red, green, blue, tint_red, tint_green, tint_blue,
+                tint_enabled):
+    if not tint_enabled:
+        return red, green, blue
+    intensity = max(red, green, blue)
+    return (tint_red * intensity, tint_green * intensity,
+            tint_blue * intensity)
+
+
 def _apply_normalized(rgb, normalized):
-    """Apply the operation order to RGB floats and a validated state."""
+    """Apply tint, then the normal color operation order to RGB floats."""
     try:
         red, green, blue = (float(channel) for channel in rgb)
     except (TypeError, ValueError):
         raise ValueError("RGB must contain three numeric channels") from None
+    red, green, blue = _apply_tint(
+        red, green, blue, *tint_rgb(normalized["tint"]),
+        normalized["tint"] is not None)
     hue, saturation, value = _rgb_to_hsv(red, green, blue)
     hue = (hue + normalized["hue"] / 360.0) % 1.0
     saturation = min(1.0, max(0.0, saturation * normalized["saturation"]))
@@ -178,17 +218,13 @@ def _apply_normalized(rgb, normalized):
     red = (red - 0.5) * normalized["contrast"] + 0.5
     green = (green - 0.5) * normalized["contrast"] + 0.5
     blue = (blue - 0.5) * normalized["contrast"] + 0.5
-    red *= normalized["red"]
-    green *= normalized["green"]
-    blue *= normalized["blue"]
+    intensity = max(red, green, blue)
+    red = _adjust_channel(red, intensity, normalized["red"])
+    green = _adjust_channel(green, intensity, normalized["green"])
+    blue = _adjust_channel(blue, intensity, normalized["blue"])
     red = min(1.0, max(0.0, red))
     green = min(1.0, max(0.0, green))
     blue = min(1.0, max(0.0, blue))
-    tint_red, tint_green, tint_blue = tint_rgb(normalized["tint"])
-    strength = normalized["tint_strength"]
-    red = red * (1.0 - strength) + tint_red * strength
-    green = green * (1.0 - strength) + tint_green * strength
-    blue = blue * (1.0 - strength) + tint_blue * strength
     return tuple(min(1.0, max(0.0, channel))
                  for channel in (red, green, blue))
 
@@ -199,6 +235,9 @@ def _apply_prepared(rgb, prepared):
         red, green, blue = (float(channel) for channel in rgb)
     except (TypeError, ValueError):
         raise ValueError("RGB must contain three numeric channels") from None
+    red, green, blue = _apply_tint(
+        red, green, blue, prepared.tint_red, prepared.tint_green,
+        prepared.tint_blue, prepared.tint_enabled)
     hue, saturation, value = _rgb_to_hsv(red, green, blue)
     hue = (hue + prepared.hue_offset) % 1.0
     saturation = min(1.0, max(0.0, saturation * prepared.saturation))
@@ -207,16 +246,13 @@ def _apply_prepared(rgb, prepared):
     red = (red - 0.5) * prepared.contrast + 0.5
     green = (green - 0.5) * prepared.contrast + 0.5
     blue = (blue - 0.5) * prepared.contrast + 0.5
-    red *= prepared.red
-    green *= prepared.green
-    blue *= prepared.blue
+    intensity = max(red, green, blue)
+    red = _adjust_channel(red, intensity, prepared.red)
+    green = _adjust_channel(green, intensity, prepared.green)
+    blue = _adjust_channel(blue, intensity, prepared.blue)
     red = min(1.0, max(0.0, red))
     green = min(1.0, max(0.0, green))
     blue = min(1.0, max(0.0, blue))
-    strength = prepared.tint_strength
-    red = red * (1.0 - strength) + prepared.tint_red * strength
-    green = green * (1.0 - strength) + prepared.tint_green * strength
-    blue = blue * (1.0 - strength) + prepared.tint_blue * strength
     return tuple(min(1.0, max(0.0, channel))
                  for channel in (red, green, blue))
 

@@ -192,8 +192,7 @@ def test_mesh_color_adjustments_normalize_and_preserve_unrelated_metadata(
                 "green": 1.0,
                 "blue": 2.0,
                 "tint": "#aabbcc",
-                "tint_strength": 0.4,
-            },
+                },
         },
     }
 
@@ -255,7 +254,7 @@ def test_hydrate_mesh_color_adjustments_uses_canonical_and_safe_legacy_keys():
     adjustment = {
         "hue": 35, "saturation": 1, "brightness": 1, "contrast": 1,
         "red": 1, "green": 1, "blue": 1,
-        "tint": "#ffffff", "tint_strength": 0.25,
+        "tint": "#ffffff",
     }
     hydrated = metadata.hydrate_mesh_color_adjustments(payload, {
         "mesh_color_adjustments": {
@@ -265,6 +264,6 @@ def test_hydrate_mesh_color_adjustments_uses_canonical_and_safe_legacy_keys():
     })
 
     assert hydrated == {
-        canonical: adjustment,
-        "Body::6,0,0": adjustment,
+        canonical: {**adjustment},
+        "Body::6,0,0": {**adjustment},
     }

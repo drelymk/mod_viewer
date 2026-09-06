@@ -8,19 +8,17 @@ export const DEFAULT_COLOR_ADJUSTMENT = Object.freeze({
   red: 1,
   green: 1,
   blue: 1,
-  tint: '#ffffff',
-  tintStrength: 0,
+  tint: null,
 });
 
 const COLOR_RANGES = Object.freeze({
   hue: [-180, 180],
   saturation: [0, 2],
-  brightness: [0, 2],
+  brightness: [0, 4],
   contrast: [0, 2],
   red: [0, 2],
   green: [0, 2],
   blue: [0, 2],
-  tintStrength: [0, 1],
 });
 
 const TINT_PATTERN = /^#[0-9a-f]{6}$/i;
@@ -36,7 +34,17 @@ function clamp(value, [minimum, maximum]) {
 
 function tintValue(value) {
   return typeof value === 'string' && TINT_PATTERN.test(value)
-    ? value.toLowerCase() : DEFAULT_COLOR_ADJUSTMENT.tint;
+    ? value.toLowerCase() : null;
+}
+
+function normalizedTint(source) {
+  const tint = tintValue(source.tint);
+  const legacyStrength = source.tintStrength ?? source.tint_strength;
+  if (legacyStrength !== undefined
+      && finiteNumber(legacyStrength, 0) <= 0) {
+    return null;
+  }
+  return tint;
 }
 
 /** Normalize frontend or backend-shaped state to the canonical JS shape. */
@@ -64,10 +72,7 @@ export function normalizeColorAdjustment(value) {
     blue: clamp(
       finiteNumber(read('blue'), DEFAULT_COLOR_ADJUSTMENT.blue),
       COLOR_RANGES.blue),
-    tint: tintValue(read('tint')),
-    tintStrength: clamp(
-      finiteNumber(read('tintStrength', 'tint_strength'),
-        DEFAULT_COLOR_ADJUSTMENT.tintStrength), COLOR_RANGES.tintStrength),
+    tint: normalizedTint(source),
   };
 }
 
@@ -80,13 +85,12 @@ export function isNeutralColorAdjustment(value) {
     && adjustment.red === 1
     && adjustment.green === 1
     && adjustment.blue === 1
-    && adjustment.tint === '#ffffff'
-    && adjustment.tintStrength === 0;
+    && adjustment.tint === null;
 }
 
 /** Parse picker sRGB bytes without Three.js color-management conversion. */
 export function tintRgbFromHex(value) {
-  const tint = tintValue(value);
+  const tint = tintValue(value) || '#ffffff';
   return [
     parseInt(tint.slice(1, 3), 16) / 255,
     parseInt(tint.slice(3, 5), 16) / 255,

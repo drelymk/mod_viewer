@@ -319,9 +319,19 @@ function hsvToRgb(hsv) {
             vec3(value, p, q))))));
 }
 
+function adjustColorChannel(channel, intensity, amount) {
+  const reduced = channel.mul(amount);
+  const filled = mix(channel, intensity, amount.sub(1));
+  return amount.lessThanEqual(1).select(reduced, filled);
+}
+
 function createColorAdjustmentNode(state, baseColor) {
   const editorColor = colorMap(baseColor, linearToEditorSrgbChannel);
-  const hsv = rgbToHsv(editorColor);
+  const sourceIntensity = editorColor.r.max(editorColor.g).max(editorColor.b);
+  const tinted = state.colorTintNode.mul(sourceIntensity);
+  const adjustmentColor = state.colorTintEnabledNode.select(
+    tinted, editorColor);
+  const hsv = rgbToHsv(adjustmentColor);
   let hue = hsv.x.add(state.colorHueNode.div(360));
   hue = hue.lessThan(0).select(hue.add(1), hue);
   hue = hue.greaterThanEqual(1).select(hue.sub(1), hue);
@@ -332,12 +342,12 @@ function createColorAdjustmentNode(state, baseColor) {
   );
   let result = hsvToRgb(adjustedHsv);
   result = result.sub(0.5).mul(state.colorContrastNode).add(0.5);
+  const intensity = result.r.max(result.g).max(result.b);
   result = vec3(
-    result.r.mul(state.colorRedNode),
-    result.g.mul(state.colorGreenNode),
-    result.b.mul(state.colorBlueNode),
+    adjustColorChannel(result.r, intensity, state.colorRedNode),
+    adjustColorChannel(result.g, intensity, state.colorGreenNode),
+    adjustColorChannel(result.b, intensity, state.colorBlueNode),
   ).clamp(0, 1);
-  result = mix(result, state.colorTintNode, state.colorTintStrengthNode);
   result = result.clamp(0, 1);
   result = colorMap(result, editorSrgbToLinearChannel);
   return state.colorAdjustmentEnabledNode.select(result, baseColor);
@@ -907,7 +917,7 @@ export function configureGameMaterial(material, profile, options = {}) {
     // Picker values are raw editor-sRGB components. Do not use THREE.Color,
     // whose hex/CSS setters convert into the linear working color space.
     colorTintNode: uniform(new Vector3(1, 1, 1)),
-    colorTintStrengthNode: uniform(0),
+    colorTintEnabledNode: uniform(false),
     hasMaterialId,
     hasSpecularArea,
     hasShadowMask,
@@ -1052,7 +1062,7 @@ export function getMaterialDebugMode(material) {
 export function getGameMaterialColorAdjustment(material) {
   const state = material?.userData?.gameMaterial;
   if (!state) return {...DEFAULT_COLOR_ADJUSTMENT};
-  const tint = state.colorTintNode?.value;
+  const tintEnabled = state.colorTintEnabledNode?.value === true;
   return normalizeColorAdjustment({
     hue: state.colorHueNode?.value,
     saturation: state.colorSaturationNode?.value,
@@ -1061,8 +1071,7 @@ export function getGameMaterialColorAdjustment(material) {
     red: state.colorRedNode?.value,
     green: state.colorGreenNode?.value,
     blue: state.colorBlueNode?.value,
-    tint: tintHexFromRgb(tint),
-    tintStrength: state.colorTintStrengthNode?.value,
+    tint: tintEnabled ? tintHexFromRgb(state.colorTintNode?.value) : null,
   });
 }
 
@@ -1080,7 +1089,6 @@ export function setGameMaterialColorAdjustment(
     ['colorRedNode', value.red],
     ['colorGreenNode', value.green],
     ['colorBlueNode', value.blue],
-    ['colorTintStrengthNode', value.tintStrength],
   ];
   scalarNodes.forEach(([name, next]) => {
     const node = state[name];
@@ -1088,11 +1096,16 @@ export function setGameMaterialColorAdjustment(
     node.value = next;
   });
   const tintNode = state.colorTintNode;
-  const currentTint = tintHexFromRgb(tintNode.value);
+  const currentTint = state.colorTintEnabledNode.value
+    ? tintHexFromRgb(tintNode.value) : null;
   const tintRgb = tintRgbFromHex(value.tint);
   changed = currentTint !== value.tint || changed;
   if (tintNode.value?.set) tintNode.value.set(...tintRgb);
   else tintNode.value = new Vector3(...tintRgb);
+  const tintEnabled = value.tint !== null;
+  changed = !Object.is(state.colorTintEnabledNode.value, tintEnabled)
+    || changed;
+  state.colorTintEnabledNode.value = tintEnabled;
   const nextEnabled = enabled === true;
   changed = !Object.is(state.colorAdjustmentEnabledNode.value, nextEnabled)
     || changed;

@@ -4662,7 +4662,7 @@ def test_texture_stays_fallback_until_png_load_completes(
             './js/mesh/mesh-color-state.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
             hue: 0, saturation: 1, brightness: 0, contrast: 1,
-            red: 1, green: 1, blue: 1, tint: '#ffffff', tintStrength: 0,
+            red: 1, green: 1, blue: 1, tint: null,
           });
         }""")
         page.wait_for_timeout(250)
@@ -4730,7 +4730,7 @@ def test_mesh_color_adjustment_does_not_recolor_flat_texture_fallback(
             './js/mesh/mesh-color-state.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
             hue: 0, saturation: 1, brightness: 0, contrast: 1,
-            red: 1, green: 1, blue: 1, tint: '#4080c0', tintStrength: 1,
+            red: 1, green: 1, blue: 1, tint: '#4080c0',
           });
         }""")
         page.wait_for_timeout(250)
@@ -5443,7 +5443,7 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
           const mesh = window.modViewer.activeMeshes[0];
           setMeshColorAdjustment(mesh, {
             hue: 120, saturation: 1, brightness: 1, contrast: 1,
-            red: 1, green: 1, blue: 1, tint: '#ffffff', tintStrength: 0,
+            red: 1, green: 1, blue: 1, tint: null,
           });
         }""")
         page.wait_for_timeout(250)
@@ -5453,18 +5453,29 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].material.opacity") == opacity
 
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} = await import(
+            './js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+            hue: 0, saturation: 1, brightness: 1, contrast: 1,
+            red: 1, green: 2, blue: 1, tint: null,
+          });
+        }""")
+        page.wait_for_timeout(250)
+        filled = _sample_mesh_pixel_at(page, -0.5, -0.5)
+        assert filled[0] > filled[2], filled
+        assert filled[1] > filled[2], filled
+
         tints = page.evaluate("""async () => {
           const {setGameMaterialColorAdjustment,
             getGameMaterialColorAdjustment} = await import(
             './js/mesh/material-profile.js');
           const mesh = window.modViewer.activeMeshes[0];
-          const cases = [
-            ['#808080', 1], ['#4080c0', 1], ['#4080c0', .5],
-          ];
-          return cases.map(([tint, tintStrength]) => {
+          const cases = [null, '#ffffff', '#4080c0'];
+          return cases.map(tint => {
             setGameMaterialColorAdjustment(mesh.material, {
               hue: 0, saturation: 1, brightness: 1, contrast: 1,
-              red: 1, green: 1, blue: 1, tint, tintStrength,
+              red: 1, green: 1, blue: 1, tint,
             }, {enabled: true});
             return {
               state: getGameMaterialColorAdjustment(mesh.material),
@@ -5474,10 +5485,10 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
           });
         }""")
         assert [item["state"]["tint"] for item in tints] == [
-            "#808080", "#4080c0", "#4080c0"]
+            None, "#ffffff", "#4080c0"]
         expected_raw_tints = [
-            [128 / 255, 128 / 255, 128 / 255],
-            [64 / 255, 128 / 255, 192 / 255],
+            [1, 1, 1],
+            [1, 1, 1],
             [64 / 255, 128 / 255, 192 / 255],
         ]
         for actual, expected in zip(
@@ -5494,7 +5505,7 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
           setMeshTextureState(mesh, {diffuse: whiteKey});
           setMeshColorAdjustment(mesh, {
             hue: 0, saturation: 1, brightness: 1, contrast: 1,
-            red: 1, green: 1, blue: 1, tint: '#ffffff', tintStrength: 0,
+            red: 1, green: 1, blue: 1, tint: null,
           });
         }""", {"whiteKey": white_key})
         page.wait_for_function("""() =>
@@ -5508,31 +5519,104 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
             './js/mesh/mesh-color-state.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
             hue: 0, saturation: 1, brightness: 1, contrast: 1,
-            red: 1, green: 1, blue: 1, tint: '#4080c0', tintStrength: 1,
+            red: 1, green: 1, blue: 1, tint: '#4080c0',
           });
         }""")
         page.wait_for_timeout(250)
         full_rendered = _sample_mesh_pixel_at(page, -0.25, -0.25)
 
+        assert full_rendered[2] > full_rendered[1] > full_rendered[0], (
+            neutral_rendered, full_rendered)
+        assert any(abs(neutral - full) > 5
+                   for neutral, full in zip(neutral_rendered, full_rendered))
+    finally:
+        context.close()
+
+
+def test_mesh_color_tint_preserves_rendered_shading(
+        edge_browser, frontend_url):
+    payload = _payload("TintRender")
+    entry = payload["meshes"]["Body-TintRender-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, -1, 1, 0)
+    entry["idx"] = _u32(0, 1, 2)
+    entry["drawindexed"] = [3, 0, 0]
+    payload["textures"] = {
+        entry["tex_key"]: _banded_png_uri([
+            (24, 12, 8, 255), (220, 110, 80, 255),
+        ]),
+    }
+    context, page = _page(edge_browser, frontend_url, {"TintRender": payload})
+    try:
+        _open(page, "TintRender")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.wait_for_function("""() => window.modViewer.activeMeshes[0]
+          ?.material?.userData?.gameMaterial?.bindings?.diffuse
+          ?.enabledNode?.value === true""")
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} = await import(
             './js/mesh/mesh-color-state.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
             hue: 0, saturation: 1, brightness: 1, contrast: 1,
-            red: 1, green: 1, blue: 1, tint: '#4080c0', tintStrength: .5,
+            red: 1, green: 1, blue: 1, tint: '#4080ff',
           });
         }""")
         page.wait_for_timeout(250)
-        half_rendered = _sample_mesh_pixel_at(page, -0.25, -0.25)
+        dark = _sample_mesh_pixel_at(page, -0.75, -0.5)
+        bright = _sample_mesh_pixel_at(page, 0.5, -0.5)
 
-        assert full_rendered[2] > full_rendered[1] > full_rendered[0], (
-            neutral_rendered, full_rendered)
-        assert any(abs(neutral - full) > 5
-                   for neutral, full in zip(neutral_rendered, full_rendered))
-        for neutral, full, half in zip(
-                neutral_rendered, full_rendered, half_rendered):
-            assert min(neutral, full) - 3 <= half <= max(neutral, full) + 3, (
-                neutral_rendered, full_rendered, half_rendered)
+        assert sum(bright) > sum(dark) + 30, (dark, bright)
+        assert bright[2] > bright[0] + 20, (dark, bright)
+    finally:
+        context.close()
+
+
+def test_mesh_color_tint_keeps_adjustment_controls_active(
+        edge_browser, frontend_url):
+    payload = _payload("TintControlsRender")
+    entry = payload["meshes"]["Body-TintControlsRender-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, -1, 1, 0)
+    entry["idx"] = _u32(0, 1, 2)
+    entry["drawindexed"] = [3, 0, 0]
+    payload["textures"] = {
+        entry["tex_key"]: _flat_png_uri((180, 90, 45, 255)),
+    }
+    context, page = _page(edge_browser, frontend_url,
+                          {"TintControlsRender": payload})
+    try:
+        _open(page, "TintControlsRender")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.wait_for_function("""() => window.modViewer.activeMeshes[0]
+          ?.material?.userData?.gameMaterial?.bindings?.diffuse
+          ?.enabledNode?.value === true""")
+
+        adjustments = {
+            "base": {"tint": "#4080c0"},
+            "hue": {"tint": "#4080c0", "hue": 120},
+            "saturation": {"tint": "#4080c0", "saturation": 0},
+            "brightness": {"tint": "#4080c0", "brightness": 0.5},
+            "contrast": {"tint": "#4080c0", "contrast": 0.5},
+            "rgb-fill": {"tint": "#4080c0", "green": 2},
+        }
+        samples = {}
+        for name, adjustment in adjustments.items():
+            page.evaluate("""async (adjustment) => {
+              const {setMeshColorAdjustment} = await import(
+                './js/mesh/mesh-color-state.js');
+              setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
+                hue: 0, saturation: 1, brightness: 1, contrast: 1,
+                red: 1, green: 1, blue: 1, ...adjustment,
+              });
+            }""", adjustment)
+            page.wait_for_timeout(150)
+            samples[name] = _sample_mesh_pixel_at(page, -0.5, -0.5)
+
+        baseline = samples.pop("base")
+        for name, sample in samples.items():
+            assert any(abs(actual - expected) > 4
+                       for actual, expected in zip(sample, baseline)), (
+                           name, baseline, sample)
     finally:
         context.close()
 
