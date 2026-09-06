@@ -155,9 +155,10 @@ that modifies the source texture file.
 3. In the `Color` section, adjust `Hue`, `Saturation`, `Brightness`, and
    `Contrast`, then fine-tune `R`, `G`, `B`, and `Tint` as needed. Choose a
    `Tint` color to recolor the texture while preserving its shading; use
-   `Clear` to disable it. The model updates immediately, and the preview
-   settings are saved in `.mod_viewer.json`. Use `Reset Color` to remove the
-   preview adjustment.
+   `Clear` to disable it. Brightness keeps its 0–400% range with 100% centered
+   on the slider. The model updates immediately, and the preview settings are
+   saved in `.mod_viewer.json`. Use `Reset Color` to remove the preview
+   adjustment.
 4. To bake the preview into a supported DDS texture, click `Save to Texture...`.
 5. Review the texture and the list of meshes with color changes. Saving
    includes the changed meshes sharing that texture. Click `Save` to write

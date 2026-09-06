@@ -230,17 +230,54 @@ function formatPercent(value) {
   return `${Math.round(value)}%`;
 }
 
+const BRIGHTNESS_SLIDER_NEUTRAL = 100;
+const BRIGHTNESS_SLIDER_MAX = 200;
+const BRIGHTNESS_MAX = 4;
+
+export function brightnessSliderPosition(brightness) {
+  const numeric = Number(brightness);
+  const value = Math.min(BRIGHTNESS_MAX,
+    Math.max(0, Number.isFinite(numeric) ? numeric : 1));
+  if (value <= 1) return value * BRIGHTNESS_SLIDER_NEUTRAL;
+  return BRIGHTNESS_SLIDER_NEUTRAL
+    + BRIGHTNESS_SLIDER_NEUTRAL * Math.log(value) / Math.log(BRIGHTNESS_MAX);
+}
+
+export function brightnessFromSliderPosition(position) {
+  const numeric = Number(position);
+  const value = Math.min(BRIGHTNESS_SLIDER_MAX,
+    Math.max(0, Number.isFinite(numeric) ? numeric : 100));
+  if (value <= BRIGHTNESS_SLIDER_NEUTRAL) {
+    return value / BRIGHTNESS_SLIDER_NEUTRAL;
+  }
+  return BRIGHTNESS_MAX ** (
+    (value - BRIGHTNESS_SLIDER_NEUTRAL) / BRIGHTNESS_SLIDER_NEUTRAL);
+}
+
 function colorControlValue(field, adjustment) {
-  return field === 'hue' ? adjustment.hue : adjustment[field] * 100;
+  if (field === 'hue') return adjustment.hue;
+  if (field === 'brightness') return brightnessSliderPosition(adjustment[field]);
+  return adjustment[field] * 100;
 }
 
 function colorAdjustmentValue(field, controlValue) {
-  return field === 'hue' ? controlValue : controlValue / 100;
+  if (field === 'hue') return controlValue;
+  if (field === 'brightness') return brightnessFromSliderPosition(controlValue);
+  return controlValue / 100;
+}
+
+function formatColorControlValue(field, controlValue) {
+  if (field === 'hue') return formatHue(controlValue);
+  const value = field === 'brightness'
+    ? brightnessFromSliderPosition(controlValue) * 100
+    : controlValue;
+  return formatPercent(value);
 }
 
 /** Build one range control shared by the Inspector's color sliders. */
 function buildRangeControl({
   field, label, min, max, step, value, formatValue, onInput, onChange,
+  neutralMarker = false,
 }) {
   const row = document.createElement('label');
   row.className = 'inspector-color-control';
@@ -266,7 +303,16 @@ function buildRangeControl({
   });
   slider.addEventListener('change', () => onChange(Number(slider.value)));
   syncValue();
-  row.append(heading, slider, valueNode);
+  const sliderWrap = document.createElement('span');
+  sliderWrap.className = 'inspector-color-slider-wrap';
+  sliderWrap.appendChild(slider);
+  if (neutralMarker) {
+    const marker = document.createElement('span');
+    marker.className = 'inspector-color-slider-neutral-marker';
+    marker.setAttribute('aria-hidden', 'true');
+    sliderWrap.appendChild(marker);
+  }
+  row.append(heading, sliderWrap, valueNode);
   return row;
 }
 
@@ -339,27 +385,29 @@ function buildColorSection(content, mesh) {
   }
 
   const adjustment = getMeshColorAdjustment(mesh);
-  const addSlider = (field, label, min, max, step, formatValue) => {
+  const addSlider = (field, label, min, max, step, neutralMarker = false) => {
     section.appendChild(buildRangeControl({
       field, label, min, max, step,
-      value: colorControlValue(field, adjustment), formatValue,
+      value: colorControlValue(field, adjustment),
+      formatValue: value => formatColorControlValue(field, value),
       onInput: value => updateColorAdjustment(section, mesh, field, value),
       onChange: value => updateColorAdjustment(
         section, mesh, field, value, true),
+      neutralMarker,
     }));
   };
-  addSlider('hue', 'Hue', -180, 180, 1, formatHue);
-  addSlider('saturation', 'Saturation', 0, 200, 1, formatPercent);
-  addSlider('brightness', 'Brightness', 0, 400, 1, formatPercent);
-  addSlider('contrast', 'Contrast', 0, 200, 1, formatPercent);
+  addSlider('hue', 'Hue', -180, 180, 1);
+  addSlider('saturation', 'Saturation', 0, 200, 1);
+  addSlider('brightness', 'Brightness', 0, 200, 1, true);
+  addSlider('contrast', 'Contrast', 0, 200, 1);
 
   const rgbTitle = document.createElement('div');
   rgbTitle.className = 'inspector-color-subtitle';
   rgbTitle.textContent = 'RGB';
   section.appendChild(rgbTitle);
-  addSlider('red', 'R', 0, 200, 1, formatPercent);
-  addSlider('green', 'G', 0, 200, 1, formatPercent);
-  addSlider('blue', 'B', 0, 200, 1, formatPercent);
+  addSlider('red', 'R', 0, 200, 1);
+  addSlider('green', 'G', 0, 200, 1);
+  addSlider('blue', 'B', 0, 200, 1);
 
   const tint = document.createElement('div');
   tint.className = 'inspector-color-tint';
@@ -431,8 +479,7 @@ function updateColorControlState(content, mesh) {
     if (!slider || !value || !Object.hasOwn(adjustment, field)) return;
     const controlValue = colorControlValue(field, adjustment);
     slider.value = String(controlValue);
-    value.textContent = field === 'hue'
-      ? formatHue(controlValue) : formatPercent(controlValue);
+    value.textContent = formatColorControlValue(field, controlValue);
   });
   const tintInput = section.querySelector('.inspector-color-tint-input');
   const tintValue = section.querySelector('[data-color-tint-value]');

@@ -1208,6 +1208,13 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 .inspector-color-control-heading { color: var(--text-muted); }
 .inspector-color-slider { width: 100%; accent-color: var(--accent-soft); cursor: pointer; }
+.inspector-color-slider-wrap { position: relative; display: flex; align-items: center; min-width: 0; }
+.inspector-color-slider-wrap .inspector-color-slider { position: relative; z-index: 1; }
+.inspector-color-slider-neutral-marker {
+  position: absolute; z-index: 2; top: 3px; bottom: 3px; left: 50%; width: 1px;
+  background: var(--text-muted); opacity: .75; transform: translateX(-50%);
+  pointer-events: none;
+}
 .inspector-color-value {
   color: var(--accent-soft); text-align: right; font-variant-numeric: tabular-nums;
 }

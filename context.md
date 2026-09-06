@@ -152,8 +152,10 @@ of documentation, comments and tests; use portable fixtures instead.
 - CPU saving and GPU preview share normalization and operation order: optional
   target-color tint first seeds the editor-sRGB color while preserving source
   intensity/shading, then hue, saturation, brightness, contrast, and RGB
-  channel adjustments are applied. Brightness supports up to 400%. Adjust in
-  editor-sRGB, preserving alpha;
+  channel adjustments are applied. Brightness supports up to 400%; its Inspector
+  slider uses a centered nonlinear mapping so 100% remains at the midpoint
+  while the stored/backend range stays 0–4. Adjust in editor-sRGB, preserving
+  alpha;
   convert at shader boundaries and do not run picker hex values through
   Three.js's implicit linear color conversion.
   Preview changes update stable material nodes without recreating textures.

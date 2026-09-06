@@ -1,6 +1,7 @@
 import base64
 import copy
 import json
+import math
 
 from .support import *
 
@@ -910,7 +911,12 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         page.locator(".draw-item").first.click()
         color = page.locator(".inspector-color-section")
         assert color.locator(".inspector-color-slider").count() == 7
-        assert color.locator("[data-color-field='brightness'] .inspector-color-slider").get_attribute("max") == "400"
+        brightness = color.locator(
+            "[data-color-field='brightness'] .inspector-color-slider")
+        assert brightness.get_attribute("max") == "200"
+        assert brightness.input_value() == "100"
+        assert color.locator(
+            ".inspector-color-slider-neutral-marker").count() == 1
         assert "Strength" not in color.inner_text()
         assert color.locator(".inspector-color-tint-clear").is_disabled()
         hue = color.locator("[data-color-field='hue'] .inspector-color-slider")
@@ -940,14 +946,16 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         page.evaluate("""() => {
           const slider = document.querySelector(
             '[data-color-field="brightness"] .inspector-color-slider');
-          slider.value = '250';
+          slider.value = '150';
           slider.dispatchEvent(new Event('input', {bubbles: true}));
           slider.dispatchEvent(new Event('change', {bubbles: true}));
         }""")
         page.wait_for_function(
             "window.__fakeApi.calls.saveMeshColorAdjustment.length === 2")
         assert page.evaluate(
-            "window.modViewer.activeMeshes[0].userData.colorAdjustment.brightness") == 2.5
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.brightness") == 2
+        assert color.locator(
+            "[data-color-field='brightness'] .inspector-color-value").inner_text() == "200%"
 
         page.evaluate("""() => {
           const input = document.querySelector('.inspector-color-tint-input');
@@ -967,7 +975,7 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         assert page.evaluate("""() => {
           const adjustment = window.modViewer.activeMeshes[0].userData.colorAdjustment;
           return {tint: adjustment.tint, brightness: adjustment.brightness};
-        }""") == {"tint": None, "brightness": 2.5}
+        }""") == {"tint": None, "brightness": 2}
         assert color.locator(".inspector-color-tint-clear").is_disabled()
 
         page.evaluate("""async () => {
@@ -1010,6 +1018,37 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         page.locator(".inspector-color-readonly-title").wait_for()
         assert page.locator(".inspector-color-readonly-title").inner_text() == (
             "No diffuse texture")
+    finally:
+        context.close()
+
+
+def test_brightness_slider_uses_centered_nonlinear_mapping(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"BrightnessMapping": _payload("BrightnessMapping")})
+    try:
+        _open(page, "BrightnessMapping")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        mapping = page.evaluate("""async () => {
+          const {brightnessSliderPosition, brightnessFromSliderPosition} =
+            await import('./js/panels/inspector-panel.js');
+          const positions = [0, 1, 2, 4].map(brightnessSliderPosition);
+          const values = [0, 100, 150, 200].map(brightnessFromSliderPosition);
+          const roundTrips = [1.4, 2.5, 3.0].map(value => ({
+            position: brightnessSliderPosition(value),
+            value: brightnessFromSliderPosition(brightnessSliderPosition(value)),
+          }));
+          return {positions, values, roundTrips};
+        }""")
+        assert mapping["positions"] == pytest.approx([0, 100, 150, 200])
+        assert mapping["values"] == pytest.approx([0, 1, 2, 4])
+        assert [item["value"] for item in mapping["roundTrips"]] == pytest.approx(
+            [1.4, 2.5, 3.0])
+        assert mapping["roundTrips"][0]["position"] == pytest.approx(
+            100 + 100 * math.log(1.4, 4))
     finally:
         context.close()
 
