@@ -379,6 +379,7 @@ function buildRigSection(parent) {
   ui.renamePreset = rename;
   ui.deletePreset = remove;
   ui.presetStatus = addText(section, 'rig-hint');
+  ui.presetStatus.setAttribute('aria-live', 'polite');
 
   const advanced = addAdvanced(parent);
   const display = addRigAdvancedGroup(advanced.content, 'Display');
@@ -737,6 +738,70 @@ function selectedPreset(state = latestRigState, id = ui?.preset?.value) {
   return (presetState.presets || []).find(item => item.id === id) || null;
 }
 
+const PRESET_SKIP_REASON_LABELS = Object.freeze({
+  joint_not_found: 'no matching joint',
+  root_not_found: 'no matching root',
+  ambiguous_joint_signature: 'ambiguous match',
+  duplicate_joint_entry: 'duplicate entry',
+  duplicate_root_entry: 'duplicate entry',
+  invalid_signature: 'invalid joint identity',
+  invalid_rotation: 'invalid rotation',
+  invalid_preset: 'invalid saved pose',
+});
+
+function pluralizePresetCount(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function presetSkipLabel(item) {
+  return PRESET_SKIP_REASON_LABELS[item?.reason]
+    || (item?.type === 'root' ? 'could not match root' : 'could not match joint');
+}
+
+function formatPresetApplication(result) {
+  if (!result) return '';
+  const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+  const skippedReasons = new Map();
+  skipped.forEach(item => {
+    const label = presetSkipLabel(item);
+    skippedReasons.set(label, (skippedReasons.get(label) || 0) + 1);
+  });
+  const applied = [];
+  if (result.appliedJointCount) {
+    applied.push(pluralizePresetCount(
+      result.appliedJointCount, 'joint rotation'));
+  }
+  if (result.appliedRootCount) {
+    applied.push(pluralizePresetCount(result.appliedRootCount, 'root'));
+  }
+  const skippedParts = [];
+  if (result.skippedJointCount) {
+    skippedParts.push(pluralizePresetCount(result.skippedJointCount, 'joint'));
+  }
+  if (result.skippedRootCount) {
+    skippedParts.push(pluralizePresetCount(result.skippedRootCount, 'root'));
+  }
+  const reasonText = [...skippedReasons.entries()]
+    .map(([label, count]) => count > 1 ? `${label} (${count})` : label)
+    .join('; ');
+  if (!result.success) {
+    return `Could not apply this pose${reasonText ? `: ${reasonText}` : '.'}`;
+  }
+  if (!skippedParts.length) {
+    return applied.length ? `Applied ${applied.join(' and ')}.`
+      : 'Applied pose.';
+  }
+  return `Applied ${applied.length ? applied.join(' and ') : 'nothing'}. `
+    + `Skipped ${skippedParts.join(' and ')}`
+    + `${reasonText ? `: ${reasonText}` : '.'}`;
+}
+
+function presetFeedback(state) {
+  const presetState = state?.rigPresets || {};
+  if (presetState.error) return presetState.error;
+  return formatPresetApplication(presetState.lastApplyResult);
+}
+
 function syncPresetControls(state) {
   const presetState = state?.rigPresets || {};
   const presets = presetState.presets || [];
@@ -775,24 +840,18 @@ function syncPresetControls(state) {
   ui.savePreset.disabled = !state?.loaded;
   ui.renamePreset.disabled = !hasPreset;
   ui.deletePreset.disabled = !hasPreset;
-  if (presetState.error) ui.presetStatus.textContent = presetState.error;
-  else ui.presetStatus.textContent = '';
+  ui.presetStatus.textContent = presetFeedback(state);
 }
 
 function applySelectedPreset(presetId) {
-  const result = applyRigPosePresetById(presetId);
-  if (result?.success) {
-    ui.presetStatus.textContent = '';
-    return;
-  }
-  ui.presetStatus.textContent = 'Could not apply this pose.';
+  return applyRigPosePresetById(presetId);
 }
 
 async function savePreset() {
   const name = await inputConfirmDialog('Save pose preset as:', '');
   if (!name) return;
   const result = await saveRigPosePreset(name);
-  ui.presetStatus.textContent = result?.saved ? ''
+  ui.presetStatus.textContent = result?.saved ? presetFeedback(latestRigState)
     : result?.error || 'Could not save this pose.';
 }
 
@@ -802,7 +861,7 @@ async function renamePreset() {
   const name = await inputConfirmDialog('Rename pose preset:', current.name);
   if (!name) return;
   const result = await renameRigPosePreset(current.id, name);
-  ui.presetStatus.textContent = result?.saved ? ''
+  ui.presetStatus.textContent = result?.saved ? presetFeedback(latestRigState)
     : result?.error || 'Could not rename this pose.';
 }
 
@@ -810,7 +869,7 @@ async function deletePreset() {
   const current = latestRigState?.rigPresets?.presets?.find(item => item.id === ui.preset.value);
   if (!current || !await confirmDialog(`Delete pose preset "${current.name}"?`)) return;
   const result = await deleteRigPosePreset(current.id);
-  ui.presetStatus.textContent = result?.saved ? ''
+  ui.presetStatus.textContent = result?.saved ? presetFeedback(latestRigState)
     : result?.error || 'Could not delete this pose.';
 }
 

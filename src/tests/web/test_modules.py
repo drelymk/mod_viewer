@@ -102,6 +102,49 @@ def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
     }
 
 
+def test_runtime_resets_keep_live_state_and_fresh_mutable_defaults(module_page):
+    result = module_page.evaluate("""async () => {
+      const runtime = await import('./js/mesh/weight-runtime.js');
+      const weight = runtime.createWeightRuntimeState();
+      const rig = runtime.createRigRuntimeState();
+      const weightState = weight.modelWeightState;
+      const modelRigState = rig.modelRigState;
+      const presetState = rig.rigPresetState;
+      const oldSelected = weightState.selectedBonesBySource;
+      const oldRoots = modelRigState.explicitRootSignatures;
+      const oldPresets = presetState.presets;
+      weightState.selectedBonesBySource.set('source', new Set([1]));
+      modelRigState.explicitRootSignatures.add('root');
+      presetState.presets.push({id: 'pose', name: 'Pose'});
+      rig.structureRevision = 7;
+      weight.resetModelWeightState();
+      rig.resetModelRigState();
+      rig.resetRigPresetState();
+      return {
+        stableReferences: weight.modelWeightState === weightState
+          && rig.modelRigState === modelRigState
+          && rig.rigPresetState === presetState,
+        freshWeightMap: weightState.selectedBonesBySource !== oldSelected
+          && weightState.selectedBonesBySource.size === 0,
+        freshRootSet: modelRigState.explicitRootSignatures !== oldRoots
+          && modelRigState.explicitRootSignatures.size === 0,
+        freshPresetArray: presetState.presets !== oldPresets
+          && presetState.presets.length === 0,
+        resetDefaults: !weightState.loaded && !modelRigState.loaded
+          && !presetState.loaded && presetState.lastApplyResult === null,
+        structureRevisionPreserved: rig.structureRevision === 7,
+      };
+    }""")
+    assert result == {
+        "stableReferences": True,
+        "freshWeightMap": True,
+        "freshRootSet": True,
+        "freshPresetArray": True,
+        "resetDefaults": True,
+        "structureRevisionPreserved": True,
+    }
+
+
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -1569,18 +1612,38 @@ def test_secondary_pose_composition_preserves_base_and_propagates_offsets(
         left.angleTo(right) < 1e-6;
       const matrixMatches = (left, right) => left.elements.every(
         (value, index) => Math.abs(value - right.elements[index]) < 1e-6);
-      const expectedParent = baseRotations.get(1).clone()
-        .multiply(new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(0, 1, 0), Math.PI / 18)).normalize();
+      const manualMatches = [1, 2, 3].every(id =>
+        matrixMatches(manualOnly.get(id), baseTransforms.get(id))
+        && quaternionMatches(
+          manualOnlyRotations.get(id), baseRotations.get(id)));
+      const transformCache = new Map();
+      const cachedFirst = deformation.composeBasePoseWithPhysicsOffsets({
+        forest, nodeCenters: centers,
+        baseTransformByBoneId: baseTransforms,
+        baseRotationByBoneId: baseRotations,
+        transformCache,
+      });
+      const cachedFirstElements = [...cachedFirst.get(2).elements];
+      baseTransforms.get(2).elements[12] += 0.25;
+      const changedBaseElements = [...baseTransforms.get(2).elements];
+      const cachedSecond = deformation.composeBasePoseWithPhysicsOffsets({
+        forest, nodeCenters: centers,
+        baseTransformByBoneId: baseTransforms,
+        baseRotationByBoneId: baseRotations,
+        transformCache,
+      });
+      const expectedParent = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0), Math.PI / 18)
+        .multiply(baseRotations.get(1)).normalize();
       const parentDelta = parentPhysicsRotations.get(1).clone()
         .multiply(baseRotations.get(1).clone().invert()).normalize();
       const expectedChild = parentDelta.clone()
         .multiply(baseRotations.get(2)).normalize();
       const expectedGrandchild = parentDelta.clone()
         .multiply(baseRotations.get(3)).normalize();
-      const expectedChildPhysics = baseRotations.get(2).clone()
-        .multiply(new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(0, 0, 1), Math.PI / 24)).normalize();
+      const expectedChildPhysics = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1), Math.PI / 24)
+        .multiply(baseRotations.get(2)).normalize();
       const normalBaseline = new Float32Array([1, 0, 0]);
       const normalOutput = normalBaseline.slice();
       deformation.applyWeightedNormalDeformationInto(
@@ -1592,10 +1655,7 @@ def test_secondary_pose_composition_preserves_base_and_propagates_offsets(
       return {
         identityMatches: [1, 2, 3].every(id =>
           matrixMatches(identityComposed.get(id), physicsOnly.get(id))),
-        manualMatches: [1, 2, 3].every(id =>
-          matrixMatches(manualOnly.get(id), baseTransforms.get(id))
-          && quaternionMatches(
-            manualOnlyRotations.get(id), baseRotations.get(id))),
+        manualMatches,
         rootMatches: matrixMatches(parentPhysics.get(0), baseTransforms.get(0)),
         parentPhysicsMatches: quaternionMatches(
           parentPhysicsRotations.get(1), expectedParent),
@@ -1604,6 +1664,11 @@ def test_secondary_pose_composition_preserves_base_and_propagates_offsets(
           && quaternionMatches(parentPhysicsRotations.get(3), expectedGrandchild),
         childPhysicsMatches: quaternionMatches(
           childPhysicsRotationsOutput.get(2), expectedChildPhysics),
+        cacheRefreshesInPlace: Math.abs(
+          cachedSecond.get(2).elements[12] - cachedFirstElements[12])
+          > 0.2,
+        cacheDoesNotMutateInput: changedBaseElements.every((value, index) =>
+          Math.abs(value - baseTransforms.get(2).elements[index]) < 1e-6),
         normalsMatch: [...normalOutput].every((value, index) =>
           Math.abs(value - expectedNormal.getComponent(index)) < 1e-6),
       };
@@ -1614,7 +1679,58 @@ def test_secondary_pose_composition_preserves_base_and_propagates_offsets(
     assert result["parentPhysicsMatches"]
     assert result["parentPhysicsPropagatesOnce"]
     assert result["childPhysicsMatches"]
+    assert result["cacheRefreshesInPlace"]
+    assert result["cacheDoesNotMutateInput"]
     assert result["normalsMatch"]
+
+
+def test_gravity_offset_stays_in_model_frame_after_manual_twist(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const THREE = await import('three');
+      const physics = await import('./js/mesh/weight-physics.js');
+      const deformation = await import('./js/mesh/weight-deformation.js');
+      const forest = {components: [{rootId: 0, nodeIds: [0, 1],
+        maxDepth: 1, depthById: {0: 0, 1: 1},
+        childrenById: {0: [1]}}]};
+      const restCenters = new Map([
+        [0, [0, 0, 0]], [1, [0, 0, 1]],
+      ]);
+      return [0, Math.PI / 2, -Math.PI / 2].map(angle => {
+        const manualRotation = new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0, 0, 1), angle);
+        const baseRotations = new Map();
+        const baseTransforms = deformation.buildForestTransformsFromLocalRotations(
+          forest, restCenters, {
+            quaternionByBoneId: new Map([[1, manualRotation]]),
+            rotationOutput: baseRotations,
+          });
+        const posedCenters = new Map([...restCenters.entries()].map(
+          ([boneId, center]) => [boneId, new THREE.Vector3(...center)
+            .applyMatrix4(baseTransforms.get(boneId)).toArray()]));
+        const gravity = physics.buildGravityAngularAccelerations(
+          forest, posedCenters, [0, -1, 0], {
+            referenceRadius: 1, gravityScale: 1,
+          });
+        const acceleration = gravity.accelerationByBoneId.get(1);
+        const composed = deformation.composeBasePoseWithPhysicsOffsets({
+          forest,
+          nodeCenters: posedCenters,
+          baseTransformByBoneId: baseTransforms,
+          baseRotationByBoneId: baseRotations,
+          getOffsetRotation: boneId => boneId === 1
+            ? acceleration.map(value => value * 0.01) : null,
+        });
+        const point = new THREE.Vector3(0, 0, 1)
+          .applyMatrix4(composed.get(1));
+        return {angle, acceleration, point: point.toArray()};
+      });
+    }""")
+    assert len(result) == 3
+    for sample in result:
+        assert sample["acceleration"][0] > 0
+        assert sample["point"][0] == pytest.approx(0, abs=1e-5)
+        assert sample["point"][1] < -0.005
 
 
 def test_skinning_physics_solver_uses_true_3d_vectors_and_quaternions(module_page):

@@ -593,52 +593,10 @@ function resetModelWeightState() {
   sourcePhysicsRigs.clear();
   sourceSkinningRigs.clear();
   modelSkinningRig = null;
-  modelWeightState.loaded = false;
-  modelWeightState.loading = false;
-  modelWeightState.promise = null;
-  modelWeightState.error = null;
-  modelWeightState.noWeights = false;
-  modelWeightState.sources = [];
-  modelWeightState.selectedBonesBySource = new Map();
-  modelWeightState.savedBonesBySource = new Map();
-  modelWeightState.sourceDescriptors = new Map();
-  modelWeightState.savedSelectionApplied = false;
-  modelWeightState.savingSelection = false;
-  modelWeightState.selectionSaveError = null;
+  weightRuntime.resetModelWeightState();
   selectionSavePromise = null;
-  modelWeightState.heatmapEnabled = false;
-  modelWeightState.loadedMeshCount = 0;
-  modelWeightState.failedMeshCount = 0;
-  modelWeightState.pickedPoint = null;
-  modelWeightState.pickerViewMode = 'all';
-  modelWeightState.pickStatus = '';
-  modelRigState.loaded = false;
-  modelRigState.loading = false;
-  modelRigState.promise = null;
-  modelRigState.error = null;
-  modelRigState.visible = false;
-  modelRigState.picking = false;
-  modelRigState.selectedJointId = null;
-  modelRigState.structureRevision = 0;
-  modelRigState.pickStatus = '';
-  modelRigState.rigAnalysisMs = 0;
-  modelRigState.rigTransformMs = 0;
-  modelRigState.rigDeformMs = 0;
-  modelRigState.rigDeformedVertexCount = 0;
-  modelRigState.rigReconcileMs = 0;
-  modelRigState.rigCandidateCount = 0;
-  modelRigState.rigEquivalentClusterCount = 0;
-  modelRigState.rigAttachmentCount = 0;
-  modelRigState.rigAmbiguousCount = 0;
-  modelRigState.rotationSnapDegrees = 0;
-  modelRigState.overlayScope = 'selection';
-  modelRigState.explicitRootSignatures = new Set();
-  rigPresetState.loaded = false;
-  rigPresetState.loading = false;
-  rigPresetState.error = null;
-  rigPresetState.presets = [];
-  rigPresetState.selectedPresetId = null;
-  rigPresetState.lastApplyResult = null;
+  rigRuntime.resetModelRigState();
+  rigRuntime.resetRigPresetState();
   notifyModelWeightChanged();
   notifyModelRigChanged();
 }
@@ -1207,8 +1165,6 @@ function createSourcePhysicsRig(sourceKey, members) {
     composedTransforms: new Map(),
     composedRotations: new Map(),
     basePoseRevision: -1,
-    baseTransformInverseCache: new Map(),
-    baseInversePoseRevision: -2,
     skinRig,
   };
   skinRig.physicsRig = rig;

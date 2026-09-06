@@ -270,11 +270,6 @@ export function createWeightPhysicsRuntime({
   function buildComposedSourceTransforms(rig) {
     const started = performanceNow();
     const modelSkinningRig = getModelSkinningRig();
-    const baseRevision = modelSkinningRig?.poseRevision ?? -1;
-    if (rig.baseInversePoseRevision !== baseRevision) {
-      rig.baseTransformInverseCache.clear();
-      rig.baseInversePoseRevision = baseRevision;
-    }
     const baseTransforms = modelSkinningRig?.sourceTransformAliases
       ?.get(rig.sourceKey) || rig.skinRig?.modelTransformAliasByBoneId || null;
     const baseRotations = modelSkinningRig?.sourceRotationAliases
@@ -288,7 +283,6 @@ export function createWeightPhysicsRuntime({
       getOffsetRotation: boneId => rig.physicsState?.joints.get(boneId)
         ?.rotationVector,
       transformCache: rig.composedTransformCache,
-      baseTransformInverseCache: rig.baseTransformInverseCache,
       rotationOutput: rig.composedRotations,
     });
     rig.basePoseRevision = modelSkinningRig?.poseRevision ?? -1;

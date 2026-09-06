@@ -183,7 +183,6 @@ export function composeBasePoseWithPhysicsOffsets({
   rotationByBoneId = null,
   getOffsetRotation = null,
   transformCache = new Map(),
-  baseTransformInverseCache = new Map(),
   rotationOutput = null,
 } = {}) {
   const transforms = new Map();
@@ -223,9 +222,8 @@ export function composeBasePoseWithPhysicsOffsets({
   };
   const baseMatrixOrIdentity = boneId => baseMatrixFor(boneId)
     || RIG_IDENTITY_MATRIX;
-  const inverseCache = baseTransformInverseCache instanceof Map
-    ? baseTransformInverseCache : new Map();
   const parentDeltaMatrix = new THREE.Matrix4();
+  const baseInverseMatrix = new THREE.Matrix4();
   const aroundPivot = new THREE.Matrix4();
   const translationToPivot = new THREE.Matrix4();
   const translationFromPivot = new THREE.Matrix4();
@@ -268,13 +266,8 @@ export function composeBasePoseWithPhysicsOffsets({
       const parentRotation = rotations.get(parentId)
         || new THREE.Quaternion();
       const baseParent = baseMatrixOrIdentity(parentId);
-      let cachedInverse = inverseCache.get(Number(parentId));
-      if (!cachedInverse) {
-        cachedInverse = new THREE.Matrix4();
-        inverseCache.set(Number(parentId), cachedInverse);
-      }
-      cachedInverse.copy(baseParent).invert();
-      parentDeltaMatrix.copy(parentTransform).multiply(cachedInverse);
+      baseInverseMatrix.copy(baseParent).invert();
+      parentDeltaMatrix.copy(parentTransform).multiply(baseInverseMatrix);
       baseParentRotation.copy(baseRotationFor(parentId));
       parentDeltaRotation.copy(parentRotation)
         .multiply(baseParentRotation.invert());
@@ -291,8 +284,12 @@ export function composeBasePoseWithPhysicsOffsets({
         inheritedRotation.copy(parentDeltaRotation)
           .multiply(baseChildRotation);
         const offset = offsetQuaternionFor(childId);
-        inverseRotation.copy(inheritedRotation).invert();
-        worldRotation.copy(inheritedRotation)
+        // Physics solver vectors are in the model reference frame.  The
+        // composed parent delta is the accumulated Physics change from that
+        // frame to the posed scene; manual model rotation must not redefine
+        // the solver vector's frame.
+        inverseRotation.copy(parentDeltaRotation).invert();
+        worldRotation.copy(parentDeltaRotation)
           .multiply(offset)
           .multiply(inverseRotation);
         const pivotValue = valueFromCollection(
@@ -307,7 +304,7 @@ export function composeBasePoseWithPhysicsOffsets({
           .multiply(translationFromPivot);
         const entry = entryFor(childId);
         entry.matrix.copy(aroundPivot).multiply(inheritedMatrix);
-        entry.rotation.copy(inheritedRotation).multiply(offset).normalize();
+        entry.rotation.copy(worldRotation).multiply(inheritedRotation).normalize();
         transforms.set(childId, entry.matrix);
         rotations.set(childId, entry.rotation);
         queue.push(childId);

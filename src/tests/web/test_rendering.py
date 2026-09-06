@@ -1111,20 +1111,55 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
               rotation: [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)],
             }],
           };
-          experiment.setRigPresetMetadata({version: 1, presets: [savedPreset]});
+          const missingSignature = '["missing|offset=0#bone=999"]';
+          const partialPreset = {
+            id: 'saved:partial-pose', name: 'Partial Pose', roots: [],
+            joints: [...savedPreset.joints,
+              {joint_signature: missingSignature,
+               rotation: [0, 0, Math.sin(Math.PI / 6), Math.cos(Math.PI / 6)]}],
+          };
+          const noMatchPreset = {
+            id: 'saved:no-match-pose', name: 'No Match Pose', roots: [],
+            joints: [{joint_signature: missingSignature,
+              rotation: [0, 0, 0, 1]}],
+          };
+          experiment.setRigPresetMetadata({version: 1, presets: [
+            partialPreset, savedPreset, noMatchPreset,
+          ]});
           const beforePreset = experiment.getModelRigState();
           let presetRigEvents = 0;
           const countPresetRigEvent = () => { presetRigEvents += 1; };
           window.addEventListener(
             'mod-viewer-model-rig-changed', countPresetRigEvent);
           const savedPresetSelect = document.querySelector('.rig-preset-select');
-          savedPresetSelect.value = savedPreset.id;
-          savedPresetSelect.dispatchEvent(new Event('change', {bubbles: true}));
-          const afterPreset = experiment.getModelRigState();
+          const presetStatus = () => document.querySelector(
+            '.rig-hint')?.textContent || '';
+          const applyFromPanel = id => {
+            savedPresetSelect.value = id;
+            savedPresetSelect.dispatchEvent(new Event('change', {bubbles: true}));
+            return {
+              state: experiment.getModelRigState(),
+              status: presetStatus(),
+            };
+          };
+          const partialApply = applyFromPanel(partialPreset.id);
+          const partialPose = partialApply.state.model.poseJointIds;
+          experiment.selectRigJoint(poseJointId);
+          experiment.setRigOverlayScope('all');
+          const partialAfterNotifications = presetStatus();
+          const fullApply = applyFromPanel(savedPreset.id);
+          const afterPreset = fullApply.state;
+          const fullPose = [...afterPreset.model.poseJointIds];
+          const noMatchApply = applyFromPanel(noMatchPreset.id);
+          const afterNoMatch = noMatchApply.state;
+          const noMatchPose = [...afterNoMatch.model.poseJointIds];
           window.removeEventListener(
             'mod-viewer-model-rig-changed', countPresetRigEvent);
           const resetAfterPreset = experiment.resetRigPose();
           const afterResetPreset = experiment.getModelRigState();
+          const afterResetStatus = presetStatus();
+          experiment.setRigPresetMetadata({version: 1, presets: []});
+          const afterMetadataReloadStatus = presetStatus();
           return {
             calls: window.__rigPanelPreviewCalls,
             sourceKey: source.sourceKey,
@@ -1175,6 +1210,14 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             presetBeforePose: beforePreset.model.poseJointIds,
             presetAfterPose: afterPreset.model.poseJointIds,
             presetApplySuccess: afterPreset.rigPresets.lastApplyResult?.success,
+            partialPose,
+            partialMessage: partialApply.status,
+            partialAfterNotifications,
+            fullMessage: fullApply.status,
+            fullMessageClearedPartial: !fullApply.status.includes('Skipped'),
+            noMatchMessage: noMatchApply.status,
+            noMatchPosePreserved: JSON.stringify(noMatchPose)
+              === JSON.stringify(fullPose),
             presetApplyEvents: presetRigEvents,
             resetAfterPreset,
             resetAfterPresetJointId: afterResetPreset.selectedJointId,
@@ -1183,6 +1226,8 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             resetAfterPresetResult: afterResetPreset.rigPresets.lastApplyResult,
             resetAfterPresetSelectValue: savedPresetSelect.value,
             savedPresetsAfterReset: afterResetPreset.rigPresets.presets,
+            afterResetStatus,
+            afterMetadataReloadStatus,
             weightAfter: experiment.getModelWeightState(),
           };
         }""")
@@ -1237,15 +1282,26 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["presetBeforePose"] == []
         assert result["presetAfterPose"]
         assert result["presetApplySuccess"] is True
-        assert result["presetApplyEvents"] == 1
+        assert len(result["partialPose"]) == 1
+        assert "Applied 1 joint rotation" in result["partialMessage"]
+        assert "Skipped 1 joint" in result["partialMessage"]
+        assert "no matching joint" in result["partialMessage"]
+        assert result["partialAfterNotifications"] == result["partialMessage"]
+        assert result["fullMessageClearedPartial"]
+        assert "Applied 1 joint rotation" in result["fullMessage"]
+        assert "Could not apply this pose" in result["noMatchMessage"]
+        assert result["noMatchPosePreserved"]
+        assert result["presetApplyEvents"] >= 5
         assert result["resetAfterPreset"]
         assert result["resetAfterPresetJointId"] == result["resetSelectedJointId"]
         assert result["resetAfterPresetPose"] == []
         assert result["resetAfterPresetSelection"] is None
         assert result["resetAfterPresetResult"] is None
         assert result["resetAfterPresetSelectValue"] == ""
+        assert result["afterResetStatus"] == ""
+        assert result["afterMetadataReloadStatus"] == ""
         assert [preset["id"] for preset in result["savedPresetsAfterReset"]] == [
-            "saved:test-pose"]
+            "saved:partial-pose", "saved:test-pose", "saved:no-match-pose"]
         assert result["weightAfter"]["selectedBones"] == []
     finally:
         context.close()

@@ -278,6 +278,10 @@ of documentation, comments and tests; use portable fixtures instead.
   manual transform, while selected influences additionally receive Physics,
   without renormalizing weights. Positions and normals use the same composed
   transform/rotation maps.
+- Physics solver angular, translation and velocity vectors are expressed in
+  the model reference frame. Composition applies an offset in that frame and
+  conjugates it only by the accumulated parent Physics delta, never by a
+  child's manual model rotation.
 - A nonempty Weight selection continues to enable model-scoped Physics and an
   empty selection disables it. Starting, stopping or reconfiguring Physics
   preserves manual pose. Manual pose changes, presets, Reset Joint and Reset

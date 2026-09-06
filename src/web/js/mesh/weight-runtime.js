@@ -3,40 +3,56 @@
 export const EMPTY_ACTIVE_VERTICES = new Uint32Array();
 export const RIG_ROTATION_SNAP_DEGREES = Object.freeze([0, 5, 15, 30]);
 
-export function createRigRuntimeState() {
+function createModelRigDefaults() {
   return {
-    modelRigState: {
-      loaded: false,
-      loading: false,
-      promise: null,
-      error: null,
-      visible: false,
-      picking: false,
-      selectedJointId: null,
-      structureRevision: 0,
-      pickStatus: '',
-      rigAnalysisMs: 0,
-      rigTransformMs: 0,
-      rigDeformMs: 0,
-      rigDeformedVertexCount: 0,
-      rigReconcileMs: 0,
-      rigCandidateCount: 0,
-      rigEquivalentClusterCount: 0,
-      rigAttachmentCount: 0,
-      rigAmbiguousCount: 0,
-      rotationSnapDegrees: 0,
-      overlayScope: 'selection',
-      explicitRootSignatures: new Set(),
-    },
-    rigPresetState: {
-      loaded: false,
-      loading: false,
-      error: null,
-      presets: [],
-      selectedPresetId: null,
-      lastApplyResult: null,
-    },
+    loaded: false,
+    loading: false,
+    promise: null,
+    error: null,
+    visible: false,
+    picking: false,
+    selectedJointId: null,
     structureRevision: 0,
+    pickStatus: '',
+    rigAnalysisMs: 0,
+    rigTransformMs: 0,
+    rigDeformMs: 0,
+    rigDeformedVertexCount: 0,
+    rigReconcileMs: 0,
+    rigCandidateCount: 0,
+    rigEquivalentClusterCount: 0,
+    rigAttachmentCount: 0,
+    rigAmbiguousCount: 0,
+    rotationSnapDegrees: 0,
+    overlayScope: 'selection',
+    explicitRootSignatures: new Set(),
+  };
+}
+
+function createRigPresetDefaults() {
+  return {
+    loaded: false,
+    loading: false,
+    error: null,
+    presets: [],
+    selectedPresetId: null,
+    lastApplyResult: null,
+  };
+}
+
+export function createRigRuntimeState() {
+  const modelRigState = createModelRigDefaults();
+  const rigPresetState = createRigPresetDefaults();
+  return {
+    modelRigState,
+    rigPresetState,
+    structureRevision: 0,
+    resetModelRigState() {
+      Object.assign(modelRigState, createModelRigDefaults());
+    },
+    resetRigPresetState() {
+      Object.assign(rigPresetState, createRigPresetDefaults());
+    },
   };
 }
 
@@ -72,7 +88,7 @@ export function aggregateModelBoneStats(nodeLists) {
 export function createWeightRuntimeState() {
   const states = new WeakMap();
   const knownMeshes = new Set();
-  const modelWeightState = {
+  const createModelWeightDefaults = () => ({
     loaded: false,
     loading: false,
     promise: null,
@@ -92,7 +108,8 @@ export function createWeightRuntimeState() {
     pickerViewMode: 'all',
     pickStatus: '',
     picking: false,
-  };
+  });
+  const modelWeightState = createModelWeightDefaults();
 
   function newState() {
     return {
@@ -142,11 +159,16 @@ export function createWeightRuntimeState() {
     return state;
   }
 
+  function resetModelWeightState() {
+    Object.assign(modelWeightState, createModelWeightDefaults());
+  }
+
   return {
     states,
     knownMeshes,
     modelWeightState,
     newState,
     stateFor,
+    resetModelWeightState,
   };
 }
