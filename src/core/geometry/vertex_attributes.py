@@ -62,38 +62,47 @@ def decode_normals(source, data, vertex_indices):
     The result is all-or-nothing: a truncated, non-finite, zero or implausible
     stream returns ``None`` so the caller can use geometric reconstruction.
     """
-    indices = tuple(vertex_indices)
-    if not indices:
+    try:
+        count = len(vertex_indices)
+        indices = vertex_indices
+    except TypeError:
+        indices = tuple(vertex_indices)
+        count = len(indices)
+    if not count:
         return bytearray()
-    decoded = []
-    raw_lengths = []
-    for vertex_index in indices:
-        offset = vertex_index * source.stride + source.offset
-        if source.encoding == "f32x3":
+
+    if source.encoding == "f32x3":
+        output = bytearray(count * 12)
+        plausible = 0
+        for output_index, vertex_index in enumerate(indices):
+            offset = vertex_index * source.stride + source.offset
             if vertex_index < 0 or offset + 12 > len(data):
                 return None
             raw = struct.unpack_from("<fff", data, offset)
+            if not all(math.isfinite(value) for value in raw):
+                return None
             raw_length = math.sqrt(sum(value * value for value in raw))
-            raw_lengths.append(raw_length)
+            if not math.isfinite(raw_length) or raw_length <= 1e-12:
+                return None
+            # A genuine normal stream is generally unit length. Allow modest
+            # authoring/format error because values are normalized below, but
+            # reject arbitrary finite data such as position or color payloads.
+            if raw_length < 0.1 or raw_length > 4.0:
+                return None
+            if 0.5 <= raw_length <= 1.5:
+                plausible += 1
+            normal = tuple(value / raw_length for value in raw)
+            struct.pack_into("<fff", output, output_index * 12, *normal)
+
+        if count >= 8 and plausible / count < 0.75:
+            return None
+        return output
+
+    output = bytearray(count * 12)
+    for output_index, vertex_index in enumerate(indices):
         normal = decode_normal(source, data, vertex_index)
         if normal is None:
             return None
-        decoded.append(normal)
-
-    if source.encoding == "f32x3":
-        # A genuine normal stream is generally unit length. Allow modest
-        # authoring/format error because values are normalized below, but
-        # reject arbitrary finite data such as position or color payloads.
-        if any(not math.isfinite(length) or length < 0.1 or length > 4.0
-               for length in raw_lengths):
-            return None
-        if len(raw_lengths) >= 8:
-            plausible = sum(0.5 <= length <= 1.5 for length in raw_lengths)
-            if plausible / len(raw_lengths) < 0.75:
-                return None
-
-    output = bytearray(len(decoded) * 12)
-    for output_index, normal in enumerate(decoded):
         struct.pack_into("<fff", output, output_index * 12, *normal)
     return output
 

@@ -62,6 +62,16 @@ _SUMMARY_TIMING_FIELDS = (
      ("backend", "build_mesh_result_seconds")),
     ("backend.pack_draw_geometry_seconds",
      ("backend", "pack_draw_geometry_seconds")),
+    ("backend.prepare_draw_vertices_seconds",
+     ("backend", "prepare_draw_vertices_seconds")),
+    ("backend.index_decode_seconds",
+     ("backend", "index_decode_seconds")),
+    ("backend.decode_normals_seconds",
+     ("backend", "decode_normals_seconds")),
+    ("backend.build_shape_buffers_seconds",
+     ("backend", "build_shape_buffers_seconds")),
+    ("backend.pack_other_seconds",
+     ("backend", "pack_other_seconds")),
     ("backend.metadata_hydrate_textures_seconds",
      ("backend", "metadata_hydrate_textures_seconds")),
     ("backend.geometry_publication_seconds",
@@ -187,6 +197,7 @@ def _install_load_instrumentation(timings, counters):
     from app.assets import index as asset_index
     from core.geometry import buffers as geometry_buffers
     from core.geometry import mesh_builder
+    from core.geometry import packing as geometry_packing
 
     patches = []
 
@@ -213,6 +224,12 @@ def _install_load_instrumentation(timings, counters):
     timing(mod_loader, "build_mesh_result", "build_mesh_result")
     timing(metadata, "hydrate_textures", "metadata_hydrate_textures")
     timing(server, "publish_payload_geometry", "geometry_publication")
+    timing(geometry_packing, "_prepare_draw_vertices",
+           "prepare_draw_vertices")
+    timing(geometry_buffers.BufferStore, "indices", "index_decode")
+    timing(geometry_packing, "decode_normals", "decode_normals")
+    timing(geometry_packing, "_build_shape_buffers",
+           "build_shape_buffers")
 
     original_index_load = asset_index.load_index
 
@@ -834,6 +851,10 @@ def _run_once(mod_path, concurrency, browser_channel):
         (payload.get("geometry") or {}).get("length", 0)
         if isinstance(payload.get("geometry"), dict) else 0)
     counters["structured_bridge_payload_bytes"] = payload_bytes
+    pack_draw_geometry_seconds = sum(timings["pack_draw_geometry"])
+    prepare_draw_vertices_seconds = sum(timings["prepare_draw_vertices"])
+    decode_normals_seconds = sum(timings["decode_normals"])
+    build_shape_buffers_seconds = sum(timings["build_shape_buffers"])
     return {
         "concurrency": concurrency,
         "backend": {
@@ -847,8 +868,17 @@ def _run_once(mod_path, concurrency, browser_channel):
             "asset_index_load_seconds": sum(timings["asset_index_load"]),
             "asset_enrichment_seconds": sum(timings["asset_enrichment"]),
             "build_mesh_result_seconds": sum(timings["build_mesh_result"]),
-            "pack_draw_geometry_seconds": sum(
-                timings["pack_draw_geometry"]),
+            "pack_draw_geometry_seconds": pack_draw_geometry_seconds,
+            "prepare_draw_vertices_seconds": prepare_draw_vertices_seconds,
+            "index_decode_seconds": sum(timings["index_decode"]),
+            "decode_normals_seconds": decode_normals_seconds,
+            "build_shape_buffers_seconds": build_shape_buffers_seconds,
+            "pack_other_seconds": max(
+                0.0,
+                pack_draw_geometry_seconds
+                - prepare_draw_vertices_seconds
+                - decode_normals_seconds
+                - build_shape_buffers_seconds),
             "metadata_hydrate_textures_seconds": sum(
                 timings["metadata_hydrate_textures"]),
             "geometry_publication_seconds": sum(

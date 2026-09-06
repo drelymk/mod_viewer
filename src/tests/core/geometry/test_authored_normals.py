@@ -4,6 +4,8 @@ import os
 import struct
 import math
 
+import pytest
+
 from core.geometry.draw_call import DrawCall
 from core.geometry.conventions import geometry_convention_for
 from core.ini.parser import (build_draw_groups, extract_resources,
@@ -326,3 +328,68 @@ def test_normal_decoder_boundaries_truncation_and_zero_vectors():
     assert decode_normals(source, bytes(8), [0]) is None
     f32_source = VertexAttributeSource("position.buf", 12, 0, "f32x3")
     assert decode_normals(f32_source, struct.pack("<3f", 100., 0., 0.), [0]) is None
+
+
+def test_bulk_normals_match_the_canonical_single_normal_decoder():
+    f32_source = VertexAttributeSource("normal.buf", 16, 4, "f32x3")
+    f32_data = b"".join(struct.pack("<f3f", 9., *values) for values in (
+        (1., 0., 0.), (0., 2., 0.), (.6, 0., .8)))
+    f32_indices = [2, 0, 1]
+    f32_expected = b"".join(
+        struct.pack("<fff", *decode_normal(f32_source, f32_data, index))
+        for index in f32_indices)
+    assert bytes(decode_normals(
+        f32_source, f32_data, f32_indices)) == f32_expected
+
+    snorm_source = VertexAttributeSource("normal.buf", 5, 1, "snorm8x3")
+    snorm_data = bytes((
+        99, 127, 0, 0, 88,
+        99, 0, 127, 0, 88,
+        99, 0, 0, 128, 88,
+    ))
+    snorm_indices = [2, 0, 1]
+    snorm_expected = b"".join(
+        struct.pack("<fff", *decode_normal(
+            snorm_source, snorm_data, index))
+        for index in snorm_indices)
+    assert bytes(decode_normals(
+        snorm_source, snorm_data, snorm_indices)) == snorm_expected
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param(b"\0" * 8, id="truncated-record"),
+        pytest.param(struct.pack("<3f", float("nan"), 0., 0.), id="nan"),
+        pytest.param(struct.pack("<3f", float("inf"), 0., 0.), id="inf"),
+        pytest.param(struct.pack("<3f", 0., 0., 0.), id="zero"),
+        pytest.param(struct.pack("<3f", .05, 0., 0.), id="too-short"),
+        pytest.param(struct.pack("<3f", 4.01, 0., 0.), id="too-long"),
+    ],
+)
+def test_f32_bulk_normals_reject_invalid_records(data):
+    source = VertexAttributeSource("normal.buf", 12, 0, "f32x3")
+
+    assert decode_normals(source, data, [0]) is None
+
+
+def test_f32_bulk_normals_reject_less_than_75_percent_plausible():
+    source = VertexAttributeSource("normal.buf", 12, 0, "f32x3")
+    data = b"".join(struct.pack("<3f", *(
+        (1., 0., 0.) if index < 5 else (.2, 0., 0.)
+    )) for index in range(8))
+
+    assert decode_normals(source, data, list(range(8))) is None
+
+
+def test_f32_bulk_normals_accept_exactly_75_percent_plausible():
+    source = VertexAttributeSource("normal.buf", 12, 0, "f32x3")
+    data = b"".join(struct.pack("<3f", *(
+        (1., 0., 0.) if index < 6 else (.2, 0., 0.)
+    )) for index in range(8))
+    indices = list(range(8))
+    expected = b"".join(
+        struct.pack("<fff", *decode_normal(source, data, index))
+        for index in indices)
+
+    assert bytes(decode_normals(source, data, indices)) == expected
