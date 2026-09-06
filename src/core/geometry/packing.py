@@ -109,36 +109,47 @@ def _prepare_draw_vertices(
         if pos_offset < 0 or pos_offset + 12 > len(pos_data):
             decoded_vertices[index] = None
             return None
-        position = struct.unpack_from("<fff", pos_data, pos_offset)
-        if not all(math.isfinite(value) for value in position):
+        x, y, z = struct.unpack_from("<fff", pos_data, pos_offset)
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
             decoded_vertices[index] = None
             return None
-        texcoord = (None, None)
+        u = v = None
         if tc_data:
             tc_offset = index * draw_streams.texcoord_stride + uv_offset
             if tc_offset < 0 or tc_offset + uv_size > len(tc_data):
                 decoded_vertices[index] = None
                 return None
-            texcoord = struct.unpack_from(uv_format, tc_data, tc_offset)
-            if not all(math.isfinite(value) for value in texcoord):
+            u, v = struct.unpack_from(uv_format, tc_data, tc_offset)
+            if not (math.isfinite(u) and math.isfinite(v)):
                 decoded_vertices[index] = None
                 return None
-        decoded = (*position, *texcoord)
+        decoded = (x, y, z, u, v)
         decoded_vertices[index] = decoded
         return decoded
 
     valid_raw = []
+    append_valid = valid_raw.append
+    reverse_winding = geometry_convention.reverse_winding
     for triangle_start in range(0, len(raw) - 2, 3):
-        triangle = raw[triangle_start:triangle_start + 3]
-        if all(decode_vertex(index) is not None for index in triangle):
-            valid_raw.extend(triangle)
+        a = raw[triangle_start]
+        b = raw[triangle_start + 1]
+        c = raw[triangle_start + 2]
+        if decode_vertex(a) is None:
+            continue
+        if decode_vertex(b) is None:
+            continue
+        if decode_vertex(c) is None:
+            continue
+        append_valid(a)
+        if reverse_winding:
+            append_valid(c)
+            append_valid(b)
+        else:
+            append_valid(b)
+            append_valid(c)
     if not valid_raw:
         return None
     raw = valid_raw
-    if geometry_convention.reverse_winding:
-        for triangle_start in range(0, len(raw) - 2, 3):
-            raw[triangle_start + 1], raw[triangle_start + 2] = (
-                raw[triangle_start + 2], raw[triangle_start + 1])
 
     used = sorted(set(raw))
     return PreparedDrawVertices(

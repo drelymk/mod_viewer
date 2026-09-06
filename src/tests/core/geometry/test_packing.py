@@ -133,11 +133,14 @@ def test_invalid_vertex_decode_is_cached_across_triangles(tmp_path):
 
 
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf")])
+@pytest.mark.parametrize("component", range(3))
 def test_nonfinite_position_removes_only_the_affected_triangle(
-        tmp_path, invalid):
+        tmp_path, invalid, component):
+    invalid_position = [0., 0., 0.]
+    invalid_position[component] = invalid
     positions = [
         (0., 0., 0.), (1., 0., 0.), (0., 1., 0.),
-        (invalid, 0., 0.), (1., 1., 0.),
+        tuple(invalid_position), (1., 1., 0.),
     ]
 
     packed = _pack_fixture(
@@ -158,9 +161,13 @@ def test_truncated_uv_removes_only_the_affected_triangle(tmp_path):
 
 
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf")])
-def test_nonfinite_uv_removes_only_the_affected_triangle(tmp_path, invalid):
+@pytest.mark.parametrize("component", range(2))
+def test_nonfinite_uv_removes_only_the_affected_triangle(
+        tmp_path, invalid, component):
     positions = [(float(index), 0., 0.) for index in range(5)]
-    uvs = [(0., 0.), (0., 0.), (0., 0.), (invalid, 0.), (0., 0.)]
+    invalid_uv = [0., 0.]
+    invalid_uv[component] = invalid
+    uvs = [(0., 0.), (0., 0.), (0., 0.), tuple(invalid_uv), (0., 0.)]
 
     packed = _pack_fixture(
         tmp_path, (0, 1, 2, 0, 3, 4), positions, uvs=uvs)
@@ -184,12 +191,70 @@ def test_reverse_winding_preserves_compact_vertex_order_and_output_shape(
     assert reverse.indices == forward.indices
 
 
-def test_incomplete_trailing_indices_are_ignored(tmp_path):
+@pytest.mark.parametrize("trailing", [(0,), (0, 1)])
+def test_incomplete_trailing_indices_are_ignored(tmp_path, trailing):
     positions = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)]
 
-    packed = _pack_fixture(tmp_path, (0, 1, 2, 0, 1), positions)
+    packed = _pack_fixture(tmp_path, (0, 1, 2) + trailing, positions)
 
     assert _unpack_indices(packed.indices) == (0, 1, 2)
+
+
+@pytest.mark.parametrize("reverse_winding, expected", [
+    (False, (0, 1, 2)), (True, (0, 2, 1)),
+])
+@pytest.mark.parametrize("indices", [
+    (0, 3, 2, 0, 1, 2), (0, 1, 2, 0, 1, 3),
+])
+def test_invalid_triangles_never_append_partial_indices(
+        tmp_path, reverse_winding, expected, indices):
+    packed = _pack_fixture(
+        tmp_path, indices, [(float(i), 0., 0.) for i in range(3)],
+        reverse_winding=reverse_winding)
+
+    assert _unpack_indices(packed.indices) == expected
+
+
+def test_negative_base_with_nonnegative_effective_indices_and_reverse_winding(
+        tmp_path):
+    packed = _pack_fixture(
+        tmp_path, (3, 4, 5), [(float(i), 0., 0.) for i in range(3)],
+        base=-3, reverse_winding=True)
+
+    assert _unpack_indices(packed.indices) == (0, 2, 1)
+    assert _unpack_f32(packed.positions) == (0., 0., 0., 1., 0., 0., 2., 0., 0.)
+
+
+def test_shared_vertices_preserve_prepared_identity_and_decode_once(tmp_path):
+    prepared_results = []
+    unpack_offsets = []
+    original_prepare = packing._prepare_draw_vertices
+    original_unpack = struct.unpack_from
+
+    def capture_prepare(*args, **kwargs):
+        prepared = original_prepare(*args, **kwargs)
+        prepared_results.append(prepared)
+        return prepared
+
+    def capture_unpack(format_string, data, offset=0):
+        if format_string == "<fff":
+            unpack_offsets.append(offset)
+        return original_unpack(format_string, data, offset)
+
+    with patch.object(packing, "_prepare_draw_vertices", capture_prepare), \
+            patch.object(packing.struct, "unpack_from", capture_unpack):
+        packed = _pack_fixture(
+            tmp_path, (5, 2, 4, 4, 2, 5),
+            [(float(i), 0., 0.) for i in range(6)], reverse_winding=True)
+
+    prepared, = prepared_results
+    assert prepared.raw_indices == [5, 4, 2, 4, 5, 2]
+    assert prepared.used_vertices == [2, 4, 5]
+    assert prepared.remap == {2: 0, 4: 1, 5: 2}
+    assert prepared.decoded_vertices == {
+        i: (float(i), 0., 0., None, None) for i in (2, 4, 5)}
+    assert unpack_offsets == [60, 24, 48]
+    assert _unpack_indices(packed.indices) == (2, 1, 0, 1, 2, 0)
 
 
 def test_no_uv_path_remains_valid_without_a_texcoord_payload(tmp_path):
