@@ -1,6 +1,73 @@
-// Shared mutable state for the Weight/Rig runtime.
+// Shared mutable state for the Weight and Rig runtime.
 
 export const EMPTY_ACTIVE_VERTICES = new Uint32Array();
+export const RIG_ROTATION_SNAP_DEGREES = Object.freeze([0, 5, 15, 30]);
+
+export function createRigRuntimeState() {
+  return {
+    modelRigState: {
+      loaded: false,
+      loading: false,
+      promise: null,
+      error: null,
+      visible: false,
+      picking: false,
+      selectedJointId: null,
+      structureRevision: 0,
+      pickStatus: '',
+      rigAnalysisMs: 0,
+      rigTransformMs: 0,
+      rigDeformMs: 0,
+      rigDeformedVertexCount: 0,
+      rigReconcileMs: 0,
+      rigCandidateCount: 0,
+      rigEquivalentClusterCount: 0,
+      rigAttachmentCount: 0,
+      rigAmbiguousCount: 0,
+      rotationSnapDegrees: 0,
+      overlayScope: 'selection',
+      explicitRootSignatures: new Set(),
+    },
+    rigPresetState: {
+      loaded: false,
+      loading: false,
+      error: null,
+      presets: [],
+      selectedPresetId: null,
+      lastApplyResult: null,
+    },
+    structureRevision: 0,
+  };
+}
+
+export function aggregateModelBoneStats(nodeLists) {
+  const totals = new Map();
+  for (const nodes of nodeLists || []) {
+    for (const node of nodes || []) {
+      const boneId = Number(node?.boneId);
+      const affectedVertexCount = Number(node?.affectedVertexCount);
+      const totalWeight = Number(node?.totalWeight);
+      if (!Number.isFinite(boneId) || !Number.isFinite(affectedVertexCount)
+          || affectedVertexCount < 0 || !Number.isFinite(totalWeight)) {
+        continue;
+      }
+      const entry = totals.get(boneId) || {
+        affectedVertexCount: 0,
+        totalWeight: 0,
+      };
+      entry.affectedVertexCount += affectedVertexCount;
+      entry.totalWeight += totalWeight;
+      totals.set(boneId, entry);
+    }
+  }
+  return Object.fromEntries([...totals.entries()]
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .map(([boneId, entry]) => [boneId, {
+      affectedVertexCount: entry.affectedVertexCount,
+      averageInfluence: entry.affectedVertexCount > 0
+        ? entry.totalWeight / entry.affectedVertexCount : 0,
+    }]));
+}
 
 export function createWeightRuntimeState() {
   const states = new WeakMap();

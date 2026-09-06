@@ -31,11 +31,87 @@ import {
   candidateRelationshipEdges,
   orientTree,
 } from './weight-rig.js';
-import {
-  pruneSelectedRelationshipEdges,
-  selectAttachmentRelationship,
-} from './weight-rig-runtime.js';
 import {normalizeSelectedBoneIds} from './weight-selection.js';
+
+function attachmentRelationshipSort(a, b) {
+  return (Number(b.minOverlap) || 0) - (Number(a.minOverlap) || 0)
+    || (Number(b.sharedVertexCount) || 0)
+      - (Number(a.sharedVertexCount) || 0)
+    || (Number(b.containment) || 0) - (Number(a.containment) || 0)
+    || (Number(b.jaccard) || 0) - (Number(a.jaccard) || 0)
+    || (Number(a.normalizedDistance ?? Infinity)
+      - Number(b.normalizedDistance ?? Infinity))
+    || Number(a.boneA) - Number(b.boneA)
+    || Number(a.boneB) - Number(b.boneB);
+}
+
+export function selectAttachmentRelationship(relationships) {
+  return [...relationships || []].sort(attachmentRelationshipSort)[0] || null;
+}
+
+function physicsTreeSideForEdge(edges, startId, skippedEdge) {
+  const adjacency = new Map();
+  for (const edge of edges || []) {
+    if (edge === skippedEdge) continue;
+    const boneA = Number(edge.boneA);
+    const boneB = Number(edge.boneB);
+    if (!Number.isFinite(boneA) || !Number.isFinite(boneB)) continue;
+    if (!adjacency.has(boneA)) adjacency.set(boneA, []);
+    if (!adjacency.has(boneB)) adjacency.set(boneB, []);
+    adjacency.get(boneA).push(boneB);
+    adjacency.get(boneB).push(boneA);
+  }
+  const side = new Set([startId]);
+  const pending = [startId];
+  while (pending.length) {
+    const boneId = pending.pop();
+    for (const neighbor of adjacency.get(boneId) || []) {
+      if (side.has(neighbor)) continue;
+      side.add(neighbor);
+      pending.push(neighbor);
+    }
+  }
+  return side;
+}
+
+function physicsBestStaticAttachment(side, relationships, selected) {
+  return selectAttachmentRelationship((relationships || []).filter(edge => {
+    const boneA = Number(edge.boneA);
+    const boneB = Number(edge.boneB);
+    const leftInside = side.has(boneA);
+    const rightInside = side.has(boneB);
+    if (leftInside === rightInside) return false;
+    const outside = leftInside ? boneB : boneA;
+    return !selected.has(outside);
+  }));
+}
+
+/** Cut only tree bridges whose two sides have stronger static attachments. */
+export function pruneSelectedRelationshipEdges(
+    treeEdges, relationships = [], selectedBoneIds = []) {
+  const edges = [...treeEdges || []];
+  const selected = new Set(normalizeSelectedBoneIds(selectedBoneIds));
+  if (!selected.size) {
+    edges.forEach(edge => {
+      selected.add(Number(edge.boneA));
+      selected.add(Number(edge.boneB));
+    });
+  }
+  return edges.filter(edge => {
+    const boneA = Number(edge.boneA);
+    const boneB = Number(edge.boneB);
+    const left = physicsTreeSideForEdge(edges, boneA, edge);
+    const right = physicsTreeSideForEdge(edges, boneB, edge);
+    const leftAttachment = physicsBestStaticAttachment(
+      left, relationships, selected);
+    const rightAttachment = physicsBestStaticAttachment(
+      right, relationships, selected);
+    const bridgeOverlap = Number(edge.minOverlap) || 0;
+    return !(leftAttachment && rightAttachment
+      && Number(leftAttachment.minOverlap) > bridgeOverlap
+      && Number(rightAttachment.minOverlap) > bridgeOverlap);
+  });
+}
 
 export function createWeightPhysicsRuntime({
   states, sourcePhysicsRigs, getModelSkinningRig,
@@ -366,13 +442,6 @@ function averageSelectedCenter(centerByBoneId, ids) {
     selectedBoneIds: [...selected],
     centers,
   };
-}
-
-  function syncMeshPhysicsState(state, enabled) {
-  state.physicsEnabled = !!enabled;
-  state.deformationMode = enabled ? 'physics' : null;
-  state.physicsParticipantStatus = enabled ? 'participating' : 'not-selected';
-  state.physicsParticipantError = null;
 }
 
   function getPhysicsConstraintDiagnostics(meshOrState) {

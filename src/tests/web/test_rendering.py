@@ -1002,13 +1002,8 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         result = page.evaluate("""async () => {
           const experiment = await import('./js/mesh/weight-experiment.js');
           const source = experiment.getModelRigDebugState().sources[0];
-          const rigState = experiment.getModelRigState();
           const component = source.components[0];
-          const selectedBuiltin = experiment.selectRigPosePreset('builtin:arms-up');
-          const builtinApply = experiment.applyRigPosePresetById('builtin:arms-up');
           const presetSelect = document.querySelector('.rig-preset-select');
-          const builtInOption = [...presetSelect.options].find(option =>
-            option.value === 'builtin:arms-up');
           const presetGroups = [...presetSelect.querySelectorAll('optgroup')]
             .map(group => group.label);
           const initialJointSelectValue =
@@ -1130,15 +1125,6 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           return {
             calls: window.__rigPanelPreviewCalls,
             sourceKey: source.sourceKey,
-            builtInPresets: rigState.rigPresets.builtInPresets,
-            builtInOption: builtInOption ? {
-              text: builtInOption.textContent, disabled: builtInOption.disabled,
-            } : null,
-            selectedBuiltin, builtinApply: {
-              success: builtinApply.success,
-              failureReason: builtinApply.failureReason,
-              reason: builtinApply.skipped?.[0]?.reason,
-                },
             presetGroups,
             jointSearchAbsent,
             allJointOptions,
@@ -1194,22 +1180,12 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             resetAfterPresetResult: afterResetPreset.rigPresets.lastApplyResult,
             resetAfterPresetSelectValue: savedPresetSelect.value,
             savedPresetsAfterReset: afterResetPreset.rigPresets.presets,
-            builtInsAfterReset: afterResetPreset.rigPresets.builtInPresets,
             weightAfter: experiment.getModelWeightState(),
           };
         }""")
         assert result["calls"] == 1
         assert result["sourceKey"] == "test/bodyblend.buf|offset=0"
-        assert result["builtInPresets"][0]["id"] == "builtin:arms-up"
-        assert result["builtInPresets"][0]["available"] is False
-        assert result["builtInPresets"][0]["reason"] == "insufficient_rig"
-        assert result["builtInOption"] == {
-            "text": "Arms Up", "disabled": True}
-        assert result["selectedBuiltin"] is True
-        assert result["builtinApply"] == {
-            "success": False, "failureReason": "builtin_unavailable",
-            "reason": "insufficient_rig"}
-        assert result["presetGroups"] == ["Built-in", "My Poses"]
+        assert result["presetGroups"] == ["My Poses"]
         assert result["presetDisabled"] is True
         assert result["applyButtonCount"] == 0
         assert result["jointSearchAbsent"]
@@ -1248,10 +1224,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["reset"]
         assert result["restored"]
         assert result["clear"]
-        assert result["clearPresetId"] == "builtin:arms-up"
+        assert result["clearPresetId"] is None
         assert result["clearSelectedJointId"] is None
         assert result["clearPoseJointIds"]
-        assert result["clearPresetAfter"] == "builtin:arms-up"
+        assert result["clearPresetAfter"] is None
         assert result["clearButtonAfter"] is True
         assert result["resetSelectedJointId"] is not None
         assert result["resetPresetId"] is None
@@ -1267,7 +1243,6 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["resetAfterPresetSelectValue"] == ""
         assert [preset["id"] for preset in result["savedPresetsAfterReset"]] == [
             "saved:test-pose"]
-        assert result["builtInsAfterReset"]
         assert result["weightAfter"]["selectedBones"] == []
     finally:
         context.close()
@@ -1341,7 +1316,7 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
           const sourceC = debug.sources.find(source =>
             source.sourceKey === 'cross/c.buf|offset=0');
           if (!sourceA || !sourceB || !sourceC) {
-            return {sourceKeys: state.sources.map(source => source.sourceKey)};
+            return {sourceKeys: debug.sources.map(source => source.sourceKey)};
           }
           const before = window.modViewer.activeMeshes.map(mesh =>
             [...mesh.geometry.attributes.position.array]);
@@ -1416,7 +1391,7 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
           return {
             modelJointCount: state.model.joints.length,
             equivalent: jointA === jointB && jointA === jointC,
-            members: state.model.joints.find(joint => joint.jointId === jointA)
+            members: debug.joints.find(joint => joint.jointId === jointA)
               ?.members?.length || 0,
             gizmoNoSelection, gizmoOff, gizmoOn, gizmoOffAgain,
             modelControls: !!modelControls,
@@ -1754,7 +1729,7 @@ def test_rig_pose_preset_recomputes_descendants_after_root_change(
             Math.abs(value - right[index]) > 1e-5);
           let state = experiment.getModelRigState();
           let debug = experiment.getModelRigDebugState();
-          const sourceKey = state.sources[0].sourceKey;
+          const sourceKey = debug.sources[0].sourceKey;
           const source = debug.sources[0];
           const jointId = boneId => Number(source.modelJointIds[boneId]);
           const defaultSourceRoot = source.components[0].rootId;
@@ -1882,7 +1857,7 @@ def test_rig_pose_preset_restores_roots_for_disconnected_components(
           const presets = await import('./js/mesh/weight-rig-presets.js');
           let state = experiment.getModelRigState();
           let debug = experiment.getModelRigDebugState();
-          const sourceKey = state.sources[0].sourceKey;
+          const sourceKey = debug.sources[0].sourceKey;
           const source = debug.sources[0];
           const jointId = boneId => Number(source.modelJointIds[boneId]);
           const components = source.components.filter(component =>
@@ -1894,7 +1869,8 @@ def test_rig_pose_preset_restores_roots_for_disconnected_components(
           }
           roots.forEach(root => experiment.setRigJointRoot(jointId(root)));
           state = experiment.getModelRigState();
-          const rootsBeforeApply = state.model.explicitRootSignatures;
+          debug = experiment.getModelRigDebugState();
+          const rootsBeforeApply = debug.explicitRootSignatures;
           const model = state.model;
           const jointIdForBone = boneId => jointId(boneId);
           const signatureForBone = boneId => model.joints.find(joint =>
@@ -1913,9 +1889,10 @@ def test_rig_pose_preset_restores_roots_for_disconnected_components(
           const versionBefore = position.version;
           const applied = experiment.applyRigPosePreset(resolved);
           state = experiment.getModelRigState();
+          debug = experiment.getModelRigDebugState();
           return {
             componentCount: state.model.components.length,
-            explicitRootCount: state.model.explicitRootSignatures.length,
+            explicitRootCount: debug.explicitRootSignatures.length,
             rootsBeforeApply,
             appliedRootCount: applied.appliedRootCount,
             skippedRootCount: applied.skippedRootCount,
@@ -2400,7 +2377,8 @@ def test_stale_rig_load_cannot_publish_after_model_switch(
             staleLoaded: stale.loaded,
             duringBLoading: duringB.loading,
             currentLoaded: current.loaded,
-            currentSource: state.sources.map(source => source.sourceKey),
+                currentSource: experiment.getModelRigDebugState().sources.map(
+                  source => source.sourceKey),
             currentModelJoints: state.model?.joints?.length || 0,
             currentError: state.error,
           };
@@ -3768,7 +3746,7 @@ def test_selected_weight_topology_preserves_mirrored_branches_and_attachment(
         edge_browser, frontend_url, {"WeightTopologyMirrored": _payload("WeightTopologyMirrored")})
     try:
         result = page.evaluate("""async () => {
-          const weight = await import('./js/mesh/weight-rig-runtime.js');
+          const weight = await import('./js/mesh/weight-physics-runtime.js');
           const rig = await import('./js/mesh/weight-rig.js');
           const deformation = await import('./js/mesh/weight-deformation.js');
           const edges = [
@@ -3855,8 +3833,8 @@ def test_model_bone_stats_sum_same_ids_before_averaging(
         edge_browser, frontend_url, {"WeightStats": _payload("WeightStats")})
     try:
         result = page.evaluate("""async () => {
-          const rig = await import('./js/mesh/weight-rig-runtime.js');
-          return rig.aggregateModelBoneStats([
+          const weight = await import('./js/mesh/weight-runtime.js');
+          return weight.aggregateModelBoneStats([
             [{boneId: 45, affectedVertexCount: 2, totalWeight: .6}],
             [
               {boneId: 45, affectedVertexCount: 4, totalWeight: 2},

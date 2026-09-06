@@ -1,7 +1,7 @@
 // Generic, source-scoped analysis of authored skinning weights.
 //
 // This module deliberately contains no physics state.  Character Physics and
-// the experimental Rig/Pose mode consume the same inferred topology, while
+// the Rig/Pose mode consume the same inferred topology, while
 // retaining their own runtime selection and deformation state.
 
 export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;

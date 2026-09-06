@@ -734,27 +734,13 @@ function syncRotationReadout(state, localOverride = null) {
 
 function selectedPreset(state = latestRigState, id = ui?.preset?.value) {
   const presetState = state?.rigPresets || {};
-  return (presetState.builtInPresets || []).find(item => item.id === id)
-    || (presetState.presets || []).find(item => item.id === id) || null;
-}
-
-function rigPresetUnavailableMessage(reason) {
-  return {
-    arm_pair_not_found: 'Could not identify both arms reliably.',
-    arm_pair_low_confidence: 'Could not identify both arms reliably.',
-    arm_pair_ambiguous: 'Could not identify both arms reliably.',
-    semantic_landmarks_incomplete: 'The inferred arm hierarchy is incomplete.',
-    arm_pose_connectivity_insufficient: 'The inferred arm hierarchy is incomplete.',
-    insufficient_rig: 'The inferred arm hierarchy is incomplete.',
-  }[reason] || 'Arms Up is unavailable for this model.';
+  return (presetState.presets || []).find(item => item.id === id) || null;
 }
 
 function syncPresetControls(state) {
   const presetState = state?.rigPresets || {};
-  const builtIns = presetState.builtInPresets || [];
   const presets = presetState.presets || [];
   const optionKey = JSON.stringify({
-    builtIns: builtIns.map(item => [item.id, item.name, item.available, item.reason]),
     presets: presets.map(item => [item.id, item.name]),
   });
   if (optionKey !== ui.preset.dataset.optionKey) {
@@ -764,18 +750,6 @@ function syncPresetControls(state) {
     placeholder.textContent = 'Select a pose';
     placeholder.disabled = true;
     ui.preset.appendChild(placeholder);
-    if (builtIns.length) {
-      const group = document.createElement('optgroup');
-      group.label = 'Built-in';
-      builtIns.forEach(item => {
-        const option = document.createElement('option');
-        option.value = item.id;
-        option.textContent = item.name;
-        option.disabled = !item.available;
-        group.appendChild(option);
-      });
-      ui.preset.appendChild(group);
-    }
     const group = document.createElement('optgroup');
     group.label = 'My Poses';
     if (!presets.length) {
@@ -796,31 +770,22 @@ function syncPresetControls(state) {
   ui.preset.value = presetState.selectedPresetId || '';
   const current = selectedPreset(state, ui.preset.value);
   const hasPreset = !!current;
-  const isBuiltin = current?.kind === 'builtin';
-  const hasUsablePreset = builtIns.some(item => item.available) || presets.length > 0;
-  ui.preset.disabled = !state?.loaded || !hasUsablePreset
+  ui.preset.disabled = !state?.loaded || !presets.length
     || !!presetState.loading;
   ui.savePreset.disabled = !state?.loaded;
-  ui.renamePreset.disabled = !hasPreset || isBuiltin;
-  ui.deletePreset.disabled = !hasPreset || isBuiltin;
-  if (current?.kind === 'builtin' && !current.available) {
-    ui.presetStatus.textContent = rigPresetUnavailableMessage(current.reason);
-  } else if (presetState.error) ui.presetStatus.textContent = presetState.error;
+  ui.renamePreset.disabled = !hasPreset;
+  ui.deletePreset.disabled = !hasPreset;
+  if (presetState.error) ui.presetStatus.textContent = presetState.error;
   else ui.presetStatus.textContent = '';
 }
 
 function applySelectedPreset(presetId) {
-  const selected = selectedPreset(latestRigState, presetId);
   const result = applyRigPosePresetById(presetId);
   if (result?.success) {
     ui.presetStatus.textContent = '';
     return;
   }
-  ui.presetStatus.textContent = result?.failureReason === 'builtin_unavailable'
-      ? rigPresetUnavailableMessage(result?.skipped?.[0]?.reason)
-      : result?.failureReason === 'no_matches'
-        ? `Could not apply "${selected?.name || 'this pose'}" to this rig.`
-        : 'Could not apply this pose.';
+  ui.presetStatus.textContent = 'Could not apply this pose.';
 }
 
 async function savePreset() {
@@ -914,9 +879,9 @@ export function initWeightRigPanel() {
       syncRotationReadout(latestRigState, event.detail?.quaternion);
     }
   });
-  window.addEventListener('mod-viewer-model-point-picked', event => {
-    latestWeightState = event.detail?.weight || latestWeightState;
-    latestRigState = event.detail?.rig || latestRigState;
+  window.addEventListener('mod-viewer-model-point-picked', () => {
+    latestWeightState = getModelWeightState();
+    latestRigState = getModelRigState();
     syncWeightControls(latestWeightState);
     syncRigOptions(latestRigState);
     syncStatus();

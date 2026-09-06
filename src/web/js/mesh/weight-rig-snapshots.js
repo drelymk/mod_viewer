@@ -13,8 +13,8 @@ function componentSnapshot(component) {
   };
 }
 
+/** Build the source-level projection exposed only by Rig debug state. */
 export function sourceRigSnapshot(rig, {
-  debug = false,
   modelRigState,
   modelJointIdForSourceBone,
   quaternionIsIdentity,
@@ -29,8 +29,6 @@ export function sourceRigSnapshot(rig, {
     boneIds: (rig.influenceGraph?.nodes || []).map(node => node.boneId),
     physicsActive: !!rig.physicsRig?.physicsState,
   };
-  if (!debug) return source;
-
   const components = (rig.inferredForest?.components || [])
     .map(componentSnapshot);
   const jointPivotByBoneId = Object.fromEntries(
@@ -57,9 +55,10 @@ export function sourceRigSnapshot(rig, {
   }));
   source.forestEdges = forestEdges;
   source.jointPivotByBoneId = jointPivotByBoneId;
-  source.selectedBoneId = modelRigState.selectedBoneBySource.get(
-    rig.sourceKey) ?? null;
   source.selectedJointId = modelRigState.selectedJointId;
+  source.selectedBoneId = (rig.boneIds || []).find(boneId =>
+    modelJointIdForSourceBone(rig.sourceKey, boneId)
+      === modelRigState.selectedJointId) ?? null;
   source.modelJointIds = Object.fromEntries((rig.boneIds || []).map(boneId => [
     boneId, modelJointIdForSourceBone(rig.sourceKey, boneId) ?? null]));
   source.poseBoneIds = [...rig.poseRotationByBoneId.entries()]
@@ -98,19 +97,21 @@ export function modelRigSnapshot(modelSkinningRig, {
     jointId: joint.jointId,
     jointKey: joint.jointKey,
     signature: joint.signature,
-    members: (joint.members || []).map(member => ({...member})),
     restCenter: [...(joint.restCenter || [0, 0, 0])],
     restPivot: [...(joint.restPivot || joint.restCenter || [0, 0, 0])],
     restDirection: joint.restDirection ? [...joint.restDirection] : null,
     restFrame: [...(joint.restFrame || [0, 0, 0, 1])],
     parentId: joint.parentId,
     childrenIds: [...(joint.childrenIds || [])],
-    representativeMember: joint.representativeMember
-      ? {...joint.representativeMember} : null,
-    affectedVertexCount: Number(joint.evidence?.affectedVertexCount
-      ?? joint.affectedVertexCount ?? 0),
-    totalWeight: Number(joint.evidence?.totalWeight
-      ?? joint.totalWeight ?? 0),
+    ...(debug ? {
+      members: (joint.members || []).map(member => ({...member})),
+      representativeMember: joint.representativeMember
+        ? {...joint.representativeMember} : null,
+      affectedVertexCount: Number(joint.evidence?.affectedVertexCount
+        ?? joint.affectedVertexCount ?? 0),
+      totalWeight: Number(joint.evidence?.totalWeight
+        ?? joint.totalWeight ?? 0),
+    } : {}),
     ...(debug ? {evidence: {...(joint.evidence || {})}} : {}),
   }));
   const forestEdges = (modelSkinningRig.edges || []).map(edge => {
@@ -129,17 +130,17 @@ export function modelRigSnapshot(modelSkinningRig, {
     joints,
     forestEdges,
     components,
-    defaultComponents,
     poseRotationByJointId: Object.fromEntries(
       [...modelSkinningRig.poseRotationByJointId.entries()].map(
         ([jointId, quaternion]) => [jointId, quaternion.toArray()])),
     poseJointIds: [...modelSkinningRig.poseRotationByJointId.entries()]
       .filter(([, quaternion]) => !quaternionIsIdentity(quaternion))
       .map(([jointId]) => jointId),
-    explicitRootSignatures: [...modelRigState.explicitRootSignatures]
-      .sort((left, right) => left.localeCompare(right)),
   };
   if (debug) {
+    snapshot.defaultComponents = defaultComponents;
+    snapshot.explicitRootSignatures = [...modelRigState.explicitRootSignatures]
+      .sort((left, right) => left.localeCompare(right));
     snapshot.defaultRestPivotByJointId = Object.fromEntries(
       [...(modelSkinningRig.defaultJointPivotByJointId || new Map())]
         .map(([jointId, pivot]) => [jointId, [...pivot]]));
@@ -159,7 +160,7 @@ export function modelRigSnapshot(modelSkinningRig, {
   return snapshot;
 }
 
-export function rigPresetSnapshot(rigPresetState, {debug = false} = {}) {
+export function rigPresetSnapshot(rigPresetState) {
   return {
     loaded: rigPresetState.loaded,
     loading: rigPresetState.loading,
@@ -167,32 +168,6 @@ export function rigPresetSnapshot(rigPresetState, {debug = false} = {}) {
     presets: rigPresetState.presets.map(preset => ({
       id: preset.id,
       name: preset.name,
-    })),
-    builtInPresets: rigPresetState.builtInPresets.map(preset => ({
-      id: preset.id,
-      name: preset.name,
-      kind: preset.kind,
-      available: !!preset.available,
-      confidence: Number.isFinite(preset.confidence) ? preset.confidence : 0,
-      reason: preset.reason || null,
-      ...(debug ? {diagnostics: {
-        semanticFrame: preset.diagnostics?.semanticFrame
-          ? {
-            up: [...(preset.diagnostics.semanticFrame.up || [])],
-            right: [...(preset.diagnostics.semanticFrame.right || [])],
-            forward: [...(preset.diagnostics.semanticFrame.forward || [])],
-          } : null,
-        semantic: preset.diagnostics?.semantic || null,
-        bodyFrame: preset.diagnostics?.bodyFrame
-          ? {...preset.diagnostics.bodyFrame} : null,
-        candidateCounts: preset.diagnostics?.candidateCounts
-          ? {...preset.diagnostics.candidateCounts} : null,
-        runnerUpScore: Number.isFinite(preset.diagnostics?.runnerUpScore)
-          ? preset.diagnostics.runnerUpScore : null,
-        pairFeatures: preset.diagnostics?.pairFeatures
-          ? {...preset.diagnostics.pairFeatures} : null,
-        selectedJointIds: [...(preset.diagnostics?.selectedJointIds || [])],
-      }} : {}),
     })),
     selectedPresetId: rigPresetState.selectedPresetId,
     lastApplyResult: rigPresetState.lastApplyResult,

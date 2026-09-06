@@ -50,17 +50,9 @@ import {
   resolveRigPreset, serializeRigPose, validateRigPresetName,
 } from './weight-rig-presets.js';
 import {
-  BUILTIN_ARMS_UP_ID, generateArmsUpPreset,
-  getBuiltInRigPoseDescriptors,
-} from './weight-rig-procedural-poses.js';
-import {
-  EMPTY_ACTIVE_VERTICES, createWeightRuntimeState,
+  aggregateModelBoneStats, EMPTY_ACTIVE_VERTICES, createRigRuntimeState,
+  createWeightRuntimeState, RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
-import {
-  RIG_ROTATION_SNAP_DEGREES, aggregateModelBoneStats,
-  createRigRuntimeState, pruneSelectedRelationshipEdges,
-  selectAttachmentRelationship,
-} from './weight-rig-runtime.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -219,49 +211,8 @@ function modelRigSnapshotForState({debug = false} = {}) {
   });
 }
 
-function refreshBuiltInRigPresets(rig = modelSkinningRig) {
-  if (!rig) {
-    rigRuntime.proceduralPoseCache = null;
-    rigPresetState.builtInPresets = [];
-    return [];
-  }
-  if (rigRuntime.proceduralPoseCache?.rig === rig
-      && rigRuntime.proceduralPoseCache.revision === rig.structureRevision) {
-    return rigRuntime.proceduralPoseCache.descriptors;
-  }
-  const descriptors = getBuiltInRigPoseDescriptors(
-    modelRigSnapshotForState({debug: true}), {
-    semanticFrame: proceduralSemanticFrame(),
-  });
-  rigRuntime.proceduralPoseCache = {
-    rig,
-    revision: rig.structureRevision,
-    descriptors,
-  };
-  rigPresetState.builtInPresets = descriptors;
-  return descriptors;
-}
-
-// Rig coordinates remain untouched. Convert the viewer's semantic axes back
-// through only the non-user orientation so manual model turns cannot affect
-// procedural detection or pose generation.
-function proceduralSemanticFrame() {
-  const transform = getModelTransformState();
-  const orientation = transform?.orientation;
-  const userRotation = transform?.userRotation;
-  if (!orientation?.isQuaternion || !userRotation?.isQuaternion) return null;
-  const baseOrientation = userRotation.clone().invert()
-    .multiply(orientation).normalize();
-  const inverse = baseOrientation.clone().invert();
-  return {
-    up: new THREE.Vector3(0, 1, 0).applyQuaternion(inverse).toArray(),
-    right: new THREE.Vector3(1, 0, 0).applyQuaternion(inverse).toArray(),
-    forward: new THREE.Vector3(0, 0, 1).applyQuaternion(inverse).toArray(),
-  };
-}
-
-function rigPresetSnapshotForState({debug = false} = {}) {
-  return rigPresetSnapshot(rigPresetState, {debug});
+function rigPresetSnapshotForState() {
+  return rigPresetSnapshot(rigPresetState);
 }
 
 function rigSnapshot() {
@@ -275,16 +226,8 @@ function rigSnapshot() {
     selectedJointId: modelRigState.selectedJointId,
     physicsActive: modelRigHasActivePhysics(),
     rotationSnapDegrees: modelRigState.rotationSnapDegrees,
-    pickedPoint: modelRigState.pickedPoint
-      ? {...modelRigState.pickedPoint,
-        point: [...modelRigState.pickedPoint.point],
-        influences: modelRigState.pickedPoint.influences.map(influence => ({...influence}))}
-      : null,
     pickStatus: modelRigState.pickStatus,
     rigPresets: rigPresetSnapshotForState(),
-    sources: [...sourceSkinningRigs.values()].map(rig => sourceRigSnapshot(rig, {
-      modelRigState, modelJointIdForSourceBone, quaternionIsIdentity,
-    })),
     overlayScope: modelRigState.overlayScope,
     model: modelRigSnapshotForState(),
   };
@@ -318,11 +261,11 @@ export function getModelRigState() {
   return rigSnapshot();
 }
 
-export function getModelRigDebugState(sourceKey = modelRigState.activeSourceKey) {
+export function getModelRigDebugState(sourceKey = null) {
   const model = modelRigSnapshotForState({debug: true});
   const sources = [...sourceSkinningRigs.values()]
     .map(rig => sourceRigSnapshot(rig, {
-      debug: true, modelRigState, modelJointIdForSourceBone,
+      modelRigState, modelJointIdForSourceBone,
       quaternionIsIdentity,
     }));
   const metrics = {
@@ -336,15 +279,16 @@ export function getModelRigDebugState(sourceKey = modelRigState.activeSourceKey)
     rigAttachmentCount: modelRigState.rigAttachmentCount || 0,
     rigAmbiguousCount: modelRigState.rigAmbiguousCount || 0,
   };
+  const selectedSourceKey = sourceKey || sources[0]?.sourceKey || null;
   if (!model) return {sources, source: sources.find(item =>
-    item.sourceKey === sourceKey) || null, metrics,
-  rigPresets: rigPresetSnapshotForState({debug: true})};
+    item.sourceKey === selectedSourceKey) || null, metrics,
+    rigPresets: rigPresetSnapshotForState()};
   return {
     ...model,
     sources,
-    source: sources.find(item => item.sourceKey === sourceKey) || null,
+    source: sources.find(item => item.sourceKey === selectedSourceKey) || null,
     metrics,
-    rigPresets: rigPresetSnapshotForState({debug: true}),
+    rigPresets: rigPresetSnapshotForState(),
   };
 }
 
@@ -425,10 +369,7 @@ function handleModelPickedIntersection(intersection) {
   modelWeightState.pickedPoint = pickedPoint;
   modelWeightState.pickerViewMode = 'picked';
   modelWeightState.pickStatus = '';
-  modelRigState.pickedPoint = pickedPoint;
-  modelRigState.activeSourceKey = sampled.sourceKey;
   const pickedBoneId = sampled.influences[0]?.boneId ?? null;
-  modelRigState.selectedBoneBySource.set(sampled.sourceKey, pickedBoneId);
   modelRigState.selectedJointId = Number.isInteger(Number(pickedBoneId))
     ? modelJointIdForSourceBone(sampled.sourceKey, pickedBoneId) ?? null : null;
   modelRigState.pickStatus = '';
@@ -437,8 +378,8 @@ function handleModelPickedIntersection(intersection) {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('mod-viewer-model-point-picked', {
       detail: {
-        weight: modelWeightSnapshot(),
-        rig: rigSnapshot(),
+        sourceKey: sampled.sourceKey,
+        jointId: modelRigState.selectedJointId,
       },
     }));
   }
@@ -652,7 +593,6 @@ function resetModelWeightState() {
   sourcePhysicsRigs.clear();
   sourceSkinningRigs.clear();
   modelSkinningRig = null;
-  rigRuntime.proceduralPoseCache = null;
   modelWeightState.loaded = false;
   modelWeightState.loading = false;
   modelWeightState.promise = null;
@@ -678,11 +618,8 @@ function resetModelWeightState() {
   modelRigState.error = null;
   modelRigState.visible = false;
   modelRigState.picking = false;
-  modelRigState.activeSourceKey = null;
-  modelRigState.selectedBoneBySource = new Map();
   modelRigState.selectedJointId = null;
   modelRigState.structureRevision = 0;
-  modelRigState.pickedPoint = null;
   modelRigState.pickStatus = '';
   modelRigState.rigAnalysisMs = 0;
   modelRigState.rigTransformMs = 0;
@@ -700,7 +637,6 @@ function resetModelWeightState() {
   rigPresetState.loading = false;
   rigPresetState.error = null;
   rigPresetState.presets = [];
-  rigPresetState.builtInPresets = [];
   rigPresetState.selectedPresetId = null;
   rigPresetState.lastApplyResult = null;
   notifyModelWeightChanged();
@@ -1161,7 +1097,6 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     sourceRig.poseFrameCache.clear();
   });
   modelSkinningRig = rig;
-  refreshBuiltInRigPresets(rig);
   updateModelWeightHeatmap();
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId = Number.isInteger(previousSelectedJointId)
@@ -1334,9 +1269,6 @@ export function unregisterSkinningMesh(mesh) {
   if (sourceKey && modelPhysicsSession.getState().enabled) {
     syncPhysicsParticipants(new Set([sourceKey]));
   }
-  if (sourceKey && modelRigState.activeSourceKey === sourceKey) {
-    modelRigState.activeSourceKey = null;
-  }
   if (modelRigState.loaded) {
     buildAllSourceSkinningRigs();
     buildModelSkinningRig([...sourceSkinningRigs.values()]);
@@ -1356,8 +1288,7 @@ export function getModelPhysicsState() {
  * is the single authority for solver state and composed transforms.
  */
 export function getModelPhysicsDebugState(sourceKey = null) {
-  const key = sourceKey || modelRigState.activeSourceKey;
-  const rig = (key ? sourcePhysicsRigs.get(key) : null)
+  const rig = (sourceKey ? sourcePhysicsRigs.get(sourceKey) : null)
     || [...sourcePhysicsRigs.values()][0];
   return physicsDebugSnapshot(rig);
 }
@@ -1944,8 +1875,7 @@ export function getRigPresetState() {
 
 export function selectRigPosePreset(presetId) {
   const id = String(presetId || '');
-  if (!rigPresetState.presets.some(preset => preset.id === id)
-      && !rigPresetState.builtInPresets.some(preset => preset.id === id)) {
+  if (!rigPresetState.presets.some(preset => preset.id === id)) {
     return false;
   }
   rigPresetState.selectedPresetId = id;
@@ -1975,7 +1905,8 @@ function queueRigPresetWrite(operation) {
     });
 }
 
-export function applySavedRigPosePreset(presetId = rigPresetState.selectedPresetId) {
+export function applyRigPosePresetById(
+    presetId = rigPresetState.selectedPresetId) {
   const preset = rigPresetState.presets.find(item => item.id === presetId);
   if (!preset) {
     const result = unavailableRigPresetResult('invalid_preset');
@@ -1987,32 +1918,6 @@ export function applySavedRigPosePreset(presetId = rigPresetState.selectedPreset
     presetId: preset.id,
   });
   return result;
-}
-
-/** Apply either a saved preset or a transient built-in preset by stable ID. */
-export function applyRigPosePresetById(
-    presetId = rigPresetState.selectedPresetId) {
-  const id = String(presetId || '');
-  if (id === BUILTIN_ARMS_UP_ID) {
-    const generated = generateArmsUpPreset(modelRigSnapshotForState({debug: true}), {
-      semanticFrame: proceduralSemanticFrame(),
-    });
-    if (!generated.available) {
-      const result = unavailableRigPresetResult(
-        generated.reason || 'arm_pair_not_found', generated.preset);
-      result.presetId = id;
-      result.failureReason = 'builtin_unavailable';
-      result.confidence = generated.confidence;
-      result.diagnostics = generated.diagnostics;
-      rigPresetState.lastApplyResult = result;
-      notifyModelRigChanged();
-      return result;
-    }
-    return applyRigPosePreset(resolveRigPreset(modelSkinningRig, generated.preset), {
-      presetId: id,
-    });
-  }
-  return applySavedRigPosePreset(id);
 }
 
 export function saveRigPosePreset(name) {
@@ -2057,10 +1962,6 @@ export function saveRigPosePreset(name) {
 
 export function renameRigPosePreset(presetId, name) {
   const id = String(presetId || '');
-  if (rigPresetState.builtInPresets.some(item => item.id === id)) {
-    return Promise.resolve({saved: false,
-      error: 'Built-in pose presets cannot be renamed.'});
-  }
   const preset = rigPresetState.presets.find(item => item.id === id);
   const checked = validateRigPresetName(name);
   if (!preset) return Promise.resolve({saved: false, error: 'Pose preset was not found.'});
@@ -2088,10 +1989,6 @@ export function renameRigPosePreset(presetId, name) {
 
 export function deleteRigPosePreset(presetId) {
   const id = String(presetId || '');
-  if (rigPresetState.builtInPresets.some(item => item.id === id)) {
-    return Promise.resolve({saved: false,
-      error: 'Built-in pose presets cannot be deleted.'});
-  }
   const preset = rigPresetState.presets.find(item => item.id === id);
   if (!preset) return Promise.resolve({saved: false, error: 'Pose preset was not found.'});
   const api = window.pywebview?.api?.delete_rig_pose_preset;
@@ -2132,9 +2029,6 @@ export function ensureModelRigLoaded() {
       const rigs = buildAllSourceSkinningRigs();
       buildModelSkinningRig(rigs);
       modelRigState.loaded = true;
-      modelRigState.activeSourceKey = modelRigState.activeSourceKey
-        && sourceSkinningRigs.has(modelRigState.activeSourceKey)
-        ? modelRigState.activeSourceKey : rigs[0]?.sourceKey || null;
       modelRigState.rigAnalysisMs = performanceNow() - analysisStarted;
       addWeightPhysicsPerformance('rigAnalysisMs', modelRigState.rigAnalysisMs);
       return rigSnapshot();
@@ -2194,8 +2088,6 @@ function selectRigBoneInternal(sourceKey, boneId) {
   const jointId = modelJointIdForSourceBone(sourceKey, id);
   if (!rig || !Number.isInteger(id) || !rig.boneIds.includes(id)
       || !Number.isInteger(jointId)) return false;
-  modelRigState.activeSourceKey = rig.sourceKey;
-  modelRigState.selectedBoneBySource.set(rig.sourceKey, id);
   modelRigState.selectedJointId = jointId;
   modelRigState.pickStatus = '';
   notifyModelRigChanged();
@@ -2206,13 +2098,7 @@ function selectRigBoneInternal(sourceKey, boneId) {
 export function selectRigJoint(jointId) {
   const joint = modelJointForId(jointId);
   if (!joint) return false;
-  const member = joint.representativeMember || joint.members?.[0];
   modelRigState.selectedJointId = joint.jointId;
-  if (member) {
-    modelRigState.activeSourceKey = member.sourceKey;
-    modelRigState.selectedBoneBySource.set(
-      member.sourceKey, Number(member.boneId));
-  }
   modelRigState.pickStatus = '';
   notifyModelRigChanged();
   requestRender();
@@ -2220,12 +2106,10 @@ export function selectRigJoint(jointId) {
 }
 
 export function clearRigJointSelection() {
-  const hadSelection = (modelRigState.selectedJointId !== null
-    && modelRigState.selectedJointId !== undefined)
-    || modelRigState.selectedBoneBySource.size > 0;
+  const hadSelection = modelRigState.selectedJointId !== null
+    && modelRigState.selectedJointId !== undefined;
   const hadStatus = !!modelRigState.pickStatus;
   modelRigState.selectedJointId = null;
-  modelRigState.selectedBoneBySource.clear();
   modelRigState.pickStatus = '';
   if (!hadSelection && !hadStatus) return false;
   notifyModelRigChanged();
@@ -2311,8 +2195,6 @@ function setRigJointRotationForSource(sourceKey, boneId, quaternion, options = {
     return false;
   }
   modelSkinningRig.poseRotationByJointId.set(jointId, cloneRigQuaternion(quaternion));
-  modelRigState.activeSourceKey = rig.sourceKey;
-  modelRigState.selectedBoneBySource.set(rig.sourceKey, id);
   modelRigState.selectedJointId = jointId;
   const dragging = options?.dragging === true;
   applyModelPose({dragging});
@@ -2654,17 +2536,12 @@ export function refreshSkinningAfterShapeChange(mesh) {
   state.combinedPhysicsVerticesRef = null;
   modelRigState.loaded = false;
   modelSkinningRig = null;
-  rigRuntime.proceduralPoseCache = null;
   modelRigState.selectedJointId = null;
   modelRigState.structureRevision = 0;
   modelRigState.visible = false;
-  modelRigState.activeSourceKey = null;
-  modelRigState.selectedBoneBySource = new Map();
   modelRigState.explicitRootSignatures = new Set();
   modelRigState.overlayScope = 'selection';
   rigPresetState.lastApplyResult = null;
-  rigPresetState.builtInPresets = [];
-  modelRigState.pickedPoint = null;
   modelRigState.pickStatus = '';
   notifyModelRigChanged();
   position.array.set(shapedPositions);

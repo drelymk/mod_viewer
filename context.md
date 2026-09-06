@@ -237,8 +237,7 @@ of documentation, comments and tests; use portable fixtures instead.
 - Cross-source reconciliation connects multiple skinning palettes for inferred
   posing. Because the model-wide inferred hierarchy may differ from each source
   palette's original weighting topology, some cross-source weighted regions can
-  stretch during rotation. This is currently accepted as an experimental Rig
-  limitation.
+  stretch during rotation. This remains a known Rig limitation.
 - Each ModelJoint exposes a stable signature made from its sorted canonical
   source-bone keys. Runtime joint, component and root indices are ephemeral and
   must not be persisted as preset identities.
@@ -254,19 +253,6 @@ of documentation, comments and tests; use portable fixtures instead.
   entries still apply. Saved presets are never auto-applied after load or shape
   rebaseline, and Reset Pose returns to the default inferred roots and identity
  rotations without deleting saved presets.
-- Built-in procedural Rig poses are frontend-only descriptors regenerated from
-  the current default model Rig. They are never persisted or renamed/deleted;
-  applying one generates a schema-compatible transient preset and uses the same
-  exact-signature resolver as saved poses. Semantic detection projects default
-  rest geometry through the non-user model orientation so raw Y-up/Z-up assets
-  share one basis; uncertain detection fails closed with a diagnostic reason.
-- Spatial semantic analysis keeps anatomy separate from deformation topology:
-  rest centers identify compact bilateral landmarks such as hands and finger
-  rays, rest pivots drive posing, and component connectivity is reported as
-  poseConnectivity evidence rather than repaired or mutated. Arms Up requires
-  directed pose descendants from each shoulder to its wrist/hand; disconnected
-  semantic landmarks remain diagnostic-only. Results are partial,
-  confidence-scored and cached by model-Rig structure revision.
 - Applying a preset is one batch transaction: restore valid model-root
   overrides first, rebuild rest frames/caches once, install all valid local
   rotations, run one model deformation/bounds pass, then notify and render once.
@@ -282,6 +268,9 @@ of documentation, comments and tests; use portable fixtures instead.
   vertex caching and baseline restoration, and keep Character Physics
   source-scoped secondary rotation/velocity offsets. Physics never clears or
   overwrites the manual model pose.
+- Normal Rig snapshots contain only panel and overlay data. Source membership,
+  reconciliation evidence and performance diagnostics are available only from
+  the explicit Rig debug projection.
 - Final deformation composes manual source transforms with Physics offsets
   before one authored-baseline skinning pass. Never skin already-deformed
   geometry a second time. The final active vertex set is the union of manual
@@ -298,7 +287,8 @@ of documentation, comments and tests; use portable fixtures instead.
   pose/root state. Saved presets serialize manual Rig state only, never
   instantaneous Physics offsets.
 - The Rig picker maps source influences to model joints. The Rig panel selects
-  model joints and displays membership/topology without semantic labels; the
+  model joints and displays topology without semantic labels; the
+  explicit Rig debug projection exposes source membership; the
   combined overlay renders model joints, source edges and distinguishable
   attachment edges with O(1) Three.js objects. Reconciliation rebuilds on
   source membership/shape changes and resets pose; model structure revisions
@@ -308,7 +298,7 @@ of documentation, comments and tests; use portable fixtures instead.
   manual pose, presets, Weight selection, Physics and overlay visibility
   unchanged. Reset Joint preserves the selected Joint; Reset Pose preserves
   it too, clears only the runtime selected-preset/apply-result state, and never
-  deletes saved or built-in preset records.
+  deletes saved preset records.
 - Step each source rig once at fixed 1/120 second with bounded catch-up; deform
   visible members only at selected-weight vertices and transform baseline normals
   with the same influence. Defer exact bounds and shadow-camera fitting until

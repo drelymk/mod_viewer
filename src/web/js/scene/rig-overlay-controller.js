@@ -1,6 +1,6 @@
-// Temporary visualization for the experimental inferred skinning rig.
-// Nothing in this group is a model mesh or a THREE.Bone; it is disposable
-// diagnostic geometry owned entirely by the Rig panel.
+// Visualization for the inferred skinning rig.
+// Nothing in this group is a model mesh or a THREE.Bone; it is overlay
+// geometry owned entirely by the Rig panel.
 
 import * as THREE from 'three/webgpu';
 
