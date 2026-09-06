@@ -36,6 +36,8 @@ class PreparedDrawVertices:
     raw_indices: list[int]
     used_vertices: list[int]
     remap: dict[int, int]
+    decoded_vertices: dict[
+        int, tuple[float, float, float, float | None, float | None] | None]
     streams: VertexStreams
     position_path: str
     texcoord_path: str
@@ -96,27 +98,39 @@ def _prepare_draw_vertices(
     uv_offset = draw_streams.uv_offset
     uv_format = draw_streams.uv_format
     uv_size = struct.calcsize(uv_format)
+    decoded_vertices = {}
+    missing = object()
 
-    def finite_vertex(index):
+    def decode_vertex(index):
+        cached = decoded_vertices.get(index, missing)
+        if cached is not missing:
+            return cached
         pos_offset = index * draw_streams.position_stride + POSITION_OFFSET
         if pos_offset < 0 or pos_offset + 12 > len(pos_data):
-            return False
+            decoded_vertices[index] = None
+            return None
         position = struct.unpack_from("<fff", pos_data, pos_offset)
         if not all(math.isfinite(value) for value in position):
-            return False
+            decoded_vertices[index] = None
+            return None
+        texcoord = (None, None)
         if tc_data:
             tc_offset = index * draw_streams.texcoord_stride + uv_offset
             if tc_offset < 0 or tc_offset + uv_size > len(tc_data):
-                return False
+                decoded_vertices[index] = None
+                return None
             texcoord = struct.unpack_from(uv_format, tc_data, tc_offset)
             if not all(math.isfinite(value) for value in texcoord):
-                return False
-        return True
+                decoded_vertices[index] = None
+                return None
+        decoded = (*position, *texcoord)
+        decoded_vertices[index] = decoded
+        return decoded
 
     valid_raw = []
     for triangle_start in range(0, len(raw) - 2, 3):
         triangle = raw[triangle_start:triangle_start + 3]
-        if all(finite_vertex(index) for index in triangle):
+        if all(decode_vertex(index) is not None for index in triangle):
             valid_raw.extend(triangle)
     if not valid_raw:
         return None
@@ -130,6 +144,7 @@ def _prepare_draw_vertices(
     return PreparedDrawVertices(
         raw_indices=raw, used_vertices=used,
         remap={old: new for new, old in enumerate(used)},
+        decoded_vertices=decoded_vertices,
         streams=draw_streams, position_path=draw_pos_path,
         texcoord_path=draw_tc_path)
 
@@ -232,9 +247,6 @@ def pack_draw_geometry(
     draw_streams = prepared.streams
     pos_data = draw_streams.position_data
     tc_data = draw_streams.texcoord_data
-    uv_offset = draw_streams.uv_offset
-    uv_format = draw_streams.uv_format
-    uv_size = struct.calcsize(uv_format)
     pos_bytes = bytearray(len(used) * 12)
     normal_bytes = None
     normal_source = draw.normal_source
@@ -250,11 +262,7 @@ def pack_draw_geometry(
         buffers, sparse_shape_cache)
     uv_bytes = bytearray(len(used) * 8) if tc_data else None
     for output_index, vertex_index in enumerate(used):
-        pos_offset = vertex_index * draw_streams.position_stride + POSITION_OFFSET
-        if pos_offset + 12 <= len(pos_data):
-            x, y, z = struct.unpack_from("<fff", pos_data, pos_offset)
-        else:
-            x, y, z = 0., 0., 0.
+        x, y, z, u, v = prepared.decoded_vertices[vertex_index]
         struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
         for item in shape_buffers:
             shape = item.shape
@@ -280,11 +288,6 @@ def pack_draw_geometry(
                 struct.pack_into("<fff", item.low_bytes, output_index * 12,
                                  lx, ly, lz)
         if tc_data:
-            tc_offset = vertex_index * draw_streams.texcoord_stride + uv_offset
-            if tc_offset + uv_size <= len(tc_data):
-                u, v = struct.unpack_from(uv_format, tc_data, tc_offset)
-            else:
-                u, v = 0., 0.
             struct.pack_into("<ff", uv_bytes, output_index * 8,
                              u, 1.0 - v)  # flip V for Three.js
 
