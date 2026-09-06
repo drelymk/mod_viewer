@@ -1553,14 +1553,14 @@ def test_texture_save_resets_all_committed_meshes_and_refreshes_affected_keys(
                     "semantic_key": "Body-BakeConfirm-0",
                     "metadata_key": "Body BakeConfirm::3,0,0",
                     "adjustment": {
-                    "hue": 30, "saturation": 1, "brightness": 1, "contrast": 1,
+                        "hue": 30, "saturation": 1, "brightness": 1, "contrast": 1,
                         "red": 1, "green": 1, "blue": 1, "tint": None,
                     },
                 }, {
                     "semantic_key": "Face-BakeConfirm-0",
                     "metadata_key": "Face BakeConfirm::3,0,0",
                     "adjustment": {
-                    "hue": 45, "saturation": 1, "brightness": 1, "contrast": 1,
+                        "hue": 45, "saturation": 1, "brightness": 1, "contrast": 1,
                         "red": 1, "green": 1, "blue": 1, "tint": None,
                     },
                 }],
