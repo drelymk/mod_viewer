@@ -1024,6 +1024,19 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             '.rig-bone-select').options].map(option => option.textContent);
           jointSearch.value = '';
           jointSearch.dispatchEvent(new Event('input', {bubbles: true}));
+          const initialPresetDisabled = presetSelect.disabled;
+          const initialRenamePresetDisabled = document.querySelector(
+            '.rig-rename-preset')?.disabled;
+          const initialDeletePresetDisabled = document.querySelector(
+            '.rig-delete-preset')?.disabled;
+          const presetActionRow = document.querySelector('.rig-preset-actions');
+          const presetActionButtons = [...presetActionRow.querySelectorAll('button')];
+          const presetActionsLayout = {
+            flexWrap: getComputedStyle(presetActionRow).flexWrap,
+            buttonCount: presetActionButtons.length,
+            sameRow: new Set(presetActionButtons.map(button =>
+              Math.round(button.getBoundingClientRect().top))).size === 1,
+          };
           const poseBone = component.nodeIds.find(id => id !== component.rootId);
           const mesh = window.modViewer.activeMeshes[0];
           const before = [...mesh.geometry.attributes.position.array];
@@ -1053,6 +1066,30 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           const restored = [...mesh.geometry.attributes.position.array];
           mesh.geometry.computeBoundingBox = originalBoundingBox;
           mesh.geometry.computeBoundingSphere = originalBoundingSphere;
+          const currentRig = experiment.getModelRigState();
+          const poseJoint = currentRig.model.joints.find(joint =>
+            currentRig.model.components.some(component =>
+              component.rootId !== joint.jointId
+              && component.nodeIds.includes(joint.jointId)));
+          const savedPreset = {
+            id: 'saved:test-pose', name: 'Test Pose', roots: [],
+            joints: [{
+              joint_signature: poseJoint?.signature,
+              rotation: [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)],
+            }],
+          };
+          experiment.setRigPresetMetadata({version: 1, presets: [savedPreset]});
+          const beforePreset = experiment.getModelRigState();
+          let presetRigEvents = 0;
+          const countPresetRigEvent = () => { presetRigEvents += 1; };
+          window.addEventListener(
+            'mod-viewer-model-rig-changed', countPresetRigEvent);
+          const savedPresetSelect = document.querySelector('.rig-preset-select');
+          savedPresetSelect.value = savedPreset.id;
+          savedPresetSelect.dispatchEvent(new Event('change', {bubbles: true}));
+          const afterPreset = experiment.getModelRigState();
+          window.removeEventListener(
+            'mod-viewer-model-rig-changed', countPresetRigEvent);
           return {
             calls: window.__rigPanelPreviewCalls,
             sourceKey: source.sourceKey,
@@ -1064,14 +1101,20 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
               success: builtinApply.success,
               failureReason: builtinApply.failureReason,
               reason: builtinApply.skipped?.[0]?.reason,
-            },
-            presetGroups,
-            applyPresetDisabled: document.querySelector(
-              '.rig-apply-preset')?.disabled,
-            renamePresetDisabled: document.querySelector(
-              '.rig-rename-preset')?.disabled,
-            deletePresetDisabled: document.querySelector(
-              '.rig-delete-preset')?.disabled,
+                },
+                presetGroups,
+                presetDisabled: initialPresetDisabled,
+            applyButtonCount: document.querySelectorAll(
+              '.rig-apply-preset').length,
+            weightActionsInsideAdvanced: !!document.querySelector(
+              '.weight-selection-actions')?.closest('details'),
+            rigActionsInsideAdvanced: !!document.querySelector(
+              '.rig-save-preset')?.closest('details'),
+                savePresetText: document.querySelector(
+                  '.rig-save-preset')?.textContent,
+                renamePresetDisabled: initialRenamePresetDisabled,
+                deletePresetDisabled: initialDeletePresetDisabled,
+                presetActionsLayout,
             jointSelectValue: initialJointSelectValue,
             jointSelectText: initialJointSelectText,
             initialShowAll,
@@ -1087,6 +1130,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             reset,
             restored: restored.every((value, index) =>
               Math.abs(value - before[index]) < 1e-5),
+            presetBeforePose: beforePreset.model.poseJointIds,
+            presetAfterPose: afterPreset.model.poseJointIds,
+            presetApplySuccess: afterPreset.rigPresets.lastApplyResult?.success,
+            presetApplyEvents: presetRigEvents,
             weightAfter: experiment.getModelWeightState(),
           };
         }""")
@@ -1102,14 +1149,20 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             "success": False, "failureReason": "builtin_unavailable",
             "reason": "insufficient_rig"}
         assert result["presetGroups"] == ["Built-in", "My Poses"]
-        assert result["applyPresetDisabled"] is True
+        assert result["presetDisabled"] is True
+        assert result["applyButtonCount"] == 0
+        assert not result["weightActionsInsideAdvanced"]
+        assert not result["rigActionsInsideAdvanced"]
+        assert result["savePresetText"] == "Save"
+        assert result["presetActionsLayout"] == {
+            "flexWrap": "nowrap", "buttonCount": 3, "sameRow": True}
         assert result["renamePresetDisabled"] is True
         assert result["deletePresetDisabled"] is True
-        assert result["jointSelectValue"] == "0"
+        assert result["jointSelectValue"] == ""
         assert result["jointSelectText"] == "Select a joint"
         assert result["initialShowAll"] is False
         assert result["filteredJointOptions"] == [
-            "Select a joint", "Joint 0", "Joint 1"]
+            "Select a joint", "Joint 1"]
         assert result["weightBefore"] == []
         assert result["posed"]
         assert result["boundsDuringDrag"] == {"boundsCalls": 0, "sphereCalls": 0}
@@ -1119,6 +1172,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["changed"]
         assert result["reset"]
         assert result["restored"]
+        assert result["presetBeforePose"] == []
+        assert result["presetAfterPose"]
+        assert result["presetApplySuccess"] is True
+        assert result["presetApplyEvents"] == 2
         assert result["weightAfter"]["selectedBones"] == []
     finally:
         context.close()
@@ -1203,14 +1260,6 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             `cross/b.buf|offset=0#bone=${child + 4}`];
           const jointC = state.model.sourceBoneToModelJointId[
             `cross/c.buf|offset=0#bone=${child + 8}`];
-          const q = new THREE.Quaternion().setFromAxisAngle(
-            new THREE.Vector3(0, 0, 1), Math.PI / 2);
-          experiment.selectRigBone(sourceA.sourceKey, child);
-          const posed = experiment.setRigBoneRotation(
-            sourceA.sourceKey, child, q, {dragging: true});
-          const after = window.modViewer.activeMeshes.map(mesh =>
-            [...mesh.geometry.attributes.position.array]);
-          experiment.setRigVisible(true);
           const controller = createRigOverlayController({
             scene, camera,
             canvas: document.querySelector('#canvas-container canvas'),
@@ -1223,6 +1272,24 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             finishRigPose: experiment.finishRigPose,
             requestRender: () => {},
           });
+          experiment.setRigVisible(false);
+          controller.refresh(experiment.getModelRigState());
+          const gizmoNoSelection = controller.getDebugState();
+          experiment.selectRigJoint(jointA);
+          const modelControls = await controller.ensureTransformControls();
+          const gizmoOff = controller.getDebugState();
+          experiment.setRigVisible(true);
+          const gizmoOn = controller.getDebugState();
+          experiment.setRigVisible(false);
+          const gizmoOffAgain = controller.getDebugState();
+          const q = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 0, 1), Math.PI / 2);
+          experiment.selectRigBone(sourceA.sourceKey, child);
+          const posed = experiment.setRigBoneRotation(
+            sourceA.sourceKey, child, q, {dragging: true});
+          const after = window.modViewer.activeMeshes.map(mesh =>
+            [...mesh.geometry.attributes.position.array]);
+          experiment.setRigVisible(true);
           experiment.setSelectedBones([{
             sourceKey: sourceB.sourceKey,
             sourceFile: sourceB.sourceFile,
@@ -1248,6 +1315,8 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             equivalent: jointA === jointB && jointA === jointC,
             members: state.model.joints.find(joint => joint.jointId === jointA)
               ?.members?.length || 0,
+            gizmoNoSelection, gizmoOff, gizmoOn, gizmoOffAgain,
+            modelControls: !!modelControls,
             posed,
             diagnosticsVisible: !!document.querySelector(
               '.rig-reconciliation-summary, .rig-connection-value, .rig-confidence-value'),
@@ -1265,6 +1334,19 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         assert result.get("modelJointCount") == 2, result
         assert result["equivalent"], result
         assert result["members"] == 3
+        assert result["modelControls"]
+        assert result["gizmoNoSelection"]["selectedBoneId"] is None
+        assert not result["gizmoNoSelection"]["proxyVisible"]
+        assert not result["gizmoOff"]["staticVisible"]
+        assert result["gizmoOff"]["proxyVisible"]
+        assert result["gizmoOff"]["controlsAttached"]
+        assert result["gizmoOn"]["staticVisible"]
+        assert result["gizmoOn"]["proxyVisible"]
+        assert result["gizmoOn"]["controlsCreateCount"] == \
+            result["gizmoOff"]["controlsCreateCount"]
+        assert not result["gizmoOffAgain"]["staticVisible"]
+        assert result["gizmoOffAgain"]["proxyVisible"]
+        assert result["gizmoOffAgain"]["controlsAttached"]
         assert result["posed"]
         assert not result["diagnosticsVisible"]
         assert result["changed"] == [True, True, True]
@@ -2831,6 +2913,13 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
         assert page.locator(".weight-scope-option").count() == 0
         assert page.locator(".weight-model-joint-option").count() == 0
         assert page.locator(".weight-rig-advanced").count() == 2
+        assert page.locator(".weight-selection-actions").evaluate(
+            "node => node.closest('details') === null")
+        assert page.locator(".rig-save-preset").evaluate(
+            "node => node.closest('details') === null")
+        assert page.locator(".rig-apply-preset").count() == 0
+        assert page.locator(".weight-rig-advanced").evaluate_all(
+            "nodes => nodes.every(node => !node.open)")
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
         physics = page.evaluate("""async () => {
           const {getSkinningState} = await import('./js/mesh/weight-experiment.js');

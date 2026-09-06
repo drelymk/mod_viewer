@@ -19,9 +19,11 @@ function sourceFor(snapshot) {
 }
 
 function selectedBoneFor(snapshot) {
-  if (snapshot?.model && snapshot.selectedJointId !== null
-      && snapshot.selectedJointId !== undefined) {
-    return Number(snapshot.selectedJointId);
+  if (snapshot?.model) {
+    const rawId = snapshot.selectedJointId;
+    if (rawId === null || rawId === undefined || rawId === '') return null;
+    const id = Number(rawId);
+    return Number.isInteger(id) ? id : null;
   }
   const value = snapshot?.selectedBoneId;
   if (value === null || value === undefined || value === '') return null;
@@ -112,7 +114,7 @@ function modelRigHasActivePhysics(snapshot, source = null) {
 }
 
 function canPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
-  if (!snapshot?.visible || snapshot.picking || !source || boneId === null
+  if (snapshot?.picking || !source || boneId === null
       || modelRigHasActivePhysics(snapshot, source)) {
     return false;
   }
@@ -168,9 +170,11 @@ export function createRigOverlayController({
     return sourceFor(snapshot);
   };
   const selectedIdFor = (snapshot, source) => {
-    if (source?.joints && snapshot?.selectedJointId !== null
-        && snapshot?.selectedJointId !== undefined) {
-      return Number(snapshot.selectedJointId);
+    if (source?.joints) {
+      const rawId = snapshot?.selectedJointId;
+      if (rawId === null || rawId === undefined || rawId === '') return null;
+      const id = Number(rawId);
+      return Number.isInteger(id) ? id : null;
     }
     const value = snapshot?.selectedBoneId;
     if (value === null || value === undefined || value === '') return null;
@@ -423,7 +427,7 @@ export function createRigOverlayController({
     }
     if (poseDragActive && boneId === dragBoneId
         && (source?.joints || source?.sourceKey === dragSourceKey)) {
-      proxy.visible = group.visible;
+      proxy.visible = true;
       return;
     }
     const poseFrame = source?.joints
@@ -435,7 +439,7 @@ export function createRigOverlayController({
       || quaternionFor(source, boneId);
     if (values) proxy.quaternion.set(...values).normalize();
     else proxy.quaternion.identity();
-    proxy.visible = group.visible;
+    proxy.visible = true;
     if (transformControls) {
       transformControls.attach?.(proxy);
       transformControls.update?.();
@@ -474,7 +478,7 @@ export function createRigOverlayController({
     } else if (detail.quaternion?.length === 4) {
       proxy.quaternion.set(...detail.quaternion).normalize();
     }
-    proxy.visible = group.visible && canPose(currentSnapshot, currentSource, id);
+    proxy.visible = canPose(currentSnapshot, currentSource, id);
     if (!proxy.visible) detachControls();
     else {
       transformControls?.attach?.(proxy);
@@ -599,8 +603,8 @@ export function createRigOverlayController({
       rebuildOverlay(currentSource);
     }
     updateModelFrame();
-    group.visible = !!currentSnapshot.visible && !!currentSource;
-    staticGroup.visible = group.visible;
+    group.visible = !!currentSource;
+    staticGroup.visible = !!currentSnapshot.visible && !!currentSource;
     updatePosedOverlay(currentSource);
     updateCenterColors();
     updateProxy(currentSource, currentSnapshot);
@@ -632,6 +636,8 @@ export function createRigOverlayController({
         modelFrameUpdateCount,
         posedOverlayUpdateCount,
         staticObjectCount: staticGroup.children.length,
+        groupVisible: group.visible,
+        staticVisible: staticGroup.visible,
         nodeCount: nodeBoneIds.length,
         jointCount: jointPoints.geometry.getAttribute('position')?.count || 0,
         edgeCount: lineSegments.geometry.getAttribute('position')?.count / 2 || 0,

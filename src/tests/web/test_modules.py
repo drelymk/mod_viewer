@@ -637,7 +637,7 @@ def test_rig_overlay_can_scope_model_view_to_selected_chain(module_page):
     assert result["singleton"]["edgeCount"] == 0
 
 
-def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
+def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_page):
     page = module_page
     result = page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
@@ -754,7 +754,9 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
     assert result["noSelection"]["controlsCreated"] is False
     assert result["root"]["controlsAttached"] is False
     assert result["rootAgain"]["controlsAttached"] is False
-    assert result["hidden"]["controlsAttached"] is False
+    assert result["hidden"]["controlsAttached"] is True
+    assert result["hidden"]["proxyVisible"] is True
+    assert result["hidden"]["staticVisible"] is False
     assert result["nonRoot"]["controlsCreated"] is True
     assert result["nonRoot"]["controlsAttached"] is True
     assert result["nonRoot"]["helperInScene"] is True
@@ -780,6 +782,7 @@ def test_rig_overlay_controls_detach_for_root_and_hidden_selection(module_page):
     assert result["afterPick"]["arcballEnabled"] is True
     assert result["arcballActions"] == [["unset", 0], ["set", "ROTATE", 0]]
     assert result["shown"]["controlsAttached"] is True
+    assert result["shown"]["staticVisible"] is True
     assert result["shown"]["helperInScene"] is True
     assert result["shown"]["controlsCreateCount"] == 1
     assert result["picking"]["controlsAttached"] is False

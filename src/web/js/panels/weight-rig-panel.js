@@ -13,9 +13,9 @@ import {
   setRigComponentRoot, setRigOverlayScope,
   setRigRotationSnapDegrees, setRigVisible, setWeightPickerViewMode,
   applyRigPosePresetById,
-  deleteRigPosePreset, renameRigPosePreset, saveRigPosePreset,
+  deleteRigPosePreset, eulerFromRestFrameDelta, renameRigPosePreset,
+  saveRigPosePreset,
 } from '../mesh/weight-experiment.js';
-import { eulerFromRestFrameDelta } from '../mesh/weight-experiment.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 
 let panel = null;
@@ -183,6 +183,29 @@ function buildWeightSection(parent) {
   const section = addSection(parent, 'WEIGHT');
   buildBonePicker(section);
 
+  const actions = document.createElement('div');
+  actions.className = 'weight-selection-actions';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'ui-button weight-save-selection';
+  save.textContent = 'Save';
+  save.addEventListener('click', () => void saveModelWeightSelection());
+  const load = document.createElement('button');
+  load.type = 'button';
+  load.className = 'ui-button weight-load-selection';
+  load.textContent = 'Load';
+  load.addEventListener('click', () => loadSavedBoneSelection());
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'ui-button weight-clear-selection';
+  clear.textContent = 'Clear';
+  clear.addEventListener('click', () => clearSelectedBones());
+  actions.append(save, load, clear);
+  section.appendChild(actions);
+  ui.clearSelection = clear;
+  ui.saveSelection = save;
+  ui.loadSelection = load;
+
   const heatmapLabel = document.createElement('label');
   heatmapLabel.className = 'weight-checkbox';
   const heatmap = document.createElement('input');
@@ -206,31 +229,6 @@ function buildWeightSection(parent) {
   ui.physicsGravityEnable = gravity;
 
   const advanced = addAdvanced(parent);
-  const selectionTitle = addText(advanced.content, 'weight-rig-advanced-title', 'Selection tools');
-  selectionTitle.setAttribute('aria-hidden', 'true');
-  const actions = document.createElement('div');
-  actions.className = 'weight-selection-actions';
-  const save = document.createElement('button');
-  save.type = 'button';
-  save.className = 'ui-button weight-save-selection';
-  save.textContent = 'Save';
-  save.addEventListener('click', () => void saveModelWeightSelection());
-  const load = document.createElement('button');
-  load.type = 'button';
-  load.className = 'ui-button weight-load-selection';
-  load.textContent = 'Load';
-  load.addEventListener('click', () => loadSavedBoneSelection());
-  const clear = document.createElement('button');
-  clear.type = 'button';
-  clear.className = 'ui-button weight-clear-selection';
-  clear.textContent = 'Clear';
-  clear.addEventListener('click', () => clearSelectedBones());
-  actions.append(save, load, clear);
-  advanced.content.appendChild(actions);
-  ui.clearSelection = clear;
-  ui.saveSelection = save;
-  ui.loadSelection = load;
-
   const physicsTitle = addText(advanced.content, 'weight-rig-advanced-title', 'Physics tuning');
   physicsTitle.setAttribute('aria-hidden', 'true');
   const initial = getModelPhysicsState();
@@ -276,9 +274,12 @@ function buildWeightSection(parent) {
 }
 
 function selectedJoint(state = latestRigState) {
-  const id = Number(state?.selectedJointId);
-  return Number.isInteger(id) ? state?.model?.joints?.find(joint =>
-    Number(joint.jointId) === id) || null : null;
+  const rawId = state?.selectedJointId;
+  if (rawId === null || rawId === undefined || rawId === '') return null;
+  const id = Number(rawId);
+  if (!Number.isInteger(id)) return null;
+  return state?.model?.joints?.find(joint =>
+    Number(joint.jointId) === id) || null;
 }
 
 function jointSearchText(joint) {
@@ -319,16 +320,36 @@ function buildRigSection(parent) {
   const preset = document.createElement('select');
   preset.className = 'rig-preset-select';
   preset.setAttribute('aria-label', 'Rig pose preset');
-  preset.addEventListener('change', () => selectRigPosePreset(preset.value || null));
+  preset.addEventListener('change', () => {
+    const presetId = preset.value || null;
+    if (!presetId) return;
+    selectRigPosePreset(presetId);
+    applySelectedPreset(presetId);
+  });
   section.appendChild(preset);
-  const apply = document.createElement('button');
-  apply.type = 'button';
-  apply.className = 'ui-button rig-apply-preset';
-  apply.textContent = 'Apply';
-  apply.addEventListener('click', () => applyPreset());
-  section.appendChild(apply);
   ui.preset = preset;
-  ui.applyPreset = apply;
+  const management = document.createElement('div');
+  management.className = 'rig-actions rig-preset-actions';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'ui-button rig-save-preset';
+  save.textContent = 'Save';
+  save.addEventListener('click', () => savePreset());
+  const rename = document.createElement('button');
+  rename.type = 'button';
+  rename.className = 'ui-button rig-rename-preset';
+  rename.textContent = 'Rename';
+  rename.addEventListener('click', () => renamePreset());
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'ui-button rig-delete-preset';
+  remove.textContent = 'Delete';
+  remove.addEventListener('click', () => deletePreset());
+  management.append(save, rename, remove);
+  section.appendChild(management);
+  ui.savePreset = save;
+  ui.renamePreset = rename;
+  ui.deletePreset = remove;
   ui.presetStatus = addText(section, 'rig-hint');
 
   const advanced = addAdvanced(parent);
@@ -416,30 +437,6 @@ function buildRigSection(parent) {
   advanced.content.appendChild(setRoot);
   ui.setRoot = setRoot;
 
-  const presetTitle = addText(advanced.content, 'weight-rig-advanced-title', 'Pose preset management');
-  presetTitle.setAttribute('aria-hidden', 'true');
-  const management = document.createElement('div');
-  management.className = 'rig-actions';
-  const save = document.createElement('button');
-  save.type = 'button';
-  save.className = 'ui-button rig-save-preset';
-  save.textContent = 'Save New';
-  save.addEventListener('click', () => savePreset());
-  const rename = document.createElement('button');
-  rename.type = 'button';
-  rename.className = 'ui-button rig-rename-preset';
-  rename.textContent = 'Rename';
-  rename.addEventListener('click', () => renamePreset());
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.className = 'ui-button rig-delete-preset';
-  remove.textContent = 'Delete';
-  remove.addEventListener('click', () => deletePreset());
-  management.append(save, rename, remove);
-  advanced.content.appendChild(management);
-  ui.savePreset = save;
-  ui.renamePreset = rename;
-  ui.deletePreset = remove;
 }
 
 function addAdvancedValue(parent, label) {
@@ -799,21 +796,21 @@ function syncPresetControls(state, physicsActive) {
   const current = selectedPreset(state, ui.preset.value);
   const hasPreset = !!current;
   const isBuiltin = current?.kind === 'builtin';
-  const isAvailable = !isBuiltin || current.available;
-  ui.preset.disabled = !builtIns.length && !presets.length;
-  ui.applyPreset.disabled = !state?.loaded || !hasPreset || !isAvailable || physicsActive;
+  const hasUsablePreset = builtIns.some(item => item.available) || presets.length > 0;
+  ui.preset.disabled = !state?.loaded || !hasUsablePreset
+    || !!presetState.loading || physicsActive;
   ui.savePreset.disabled = !state?.loaded || physicsActive;
   ui.renamePreset.disabled = !hasPreset || isBuiltin;
   ui.deletePreset.disabled = !hasPreset || isBuiltin;
   if (current?.kind === 'builtin' && !current.available) {
     ui.presetStatus.textContent = rigPresetUnavailableMessage(current.reason);
   } else if (presetState.error) ui.presetStatus.textContent = presetState.error;
-  else if (!ui.presetStatus.dataset.actionError) ui.presetStatus.textContent = '';
+  else ui.presetStatus.textContent = '';
 }
 
-function applyPreset() {
-  const selected = selectedPreset(latestRigState, ui.preset.value);
-  const result = applyRigPosePresetById(ui.preset.value || null);
+function applySelectedPreset(presetId) {
+  const selected = selectedPreset(latestRigState, presetId);
+  const result = applyRigPosePresetById(presetId);
   if (result?.success) {
     ui.presetStatus.textContent = '';
     return;
