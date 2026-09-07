@@ -154,14 +154,18 @@ class ModPreview:
             return self._semantic_read_error()
 
     def save_texture_color(
-            self, folder_path, tex_key, targets, texture_usage):
+            self, folder_path, tex_key, targets, texture_usage,
+            progress_callback=None):
         """Save all captured Color changes that target one physical DDS."""
         try:
             folder_path, overrides, _pending, context = \
                 self.authoritative_context(folder_path)
+            save_kwargs = {} if progress_callback is None else {
+                "progress_callback": progress_callback,
+            }
             result = save_texture_color(
                 context, overrides, self._active_mesh_keys.get(folder_path),
-                tex_key, targets, texture_usage)
+                tex_key, targets, texture_usage, **save_kwargs)
             if result.get("status") == "ok":
                 keys = [
                     item.get("metadata_key")

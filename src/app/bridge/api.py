@@ -5,6 +5,8 @@ orchestration live in underscore-private collaborators so pywebview exposes
 only this class's deliberate bridge contract.
 """
 
+import json
+import logging
 import traceback
 
 import webview
@@ -16,6 +18,9 @@ from app.bridge import present as present_api
 from app.bridge.mod_preview import ModPreview
 from app.bridge.registry import AssetFolderRegistry, ModFolderRegistry
 from app.bridge import toggle as toggle_api
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ModViewerAPI:
@@ -157,9 +162,30 @@ class ModViewerAPI:
     def get_mesh_semantics(self, folder_path):
         return self._mod_preview.get_mesh_semantics(folder_path)
 
-    def save_texture_color(self, folder_path, tex_key, targets, texture_usage):
+    def _emit_ui_event(self, name, detail):
+        """Push one structured event to the current WebView, if available."""
+        if self._window is None:
+            return
+        try:
+            event_name = json.dumps(name)
+            payload = json.dumps(detail, separators=(",", ":"))
+            self._window.run_js(
+                "window.dispatchEvent(new CustomEvent(%s, {detail: %s}));"
+                % (event_name, payload))
+        except Exception:
+            _LOGGER.debug("UI event dispatch failed", exc_info=True)
+
+    def save_texture_color(
+            self, folder_path, tex_key, targets, texture_usage,
+            request_id=None):
+        def progress(event):
+            self._emit_ui_event(
+                "mod-viewer-texture-save-progress",
+                {"request_id": request_id, **event})
+
         return self._mod_preview.save_texture_color(
-            folder_path, tex_key, targets, texture_usage)
+            folder_path, tex_key, targets, texture_usage,
+            progress_callback=progress)
 
     def get_model_skinning_preview(self, folder_path):
         return self._mod_preview.get_model_skinning_preview(folder_path)

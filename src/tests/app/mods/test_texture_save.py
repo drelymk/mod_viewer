@@ -124,6 +124,52 @@ def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatc
     assert backups[0].read_bytes() == original
 
 
+def test_save_progress_reports_stages_and_ignores_callback_errors(
+        tmp_path, monkeypatch):
+    source = tmp_path / "body.dds"
+    original = _dx10_dds(bytes(16))
+    source.write_bytes(original)
+    prepared = _write_prepared_save(source)
+    monkeypatch.setattr(
+        texture_save, "_prepare_texture_save",
+        lambda *args, **kwargs: prepared)
+
+    def save_blocks(*args, **kwargs):
+        reporter = kwargs["progress_reporter"]
+        reporter.processing(0, 1, 1, 1)
+        return original, _write_stats()
+
+    monkeypatch.setattr(texture_save, "_save_bc7_blocks", save_blocks)
+    events = []
+
+    def callback(event):
+        events.append(event)
+        raise RuntimeError("synthetic progress listener failure")
+
+    result = texture_save.save_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+        "diffuse::body.dds", [], [], progress_callback=callback)
+
+    assert result["status"] == "ok"
+    assert [event["stage"] for event in events] == [
+        "preparing", "reading", "processing", "writing", "complete",
+    ]
+    assert all("request_id" not in event for event in events)
+
+
+def test_save_progress_throttles_intermediate_blocks_but_keeps_final(
+        monkeypatch):
+    events = []
+    reporter = texture_save._SaveProgressReporter(events.append)
+    monkeypatch.setattr(texture_save, "_SAVE_PROGRESS_INTERVAL", 60.0)
+
+    reporter.processing(0, 1, 0, 10)
+    reporter.processing(0, 1, 1, 10)
+    reporter.processing(0, 1, 10, 10)
+
+    assert [event["completed_blocks"] for event in events] == [0, 10]
+
+
 def test_save_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatch):
     source = tmp_path / "body.dds"
     original = _dx10_dds(bytes(16))
@@ -622,16 +668,31 @@ def test_parallel_bc7_save_matches_serial_bytes_and_stats(tmp_path, monkeypatch)
     )
     monkeypatch.setattr(texture_save, "_bc7_worker_count", lambda: 2)
     monkeypatch.setattr(texture_save, "_BC7_CHUNK_SIZE", 2)
+    monkeypatch.setattr(texture_save, "_SAVE_PROGRESS_INTERVAL", 0)
     monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 10000)
+    serial_events = []
+    serial_progress = texture_save._SaveProgressReporter(
+        serial_events.append)
     serial_bytes, serial_stats = texture_save._save_bc7_blocks(
-        original, prepared)
+        original, prepared, progress_reporter=serial_progress)
 
     monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 0)
+    parallel_events = []
+    parallel_progress = texture_save._SaveProgressReporter(
+        parallel_events.append)
     parallel_bytes, parallel_stats = texture_save._save_bc7_blocks(
-        original, prepared)
+        original, prepared, progress_reporter=parallel_progress)
 
     assert parallel_bytes == serial_bytes
     assert parallel_stats == serial_stats
+    for events in (serial_events, parallel_events):
+        processing = [event for event in events
+                      if event["stage"] == "processing"]
+        assert processing[0]["completed_blocks"] == 0
+        assert [event["completed_blocks"] for event in processing] == \
+            list(range(8))
+        assert processing[-1]["completed_blocks"] == \
+            processing[-1]["total_blocks"]
 
 
 def test_bc7_result_application_uses_block_offsets():
