@@ -148,16 +148,27 @@ export function textureSaveStateMatches(mesh, snapshot, current = null) {
 }
 
 /** Check one committed target before clearing its live Color state. */
-export function textureSaveTargetMatches(mesh, snapshot, target) {
+function textureSaveTargetIdentityMatches(mesh, snapshot, target) {
   if (!snapshot || !target || !activeMeshes.includes(mesh)) return false;
   const data = mesh.userData || {};
-  if (!samePath(snapshot.modPath, viewerState.currentModPath)
-      || !samePath(data.modPath, snapshot.modPath)
-      || data.semanticKey !== target.semanticKey
-      || data.metadataKey !== target.metadataKey
-      || textureIdentity(data.texKey) !== textureIdentity(snapshot.texKey)) {
-    return false;
-  }
+  return viewerState.currentSource?.kind === 'mod'
+    && samePath(snapshot.modPath, viewerState.currentModPath)
+    && samePath(data.modPath, snapshot.modPath)
+    && data.semanticKey === target.semanticKey
+    && data.metadataKey === target.metadataKey
+    && textureIdentity(data.texKey) === textureIdentity(snapshot.texKey);
+}
+
+/** Find the current replacement for a captured committed target. */
+export function findCurrentTextureSaveTarget(snapshot, target) {
+  if (!snapshot || !target) return null;
+  return activeMeshes.find(mesh =>
+    textureSaveTargetIdentityMatches(mesh, snapshot, target)) || null;
+}
+
+/** Check one committed target before clearing its live Color state. */
+export function textureSaveTargetMatches(mesh, snapshot, target) {
+  if (!textureSaveTargetIdentityMatches(mesh, snapshot, target)) return false;
   return JSON.stringify(publicTargets([targetState(mesh)]))
     === JSON.stringify(publicTargets([target]));
 }

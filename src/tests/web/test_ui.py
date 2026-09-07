@@ -1519,6 +1519,202 @@ def test_successful_texture_save_syncs_stale_mesh_after_selection_changes(
         context.close()
 
 
+def test_texture_save_resets_same_mod_replacement_mesh_after_reload(
+        edge_browser, frontend_url):
+    payload, tex_key = _bake_test_payload(
+        "BakeReloadReplacement", _PNG_URI)
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakeReloadReplacement": payload})
+    try:
+        _open(page, "BakeReloadReplacement")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("window.__saveMeshBeforeReload = window.modViewer.activeMeshes[0]")
+        page.evaluate("""() => {
+          window.pywebview.api.save_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureSave = resolve; });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureSave !== undefined")
+
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadMod.length === 2")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0] !== window.__saveMeshBeforeReload")
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue") == 30
+
+        page.evaluate("""() => window.__releaseTextureSave({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          saved_meshes: [{semantic_key: 'Body-BakeReloadReplacement-0',
+            metadata_key: 'Body BakeReloadReplacement::3,0,0'}],
+          texture: {file: 'BakeReloadReplacement-bake.dds'},
+          backup: {file: 'BakeReloadReplacement-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(tex_key), json.dumps(tex_key)))
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue === 0")
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+    finally:
+        context.close()
+
+
+def test_texture_save_preserves_newer_adjustment_on_reloaded_mesh(
+        edge_browser, frontend_url):
+    payload, tex_key = _bake_test_payload(
+        "BakeReloadNewer", _PNG_URI)
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakeReloadNewer": payload})
+    try:
+        _open(page, "BakeReloadNewer")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("window.__saveMeshBeforeReload = window.modViewer.activeMeshes[0]")
+        page.evaluate("""() => {
+          window.pywebview.api.save_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureSave = resolve; });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureSave !== undefined")
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadMod.length === 2")
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0] !== window.__saveMeshBeforeReload")
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} =
+            await import('./js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {hue: 75}, {
+            persist: false, render: false,
+          });
+        }""")
+
+        page.evaluate("""() => window.__releaseTextureSave({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          metadata_reset: {cleared: [%s], preserved: [], failed: []},
+          saved_meshes: [{semantic_key: 'Body-BakeReloadNewer-0',
+            metadata_key: 'Body BakeReloadNewer::3,0,0'}],
+          texture: {file: 'BakeReloadNewer-bake.dds'},
+          backup: {file: 'BakeReloadNewer-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(tex_key), json.dumps(tex_key),
+                   json.dumps("Body BakeReloadNewer::3,0,0")))
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue === 75")
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 1
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment[0][2].hue") == 75
+    finally:
+        context.close()
+
+
+def test_texture_save_preserves_live_state_for_preserved_metadata(
+        edge_browser, frontend_url):
+    payload, tex_key = _bake_test_payload("BakePreserved", _PNG_URI)
+    metadata_key = "Body BakePreserved::3,0,0"
+    payload["textureSaveResult"]["metadata_reset"] = {
+        "cleared": [], "preserved": [metadata_key], "failed": [],
+    }
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakePreserved": payload})
+    try:
+        _open(page, "BakePreserved")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.save_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureSave = resolve; });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureSave !== undefined")
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} =
+            await import('./js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {hue: 75}, {
+            persist: false, render: false,
+          });
+        }""")
+        page.evaluate("""() => window.__releaseTextureSave({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          metadata_reset: {cleared: [], preserved: [%s], failed: []},
+          saved_meshes: [{semantic_key: 'Body-BakePreserved-0',
+            metadata_key: %s}],
+          texture: {file: 'BakePreserved-bake.dds'},
+          backup: {file: 'BakePreserved-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(tex_key), json.dumps(tex_key),
+                   json.dumps(metadata_key), json.dumps(metadata_key)))
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue === 75")
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+    finally:
+        context.close()
+
+
+def test_texture_save_persists_newer_adjustment_after_failed_cleanup(
+        edge_browser, frontend_url):
+    payload, tex_key = _bake_test_payload("BakeFailedNewer", _PNG_URI)
+    metadata_key = "Body BakeFailedNewer::3,0,0"
+    payload["textureSaveResult"].update({
+        "warning": "color_state_reset_failed",
+        "metadata_reset": {"cleared": [], "preserved": [],
+                            "failed": [metadata_key]},
+    })
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakeFailedNewer": payload})
+    try:
+        _open(page, "BakeFailedNewer")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.save_texture_color = async () =>
+            new Promise(resolve => { window.__releaseTextureSave = resolve; });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__releaseTextureSave !== undefined")
+        page.evaluate("""async () => {
+          const {setMeshColorAdjustment} =
+            await import('./js/mesh/mesh-color-state.js');
+          setMeshColorAdjustment(window.modViewer.activeMeshes[0], {hue: 75}, {
+            persist: false, render: false,
+          });
+        }""")
+        page.evaluate("""() => window.__releaseTextureSave({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          warning: 'color_state_reset_failed',
+          metadata_reset: {cleared: [], preserved: [], failed: [%s]},
+          saved_meshes: [{semantic_key: 'Body-BakeFailedNewer-0',
+            metadata_key: %s}],
+          texture: {file: 'BakeFailedNewer-bake.dds'},
+          backup: {file: 'BakeFailedNewer-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(tex_key), json.dumps(tex_key),
+                   json.dumps(metadata_key), json.dumps(metadata_key)))
+        page.locator("#texture-bake-body", has_text="TEXTURE SAVED").wait_for()
+        page.wait_for_function(
+            "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue === 75")
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 1
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment[0][2].hue") == 75
+        assert "Color metadata" not in page.locator(
+            "#texture-bake-body").inner_text()
+    finally:
+        context.close()
+
+
 def test_successful_texture_save_does_not_reload_a_new_mod_after_switch(
         edge_browser, frontend_url):
     first_payload, first_key = _bake_test_payload(
@@ -1675,6 +1871,65 @@ def test_texture_save_resets_all_committed_meshes_and_refreshes_affected_keys(
             "#texture-bake-body").inner_text()
         page.wait_for_function(
             "window.__fakeApi.calls.diagnostics.length >= 2")
+    finally:
+        context.close()
+
+
+def test_texture_save_keeps_warning_for_one_failed_target_recovery(
+        edge_browser, frontend_url):
+    payload = _payload("BakePartialCleanup")
+    first = payload["meshes"]["Body-BakePartialCleanup-0"]
+    dds_key = "diffuse::BakePartialCleanup-one.dds"
+    first["tex_key"] = dds_key
+    payload["texture_pools"]["p0"][0]["tex_key"] = dds_key
+    payload["textures"][dds_key] = payload["textures"].pop(
+        "diffuse::BakePartialCleanup-one.png")
+    body_key = "Body BakePartialCleanup::3,0,0"
+    face_key = "Face BakePartialCleanup::3,0,0"
+    payload["metadata"]["mesh_color_adjustments"] = {
+        body_key: {"hue": 30}, face_key: {"hue": 45},
+    }
+    second = copy.deepcopy(first)
+    second["component"] = "Face BakePartialCleanup"
+    payload["meshes"]["Face-BakePartialCleanup-0"] = second
+    payload["textureSaveResult"] = {
+        "status": "ok", "warning": "color_state_reset_failed",
+        "tex_key": dds_key, "affected_tex_keys": [dds_key],
+        "metadata_reset": {"cleared": [], "preserved": [],
+                            "failed": [body_key, face_key]},
+        "saved_meshes": [
+            {"semantic_key": "Body-BakePartialCleanup-0",
+             "metadata_key": body_key},
+            {"semantic_key": "Face-BakePartialCleanup-0",
+             "metadata_key": face_key},
+        ],
+        "texture": {"file": "BakePartialCleanup-one.dds"},
+        "backup": {"file": "BakePartialCleanup-one.dds.modviewer.bak"},
+    }
+    context, page = _page(edge_browser, frontend_url,
+                           {"BakePartialCleanup": payload})
+    try:
+        _open(page, "BakePartialCleanup")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.evaluate("""() => {
+          window.pywebview.api.save_mesh_color_adjustment = async (...args) => {
+            window.__fakeApi.calls.saveMeshColorAdjustment.push(args);
+            return args[1] === 'Face BakePartialCleanup::3,0,0'
+              ? {error: 'metadata write failed'} : {};
+          };
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.locator("#texture-bake-body", has_text="TEXTURE SAVED").wait_for()
+        assert page.evaluate(
+            "window.modViewer.activeMeshes.every(mesh => "
+            "mesh.userData.colorAdjustment.hue === 0)")
+        details = page.locator("#texture-bake-body").inner_text()
+        assert "Color metadata" in details
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 2
     finally:
         context.close()
 

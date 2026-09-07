@@ -3,12 +3,13 @@
 import { bindModalDismiss, setModalError } from './modal-shell.js';
 import {
   captureTextureSaveState, textureSaveStateMatches,
-  textureSaveTargetMatches, textureSaveTargetsPayload,
+  findCurrentTextureSaveTarget, textureSaveTargetMatches,
+  textureSaveTargetsPayload,
 } from '../mesh/texture-save-state.js';
 import {
-  flushMeshColorAdjustmentPersistence, resetMeshColorAdjustment,
+  flushMeshColorAdjustmentPersistence, persistCurrentMeshColorAdjustment,
+  resetMeshColorAdjustment,
 } from '../mesh/mesh-color-state.js';
-import { activeMeshes } from '../mesh/mesh-state.js';
 import { reloadTextures } from '../mesh/mesh-factory.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import { viewerState, samePath } from '../app/state.js';
@@ -221,35 +222,90 @@ function handleTextureSaveProgress(event) {
 }
 
 async function synchronizeCommittedSave(state, result) {
-  const affectedKeys = affectedTextureKeys(result);
-  const saved = Array.isArray(result.saved_meshes) ? result.saved_meshes : [];
-  const savedKeys = new Set(saved.map(item =>
-    `${item?.semantic_key || ''}\u0000${item?.metadata_key || ''}`));
-  const meshes = (state.targets || [])
-    .filter(target => savedKeys.has(
-      `${target.semanticKey || ''}\u0000${target.metadataKey || ''}`)
-      && textureSaveTargetMatches(target.mesh, state, target))
-    .map(target => target.mesh)
-    .filter(mesh => activeMeshes.includes(mesh));
   const sameLoadedMod = viewerState.currentSource?.kind === 'mod'
     && samePath(viewerState.currentModPath, state.modPath);
   if (!sameLoadedMod) return false;
 
-  const retryMetadataClear = result.warning === 'color_state_reset_failed';
-  meshes.forEach(mesh => resetMeshColorAdjustment(
-    mesh, {persist: retryMetadataClear, render: false}));
-  if (retryMetadataClear) {
+  const affectedKeys = affectedTextureKeys(result);
+  const saved = Array.isArray(result.saved_meshes) ? result.saved_meshes : [];
+  const capturedTargets = new Map((state.targets || []).map(target => [
+    `${target.semanticKey || ''}\u0000${target.metadataKey || ''}`, target,
+  ]));
+  const receipt = result.metadata_reset
+    && typeof result.metadata_reset === 'object'
+    ? result.metadata_reset : null;
+  const receiptKeys = name => Array.isArray(receipt?.[name])
+    ? receipt[name] : [];
+  const fallbackStatus = result.warning === 'color_state_reset_failed'
+    ? 'failed' : 'cleared';
+  const statusFor = metadataKey => {
+    if (!receipt) return fallbackStatus;
+    if (receiptKeys('cleared').includes(metadataKey)) return 'cleared';
+    if (receiptKeys('preserved').includes(metadataKey)) return 'preserved';
+    if (receiptKeys('failed').includes(metadataKey)) return 'failed';
+    return fallbackStatus;
+  };
+  const records = saved.map(item => {
+    const semanticKey = item?.semantic_key;
+    const metadataKey = item?.metadata_key;
+    const target = capturedTargets.get(
+      `${semanticKey || ''}\u0000${metadataKey || ''}`);
+    return {
+      target,
+      metadataKey,
+      status: target ? statusFor(metadataKey) : 'failed',
+    };
+  });
+  const changedMeshes = new Set();
+  let unresolvedFailedTargets = 0;
+
+  for (const record of records) {
+    if (record.status === 'preserved') continue;
+    if (record.status === 'failed' && !record.target) {
+      unresolvedFailedTargets += 1;
+      continue;
+    }
+    const mesh = findCurrentTextureSaveTarget(state, record.target);
+    if (!mesh) {
+      if (record.status === 'failed') unresolvedFailedTargets += 1;
+      continue;
+    }
+    if (record.status === 'cleared') {
+      if (textureSaveTargetMatches(mesh, state, record.target)) {
+        resetMeshColorAdjustment(mesh, {persist: false, render: false});
+        changedMeshes.add(mesh);
+      } else {
+        try {
+          persistCurrentMeshColorAdjustment(mesh);
+          await flushMeshColorAdjustmentPersistence(mesh);
+        } catch (_metadataError) {
+          unresolvedFailedTargets += 1;
+        }
+      }
+      continue;
+    }
+
     try {
-      await Promise.all(meshes.map(mesh =>
-        flushMeshColorAdjustmentPersistence(mesh)));
-      if (meshes.length) delete result.warning;
+      if (textureSaveTargetMatches(mesh, state, record.target)) {
+        resetMeshColorAdjustment(mesh, {persist: true, render: false});
+        changedMeshes.add(mesh);
+      } else {
+        persistCurrentMeshColorAdjustment(mesh);
+      }
+      await flushMeshColorAdjustmentPersistence(mesh);
     } catch (_metadataError) {
-      // Keep the warning visible when the per-mesh recovery write also fails.
-      result.warning = 'color_state_reset_failed';
+      unresolvedFailedTargets += 1;
     }
   }
+
+  if (unresolvedFailedTargets
+      && (!result.warning || result.warning === 'color_state_reset_failed')) {
+    result.warning = 'color_state_reset_failed';
+  } else if (result.warning === 'color_state_reset_failed') {
+    delete result.warning;
+  }
   await reloadTextures(affectedKeys, {force: true});
-  notifyMeshStateChanged(meshes);
+  if (changedMeshes.size) notifyMeshStateChanged([...changedMeshes]);
   window.dispatchEvent(new CustomEvent('mod-viewer-texture-saved', {
     detail: {
       texKey: result.tex_key,

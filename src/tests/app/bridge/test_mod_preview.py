@@ -279,7 +279,7 @@ def test_save_texture_color_forwards_complete_target_request(monkeypatch):
     preview._active_mesh_keys["mod"] = {"Body-1", "Body-2"}
     context = _context()
     captured = []
-    cleared = []
+    compared = []
     monkeypatch.setattr(
         preview, "authoritative_context",
         lambda _folder: ("mod", {"override": 1}, {}, context))
@@ -292,11 +292,13 @@ def test_save_texture_color_forwards_complete_target_request(monkeypatch):
             }],
         })
     monkeypatch.setattr(
-        "app.bridge.mod_preview.metadata.clear_mesh_color_adjustments",
-        lambda folder, keys: cleared.append((folder, keys)) or {"saved": True})
+        "app.bridge.mod_preview.metadata.clear_mesh_color_adjustments_if_unchanged",
+        lambda folder, expected: compared.append((folder, expected)) or {
+            "cleared": ["Body::one"], "preserved": [], "failed": [],
+        })
 
     targets = [{
-        "semantic_key": "Body-1", "metadata_key": "Request::not-committed",
+        "semantic_key": "Body-1", "metadata_key": "Body::one",
         "adjustment": {"hue": 30},
     }]
     usage = [{
@@ -315,7 +317,168 @@ def test_save_texture_color_forwards_complete_target_request(monkeypatch):
         context, {"override": 1}, {"Body-1", "Body-2"},
         "diffuse::body.dds", targets, usage)
     assert captured[0][1] == {}
-    assert cleared == [("mod", ["Body::one"])]
+    assert compared == [("mod", {"Body::one": {"hue": 30}})]
+    assert result["metadata_reset"] == {
+        "cleared": ["Body::one"], "preserved": [], "failed": [],
+    }
+
+
+def test_save_texture_color_compares_only_committed_targets(monkeypatch):
+    preview = ModPreview(_Access())
+    preview._active_mesh_keys["mod"] = {"Body-1", "Body-2"}
+    context = _context()
+    compared = []
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.save_texture_color",
+        lambda *args, **kwargs: {
+            "status": "ok", "saved_meshes": [{
+                "semantic_key": "Body-1", "metadata_key": "Body::one",
+            }],
+        })
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.clear_mesh_color_adjustments_if_unchanged",
+        lambda folder, expected: compared.append((folder, expected)) or {
+            "cleared": ["Body::one"], "preserved": [], "failed": [],
+        })
+
+    targets = [
+        {"semantic_key": "Body-1", "metadata_key": "Body::one",
+         "adjustment": {"hue": 30}},
+        {"semantic_key": "Body-2", "metadata_key": "Body::two",
+         "adjustment": {"hue": 45}},
+    ]
+    result = preview.save_texture_color("mod", "diffuse::body.dds", targets, [])
+
+    assert compared == [("mod", {"Body::one": {"hue": 30}})]
+    assert result.get("warning") is None
+
+
+def test_save_texture_color_reports_structured_cleanup_status(monkeypatch):
+    preview = ModPreview(_Access())
+    context = _context()
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.save_texture_color",
+        lambda *args, **kwargs: {
+            "status": "ok", "saved_meshes": [
+                {"semantic_key": "Body-1", "metadata_key": "Body::one"},
+                {"semantic_key": "Body-2", "metadata_key": "Body::two"},
+            ],
+        })
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.clear_mesh_color_adjustments_if_unchanged",
+        lambda *_args: {
+            "cleared": ["Body::one"], "preserved": ["Body::two"],
+            "failed": [],
+        })
+
+    result = preview.save_texture_color("mod", "diffuse::body.dds", [
+        {"semantic_key": "Body-1", "metadata_key": "Body::one",
+         "adjustment": {"hue": 30}},
+        {"semantic_key": "Body-2", "metadata_key": "Body::two",
+         "adjustment": {"hue": 45}},
+    ], [])
+
+    assert result["metadata_reset"] == {
+        "cleared": ["Body::one"], "preserved": ["Body::two"],
+        "failed": [],
+    }
+    assert "warning" not in result
+
+
+def test_save_texture_color_mapping_failure_is_fail_safe(monkeypatch):
+    preview = ModPreview(_Access())
+    context = _context()
+    compared = []
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.save_texture_color",
+        lambda *args, **kwargs: {
+            "status": "ok", "saved_meshes": [{
+                "semantic_key": "Body-1", "metadata_key": "Body::missing",
+            }],
+        })
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.clear_mesh_color_adjustments_if_unchanged",
+        lambda *_args: compared.append(True))
+
+    result = preview.save_texture_color("mod", "diffuse::body.dds", [
+        {"semantic_key": "Body-1", "metadata_key": "Body::one",
+         "adjustment": {"hue": 30}},
+    ], [])
+
+    assert compared == []
+    assert result["metadata_reset"] == {
+        "cleared": [], "preserved": [], "failed": ["Body::missing"],
+    }
+    assert result["warning"] == "color_state_reset_failed"
+
+
+def test_save_texture_color_duplicate_metadata_is_fail_safe(monkeypatch):
+    preview = ModPreview(_Access())
+    context = _context()
+    compared = []
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.save_texture_color",
+        lambda *args, **kwargs: {
+            "status": "ok", "saved_meshes": [
+                {"semantic_key": "Body-1", "metadata_key": "Shared::one"},
+                {"semantic_key": "Body-2", "metadata_key": "Shared::one"},
+            ],
+        })
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.clear_mesh_color_adjustments_if_unchanged",
+        lambda *_args: compared.append(True))
+
+    result = preview.save_texture_color("mod", "diffuse::body.dds", [
+        {"semantic_key": "Body-1", "metadata_key": "Shared::one",
+         "adjustment": {"hue": 30}},
+        {"semantic_key": "Body-2", "metadata_key": "Shared::one",
+         "adjustment": {"hue": 45}},
+    ], [])
+
+    assert compared == []
+    assert result["metadata_reset"]["failed"] == ["Shared::one"]
+    assert result["warning"] == "color_state_reset_failed"
+
+
+def test_save_texture_color_cleanup_exception_keeps_save_success(monkeypatch):
+    preview = ModPreview(_Access())
+    context = _context()
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.save_texture_color",
+        lambda *args, **kwargs: {
+            "status": "ok", "saved_meshes": [{
+                "semantic_key": "Body-1", "metadata_key": "Body::one",
+            }],
+        })
+    def fail_cleanup(*_args):
+        raise RuntimeError("unexpected cleanup error")
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.metadata.clear_mesh_color_adjustments_if_unchanged",
+        fail_cleanup)
+
+    result = preview.save_texture_color("mod", "diffuse::body.dds", [
+        {"semantic_key": "Body-1", "metadata_key": "Body::one",
+         "adjustment": {"hue": 30}},
+    ], [])
+
+    assert result["status"] == "ok"
+    assert result["metadata_reset"]["failed"] == ["Body::one"]
+    assert result["warning"] == "color_state_reset_failed"
 
 
 def test_save_texture_color_forwards_progress_callback(monkeypatch):

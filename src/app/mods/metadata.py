@@ -172,6 +172,77 @@ def clear_mesh_color_adjustments(folder_path, mesh_keys):
         return _save(folder_path, data)
 
 
+def clear_mesh_color_adjustments_if_unchanged(
+        folder_path, expected_adjustments):
+    """Remove only color states that still match the completed save request."""
+    result = {"cleared": [], "preserved": [], "failed": [], "saved": False}
+    if not isinstance(expected_adjustments, dict):
+        result["error"] = "Invalid expected mesh color adjustments."
+        return result
+
+    expected = {}
+    invalid_input = False
+    for mesh_key, adjustment in expected_adjustments.items():
+        if not isinstance(mesh_key, str) or not mesh_key:
+            invalid_input = True
+            continue
+        normalized = _normalize_mesh_color_adjustment(
+            adjustment, reject_invalid=True)
+        if normalized is None:
+            result["failed"].append(mesh_key)
+            invalid_input = True
+        else:
+            expected[mesh_key] = normalized
+    if invalid_input:
+        result["failed"] = [
+            key for key in expected_adjustments
+            if isinstance(key, str) and key]
+        result["error"] = "Invalid expected mesh color adjustment."
+        return result
+
+    with _LOCK:
+        data = load(folder_path)
+        raw_adjustments = data.get(MESH_COLOR_ADJUSTMENTS_KEY)
+        if not isinstance(raw_adjustments, dict):
+            result["cleared"].extend(expected)
+            return result
+
+        removable = []
+        for mesh_key, expected_adjustment in expected.items():
+            if mesh_key not in raw_adjustments:
+                result["cleared"].append(mesh_key)
+                continue
+            current = _normalize_mesh_color_adjustment(
+                raw_adjustments[mesh_key])
+            if current is None or current != expected_adjustment:
+                result["preserved"].append(mesh_key)
+                continue
+            removable.append(mesh_key)
+
+        if not removable:
+            return result
+
+        updated_adjustments = dict(raw_adjustments)
+        for mesh_key in removable:
+            updated_adjustments.pop(mesh_key, None)
+        updated_data = dict(data)
+        if updated_adjustments:
+            updated_data[MESH_COLOR_ADJUSTMENTS_KEY] = updated_adjustments
+        else:
+            updated_data.pop(MESH_COLOR_ADJUSTMENTS_KEY, None)
+        try:
+            saved = _save(folder_path, updated_data)
+        except Exception as exc:
+            result["failed"].extend(removable)
+            result["error"] = str(exc)
+            return result
+
+        result["cleared"].extend(removable)
+        result["saved"] = (bool(saved.get("saved"))
+                           if isinstance(saved, dict) else True)
+        return result
+
+
 def hydrate_mesh_color_adjustments(payload, data=None):
     """Project saved color state through canonical/legacy mesh identities."""
     saved = mesh_color_adjustments(data=data)
