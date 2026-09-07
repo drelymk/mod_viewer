@@ -130,6 +130,17 @@ class _BC7BlockJob:
 
 
 @dataclass(frozen=True)
+class _BC7SingleIntentJob:
+    """Compact mip-0 job whose source and target are worker-prepared."""
+
+    start: int
+    source_block: bytes
+    adjustment: PreparedColorAdjustment
+    valid_width: int
+    valid_height: int
+
+
+@dataclass(frozen=True)
 class _BC7BlockResult:
     """Compact worker result applied by the parent save operation."""
 
@@ -140,6 +151,7 @@ class _BC7BlockResult:
     mode: int
     source_kept: bool
     error: str = None
+    error_code: str = None
 
 
 def _error(code, message, status="error", **details):
@@ -831,6 +843,19 @@ def _bc7_weighted_block_intent_info(state, mip, block_index):
         multi_intent=len(ordered_classes) > 1)
 
 
+def _bc7_single_adjustment_target_pixels(
+        source_pixels, adjustment, valid_width, valid_height):
+    """Apply one Color adjustment while preserving alpha and block padding."""
+    target_pixels = list(source_pixels)
+    for row in range(valid_height):
+        for column in range(valid_width):
+            local = row * 4 + column
+            rgb = apply_prepared_color_u8(
+                source_pixels[local][:3], adjustment)
+            target_pixels[local] = rgb + (source_pixels[local][3],)
+    return tuple(target_pixels)
+
+
 def _bc7_target_block_pixels(source_block, mip, block_index, state,
                              adjustments, block_intent=None):
     """Build one sixteen-pixel BC7 target without a reconstructed image."""
@@ -849,17 +874,21 @@ def _bc7_target_block_pixels(source_block, mip, block_index, state,
                 state, mip, block_index)
         if len(block_intent.classes) == 1:
             single_intent_class = block_intent.classes[0]
+    if single_intent_class is not None:
+        return (
+            source_pixels,
+            _bc7_single_adjustment_target_pixels(
+                source_pixels, adjustments[single_intent_class],
+                valid_width, valid_height),
+            valid_width,
+            valid_height,
+        )
     for row in range(valid_height):
         for column in range(valid_width):
             local = row * 4 + column
             pixel = ((source_y + row) * mip.width + source_x + column)
-            if single_intent_class is not None:
-                rgb = apply_prepared_color_u8(
-                    source_pixels[local][:3],
-                    adjustments[single_intent_class])
-            else:
-                rgb = _bc7_intent_rgb(
-                    source_pixels[local][:3], state, pixel, adjustments)
+            rgb = _bc7_intent_rgb(
+                source_pixels[local][:3], state, pixel, adjustments)
             target_pixels[local] = rgb + (source_pixels[local][3],)
     return (source_pixels, tuple(target_pixels), valid_width, valid_height)
 
@@ -870,11 +899,20 @@ def _bc7_worker_count():
     return max(1, min(_BC7_MAX_WORKERS, cpu_count - 1))
 
 
-def _prepare_bc7_block_job(original, mip, block_index, state, adjustments,
-                           block_intent):
-    """Prepare the compact, parent-owned input sent to one worker."""
+def _bc7_source_block_and_bounds(original, mip, block_index):
+    """Return the one block slice and valid pixel bounds shared by job types."""
     start = mip.offset + block_index * mip.bytes_per_unit
     source_block = bytes(original[start:start + 16])
+    _source_x, _source_y, valid_width, valid_height = _unit_bounds(
+        mip, block_index)
+    return start, source_block, valid_width, valid_height
+
+
+def _prepare_bc7_block_job(original, mip, block_index, state, adjustments,
+                           block_intent):
+    """Prepare the parent-owned input sent to one worker."""
+    start, source_block, valid_width, valid_height = (
+        _bc7_source_block_and_bounds(original, mip, block_index))
     source_pixels, target_pixels, valid_width, valid_height = (
         _bc7_target_block_pixels(
             source_block, mip, block_index, state, adjustments,
@@ -885,15 +923,31 @@ def _prepare_bc7_block_job(original, mip, block_index, state, adjustments,
         valid_width=valid_width, valid_height=valid_height)
 
 
+def _prepare_bc7_single_intent_job(
+        original, mip, block_index, adjustments, block_intent):
+    """Prepare a compact mip-0 job for one explicit Color adjustment."""
+    start, source_block, valid_width, valid_height = (
+        _bc7_source_block_and_bounds(original, mip, block_index))
+    return _BC7SingleIntentJob(
+        start=start, source_block=source_block,
+        adjustment=adjustments[block_intent.classes[0]],
+        valid_width=valid_width, valid_height=valid_height)
+
+
 def _iter_bc7_jobs(original, mip, affected, state, adjustments,
-                    record_intent):
+                    record_intent, defer_single_intent=False):
     """Yield parent-prepared BC7 jobs while recording intent diagnostics."""
     for block_index in affected:
         block_intent = _bc7_block_intent_info(
             state, mip, block_index)
         record_intent(block_intent)
-        yield _prepare_bc7_block_job(
-            original, mip, block_index, state, adjustments, block_intent)
+        if (defer_single_intent and state["level"] == 0
+                and len(block_intent.classes) == 1):
+            yield _prepare_bc7_single_intent_job(
+                original, mip, block_index, adjustments, block_intent)
+        else:
+            yield _prepare_bc7_block_job(
+                original, mip, block_index, state, adjustments, block_intent)
 
 
 def _iter_bc7_job_chunks(original, mip, affected, state, adjustments,
@@ -901,7 +955,8 @@ def _iter_bc7_job_chunks(original, mip, affected, state, adjustments,
     """Group compact jobs into bounded worker submissions."""
     chunk = []
     for job in _iter_bc7_jobs(
-            original, mip, affected, state, adjustments, record_intent):
+            original, mip, affected, state, adjustments, record_intent,
+            defer_single_intent=True):
         chunk.append(job)
         if len(chunk) >= chunk_size:
             yield tuple(chunk)
@@ -910,10 +965,44 @@ def _iter_bc7_job_chunks(original, mip, affected, state, adjustments,
         yield tuple(chunk)
 
 
+def _recolor_bc7_single_intent(job):
+    """Decode, target, and recolor one compact single-intent job."""
+    try:
+        source_pixels = _bc7_codec.decode_block(job.source_block)
+    except _bc7_codec.BC7Error:
+        return _BC7BlockResult(
+            start=job.start, block=b"", source_error=0,
+            candidate_error=0, mode=0, source_kept=False,
+            error="The texture contains invalid BC7 data.",
+            error_code="invalid_bc7")
+    target_pixels = _bc7_single_adjustment_target_pixels(
+        source_pixels, job.adjustment, job.valid_width, job.valid_height)
+    try:
+        result = _bc7_codec.recolor_block(
+            job.source_block, target_pixels,
+            job.valid_width, job.valid_height, source_pixels)
+    except _bc7_codec.BC7Error as error:
+        return _BC7BlockResult(
+            start=job.start, block=b"", source_error=0,
+            candidate_error=0, mode=0, source_kept=False,
+            error=str(error))
+    return _BC7BlockResult(
+        start=job.start, block=result.block,
+        source_error=result.source_error,
+        candidate_error=result.candidate_error, mode=result.mode,
+        source_kept=result.block == job.source_block)
+
+
 def _recolor_bc7_chunk(jobs):
     """Fit one compact chunk in a spawned worker process."""
     results = []
     for job in jobs:
+        if isinstance(job, _BC7SingleIntentJob):
+            result = _recolor_bc7_single_intent(job)
+            results.append(result)
+            if result.error is not None:
+                break
+            continue
         try:
             result = _bc7_codec.recolor_block(
                 job.source_block, job.target_pixels,
@@ -936,7 +1025,8 @@ def _record_bc7_result(final, result, totals, modes, mip_stats):
     """Apply one worker result and update all parent-owned diagnostics."""
     if result.error is not None:
         raise TextureSaveError(
-            "texture_validation_failed", result.error)
+            getattr(result, "error_code", None)
+            or "texture_validation_failed", result.error)
     final[result.start:result.start + 16] = result.block
     totals["touched"] += 1
     totals["improved"] += result.candidate_error < result.source_error
