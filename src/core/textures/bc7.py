@@ -396,7 +396,16 @@ def recolor_separate(block, target_pixels, valid_width, valid_height):
         scalar_indices = second_indices
         vector_precision = scalar_precision = 2
         precisions = (7, 7, 7, 8)
+    vector_weights = (WEIGHTS_3 if vector_precision == 3
+                      else WEIGHTS_2)
+    scalar_weights = (WEIGHTS_3 if scalar_precision == 3
+                      else WEIGHTS_2)
     alpha_internal = 3 if not rotation else rotation - 1
+    vector_basis = _prepare_fixed_index_fit_basis(
+        vector_indices, vector_weights)
+    scalar_basis = (
+        _prepare_fixed_index_fit_basis(scalar_indices, scalar_weights)
+        if alpha_internal != 3 else None)
     targets_by_channel = [[] for _channel in range(4)]
     indices_by_channel = [vector_indices] * 3 + [scalar_indices]
     for row in range(valid_height):
@@ -422,7 +431,8 @@ def recolor_separate(block, target_pixels, valid_width, valid_height):
                 (1 << precision) - 1,
                 lambda raw, _pbit: _unquantize(raw, precision)),
             original_raw=(raw_endpoints[0][channel],
-                          raw_endpoints[1][channel]))
+                          raw_endpoints[1][channel]),
+            basis=(vector_basis if channel < 3 else scalar_basis))
         bits = set_bits(bits, endpoint_offset, precision, raw0)
         bits = set_bits(bits, endpoint_offset + precision, precision, raw1)
         endpoint_offset += precision * 2
@@ -558,6 +568,26 @@ class _EndpointCodec:
 
 
 @dataclass(frozen=True)
+class _FixedIndexFitBasis:
+    """Index-only terms shared by channels with one fixed index stream."""
+
+    fractions: tuple
+    aa: float
+    ab: float
+    bb: float
+    determinant: float
+
+
+def _prepare_fixed_index_fit_basis(indices, weights):
+    fractions = tuple(weights[index] / 64.0 for index in indices)
+    aa = sum((1.0 - fraction) ** 2 for fraction in fractions)
+    ab = sum((1.0 - fraction) * fraction for fraction in fractions)
+    bb = sum(fraction ** 2 for fraction in fractions)
+    return _FixedIndexFitBasis(
+        fractions, aa, ab, bb, aa * bb - ab * ab)
+
+
+@dataclass(frozen=True)
 class BC7RecolorResult:
     """The source-preserving result of recoloring one BC7 block."""
 
@@ -689,20 +719,22 @@ def _quantize_endpoint(value, codec, pbit):
 
 def _fit_fixed_index_endpoints(targets, indices, weights, endpoint_codec,
                                *, original_raw=(0, 0), pbit0=None,
-                               pbit1=None, neighborhood=2):
+                               pbit1=None, neighborhood=2, basis=None):
     """Fit a legal endpoint pair with a small deterministic local search."""
     if not targets:
         return original_raw
-    fractions = tuple(weights[index] / 64.0 for index in indices)
-    aa = sum((1.0 - fraction) ** 2 for fraction in fractions)
-    ab = sum((1.0 - fraction) * fraction for fraction in fractions)
-    bb = sum(fraction ** 2 for fraction in fractions)
+    if basis is None:
+        basis = _prepare_fixed_index_fit_basis(indices, weights)
+    fractions = basis.fractions
+    aa = basis.aa
+    ab = basis.ab
+    bb = basis.bb
     at = sum((1.0 - fraction) * target
              for fraction, target in zip(fractions, targets))
     bt = sum(fraction * target
              for fraction, target in zip(fractions, targets))
     tt = sum(target * target for target in targets)
-    determinant = aa * bb - ab * ab
+    determinant = basis.determinant
     if determinant > 1e-9:
         estimate0 = (at * bb - bt * ab) / determinant
         estimate1 = (bt * aa - at * ab) / determinant
@@ -724,14 +756,6 @@ def _fit_fixed_index_endpoints(targets, indices, weights, endpoint_codec,
         raw0_values.add(_quantize_endpoint(value, endpoint_codec, pbit0))
         raw1_values.add(_quantize_endpoint(value, endpoint_codec, pbit1))
 
-    def error(endpoint0, endpoint1):
-        return (aa * endpoint0 * endpoint0
-                + 2.0 * ab * endpoint0 * endpoint1
-                + bb * endpoint1 * endpoint1
-                - 2.0 * at * endpoint0
-                - 2.0 * bt * endpoint1
-                + tt)
-
     raw0_candidates = sorted(raw0_values)
     raw1_candidates = sorted(raw1_values)
     decoded0 = tuple(
@@ -740,13 +764,26 @@ def _fit_fixed_index_endpoints(targets, indices, weights, endpoint_codec,
     decoded1 = tuple(
         (raw1, endpoint_codec.decode(raw1, pbit1))
         for raw1 in raw1_candidates)
+    original_endpoint0 = endpoint_codec.decode(original_raw[0], pbit0)
+    original_endpoint1 = endpoint_codec.decode(original_raw[1], pbit1)
     best = (
-        error(endpoint_codec.decode(original_raw[0], pbit0),
-              endpoint_codec.decode(original_raw[1], pbit1)),
+        (aa * original_endpoint0 * original_endpoint0
+         + 2.0 * ab * original_endpoint0 * original_endpoint1
+         + bb * original_endpoint1 * original_endpoint1
+         - 2.0 * at * original_endpoint0
+         - 2.0 * bt * original_endpoint1
+         + tt),
         original_raw[0], original_raw[1])
     for raw0, endpoint0 in decoded0:
         for raw1, endpoint1 in decoded1:
-            candidate = (error(endpoint0, endpoint1), raw0, raw1)
+            candidate = (
+                aa * endpoint0 * endpoint0
+                + 2.0 * ab * endpoint0 * endpoint1
+                + bb * endpoint1 * endpoint1
+                - 2.0 * at * endpoint0
+                - 2.0 * bt * endpoint1
+                + tt,
+                raw0, raw1)
             if candidate < best:
                 best = candidate
     return best[1], best[2]
