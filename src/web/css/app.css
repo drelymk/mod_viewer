@@ -717,6 +717,10 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .texture-bake-title-row h4 { margin-bottom: 0; }
 .texture-bake-body { min-height: 58px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
 .texture-bake-loading { padding: 12px 0; }
+.texture-bake-progress-view { padding: 12px 0; }
+.texture-bake-progress-status { margin: 0 0 8px; color: var(--text); }
+.texture-bake-progress { display: block; width: 100%; height: 10px; }
+.texture-bake-progress-detail { margin: 7px 0 0; min-height: 16px; }
 .texture-bake-state { color: var(--success); font-size: 12px; font-weight: 600; }
 .texture-bake-state-unknown { color: var(--warning); }
 .texture-bake-summary { margin: 7px 0 10px; }

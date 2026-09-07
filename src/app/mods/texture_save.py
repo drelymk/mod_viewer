@@ -51,6 +51,7 @@ _BC7_PARALLEL_THRESHOLD = 4096
 _BC7_CHUNK_SIZE = 256
 _BC7_MAX_WORKERS = 6
 _BC7_MAX_IN_FLIGHT_FACTOR = 2
+_SAVE_PROGRESS_INTERVAL = 0.15
 
 
 class TextureSaveError(ValueError):
@@ -145,6 +146,56 @@ def _error(code, message, status="error", **details):
     result = {"status": status, "code": code, "error": message}
     result.update(details)
     return result
+
+
+def _report_progress(callback, event):
+    """Deliver best-effort domain progress without affecting the save."""
+    if callback is None:
+        return
+    try:
+        callback(dict(event))
+    except Exception:
+        _LOGGER.debug("Texture save progress callback failed", exc_info=True)
+
+
+class _SaveProgressReporter:
+    """Throttle progress callbacks while keeping stage changes immediate."""
+
+    def __init__(self, callback):
+        self._callback = callback
+        self._last_emit = None
+        self._last_stage = None
+        self._last_mip = None
+
+    def stage(self, value):
+        if value == self._last_stage:
+            return
+        self._last_stage = value
+        self._emit({"stage": value}, force=True)
+
+    def processing(self, mip, mip_count, completed, total):
+        now = time.perf_counter()
+        force = mip != self._last_mip or completed >= total
+        self._last_mip = mip
+        if (not force and self._last_emit is not None
+                and now - self._last_emit < _SAVE_PROGRESS_INTERVAL):
+            return
+        self._last_emit = now
+        _report_progress(self._callback, {
+            "stage": "processing",
+            "mip": mip,
+            "mip_count": mip_count,
+            "completed_blocks": completed,
+            "total_blocks": total,
+        })
+
+    def _emit(self, event, force=False):
+        now = time.perf_counter()
+        if (not force and self._last_emit is not None
+                and now - self._last_emit < _SAVE_PROGRESS_INTERVAL):
+            return
+        self._last_emit = now
+        _report_progress(self._callback, event)
 
 
 def _canonical_mod_path(mod_dir, relative_path):
@@ -898,18 +949,21 @@ def _record_bc7_result(final, result, totals, modes, mip_stats):
 
 
 def _process_bc7_serial(final, original, mip, affected, state, adjustments,
-                        record_intent, totals, modes, mip_stats):
+                        record_intent, totals, modes, mip_stats,
+                        record_progress=None):
     """Fit BC7 jobs serially through the same job/result path."""
     for job in _iter_bc7_jobs(
             original, mip, affected, state, adjustments, record_intent):
         results = _recolor_bc7_chunk((job,))
         for result in results:
             _record_bc7_result(final, result, totals, modes, mip_stats)
+            if record_progress is not None:
+                record_progress()
 
 
 def _process_bc7_parallel(final, original, mip, affected, state, adjustments,
                           record_intent, totals, modes, mip_stats, executor,
-                          worker_count):
+                          worker_count, record_progress=None):
     """Fit BC7 jobs with bounded outstanding work on a reused process pool."""
     chunks = iter(_iter_bc7_job_chunks(
         original, mip, affected, state, adjustments, record_intent,
@@ -949,10 +1003,13 @@ def _process_bc7_parallel(final, original, mip, affected, state, adjustments,
             for result in results:
                 _record_bc7_result(
                     final, result, totals, modes, mip_stats)
+                if record_progress is not None:
+                    record_progress()
         submit_available()
 
 
-def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
+def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None,
+                     progress_reporter=None):
     """Edit authorized BC7 blocks in-place while preserving all other bytes."""
     timings = {} if timings is None else timings
     if not prepared.info.format.startswith("bc7"):
@@ -997,11 +1054,22 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
             started = time.perf_counter()
             if stage_callback is not None:
                 stage_callback("bc7_decode_fit")
+            if progress_reporter is not None:
+                progress_reporter.processing(
+                    level, len(prepared.layout.mips), 0, len(affected))
             mip_stats = {
                 "partial": 0, "full": 0,
                 "single_intent_partial": 0, "multi_intent": 0,
                 "source_blocks_kept": 0,
             }
+            mip_completed = 0
+
+            def record_progress():
+                nonlocal mip_completed
+                mip_completed += 1
+                progress_reporter.processing(
+                    level, len(prepared.layout.mips), mip_completed,
+                    len(affected))
 
             def record_intent(block_intent):
                 totals["partial"] += block_intent.partial
@@ -1032,11 +1100,13 @@ def _save_bc7_blocks(original, prepared, timings=None, stage_callback=None):
                 _process_bc7_parallel(
                     final, original, mip, affected, state, adjustments,
                     record_intent, totals, modes, mip_stats, executor,
-                    worker_count)
+                    worker_count,
+                    record_progress if progress_reporter is not None else None)
             else:
                 _process_bc7_serial(
                     final, original, mip, affected, state, adjustments,
-                    record_intent, totals, modes, mip_stats)
+                    record_intent, totals, modes, mip_stats,
+                    record_progress if progress_reporter is not None else None)
             timings["bc7_decode_fit"] = timings.get("bc7_decode_fit", 0.0) + (
                 time.perf_counter() - started)
             _LOGGER.debug(
@@ -1344,12 +1414,16 @@ def _replacement_completed(source_path, temporary_path, final):
 
 def save_texture_color(
         context, overrides, active_mesh_keys, selected_texture_key, targets,
-        texture_usage):
+        texture_usage, progress_callback=None):
     """Save captured Color changes by editing authorized BC7 blocks."""
     committed = False
     success_result = None
     timings = {}
     stage = "prepare"
+    progress = (_SaveProgressReporter(progress_callback)
+                if progress_callback is not None else None)
+    if progress is not None:
+        progress.stage("preparing")
     try:
         started = time.perf_counter()
         prepared = _prepare_texture_save(
@@ -1358,6 +1432,8 @@ def save_texture_color(
         timings["prepare"] = time.perf_counter() - started
 
         stage = "read"
+        if progress is not None:
+            progress.stage("reading")
         original = _read_source(prepared.selected_path)
         original_hash = _sha256_bytes(original)
         affected = _affected_texture_keys(context, prepared)
@@ -1367,8 +1443,11 @@ def save_texture_color(
             stage = value
 
         candidate, bc7_stats = _save_bc7_blocks(
-            original, prepared, timings, stage_callback=set_stage)
+            original, prepared, timings, stage_callback=set_stage,
+            progress_reporter=progress)
         stage = "write"
+        if progress is not None:
+            progress.stage("writing")
         temporary = _write_temp(prepared.selected_path, candidate)
         try:
             candidate_layout = inspect_dds_layout(temporary)
@@ -1430,6 +1509,8 @@ def save_texture_color(
             "texture save timing_ms=%s",
             {key: round(value * 1000.0, 2)
              for key, value in timings.items()})
+        if progress is not None:
+            progress.stage("complete")
         return success_result
     except TextureSaveError as error:
         if committed and success_result is not None:

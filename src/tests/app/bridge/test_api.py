@@ -175,7 +175,8 @@ def test_texture_save_forwards_targets_and_usage(monkeypatch):
     calls = []
     monkeypatch.setattr(
         api._mod_preview, "save_texture_color",
-        lambda *args: calls.append(args) or {"status": "ok"},
+        lambda *args, **kwargs: calls.append((args, kwargs))
+        or {"status": "ok"},
     )
     targets = [{"semantic_key": "Body-1", "metadata_key": "Body::one",
                 "adjustment": {"hue": 30}}]
@@ -192,4 +193,40 @@ def test_texture_save_forwards_targets_and_usage(monkeypatch):
         "mod", "diffuse::body.dds", targets, usage)
 
     assert result == {"status": "ok"}
-    assert calls == [("mod", "diffuse::body.dds", targets, usage)]
+    assert calls[0][0] == ("mod", "diffuse::body.dds", targets, usage)
+    assert callable(calls[0][1]["progress_callback"])
+
+
+def test_texture_save_progress_event_includes_request_id_and_is_best_effort():
+    api = ModViewerAPI()
+    captured = []
+
+    class Window:
+        def run_js(self, script):
+            captured.append(script)
+
+    def save(*_args, **kwargs):
+        kwargs["progress_callback"]({
+            "stage": "processing", "mip": 0, "mip_count": 1,
+            "completed_blocks": 3, "total_blocks": 7,
+        })
+        return {"status": "ok"}
+
+    api._mod_preview.save_texture_color = save
+    api._window = Window()
+    result = api.save_texture_color(
+        "mod", "diffuse::body.dds", [], [], "request-7")
+
+    assert result == {"status": "ok"}
+    assert len(captured) == 1
+    assert "mod-viewer-texture-save-progress" in captured[0]
+    assert '"request_id":"request-7"' in captured[0]
+    assert '"completed_blocks":3' in captured[0]
+
+    class BrokenWindow:
+        def run_js(self, _script):
+            raise RuntimeError("closed WebView")
+
+    api._window = BrokenWindow()
+    assert api.save_texture_color(
+        "mod", "diffuse::body.dds", [], [], "request-8") == {"status": "ok"}

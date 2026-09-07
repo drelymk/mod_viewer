@@ -1304,6 +1304,83 @@ def test_texture_save_modal_blocks_dismissal_while_saving(
         context.close()
 
 
+def test_texture_save_modal_displays_progress_and_ignores_stale_events(
+        edge_browser, frontend_url):
+    payload, tex_key = _bake_test_payload("BakeProgress", _PNG_URI)
+    context, page = _page(edge_browser, frontend_url, {"BakeProgress": payload})
+    try:
+        _open(page, "BakeProgress")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".draw-item").first.click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""() => {
+          window.pywebview.api.save_texture_color = async (...args) => {
+            window.__textureSaveArgs = args;
+            return new Promise(resolve => {
+              window.__releaseTextureSave = resolve;
+            });
+          };
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("window.__textureSaveArgs !== undefined")
+        request_id = page.evaluate("window.__textureSaveArgs[4]")
+        assert isinstance(request_id, str)
+        assert page.locator(".texture-bake-progress-status").inner_text() == (
+            "Preparing texture…")
+        assert page.locator("#texture-bake-progress").get_attribute("value") is None
+
+        page.evaluate("""detail => window.dispatchEvent(new CustomEvent(
+          'mod-viewer-texture-save-progress', {detail}))""", {
+            "request_id": request_id, "stage": "processing", "mip": 0,
+            "mip_count": 1, "completed_blocks": 500, "total_blocks": 1000,
+        })
+        assert page.locator(".texture-bake-progress-status").inner_text() == (
+            "Processing texture…")
+        assert page.locator(".texture-bake-progress-detail").inner_text() == (
+            "500 / 1000 blocks")
+        assert page.evaluate(
+            "document.querySelector('#texture-bake-progress').value") == 50
+
+        page.evaluate("""detail => window.dispatchEvent(new CustomEvent(
+          'mod-viewer-texture-save-progress', {detail}))""", {
+            "request_id": "stale-request", "stage": "processing", "mip": 0,
+            "mip_count": 1, "completed_blocks": 900, "total_blocks": 1000,
+        })
+        assert page.locator(".texture-bake-progress-detail").inner_text() == (
+            "500 / 1000 blocks")
+
+        page.evaluate("""detail => window.dispatchEvent(new CustomEvent(
+          'mod-viewer-texture-save-progress', {detail}))""", {
+            "request_id": request_id, "stage": "processing", "mip": 1,
+            "mip_count": 3, "completed_blocks": 25, "total_blocks": 50,
+        })
+        assert page.locator(".texture-bake-progress-detail").inner_text() == (
+            "Mip 2 of 3 · 25 / 50 blocks")
+        assert page.evaluate(
+            "document.querySelector('#texture-bake-progress').value") == 50
+
+        page.evaluate("""detail => window.dispatchEvent(new CustomEvent(
+          'mod-viewer-texture-save-progress', {detail}))""", {
+            "request_id": request_id, "stage": "writing",
+        })
+        assert page.locator(".texture-bake-progress-status").inner_text() == (
+            "Writing texture…")
+        assert page.locator("#texture-bake-progress").get_attribute("value") is None
+
+        page.evaluate("""() => window.__releaseTextureSave({
+          status: 'ok', tex_key: %s, affected_tex_keys: [%s],
+          saved_meshes: [{semantic_key: 'Body-BakeProgress-0',
+            metadata_key: 'Body BakeProgress::3,0,0'}],
+          texture: {file: 'BakeProgress-bake.dds'},
+          backup: {file: 'BakeProgress-bake.dds.modviewer.bak'},
+        })""" % (json.dumps(tex_key), json.dumps(tex_key)))
+        page.locator("#texture-bake-body", has_text="TEXTURE SAVED").wait_for()
+    finally:
+        context.close()
+
+
 def test_texture_save_refreshes_targets_after_color_change(
         edge_browser, frontend_url):
     payload, _tex_key = _bake_test_payload("BakeStale", _PNG_URI)
@@ -1546,8 +1623,9 @@ def test_texture_save_resets_all_committed_meshes_and_refreshes_affected_keys(
         page.locator("#texture-bake-confirm").wait_for()
         page.locator("#texture-bake-confirm").click()
         page.locator("#texture-bake-body", has_text="TEXTURE SAVED").wait_for()
-        assert page.evaluate(
-            "window.__fakeApi.calls.saveTextureColor[0]") == [
+        request = page.evaluate(
+            "window.__fakeApi.calls.saveTextureColor[0]")
+        assert request[:4] == [
                 "BakeConfirm", dds_key,
                 [{
                     "semantic_key": "Body-BakeConfirm-0",
@@ -1586,6 +1664,7 @@ def test_texture_save_resets_all_committed_meshes_and_refreshes_affected_keys(
                     },
                 }],
             ]
+        assert isinstance(request[4], str)
         assert page.evaluate(
             "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue") == 0
         assert page.evaluate(

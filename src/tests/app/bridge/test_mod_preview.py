@@ -285,7 +285,7 @@ def test_save_texture_color_forwards_complete_target_request(monkeypatch):
         lambda _folder: ("mod", {"override": 1}, {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.save_texture_color",
-        lambda *args: captured.append(args) or {
+        lambda *args, **kwargs: captured.append((args, kwargs)) or {
             "status": "ok", "tex_key": "diffuse::body.dds",
             "saved_meshes": [{
                 "semantic_key": "Body-1", "metadata_key": "Body::one",
@@ -311,6 +311,29 @@ def test_save_texture_color_forwards_complete_target_request(monkeypatch):
         "mod", "diffuse::body.dds", targets, usage)
 
     assert result["status"] == "ok"
-    assert captured == [(context, {"override": 1}, {"Body-1", "Body-2"},
-                         "diffuse::body.dds", targets, usage)]
+    assert captured[0][0] == (
+        context, {"override": 1}, {"Body-1", "Body-2"},
+        "diffuse::body.dds", targets, usage)
+    assert captured[0][1] == {}
     assert cleared == [("mod", ["Body::one"])]
+
+
+def test_save_texture_color_forwards_progress_callback(monkeypatch):
+    preview = ModPreview(_Access())
+    preview._active_mesh_keys["mod"] = {"Body-1"}
+    context = _context()
+    callback = object()
+    captured = []
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _folder: ("mod", {}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.save_texture_color",
+        lambda *args, **kwargs: captured.append((args, kwargs)) or {
+            "status": "error",
+        })
+
+    preview.save_texture_color(
+        "mod", "diffuse::body.dds", [], [], progress_callback=callback)
+
+    assert captured[0][1] == {"progress_callback": callback}

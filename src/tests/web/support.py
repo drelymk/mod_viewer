@@ -486,8 +486,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   ?? payload.asset_resolution ?? null,
               });
             },
-            save_texture_color: async (path, texKey, targets, usage) => {
-              state.calls.saveTextureColor.push([path, texKey, targets, usage]);
+            save_texture_color: async (path, texKey, targets, usage, requestId) => {
+              state.calls.saveTextureColor.push([
+                path, texKey, targets, usage, requestId,
+              ]);
               return copy(state.responses[path]?.textureSaveResult || {
                 status: 'ok',
                 tex_key: texKey,

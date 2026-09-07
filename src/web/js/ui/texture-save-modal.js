@@ -21,6 +21,18 @@ const saveButton = $('texture-bake-confirm');
 
 let pendingSave = null;
 let saving = false;
+let saveRequestSequence = 0;
+let activeSaveRequestId = null;
+let saveProgressElements = null;
+
+const saveStageLabels = {
+  preparing: 'Preparing texture…',
+  reading: 'Reading source texture…',
+  processing: 'Processing texture…',
+  writing: 'Writing texture…',
+  refreshing: 'Refreshing viewer…',
+  complete: 'Texture saved…',
+};
 
 function displayNameForTarget(target) {
   return target?.mesh?.userData?.displayName
@@ -33,6 +45,7 @@ function closeTextureSaveModal() {
   // Keep the modal open while the destructive request and post-commit state
   // synchronization are in flight.
   if (saving) return;
+  activeSaveRequestId = null;
   pendingSave = null;
   backdrop?.classList.remove('show');
 }
@@ -59,6 +72,7 @@ function textureFileForKey(key) {
 
 function renderSavePrompt(state) {
   setModalError(error, '');
+  saveProgressElements = null;
   body.replaceChildren();
   const heading = document.createElement('div');
   heading.className = 'texture-bake-state';
@@ -106,6 +120,7 @@ function affectedTextureKeys(result) {
 }
 
 function renderSaveError(result) {
+  saveProgressElements = null;
   body.replaceChildren();
   setModalError(error, formatSaveError(result));
   setSaveAction();
@@ -113,6 +128,7 @@ function renderSaveError(result) {
 
 function renderSaveSuccess(result, targetCount) {
   setModalError(error, '');
+  saveProgressElements = null;
   body.replaceChildren();
   const heading = document.createElement('div');
   heading.className = 'texture-bake-state';
@@ -141,6 +157,67 @@ function renderSaveSuccess(result, targetCount) {
     body.appendChild(warning);
   }
   setSaveAction();
+}
+
+function renderSaveProgress(detail = {stage: 'preparing'}) {
+  if (!saveProgressElements) {
+    body.replaceChildren();
+    const view = document.createElement('div');
+    view.className = 'texture-bake-progress-view';
+    const heading = document.createElement('div');
+    heading.className = 'texture-bake-state';
+    heading.textContent = 'SAVING TO TEXTURE';
+    const status = document.createElement('p');
+    status.className = 'texture-bake-progress-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    const progress = document.createElement('progress');
+    progress.id = 'texture-bake-progress';
+    progress.className = 'texture-bake-progress';
+    progress.max = 100;
+    progress.setAttribute('aria-label', 'Texture save progress');
+    const progressDetail = document.createElement('p');
+    progressDetail.className = 'texture-bake-progress-detail';
+    view.append(heading, status, progress, progressDetail);
+    body.appendChild(view);
+    saveProgressElements = {
+      status, progress, progressDetail, stage: null,
+    };
+  }
+
+  const stage = typeof detail?.stage === 'string'
+    ? detail.stage : 'preparing';
+  const label = saveStageLabels[stage] || 'Saving texture…';
+  if (saveProgressElements.stage !== stage) {
+    saveProgressElements.status.textContent = label;
+    saveProgressElements.stage = stage;
+  }
+  const completed = Number(detail?.completed_blocks);
+  const total = Number(detail?.total_blocks);
+  if (stage === 'processing' && Number.isFinite(completed)
+      && Number.isFinite(total) && total > 0) {
+    const boundedCompleted = Math.max(0, Math.min(completed, total));
+    saveProgressElements.progress.value = boundedCompleted / total * 100;
+    saveProgressElements.progress.setAttribute(
+      'aria-valuetext', `${boundedCompleted} of ${total} blocks`);
+    const mip = Number(detail?.mip);
+    const mipCount = Number(detail?.mip_count);
+    const mipLabel = mipCount > 1 && Number.isInteger(mip)
+      ? `Mip ${mip + 1} of ${mipCount} · ` : '';
+    saveProgressElements.progressDetail.textContent =
+      `${mipLabel}${boundedCompleted} / ${total} blocks`;
+  } else {
+    saveProgressElements.progress.removeAttribute('value');
+    saveProgressElements.progress.removeAttribute('aria-valuetext');
+    saveProgressElements.progressDetail.textContent = '';
+  }
+}
+
+function handleTextureSaveProgress(event) {
+  const detail = event?.detail;
+  if (!saving || activeSaveRequestId === null
+      || detail?.request_id !== activeSaveRequestId) return;
+  renderSaveProgress(detail);
 }
 
 async function synchronizeCommittedSave(state, result) {
@@ -190,18 +267,17 @@ async function runSave(job) {
     return null;
   }
   saving = true;
+  const requestId = String(++saveRequestSequence);
+  activeSaveRequestId = requestId;
   setSaveAction({visible: true, disabled: true, label: 'Saving…'});
-  body.replaceChildren();
-  const loading = document.createElement('div');
-  loading.className = 'texture-bake-loading';
-  loading.textContent = 'Saving color changes to the texture…';
-  body.appendChild(loading);
+  renderSaveProgress({stage: 'preparing'});
 
   try {
     await Promise.all((job.state.targets || []).map(target =>
       flushMeshColorAdjustmentPersistence(target.mesh)));
   } catch (_persistenceError) {
     saving = false;
+    activeSaveRequestId = null;
     renderSaveError({
       status: 'error',
       error: 'The pending Color metadata could not be saved. '
@@ -213,6 +289,7 @@ async function runSave(job) {
   if ((typeof job.isCurrent === 'function' && !job.isCurrent())
       || !textureSaveStateMatches(job.mesh, job.state, currentState)) {
     saving = false;
+    activeSaveRequestId = null;
     pendingSave = {mesh: job.mesh, isCurrent: job.isCurrent, state: currentState};
     renderSavePrompt(currentState);
     return null;
@@ -225,15 +302,18 @@ async function runSave(job) {
   try {
     result = await api(
       job.state.modPath, job.state.texKey,
-      textureSaveTargetsPayload(job.state), job.state.textureUsage);
+      textureSaveTargetsPayload(job.state), job.state.textureUsage,
+      requestId);
   } catch (_requestError) {
     result = {status: 'error', error: 'Texture save failed.'};
   }
   if (result?.status !== 'ok') {
     saving = false;
+    activeSaveRequestId = null;
     renderSaveError(result);
     return result;
   }
+  renderSaveProgress({stage: 'refreshing'});
   try {
     await synchronizeCommittedSave(job.state, result);
   } catch (_refreshError) {
@@ -244,6 +324,7 @@ async function runSave(job) {
     return result;
   } finally {
     saving = false;
+    activeSaveRequestId = null;
   }
   if (typeof job.isCurrent === 'function' && !job.isCurrent()) {
     closeTextureSaveModal();
@@ -256,6 +337,7 @@ async function runSave(job) {
 /** Open the Save to Texture modal without performing a backend preflight. */
 export function openTextureSaveModal(mesh, {isCurrent} = {}) {
   if (!backdrop || !body) return null;
+  activeSaveRequestId = null;
   const state = captureTextureSaveState(mesh);
   pendingSave = {mesh, isCurrent, state};
   backdrop.classList.add('show');
@@ -287,5 +369,8 @@ window.addEventListener('mod-viewer-mesh-selected', () => {
     closeTextureSaveModal();
   }
 });
+
+window.addEventListener(
+  'mod-viewer-texture-save-progress', handleTextureSaveProgress);
 
 export { closeTextureSaveModal };
