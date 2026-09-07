@@ -98,13 +98,14 @@ def _mode7_block():
     return bits.to_bytes(16, "little")
 
 
-def _separate_block(mode, rotation):
+def _separate_block(mode, rotation, index_mode=None):
     bits = 1 << mode
     start = mode + 1
     bits = _put(bits, start, 2, rotation)
     start += 2
-    index_mode = 1 if mode == 4 and rotation % 2 else 0
     if mode == 4:
+        if index_mode is None:
+            index_mode = 1 if rotation % 2 else 0
         bits = _put(bits, start, 1, index_mode)
         start += 1
     precisions = (5, 5, 5, 6) if mode == 4 else (7, 7, 7, 8)
@@ -331,7 +332,105 @@ def test_fixed_index_fitter_empty_and_degenerate_inputs_match_reference():
             targets, indices, bc7.WEIGHTS_3, codec, original_raw=(7, 19))
         actual = bc7._fit_fixed_index_endpoints(
             targets, indices, bc7.WEIGHTS_3, codec, original_raw=(7, 19))
+        prepared = bc7._fit_fixed_index_endpoints(
+            targets, indices, bc7.WEIGHTS_3, codec, original_raw=(7, 19),
+            basis=bc7._prepare_fixed_index_fit_basis(
+                indices, bc7.WEIGHTS_3))
         assert actual == expected
+        assert prepared == expected
+
+
+@pytest.mark.parametrize(
+    ("weights", "indices", "targets"),
+    ((
+        (bc7.WEIGHTS_2, (0, 1, 2, 3), (0, 255, 128, 64)),
+        (bc7.WEIGHTS_3, (0, 1, 2, 3, 4), (17, 42, 201, 88, 254)),
+        (bc7.WEIGHTS_4, (0, 3, 6, 9), (255, 3, 127, 64)),
+    )),
+    ids=("weights2", "weights3", "weights4"))
+@pytest.mark.parametrize(
+    "codec_case", _ENDPOINT_CASES,
+    ids=lambda case: case[0])
+def test_fixed_index_prepared_basis_matches_reference(
+        weights, indices, targets, codec_case):
+    _codec_name, codec, pbit0, pbit1 = codec_case
+    original_raw = (
+        min(codec.raw_max, 7), min(codec.raw_max, 19))
+    expected = _reference_fit_fixed_index_endpoints(
+        targets, indices, weights, codec,
+        original_raw=original_raw, pbit0=pbit0, pbit1=pbit1)
+    generic = bc7._fit_fixed_index_endpoints(
+        targets, indices, weights, codec,
+        original_raw=original_raw, pbit0=pbit0, pbit1=pbit1)
+    prepared = bc7._prepare_fixed_index_fit_basis(indices, weights)
+    optimized = bc7._fit_fixed_index_endpoints(
+        targets, indices, weights, codec,
+        original_raw=original_raw, pbit0=pbit0, pbit1=pbit1,
+        basis=prepared)
+
+    assert generic == expected
+    assert optimized == generic
+
+
+@pytest.mark.parametrize("rotation", range(4))
+@pytest.mark.parametrize("index_mode", range(2))
+@pytest.mark.parametrize("valid_width, valid_height", _EDGE_SIZES)
+def test_mode4_rotation_and_index_mode_match_reference(
+        monkeypatch, rotation, index_mode, valid_width, valid_height):
+    block = _separate_block(4, rotation, index_mode)
+    source = bc7.decode_block(block)
+    target = tuple(
+        (min(255, red + 31), max(0, green - 17),
+         min(255, blue + 23), alpha)
+        for red, green, blue, alpha in source)
+    optimized = bc7.recolor_block(
+        block, target, valid_width=valid_width, valid_height=valid_height)
+
+    def reference_fitter(*args, **kwargs):
+        kwargs.pop("basis", None)
+        return _reference_fit_fixed_index_endpoints(*args, **kwargs)
+
+    monkeypatch.setattr(bc7, "_fit_fixed_index_endpoints", reference_fitter)
+    reference = bc7.recolor_block(
+        block, target, valid_width=valid_width, valid_height=valid_height)
+
+    assert optimized.block == reference.block
+    assert optimized.candidate_pixels == reference.candidate_pixels
+    assert optimized.source_error == reference.source_error
+    assert optimized.candidate_error == reference.candidate_error
+
+
+def test_mode4_deterministic_corpus_matches_reference(monkeypatch):
+    cases = []
+    for case in range(96):
+        rotation = case % 4
+        index_mode = (case // 4) % 2
+        valid_width = 1 + (case * 3) % 4
+        valid_height = 1 + (case * 5) % 4
+        block = _separate_block(4, rotation, index_mode)
+        source = bc7.decode_block(block)
+        target = tuple(
+            ((red + case * 7 + pixel * 3) & 0xff,
+             (green - case * 5 - pixel * 2) & 0xff,
+             (blue + case * 11 + pixel) & 0xff,
+             alpha)
+            for pixel, (red, green, blue, alpha) in enumerate(source))
+        cases.append((block, target, valid_width, valid_height))
+
+    optimized = [bc7.recolor_block(
+        block, target, valid_width, valid_height)
+        for block, target, valid_width, valid_height in cases]
+
+    def reference_fitter(*args, **kwargs):
+        kwargs.pop("basis", None)
+        return _reference_fit_fixed_index_endpoints(*args, **kwargs)
+
+    monkeypatch.setattr(bc7, "_fit_fixed_index_endpoints", reference_fitter)
+    reference = [bc7.recolor_block(
+        block, target, valid_width, valid_height)
+        for block, target, valid_width, valid_height in cases]
+
+    assert optimized == reference
 
 
 @pytest.mark.parametrize("mode", range(8))
@@ -347,9 +446,12 @@ def test_recolor_block_matches_reference_fitter(
         for red, green, blue, alpha in source)
     optimized = bc7.recolor_block(
         block, target, valid_width=valid_width, valid_height=valid_height)
-    monkeypatch.setattr(
-        bc7, "_fit_fixed_index_endpoints",
-        _reference_fit_fixed_index_endpoints)
+
+    def reference_fitter(*args, **kwargs):
+        kwargs.pop("basis", None)
+        return _reference_fit_fixed_index_endpoints(*args, **kwargs)
+
+    monkeypatch.setattr(bc7, "_fit_fixed_index_endpoints", reference_fitter)
     reference = bc7.recolor_block(
         block, target, valid_width=valid_width, valid_height=valid_height)
 
