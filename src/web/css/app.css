@@ -1092,8 +1092,10 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-influence-id { color: var(--text); font-family: ui-monospace, monospace; }
 .rig-influence-weight { margin-left: auto; color: var(--accent-soft); font-variant-numeric: tabular-nums; }
 .rig-snap-select { min-height: 26px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.rig-chain-length { width: 58px; min-height: 26px; padding: 2px 6px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); font-variant-numeric: tabular-nums; }
 .rig-chain-preview { color: var(--text); font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.rig-limb-mapping { display: flex; flex-direction: column; gap: 3px; }
+.rig-limb-value { color: var(--text); font-size: 11px; }
+.rig-limb-select { min-height: 26px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .rig-preset-select { width: 100%; min-height: 30px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .rig-preset-title { margin-top: 3px; }
 .rig-actions { display: flex; flex-wrap: wrap; gap: 5px; }

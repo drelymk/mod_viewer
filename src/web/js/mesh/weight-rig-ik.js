@@ -1,12 +1,24 @@
-// ModelJoint-native inverse kinematics. This module is deliberately pure:
-// speculative solver poses never touch the live model Rig.
+// ModelJoint-native character limb IK. Detection may retain helper joints in
+// a path, but the solver is deliberately limited to an anchor and bend.
 
 import * as THREE from 'three';
 import {buildForestTransformsFromLocalRotations} from './weight-deformation.js';
 
 const EPSILON = 1e-8;
-const MAX_ITERATIONS = 10;
+const MAX_PATH_DEPTH = 64;
+const MAX_SOLVE_PASSES = 2;
 const TOLERANCE_SCALE = 1e-4;
+
+export const RIG_LIMB_ROLES = Object.freeze([
+  'left_arm', 'right_arm', 'left_leg', 'right_leg',
+]);
+
+export const RIG_LIMB_ROLE_INFO = Object.freeze({
+  left_arm: Object.freeze({label: 'Left Arm', anchor: 'Shoulder', bend: 'Elbow', end: 'Hand'}),
+  right_arm: Object.freeze({label: 'Right Arm', anchor: 'Shoulder', bend: 'Elbow', end: 'Hand'}),
+  left_leg: Object.freeze({label: 'Left Leg', anchor: 'Hip', bend: 'Knee', end: 'Foot'}),
+  right_leg: Object.freeze({label: 'Right Leg', anchor: 'Hip', bend: 'Knee', end: 'Foot'}),
+});
 
 function valueFor(collection, id) {
   if (collection instanceof Map) {
@@ -16,36 +28,15 @@ function valueFor(collection, id) {
 }
 
 function numberId(value) {
+  if (value === null || value === undefined || value === '') return null;
   const id = Number(value);
   return Number.isInteger(id) ? id : null;
 }
 
-function parentFor(component, id) {
-  const parent = valueFor(component?.parentById, id);
-  if (parent === null || parent === undefined || parent === '') return null;
-  return numberId(parent);
-}
-
-function quaternionFrom(value) {
-  if (value?.isQuaternion) {
-    const quaternion = value.clone();
-    return quaternion.normalize();
-  }
-  const values = Array.isArray(value) || ArrayBuffer.isView(value)
-    ? [...value].slice(0, 4).map(Number)
-    : [value?.x, value?.y, value?.z, value?.w].map(Number);
-  if (values.length !== 4 || !values.every(Number.isFinite)) {
-    return new THREE.Quaternion();
-  }
-  const quaternion = new THREE.Quaternion(...values);
-  return Number.isFinite(quaternion.lengthSq())
-    && quaternion.lengthSq() > EPSILON ? quaternion.normalize()
-    : new THREE.Quaternion();
-}
-
 function finiteVector(value) {
   if (value?.isVector3) {
-    return value.clone().toArray().every(Number.isFinite) ? value.clone() : null;
+    const result = value.clone();
+    return result.toArray().every(Number.isFinite) ? result : null;
   }
   const values = Array.isArray(value) || ArrayBuffer.isView(value)
     ? [...value].slice(0, 3).map(Number)
@@ -54,13 +45,248 @@ function finiteVector(value) {
   return new THREE.Vector3(...values);
 }
 
-function pointFor(id, transforms, centers, pivots) {
-  const point = finiteVector(valueFor(pivots, id))
-    || finiteVector(valueFor(centers, id));
-  if (!point) return null;
-  const transform = transforms.get(id);
-  if (!transform?.isMatrix4) return point;
-  return point.applyMatrix4(transform);
+function quaternionFrom(value) {
+  if (value?.isQuaternion) {
+    const result = value.clone();
+    return Number.isFinite(result.lengthSq()) && result.lengthSq() > EPSILON
+      ? result.normalize() : new THREE.Quaternion();
+  }
+  const values = Array.isArray(value) || ArrayBuffer.isView(value)
+    ? [...value].slice(0, 4).map(Number)
+    : [value?.x, value?.y, value?.z, value?.w].map(Number);
+  if (values.length !== 4 || !values.every(Number.isFinite)) {
+    return new THREE.Quaternion();
+  }
+  const result = new THREE.Quaternion(...values);
+  return Number.isFinite(result.lengthSq()) && result.lengthSq() > EPSILON
+    ? result.normalize() : new THREE.Quaternion();
+}
+
+function parentFor(component, id) {
+  const parent = valueFor(component?.parentById, id);
+  if (parent === null || parent === undefined || parent === '') return null;
+  return numberId(parent);
+}
+
+function childrenFor(component, id) {
+  return (valueFor(component?.childrenById, id) || [])
+    .map(numberId).filter(Number.isInteger);
+}
+
+function componentFor(rig, id) {
+  const componentId = valueFor(rig?.componentByJointId, id)
+    ?? valueFor(rig?.inferredForest?.componentByBoneId, id);
+  const components = rig?.components || rig?.inferredForest?.components || [];
+  return Number.isInteger(Number(componentId))
+    ? components[Number(componentId)] || null : null;
+}
+
+function jointFor(rig, id) {
+  return (rig?.joints || []).find(joint => Number(joint?.jointId) === id)
+    || null;
+}
+
+function pointFor(rig, id) {
+  return finiteVector(valueFor(rig?.jointPivotByJointId, id))
+    || finiteVector(jointFor(rig, id)?.restPivot)
+    || finiteVector(valueFor(rig?.centerByJointId, id))
+    || finiteVector(jointFor(rig, id)?.restCenter);
+}
+
+function edgeFor(component, parentId, childId) {
+  return (component?.edges || []).find(edge => {
+    const left = Number(edge?.jointA ?? edge?.boneA);
+    const right = Number(edge?.jointB ?? edge?.boneB);
+    return (left === parentId && right === childId)
+      || (left === childId && right === parentId);
+  }) || null;
+}
+
+function edgeSupport(component, parentId, childId) {
+  const edge = edgeFor(component, parentId, childId);
+  const score = Number(edge?.combinedTreeScore ?? edge?.treeEdgeScore
+    ?? edge?.score ?? edge?.attachmentScore ?? edge?.jaccard ?? 0);
+  return Number.isFinite(score) ? score : 0;
+}
+
+function continuationFor(rig, id) {
+  return numberId(valueFor(
+    rig?.restContinuationChildByJointId
+      || rig?.continuationChildByJointId,
+    id));
+}
+
+function restFrameFor(rig, id) {
+  const value = valueFor(rig?.restFrameByJointId, id)
+    || jointFor(rig, id)?.restFrame;
+  return quaternionFrom(value);
+}
+
+function projectedDirection(vector, axis) {
+  const result = vector.clone().addScaledVector(axis, -vector.dot(axis));
+  return result.lengthSq() > EPSILON ? result.normalize() : null;
+}
+
+function preferredBendDirection(rig, pathJointIds, bendJointId) {
+  const anchor = pointFor(rig, pathJointIds[0]);
+  const bend = pointFor(rig, bendJointId);
+  const end = pointFor(rig, pathJointIds.at(-1));
+  if (!anchor || !bend || !end) return null;
+  const axis = end.clone().sub(anchor);
+  if (axis.lengthSq() > EPSILON) {
+    axis.normalize();
+    const projected = projectedDirection(bend.clone().sub(anchor), axis);
+    if (projected) return projected;
+  }
+
+  const frame = restFrameFor(rig, bendJointId);
+  const candidates = [
+    new THREE.Vector3(1, 0, 0).applyQuaternion(frame),
+    new THREE.Vector3(0, 0, 1).applyQuaternion(frame),
+    new THREE.Vector3(0, 1, 0),
+  ];
+  const fallbackAxis = end.clone().sub(anchor);
+  if (fallbackAxis.lengthSq() <= EPSILON) fallbackAxis.set(0, 1, 0);
+  fallbackAxis.normalize();
+  return candidates.map(candidate => projectedDirection(candidate, fallbackAxis))
+    .find(Boolean) || new THREE.Vector3(1, 0, 0);
+}
+
+function confidenceFor(path, reason, branchHub) {
+  if (path.length < 3) return 'low';
+  if (branchHub && path.length >= 4) return 'high';
+  if (path.length >= 4 && !reason) return 'high';
+  return 'medium';
+}
+
+function bendCandidate(rig, pathJointIds) {
+  if (pathJointIds.length < 3) return null;
+  const distances = [0];
+  for (let index = 1; index < pathJointIds.length; index += 1) {
+    const first = pointFor(rig, pathJointIds[index - 1]);
+    const second = pointFor(rig, pathJointIds[index]);
+    if (!first || !second) return null;
+    distances.push(distances.at(-1) + first.distanceTo(second));
+  }
+  const total = distances.at(-1);
+  if (!Number.isFinite(total) || total <= EPSILON) return null;
+  const middle = total / 2;
+  let best = null;
+  for (let index = 1; index < pathJointIds.length - 1; index += 1) {
+    const candidate = {
+      jointId: pathJointIds[index],
+      distanceFromMiddle: Math.abs(distances[index] - middle),
+      edgePenalty: Math.min(distances[index], total - distances[index]),
+      support: edgeSupport(componentFor(rig, pathJointIds[index]),
+        pathJointIds[index - 1], pathJointIds[index]),
+    };
+    const closer = !best || candidate.distanceFromMiddle
+      < best.distanceFromMiddle - EPSILON;
+    const tie = best && Math.abs(candidate.distanceFromMiddle
+      - best.distanceFromMiddle) <= EPSILON;
+    if (closer || tie && candidate.edgePenalty > best.edgePenalty + EPSILON
+        || tie && Math.abs(candidate.edgePenalty - best.edgePenalty) <= EPSILON
+          && candidate.support > best.support + EPSILON
+        || tie && Math.abs(candidate.edgePenalty - best.edgePenalty) <= EPSILON
+          && Math.abs(candidate.support - best.support) <= EPSILON
+          && candidate.jointId < best.jointId) best = candidate;
+  }
+  return best?.jointId ?? null;
+}
+
+function detectionResult(role, anchorJointId, pathJointIds, reason,
+    branchHub, rig) {
+  const bendJointId = bendCandidate(rig, pathJointIds);
+  const endJointId = pathJointIds.at(-1) ?? null;
+  const component = componentFor(rig, anchorJointId);
+  const available = pathJointIds.length >= 3
+    && Number.isInteger(bendJointId)
+    && Number.isInteger(endJointId)
+    && bendJointId !== anchorJointId
+    && endJointId !== anchorJointId
+    && Number(component?.rootId) !== anchorJointId;
+  const finalReason = available ? null : reason || 'short_or_invalid_limb_path';
+  return {
+    available,
+    role: RIG_LIMB_ROLES.includes(role) ? role : null,
+    anchorJointId,
+    pathJointIds: [...pathJointIds],
+    bendJointId: available ? bendJointId : null,
+    endJointId: available ? endJointId : null,
+    confidence: available ? confidenceFor(pathJointIds, reason, branchHub) : 'low',
+    reason: finalReason,
+    bendDirection: available
+      ? preferredBendDirection(rig, pathJointIds, bendJointId)?.toArray() || null
+      : null,
+  };
+}
+
+/** Detect one primary descendant limb path without searching sideways. */
+export function detectLimbPath({rig, anchorJointId, role} = {}) {
+  const anchor = numberId(anchorJointId);
+  const component = componentFor(rig, anchor);
+  if (!component || anchor === null
+      || !component.nodeIds?.map(Number).includes(anchor)) {
+    return detectionResult(role, anchor, [], 'anchor_not_found', false, rig);
+  }
+  if (!pointFor(rig, anchor)) {
+    return detectionResult(role, anchor, [anchor], 'anchor_pivot_invalid', false, rig);
+  }
+  if (Number(component.rootId) === anchor) {
+    return detectionResult(role, anchor, [anchor], 'anchor_is_component_root', false, rig);
+  }
+
+  const path = [anchor];
+  const visited = new Set(path);
+  let reason = null;
+  let branchHub = false;
+  for (let depth = 0; depth < MAX_PATH_DEPTH; depth += 1) {
+    const current = path.at(-1);
+    const children = childrenFor(component, current)
+      .filter(childId => !visited.has(childId) && pointFor(rig, childId));
+    const continuation = continuationFor(rig, current);
+    const branchChildren = children.filter(childId => childId !== continuation);
+    // Once two useful limb sections exist, a multi-child node is most likely
+    // a hand/foot hub. Do not follow one arbitrary finger or toe.
+    // A single accessory child is not enough: preserve the continuation and
+    // let the existing rest-frame ranking decide which child to follow.
+    if (path.length >= 4
+        && (branchChildren.length >= 2
+          || continuation === null && children.length >= 2)) {
+      branchHub = true;
+      reason = 'terminal_branch_hub';
+      break;
+    }
+    const next = continuation;
+    if (next === null || !children.includes(next)) {
+      reason = children.length ? 'continuation_missing' : 'leaf';
+      break;
+    }
+    if (visited.has(next)) {
+      reason = 'cycle';
+      break;
+    }
+    const previous = pointFor(rig, path.length > 1 ? path.at(-2) : current);
+    const currentPoint = pointFor(rig, current);
+    const nextPoint = pointFor(rig, next);
+    if (!previous || !currentPoint || !nextPoint) {
+      reason = 'pivot_invalid';
+      break;
+    }
+    if (path.length >= 4) {
+      const incoming = currentPoint.clone().sub(previous).normalize();
+      const outgoing = nextPoint.clone().sub(currentPoint).normalize();
+      if (incoming.lengthSq() > EPSILON && outgoing.lengthSq() > EPSILON
+          && incoming.dot(outgoing) < 0.1) {
+        reason = 'direction_break';
+        break;
+      }
+    }
+    visited.add(next);
+    path.push(next);
+  }
+  if (path.length >= MAX_PATH_DEPTH && !reason) reason = 'safety_depth';
+  return detectionResult(role, anchor, path, reason, branchHub, rig);
 }
 
 function cloneRotations(localRotations) {
@@ -70,9 +296,7 @@ function cloneRotations(localRotations) {
       const jointId = numberId(id);
       if (jointId !== null) result.set(jointId, quaternionFrom(rotation));
     });
-    return result;
-  }
-  Object.entries(localRotations || {}).forEach(([id, rotation]) => {
+  } else Object.entries(localRotations || {}).forEach(([id, rotation]) => {
     const jointId = numberId(id);
     if (jointId !== null) result.set(jointId, quaternionFrom(rotation));
   });
@@ -86,187 +310,157 @@ function buildEvaluation({forest, centers, pivots, rotations}) {
       getQuaternion: id => rotations.get(Number(id)) || new THREE.Quaternion(),
       jointPivotByBoneId: pivots,
       rotationOutput,
-      // Keep this cache private to the current solve. The live pose cache is
-      // intentionally never used during CCD iterations.
       transformCache: new Map(),
     });
   return {transforms, rotations: rotationOutput};
 }
 
-function distanceBetween(left, right) {
-  if (!left || !right) return Infinity;
-  return left.distanceTo(right);
+function pointAt(id, transforms, centers, pivots) {
+  const point = finiteVector(valueFor(pivots, id))
+    || finiteVector(valueFor(centers, id));
+  if (!point) return null;
+  const transform = transforms.get(id);
+  return transform?.isMatrix4 ? point.applyMatrix4(transform) : point;
 }
 
-function chainScale(chainJointIds, centers, pivots) {
-  let scale = 0;
-  for (let index = 1; index < chainJointIds.length; index += 1) {
-    const first = finiteVector(valueFor(
-      pivots, chainJointIds[index - 1]))
-      || finiteVector(valueFor(centers, chainJointIds[index - 1]));
-    const second = finiteVector(valueFor(
-      pivots, chainJointIds[index]))
-      || finiteVector(valueFor(centers, chainJointIds[index]));
-    if (first && second) scale += first.distanceTo(second);
-  }
-  return Math.max(scale, EPSILON);
+function parentAcrossForest(forest, id) {
+  const component = (forest?.components || []).find(item =>
+    item?.nodeIds?.map(Number).includes(id));
+  return parentFor(component, id);
 }
 
 function shortestArc(from, to) {
-  const dot = THREE.MathUtils.clamp(from.dot(to), -1, 1);
+  if (from.lengthSq() <= EPSILON || to.lengthSq() <= EPSILON) {
+    return new THREE.Quaternion();
+  }
+  const source = from.clone().normalize();
+  const target = to.clone().normalize();
+  const dot = THREE.MathUtils.clamp(source.dot(target), -1, 1);
   if (dot > 1 - EPSILON) return new THREE.Quaternion();
   if (dot < -1 + EPSILON) {
-    // Pick a deterministic axis perpendicular to the source vector for the
-    // otherwise ambiguous 180-degree correction.
-    const axis = Math.abs(from.x) < Math.abs(from.y)
+    const axis = Math.abs(source.x) < Math.abs(source.y)
       ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-    axis.cross(from).normalize();
+    axis.cross(source).normalize();
     return new THREE.Quaternion().setFromAxisAngle(axis, Math.PI);
   }
-  return new THREE.Quaternion().setFromUnitVectors(from, to).normalize();
+  return new THREE.Quaternion().setFromUnitVectors(source, target).normalize();
 }
 
-function changedQuaternion(before, after) {
-  return Math.abs(Math.abs(before.dot(after)) - 1) > 1e-7;
+function applyWorldDelta({jointId, delta, forest, evaluation, working}) {
+  const parentId = parentAcrossForest(forest, jointId);
+  const parentRotation = parentId === null
+    ? new THREE.Quaternion()
+    : evaluation.rotations.get(parentId)?.clone() || new THREE.Quaternion();
+  const localDelta = parentRotation.clone().invert()
+    .multiply(delta).multiply(parentRotation).normalize();
+  const next = localDelta.multiply(
+    working.get(jointId)?.clone() || new THREE.Quaternion()).normalize();
+  if (![next.x, next.y, next.z, next.w].every(Number.isFinite)) return false;
+  working.set(jointId, next);
+  return true;
 }
 
-/** Resolve an end-effector chain without ever including the component root. */
-export function resolveIkChain({component, endJointId, requestedLength} = {}) {
-  const end = numberId(endJointId);
-  const requested = Math.max(1, Math.floor(Number(requestedLength) || 1));
-  const root = numberId(component?.rootId);
-  const jointIds = [];
-  if (end !== null && component?.parentById && end !== root) {
-    let current = end;
-    const visited = new Set();
-    while (current !== null && !visited.has(current)
-        && jointIds.length < requested) {
-      visited.add(current);
-      jointIds.unshift(current);
-      const parent = parentFor(component, current);
-      if (parent === null || parent === root) break;
-      current = parent;
-    }
-  }
-  const solverJointIds = jointIds.length > 1
-    ? jointIds.slice(0, -1) : [];
-  return {
-    available: solverJointIds.length > 0,
-    endJointId: end,
-    jointIds,
-    solverJointIds,
-    requestedLength: requested,
-    effectiveLength: jointIds.length,
-    clamped: jointIds.length !== requested,
+function preferredDirectionFromInput(value) {
+  const direction = finiteVector(value);
+  return direction && direction.lengthSq() > EPSILON ? direction.normalize() : null;
+}
+
+function solvePass({forest, centers, pivots, working, anchorJointId,
+    bendJointId, endJointId, targetPoint, bendDirection}) {
+  let evaluation = buildEvaluation({forest, centers, pivots, rotations: working});
+  const anchor = pointAt(anchorJointId, evaluation.transforms, centers, pivots);
+  let bend = pointAt(bendJointId, evaluation.transforms, centers, pivots);
+  let end = pointAt(endJointId, evaluation.transforms, centers, pivots);
+  if (!anchor || !bend || !end) return {evaluation, residual: Infinity};
+
+  const upper = bend.clone().sub(anchor);
+  const lower = end.clone().sub(bend);
+  const l1 = upper.length();
+  const l2 = lower.length();
+  if (l1 <= EPSILON || l2 <= EPSILON) return {
+    evaluation, residual: end.distanceTo(targetPoint),
   };
+  const targetVector = targetPoint.clone().sub(anchor);
+  const distance = targetVector.length();
+  if (distance <= EPSILON) return {
+    evaluation, residual: end.distanceTo(targetPoint),
+  };
+  const direction = targetVector.multiplyScalar(1 / distance);
+  const clampedDistance = THREE.MathUtils.clamp(
+    distance, Math.abs(l1 - l2) + EPSILON, l1 + l2 - EPSILON);
+  const x = (l1 * l1 - l2 * l2 + clampedDistance * clampedDistance)
+    / (2 * clampedDistance);
+  const h = Math.sqrt(Math.max(l1 * l1 - x * x, 0));
+  let plane = preferredDirectionFromInput(bendDirection);
+  plane = plane ? projectedDirection(plane, direction) : null;
+  if (!plane) plane = projectedDirection(upper, direction);
+  if (!plane) {
+    const fallback = Math.abs(direction.x) < 0.8
+      ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    plane = projectedDirection(fallback, direction)
+      || new THREE.Vector3(0, 0, 1);
+  }
+  const desiredBend = anchor.clone()
+    .addScaledVector(direction, x).addScaledVector(plane, h);
+
+  applyWorldDelta({jointId: anchorJointId,
+    delta: shortestArc(upper, desiredBend.clone().sub(anchor)),
+    forest, evaluation, working});
+  evaluation = buildEvaluation({forest, centers, pivots, rotations: working});
+  bend = pointAt(bendJointId, evaluation.transforms, centers, pivots);
+  end = pointAt(endJointId, evaluation.transforms, centers, pivots);
+  if (!bend || !end) return {evaluation, residual: Infinity};
+  applyWorldDelta({jointId: bendJointId,
+    delta: shortestArc(end.clone().sub(bend), targetPoint.clone().sub(bend)),
+    forest, evaluation, working});
+  evaluation = buildEvaluation({forest, centers, pivots, rotations: working});
+  end = pointAt(endJointId, evaluation.transforms, centers, pivots);
+  return {evaluation, residual: end ? end.distanceTo(targetPoint) : Infinity};
 }
 
-/**
- * Solve one target from the supplied pose. `rotations` contains only changed
- * solver joints; the input map and all forest data remain untouched.
- */
-export function solveIkChain({
-  forest, centers, jointPivots, localRotations, chainJointIds, target,
-} = {}) {
-  const chain = (chainJointIds || []).map(numberId)
-    .filter(id => id !== null);
-  const rootIds = new Set((forest?.components || [])
-    .map(component => numberId(component?.rootId))
-    .filter(id => id !== null));
-  const solverJointIds = chain.length > 1
-    ? chain.slice(0, -1).filter(id => !rootIds.has(id)) : [];
-  const endJointId = chain.at(-1) ?? null;
+/** Solve a detected limb while changing only its anchor and bend controls. */
+export function solveLimbIk({forest, centers, jointPivots, localRotations,
+    anchorJointId, bendJointId, endJointId, pathJointIds, target,
+    bendDirection, bendSign = 1} = {}) {
+  const anchor = numberId(anchorJointId);
+  const bend = numberId(bendJointId);
+  const end = numberId(endJointId);
+  const path = (pathJointIds || []).map(numberId).filter(Number.isInteger);
   const targetPoint = finiteVector(target);
+  const component = (forest?.components || []).find(item =>
+    item?.nodeIds?.map(Number).includes(anchor));
+  if (!forest || !targetPoint || anchor === null || bend === null || end === null
+      || !component || Number(component.rootId) === anchor
+      || path.length < 3 || path[0] !== anchor || path.at(-1) !== end
+      || !path.includes(bend)) {
+    return {rotations: new Map(), iterations: 0, residual: Infinity, reached: false};
+  }
   const working = cloneRotations(localRotations);
   const original = cloneRotations(localRotations);
-  if (!forest || !targetPoint || endJointId === null
-      || !solverJointIds.length) {
-    return {rotations: new Map(), iterations: 0, residual: Infinity,
-      reached: false};
+  const direction = preferredDirectionFromInput(bendDirection);
+  if (direction && Number(bendSign) < 0) direction.negate();
+  let result = solvePass({forest, centers, pivots: jointPivots,
+    working, anchorJointId: anchor, bendJointId: bend, endJointId: end,
+    targetPoint, bendDirection: direction});
+  const tolerance = Math.max(
+    pointAt(end, result.evaluation?.transforms, centers, jointPivots)
+      ?.distanceTo(targetPoint) || 1, 1e-6) * TOLERANCE_SCALE;
+  let iterations = 1;
+  while (iterations < MAX_SOLVE_PASSES && result.residual > tolerance) {
+    result = solvePass({forest, centers, pivots: jointPivots,
+      working, anchorJointId: anchor, bendJointId: bend, endJointId: end,
+      targetPoint, bendDirection: direction});
+    iterations += 1;
   }
-
-  const tolerance = chainScale(chain, centers, jointPivots) * TOLERANCE_SCALE;
-  let evaluation = buildEvaluation({
-    forest, centers, pivots: jointPivots, rotations: working,
-  });
-  let endPoint = pointFor(
-    endJointId, evaluation.transforms, centers, jointPivots);
-  let residual = distanceBetween(endPoint, targetPoint);
-  if (!Number.isFinite(residual)) {
-    return {rotations: new Map(), iterations: 0, residual: Infinity,
-      reached: false};
-  }
-  if (residual <= tolerance) {
-    return {rotations: new Map(), iterations: 0, residual, reached: true};
-  }
-
-  let iterations = 0;
-  for (; iterations < MAX_ITERATIONS && residual > tolerance; iterations += 1) {
-    // CCD works from the joint nearest the end effector outward.
-    for (let index = solverJointIds.length - 1; index >= 0; index -= 1) {
-      const jointId = solverJointIds[index];
-      const jointPoint = pointFor(
-        jointId, evaluation.transforms, centers, jointPivots);
-      endPoint = pointFor(
-        endJointId, evaluation.transforms, centers, jointPivots);
-      if (!jointPoint || !endPoint) continue;
-      const currentVector = endPoint.clone().sub(jointPoint);
-      const targetVector = targetPoint.clone().sub(jointPoint);
-      if (currentVector.lengthSq() <= EPSILON
-          || targetVector.lengthSq() <= EPSILON) continue;
-      currentVector.normalize();
-      targetVector.normalize();
-      const delta = shortestArc(currentVector, targetVector);
-      if (!delta.isQuaternion || !Number.isFinite(delta.lengthSq())) continue;
-
-      const parentId = parentFor(
-        (forest.components || []).find(component =>
-          (component.nodeIds || []).map(Number).includes(jointId)), jointId);
-      const parentRotation = parentId === null
-        ? new THREE.Quaternion()
-        : evaluation.rotations.get(parentId)?.clone()
-          || new THREE.Quaternion();
-      const localDelta = parentRotation.clone().invert()
-        .multiply(delta)
-        .multiply(parentRotation)
-        .normalize();
-      const previous = working.get(jointId)?.clone()
-        || new THREE.Quaternion();
-      const next = localDelta.multiply(previous).normalize();
-      if (!Number.isFinite(next.x) || !Number.isFinite(next.y)
-          || !Number.isFinite(next.z) || !Number.isFinite(next.w)) continue;
-      working.set(jointId, next);
-      evaluation = buildEvaluation({
-        forest, centers, pivots: jointPivots, rotations: working,
-      });
-      endPoint = pointFor(
-        endJointId, evaluation.transforms, centers, jointPivots);
-      residual = distanceBetween(endPoint, targetPoint);
-      if (!Number.isFinite(residual)) {
-        // Keep the last valid pose and abandon this solve safely.
-        working.set(jointId, previous);
-        evaluation = buildEvaluation({
-          forest, centers, pivots: jointPivots, rotations: working,
-        });
-        endPoint = pointFor(
-          endJointId, evaluation.transforms, centers, jointPivots);
-        residual = distanceBetween(endPoint, targetPoint);
-        break;
-      }
-      if (residual <= tolerance) break;
-    }
-  }
-
   const rotations = new Map();
-  solverJointIds.forEach(jointId => {
+  for (const jointId of [anchor, bend]) {
     const before = original.get(jointId) || new THREE.Quaternion();
     const after = working.get(jointId) || new THREE.Quaternion();
-    if (changedQuaternion(before, after)) rotations.set(jointId, after.clone().normalize());
-  });
-  return {
-    rotations,
-    iterations,
-    residual: Number.isFinite(residual) ? residual : Infinity,
-    reached: Number.isFinite(residual) && residual <= tolerance,
-  };
+    if (Math.abs(Math.abs(before.dot(after)) - 1) > 1e-7) {
+      rotations.set(jointId, after.clone().normalize());
+    }
+  }
+  const residual = Number.isFinite(result.residual) ? result.residual : Infinity;
+  return {rotations, iterations, residual,
+    reached: residual <= tolerance};
 }

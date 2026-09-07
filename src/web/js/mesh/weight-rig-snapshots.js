@@ -156,6 +156,9 @@ export function modelRigSnapshot(modelSkinningRig, {
       [...(modelSkinningRig.defaultRestFrameByJointId || new Map())]
         .map(([jointId, frame]) => [jointId,
           frame ? (frame.toArray?.() || [...frame]) : null]));
+    snapshot.restContinuationChildByJointId = Object.fromEntries(
+      [...(modelSkinningRig.restContinuationChildByJointId || new Map())]
+        .map(([jointId, childId]) => [jointId, childId]));
     snapshot.sourceBoneToModelJointId = Object.fromEntries(
       modelSkinningRig.sourceBoneToModelJointId || []);
     snapshot.reconciliation = modelSkinningRig.reconciliation?.reconciliation

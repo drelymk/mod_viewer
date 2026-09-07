@@ -145,46 +145,56 @@ def test_runtime_resets_keep_live_state_and_fresh_mutable_defaults(module_page):
     }
 
 
-def test_rig_ik_resolves_root_safe_chains_and_solves_from_local_pose(module_page):
+def test_rig_limb_detection_and_two_control_solver(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
       const ik = await import('./js/mesh/weight-rig-ik.js');
       const component = {
-        rootId: 0, nodeIds: [0, 1, 2, 3, 4],
-        parentById: {0: null, 1: 0, 2: 1, 3: 2, 4: 3},
+        rootId: 0, nodeIds: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        parentById: {0: null, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4,
+          6: 5, 7: 5, 8: 5},
+        childrenById: {0: [1], 1: [2], 2: [3], 3: [4], 4: [5],
+          5: [6, 7, 8], 6: [], 7: [], 8: []},
       };
-      const chain = ik.resolveIkChain({
-        component, endJointId: 4, requestedLength: 3,
-      });
-      const clamped = ik.resolveIkChain({
-        component, endJointId: 4, requestedLength: 12,
-      });
-      const root = ik.resolveIkChain({
-        component, endJointId: 0, requestedLength: 3,
-      });
-      const childOfRoot = ik.resolveIkChain({
-        component, endJointId: 1, requestedLength: 3,
-      });
-      const forest = {components: [{
-        rootId: 0, nodeIds: [0, 1, 2, 3],
-        parentById: {0: null, 1: 0, 2: 1, 3: 2},
-        childrenById: {0: [1], 1: [2], 2: [3], 3: []},
-      }]};
-      const centers = new Map([
-        [0, [0, 0, 0]], [1, [0, 0, 0]],
-        [2, [1, 0, 0]], [3, [2, 0, 0]],
+      const points = new Map([
+        [0, [-1, 0, 0]], [1, [0, 0, 0]], [2, [.5, 0, 0]],
+        [3, [1, 0, 0]], [4, [1.5, 0, 0]], [5, [2, 0, 0]],
+        [6, [2, .2, 0]], [7, [2, 0, .2]], [8, [2, -.2, 0]],
       ]);
-      const pivots = new Map(centers);
-      const initial = new Map([[1, new THREE.Quaternion()]]);
-      const solved = ik.solveIkChain({
-        forest, centers, jointPivots: pivots, localRotations: initial,
-        chainJointIds: [1, 2, 3], target: [1.5, .8, 0],
+      const rig = {
+        components: [component], componentByJointId: new Map(
+          component.nodeIds.map(id => [id, 0])),
+        jointPivotByJointId: points, centerByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6],
+        ]),
+        restFrameByJointId: new Map(),
+      };
+      const detected = ik.detectLimbPath({
+        rig, anchorJointId: 1, role: 'left_arm',
+      });
+      const initial = new Map([[5, new THREE.Quaternion()]]);
+      const solved = ik.solveLimbIk({
+        forest: {components: [component]}, centers: points,
+        jointPivots: points, localRotations: initial,
+        anchorJointId: detected.anchorJointId,
+        bendJointId: detected.bendJointId,
+        endJointId: detected.endJointId,
+        pathJointIds: detected.pathJointIds,
+        bendDirection: detected.bendDirection,
+        target: [1.5, .8, 0],
       });
       const finite = [...solved.rotations.values()].every(rotation =>
         [rotation.x, rotation.y, rotation.z, rotation.w].every(Number.isFinite)
         && Math.abs(rotation.length() - 1) < 1e-6);
       return {
-        chain, clamped, root, childOfRoot,
+        detected: {
+          available: detected.available,
+          path: detected.pathJointIds,
+          bend: detected.bendJointId,
+          end: detected.endJointId,
+          confidence: detected.confidence,
+        },
         solved: {
           iterations: solved.iterations,
           residual: solved.residual,
@@ -194,16 +204,16 @@ def test_rig_ik_resolves_root_safe_chains_and_solves_from_local_pose(module_page
         },
       };
     }""")
-    assert result["chain"]["jointIds"] == [2, 3, 4]
-    assert result["chain"]["solverJointIds"] == [2, 3]
-    assert result["chain"]["available"]
-    assert result["clamped"]["jointIds"] == [1, 2, 3, 4]
-    assert result["clamped"]["clamped"]
-    assert not result["root"]["available"]
-    assert not result["childOfRoot"]["available"]
+    assert result["detected"] == {
+        "available": True,
+        "path": [1, 2, 3, 4, 5],
+        "bend": 3,
+        "end": 5,
+        "confidence": "high",
+    }
     assert result["solved"]["finite"]
-    assert result["solved"]["ids"] == [1, 2]
-    assert result["solved"]["endDistance"] < 0.01
+    assert result["solved"]["ids"] == [1, 3]
+    assert result["solved"]["endDistance"] < 0.1
 
 
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
@@ -511,8 +521,8 @@ def test_rig_overlay_switches_between_fk_and_ik_target_modes(module_page):
         visible: true, selectedJointId: 3, picking: false,
         rotationSnapDegrees: 15, model: source,
         ik: {enabled: true, available: true, endJointId: 3,
-          chainLength: 3, jointIds: [1, 2, 3], solverJointIds: [1, 2],
-          effectiveLength: 3, clamped: false},
+          activeLimbRole: 'left_arm', pathJointIds: [1, 2, 3],
+          anchorJointId: 1, bendJointId: 2, bendSign: 1},
       };
       const solveCalls = [];
       const finishCalls = [];

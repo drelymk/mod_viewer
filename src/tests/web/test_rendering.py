@@ -1172,8 +1172,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             ikControl: {
               present: !!document.querySelector('.rig-panel-enable-ik'),
               disabled: document.querySelector('.rig-panel-enable-ik')?.disabled,
-              chainLengthPresent: !!document.querySelector('.rig-chain-length'),
-              chainPreviewPresent: !!document.querySelector('.rig-chain-preview'),
+              limbSelectorPresent: !!document.querySelector('.rig-limb-select'),
+              setAnchorPresent: !!document.querySelector('.rig-set-limb-anchor'),
+              chainLengthAbsent: !document.querySelector('.rig-chain-length'),
+              detectedPathPresent: !!document.querySelector('.rig-chain-preview'),
             },
             obsoleteReadoutsRemoved: !document.querySelector(
               '.rig-readout-title, .rig-nav-row, .rig-nav-button'),
@@ -1255,11 +1257,12 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             "resetPoseDisabled": False,
         }
         assert result["advancedGroups"] == [
-            "Inverse Kinematics", "Manual Rotation", "Overlay", "Rig Structure"]
+            "Limb IK", "Manual Rotation", "Overlay", "Rig Structure"]
         assert result["rigAdvancedSummary"] == "Rig Advanced Settings"
         assert result["ikControl"] == {
             "present": True, "disabled": True,
-            "chainLengthPresent": True, "chainPreviewPresent": True,
+            "limbSelectorPresent": True, "setAnchorPresent": True,
+            "chainLengthAbsent": True, "detectedPathPresent": True,
         }
         assert result["obsoleteReadoutsRemoved"]
         assert result["primaryOrderIndexes"] == sorted(

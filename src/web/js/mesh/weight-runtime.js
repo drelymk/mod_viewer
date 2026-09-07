@@ -2,9 +2,9 @@
 
 export const EMPTY_ACTIVE_VERTICES = new Uint32Array();
 export const RIG_ROTATION_SNAP_DEGREES = Object.freeze([0, 5, 15, 30]);
-export const RIG_IK_DEFAULT_CHAIN_LENGTH = 3;
-export const RIG_IK_MIN_CHAIN_LENGTH = 2;
-export const RIG_IK_MAX_CHAIN_LENGTH = 12;
+export const RIG_LIMB_ROLES = Object.freeze([
+  'left_arm', 'right_arm', 'left_leg', 'right_leg',
+]);
 
 function createModelRigDefaults() {
   return {
@@ -28,7 +28,7 @@ function createModelRigDefaults() {
     rigAmbiguousCount: 0,
     rotationSnapDegrees: 0,
     ikEnabled: false,
-    ikChainLength: RIG_IK_DEFAULT_CHAIN_LENGTH,
+    activeLimbRole: 'left_arm',
     overlayScope: 'selection',
     explicitRootSignatures: new Set(),
   };
@@ -40,6 +40,7 @@ function createRigPresetDefaults() {
     loading: false,
     error: null,
     presets: [],
+    limbMappings: {},
     selectedPresetId: null,
     lastApplyResult: null,
   };
