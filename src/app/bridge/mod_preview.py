@@ -26,6 +26,79 @@ from app.runtime import server
 from app.session import edit as edit_session
 
 
+def _unique_strings(values):
+    return list(dict.fromkeys(value for value in values
+                              if isinstance(value, str) and value))
+
+
+def _clear_committed_color_adjustments(folder_path, targets, saved_meshes):
+    """Compare only committed targets before clearing their metadata."""
+    captured = {}
+    for target in targets if isinstance(targets, list) else []:
+        if not isinstance(target, dict):
+            continue
+        semantic_key = target.get("semantic_key")
+        metadata_key = target.get("metadata_key")
+        if (isinstance(semantic_key, str) and semantic_key
+                and isinstance(metadata_key, str) and metadata_key):
+            captured.setdefault((semantic_key, metadata_key), []).append(target)
+
+    expected = {}
+    failed = []
+    invalid_saved_identity = False
+    for saved in saved_meshes if isinstance(saved_meshes, list) else []:
+        if not isinstance(saved, dict):
+            invalid_saved_identity = True
+            continue
+        semantic_key = saved.get("semantic_key")
+        metadata_key = saved.get("metadata_key")
+        if not (isinstance(semantic_key, str) and semantic_key
+                and isinstance(metadata_key, str) and metadata_key):
+            invalid_saved_identity = True
+            if isinstance(metadata_key, str) and metadata_key:
+                failed.append(metadata_key)
+            continue
+        if metadata_key in failed:
+            continue
+        candidates = captured.get((semantic_key, metadata_key), [])
+        if len(candidates) != 1:
+            failed.append(metadata_key)
+            continue
+        if metadata_key in expected:
+            expected.pop(metadata_key, None)
+            failed.append(metadata_key)
+            continue
+        expected[metadata_key] = candidates[0].get("adjustment")
+
+    receipt = {"cleared": [], "preserved": [], "failed": failed}
+    helper_failed = False
+    if expected:
+        try:
+            reset = metadata.clear_mesh_color_adjustments_if_unchanged(
+                folder_path, expected)
+        except Exception:
+            reset = None
+            helper_failed = True
+        if not isinstance(reset, dict):
+            helper_failed = True
+        else:
+            for status in ("cleared", "preserved", "failed"):
+                receipt[status].extend(reset.get(status, []))
+            if reset.get("error") and not reset.get("failed"):
+                helper_failed = True
+
+        if helper_failed:
+            receipt["cleared"] = [
+                key for key in receipt["cleared"] if key not in expected]
+            receipt["preserved"] = [
+                key for key in receipt["preserved"] if key not in expected]
+            receipt["failed"].extend(expected)
+
+    for status in receipt:
+        receipt[status] = _unique_strings(receipt[status])
+    return receipt, invalid_saved_identity or helper_failed
+
+
 class ModPreview:
     def __init__(self, access):
         self._access = access
@@ -167,17 +240,10 @@ class ModPreview:
                 context, overrides, self._active_mesh_keys.get(folder_path),
                 tex_key, targets, texture_usage, **save_kwargs)
             if result.get("status") == "ok":
-                keys = [
-                    item.get("metadata_key")
-                    for item in (result.get("saved_meshes") or [])
-                    if isinstance(item, dict)
-                ]
-                try:
-                    cleared = metadata.clear_mesh_color_adjustments(
-                        folder_path, keys)
-                    if cleared.get("error"):
-                        result["warning"] = "color_state_reset_failed"
-                except Exception:
+                receipt, cleanup_failed = _clear_committed_color_adjustments(
+                    folder_path, targets, result.get("saved_meshes"))
+                result["metadata_reset"] = receipt
+                if cleanup_failed or receipt["failed"]:
                     result["warning"] = "color_state_reset_failed"
             return result
         except Exception:

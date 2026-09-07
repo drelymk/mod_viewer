@@ -240,6 +240,105 @@ def test_clear_mesh_color_adjustments_is_atomic_and_preserves_other_metadata(
     assert "body" not in saved["mesh_color_adjustments"]
 
 
+def test_clear_mesh_color_adjustments_if_unchanged_clears_committed_state(
+        tmp_path):
+    path = tmp_path / metadata.METADATA_NAME
+    original = {
+        "mesh_names": {"mesh": "Body"},
+        "future": {"keep": True},
+        "mesh_color_adjustments": {
+            "body": {"hue": 30},
+            "other": {"hue": 45},
+        },
+    }
+    path.write_text(json.dumps(original), encoding="utf-8")
+
+    result = metadata.clear_mesh_color_adjustments_if_unchanged(
+        str(tmp_path), {"body": {"hue": 30}})
+
+    assert result["cleared"] == ["body"]
+    assert result["preserved"] == []
+    assert result["failed"] == []
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["mesh_names"] == original["mesh_names"]
+    assert saved["future"] == original["future"]
+    assert saved["mesh_color_adjustments"] == {"other": {"hue": 45}}
+
+
+def test_clear_mesh_color_adjustments_if_unchanged_preserves_newer_and_malformed(
+        tmp_path):
+    path = tmp_path / metadata.METADATA_NAME
+    current = {
+        "mesh_color_adjustments": {
+            "newer": {"hue": 60},
+            "malformed": {"hue": "later"},
+        },
+    }
+    path.write_text(json.dumps(current), encoding="utf-8")
+
+    result = metadata.clear_mesh_color_adjustments_if_unchanged(
+        str(tmp_path), {
+            "newer": {"hue": 30},
+            "malformed": {"hue": 30},
+        })
+
+    assert result["cleared"] == []
+    assert result["preserved"] == ["newer", "malformed"]
+    assert result["failed"] == []
+    assert json.loads(path.read_text(encoding="utf-8")) == current
+
+
+def test_clear_mesh_color_adjustments_if_unchanged_mixes_and_handles_absent(
+        tmp_path):
+    path = tmp_path / metadata.METADATA_NAME
+    path.write_text(json.dumps({
+        "mesh_color_adjustments": {
+            "matching": {"hue": 30},
+            "newer": {"hue": 60},
+        },
+    }), encoding="utf-8")
+
+    result = metadata.clear_mesh_color_adjustments_if_unchanged(
+        str(tmp_path), {
+            "matching": {"hue": 30},
+            "newer": {"hue": 30},
+            "absent": {"hue": 30},
+        })
+
+    assert result["cleared"] == ["absent", "matching"]
+    assert result["preserved"] == ["newer"]
+    assert result["failed"] == []
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["mesh_color_adjustments"] == {"newer": {"hue": 60}}
+
+
+def test_clear_mesh_color_adjustments_if_unchanged_reports_save_failure(
+        tmp_path, monkeypatch):
+    path = tmp_path / metadata.METADATA_NAME
+    original = {
+        "mesh_color_adjustments": {
+            "matching": {"hue": 30},
+            "newer": {"hue": 60},
+        },
+    }
+    path.write_text(json.dumps(original), encoding="utf-8")
+
+    def fail_save(*_args, **_kwargs):
+        raise OSError("metadata write failed")
+
+    monkeypatch.setattr(metadata, "_save", fail_save)
+    result = metadata.clear_mesh_color_adjustments_if_unchanged(
+        str(tmp_path), {
+            "matching": {"hue": 30},
+            "newer": {"hue": 30},
+        })
+
+    assert result["cleared"] == []
+    assert result["preserved"] == ["newer"]
+    assert result["failed"] == ["matching"]
+    assert json.loads(path.read_text(encoding="utf-8")) == original
+
+
 def test_hydrate_mesh_color_adjustments_uses_canonical_and_safe_legacy_keys():
     canonical = "mesh:[5,\"A.ini\",\"Body\",null,null,[3,0,0],[]]"
     payload = {"meshes": {
