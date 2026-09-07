@@ -7,7 +7,8 @@ import {
   textureSaveTargetsPayload,
 } from '../mesh/texture-save-state.js';
 import {
-  flushMeshColorAdjustmentPersistence, resetMeshColorAdjustment,
+  flushMeshColorAdjustmentPersistence, persistCurrentMeshColorAdjustment,
+  resetMeshColorAdjustment,
 } from '../mesh/mesh-color-state.js';
 import { reloadTextures } from '../mesh/mesh-factory.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
@@ -273,6 +274,13 @@ async function synchronizeCommittedSave(state, result) {
       if (textureSaveTargetMatches(mesh, state, record.target)) {
         resetMeshColorAdjustment(mesh, {persist: false, render: false});
         changedMeshes.add(mesh);
+      } else {
+        try {
+          persistCurrentMeshColorAdjustment(mesh);
+          await flushMeshColorAdjustmentPersistence(mesh);
+        } catch (_metadataError) {
+          unresolvedFailedTargets += 1;
+        }
       }
       continue;
     }
@@ -281,6 +289,8 @@ async function synchronizeCommittedSave(state, result) {
       if (textureSaveTargetMatches(mesh, state, record.target)) {
         resetMeshColorAdjustment(mesh, {persist: true, render: false});
         changedMeshes.add(mesh);
+      } else {
+        persistCurrentMeshColorAdjustment(mesh);
       }
       await flushMeshColorAdjustmentPersistence(mesh);
     } catch (_metadataError) {

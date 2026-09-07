@@ -48,6 +48,11 @@ function persistMeshColorAdjustment(mesh, adjustment = getMeshColorAdjustment(me
   return request;
 }
 
+/** Queue the current live color state even when no write is already pending. */
+export function persistCurrentMeshColorAdjustment(mesh) {
+  return persistMeshColorAdjustment(mesh, getMeshColorAdjustment(mesh));
+}
+
 /** Wait for queued color writes and propagate failures to destructive flows. */
 export function flushMeshColorAdjustmentPersistence(mesh) {
   return persistenceResults.get(mesh) || Promise.resolve();
