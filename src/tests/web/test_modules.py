@@ -145,6 +145,67 @@ def test_runtime_resets_keep_live_state_and_fresh_mutable_defaults(module_page):
     }
 
 
+def test_rig_ik_resolves_root_safe_chains_and_solves_from_local_pose(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const ik = await import('./js/mesh/weight-rig-ik.js');
+      const component = {
+        rootId: 0, nodeIds: [0, 1, 2, 3, 4],
+        parentById: {0: null, 1: 0, 2: 1, 3: 2, 4: 3},
+      };
+      const chain = ik.resolveIkChain({
+        component, endJointId: 4, requestedLength: 3,
+      });
+      const clamped = ik.resolveIkChain({
+        component, endJointId: 4, requestedLength: 12,
+      });
+      const root = ik.resolveIkChain({
+        component, endJointId: 0, requestedLength: 3,
+      });
+      const childOfRoot = ik.resolveIkChain({
+        component, endJointId: 1, requestedLength: 3,
+      });
+      const forest = {components: [{
+        rootId: 0, nodeIds: [0, 1, 2, 3],
+        parentById: {0: null, 1: 0, 2: 1, 3: 2},
+        childrenById: {0: [1], 1: [2], 2: [3], 3: []},
+      }]};
+      const centers = new Map([
+        [0, [0, 0, 0]], [1, [0, 0, 0]],
+        [2, [1, 0, 0]], [3, [2, 0, 0]],
+      ]);
+      const pivots = new Map(centers);
+      const initial = new Map([[1, new THREE.Quaternion()]]);
+      const solved = ik.solveIkChain({
+        forest, centers, jointPivots: pivots, localRotations: initial,
+        chainJointIds: [1, 2, 3], target: [1.5, .8, 0],
+      });
+      const finite = [...solved.rotations.values()].every(rotation =>
+        [rotation.x, rotation.y, rotation.z, rotation.w].every(Number.isFinite)
+        && Math.abs(rotation.length() - 1) < 1e-6);
+      return {
+        chain, clamped, root, childOfRoot,
+        solved: {
+          iterations: solved.iterations,
+          residual: solved.residual,
+          finite,
+          ids: [...solved.rotations.keys()],
+          endDistance: solved.residual,
+        },
+      };
+    }""")
+    assert result["chain"]["jointIds"] == [2, 3, 4]
+    assert result["chain"]["solverJointIds"] == [2, 3]
+    assert result["chain"]["available"]
+    assert result["clamped"]["jointIds"] == [1, 2, 3, 4]
+    assert result["clamped"]["clamped"]
+    assert not result["root"]["available"]
+    assert not result["childOfRoot"]["available"]
+    assert result["solved"]["finite"]
+    assert result["solved"]["ids"] == [1, 2]
+    assert result["solved"]["endDistance"] < 0.01
+
+
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -422,6 +483,80 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
     assert result["picked"]["arcballEnabled"] is True
     assert result["interactionDuringGizmo"] is True
     assert result["interactionAfterGizmo"] is False
+
+
+def test_rig_overlay_switches_between_fk_and_ik_target_modes(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera();
+      const canvas = document.createElement('canvas');
+      const model = new THREE.Object3D();
+      scene.add(model);
+      const source = {
+        key: 'model-rig', structureRevision: 1,
+        joints: [1, 2, 3].map((jointId, index) => ({
+          jointId, restCenter: [index, 0, 0], restPivot: [index, 0, 0],
+        })),
+        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2, 3],
+          parentById: {1: null, 2: 1, 3: 2},
+          childrenById: {1: [2], 2: [3], 3: []}}],
+        forestEdges: [
+          {parentId: 1, childId: 2}, {parentId: 2, childId: 3},
+        ],
+      };
+      let state = {
+        visible: true, selectedJointId: 3, picking: false,
+        rotationSnapDegrees: 15, model: source,
+        ik: {enabled: true, available: true, endJointId: 3,
+          chainLength: 3, jointIds: [1, 2, 3], solverJointIds: [1, 2],
+          effectiveLength: 3, clamped: false},
+      };
+      const solveCalls = [];
+      const finishCalls = [];
+      const controller = createRigOverlayController({
+        scene, camera, canvas, getMeshes: () => [model],
+        getRigState: () => state, getRigJointPoseFrame: () => ({
+          pivot: [2, 0, 0], center: [2, 0, 0],
+          parentRotation: [0, 0, 0, 1], boneRotation: [0, 0, 0, 1],
+          restRotation: [0, 0, 0, 1], gizmoRotation: [0, 0, 0, 1],
+        }), solveRigIkTarget: (...args) => solveCalls.push(args),
+        finishRigJointPose: (...args) => finishCalls.push(args),
+      });
+      controller.refresh(state);
+      const controls = await controller.ensureTransformControls();
+      const ikBefore = controller.getDebugState();
+      const ikMode = controls.getMode?.();
+      const ikSpace = controls.space;
+      const ikSnap = controls.rotationSnap;
+      controls.dispatchEvent({type: 'dragging-changed', value: true});
+      controls.object.position.x += 0.5;
+      controls.dispatchEvent({type: 'objectChange'});
+      controls.dispatchEvent({type: 'dragging-changed', value: false});
+      await Promise.resolve();
+      state = {...state, ik: {...state.ik, enabled: false}};
+      controller.refresh(state);
+      const fkMode = controls.getMode?.();
+      const fkSpace = controls.space;
+      const fk = controller.getDebugState();
+      controller.dispose();
+      return {ikBefore, ikMode, ikSpace, ikSnap, solveCalls: solveCalls.length,
+        solveTarget: solveCalls[0]?.[0], finishCalls, fkMode, fkSpace, fk};
+    }""")
+    assert result["ikBefore"]["ikTargetVisible"]
+    assert result["ikBefore"]["controlsAttachedTo"] == "ik-target"
+    assert result["ikMode"] == "translate"
+    assert result["ikSpace"] == "world"
+    assert result["ikSnap"] is None
+    assert result["solveCalls"] == 1
+    assert result["solveTarget"] == pytest.approx([2.5, 0, 0])
+    assert result["finishCalls"] == [[3]]
+    assert result["fkMode"] == "rotate"
+    assert result["fkSpace"] == "local"
+    assert not result["fk"]["ikTargetVisible"]
+    assert result["fk"]["controlsAttachedTo"] == "fk-proxy"
 
 
 def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):

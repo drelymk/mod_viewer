@@ -2,6 +2,9 @@
 
 export const EMPTY_ACTIVE_VERTICES = new Uint32Array();
 export const RIG_ROTATION_SNAP_DEGREES = Object.freeze([0, 5, 15, 30]);
+export const RIG_IK_DEFAULT_CHAIN_LENGTH = 3;
+export const RIG_IK_MIN_CHAIN_LENGTH = 2;
+export const RIG_IK_MAX_CHAIN_LENGTH = 12;
 
 function createModelRigDefaults() {
   return {
@@ -24,6 +27,8 @@ function createModelRigDefaults() {
     rigAttachmentCount: 0,
     rigAmbiguousCount: 0,
     rotationSnapDegrees: 0,
+    ikEnabled: false,
+    ikChainLength: RIG_IK_DEFAULT_CHAIN_LENGTH,
     overlayScope: 'selection',
     explicitRootSignatures: new Set(),
   };

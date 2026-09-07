@@ -80,12 +80,25 @@ function topologyKey(source) {
   return JSON.stringify([source.key, source.structureRevision]);
 }
 
-function canPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
+function canFkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
   if (snapshot?.picking || !source || boneId === null) {
     return false;
   }
   const component = componentFor(source, boneId);
   return !!component && component.rootId !== boneId;
+}
+
+function canIkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
+  if (snapshot?.picking || !source || boneId === null) return false;
+  const ik = snapshot?.ik;
+  return !!ik?.enabled && !!ik.available
+    && Number(ik.endJointId) === Number(boneId);
+}
+
+function manipulationMode(snapshot, source, boneId = selectedBoneFor(snapshot)) {
+  if (canIkPose(snapshot, source, boneId)) return 'ik';
+  if (snapshot?.ik?.enabled) return null;
+  return canFkPose(snapshot, source, boneId) ? 'fk' : null;
 }
 
 let rigTransformInteractionActive = false;
@@ -119,7 +132,7 @@ function centerColor(component, jointId, selectedJointId) {
 export function createRigOverlayController({
   scene, camera, canvas, getMeshes, getRigState,
   getRigJointPoseFrame, arcballControls, setRigJointRotation,
-  finishRigJointPose, onTransformControlsUnavailable,
+  solveRigIkTarget, finishRigJointPose, onTransformControlsUnavailable,
   requestRender,
 } = {}) {
   const selectedIdFor = snapshot => selectedBoneFor(snapshot);
@@ -175,6 +188,17 @@ export function createRigOverlayController({
   proxy.add(proxyRing);
   group.add(proxy);
 
+  const ikTargetProxy = new THREE.Object3D();
+  ikTargetProxy.name = 'viewer-inferred-rig-ik-target';
+  ikTargetProxy.userData.isViewerRigOverlay = true;
+  const ikTargetMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(0.045, 12, 8), selectedMaterial);
+  ikTargetMarker.name = 'viewer-inferred-rig-ik-target-marker';
+  ikTargetMarker.raycast = () => {};
+  ikTargetProxy.add(ikTargetMarker);
+  ikTargetProxy.visible = false;
+  group.add(ikTargetProxy);
+
   let transformControls = null;
   let transformHelper = null;
   let transformControlsReady = null;
@@ -197,6 +221,7 @@ export function createRigOverlayController({
   let dragParentRotation = null;
   let dragRestRotation = null;
   let dragJointId = null;
+  let dragMode = null;
   let disposed = false;
 
   function setArcballDragState(dragging) {
@@ -220,6 +245,7 @@ export function createRigOverlayController({
     dragParentRotation = null;
     dragRestRotation = null;
     dragJointId = null;
+    dragMode = null;
     rigTransformInteractionActive = false;
   }
 
@@ -352,23 +378,39 @@ export function createRigOverlayController({
   function updateProxy(source = currentSource, snapshot = currentSnapshot) {
     const boneId = selectedIdFor(snapshot);
     selectedJointId = boneId;
-    if (!canPose(snapshot, source, boneId)) {
+    const mode = manipulationMode(snapshot, source, boneId);
+    if (!mode) {
       detachControls();
       proxy.visible = false;
+      ikTargetProxy.visible = false;
       return;
     }
     if (poseDragActive && boneId === dragBoneId) {
-      proxy.visible = true;
+      proxy.visible = mode === 'fk';
+      ikTargetProxy.visible = mode === 'ik';
       return;
     }
     const poseFrame = getRigJointPoseFrame?.(boneId);
     const pivot = poseFrame?.pivot || pivotFor(source, boneId);
+    if (mode === 'ik') {
+      if (pivot) ikTargetProxy.position.copy(vector(pivot));
+      proxy.visible = false;
+      ikTargetProxy.visible = true;
+      transformControls?.setMode?.('translate');
+      transformControls?.setSpace?.('world');
+      transformControls?.attach?.(ikTargetProxy);
+      transformControls?.update?.();
+      return;
+    }
     if (pivot) proxy.position.copy(vector(pivot));
     const values = poseFrame?.gizmoRotation || poseFrame?.boneRotation
       || quaternionFor(source, boneId);
     if (values) proxy.quaternion.set(...values).normalize();
     else proxy.quaternion.identity();
     proxy.visible = true;
+    ikTargetProxy.visible = false;
+    transformControls?.setMode?.('rotate');
+    transformControls?.setSpace?.('local');
     if (transformControls) {
       transformControls.attach?.(proxy);
       transformControls.update?.();
@@ -377,7 +419,8 @@ export function createRigOverlayController({
 
   function syncRotationSnap(snapshot = currentSnapshot) {
     const degrees = Number(snapshot?.rotationSnapDegrees) || 0;
-    const radians = degrees > 0 ? THREE.MathUtils.degToRad(degrees) : null;
+    const radians = snapshot?.ik?.enabled
+      ? null : degrees > 0 ? THREE.MathUtils.degToRad(degrees) : null;
     transformControls?.setRotationSnap?.(radians);
   }
 
@@ -394,25 +437,40 @@ export function createRigOverlayController({
     }
     selectedJointId = id;
     const poseFrame = getRigJointPoseFrame?.(id);
-    if (poseFrame?.gizmoRotation?.length === 4) {
-      proxy.position.copy(vector(poseFrame.pivot));
-      proxy.quaternion.set(...poseFrame.gizmoRotation).normalize();
-    } else if (poseFrame?.boneRotation?.length === 4) {
-      proxy.position.copy(vector(poseFrame.pivot));
-      proxy.quaternion.set(...poseFrame.boneRotation).normalize();
-    } else if (detail.quaternion?.length === 4) {
-      proxy.quaternion.set(...detail.quaternion).normalize();
-    }
-    proxy.visible = canPose(currentSnapshot, currentSource, id);
-    if (!proxy.visible) detachControls();
-    else {
+    const mode = manipulationMode(currentSnapshot, currentSource, id);
+    if (mode === 'ik') {
+      if (poseFrame?.pivot) ikTargetProxy.position.copy(vector(poseFrame.pivot));
+      proxy.visible = false;
+      ikTargetProxy.visible = true;
+      transformControls?.setMode?.('translate');
+      transformControls?.setSpace?.('world');
+      transformControls?.attach?.(ikTargetProxy);
+      transformControls?.update?.();
+    } else if (mode === 'fk') {
+      if (poseFrame?.gizmoRotation?.length === 4) {
+        proxy.position.copy(vector(poseFrame.pivot));
+        proxy.quaternion.set(...poseFrame.gizmoRotation).normalize();
+      } else if (poseFrame?.boneRotation?.length === 4) {
+        proxy.position.copy(vector(poseFrame.pivot));
+        proxy.quaternion.set(...poseFrame.boneRotation).normalize();
+      } else if (detail.quaternion?.length === 4) {
+        proxy.quaternion.set(...detail.quaternion).normalize();
+      }
+      proxy.visible = true;
+      ikTargetProxy.visible = false;
+      transformControls?.setMode?.('rotate');
+      transformControls?.setSpace?.('local');
       transformControls?.attach?.(proxy);
       transformControls?.update?.();
+    } else {
+      detachControls();
+      proxy.visible = false;
+      ikTargetProxy.visible = false;
     }
   }
 
   async function ensureTransformControls() {
-    if (!canPose(currentSnapshot, currentSource,
+    if (!manipulationMode(currentSnapshot, currentSource,
       selectedIdFor(currentSnapshot))) return null;
     if (transformControlsReady) return transformControlsReady;
     transformControlsReady = import('three/addons/controls/TransformControls.js')
@@ -423,8 +481,10 @@ export function createRigOverlayController({
         transformHelper.userData.isViewerRigTransformHelper = true;
         scene?.add(transformHelper);
         controlsCreateCount += 1;
-        transformControls.setMode?.('rotate');
-        transformControls.setSpace?.('local');
+        const initialMode = manipulationMode(
+          currentSnapshot, currentSource, selectedIdFor(currentSnapshot));
+        transformControls.setMode?.(initialMode === 'ik' ? 'translate' : 'rotate');
+        transformControls.setSpace?.(initialMode === 'ik' ? 'world' : 'local');
         transformControls.addEventListener?.('mouseUp', () => {
           queueMicrotask(() => {
             rigTransformInteractionActive = false;
@@ -437,6 +497,10 @@ export function createRigOverlayController({
           if (!poseDragActive) return;
           const boneId = dragBoneId;
           if (boneId === null) return;
+          if (dragMode === 'ik') {
+            solveRigIkTarget?.(ikTargetProxy.position.toArray(), {dragging: true});
+            return;
+          }
           let localRotation = proxy.quaternion.clone();
           if (dragParentRotation) {
             localRotation = dragParentRotation.clone().invert()
@@ -456,19 +520,26 @@ export function createRigOverlayController({
           if (event.value) {
             const source = currentSource;
             const boneId = selectedIdFor(currentSnapshot);
-            if (!canPose(currentSnapshot, source, boneId)) return;
+            const mode = manipulationMode(currentSnapshot, source, boneId);
+            if (!mode) return;
             poseDragActive = true;
             dragBoneId = boneId;
             dragJointId = boneId;
-            const modelPoseFrame = getRigJointPoseFrame?.(dragJointId);
-            dragParentRotation = modelPoseFrame?.parentRotation?.length === 4
-              ? new THREE.Quaternion(
-                ...modelPoseFrame.parentRotation).normalize()
-              : new THREE.Quaternion();
-            dragRestRotation = modelPoseFrame?.restRotation?.length === 4
-              ? new THREE.Quaternion(
-                ...modelPoseFrame.restRotation).normalize()
-              : new THREE.Quaternion();
+            dragMode = mode;
+            if (mode === 'fk') {
+              const modelPoseFrame = getRigJointPoseFrame?.(dragJointId);
+              dragParentRotation = modelPoseFrame?.parentRotation?.length === 4
+                ? new THREE.Quaternion(
+                  ...modelPoseFrame.parentRotation).normalize()
+                : new THREE.Quaternion();
+              dragRestRotation = modelPoseFrame?.restRotation?.length === 4
+                ? new THREE.Quaternion(
+                  ...modelPoseFrame.restRotation).normalize()
+                : new THREE.Quaternion();
+            } else {
+              dragParentRotation = null;
+              dragRestRotation = null;
+            }
             setArcballDragState(true);
             rigTransformInteractionActive = true;
           } else if (event.value === false) {
@@ -478,6 +549,7 @@ export function createRigOverlayController({
             dragBoneId = null;
             dragParentRotation = null;
             dragRestRotation = null;
+            dragMode = null;
             queueMicrotask(() => {
               rigTransformInteractionActive = false;
             });
@@ -519,7 +591,7 @@ export function createRigOverlayController({
     updateCenterColors();
     updateProxy(currentSource, currentSnapshot);
     syncRotationSnap(currentSnapshot);
-    if (canPose(currentSnapshot, currentSource,
+    if (manipulationMode(currentSnapshot, currentSource,
       selectedIdFor(currentSnapshot))) {
       void ensureTransformControls();
     }
@@ -553,9 +625,13 @@ export function createRigOverlayController({
         edgeCount: lineSegments.geometry.getAttribute('position')?.count / 2 || 0,
         selectedJointId,
         proxyVisible: proxy.visible,
+        ikTargetVisible: ikTargetProxy.visible,
         controlsCreated: !!transformControls,
         controlsCreateCount,
-        controlsAttached: transformControls?.object === proxy,
+        controlsAttached: transformControls?.object === proxy
+          || transformControls?.object === ikTargetProxy,
+        controlsAttachedTo: transformControls?.object === ikTargetProxy
+          ? 'ik-target' : transformControls?.object === proxy ? 'fk-proxy' : null,
         helperInScene: !!transformHelper && transformHelper.parent === scene,
         arcballEnabled: arcballControls?.enabled,
         arcballWasEnabled,
@@ -582,7 +658,8 @@ export function createRigOverlayController({
       jointMaterial.dispose();
       selectedMaterial.dispose();
       lineMaterial.dispose();
-      group.remove(staticGroup, proxy);
+      ikTargetMarker.geometry.dispose();
+      group.remove(staticGroup, proxy, ikTargetProxy);
       scene?.remove(group);
     },
   };

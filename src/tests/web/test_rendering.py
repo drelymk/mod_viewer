@@ -1168,6 +1168,15 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             allJointOptions,
             jointActionsLayout,
             advancedGroups,
+            rigAdvancedSummary: rigAdvanced?.querySelector('summary')?.textContent,
+            ikControl: {
+              present: !!document.querySelector('.rig-panel-enable-ik'),
+              disabled: document.querySelector('.rig-panel-enable-ik')?.disabled,
+              chainLengthPresent: !!document.querySelector('.rig-chain-length'),
+              chainPreviewPresent: !!document.querySelector('.rig-chain-preview'),
+            },
+            obsoleteReadoutsRemoved: !document.querySelector(
+              '.rig-readout-title, .rig-nav-row, .rig-nav-button'),
             primaryOrderIndexes,
             presetDisabled: initialPresetDisabled,
             applyButtonCount: document.querySelectorAll(
@@ -1245,7 +1254,14 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             "clearDisabled": True, "resetJointDisabled": True,
             "resetPoseDisabled": False,
         }
-        assert result["advancedGroups"] == ["Display", "Transform", "Hierarchy"]
+        assert result["advancedGroups"] == [
+            "Inverse Kinematics", "Manual Rotation", "Overlay", "Rig Structure"]
+        assert result["rigAdvancedSummary"] == "Rig Advanced Settings"
+        assert result["ikControl"] == {
+            "present": True, "disabled": True,
+            "chainLengthPresent": True, "chainPreviewPresent": True,
+        }
+        assert result["obsoleteReadoutsRemoved"]
         assert result["primaryOrderIndexes"] == sorted(
             result["primaryOrderIndexes"])
         assert not result["weightActionsInsideAdvanced"]

@@ -302,6 +302,12 @@ of documentation, comments and tests; use portable fixtures instead.
   attachment edges with O(1) Three.js objects. Reconciliation rebuilds on
   source membership/shape changes and resets pose; model structure revisions
   do not change for pose, materials, textures, visibility or model turns.
+- Rig IK is session-only ModelJoint-native CCD: the selected joint is the end
+  effector, the inferred chain never rotates a component root, speculative
+  solves use private transforms, and one target update commits all changed
+  local quaternions through one batch manual-pose transaction. IK never owns a
+  skeleton, deformation path, Physics state, preset schema, or persisted
+  target.
 - Joint selection is independent from pose state: Clear removes the selected
   ModelJoint through the state API, leaving
   manual pose, presets, Weight selection, Physics and overlay visibility

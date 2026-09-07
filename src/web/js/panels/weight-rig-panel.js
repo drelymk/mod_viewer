@@ -4,20 +4,19 @@
 import {
   beginModelPicking, cancelModelPicking, clearSelectedBones,
   ensureModelRigLoaded, getModelPhysicsState, getModelRigState,
-  getModelWeightState, getRigJointPoseFrame, loadSavedBoneSelection,
+  getModelWeightState, loadSavedBoneSelection,
   clearRigJointSelection, resetModelPhysics, resetRigJoint, resetRigPose,
   saveModelWeightSelection,
   selectRigJoint, setBoneSelected, setPhysicsConstraintsEnabled,
   setPhysicsContinuousLinearResponse, setPhysicsDamping, setPhysicsFrequency,
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
   setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
-  setRigJointRoot, setRigOverlayScope,
+  setRigIkChainLength, setRigIkEnabled, setRigJointRoot, setRigOverlayScope,
   setRigRotationSnapDegrees, setRigVisible, setWeightPickerViewMode,
   applyRigPosePresetById,
   deleteRigPosePreset, renameRigPosePreset,
   saveRigPosePreset,
 } from '../mesh/weight-experiment.js';
-import {eulerFromRestFrameDelta} from '../mesh/weight-rig-frames.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 
 let panel = null;
@@ -292,11 +291,6 @@ function selectedJoint(state = latestRigState) {
     Number(joint.jointId) === id) || null;
 }
 
-function componentForJoint(model, jointId) {
-  return (model?.components || []).find(component =>
-    (component.nodeIds || []).includes(Number(jointId))) || null;
-}
-
 function buildRigSection(parent) {
   const section = addSection(parent, 'RIG');
   addText(section, 'weight-rig-control-label', 'Selected Joint');
@@ -381,20 +375,42 @@ function buildRigSection(parent) {
   ui.presetStatus = addText(section, 'rig-hint');
   ui.presetStatus.setAttribute('aria-live', 'polite');
 
-  const advanced = addAdvanced(parent);
-  const display = addRigAdvancedGroup(advanced.content, 'Display');
-  const allLabel = document.createElement('label');
-  allLabel.className = 'weight-checkbox';
-  const all = document.createElement('input');
-  all.type = 'checkbox';
-  all.className = 'rig-panel-show-all';
-  all.addEventListener('change', () => setRigOverlayScope(all.checked ? 'all' : 'selection'));
-  allLabel.appendChild(all);
-  addText(allLabel, 'weight-label', 'Show all overlay joints');
-  display.appendChild(allLabel);
-  ui.showAll = all;
+  const advanced = addAdvanced(parent, 'Rig Advanced Settings');
+  const inverseKinematics = addRigAdvancedGroup(
+    advanced.content, 'Inverse Kinematics');
+  const ikLabel = document.createElement('label');
+  ikLabel.className = 'weight-checkbox';
+  const ik = document.createElement('input');
+  ik.type = 'checkbox';
+  ik.className = 'rig-panel-enable-ik';
+  ik.addEventListener('change', () => setRigIkEnabled(ik.checked));
+  ikLabel.appendChild(ik);
+  addText(ikLabel, 'weight-label', 'Enable IK');
+  inverseKinematics.appendChild(ikLabel);
+  ui.ik = ik;
 
-  const transform = addRigAdvancedGroup(advanced.content, 'Transform');
+  const chainLengthRow = document.createElement('label');
+  chainLengthRow.className = 'rig-row';
+  addText(chainLengthRow, 'rig-label', 'Chain length');
+  const chainLength = document.createElement('input');
+  chainLength.type = 'number';
+  chainLength.className = 'rig-chain-length';
+  chainLength.min = '2';
+  chainLength.max = '12';
+  chainLength.step = '1';
+  chainLength.addEventListener('change', () => {
+    setRigIkChainLength(chainLength.value);
+  });
+  chainLengthRow.appendChild(chainLength);
+  inverseKinematics.appendChild(chainLengthRow);
+  ui.chainLength = chainLength;
+
+  addText(inverseKinematics, 'rig-label', 'Chain');
+  ui.chainPreview = addText(inverseKinematics, 'rig-chain-preview', '—');
+  ui.ikHint = addText(inverseKinematics, 'rig-hint');
+
+  const manualRotation = addRigAdvancedGroup(
+    advanced.content, 'Manual Rotation');
   const snapRow = document.createElement('label');
   snapRow.className = 'rig-row';
   addText(snapRow, 'rig-label', 'Rotation snap');
@@ -408,25 +424,22 @@ function buildRigSection(parent) {
   });
   snap.addEventListener('change', () => setRigRotationSnapDegrees(Number(snap.value)));
   snapRow.appendChild(snap);
-  transform.appendChild(snapRow);
+  manualRotation.appendChild(snapRow);
   ui.snap = snap;
 
-  const rotationTitle = addText(transform, 'rig-readout-title', 'Rotation');
-  rotationTitle.setAttribute('aria-hidden', 'true');
-  ui.rotationValues = [];
-  ['X', 'Y', 'Z'].forEach(axis => {
-    const row = document.createElement('div');
-    row.className = 'rig-row rig-readout-row';
-    addText(row, 'rig-label', axis);
-    ui.rotationValues.push(addText(row, 'rig-value', '—'));
-    transform.appendChild(row);
-  });
+  const overlay = addRigAdvancedGroup(advanced.content, 'Overlay');
+  const allLabel = document.createElement('label');
+  allLabel.className = 'rig-row';
+  const all = document.createElement('input');
+  all.type = 'checkbox';
+  all.className = 'rig-panel-show-all';
+  all.addEventListener('change', () => setRigOverlayScope(all.checked ? 'all' : 'selection'));
+  allLabel.appendChild(all);
+  addText(allLabel, 'rig-label', 'Show all overlay joints');
+  overlay.appendChild(allLabel);
+  ui.showAll = all;
 
-  const hierarchy = addRigAdvancedGroup(advanced.content, 'Hierarchy');
-  ui.root = addAdvancedValue(hierarchy, 'Component root');
-  ui.parent = addAdvancedNavValue(hierarchy, 'Parent');
-  ui.children = addAdvancedNavValue(hierarchy, 'Children');
-  ui.depth = addAdvancedValue(hierarchy, 'Depth');
+  const hierarchy = addRigAdvancedGroup(advanced.content, 'Rig Structure');
   const setRoot = document.createElement('button');
   setRoot.type = 'button';
   setRoot.className = 'ui-button rig-set-root';
@@ -438,26 +451,6 @@ function buildRigSection(parent) {
   hierarchy.appendChild(setRoot);
   ui.setRoot = setRoot;
 
-}
-
-function addAdvancedValue(parent, label) {
-  const row = document.createElement('div');
-  row.className = 'rig-row';
-  addText(row, 'rig-label', label);
-  const value = addText(row, 'rig-value', '—');
-  parent.appendChild(row);
-  return value;
-}
-
-function addAdvancedNavValue(parent, label) {
-  const row = document.createElement('div');
-  row.className = 'rig-nav-row';
-  addText(row, 'rig-label', label);
-  const value = document.createElement('div');
-  value.className = 'rig-nav-values';
-  row.appendChild(value);
-  parent.appendChild(row);
-  return value;
 }
 
 function buildPanel() {
@@ -676,61 +669,31 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   ui.showAll.checked = state?.overlayScope !== 'selection';
   ui.showAll.disabled = !state?.loaded || !joints.length;
   ui.snap.value = String(state?.rotationSnapDegrees ?? 0);
-  ui.snap.disabled = !state?.loaded || !joints.length;
+  ui.snap.disabled = !state?.loaded || !joints.length || !!state?.ik?.enabled;
   const hasSelected = !!selected;
+  const ik = state?.ik || {};
+  const hasIkChain = !!ik.available;
+  ui.ik.checked = !!ik.enabled;
+  ui.ik.disabled = !state?.loaded || !hasSelected || !hasIkChain;
+  ui.chainLength.value = String(ik.chainLength ?? 3);
+  ui.chainLength.disabled = !state?.loaded || !hasSelected;
+  const chainIds = (ik.jointIds || []).map(id => `Joint ${id}`);
+  ui.chainPreview.textContent = chainIds.length ? chainIds.join(' → ') : '—';
+  if (!hasSelected) ui.ikHint.textContent = 'Select a joint to use IK.';
+  else if (!hasIkChain) {
+    ui.ikHint.textContent = 'IK needs at least one movable parent joint.';
+  } else if (ik.clamped) {
+    ui.ikHint.textContent = `Using ${ik.effectiveLength} available joints.`;
+  } else {
+    ui.ikHint.textContent = 'Drag the target in the viewport to pose this chain.';
+  }
   ui.clearJoint.disabled = !hasSelected;
   ui.setRoot.disabled = !hasSelected;
   ui.resetJoint.disabled = !hasSelected;
+  ui.resetJoint.textContent = state?.ik?.enabled && hasIkChain
+    ? 'Reset Chain' : 'Reset Joint';
   ui.resetPose.disabled = !state?.loaded;
-  syncHierarchy(state, selected);
-  syncRotationReadout(state);
   syncPresetControls(state);
-}
-
-function syncHierarchy(state, joint) {
-  const model = state?.model;
-  const id = joint?.jointId;
-  const component = id === undefined ? null : componentForJoint(model, id);
-  ui.root.textContent = component ? String(component.rootId) : '—';
-  ui.depth.textContent = component ? String(component.depthById?.[id] ?? '—') : '—';
-  ui.parent.replaceChildren();
-  ui.children.replaceChildren();
-  if (!component || id === undefined) {
-    addText(ui.parent, 'rig-value', '—');
-    addText(ui.children, 'rig-value', '—');
-    return;
-  }
-  const parentId = component.parentById?.[id];
-  if (parentId === null || parentId === undefined) addText(ui.parent, 'rig-value', '—');
-  else addNavigationButton(ui.parent, Number(parentId));
-  const children = component.childrenById?.[id] || [];
-  if (!children.length) addText(ui.children, 'rig-value', '—');
-  else children.forEach(childId => addNavigationButton(ui.children, Number(childId)));
-}
-
-function addNavigationButton(parent, jointId) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'rig-nav-button';
-  button.textContent = String(jointId);
-  button.addEventListener('click', () => selectRigJoint(jointId));
-  parent.appendChild(button);
-}
-
-function syncRotationReadout(state, localOverride = null) {
-  const joint = selectedJoint(state);
-  const id = Number(joint?.jointId);
-  const frame = Number.isInteger(id) ? getRigJointPoseFrame(id) : null;
-  const local = localOverride?.length === 4 ? localOverride
-    : state?.model?.poseRotationByJointId?.[id] || [0, 0, 0, 1];
-  if (!frame?.restRotation || !Number.isInteger(id)) {
-    ui.rotationValues.forEach(value => { value.textContent = '—'; });
-    return;
-  }
-  const euler = eulerFromRestFrameDelta(local, frame.restRotation, 'XYZ');
-  [euler.x, euler.y, euler.z].forEach((value, index) => {
-    ui.rotationValues[index].textContent = `${(value * 180 / Math.PI).toFixed(1)}°`;
-  });
 }
 
 function selectedPreset(state = latestRigState, id = ui?.preset?.value) {
@@ -933,10 +896,7 @@ export function initWeightRigPanel() {
     syncPicker();
   });
   window.addEventListener('mod-viewer-model-rig-pose-changed', event => {
-    if (latestRigState?.selectedJointId !== null
-        && Number(event.detail?.jointId) === Number(latestRigState.selectedJointId)) {
-      syncRotationReadout(latestRigState, event.detail?.quaternion);
-    }
+    if (latestRigState) syncRigOptions(latestRigState);
   });
   window.addEventListener('mod-viewer-model-point-picked', () => {
     latestWeightState = getModelWeightState();

@@ -51,8 +51,11 @@ import {
 } from './weight-rig-presets.js';
 import {
   aggregateModelBoneStats, EMPTY_ACTIVE_VERTICES, createRigRuntimeState,
-  createWeightRuntimeState, RIG_ROTATION_SNAP_DEGREES,
+  createWeightRuntimeState, RIG_IK_DEFAULT_CHAIN_LENGTH,
+  RIG_IK_MAX_CHAIN_LENGTH, RIG_IK_MIN_CHAIN_LENGTH,
+  RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
+import {resolveIkChain, solveIkChain} from './weight-rig-ik.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -211,6 +214,37 @@ function modelRigSnapshotForState({debug = false} = {}) {
   });
 }
 
+function modelComponentForJoint(jointId) {
+  const id = Number(jointId);
+  const componentId = modelSkinningRig?.componentByJointId?.get(id);
+  return Number.isInteger(Number(componentId))
+    ? modelSkinningRig?.components?.[Number(componentId)] || null : null;
+}
+
+function currentIkChain() {
+  const endJointId = Number.isInteger(modelRigState.selectedJointId)
+    ? modelRigState.selectedJointId : null;
+  return resolveIkChain({
+    component: modelComponentForJoint(endJointId),
+    endJointId,
+    requestedLength: modelRigState.ikChainLength,
+  });
+}
+
+function ikSnapshot() {
+  const chain = currentIkChain();
+  return {
+    enabled: !!modelRigState.ikEnabled,
+    chainLength: modelRigState.ikChainLength,
+    available: chain.available,
+    endJointId: chain.endJointId,
+    jointIds: chain.jointIds,
+    solverJointIds: chain.solverJointIds,
+    effectiveLength: chain.effectiveLength,
+    clamped: chain.clamped,
+  };
+}
+
 function rigPresetSnapshotForState() {
   return rigPresetSnapshot(rigPresetState);
 }
@@ -226,6 +260,7 @@ function rigSnapshot() {
     selectedJointId: modelRigState.selectedJointId,
     physicsActive: modelRigHasActivePhysics(),
     rotationSnapDegrees: modelRigState.rotationSnapDegrees,
+    ik: ikSnapshot(),
     pickStatus: modelRigState.pickStatus,
     rigPresets: rigPresetSnapshotForState(),
     overlayScope: modelRigState.overlayScope,
@@ -241,15 +276,19 @@ function notifyModelRigChanged() {
   }
 }
 
-function notifyModelRigPoseChanged(rig, boneId) {
+function notifyModelRigPoseChanged(rig, boneId, changedJointIds = null) {
   if (typeof window !== 'undefined') {
     const quaternion = rig?.poseRotationByBoneId?.get(boneId);
     const jointId = modelJointIdForSourceBone(rig?.sourceKey, boneId);
     const modelQuaternion = Number.isInteger(jointId)
       ? modelSkinningRig?.poseRotationByJointId?.get(jointId) : null;
+    const jointIds = Array.isArray(changedJointIds)
+      ? changedJointIds.map(Number).filter(Number.isInteger)
+      : Number.isInteger(jointId) ? [jointId] : [];
     window.dispatchEvent(new CustomEvent('mod-viewer-model-rig-pose-changed', {
       detail: {
         jointId: Number.isInteger(jointId) ? jointId : null,
+        jointIds,
         quaternion: (modelQuaternion || quaternion)?.toArray()
           || [0, 0, 0, 1],
       },
@@ -2027,6 +2066,28 @@ export function setRigRotationSnapDegrees(value) {
   return next;
 }
 
+export function setRigIkEnabled(enabled) {
+  const next = !!enabled;
+  if (modelRigState.ikEnabled === next) return next;
+  modelRigState.ikEnabled = next;
+  notifyModelRigChanged();
+  requestRender();
+  return next;
+}
+
+export function setRigIkChainLength(value) {
+  const numeric = Number(value);
+  const next = Number.isFinite(numeric)
+    ? Math.min(RIG_IK_MAX_CHAIN_LENGTH, Math.max(
+      RIG_IK_MIN_CHAIN_LENGTH, Math.round(numeric)))
+    : RIG_IK_DEFAULT_CHAIN_LENGTH;
+  if (modelRigState.ikChainLength === next) return next;
+  modelRigState.ikChainLength = next;
+  notifyModelRigChanged();
+  requestRender();
+  return next;
+}
+
 function selectRigBoneInternal(sourceKey, boneId) {
   const rig = rigSourceFor(sourceKey);
   const id = Number(boneId);
@@ -2124,6 +2185,80 @@ function setRigComponentRootForSource(sourceKey, boneId) {
   return true;
 }
 
+function strictRigQuaternion(value) {
+  const values = value?.isQuaternion
+    ? [value.x, value.y, value.z, value.w]
+    : Array.isArray(value) || ArrayBuffer.isView(value)
+      ? [...value].slice(0, 4).map(Number)
+      : [value?.x, value?.y, value?.z, value?.w].map(Number);
+  if (values.length !== 4 || !values.every(Number.isFinite)) return null;
+  const quaternion = new THREE.Quaternion(...values);
+  if (!Number.isFinite(quaternion.lengthSq())
+      || quaternion.lengthSq() <= 1e-12) return null;
+  return quaternion.normalize();
+}
+
+function rotationEntries(rotationsByJointId) {
+  if (rotationsByJointId instanceof Map) return [...rotationsByJointId.entries()];
+  return Object.entries(rotationsByJointId || {});
+}
+
+/** Apply several model-local rotations in one authoritative pose transaction. */
+export function setRigJointRotations(rotationsByJointId, options = {}) {
+  if (!modelSkinningRig || !modelRigState.loaded) return false;
+  const updates = [];
+  const seen = new Set();
+  for (const [rawId, value] of rotationEntries(rotationsByJointId)) {
+    const jointId = Number(rawId);
+    const joint = modelJointForId(jointId);
+    const component = modelComponentForJoint(jointId);
+    if (!Number.isInteger(jointId) || !joint || !component
+        || seen.has(jointId)) {
+      modelRigState.pickStatus = 'Could not apply the Rig pose.';
+      notifyModelRigChanged();
+      return false;
+    }
+    if (Number(component.rootId) === jointId) {
+      modelRigState.pickStatus = 'Component root / anchor cannot be rotated.';
+      notifyModelRigChanged();
+      return false;
+    }
+    const quaternion = strictRigQuaternion(value);
+    if (!quaternion) {
+      modelRigState.pickStatus = 'Could not apply the Rig pose.';
+      notifyModelRigChanged();
+      return false;
+    }
+    seen.add(jointId);
+    updates.push([jointId, quaternion]);
+  }
+  if (!updates.length) return false;
+
+  // Validation is complete before the authoritative map is touched.
+  updates.forEach(([jointId, quaternion]) => {
+    modelSkinningRig.poseRotationByJointId.set(jointId, quaternion);
+  });
+  const selectedId = options?.selectedJointId === null
+    || options?.selectedJointId === undefined
+    ? null : Number(options.selectedJointId);
+  if (Number.isInteger(selectedId) && modelJointForId(selectedId)) {
+    modelRigState.selectedJointId = selectedId;
+  }
+  const dragging = options?.dragging === true;
+  applyModelPose({dragging});
+  modelRigState.pickStatus = '';
+  if (dragging) {
+    const selectedJoint = modelJointForId(modelRigState.selectedJointId);
+    const member = selectedJoint?.representativeMember || selectedJoint?.members?.[0];
+    if (member) notifyModelRigPoseChanged(
+      rigSourceFor(member.sourceKey), member.boneId, updates.map(([id]) => id));
+    else notifyModelRigChanged();
+  } else {
+    notifyModelRigChanged();
+  }
+  return true;
+}
+
 function setRigJointRotationForSource(sourceKey, boneId, quaternion, options = {}) {
   const rig = rigSourceFor(sourceKey);
   const id = Number(boneId);
@@ -2139,14 +2274,9 @@ function setRigJointRotationForSource(sourceKey, boneId, quaternion, options = {
     notifyModelRigChanged();
     return false;
   }
-  modelSkinningRig.poseRotationByJointId.set(jointId, cloneRigQuaternion(quaternion));
-  modelRigState.selectedJointId = jointId;
-  const dragging = options?.dragging === true;
-  applyModelPose({dragging});
-  modelRigState.pickStatus = '';
-  if (dragging) notifyModelRigPoseChanged(rig, id);
-  else notifyModelRigChanged();
-  return true;
+  return setRigJointRotations(new Map([[jointId, quaternion]]), {
+    ...options, selectedJointId: jointId,
+  });
 }
 
 export function setRigJointRotation(jointId, quaternion, options = {}) {
@@ -2154,6 +2284,26 @@ export function setRigJointRotation(jointId, quaternion, options = {}) {
   const member = joint?.representativeMember || joint?.members?.[0];
   return member ? setRigJointRotationForSource(
     member.sourceKey, member.boneId, quaternion, options) : false;
+}
+
+export function solveRigIkTarget(target, options = {}) {
+  const rig = modelSkinningRig;
+  const chain = currentIkChain();
+  if (!rig || !modelRigState.ikEnabled || !chain.available) return false;
+  const solved = solveIkChain({
+    forest: rig.inferredForest,
+    centers: rig.centerByJointId,
+    jointPivots: rig.jointPivotByJointId,
+    localRotations: rig.poseRotationByJointId,
+    chainJointIds: chain.jointIds,
+    target,
+  });
+  if (!solved.rotations.size) return solved;
+  const applied = setRigJointRotations(solved.rotations, {
+    dragging: options?.dragging === true,
+    selectedJointId: chain.endJointId,
+  });
+  return {...solved, applied};
 }
 
 function finishRigPoseForSource(sourceKey, boneId) {
@@ -2188,6 +2338,22 @@ function resetRigBoneForSource(sourceKey, boneId) {
   return true;
 }
 
+function resetRigChain() {
+  const chain = currentIkChain();
+  if (!chain.available || !modelSkinningRig) return false;
+  const hadPose = chain.solverJointIds.some(jointId =>
+    modelSkinningRig.poseRotationByJointId.has(jointId));
+  chain.solverJointIds.forEach(jointId => {
+    modelSkinningRig.poseRotationByJointId.delete(jointId);
+  });
+  if (!hadPose) return false;
+  applyModelPose();
+  modelRigState.pickStatus = '';
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
 export function setRigJointRoot(jointId) {
   const joint = modelJointForId(jointId);
   const member = joint?.representativeMember || joint?.members?.[0];
@@ -2203,6 +2369,10 @@ export function finishRigJointPose(jointId) {
 }
 
 export function resetRigJoint(jointId) {
+  const selectedId = Number(jointId);
+  const chain = currentIkChain();
+  if (modelRigState.ikEnabled && chain.available
+      && chain.endJointId === selectedId) return resetRigChain();
   const joint = modelJointForId(jointId);
   const member = joint?.representativeMember || joint?.members?.[0];
   return member ? resetRigBoneForSource(member.sourceKey, member.boneId)
@@ -2486,6 +2656,8 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelRigState.selectedJointId = null;
   modelRigState.structureRevision = 0;
   modelRigState.visible = false;
+  modelRigState.ikEnabled = false;
+  modelRigState.ikChainLength = RIG_IK_DEFAULT_CHAIN_LENGTH;
   modelRigState.explicitRootSignatures = new Set();
   modelRigState.overlayScope = 'selection';
   rigPresetState.lastApplyResult = null;
