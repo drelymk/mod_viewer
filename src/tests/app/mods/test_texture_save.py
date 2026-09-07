@@ -1,6 +1,7 @@
 """Atomic BC7 Save to Texture regressions."""
 
 import struct
+from concurrent.futures import Future
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -602,6 +603,105 @@ def test_bc7_stats_count_source_blocks_by_block_identity(tmp_path, monkeypatch):
     assert stats.source_blocks_kept == 1
     assert stats.improved_blocks == 1
     assert stats.unchanged_blocks == 0
+
+
+def test_parallel_bc7_save_matches_serial_bytes_and_stats(tmp_path, monkeypatch):
+    blocks = b"".join(_mode6_block(((20 + index, 110 + index),
+                                      (40 + index, 140 + index),
+                                      (60 + index, 170 + index)))
+                       for index in range(7))
+    original = _dx10_dds(blocks, width=28, height=4)
+    source = tmp_path / "body.dds"
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        mip0_claims=bytearray([1] * (28 * 4)),
+        intent_adjustments=(None, prepare_color_adjustment({"hue": 120})),
+        mip0_affected_blocks=tuple(range(7)),
+    )
+    monkeypatch.setattr(texture_save, "_bc7_worker_count", lambda: 2)
+    monkeypatch.setattr(texture_save, "_BC7_CHUNK_SIZE", 2)
+    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 10000)
+    serial_bytes, serial_stats = texture_save._save_bc7_blocks(
+        original, prepared)
+
+    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 0)
+    parallel_bytes, parallel_stats = texture_save._save_bc7_blocks(
+        original, prepared)
+
+    assert parallel_bytes == serial_bytes
+    assert parallel_stats == serial_stats
+
+
+def test_bc7_result_application_uses_block_offsets():
+    final = bytearray(32)
+    totals = {
+        "touched": 0, "improved": 0, "unchanged": 0,
+        "source_blocks_kept": 0, "source_error": 0, "final_error": 0,
+    }
+    modes = {}
+    mip_stats = {"source_blocks_kept": 0}
+    results = (
+        texture_save._BC7BlockResult(
+            16, b"B" * 16, 4, 2, 6, False),
+        texture_save._BC7BlockResult(
+            0, b"A" * 16, 3, 1, 6, False),
+    )
+
+    for result in results:
+        texture_save._record_bc7_result(
+            final, result, totals, modes, mip_stats)
+
+    assert bytes(final) == b"A" * 16 + b"B" * 16
+    assert totals["touched"] == 2
+    assert totals["improved"] == 2
+    assert modes == {6: 2}
+
+
+@pytest.mark.parametrize(
+    ("cpu_count", "expected"),
+    [(None, 1), (1, 1), (2, 1), (4, 3), (32, 6)],
+)
+def test_bc7_worker_count_leaves_one_cpu(monkeypatch, cpu_count, expected):
+    monkeypatch.setattr(texture_save.os, "cpu_count", lambda: cpu_count)
+    assert texture_save._bc7_worker_count() == expected
+
+
+def test_parallel_bc7_worker_failure_is_reported(tmp_path, monkeypatch):
+    source = tmp_path / "body.dds"
+    source.write_bytes(_dx10_dds(_mode6_block()))
+    layout = inspect_dds_layout(source)
+    prepared = SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        mip0_claims=bytearray([1] * 16),
+        intent_adjustments=(None, prepare_color_adjustment({"hue": 120})),
+        mip0_affected_blocks=(0,),
+    )
+
+    class FailingExecutor:
+        def __init__(self, **_kwargs):
+            self.shutdown_called = False
+
+        def submit(self, *_args):
+            future = Future()
+            future.set_exception(RuntimeError("synthetic worker failure"))
+            return future
+
+        def shutdown(self, **_kwargs):
+            self.shutdown_called = True
+
+    executor = FailingExecutor()
+    monkeypatch.setattr(
+        texture_save, "ProcessPoolExecutor", lambda **_kwargs: executor)
+    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 0)
+    monkeypatch.setattr(texture_save, "_bc7_worker_count", lambda: 2)
+
+    with pytest.raises(texture_save.TextureSaveError) as raised:
+        texture_save._save_bc7_blocks(source.read_bytes(), prepared)
+
+    assert raised.value.code == "texture_processing_failed"
+    assert executor.shutdown_called
 
 
 @pytest.mark.parametrize(
