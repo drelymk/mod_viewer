@@ -141,6 +141,19 @@ class _BC7SingleIntentJob:
 
 
 @dataclass(frozen=True)
+class _BC7WeightedSingleIntentJob:
+    """Compact lower-mip job with worker-prepared weighted intent."""
+
+    start: int
+    source_block: bytes
+    adjustment: PreparedColorAdjustment
+    changed_counts: tuple
+    total_counts: tuple
+    valid_width: int
+    valid_height: int
+
+
+@dataclass(frozen=True)
 class _BC7BlockResult:
     """Compact worker result applied by the parent save operation."""
 
@@ -707,6 +720,24 @@ def _bc7_affected_blocks(changed, width, height, mip):
     return sorted(affected)
 
 
+def _bc7_weighted_single_rgb(
+        source_rgb, adjustment, changed_count, total_count):
+    """Resolve one RGB value from one lower-mip adjustment weight."""
+    if changed_count > total_count:
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Changed color intent exceeds total mip weight.")
+    if not changed_count or not total_count:
+        return source_rgb
+    base = tuple(channel / 255.0 for channel in source_rgb)
+    adjusted = apply_prepared_color_adjustment(base, adjustment)
+    return tuple(min(255, max(0, round(value * 255.0)))
+                  for value in (
+                      (base[channel] * (total_count - changed_count)
+                       + adjusted[channel] * changed_count) / total_count
+                      for channel in range(3)))
+
+
 def _bc7_intent_rgb(source_rgb, state, pixel, adjustments):
     """Resolve one target RGB value from the current mip's intent state."""
     base = tuple(channel / 255.0 for channel in source_rgb)
@@ -723,20 +754,9 @@ def _bc7_intent_rgb(source_rgb, state, pixel, adjustments):
             source_rgb, adjustments[intent_class])
 
     if state["single"]:
-        changed_count = state["changed_counts"][pixel]
-        total_count = state["total_counts"][pixel]
-        if changed_count > total_count:
-            raise TextureSaveError(
-                "texture_validation_failed",
-                "Changed color intent exceeds total mip weight.")
-        if not changed_count or not total_count:
-            return source_rgb
-        adjusted = apply_prepared_color_adjustment(base, adjustments[1])
-        return tuple(min(255, max(0, round(value * 255.0)))
-                      for value in (
-                          (base[channel] * (total_count - changed_count)
-                           + adjusted[channel] * changed_count) / total_count
-                          for channel in range(3)))
+        return _bc7_weighted_single_rgb(
+            source_rgb, adjustments[1], state["changed_counts"][pixel],
+            state["total_counts"][pixel])
 
     counts = [count[pixel] for count in state["counts"]]
     total_count = sum(counts)
@@ -856,6 +876,35 @@ def _bc7_single_adjustment_target_pixels(
     return tuple(target_pixels)
 
 
+def _bc7_weighted_single_target_pixels(
+        source_pixels, adjustment, changed_counts, total_counts,
+        valid_width, valid_height):
+    """Apply weighted intent while preserving alpha and block padding."""
+    expected = valid_width * valid_height
+    try:
+        changed_length = len(changed_counts)
+        total_length = len(total_counts)
+    except TypeError as error:
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Weighted BC7 job counts do not match the valid block area.") \
+            from error
+    if (changed_length != expected or total_length != expected):
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Weighted BC7 job counts do not match the valid block area.")
+    target_pixels = list(source_pixels)
+    for row in range(valid_height):
+        for column in range(valid_width):
+            index = row * valid_width + column
+            local = row * 4 + column
+            rgb = _bc7_weighted_single_rgb(
+                source_pixels[local][:3], adjustment,
+                changed_counts[index], total_counts[index])
+            target_pixels[local] = rgb + (source_pixels[local][3],)
+    return tuple(target_pixels)
+
+
 def _bc7_target_block_pixels(source_block, mip, block_index, state,
                              adjustments, block_intent=None):
     """Build one sixteen-pixel BC7 target without a reconstructed image."""
@@ -934,6 +983,68 @@ def _prepare_bc7_single_intent_job(
         valid_width=valid_width, valid_height=valid_height)
 
 
+def _bc7_single_weighted_block_counts(state, mip, block_index):
+    """Extract valid lower-mip weights for one worker job."""
+    if (state.get("level", 0) <= 0 or not state.get("single")
+            or state.get("width") != mip.width
+            or state.get("height") != mip.height):
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Lower-mip BC7 weighted intent state is invalid.")
+    changed = state.get("changed_counts")
+    total = state.get("total_counts")
+    expected_state_size = mip.width * mip.height
+    if (changed is None or total is None
+            or len(changed) != expected_state_size
+            or len(total) != expected_state_size):
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Lower-mip color intent does not match the source texture size.")
+    source_x, source_y, valid_width, valid_height = _unit_bounds(
+        mip, block_index)
+    changed_counts = []
+    total_counts = []
+    for row in range(valid_height):
+        start = (source_y + row) * mip.width + source_x
+        end = start + valid_width
+        changed_counts.extend(int(value) for value in changed[start:end])
+        total_counts.extend(int(value) for value in total[start:end])
+    return (tuple(changed_counts), tuple(total_counts),
+            valid_width, valid_height)
+
+
+def _prepare_bc7_weighted_single_intent_job(
+        original, mip, block_index, state, adjustments, block_intent):
+    """Prepare a compact lower-mip job with worker-side target generation."""
+    start, source_block, valid_width, valid_height = (
+        _bc7_source_block_and_bounds(original, mip, block_index))
+    changed_counts, total_counts, valid_width, valid_height = (
+        _bc7_single_weighted_block_counts(state, mip, block_index))
+    return _BC7WeightedSingleIntentJob(
+        start=start, source_block=source_block,
+        adjustment=adjustments[1], changed_counts=changed_counts,
+        total_counts=total_counts, valid_width=valid_width,
+        valid_height=valid_height)
+
+
+def _prepare_bc7_parallel_job(
+        original, mip, block_index, state, adjustments, block_intent):
+    """Choose the smallest safe worker input for one BC7 block."""
+    if state.get("level") == 0 and len(block_intent.classes) == 1:
+        return _prepare_bc7_single_intent_job(
+            original, mip, block_index, adjustments, block_intent)
+    if (state.get("level", 0) > 0 and state.get("single")
+            and state.get("width") == mip.width
+            and state.get("height") == mip.height
+            and state.get("changed_counts") is not None
+            and state.get("total_counts") is not None
+            and block_intent.classes == (1,)):
+        return _prepare_bc7_weighted_single_intent_job(
+            original, mip, block_index, state, adjustments, block_intent)
+    return _prepare_bc7_block_job(
+        original, mip, block_index, state, adjustments, block_intent)
+
+
 def _iter_bc7_jobs(original, mip, affected, state, adjustments,
                     record_intent, defer_single_intent=False):
     """Yield parent-prepared BC7 jobs while recording intent diagnostics."""
@@ -941,10 +1052,9 @@ def _iter_bc7_jobs(original, mip, affected, state, adjustments,
         block_intent = _bc7_block_intent_info(
             state, mip, block_index)
         record_intent(block_intent)
-        if (defer_single_intent and state["level"] == 0
-                and len(block_intent.classes) == 1):
-            yield _prepare_bc7_single_intent_job(
-                original, mip, block_index, adjustments, block_intent)
+        if defer_single_intent:
+            yield _prepare_bc7_parallel_job(
+                original, mip, block_index, state, adjustments, block_intent)
         else:
             yield _prepare_bc7_block_job(
                 original, mip, block_index, state, adjustments, block_intent)
@@ -993,12 +1103,53 @@ def _recolor_bc7_single_intent(job):
         source_kept=result.block == job.source_block)
 
 
+def _recolor_bc7_weighted_single_intent(job):
+    """Decode, target, and recolor one weighted lower-mip job."""
+    try:
+        source_pixels = _bc7_codec.decode_block(job.source_block)
+    except _bc7_codec.BC7Error:
+        return _BC7BlockResult(
+            start=job.start, block=b"", source_error=0,
+            candidate_error=0, mode=0, source_kept=False,
+            error="The texture contains invalid BC7 data.",
+            error_code="invalid_bc7")
+    try:
+        target_pixels = _bc7_weighted_single_target_pixels(
+            source_pixels, job.adjustment, job.changed_counts,
+            job.total_counts, job.valid_width, job.valid_height)
+    except TextureSaveError as error:
+        return _BC7BlockResult(
+            start=job.start, block=b"", source_error=0,
+            candidate_error=0, mode=0, source_kept=False,
+            error=error.message, error_code=error.code)
+    try:
+        result = _bc7_codec.recolor_block(
+            job.source_block, target_pixels,
+            job.valid_width, job.valid_height, source_pixels)
+    except _bc7_codec.BC7Error as error:
+        return _BC7BlockResult(
+            start=job.start, block=b"", source_error=0,
+            candidate_error=0, mode=0, source_kept=False,
+            error=str(error))
+    return _BC7BlockResult(
+        start=job.start, block=result.block,
+        source_error=result.source_error,
+        candidate_error=result.candidate_error, mode=result.mode,
+        source_kept=result.block == job.source_block)
+
+
 def _recolor_bc7_chunk(jobs):
     """Fit one compact chunk in a spawned worker process."""
     results = []
     for job in jobs:
         if isinstance(job, _BC7SingleIntentJob):
             result = _recolor_bc7_single_intent(job)
+            results.append(result)
+            if result.error is not None:
+                break
+            continue
+        if isinstance(job, _BC7WeightedSingleIntentJob):
+            result = _recolor_bc7_weighted_single_intent(job)
             results.append(result)
             if result.error is not None:
                 break
