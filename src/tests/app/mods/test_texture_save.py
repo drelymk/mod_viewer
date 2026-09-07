@@ -1009,7 +1009,9 @@ def test_parallel_lower_mip_multi_intent_keeps_parent_prepared_job(
     adjustment = prepare_color_adjustment({"hue": 30})
     state = {
         "level": 1, "width": 4, "height": 4, "single": False,
-        "counts": ([0] * 16, [1] * 16, [0] * 16),
+        "class_count": 3,
+        "counts": ([0] * 16, [1] * 8 + [0] * 8,
+                    [0] * 8 + [1] * 8),
     }
     selected = []
     monkeypatch.setattr(
@@ -1026,6 +1028,180 @@ def test_parallel_lower_mip_multi_intent_keeps_parent_prepared_job(
 
     assert jobs == ["legacy"]
     assert selected == ["legacy"]
+
+
+@pytest.mark.parametrize("intent_class", [1, 2, 3])
+def test_parallel_lower_mip_single_class_uses_that_weighted_adjustment(
+        intent_class):
+    source = bytearray(_mode6_block())
+    mip = SimpleNamespace(
+        offset=0, bytes_per_unit=16, width=4, height=4, units_x=1)
+    adjustments = tuple(
+        [None] + [prepare_color_adjustment({"hue": 30 * index})
+                  for index in range(1, 4)])
+    counts = [[0] * 16 for _ in range(4)]
+    counts[0] = [3] * 16
+    counts[intent_class] = [2] * 16
+    state = {
+        "level": 1, "width": 4, "height": 4, "single": False,
+        "class_count": 4, "counts": tuple(counts),
+    }
+    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
+
+    job = texture_save._prepare_bc7_parallel_job(
+        source, mip, 0, state, adjustments, block_intent)
+
+    assert isinstance(job, texture_save._BC7WeightedSingleIntentJob)
+    assert job.adjustment is adjustments[intent_class]
+    assert job.changed_counts == (2,) * 16
+    assert job.total_counts == (5,) * 16
+
+
+@pytest.mark.parametrize(
+    ("base_counts", "changed_counts", "expected_full"),
+    [([0] * 16, [1] * 16, True),
+     ([0] * 16, [1] * 8 + [0] * 8, False)],
+)
+def test_parallel_lower_mip_compacts_full_and_partial_single_class_blocks(
+        base_counts, changed_counts, expected_full):
+    source = bytearray(_mode6_block())
+    mip = SimpleNamespace(
+        offset=0, bytes_per_unit=16, width=4, height=4, units_x=1)
+    adjustment = prepare_color_adjustment({"brightness": 1.5})
+    state = {
+        "level": 1, "width": 4, "height": 4, "single": False,
+        "class_count": 3,
+        "counts": (base_counts, changed_counts, [0] * 16),
+    }
+    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
+    job = texture_save._prepare_bc7_parallel_job(
+        source, mip, 0, state, (None, adjustment, adjustment), block_intent)
+
+    assert block_intent.classes == (1,)
+    assert block_intent.full is expected_full
+    assert isinstance(job, texture_save._BC7WeightedSingleIntentJob)
+
+
+@pytest.mark.parametrize(
+    ("source_rgb", "changed_count", "total_count"),
+    [((0, 0, 0), 1, 2), ((37, 101, 203), 3, 7),
+     ((255, 128, 1), 1023, 4096)],
+)
+@pytest.mark.parametrize("intent_class", [1, 2, 3])
+@pytest.mark.parametrize(
+    "adjustment",
+    [{"hue": 30}, {"brightness": 1.5, "contrast": 1.25},
+     {"red": 0.5, "green": 1.5, "blue": 2.0, "tint": "#4080c0"}],
+)
+def test_lower_mip_single_class_weighted_rgb_matches_generic_intent(
+        source_rgb, changed_count, total_count, intent_class, adjustment):
+    prepared_adjustment = prepare_color_adjustment(adjustment)
+    counts = [[0] for _ in range(4)]
+    counts[0][0] = total_count - changed_count
+    counts[intent_class][0] = changed_count
+    state = {
+        "level": 1, "width": 1, "height": 1, "single": False,
+        "class_count": 4, "counts": tuple(counts),
+    }
+
+    generic = texture_save._bc7_intent_rgb(
+        source_rgb, state, 0,
+        (None, prepared_adjustment, prepared_adjustment, prepared_adjustment))
+    weighted = texture_save._bc7_weighted_single_rgb(
+        source_rgb, prepared_adjustment, changed_count, total_count)
+
+    assert weighted == generic
+
+
+@pytest.mark.parametrize(
+    ("block", "valid_width", "valid_height"),
+    [(_separate_block(4), 4, 4), (_mode5_block(), 3, 4),
+     (_mode6_block(), 4, 3), (_mode7_block(), 3, 2),
+     (_separate_block(4), 1, 1)],
+)
+def test_lower_mip_weighted_multi_class_worker_matches_parent_prepared_worker(
+        block, valid_width, valid_height):
+    source = bytearray(block)
+    mip = SimpleNamespace(
+        offset=0, bytes_per_unit=16, width=valid_width, height=valid_height,
+        units_x=1)
+    area = valid_width * valid_height
+    adjustments = (None, prepare_color_adjustment({"hue": 30}),
+                   prepare_color_adjustment({"hue": 120}))
+    state = {
+        "level": 1, "width": valid_width, "height": valid_height,
+        "single": False, "class_count": 3,
+        "counts": ([0] * area, [0] * area, [1] * area),
+    }
+    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
+
+    legacy_job = texture_save._prepare_bc7_block_job(
+        source, mip, 0, state, adjustments, block_intent)
+    weighted_job = texture_save._prepare_bc7_weighted_single_intent_job(
+        source, mip, 0, state, adjustments, block_intent)
+    legacy_result = texture_save._recolor_bc7_chunk((legacy_job,))[0]
+    weighted_result = texture_save._recolor_bc7_chunk((weighted_job,))[0]
+
+    assert weighted_job.adjustment is adjustments[2]
+    assert weighted_result == legacy_result
+
+
+def test_lower_mip_weighted_multi_class_job_preserves_wide_counts():
+    mip = SimpleNamespace(
+        offset=0, bytes_per_unit=16, width=1, height=1, units_x=1)
+    state = {
+        "level": 1, "width": 1, "height": 1, "single": False,
+        "class_count": 3,
+        "counts": ([65535], [0], [1]),
+    }
+    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
+
+    changed, total, valid_width, valid_height = \
+        texture_save._bc7_single_weighted_block_counts(
+            state, mip, 0, block_intent)
+
+    assert (changed, total, valid_width, valid_height) == ((1,), (65536,), 1, 1)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [{
+        "level": 1, "width": 4, "height": 4, "single": False,
+        "class_count": 3, "counts": ([0] * 16, [1] * 15, [0] * 16),
+    }, {
+        "level": 1, "width": 4, "height": 4, "single": False,
+        "class_count": 2, "counts": ([0] * 16, [1] * 16, [0] * 16),
+    }, {
+        "level": 1, "width": 4, "height": 4, "single": False,
+        "class_count": 3, "counts": ([0] * 16, [-1] * 16, [0] * 16),
+    }],
+)
+def test_lower_mip_malformed_multi_class_counts_are_stable(state):
+    mip = SimpleNamespace(
+        offset=0, bytes_per_unit=16, width=4, height=4, units_x=1)
+
+    with pytest.raises(texture_save.TextureSaveError) as raised:
+        texture_save._bc7_block_intent_info(state, mip, 0)
+
+    assert raised.value.code == "texture_validation_failed"
+
+
+def test_lower_mip_weighted_job_rejects_invalid_adjustment_class():
+    mip = SimpleNamespace(
+        offset=0, bytes_per_unit=16, width=4, height=4, units_x=1)
+    state = {
+        "level": 1, "width": 4, "height": 4, "single": False,
+        "class_count": 3,
+        "counts": ([0] * 16, [1] * 16, [0] * 16),
+    }
+    block_intent = SimpleNamespace(classes=(3,))
+
+    with pytest.raises(texture_save.TextureSaveError) as raised:
+        texture_save._prepare_bc7_weighted_single_intent_job(
+            bytearray(_mode6_block()), mip, 0, state,
+            (None, prepare_color_adjustment({"hue": 30})), block_intent)
+
+    assert raised.value.code == "texture_validation_failed"
 
 
 def test_worker_chunk_accepts_compact_and_parent_prepared_jobs_in_order():
@@ -1295,6 +1471,55 @@ def test_parallel_bc7_multi_mip_weighted_jobs_match_serial_results(
         assert [event["mip"] for event in processing
                 if event["completed_blocks"] == event["total_blocks"]] == [
                     0, 1, 2]
+
+
+def test_parallel_bc7_multi_adjustment_lower_mips_match_serial_results(
+        tmp_path, monkeypatch):
+    width, height = 20, 4
+    block_count = 5 + 3 + 2
+    original = _dx10_dds(_mode6_block() * block_count,
+                         width=width, height=height, mip_count=3)
+    source = tmp_path / "body.dds"
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    claims = bytearray(
+        1 if x < width // 2 else 2
+        for _y in range(height)
+        for x in range(width))
+    adjustments = (
+        None, prepare_color_adjustment({"hue": 60}),
+        prepare_color_adjustment({"brightness": 1.5}),
+    )
+    prepared = SimpleNamespace(
+        selected_path="body.dds", info=layout.info, layout=layout,
+        mip0_claims=claims, intent_adjustments=adjustments,
+        mip0_affected_blocks=tuple(range(5)),)
+    monkeypatch.setattr(texture_save, "_bc7_worker_count", lambda: 2)
+    monkeypatch.setattr(texture_save, "_BC7_CHUNK_SIZE", 2)
+    monkeypatch.setattr(texture_save, "_SAVE_PROGRESS_INTERVAL", 0)
+
+    class InlineExecutor:
+        def submit(self, function, argument):
+            future = Future()
+            future.set_result(function(argument))
+            return future
+
+        def shutdown(self, **_kwargs):
+            pass
+
+    monkeypatch.setattr(
+        texture_save, "ProcessPoolExecutor", lambda **_kwargs: InlineExecutor())
+    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 10000)
+    serial_bytes, serial_stats = texture_save._save_bc7_blocks(
+        original, prepared)
+
+    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 0)
+    parallel_bytes, parallel_stats = texture_save._save_bc7_blocks(
+        original, prepared)
+
+    assert parallel_bytes == serial_bytes
+    assert parallel_stats == serial_stats
+    assert parallel_stats.multi_intent_blocks > 0
 
 
 def test_bc7_result_application_uses_block_offsets():
