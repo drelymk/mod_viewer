@@ -828,30 +828,121 @@ def _bc7_block_intent_info(state, mip, block_index):
         multi_intent=len(ordered_classes) > 1)
 
 
+def _bc7_validate_lower_single_state(state, mip):
+    """Return validated one-adjustment lower-mip weight planes."""
+    if (state.get("level", 0) <= 0
+            or state.get("width") != mip.width
+            or state.get("height") != mip.height):
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Lower-mip BC7 weighted intent state is invalid.")
+    changed = state.get("changed_counts")
+    total = state.get("total_counts")
+    expected = mip.width * mip.height
+    try:
+        changed_length = len(changed)
+        total_length = len(total)
+    except TypeError as error:
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Lower-mip color intent does not match the source texture size.") \
+            from error
+    if changed_length != expected or total_length != expected:
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Lower-mip color intent does not match the source texture size.")
+    return changed, total
+
+
+def _bc7_validate_lower_multi_counts(state, mip):
+    """Return validated per-class lower-mip count planes."""
+    if (state.get("level", 0) <= 0
+            or state.get("width") != mip.width
+            or state.get("height") != mip.height):
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Lower-mip BC7 weighted intent state is invalid.")
+    counts = state.get("counts")
+    expected = mip.width * mip.height
+    try:
+        count_plane_count = len(counts)
+    except (TypeError, AttributeError) as error:
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Lower-mip color intent does not match the source texture size.") \
+            from error
+    class_count = state.get("class_count", count_plane_count)
+    if (not isinstance(class_count, int) or class_count <= 0
+            or count_plane_count != class_count):
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Lower-mip color intent contains an invalid class count.")
+    for count_values in counts:
+        try:
+            count_length = len(count_values)
+        except TypeError as error:
+            raise TextureSaveError(
+                "texture_validation_failed",
+                "Lower-mip color intent does not match the source texture size.") \
+                from error
+        if count_length != expected:
+            raise TextureSaveError(
+                "texture_validation_failed",
+                "Lower-mip color intent does not match the source texture size.")
+    return counts
+
+
 def _bc7_weighted_block_intent_info(state, mip, block_index):
     """Classify one lower-mip block's weighted logical intent."""
     source_x, source_y, valid_width, valid_height = _unit_bounds(
         mip, block_index)
     classes = set()
     full = True
+    if state.get("single"):
+        changed_counts, total_counts = _bc7_validate_lower_single_state(
+            state, mip)
+        counts = None
+    else:
+        counts = _bc7_validate_lower_multi_counts(state, mip)
+        changed_counts = total_counts = None
     for row in range(valid_height):
         for column in range(valid_width):
             pixel = ((source_y + row) * mip.width + source_x + column)
             if state["single"]:
-                changed = state["changed_counts"][pixel]
-                total = state["total_counts"][pixel]
+                changed = changed_counts[pixel]
+                total = total_counts[pixel]
+                if (not isinstance(changed, int)
+                        or not isinstance(total, int)
+                        or changed < 0 or total < 0):
+                    raise TextureSaveError(
+                        "texture_validation_failed",
+                        "Lower-mip color intent contains an invalid count.")
+                if changed > total:
+                    raise TextureSaveError(
+                        "texture_validation_failed",
+                        "Changed color intent exceeds total mip weight.")
                 if changed:
                     classes.add(1)
                 if not changed or changed != total:
                     full = False
                 continue
+            base_count = counts[0][pixel]
+            if (not isinstance(base_count, int) or base_count < 0):
+                raise TextureSaveError(
+                    "texture_validation_failed",
+                    "Lower-mip color intent contains an invalid count.")
             pixel_class_count = 0
             for intent_class, count_values in enumerate(
-                    state["counts"][1:], 1):
-                if count_values[pixel]:
+                    counts[1:], 1):
+                count = count_values[pixel]
+                if (not isinstance(count, int) or count < 0):
+                    raise TextureSaveError(
+                        "texture_validation_failed",
+                        "Lower-mip color intent contains an invalid count.")
+                if count:
                     classes.add(intent_class)
                     pixel_class_count += 1
-            if (not pixel_class_count or state["counts"][0][pixel]
+            if (not pixel_class_count or base_count
                     or pixel_class_count != 1):
                 full = False
     if not classes:
@@ -983,23 +1074,30 @@ def _prepare_bc7_single_intent_job(
         valid_width=valid_width, valid_height=valid_height)
 
 
-def _bc7_single_weighted_block_counts(state, mip, block_index):
+def _bc7_single_weighted_block_counts(
+        state, mip, block_index, block_intent=None):
     """Extract valid lower-mip weights for one worker job."""
-    if (state.get("level", 0) <= 0 or not state.get("single")
-            or state.get("width") != mip.width
-            or state.get("height") != mip.height):
-        raise TextureSaveError(
-            "texture_validation_failed",
-            "Lower-mip BC7 weighted intent state is invalid.")
-    changed = state.get("changed_counts")
-    total = state.get("total_counts")
-    expected_state_size = mip.width * mip.height
-    if (changed is None or total is None
-            or len(changed) != expected_state_size
-            or len(total) != expected_state_size):
-        raise TextureSaveError(
-            "texture_validation_failed",
-            "Lower-mip color intent does not match the source texture size.")
+    if state.get("single"):
+        changed, total = _bc7_validate_lower_single_state(state, mip)
+        changed_values = changed
+        total_values = total
+    else:
+        if (block_intent is None
+                or len(block_intent.classes) != 1
+                or not isinstance(block_intent.classes[0], int)
+                or block_intent.classes[0] <= 0):
+            raise TextureSaveError(
+                "texture_validation_failed",
+                "Lower-mip BC7 block does not have one adjustment class.")
+        counts = _bc7_validate_lower_multi_counts(state, mip)
+        intent_class = block_intent.classes[0]
+        if intent_class >= len(counts):
+            raise TextureSaveError(
+                "texture_validation_failed",
+                "Lower-mip BC7 block contains an invalid adjustment class.")
+        changed_values = counts[intent_class]
+        base_values = counts[0]
+        total_values = None
     source_x, source_y, valid_width, valid_height = _unit_bounds(
         mip, block_index)
     changed_counts = []
@@ -1007,8 +1105,30 @@ def _bc7_single_weighted_block_counts(state, mip, block_index):
     for row in range(valid_height):
         start = (source_y + row) * mip.width + source_x
         end = start + valid_width
-        changed_counts.extend(int(value) for value in changed[start:end])
-        total_counts.extend(int(value) for value in total[start:end])
+        if total_values is None:
+            for base, changed in zip(
+                    base_values[start:end], changed_values[start:end]):
+                if (not isinstance(base, int) or not isinstance(changed, int)
+                        or base < 0 or changed < 0):
+                    raise TextureSaveError(
+                        "texture_validation_failed",
+                        "Lower-mip color intent contains an invalid count.")
+                changed_counts.append(changed)
+                total_counts.append(base + changed)
+        else:
+            for changed, total in zip(
+                    changed_values[start:end], total_values[start:end]):
+                if (not isinstance(changed, int) or not isinstance(total, int)
+                        or changed < 0 or total < 0):
+                    raise TextureSaveError(
+                        "texture_validation_failed",
+                        "Lower-mip color intent contains an invalid count.")
+                if changed > total:
+                    raise TextureSaveError(
+                        "texture_validation_failed",
+                        "Changed color intent exceeds total mip weight.")
+                changed_counts.append(changed)
+                total_counts.append(total)
     return (tuple(changed_counts), tuple(total_counts),
             valid_width, valid_height)
 
@@ -1016,13 +1136,22 @@ def _bc7_single_weighted_block_counts(state, mip, block_index):
 def _prepare_bc7_weighted_single_intent_job(
         original, mip, block_index, state, adjustments, block_intent):
     """Prepare a compact lower-mip job with worker-side target generation."""
+    if (len(block_intent.classes) != 1
+            or not isinstance(block_intent.classes[0], int)
+            or block_intent.classes[0] <= 0
+            or block_intent.classes[0] >= len(adjustments)):
+        raise TextureSaveError(
+            "texture_validation_failed",
+            "Lower-mip BC7 block contains an invalid adjustment class.")
+    intent_class = block_intent.classes[0]
     start, source_block, valid_width, valid_height = (
         _bc7_source_block_and_bounds(original, mip, block_index))
     changed_counts, total_counts, valid_width, valid_height = (
-        _bc7_single_weighted_block_counts(state, mip, block_index))
+        _bc7_single_weighted_block_counts(
+            state, mip, block_index, block_intent))
     return _BC7WeightedSingleIntentJob(
         start=start, source_block=source_block,
-        adjustment=adjustments[1], changed_counts=changed_counts,
+        adjustment=adjustments[intent_class], changed_counts=changed_counts,
         total_counts=total_counts, valid_width=valid_width,
         valid_height=valid_height)
 
@@ -1033,12 +1162,7 @@ def _prepare_bc7_parallel_job(
     if state.get("level") == 0 and len(block_intent.classes) == 1:
         return _prepare_bc7_single_intent_job(
             original, mip, block_index, adjustments, block_intent)
-    if (state.get("level", 0) > 0 and state.get("single")
-            and state.get("width") == mip.width
-            and state.get("height") == mip.height
-            and state.get("changed_counts") is not None
-            and state.get("total_counts") is not None
-            and block_intent.classes == (1,)):
+    if state.get("level", 0) > 0 and len(block_intent.classes) == 1:
         return _prepare_bc7_weighted_single_intent_job(
             original, mip, block_index, state, adjustments, block_intent)
     return _prepare_bc7_block_job(
