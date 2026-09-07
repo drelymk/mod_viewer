@@ -12,6 +12,7 @@ package and the user interface in `web/`.
 """
 
 import argparse
+import multiprocessing
 import sys
 
 try:
@@ -65,4 +66,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     sys.exit(main())
