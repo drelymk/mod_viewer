@@ -442,12 +442,14 @@ def test_rig_joint_picker_owns_plain_left_and_allows_alt_orbit(module_page):
         jointPickIntent: {type: 'limb-anchor', role: 'left_arm'},
         model: source};
       const picked = [];
+      const surface = [];
       let arcballDown = 0;
       let arcballUp = 0;
       const controller = createRigOverlayController({
         scene, camera, canvas, getMeshes: () => [], getRigState: () => state,
         getRigJointPoseFrame: id => ({pivot: pivots.get(Number(id))}),
         onRigJointPicked: id => picked.push(id),
+        onRigSurfacePickRequested: (point, intent) => surface.push({point, intent}),
       });
       controller.refresh(state);
       canvas.addEventListener('pointerdown', () => { arcballDown += 1; });
@@ -472,13 +474,19 @@ def test_rig_joint_picker_owns_plain_left_and_allows_alt_orbit(module_page):
       dispatch('pointermove', 7, center.x + 10, center.y);
       const switched = controller.getDebugState();
       dispatch('pointermove', 8, center.x + 30, center.y);
+      dispatch('pointerdown', 9, center.x + 50, center.y);
+      dispatch('pointerup', 9, center.x + 50, center.y);
       const cleared = controller.getDebugState();
       controller.dispose();
       canvas.remove();
-      return {picked, arcballDown, arcballUp, outside, firstHover,
+      return {picked, surface, arcballDown, arcballUp, outside, firstHover,
         hysteresis, switched, cleared};
     }""")
     assert result["picked"] == [1]
+    assert result["surface"] == [{
+        "point": {"clientX": 160, "clientY": 120},
+        "intent": {"type": "limb-anchor", "role": "left_arm"},
+    }]
     assert result["arcballDown"] == 1
     assert result["arcballUp"] == 1
     assert result["outside"]["hoveredJointId"] is None

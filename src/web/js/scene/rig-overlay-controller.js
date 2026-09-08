@@ -196,7 +196,7 @@ export function createRigOverlayController({
   scene, camera, canvas, getMeshes, getRigState,
   getRigJointPoseFrame, arcballControls, setRigJointRotation,
   solveRigIkTarget, finishRigJointPose, onTransformControlsUnavailable,
-  onRigJointPicked, onRigJointPickCancelled,
+  onRigJointPicked, onRigSurfacePickRequested, onRigJointPickCancelled,
   requestRender,
 } = {}) {
   const selectedIdFor = snapshot => selectedBoneFor(snapshot);
@@ -622,7 +622,13 @@ export function createRigOverlayController({
         >= PICK_CLICK_THRESHOLD) return;
     const nearest = nearestPickCandidate(
       event.clientX, event.clientY, PICK_CLICK_RADIUS);
-    if (nearest) onRigJointPicked?.(nearest.jointId, currentSnapshot.jointPickIntent);
+    if (nearest) {
+      onRigJointPicked?.(nearest.jointId, currentSnapshot.jointPickIntent);
+      return;
+    }
+    onRigSurfacePickRequested?.({
+      clientX: event.clientX, clientY: event.clientY,
+    }, currentSnapshot.jointPickIntent);
   }
 
   function onPickPointerCancel(event) {

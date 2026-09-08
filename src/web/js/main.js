@@ -32,6 +32,7 @@ import {
   setRigLimbOverride, beginRigJointPicking, cancelRigJointPicking,
   handleRigJointPicked, redetectRigLimb, clearRigLimbMapping,
   flipRigLimbBend, setRigIkEnabled,
+  pickRigJointFromModelSurface,
   setRigJointRotation, setRigJointRoot, solveRigIkTarget,
   getRigRotationSnapDegrees, setRigRotationSnapDegrees, setRigVisible,
   setRigOverlayScope,
@@ -271,6 +272,7 @@ rendererReady.then(ready => {
     solveRigIkTarget,
     finishRigJointPose,
     onRigJointPicked: handleRigJointPicked,
+    onRigSurfacePickRequested: pickRigJointFromModelSurface,
     onRigJointPickCancelled: cancelRigJointPicking,
     onTransformControlsUnavailable: () => setRigPoseControlStatus(
       'Pose gizmo is unavailable in this build.'),

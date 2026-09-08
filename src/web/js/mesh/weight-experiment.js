@@ -33,6 +33,7 @@ import {
   jointPivotMap,
 } from './weight-rig.js';
 import { createWeightPickController } from '../scene/weight-pick-controller.js';
+import { raycastModelAtClientPoint } from '../scene/model-picking.js';
 import { computeModelBounds } from '../scene/model-bounds.js';
 import {DEFAULT_MODEL_PHYSICS_SETTINGS} from './model-physics-session.js';
 import {
@@ -547,6 +548,48 @@ function clearPickedPoint({notify = true} = {}) {
   return true;
 }
 
+export function sampleModelJointAtIntersection(intersection) {
+  const mesh = intersection?.object;
+  const state = states.get(mesh);
+  if (!state?.loaded || !state.skinningSourceKey) return null;
+  const radiusWorld = pickRadiusWorld();
+  const sampled = sampleSkinningAtIntersection(
+    intersection, mesh, state, {radius: radiusWorld});
+  if (!sampled) return null;
+
+  const jointScores = new Map();
+  for (const influence of sampled.influences) {
+    const boneId = Number(influence?.boneId);
+    const weight = Number(influence?.weight);
+    const jointId = modelJointIdForSourceBone(sampled.sourceKey, boneId);
+    if (!Number.isInteger(boneId) || !Number.isFinite(weight)
+        || weight <= 0 || !Number.isInteger(jointId)) continue;
+    const current = jointScores.get(jointId);
+    if (!current) {
+      jointScores.set(jointId, {weight, boneId, boneWeight: weight});
+      continue;
+    }
+    current.weight += weight;
+    if (weight > current.boneWeight
+        || (weight === current.boneWeight && boneId < current.boneId)) {
+      current.boneId = boneId;
+      current.boneWeight = weight;
+    }
+  }
+  const best = [...jointScores.entries()].sort((left, right) =>
+    right[1].weight - left[1].weight || left[0] - right[0])[0];
+  if (!best) return null;
+  return {
+    point: sampled.point,
+    jointId: best[0],
+    sourceKey: sampled.sourceKey,
+    sourceFile: sampled.sourceFile,
+    boneIdOffset: sampled.boneIdOffset,
+    boneId: best[1].boneId,
+    influences: sampled.influences,
+  };
+}
+
 function handleModelPickedIntersection(intersection) {
   if (!intersection) {
     modelWeightState.pickStatus = 'No model surface was picked.';
@@ -555,18 +598,7 @@ function handleModelPickedIntersection(intersection) {
     notifyModelRigChanged();
     return null;
   }
-  const mesh = intersection.object;
-  const state = states.get(mesh);
-  if (!state?.loaded || !state.skinningSourceKey) {
-    modelWeightState.pickStatus = 'No skin weights are available for this part.';
-    modelRigState.pickStatus = 'No skin weights are available for this part.';
-    notifyModelWeightChanged();
-    notifyModelRigChanged();
-    return null;
-  }
-  const radiusWorld = pickRadiusWorld();
-  const sampled = sampleSkinningAtIntersection(
-    intersection, mesh, state, {radius: radiusWorld});
+  const sampled = sampleModelJointAtIntersection(intersection);
   if (!sampled) {
     modelWeightState.pickStatus = 'No skin weights are available for this part.';
     modelRigState.pickStatus = 'No skin weights are available for this part.';
@@ -574,10 +606,12 @@ function handleModelPickedIntersection(intersection) {
     notifyModelRigChanged();
     return null;
   }
-  const source = modelWeightState.sourceDescriptors.get(state.skinningSourceKey);
+  const mesh = intersection.object;
+  const source = modelWeightState.sourceDescriptors.get(sampled.sourceKey);
+  const radiusWorld = pickRadiusWorld();
   const pickedPoint = {
     point: sampled.point,
-    sourceKey: state.skinningSourceKey,
+    sourceKey: sampled.sourceKey,
     sourceFile: source?.sourceFile || sampled.sourceFile,
     boneIdOffset: source?.boneIdOffset ?? sampled.boneIdOffset,
     meshKey: mesh.userData?.semanticKey || null,
@@ -587,9 +621,7 @@ function handleModelPickedIntersection(intersection) {
   modelWeightState.pickedPoint = pickedPoint;
   modelWeightState.pickerViewMode = 'picked';
   modelWeightState.pickStatus = '';
-  const pickedBoneId = sampled.influences[0]?.boneId ?? null;
-  modelRigState.selectedJointId = Number.isInteger(Number(pickedBoneId))
-    ? modelJointIdForSourceBone(sampled.sourceKey, pickedBoneId) ?? null : null;
+  modelRigState.selectedJointId = sampled.jointId;
   modelRigState.pickStatus = '';
   notifyModelWeightChanged();
   notifyModelRigChanged();
@@ -602,6 +634,28 @@ function handleModelPickedIntersection(intersection) {
     }));
   }
   return pickedPoint;
+}
+
+function setRigSurfacePickStatus(message) {
+  modelRigState.pickStatus = message;
+  notifyModelRigChanged();
+  requestRender();
+}
+
+export function pickRigJointFromModelSurface(
+    {clientX, clientY} = {}, intent = modelRigState.jointPickIntent) {
+  const next = validLimbPickIntent(intent);
+  if (!next) return false;
+  const intersection = raycastModelAtClientPoint({
+    clientX, clientY, canvas: renderer.domElement, camera,
+    meshes: modelPickMeshes(),
+  });
+  const sampled = sampleModelJointAtIntersection(intersection);
+  if (!sampled) {
+    setRigSurfacePickStatus('No usable Rig joint was found at this point.');
+    return false;
+  }
+  return handleRigJointPicked(sampled.jointId, next);
 }
 
 export function beginModelPicking() {

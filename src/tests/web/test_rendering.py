@@ -3196,6 +3196,27 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
             y: rect.top + (1 - projected.y) * rect.height / 2,
           };
         }""")
+        surface_sample = page.evaluate("""async point => {
+          const {camera, renderer} = await import('./js/scene/scene.js');
+          const {raycastModelAtClientPoint} = await import(
+            './js/scene/model-picking.js');
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const before = experiment.getModelWeightState().pickedPoint;
+          const intersection = raycastModelAtClientPoint({
+            clientX: point.x, clientY: point.y,
+            canvas: renderer.domElement, camera,
+            meshes: window.modViewer.activeMeshes,
+          });
+          const sampled = experiment.sampleModelJointAtIntersection(intersection);
+          const after = experiment.getModelWeightState().pickedPoint;
+          return {sampled, unchanged: before === after};
+        }""", point)
+        assert surface_sample["sampled"]["sourceKey"] == (
+            "test/bodyblend.buf|offset=0")
+        assert isinstance(surface_sample["sampled"]["jointId"], int)
+        assert isinstance(surface_sample["sampled"]["boneId"], int)
+        assert surface_sample["sampled"]["influences"]
+        assert surface_sample["unchanged"]
         page.mouse.click(point["x"], point["y"])
         page.wait_for_function(
             "window.modViewer.getModelWeightState().pickerViewMode === 'picked'")
