@@ -1408,6 +1408,285 @@ function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
   return {components, componentByJointId: componentById};
 }
 
+function cloneForestComponent(component) {
+  return {
+    ...component,
+    nodeIds: [...(component?.nodeIds || [])],
+    parentById: {...(component?.parentById || {})},
+    childrenById: Object.fromEntries(Object.entries(
+      component?.childrenById || {}).map(([id, children]) => [
+      id, [...children],
+    ])),
+    depthById: {...(component?.depthById || {})},
+    edges: (component?.edges || []).map(edge => ({...edge})),
+  };
+}
+
+function componentAdjacency(component) {
+  const adjacency = new Map((component?.nodeIds || []).map(id => [
+    Number(id), [],
+  ]));
+  (component?.edges || []).forEach(edge => {
+    const left = Number(edge.jointA ?? edge.boneA);
+    const right = Number(edge.jointB ?? edge.boneB);
+    if (!adjacency.has(left) || !adjacency.has(right) || left === right) {
+      return;
+    }
+    adjacency.get(left).push(right);
+    adjacency.get(right).push(left);
+  });
+  if (!adjacency.size) return adjacency;
+  adjacency.forEach((neighbors, id) => {
+    if (neighbors.length) return;
+    const parent = Number(component?.parentById?.[id]);
+    if (Number.isFinite(parent) && adjacency.has(parent)) {
+      neighbors.push(parent);
+      adjacency.get(parent).push(id);
+    }
+  });
+  adjacency.forEach(neighbors => {
+    neighbors.sort((left, right) => left - right);
+  });
+  return adjacency;
+}
+
+function orientComponentFromRoot(component, rootId) {
+  const nodeIds = (component?.nodeIds || []).map(Number)
+    .filter(Number.isFinite).sort((left, right) => left - right);
+  const root = nodeIds.includes(Number(rootId))
+    ? Number(rootId) : Number(component?.rootId);
+  const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+  const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+  const depthById = Object.fromEntries(nodeIds.map(id => [id, null]));
+  const adjacency = componentAdjacency(component);
+  const queue = Number.isFinite(root) ? [root] : [];
+  const visited = new Set(queue);
+  if (Number.isFinite(root)) depthById[root] = 0;
+  while (queue.length) {
+    const parent = queue.shift();
+    (adjacency.get(parent) || []).forEach(child => {
+      if (visited.has(child)) return;
+      visited.add(child);
+      parentById[child] = parent;
+      childrenById[parent].push(child);
+      depthById[child] = depthById[parent] + 1;
+      queue.push(child);
+    });
+  }
+  return {
+    ...cloneForestComponent(component),
+    rootId: root,
+    nodeIds,
+    parentById,
+    childrenById,
+    depthById,
+    maxDepth: Math.max(0, ...Object.values(depthById)
+      .filter(depth => depth !== null).map(Number)),
+  };
+}
+
+function componentStableKey(component, joints) {
+  const memberKeys = (component?.nodeIds || []).flatMap(jointId =>
+    (joints[Number(jointId)]?.members || []).map(member =>
+      String(member.sourceBoneKey)));
+  return (memberKeys.length ? memberKeys : component?.nodeIds || [])
+    .map(String).sort().join('|');
+}
+
+function compareAttachmentHosts(left, right, joints, votes,
+    incomingCount, outgoingCount) {
+  return componentSupport(right, joints) - componentSupport(left, joints)
+    || (incomingCount.get(left.componentId) || 0)
+      - (incomingCount.get(right.componentId) || 0)
+    || (outgoingCount.get(right.componentId) || 0)
+      - (outgoingCount.get(left.componentId) || 0)
+    || (votes.get(Number(right.rootId)) || 0)
+      - (votes.get(Number(left.rootId)) || 0)
+    || componentStableKey(left, joints).localeCompare(
+      componentStableKey(right, joints))
+    || left.componentId - right.componentId;
+}
+
+function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
+  const sourceComponents = sourceForest?.components || [];
+  const componentById = new Map(sourceComponents.map(component => [
+    Number(component.componentId), component,
+  ]));
+  const componentForJoint = jointId => sourceForest?.componentByJointId
+    instanceof Map
+    ? sourceForest.componentByJointId.get(Number(jointId))
+    : sourceForest?.componentByJointId?.[Number(jointId)];
+  const attachments = (edges || []).filter(edge =>
+    edge.relationshipType === 'attachment').map(edge => {
+    const targetComponentId = Number(edge.targetComponentId
+      ?? componentForJoint(edge.jointA));
+    const accessoryComponentId = Number(edge.accessoryComponentId
+      ?? componentForJoint(edge.jointB));
+    return {
+      edge,
+      targetComponentId,
+      accessoryComponentId,
+      targetJointId: Number(edge.targetJointId ?? edge.jointA),
+      accessoryJointId: Number(edge.accessoryJointId ?? edge.jointB),
+    };
+  }).filter(item => componentById.has(item.targetComponentId)
+    && componentById.has(item.accessoryComponentId)
+    && item.targetComponentId !== item.accessoryComponentId);
+
+  const adjacency = new Map([...componentById.keys()].map(id => [id, []]));
+  const outgoing = new Map([...componentById.keys()].map(id => [id, []]));
+  const incomingCount = new Map([...componentById.keys()].map(id => [id, 0]));
+  const outgoingCount = new Map([...componentById.keys()].map(id => [id, 0]));
+  attachments.forEach(item => {
+    adjacency.get(item.targetComponentId).push(item);
+    adjacency.get(item.accessoryComponentId).push(item);
+    outgoing.get(item.targetComponentId).push(item);
+    incomingCount.set(item.accessoryComponentId,
+      (incomingCount.get(item.accessoryComponentId) || 0) + 1);
+    outgoingCount.set(item.targetComponentId,
+      (outgoingCount.get(item.targetComponentId) || 0) + 1);
+  });
+  adjacency.forEach(items => items.sort((left, right) =>
+    left.targetComponentId - right.targetComponentId
+      || left.accessoryComponentId - right.accessoryComponentId
+      || left.targetJointId - right.targetJointId
+      || left.accessoryJointId - right.accessoryJointId));
+  outgoing.forEach(items => items.sort((left, right) =>
+    left.accessoryComponentId - right.accessoryComponentId
+      || left.targetJointId - right.targetJointId
+      || left.accessoryJointId - right.accessoryJointId));
+
+  const unseen = new Set(componentById.keys());
+  const orientedGroups = [];
+  while (unseen.size) {
+    const start = Math.min(...unseen);
+    const groupIds = [];
+    const queue = [start];
+    unseen.delete(start);
+    while (queue.length) {
+      const current = queue.shift();
+      groupIds.push(current);
+      (adjacency.get(current) || []).forEach(item => {
+        const other = item.targetComponentId === current
+          ? item.accessoryComponentId : item.targetComponentId;
+        if (!unseen.has(other)) return;
+        unseen.delete(other);
+        queue.push(other);
+      });
+    }
+    const groupSet = new Set(groupIds);
+    const groupAttachments = attachments.filter(item =>
+      groupSet.has(item.targetComponentId)
+      && groupSet.has(item.accessoryComponentId));
+    const groupRoots = groupIds.filter(id => (incomingCount.get(id) || 0) === 0)
+      .map(id => componentById.get(id))
+      .filter(Boolean)
+      .sort((left, right) => compareAttachmentHosts(
+        left, right, joints, votes, incomingCount, outgoingCount));
+    const host = (groupRoots.length ? groupRoots
+      : groupIds.map(id => componentById.get(id)).filter(Boolean)
+        .sort((left, right) => compareAttachmentHosts(
+          left, right, joints, votes, incomingCount, outgoingCount)))[0];
+    const oriented = new Map();
+    const attachmentLinks = [];
+    if (host) {
+      oriented.set(host.componentId, cloneForestComponent(host));
+      const pending = [host.componentId];
+      while (pending.length) {
+        const parentComponentId = pending.shift();
+        (outgoing.get(parentComponentId) || []).forEach(item => {
+          if (!groupSet.has(item.accessoryComponentId)
+              || oriented.has(item.accessoryComponentId)) return;
+          const accessory = componentById.get(item.accessoryComponentId);
+          oriented.set(item.accessoryComponentId,
+            orientComponentFromRoot(accessory, item.accessoryJointId));
+          attachmentLinks.push({
+            ...item,
+            parentComponentId,
+            childComponentId: item.accessoryComponentId,
+          });
+          pending.push(item.accessoryComponentId);
+        });
+      }
+    }
+    // The accepted attachment graph is a forest, so every component should be
+    // reachable from its stable host. Keep a source orientation for any
+    // malformed diagnostic fixture rather than dropping its geometry.
+    groupIds.forEach(componentId => {
+      if (oriented.has(componentId)) return;
+      const component = componentById.get(componentId);
+      if (component) oriented.set(componentId, cloneForestComponent(component));
+    });
+
+    const nodeIds = groupIds.flatMap(componentId =>
+      oriented.get(componentId)?.nodeIds || []).sort((left, right) => left - right);
+    const nodeSet = new Set(nodeIds);
+    const parentById = {};
+    const childrenById = {};
+    groupIds.forEach(componentId => {
+      const component = oriented.get(componentId);
+      (component?.nodeIds || []).forEach(jointId => {
+        parentById[jointId] = component.parentById?.[jointId] ?? null;
+        childrenById[jointId] = [...(component.childrenById?.[jointId] || [])];
+      });
+    });
+    attachmentLinks.forEach(item => {
+      const component = oriented.get(item.childComponentId);
+      const accessoryRoot = component?.rootId;
+      if (!Number.isFinite(accessoryRoot)
+          || !nodeSet.has(item.targetJointId)
+          || !nodeSet.has(accessoryRoot)) return;
+      parentById[accessoryRoot] = item.targetJointId;
+      childrenById[item.targetJointId] ||= [];
+      childrenById[item.targetJointId].push(accessoryRoot);
+    });
+    Object.values(childrenById).forEach(children =>
+      children.sort((left, right) => Number(left) - Number(right)));
+    const rootId = oriented.get(host?.componentId)?.rootId
+      ?? nodeIds[0] ?? null;
+    const depthById = Object.fromEntries(nodeIds.map(id => [id, null]));
+    if (Number.isFinite(rootId) && Object.hasOwn(depthById, rootId)) {
+      depthById[rootId] = 0;
+      const pending = [rootId];
+      while (pending.length) {
+        const parent = pending.shift();
+        (childrenById[parent] || []).forEach(child => {
+          if (depthById[child] !== null) return;
+          depthById[child] = depthById[parent] + 1;
+          pending.push(child);
+        });
+      }
+    }
+    const groupEdges = (edges || []).filter(edge =>
+      nodeSet.has(Number(edge.jointA)) && nodeSet.has(Number(edge.jointB)));
+    orientedGroups.push({
+      componentId: Math.min(...nodeIds),
+      nodeIds,
+      rootId,
+      parentById,
+      childrenById,
+      depthById,
+      maxDepth: Math.max(0, ...Object.values(depthById)
+        .filter(depth => depth !== null).map(Number)),
+      edges: groupEdges,
+    });
+  }
+  orientedGroups.sort((left, right) => left.componentId - right.componentId);
+  const components = orientedGroups.map((component, componentId) => ({
+    ...component, componentId,
+  }));
+  const componentByJointId = new Map();
+  components.forEach(component => component.nodeIds.forEach(jointId =>
+    componentByJointId.set(jointId, component.componentId)));
+  joints.forEach(joint => {
+    const componentId = componentByJointId.get(joint.jointId);
+    const component = components[componentId];
+    joint.parentId = component?.parentById?.[joint.jointId] ?? null;
+    joint.childrenIds = [...(component?.childrenById?.[joint.jointId] || [])];
+  });
+  return {components, componentByJointId};
+}
+
 export function orientModelRigForest(joints, edges, rootOverrides = {}) {
   const overrides = rootOverrides instanceof Map
     ? rootOverrides
@@ -1723,6 +2002,10 @@ function addAttachments(joints, sourceEdges, forest, referenceRadius,
     const edge = {
       jointA: best.jointA,
       jointB: best.jointB,
+      targetComponentId: best.targetComponentId,
+      accessoryComponentId: best.accessoryComponentId,
+      targetJointId: best.targetJointId,
+      accessoryJointId: best.accessoryJointId,
       sourceSupportCount: 0,
       sourceEdges: [],
       combinedTreeScore: best.score,
@@ -1782,20 +2065,8 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
     model.joints, sourceForestEdges, sourceForest, referenceRadius,
     candidateBuild.crossEvidenceByPair);
   const finalEdges = maximumSpanningForest(model.joints, attachments.edges);
-  const initialFinalForest = orientModelForest(model.joints, finalEdges, votes);
-  const finalRootOverrides = new Map();
-  initialFinalForest.components.forEach(component => {
-    const members = new Set(component.nodeIds);
-    const attachment = finalEdges.filter(edge =>
-      edge.relationshipType === 'attachment'
-      && members.has(edge.jointA) && members.has(edge.jointB))
-      .sort((left, right) => right.attachmentScore - left.attachmentScore
-        || left.jointA - right.jointA || left.jointB - right.jointB)[0];
-    if (attachment) finalRootOverrides.set(
-      component.componentId, attachment.jointA);
-  });
-  const finalForest = orientModelForest(
-    model.joints, finalEdges, votes, finalRootOverrides);
+  const finalForest = orientModelForestWithAttachments(
+    model.joints, sourceForest, finalEdges, votes);
   const survivingAttachments = finalEdges.filter(edge =>
     edge.relationshipType === 'attachment');
   attachments.diagnostics.forEach(diagnostic => {

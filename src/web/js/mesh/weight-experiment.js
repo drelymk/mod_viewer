@@ -1263,6 +1263,8 @@ function restoreDefaultModelRigOrientation(rig) {
 function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   const started = performanceNow();
   const previousSelectedJointId = modelRigState.selectedJointId;
+  const previousRootSignatures = modelSkinningRig
+    ? new Set(modelRigState.explicitRootSignatures) : new Set();
   if (modelSkinningRig) resetModelPose({request: false});
   const reconciliation = buildModelRigReconciliation(sourceRigs);
   const joints = reconciliation.joints || [];
@@ -1322,7 +1324,23 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     .map(([jointId, direction]) => [jointId, direction.toArray?.() || [...direction]]));
   rig.defaultRestContinuationChildByJointId = new Map(
     rig.restContinuationChildByJointId);
-  modelRigState.explicitRootSignatures = new Set();
+  let restoredRootSignatures = new Set();
+  if (previousRootSignatures.size) {
+    const rootRestore = modelForestWithRootSignatures(
+      rig, [...previousRootSignatures]);
+    installModelForest(rig, rootRestore.forest);
+    const signatureIndex = buildJointSignatureIndex(rig).resolvedBySignature;
+    restoredRootSignatures = new Set(rootRestore.appliedRoots.filter(signature => {
+      const jointId = signatureIndex.get(signature);
+      const componentId = rig.defaultComponentByJointId.get(jointId);
+      return Number.isInteger(Number(componentId))
+        && rig.defaultRootIdByComponent.get(Number(componentId)) !== jointId;
+    }));
+    if (restoredRootSignatures.size) {
+      rig.structureRevision = ++rigRuntime.structureRevision;
+    }
+  }
+  modelRigState.explicitRootSignatures = restoredRootSignatures;
   rigPresetState.lastApplyResult = null;
   sourceRigs.forEach(sourceRig => {
     rig.sourceTransformAliases.set(sourceRig.sourceKey, new Map());

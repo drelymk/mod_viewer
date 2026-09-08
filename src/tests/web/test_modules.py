@@ -1338,7 +1338,8 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
         "mutual-left#bone=11", "mutual-right#bone=21"]]
 
 
-def test_cross_source_reconciliation_keeps_accessory_root_as_attachment(module_page):
+def test_cross_source_reconciliation_preserves_host_root_and_reroots_accessory(
+        module_page):
     page = module_page
     result = page.evaluate("""async () => {
       const {buildModelRigReconciliation} = await import(
@@ -1475,6 +1476,12 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
         edge.relationshipType === 'attachment');
       const attachmentBoundary = id(first, 'accessory#bone=20');
       const bodyTarget = id(first, 'main#bone=2');
+      const bodyRoot = id(first, 'main#bone=0');
+      const bodyParent = id(first, 'main#bone=1');
+      const accessoryChild = id(first, 'accessory#bone=21');
+      const accessoryRoot = id(first, 'accessory#bone=22');
+      const accessoryBranch = id(first, 'accessory#bone=23');
+      const component = first.components[0];
       const mapKeys = [
         'main#bone=0', 'main#bone=1', 'main#bone=2', 'main#bone=3',
         'partial#bone=7', 'partial#bone=8', 'partial#bone=9',
@@ -1498,7 +1505,13 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
           target: attachment.jointA === bodyTarget,
         } : null,
         attachedRoot: first.components.length === 1
-          && first.components[0].rootId === bodyTarget,
+          && component.rootId === bodyRoot,
+        hostOrientation: component.parentById[bodyTarget] === bodyParent
+          && component.parentById[bodyParent] === bodyRoot,
+        accessoryOrientation: component.parentById[attachmentBoundary] === bodyTarget
+          && component.parentById[accessoryChild] === attachmentBoundary
+          && component.parentById[accessoryRoot] === accessoryChild
+          && component.parentById[accessoryBranch] === accessoryChild,
         orderInvariant: mapKeys.every(key =>
           id(first, key) === id(second, key))
           && JSON.stringify(first.edges.map(edge => [
@@ -1518,9 +1531,88 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
     assert result["attachment"]["boundary"]
     assert result["attachment"]["target"]
     assert result["attachedRoot"]
+    assert result["hostOrientation"]
+    assert result["accessoryOrientation"]
+
+
+def test_cross_source_reconciliation_preserves_host_for_multiple_attachments(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (sourceKey, entries, rootId, edgeList) => {
+        const nodeIds = entries.map(([id]) => id);
+        const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
+        edgeList.forEach(([parent, child]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        return {
+          sourceKey, boneIds: nodeIds,
+          influenceGraph: {nodes: entries.map(([boneId, weightedCenter]) => ({
+            boneId, weightedCenter, weightedRadius: .1,
+            totalWeight: 10, affectedVertexCount: 20,
+          }))},
+          centerByBoneId: new Map(entries),
+          jointPivotByBoneId: new Map(entries.filter(([id]) => id !== rootId)),
+          restDirectionByBoneId: new Map(entries.map(([id]) => [id, [0, 1, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(),
+          inferredForest: {
+            components: [{componentId: 0, rootId, nodeIds,
+              parentById, childrenById,
+              depthById: Object.fromEntries(nodeIds.map(id => [id, 0])),
+              edges: edgeList.map(([boneA, boneB]) => ({
+                boneA, boneB, treeEdgeScore: 1,
+              }))}],
+            componentByBoneId: Object.fromEntries(nodeIds.map(id => [id, 0])),
+          },
+        };
+      };
+      const host = make('host', [
+        [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, 2, 0]],
+      ], 0, [[0, 1], [1, 2]]);
+      const upper = make('upper', [
+        [10, [.05, 2, 0]], [11, [.35, 2.3, 0]],
+      ], 10, [[10, 11]]);
+      const lower = make('lower', [
+        [20, [.05, 0, 0]], [21, [-.3, -.3, 0]],
+      ], 20, [[20, 21]]);
+      const first = buildModelRigReconciliation(
+        [host, upper, lower], {modelReferenceRadius: 1});
+      const second = buildModelRigReconciliation(
+        [lower, host, upper], {modelReferenceRadius: 1});
+      const id = (value, source, bone) =>
+        value.sourceBoneToModelJointId[`${source}#bone=${bone}`];
+      const hostRoot = id(first, 'host', 0);
+      const hostMiddle = id(first, 'host', 1);
+      const hostTop = id(first, 'host', 2);
+      const upperRoot = id(first, 'upper', 10);
+      const lowerRoot = id(first, 'lower', 20);
+      const component = first.components.find(item =>
+        item.nodeIds.includes(hostRoot));
+      const hierarchy = value => value.components.map(item => ({
+        root: item.rootId,
+        parent: Object.entries(item.parentById).sort(),
+      }));
+      return {
+        attachmentCount: first.reconciliation.attachmentCount,
+        root: component?.rootId,
+        hostParent: [component?.parentById[hostMiddle],
+          component?.parentById[hostTop]],
+        accessoryParents: [component?.parentById[upperRoot],
+          component?.parentById[lowerRoot]],
+        orderInvariant: JSON.stringify(hierarchy(first)) ===
+          JSON.stringify(hierarchy(second)),
+      };
+    }""")
+    assert result["attachmentCount"] == 2
+    assert result["root"] == 0
+    assert result["hostParent"] == [0, 1]
+    assert result["accessoryParents"] == [2, 0]
     assert result["orderInvariant"]
-
-
 def test_cross_source_reconciliation_confidence_lanes_and_support(module_page):
     page = module_page
     result = page.evaluate("""async () => {
