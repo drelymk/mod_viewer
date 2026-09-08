@@ -14,6 +14,7 @@ function createModelRigDefaults() {
     error: null,
     visible: false,
     picking: false,
+    jointPickIntent: null,
     selectedJointId: null,
     structureRevision: 0,
     pickStatus: '',

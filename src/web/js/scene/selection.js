@@ -9,7 +9,9 @@ import { getMeshView } from '../mesh/mesh-view-bindings.js';
 import { setMeshSelectionOutline } from './outline-renderer.js';
 import { raycastModelAtClientPoint } from './model-picking.js';
 import { requestRender } from './render-scheduler.js';
-import { isRigTransformInteractionActive } from './rig-overlay-controller.js';
+import {
+  isRigTransformInteractionActive, isRigJointPickingActive,
+} from './rig-overlay-controller.js';
 
 let selected = null; // currently selected mesh, or null
 
@@ -72,7 +74,7 @@ function onPointerDown(e) {
 }
 
 function onPointerUp(e) {
-  if (isRigTransformInteractionActive()) return;
+  if (isRigTransformInteractionActive() || isRigJointPickingActive()) return;
   if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return; // was a drag, not a click
 
   const hit = raycastModelAtClientPoint({

@@ -277,7 +277,35 @@ function compactLimbMapping(mapping) {
     anchorSource: mapping.anchorSource,
     bendSource: mapping.bendSource,
     endSource: mapping.endSource,
+    bendDirection: mapping.bendDirection
+      ? [...mapping.bendDirection] : null,
+    bendDirectionSource: mapping.bendDirectionSource,
+    bendDirectionStrength: Number(mapping.bendDirectionStrength) || 0,
   };
+}
+
+function quaternionValue(value) {
+  if (value?.isQuaternion) return value.clone().normalize();
+  const values = Array.isArray(value) || ArrayBuffer.isView(value)
+    ? [...value].slice(0, 4).map(Number)
+    : [value?.x, value?.y, value?.z, value?.w].map(Number);
+  if (values.length !== 4 || !values.every(Number.isFinite)) return null;
+  return new THREE.Quaternion(...values).normalize();
+}
+
+function characterForwardForRole(role) {
+  const transform = getModelTransformState?.();
+  const orientation = quaternionValue(transform?.orientation);
+  const userRotation = quaternionValue(transform?.userRotation);
+  if (!orientation || !userRotation) return null;
+  // The rig is expressed in the model frame. Remove only the temporary
+  // viewport turn so the fallback follows the character rather than the view.
+  const baseOrientation = userRotation.invert().multiply(orientation).normalize();
+  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(baseOrientation);
+  if (!Number.isFinite(forward.lengthSq()) || forward.lengthSq() <= 1e-8) {
+    return null;
+  }
+  return forward.normalize();
 }
 
 function resolveLimbMapping(role) {
@@ -299,6 +327,7 @@ function resolveLimbMapping(role) {
   }
   const detected = detectLimbPath({
     rig: modelSkinningRig, anchorJointId, role,
+    characterForward: characterForwardForRole(role),
   });
   const mapping = {
     ...detected,
@@ -404,6 +433,8 @@ function rigSnapshot() {
     error: modelRigState.error,
     visible: modelRigState.visible,
     picking: modelRigState.picking,
+    jointPickIntent: modelRigState.jointPickIntent
+      ? {...modelRigState.jointPickIntent} : null,
     structureRevision: modelRigState.structureRevision,
     selectedJointId: modelRigState.selectedJointId,
     physicsActive: modelRigHasActivePhysics(),
@@ -574,6 +605,7 @@ function handleModelPickedIntersection(intersection) {
 }
 
 export function beginModelPicking() {
+  if (modelRigState.jointPickIntent) cancelRigJointPicking();
   if (!modelWeightState.loaded) {
     modelWeightState.pickStatus = 'Load model weights before picking.';
     notifyModelWeightChanged();
@@ -588,7 +620,7 @@ export function beginModelPicking() {
 }
 
 export function cancelModelPicking() {
-  return modelPickController.cancel();
+  return modelPickController.cancel() || cancelRigJointPicking();
 }
 
 export function setWeightPickerViewMode(mode) {
@@ -2298,6 +2330,52 @@ export function setRigIkEnabled(enabled) {
   return next;
 }
 
+function limbLabel(role) {
+  return RIG_LIMB_ROLE_INFO[role]?.label || role;
+}
+
+function limbPartLabel(role, type) {
+  const info = RIG_LIMB_ROLE_INFO[role];
+  if (!info) return type;
+  if (type === 'limb-anchor') return info.anchor;
+  if (type === 'limb-bend-override') return info.bend;
+  if (type === 'limb-end-override') return info.end;
+  return type;
+}
+
+function validLimbPickIntent(intent) {
+  const type = String(intent?.type || '');
+  const role = validLimbRole(intent?.role);
+  return role && ['limb-anchor', 'limb-bend-override',
+    'limb-end-override'].includes(type) ? {type, role} : null;
+}
+
+export function beginRigJointPicking(intent = {}) {
+  const next = validLimbPickIntent(intent);
+  if (!next || !modelRigState.loaded || !modelSkinningRig) return false;
+  if (modelRigState.jointPickIntent
+      && modelRigState.jointPickIntent.type === next.type
+      && modelRigState.jointPickIntent.role === next.role) {
+    return cancelRigJointPicking();
+  }
+  if (modelPickController.isEnabled()) modelPickController.cancel();
+  modelRigState.jointPickIntent = next;
+  modelRigState.pickStatus = `Pick the ${limbLabel(next.role)} ${
+    limbPartLabel(next.role, next.type)} joint.`;
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
+export function cancelRigJointPicking() {
+  if (!modelRigState.jointPickIntent && !modelRigState.pickStatus) return false;
+  modelRigState.jointPickIntent = null;
+  modelRigState.pickStatus = '';
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
 function mappingToMetadata(mapping, bendSign = 1) {
   return {
     anchor_signature: mapping.anchor_signature,
@@ -2365,6 +2443,84 @@ export function setRigLimbAnchor(role, jointId = modelRigState.selectedJointId) 
     }
   });
   return true;
+}
+
+export function setRigLimbOverride(role, type, jointId) {
+  const nextRole = validLimbRole(role);
+  const kind = String(type || '');
+  const mapping = nextRole ? currentLimbMappingForRole(nextRole) : null;
+  const joint = modelJointForId(jointId);
+  if (!nextRole || !mapping?.available || !joint || !modelSkinningRig) {
+    modelRigState.pickStatus = 'The selected joint is not valid for this limb.';
+    notifyModelRigChanged();
+    return false;
+  }
+  const component = modelComponentForJoint(mapping.anchorJointId);
+  let candidatePath = [];
+  if (kind === 'limb-end-override') {
+    candidatePath = descendantPath(component, mapping.anchorJointId, joint.jointId);
+    if (candidatePath.length < 3
+        || !candidatePath.includes(mapping.bendJointId)) {
+      modelRigState.pickStatus = 'The foot/hand must contain the detected bend.';
+      notifyModelRigChanged();
+      return false;
+    }
+  } else if (kind === 'limb-bend-override') {
+    candidatePath = mapping.pathJointIds || [];
+    if (!candidatePath.includes(joint.jointId)
+        || joint.jointId === mapping.anchorJointId
+        || joint.jointId === mapping.endJointId) {
+      modelRigState.pickStatus = 'The bend must be between the anchor and end.';
+      notifyModelRigChanged();
+      return false;
+    }
+  } else {
+    modelRigState.pickStatus = 'Unknown limb mapping action.';
+    notifyModelRigChanged();
+    return false;
+  }
+  if (typeof joint.signature !== 'string' || !joint.signature.trim()) {
+    modelRigState.pickStatus = 'The selected joint has no stable identity.';
+    notifyModelRigChanged();
+    return false;
+  }
+  const previous = rigPresetState.limbMappings?.[nextRole] || {};
+  const updated = {
+    ...previous,
+    anchor_signature: previous.anchor_signature
+      || modelJointForId(mapping.anchorJointId)?.signature,
+    ...(kind === 'limb-bend-override'
+      ? {bend_override_signature: joint.signature}
+      : {end_override_signature: joint.signature}),
+  };
+  rigPresetState.limbMappings = {
+    ...(rigPresetState.limbMappings || {}), [nextRole]: updated,
+  };
+  limbMappingMetadataRevision += 1;
+  resolvedLimbMappings = null;
+  modelRigState.activeLimbRole = nextRole;
+  modelRigState.ikEnabled = false;
+  modelRigState.pickStatus = '';
+  notifyModelRigChanged();
+  requestRender();
+  void persistLimbMapping(nextRole, updated).then(result => {
+    if (result?.saved === false && result?.error) {
+      modelRigState.pickStatus = result.error;
+      notifyModelRigChanged();
+    }
+  });
+  return true;
+}
+
+export function handleRigJointPicked(jointId,
+    intent = modelRigState.jointPickIntent) {
+  const next = validLimbPickIntent(intent);
+  if (!next) return false;
+  const changed = next.type === 'limb-anchor'
+    ? setRigLimbAnchor(next.role, jointId)
+    : setRigLimbOverride(next.role, next.type, jointId);
+  if (changed) cancelRigJointPicking();
+  return changed;
 }
 
 export function redetectRigLimb(role = modelRigState.activeLimbRole) {
@@ -2993,6 +3149,7 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelRigState.selectedJointId = null;
   modelRigState.structureRevision = 0;
   modelRigState.visible = false;
+  modelRigState.jointPickIntent = null;
   modelRigState.ikEnabled = false;
   modelRigState.activeLimbRole = 'left_arm';
   modelRigState.explicitRootSignatures = new Set();

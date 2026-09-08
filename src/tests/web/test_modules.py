@@ -216,6 +216,93 @@ def test_rig_limb_detection_and_two_control_solver(module_page):
     assert result["solved"]["endDistance"] < 0.1
 
 
+def test_limb_bend_direction_uses_scale_relative_evidence_and_role_fallback(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const ik = await import('./js/mesh/weight-rig-ik.js');
+      const component = {
+        rootId: 0, nodeIds: [0, 1, 2, 3],
+        parentById: {0: null, 1: 0, 2: 1, 3: 2},
+        childrenById: {0: [1], 1: [2], 2: [3], 3: []},
+      };
+      const rigFor = bendZ => {
+        const points = new Map([
+          [0, [-1, 0, 0]], [1, [0, 0, 0]],
+          [2, [1, 0, bendZ]], [3, [2, 0, 0]],
+        ]);
+        return {
+          components: [component], componentByJointId: new Map(
+            component.nodeIds.map(id => [id, 0])),
+          jointPivotByJointId: points, centerByJointId: points,
+          restContinuationChildByJointId: new Map([[0, 1], [1, 2], [2, 3]]),
+          restFrameByJointId: new Map(),
+        };
+      };
+      const detect = (bendZ, role) => ik.detectLimbPath({
+        rig: rigFor(bendZ), anchorJointId: 1, role,
+        characterForward: [0, 0, 1],
+      });
+      const meaningful = detect(.2, 'left_arm');
+      const noisyPositive = detect(.000001, 'left_arm');
+      const noisyNegative = detect(-.000001, 'right_arm');
+      const leftLeg = detect(.000001, 'left_leg');
+      const rightLeg = detect(-.000001, 'right_leg');
+      return {meaningful, noisyPositive, noisyNegative, leftLeg, rightLeg};
+    }""")
+    assert result["meaningful"]["bendDirectionSource"] == "rest-offset"
+    assert result["meaningful"]["bendDirection"] == pytest.approx([0, 0, 1])
+    assert result["meaningful"]["bendDirectionStrength"] == pytest.approx(.1)
+    assert result["noisyPositive"]["bendDirectionSource"] == (
+        "semantic-character-facing")
+    assert result["noisyPositive"]["bendDirection"] == pytest.approx([0, 0, 1])
+    assert result["noisyNegative"]["bendDirection"] == pytest.approx([0, 0, 1])
+    assert result["leftLeg"]["bendDirection"] == pytest.approx([0, 0, -1])
+    assert result["rightLeg"]["bendDirection"] == pytest.approx([0, 0, -1])
+
+
+def test_rig_joint_picker_projects_current_pivots_and_uses_nearest_hit(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {findNearestRigJoint, projectRigPointToClient} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const camera = new THREE.PerspectiveCamera(90, 1, .1, 100);
+      camera.position.set(0, 0, 5);
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+      const canvas = {
+        clientWidth: 200, clientHeight: 200,
+        getBoundingClientRect: () => ({left: 10, top: 20, width: 200, height: 200}),
+      };
+      const center = projectRigPointToClient({
+        point: [0, 0, 0], camera, canvas,
+      });
+      const posed = projectRigPointToClient({
+        point: [.2, .1, 0], camera, canvas,
+      });
+      const near = findNearestRigJoint({
+        candidates: [
+          {jointId: 12, pivot: [.24, .1, 0]},
+          {jointId: 13, pivot: [.2, .1, 0]},
+          {jointId: 14, pivot: [2, 0, 0]},
+        ], pointer: posed, camera, canvas, hitRadius: 14,
+      });
+      const outside = findNearestRigJoint({
+        candidates: [{jointId: 13, pivot: [.2, .1, 0]}],
+        pointer: {x: posed.x + 20, y: posed.y}, camera, canvas,
+        hitRadius: 14,
+      });
+      return {center, posed, nearest: near?.jointId || null,
+        candidateCount: near?.candidates?.length || 0, outside};
+    }""")
+    assert result["center"]["x"] == pytest.approx(110)
+    assert result["center"]["y"] == pytest.approx(120)
+    assert result["nearest"] == 13
+    assert result["candidateCount"] == 2
+    assert result["outside"] is None
+
+
 def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -261,7 +348,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       controller.dispose();
       return {initial, selectedRoot, afterTransform, shownAgain};
     }""")
-    assert result["initial"]["staticObjectCount"] == 3
+    assert result["initial"]["staticObjectCount"] == 4
     assert result["initial"]["nodeCount"] == 3
     assert result["initial"]["edgeCount"] == 2
     assert result["initial"]["jointCount"] == 3
@@ -273,6 +360,56 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
         result["initial"]["modelFrameUpdateCount"] + 2
     assert result["shownAgain"]["rebuildCount"] == 1
     assert result["shownAgain"]["selectedJointId"] is None
+
+
+def test_rig_joint_picking_temporarily_exposes_all_overlay_joints(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const model = new THREE.Object3D();
+      scene.add(model);
+      const canvas = document.createElement('canvas');
+      document.body.appendChild(canvas);
+      let state = {
+        visible: false, overlayScope: 'selection', selectedJointId: 2,
+        jointPickIntent: null,
+        model: {
+          key: 'model-rig', structureRevision: 1,
+          joints: [1, 2, 3, 4].map((jointId, index) => ({
+            jointId, restCenter: [index, 0, 0], restPivot: [index, 0, 0],
+          })),
+          components: [{componentId: 0, rootId: 1, nodeIds: [1, 2, 3, 4],
+            parentById: {1: null, 2: 1, 3: 2, 4: 3},
+            childrenById: {1: [2], 2: [3], 3: [4], 4: []}}],
+          forestEdges: [
+            {parentId: 1, childId: 2}, {parentId: 2, childId: 3},
+            {parentId: 3, childId: 4},
+          ], poseRotationByJointId: {},
+        },
+      };
+      const controller = createRigOverlayController({
+        scene, canvas, getMeshes: () => [model], getRigState: () => state,
+      });
+      controller.refresh(state);
+      const before = controller.getDebugState();
+      state = {...state, jointPickIntent: {type: 'limb-anchor', role: 'left_arm'}};
+      controller.refresh(state);
+      const during = controller.getDebugState();
+      state = {...state, jointPickIntent: null};
+      controller.refresh(state);
+      const after = controller.getDebugState();
+      controller.dispose();
+      canvas.remove();
+      return {before, during, after};
+    }""")
+    assert result["before"]["nodeCount"] == 3
+    assert result["before"]["staticVisible"] is False
+    assert result["during"]["nodeCount"] == 4
+    assert result["during"]["staticVisible"] is True
+    assert result["after"]["nodeCount"] == 3
+    assert result["after"]["staticVisible"] is False
 
 
 def test_rig_overlay_can_scope_model_view_to_selected_chain(module_page):

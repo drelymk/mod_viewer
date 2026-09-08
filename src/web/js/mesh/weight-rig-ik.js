@@ -8,6 +8,7 @@ const EPSILON = 1e-8;
 const MAX_PATH_DEPTH = 64;
 const MAX_SOLVE_PASSES = 2;
 const TOLERANCE_SCALE = 1e-4;
+export const LIMB_BEND_RATIO_THRESHOLD = 0.025;
 
 export const RIG_LIMB_ROLES = Object.freeze([
   'left_arm', 'right_arm', 'left_leg', 'right_leg',
@@ -127,16 +128,64 @@ function projectedDirection(vector, axis) {
   return result.lengthSq() > EPSILON ? result.normalize() : null;
 }
 
-function preferredBendDirection(rig, pathJointIds, bendJointId) {
+function preferredBendDirection(rig, pathJointIds, bendJointId, role,
+    characterForward) {
   const anchor = pointFor(rig, pathJointIds[0]);
   const bend = pointFor(rig, bendJointId);
   const end = pointFor(rig, pathJointIds.at(-1));
-  if (!anchor || !bend || !end) return null;
+  if (!anchor || !bend || !end) return {
+    bendDirection: null,
+    bendDirectionSource: 'unavailable',
+    bendDirectionStrength: 0,
+  };
   const axis = end.clone().sub(anchor);
   if (axis.lengthSq() > EPSILON) {
+    const limbLength = axis.length();
     axis.normalize();
-    const projected = projectedDirection(bend.clone().sub(anchor), axis);
-    if (projected) return projected;
+    const bendOffset = bend.clone().sub(anchor)
+      .addScaledVector(axis, -bend.clone().sub(anchor).dot(axis));
+    const bendOffsetLength = bendOffset.length();
+    const bendRatio = limbLength > EPSILON
+      ? bendOffsetLength / limbLength : 0;
+    if (bendRatio >= LIMB_BEND_RATIO_THRESHOLD) {
+      return {
+        bendDirection: bendOffset.normalize(),
+        bendDirectionSource: 'rest-offset',
+        bendDirectionStrength: bendRatio,
+      };
+    }
+
+    const semantic = finiteVector(characterForward);
+    if (semantic && semantic.lengthSq() > EPSILON) {
+      const direction = semantic.normalize();
+      if (role?.endsWith('_leg')) direction.negate();
+      const projected = projectedDirection(direction, axis);
+      if (projected) return {
+        bendDirection: projected,
+        bendDirectionSource: 'semantic-character-facing',
+        bendDirectionStrength: bendRatio,
+      };
+    }
+
+    const frame = restFrameFor(rig, bendJointId);
+    const candidates = [
+      new THREE.Vector3(1, 0, 0).applyQuaternion(frame),
+      new THREE.Vector3(0, 0, 1).applyQuaternion(frame),
+      new THREE.Vector3(0, 1, 0),
+    ];
+    const fallback = candidates.map(candidate =>
+      projectedDirection(candidate, axis)).find(Boolean);
+    if (fallback) return {
+      bendDirection: fallback,
+      bendDirectionSource: 'rest-frame',
+      bendDirectionStrength: bendRatio,
+    };
+
+    return {
+      bendDirection: null,
+      bendDirectionSource: 'ambiguous-straight',
+      bendDirectionStrength: bendRatio,
+    };
   }
 
   const frame = restFrameFor(rig, bendJointId);
@@ -148,8 +197,14 @@ function preferredBendDirection(rig, pathJointIds, bendJointId) {
   const fallbackAxis = end.clone().sub(anchor);
   if (fallbackAxis.lengthSq() <= EPSILON) fallbackAxis.set(0, 1, 0);
   fallbackAxis.normalize();
-  return candidates.map(candidate => projectedDirection(candidate, fallbackAxis))
-    .find(Boolean) || new THREE.Vector3(1, 0, 0);
+  const direction = candidates.map(candidate =>
+    projectedDirection(candidate, fallbackAxis)).find(Boolean)
+    || new THREE.Vector3(1, 0, 0);
+  return {
+    bendDirection: direction,
+    bendDirectionSource: 'rest-frame',
+    bendDirectionStrength: 0,
+  };
 }
 
 function confidenceFor(path, reason, branchHub) {
@@ -195,7 +250,7 @@ function bendCandidate(rig, pathJointIds) {
 }
 
 function detectionResult(role, anchorJointId, pathJointIds, reason,
-    branchHub, rig) {
+    branchHub, rig, characterForward) {
   const bendJointId = bendCandidate(rig, pathJointIds);
   const endJointId = pathJointIds.at(-1) ?? null;
   const component = componentFor(rig, anchorJointId);
@@ -206,6 +261,11 @@ function detectionResult(role, anchorJointId, pathJointIds, reason,
     && endJointId !== anchorJointId
     && Number(component?.rootId) !== anchorJointId;
   const finalReason = available ? null : reason || 'short_or_invalid_limb_path';
+  const directionEvidence = available
+    ? preferredBendDirection(rig, pathJointIds, bendJointId, role,
+      characterForward)
+    : {bendDirection: null, bendDirectionSource: 'unavailable',
+      bendDirectionStrength: 0};
   return {
     available,
     role: RIG_LIMB_ROLES.includes(role) ? role : null,
@@ -215,25 +275,28 @@ function detectionResult(role, anchorJointId, pathJointIds, reason,
     endJointId: available ? endJointId : null,
     confidence: available ? confidenceFor(pathJointIds, reason, branchHub) : 'low',
     reason: finalReason,
-    bendDirection: available
-      ? preferredBendDirection(rig, pathJointIds, bendJointId)?.toArray() || null
-      : null,
+    bendDirection: directionEvidence.bendDirection?.toArray() || null,
+    bendDirectionSource: directionEvidence.bendDirectionSource,
+    bendDirectionStrength: directionEvidence.bendDirectionStrength,
   };
 }
 
 /** Detect one primary descendant limb path without searching sideways. */
-export function detectLimbPath({rig, anchorJointId, role} = {}) {
+export function detectLimbPath({rig, anchorJointId, role, characterForward} = {}) {
   const anchor = numberId(anchorJointId);
   const component = componentFor(rig, anchor);
   if (!component || anchor === null
       || !component.nodeIds?.map(Number).includes(anchor)) {
-    return detectionResult(role, anchor, [], 'anchor_not_found', false, rig);
+    return detectionResult(role, anchor, [], 'anchor_not_found', false, rig,
+      characterForward);
   }
   if (!pointFor(rig, anchor)) {
-    return detectionResult(role, anchor, [anchor], 'anchor_pivot_invalid', false, rig);
+    return detectionResult(role, anchor, [anchor], 'anchor_pivot_invalid', false,
+      rig, characterForward);
   }
   if (Number(component.rootId) === anchor) {
-    return detectionResult(role, anchor, [anchor], 'anchor_is_component_root', false, rig);
+    return detectionResult(role, anchor, [anchor], 'anchor_is_component_root',
+      false, rig, characterForward);
   }
 
   const path = [anchor];
@@ -286,7 +349,8 @@ export function detectLimbPath({rig, anchorJointId, role} = {}) {
     path.push(next);
   }
   if (path.length >= MAX_PATH_DEPTH && !reason) reason = 'safety_depth';
-  return detectionResult(role, anchor, path, reason, branchHub, rig);
+  return detectionResult(role, anchor, path, reason, branchHub, rig,
+    characterForward);
 }
 
 function cloneRotations(localRotations) {

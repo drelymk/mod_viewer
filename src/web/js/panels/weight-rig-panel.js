@@ -12,6 +12,7 @@ import {
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
   setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
   setRigActiveLimbRole, setRigLimbAnchor, redetectRigLimb,
+  setRigLimbOverride, beginRigJointPicking, cancelRigJointPicking,
   clearRigLimbMapping, flipRigLimbBend, setRigIkEnabled,
   setRigJointRoot, setRigOverlayScope,
   setRigRotationSnapDegrees, setRigVisible, setWeightPickerViewMode,
@@ -409,14 +410,43 @@ function buildRigSection(parent) {
 
   const mapping = document.createElement('div');
   mapping.className = 'rig-limb-mapping';
-  const anchor = addText(mapping, 'rig-limb-value');
-  const bend = addText(mapping, 'rig-limb-value');
-  const end = addText(mapping, 'rig-limb-value');
+  const makeMappingRow = (kind, label, actionText, actionClass) => {
+    const row = document.createElement('div');
+    row.className = `rig-limb-mapping-row ${kind}`;
+    addText(row, 'rig-label', label);
+    const value = addText(row, 'rig-limb-value');
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = `ui-button rig-limb-pick ${actionClass}`;
+    action.textContent = actionText;
+    action.addEventListener('click', () => {
+      const role = latestRigState?.ik?.activeLimbRole || limb.value;
+      const intent = {type: kind, role};
+      const current = latestRigState?.jointPickIntent;
+      if (current?.type === intent.type && current?.role === intent.role) {
+        cancelRigJointPicking();
+      } else {
+        beginRigJointPicking(intent);
+      }
+    });
+    row.appendChild(action);
+    mapping.appendChild(row);
+    return {value, action};
+  };
+  const anchorRow = makeMappingRow(
+    'limb-anchor', 'Shoulder', 'Pick', 'rig-limb-anchor-pick');
+  const bendRow = makeMappingRow(
+    'limb-bend-override', 'Elbow', 'Override', 'rig-limb-bend-pick');
+  const endRow = makeMappingRow(
+    'limb-end-override', 'Hand', 'Override', 'rig-limb-end-pick');
   inverseKinematics.appendChild(mapping);
   ui.limbMapping = mapping;
-  ui.limbAnchor = anchor;
-  ui.limbBend = bend;
-  ui.limbEnd = end;
+  ui.limbAnchor = anchorRow.value;
+  ui.limbBend = bendRow.value;
+  ui.limbEnd = endRow.value;
+  ui.limbAnchorPick = anchorRow.action;
+  ui.limbBendPick = bendRow.action;
+  ui.limbEndPick = endRow.action;
 
   addText(inverseKinematics, 'rig-label', 'Detected path');
   ui.pathPreview = addText(inverseKinematics, 'rig-chain-preview', '—');
@@ -735,21 +765,34 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   const hasMapping = !!mapping.anchorJointId;
   const hasLimb = !!mapping.available;
   const hasSelected = !!selected;
+  ui.limbAnchor.previousElementSibling.textContent = labels[0];
+  ui.limbBend.previousElementSibling.textContent = labels[1];
+  ui.limbEnd.previousElementSibling.textContent = labels[2];
   ui.limb.value = role;
   ui.limb.disabled = !state?.loaded || !joints.length;
-  ui.limbAnchor.textContent = `${labels[0]}  ${mapping.anchorJointId
-    ? `Joint ${mapping.anchorJointId} · Manual` : 'Not mapped'}`;
-  ui.limbBend.textContent = `${labels[1]}  ${mapping.bendJointId
+  ui.limbAnchor.textContent = mapping.anchorJointId
+    ? `Joint ${mapping.anchorJointId} · Manual` : 'Unassigned';
+  ui.limbBend.textContent = mapping.bendJointId
     ? `Joint ${mapping.bendJointId} · ${mapping.bendSource === 'override'
-      ? 'Override' : 'Auto'}` : '—'}`;
-  ui.limbEnd.textContent = `${labels[2]}  ${mapping.endJointId
+      ? 'Override' : 'Auto'}` : '—';
+  ui.limbEnd.textContent = mapping.endJointId
     ? `Joint ${mapping.endJointId} · ${mapping.endSource === 'override'
-      ? 'Override' : 'Auto'}` : '—'}`;
+      ? 'Override' : 'Auto'}` : '—';
   const pathIds = mapping.pathJointIds || [];
   ui.pathPreview.textContent = pathIds.length
     ? pathIds.map(id => `Joint ${id}`).join(' → ') : '—';
   ui.setLimbAnchor.textContent = `Set Selected as ${labels[0]}`;
   ui.setLimbAnchor.disabled = !state?.loaded || !hasSelected;
+  const pick = state?.jointPickIntent;
+  const pickButton = (button, type, enabled, idleText) => {
+    const active = pick?.type === type && pick?.role === role;
+    button.textContent = active ? 'Cancel' : idleText;
+    button.classList.toggle('active', active);
+    button.disabled = !state?.loaded || !enabled;
+  };
+  pickButton(ui.limbAnchorPick, 'limb-anchor', true, 'Pick');
+  pickButton(ui.limbBendPick, 'limb-bend-override', hasLimb, 'Override');
+  pickButton(ui.limbEndPick, 'limb-end-override', hasLimb, 'Override');
   ui.redetectLimb.disabled = !state?.loaded || !hasMapping;
   ui.clearLimb.disabled = !state?.loaded || !hasMapping;
   ui.ik.checked = !!ik.enabled;
@@ -908,7 +951,8 @@ async function deletePreset() {
 }
 
 function syncPicker() {
-  const active = !!(latestWeightState?.picking || latestRigState?.picking);
+  const active = !!(latestWeightState?.picking || latestRigState?.picking
+    || latestRigState?.jointPickIntent);
   ui.pickModel.textContent = active ? 'Cancel picking' : 'Pick from model';
   ui.pickModel.classList.toggle('active', active);
   ui.pickModel.setAttribute('aria-pressed', String(active));
@@ -985,7 +1029,8 @@ export function initWeightRigPanel() {
     const active = event.detail?.tab === 'weight-rig' && event.detail?.open;
     if (!active) {
       closePopover();
-      if (latestWeightState?.picking || latestRigState?.picking) cancelModelPicking();
+      if (latestWeightState?.picking || latestRigState?.picking
+          || latestRigState?.jointPickIntent) cancelModelPicking();
     } else void loadOnDemand();
   });
   document.addEventListener('pointerdown', event => {
@@ -995,7 +1040,8 @@ export function initWeightRigPanel() {
   });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
-    if (latestWeightState?.picking || latestRigState?.picking) {
+    if (latestWeightState?.picking || latestRigState?.picking
+        || latestRigState?.jointPickIntent) {
       cancelModelPicking();
     }
     if (!ui?.popover?.hidden) {
