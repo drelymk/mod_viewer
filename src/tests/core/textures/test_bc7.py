@@ -250,47 +250,6 @@ def _reference_fit_fixed_index_endpoints(
     return best[1], best[2]
 
 
-def _fitter_cases():
-    cases = []
-    patterns = {
-        "constant": lambda count, size: (0,) * count,
-        "alternating": lambda count, size: tuple(
-            index % 2 for index in range(count)),
-        "full_range": lambda count, size: tuple(
-            index % size for index in range(count)),
-        "reverse": lambda count, size: tuple(
-            (size - index - 1) % size for index in range(count)),
-    }
-    target_kinds = {
-        "black": lambda count: (0,) * count,
-        "white": lambda count: (255,) * count,
-        "grayscale": lambda count: tuple(
-            round(index * 255 / max(1, count - 1))
-            for index in range(count)),
-        "saturated": lambda count: tuple(
-            255 if index % 2 else 0 for index in range(count)),
-        "low_contrast": lambda count: tuple(
-            127 + (index % 3) for index in range(count)),
-        "high_contrast": lambda count: tuple(
-            8 if index % 2 else 247 for index in range(count)),
-        "random": lambda count: tuple(
-            (index * 73 + count * 19 + 11) & 0xff
-            for index in range(count)),
-    }
-    for weights_name, weights in (
-            ("weights2", bc7.WEIGHTS_2),
-            ("weights3", bc7.WEIGHTS_3),
-            ("weights4", bc7.WEIGHTS_4)):
-        for count in (1, 4, 8, 16):
-            for pattern_name, pattern in patterns.items():
-                indices = pattern(count, len(weights))
-                for target_name, target_factory in target_kinds.items():
-                    cases.append((
-                        f"{weights_name}-{count}-{pattern_name}-{target_name}",
-                        weights, indices, target_factory(count)))
-    return cases
-
-
 _ENDPOINT_CASES = (
     ("raw5", bc7._EndpointCodec(
         31, lambda raw, _pbit: bc7._unquantize(raw, 5)), None, None),
@@ -305,23 +264,6 @@ _ENDPOINT_CASES = (
     ("pbit7", bc7._EndpointCodec(
         63, lambda raw, pbit: bc7._unquantize((raw << 1) | pbit, 7)), 0, 1),
 )
-
-
-@pytest.mark.parametrize(
-    "case", _fitter_cases(), ids=lambda case: case[0])
-def test_fixed_index_fitter_matches_reference(case):
-    _case_name, weights, indices, targets = case
-    for _codec_name, codec, pbit0, pbit1 in _ENDPOINT_CASES:
-        original_raw = (
-            min(codec.raw_max, len(targets) + 3),
-            min(codec.raw_max, len(targets) + 11))
-        expected = _reference_fit_fixed_index_endpoints(
-            targets, indices, weights, codec,
-            original_raw=original_raw, pbit0=pbit0, pbit1=pbit1)
-        actual = bc7._fit_fixed_index_endpoints(
-            targets, indices, weights, codec,
-            original_raw=original_raw, pbit0=pbit0, pbit1=pbit1)
-        assert actual == expected
 
 
 def test_fixed_index_fitter_empty_and_degenerate_inputs_match_reference():

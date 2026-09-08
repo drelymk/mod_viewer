@@ -2718,3 +2718,68 @@ def test_cached_model_bounds_do_not_rescan_positions(module_page):
     assert state == {
         "initialEmpty": False, "cachedEmpty": False, "boundsShared": True,
     }
+
+
+def test_selected_weight_topology_filters_weak_edges_and_pivots_synthetic_roots(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const weight = await import('./js/mesh/weight-rig.js');
+      const deformation = await import('./js/mesh/weight-deformation.js');
+      const weak = {
+        boneA: 7, boneB: 8, sharedVertexCount: 1,
+        containment: .001, jaccard: .001, normalizedDistance: 0,
+      };
+      const candidateEdges = weight.candidateRelationshipEdges({
+        relationships: [weak],
+      });
+      const tree = weight.buildMaximumSpanningTree(
+        [{boneId: 7}, {boneId: 8}], candidateEdges);
+      const forest = {
+        components: [{
+          rootId: -1, nodeIds: [-1, 7, 8],
+          childrenById: {'-1': [7], '7': [8]},
+        }],
+      };
+      const centers = new Map([
+        [-1, [2, 0, 0]], [7, [2, 1, 0]], [8, [2, 2, 0]],
+      ]);
+      const transforms = deformation.buildForestTransformsFromLocalRotations(
+        forest, centers, {
+          rotationByBoneId: new Map([[7, [0, 0, Math.PI / 2]]]),
+        });
+      const THREE = await import('three');
+      const point = new THREE.Vector3(2, 1, 0).applyMatrix4(
+        transforms.get(7));
+      return {
+        candidateCount: candidateEdges.length,
+        componentCount: tree.components.length,
+        pivotedPoint: point.toArray(),
+      };
+    }""")
+    assert result == {
+        "candidateCount": 0,
+        "componentCount": 2,
+        "pivotedPoint": pytest.approx([1, 0, 0]),
+    }
+
+
+def test_model_bone_stats_sum_same_ids_before_averaging(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const weight = await import('./js/mesh/weight-runtime.js');
+      return weight.aggregateModelBoneStats([
+        [{boneId: 45, affectedVertexCount: 2, totalWeight: .6}],
+        [
+          {boneId: 45, affectedVertexCount: 4, totalWeight: 2},
+          {boneId: 7, affectedVertexCount: 1, totalWeight: .25},
+        ],
+      ]);
+    }""")
+    assert result["45"] == {
+        "affectedVertexCount": 6,
+        "averageInfluence": pytest.approx(2.6 / 6),
+    }
+    assert result["7"] == {
+        "affectedVertexCount": 1,
+        "averageInfluence": pytest.approx(.25),
+    }

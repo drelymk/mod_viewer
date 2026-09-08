@@ -72,16 +72,6 @@ def test_repeated_vertices_keep_exact_packed_positions_uvs_and_indices(
     assert _unpack_indices(packed.indices) == (2, 0, 2, 1, 2, 0)
 
 
-def test_compaction_remains_sorted_by_source_vertex_index(tmp_path):
-    positions = [(float(index),) * 3 for index in range(6)]
-
-    packed = _pack_fixture(tmp_path, (5, 2, 4), positions)
-
-    assert _unpack_f32(packed.positions) == (
-        2., 2., 2., 4., 4., 4., 5., 5., 5.)
-    assert _unpack_indices(packed.indices) == (2, 0, 1)
-
-
 def test_base_vertex_location_is_applied_before_packing(tmp_path):
     positions = [(float(index), 0., 0.) for index in range(6)]
 

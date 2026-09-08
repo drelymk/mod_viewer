@@ -20,12 +20,6 @@ def vectors():
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_shader_order_vectors(vectors):
-    for vector in vectors:
-        actual = apply_color_adjustment(vector["rgb"], vector["adjustment"])
-        assert actual == pytest.approx(vector["expected"], abs=1e-7), vector["name"]
-
-
 def test_normalization_accepts_frontend_tint_name_and_rejects_bad_values():
     assert normalize_color_adjustment({
         "tint": "#AABBCC", "tintStrength": 0.25,
@@ -54,8 +48,10 @@ def test_neutral_state_is_identity():
         pytest.approx((0.23, 0.45, 0.91))
 
 
-def test_prepared_adjustment_matches_validated_transform(vectors):
+def test_color_entry_points_match_shader_order_vectors(vectors):
     for vector in vectors:
+        actual = apply_color_adjustment(vector["rgb"], vector["adjustment"])
+        assert actual == pytest.approx(vector["expected"], abs=1e-7), vector["name"]
         prepared = prepare_color_adjustment(vector["adjustment"])
         actual = apply_prepared_color_adjustment(vector["rgb"], prepared)
         assert actual == pytest.approx(vector["expected"], abs=1e-7), vector["name"]

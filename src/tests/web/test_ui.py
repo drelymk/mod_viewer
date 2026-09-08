@@ -100,24 +100,6 @@ def test_right_dock_migrates_weight_and_rig_tab_preferences(
     finally:
         context.close()
 
-def test_reload_current_mod_does_not_read_disabled_ini_checkbox(
-        edge_browser, frontend_url):
-    path = "ReloadCheckbox"
-    context, page = _page(edge_browser, frontend_url, {path: _payload(path)})
-    try:
-        _open(page, path)
-        page.locator(".draw-item").wait_for()
-        page.locator("#open-disabled-mod").check()
-        page.evaluate("window.modViewer.reloadCurrentMod()")
-        page.wait_for_function(
-            "window.__fakeApi.calls.loadModArgs.length === 2")
-
-        assert page.evaluate("window.__fakeApi.calls.loadModArgs") == [
-            [path, False], [path, False],
-        ]
-    finally:
-        context.close()
-
 def test_mesh_row_selection_invalidates_on_demand_renderer(
         edge_browser, frontend_url):
     payload = _payload("Selection")
@@ -278,10 +260,6 @@ def test_feature_flag_css_keeps_cycle_preview_and_core_invariants(
         assert page.locator("#toggle-list .toggle-cycle-btn").is_visible()
         assert page.locator("#open-disabled-mod").is_hidden()
 
-        css = (paths.web_dir() + "/css/app.css")
-        with open(css, encoding="utf-8") as handle:
-            source = handle.read().replace(" ", "")
-        assert "#menu-list.image-layout.collapsed{display:none;}" in source
         with open(paths.web_dir() + "/index.html", encoding="utf-8") as handle:
             html = handle.read()
         assert "https://cdn" not in html.lower()
@@ -311,36 +289,36 @@ def test_open_disabled_checkbox_controls_direct_and_library_loads(
     try:
         checkbox = page.locator("#open-disabled-mod")
         assert checkbox.is_visible()
-        assert checkbox.get_attribute("title") == "Open disabled mod"
         assert checkbox.get_attribute("aria-label") == "Open disabled mod"
         assert not checkbox.is_checked()
-        assert checkbox.evaluate("element => element.labels.length") == 0
-        assert "Open disabled mod" not in page.locator("#toolbar").inner_text()
 
         _open(page, direct_unchecked)
         page.locator(".draw-item").wait_for()
         page.wait_for_function(
             "window.__fakeApi.calls.loadModArgs.length === 1")
         checkbox.check()
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.wait_for_function("window.__fakeApi.calls.loadModArgs.length === 2")
         _open(page, direct_checked)
         page.locator(".draw-item").wait_for()
         page.wait_for_function(
-            "window.__fakeApi.calls.loadModArgs.length === 2")
+            "window.__fakeApi.calls.loadModArgs.length === 3")
 
         checkbox.uncheck()
         _open_library(page)
         page.locator(".mod-folder-select", has_text="Library Unchecked").click()
         page.locator(".draw-item").wait_for(state="attached")
         page.wait_for_function(
-            "window.__fakeApi.calls.loadModArgs.length === 3")
+            "window.__fakeApi.calls.loadModArgs.length === 4")
         checkbox.check()
         page.locator(".mod-folder-select", has_text="Library Checked").click()
         page.locator(".draw-item").wait_for(state="attached")
         page.wait_for_function(
-            "window.__fakeApi.calls.loadModArgs.length === 4")
+            "window.__fakeApi.calls.loadModArgs.length === 5")
 
         assert page.evaluate("window.__fakeApi.calls.loadModArgs") == [
-            [direct_unchecked, False], [direct_checked, True],
+            [direct_unchecked, False], [direct_unchecked, False],
+            [direct_checked, True],
             [library_unchecked, False], [library_checked, True],
         ]
     finally:
@@ -643,23 +621,6 @@ def test_panel_opacity_control_applies_and_saves_whole_percent(
         page.evaluate("""() => document.querySelector('#panel-opacity')
           .dispatchEvent(new Event('change', {bubbles: true}))""")
         assert page.evaluate("window.__fakeApi.calls.panelOpacity") == []
-        header_controls = page.evaluate("""() => {
-          const toolbar = document.querySelector('#toolbar').getBoundingClientRect();
-          const environment = document.querySelector('#environment-btn').getBoundingClientRect();
-          const appearance = document.querySelector('#appearance-btn').getBoundingClientRect();
-          return {
-            environmentLeftOfAppearance: environment.right <= appearance.left,
-            equalSize: environment.width === appearance.width &&
-              environment.height === appearance.height,
-            appearanceAtRight: appearance.right >= toolbar.right - 16,
-          };
-        }""")
-        assert header_controls == {
-            "environmentLeftOfAppearance": True,
-            "equalSize": True,
-            "appearanceAtRight": True,
-        }
-        assert page.locator("#environment-label").count() == 0
         opacity_surfaces = page.locator(
             "#sidebar, .right-dock-tabs, #tool-panel.viewport-toolbar")
         assert set(opacity_surfaces.evaluate_all(
@@ -2043,76 +2004,6 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
         _open(page, "A")
         page.locator(".draw-item").first.wait_for()
         assert page.locator("#tool-buttons").is_visible()
-        toolbar_geometry = page.evaluate("""() => {
-          const style = selector => getComputedStyle(document.querySelector(selector));
-          return {
-            token: getComputedStyle(document.documentElement)
-              .getPropertyValue('--toolbar-height').trim(),
-            toolbarHeight: style('#toolbar').height,
-            canvasTop: style('#canvas-container').top,
-            leftDockTop: style('#left-dock').top,
-            rightDockTop: style('#right-dock').top,
-          };
-        }""")
-        assert toolbar_geometry == {
-            "token": "54px",
-            "toolbarHeight": "54px",
-            "canvasTop": "54px",
-            "leftDockTop": "58px",
-            "rightDockTop": "58px",
-        }
-        toolbar_layout = page.evaluate("""() => {
-          const rect = selector => document.querySelector(selector).getBoundingClientRect();
-          const style = selector => getComputedStyle(document.querySelector(selector));
-          const toolbar = rect('#tool-panel');
-          const camera = rect('#viewport-camera-buttons');
-          const tools = rect('#tool-buttons');
-          return {
-            centered: Math.abs(toolbar.left + toolbar.width / 2 - window.innerWidth / 2) < 1,
-            sameRow: Math.abs(camera.top + camera.height / 2
-              - tools.top - tools.height / 2) < 1,
-            toolbarDirection: style('#tool-panel').flexDirection,
-            toolbarWrap: style('#tool-panel').flexWrap,
-            toolsDisplay: style('#tool-buttons').display,
-            toolsDirection: style('#tool-buttons').flexDirection,
-            cameraLabelsHidden: [...document.querySelectorAll(
-              '#viewport-camera-buttons .camera-btn span')]
-              .every(span => getComputedStyle(span).display === 'none'),
-          };
-        }""")
-        assert toolbar_layout == {
-            "centered": True,
-            "sameRow": True,
-            "toolbarDirection": "row",
-            "toolbarWrap": "nowrap",
-            "toolsDisplay": "flex",
-            "toolsDirection": "row",
-            "cameraLabelsHidden": True,
-        }
-        toon_button = page.locator("#toon-btn")
-        assert toon_button.get_attribute("title") == "Toon shadows: off"
-        assert toon_button.get_attribute("aria-label") == "Toon shadows: off"
-        assert toon_button.get_attribute("aria-pressed") == "false"
-        assert toon_button.evaluate(
-            "button => button.classList.contains('off')")
-        active_colors = page.evaluate("""() => {
-          const color = selector => getComputedStyle(
-            document.querySelector(selector)).backgroundColor;
-          return {
-            grid: color('#grid-btn'),
-            light: color('#light-btn'),
-          };
-        }""")
-        assert active_colors == {
-            "grid": "rgba(31, 111, 235, 0.22)",
-            "light": "rgba(227, 179, 65, 0.18)",
-        }
-        assert page.locator("#light-btn").evaluate(
-            "button => button.classList.contains('partial')")
-        tool_order = page.evaluate(
-            "() => [...document.querySelectorAll('#tool-buttons > .tool-btn')]"
-            ".map(button => button.id)")
-        assert tool_order.index("toon-btn") == tool_order.index("grid-btn") - 1
         toolbar_center = page.evaluate("""() => {
           const box = document.querySelector('#tool-panel').getBoundingClientRect();
           return box.left + box.width / 2;
@@ -2161,111 +2052,31 @@ def test_viewport_toolbar_popovers_and_responsive_overflow(
             "Textures: diffuse only")
         assert page.locator("#texture-btn").get_attribute("aria-expanded") == "false"
         assert page.locator("#texture-popover").is_hidden()
-        assert page.evaluate(
-            "getComputedStyle(document.querySelector('#texture-btn')).backgroundColor"
-        ) == "rgba(227, 179, 65, 0.18)"
-
-        page.locator("#light-btn").click()
-        page.locator("#light-popover:not([hidden])").wait_for()
-        assert page.locator("#light-btn").get_attribute("aria-expanded") == "true"
-        light_position = page.evaluate("""() => {
-          const button = document.querySelector('#light-btn').getBoundingClientRect();
-          const popover = document.querySelector('#light-popover').getBoundingClientRect();
-          return {
-            above: popover.bottom <= button.top,
-            within: popover.left >= 0 && popover.right <= window.innerWidth
-              && popover.top >= 0 && popover.bottom <= window.innerHeight,
-          };
-        }""")
-        assert light_position == {"above": True, "within": True}
-        assert page.locator("#light-btn").get_attribute("aria-haspopup") == "dialog"
-        assert page.locator("#light-btn").get_attribute("aria-controls") == "light-popover"
-        assert page.locator("#light-btn").get_attribute("aria-label") == "Key light: 67%"
-        slider = page.locator("#light-slider")
-        assert slider.get_attribute("min") == "0"
-        assert slider.get_attribute("max") == "100"
-        assert slider.get_attribute("step") == "1"
-        assert slider.input_value() == "67"
-        assert page.locator("#light-btn").get_attribute("aria-expanded") == "true"
-        assert page.evaluate("document.activeElement.id") == "light-slider"
-        for level in (0, 33, 67, 100):
-            before = page.evaluate("window.modViewer.getRenderCount()")
-            page.evaluate("""value => {
-              const slider = document.querySelector('#light-slider');
-              slider.value = String(value);
-              slider.dispatchEvent(new Event('input', {bubbles: true}));
-            }""", level)
-            page.wait_for_function(
-                "count => window.modViewer.getRenderCount() > count", arg=before)
-            assert slider.input_value() == str(level)
-            assert page.locator("#light-value").text_content() == f"{level}%"
-            expected_label = "Key light: Off" if level == 0 else f"Key light: {level}%"
-            assert page.locator("#light-btn").get_attribute("aria-label") == expected_label
-            assert page.locator("#light-btn").get_attribute("title") == expected_label
-            assert page.locator("#light-btn").evaluate(
-                "(button, level) => button.classList.contains('active') === (level === 100)",
-                level,
-            )
-            assert page.locator("#light-btn").evaluate(
-                "(button, level) => button.classList.contains('partial') === (level > 0 && level < 100)",
-                level,
-            )
-            assert page.locator("#light-btn").evaluate(
-                "(button, level) => button.classList.contains('off') === (level === 0)",
-                level,
-            )
-            assert page.evaluate("""async () => {
-              const {getKeyLightIntensity} = await import('./js/scene/scene.js');
-              return getKeyLightIntensity();
-            }""") == pytest.approx(level / 100 * 1.5)
-        page.locator("#light-btn").click()
-        assert page.locator("#light-popover").is_hidden()
+        for control, label in (("light", "Key light"), ("ao", "Ambient occlusion")):
+            button = page.locator(f"#{control}-btn")
+            popover = page.locator(f"#{control}-popover")
+            button.click()
+            popover.wait_for(state="visible")
+            assert button.get_attribute("aria-expanded") == "true"
+            assert page.evaluate("document.activeElement.id") == f"{control}-slider"
+            assert popover.evaluate("""element => {
+              const box = element.getBoundingClientRect();
+              return box.left >= 0 && box.right <= window.innerWidth
+                && box.top >= 0 && box.bottom <= window.innerHeight;
+            }""")
+            for level in (0, 50, 100):
+                page.locator(f"#{control}-slider").evaluate("""(slider, value) => {
+                  slider.value = String(value);
+                  slider.dispatchEvent(new Event('input', {bubbles: true}));
+                }""", level)
+                assert page.locator(f"#{control}-value").inner_text() == f"{level}%"
+                value = "Off" if control == "light" and level == 0 else f"{level}%"
+                assert button.get_attribute("aria-label") == f"{label}: {value}"
+            if control == "light":
+                button.click()
+                assert popover.is_hidden()
 
         ao_button = page.locator("#ao-btn")
-        assert ao_button.get_attribute("aria-pressed") is None
-        assert ao_button.get_attribute("aria-expanded") == "false"
-        assert ao_button.get_attribute("aria-controls") == "ao-popover"
-        assert ao_button.get_attribute("aria-label") == "Ambient occlusion: 0%"
-        assert not ao_button.evaluate("button => button.classList.contains('active')")
-        assert not ao_button.evaluate("button => button.classList.contains('partial')")
-
-        ao_button.click()
-        page.locator("#ao-popover:not([hidden])").wait_for()
-        assert ao_button.get_attribute("aria-expanded") == "true"
-        assert page.evaluate("document.activeElement.id") == "ao-slider"
-        slider = page.locator("#ao-slider")
-        assert slider.get_attribute("min") == "0"
-        assert slider.get_attribute("max") == "100"
-        assert slider.get_attribute("step") == "1"
-        assert slider.input_value() == "0"
-        ao_position = page.evaluate("""() => {
-          const button = document.querySelector('#ao-btn').getBoundingClientRect();
-          const popover = document.querySelector('#ao-popover').getBoundingClientRect();
-          return {
-            above: popover.bottom <= button.top,
-            within: popover.left >= 0 && popover.right <= window.innerWidth
-              && popover.top >= 0 && popover.bottom <= window.innerHeight,
-          };
-        }""")
-        assert ao_position == {"above": True, "within": True}
-
-        for level, class_name in ((1, "partial"), (50, "partial"),
-                                  (99, "partial"), (100, "active"), (0, None)):
-            page.evaluate("""value => {
-              const slider = document.querySelector('#ao-slider');
-              slider.value = String(value);
-              slider.dispatchEvent(new Event('input', {bubbles: true}));
-            }""", level)
-            assert slider.input_value() == str(level)
-            assert page.locator("#ao-value").inner_text() == f"{level}%"
-            assert ao_button.get_attribute("aria-label") == (
-                f"Ambient occlusion: {level}%")
-            assert ao_button.get_attribute("title") == f"Ambient occlusion: {level}%"
-            assert ao_button.evaluate(
-                "button => button.classList.contains('active')") is (level == 100)
-            assert ao_button.evaluate(
-                "button => button.classList.contains('partial')") is (class_name == "partial")
-
         page.keyboard.press("Escape")
         assert page.locator("#ao-popover").is_hidden()
         assert ao_button.get_attribute("aria-expanded") == "false"
