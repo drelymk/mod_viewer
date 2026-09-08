@@ -226,6 +226,19 @@ of documentation, comments and tests; use portable fixtures instead.
   state and bone transforms. All loaded members, including hidden meshes,
   contribute evidence; member meshes consume shared transforms with their own
   authored weights to avoid seams tearing.
+- Rig influence evidence integrates linearly interpolated skin weights over
+  indexed (or non-indexed consecutive) valid triangles when every loaded
+  member of a source has usable positive-area geometry. Node support, moments,
+  overlap, pivots and root evidence are then triangle-domain quantities; raw
+  Weight-panel statistics remain vertex-weighted and are never mixed into the
+  Rig graph.
+- If any member of a source lacks usable surface evidence, the complete source
+  falls back to vertex evidence. Aggregate graphs reject mixed evidence modes.
+  Exact duplicate members are counted once for Rig evidence while their
+  provenance and diagnostic-only partial overlaps remain visible in the Rig
+  debug projection. Shape rebaselines invalidate and lazily rebuild surface
+  evidence; visibility, material, texture and per-frame paths do not rebuild
+  it.
 - Infer topology only from influence overlap and weighted centers. Blend data
   supplies no names, canonical skeleton, hierarchy, bind pose or animation.
   Keep maximum-spanning relationships, weak-bridge pruning and static-boundary
