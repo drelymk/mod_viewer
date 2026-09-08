@@ -522,6 +522,7 @@ function resolveLimbMapping(role) {
   const detected = detectLimbPath({
     rig: modelSkinningRig, anchorJointId, role,
     characterForward: characterForwardForRole(),
+    characterAxes: humanoidSemanticAxes(),
   });
   const mapping = {
     ...detected,

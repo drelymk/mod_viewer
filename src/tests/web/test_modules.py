@@ -340,6 +340,7 @@ def test_humanoid_detector_collapses_dense_helper_joint_families(module_page):
         roles: detected.roles,
         wingRoles: withWings.roles,
         families: withWings.debug.families,
+        pairs: withWings.debug.pairs.arms,
         top: detected.debug.topCandidatesByRole.left_arm,
       };
     }""")
@@ -354,8 +355,114 @@ def test_humanoid_detector_collapses_dense_helper_joint_families(module_page):
     assert len(arm_family["alternatives"]) >= 3
     assert arm_family["representative"]["anchorJointId"] == 1
     assert result["top"][0]["forwardOffset"] <= .3
-    assert result["wingRoles"]["left_arm"]["reasons"][0] == "ambiguous_pair"
-    assert result["wingRoles"]["right_arm"]["reasons"][0] == "ambiguous_pair"
+    assert result["wingRoles"]["left_arm"]["available"]
+    assert result["wingRoles"]["right_arm"]["available"]
+    assert result["wingRoles"]["left_arm"]["anchorJointId"] == 1
+    assert result["wingRoles"]["right_arm"]["anchorJointId"] == 8
+    assert result["pairs"]["best"]["left"]["anchorJointId"] == 1
+    assert result["pairs"]["best"]["right"]["anchorJointId"] == 8
+    assert result["pairs"]["runnerUp"]["leftAnchorJointId"] == 21
+    assert result["pairs"]["runnerUp"]["rightAnchorJointId"] == 24
+    assert result["pairs"]["margin"] > .065
+
+
+def test_shared_limb_resolver_handles_wrong_hints_narrow_anchors_and_wings(module_page):
+    result = module_page.evaluate("""async () => {
+      const {resolveLimbPathCandidates} = await import('./js/mesh/weight-rig-ik.js');
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.07, 1.45, 0]], [2, [-.3, 1.4, 0]], [3, [-.55, 1.3, 0]],
+        [4, [-.8, 1.1, 0]], [5, [-1.0, 1.0, 0]], [6, [-1.15, .95, 0]],
+        [7, [-1.2, .95, 0]], [8, [-1.1, .95, 0]],
+        [10, [.07, 1.45, 0]], [11, [.3, 1.4, 0]], [12, [.55, 1.3, 0]],
+        [13, [.8, 1.1, 0]], [14, [1.0, 1.0, 0]], [15, [1.15, .95, 0]],
+        [16, [1.2, .95, 0]], [17, [1.1, .95, 0]],
+        [20, [-.32, 1.42, .35]], [21, [-.6, 1.28, .3]], [22, [-.9, 1.18, .25]],
+        [30, [-.04, .8, 0]], [31, [-.1, .55, 0]], [32, [-.12, .2, 0]],
+        [33, [-.14, -.25, 0]], [34, [-.15, -.45, 0]], [35, [-.2, -.48, 0]],
+        [40, [.04, .8, 0]], [41, [.1, .55, 0]], [42, [.12, .2, 0]],
+        [43, [.14, -.25, 0]], [44, [.15, -.45, 0]], [45, [.2, -.48, 0]],
+        [50, [-.7, 1.4, -.8]], [51, [-1.4, 1.45, -1.3]], [52, [-2.1, 1.5, -1.6]],
+        [60, [.7, 1.4, -.8]], [61, [1.4, 1.45, -1.3]], [62, [2.1, 1.5, -1.6]],
+      ]);
+      const parentById = {
+        0: null, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 6,
+        10: 0, 11: 10, 12: 11, 13: 12, 14: 13, 15: 14, 16: 15, 17: 15,
+        20: 2, 21: 3, 22: 21,
+        30: 0, 31: 30, 32: 31, 33: 32, 34: 33, 35: 34,
+        40: 0, 41: 40, 42: 41, 43: 42, 44: 43, 45: 44,
+        50: 0, 51: 50, 52: 51, 60: 0, 61: 60, 62: 61,
+      };
+      const continuation = new Map([
+        [1, 2], [2, 20], [3, 21], [4, 5], [5, 6], [10, 11], [11, 12],
+        [12, 13], [13, 14], [14, 15], [30, 31], [31, 32], [32, 33],
+        [33, 34], [34, 35], [40, 41], [41, 42], [42, 43], [43, 44],
+        [44, 45], [50, 51], [51, 52], [60, 61], [61, 62],
+      ]);
+      const correctedContinuation = new Map([
+        ...continuation, [2, 3], [3, 4],
+      ]);
+      const makeRig = (shuffled, wrongHint = true) => {
+        const ids = [...points.keys()];
+        const ordered = shuffled ? ids.reverse() : ids;
+        const childrenById = Object.fromEntries(ids.map(id => [id, []]));
+        Object.entries(parentById).forEach(([child, parent]) => {
+          if (parent !== null) childrenById[parent].push(Number(child));
+        });
+        if (shuffled) Object.values(childrenById).forEach(children => children.reverse());
+        const component = {
+          rootId: 0, nodeIds: ordered, parentById, childrenById,
+        };
+        return {
+          joints: ordered.map(jointId => ({jointId, restPivot: points.get(jointId)})),
+          components: [component],
+          componentByJointId: new Map(ids.map(id => [id, 0])),
+          centerByJointId: points, jointPivotByJointId: points,
+          restContinuationChildByJointId: wrongHint
+            ? continuation : correctedContinuation,
+        };
+      };
+      const baseline = suggestHumanoidLimbMappings({rig: makeRig(false),
+        characterForward: [0, 0, 1], debug: true});
+      const shuffled = suggestHumanoidLimbMappings({rig: makeRig(true),
+        characterForward: [0, 0, 1], debug: true});
+      const corrected = suggestHumanoidLimbMappings({rig: makeRig(false, false),
+        characterForward: [0, 0, 1], debug: true});
+      const wrongHint = resolveLimbPathCandidates({rig: makeRig(false),
+        anchorJointId: 1, role: 'left_arm', characterForward: [0, 0, 1]});
+      return {
+        baseline: baseline.roles,
+        shuffled: shuffled.roles,
+        corrected: corrected.roles,
+        paths: wrongHint.candidates.slice(0, 3).map(candidate => ({
+          path: candidate.pathJointIds, end: candidate.endJointId,
+          metrics: candidate.pathMetrics,
+        })),
+        pairs: baseline.debug.pairs,
+      };
+    }""")
+    expected = {
+        "left_arm": 1, "right_arm": 10, "left_leg": 30, "right_leg": 40,
+    }
+    for result_name in ("baseline", "shuffled"):
+        roles = result[result_name]
+        assert all(roles[role]["available"] for role in expected)
+        assert {role: roles[role]["anchorJointId"] for role in expected} == expected
+    assert result["baseline"]["left_arm"]["pathJointIds"] == [1, 2, 3, 4, 5, 6]
+    assert result["baseline"]["left_leg"]["pathJointIds"] == [30, 31, 32, 33, 34, 35]
+    assert result["shuffled"]["left_arm"]["pathJointIds"] == result["baseline"]["left_arm"]["pathJointIds"]
+    assert result["shuffled"]["left_leg"]["pathJointIds"] == result["baseline"]["left_leg"]["pathJointIds"]
+    assert result["corrected"]["left_arm"]["pathJointIds"] == result["baseline"]["left_arm"]["pathJointIds"]
+    assert result["corrected"]["left_leg"]["pathJointIds"] == result["baseline"]["left_leg"]["pathJointIds"]
+    assert result["paths"][0]["end"] == 6
+    assert result["pairs"]["arms"]["best"]["left"]["anchorJointId"] == 1
+    assert result["pairs"]["arms"]["best"]["right"]["anchorJointId"] == 10
+    assert result["pairs"]["arms"]["runnerUp"]["leftAnchorJointId"] == 50
+    assert result["pairs"]["arms"]["runnerUp"]["rightAnchorJointId"] == 60
+    assert (result["pairs"]["legs"]["best"]["left"]["anchorJointId"],
+            result["pairs"]["legs"]["best"]["right"]["anchorJointId"]) == (30, 40)
 
 
 def test_humanoid_suggestions_report_missing_and_ambiguous_pairs(module_page):

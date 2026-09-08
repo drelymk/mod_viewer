@@ -196,17 +196,27 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
   const component = componentFor(rig, anchorJointId);
   const parentId = parentFor(component, anchorJointId);
   if (!component || parentId === null) return {rejected: 'anchor_is_component_root'};
-  const detected = detectLimbPath({rig, anchorJointId, role, characterForward});
-  if (!detected.available) return {rejected: detected.reason || 'path_unavailable', detected};
   const anchor = pointFor(rig, anchorJointId);
   const parent = pointFor(rig, parentId);
-  const end = pointFor(rig, detected.endJointId);
-  const bend = pointFor(rig, detected.bendJointId);
-  if (!anchor || !parent || !end || !bend) return {rejected: 'pivot_invalid', detected};
+  if (!anchor || !parent) return {rejected: 'pivot_invalid'};
   const sideSign = role.startsWith('left_') ? -1 : 1;
   const side = anchor.clone().sub(frame.center).dot(frame.right) / frame.height;
-  const endSide = end.clone().sub(frame.center).dot(frame.right) / frame.height;
   const height = anchor.clone().sub(frame.center).dot(frame.up) / frame.height;
+  if (side * sideSign < -.12) return {rejected: 'wrong_side'};
+  if (role.endsWith('_leg') && height > .04) {
+    return {rejected: 'anchor_too_high_for_leg'};
+  }
+  if (role.endsWith('_arm') && height < -.05) {
+    return {rejected: 'anchor_too_low_for_arm'};
+  }
+  const detected = detectLimbPath({
+    rig, anchorJointId, role, characterForward, characterAxes: frame,
+  });
+  if (!detected.available) return {rejected: detected.reason || 'path_unavailable', detected};
+  const end = pointFor(rig, detected.endJointId);
+  const bend = pointFor(rig, detected.bendJointId);
+  if (!end || !bend) return {rejected: 'pivot_invalid', detected};
+  const endSide = end.clone().sub(frame.center).dot(frame.right) / frame.height;
   const endHeight = end.clone().sub(frame.center).dot(frame.up) / frame.height;
   const parentSide = Math.abs(parent.clone().sub(frame.center).dot(frame.right) / frame.height);
   const forwardOffset = Math.abs(end.clone().sub(anchor).dot(frame.forward) / frame.height);
@@ -216,34 +226,42 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
   const sideAgreement = clamp01((side * sideSign - .04) / .35);
   const endSideAgreement = clamp01((endSide * sideSign - .02) / .4);
   const parentCentrality = clamp01(1 - parentSide / Math.max(Math.abs(side), .08));
-  const lengthScore = role.endsWith('_arm') ? rangeScore(length, .12, .8, .7)
-    : rangeScore(length, .2, 1.2, .8);
+  const metrics = detected.pathMetrics || {};
+  const pathGeometryScore = clamp01(detected.pathScore);
+  const continuationAgreement = clamp01(detected.continuationAgreement);
+  const lengthScore = role.endsWith('_arm') ? rangeScore(length, .12, 1.5, .7)
+    : rangeScore(length, .2, 1.7, .8);
   const levelScore = role.endsWith('_arm') ? rangeScore(height, .12, .65, .55)
     : rangeScore(height, -.5, .05, .45);
   const verticalScore = role.endsWith('_arm')
     ? rangeScore(height - endHeight, -.2, .65, .55)
     : rangeScore(height - endHeight, .25, 1.1, .65);
   const forwardScore = clamp01(1 - forwardOffset / .35);
-  const anchorScore = clamp01((Math.abs(side) - .06) / .5);
-  const score = .25 * sideAgreement + .12 * endSideAgreement
-    + .14 * parentCentrality + .15 * lengthScore + .12 * levelScore
-    + .1 * verticalScore + .1 * forwardScore + .04 * anchorScore
-    + .03 * evidenceScore;
+  const anchorScore = clamp01(.42 * sideAgreement + .38 * parentCentrality
+    + .2 * levelScore);
+  const endpointScore = clamp01(.42 * endSideAgreement + .32 * verticalScore
+    + .26 * forwardScore);
+  const hierarchyScore = clamp01(.55 * continuationAgreement + .45 * evidenceScore);
+  const score = clamp01(.25 * anchorScore + .4 * pathGeometryScore
+    + .2 * endpointScore + .15 * hierarchyScore);
   const reasons = [];
   if (sideAgreement > .75) reasons.push('anchor_side');
   if (parentCentrality > .75) reasons.push('central_parent');
   if (lengthScore > .75) reasons.push('limb_length');
   if (verticalScore > .75) reasons.push(role.endsWith('_arm') ? 'arm_drop' : 'leg_drop');
-  if (forwardScore < .35) reasons.push('forward_offset');
+  if (forwardScore < .35) reasons.push('depth_excessive');
   if (evidenceScore > .65) reasons.push('evidence');
-  if (Math.abs(side) < .08) return {rejected: 'anchor_too_central', detected};
-  if (length < .08) return {rejected: 'limb_too_short', detected};
-  if (forwardOffset > .3) return {rejected: 'forward_offset', detected};
-  if (role.endsWith('_leg') && height > .18) {
-    return {rejected: 'anchor_too_high_for_leg', detected};
+  if (length < .08) return {rejected: 'path_too_short', detected};
+  const depthLimit = role.endsWith('_arm') ? .55 : .65;
+  if (Number(metrics.absoluteForwardTravel) > depthLimit
+      || forwardOffset > .45) return {rejected: 'depth_excessive', detected};
+  if (role.endsWith('_arm') && Number(metrics.outwardProgressFraction) < .25
+      && side * sideSign < .06) {
+    return {rejected: 'insufficient_arm_progression', detected};
   }
-  if (role.endsWith('_arm') && height < -.05) {
-    return {rejected: 'anchor_too_low_for_arm', detected};
+  if (role.endsWith('_leg') && (-metrics.netHeight < .08
+      || (Number(metrics.downwardProgressFraction) < .35 && -metrics.netHeight < .2))) {
+    return {rejected: 'insufficient_leg_drop', detected};
   }
   return {
     role, available: true, anchorJointId: Number(anchorJointId),
@@ -256,6 +274,13 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
     parentJointId: parentId,
     parentCentrality,
     pathLength: length,
+    pathGeometryScore,
+    endpointScore,
+    anchorScore,
+    continuationAgreement,
+    pathMetrics: metrics,
+    paths: detected.pathCandidates || [],
+    pathDiagnostics: detected.pathDiagnostics || null,
     side,
     endSide,
     normalizedHeight: height,
@@ -268,17 +293,53 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
 
 function candidateSort(left, right) {
   if (Math.abs(right.score - left.score) > .000001) return right.score - left.score;
-  if (left.pathJointIds.length !== right.pathJointIds.length) {
-    return right.pathJointIds.length - left.pathJointIds.length;
+  if (Math.abs((right.pathGeometryScore || 0) - (left.pathGeometryScore || 0)) > .000001) {
+    return (right.pathGeometryScore || 0) - (left.pathGeometryScore || 0);
   }
-  return Number(left.anchorJointId) - Number(right.anchorJointId);
+  if (Math.abs((right.continuationAgreement || 0)
+      - (left.continuationAgreement || 0)) > .000001) {
+    return (right.continuationAgreement || 0) - (left.continuationAgreement || 0);
+  }
+  if (Math.abs((right.pathLength || 0) - (left.pathLength || 0)) > .000001) {
+    return (right.pathLength || 0) - (left.pathLength || 0);
+  }
+  if (Number(left.endJointId) !== Number(right.endJointId)) {
+    return Number(left.endJointId) - Number(right.endJointId);
+  }
+  if (Number(left.anchorJointId) !== Number(right.anchorJointId)) {
+    return Number(left.anchorJointId) - Number(right.anchorJointId);
+  }
+  for (let index = 0; index < Math.min(left.pathJointIds.length, right.pathJointIds.length); index += 1) {
+    if (left.pathJointIds[index] !== right.pathJointIds[index]) {
+      return left.pathJointIds[index] - right.pathJointIds[index];
+    }
+  }
+  return left.pathJointIds.length - right.pathJointIds.length;
 }
 
-function candidatePathsAreNested(left, right) {
-  if (left.endJointId !== right.endJointId) return false;
+function isDescendantInComponent(component, ancestorId, descendantId) {
+  let current = numberId(descendantId);
+  const ancestor = numberId(ancestorId);
+  const visited = new Set();
+  while (current !== null && !visited.has(current)) {
+    if (current === ancestor) return true;
+    visited.add(current);
+    current = parentFor(component, current);
+  }
+  return false;
+}
+
+function candidatePathsAreNested(rig, left, right) {
   const leftPath = new Set(left.pathJointIds);
   const rightPath = new Set(right.pathJointIds);
-  return leftPath.has(right.anchorJointId) || rightPath.has(left.anchorJointId);
+  const overlap = [...leftPath].filter(id => rightPath.has(id)).length;
+  const overlapRatio = overlap / Math.max(1, Math.min(leftPath.size, rightPath.size));
+  if (overlapRatio < .6) return false;
+  const component = componentFor(rig, left.anchorJointId);
+  return left.endJointId === right.endJointId
+    || leftPath.has(right.endJointId) || rightPath.has(left.endJointId)
+    || isDescendantInComponent(component, left.endJointId, right.endJointId)
+    || isDescendantInComponent(component, right.endJointId, left.endJointId);
 }
 
 function familyRepresentativeSort(left, right) {
@@ -292,7 +353,7 @@ function familyRepresentativeSort(left, right) {
   return Number(left.anchorJointId) - Number(right.anchorJointId);
 }
 
-function collapseCandidateFamilies(candidates, role) {
+function collapseCandidateFamilies(rig, candidates, role) {
   const sideSign = role.startsWith('left_') ? -1 : 1;
   const matching = candidates.filter(candidate => candidate.role === role
     && candidate.side * sideSign > 0);
@@ -314,7 +375,7 @@ function collapseCandidateFamilies(candidates, role) {
   };
   for (let left = 0; left < matching.length; left += 1) {
     for (let right = left + 1; right < matching.length; right += 1) {
-      if (candidatePathsAreNested(matching[left], matching[right])) union(left, right);
+      if (candidatePathsAreNested(rig, matching[left], matching[right])) union(left, right);
     }
   }
   const groups = new Map();
@@ -352,16 +413,49 @@ function pairCandidates(rig, frame, left, right) {
         - rightEnd.clone().sub(frame.center).dot(frame.up)) / frame.height
       + Math.abs(Math.abs(leftPoint.clone().sub(frame.center).dot(frame.right))
         - Math.abs(rightPoint.clone().sub(frame.center).dot(frame.right))) / frame.height;
-    const pairScore = (first.score + second.score) / 2 - Math.min(.35, symmetry * .18);
+    const descriptorSymmetry = .08 * Math.abs((first.pathLength || 0)
+        - (second.pathLength || 0))
+      + .06 * Math.abs((first.pathMetrics?.netSide || 0) * -1
+        - (second.pathMetrics?.netSide || 0))
+      + .06 * Math.abs((first.pathMetrics?.netHeight || 0)
+        - (second.pathMetrics?.netHeight || 0))
+      + .06 * Math.abs((first.pathMetrics?.netDepth || 0)
+        - (second.pathMetrics?.netDepth || 0))
+      + .05 * Math.abs(Math.abs(first.pathMetrics?.endpointSide || 0)
+        - Math.abs(second.pathMetrics?.endpointSide || 0))
+      + .05 * Math.abs((first.pathMetrics?.endpointDepth || 0)
+        - (second.pathMetrics?.endpointDepth || 0))
+      + .06 * Math.abs((first.pathMetrics?.straightness || 0)
+        - (second.pathMetrics?.straightness || 0))
+      + .05 * Math.abs((first.pathMetrics?.outwardProgressFraction || 0)
+        - (second.pathMetrics?.outwardProgressFraction || 0))
+      + .05 * Math.abs((first.pathMetrics?.downwardProgressFraction || 0)
+        - (second.pathMetrics?.downwardProgressFraction || 0));
+    const pairScore = (first.score + second.score) / 2
+      - Math.min(.35, symmetry * .12 + descriptorSymmetry);
     pairs.push({first, second, pairScore, symmetry,
       familyIds: [first.familyId, second.familyId]});
   }
-  return pairs.sort((a, b) => b.pairScore - a.pairScore);
+  return pairs.sort((a, b) => {
+    if (Math.abs(b.pairScore - a.pairScore) > .000001) return b.pairScore - a.pairScore;
+    const firstGeometry = (a.first.pathGeometryScore + a.second.pathGeometryScore) / 2;
+    const secondGeometry = (b.first.pathGeometryScore + b.second.pathGeometryScore) / 2;
+    if (Math.abs(secondGeometry - firstGeometry) > .000001) return secondGeometry - firstGeometry;
+    const firstContinuation = (a.first.continuationAgreement + a.second.continuationAgreement) / 2;
+    const secondContinuation = (b.first.continuationAgreement + b.second.continuationAgreement) / 2;
+    if (Math.abs(secondContinuation - firstContinuation) > .000001) return secondContinuation - firstContinuation;
+    const firstLength = (a.first.pathLength + a.second.pathLength) / 2;
+    const secondLength = (b.first.pathLength + b.second.pathLength) / 2;
+    if (Math.abs(secondLength - firstLength) > .000001) return secondLength - firstLength;
+    if (a.first.endJointId !== b.first.endJointId) return a.first.endJointId - b.first.endJointId;
+    if (a.second.endJointId !== b.second.endJointId) return a.second.endJointId - b.second.endJointId;
+    return a.first.anchorJointId - b.first.anchorJointId || a.second.anchorJointId - b.second.anchorJointId;
+  });
 }
 
 function choosePair(rig, frame, candidates, roles) {
-  const leftFamilies = collapseCandidateFamilies(candidates, roles[0]);
-  const rightFamilies = collapseCandidateFamilies(candidates, roles[1]);
+  const leftFamilies = collapseCandidateFamilies(rig, candidates, roles[0]);
+  const rightFamilies = collapseCandidateFamilies(rig, candidates, roles[1]);
   const pairs = pairCandidates(rig, frame,
     leftFamilies.map(family => family.representative),
     rightFamilies.map(family => family.representative));
@@ -404,6 +498,19 @@ function candidateSnapshot(candidate) {
     score: candidate.score,
     parentCentrality: candidate.parentCentrality,
     pathLength: candidate.pathLength,
+    pathGeometryScore: candidate.pathGeometryScore,
+    anchorScore: candidate.anchorScore,
+    endpointScore: candidate.endpointScore,
+    continuationAgreement: candidate.continuationAgreement,
+    pathMetrics: candidate.pathMetrics || null,
+    paths: (candidate.paths || []).map(path => ({
+      pathJointIds: [...path.pathJointIds],
+      endJointId: path.endJointId,
+      bendJointId: path.bendJointId,
+      score: path.score,
+      ...path.pathMetrics,
+      continuationAgreement: path.continuationAgreement,
+    })),
     side: candidate.side,
     endSide: candidate.endSide,
     normalizedHeight: candidate.normalizedHeight,
@@ -461,12 +568,26 @@ export function suggestHumanoidLimbMappings({
   const frame = robustFrame(rig, semanticAxes);
   const rejected = [];
   const candidates = [];
+  const resolverStats = {
+    anchorsEvaluated: 0, pathExpansions: 0, maxBeamSize: 0,
+    pathCandidatesProduced: 0, maxDepth: 0, beamWidth: 0,
+  };
   const joints = [...(rig?.joints || [])].sort((left, right) => Number(left?.jointId) - Number(right?.jointId));
   for (const joint of joints) {
     const id = numberId(joint?.jointId);
     if (id === null || !pointFor(rig, id)) continue;
     for (const role of ROLES) {
+      resolverStats.anchorsEvaluated += 1;
       const result = candidateFor(rig, frame, role, id, semanticAxes.forward);
+      const stats = result.detected?.pathDiagnostics;
+      if (stats) {
+        resolverStats.pathExpansions += stats.pathExpansions || 0;
+        resolverStats.maxBeamSize = Math.max(resolverStats.maxBeamSize,
+          stats.maxBeamSize || 0);
+        resolverStats.pathCandidatesProduced += stats.pathCandidatesProduced || 0;
+        resolverStats.maxDepth = Math.max(resolverStats.maxDepth, stats.maxDepth || 0);
+        resolverStats.beamWidth = Math.max(resolverStats.beamWidth, stats.beamWidth || 0);
+      }
       if (result.rejected) {
         if (debug) rejected.push({role, anchorJointId: id, reason: result.rejected});
       } else candidates.push(result);
@@ -523,6 +644,7 @@ export function suggestHumanoidLimbMappings({
         right_leg: legChoice.rightFamilies.map(familySnapshot),
       },
       pairs: {arms: pairSnapshot(armChoice), legs: pairSnapshot(legChoice)},
+      resolver: resolverStats,
       armPairCount: armChoice.pairs.length,
       legPairCount: legChoice.pairs.length,
     };

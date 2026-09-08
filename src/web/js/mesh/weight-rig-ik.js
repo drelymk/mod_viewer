@@ -256,7 +256,7 @@ export function selectLimbBendJoint(rig, pathJointIds = []) {
 }
 
 function detectionResult(role, anchorJointId, pathJointIds, reason,
-    branchHub, rig, characterForward) {
+    branchHub, rig, characterForward, pathCandidate = null) {
   const bendJointId = selectLimbBendJoint(rig, pathJointIds);
   const endJointId = pathJointIds.at(-1) ?? null;
   const component = componentFor(rig, anchorJointId);
@@ -286,79 +286,357 @@ function detectionResult(role, anchorJointId, pathJointIds, reason,
     bendDirection: directionEvidence.bendDirection?.toArray() || null,
     bendDirectionSource: directionEvidence.bendDirectionSource,
     bendDirectionStrength: directionEvidence.bendDirectionStrength,
+    pathScore: Number(pathCandidate?.score) || 0,
+    pathMetrics: pathCandidate?.pathMetrics || null,
+    continuationAgreement: Number(pathCandidate?.continuationAgreement) || 0,
+    pathCandidates: pathCandidate?.pathCandidates || [],
+    pathDiagnostics: pathCandidate?.pathDiagnostics || null,
   };
 }
 
-/** Detect one primary descendant limb path without searching sideways. */
-export function detectLimbPath({rig, anchorJointId, role, characterForward} = {}) {
+function vectorForAxis(value) {
+  const vector = finiteVector(value);
+  return vector && vector.lengthSq() > EPSILON ? vector.normalize() : null;
+}
+
+function semanticAxesForPath({characterAxes, characterForward} = {}) {
+  const up = vectorForAxis(characterAxes?.up) || new THREE.Vector3(0, 1, 0);
+  let forward = vectorForAxis(characterAxes?.forward)
+    || vectorForAxis(characterForward) || new THREE.Vector3(0, 0, 1);
+  forward.addScaledVector(up, -forward.dot(up));
+  if (forward.lengthSq() <= EPSILON) forward = new THREE.Vector3(0, 0, 1);
+  forward.normalize();
+  let right = vectorForAxis(characterAxes?.right);
+  if (!right || Math.abs(right.dot(up)) > 1e-4
+      || Math.abs(right.dot(forward)) > 1e-4) right = up.clone().cross(forward);
+  if (right.lengthSq() <= EPSILON) right.set(1, 0, 0);
+  right.normalize();
+  return {up, forward, right};
+}
+
+function medianValue(values) {
+  if (!values.length) return 0;
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.floor((ordered.length - 1) / 2)];
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, Number(value) || 0));
+}
+
+function rangeScore(value, low, high, softness = .15) {
+  if (value >= low && value <= high) return 1;
+  const distance = value < low ? low - value : value - high;
+  return clamp01(1 - distance / Math.max(softness, EPSILON));
+}
+
+function resolverFrame(rig, component, axes) {
+  const points = [...new Set((component?.nodeIds || []).map(numberId)
+    .filter(Number.isInteger))].map(id => pointFor(rig, id)).filter(Boolean);
+  const coordinates = points.map(point => ({
+    side: point.dot(axes.right), height: point.dot(axes.up), depth: point.dot(axes.forward),
+  }));
+  const heights = coordinates.map(item => item.height);
+  const minHeight = Math.min(...heights);
+  const maxHeight = Math.max(...heights);
+  const bounds = new THREE.Box3().setFromPoints(points);
+  const extent = bounds.getSize(new THREE.Vector3()).length();
+  return {
+    center: axes.right.clone().multiplyScalar(medianValue(coordinates.map(item => item.side)))
+      .addScaledVector(axes.up, medianValue(coordinates.map(item => item.height)))
+      .addScaledVector(axes.forward, medianValue(coordinates.map(item => item.depth))),
+    height: Math.max(maxHeight - minHeight > EPSILON
+      ? maxHeight - minHeight : extent, EPSILON),
+  };
+}
+
+function pathMetricsForState(state, rig, frame, axes, role) {
+  const path = state.pathJointIds;
+  const endpoint = pointFor(rig, path.at(-1));
+  const relative = endpoint ? endpoint.clone().sub(frame.center) : new THREE.Vector3();
+  const sideSign = String(role || '').startsWith('left_') ? -1 : 1;
+  const absoluteSide = state.absoluteSideTravel;
+  const absoluteHeight = state.absoluteHeightTravel;
+  const absoluteForward = state.absoluteForwardTravel;
+  const outwardTravel = state.outwardTravel;
+  const downwardTravel = state.downwardTravel;
+  const directDistance = state.points.length > 1
+    ? state.points[0].distanceTo(state.points.at(-1)) : 0;
+  const metrics = {
+    totalLength: state.totalLength / frame.height,
+    directDistance: directDistance / frame.height,
+    straightness: state.totalLength > EPSILON
+      ? clamp01(directDistance / state.totalLength) : 0,
+    netSide: state.netSide / frame.height,
+    netHeight: state.netHeight / frame.height,
+    netForward: state.netForward / frame.height,
+    netSideDisplacement: state.netSide / frame.height,
+    netHeightDisplacement: state.netHeight / frame.height,
+    netForwardDisplacement: state.netForward / frame.height,
+    absoluteForwardTravel: absoluteForward / frame.height,
+    outwardProgressFraction: outwardTravel / Math.max(absoluteSide, EPSILON),
+    downwardProgressFraction: downwardTravel / Math.max(absoluteHeight, EPSILON),
+    forwardBacktracking: Math.max(0, absoluteForward - Math.abs(state.netForward)) / frame.height,
+    sideBacktracking: Math.max(0, absoluteSide - Math.abs(state.netSide)) / frame.height,
+    heightBacktracking: Math.max(0, absoluteHeight - Math.abs(state.netHeight)) / frame.height,
+    endpointSide: relative.dot(axes.right) / frame.height,
+    endpointHeight: relative.dot(axes.up) / frame.height,
+    endpointDepth: relative.dot(axes.forward) / frame.height,
+    continuationAgreement: state.segmentCount
+      ? state.continuationMatches / state.segmentCount : 0,
+    branchCount: state.branchCount,
+    segmentCount: state.segmentCount,
+    sideSign,
+  };
+  return metrics;
+}
+
+function pathScoreForRole(metrics, role, branchHub = false, terminal = false) {
+  const isArm = String(role || '').endsWith('_arm');
+  const sideSign = metrics.sideSign;
+  const outward = clamp01(metrics.netSide * sideSign / .45);
+  const endpointOutward = clamp01(metrics.endpointSide * sideSign / .65);
+  const downward = clamp01(-metrics.netHeight / .65);
+  const endpointLow = clamp01((.25 - metrics.endpointHeight) / .8);
+  const length = rangeScore(metrics.totalLength, isArm ? .12 : .2,
+    isArm ? 1.5 : 1.7, .7);
+  const continuation = clamp01(metrics.continuationAgreement);
+  const depthPenalty = clamp01(metrics.absoluteForwardTravel / .45
+    + metrics.forwardBacktracking / .3);
+  const sidePenalty = clamp01(metrics.sideBacktracking / .65);
+  const heightPenalty = clamp01(metrics.heightBacktracking / .8);
+  const outwardProgress = clamp01(metrics.outwardProgressFraction);
+  const downwardProgress = clamp01(metrics.downwardProgressFraction);
+  const downwardReach = clamp01(-metrics.netHeight / .35);
+  const branchBonus = branchHub && metrics.totalLength > .18
+    ? (isArm ? .2
+      : Math.abs(metrics.endpointDepth) < .25 && downwardReach < .25 ? .6 : .2)
+    : 0;
+  if (isArm) {
+    return clamp01(.28 * outward + .17 * endpointOutward + .15 * length
+      + .12 * metrics.straightness + .1 * outwardProgress
+      + .06 * downward + .06 * continuation + branchBonus
+      - .24 * depthPenalty - .08 * sidePenalty - .04 * heightPenalty);
+  }
+  const lateralPenalty = clamp01(Math.abs(metrics.netSide) / .8
+    + metrics.sideBacktracking / .45);
+  const extended = clamp01(metrics.totalLength / .9);
+  return clamp01(.34 * downwardReach + .18 * endpointLow + .16 * length
+    + .1 * downwardProgress + .1 * metrics.straightness + .1 * extended
+    + .06 * continuation + branchBonus + (terminal ? .04 : 0)
+    - .16 * lateralPenalty - .12 * depthPenalty - .05 * heightPenalty);
+}
+
+function pathSort(left, right) {
+  if (Math.abs(right.score - left.score) > EPSILON) return right.score - left.score;
+  const leftMetrics = left.pathMetrics || {};
+  const rightMetrics = right.pathMetrics || {};
+  if (Math.abs((rightMetrics.straightness || 0) - (leftMetrics.straightness || 0)) > EPSILON) {
+    return (rightMetrics.straightness || 0) - (leftMetrics.straightness || 0);
+  }
+  if (Math.abs((right.continuationAgreement || 0)
+      - (left.continuationAgreement || 0)) > EPSILON) {
+    return (right.continuationAgreement || 0) - (left.continuationAgreement || 0);
+  }
+  if (Math.abs((rightMetrics.totalLength || 0) - (leftMetrics.totalLength || 0)) > EPSILON) {
+    return (rightMetrics.totalLength || 0) - (leftMetrics.totalLength || 0);
+  }
+  if (Number(left.endJointId) !== Number(right.endJointId)) {
+    return Number(left.endJointId) - Number(right.endJointId);
+  }
+  const leftPath = left.pathJointIds || [];
+  const rightPath = right.pathJointIds || [];
+  for (let index = 0; index < Math.min(leftPath.length, rightPath.length); index += 1) {
+    if (leftPath[index] !== rightPath[index]) return leftPath[index] - rightPath[index];
+  }
+  return leftPath.length - rightPath.length;
+}
+
+function pathCandidateForState(state, rig, frame, axes, role, reason = null) {
+  if (state.pathJointIds.length < 3) return null;
+  const metrics = pathMetricsForState(state, rig, frame, axes, role);
+  const branchHub = state.branchHub === true && state.pathJointIds.length >= 3;
+  const endJointId = state.pathJointIds.at(-1);
+  const bendJointId = selectLimbBendJoint(rig, state.pathJointIds);
+  if (!Number.isInteger(bendJointId) || !Number.isInteger(endJointId)) return null;
+  return {
+    pathJointIds: [...state.pathJointIds],
+    endJointId,
+    bendJointId,
+    score: pathScoreForRole(metrics, role, branchHub, reason === 'leaf'),
+    pathMetrics: metrics,
+    continuationAgreement: metrics.continuationAgreement,
+    reason,
+    branchHub,
+  };
+}
+
+function expandPathState(state, childId, rig, component, frame, axes, role) {
+  const current = state.pathJointIds.at(-1);
+  const previousPoint = state.points.at(-1);
+  const nextPoint = pointFor(rig, childId);
+  if (!nextPoint) return null;
+  const delta = nextPoint.clone().sub(previousPoint);
+  const sideStep = delta.dot(axes.right);
+  const heightStep = delta.dot(axes.up);
+  const forwardStep = delta.dot(axes.forward);
+  const continuation = continuationFor(rig, current);
+  const children = childrenFor(component, current).filter(child => pointFor(rig, child));
+  const next = {
+    pathJointIds: [...state.pathJointIds, childId],
+    points: [...state.points, nextPoint],
+    totalLength: state.totalLength + delta.length(),
+    netSide: state.netSide + sideStep,
+    netHeight: state.netHeight + heightStep,
+    netForward: state.netForward + forwardStep,
+    absoluteSideTravel: state.absoluteSideTravel + Math.abs(sideStep),
+    absoluteHeightTravel: state.absoluteHeightTravel + Math.abs(heightStep),
+    absoluteForwardTravel: state.absoluteForwardTravel + Math.abs(forwardStep),
+    outwardTravel: state.outwardTravel + Math.max(0,
+      sideStep * (String(role || '').startsWith('left_') ? -1 : 1)),
+    downwardTravel: state.downwardTravel + Math.max(0, -heightStep),
+    continuationMatches: state.continuationMatches
+      + (continuation === childId ? 1 : 0),
+    segmentCount: state.segmentCount + 1,
+    branchCount: state.branchCount + (children.length > 1 ? 1 : 0),
+    branchHub: false,
+  };
+  const metrics = pathMetricsForState(next, rig, frame, axes, role);
+  next.provisionalScore = pathScoreForRole(metrics, role, children.length > 1)
+    + Math.min(next.pathJointIds.length, 6) * .01;
+  return next;
+}
+
+export function resolveLimbPathCandidates({
+  rig, anchorJointId, role, characterForward, characterAxes,
+  maxDepth = 32, beamWidth = 12, maxResults = 16,
+} = {}) {
   const anchor = numberId(anchorJointId);
   const component = componentFor(rig, anchor);
   if (!component || anchor === null
       || !component.nodeIds?.map(Number).includes(anchor)) {
-    return detectionResult(role, anchor, [], 'anchor_not_found', false, rig,
-      characterForward);
+    return {available: false, candidates: [], reason: 'anchor_not_found'};
   }
   if (!pointFor(rig, anchor)) {
-    return detectionResult(role, anchor, [anchor], 'anchor_pivot_invalid', false,
-      rig, characterForward);
+    return {available: false, candidates: [], reason: 'anchor_pivot_invalid'};
   }
   if (Number(component.rootId) === anchor) {
-    return detectionResult(role, anchor, [anchor], 'anchor_is_component_root',
+    return {available: false, candidates: [], reason: 'anchor_is_component_root'};
+  }
+  const axes = semanticAxesForPath({characterAxes, characterForward});
+  const frame = resolverFrame(rig, component, axes);
+  const anchorPoint = pointFor(rig, anchor);
+  const initial = {
+    pathJointIds: [anchor], points: [anchorPoint], totalLength: 0,
+    netSide: 0, netHeight: 0, netForward: 0,
+    absoluteSideTravel: 0, absoluteHeightTravel: 0, absoluteForwardTravel: 0,
+    outwardTravel: 0, downwardTravel: 0, continuationMatches: 0,
+    segmentCount: 0, branchCount: 0, provisionalScore: 0,
+  };
+  let active = [initial];
+  const finals = [];
+  let pathExpansions = 0;
+  let maxBeamSize = active.length;
+  const depthLimit = Math.max(1, Math.min(Number(maxDepth) || 32, MAX_PATH_DEPTH));
+  const beamLimit = Math.max(1, Math.min(Number(beamWidth) || 12, 64));
+  for (let depth = 0; depth < depthLimit && active.length; depth += 1) {
+    const expanded = [];
+    active.forEach(state => {
+      const current = state.pathJointIds.at(-1);
+      const children = [...new Set(childrenFor(component, current).map(numberId))]
+        .filter(childId => Number.isInteger(childId)
+          && !state.pathJointIds.includes(childId) && pointFor(rig, childId))
+        .sort((left, right) => left - right);
+      if (state.pathJointIds.length >= 3) {
+        state.branchHub = children.length > 1;
+        const endpoint = pathCandidateForState(state, rig, frame, axes, role,
+          children.length ? 'branch_endpoint' : 'leaf');
+        if (endpoint) finals.push(endpoint);
+      }
+      children.forEach(childId => {
+        const next = expandPathState(state, childId, rig, component, frame, axes, role);
+        if (next) {
+          pathExpansions += 1;
+          expanded.push(next);
+        }
+      });
+    });
+    expanded.sort((left, right) => {
+      if (Math.abs(right.provisionalScore - left.provisionalScore) > EPSILON) {
+        return right.provisionalScore - left.provisionalScore;
+      }
+      if (left.pathJointIds.length !== right.pathJointIds.length) {
+        return right.pathJointIds.length - left.pathJointIds.length;
+      }
+      for (let index = 0; index < left.pathJointIds.length; index += 1) {
+        if (left.pathJointIds[index] !== right.pathJointIds[index]) {
+          return left.pathJointIds[index] - right.pathJointIds[index];
+        }
+      }
+      return 0;
+    });
+    active = expanded.slice(0, beamLimit);
+    maxBeamSize = Math.max(maxBeamSize, active.length);
+  }
+  active.forEach(state => {
+    if (state.pathJointIds.length < 3) return;
+    const endpoint = pathCandidateForState(state, rig, frame, axes, role,
+      'safety_depth');
+    if (endpoint) finals.push(endpoint);
+  });
+  const uniqueFinals = new Map();
+  finals.forEach(candidate => {
+    const key = candidate.pathJointIds.join(',');
+    const current = uniqueFinals.get(key);
+    if (!current || pathSort(candidate, current) < 0) {
+      uniqueFinals.set(key, candidate);
+    }
+  });
+  const candidates = [...uniqueFinals.values()]
+    .sort(pathSort).slice(0, Math.max(1, Number(maxResults) || 16));
+  return {
+    available: candidates.length > 0,
+    candidates,
+    reason: candidates.length ? null : 'no_valid_descendant_path',
+    axes,
+    frame,
+    stats: {
+      pathExpansions,
+      maxBeamSize,
+      pathCandidatesProduced: finals.length,
+      maxDepth: depthLimit,
+      beamWidth: beamLimit,
+    },
+  };
+}
+
+/** Detect one primary descendant limb path through the shared resolver. */
+export function detectLimbPath({
+  rig, anchorJointId, role, characterForward, characterAxes,
+} = {}) {
+  const resolved = resolveLimbPathCandidates({
+    rig, anchorJointId, role, characterForward, characterAxes,
+  });
+  const anchor = numberId(anchorJointId);
+  if (!resolved.candidates.length) {
+    return detectionResult(role, anchor, [], resolved.reason || 'no_valid_descendant_path',
       false, rig, characterForward);
   }
-
-  const path = [anchor];
-  const visited = new Set(path);
-  let reason = null;
-  let branchHub = false;
-  for (let depth = 0; depth < MAX_PATH_DEPTH; depth += 1) {
-    const current = path.at(-1);
-    const children = childrenFor(component, current)
-      .filter(childId => !visited.has(childId) && pointFor(rig, childId));
-    const continuation = continuationFor(rig, current);
-    const branchChildren = children.filter(childId => childId !== continuation);
-    // Once two useful limb sections exist, a multi-child node is most likely
-    // a hand/foot hub. Do not follow one arbitrary finger or toe.
-    // A single accessory child is not enough: preserve the continuation and
-    // let the existing rest-frame ranking decide which child to follow.
-    if (path.length >= 3
-        && (branchChildren.length >= 2
-          || continuation === null && children.length >= 2)) {
-      branchHub = true;
-      reason = 'terminal_branch_hub';
-      break;
-    }
-    const next = continuation;
-    if (next === null || !children.includes(next)) {
-      reason = children.length ? 'continuation_missing' : 'leaf';
-      break;
-    }
-    if (visited.has(next)) {
-      reason = 'cycle';
-      break;
-    }
-    const previous = pointFor(rig, path.length > 1 ? path.at(-2) : current);
-    const currentPoint = pointFor(rig, current);
-    const nextPoint = pointFor(rig, next);
-    if (!previous || !currentPoint || !nextPoint) {
-      reason = 'pivot_invalid';
-      break;
-    }
-    if (path.length >= 4) {
-      const incoming = currentPoint.clone().sub(previous).normalize();
-      const outgoing = nextPoint.clone().sub(currentPoint).normalize();
-      if (incoming.lengthSq() > EPSILON && outgoing.lengthSq() > EPSILON
-          && incoming.dot(outgoing) < 0.1) {
-        reason = 'direction_break';
-        break;
-      }
-    }
-    visited.add(next);
-    path.push(next);
-  }
-  if (path.length >= MAX_PATH_DEPTH && !reason) reason = 'safety_depth';
-  return detectionResult(role, anchor, path, reason, branchHub, rig,
-    characterForward);
+  const best = resolved.candidates[0];
+  const pathCandidates = resolved.candidates.map(candidate => ({
+    pathJointIds: [...candidate.pathJointIds],
+    endJointId: candidate.endJointId,
+    bendJointId: candidate.bendJointId,
+    score: candidate.score,
+    pathMetrics: candidate.pathMetrics,
+    continuationAgreement: candidate.continuationAgreement,
+    reason: candidate.reason,
+    branchHub: candidate.branchHub,
+  }));
+  return detectionResult(role, anchor, best.pathJointIds, best.reason,
+    best.branchHub, rig, characterForward, {
+      ...best, pathCandidates, pathDiagnostics: resolved.stats,
+  });
 }
 
 function cloneRotations(localRotations) {
