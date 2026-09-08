@@ -375,16 +375,25 @@ function cloneRotations(localRotations) {
   return result;
 }
 
-export function characterForwardFromOrientation({orientation, userRotation} = {}) {
+export function characterAxesFromOrientation({orientation, userRotation} = {}) {
   if (!orientation || !userRotation) return null;
   const baseOrientation = quaternionFrom(userRotation).invert()
     .multiply(quaternionFrom(orientation)).normalize();
-  const forward = new THREE.Vector3(0, 0, 1)
-    .applyQuaternion(baseOrientation.clone().invert());
-  if (!Number.isFinite(forward.lengthSq()) || forward.lengthSq() <= EPSILON) {
-    return null;
-  }
-  return forward.normalize();
+  const inverseBase = baseOrientation.clone().invert();
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(inverseBase).normalize();
+  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(inverseBase);
+  forward.addScaledVector(up, -forward.dot(up));
+  if (!Number.isFinite(up.lengthSq()) || !Number.isFinite(forward.lengthSq())
+      || up.lengthSq() <= EPSILON || forward.lengthSq() <= EPSILON) return null;
+  forward.normalize();
+  const right = up.clone().cross(forward);
+  if (!Number.isFinite(right.lengthSq()) || right.lengthSq() <= EPSILON) return null;
+  right.normalize();
+  return {up, forward, right};
+}
+
+export function characterForwardFromOrientation(state = {}) {
+  return characterAxesFromOrientation(state)?.forward || null;
 }
 
 function buildEvaluation({forest, centers, pivots, rotations}) {

@@ -1,7 +1,7 @@
 /* Geometry-only humanoid limb suggestions for the inferred Model Rig. */
 
 import * as THREE from 'three';
-import {characterForwardFromOrientation, detectLimbPath} from './weight-rig-ik.js';
+import {characterAxesFromOrientation, detectLimbPath} from './weight-rig-ik.js';
 
 const EPSILON = 1e-8;
 const ROLES = Object.freeze(['left_arm', 'right_arm', 'left_leg', 'right_leg']);
@@ -16,6 +16,43 @@ function numberId(value) {
 function valueFor(collection, id) {
   if (collection instanceof Map) return collection.get(id) ?? collection.get(String(id));
   return collection?.[id] ?? collection?.[String(id)];
+}
+
+function vectorFor(value) {
+  if (value?.isVector3) return value.clone();
+  const values = Array.isArray(value) || ArrayBuffer.isView(value)
+    ? [...value].slice(0, 3).map(Number)
+    : [value?.x, value?.y, value?.z].map(Number);
+  return values.length === 3 && values.every(Number.isFinite)
+    ? new THREE.Vector3(...values) : null;
+}
+
+function semanticAxesFromForward(characterForward) {
+  const up = new THREE.Vector3(0, 1, 0);
+  const forward = vectorFor(characterForward) || new THREE.Vector3(0, 0, 1);
+  forward.addScaledVector(up, -forward.dot(up));
+  if (forward.lengthSq() <= EPSILON) forward.set(0, 0, 1);
+  forward.normalize();
+  const right = up.clone().cross(forward);
+  if (right.lengthSq() <= EPSILON) right.set(1, 0, 0);
+  right.normalize();
+  return {up, forward, right};
+}
+
+function semanticAxesFor({axes, characterForward} = {}) {
+  const up = vectorFor(axes?.up);
+  const forward = vectorFor(axes?.forward);
+  if (!up || !forward || up.lengthSq() <= EPSILON || forward.lengthSq() <= EPSILON) {
+    return semanticAxesFromForward(characterForward);
+  }
+  up.normalize();
+  forward.addScaledVector(up, -forward.dot(up));
+  if (forward.lengthSq() <= EPSILON) return semanticAxesFromForward(characterForward);
+  forward.normalize();
+  const right = up.clone().cross(forward);
+  if (right.lengthSq() <= EPSILON) return semanticAxesFromForward(characterForward);
+  right.normalize();
+  return {up, forward, right};
 }
 
 function pointFor(rig, id) {
@@ -55,73 +92,74 @@ function weightedValue(joint) {
 function weightedMedian(samples, selector) {
   if (!samples.length) return 0;
   const ordered = [...samples].sort((left, right) =>
-    selector(left.point) - selector(right.point));
+    selector(left) - selector(right));
   const total = ordered.reduce((sum, sample) => sum + sample.weight, 0);
   let accumulated = 0;
   for (const sample of ordered) {
     accumulated += sample.weight;
-    if (accumulated >= total / 2) return selector(sample.point);
+    if (accumulated >= total / 2) return selector(sample);
   }
-  return selector(ordered.at(-1).point);
+  return selector(ordered.at(-1));
 }
 
 function weightedQuantile(samples, selector, fraction) {
   if (!samples.length) return 0;
   const ordered = [...samples].sort((left, right) =>
-    selector(left.point) - selector(right.point));
+    selector(left) - selector(right));
   const total = ordered.reduce((sum, sample) => sum + sample.weight, 0);
   const target = total * Math.max(0, Math.min(1, fraction));
   let accumulated = 0;
   for (const sample of ordered) {
     accumulated += sample.weight;
-    if (accumulated >= target) return selector(sample.point);
+    if (accumulated >= target) return selector(sample);
   }
-  return selector(ordered.at(-1).point);
+  return selector(ordered.at(-1));
 }
 
-function robustFrame(rig, characterForward) {
+function robustFrame(rig, axes) {
+  const {up, forward, right} = axes;
   const samples = (rig?.joints || []).map(joint => {
     const point = pointFor(rig, joint?.jointId);
     const evidence = weightedValue(joint);
-    return point ? {point, weight: 1 + Math.log1p(evidence)} : null;
+    return point ? {
+      point,
+      weight: 1 + Math.log1p(evidence),
+      sideCoordinate: point.dot(right),
+      heightCoordinate: point.dot(up),
+      depthCoordinate: point.dot(forward),
+    } : null;
   }).filter(Boolean);
   const points = samples.map(sample => sample.point);
-  const up = new THREE.Vector3(0, 1, 0);
   if (!points.length) {
     return {
       center: new THREE.Vector3(),
       up,
-      forward: new THREE.Vector3(0, 0, 1),
-      right: new THREE.Vector3(1, 0, 0),
+      forward,
+      right,
       height: 1,
     };
   }
-  const forward = pointFor({centerByJointId: new Map([[0, characterForward]])}, 0)
-    || new THREE.Vector3(0, 0, 1);
-  forward.addScaledVector(up, -forward.dot(up));
-  if (forward.lengthSq() <= EPSILON) forward.set(0, 0, 1);
-  forward.normalize();
-  const right = up.clone().cross(forward);
-  if (right.lengthSq() <= EPSILON) right.set(1, 0, 0);
-  right.normalize();
-  const ys = points.map(point => point.y);
-  let height = weightedQuantile(samples, point => point.y, .95)
-    - weightedQuantile(samples, point => point.y, .05);
+  let height = weightedQuantile(samples, sample => sample.heightCoordinate, .95)
+    - weightedQuantile(samples, sample => sample.heightCoordinate, .05);
+  if (!Number.isFinite(height) || height <= EPSILON) {
+    const heightCoordinates = samples.map(sample => sample.heightCoordinate);
+    height = Math.max(...heightCoordinates) - Math.min(...heightCoordinates);
+  }
   if (!Number.isFinite(height) || height <= EPSILON) {
     const box = new THREE.Box3().setFromPoints(points);
     height = box.getSize(new THREE.Vector3()).length();
   }
   height = Math.max(height, EPSILON);
-  const medianZ = weightedMedian(samples, point => point.z);
-  const depthSpread = weightedQuantile(samples, point => point.z, .75)
-    - weightedQuantile(samples, point => point.z, .25);
+  const medianDepth = weightedMedian(samples, sample => sample.depthCoordinate);
+  const depthSpread = weightedQuantile(samples, sample => sample.depthCoordinate, .75)
+    - weightedQuantile(samples, sample => sample.depthCoordinate, .25);
   const depthThreshold = Math.max(depthSpread * 1.5, height * .08, EPSILON);
   const coreSamples = samples.filter(sample =>
-    Math.abs(sample.point.z - medianZ) <= depthThreshold);
-  const center = new THREE.Vector3(
-    weightedMedian(coreSamples, point => point.x),
-    weightedMedian(samples, point => point.y),
-    weightedMedian(samples, point => point.z));
+    Math.abs(sample.depthCoordinate - medianDepth) <= depthThreshold);
+  const center = right.clone().multiplyScalar(
+    weightedMedian(coreSamples, sample => sample.sideCoordinate))
+    .addScaledVector(up, weightedMedian(samples, sample => sample.heightCoordinate))
+    .addScaledVector(forward, medianDepth);
   return {center, up, forward, right, height};
 }
 
@@ -168,8 +206,8 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
   const sideSign = role.startsWith('left_') ? -1 : 1;
   const side = anchor.clone().sub(frame.center).dot(frame.right) / frame.height;
   const endSide = end.clone().sub(frame.center).dot(frame.right) / frame.height;
-  const y = (anchor.y - frame.center.y) / frame.height;
-  const endY = (end.y - frame.center.y) / frame.height;
+  const height = anchor.clone().sub(frame.center).dot(frame.up) / frame.height;
+  const endHeight = end.clone().sub(frame.center).dot(frame.up) / frame.height;
   const parentSide = Math.abs(parent.clone().sub(frame.center).dot(frame.right) / frame.height);
   const forwardOffset = Math.abs(end.clone().sub(anchor).dot(frame.forward) / frame.height);
   const length = pathLength(rig, detected.pathJointIds) / frame.height;
@@ -180,11 +218,11 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
   const parentCentrality = clamp01(1 - parentSide / Math.max(Math.abs(side), .08));
   const lengthScore = role.endsWith('_arm') ? rangeScore(length, .12, .8, .7)
     : rangeScore(length, .2, 1.2, .8);
-  const levelScore = role.endsWith('_arm') ? rangeScore(y, .12, .65, .55)
-    : rangeScore(y, -.5, .05, .45);
+  const levelScore = role.endsWith('_arm') ? rangeScore(height, .12, .65, .55)
+    : rangeScore(height, -.5, .05, .45);
   const verticalScore = role.endsWith('_arm')
-    ? rangeScore(y - endY, -.2, .65, .55)
-    : rangeScore(y - endY, .25, 1.1, .65);
+    ? rangeScore(height - endHeight, -.2, .65, .55)
+    : rangeScore(height - endHeight, .25, 1.1, .65);
   const forwardScore = clamp01(1 - forwardOffset / .35);
   const anchorScore = clamp01((Math.abs(side) - .06) / .5);
   const score = .25 * sideAgreement + .12 * endSideAgreement
@@ -201,10 +239,10 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
   if (Math.abs(side) < .08) return {rejected: 'anchor_too_central', detected};
   if (length < .08) return {rejected: 'limb_too_short', detected};
   if (forwardOffset > .3) return {rejected: 'forward_offset', detected};
-  if (role.endsWith('_leg') && y > .18) {
+  if (role.endsWith('_leg') && height > .18) {
     return {rejected: 'anchor_too_high_for_leg', detected};
   }
-  if (role.endsWith('_arm') && y < -.05) {
+  if (role.endsWith('_arm') && height < -.05) {
     return {rejected: 'anchor_too_low_for_arm', detected};
   }
   return {
@@ -220,8 +258,8 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
     pathLength: length,
     side,
     endSide,
-    normalizedY: y,
-    normalizedEndY: endY,
+    normalizedHeight: height,
+    normalizedEndHeight: endHeight,
     forwardOffset,
     familyId: null,
     alternatives: [],
@@ -308,8 +346,10 @@ function pairCandidates(rig, frame, left, right) {
     const leftEnd = pointFor(rig, first.endJointId);
     const rightEnd = pointFor(rig, second.endJointId);
     if (!leftPoint || !rightPoint || !leftEnd || !rightEnd) continue;
-    const symmetry = Math.abs(leftPoint.y - rightPoint.y) / frame.height
-      + Math.abs(leftEnd.y - rightEnd.y) / frame.height
+    const symmetry = Math.abs(leftPoint.clone().sub(frame.center).dot(frame.up)
+      - rightPoint.clone().sub(frame.center).dot(frame.up)) / frame.height
+      + Math.abs(leftEnd.clone().sub(frame.center).dot(frame.up)
+        - rightEnd.clone().sub(frame.center).dot(frame.up)) / frame.height
       + Math.abs(Math.abs(leftPoint.clone().sub(frame.center).dot(frame.right))
         - Math.abs(rightPoint.clone().sub(frame.center).dot(frame.right))) / frame.height;
     const pairScore = (first.score + second.score) / 2 - Math.min(.35, symmetry * .18);
@@ -366,8 +406,8 @@ function candidateSnapshot(candidate) {
     pathLength: candidate.pathLength,
     side: candidate.side,
     endSide: candidate.endSide,
-    normalizedY: candidate.normalizedY,
-    normalizedEndY: candidate.normalizedEndY,
+    normalizedHeight: candidate.normalizedHeight,
+    normalizedEndHeight: candidate.normalizedEndHeight,
     forwardOffset: candidate.forwardOffset,
     reasons: [...candidate.reasons],
   };
@@ -405,9 +445,20 @@ function pairSnapshot(choice) {
   };
 }
 
+export function aPoseDirectionFromAxes({axes, side, downwardDegrees = 35} = {}) {
+  const semanticAxes = semanticAxesFor({axes});
+  const radians = THREE.MathUtils.degToRad(Number(downwardDegrees) || 0);
+  return semanticAxes.right.clone().multiplyScalar(Number(side) || 0)
+    .multiplyScalar(Math.cos(radians))
+    .addScaledVector(semanticAxes.up, -Math.sin(radians)).normalize();
+}
+
 /** Suggest bilateral arm and leg mappings from ModelJoint geometry. */
-export function suggestHumanoidLimbMappings({rig, characterForward, debug = false} = {}) {
-  const frame = robustFrame(rig, characterForward);
+export function suggestHumanoidLimbMappings({
+  rig, characterForward, axes, debug = false,
+} = {}) {
+  const semanticAxes = semanticAxesFor({axes, characterForward});
+  const frame = robustFrame(rig, semanticAxes);
   const rejected = [];
   const candidates = [];
   const joints = [...(rig?.joints || [])].sort((left, right) => Number(left?.jointId) - Number(right?.jointId));
@@ -415,7 +466,7 @@ export function suggestHumanoidLimbMappings({rig, characterForward, debug = fals
     const id = numberId(joint?.jointId);
     if (id === null || !pointFor(rig, id)) continue;
     for (const role of ROLES) {
-      const result = candidateFor(rig, frame, role, id, characterForward);
+      const result = candidateFor(rig, frame, role, id, semanticAxes.forward);
       if (result.rejected) {
         if (debug) rejected.push({role, anchorJointId: id, reason: result.rejected});
       } else candidates.push(result);
@@ -428,9 +479,15 @@ export function suggestHumanoidLimbMappings({rig, characterForward, debug = fals
   const arms = [roles.left_arm, roles.right_arm];
   const legs = [roles.left_leg, roles.right_leg];
   if (arms.every(item => item.available) && legs.every(item => item.available)) {
-    const shoulderY = Math.min(...arms.map(item => pointFor(rig, item.anchorJointId)?.y ?? 0));
-    const hipY = Math.max(...legs.map(item => pointFor(rig, item.anchorJointId)?.y ?? 0));
-    if (shoulderY <= hipY) {
+    const shoulderHeight = Math.min(...arms.map(item => {
+      const point = pointFor(rig, item.anchorJointId);
+      return point ? point.clone().sub(frame.center).dot(frame.up) : 0;
+    }));
+    const hipHeight = Math.max(...legs.map(item => {
+      const point = pointFor(rig, item.anchorJointId);
+      return point ? point.clone().sub(frame.center).dot(frame.up) : 0;
+    }));
+    if (shoulderHeight <= hipHeight) {
       roles = {...roles};
       arms.forEach(item => { roles[item.role] = emptySuggestion(item.role, 'humanoid_level_sanity_failed'); });
       legs.forEach(item => { roles[item.role] = emptySuggestion(item.role, 'humanoid_level_sanity_failed'); });
@@ -452,7 +509,7 @@ export function suggestHumanoidLimbMappings({rig, characterForward, debug = fals
     const topCandidatesByRole = Object.fromEntries(ROLES.map(role => [role,
       roleCandidates(role).slice(0, 10).map(candidateSnapshot)]));
     result.debug = {
-      frame: {center: frame.center.toArray(), right: frame.right.toArray(), forward: frame.forward.toArray(), height: frame.height},
+      frame: {center: frame.center.toArray(), up: frame.up.toArray(), right: frame.right.toArray(), forward: frame.forward.toArray(), height: frame.height},
       candidates: candidates.map(candidateSnapshot),
       topCandidatesByRole,
       rejected,
@@ -474,5 +531,5 @@ export function suggestHumanoidLimbMappings({rig, characterForward, debug = fals
 }
 
 export function characterForwardForHumanoidOrientation(state) {
-  return characterForwardFromOrientation(state) || new THREE.Vector3(0, 0, 1);
+  return characterAxesFromOrientation(state)?.forward || new THREE.Vector3(0, 0, 1);
 }

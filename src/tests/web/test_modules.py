@@ -434,6 +434,116 @@ def test_limb_forward_conversion_inverts_non_identity_base_orientation(module_pa
         assert turn == pytest.approx(expected)
 
 
+def test_humanoid_detection_and_apose_axes_are_coordinate_invariant(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {characterAxesFromOrientation} = await import('./js/mesh/weight-rig-ik.js');
+      const {aPoseDirectionFromAxes, suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const canonical = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.55, 1.55, 0]], [2, [-1.05, 1.35, 0]], [3, [-1.5, 1.1, 0]],
+        [4, [.55, 1.55, 0]], [5, [1.05, 1.35, 0]], [6, [1.5, 1.1, 0]],
+        [7, [-.35, .8, 0]], [8, [-.4, .2, 0]], [9, [-.42, -.4, 0]],
+        [10, [.35, .8, 0]], [11, [.4, .2, 0]], [12, [.42, -.4, 0]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 0, 5: 4, 6: 5,
+        7: 0, 8: 7, 9: 8, 10: 0, 11: 10, 12: 11};
+      const continuation = new Map([
+        [1, 2], [2, 3], [4, 5], [5, 6], [7, 8], [8, 9], [10, 11], [11, 12],
+      ]);
+      const makeRig = rotation => {
+        const points = new Map([...canonical].map(([id, point]) => [id,
+          new THREE.Vector3(...point).applyQuaternion(rotation).toArray()]));
+        const centers = new Map([...points].map(([id, point]) => [id,
+          point.map((value, index) => value + [.4, -.2, .15][index])]));
+        const childrenById = Object.fromEntries(Object.keys(parentById).map(id => [id, []]));
+        Object.entries(parentById).forEach(([child, parent]) => {
+          if (parent !== null) childrenById[parent].push(Number(child));
+        });
+        const component = {rootId: 0, nodeIds: [...points.keys()], parentById, childrenById};
+        return {
+          joints: [...points.keys()].reverse().map(jointId => ({jointId,
+            restPivot: points.get(jointId), restCenter: centers.get(jointId)})),
+          components: [component], componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+          centerByJointId: centers, jointPivotByJointId: points,
+          restContinuationChildByJointId: continuation,
+        };
+      };
+      const identity = new THREE.Quaternion();
+      const sourceRotation = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      const upright = sourceRotation.clone().invert();
+      const userTurn = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0), Math.PI / 2);
+      const canonicalAxes = characterAxesFromOrientation({
+        orientation: identity, userRotation: identity,
+      });
+      const sourceAxes = characterAxesFromOrientation({
+        orientation: upright, userRotation: identity,
+      });
+      const turnedAxes = characterAxesFromOrientation({
+        orientation: userTurn, userRotation: userTurn,
+      });
+      const detect = (rig, axes) => suggestHumanoidLimbMappings({
+        rig, axes, characterForward: axes.forward, debug: true,
+      });
+      const first = detect(makeRig(identity), canonicalAxes);
+      const second = detect(makeRig(sourceRotation), sourceAxes);
+      const third = detect(makeRig(identity), turnedAxes);
+      const poseDirections = (axes, rotation = null) => [-1, 1].map(side => {
+        const direction = aPoseDirectionFromAxes({axes, side});
+        return (rotation ? direction.applyQuaternion(rotation) : direction).toArray();
+      });
+      const structure = item => ({
+        families: Object.fromEntries(['left_arm', 'right_arm', 'left_leg', 'right_leg']
+          .map(role => [role, item.debug.families[role].map(family => ({
+            representative: family.representative.anchorJointId,
+            alternatives: family.alternatives.map(candidate => candidate.anchorJointId),
+          }))])),
+        pairs: Object.fromEntries(['arms', 'legs'].map(kind => {
+          const pair = item.debug.pairs[kind];
+          return [kind, {
+            best: pair.best && [pair.best.left.anchorJointId, pair.best.right.anchorJointId],
+            runnerUp: pair.runnerUp && [pair.runnerUp.leftAnchorJointId,
+              pair.runnerUp.rightAnchorJointId],
+          }];
+        })),
+      });
+      const canonicalPoseDirections = poseDirections(canonicalAxes);
+      const sourcePoseDirections = poseDirections(sourceAxes, sourceRotation.clone().invert());
+      return {
+        axes: {
+          canonical: {up: canonicalAxes.up.toArray(), forward: canonicalAxes.forward.toArray(),
+            right: canonicalAxes.right.toArray()},
+          source: {up: sourceAxes.up.toArray(), forward: sourceAxes.forward.toArray(),
+            right: sourceAxes.right.toArray()},
+        },
+        roles: [first, second, third].map(item => item.roles),
+        confidences: [first, second, third].map(item =>
+          ['left_arm', 'right_arm', 'left_leg', 'right_leg']
+            .map(role => item.roles[role].confidence)),
+        structures: [first, second, third].map(structure),
+        poseDirections: [canonicalPoseDirections, sourcePoseDirections],
+      };
+    }""")
+    assert result["axes"]["source"]["up"] == pytest.approx([0, 0, 1])
+    assert result["axes"]["source"]["forward"] == pytest.approx([0, -1, 0])
+    assert result["axes"]["source"]["right"] == pytest.approx([1, 0, 0])
+    expected_anchors = {
+        "left_arm": 1, "right_arm": 4, "left_leg": 7, "right_leg": 10,
+    }
+    for roles in result["roles"]:
+        assert all(roles[role]["available"] for role in expected_anchors)
+        assert {role: roles[role]["anchorJointId"] for role in expected_anchors} == expected_anchors
+    assert result["confidences"][0] == result["confidences"][1] == result["confidences"][2]
+    assert result["structures"][0] == result["structures"][1] == result["structures"][2]
+    assert result["poseDirections"][0][0] == pytest.approx([-.8191520443, -.5735764364, 0])
+    assert result["poseDirections"][0][1] == pytest.approx([.8191520443, -.5735764364, 0])
+    for source, canonical in zip(result["poseDirections"][1], result["poseDirections"][0]):
+        assert source == pytest.approx(canonical)
+
+
 def test_compact_limb_detection_stops_at_terminal_branch(module_page):
     result = module_page.evaluate("""async () => {
       const ik = await import('./js/mesh/weight-rig-ik.js');

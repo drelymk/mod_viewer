@@ -59,10 +59,12 @@ import {
 } from './weight-runtime.js';
 import {
   detectLimbPath, RIG_LIMB_ROLES, RIG_LIMB_ROLE_INFO,
-  characterForwardFromOrientation, resolveLimbBendDirection,
+  characterAxesFromOrientation, resolveLimbBendDirection,
   selectLimbBendJoint, solveLimbIk,
 } from './weight-rig-ik.js';
-import {suggestHumanoidLimbMappings} from './weight-rig-humanoid.js';
+import {
+  aPoseDirectionFromAxes, suggestHumanoidLimbMappings,
+} from './weight-rig-humanoid.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -300,7 +302,15 @@ function humanoidSnapshot() {
 }
 
 function characterForwardForRole() {
-  return characterForwardFromOrientation(getModelTransformState?.());
+  return humanoidSemanticAxes().forward;
+}
+
+function humanoidSemanticAxes() {
+  return characterAxesFromOrientation(getModelTransformState?.()) || {
+    up: new THREE.Vector3(0, 1, 0),
+    forward: new THREE.Vector3(0, 0, 1),
+    right: new THREE.Vector3(1, 0, 0),
+  };
 }
 
 function humanoidAnalysis() {
@@ -317,7 +327,8 @@ function humanoidAnalysis() {
   }
   const started = performanceNow();
   const result = suggestHumanoidLimbMappings({
-    rig, characterForward: characterForwardForRole(), debug: true,
+    rig, characterForward: characterForwardForRole(),
+    axes: humanoidSemanticAxes(), debug: true,
   });
   modelRigState.semanticDetectionMs = performanceNow() - started;
   modelRigState.humanoidStructureRevision = revision;
@@ -402,9 +413,11 @@ export async function autoDetectHumanoidLimbs() {
 }
 
 function modelPointForHumanoid(id) {
-  const values = modelSkinningRig?.centerByJointId?.get(Number(id))
-    || modelSkinningRig?.jointPivotByJointId?.get(Number(id))
-    || modelJointForId(id)?.restCenter;
+  const joint = modelJointForId(id);
+  const values = modelSkinningRig?.jointPivotByJointId?.get(Number(id))
+    ?? joint?.restPivot
+    ?? modelSkinningRig?.centerByJointId?.get(Number(id))
+    ?? joint?.restCenter;
   const array = values?.toArray ? values.toArray() : values;
   return Array.isArray(array) && array.length >= 3
     && array.slice(0, 3).every(Number.isFinite)
@@ -412,13 +425,7 @@ function modelPointForHumanoid(id) {
 }
 
 function humanoidFrame() {
-  const forward = characterForwardForRole() || new THREE.Vector3(0, 0, 1);
-  forward.addScaledVector(new THREE.Vector3(0, 1, 0), -forward.y);
-  if (forward.lengthSq() <= 1e-8) forward.set(0, 0, 1);
-  forward.normalize();
-  const up = new THREE.Vector3(0, 1, 0);
-  const right = up.clone().cross(forward).normalize();
-  return {forward, right, up};
+  return humanoidSemanticAxes();
 }
 
 /** Replace the current pose with an arm-only A-pose in one pose transaction. */
@@ -454,11 +461,8 @@ export function applyHumanoidAPose() {
     const upperLength = anchor.distanceTo(bend);
     const lowerLength = bend.distanceTo(end);
     const length = Math.max(upperLength + lowerLength, 1e-5);
-    const horizontal = Math.cos(THREE.MathUtils.degToRad(35));
-    const downward = Math.sin(THREE.MathUtils.degToRad(35));
     const side = mapping.role === 'left_arm' ? -1 : 1;
-    const direction = frame.right.clone().multiplyScalar(side * horizontal)
-      .addScaledVector(frame.up, -downward).normalize();
+    const direction = aPoseDirectionFromAxes({axes: frame, side});
     const distance = THREE.MathUtils.clamp(length * .985,
       Math.abs(upperLength - lowerLength) + 1e-5, length - 1e-5);
     const target = anchor.clone().addScaledVector(direction, distance);
