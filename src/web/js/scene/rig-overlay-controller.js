@@ -4,6 +4,12 @@
 
 import * as THREE from 'three/webgpu';
 
+const PICK_ACQUIRE_RADIUS = 9;
+const PICK_RELEASE_RADIUS = 13;
+const PICK_SWITCH_MARGIN = 3;
+const PICK_CLICK_RADIUS = 15;
+const PICK_CLICK_THRESHOLD = 4;
+
 function vector(value) {
   if (value?.isVector3) return value.clone();
   return new THREE.Vector3(
@@ -230,6 +236,10 @@ export function createRigOverlayController({
   });
   const hoverPoint = new THREE.Points(
     new THREE.BufferGeometry(), hoverMaterial);
+  const hoverPosition = new THREE.Float32BufferAttribute([0, 0, 0], 3);
+  hoverPosition.setUsage?.(THREE.DynamicDrawUsage);
+  hoverPoint.geometry.setAttribute('position', hoverPosition);
+  hoverPoint.visible = false;
   lineSegments.renderOrder = 10;
   centerPoints.renderOrder = 11;
   jointPoints.renderOrder = 12;
@@ -291,7 +301,9 @@ export function createRigOverlayController({
   let hoveredJointId = null;
   let hoveredScreen = null;
   let pickPointer = null;
+  let pickCandidateCache = [];
   let pickCandidateCount = 0;
+  let lastPickClientPoint = null;
   let suppressContextMenu = false;
   let pickLabel = null;
   let disposed = false;
@@ -455,7 +467,7 @@ export function createRigOverlayController({
     posedOverlayUpdateCount += 1;
   }
 
-  function pickCandidates() {
+  function buildPickCandidates() {
     return (currentSource?.joints || []).map(joint => {
       const jointId = Number(joint.jointId);
       const frame = getRigJointPoseFrame?.(jointId);
@@ -465,6 +477,18 @@ export function createRigOverlayController({
       };
     }).filter(candidate => Number.isInteger(candidate.jointId)
       && candidate.pivot);
+  }
+
+  function refreshPickCandidates() {
+    if (!currentSnapshot?.jointPickIntent || !currentSource) {
+      pickCandidateCache = [];
+      clearPickHover();
+      return;
+    }
+    pickCandidateCache = buildPickCandidates();
+    if (lastPickClientPoint) {
+      updatePickHoverAt(lastPickClientPoint.x, lastPickClientPoint.y);
+    }
   }
 
   function updatePickLabel() {
@@ -489,71 +513,123 @@ export function createRigOverlayController({
     hoveredScreen = null;
     pickCandidateCount = 0;
     hoverPoint.visible = false;
-    setGeometry(hoverPoint, []);
     updatePickLabel();
   }
 
-  function updatePickHover(event) {
+  function setPickCursor(value = '') {
+    if (canvas?.style) canvas.style.cursor = value;
+  }
+
+  function showPickHover(candidate, candidateCount) {
+    if (!candidate) {
+      clearPickHover();
+      return;
+    }
+    hoveredJointId = candidate.jointId;
+    hoveredScreen = candidate.screen;
+    pickCandidateCount = candidateCount;
+    const value = vector(candidate.pivot);
+    const attribute = hoverPoint.geometry.getAttribute('position');
+    attribute?.setXYZ(0, value.x, value.y, value.z);
+    if (attribute) attribute.needsUpdate = true;
+    hoverPoint.visible = true;
+    updatePickLabel();
+  }
+
+  function nearestPickCandidate(clientX, clientY, hitRadius) {
+    group.updateMatrixWorld?.(true);
+    return findNearestRigJoint({
+      candidates: pickCandidateCache,
+      pointer: {x: clientX, y: clientY},
+      camera,
+      canvas,
+      worldMatrix: group.matrixWorld,
+      hitRadius,
+    });
+  }
+
+  function updatePickHoverAt(clientX, clientY) {
     if (!currentSnapshot?.jointPickIntent || !currentSource) {
       clearPickHover();
       return null;
     }
-    group.updateMatrixWorld?.(true);
-    const nearest = findNearestRigJoint({
-      candidates: pickCandidates(),
-      pointer: {x: event.clientX, y: event.clientY},
-      camera,
-      canvas,
-      worldMatrix: group.matrixWorld,
-      hitRadius: 14,
-    });
-    hoveredJointId = nearest?.jointId ?? null;
-    hoveredScreen = nearest?.screen || null;
-    pickCandidateCount = nearest?.candidates?.length || 0;
-    if (nearest) {
-      const candidate = nearest.candidates[0];
-      setGeometry(hoverPoint, vector(candidate.pivot).toArray());
-      hoverPoint.visible = true;
-    } else {
-      hoverPoint.visible = false;
-      setGeometry(hoverPoint, []);
+    const nearest = nearestPickCandidate(
+      clientX, clientY, PICK_RELEASE_RADIUS);
+    let selected = null;
+    if (hoveredJointId !== null) {
+      const current = nearest?.candidates?.find(candidate =>
+        candidate.jointId === hoveredJointId);
+      if (current) {
+        const replacement = nearest.jointId !== hoveredJointId
+          && nearest.distance <= current.distance - PICK_SWITCH_MARGIN
+          ? nearest.candidates[0] : current;
+        selected = replacement;
+      } else if (nearest && nearest.distance <= PICK_ACQUIRE_RADIUS) {
+        selected = nearest.candidates[0];
+      }
+    } else if (nearest && nearest.distance <= PICK_ACQUIRE_RADIUS) {
+      selected = nearest.candidates[0];
     }
-    updatePickLabel();
+    showPickHover(selected, nearest?.candidates?.length || 0);
+    setPickCursor(selected ? 'pointer' : 'crosshair');
     requestRender?.();
-    return nearest;
+    return selected;
+  }
+
+  function updatePickHover(event) {
+    lastPickClientPoint = {x: event.clientX, y: event.clientY};
+    const selected = updatePickHoverAt(event.clientX, event.clientY);
+    if (currentSnapshot?.jointPickIntent && event.altKey) setPickCursor('grab');
+    return selected;
   }
 
   function onPickPointerMove(event) {
-    if (currentSnapshot?.jointPickIntent) updatePickHover(event);
+    if (!currentSnapshot?.jointPickIntent) return;
+    if (event.altKey) {
+      clearPickHover();
+      setPickCursor('grab');
+      return;
+    }
+    updatePickHover(event);
   }
 
   function onPickPointerDown(event) {
     if (!currentSnapshot?.jointPickIntent) return;
     if (event.button === 2) {
       event.preventDefault();
+      event.stopImmediatePropagation();
       suppressContextMenu = true;
       onRigJointPickCancelled?.();
       return;
     }
-    if (event.button === 0) {
-      pickPointer = {x: event.clientX, y: event.clientY};
-    }
+    if (event.button !== 0 || event.altKey) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    pickPointer = {id: event.pointerId, x: event.clientX, y: event.clientY};
+    try { canvas?.setPointerCapture?.(event.pointerId); } catch { /* best effort */ }
   }
 
   function onPickPointerUp(event) {
-    if (!currentSnapshot?.jointPickIntent || event.button !== 0) return;
+    if (!currentSnapshot?.jointPickIntent || event.button !== 0 || !pickPointer) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     const start = pickPointer;
     pickPointer = null;
+    if (start.id !== undefined && canvas?.hasPointerCapture?.(start.id)) {
+      try { canvas.releasePointerCapture(start.id); } catch { /* best effort */ }
+    }
     if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y)
-        >= 4) return;
-    const nearest = updatePickHover(event);
+        >= PICK_CLICK_THRESHOLD) return;
+    const nearest = nearestPickCandidate(
+      event.clientX, event.clientY, PICK_CLICK_RADIUS);
     if (nearest) onRigJointPicked?.(nearest.jointId, currentSnapshot.jointPickIntent);
   }
 
-  function onPickPointerCancel() {
+  function onPickPointerCancel(event) {
+    if (pickPointer && event?.pointerId !== undefined
+        && event.pointerId !== pickPointer.id) return;
     pickPointer = null;
+    setPickCursor('crosshair');
   }
 
   function onPickContextMenu(event) {
@@ -568,9 +644,22 @@ export function createRigOverlayController({
   }
 
   function onPickKeyDown(event) {
+    if (currentSnapshot?.jointPickIntent && event.key === 'Alt') {
+      clearPickHover();
+      setPickCursor('grab');
+      return;
+    }
     if (currentSnapshot?.jointPickIntent && event.key === 'Escape') {
       event.preventDefault();
       onRigJointPickCancelled?.();
+    }
+  }
+
+  function onPickKeyUp(event) {
+    if (currentSnapshot?.jointPickIntent && event.key === 'Alt') {
+      if (lastPickClientPoint) {
+        updatePickHoverAt(lastPickClientPoint.x, lastPickClientPoint.y);
+      } else setPickCursor('crosshair');
     }
   }
 
@@ -628,6 +717,7 @@ export function createRigOverlayController({
     const id = Number(detail?.jointId);
     if (!Number.isInteger(id)) return;
     updatePosedOverlay(currentSource);
+    if (currentSnapshot?.jointPickIntent) refreshPickCandidates();
     if (poseDragActive && id === dragBoneId) {
       // TransformControls owns the proxy until the gesture ends. The model
       // still updates from every pose event, but its canonical state must not
@@ -775,6 +865,7 @@ export function createRigOverlayController({
 
   function refresh(snapshot = getRigState?.()) {
     if (disposed) return;
+    const wasJointPicking = rigJointPickingActive;
     currentSnapshot = snapshot || {};
     currentSource = sourceFor(currentSnapshot);
     rigJointPickingActive = !!currentSnapshot.jointPickIntent;
@@ -788,8 +879,18 @@ export function createRigOverlayController({
     group.visible = !!currentSource;
     staticGroup.visible = (!!currentSnapshot.visible
       || !!currentSnapshot.jointPickIntent) && !!currentSource;
-    if (!currentSnapshot.jointPickIntent) clearPickHover();
+    if (!currentSnapshot.jointPickIntent) {
+      pickCandidateCache = [];
+      pickPointer = null;
+      lastPickClientPoint = null;
+      clearPickHover();
+      if (wasJointPicking) setPickCursor('');
+    }
     updatePosedOverlay(currentSource);
+    if (currentSnapshot.jointPickIntent) {
+      refreshPickCandidates();
+      if (hoveredJointId === null) setPickCursor('crosshair');
+    }
     updateCenterColors();
     updateProxy(currentSource, currentSnapshot);
     syncRotationSnap(currentSnapshot);
@@ -804,17 +905,21 @@ export function createRigOverlayController({
   const onPoseChanged = event => updatePoseFromEvent(event.detail);
   const onModelTransformChanged = () => {
     updateModelFrame();
+    if (currentSnapshot?.jointPickIntent && lastPickClientPoint) {
+      updatePickHoverAt(lastPickClientPoint.x, lastPickClientPoint.y);
+    }
     requestRender?.();
   };
   window.addEventListener('mod-viewer-model-rig-changed', onRigChanged);
   window.addEventListener('mod-viewer-model-rig-pose-changed', onPoseChanged);
   window.addEventListener('mod-viewer-model-transform-changed', onModelTransformChanged);
-  canvas?.addEventListener('pointermove', onPickPointerMove);
-  canvas?.addEventListener('pointerdown', onPickPointerDown);
-  canvas?.addEventListener('pointerup', onPickPointerUp);
-  canvas?.addEventListener('pointercancel', onPickPointerCancel);
+  canvas?.addEventListener('pointermove', onPickPointerMove, true);
+  canvas?.addEventListener('pointerdown', onPickPointerDown, true);
+  canvas?.addEventListener('pointerup', onPickPointerUp, true);
+  canvas?.addEventListener('pointercancel', onPickPointerCancel, true);
   canvas?.addEventListener('contextmenu', onPickContextMenu);
   if (typeof document !== 'undefined') document.addEventListener('keydown', onPickKeyDown);
+  if (typeof document !== 'undefined') document.addEventListener('keyup', onPickKeyUp);
 
   return {
     group,
@@ -855,13 +960,14 @@ export function createRigOverlayController({
       window.removeEventListener('mod-viewer-model-rig-changed', onRigChanged);
       window.removeEventListener('mod-viewer-model-rig-pose-changed', onPoseChanged);
       window.removeEventListener('mod-viewer-model-transform-changed', onModelTransformChanged);
-      canvas?.removeEventListener('pointermove', onPickPointerMove);
-      canvas?.removeEventListener('pointerdown', onPickPointerDown);
-      canvas?.removeEventListener('pointerup', onPickPointerUp);
-      canvas?.removeEventListener('pointercancel', onPickPointerCancel);
+      canvas?.removeEventListener('pointermove', onPickPointerMove, true);
+      canvas?.removeEventListener('pointerdown', onPickPointerDown, true);
+      canvas?.removeEventListener('pointerup', onPickPointerUp, true);
+      canvas?.removeEventListener('pointercancel', onPickPointerCancel, true);
       canvas?.removeEventListener('contextmenu', onPickContextMenu);
       if (typeof document !== 'undefined') {
         document.removeEventListener('keydown', onPickKeyDown);
+        document.removeEventListener('keyup', onPickKeyUp);
       }
       pickLabel?.remove?.();
       detachControls();

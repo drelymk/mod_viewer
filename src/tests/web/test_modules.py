@@ -412,6 +412,82 @@ def test_rig_joint_picking_temporarily_exposes_all_overlay_joints(module_page):
     assert result["after"]["staticVisible"] is False
 
 
+def test_rig_joint_picker_owns_plain_left_and_allows_alt_orbit(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController, projectRigPointToClient} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(90, 1, .1, 100);
+      camera.position.set(0, 0, 5);
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+      const canvas = document.createElement('canvas');
+      canvas.getBoundingClientRect = () => ({left: 10, top: 20,
+        width: 200, height: 200});
+      document.body.appendChild(canvas);
+      const pivots = new Map([[1, [0, 0, 0]], [2, [.3, 0, 0]]]);
+      const source = {
+        key: 'model-rig', structureRevision: 1,
+        joints: [1, 2].map(jointId => ({jointId,
+          restCenter: pivots.get(jointId), restPivot: pivots.get(jointId)})),
+        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2],
+          parentById: {1: null, 2: 1}, childrenById: {1: [2], 2: []}}],
+        forestEdges: [{parentId: 1, childId: 2}],
+        poseRotationByJointId: {},
+      };
+      let state = {visible: false, overlayScope: 'selection',
+        selectedJointId: null,
+        jointPickIntent: {type: 'limb-anchor', role: 'left_arm'},
+        model: source};
+      const picked = [];
+      let arcballDown = 0;
+      let arcballUp = 0;
+      const controller = createRigOverlayController({
+        scene, camera, canvas, getMeshes: () => [], getRigState: () => state,
+        getRigJointPoseFrame: id => ({pivot: pivots.get(Number(id))}),
+        onRigJointPicked: id => picked.push(id),
+      });
+      controller.refresh(state);
+      canvas.addEventListener('pointerdown', () => { arcballDown += 1; });
+      canvas.addEventListener('pointerup', () => { arcballUp += 1; });
+      const center = projectRigPointToClient({point: [0, 0, 0], camera, canvas});
+      const dispatch = (type, id, x, y, altKey = false) => canvas.dispatchEvent(
+        new PointerEvent(type, {bubbles: true, button: 0, pointerId: id,
+          clientX: x, clientY: y, altKey}));
+      dispatch('pointerdown', 1, center.x, center.y);
+      dispatch('pointerup', 1, center.x, center.y);
+      dispatch('pointerdown', 2, center.x, center.y, true);
+      dispatch('pointermove', 2, center.x + 20, center.y, true);
+      dispatch('pointerup', 2, center.x + 20, center.y, true);
+      dispatch('pointerdown', 3, center.x, center.y);
+      dispatch('pointerup', 3, center.x + 8, center.y);
+      dispatch('pointermove', 4, center.x + 18, center.y);
+      const outside = controller.getDebugState();
+      dispatch('pointermove', 5, center.x, center.y);
+      const firstHover = controller.getDebugState();
+      dispatch('pointermove', 6, center.x + 4, center.y);
+      const hysteresis = controller.getDebugState();
+      dispatch('pointermove', 7, center.x + 10, center.y);
+      const switched = controller.getDebugState();
+      dispatch('pointermove', 8, center.x + 30, center.y);
+      const cleared = controller.getDebugState();
+      controller.dispose();
+      canvas.remove();
+      return {picked, arcballDown, arcballUp, outside, firstHover,
+        hysteresis, switched, cleared};
+    }""")
+    assert result["picked"] == [1]
+    assert result["arcballDown"] == 1
+    assert result["arcballUp"] == 1
+    assert result["outside"]["hoveredJointId"] is None
+    assert result["firstHover"]["hoveredJointId"] == 1
+    assert result["hysteresis"]["hoveredJointId"] == 1
+    assert result["switched"]["hoveredJointId"] == 2
+    assert result["cleared"]["hoveredJointId"] is None
+
+
 def test_rig_overlay_can_scope_model_view_to_selected_chain(module_page):
     page = module_page
     result = page.evaluate("""async () => {
