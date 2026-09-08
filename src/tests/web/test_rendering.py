@@ -2370,13 +2370,24 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
           await experiment.ensureModelWeightsLoaded();
           await experiment.ensureModelRigLoaded();
-          const rigState = experiment.getModelRigState();
-          const posedJoint = rigState.model.joints.find(joint =>
+          let rigState = experiment.getModelRigState();
+          let debug = experiment.getModelRigDebugState();
+          const rootComponent = rigState.model.components.find(component =>
+            component.nodeIds.some(id => id !== component.rootId));
+          const manualRootId = rootComponent?.nodeIds.find(id =>
+            id !== rootComponent.rootId);
+          const manualRootJoint = debug.joints.find(joint =>
+            joint.jointId === manualRootId);
+          const manualRootSignature = manualRootJoint?.signature;
+          const manualRootApplied = experiment.setRigJointRoot(manualRootId);
+          rigState = experiment.getModelRigState();
+          const posedJoint = debug.joints.find(joint =>
             rigState.model.components.some(component =>
               component.nodeIds.includes(joint.jointId)
               && component.rootId !== joint.jointId));
+          const posedJointSignature = posedJoint?.signature;
+          const THREE = await import('three');
           if (posedJoint) {
-            const THREE = await import('three');
             experiment.setRigJointRotation(posedJoint.jointId,
               new THREE.Quaternion().setFromAxisAngle(
                 new THREE.Vector3(0, 0, 1), Math.PI / 12));
@@ -2385,12 +2396,50 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           setControlValue('shape', '1');
           refreshMeshes();
           const state = experiment.getSkinningState(mesh);
+          const influenceGraph = state.influenceGraph;
+          await experiment.ensureModelRigLoaded();
+          const rebuiltDebug = experiment.getModelRigDebugState();
+          const rebuiltJoint = rebuiltDebug.joints.find(joint =>
+            joint.signature === manualRootSignature);
+          const rebuiltComponent = rebuiltDebug.components.find(component =>
+            component.nodeIds.includes(rebuiltJoint?.jointId));
+          const rebuiltPoseJoint = rebuiltDebug.joints.find(joint =>
+            joint.signature === posedJointSignature);
+          const rootSurvived = rebuiltComponent?.rootId === rebuiltJoint?.jointId
+            && rebuiltDebug.explicitRootSignatures.includes(manualRootSignature);
+          const poseAfterRebuild = experiment.setRigJointRotation(
+            rebuiltPoseJoint?.jointId,
+            new THREE.Quaternion().setFromAxisAngle(
+              new THREE.Vector3(0, 0, 1), Math.PI / 12),
+            {dragging: true});
+          const resetAfterRebuild = experiment.resetRigPose();
+          const resetDebug = experiment.getModelRigDebugState();
+          const resetComponent = resetDebug.components.find(component =>
+            component.nodeIds.includes(rebuiltJoint?.jointId));
+          const resetWorked = resetAfterRebuild
+            && resetDebug.poseJointIds.length === 0
+            && resetDebug.explicitRootSignatures.length === 0
+            && resetComponent?.rootId !== rebuiltJoint?.jointId;
+          experiment.setRigJointRoot(rebuiltJoint?.jointId);
+          experiment.unregisterSkinningMesh(mesh);
+          const unresolvedDebug = experiment.getModelRigDebugState();
+          const unresolvedDropped = !unresolvedDebug.explicitRootSignatures
+            || unresolvedDebug.explicitRootSignatures.length === 0;
+          experiment.destroyModelPhysicsSession();
+          const resetState = experiment.getModelRigState();
           const after = [...mesh.geometry.attributes.position.array];
           const box = mesh.geometry.boundingBox;
           const sphere = mesh.geometry.boundingSphere;
           URL.revokeObjectURL(url);
           return {
             loaded: state.loaded,
+            manualRootApplied,
+            manualRootSignature,
+            rootSurvived,
+            poseAfterRebuild,
+            resetWorked,
+            unresolvedDropped,
+            fullResetCleared: !resetState.loaded,
             baseline: [...state.baselinePositions],
             before, after,
             bounds: {
@@ -2399,7 +2448,7 @@ def test_loaded_skinning_rebaselines_after_shape_change(
             sphere: {
               center: sphere.center.toArray(), radius: sphere.radius,
             },
-            graph: state.influenceGraph,
+            graph: influenceGraph,
           };
         }""")
         assert result["loaded"]
@@ -2411,6 +2460,13 @@ def test_loaded_skinning_rebaselines_after_shape_change(
         assert result["bounds"]["max"] == pytest.approx([1.2, 1.2, 0])
         assert result["sphere"]["center"] == pytest.approx([.6, .6, 0])
         assert result["sphere"]["radius"] == pytest.approx(math.sqrt(.72))
+        assert result["manualRootApplied"]
+        assert result["manualRootSignature"]
+        assert result["rootSurvived"]
+        assert result["poseAfterRebuild"]
+        assert result["resetWorked"]
+        assert result["unresolvedDropped"]
+        assert result["fullResetCleared"]
         for offset in range(0, len(result["after"]), 3):
             point = result["after"][offset:offset + 3]
             assert all(result["bounds"]["min"][axis] - 1e-6 <= point[axis]

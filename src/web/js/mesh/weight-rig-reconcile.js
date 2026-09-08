@@ -1575,9 +1575,6 @@ function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
       });
     }
     const groupSet = new Set(groupIds);
-    const groupAttachments = attachments.filter(item =>
-      groupSet.has(item.targetComponentId)
-      && groupSet.has(item.accessoryComponentId));
     const groupRoots = groupIds.filter(id => (incomingCount.get(id) || 0) === 0)
       .map(id => componentById.get(id))
       .filter(Boolean)

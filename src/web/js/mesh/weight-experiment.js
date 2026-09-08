@@ -1263,8 +1263,8 @@ function restoreDefaultModelRigOrientation(rig) {
 function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   const started = performanceNow();
   const previousSelectedJointId = modelRigState.selectedJointId;
-  const previousRootSignatures = modelSkinningRig
-    ? new Set(modelRigState.explicitRootSignatures) : new Set();
+  const previousRootSignatures = new Set(
+    modelRigState.explicitRootSignatures);
   if (modelSkinningRig) resetModelPose({request: false});
   const reconciliation = buildModelRigReconciliation(sourceRigs);
   const joints = reconciliation.joints || [];
@@ -3181,6 +3181,8 @@ export function refreshSkinningAfterShapeChange(mesh) {
   const position = mesh?.geometry?.attributes?.position;
   clearPickedPoint();
   if (!state?.loaded || !position) return false;
+  const preservedRootSignatures = modelSkinningRig
+    ? new Set(modelRigState.explicitRootSignatures) : new Set();
   const sourceKey = state.skinningSourceKey;
   // Capture the authoritative shaped geometry before physics detachment or
   // pose reset can restore the previous baseline onto this mesh.
@@ -3212,7 +3214,7 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelRigState.jointPickIntent = null;
   modelRigState.ikEnabled = false;
   modelRigState.activeLimbRole = 'left_arm';
-  modelRigState.explicitRootSignatures = new Set();
+  modelRigState.explicitRootSignatures = preservedRootSignatures;
   rigPresetState.lastApplyResult = null;
   resolvedLimbMappings = null;
   resolvedLimbMappingsStructureRevision = null;
