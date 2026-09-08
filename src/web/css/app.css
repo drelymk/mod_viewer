@@ -1108,7 +1108,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-preset-actions { flex-wrap: nowrap; }
 .rig-preset-actions .ui-button { min-width: 0; }
 .rig-advanced-group { display: flex; flex-direction: column; gap: 7px; }
-.rig-hint { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+.rig-hint, .rig-humanoid-status { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
 .rig-joint-pick-label { position: absolute; z-index: 20; pointer-events: none; padding: 2px 5px; color: #111827; background: #facc15; border-radius: 3px; font: 11px/1.2 ui-monospace, monospace; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
 .rig-joint-pick-label[hidden] { display: none; }
 .weight-picker { position: relative; }

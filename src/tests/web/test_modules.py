@@ -227,6 +227,110 @@ def test_rig_limb_detection_and_two_control_solver(module_page):
     assert result["unreachable"]["reached"] is False
 
 
+def test_humanoid_limb_suggestions_are_bilateral_and_ignore_wings(module_page):
+    result = module_page.evaluate("""async () => {
+      const humanoid = await import('./js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.55, 1.55, 0]], [2, [-1.05, 1.35, 0]], [3, [-1.5, 1.1, 0]],
+        [4, [.55, 1.55, 0]], [5, [1.05, 1.35, 0]], [6, [1.5, 1.1, 0]],
+        [7, [-.35, .8, 0]], [8, [-.4, .2, 0]], [9, [-.42, -.4, 0]],
+        [10, [.35, .8, 0]], [11, [.4, .2, 0]], [12, [.42, -.4, 0]],
+        [13, [-.8, 1.8, -1]], [14, [-1.6, 1.8, -1.5]], [15, [-2.4, 1.8, -1.8]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 0, 5: 4, 6: 5,
+        7: 0, 8: 7, 9: 8, 10: 0, 11: 10, 12: 11, 13: 0, 14: 13, 15: 14};
+      const childrenById = Object.fromEntries(Object.keys(parentById).map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const component = {rootId: 0, nodeIds: [...points.keys()], parentById, childrenById};
+      const rig = {
+        joints: [...points.keys()].reverse().map(jointId => ({jointId, restCenter: points.get(jointId)})),
+        components: [component], componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+        centerByJointId: points, jointPivotByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [1, 2], [2, 3], [4, 5], [5, 6], [7, 8], [8, 9],
+          [10, 11], [11, 12], [13, 14], [14, 15],
+        ]),
+      };
+      const result = humanoid.suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      const scaledPoints = new Map([...points].map(([id, point]) => [id,
+        point.map(value => value * 10)]));
+      const scaledRig = {...rig, joints: rig.joints.map(joint => ({...joint,
+        restCenter: scaledPoints.get(joint.jointId)})),
+        centerByJointId: scaledPoints, jointPivotByJointId: scaledPoints};
+      const scaled = humanoid.suggestHumanoidLimbMappings({
+        rig: scaledRig, characterForward: [0, 0, 1]});
+      return {roles: result.roles, scaledRoles: scaled.roles,
+        rejectedWings: result.debug.rejected
+        .filter(item => item.anchorJointId === 13).map(item => item.reason)};
+    }""")
+    roles = result["roles"]
+    assert roles["left_arm"]["available"]
+    assert roles["right_arm"]["available"]
+    assert roles["left_leg"]["available"]
+    assert roles["right_leg"]["available"]
+    assert roles["left_arm"]["anchorJointId"] == 1
+    assert roles["right_arm"]["anchorJointId"] == 4
+    assert roles["left_leg"]["anchorJointId"] == 7
+    assert roles["right_leg"]["anchorJointId"] == 10
+    assert 13 not in [roles[role]["anchorJointId"] for role in roles]
+    assert result["scaledRoles"]["left_arm"]["anchorJointId"] == 1
+    assert result["scaledRoles"]["right_arm"]["anchorJointId"] == 4
+
+
+def test_humanoid_suggestions_report_missing_and_ambiguous_pairs(module_page):
+    result = module_page.evaluate("""async () => {
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const makeRig = items => {
+        const points = new Map(items.map(item => [item.id, item.point]));
+        const parentById = Object.fromEntries(items.map(item => [item.id, item.parent]));
+        const childrenById = Object.fromEntries(items.map(item => [item.id, []]));
+        items.forEach(item => { if (item.parent !== null) childrenById[item.parent].push(item.id); });
+        const component = {rootId: 0, nodeIds: items.map(item => item.id), parentById, childrenById};
+        return {joints: items.map(item => ({jointId: item.id, restCenter: item.point})),
+          components: [component], componentByJointId: new Map(items.map(item => [item.id, 0])),
+          centerByJointId: points, jointPivotByJointId: points,
+          restContinuationChildByJointId: new Map(items.filter(item => item.child !== null)
+            .map(item => [item.id, item.child]))};
+      };
+      const arm = [
+        {id: 0, parent: null, child: 1, point: [0, 1, 0]},
+        {id: 1, parent: 0, child: 2, point: [-.6, 1.5, 0]},
+        {id: 2, parent: 1, child: 3, point: [-1.1, 1.3, 0]},
+        {id: 3, parent: 2, child: null, point: [-1.5, 1.1, 0]},
+        {id: 4, parent: 0, child: 5, point: [.6, 1.5, 0]},
+        {id: 5, parent: 4, child: 6, point: [1.1, 1.3, 0]},
+        {id: 6, parent: 5, child: null, point: [1.5, 1.1, 0]},
+      ];
+      const complete = suggestHumanoidLimbMappings({rig: makeRig(arm),
+        characterForward: [0, 0, 1]});
+      const missing = suggestHumanoidLimbMappings({
+        rig: makeRig(arm.filter(item => item.id < 4)), characterForward: [0, 0, 1]});
+      const duplicate = arm.concat([
+        {id: 7, parent: 0, child: 8, point: [-.6, 1.5, 0]},
+        {id: 8, parent: 7, child: 9, point: [-1.1, 1.3, 0]},
+        {id: 9, parent: 8, child: null, point: [-1.5, 1.1, 0]},
+        {id: 10, parent: 0, child: 11, point: [0, .7, 0]},
+        {id: 11, parent: 10, child: 12, point: [0, .1, 0]},
+        {id: 12, parent: 11, child: null, point: [0, -.5, 0]},
+      ]);
+      const ambiguous = suggestHumanoidLimbMappings({
+        rig: makeRig(duplicate), characterForward: [0, 0, 1]});
+      return {complete: complete.roles, missing: missing.roles,
+        ambiguous: ambiguous.roles};
+    }""")
+    assert result["complete"]["left_arm"]["available"]
+    assert result["complete"]["right_arm"]["available"]
+    assert result["missing"]["right_arm"]["reasons"][0] == "no_bilateral_pair"
+    assert result["ambiguous"]["left_arm"]["reasons"][0] == "ambiguous_pair"
+    assert result["ambiguous"]["right_arm"]["reasons"][0] == "ambiguous_pair"
+
+
 def test_limb_forward_conversion_inverts_non_identity_base_orientation(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
