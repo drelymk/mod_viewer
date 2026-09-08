@@ -302,6 +302,14 @@ of documentation, comments and tests; use portable fixtures instead.
   attachment edges with O(1) Three.js objects. Reconciliation rebuilds on
   source membership/shape changes and resets pose; model structure revisions
   do not change for pose, materials, textures, visibility or model turns.
+- Rig IK is ModelJoint-native semantic limb posing: users persist only stable
+  anchor signatures for the four supported limb roles, rest-frame continuation
+  evidence re-detects helper-inclusive paths, and the solver rotates only the
+  mapped anchor and bend controls. End local rotation, helper local rotations,
+  Physics composition, and pose preset schema remain authoritative elsewhere.
+  Speculative solves use private transforms and one target update commits all
+  changed local quaternions through one batch manual-pose transaction. IK never
+  owns a skeleton, deformation path, IK Physics state, or persisted target.
 - Joint selection is independent from pose state: Clear removes the selected
   ModelJoint through the state API, leaving
   manual pose, presets, Weight selection, Physics and overlay visibility

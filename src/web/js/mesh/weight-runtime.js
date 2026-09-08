@@ -2,6 +2,9 @@
 
 export const EMPTY_ACTIVE_VERTICES = new Uint32Array();
 export const RIG_ROTATION_SNAP_DEGREES = Object.freeze([0, 5, 15, 30]);
+export const RIG_LIMB_ROLES = Object.freeze([
+  'left_arm', 'right_arm', 'left_leg', 'right_leg',
+]);
 
 function createModelRigDefaults() {
   return {
@@ -9,8 +12,7 @@ function createModelRigDefaults() {
     loading: false,
     promise: null,
     error: null,
-    visible: false,
-    picking: false,
+    jointPickIntent: null,
     selectedJointId: null,
     structureRevision: 0,
     pickStatus: '',
@@ -24,7 +26,8 @@ function createModelRigDefaults() {
     rigAttachmentCount: 0,
     rigAmbiguousCount: 0,
     rotationSnapDegrees: 0,
-    overlayScope: 'selection',
+    ikEnabled: false,
+    activeLimbRole: 'left_arm',
     explicitRootSignatures: new Set(),
   };
 }
@@ -35,6 +38,7 @@ function createRigPresetDefaults() {
     loading: false,
     error: null,
     presets: [],
+    limbMappings: {},
     selectedPresetId: null,
     lastApplyResult: null,
   };

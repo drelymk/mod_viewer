@@ -1001,6 +1001,9 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const experiment = await import('./js/mesh/weight-experiment.js');
+          const initialIkHint = document.querySelector('.rig-panel-enable-ik')
+            ?.closest('.rig-advanced-group')?.querySelector('.rig-hint')
+            ?.textContent;
           const source = experiment.getModelRigDebugState().sources[0];
           const component = source.components[0];
           const presetSelect = document.querySelector('.rig-preset-select');
@@ -1010,8 +1013,8 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             document.querySelector('.rig-bone-select')?.value;
           const initialJointSelectText = document.querySelector(
             '.rig-bone-select option')?.textContent;
-          const initialShowAll = document.querySelector(
-            '.rig-panel-show-all')?.checked;
+          const removedOverlayUi = !document.querySelector(
+            '.rig-show-inferred, .rig-panel-show-all');
           const jointSearchAbsent = !document.querySelector('.rig-joint-search');
           const allJointOptions = [...document.querySelector(
             '.rig-bone-select').options].map(option => option.textContent);
@@ -1041,13 +1044,21 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           };
           const rigSection = document.querySelector('.rig-bone-select')
             .closest('.weight-rig-section');
+          const weightSection = document.querySelector('.weight-bone-select')
+            .closest('.weight-rig-section');
+          const weightOrder = [
+            '.weight-bone-select', '.weight-pick-model',
+            '.weight-selection-actions',
+          ].map(selector => weightSection.querySelector(selector));
+          const weightOrderIndexes = weightOrder.map(node =>
+            [...weightSection.children].indexOf(node));
           const rigAdvanced = rigSection?.nextElementSibling;
           const advancedGroups = [...rigAdvanced.querySelectorAll(
             ':scope > .weight-rig-advanced-content > .rig-advanced-group')]
             .map(group => group.querySelector('.weight-rig-advanced-title')
               ?.textContent);
           const primaryOrder = [
-            '.rig-bone-select', '.rig-show-inferred', '.rig-joint-actions',
+            '.rig-bone-select', '.rig-pick-joint', '.rig-joint-actions',
             '.rig-preset-select', '.rig-preset-actions',
           ].map(selector => {
             const node = rigSection.querySelector(selector);
@@ -1145,8 +1156,7 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           const partialApply = applyFromPanel(partialPreset.id);
           const partialPose = partialApply.state.model.poseJointIds;
           experiment.selectRigJoint(poseJointId);
-          experiment.setRigOverlayScope('all');
-          const partialAfterNotifications = presetStatus();
+           const partialAfterNotifications = presetStatus();
           const fullApply = applyFromPanel(savedPreset.id);
           const afterPreset = fullApply.state;
           const fullPose = [...afterPreset.model.poseJointIds];
@@ -1167,8 +1177,25 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             jointSearchAbsent,
             allJointOptions,
             jointActionsLayout,
-            advancedGroups,
-            primaryOrderIndexes,
+             advancedGroups,
+             rigAdvancedSummary: rigAdvanced?.querySelector('summary')?.textContent,
+            ikControl: {
+              present: !!document.querySelector('.rig-panel-enable-ik'),
+              disabled: document.querySelector('.rig-panel-enable-ik')?.disabled,
+              limbSelectorPresent: !!document.querySelector('.rig-limb-select'),
+              setAnchorAbsent: !document.querySelector('.rig-set-limb-anchor'),
+              redetectAbsent: !document.querySelector('.rig-redetect-limb'),
+              limbActionLabels: [...document.querySelectorAll(
+                '.rig-limb-actions button')].map(button => button.textContent),
+              chainLengthAbsent: !document.querySelector('.rig-chain-length'),
+               detectedPathPresent: !!document.querySelector('.rig-chain-preview'),
+                hint: initialIkHint,
+             },
+             removedOverlayUi,
+             obsoleteReadoutsRemoved: !document.querySelector(
+              '.rig-readout-title, .rig-nav-row, .rig-nav-button'),
+             primaryOrderIndexes,
+             weightOrderIndexes,
             presetDisabled: initialPresetDisabled,
             applyButtonCount: document.querySelectorAll(
               '.rig-apply-preset').length,
@@ -1183,7 +1210,6 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
                 presetActionsLayout,
             jointSelectValue: initialJointSelectValue,
             jointSelectText: initialJointSelectText,
-            initialShowAll,
             clear,
             clearPresetId,
             clearSelectedJointId: afterClear.selectedJointId,
@@ -1245,9 +1271,22 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             "clearDisabled": True, "resetJointDisabled": True,
             "resetPoseDisabled": False,
         }
-        assert result["advancedGroups"] == ["Display", "Transform", "Hierarchy"]
+        assert result["advancedGroups"] == [
+            "Limb IK", "Manual Rotation", "Rig Structure"]
+        assert result["rigAdvancedSummary"] == "Rig Advanced Settings"
+        assert result["ikControl"] == {
+            "present": True, "disabled": True,
+            "limbSelectorPresent": True, "setAnchorAbsent": True,
+            "redetectAbsent": True, "limbActionLabels": ["Clear"],
+            "chainLengthAbsent": True, "detectedPathPresent": True,
+            "hint": "Pick the Shoulder joint to configure this limb.",
+        }
+        assert result["obsoleteReadoutsRemoved"]
+        assert result["removedOverlayUi"]
         assert result["primaryOrderIndexes"] == sorted(
             result["primaryOrderIndexes"])
+        assert result["weightOrderIndexes"] == sorted(
+            result["weightOrderIndexes"])
         assert not result["weightActionsInsideAdvanced"]
         assert not result["rigActionsInsideAdvanced"]
         assert result["savePresetText"] == "Save"
@@ -1257,7 +1296,6 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["deletePresetDisabled"] is True
         assert result["jointSelectValue"] == ""
         assert result["jointSelectText"] == "Select a joint"
-        assert result["initialShowAll"] is False
         assert result["weightBefore"] == []
         assert result["posed"]
         assert result["boundsDuringDrag"] == {"boundsCalls": 0, "sphereCalls": 0}
@@ -1291,7 +1329,7 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert "Applied 1 joint rotation" in result["fullMessage"]
         assert "Could not apply this pose" in result["noMatchMessage"]
         assert result["noMatchPosePreserved"]
-        assert result["presetApplyEvents"] >= 5
+        assert result["presetApplyEvents"] >= 4
         assert result["resetAfterPreset"]
         assert result["resetAfterPresetJointId"] == result["resetSelectedJointId"]
         assert result["resetAfterPresetPose"] == []
@@ -1397,16 +1435,17 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             finishRigJointPose: experiment.finishRigJointPose,
             requestRender: () => {},
           });
-          experiment.setRigVisible(false);
-          controller.refresh(experiment.getModelRigState());
-          const gizmoNoSelection = controller.getDebugState();
+           controller.refresh(experiment.getModelRigState());
+           const gizmoNoSelection = controller.getDebugState();
           experiment.selectRigJoint(jointA);
           const modelControls = await controller.ensureTransformControls();
           const gizmoOff = controller.getDebugState();
-          experiment.setRigVisible(true);
-          const gizmoOn = controller.getDebugState();
-          experiment.setRigVisible(false);
-          const gizmoOffAgain = controller.getDebugState();
+           experiment.beginRigJointPicking({type: 'selected-joint'});
+           controller.refresh(experiment.getModelRigState());
+           const gizmoOn = controller.getDebugState();
+           experiment.cancelRigJointPicking();
+           controller.refresh(experiment.getModelRigState());
+           const gizmoOffAgain = controller.getDebugState();
           const q = new THREE.Quaternion().setFromAxisAngle(
             new THREE.Vector3(0, 0, 1), Math.PI / 2);
           experiment.selectRigJoint(jointA);
@@ -1414,8 +1453,7 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
             jointA, q, {dragging: true});
           const after = window.modViewer.activeMeshes.map(mesh =>
             [...mesh.geometry.attributes.position.array]);
-          experiment.setRigVisible(true);
-          experiment.setSelectedBones([{
+           experiment.setSelectedBones([{
             sourceKey: sourceA.sourceKey,
             sourceFile: sourceA.sourceFile,
             boneIdOffset: sourceA.boneIdOffset,
@@ -1482,7 +1520,8 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         assert result["gizmoOff"]["proxyVisible"]
         assert result["gizmoOff"]["controlsAttached"]
         assert result["gizmoOn"]["staticVisible"]
-        assert result["gizmoOn"]["proxyVisible"]
+        assert not result["gizmoOn"]["proxyVisible"]
+        assert not result["gizmoOn"]["controlsAttached"]
         assert result["gizmoOn"]["controlsCreateCount"] == \
             result["gizmoOff"]["controlsCreateCount"]
         assert not result["gizmoOffAgain"]["staticVisible"]
@@ -2014,9 +2053,8 @@ def test_rig_overlay_real_controls_deform_without_proxy_feedback(
           let debug = experiment.getModelRigDebugState();
           let source = debug.sources[0];
           const sourceKey = source.sourceKey;
-          const jointId = boneId => Number(source.modelJointIds[boneId]);
-          experiment.setRigJointRoot(jointId(0));
-          experiment.setRigVisible(true);
+           const jointId = boneId => Number(source.modelJointIds[boneId]);
+           experiment.setRigJointRoot(jointId(0));
           debug = experiment.getModelRigDebugState();
           source = debug.sources.find(item =>
             item.sourceKey === sourceKey);
@@ -3155,10 +3193,18 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         }""")
         page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
+        page.wait_for_function("window.modViewer.getModelRigState().loaded")
+        selected_joint_before = page.evaluate("""async () => {
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const id = experiment.getModelRigState().model.joints[0].jointId;
+          experiment.selectRigJoint(id);
+          return experiment.getModelRigState().selectedJointId;
+        }""")
         page.locator(".weight-bone-select").click()
         page.locator('.weight-bone-option input[value="1"]').check()
         page.wait_for_function(
             "window.modViewer.getModelWeightState().selectedBoneCount === 1")
+        page.locator(".weight-bone-select").click()
         page.locator(".weight-pick-model").click()
         assert page.locator(".weight-bone-popover").is_hidden()
         assert page.locator(".weight-pick-model").get_attribute("aria-pressed") == "true"
@@ -3177,6 +3223,28 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
             y: rect.top + (1 - projected.y) * rect.height / 2,
           };
         }""")
+        surface_sample = page.evaluate("""async point => {
+          const {camera, renderer} = await import('./js/scene/scene.js');
+          const {raycastModelAtClientPoint} = await import(
+            './js/scene/model-picking.js');
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const before = experiment.getModelWeightState().pickedPoint;
+          const intersection = raycastModelAtClientPoint({
+            clientX: point.x, clientY: point.y,
+            canvas: renderer.domElement, camera,
+            meshes: window.modViewer.activeMeshes,
+          });
+          const sampled = experiment.sampleModelSkinningAtIntersection(intersection);
+          const resolved = experiment.modelJointFromSkinningSample(sampled);
+          const after = experiment.getModelWeightState().pickedPoint;
+          return {sampled, resolved, unchanged: before === after};
+        }""", point)
+        assert surface_sample["sampled"]["sourceKey"] == (
+            "test/bodyblend.buf|offset=0")
+        assert isinstance(surface_sample["resolved"]["jointId"], int)
+        assert isinstance(surface_sample["resolved"]["boneId"], int)
+        assert surface_sample["sampled"]["influences"]
+        assert surface_sample["unchanged"]
         page.mouse.click(point["x"], point["y"])
         page.wait_for_function(
             "window.modViewer.getModelWeightState().pickerViewMode === 'picked'")
@@ -3210,7 +3278,7 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         }]
         assert result["picked"]["sourceKey"] == "test/bodyblend.buf|offset=0"
         assert result["picked"]["influences"]
-        assert isinstance(result["selectedJointId"], int)
+        assert result["selectedJointId"] == selected_joint_before
         assert result["mode"] == "picked"
         assert result["rows"]
         assert result["cursor"] in ("auto", "")
@@ -3222,6 +3290,7 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         assert result["scrollTop"] == 0
 
         previous_pick = result["picked"]
+        page.locator(".weight-bone-select").click()
         page.locator(".weight-pick-model").click()
         page.keyboard.press("Escape")
         page.wait_for_function(

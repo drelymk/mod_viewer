@@ -4,6 +4,12 @@
 
 import * as THREE from 'three/webgpu';
 
+const PICK_ACQUIRE_RADIUS = 9;
+const PICK_RELEASE_RADIUS = 13;
+const PICK_SWITCH_MARGIN = 3;
+const PICK_CLICK_RADIUS = 15;
+const PICK_CLICK_THRESHOLD = 4;
+
 function vector(value) {
   if (value?.isVector3) return value.clone();
   return new THREE.Vector3(
@@ -29,36 +35,12 @@ function componentFor(source, boneId) {
     component.nodeIds.includes(boneId)) || null;
 }
 
-function selectedOverlayId(source, snapshot) {
-  return source?.joints ? selectedBoneFor(snapshot) : null;
+function overlayNodeIds(source) {
+  return new Set((source?.joints || []).map(joint => Number(joint.jointId)));
 }
 
-function overlayNodeIds(source, snapshot) {
-  const allIds = (source?.joints || []).map(joint => Number(joint.jointId));
-  if (snapshot?.overlayScope !== 'selection') return new Set(allIds);
-  const selected = selectedOverlayId(source, snapshot);
-  const component = componentFor(source, selected);
-  if (!component || !Number.isInteger(selected)) return new Set(allIds);
-  const ids = new Set([selected]);
-  let current = selected;
-  while (component.parentById?.[current] !== null
-      && component.parentById?.[current] !== undefined) {
-    current = Number(component.parentById[current]);
-    if (!Number.isInteger(current)) break;
-    ids.add(current);
-  }
-  (component.childrenById?.[selected] || []).forEach(child => {
-    const id = Number(child);
-    if (Number.isInteger(id)) ids.add(id);
-  });
-  return ids;
-}
-
-function overlayPresentationKey(snapshot, source) {
-  const scope = snapshot?.overlayScope === 'selection' ? 'selection' : 'all';
-  const selected = scope === 'selection'
-    ? selectedOverlayId(source, snapshot) : '';
-  return `${topologyKey(source)}|overlay=${scope}:${selected ?? ''}`;
+function overlayPresentationKey(source) {
+  return topologyKey(source);
 }
 
 function pivotFor(source, boneId) {
@@ -80,18 +62,83 @@ function topologyKey(source) {
   return JSON.stringify([source.key, source.structureRevision]);
 }
 
-function canPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
-  if (snapshot?.picking || !source || boneId === null) {
+function canvasRect(canvas) {
+  const rect = canvas?.getBoundingClientRect?.();
+  if (!rect) return null;
+  const width = Number(rect.width) || Number(canvas.clientWidth) || 0;
+  const height = Number(rect.height) || Number(canvas.clientHeight) || 0;
+  return {...rect, width, height};
+}
+
+export function projectRigPointToClient({point, camera, canvas, worldMatrix} = {}) {
+  const rect = canvasRect(canvas);
+  const value = vector(point);
+  if (!rect || rect.width <= 0 || rect.height <= 0
+      || !camera || !Number.isFinite(value.lengthSq())) return null;
+  if (worldMatrix?.isMatrix4) value.applyMatrix4(worldMatrix);
+  const projected = value.project(camera);
+  if (![projected.x, projected.y, projected.z].every(Number.isFinite)
+      || projected.z < -1 || projected.z > 1) return null;
+  return {
+    x: rect.left + (projected.x + 1) * rect.width * 0.5,
+    y: rect.top + (1 - projected.y) * rect.height * 0.5,
+    depth: projected.z,
+  };
+}
+
+export function findNearestRigJoint({candidates = [], pointer, camera, canvas,
+    worldMatrix, hitRadius = 14} = {}) {
+  const x = Number(pointer?.x ?? pointer?.clientX);
+  const y = Number(pointer?.y ?? pointer?.clientY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const found = candidates.flatMap(candidate => {
+    const jointId = Number(candidate?.jointId);
+    const screen = projectRigPointToClient({
+      point: candidate?.pivot, camera, canvas, worldMatrix,
+    });
+    if (!Number.isInteger(jointId) || !screen) return [];
+    const distance = Math.hypot(screen.x - x, screen.y - y);
+    return distance <= hitRadius ? [{...candidate, jointId, screen, distance}] : [];
+  }).sort((left, right) => left.distance - right.distance
+    || left.screen.depth - right.screen.depth
+    || left.jointId - right.jointId);
+  if (!found.length) return null;
+  return {jointId: found[0].jointId, distance: found[0].distance,
+    screen: found[0].screen, candidates: found};
+}
+
+function canFkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
+  if (snapshot?.jointPickIntent || !source
+      || boneId === null) {
     return false;
   }
   const component = componentFor(source, boneId);
   return !!component && component.rootId !== boneId;
 }
 
+function canIkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
+  if (snapshot?.jointPickIntent || !source
+      || boneId === null) return false;
+  const ik = snapshot?.ik;
+  return !!ik?.enabled && !!ik.available
+    && Number(ik.endJointId) === Number(boneId);
+}
+
+function manipulationMode(snapshot, source, boneId = selectedBoneFor(snapshot)) {
+  if (canIkPose(snapshot, source, boneId)) return 'ik';
+  if (snapshot?.ik?.enabled) return null;
+  return canFkPose(snapshot, source, boneId) ? 'fk' : null;
+}
+
 let rigTransformInteractionActive = false;
+let rigJointPickingActive = false;
 
 export function isRigTransformInteractionActive() {
   return rigTransformInteractionActive;
+}
+
+export function isRigJointPickingActive() {
+  return rigJointPickingActive;
 }
 
 function setGeometry(object, positions, colors = null) {
@@ -119,7 +166,8 @@ function centerColor(component, jointId, selectedJointId) {
 export function createRigOverlayController({
   scene, camera, canvas, getMeshes, getRigState,
   getRigJointPoseFrame, arcballControls, setRigJointRotation,
-  finishRigJointPose, onTransformControlsUnavailable,
+  solveRigIkTarget, finishRigJointPose, onTransformControlsUnavailable,
+  onRigJointPicked, onRigSurfacePickRequested, onRigJointPickCancelled,
   requestRender,
 } = {}) {
   const selectedIdFor = snapshot => selectedBoneFor(snapshot);
@@ -153,16 +201,28 @@ export function createRigOverlayController({
     new THREE.BufferGeometry(), centerMaterial);
   const jointPoints = new THREE.Points(
     new THREE.BufferGeometry(), jointMaterial);
+  const hoverMaterial = new THREE.PointsMaterial({
+    color: 0xfacc15, size: 0.06, sizeAttenuation: false,
+    depthTest: false, depthWrite: false,
+  });
+  const hoverPoint = new THREE.Points(
+    new THREE.BufferGeometry(), hoverMaterial);
+  const hoverPosition = new THREE.Float32BufferAttribute([0, 0, 0], 3);
+  hoverPosition.setUsage?.(THREE.DynamicDrawUsage);
+  hoverPoint.geometry.setAttribute('position', hoverPosition);
+  hoverPoint.visible = false;
   lineSegments.renderOrder = 10;
   centerPoints.renderOrder = 11;
   jointPoints.renderOrder = 12;
   lineSegments.frustumCulled = false;
   centerPoints.frustumCulled = false;
   jointPoints.frustumCulled = false;
+  hoverPoint.frustumCulled = false;
   lineSegments.raycast = () => {};
   centerPoints.raycast = () => {};
   jointPoints.raycast = () => {};
-  staticGroup.add(lineSegments, centerPoints, jointPoints);
+  hoverPoint.raycast = () => {};
+  staticGroup.add(lineSegments, centerPoints, jointPoints, hoverPoint);
   group.add(staticGroup);
 
   const proxy = new THREE.Object3D();
@@ -174,6 +234,17 @@ export function createRigOverlayController({
   proxyRing.raycast = () => {};
   proxy.add(proxyRing);
   group.add(proxy);
+
+  const ikTargetProxy = new THREE.Object3D();
+  ikTargetProxy.name = 'viewer-inferred-rig-ik-target';
+  ikTargetProxy.userData.isViewerRigOverlay = true;
+  const ikTargetMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(0.045, 12, 8), selectedMaterial);
+  ikTargetMarker.name = 'viewer-inferred-rig-ik-target-marker';
+  ikTargetMarker.raycast = () => {};
+  ikTargetProxy.add(ikTargetMarker);
+  ikTargetProxy.visible = false;
+  group.add(ikTargetProxy);
 
   let transformControls = null;
   let transformHelper = null;
@@ -197,7 +268,24 @@ export function createRigOverlayController({
   let dragParentRotation = null;
   let dragRestRotation = null;
   let dragJointId = null;
+  let dragMode = null;
+  let hoveredJointId = null;
+  let hoveredScreen = null;
+  let pickPointer = null;
+  let pickCandidateCache = [];
+  let pickCandidateCount = 0;
+  let lastPickClientPoint = null;
+  let suppressContextMenu = false;
+  let pickLabel = null;
   let disposed = false;
+
+  if (typeof document !== 'undefined' && canvas?.parentElement) {
+    pickLabel = document.createElement('div');
+    pickLabel.className = 'rig-joint-pick-label';
+    pickLabel.hidden = true;
+    pickLabel.setAttribute('aria-hidden', 'true');
+    canvas.parentElement.appendChild(pickLabel);
+  }
 
   function setArcballDragState(dragging) {
     if (!arcballControls) return;
@@ -220,6 +308,7 @@ export function createRigOverlayController({
     dragParentRotation = null;
     dragRestRotation = null;
     dragJointId = null;
+    dragMode = null;
     rigTransformInteractionActive = false;
   }
 
@@ -250,7 +339,7 @@ export function createRigOverlayController({
   }
 
   function rebuildOverlay(source) {
-    const visibleIds = overlayNodeIds(source, currentSnapshot);
+    const visibleIds = overlayNodeIds(source);
     const modelNodes = (source?.joints || []).map(joint => [
       Number(joint.jointId), joint.restCenter,
     ]).filter(([boneId]) => visibleIds.has(boneId));
@@ -349,26 +438,244 @@ export function createRigOverlayController({
     posedOverlayUpdateCount += 1;
   }
 
+  function buildPickCandidates() {
+    return (currentSource?.joints || []).map(joint => {
+      const jointId = Number(joint.jointId);
+      const frame = getRigJointPoseFrame?.(jointId);
+      return {
+        jointId,
+        pivot: frame?.pivot || joint.restPivot || joint.restCenter,
+      };
+    }).filter(candidate => Number.isInteger(candidate.jointId)
+      && candidate.pivot);
+  }
+
+  function refreshPickCandidates() {
+    if (!currentSnapshot?.jointPickIntent || !currentSource) {
+      pickCandidateCache = [];
+      clearPickHover();
+      return;
+    }
+    pickCandidateCache = buildPickCandidates();
+    if (lastPickClientPoint) {
+      updatePickHoverAt(lastPickClientPoint.x, lastPickClientPoint.y);
+    }
+  }
+
+  function updatePickLabel() {
+    if (!pickLabel) return;
+    if (hoveredJointId === null || !hoveredScreen) {
+      pickLabel.hidden = true;
+      return;
+    }
+    const hostRect = canvas?.parentElement?.getBoundingClientRect?.();
+    if (!hostRect) {
+      pickLabel.hidden = true;
+      return;
+    }
+    pickLabel.textContent = `Joint ${hoveredJointId}`;
+    pickLabel.style.left = `${hoveredScreen.x - hostRect.left + 8}px`;
+    pickLabel.style.top = `${hoveredScreen.y - hostRect.top - 10}px`;
+    pickLabel.hidden = false;
+  }
+
+  function clearPickHover() {
+    hoveredJointId = null;
+    hoveredScreen = null;
+    pickCandidateCount = 0;
+    hoverPoint.visible = false;
+    updatePickLabel();
+  }
+
+  function setPickCursor(value = '') {
+    if (canvas?.style) canvas.style.cursor = value;
+  }
+
+  function showPickHover(candidate, candidateCount) {
+    if (!candidate) {
+      clearPickHover();
+      return;
+    }
+    hoveredJointId = candidate.jointId;
+    hoveredScreen = candidate.screen;
+    pickCandidateCount = candidateCount;
+    const value = vector(candidate.pivot);
+    const attribute = hoverPoint.geometry.getAttribute('position');
+    attribute?.setXYZ(0, value.x, value.y, value.z);
+    if (attribute) attribute.needsUpdate = true;
+    hoverPoint.visible = true;
+    updatePickLabel();
+  }
+
+  function nearestPickCandidate(clientX, clientY, hitRadius) {
+    group.updateMatrixWorld?.(true);
+    return findNearestRigJoint({
+      candidates: pickCandidateCache,
+      pointer: {x: clientX, y: clientY},
+      camera,
+      canvas,
+      worldMatrix: group.matrixWorld,
+      hitRadius,
+    });
+  }
+
+  function updatePickHoverAt(clientX, clientY) {
+    if (!currentSnapshot?.jointPickIntent || !currentSource) {
+      clearPickHover();
+      return null;
+    }
+    const nearest = nearestPickCandidate(
+      clientX, clientY, PICK_RELEASE_RADIUS);
+    let selected = null;
+    if (hoveredJointId !== null) {
+      const current = nearest?.candidates?.find(candidate =>
+        candidate.jointId === hoveredJointId);
+      if (current) {
+        const replacement = nearest.jointId !== hoveredJointId
+          && nearest.distance <= current.distance - PICK_SWITCH_MARGIN
+          ? nearest.candidates[0] : current;
+        selected = replacement;
+      } else if (nearest && nearest.distance <= PICK_ACQUIRE_RADIUS) {
+        selected = nearest.candidates[0];
+      }
+    } else if (nearest && nearest.distance <= PICK_ACQUIRE_RADIUS) {
+      selected = nearest.candidates[0];
+    }
+    showPickHover(selected, nearest?.candidates?.length || 0);
+    setPickCursor(selected ? 'pointer' : 'crosshair');
+    requestRender?.();
+    return selected;
+  }
+
+  function updatePickHover(event) {
+    lastPickClientPoint = {x: event.clientX, y: event.clientY};
+    const selected = updatePickHoverAt(event.clientX, event.clientY);
+    if (currentSnapshot?.jointPickIntent && event.altKey) setPickCursor('grab');
+    return selected;
+  }
+
+  function onPickPointerMove(event) {
+    if (!currentSnapshot?.jointPickIntent) return;
+    if (event.altKey) {
+      clearPickHover();
+      setPickCursor('grab');
+      return;
+    }
+    updatePickHover(event);
+  }
+
+  function onPickPointerDown(event) {
+    if (!currentSnapshot?.jointPickIntent) return;
+    if (event.button === 2) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      suppressContextMenu = true;
+      onRigJointPickCancelled?.();
+      return;
+    }
+    if (event.button !== 0 || event.altKey) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    pickPointer = {id: event.pointerId, x: event.clientX, y: event.clientY};
+    try { canvas?.setPointerCapture?.(event.pointerId); } catch { /* best effort */ }
+  }
+
+  function onPickPointerUp(event) {
+    if (!currentSnapshot?.jointPickIntent || event.button !== 0 || !pickPointer) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const start = pickPointer;
+    pickPointer = null;
+    if (start.id !== undefined && canvas?.hasPointerCapture?.(start.id)) {
+      try { canvas.releasePointerCapture(start.id); } catch { /* best effort */ }
+    }
+    if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y)
+        >= PICK_CLICK_THRESHOLD) return;
+    const nearest = nearestPickCandidate(
+      event.clientX, event.clientY, PICK_CLICK_RADIUS);
+    if (nearest) {
+      onRigJointPicked?.(nearest.jointId, currentSnapshot.jointPickIntent);
+      return;
+    }
+    onRigSurfacePickRequested?.({
+      clientX: event.clientX, clientY: event.clientY,
+    }, currentSnapshot.jointPickIntent);
+  }
+
+  function onPickPointerCancel(event) {
+    if (pickPointer && event?.pointerId !== undefined
+        && event.pointerId !== pickPointer.id) return;
+    pickPointer = null;
+    setPickCursor('crosshair');
+  }
+
+  function onPickContextMenu(event) {
+    if (suppressContextMenu) {
+      suppressContextMenu = false;
+      event.preventDefault();
+      return;
+    }
+    if (!currentSnapshot?.jointPickIntent) return;
+    event.preventDefault();
+    onRigJointPickCancelled?.();
+  }
+
+  function onPickKeyDown(event) {
+    if (currentSnapshot?.jointPickIntent && event.key === 'Alt') {
+      clearPickHover();
+      setPickCursor('grab');
+      return;
+    }
+    if (currentSnapshot?.jointPickIntent && event.key === 'Escape') {
+      event.preventDefault();
+      onRigJointPickCancelled?.();
+    }
+  }
+
+  function onPickKeyUp(event) {
+    if (currentSnapshot?.jointPickIntent && event.key === 'Alt') {
+      if (lastPickClientPoint) {
+        updatePickHoverAt(lastPickClientPoint.x, lastPickClientPoint.y);
+      } else setPickCursor('crosshair');
+    }
+  }
+
   function updateProxy(source = currentSource, snapshot = currentSnapshot) {
     const boneId = selectedIdFor(snapshot);
     selectedJointId = boneId;
-    if (!canPose(snapshot, source, boneId)) {
+    const mode = manipulationMode(snapshot, source, boneId);
+    if (!mode) {
       detachControls();
       proxy.visible = false;
+      ikTargetProxy.visible = false;
       return;
     }
     if (poseDragActive && boneId === dragBoneId) {
-      proxy.visible = true;
+      proxy.visible = mode === 'fk';
+      ikTargetProxy.visible = mode === 'ik';
       return;
     }
     const poseFrame = getRigJointPoseFrame?.(boneId);
     const pivot = poseFrame?.pivot || pivotFor(source, boneId);
+    if (mode === 'ik') {
+      if (pivot) ikTargetProxy.position.copy(vector(pivot));
+      proxy.visible = false;
+      ikTargetProxy.visible = true;
+      transformControls?.setMode?.('translate');
+      transformControls?.setSpace?.('world');
+      transformControls?.attach?.(ikTargetProxy);
+      transformControls?.update?.();
+      return;
+    }
     if (pivot) proxy.position.copy(vector(pivot));
     const values = poseFrame?.gizmoRotation || poseFrame?.boneRotation
       || quaternionFor(source, boneId);
     if (values) proxy.quaternion.set(...values).normalize();
     else proxy.quaternion.identity();
     proxy.visible = true;
+    ikTargetProxy.visible = false;
+    transformControls?.setMode?.('rotate');
+    transformControls?.setSpace?.('local');
     if (transformControls) {
       transformControls.attach?.(proxy);
       transformControls.update?.();
@@ -377,7 +684,8 @@ export function createRigOverlayController({
 
   function syncRotationSnap(snapshot = currentSnapshot) {
     const degrees = Number(snapshot?.rotationSnapDegrees) || 0;
-    const radians = degrees > 0 ? THREE.MathUtils.degToRad(degrees) : null;
+    const radians = snapshot?.ik?.enabled
+      ? null : degrees > 0 ? THREE.MathUtils.degToRad(degrees) : null;
     transformControls?.setRotationSnap?.(radians);
   }
 
@@ -386,6 +694,7 @@ export function createRigOverlayController({
     const id = Number(detail?.jointId);
     if (!Number.isInteger(id)) return;
     updatePosedOverlay(currentSource);
+    if (currentSnapshot?.jointPickIntent) refreshPickCandidates();
     if (poseDragActive && id === dragBoneId) {
       // TransformControls owns the proxy until the gesture ends. The model
       // still updates from every pose event, but its canonical state must not
@@ -394,25 +703,40 @@ export function createRigOverlayController({
     }
     selectedJointId = id;
     const poseFrame = getRigJointPoseFrame?.(id);
-    if (poseFrame?.gizmoRotation?.length === 4) {
-      proxy.position.copy(vector(poseFrame.pivot));
-      proxy.quaternion.set(...poseFrame.gizmoRotation).normalize();
-    } else if (poseFrame?.boneRotation?.length === 4) {
-      proxy.position.copy(vector(poseFrame.pivot));
-      proxy.quaternion.set(...poseFrame.boneRotation).normalize();
-    } else if (detail.quaternion?.length === 4) {
-      proxy.quaternion.set(...detail.quaternion).normalize();
-    }
-    proxy.visible = canPose(currentSnapshot, currentSource, id);
-    if (!proxy.visible) detachControls();
-    else {
+    const mode = manipulationMode(currentSnapshot, currentSource, id);
+    if (mode === 'ik') {
+      if (poseFrame?.pivot) ikTargetProxy.position.copy(vector(poseFrame.pivot));
+      proxy.visible = false;
+      ikTargetProxy.visible = true;
+      transformControls?.setMode?.('translate');
+      transformControls?.setSpace?.('world');
+      transformControls?.attach?.(ikTargetProxy);
+      transformControls?.update?.();
+    } else if (mode === 'fk') {
+      if (poseFrame?.gizmoRotation?.length === 4) {
+        proxy.position.copy(vector(poseFrame.pivot));
+        proxy.quaternion.set(...poseFrame.gizmoRotation).normalize();
+      } else if (poseFrame?.boneRotation?.length === 4) {
+        proxy.position.copy(vector(poseFrame.pivot));
+        proxy.quaternion.set(...poseFrame.boneRotation).normalize();
+      } else if (detail.quaternion?.length === 4) {
+        proxy.quaternion.set(...detail.quaternion).normalize();
+      }
+      proxy.visible = true;
+      ikTargetProxy.visible = false;
+      transformControls?.setMode?.('rotate');
+      transformControls?.setSpace?.('local');
       transformControls?.attach?.(proxy);
       transformControls?.update?.();
+    } else {
+      detachControls();
+      proxy.visible = false;
+      ikTargetProxy.visible = false;
     }
   }
 
   async function ensureTransformControls() {
-    if (!canPose(currentSnapshot, currentSource,
+    if (!manipulationMode(currentSnapshot, currentSource,
       selectedIdFor(currentSnapshot))) return null;
     if (transformControlsReady) return transformControlsReady;
     transformControlsReady = import('three/addons/controls/TransformControls.js')
@@ -423,8 +747,10 @@ export function createRigOverlayController({
         transformHelper.userData.isViewerRigTransformHelper = true;
         scene?.add(transformHelper);
         controlsCreateCount += 1;
-        transformControls.setMode?.('rotate');
-        transformControls.setSpace?.('local');
+        const initialMode = manipulationMode(
+          currentSnapshot, currentSource, selectedIdFor(currentSnapshot));
+        transformControls.setMode?.(initialMode === 'ik' ? 'translate' : 'rotate');
+        transformControls.setSpace?.(initialMode === 'ik' ? 'world' : 'local');
         transformControls.addEventListener?.('mouseUp', () => {
           queueMicrotask(() => {
             rigTransformInteractionActive = false;
@@ -437,6 +763,10 @@ export function createRigOverlayController({
           if (!poseDragActive) return;
           const boneId = dragBoneId;
           if (boneId === null) return;
+          if (dragMode === 'ik') {
+            solveRigIkTarget?.(ikTargetProxy.position.toArray(), {dragging: true});
+            return;
+          }
           let localRotation = proxy.quaternion.clone();
           if (dragParentRotation) {
             localRotation = dragParentRotation.clone().invert()
@@ -456,19 +786,26 @@ export function createRigOverlayController({
           if (event.value) {
             const source = currentSource;
             const boneId = selectedIdFor(currentSnapshot);
-            if (!canPose(currentSnapshot, source, boneId)) return;
+            const mode = manipulationMode(currentSnapshot, source, boneId);
+            if (!mode) return;
             poseDragActive = true;
             dragBoneId = boneId;
             dragJointId = boneId;
-            const modelPoseFrame = getRigJointPoseFrame?.(dragJointId);
-            dragParentRotation = modelPoseFrame?.parentRotation?.length === 4
-              ? new THREE.Quaternion(
-                ...modelPoseFrame.parentRotation).normalize()
-              : new THREE.Quaternion();
-            dragRestRotation = modelPoseFrame?.restRotation?.length === 4
-              ? new THREE.Quaternion(
-                ...modelPoseFrame.restRotation).normalize()
-              : new THREE.Quaternion();
+            dragMode = mode;
+            if (mode === 'fk') {
+              const modelPoseFrame = getRigJointPoseFrame?.(dragJointId);
+              dragParentRotation = modelPoseFrame?.parentRotation?.length === 4
+                ? new THREE.Quaternion(
+                  ...modelPoseFrame.parentRotation).normalize()
+                : new THREE.Quaternion();
+              dragRestRotation = modelPoseFrame?.restRotation?.length === 4
+                ? new THREE.Quaternion(
+                  ...modelPoseFrame.restRotation).normalize()
+                : new THREE.Quaternion();
+            } else {
+              dragParentRotation = null;
+              dragRestRotation = null;
+            }
             setArcballDragState(true);
             rigTransformInteractionActive = true;
           } else if (event.value === false) {
@@ -478,6 +815,7 @@ export function createRigOverlayController({
             dragBoneId = null;
             dragParentRotation = null;
             dragRestRotation = null;
+            dragMode = null;
             queueMicrotask(() => {
               rigTransformInteractionActive = false;
             });
@@ -504,22 +842,35 @@ export function createRigOverlayController({
 
   function refresh(snapshot = getRigState?.()) {
     if (disposed) return;
+    const wasJointPicking = rigJointPickingActive;
     currentSnapshot = snapshot || {};
     currentSource = sourceFor(currentSnapshot);
+    rigJointPickingActive = !!currentSnapshot.jointPickIntent;
     selectedJointId = selectedIdFor(currentSnapshot);
-    const nextTopologyKey = overlayPresentationKey(currentSnapshot, currentSource);
+    const nextTopologyKey = overlayPresentationKey(currentSource);
     if (nextTopologyKey !== currentTopologyKey) {
       currentTopologyKey = nextTopologyKey;
       rebuildOverlay(currentSource);
     }
     updateModelFrame();
     group.visible = !!currentSource;
-    staticGroup.visible = !!currentSnapshot.visible && !!currentSource;
+    staticGroup.visible = !!currentSnapshot.jointPickIntent && !!currentSource;
+    if (!currentSnapshot.jointPickIntent) {
+      pickCandidateCache = [];
+      pickPointer = null;
+      lastPickClientPoint = null;
+      clearPickHover();
+      if (wasJointPicking) setPickCursor('');
+    }
     updatePosedOverlay(currentSource);
+    if (currentSnapshot.jointPickIntent) {
+      refreshPickCandidates();
+      if (hoveredJointId === null) setPickCursor('crosshair');
+    }
     updateCenterColors();
     updateProxy(currentSource, currentSnapshot);
     syncRotationSnap(currentSnapshot);
-    if (canPose(currentSnapshot, currentSource,
+    if (manipulationMode(currentSnapshot, currentSource,
       selectedIdFor(currentSnapshot))) {
       void ensureTransformControls();
     }
@@ -530,11 +881,21 @@ export function createRigOverlayController({
   const onPoseChanged = event => updatePoseFromEvent(event.detail);
   const onModelTransformChanged = () => {
     updateModelFrame();
+    if (currentSnapshot?.jointPickIntent && lastPickClientPoint) {
+      updatePickHoverAt(lastPickClientPoint.x, lastPickClientPoint.y);
+    }
     requestRender?.();
   };
   window.addEventListener('mod-viewer-model-rig-changed', onRigChanged);
   window.addEventListener('mod-viewer-model-rig-pose-changed', onPoseChanged);
   window.addEventListener('mod-viewer-model-transform-changed', onModelTransformChanged);
+  canvas?.addEventListener('pointermove', onPickPointerMove, true);
+  canvas?.addEventListener('pointerdown', onPickPointerDown, true);
+  canvas?.addEventListener('pointerup', onPickPointerUp, true);
+  canvas?.addEventListener('pointercancel', onPickPointerCancel, true);
+  canvas?.addEventListener('contextmenu', onPickContextMenu);
+  if (typeof document !== 'undefined') document.addEventListener('keydown', onPickKeyDown);
+  if (typeof document !== 'undefined') document.addEventListener('keyup', onPickKeyUp);
 
   return {
     group,
@@ -553,20 +914,38 @@ export function createRigOverlayController({
         edgeCount: lineSegments.geometry.getAttribute('position')?.count / 2 || 0,
         selectedJointId,
         proxyVisible: proxy.visible,
+        ikTargetVisible: ikTargetProxy.visible,
         controlsCreated: !!transformControls,
         controlsCreateCount,
-        controlsAttached: transformControls?.object === proxy,
+        controlsAttached: transformControls?.object === proxy
+          || transformControls?.object === ikTargetProxy,
+        controlsAttachedTo: transformControls?.object === ikTargetProxy
+          ? 'ik-target' : transformControls?.object === proxy ? 'fk-proxy' : null,
         helperInScene: !!transformHelper && transformHelper.parent === scene,
         arcballEnabled: arcballControls?.enabled,
         arcballWasEnabled,
         poseDragActive,
+        hoveredJointId,
+        pickCandidateCount,
+        pickLabelVisible: !!pickLabel && !pickLabel.hidden,
       };
     },
     dispose() {
       disposed = true;
+      rigJointPickingActive = false;
       window.removeEventListener('mod-viewer-model-rig-changed', onRigChanged);
       window.removeEventListener('mod-viewer-model-rig-pose-changed', onPoseChanged);
       window.removeEventListener('mod-viewer-model-transform-changed', onModelTransformChanged);
+      canvas?.removeEventListener('pointermove', onPickPointerMove, true);
+      canvas?.removeEventListener('pointerdown', onPickPointerDown, true);
+      canvas?.removeEventListener('pointerup', onPickPointerUp, true);
+      canvas?.removeEventListener('pointercancel', onPickPointerCancel, true);
+      canvas?.removeEventListener('contextmenu', onPickContextMenu);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('keydown', onPickKeyDown);
+        document.removeEventListener('keyup', onPickKeyUp);
+      }
+      pickLabel?.remove?.();
       detachControls();
       if (transformControls) {
         scene?.remove(transformHelper);
@@ -577,12 +956,15 @@ export function createRigOverlayController({
       lineSegments.geometry.dispose();
       centerPoints.geometry.dispose();
       jointPoints.geometry.dispose();
+      hoverPoint.geometry.dispose();
       proxyRing.geometry.dispose();
       centerMaterial.dispose();
       jointMaterial.dispose();
+      hoverMaterial.dispose();
       selectedMaterial.dispose();
       lineMaterial.dispose();
-      group.remove(staticGroup, proxy);
+      ikTargetMarker.geometry.dispose();
+      group.remove(staticGroup, proxy, ikTargetProxy);
       scene?.remove(group);
     },
   };

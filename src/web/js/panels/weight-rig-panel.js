@@ -1,23 +1,25 @@
 // Unified Weight/Rig controls. The panel owns one stable DOM tree for both
-// domains and one lazy-load/picking lifecycle.
+// domains while keeping Weight and Rig picking lifecycles separate.
 
 import {
-  beginModelPicking, cancelModelPicking, clearSelectedBones,
+  beginWeightModelPicking, cancelWeightModelPicking, clearSelectedBones,
   ensureModelRigLoaded, getModelPhysicsState, getModelRigState,
-  getModelWeightState, getRigJointPoseFrame, loadSavedBoneSelection,
+  getModelWeightState, loadSavedBoneSelection,
   clearRigJointSelection, resetModelPhysics, resetRigJoint, resetRigPose,
   saveModelWeightSelection,
   selectRigJoint, setBoneSelected, setPhysicsConstraintsEnabled,
   setPhysicsContinuousLinearResponse, setPhysicsDamping, setPhysicsFrequency,
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
   setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
-  setRigJointRoot, setRigOverlayScope,
-  setRigRotationSnapDegrees, setRigVisible, setWeightPickerViewMode,
+  setRigActiveLimbRole,
+  setRigLimbOverride, beginRigJointPicking, cancelRigJointPicking,
+  clearRigLimbMapping, flipRigLimbBend, setRigIkEnabled,
+  setRigJointRoot,
+  setRigRotationSnapDegrees, setWeightPickerViewMode,
   applyRigPosePresetById,
   deleteRigPosePreset, renameRigPosePreset,
   saveRigPosePreset,
 } from '../mesh/weight-experiment.js';
-import {eulerFromRestFrameDelta} from '../mesh/weight-rig-frames.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 
 let panel = null;
@@ -27,6 +29,16 @@ let latestWeightState = null;
 let latestRigState = null;
 
 const $ = id => document.getElementById(id);
+const LIMB_ROLES = Object.freeze([
+  ['left_arm', 'Left Arm'], ['right_arm', 'Right Arm'],
+  ['left_leg', 'Left Leg'], ['right_leg', 'Right Leg'],
+]);
+const LIMB_LABELS = Object.freeze({
+  left_arm: ['Shoulder', 'Elbow', 'Hand'],
+  right_arm: ['Shoulder', 'Elbow', 'Hand'],
+  left_leg: ['Hip', 'Knee', 'Foot'],
+  right_leg: ['Hip', 'Knee', 'Foot'],
+});
 
 function addText(parent, className, value = '') {
   const node = document.createElement('span');
@@ -98,7 +110,7 @@ function addRange(parent, className, label, min, max, step, value, onInput) {
   return {input, valueNode};
 }
 
-function buildPrimaryPicker(parent) {
+function buildWeightModelPicker(section) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'ui-button weight-rig-primary-action weight-pick-model';
@@ -106,11 +118,11 @@ function buildPrimaryPicker(parent) {
   button.setAttribute('aria-pressed', 'false');
   button.addEventListener('click', () => {
     closePopover();
-    if (latestWeightState?.picking || latestRigState?.picking) cancelModelPicking();
-    else beginModelPicking();
+    if (latestWeightState?.picking) cancelWeightModelPicking();
+    else beginWeightModelPicking();
   });
-  parent.appendChild(button);
-  ui.pickModel = button;
+  section.appendChild(button);
+  ui.weightPick = button;
 }
 
 function buildBonePicker(section) {
@@ -192,6 +204,7 @@ function buildBonePicker(section) {
 function buildWeightSection(parent) {
   const section = addSection(parent, 'WEIGHT');
   buildBonePicker(section);
+  buildWeightModelPicker(section);
 
   const actions = document.createElement('div');
   actions.className = 'weight-selection-actions';
@@ -292,11 +305,6 @@ function selectedJoint(state = latestRigState) {
     Number(joint.jointId) === id) || null;
 }
 
-function componentForJoint(model, jointId) {
-  return (model?.components || []).find(component =>
-    (component.nodeIds || []).includes(Number(jointId))) || null;
-}
-
 function buildRigSection(parent) {
   const section = addSection(parent, 'RIG');
   addText(section, 'weight-rig-control-label', 'Selected Joint');
@@ -309,15 +317,19 @@ function buildRigSection(parent) {
   section.appendChild(joint);
   ui.joint = joint;
 
-  const visibleLabel = document.createElement('label');
-  visibleLabel.className = 'weight-checkbox rig-show-inferred';
-  const visible = document.createElement('input');
-  visible.type = 'checkbox';
-  visible.addEventListener('change', () => setRigVisible(visible.checked));
-  visibleLabel.appendChild(visible);
-  addText(visibleLabel, 'weight-label', 'Show inferred rig');
-  section.appendChild(visibleLabel);
-  ui.visible = visible;
+  const pickJoint = document.createElement('button');
+  pickJoint.type = 'button';
+  pickJoint.className = 'ui-button weight-rig-primary-action rig-pick-joint';
+  pickJoint.textContent = 'Pick from model';
+  pickJoint.setAttribute('aria-pressed', 'false');
+  pickJoint.addEventListener('click', () => {
+    closePopover();
+    const current = latestRigState?.jointPickIntent;
+    if (current?.type === 'selected-joint') cancelRigJointPicking();
+    else beginRigJointPicking({type: 'selected-joint'});
+  });
+  section.appendChild(pickJoint);
+  ui.rigPickJoint = pickJoint;
 
   const jointActions = document.createElement('div');
   jointActions.className = 'rig-actions rig-joint-actions';
@@ -381,20 +393,102 @@ function buildRigSection(parent) {
   ui.presetStatus = addText(section, 'rig-hint');
   ui.presetStatus.setAttribute('aria-live', 'polite');
 
-  const advanced = addAdvanced(parent);
-  const display = addRigAdvancedGroup(advanced.content, 'Display');
-  const allLabel = document.createElement('label');
-  allLabel.className = 'weight-checkbox';
-  const all = document.createElement('input');
-  all.type = 'checkbox';
-  all.className = 'rig-panel-show-all';
-  all.addEventListener('change', () => setRigOverlayScope(all.checked ? 'all' : 'selection'));
-  allLabel.appendChild(all);
-  addText(allLabel, 'weight-label', 'Show all overlay joints');
-  display.appendChild(allLabel);
-  ui.showAll = all;
+  const advanced = addAdvanced(parent, 'Rig Advanced Settings');
+  const inverseKinematics = addRigAdvancedGroup(
+    advanced.content, 'Limb IK');
+  const limbRow = document.createElement('label');
+  limbRow.className = 'rig-row';
+  addText(limbRow, 'rig-label', 'Limb');
+  const limb = document.createElement('select');
+  limb.className = 'rig-limb-select';
+  limb.setAttribute('aria-label', 'Active limb');
+  LIMB_ROLES.forEach(([role, label]) => {
+    const option = document.createElement('option');
+    option.value = role;
+    option.textContent = label;
+    limb.appendChild(option);
+  });
+  limb.addEventListener('change', () => setRigActiveLimbRole(limb.value));
+  limbRow.appendChild(limb);
+  inverseKinematics.appendChild(limbRow);
+  ui.limb = limb;
 
-  const transform = addRigAdvancedGroup(advanced.content, 'Transform');
+  const mapping = document.createElement('div');
+  mapping.className = 'rig-limb-mapping';
+  const makeMappingRow = (kind, label, actionText, actionClass) => {
+    const row = document.createElement('div');
+    row.className = `rig-limb-mapping-row ${kind}`;
+    addText(row, 'rig-label', label);
+    const value = addText(row, 'rig-limb-value');
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = `ui-button rig-limb-pick ${actionClass}`;
+    action.textContent = actionText;
+    action.addEventListener('click', () => {
+      const role = latestRigState?.ik?.activeLimbRole || limb.value;
+      const intent = {type: kind, role};
+      const current = latestRigState?.jointPickIntent;
+      if (current?.type === intent.type && current?.role === intent.role) {
+        cancelRigJointPicking();
+      } else {
+        beginRigJointPicking(intent);
+      }
+    });
+    row.appendChild(action);
+    mapping.appendChild(row);
+    return {value, action};
+  };
+  const anchorRow = makeMappingRow(
+    'limb-anchor', 'Shoulder', 'Pick', 'rig-limb-anchor-pick');
+  const bendRow = makeMappingRow(
+    'limb-bend-override', 'Elbow', 'Override', 'rig-limb-bend-pick');
+  const endRow = makeMappingRow(
+    'limb-end-override', 'Hand', 'Override', 'rig-limb-end-pick');
+  inverseKinematics.appendChild(mapping);
+  ui.limbMapping = mapping;
+  ui.limbAnchor = anchorRow.value;
+  ui.limbBend = bendRow.value;
+  ui.limbEnd = endRow.value;
+  ui.limbAnchorPick = anchorRow.action;
+  ui.limbBendPick = bendRow.action;
+  ui.limbEndPick = endRow.action;
+
+  addText(inverseKinematics, 'rig-label', 'Detected path');
+  ui.pathPreview = addText(inverseKinematics, 'rig-chain-preview', '—');
+
+  const mappingActions = document.createElement('div');
+  mappingActions.className = 'rig-actions rig-limb-actions';
+  const clearMapping = document.createElement('button');
+  clearMapping.type = 'button';
+  clearMapping.className = 'ui-button rig-clear-limb';
+  clearMapping.textContent = 'Clear';
+  clearMapping.addEventListener('click', () => clearRigLimbMapping(limb.value));
+  mappingActions.append(clearMapping);
+  inverseKinematics.appendChild(mappingActions);
+  ui.clearLimb = clearMapping;
+
+  const ikLabel = document.createElement('label');
+  ikLabel.className = 'weight-checkbox';
+  const ik = document.createElement('input');
+  ik.type = 'checkbox';
+  ik.className = 'rig-panel-enable-ik';
+  ik.addEventListener('change', () => setRigIkEnabled(ik.checked));
+  ikLabel.appendChild(ik);
+  addText(ikLabel, 'weight-label', 'Enable IK');
+  inverseKinematics.appendChild(ikLabel);
+  ui.ik = ik;
+
+  const flip = document.createElement('button');
+  flip.type = 'button';
+  flip.className = 'ui-button rig-flip-bend';
+  flip.textContent = 'Flip Bend';
+  flip.addEventListener('click', () => flipRigLimbBend(limb.value));
+  inverseKinematics.appendChild(flip);
+  ui.flipBend = flip;
+  ui.ikHint = addText(inverseKinematics, 'rig-hint');
+
+  const manualRotation = addRigAdvancedGroup(
+    advanced.content, 'Manual Rotation');
   const snapRow = document.createElement('label');
   snapRow.className = 'rig-row';
   addText(snapRow, 'rig-label', 'Rotation snap');
@@ -408,25 +502,10 @@ function buildRigSection(parent) {
   });
   snap.addEventListener('change', () => setRigRotationSnapDegrees(Number(snap.value)));
   snapRow.appendChild(snap);
-  transform.appendChild(snapRow);
+  manualRotation.appendChild(snapRow);
   ui.snap = snap;
 
-  const rotationTitle = addText(transform, 'rig-readout-title', 'Rotation');
-  rotationTitle.setAttribute('aria-hidden', 'true');
-  ui.rotationValues = [];
-  ['X', 'Y', 'Z'].forEach(axis => {
-    const row = document.createElement('div');
-    row.className = 'rig-row rig-readout-row';
-    addText(row, 'rig-label', axis);
-    ui.rotationValues.push(addText(row, 'rig-value', '—'));
-    transform.appendChild(row);
-  });
-
-  const hierarchy = addRigAdvancedGroup(advanced.content, 'Hierarchy');
-  ui.root = addAdvancedValue(hierarchy, 'Component root');
-  ui.parent = addAdvancedNavValue(hierarchy, 'Parent');
-  ui.children = addAdvancedNavValue(hierarchy, 'Children');
-  ui.depth = addAdvancedValue(hierarchy, 'Depth');
+  const hierarchy = addRigAdvancedGroup(advanced.content, 'Rig Structure');
   const setRoot = document.createElement('button');
   setRoot.type = 'button';
   setRoot.className = 'ui-button rig-set-root';
@@ -440,26 +519,6 @@ function buildRigSection(parent) {
 
 }
 
-function addAdvancedValue(parent, label) {
-  const row = document.createElement('div');
-  row.className = 'rig-row';
-  addText(row, 'rig-label', label);
-  const value = addText(row, 'rig-value', '—');
-  parent.appendChild(row);
-  return value;
-}
-
-function addAdvancedNavValue(parent, label) {
-  const row = document.createElement('div');
-  row.className = 'rig-nav-row';
-  addText(row, 'rig-label', label);
-  const value = document.createElement('div');
-  value.className = 'rig-nav-values';
-  row.appendChild(value);
-  parent.appendChild(row);
-  return value;
-}
-
 function buildPanel() {
   panel.replaceChildren();
   ui = {};
@@ -470,7 +529,6 @@ function buildPanel() {
   header.appendChild(heading);
   ui.status = addText(header, 'weight-rig-status');
   panel.appendChild(header);
-  buildPrimaryPicker(panel);
   buildWeightSection(panel);
   buildRigSection(panel);
 }
@@ -616,6 +674,10 @@ function syncWeightControls(state = latestWeightState || getModelWeightState()) 
   ui.boneButton.textContent = selectedLabel(state);
   const available = (state.sources || []).some(source => source.availableBoneIds?.length);
   ui.boneButton.disabled = !state.loaded || !available;
+  ui.weightPick.textContent = state.picking ? 'Cancel picking' : 'Pick from model';
+  ui.weightPick.classList.toggle('active', !!state.picking);
+  ui.weightPick.setAttribute('aria-pressed', String(!!state.picking));
+  ui.weightPick.disabled = !state.loaded || !available;
   ui.clearSelection.disabled = !state.selectedBoneCount;
   ui.saveSelection.disabled = !state.selectedBoneCount || state.savingSelection;
   ui.loadSelection.disabled = !state.savedBones?.length;
@@ -671,66 +733,63 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   }
   ui.joint.value = selected ? String(selected.jointId) : '';
   ui.joint.disabled = !state?.loaded || !joints.length;
-  ui.visible.checked = !!state?.visible;
-  ui.visible.disabled = !state?.loaded || !joints.length;
-  ui.showAll.checked = state?.overlayScope !== 'selection';
-  ui.showAll.disabled = !state?.loaded || !joints.length;
+  const jointPickActive = state?.jointPickIntent?.type === 'selected-joint';
+  ui.rigPickJoint.textContent = jointPickActive ? 'Cancel picking' : 'Pick from model';
+  ui.rigPickJoint.classList.toggle('active', jointPickActive);
+  ui.rigPickJoint.setAttribute('aria-pressed', String(jointPickActive));
+  ui.rigPickJoint.disabled = !state?.loaded || !joints.length;
   ui.snap.value = String(state?.rotationSnapDegrees ?? 0);
-  ui.snap.disabled = !state?.loaded || !joints.length;
+  ui.snap.disabled = !state?.loaded || !joints.length || !!state?.ik?.enabled;
+  const ik = state?.ik || {};
+  const role = ik.activeLimbRole || 'left_arm';
+  const labels = LIMB_LABELS[role] || LIMB_LABELS.left_arm;
+  const mapping = ik.mappings?.[role] || {};
+  const hasMapping = Number.isInteger(mapping.anchorJointId);
+  const hasLimb = !!mapping.available;
   const hasSelected = !!selected;
+  ui.limbAnchor.previousElementSibling.textContent = labels[0];
+  ui.limbBend.previousElementSibling.textContent = labels[1];
+  ui.limbEnd.previousElementSibling.textContent = labels[2];
+  ui.limb.value = role;
+  ui.limb.disabled = !state?.loaded || !joints.length;
+  ui.limbAnchor.textContent = mapping.anchorJointId
+    ? `Joint ${mapping.anchorJointId} · Manual` : 'Unassigned';
+  ui.limbBend.textContent = mapping.bendJointId
+    ? `Joint ${mapping.bendJointId} · ${mapping.bendSource === 'override'
+      ? 'Override' : 'Auto'}` : '—';
+  ui.limbEnd.textContent = mapping.endJointId
+    ? `Joint ${mapping.endJointId} · ${mapping.endSource === 'override'
+      ? 'Override' : 'Auto'}` : '—';
+  const pathIds = mapping.pathJointIds || [];
+  ui.pathPreview.textContent = pathIds.length
+    ? pathIds.map(id => `Joint ${id}`).join(' → ') : '—';
+  const pick = state?.jointPickIntent;
+  const pickButton = (button, type, enabled, idleText) => {
+    const active = pick?.type === type && pick?.role === role;
+    button.textContent = active ? 'Cancel' : idleText;
+    button.classList.toggle('active', active);
+    button.disabled = !state?.loaded || !enabled;
+  };
+  pickButton(ui.limbAnchorPick, 'limb-anchor', true, 'Pick');
+  pickButton(ui.limbBendPick, 'limb-bend-override', hasLimb, 'Override');
+  pickButton(ui.limbEndPick, 'limb-end-override', hasMapping, 'Override');
+  ui.clearLimb.disabled = !state?.loaded || !hasMapping;
+  ui.ik.checked = !!ik.enabled;
+  ui.ik.disabled = !state?.loaded || !hasLimb;
+  ui.flipBend.disabled = !state?.loaded || !hasLimb;
+  if (!hasMapping) {
+    ui.ikHint.textContent = `Pick the ${labels[0]} joint to configure this limb.`;
+  }
+  else if (!hasLimb) ui.ikHint.textContent = `IK unavailable: ${mapping.reason || 'limb path not detected'}.`;
+  else ui.ikHint.textContent = `${mapping.confidence || 'medium'} confidence · drag the ${labels[2]} target.`;
   ui.clearJoint.disabled = !hasSelected;
   ui.setRoot.disabled = !hasSelected;
   ui.resetJoint.disabled = !hasSelected;
+  ui.resetJoint.textContent = state?.ik?.enabled && hasLimb
+      && selected?.jointId === mapping.endJointId
+    ? 'Reset Limb' : 'Reset Joint';
   ui.resetPose.disabled = !state?.loaded;
-  syncHierarchy(state, selected);
-  syncRotationReadout(state);
   syncPresetControls(state);
-}
-
-function syncHierarchy(state, joint) {
-  const model = state?.model;
-  const id = joint?.jointId;
-  const component = id === undefined ? null : componentForJoint(model, id);
-  ui.root.textContent = component ? String(component.rootId) : '—';
-  ui.depth.textContent = component ? String(component.depthById?.[id] ?? '—') : '—';
-  ui.parent.replaceChildren();
-  ui.children.replaceChildren();
-  if (!component || id === undefined) {
-    addText(ui.parent, 'rig-value', '—');
-    addText(ui.children, 'rig-value', '—');
-    return;
-  }
-  const parentId = component.parentById?.[id];
-  if (parentId === null || parentId === undefined) addText(ui.parent, 'rig-value', '—');
-  else addNavigationButton(ui.parent, Number(parentId));
-  const children = component.childrenById?.[id] || [];
-  if (!children.length) addText(ui.children, 'rig-value', '—');
-  else children.forEach(childId => addNavigationButton(ui.children, Number(childId)));
-}
-
-function addNavigationButton(parent, jointId) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'rig-nav-button';
-  button.textContent = String(jointId);
-  button.addEventListener('click', () => selectRigJoint(jointId));
-  parent.appendChild(button);
-}
-
-function syncRotationReadout(state, localOverride = null) {
-  const joint = selectedJoint(state);
-  const id = Number(joint?.jointId);
-  const frame = Number.isInteger(id) ? getRigJointPoseFrame(id) : null;
-  const local = localOverride?.length === 4 ? localOverride
-    : state?.model?.poseRotationByJointId?.[id] || [0, 0, 0, 1];
-  if (!frame?.restRotation || !Number.isInteger(id)) {
-    ui.rotationValues.forEach(value => { value.textContent = '—'; });
-    return;
-  }
-  const euler = eulerFromRestFrameDelta(local, frame.restRotation, 'XYZ');
-  [euler.x, euler.y, euler.z].forEach((value, index) => {
-    ui.rotationValues[index].textContent = `${(value * 180 / Math.PI).toFixed(1)}°`;
-  });
 }
 
 function selectedPreset(state = latestRigState, id = ui?.preset?.value) {
@@ -873,16 +932,6 @@ async function deletePreset() {
     : result?.error || 'Could not delete this pose.';
 }
 
-function syncPicker() {
-  const active = !!(latestWeightState?.picking || latestRigState?.picking);
-  ui.pickModel.textContent = active ? 'Cancel picking' : 'Pick from model';
-  ui.pickModel.classList.toggle('active', active);
-  ui.pickModel.setAttribute('aria-pressed', String(active));
-  ui.pickModel.disabled = !active && (
-    !latestWeightState?.loaded || !latestRigState?.loaded
-    || !(latestWeightState.sources || []).some(source => source.availableBoneIds?.length));
-}
-
 function syncStatus() {
   const weight = latestWeightState || getModelWeightState();
   const rig = latestRigState || getModelRigState();
@@ -919,7 +968,6 @@ export function initWeightRigPanel() {
     latestWeightState = event.detail;
     syncWeightControls(event.detail);
     syncStatus();
-    syncPicker();
   });
   window.addEventListener('mod-viewer-model-physics-changed', event => {
     syncPhysicsControls(event.detail);
@@ -930,19 +978,13 @@ export function initWeightRigPanel() {
     if (!event.detail?.loading && !event.detail?.loaded) loadingPromise = null;
     syncRigOptions(event.detail);
     syncStatus();
-    syncPicker();
   });
   window.addEventListener('mod-viewer-model-rig-pose-changed', event => {
-    if (latestRigState?.selectedJointId !== null
-        && Number(event.detail?.jointId) === Number(latestRigState.selectedJointId)) {
-      syncRotationReadout(latestRigState, event.detail?.quaternion);
-    }
+    if (latestRigState) syncRigOptions(latestRigState);
   });
-  window.addEventListener('mod-viewer-model-point-picked', () => {
+  window.addEventListener('mod-viewer-weight-point-picked', () => {
     latestWeightState = getModelWeightState();
-    latestRigState = getModelRigState();
     syncWeightControls(latestWeightState);
-    syncRigOptions(latestRigState);
     syncStatus();
     if (latestWeightState?.pickedPoint) {
       ui.boneList.scrollTop = 0;
@@ -954,7 +996,8 @@ export function initWeightRigPanel() {
     const active = event.detail?.tab === 'weight-rig' && event.detail?.open;
     if (!active) {
       closePopover();
-      if (latestWeightState?.picking || latestRigState?.picking) cancelModelPicking();
+      if (latestWeightState?.picking) cancelWeightModelPicking();
+      if (latestRigState?.jointPickIntent) cancelRigJointPicking();
     } else void loadOnDemand();
   });
   document.addEventListener('pointerdown', event => {
@@ -964,9 +1007,8 @@ export function initWeightRigPanel() {
   });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
-    if (latestWeightState?.picking || latestRigState?.picking) {
-      cancelModelPicking();
-    }
+    if (latestWeightState?.picking) cancelWeightModelPicking();
+    if (latestRigState?.jointPickIntent) cancelRigJointPicking();
     if (!ui?.popover?.hidden) {
       closePopover();
       ui.boneButton.focus();
@@ -978,5 +1020,4 @@ export function initWeightRigPanel() {
   syncPhysicsControls();
   syncRigOptions(latestRigState);
   syncStatus();
-  syncPicker();
 }
