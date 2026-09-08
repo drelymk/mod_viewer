@@ -1263,6 +1263,8 @@ function restoreDefaultModelRigOrientation(rig) {
 function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   const started = performanceNow();
   const previousSelectedJointId = modelRigState.selectedJointId;
+  const previousRootSignatures = new Set(
+    modelRigState.explicitRootSignatures);
   if (modelSkinningRig) resetModelPose({request: false});
   const reconciliation = buildModelRigReconciliation(sourceRigs);
   const joints = reconciliation.joints || [];
@@ -1322,7 +1324,23 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     .map(([jointId, direction]) => [jointId, direction.toArray?.() || [...direction]]));
   rig.defaultRestContinuationChildByJointId = new Map(
     rig.restContinuationChildByJointId);
-  modelRigState.explicitRootSignatures = new Set();
+  let restoredRootSignatures = new Set();
+  if (previousRootSignatures.size) {
+    const rootRestore = modelForestWithRootSignatures(
+      rig, [...previousRootSignatures]);
+    installModelForest(rig, rootRestore.forest);
+    const signatureIndex = buildJointSignatureIndex(rig).resolvedBySignature;
+    restoredRootSignatures = new Set(rootRestore.appliedRoots.filter(signature => {
+      const jointId = signatureIndex.get(signature);
+      const componentId = rig.defaultComponentByJointId.get(jointId);
+      return Number.isInteger(Number(componentId))
+        && rig.defaultRootIdByComponent.get(Number(componentId)) !== jointId;
+    }));
+    if (restoredRootSignatures.size) {
+      rig.structureRevision = ++rigRuntime.structureRevision;
+    }
+  }
+  modelRigState.explicitRootSignatures = restoredRootSignatures;
   rigPresetState.lastApplyResult = null;
   sourceRigs.forEach(sourceRig => {
     rig.sourceTransformAliases.set(sourceRig.sourceKey, new Map());
@@ -3163,6 +3181,8 @@ export function refreshSkinningAfterShapeChange(mesh) {
   const position = mesh?.geometry?.attributes?.position;
   clearPickedPoint();
   if (!state?.loaded || !position) return false;
+  const preservedRootSignatures = new Set(
+    modelRigState.explicitRootSignatures);
   const sourceKey = state.skinningSourceKey;
   // Capture the authoritative shaped geometry before physics detachment or
   // pose reset can restore the previous baseline onto this mesh.
@@ -3194,7 +3214,7 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelRigState.jointPickIntent = null;
   modelRigState.ikEnabled = false;
   modelRigState.activeLimbRole = 'left_arm';
-  modelRigState.explicitRootSignatures = new Set();
+  modelRigState.explicitRootSignatures = preservedRootSignatures;
   rigPresetState.lastApplyResult = null;
   resolvedLimbMappings = null;
   resolvedLimbMappingsStructureRevision = null;

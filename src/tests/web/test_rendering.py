@@ -2370,13 +2370,24 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
           await experiment.ensureModelWeightsLoaded();
           await experiment.ensureModelRigLoaded();
-          const rigState = experiment.getModelRigState();
-          const posedJoint = rigState.model.joints.find(joint =>
+          let rigState = experiment.getModelRigState();
+          let debug = experiment.getModelRigDebugState();
+          const rootComponent = rigState.model.components.find(component =>
+            component.nodeIds.some(id => id !== component.rootId));
+          const manualRootId = rootComponent?.nodeIds.find(id =>
+            id !== rootComponent.rootId);
+          const manualRootJoint = debug.joints.find(joint =>
+            joint.jointId === manualRootId);
+          const manualRootSignature = manualRootJoint?.signature;
+          const manualRootApplied = experiment.setRigJointRoot(manualRootId);
+          rigState = experiment.getModelRigState();
+          const posedJoint = debug.joints.find(joint =>
             rigState.model.components.some(component =>
               component.nodeIds.includes(joint.jointId)
               && component.rootId !== joint.jointId));
+          const posedJointSignature = posedJoint?.signature;
+          const THREE = await import('three');
           if (posedJoint) {
-            const THREE = await import('three');
             experiment.setRigJointRotation(posedJoint.jointId,
               new THREE.Quaternion().setFromAxisAngle(
                 new THREE.Vector3(0, 0, 1), Math.PI / 12));
@@ -2385,12 +2396,52 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           setControlValue('shape', '1');
           refreshMeshes();
           const state = experiment.getSkinningState(mesh);
+          const influenceGraph = state.influenceGraph;
+          await experiment.ensureModelRigLoaded();
+          const rebuiltDebug = experiment.getModelRigDebugState();
+          const rebuiltJoint = rebuiltDebug.joints.find(joint =>
+            joint.signature === manualRootSignature);
+          const rebuiltComponent = rebuiltDebug.components.find(component =>
+            component.nodeIds.includes(rebuiltJoint?.jointId));
+          const rebuiltPoseJoint = rebuiltDebug.joints.find(joint =>
+            joint.signature === posedJointSignature);
+          const rootSurvived = rebuiltComponent?.rootId === rebuiltJoint?.jointId
+            && rebuiltDebug.explicitRootSignatures.includes(manualRootSignature);
+          const poseAfterRebuild = experiment.setRigJointRotation(
+            rebuiltPoseJoint?.jointId,
+            new THREE.Quaternion().setFromAxisAngle(
+              new THREE.Vector3(0, 0, 1), Math.PI / 12),
+            {dragging: true});
+          const resetAfterRebuild = experiment.resetRigPose();
+          const resetDebug = experiment.getModelRigDebugState();
+          const resetComponent = resetDebug.components.find(component =>
+            component.nodeIds.includes(rebuiltJoint?.jointId));
+          const resetWorked = resetAfterRebuild
+            && resetDebug.poseJointIds.length === 0
+            && resetDebug.explicitRootSignatures.length === 0
+            && resetComponent
+            && resetComponent.rootId !== rebuiltJoint?.jointId;
+          experiment.setRigJointRoot(rebuiltJoint?.jointId);
+          experiment.unregisterSkinningMesh(mesh);
+          const unresolvedDebug = experiment.getModelRigDebugState();
+          const unresolvedDropped = Array.isArray(
+            unresolvedDebug.explicitRootSignatures)
+            && unresolvedDebug.explicitRootSignatures.length === 0;
+          experiment.destroyModelPhysicsSession();
+          const resetState = experiment.getModelRigState();
           const after = [...mesh.geometry.attributes.position.array];
           const box = mesh.geometry.boundingBox;
           const sphere = mesh.geometry.boundingSphere;
           URL.revokeObjectURL(url);
           return {
             loaded: state.loaded,
+            manualRootApplied,
+            manualRootSignature,
+            rootSurvived,
+            poseAfterRebuild,
+            resetWorked,
+            unresolvedDropped,
+            fullResetCleared: !resetState.loaded,
             baseline: [...state.baselinePositions],
             before, after,
             bounds: {
@@ -2399,7 +2450,7 @@ def test_loaded_skinning_rebaselines_after_shape_change(
             sphere: {
               center: sphere.center.toArray(), radius: sphere.radius,
             },
-            graph: state.influenceGraph,
+            graph: influenceGraph,
           };
         }""")
         assert result["loaded"]
@@ -2411,6 +2462,13 @@ def test_loaded_skinning_rebaselines_after_shape_change(
         assert result["bounds"]["max"] == pytest.approx([1.2, 1.2, 0])
         assert result["sphere"]["center"] == pytest.approx([.6, .6, 0])
         assert result["sphere"]["radius"] == pytest.approx(math.sqrt(.72))
+        assert result["manualRootApplied"]
+        assert result["manualRootSignature"]
+        assert result["rootSurvived"]
+        assert result["poseAfterRebuild"]
+        assert result["resetWorked"]
+        assert result["unresolvedDropped"]
+        assert result["fullResetCleared"]
         for offset in range(0, len(result["after"]), 3):
             point = result["after"][offset:offset + 3]
             assert all(result["bounds"]["min"][axis] - 1e-6 <= point[axis]
@@ -2421,6 +2479,100 @@ def test_loaded_skinning_rebaselines_after_shape_change(
                                      for axis in range(3)))
             assert distance <= result["sphere"]["radius"] + 1e-6
         assert result["graph"] is None
+    finally:
+        context.close()
+
+
+def _multi_mesh_skinning_shape_payload():
+    payload = _payload("SkinningShapePair")
+    template = next(iter(payload["meshes"].values()))
+    second = copy.deepcopy(template)
+    second["component"] = "Body SkinningShapePair second"
+    payload["meshes"]["Body-SkinningShapePair-1"] = second
+    return payload
+
+
+def test_loaded_skinning_rebaselines_all_shape_target_meshes(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"SkinningShapePair": _multi_mesh_skinning_shape_payload()})
+    try:
+        _open(page, "SkinningShapePair")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
+        result = page.evaluate("""async () => {
+          const meshes = [...window.modViewer.activeMeshes];
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__testSkinningPreview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
+          await experiment.ensureModelWeightsLoaded();
+          await experiment.ensureModelRigLoaded();
+          const rigState = experiment.getModelRigState();
+          const debug = experiment.getModelRigDebugState();
+          const component = rigState.model.components.find(item =>
+            item.nodeIds.some(id => id !== item.rootId));
+          const manualRootId = component?.nodeIds.find(id =>
+            id !== component.rootId);
+          const manualRoot = debug.joints.find(joint =>
+            joint.jointId === manualRootId);
+          const manualRootApplied = experiment.setRigJointRoot(manualRootId);
+          const before = meshes.map(mesh =>
+            [...mesh.geometry.attributes.position.array]);
+          setControlValue('shape', '1');
+          const refresh = refreshMeshes();
+          const after = meshes.map(mesh =>
+            [...mesh.geometry.attributes.position.array]);
+          const states = meshes.map(mesh =>
+            experiment.getSkinningState(mesh));
+          await experiment.ensureModelRigLoaded();
+          const rebuilt = experiment.getModelRigDebugState();
+          const rebuiltJoint = rebuilt.joints.find(joint =>
+            joint.signature === manualRoot?.signature);
+          const rebuiltComponent = rebuilt.components.find(item =>
+            item.nodeIds.includes(rebuiltJoint?.jointId));
+          const rootSurvived = rebuiltComponent?.rootId === rebuiltJoint?.jointId
+            && rebuilt.explicitRootSignatures.includes(manualRoot?.signature);
+          const result = {
+            meshCount: meshes.length,
+            changedMeshCount: refresh.changedMeshes.length,
+            bothLoaded: states.every(state => state.loaded),
+            bothChanged: after.every((positions, index) =>
+              JSON.stringify(positions) !== JSON.stringify(before[index])),
+            manualRootApplied,
+            rootSurvived,
+            explicitRootSignatures: rebuilt.explicitRootSignatures,
+            before, after,
+          };
+          experiment.destroyModelPhysicsSession();
+          URL.revokeObjectURL(url);
+          return result;
+        }""")
+        assert result["meshCount"] == 2
+        assert result["changedMeshCount"] == 2
+        assert result["bothLoaded"]
+        assert result["bothChanged"]
+        assert result["manualRootApplied"]
+        assert result["rootSurvived"], result
+        assert result["explicitRootSignatures"]
+        assert all(positions[3] == pytest.approx(1.2)
+                   and positions[7] == pytest.approx(1.2)
+                   for positions in result["after"])
     finally:
         context.close()
 
