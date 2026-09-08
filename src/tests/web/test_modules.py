@@ -1177,25 +1177,12 @@ def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
         0, 1, .5, .5, 1, 0,
       ]);
       const indices = new Uint32Array([0, 1, 0, 1, 0, 1]);
-      const measure = rig.buildVertexSurfaceMeasure(positions, triangles);
       const rawNodes = rig.buildInfluenceNodes(
         positions, indices, weights, 2, [0, 1]);
-      const surfaceNodes = rig.buildInfluenceNodes(
-        positions, indices, weights, 2, [0, 1], {
-          vertexMeasure: measure.vertexMeasure,
-        });
       const rawRelationships = rig.buildInfluenceRelationships(
         positions, indices, weights, 2, rawNodes, 4);
-      const surfaceRelationships = rig.buildInfluenceRelationships(
-        positions, indices, weights, 2, surfaceNodes, 4, {
-          vertexMeasure: measure.vertexMeasure,
-        });
-      const surfaceGraph = {
-        nodes: surfaceNodes,
-        relationships: surfaceRelationships,
-        evidenceMode: 'surface',
-        totalSurfaceArea: measure.totalSurfaceArea,
-      };
+      const surfaceGraph = rig.buildSurfaceInfluenceGraph(
+        positions, triangles, indices, weights, 2, [0, 1], 4);
       const aggregate = rig.aggregateInfluenceGraphs([
         surfaceGraph, surfaceGraph,
       ]);
@@ -1211,9 +1198,9 @@ def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
       }
       return {
         rawNodes,
-        surfaceNodes,
         rawRelationship: rawRelationships[0],
-        surfaceRelationship: surfaceRelationships[0],
+        surfaceNode: surfaceGraph.nodes[0],
+        surfaceRelationship: surfaceGraph.relationships[0],
         aggregate: {
           evidenceMode: aggregate.evidenceMode,
           affectedMeasure: aggregate.nodes[0].affectedMeasure,
@@ -1226,23 +1213,23 @@ def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
     assert result["rawNodes"][0]["totalWeight"] == pytest.approx(1.5)
     assert result["rawNodes"][0]["affectedVertexCount"] == 2
     assert result["rawNodes"][0]["affectedMeasure"] is None
-    assert result["surfaceNodes"][0]["totalWeight"] == pytest.approx(1)
-    assert result["surfaceNodes"][0]["affectedVertexCount"] == 2
-    assert result["surfaceNodes"][0]["affectedMeasure"] == pytest.approx(4 / 3)
-    assert result["surfaceNodes"][0]["weightedCenter"] == pytest.approx(
-        [2 / 3, 4 / 3, 0])
+    assert result["surfaceNode"]["totalWeight"] == pytest.approx(1)
+    assert result["surfaceNode"]["affectedVertexCount"] == 2
+    assert result["surfaceNode"]["affectedMeasure"] == pytest.approx(2)
+    assert result["surfaceNode"]["weightedCenter"] == pytest.approx(
+        [2 / 3, 5 / 6, 0])
     assert result["rawRelationship"]["sharedMeasure"] is None
     assert result["rawRelationship"]["minOverlap"] == pytest.approx(.5)
-    assert result["surfaceRelationship"]["sharedMeasure"] == pytest.approx(2 / 3)
-    assert result["surfaceRelationship"]["minOverlap"] == pytest.approx(1 / 3)
+    assert result["surfaceRelationship"]["sharedMeasure"] == pytest.approx(2)
+    assert result["surfaceRelationship"]["minOverlap"] == pytest.approx(2 / 3)
     assert result["surfaceRelationship"]["productOverlap"] == pytest.approx(
-        1 / 6)
+        5 / 12)
     assert result["surfaceRelationship"]["jointCenter"] == pytest.approx(
-        [2, 0, 0])
+        [18 / 25, 16 / 25, 0])
     assert result["aggregate"] == {
         "evidenceMode": "surface",
-        "affectedMeasure": pytest.approx(8 / 3),
-        "sharedMeasure": pytest.approx(4 / 3),
+        "affectedMeasure": pytest.approx(4),
+        "sharedMeasure": pytest.approx(4),
         "totalSurfaceArea": pytest.approx(4),
     }
     assert result["mixedModeError"] == (
@@ -1364,18 +1351,12 @@ def test_surface_rig_topology_is_scale_and_input_order_invariant(module_page):
       const build = (scale, reverse = false) => {
         const positions = new Float32Array(
           basePositions.map(value => value * scale));
-        const measure = rig.buildVertexSurfaceMeasure(positions, triangles);
-        const nodes = rig.buildInfluenceNodes(
-          positions, indices, weights, 2, [0, 1], {
-            vertexMeasure: measure.vertexMeasure,
-          });
-        const relationships = rig.buildInfluenceRelationships(
-          positions, indices, weights, 2, nodes, 4 * scale, {
-            vertexMeasure: measure.vertexMeasure,
-          });
+        const graph = rig.buildSurfaceInfluenceGraph(
+          positions, triangles, indices, weights, 2, [0, 1], 4 * scale);
         return rig.buildInferredRigForest({
-          nodes: reverse ? [...nodes].reverse() : nodes,
-          relationships: reverse ? [...relationships].reverse() : relationships,
+          nodes: reverse ? [...graph.nodes].reverse() : graph.nodes,
+          relationships: reverse
+            ? [...graph.relationships].reverse() : graph.relationships,
         });
       };
       const normal = build(1);
@@ -1403,29 +1384,29 @@ def test_surface_rig_topology_is_scale_and_input_order_invariant(module_page):
     assert result["reordered"] == result["normal"]
 
 
-def test_surface_measure_keeps_split_and_coincident_vertices_distinct(module_page):
+def test_surface_topology_keeps_split_and_coincident_vertices_distinct(
+        module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildVertexSurfaceMeasure} = await import(
+      const {inspectSurfaceTopology} = await import(
         './js/mesh/weight-rig.js');
       const positions = new Float32Array([
         0, 0, 0, 1, 0, 0, 0, 1, 0,
         0, 0, 0, 1, 0, 0, 0, 1, 0,
       ]);
-      const measure = buildVertexSurfaceMeasure(
+      const topology = inspectSurfaceTopology(
         positions, new Uint32Array([0, 1, 2, 3, 4, 5]));
       return {
-        vertexMeasure: [...measure.vertexMeasure],
-        measuredVertexCount: measure.measuredVertexCount,
-        totalSurfaceArea: measure.totalSurfaceArea,
+        measuredVertexCount: topology.measuredVertexCount,
+        totalSurfaceArea: topology.totalSurfaceArea,
       };
     }""")
-    assert result["vertexMeasure"] == pytest.approx([1 / 6] * 6)
     assert result["measuredVertexCount"] == 6
     assert result["totalSurfaceArea"] == pytest.approx(1)
 
 
-def test_surface_measure_preserves_area_across_tessellation_and_scale(module_page):
+def test_surface_topology_preserves_area_across_tessellation_and_scale(
+        module_page):
     page = module_page
     result = page.evaluate("""async () => {
       const rig = await import('./js/mesh/weight-rig.js');
@@ -1441,22 +1422,15 @@ def test_surface_measure_preserves_area_across_tessellation_and_scale(module_pag
         0, 3, 5, 3, 1, 4, 5, 4, 2, 3, 4, 5,
       ]);
       const evidence = (positions, triangles, weights) => {
-        const measure = rig.buildVertexSurfaceMeasure(positions, triangles);
-        let support = 0;
-        let weightedX = 0;
-        let weightedY = 0;
-        weights.forEach((weight, index) => {
-          const contribution = measure.vertexMeasure[index] * weight;
-          support += contribution;
-          weightedX += positions[index * 3] * contribution;
-          weightedY += positions[index * 3 + 1] * contribution;
-        });
+        const topology = rig.inspectSurfaceTopology(positions, triangles);
+        const graph = rig.buildSurfaceInfluenceGraph(
+          positions, triangles, new Uint32Array(weights.length),
+          new Float32Array(weights), 1, [0]);
+        const node = graph.nodes[0];
         return {
-          ...measure,
-          vertexMeasure: [...measure.vertexMeasure],
-          support,
-          center: [weightedX / support, weightedY / support],
-          rawSupport: weights.reduce((sum, weight) => sum + weight, 0),
+          ...topology,
+          support: node.totalWeight,
+          center: node.weightedCenter.slice(0, 2),
         };
       };
       const coarse = evidence(coarsePositions, coarseTriangles,
@@ -1468,7 +1442,7 @@ def test_surface_measure_preserves_area_across_tessellation_and_scale(module_pag
       const scaledPositions = densePositions.map(value => value * 100);
       const scaled = evidence(scaledPositions, denseTriangles,
         [.5, .5, .5, .5, .5, .5]);
-      const nonIndexed = rig.buildVertexSurfaceMeasure(new Float32Array([
+      const nonIndexed = rig.inspectSurfaceTopology(new Float32Array([
         0, 0, 0, 1, 0, 0, 0, 1, 0,
         0, 0, 0, 0, 1, 0, -1, 0, 0,
       ]));
@@ -1485,9 +1459,9 @@ def test_surface_measure_preserves_area_across_tessellation_and_scale(module_pag
           totalSurfaceArea: nonIndexed.totalSurfaceArea,
         },
         duplicateAreas: [
-          rig.buildVertexSurfaceMeasure(
+          rig.inspectSurfaceTopology(
             densePositions, denseTriangles).totalSurfaceArea,
-          rig.buildVertexSurfaceMeasure(
+          rig.inspectSurfaceTopology(
             densePositions, denseTriangles).totalSurfaceArea,
         ],
       };
@@ -1503,7 +1477,6 @@ def test_surface_measure_preserves_area_across_tessellation_and_scale(module_pag
     assert result["gradient"]["support"] == pytest.approx(2 / 3)
     assert result["coarse"]["center"] == pytest.approx([2 / 3, 2 / 3])
     assert result["dense"]["center"] == pytest.approx([2 / 3, 2 / 3])
-    assert result["coarse"]["rawSupport"] != result["dense"]["rawSupport"]
     assert result["scaled"]["totalSurfaceArea"] == pytest.approx(20000)
     assert result["scaled"]["support"] == pytest.approx(10000)
     assert result["scaled"]["center"] == pytest.approx([200 / 3, 200 / 3])
@@ -1515,16 +1488,17 @@ def test_surface_measure_preserves_area_across_tessellation_and_scale(module_pag
     assert result["duplicateAreas"] == pytest.approx([2, 2])
 
 
-def test_surface_measure_diagnostics_reject_bad_triangles_without_nan(module_page):
+def test_surface_topology_diagnostics_reject_bad_triangles_without_nan(
+        module_page):
     page = module_page
     result = page.evaluate("""async () => {
       const rig = await import('./js/mesh/weight-rig.js');
       const positions = new Float32Array([
         0, 0, 0, 1, 0, 0, 0, 1, 0, NaN, 0, 0,
       ]);
-      const malformed = rig.buildVertexSurfaceMeasure(positions,
+      const malformed = rig.inspectSurfaceTopology(positions,
         new Uint32Array([0, 1, 2, 0, 2, 3, 0, 0, 1, 0, 1, 9, 0, 1]));
-      const unusable = rig.buildVertexSurfaceMeasure(
+      const unusable = rig.inspectSurfaceTopology(
         new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
         new Uint32Array([0, 1, 2]));
       return {
@@ -1537,7 +1511,6 @@ def test_surface_measure_diagnostics_reject_bad_triangles_without_nan(module_pag
           measuredVertexCount: malformed.measuredVertexCount,
           zeroMeasureVertexCount: malformed.zeroMeasureVertexCount,
           surfaceEvidenceAvailable: malformed.surfaceEvidenceAvailable,
-          vertexMeasure: [...malformed.vertexMeasure],
         },
         unusable: {
           triangleCount: unusable.triangleCount,
@@ -1548,7 +1521,6 @@ def test_surface_measure_diagnostics_reject_bad_triangles_without_nan(module_pag
           measuredVertexCount: unusable.measuredVertexCount,
           zeroMeasureVertexCount: unusable.zeroMeasureVertexCount,
           surfaceEvidenceAvailable: unusable.surfaceEvidenceAvailable,
-          vertexMeasure: [...unusable.vertexMeasure],
         },
       };
     }""")
@@ -1561,7 +1533,6 @@ def test_surface_measure_diagnostics_reject_bad_triangles_without_nan(module_pag
         "measuredVertexCount": 3,
         "zeroMeasureVertexCount": 1,
         "surfaceEvidenceAvailable": True,
-        "vertexMeasure": pytest.approx([1 / 6, 1 / 6, 1 / 6, 0]),
     }
     assert result["unusable"] == {
         "triangleCount": 1,
@@ -1572,7 +1543,6 @@ def test_surface_measure_diagnostics_reject_bad_triangles_without_nan(module_pag
         "measuredVertexCount": 0,
         "zeroMeasureVertexCount": 3,
         "surfaceEvidenceAvailable": False,
-        "vertexMeasure": pytest.approx([0, 0, 0]),
     }
 
 

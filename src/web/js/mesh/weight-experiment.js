@@ -31,7 +31,7 @@ import {
   buildInfluenceRelationships as buildRigInfluenceRelationships,
   buildInferredRigForest,
   buildSurfaceInfluenceGraph,
-  buildVertexSurfaceMeasure,
+  inspectSurfaceTopology,
   jointPivotMap,
 } from './weight-rig.js';
 import { createWeightPickController } from '../scene/weight-pick-controller.js';
@@ -930,9 +930,7 @@ function completeMemberEvidenceEqual(left, right) {
     && memberArraysEqual(left.state.indices, right.state.indices)
     && memberArraysEqual(left.state.weights, right.state.weights)
     && memberArraysEqual(left.state.boneIds, right.state.boneIds)
-    && memberArraysEqual(left.surfaceIndices, right.surfaceIndices)
-    && memberArraysEqual(left.surfaceEvidence.vertexMeasure,
-      right.surfaceEvidence.vertexMeasure);
+    && memberArraysEqual(left.surfaceIndices, right.surfaceIndices);
 }
 
 function sourceMemberFingerprint(member) {
@@ -944,7 +942,6 @@ function sourceMemberFingerprint(member) {
     memberArrayFingerprint(state.weights),
     memberArrayFingerprint(state.boneIds),
     memberArrayFingerprint(member.surfaceIndices),
-    memberArrayFingerprint(member.surfaceEvidence.vertexMeasure),
   ].join('|');
 }
 
@@ -1056,7 +1053,7 @@ function sourceRigMembers(rig) {
     return state?.loaded ? {
       mesh, state,
       surfaceIndices: mesh.geometry?.index?.array || null,
-      surfaceEvidence: buildVertexSurfaceMeasure(
+      surfaceEvidence: inspectSurfaceTopology(
         state.baselinePositions, mesh.geometry?.index?.array || null),
     } : null;
   }).filter(Boolean);
@@ -1074,7 +1071,7 @@ function aggregateSourceInfluenceGraph(members) {
     return state?.loaded ? {
       mesh, state,
       surfaceIndices: mesh.geometry?.index?.array || null,
-      surfaceEvidence: buildVertexSurfaceMeasure(
+      surfaceEvidence: inspectSurfaceTopology(
         state.baselinePositions, mesh.geometry?.index?.array || null),
     } : null;
   }).filter(Boolean);
@@ -3359,7 +3356,7 @@ function buildInfluenceGraph(
     state.influenceCount, state.boneIds);
   state.influenceNodes = rawNodes;
   const measure = surfaceEvidence || (requestedEvidenceMode === 'surface'
-    ? buildVertexSurfaceMeasure(
+    ? inspectSurfaceTopology(
       state.baselinePositions, mesh.geometry?.index?.array || null) : null);
   const evidenceMode = requestedEvidenceMode === 'surface'
     && measure?.surfaceEvidenceAvailable ? 'surface' : 'vertex';

@@ -17,7 +17,8 @@ function triangleArea(points) {
     ab[0] * ac[1] - ab[1] * ac[0]);
 }
 
-function collectSurfaceTriangles(positions, triangleIndices = null) {
+function collectSurfaceTriangles(
+    positions, triangleIndices = null, includeTriangles = true) {
   const positionArray = positions || [];
   const positionCount = Math.floor(positionArray.length / 3);
   const indexed = triangleIndices !== null && triangleIndices !== undefined;
@@ -26,9 +27,12 @@ function collectSurfaceTriangles(positions, triangleIndices = null) {
     ? Number(indexArray?.length) || 0
     : Number(positionArray.length) / 3;
   const triangleCount = Math.ceil(indexCount / 3);
-  const triangles = [];
+  const triangles = includeTriangles ? [] : null;
+  const measuredVertices = new Set();
   let degenerateTriangleCount = 0;
   let invalidTriangleCount = 0;
+  let validTriangleCount = 0;
+  let totalSurfaceArea = 0;
   for (let triangle = 0; triangle < triangleCount; triangle += 1) {
     const indices = [0, 1, 2].map(offset => {
       const index = triangle * 3 + offset;
@@ -60,46 +64,41 @@ function collectSurfaceTriangles(positions, triangleIndices = null) {
       degenerateTriangleCount += 1;
       continue;
     }
-    triangles.push({indices, points, area});
+    validTriangleCount += 1;
+    totalSurfaceArea += area;
+    indices.forEach(index => measuredVertices.add(index));
+    if (triangles) triangles.push({indices, points, area});
   }
   return {
     positionCount,
     triangleCount,
-    triangles,
-    validTriangleCount: triangles.length,
+    triangles: triangles || [],
+    measuredVertexCount: measuredVertices.size,
+    validTriangleCount,
     degenerateTriangleCount,
     invalidTriangleCount,
-    totalSurfaceArea: triangles.reduce((sum, triangle) =>
-      sum + triangle.area, 0),
+    totalSurfaceArea,
   };
 }
 
 /**
- * Build a lumped barycentric surface measure for each position vertex.
+ * Inspect triangle topology without constructing surface influence evidence.
  *
  * `triangleIndices` is optional because non-indexed BufferGeometry uses
  * consecutive position triples as its triangle topology.
  */
-export function buildVertexSurfaceMeasure(positions, triangleIndices = null) {
-  const topology = collectSurfaceTriangles(positions, triangleIndices);
-  const vertexMeasure = new Float64Array(topology.positionCount);
-  topology.triangles.forEach(triangle => {
-    const contribution = triangle.area / 3;
-    triangle.indices.forEach(index => { vertexMeasure[index] += contribution; });
-  });
-  let measuredVertexCount = 0;
-  for (const measure of vertexMeasure) {
-    if (measure > 0) measuredVertexCount += 1;
-  }
+export function inspectSurfaceTopology(positions, triangleIndices = null) {
+  const topology = collectSurfaceTriangles(
+    positions, triangleIndices, false);
   return {
-    vertexMeasure,
     triangleCount: topology.triangleCount,
     validTriangleCount: topology.validTriangleCount,
     degenerateTriangleCount: topology.degenerateTriangleCount,
     invalidTriangleCount: topology.invalidTriangleCount,
     totalSurfaceArea: topology.totalSurfaceArea,
-    measuredVertexCount,
-    zeroMeasureVertexCount: topology.positionCount - measuredVertexCount,
+    measuredVertexCount: topology.measuredVertexCount,
+    zeroMeasureVertexCount: topology.positionCount
+      - topology.measuredVertexCount,
     surfaceEvidenceAvailable: topology.validTriangleCount > 0
       && topology.totalSurfaceArea > 0,
   };
@@ -109,12 +108,6 @@ function compactVertexCount(indices, weights, influenceCount) {
   if (!indices || !weights || !Number.isInteger(influenceCount)
       || influenceCount <= 0) return 0;
   return Math.floor(Math.min(indices.length, weights.length) / influenceCount);
-}
-
-function vertexEvidenceMeasure(vertexMeasure, vertex) {
-  if (vertexMeasure === null || vertexMeasure === undefined) return 1;
-  const measure = Number(vertexMeasure[vertex]);
-  return Number.isFinite(measure) && measure >= 0 ? measure : 0;
 }
 
 function positiveInfluencesForVertex(
@@ -406,8 +399,6 @@ export function buildSurfaceInfluenceGraph(
   }).sort((left, right) => left.boneId - right.boneId);
   const nodeById = new Map(nodes.map(node => [node.boneId, node]));
   const radius = Number(boundingSphereRadius);
-  const measuredVertices = new Set(
-    topology.triangles.flatMap(triangle => triangle.indices));
   const totalNodeWeight = nodes.reduce(
     (sum, node) => sum + node.totalWeight, 0);
   const sourceCenter = nodes.length ? nodes.reduce((sum, node) => [
@@ -459,18 +450,16 @@ export function buildSurfaceInfluenceGraph(
     degenerateTriangleCount: topology.degenerateTriangleCount,
     invalidTriangleCount: topology.invalidTriangleCount,
     totalSurfaceArea: topology.totalSurfaceArea,
-    measuredVertexCount: measuredVertices.size,
-    zeroMeasureVertexCount: topology.positionCount - measuredVertices.size,
+    measuredVertexCount: topology.measuredVertexCount,
+    zeroMeasureVertexCount: topology.positionCount
+      - topology.measuredVertexCount,
     fallbackReason: null,
   };
 }
 
 export function buildInfluenceNodes(
-    baselinePositions, indices, weights, influenceCount, boneIds = null,
-    options = {}) {
+    baselinePositions, indices, weights, influenceCount, boneIds = null) {
   const vertexCount = compactVertexCount(indices, weights, influenceCount);
-  const vertexMeasure = options?.vertexMeasure;
-  const hasMeasure = vertexMeasure !== null && vertexMeasure !== undefined;
   const requested = boneIds === null || boneIds === undefined
     ? null : new Set([...boneIds].map(Number));
   const entries = new Map();
@@ -479,12 +468,11 @@ export function buildInfluenceNodes(
       indices, weights, influenceCount, vertex);
     influences.forEach((weight, boneId) => {
       if (requested && !requested.has(boneId)) return;
-      const measure = vertexEvidenceMeasure(vertexMeasure, vertex);
       const entry = entries.get(boneId) || {
         boneId,
         totalWeight: 0,
         affectedVertexCount: 0,
-        affectedMeasure: hasMeasure ? 0 : null,
+        affectedMeasure: null,
         maxVertexWeight: 0,
         weightedX: 0,
         weightedY: 0,
@@ -492,9 +480,8 @@ export function buildInfluenceNodes(
         squaredPositionWeight: 0,
         positionWeight: 0,
       };
-      entry.totalWeight += measure * weight;
+      entry.totalWeight += weight;
       entry.affectedVertexCount += 1;
-      if (hasMeasure) entry.affectedMeasure += measure;
       entry.maxVertexWeight = Math.max(entry.maxVertexWeight, weight);
       if (baselinePositions
           && baselinePositions.length >= vertex * 3 + 3) {
@@ -503,12 +490,12 @@ export function buildInfluenceNodes(
         const y = Number(baselinePositions[offset + 1]);
         const z = Number(baselinePositions[offset + 2]);
         if ([x, y, z].every(Number.isFinite)) {
-          entry.weightedX += x * measure * weight;
-          entry.weightedY += y * measure * weight;
-          entry.weightedZ += z * measure * weight;
+          entry.weightedX += x * weight;
+          entry.weightedY += y * weight;
+          entry.weightedZ += z * weight;
           entry.squaredPositionWeight += (
-            x * x + y * y + z * z) * measure * weight;
-          entry.positionWeight += measure * weight;
+            x * x + y * y + z * z) * weight;
+          entry.positionWeight += weight;
         }
       }
       entries.set(boneId, entry);
@@ -562,12 +549,10 @@ function centerDistance(centerA, centerB) {
 /** Build overlap evidence and an overlap-derived pivot for every bone pair. */
 export function buildInfluenceRelationships(
     baselinePositions, indices, weights, influenceCount, nodes,
-    boundingSphereRadius = null, options = {}) {
+    boundingSphereRadius = null) {
   const nodeById = new Map((nodes || []).map(node => [
     Number(node.boneId), node]));
   const vertexCount = compactVertexCount(indices, weights, influenceCount);
-  const vertexMeasure = options?.vertexMeasure;
-  const hasMeasure = vertexMeasure !== null && vertexMeasure !== undefined;
   const relationships = new Map();
   const ids = [];
   const mergedWeights = [];
@@ -595,12 +580,11 @@ export function buildInfluenceRelationships(
         const weightA = mergedWeights[left];
         const weightB = mergedWeights[right];
         const jointWeight = weightA * weightB;
-        const measure = vertexEvidenceMeasure(vertexMeasure, vertex);
         const relationship = relationships.get(key) || {
           boneA,
           boneB,
           sharedVertexCount: 0,
-          sharedMeasure: hasMeasure ? 0 : null,
+          sharedMeasure: null,
           minOverlap: 0,
           productOverlap: 0,
           jointWeightTotal: 0,
@@ -609,9 +593,8 @@ export function buildInfluenceRelationships(
           jointZ: 0,
         };
         relationship.sharedVertexCount += 1;
-        if (hasMeasure) relationship.sharedMeasure += measure;
-        relationship.minOverlap += measure * Math.min(weightA, weightB);
-        relationship.productOverlap += measure * jointWeight;
+        relationship.minOverlap += Math.min(weightA, weightB);
+        relationship.productOverlap += jointWeight;
         if (baselinePositions && baselinePositions.length >= vertex * 3 + 3
             && Number.isFinite(jointWeight) && jointWeight > 0) {
           const offset = vertex * 3;
@@ -619,10 +602,10 @@ export function buildInfluenceRelationships(
           const y = Number(baselinePositions[offset + 1]);
           const z = Number(baselinePositions[offset + 2]);
           if ([x, y, z].every(Number.isFinite)) {
-            relationship.jointWeightTotal += measure * jointWeight;
-            relationship.jointX += x * measure * jointWeight;
-            relationship.jointY += y * measure * jointWeight;
-            relationship.jointZ += z * measure * jointWeight;
+            relationship.jointWeightTotal += jointWeight;
+            relationship.jointX += x * jointWeight;
+            relationship.jointY += y * jointWeight;
+            relationship.jointZ += z * jointWeight;
           }
         }
         relationships.set(key, relationship);
