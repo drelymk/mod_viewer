@@ -13,6 +13,53 @@ function componentSnapshot(component) {
   };
 }
 
+function sourceBoneSignature(sourceKey, boneId) {
+  return `${sourceKey}#bone=${Number(boneId)}`;
+}
+
+function sourcePair(left, right) {
+  return left < right ? [left, right] : [right, left];
+}
+
+/**
+ * Return topology identity keyed by source and bone rather than array IDs.
+ * This is intentionally compact so diagnostics can compare Rig rebuilds.
+ */
+export function sourceTopologyComparisonSnapshot(source) {
+  const sourceKey = String(source?.sourceKey || '');
+  const signature = boneId => sourceBoneSignature(sourceKey, boneId);
+  const components = source?.components || [];
+  const rootSignatures = components.map(component =>
+    signature(component.rootId)).sort();
+  const componentMembership = components.map(component =>
+    (component.nodeIds || []).map(signature).sort()).sort((left, right) =>
+      JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  const directedParentEdges = components.flatMap(component =>
+    Object.entries(component.parentById || {}).flatMap(([childId, parentId]) =>
+      parentId === null || parentId === undefined ? [] : [[
+        signature(parentId), signature(childId),
+      ]])).sort((left, right) => JSON.stringify(left)
+    .localeCompare(JSON.stringify(right)));
+  const undirectedTreeEdges = directedParentEdges.map(([parent, child]) =>
+    sourcePair(parent, child)).sort((left, right) => JSON.stringify(left)
+    .localeCompare(JSON.stringify(right)));
+  const pivotBySourceBonePair = (source?.relationships || [])
+    .filter(edge => edge.jointCenter?.length >= 3)
+    .map(edge => ({
+      pair: sourcePair(signature(edge.boneA), signature(edge.boneB)),
+      pivot: [...edge.jointCenter],
+    }))
+    .sort((left, right) => JSON.stringify(left.pair)
+      .localeCompare(JSON.stringify(right.pair)));
+  return {
+    rootSignatures,
+    undirectedTreeEdges,
+    directedParentEdges,
+    componentMembership,
+    pivotBySourceBonePair,
+  };
+}
+
 /** Build the source-level projection exposed only by Rig debug state. */
 export function sourceRigSnapshot(rig, {
   modelRigState,

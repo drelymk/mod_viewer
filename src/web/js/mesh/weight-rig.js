@@ -7,6 +7,85 @@
 export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
 export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
 
+/**
+ * Build a lumped barycentric surface measure for each position vertex.
+ *
+ * `triangleIndices` is optional because non-indexed BufferGeometry uses
+ * consecutive position triples as its triangle topology.
+ */
+export function buildVertexSurfaceMeasure(positions, triangleIndices = null) {
+  const positionArray = positions || [];
+  const positionCount = Math.floor(positionArray.length / 3);
+  const indexed = triangleIndices !== null && triangleIndices !== undefined;
+  const indexArray = indexed ? triangleIndices : null;
+  const indexCount = indexed ? Number(indexArray?.length) || 0 : positionCount;
+  const triangleCount = Math.ceil(indexCount / 3);
+  const vertexMeasure = new Float64Array(positionCount);
+  let validTriangleCount = 0;
+  let degenerateTriangleCount = 0;
+  let invalidTriangleCount = 0;
+  let totalSurfaceArea = 0;
+
+  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+    const indices = [0, 1, 2].map(offset => {
+      const index = triangle * 3 + offset;
+      return indexed ? Number(indexArray[index]) : index;
+    });
+    if (indices.some(index => !Number.isInteger(index)
+        || index < 0 || index >= positionCount)) {
+      invalidTriangleCount += 1;
+      continue;
+    }
+    const coordinates = indices.map(vertex => {
+      const offset = vertex * 3;
+      return [
+        Number(positionArray[offset]),
+        Number(positionArray[offset + 1]),
+        Number(positionArray[offset + 2]),
+      ];
+    });
+    if (coordinates.some(point => point.some(value => !Number.isFinite(value)))) {
+      invalidTriangleCount += 1;
+      continue;
+    }
+    const [a, b, c] = coordinates;
+    const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const area = 0.5 * Math.hypot(
+      ab[1] * ac[2] - ab[2] * ac[1],
+      ab[2] * ac[0] - ab[0] * ac[2],
+      ab[0] * ac[1] - ab[1] * ac[0]);
+    if (!Number.isFinite(area)) {
+      invalidTriangleCount += 1;
+      continue;
+    }
+    if (area === 0) {
+      degenerateTriangleCount += 1;
+      continue;
+    }
+    const contribution = area / 3;
+    indices.forEach(index => { vertexMeasure[index] += contribution; });
+    totalSurfaceArea += area;
+    validTriangleCount += 1;
+  }
+
+  let measuredVertexCount = 0;
+  for (const measure of vertexMeasure) {
+    if (measure > 0) measuredVertexCount += 1;
+  }
+  return {
+    vertexMeasure,
+    triangleCount,
+    validTriangleCount,
+    degenerateTriangleCount,
+    invalidTriangleCount,
+    totalSurfaceArea,
+    measuredVertexCount,
+    zeroMeasureVertexCount: positionCount - measuredVertexCount,
+    surfaceEvidenceAvailable: validTriangleCount > 0 && totalSurfaceArea > 0,
+  };
+}
+
 function compactVertexCount(indices, weights, influenceCount) {
   if (!indices || !weights || !Number.isInteger(influenceCount)
       || influenceCount <= 0) return 0;

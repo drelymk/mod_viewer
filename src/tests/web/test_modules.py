@@ -1107,6 +1107,214 @@ def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_p
     assert result["nonZeroRootPivotKeys"] == [0, 2]
 
 
+def test_source_topology_comparison_uses_stable_bone_signatures(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {sourceTopologyComparisonSnapshot} = await import(
+        './js/mesh/weight-rig-snapshots.js');
+      const first = {
+        sourceKey: 'body|offset=0',
+        components: [
+          {rootId: 0, nodeIds: [0, 1],
+            parentById: {0: null, 1: 0}},
+          {rootId: 3, nodeIds: [3, 4],
+            parentById: {3: null, 4: 3}},
+        ],
+        relationships: [
+          {boneA: 1, boneB: 0, jointCenter: [1, 0, 0]},
+          {boneA: 4, boneB: 3, jointCenter: [3, 0, 0]},
+        ],
+      };
+      const second = {
+        ...first,
+        components: [...first.components].reverse(),
+        relationships: [...first.relationships].reverse(),
+      };
+      return {
+        first: sourceTopologyComparisonSnapshot(first),
+        second: sourceTopologyComparisonSnapshot(second),
+      };
+    }""")
+    assert result["first"] == result["second"]
+    assert result["first"] == {
+        "rootSignatures": [
+            "body|offset=0#bone=0",
+            "body|offset=0#bone=3",
+        ],
+        "undirectedTreeEdges": [
+            ["body|offset=0#bone=0", "body|offset=0#bone=1"],
+            ["body|offset=0#bone=3", "body|offset=0#bone=4"],
+        ],
+        "directedParentEdges": [
+            ["body|offset=0#bone=0", "body|offset=0#bone=1"],
+            ["body|offset=0#bone=3", "body|offset=0#bone=4"],
+        ],
+        "componentMembership": [
+            ["body|offset=0#bone=0", "body|offset=0#bone=1"],
+            ["body|offset=0#bone=3", "body|offset=0#bone=4"],
+        ],
+        "pivotBySourceBonePair": [
+            {"pair": [
+                "body|offset=0#bone=0", "body|offset=0#bone=1",
+            ], "pivot": [1, 0, 0]},
+            {"pair": [
+                "body|offset=0#bone=3", "body|offset=0#bone=4",
+            ], "pivot": [3, 0, 0]},
+        ],
+    }
+
+
+def test_surface_measure_preserves_area_across_tessellation_and_scale(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const coarsePositions = new Float32Array([
+        0, 0, 0, 2, 0, 0, 0, 2, 0,
+      ]);
+      const coarseTriangles = new Uint32Array([0, 1, 2]);
+      const densePositions = new Float32Array([
+        0, 0, 0, 2, 0, 0, 0, 2, 0,
+        1, 0, 0, 1, 1, 0, 0, 1, 0,
+      ]);
+      const denseTriangles = new Uint32Array([
+        0, 3, 5, 3, 1, 4, 5, 4, 2, 3, 4, 5,
+      ]);
+      const evidence = (positions, triangles, weights) => {
+        const measure = rig.buildVertexSurfaceMeasure(positions, triangles);
+        let support = 0;
+        let weightedX = 0;
+        let weightedY = 0;
+        weights.forEach((weight, index) => {
+          const contribution = measure.vertexMeasure[index] * weight;
+          support += contribution;
+          weightedX += positions[index * 3] * contribution;
+          weightedY += positions[index * 3 + 1] * contribution;
+        });
+        return {
+          ...measure,
+          vertexMeasure: [...measure.vertexMeasure],
+          support,
+          center: [weightedX / support, weightedY / support],
+          rawSupport: weights.reduce((sum, weight) => sum + weight, 0),
+        };
+      };
+      const coarse = evidence(coarsePositions, coarseTriangles,
+        [.5, .5, .5]);
+      const dense = evidence(densePositions, denseTriangles,
+        [.5, .5, .5, .5, .5, .5]);
+      const gradient = evidence(densePositions, denseTriangles,
+        [0, 1, 0, .5, .5, 0]);
+      const scaledPositions = densePositions.map(value => value * 100);
+      const scaled = evidence(scaledPositions, denseTriangles,
+        [.5, .5, .5, .5, .5, .5]);
+      const nonIndexed = rig.buildVertexSurfaceMeasure(new Float32Array([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0, 0, 0, 0, 1, 0, -1, 0, 0,
+      ]));
+      return {
+        coarse, dense, gradient,
+        scaled: {
+          totalSurfaceArea: scaled.totalSurfaceArea,
+          support: scaled.support,
+          center: scaled.center,
+        },
+        nonIndexed: {
+          triangleCount: nonIndexed.triangleCount,
+          validTriangleCount: nonIndexed.validTriangleCount,
+          totalSurfaceArea: nonIndexed.totalSurfaceArea,
+        },
+        duplicateAreas: [
+          rig.buildVertexSurfaceMeasure(
+            densePositions, denseTriangles).totalSurfaceArea,
+          rig.buildVertexSurfaceMeasure(
+            densePositions, denseTriangles).totalSurfaceArea,
+        ],
+      };
+    }""")
+    assert result["coarse"]["triangleCount"] == 1
+    assert result["dense"]["triangleCount"] == 4
+    assert result["coarse"]["validTriangleCount"] == 1
+    assert result["dense"]["validTriangleCount"] == 4
+    assert result["coarse"]["totalSurfaceArea"] == pytest.approx(2)
+    assert result["dense"]["totalSurfaceArea"] == pytest.approx(2)
+    assert result["coarse"]["support"] == pytest.approx(1)
+    assert result["dense"]["support"] == pytest.approx(1)
+    assert result["gradient"]["support"] == pytest.approx(2 / 3)
+    assert result["coarse"]["center"] == pytest.approx([2 / 3, 2 / 3])
+    assert result["dense"]["center"] == pytest.approx([2 / 3, 2 / 3])
+    assert result["coarse"]["rawSupport"] != result["dense"]["rawSupport"]
+    assert result["scaled"]["totalSurfaceArea"] == pytest.approx(20000)
+    assert result["scaled"]["support"] == pytest.approx(10000)
+    assert result["scaled"]["center"] == pytest.approx([200 / 3, 200 / 3])
+    assert result["nonIndexed"] == {
+        "triangleCount": 2,
+        "validTriangleCount": 2,
+        "totalSurfaceArea": pytest.approx(1),
+    }
+    assert result["duplicateAreas"] == pytest.approx([2, 2])
+
+
+def test_surface_measure_diagnostics_reject_bad_triangles_without_nan(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const positions = new Float32Array([
+        0, 0, 0, 1, 0, 0, 0, 1, 0, NaN, 0, 0,
+      ]);
+      const malformed = rig.buildVertexSurfaceMeasure(positions,
+        new Uint32Array([0, 1, 2, 0, 2, 3, 0, 0, 1, 0, 1, 9, 0, 1]));
+      const unusable = rig.buildVertexSurfaceMeasure(
+        new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
+        new Uint32Array([0, 1, 2]));
+      return {
+        malformed: {
+          triangleCount: malformed.triangleCount,
+          validTriangleCount: malformed.validTriangleCount,
+          degenerateTriangleCount: malformed.degenerateTriangleCount,
+          invalidTriangleCount: malformed.invalidTriangleCount,
+          totalSurfaceArea: malformed.totalSurfaceArea,
+          measuredVertexCount: malformed.measuredVertexCount,
+          zeroMeasureVertexCount: malformed.zeroMeasureVertexCount,
+          surfaceEvidenceAvailable: malformed.surfaceEvidenceAvailable,
+          vertexMeasure: [...malformed.vertexMeasure],
+        },
+        unusable: {
+          triangleCount: unusable.triangleCount,
+          validTriangleCount: unusable.validTriangleCount,
+          degenerateTriangleCount: unusable.degenerateTriangleCount,
+          invalidTriangleCount: unusable.invalidTriangleCount,
+          totalSurfaceArea: unusable.totalSurfaceArea,
+          measuredVertexCount: unusable.measuredVertexCount,
+          zeroMeasureVertexCount: unusable.zeroMeasureVertexCount,
+          surfaceEvidenceAvailable: unusable.surfaceEvidenceAvailable,
+          vertexMeasure: [...unusable.vertexMeasure],
+        },
+      };
+    }""")
+    assert result["malformed"] == {
+        "triangleCount": 5,
+        "validTriangleCount": 1,
+        "degenerateTriangleCount": 1,
+        "invalidTriangleCount": 3,
+        "totalSurfaceArea": pytest.approx(.5),
+        "measuredVertexCount": 3,
+        "zeroMeasureVertexCount": 1,
+        "surfaceEvidenceAvailable": True,
+        "vertexMeasure": pytest.approx([1 / 6, 1 / 6, 1 / 6, 0]),
+    }
+    assert result["unusable"] == {
+        "triangleCount": 1,
+        "validTriangleCount": 0,
+        "degenerateTriangleCount": 1,
+        "invalidTriangleCount": 0,
+        "totalSurfaceArea": 0,
+        "measuredVertexCount": 0,
+        "zeroMeasureVertexCount": 3,
+        "surfaceEvidenceAvailable": False,
+        "vertexMeasure": pytest.approx([0, 0, 0]),
+    }
+
+
 def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_page):
     page = module_page
     result = page.evaluate("""async () => {
