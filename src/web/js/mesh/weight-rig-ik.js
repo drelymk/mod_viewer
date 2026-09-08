@@ -330,23 +330,202 @@ function rangeScore(value, low, high, softness = .15) {
   return clamp01(1 - distance / Math.max(softness, EPSILON));
 }
 
-function resolverFrame(rig, component, axes) {
-  const points = [...new Set((component?.nodeIds || []).map(numberId)
-    .filter(Number.isInteger))].map(id => pointFor(rig, id)).filter(Boolean);
+function quantileValue(values, fraction) {
+  if (!values.length) return 0;
+  const ordered = [...values].sort((left, right) => left - right);
+  const index = Math.max(0, Math.min(ordered.length - 1,
+    Math.round((ordered.length - 1) * clamp01(fraction))));
+  return ordered[index];
+}
+
+function globalResolverFrame(rig, axes) {
+  const ids = new Set();
+  (rig?.joints || []).forEach(joint => {
+    const id = numberId(joint?.jointId);
+    if (id !== null) ids.add(id);
+  });
+  (rig?.components || rig?.inferredForest?.components || []).forEach(component =>
+    (component?.nodeIds || []).forEach(id => {
+      const jointId = numberId(id);
+      if (jointId !== null) ids.add(jointId);
+    }));
+  const points = [...ids].sort((left, right) => left - right)
+    .map(id => pointFor(rig, id)).filter(Boolean);
   const coordinates = points.map(point => ({
     side: point.dot(axes.right), height: point.dot(axes.up), depth: point.dot(axes.forward),
   }));
   const heights = coordinates.map(item => item.height);
-  const minHeight = Math.min(...heights);
-  const maxHeight = Math.max(...heights);
-  const bounds = new THREE.Box3().setFromPoints(points);
-  const extent = bounds.getSize(new THREE.Vector3()).length();
+  if (!coordinates.length) {
+    return {
+      center: new THREE.Vector3(), up: axes.up, forward: axes.forward,
+      right: axes.right, lowHeight: -.5, highHeight: .5, height: 1,
+      centerSide: 0, centerDepth: 0,
+    };
+  }
+  const lowHeight = quantileValue(heights, .05);
+  const highHeight = quantileValue(heights, .95);
+  const height = Math.max(highHeight - lowHeight,
+    Math.max(...heights) - Math.min(...heights), EPSILON);
+  const centerSide = medianValue(coordinates.map(item => item.side));
+  const centerHeight = medianValue(coordinates.map(item => item.height));
+  const centerDepth = medianValue(coordinates.map(item => item.depth));
+  const center = axes.right.clone().multiplyScalar(centerSide)
+    .addScaledVector(axes.up, centerHeight)
+    .addScaledVector(axes.forward, centerDepth);
   return {
-    center: axes.right.clone().multiplyScalar(medianValue(coordinates.map(item => item.side)))
-      .addScaledVector(axes.up, medianValue(coordinates.map(item => item.height)))
-      .addScaledVector(axes.forward, medianValue(coordinates.map(item => item.depth))),
-    height: Math.max(maxHeight - minHeight > EPSILON
-      ? maxHeight - minHeight : extent, EPSILON),
+    center, up: axes.up, forward: axes.forward, right: axes.right,
+    lowHeight, highHeight, height, centerSide, centerDepth,
+  };
+}
+
+function resolverFrame(rig, axes, semanticFrame = null) {
+  if (semanticFrame?.center && Number.isFinite(Number(semanticFrame.height))) {
+    const center = finiteVector(semanticFrame.center);
+    const lowHeight = Number(semanticFrame.lowHeight);
+    const highHeight = Number(semanticFrame.highHeight);
+    const height = Number(semanticFrame.height);
+    if (center && Number.isFinite(lowHeight) && Number.isFinite(highHeight)
+        && Number.isFinite(height) && height > EPSILON) {
+      return {
+        center, up: axes.up, forward: axes.forward, right: axes.right,
+        lowHeight, highHeight, height,
+        centerSide: Number(semanticFrame.centerSide) || 0,
+        centerDepth: Number(semanticFrame.centerDepth) || 0,
+      };
+    }
+  }
+  return globalResolverFrame(rig, axes);
+}
+
+function supportValue(rig, id) {
+  const joint = jointFor(rig, id);
+  const evidence = joint?.evidence || joint || {};
+  const count = Number(evidence.affectedVertexCount);
+  const weight = Number(evidence.totalWeight);
+  const raw = Math.max(Number.isFinite(count) && count > 0 ? count : 0,
+    Number.isFinite(weight) && weight > 0 ? weight * 100 : 0, 1);
+  return Math.log1p(raw);
+}
+
+function supportScale(rig) {
+  const values = (rig?.joints || []).map(joint =>
+    supportValue(rig, joint?.jointId));
+  return Math.max(...values, 1);
+}
+
+function corridorDiagnostics(state, rig, frame, axes, role) {
+  const isArm = String(role || '').endsWith('_arm');
+  const sideSign = String(role || '').startsWith('left_') ? -1 : 1;
+  const anchor = state.points[0] || new THREE.Vector3();
+  const distances = [];
+  let inside = 0;
+  let depthTotal = 0;
+  let lateralTotal = 0;
+  let downwardTotal = 0;
+  for (const point of state.points) {
+    const relative = point.clone().sub(anchor);
+    const outward = relative.dot(axes.right) * sideSign / frame.height;
+    const downward = -relative.dot(axes.up) / frame.height;
+    const depth = Math.abs(relative.dot(axes.forward)) / frame.height;
+    let distance;
+    if (isArm) {
+      // A broad wedge around the outward/downward plane accepts T-pose through
+      // steep A-pose geometry, while continuously penalizing depth excursions.
+      const expectedDown = Math.max(-.08, outward * .38);
+      distance = Math.max(0, expectedDown - downward - .2)
+        + Math.max(0, -outward - .08) * .8
+        + Math.max(0, Math.abs(downward - expectedDown) - .2) * .45
+        + Math.max(0, depth - .28) * .9;
+    } else {
+      const allowedSide = .08 + Math.max(0, downward) * .16;
+      distance = Math.max(0, Math.abs(relative.dot(axes.right)) / frame.height
+        - allowedSide) * .9
+        + Math.max(0, depth - .22) * .9
+        + Math.max(0, -downward - .06) * .75;
+    }
+    distances.push(distance);
+    if (distance <= .24) inside += 1;
+    depthTotal += depth;
+    lateralTotal += Math.abs(relative.dot(axes.right)) / frame.height;
+    downwardTotal += Math.max(0, downward);
+  }
+  const endpoint = state.points.at(-1) || anchor;
+  const endpointRelative = endpoint.clone().sub(frame.center);
+  const endpointHeight01 = (endpoint.dot(frame.up) - frame.lowHeight) / frame.height;
+  const anchorHeight01 = (anchor.dot(frame.up) - frame.lowHeight) / frame.height;
+  const netSide = endpoint.clone().sub(anchor).dot(axes.right) / frame.height;
+  const netHeight = endpoint.clone().sub(anchor).dot(axes.up) / frame.height;
+  const netForward = endpoint.clone().sub(anchor).dot(axes.forward) / frame.height;
+  const outwardDisplacement = netSide * sideSign;
+  const downwardDisplacement = -netHeight;
+  const forwardDisplacement = netForward;
+  const planarTravel = Math.max(Math.abs(outwardDisplacement)
+    + Math.max(0, downwardDisplacement), EPSILON);
+  const dropFraction = clamp01(downwardDisplacement / planarTravel);
+  const sideFraction = clamp01(outwardDisplacement / planarTravel);
+  const depthFraction = clamp01(Math.abs(forwardDisplacement)
+    / Math.max(Math.abs(outwardDisplacement) + downwardDisplacement, EPSILON));
+  const sideDownAngle = Math.atan2(Math.max(0, downwardDisplacement),
+    Math.max(Math.abs(outwardDisplacement), EPSILON));
+  const meanCorridorDistance = distances.reduce((sum, value) => sum + value, 0)
+    / Math.max(distances.length, 1);
+  const maxCorridorDistance = Math.max(...distances, 0);
+  const insideCorridorFraction = inside / Math.max(state.points.length, 1);
+  const depthDeviation = depthTotal / Math.max(state.points.length, 1);
+  const verticalCoverage = clamp01((anchorHeight01 - endpointHeight01) / .7);
+  const endpointBottomScore = isArm
+    ? rangeScore(endpointHeight01, .32, .92, .5)
+    : rangeScore(endpointHeight01, 0, .22, .3);
+  const corridorScore = isArm
+    ? clamp01(.48 * insideCorridorFraction
+      + .3 * (1 - clamp01(meanCorridorDistance / .65))
+      + .22 * (1 - clamp01(depthDeviation / .45)))
+    : clamp01(.5 * insideCorridorFraction
+      + .26 * (1 - clamp01(meanCorridorDistance / .5))
+      + .16 * verticalCoverage + .08 * endpointBottomScore);
+  const poseAngleScore = isArm
+    ? clamp01(.38 * clamp01(outwardDisplacement / .18)
+      + .32 * rangeScore(dropFraction, .03, .72, .35)
+      + .18 * (1 - clamp01(depthFraction / .55))
+      + .12 * (1 - clamp01(Math.max(0, -outwardDisplacement) / .18)))
+    : clamp01(.55 * clamp01(downwardDisplacement / .35)
+      + .25 * (1 - clamp01(Math.abs(outwardDisplacement) / .35))
+      + .2 * (1 - clamp01(depthDeviation / .45)));
+  const supports = state.pathJointIds.map(id => supportValue(rig, id));
+  const sortedSupports = [...supports].sort((left, right) => left - right);
+  const medianSupport = sortedSupports[Math.floor((sortedSupports.length - 1) / 2)] || 0;
+  const proximalCount = Math.max(1, Math.ceil(supports.length / 3));
+  const proximalSupport = supports.slice(0, proximalCount)
+    .reduce((sum, value) => sum + value, 0) / proximalCount;
+  const scale = supportScale(rig);
+  const pathSupportScore = clamp01(medianSupport / Math.max(scale, EPSILON));
+  return {
+    meanCorridorDistance,
+    maxCorridorDistance,
+    insideCorridorFraction,
+    corridorScore,
+    poseAngleScore,
+    armPoseScore: isArm ? poseAngleScore : 0,
+    sideFraction,
+    dropFraction,
+    depthFraction,
+    sideDownAngle,
+    outwardDisplacement,
+    downwardDisplacement,
+    forwardDisplacement,
+    lateralDeviation: lateralTotal / Math.max(state.points.length, 1),
+    depthDeviation,
+    endpointHeight01,
+    endpointDepth: endpointRelative.dot(axes.forward) / frame.height,
+    verticalCoverage,
+    endpointBottomScore,
+    pathSupportScore,
+    anchorSupport: supports[0] / Math.max(scale, EPSILON),
+    proximalSupport: proximalSupport / Math.max(scale, EPSILON),
+    medianPathSupport: medianSupport / Math.max(scale, EPSILON),
+    distalSupport: (supports.at(-1) || 0) / Math.max(scale, EPSILON),
+    branchDominance: state.branchDominanceCount
+      ? state.branchDominanceSum / state.branchDominanceCount : 1,
   };
 }
 
@@ -362,6 +541,7 @@ function pathMetricsForState(state, rig, frame, axes, role) {
   const downwardTravel = state.downwardTravel;
   const directDistance = state.points.length > 1
     ? state.points[0].distanceTo(state.points.at(-1)) : 0;
+  const corridor = corridorDiagnostics(state, rig, frame, axes, role);
   const metrics = {
     totalLength: state.totalLength / frame.height,
     directDistance: directDistance / frame.height,
@@ -372,11 +552,10 @@ function pathMetricsForState(state, rig, frame, axes, role) {
     netForward: state.netForward / frame.height,
     netSideDisplacement: state.netSide / frame.height,
     netHeightDisplacement: state.netHeight / frame.height,
-    netForwardDisplacement: state.netForward / frame.height,
     absoluteForwardTravel: absoluteForward / frame.height,
+    forwardBacktracking: Math.max(0, absoluteForward - Math.abs(state.netForward)) / frame.height,
     outwardProgressFraction: outwardTravel / Math.max(absoluteSide, EPSILON),
     downwardProgressFraction: downwardTravel / Math.max(absoluteHeight, EPSILON),
-    forwardBacktracking: Math.max(0, absoluteForward - Math.abs(state.netForward)) / frame.height,
     sideBacktracking: Math.max(0, absoluteSide - Math.abs(state.netSide)) / frame.height,
     heightBacktracking: Math.max(0, absoluteHeight - Math.abs(state.netHeight)) / frame.height,
     endpointSide: relative.dot(axes.right) / frame.height,
@@ -387,6 +566,7 @@ function pathMetricsForState(state, rig, frame, axes, role) {
     branchCount: state.branchCount,
     segmentCount: state.segmentCount,
     sideSign,
+    ...corridor,
   };
   return metrics;
 }
@@ -408,23 +588,27 @@ function pathScoreForRole(metrics, role, branchHub = false, terminal = false) {
   const outwardProgress = clamp01(metrics.outwardProgressFraction);
   const downwardProgress = clamp01(metrics.downwardProgressFraction);
   const downwardReach = clamp01(-metrics.netHeight / .35);
-  const branchBonus = branchHub && metrics.totalLength > .18
-    ? (isArm ? .2
-      : Math.abs(metrics.endpointDepth) < .25 && downwardReach < .25 ? .6 : .2)
-    : 0;
+  // Branch topology is only a small tie-breaker after the geometry is already
+  // limb-like. It must never rescue a weak or shallow leg path.
+  const branchBonus = branchHub && metrics.corridorScore > .62
+    ? Math.min(.035, .015 + .02 * (metrics.branchDominance || 0)) : 0;
   if (isArm) {
-    return clamp01(.28 * outward + .17 * endpointOutward + .15 * length
-      + .12 * metrics.straightness + .1 * outwardProgress
-      + .06 * downward + .06 * continuation + branchBonus
-      - .24 * depthPenalty - .08 * sidePenalty - .04 * heightPenalty);
+    return clamp01(.27 * metrics.corridorScore + .2 * metrics.poseAngleScore
+      + .1 * outward + .08 * endpointOutward + .1 * length
+      + .08 * metrics.straightness + .07 * outwardProgress
+      + .05 * downward + .05 * continuation + .06 * metrics.pathSupportScore
+      + .04 * (metrics.branchDominance || 0) + branchBonus
+      - .2 * depthPenalty - .06 * sidePenalty - .04 * heightPenalty);
   }
   const lateralPenalty = clamp01(Math.abs(metrics.netSide) / .8
     + metrics.sideBacktracking / .45);
   const extended = clamp01(metrics.totalLength / .9);
-  return clamp01(.34 * downwardReach + .18 * endpointLow + .16 * length
-    + .1 * downwardProgress + .1 * metrics.straightness + .1 * extended
-    + .06 * continuation + branchBonus + (terminal ? .04 : 0)
-    - .16 * lateralPenalty - .12 * depthPenalty - .05 * heightPenalty);
+  return clamp01(.3 * metrics.corridorScore + .2 * metrics.poseAngleScore
+    + .13 * downwardReach + .11 * endpointLow + .1 * length
+    + .08 * downwardProgress + .07 * metrics.straightness
+    + .05 * extended + .05 * continuation + .06 * metrics.pathSupportScore
+    + .04 * (metrics.branchDominance || 0) + branchBonus + (terminal ? .025 : 0)
+    - .18 * lateralPenalty - .12 * depthPenalty - .05 * heightPenalty);
 }
 
 function pathSort(left, right) {
@@ -482,6 +666,11 @@ function expandPathState(state, childId, rig, component, frame, axes, role) {
   const forwardStep = delta.dot(axes.forward);
   const continuation = continuationFor(rig, current);
   const children = childrenFor(component, current).filter(child => pointFor(rig, child));
+  const siblingSupports = children.map(sibling => supportValue(rig, sibling));
+  const siblingTotal = siblingSupports.reduce((sum, value) => sum + value, 0);
+  const childSupport = supportValue(rig, childId);
+  const branchRatio = children.length > 1
+    ? childSupport / Math.max(siblingTotal, EPSILON) : null;
   const next = {
     pathJointIds: [...state.pathJointIds, childId],
     points: [...state.points, nextPoint],
@@ -499,6 +688,9 @@ function expandPathState(state, childId, rig, component, frame, axes, role) {
       + (continuation === childId ? 1 : 0),
     segmentCount: state.segmentCount + 1,
     branchCount: state.branchCount + (children.length > 1 ? 1 : 0),
+    branchDominanceSum: state.branchDominanceSum
+      + (branchRatio === null ? 1 : branchRatio),
+    branchDominanceCount: state.branchDominanceCount + 1,
     branchHub: false,
   };
   const metrics = pathMetricsForState(next, rig, frame, axes, role);
@@ -508,7 +700,7 @@ function expandPathState(state, childId, rig, component, frame, axes, role) {
 }
 
 export function resolveLimbPathCandidates({
-  rig, anchorJointId, role, characterForward, characterAxes,
+  rig, anchorJointId, role, characterForward, characterAxes, semanticFrame,
   maxDepth = 32, beamWidth = 12, maxResults = 16,
 } = {}) {
   const anchor = numberId(anchorJointId);
@@ -524,14 +716,17 @@ export function resolveLimbPathCandidates({
     return {available: false, candidates: [], reason: 'anchor_is_component_root'};
   }
   const axes = semanticAxesForPath({characterAxes, characterForward});
-  const frame = resolverFrame(rig, component, axes);
+  // The caller normally supplies the model-wide frame. The fallback also
+  // measures every Rig component, never the candidate's component alone.
+  const frame = resolverFrame(rig, axes, semanticFrame);
   const anchorPoint = pointFor(rig, anchor);
   const initial = {
     pathJointIds: [anchor], points: [anchorPoint], totalLength: 0,
     netSide: 0, netHeight: 0, netForward: 0,
     absoluteSideTravel: 0, absoluteHeightTravel: 0, absoluteForwardTravel: 0,
     outwardTravel: 0, downwardTravel: 0, continuationMatches: 0,
-    segmentCount: 0, branchCount: 0, provisionalScore: 0,
+    segmentCount: 0, branchCount: 0, branchDominanceSum: 1,
+    branchDominanceCount: 1, provisionalScore: 0,
   };
   let active = [initial];
   const finals = [];
@@ -551,8 +746,15 @@ export function resolveLimbPathCandidates({
         state.branchHub = children.length > 1;
         const endpoint = pathCandidateForState(state, rig, frame, axes, role,
           children.length ? 'branch_endpoint' : 'leaf');
-        if (endpoint) finals.push(endpoint);
+        const terminalBranch = children.length > 1 && children.every(child =>
+          childrenFor(component, child).length === 0);
+        // A single-child continuation is not an endpoint. Keeping it out of
+        // the final set prevents a short helper segment from beating its
+        // complete descendant path; branch hubs and leaves remain options.
+        if (endpoint && (children.length === 0 || terminalBranch)) finals.push(endpoint);
       }
+      if (children.length > 1 && children.every(child =>
+          childrenFor(component, child).length === 0)) return;
       children.forEach(childId => {
         const next = expandPathState(state, childId, rig, component, frame, axes, role);
         if (next) {
@@ -612,10 +814,10 @@ export function resolveLimbPathCandidates({
 
 /** Detect one primary descendant limb path through the shared resolver. */
 export function detectLimbPath({
-  rig, anchorJointId, role, characterForward, characterAxes,
+  rig, anchorJointId, role, characterForward, characterAxes, semanticFrame,
 } = {}) {
   const resolved = resolveLimbPathCandidates({
-    rig, anchorJointId, role, characterForward, characterAxes,
+    rig, anchorJointId, role, characterForward, characterAxes, semanticFrame,
   });
   const anchor = numberId(anchorJointId);
   if (!resolved.candidates.length) {

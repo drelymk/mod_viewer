@@ -541,11 +541,11 @@ def test_limb_forward_conversion_inverts_non_identity_base_orientation(module_pa
         assert turn == pytest.approx(expected)
 
 
-def test_humanoid_detection_and_apose_axes_are_coordinate_invariant(module_page):
+def test_humanoid_detection_is_coordinate_invariant(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
       const {characterAxesFromOrientation} = await import('./js/mesh/weight-rig-ik.js');
-      const {aPoseDirectionFromAxes, suggestHumanoidLimbMappings} = await import(
+      const {suggestHumanoidLimbMappings} = await import(
         './js/mesh/weight-rig-humanoid.js');
       const canonical = new Map([
         [0, [0, 1, 0]],
@@ -598,10 +598,6 @@ def test_humanoid_detection_and_apose_axes_are_coordinate_invariant(module_page)
       const first = detect(makeRig(identity), canonicalAxes);
       const second = detect(makeRig(sourceRotation), sourceAxes);
       const third = detect(makeRig(identity), turnedAxes);
-      const poseDirections = (axes, rotation = null) => [-1, 1].map(side => {
-        const direction = aPoseDirectionFromAxes({axes, side});
-        return (rotation ? direction.applyQuaternion(rotation) : direction).toArray();
-      });
       const structure = item => ({
         families: Object.fromEntries(['left_arm', 'right_arm', 'left_leg', 'right_leg']
           .map(role => [role, item.debug.families[role].map(family => ({
@@ -617,8 +613,6 @@ def test_humanoid_detection_and_apose_axes_are_coordinate_invariant(module_page)
           }];
         })),
       });
-      const canonicalPoseDirections = poseDirections(canonicalAxes);
-      const sourcePoseDirections = poseDirections(sourceAxes, sourceRotation.clone().invert());
       return {
         axes: {
           canonical: {up: canonicalAxes.up.toArray(), forward: canonicalAxes.forward.toArray(),
@@ -631,7 +625,6 @@ def test_humanoid_detection_and_apose_axes_are_coordinate_invariant(module_page)
           ['left_arm', 'right_arm', 'left_leg', 'right_leg']
             .map(role => item.roles[role].confidence)),
         structures: [first, second, third].map(structure),
-        poseDirections: [canonicalPoseDirections, sourcePoseDirections],
       };
     }""")
     assert result["axes"]["source"]["up"] == pytest.approx([0, 0, 1])
@@ -645,10 +638,140 @@ def test_humanoid_detection_and_apose_axes_are_coordinate_invariant(module_page)
         assert {role: roles[role]["anchorJointId"] for role in expected_anchors} == expected_anchors
     assert result["confidences"][0] == result["confidences"][1] == result["confidences"][2]
     assert result["structures"][0] == result["structures"][1] == result["structures"][2]
-    assert result["poseDirections"][0][0] == pytest.approx([-.8191520443, -.5735764364, 0])
-    assert result["poseDirections"][0][1] == pytest.approx([.8191520443, -.5735764364, 0])
-    for source, canonical in zip(result["poseDirections"][1], result["poseDirections"][0]):
-        assert source == pytest.approx(canonical)
+
+
+def test_humanoid_scaffold_and_debug_scores_are_model_wide(module_page):
+    result = module_page.evaluate("""async () => {
+      const humanoid = await import('./js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.6, 1.5, 0]], [2, [-1.1, 1.3, 0]], [3, [-1.5, 1.1, 0]],
+        [4, [.6, 1.5, 0]], [5, [1.1, 1.3, 0]], [6, [1.5, 1.1, 0]],
+        [7, [-.35, .8, 0]], [8, [-.4, .2, 0]], [9, [-.42, -.4, 0]],
+        [10, [.35, .8, 0]], [11, [.4, .2, 0]], [12, [.42, -.4, 0]],
+        [20, [0, .9, .4]], [21, [0, .7, .4]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 0, 5: 4, 6: 5,
+        7: 0, 8: 7, 9: 8, 10: 0, 11: 10, 12: 11,
+        20: null, 21: 20};
+      const childrenById = Object.fromEntries(Object.keys(parentById).map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const components = [
+        {rootId: 0, nodeIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          parentById, childrenById},
+        {rootId: 20, nodeIds: [20, 21], parentById: {20: null, 21: 20},
+          childrenById: {20: [21], 21: []}},
+      ];
+      const rig = {
+        joints: [...points.keys()].map(jointId => ({jointId,
+          restPivot: points.get(jointId)})),
+        components,
+        componentByJointId: new Map([
+          ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(id => [id, 0]),
+          [20, 1], [21, 1],
+        ]),
+        jointPivotByJointId: points,
+        centerByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [1, 2], [2, 3], [4, 5], [5, 6], [7, 8], [8, 9],
+          [10, 11], [11, 12], [20, 21],
+        ]),
+      };
+      const frame = humanoid.buildHumanoidSemanticFrame({
+        rig, characterForward: [0, 0, 1],
+      });
+      const scaffold = humanoid.buildHumanoidScaffold({rig, frame});
+      const suggestion = humanoid.suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      const candidate = suggestion.debug.topCandidatesByRole.left_arm[0];
+      return {
+        frame: {low: frame.lowHeight, high: frame.highHeight, height: frame.height},
+        scaffold: {
+          centerline: scaffold.centerline,
+          shoulderBand: scaffold.shoulderBand,
+          hipBand: scaffold.hipBand,
+          bodyDepth: scaffold.bodyDepth,
+        },
+          debug: {
+            hasWholeBody: suggestion.debug.wholeBody.combinationCount > 0,
+            candidateKeys: ['ancestryScore', 'componentBodyScore', 'corridorScore',
+              'poseAngleScore', 'pathSupportScore', 'proximalSupport',
+              'branchDominanceScore']
+            .every(key => Number.isFinite(candidate[key])),
+        },
+        removedPoseApi: typeof humanoid.aPoseDirectionFromAxes === 'undefined',
+      };
+    }""")
+    assert result["frame"]["height"] > 1.5
+    assert result["frame"]["low"] < 1
+    assert result["frame"]["high"] > 1.4
+    assert result["scaffold"]["shoulderBand"]["minHeight01"] < \
+        result["scaffold"]["shoulderBand"]["expectedHeight01"] < \
+        result["scaffold"]["shoulderBand"]["maxHeight01"]
+    assert result["scaffold"]["hipBand"]["minHeight01"] < \
+        result["scaffold"]["hipBand"]["expectedHeight01"] < \
+        result["scaffold"]["hipBand"]["maxHeight01"]
+    assert result["debug"] == {"hasWholeBody": True, "candidateKeys": True}
+    assert result["removedPoseApi"]
+
+
+def test_limb_path_descriptors_measure_forward_backtracking_symmetrically(module_page):
+    result = module_page.evaluate("""async () => {
+      const {resolveLimbPathCandidates} = await import('./js/mesh/weight-rig-ik.js');
+      const makeRig = depthSign => {
+        const points = new Map([
+          [0, [0, 1, 0]], [1, [-.55, 1.5, 0]],
+          [2, [-.9, 1.4, .3 * depthSign]],
+          [3, [-1.25, 1.25, 0]], [4, [-1.5, 1.1, 0]],
+        ]);
+        const component = {
+          rootId: 0, nodeIds: [...points.keys()],
+          parentById: {0: null, 1: 0, 2: 1, 3: 2, 4: 3},
+          childrenById: {0: [1], 1: [2], 2: [3], 3: [4], 4: []},
+        };
+        return {
+          joints: [...points.keys()].map(jointId => ({jointId,
+            restPivot: points.get(jointId)})),
+          components: [component],
+          componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+          jointPivotByJointId: points, centerByJointId: points,
+          restContinuationChildByJointId: new Map([[1, 2], [2, 3], [3, 4]]),
+        };
+      };
+      const inspect = depthSign => {
+        const resolved = resolveLimbPathCandidates({
+          rig: makeRig(depthSign), anchorJointId: 1, role: 'left_arm',
+          characterForward: [0, 0, 1],
+        });
+        const metrics = resolved.candidates[0].pathMetrics;
+        return {
+          path: resolved.candidates[0].pathJointIds,
+          score: resolved.candidates[0].score,
+          netForward: metrics.netForward,
+          absoluteForwardTravel: metrics.absoluteForwardTravel,
+          forwardBacktracking: metrics.forwardBacktracking,
+          endpointDepth: metrics.endpointDepth,
+          corridorScore: metrics.corridorScore,
+        };
+      };
+      return {positive: inspect(1), negative: inspect(-1)};
+    }""")
+    positive = result["positive"]
+    negative = result["negative"]
+    assert positive["path"] == negative["path"] == [1, 2, 3, 4]
+    assert positive["netForward"] == pytest.approx(0)
+    assert negative["netForward"] == pytest.approx(0)
+    assert positive["absoluteForwardTravel"] > 0
+    assert positive["forwardBacktracking"] == pytest.approx(
+        positive["absoluteForwardTravel"])
+    assert negative["forwardBacktracking"] == pytest.approx(
+        negative["absoluteForwardTravel"])
+    assert positive["absoluteForwardTravel"] == pytest.approx(
+        negative["absoluteForwardTravel"])
+    assert positive["corridorScore"] == pytest.approx(negative["corridorScore"])
 
 
 def test_compact_limb_detection_stops_at_terminal_branch(module_page):

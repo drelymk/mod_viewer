@@ -326,6 +326,8 @@ of documentation, comments and tests; use portable fixtures instead.
   Speculative solves use private transforms and one target update commits all
   changed local quaternions through one batch manual-pose transaction. IK never
   owns a skeleton, deformation path, IK Physics state, or persisted target.
+  Humanoid auto-detection scores the authored pose through one model-wide
+  semantic frame and scaffold; it does not generate or apply an A-pose.
 - Joint selection is independent from pose state: Clear removes the selected
   ModelJoint through the state API, leaving
   manual pose, presets, Weight selection, Physics and overlay visibility

@@ -63,7 +63,7 @@ import {
   selectLimbBendJoint, solveLimbIk,
 } from './weight-rig-ik.js';
 import {
-  aPoseDirectionFromAxes, suggestHumanoidLimbMappings,
+  buildHumanoidSemanticFrame, suggestHumanoidLimbMappings,
 } from './weight-rig-humanoid.js';
 
 const weightRuntime = createWeightRuntimeState();
@@ -294,7 +294,6 @@ function humanoidSnapshot() {
     status: modelRigState.humanoidStatus || '',
     structureRevision: modelRigState.humanoidStructureRevision,
     semanticDetectionMs: Number(modelRigState.semanticDetectionMs) || 0,
-    aPoseSolveMs: Number(modelRigState.aPoseSolveMs) || 0,
     availableRoles: suggestions?.roles
       ? RIG_LIMB_ROLES.filter(role => suggestions.roles[role]?.available)
       : [],
@@ -311,6 +310,11 @@ function humanoidSemanticAxes() {
     forward: new THREE.Vector3(0, 0, 1),
     right: new THREE.Vector3(1, 0, 0),
   };
+}
+
+function humanoidSemanticFrame() {
+  return buildHumanoidSemanticFrame({rig: modelSkinningRig,
+    axes: humanoidSemanticAxes(), characterForward: characterForwardForRole()});
 }
 
 function humanoidAnalysis() {
@@ -412,96 +416,6 @@ export async function autoDetectHumanoidLimbs() {
     suggestions: result.roles, semanticDetectionMs: modelRigState.semanticDetectionMs};
 }
 
-function modelPointForHumanoid(id) {
-  const joint = modelJointForId(id);
-  const values = modelSkinningRig?.jointPivotByJointId?.get(Number(id))
-    ?? joint?.restPivot
-    ?? modelSkinningRig?.centerByJointId?.get(Number(id))
-    ?? joint?.restCenter;
-  const array = values?.toArray ? values.toArray() : values;
-  return Array.isArray(array) && array.length >= 3
-    && array.slice(0, 3).every(Number.isFinite)
-    ? new THREE.Vector3(...array.slice(0, 3)) : null;
-}
-
-function humanoidFrame() {
-  return humanoidSemanticAxes();
-}
-
-/** Replace the current pose with an arm-only A-pose in one pose transaction. */
-export function applyHumanoidAPose() {
-  const rig = modelSkinningRig;
-  if (!rig || !modelRigState.loaded) {
-    setHumanoidStatus('The inferred Rig is not loaded.');
-    return {applied: false, reason: 'rig_not_loaded'};
-  }
-  if (modelRigHasActivePhysics() || getModelPhysicsState().enabled) {
-    setHumanoidStatus('Disable Character Physics before applying an A-pose.');
-    return {applied: false, reason: 'physics_active'};
-  }
-  const mappings = resolvedLimbMappingState();
-  const left = mappings.left_arm;
-  const right = mappings.right_arm;
-  if (!left?.available || !right?.available) {
-    setHumanoidStatus('Map both arms before applying an A-pose.');
-    return {applied: false, reason: 'arms_unavailable'};
-  }
-  const frame = humanoidFrame();
-  const working = new Map();
-  const solvedRotations = new Map();
-  const started = performanceNow();
-  for (const mapping of [left, right]) {
-    const anchor = modelPointForHumanoid(mapping.anchorJointId);
-    const bend = modelPointForHumanoid(mapping.bendJointId);
-    const end = modelPointForHumanoid(mapping.endJointId);
-    if (!anchor || !bend || !end) {
-      setHumanoidStatus('The mapped arm geometry is incomplete.');
-      return {applied: false, reason: 'arm_geometry_invalid'};
-    }
-    const upperLength = anchor.distanceTo(bend);
-    const lowerLength = bend.distanceTo(end);
-    const length = Math.max(upperLength + lowerLength, 1e-5);
-    const side = mapping.role === 'left_arm' ? -1 : 1;
-    const direction = aPoseDirectionFromAxes({axes: frame, side});
-    const distance = THREE.MathUtils.clamp(length * .985,
-      Math.abs(upperLength - lowerLength) + 1e-5, length - 1e-5);
-    const target = anchor.clone().addScaledVector(direction, distance);
-    const solved = solveLimbIk({
-      forest: rig.inferredForest, centers: rig.centerByJointId,
-      jointPivots: rig.jointPivotByJointId, localRotations: working,
-      anchorJointId: mapping.anchorJointId, bendJointId: mapping.bendJointId,
-      endJointId: mapping.endJointId, pathJointIds: mapping.pathJointIds,
-      bendDirection: mapping.bendDirection || frame.forward,
-      bendSign: mapping.bendSign, target,
-    });
-    if (!solved.reached || !solved.rotations.size) {
-      setHumanoidStatus('Could not solve both arms atomically.');
-      return {applied: false, reason: 'solve_failed', residual: solved.residual};
-    }
-    solved.rotations.forEach((rotation, jointId) => {
-      working.set(jointId, rotation.clone());
-      solvedRotations.set(jointId, rotation.clone());
-    });
-  }
-  modelRigState.aPoseSolveMs = performanceNow() - started;
-  const armControlIds = new Set([
-    left.anchorJointId, left.bendJointId, right.anchorJointId, right.bendJointId,
-  ]);
-  const finalRotations = new Map([...rig.poseRotationByJointId.entries()]
-    .filter(([jointId]) => !armControlIds.has(Number(jointId))));
-  solvedRotations.forEach((rotation, jointId) => finalRotations.set(jointId, rotation));
-  const applied = setRigJointRotations(finalRotations, {
-    replacePose: true, selectedJointId: right.endJointId,
-  });
-  if (!applied) {
-    setHumanoidStatus('Could not apply the A-pose.');
-    return {applied: false, reason: 'pose_commit_failed'};
-  }
-  setHumanoidStatus('Applied A-pose to both arms.');
-  return {applied: true, reason: null,
-    aPoseSolveMs: modelRigState.aPoseSolveMs};
-}
-
 function resolveLimbMapping(role) {
   const raw = rigPresetState.limbMappings?.[role];
   if (!raw || typeof raw !== 'object' || !modelSkinningRig) {
@@ -523,6 +437,7 @@ function resolveLimbMapping(role) {
     rig: modelSkinningRig, anchorJointId, role,
     characterForward: characterForwardForRole(),
     characterAxes: humanoidSemanticAxes(),
+    semanticFrame: humanoidSemanticFrame(),
   });
   const mapping = {
     ...detected,
@@ -722,7 +637,6 @@ export function getModelRigDebugState(sourceKey = null) {
     rigAttachmentCount: modelRigState.rigAttachmentCount || 0,
     rigAmbiguousCount: modelRigState.rigAmbiguousCount || 0,
     semanticDetectionMs: modelRigState.semanticDetectionMs || 0,
-    aPoseSolveMs: modelRigState.aPoseSolveMs || 0,
   };
   const selectedSourceKey = sourceKey || sources[0]?.sourceKey || null;
   if (!model) return {sources, source: sources.find(item =>
@@ -1769,7 +1683,6 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   modelRigState.humanoidSuggestions = null;
   modelRigState.humanoidStatus = '';
   modelRigState.semanticDetectionMs = 0;
-  modelRigState.aPoseSolveMs = 0;
   updateModelWeightHeatmap();
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId = Number.isInteger(previousSelectedJointId)
@@ -3201,7 +3114,6 @@ export function setRigJointRotations(rotationsByJointId, options = {}) {
   if (!updates.length) return false;
 
   // Validation is complete before the authoritative map is touched.
-  if (options?.replacePose) modelSkinningRig.poseRotationByJointId.clear();
   updates.forEach(([jointId, quaternion]) => {
     modelSkinningRig.poseRotationByJointId.set(jointId, quaternion);
   });
@@ -3669,7 +3581,6 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelRigState.humanoidSuggestions = null;
   modelRigState.humanoidStatus = '';
   modelRigState.semanticDetectionMs = 0;
-  modelRigState.aPoseSolveMs = 0;
   rigPresetState.lastApplyResult = null;
   resolvedLimbMappings = null;
   resolvedLimbMappingsStructureRevision = null;

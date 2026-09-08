@@ -29,7 +29,6 @@ function createModelRigDefaults() {
     humanoidStructureRevision: null,
     humanoidSuggestions: null,
     semanticDetectionMs: 0,
-    aPoseSolveMs: 0,
     rotationSnapDegrees: 0,
     ikEnabled: false,
     activeLimbRole: 'left_arm',

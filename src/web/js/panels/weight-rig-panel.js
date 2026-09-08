@@ -14,7 +14,7 @@ import {
   setRigActiveLimbRole,
   setRigLimbOverride, beginRigJointPicking, cancelRigJointPicking,
   clearRigLimbMapping, flipRigLimbBend, setRigIkEnabled,
-  autoDetectHumanoidLimbs, applyHumanoidAPose,
+  autoDetectHumanoidLimbs,
   setRigJointRoot,
   setRigRotationSnapDegrees, setWeightPickerViewMode,
   applyRigPosePresetById,
@@ -432,16 +432,6 @@ function buildRigSection(parent) {
   inverseKinematics.appendChild(autoDetect);
   ui.autoDetect = autoDetect;
 
-  const aPose = document.createElement('button');
-  aPose.type = 'button';
-  aPose.className = 'ui-button rig-apply-a-pose';
-  aPose.textContent = 'Apply A-pose';
-  aPose.addEventListener('click', () => {
-    const result = applyHumanoidAPose();
-    if (!result?.applied) syncRigOptions(latestRigState || getModelRigState());
-  });
-  inverseKinematics.appendChild(aPose);
-  ui.aPose = aPose;
   ui.humanoidStatus = addText(inverseKinematics, 'rig-humanoid-status');
   ui.humanoidStatus.setAttribute('aria-live', 'polite');
 
@@ -810,8 +800,6 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   ui.ik.disabled = !state?.loaded || !hasLimb;
   ui.flipBend.disabled = !state?.loaded || !hasLimb;
   ui.autoDetect.disabled = !state?.loaded || !joints.length;
-  ui.aPose.disabled = !state?.loaded || !state?.ik?.mappings?.left_arm?.available
-    || !state?.ik?.mappings?.right_arm?.available || !!state?.physicsActive;
   ui.humanoidStatus.textContent = ik?.humanoid?.status || '';
   if (!hasMapping) {
     ui.ikHint.textContent = `Pick the ${labels[0]} joint to configure this limb.`;

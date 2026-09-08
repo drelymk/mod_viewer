@@ -136,11 +136,16 @@ function robustFrame(rig, axes) {
       up,
       forward,
       right,
+      lowHeight: -.5,
+      highHeight: .5,
       height: 1,
+      centerSide: 0,
+      centerDepth: 0,
     };
   }
-  let height = weightedQuantile(samples, sample => sample.heightCoordinate, .95)
-    - weightedQuantile(samples, sample => sample.heightCoordinate, .05);
+  const lowHeight = weightedQuantile(samples, sample => sample.heightCoordinate, .05);
+  const highHeight = weightedQuantile(samples, sample => sample.heightCoordinate, .95);
+  let height = highHeight - lowHeight;
   if (!Number.isFinite(height) || height <= EPSILON) {
     const heightCoordinates = samples.map(sample => sample.heightCoordinate);
     height = Math.max(...heightCoordinates) - Math.min(...heightCoordinates);
@@ -156,11 +161,133 @@ function robustFrame(rig, axes) {
   const depthThreshold = Math.max(depthSpread * 1.5, height * .08, EPSILON);
   const coreSamples = samples.filter(sample =>
     Math.abs(sample.depthCoordinate - medianDepth) <= depthThreshold);
-  const center = right.clone().multiplyScalar(
-    weightedMedian(coreSamples, sample => sample.sideCoordinate))
-    .addScaledVector(up, weightedMedian(samples, sample => sample.heightCoordinate))
+  const centerSide = weightedMedian(coreSamples, sample => sample.sideCoordinate);
+  const centerHeight = weightedMedian(samples, sample => sample.heightCoordinate);
+  const centerDepth = medianDepth;
+  const center = right.clone().multiplyScalar(centerSide)
+    .addScaledVector(up, centerHeight)
     .addScaledVector(forward, medianDepth);
-  return {center, up, forward, right, height};
+  return {
+    center, up, forward, right, height,
+    lowHeight: Number.isFinite(lowHeight) ? lowHeight : centerHeight - height / 2,
+    highHeight: Number.isFinite(highHeight) ? highHeight : centerHeight + height / 2,
+    centerSide, centerDepth,
+  };
+}
+
+/** Build one model-wide semantic frame for every humanoid detector consumer. */
+export function buildHumanoidSemanticFrame({rig, axes, characterForward} = {}) {
+  const semanticAxes = semanticAxesFor({axes, characterForward});
+  return robustFrame(rig, semanticAxes);
+}
+
+function scaffoldPoint(height01, side, depth) {
+  return {height01, side, depth};
+}
+
+function interpolateCenterline(centerline, height01) {
+  const points = [centerline.lower, centerline.mid, centerline.upper];
+  const value = clamp01(height01);
+  if (value <= points[0].height01) return points[0];
+  if (value >= points[2].height01) return points[2];
+  const first = value < points[1].height01 ? points[0] : points[1];
+  const second = value < points[1].height01 ? points[1] : points[2];
+  const fraction = (value - first.height01)
+    / Math.max(second.height01 - first.height01, EPSILON);
+  return scaffoldPoint(value,
+    first.side + (second.side - first.side) * fraction,
+    first.depth + (second.depth - first.depth) * fraction);
+}
+
+/**
+ * Infer broad body regions from the authored pose. This is scoring context,
+ * not a replacement hierarchy or a semantic skeleton.
+ */
+export function buildHumanoidScaffold({rig, frame} = {}) {
+  const semanticFrame = frame || buildHumanoidSemanticFrame({rig});
+  const samples = (rig?.joints || []).map(joint => {
+    const point = pointFor(rig, joint?.jointId);
+    if (!point) return null;
+    const height01 = (point.dot(semanticFrame.up) - semanticFrame.lowHeight)
+      / Math.max(semanticFrame.height, EPSILON);
+    return {
+      point, height01: clamp01(height01),
+      side: (point.dot(semanticFrame.right) - semanticFrame.centerSide)
+        / semanticFrame.height,
+      depth: (point.dot(semanticFrame.forward) - semanticFrame.centerDepth)
+        / semanticFrame.height,
+      weight: 1 + Math.log1p(weightedValue(joint)),
+    };
+  }).filter(Boolean);
+  const centralSamples = samples.filter(sample => Math.abs(sample.depth) <= .28);
+  const source = centralSamples.length ? centralSamples : samples;
+  const band = (min, max, fallbackHeight) => {
+    const values = source.filter(sample => sample.height01 >= min
+      && sample.height01 <= max);
+    if (!values.length) return scaffoldPoint(fallbackHeight, 0, 0);
+    return scaffoldPoint(weightedMedian(values, sample => sample.height01),
+      weightedMedian(values, sample => sample.side),
+      weightedMedian(values, sample => sample.depth));
+  };
+  const centerline = {
+    lower: band(0, .38, .2),
+    mid: band(.28, .72, .5),
+    upper: band(.62, 1, .8),
+  };
+  const lateral = source.filter(sample => Math.abs(sample.side) >= .08);
+  const shoulderSamples = lateral.filter(sample => sample.height01 >= .5);
+  const hipSamples = source.filter(sample => sample.height01 <= .76
+    && Math.abs(sample.side) <= .3);
+  const shoulderExpected = shoulderSamples.length
+    ? clamp01(weightedQuantile(shoulderSamples, sample => sample.height01, .58))
+    : .72;
+  const hipSampleExpected = hipSamples.length
+    ? clamp01(weightedQuantile(hipSamples, sample => sample.height01, .75))
+    : lateral.length
+      ? clamp01(weightedQuantile(lateral.filter(sample => sample.height01 <= .76),
+        sample => sample.height01, .62))
+      : .35;
+  // The lower central band is a safer pelvis cue than a lateral endpoint
+  // quantile: legs and accessory strands contribute many low points.
+  const hipExpected = Math.max(hipSampleExpected,
+    clamp01(centerline.mid.height01 * .9));
+  const makeBand = (expected, width, min, max) => ({
+    minHeight01: clamp01(Math.max(min, expected - width)),
+    maxHeight01: clamp01(Math.min(max, expected + width)),
+    expectedHeight01: clamp01(expected),
+  });
+  const shoulderBand = makeBand(shoulderExpected, .2, .38, .98);
+  const hipBand = makeBand(hipExpected, .22, .08, .72);
+  const depthValues = source.map(sample => sample.depth);
+  const depthSpread = depthValues.length
+    ? weightedQuantile(source, sample => sample.depth, .75)
+      - weightedQuantile(source, sample => sample.depth, .25) : 0;
+  const centerlineAt = height01 => interpolateCenterline(centerline, height01);
+  const confidence = clamp01(.3 * (source.length >= 4 ? 1 : source.length / 4)
+    + .35 * (lateral.length >= 4 ? 1 : lateral.length / 4)
+    + .35 * (semanticFrame.height > EPSILON ? 1 : 0));
+  return {
+    centerline,
+    shoulderBand,
+    hipBand,
+    armRegion: {
+      minHeight01: shoulderBand.minHeight01,
+      maxHeight01: 1,
+      expectedHeight01: shoulderBand.expectedHeight01,
+    },
+    legRegion: {
+      minHeight01: 0,
+      maxHeight01: hipBand.maxHeight01,
+      expectedHeight01: hipBand.expectedHeight01,
+    },
+    bodyDepth: {
+      expected: semanticFrame.centerDepth,
+      spread: depthSpread,
+      tolerance: Math.max(.18, depthSpread * 1.5),
+    },
+    centerlineAt,
+    confidence,
+  };
 }
 
 function pathLength(rig, path) {
@@ -192,7 +319,62 @@ function emptySuggestion(role, reason = 'no_bilateral_pair') {
   };
 }
 
-function candidateFor(rig, frame, role, anchorJointId, characterForward) {
+function ancestorIds(component, id) {
+  const result = [];
+  const seen = new Set();
+  let current = parentFor(component, id);
+  while (current !== null && !seen.has(current)) {
+    result.push(current);
+    seen.add(current);
+    current = parentFor(component, current);
+  }
+  return result;
+}
+
+function componentBodyScore(rig, frame, component) {
+  const samples = (component?.nodeIds || []).map(id => pointFor(rig, id))
+    .filter(Boolean).map(point => ({
+      side: (point.dot(frame.right) - frame.centerSide) / frame.height,
+      height01: clamp01((point.dot(frame.up) - frame.lowHeight) / frame.height),
+      depth: (point.dot(frame.forward) - frame.centerDepth) / frame.height,
+      weight: 1,
+    }));
+  if (!samples.length) return 0;
+  const central = samples.filter(sample => Math.abs(sample.side) < .48
+    && Math.abs(sample.depth) < .35).length / samples.length;
+  const span = Math.max(...samples.map(sample => sample.height01))
+    - Math.min(...samples.map(sample => sample.height01));
+  const depth = 1 - clamp01(Math.abs(weightedMedian(samples,
+    sample => sample.depth)) / .75);
+  const side = 1 - clamp01(Math.abs(weightedMedian(samples,
+    sample => sample.side)) / .65);
+  return clamp01(.42 * central + .22 * clamp01(span / .65)
+    + .2 * depth + .16 * side);
+}
+
+function ancestryScore(rig, frame, role, anchor, parent, component) {
+  const ids = ancestorIds(component, numberId(anchor));
+  const anchorSide = Math.abs(anchor.clone().sub(frame.center).dot(frame.right)
+    / frame.height);
+  const anchorDepth = Math.abs(anchor.clone().sub(frame.center).dot(frame.forward)
+    / frame.height);
+  const samples = [parent, ...ids.slice(1)].map(point => ({
+    side: Math.abs(point.clone().sub(frame.center).dot(frame.right) / frame.height),
+    depth: Math.abs(point.clone().sub(frame.center).dot(frame.forward) / frame.height),
+  }));
+  if (!samples.length) return {score: 0, ids};
+  const centrality = samples.reduce((sum, sample) => sum
+    + .55 * (1 - clamp01(sample.side / Math.max(anchorSide, .12)))
+    + .45 * (1 - clamp01(sample.depth / Math.max(anchorDepth, .25))), 0)
+    / samples.length;
+  const first = samples[0];
+  const convergence = .55 * (1 - clamp01(first.side / Math.max(anchorSide, .12)))
+    + .45 * (1 - clamp01(first.depth / Math.max(anchorDepth, .25)));
+  const direction = first.side <= anchorSide + .08 ? 1 : 0;
+  return {score: clamp01(.55 * centrality + .35 * convergence + .1 * direction), ids};
+}
+
+function candidateFor(rig, frame, scaffold, role, anchorJointId, characterForward) {
   const component = componentFor(rig, anchorJointId);
   const parentId = parentFor(component, anchorJointId);
   if (!component || parentId === null) return {rejected: 'anchor_is_component_root'};
@@ -200,63 +382,97 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
   const parent = pointFor(rig, parentId);
   if (!anchor || !parent) return {rejected: 'pivot_invalid'};
   const sideSign = role.startsWith('left_') ? -1 : 1;
-  const side = anchor.clone().sub(frame.center).dot(frame.right) / frame.height;
-  const height = anchor.clone().sub(frame.center).dot(frame.up) / frame.height;
+  const side = (anchor.dot(frame.right) - frame.centerSide) / frame.height;
+  const height = clamp01((anchor.dot(frame.up) - frame.lowHeight) / frame.height);
   if (side * sideSign < -.12) return {rejected: 'wrong_side'};
-  if (role.endsWith('_leg') && height > .04) {
-    return {rejected: 'anchor_too_high_for_leg'};
-  }
-  if (role.endsWith('_arm') && height < -.05) {
-    return {rejected: 'anchor_too_low_for_arm'};
+  const anchorBand = role.endsWith('_arm') ? scaffold.shoulderBand : scaffold.hipBand;
+  const bandMargin = role.endsWith('_arm') ? .08 : .18;
+  if (height < anchorBand.minHeight01 - bandMargin
+      || height > anchorBand.maxHeight01 + bandMargin) {
+    return {rejected: role.endsWith('_arm')
+      ? 'anchor_too_low_for_arm' : 'anchor_too_high_for_leg'};
   }
   const detected = detectLimbPath({
     rig, anchorJointId, role, characterForward, characterAxes: frame,
+    semanticFrame: frame,
   });
   if (!detected.available) return {rejected: detected.reason || 'path_unavailable', detected};
   const end = pointFor(rig, detected.endJointId);
   const bend = pointFor(rig, detected.bendJointId);
   if (!end || !bend) return {rejected: 'pivot_invalid', detected};
-  const endSide = end.clone().sub(frame.center).dot(frame.right) / frame.height;
-  const endHeight = end.clone().sub(frame.center).dot(frame.up) / frame.height;
-  const parentSide = Math.abs(parent.clone().sub(frame.center).dot(frame.right) / frame.height);
+  const endSide = (end.dot(frame.right) - frame.centerSide) / frame.height;
+  const endHeight = clamp01((end.dot(frame.up) - frame.lowHeight) / frame.height);
   const forwardOffset = Math.abs(end.clone().sub(anchor).dot(frame.forward) / frame.height);
   const length = pathLength(rig, detected.pathJointIds) / frame.height;
-  const anchorJoint = rig?.joints?.find(joint => Number(joint?.jointId) === Number(anchorJointId));
-  const evidenceScore = clamp01(Math.log1p(weightedValue(anchorJoint)) / Math.log(1001));
+  const ancestry = ancestryScore(rig, frame, role, anchor, parent, component);
+  const componentScore = componentBodyScore(rig, frame, component);
   const sideAgreement = clamp01((side * sideSign - .04) / .35);
   const endSideAgreement = clamp01((endSide * sideSign - .02) / .4);
-  const parentCentrality = clamp01(1 - parentSide / Math.max(Math.abs(side), .08));
+  const parentSide = Math.abs(parent.clone().sub(frame.center).dot(frame.right)
+    / frame.height);
+  const originDeparture = clamp01((Math.abs(side) - parentSide) / .12);
+  const parentCentrality = clamp01(1 - Math.abs(parent.clone().sub(frame.center)
+    .dot(frame.right) - frame.centerSide) / frame.height
+    / Math.max(Math.abs(side), .08));
   const metrics = detected.pathMetrics || {};
   const pathGeometryScore = clamp01(detected.pathScore);
   const continuationAgreement = clamp01(detected.continuationAgreement);
   const lengthScore = role.endsWith('_arm') ? rangeScore(length, .12, 1.5, .7)
     : rangeScore(length, .2, 1.7, .8);
-  const levelScore = role.endsWith('_arm') ? rangeScore(height, .12, .65, .55)
-    : rangeScore(height, -.5, .05, .45);
+  const band = role.endsWith('_arm') ? scaffold.shoulderBand : scaffold.hipBand;
+  const bandScore = rangeScore(height, band.minHeight01, band.maxHeight01, .24);
+  const originHeightScore = clamp01(1 - Math.abs(height - band.expectedHeight01) / .35);
+  const centerline = scaffold.centerlineAt(height);
+  const centerlineScore = clamp01(1 - Math.abs(side - centerline.side) / .75);
+  const anchorPositionScore = role.endsWith('_arm')
+    ? clamp01(.38 * sideAgreement + .3 * bandScore
+      + .2 * parentCentrality + .12 * centerlineScore)
+    : clamp01(.25 * sideAgreement + .23 * bandScore
+      + .25 * originHeightScore + .25 * parentCentrality
+      + .02 * centerlineScore + .25 * originDeparture);
   const verticalScore = role.endsWith('_arm')
-    ? rangeScore(height - endHeight, -.2, .65, .55)
-    : rangeScore(height - endHeight, .25, 1.1, .65);
-  const forwardScore = clamp01(1 - forwardOffset / .35);
-  const anchorScore = clamp01(.42 * sideAgreement + .38 * parentCentrality
-    + .2 * levelScore);
-  const endpointScore = clamp01(.42 * endSideAgreement + .32 * verticalScore
-    + .26 * forwardScore);
-  const hierarchyScore = clamp01(.55 * continuationAgreement + .45 * evidenceScore);
-  const score = clamp01(.25 * anchorScore + .4 * pathGeometryScore
-    + .2 * endpointScore + .15 * hierarchyScore);
+    ? rangeScore(endHeight, .28, .92, .45)
+    : rangeScore(endHeight, 0, .24, .28);
+  const forwardScore = clamp01(1 - forwardOffset / .45);
+  const endpointPositionScore = role.endsWith('_arm')
+    ? clamp01(.34 * endSideAgreement + .22 * verticalScore
+      + .24 * forwardScore + .2 * (metrics.poseAngleScore || 0))
+    : clamp01(.45 * (metrics.endpointBottomScore || 0)
+      + .3 * verticalScore + .15 * forwardScore
+      + .1 * (metrics.verticalCoverage || 0));
+  const pathSupportScore = clamp01(.45 * (metrics.pathSupportScore || 0)
+    + .25 * (metrics.anchorSupport || 0)
+    + .15 * (metrics.proximalSupport || 0)
+    + .15 * (metrics.medianPathSupport || 0));
+  const branchDominanceScore = clamp01(metrics.branchDominance || 0);
+  const corridorScore = clamp01(metrics.corridorScore || pathGeometryScore);
+  const poseAngleScore = clamp01(metrics.poseAngleScore || 0);
+  const armProgressPenalty = role.endsWith('_arm')
+    ? .42 * clamp01((.22 - Number(metrics.outwardDisplacement || 0)) / .22)
+    : 0;
+  const score = role.endsWith('_arm')
+    ? clamp01(.27 * corridorScore + .09 * poseAngleScore
+      + .14 * anchorPositionScore + .1 * endpointPositionScore
+      + .18 * ancestry.score + .1 * pathSupportScore
+      + .07 * branchDominanceScore + .05 * componentScore
+      + .05 * continuationAgreement + .05 * lengthScore - armProgressPenalty)
+    : clamp01(.28 * corridorScore + .1 * poseAngleScore
+      + .14 * anchorPositionScore + .12 * endpointPositionScore
+      + .18 * ancestry.score + .1 * pathSupportScore
+      + .07 * branchDominanceScore + .05 * componentScore
+      + .04 * continuationAgreement + .04 * lengthScore);
   const reasons = [];
   if (sideAgreement > .75) reasons.push('anchor_side');
   if (parentCentrality > .75) reasons.push('central_parent');
   if (lengthScore > .75) reasons.push('limb_length');
   if (verticalScore > .75) reasons.push(role.endsWith('_arm') ? 'arm_drop' : 'leg_drop');
   if (forwardScore < .35) reasons.push('depth_excessive');
-  if (evidenceScore > .65) reasons.push('evidence');
+  if (pathSupportScore > .65) reasons.push('evidence');
+  if (branchDominanceScore > .65) reasons.push('primary_branch');
+  if (componentScore > .65) reasons.push('body_component');
   if (length < .08) return {rejected: 'path_too_short', detected};
-  const depthLimit = role.endsWith('_arm') ? .55 : .65;
-  if (Number(metrics.absoluteForwardTravel) > depthLimit
-      || forwardOffset > .45) return {rejected: 'depth_excessive', detected};
-  if (role.endsWith('_arm') && Number(metrics.outwardProgressFraction) < .25
-      && side * sideSign < .06) {
+  if (role.endsWith('_arm') && (Number(metrics.outwardDisplacement) < .1
+      || (Number(metrics.sideFraction) < .18 && Number(metrics.downwardDisplacement) > .35))) {
     return {rejected: 'insufficient_arm_progression', detected};
   }
   if (role.endsWith('_leg') && (-metrics.netHeight < .08
@@ -267,16 +483,27 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
     role, available: true, anchorJointId: Number(anchorJointId),
     pathJointIds: [...detected.pathJointIds], bendJointId: detected.bendJointId,
     endJointId: detected.endJointId, score: clamp01(score),
-    confidence: score >= .72 ? 'high' : score >= .5 ? 'medium' : 'low',
+    confidence: score >= .62 ? 'high' : score >= .42 ? 'medium' : 'low',
     pairScore: 0, runnerUpMargin: 0, reasons,
     bendDirection: detected.bendDirection ? [...detected.bendDirection] : null,
     bendDirectionSource: detected.bendDirectionSource,
     parentJointId: parentId,
     parentCentrality,
+    ancestorJointIds: ancestry.ids,
+    ancestryScore: ancestry.score,
+    componentId: valueFor(rig?.componentByJointId, anchorJointId),
     pathLength: length,
     pathGeometryScore,
-    endpointScore,
-    anchorScore,
+    corridorScore,
+    poseAngleScore,
+    anchorPositionScore,
+    endpointPositionScore,
+    anchorScore: anchorPositionScore,
+    endpointScore: endpointPositionScore,
+    pathSupportScore,
+    proximalSupport: metrics.proximalSupport,
+    branchDominanceScore,
+    componentBodyScore: componentScore,
     continuationAgreement,
     pathMetrics: metrics,
     paths: detected.pathCandidates || [],
@@ -419,8 +646,12 @@ function pairCandidates(rig, frame, left, right) {
         - (second.pathMetrics?.netSide || 0))
       + .06 * Math.abs((first.pathMetrics?.netHeight || 0)
         - (second.pathMetrics?.netHeight || 0))
-      + .06 * Math.abs((first.pathMetrics?.netDepth || 0)
-        - (second.pathMetrics?.netDepth || 0))
+      + .06 * Math.abs((first.pathMetrics?.netForward || 0)
+        - (second.pathMetrics?.netForward || 0))
+      + .05 * Math.abs((first.pathMetrics?.absoluteForwardTravel || 0)
+        - (second.pathMetrics?.absoluteForwardTravel || 0))
+      + .05 * Math.abs((first.pathMetrics?.forwardBacktracking || 0)
+        - (second.pathMetrics?.forwardBacktracking || 0))
       + .05 * Math.abs(Math.abs(first.pathMetrics?.endpointSide || 0)
         - Math.abs(second.pathMetrics?.endpointSide || 0))
       + .05 * Math.abs((first.pathMetrics?.endpointDepth || 0)
@@ -430,7 +661,9 @@ function pairCandidates(rig, frame, left, right) {
       + .05 * Math.abs((first.pathMetrics?.outwardProgressFraction || 0)
         - (second.pathMetrics?.outwardProgressFraction || 0))
       + .05 * Math.abs((first.pathMetrics?.downwardProgressFraction || 0)
-        - (second.pathMetrics?.downwardProgressFraction || 0));
+        - (second.pathMetrics?.downwardProgressFraction || 0))
+      + .07 * Math.abs((first.corridorScore || 0)
+        - (second.corridorScore || 0));
     const pairScore = (first.score + second.score) / 2
       - Math.min(.35, symmetry * .12 + descriptorSymmetry);
     pairs.push({first, second, pairScore, symmetry,
@@ -468,7 +701,28 @@ function choosePair(rig, frame, candidates, roles) {
 }
 
 function makePairSuggestions(choice, roles) {
-  if (!choice.pair) return Object.fromEntries(roles.map(role => [role, emptySuggestion(role)]));
+  if (!choice.pair) {
+    // A missing or weak limb on one side must not erase a clearly supported
+    // counterpart. Keep both sides unmapped only when they each have
+    // candidates but no compatible bilateral pair.
+    const canMapPartially = choice.leftFamilies.length === 0
+      || choice.rightFamilies.length === 0;
+    if (!canMapPartially) {
+      return Object.fromEntries(roles.map(role => [role, emptySuggestion(role)]));
+    }
+    return Object.fromEntries(roles.map(role => {
+      const families = role.startsWith('left_')
+        ? choice.leftFamilies : choice.rightFamilies;
+      const candidate = families[0]?.representative;
+      if (!candidate) return [role, emptySuggestion(role)];
+      return [role, {
+        ...candidate, pairScore: 0, runnerUpMargin: 0,
+        available: candidate.confidence !== 'low',
+        reasons: candidate.confidence === 'low'
+          ? [...candidate.reasons, 'low_confidence'] : candidate.reasons,
+      }];
+    }));
+  }
   const ambiguous = choice.margin < .065;
   const pair = choice.pair;
   const result = {};
@@ -494,11 +748,22 @@ function candidateSnapshot(candidate) {
     bendJointId: candidate.bendJointId,
     endJointId: candidate.endJointId,
     pathJointIds: [...candidate.pathJointIds],
+    ancestorJointIds: [...(candidate.ancestorJointIds || [])],
+    componentId: candidate.componentId ?? null,
     familyId: candidate.familyId,
     score: candidate.score,
     parentCentrality: candidate.parentCentrality,
     pathLength: candidate.pathLength,
     pathGeometryScore: candidate.pathGeometryScore,
+    corridorScore: candidate.corridorScore,
+    poseAngleScore: candidate.poseAngleScore,
+    anchorPositionScore: candidate.anchorPositionScore,
+    endpointPositionScore: candidate.endpointPositionScore,
+    ancestryScore: candidate.ancestryScore,
+    pathSupportScore: candidate.pathSupportScore,
+    proximalSupport: candidate.proximalSupport,
+    branchDominanceScore: candidate.branchDominanceScore,
+    componentBodyScore: candidate.componentBodyScore,
     anchorScore: candidate.anchorScore,
     endpointScore: candidate.endpointScore,
     continuationAgreement: candidate.continuationAgreement,
@@ -552,20 +817,64 @@ function pairSnapshot(choice) {
   };
 }
 
-export function aPoseDirectionFromAxes({axes, side, downwardDegrees = 35} = {}) {
-  const semanticAxes = semanticAxesFor({axes});
-  const radians = THREE.MathUtils.degToRad(Number(downwardDegrees) || 0);
-  return semanticAxes.right.clone().multiplyScalar(Number(side) || 0)
-    .multiplyScalar(Math.cos(radians))
-    .addScaledVector(semanticAxes.up, -Math.sin(radians)).normalize();
+function wholeBodyCoherence(rig, frame, scaffold, armPair, legPair) {
+  const arms = [armPair.first, armPair.second];
+  const legs = [legPair.first, legPair.second];
+  const point = candidate => pointFor(rig, candidate.anchorJointId);
+  const endpoint = candidate => pointFor(rig, candidate.endJointId);
+  const height01 = value => value
+    ? clamp01((value.dot(frame.up) - frame.lowHeight) / frame.height) : 0;
+  const shoulderHeight = arms.reduce((sum, item) => sum + height01(point(item)), 0) / 2;
+  const hipHeight = legs.reduce((sum, item) => sum + height01(point(item)), 0) / 2;
+  const footHeight = legs.reduce((sum, item) => sum + height01(endpoint(item)), 0) / 2;
+  const shoulderMidpoint = point(arms[0])?.clone().add(point(arms[1]))
+    .multiplyScalar(.5);
+  const hipMidpoint = point(legs[0])?.clone().add(point(legs[1]))
+    .multiplyScalar(.5);
+  const midpointScore = midpoint => midpoint
+    ? clamp01(1 - Math.abs(midpoint.dot(frame.right) - frame.centerSide)
+      / frame.height / .45) : 0;
+  const ordering = clamp01(.5 * rangeScore(shoulderHeight, hipHeight + .08, 1, .2)
+    + .5 * rangeScore(hipHeight, footHeight + .12, 1, .25));
+  const centerScore = .5 * midpointScore(shoulderMidpoint)
+    + .5 * midpointScore(hipMidpoint);
+  const armScore = arms.reduce((sum, item) => sum + (item.corridorScore || 0), 0) / 2;
+  const legScore = legs.reduce((sum, item) => sum + (item.corridorScore || 0), 0) / 2;
+  const ancestry = [...arms, ...legs].reduce((sum, item) =>
+    sum + (item.ancestryScore || 0), 0) / 4;
+  const expectedShoulder = scaffold.shoulderBand.expectedHeight01;
+  const expectedHip = scaffold.hipBand.expectedHeight01;
+  const bandScore = .5 * rangeScore(shoulderHeight, expectedShoulder - .25,
+    expectedShoulder + .25, .25)
+    + .5 * rangeScore(hipHeight, expectedHip - .28, expectedHip + .28, .28);
+  return clamp01(.28 * ordering + .2 * centerScore + .2 * armScore
+    + .18 * legScore + .08 * ancestry + .06 * bandScore);
+}
+
+function chooseWholeBody(rig, frame, scaffold, armChoice, legChoice) {
+  const armPairs = armChoice.pairs.slice(0, 4);
+  const legPairs = legChoice.pairs.slice(0, 4);
+  const combinations = [];
+  for (const armPair of armPairs) for (const legPair of legPairs) {
+    const coherence = wholeBodyCoherence(rig, frame, scaffold, armPair, legPair);
+    combinations.push({armPair, legPair, coherence,
+      wholeBodyScore: (armPair.pairScore + legPair.pairScore) / 2
+        + .12 * coherence});
+  }
+  combinations.sort((left, right) => right.wholeBodyScore - left.wholeBodyScore
+    || right.coherence - left.coherence
+    || left.armPair.first.anchorJointId - right.armPair.first.anchorJointId
+    || left.legPair.first.anchorJointId - right.legPair.first.anchorJointId);
+  return {best: combinations[0] || null, combinations};
 }
 
 /** Suggest bilateral arm and leg mappings from ModelJoint geometry. */
 export function suggestHumanoidLimbMappings({
   rig, characterForward, axes, debug = false,
 } = {}) {
-  const semanticAxes = semanticAxesFor({axes, characterForward});
-  const frame = robustFrame(rig, semanticAxes);
+  const frame = buildHumanoidSemanticFrame({rig, axes, characterForward});
+  const semanticAxes = {up: frame.up, right: frame.right, forward: frame.forward};
+  const scaffold = buildHumanoidScaffold({rig, frame});
   const rejected = [];
   const candidates = [];
   const resolverStats = {
@@ -578,7 +887,7 @@ export function suggestHumanoidLimbMappings({
     if (id === null || !pointFor(rig, id)) continue;
     for (const role of ROLES) {
       resolverStats.anchorsEvaluated += 1;
-      const result = candidateFor(rig, frame, role, id, semanticAxes.forward);
+      const result = candidateFor(rig, frame, scaffold, role, id, semanticAxes.forward);
       const stats = result.detected?.pathDiagnostics;
       if (stats) {
         resolverStats.pathExpansions += stats.pathExpansions || 0;
@@ -596,17 +905,24 @@ export function suggestHumanoidLimbMappings({
   const roleCandidates = role => candidates.filter(candidate => candidate.role === role).sort(candidateSort);
   const armChoice = choosePair(rig, frame, [...roleCandidates('left_arm'), ...roleCandidates('right_arm')], ARM_ROLES);
   const legChoice = choosePair(rig, frame, [...roleCandidates('left_leg'), ...roleCandidates('right_leg')], LEG_ROLES);
-  let roles = {...makePairSuggestions(armChoice, ARM_ROLES), ...makePairSuggestions(legChoice, LEG_ROLES)};
+  const wholeBody = armChoice.pairs.length && legChoice.pairs.length
+    ? chooseWholeBody(rig, frame, scaffold, armChoice, legChoice) : {best: null, combinations: []};
+  const selectedArmChoice = wholeBody.best
+    ? {...armChoice, pair: wholeBody.best.armPair} : armChoice;
+  const selectedLegChoice = wholeBody.best
+    ? {...legChoice, pair: wholeBody.best.legPair} : legChoice;
+  let roles = {...makePairSuggestions(selectedArmChoice, ARM_ROLES),
+    ...makePairSuggestions(selectedLegChoice, LEG_ROLES)};
   const arms = [roles.left_arm, roles.right_arm];
   const legs = [roles.left_leg, roles.right_leg];
   if (arms.every(item => item.available) && legs.every(item => item.available)) {
     const shoulderHeight = Math.min(...arms.map(item => {
       const point = pointFor(rig, item.anchorJointId);
-      return point ? point.clone().sub(frame.center).dot(frame.up) : 0;
+      return point ? (point.dot(frame.up) - frame.lowHeight) / frame.height : 0;
     }));
     const hipHeight = Math.max(...legs.map(item => {
       const point = pointFor(rig, item.anchorJointId);
-      return point ? point.clone().sub(frame.center).dot(frame.up) : 0;
+      return point ? (point.dot(frame.up) - frame.lowHeight) / frame.height : 0;
     }));
     if (shoulderHeight <= hipHeight) {
       roles = {...roles};
@@ -631,6 +947,19 @@ export function suggestHumanoidLimbMappings({
       roleCandidates(role).slice(0, 10).map(candidateSnapshot)]));
     result.debug = {
       frame: {center: frame.center.toArray(), up: frame.up.toArray(), right: frame.right.toArray(), forward: frame.forward.toArray(), height: frame.height},
+      semanticFrame: {
+        center: frame.center.toArray(), lowHeight: frame.lowHeight,
+        highHeight: frame.highHeight, height: frame.height,
+        centerSide: frame.centerSide, centerDepth: frame.centerDepth,
+      },
+      scaffold: {
+        centerline: scaffold.centerline,
+        shoulderBand: scaffold.shoulderBand,
+        hipBand: scaffold.hipBand,
+        bodyDepth: scaffold.bodyDepth,
+        lowHeight: frame.lowHeight,
+        highHeight: frame.highHeight,
+      },
       candidates: candidates.map(candidateSnapshot),
       topCandidatesByRole,
       rejected,
@@ -644,6 +973,11 @@ export function suggestHumanoidLimbMappings({
         right_leg: legChoice.rightFamilies.map(familySnapshot),
       },
       pairs: {arms: pairSnapshot(armChoice), legs: pairSnapshot(legChoice)},
+      wholeBody: {
+        bestScore: wholeBody.best?.wholeBodyScore || 0,
+        coherence: wholeBody.best?.coherence || 0,
+        combinationCount: wholeBody.combinations.length,
+      },
       resolver: resolverStats,
       armPairCount: armChoice.pairs.length,
       legPairCount: legChoice.pairs.length,
