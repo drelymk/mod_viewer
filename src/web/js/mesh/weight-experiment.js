@@ -34,6 +34,10 @@ import {
   inspectSurfaceTopology,
   jointPivotMap,
 } from './weight-rig.js';
+import {
+  buildResidualBoundaryEvidence,
+  mergeResidualBoundaryBridges,
+} from './weight-rig-boundary.js';
 import { createWeightPickController } from '../scene/weight-pick-controller.js';
 import { raycastModelAtClientPoint } from '../scene/model-picking.js';
 import { computeModelBounds } from '../scene/model-bounds.js';
@@ -1091,15 +1095,34 @@ function aggregateSourceInfluenceGraph(members) {
     duplicateMemberKeys: normalizedMembers.duplicateMemberKeys,
     memberDiagnostics,
     partialOverlapPairs: [],
+    boundaryMembers: normalizedMembers.members.map((member, index) => ({
+      memberKey: sourceMemberKey(member, index),
+      baselinePositions: member.state.baselinePositions,
+      triangleIndices: member.surfaceIndices,
+      skinIndices: member.state.indices,
+      weights: member.state.weights,
+      influenceCount: member.state.influenceCount,
+    })),
   };
 }
 
 function createSourceSkinningRig(sourceKey, members) {
   const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
-  const influenceGraph = aggregateSourceInfluenceGraph(members);
-  const inferredForest = buildInferredRigForest(influenceGraph);
+  const aggregated = aggregateSourceInfluenceGraph(members);
+  const {boundaryMembers, ...influenceGraph} = aggregated;
+  const baseInferredForest = buildInferredRigForest(influenceGraph);
+  const boundaryStarted = performanceNow();
+  const boundaryAnalysis = buildResidualBoundaryEvidence({
+    members: boundaryMembers,
+    influenceGraph,
+    baseForest: baseInferredForest,
+  });
+  boundaryAnalysis.analysisMs = performanceNow() - boundaryStarted;
+  const inferredForest = mergeResidualBoundaryBridges(
+    baseInferredForest, boundaryAnalysis.acceptedBridges, influenceGraph);
   const jointPivotByBoneId = jointPivotMap(
-    inferredForest, influenceGraph.relationships);
+    inferredForest, [...influenceGraph.relationships,
+      ...boundaryAnalysis.acceptedBridges]);
   const rig = {
     key: sourceKey,
     sourceKey,
@@ -1107,6 +1130,9 @@ function createSourceSkinningRig(sourceKey, members) {
     boneIdOffset: descriptor?.boneIdOffset ?? 0,
     meshes: new Set(members),
     influenceGraph,
+    baseInferredForest,
+    boundaryAnalysis,
+    boundaryBridges: boundaryAnalysis.acceptedBridges,
     boneIds: (influenceGraph.nodes || []).map(node => node.boneId),
     centerByBoneId: new Map((influenceGraph.nodes || []).map(node => [
       node.boneId, node.weightedCenter])),
@@ -1159,6 +1185,9 @@ function refreshSourceSkinningRig(rig, members, {resetPose = true} = {}) {
   const refreshed = createSourceSkinningRig(rig.sourceKey, members);
   rig.meshes = refreshed.meshes;
   rig.influenceGraph = refreshed.influenceGraph;
+  rig.baseInferredForest = refreshed.baseInferredForest;
+  rig.boundaryAnalysis = refreshed.boundaryAnalysis;
+  rig.boundaryBridges = refreshed.boundaryBridges;
   rig.boneIds = refreshed.boneIds;
   rig.centerByBoneId = refreshed.centerByBoneId;
   rig.inferredForest = refreshed.inferredForest;
@@ -2874,14 +2903,21 @@ function setRigComponentRootForSource(sourceKey, boneId) {
   if (!Number.isInteger(jointId) || !modelSkinningRig) return false;
   clearModelManualPose({request: false});
   resetSourceSkinningPose(rig);
-  const overrides = new Map(rig.inferredForest.components.map(item => [
+  const baseForest = rig.baseInferredForest
+    || buildInferredRigForest(rig.influenceGraph);
+  const baseComponentId = Number(baseForest.componentByBoneId[id]);
+  const overrides = new Map(baseForest.components.map(item => [
     item.componentId, item.rootId]));
-  overrides.set(component.componentId, id);
-  rig.inferredForest = buildInferredRigForest(rig.influenceGraph, {
+  if (!Number.isInteger(baseComponentId)) return false;
+  overrides.set(baseComponentId, id);
+  rig.baseInferredForest = buildInferredRigForest(rig.influenceGraph, {
     rootOverrides: overrides,
   });
+  rig.inferredForest = mergeResidualBoundaryBridges(
+    rig.baseInferredForest, rig.boundaryBridges, rig.influenceGraph);
   rig.jointPivotByBoneId = jointPivotMap(
-    rig.inferredForest, rig.influenceGraph.relationships);
+    rig.inferredForest, [...rig.influenceGraph.relationships,
+      ...rig.boundaryBridges]);
   rebuildSourceRigRestFrames(rig);
   rig.poseRootOverrides = overrides;
   const signature = modelSkinningRig.joints[jointId]?.signature;

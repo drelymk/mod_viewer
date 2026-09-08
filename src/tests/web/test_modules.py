@@ -1236,6 +1236,102 @@ def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
         "Cannot aggregate incompatible Rig evidence modes.")
 
 
+def test_residual_boundary_evidence_requires_exact_multi_edge_seams(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const boundary = await import('./js/mesh/weight-rig-boundary.js');
+      const patch = (right = false) => {
+        const positions = right ? [
+          1, 0, 0, 2, 0, 0, 2, .5, 0, 2, 1, 0, 1, 1, 0, 1, .5, 0,
+        ] : [
+          0, 0, 0, 1, 0, 0, 1, .5, 0, 1, 1, 0, 0, 1, 0,
+        ];
+        const triangles = right
+          ? new Uint32Array([0, 1, 2, 0, 2, 5, 5, 2, 3, 5, 3, 4])
+          : new Uint32Array([0, 1, 2, 0, 2, 3, 0, 3, 4]);
+        const skinIndices = new Uint32Array([
+          ...(right ? [1, 1, 1, 1, 1, 1] : [0, 0, 0, 0, 0]),
+        ]);
+        const weights = new Float32Array(right ? [1, 1, 1, 1, 1, 1]
+          : [1, 1, 1, 1, 1]);
+        return {positions: new Float32Array(positions), triangles,
+          skinIndices, weights, influenceCount: 1};
+      };
+      const left = patch();
+      const right = patch(true);
+      const combinedPositions = new Float32Array([
+        ...left.positions, ...right.positions,
+      ]);
+      const combinedTriangles = new Uint32Array([
+        ...left.triangles,
+        ...[...right.triangles].map(index => index + 5),
+      ]);
+      const combinedSkinIndices = new Uint32Array([
+        ...left.skinIndices, ...right.skinIndices,
+      ]);
+      const combinedWeights = new Float32Array([
+        ...left.weights, ...right.weights,
+      ]);
+      const combinedGraph = rig.buildSurfaceInfluenceGraph(
+        combinedPositions, combinedTriangles, combinedSkinIndices,
+        combinedWeights, 1, [0, 1], 2);
+      const graph = rig.aggregateInfluenceGraphs([combinedGraph]);
+      const baseForest = rig.buildInferredRigForest(graph);
+      const members = [{memberKey: 'combined',
+        baselinePositions: combinedPositions,
+        triangleIndices: combinedTriangles,
+        skinIndices: combinedSkinIndices,
+        weights: combinedWeights, influenceCount: 1}];
+      const accepted = boundary.buildResidualBoundaryEvidence({
+        members, influenceGraph: graph, baseForest,
+      });
+      const single = boundary.buildResidualBoundaryEvidence({
+        members: [{...members[0], memberKey: 'single',
+          triangleIndices: new Uint32Array([
+            0, 1, 2, 5, 6, 7, 5, 7, 10, 10, 7, 8, 10, 8, 9,
+          ])}],
+        influenceGraph: graph, baseForest,
+      });
+      const near = {...right, positions: new Float32Array([
+        1 + 1e-6, 0, 0, 2, 0, 0, 2, .5, 0, 2, 1, 0,
+        1 + 1e-6, 1, 0, 1 + 1e-6, .5, 0,
+      ])};
+      const nearResult = boundary.buildResidualBoundaryEvidence({
+        members: [{...members[0], baselinePositions: new Float32Array([
+          ...left.positions, ...near.positions,
+        ])}],
+        influenceGraph: graph, baseForest,
+      });
+      const merged = boundary.mergeResidualBoundaryBridges(
+        baseForest, accepted.acceptedBridges, graph);
+      return {
+        baseComponents: baseForest.components.length,
+        boundaryEdgeCount: accepted.boundaryEdgeCount,
+        matched: accepted.exactMatchedEdgeCount,
+        bridges: accepted.acceptedBridges.map(edge => ({
+          boneA: edge.boneA, boneB: edge.boneB,
+          matchedEdgeCount: edge.matchedEdgeCount,
+          jointCenter: edge.jointCenter,
+        })),
+            finalComponents: merged.components.length,
+            finalRoot: merged.components[0]?.rootId,
+            singleRejected: single.boundaryRejectedCounts,
+        nearBridges: nearResult.acceptedBridges.length,
+      };
+    }""")
+    assert result["baseComponents"] == 2, result
+    assert result["bridges"] == [{
+        "boneA": 0, "boneB": 1,
+        "matchedEdgeCount": 2,
+        "jointCenter": [1, .5, 0],
+    }], result
+    assert result["finalComponents"] == 1
+    assert result["finalRoot"] == 0
+    assert result["nearBridges"] == 0
+    assert result["singleRejected"]
+
+
 def test_triangle_surface_evidence_is_invariant_for_varying_weight_tessellation(
         module_page):
     page = module_page

@@ -239,6 +239,14 @@ of documentation, comments and tests; use portable fixtures instead.
   debug projection. Shape rebaselines invalidate and lazily rebuild surface
   evidence; visibility, material, texture and per-frame paths do not rebuild
   it.
+- After a surface-evidence base forest is built, residual components may be
+  joined only by exact indexed multi-edge seams in the same normalized member.
+  Boundary triangles must be pure to one base component; matching requires two
+  boundary records, opposite geometric sides, one connected chain of at least
+  two edges, and a unique mutual-best seam bone pair. Boundary bridges remain
+  separate `mesh_boundary` evidence, are selected cycle-free, preserve the
+  existing host root, and are disabled for vertex fallback or non-indexed
+  boundary inference.
 - Infer topology only from influence overlap and weighted centers. Blend data
   supplies no names, canonical skeleton, hierarchy, bind pose or animation.
   Keep maximum-spanning relationships, weak-bridge pruning and static-boundary

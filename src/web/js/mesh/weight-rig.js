@@ -17,7 +17,7 @@ function triangleArea(points) {
     ab[0] * ac[1] - ab[1] * ac[0]);
 }
 
-function collectSurfaceTriangles(
+export function collectSurfaceTriangles(
     positions, triangleIndices = null, includeTriangles = true) {
   const positionArray = positions || [];
   const positionCount = Math.floor(positionArray.length / 3);
@@ -1021,11 +1021,17 @@ export function buildInferredRigForest(graph, options = {}) {
       maxDepth: Math.max(0, ...depths),
     };
   });
+  const primaryComponentId = components.length ? 0 : null;
+  components.forEach((component, componentId) => {
+    component.primary = componentId === primaryComponentId;
+  });
   const componentByBoneId = {};
   components.forEach(component => component.nodeIds.forEach(id => {
     componentByBoneId[id] = component.componentId;
   }));
   return {
+    primaryRootId: components[primaryComponentId]?.rootId ?? null,
+    primaryComponentId,
     components,
     componentByBoneId,
     edges: tree.edges,

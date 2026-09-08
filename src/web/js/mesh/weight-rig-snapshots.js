@@ -84,6 +84,21 @@ export function sourceRigSnapshot(rig, {
     zeroMeasureVertexCount: rig.influenceGraph?.zeroMeasureVertexCount || 0,
     surfaceEvidenceAvailable: rig.influenceGraph?.evidenceMode === 'surface',
     fallbackReason: rig.influenceGraph?.fallbackReason || null,
+    boundaryEvidenceEnabled: rig.boundaryAnalysis?.boundaryEvidenceEnabled === true,
+    boundaryEvidenceReason: rig.boundaryAnalysis?.boundaryEvidenceReason || null,
+    baseComponentCount: rig.baseInferredForest?.components?.length
+      ?? rig.inferredForest?.components?.length ?? 0,
+    finalComponentCount: rig.inferredForest?.components?.length || 0,
+    boundaryEdgeCount: rig.boundaryAnalysis?.boundaryEdgeCount || 0,
+    exactMatchedEdgeCount: rig.boundaryAnalysis?.exactMatchedEdgeCount || 0,
+    validSeamSampleCount: rig.boundaryAnalysis?.validSeamSampleCount || 0,
+    boundaryComponentPairCount:
+      rig.boundaryAnalysis?.boundaryComponentPairCount || 0,
+    acceptedBoundaryBridgeCount: rig.boundaryBridges?.length || 0,
+    boundaryAnalysisMs: rig.boundaryAnalysis?.analysisMs || 0,
+    boundaryRejectedCounts: {
+      ...(rig.boundaryAnalysis?.boundaryRejectedCounts || {}),
+    },
     memberCount: rig.influenceGraph?.memberCount || 0,
     uniqueMemberCount: rig.influenceGraph?.uniqueMemberCount || 0,
     duplicateMemberCount: rig.influenceGraph?.duplicateMemberCount || 0,
@@ -141,6 +156,7 @@ export function sourceRigSnapshot(rig, {
   source.relationships = (rig.influenceGraph?.relationships || []).map(edge => ({
     boneA: edge.boneA,
     boneB: edge.boneB,
+    evidenceType: 'triangle_overlap',
     sharedVertexCount: edge.sharedVertexCount,
     sharedMeasure: edge.sharedMeasure,
     minOverlap: edge.minOverlap,
@@ -152,6 +168,18 @@ export function sourceRigSnapshot(rig, {
     treeEdgeScore: edge.treeEdgeScore,
     jointWeightTotal: edge.jointWeightTotal,
     jointCenter: edge.jointCenter ? [...edge.jointCenter] : null,
+  }));
+  source.boundaryBridges = (rig.boundaryBridges || []).map(edge => ({
+    boneA: edge.boneA,
+    boneB: edge.boneB,
+    evidenceType: 'mesh_boundary',
+    jointCenter: edge.jointCenter ? [...edge.jointCenter] : null,
+    matchedEdgeCount: edge.matchedEdgeCount,
+    matchedLength: edge.matchedLength,
+    memberKey: edge.memberKey,
+    componentA: edge.componentA,
+    componentB: edge.componentB,
+    bonePairSupport: {...(edge.bonePairSupport || {})},
   }));
   return source;
 }

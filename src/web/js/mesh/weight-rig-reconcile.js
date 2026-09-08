@@ -1283,7 +1283,10 @@ function sourceModelEdges(sourceRigs, keyToJoint) {
           return (a === parentBoneId && b === childBoneId)
             || (a === childBoneId && b === parentBoneId);
         });
-        const sourceRelationship = (rig.influenceGraph?.relationships || [])
+        const sourceRelationship = [
+          ...(rig.influenceGraph?.relationships || []),
+          ...(rig.boundaryBridges || []),
+        ]
           .find(candidate => {
             const a = Number(candidate.boneA);
             const b = Number(candidate.boneB);
@@ -1299,6 +1302,7 @@ function sourceModelEdges(sourceRigs, keyToJoint) {
           jointCenter: sourceRelationship?.jointCenter
             ? [...sourceRelationship.jointCenter] : null,
           jointWeightTotal: Number(sourceRelationship?.jointWeightTotal) || 0,
+          evidenceType: sourceRelationship?.evidenceType || 'triangle_overlap',
         });
         edge.combinedTreeScore += treeScore;
         edgeMap.set(key, edge);
