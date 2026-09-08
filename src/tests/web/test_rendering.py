@@ -2419,12 +2419,14 @@ def test_loaded_skinning_rebaselines_after_shape_change(
           const resetWorked = resetAfterRebuild
             && resetDebug.poseJointIds.length === 0
             && resetDebug.explicitRootSignatures.length === 0
-            && resetComponent?.rootId !== rebuiltJoint?.jointId;
+            && resetComponent
+            && resetComponent.rootId !== rebuiltJoint?.jointId;
           experiment.setRigJointRoot(rebuiltJoint?.jointId);
           experiment.unregisterSkinningMesh(mesh);
           const unresolvedDebug = experiment.getModelRigDebugState();
-          const unresolvedDropped = !unresolvedDebug.explicitRootSignatures
-            || unresolvedDebug.explicitRootSignatures.length === 0;
+          const unresolvedDropped = Array.isArray(
+            unresolvedDebug.explicitRootSignatures)
+            && unresolvedDebug.explicitRootSignatures.length === 0;
           experiment.destroyModelPhysicsSession();
           const resetState = experiment.getModelRigState();
           const after = [...mesh.geometry.attributes.position.array];
