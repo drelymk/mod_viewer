@@ -30,6 +30,7 @@ import {
   buildInfluenceNodes as buildRigInfluenceNodes,
   buildInfluenceRelationships as buildRigInfluenceRelationships,
   buildInferredRigForest,
+  buildSurfaceInfluenceGraph,
   buildVertexSurfaceMeasure,
   jointPivotMap,
 } from './weight-rig.js';
@@ -486,10 +487,15 @@ export function getModelRigState() {
 export function getModelRigDebugState(sourceKey = null) {
   const model = modelRigSnapshotForState({debug: true});
   const sources = [...sourceSkinningRigs.values()]
-    .map(rig => sourceRigSnapshot(rig, {
-      modelRigState, modelJointIdForSourceBone,
-      quaternionIsIdentity,
-    }));
+    .map(rig => {
+      const diagnostics = sourceRigDiagnostics(rig);
+      return sourceRigSnapshot(rig, {
+        modelRigState, modelJointIdForSourceBone,
+        quaternionIsIdentity,
+        memberDiagnostics: diagnostics.records,
+        partialOverlapPairs: diagnostics.partialOverlapPairs,
+      });
+    });
   const metrics = {
     rigAnalysisMs: modelRigState.rigAnalysisMs || 0,
     rigTransformMs: modelRigState.rigTransformMs || 0,
@@ -1006,8 +1012,8 @@ function sourceMemberVertexTokens(member) {
   return tokens;
 }
 
-function sourceMemberDiagnostics(members, normalized) {
-  const records = members.map((member, index) => ({
+function sourceMemberRecords(members, normalized) {
+  return members.map((member, index) => ({
     memberKey: sourceMemberKey(member, index),
     vertexCount: Math.floor((member.state.baselinePositions?.length || 0) / 3),
     triangleCount: member.surfaceEvidence.triangleCount,
@@ -1018,6 +1024,10 @@ function sourceMemberDiagnostics(members, normalized) {
     surfaceEvidenceAvailable: member.surfaceEvidence.surfaceEvidenceAvailable,
     duplicate: normalized.duplicateMembers.has(member),
   }));
+}
+
+function sourceMemberDiagnostics(members, normalized) {
+  const records = sourceMemberRecords(members, normalized);
   const tokensByMember = members.map(sourceMemberVertexTokens);
   const partialOverlapPairs = [];
   for (let left = 0; left < members.length; left += 1) {
@@ -1040,6 +1050,24 @@ function sourceMemberDiagnostics(members, normalized) {
   return {records, partialOverlapPairs};
 }
 
+function sourceRigMembers(rig) {
+  return [...(rig.meshes || [])].map(mesh => {
+    const state = states.get(mesh);
+    return state?.loaded ? {
+      mesh, state,
+      surfaceIndices: mesh.geometry?.index?.array || null,
+      surfaceEvidence: buildVertexSurfaceMeasure(
+        state.baselinePositions, mesh.geometry?.index?.array || null),
+    } : null;
+  }).filter(Boolean);
+}
+
+function sourceRigDiagnostics(rig) {
+  const members = sourceRigMembers(rig);
+  const normalized = normalizeSourceMembers(members);
+  return sourceMemberDiagnostics(members, normalized);
+}
+
 function aggregateSourceInfluenceGraph(members) {
   const loadedMembers = members.map(mesh => {
     const state = states.get(mesh);
@@ -1051,7 +1079,7 @@ function aggregateSourceInfluenceGraph(members) {
     } : null;
   }).filter(Boolean);
   const normalizedMembers = normalizeSourceMembers(loadedMembers);
-  const memberDiagnostics = sourceMemberDiagnostics(
+  const memberDiagnostics = sourceMemberRecords(
     loadedMembers, normalizedMembers);
   const evidenceMode = loadedMembers.every(member =>
     member.surfaceEvidence.surfaceEvidenceAvailable) ? 'surface' : 'vertex';
@@ -1064,8 +1092,8 @@ function aggregateSourceInfluenceGraph(members) {
     uniqueMemberCount: normalizedMembers.members.length,
     duplicateMemberCount: normalizedMembers.duplicateMemberCount,
     duplicateMemberKeys: normalizedMembers.duplicateMemberKeys,
-    memberDiagnostics: memberDiagnostics.records,
-    partialOverlapPairs: memberDiagnostics.partialOverlapPairs,
+    memberDiagnostics,
+    partialOverlapPairs: [],
   };
 }
 
@@ -3335,21 +3363,17 @@ function buildInfluenceGraph(
       state.baselinePositions, mesh.geometry?.index?.array || null) : null);
   const evidenceMode = requestedEvidenceMode === 'surface'
     && measure?.surfaceEvidenceAvailable ? 'surface' : 'vertex';
-  const nodes = evidenceMode === 'surface'
-    ? buildRigInfluenceNodes(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.boneIds, {
-        vertexMeasure: measure.vertexMeasure,
-      })
-    : rawNodes;
+  if (evidenceMode === 'surface') {
+    return buildSurfaceInfluenceGraph(
+      state.baselinePositions, mesh.geometry?.index?.array || null,
+      state.indices, state.weights, state.influenceCount, state.boneIds,
+      Number.isFinite(radius) && radius > 0 ? radius : null);
+  }
   const relationships = buildRigInfluenceRelationships(
     state.baselinePositions, state.indices, state.weights, state.influenceCount,
-    nodes, Number.isFinite(radius) && radius > 0 ? radius : null,
-    evidenceMode === 'surface' ? {
-      vertexMeasure: measure.vertexMeasure,
-    } : {});
+    rawNodes, Number.isFinite(radius) && radius > 0 ? radius : null, {});
   return {
-    nodes,
+    nodes: rawNodes,
     relationships,
     boundingSphereRadius: Number.isFinite(radius) && radius > 0 ? radius : null,
     evidenceMode,

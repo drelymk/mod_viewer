@@ -1577,6 +1577,7 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
         page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
+          const THREE = await import('three');
           const experiment = await import('./js/mesh/weight-experiment.js');
           const deformation = await import('./js/mesh/weight-deformation.js');
           let debug = experiment.getModelRigDebugState();
@@ -1609,6 +1610,15 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
             Number(node.boneId), node.weightedCenter]));
           const pivots = new Map(Object.entries(after.jointPivotByBoneId).map(
             ([id, pivot]) => [Number(id), pivot]));
+          const parentOnlyTransforms =
+            deformation.buildForestTransformsFromLocalRotations(
+              forest, centers, {
+                quaternionByBoneId: new Map([[bone1, q90]]),
+                jointPivotByBoneId: pivots,
+              });
+          const expectedParentPivot = new THREE.Vector3(
+            ...frameBefore.pivot).applyMatrix4(
+              parentOnlyTransforms.get(bone1)).toArray();
           const transforms = deformation.buildForestTransformsFromLocalRotations(
             forest, centers, {
               quaternionByBoneId: new Map([[bone1, q90], [bone2, q30]]),
@@ -1648,6 +1658,7 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
               < 1e-6));
           return {
             rooted, bone1, bone2, frameBefore, frameAfterParent,
+            expectedParentPivot,
             frameAfterChild, parentPosed, childPosed, storedLocal,
             expected: [...expected], actual, rerooted,
             jointIds,
@@ -1673,7 +1684,7 @@ def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
         assert result["bone1"] == 1
         assert result["bone2"] == 2
         rest_pivot = result["frameBefore"]["pivot"]
-        expected_parent_pivot = [-rest_pivot[1], rest_pivot[0], rest_pivot[2]]
+        expected_parent_pivot = result["expectedParentPivot"]
         assert result["frameAfterParent"]["pivot"] == pytest.approx(
             expected_parent_pivot, abs=1e-5)
         assert result["frameAfterParent"]["pivot"] != pytest.approx(
@@ -1919,7 +1930,7 @@ def test_rig_pose_preset_restores_roots_for_disconnected_components(
         0, 0, 0, 1, 0, 0, 0, 1, 0,
         4, 0, 0, 5, 0, 0, 4, 1, 0,
     )
-    entry["idx"] = _u32(0, 1, 2, 2, 3, 0)
+    entry["idx"] = _u32(0, 1, 2, 3, 4, 5)
     context, page = _page(
         edge_browser, frontend_url, {"RigMultiRoot": payload})
     try:
@@ -1928,7 +1939,7 @@ def test_rig_pose_preset_restores_roots_for_disconnected_components(
         page.evaluate("""async () => {
           const bytes = new Uint8Array(96);
           new Uint32Array(bytes.buffer).set([
-            0, 1, 0, 1, 6, 7, 6, 7, 6, 7, 0, 1,
+            0, 1, 0, 1, 0, 1, 6, 7, 6, 7, 6, 7,
           ]);
           new Float32Array(bytes.buffer, 48).set([
             .8, .2, .7, .3, .8, .2, .7, .3,
@@ -3408,7 +3419,9 @@ def test_weight_panel_loads_model_weights_and_controls_selected_bones(
             window.modViewer.activeMeshes[0]);
           const debug = experiment.getModelPhysicsDebugState();
           return {enabled: state.physicsEnabled,
-            dynamic: debug?.physicsForest?.components?.[0]?.dynamicNodeIds || []};
+            dynamic: (debug?.physicsForest?.components || [])
+              .flatMap(component => component.dynamicNodeIds || [])
+              .sort((left, right) => left - right)};
         }""")
         assert physics["enabled"]
         assert physics["dynamic"] == [1, 2]

@@ -65,6 +65,8 @@ export function sourceRigSnapshot(rig, {
   modelRigState,
   modelJointIdForSourceBone,
   quaternionIsIdentity,
+  memberDiagnostics = null,
+  partialOverlapPairs = null,
 } = {}) {
   if (!rig) return null;
   const source = {
@@ -88,9 +90,11 @@ export function sourceRigSnapshot(rig, {
     duplicateMemberKeys: [
       ...(rig.influenceGraph?.duplicateMemberKeys || []),
     ],
-    memberDiagnostics: (rig.influenceGraph?.memberDiagnostics || [])
+    memberDiagnostics: (memberDiagnostics
+      || rig.influenceGraph?.memberDiagnostics || [])
       .map(member => ({...member})),
-    partialOverlapPairs: (rig.influenceGraph?.partialOverlapPairs || [])
+    partialOverlapPairs: (partialOverlapPairs
+      || rig.influenceGraph?.partialOverlapPairs || [])
       .map(pair => ({...pair})),
     boneCount: rig.influenceGraph?.nodes?.length || 0,
     boneIds: (rig.influenceGraph?.nodes || []).map(node => node.boneId),

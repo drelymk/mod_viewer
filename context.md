@@ -226,11 +226,12 @@ of documentation, comments and tests; use portable fixtures instead.
   state and bone transforms. All loaded members, including hidden meshes,
   contribute evidence; member meshes consume shared transforms with their own
   authored weights to avoid seams tearing.
-- Rig influence evidence uses indexed (or non-indexed consecutive) triangle
-  surface measure when every loaded member of a source has usable positive-area
-  geometry. Vertex-weighted node support, overlap, pivots and root evidence
-  are then area-weighted; raw Weight-panel statistics remain vertex-weighted
-  and are never mixed into the Rig graph.
+- Rig influence evidence integrates linearly interpolated skin weights over
+  indexed (or non-indexed consecutive) valid triangles when every loaded
+  member of a source has usable positive-area geometry. Node support, moments,
+  overlap, pivots and root evidence are then triangle-domain quantities; raw
+  Weight-panel statistics remain vertex-weighted and are never mixed into the
+  Rig graph.
 - If any member of a source lacks usable surface evidence, the complete source
   falls back to vertex evidence. Aggregate graphs reject mixed evidence modes.
   Exact duplicate members are counted once for Rig evidence while their

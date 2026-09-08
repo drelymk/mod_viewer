@@ -1249,6 +1249,108 @@ def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
         "Cannot aggregate incompatible Rig evidence modes.")
 
 
+def test_triangle_surface_evidence_is_invariant_for_varying_weight_tessellation(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const weights = new Float32Array([
+        1, 0, 0, 1, 1, 0,
+      ]);
+      const indices = new Uint32Array([0, 1, 0, 1, 0, 1]);
+      const coarse = rig.buildSurfaceInfluenceGraph(
+        new Float32Array([0, 0, 0, 2, 0, 0, 0, 2, 0]),
+        new Uint32Array([0, 1, 2]), indices, weights, 2, [0, 1], 4);
+      const denseWeights = new Float32Array([
+        1, 0, 0, 1, 1, 0,
+        .5, .5, .5, .5, 1, 0,
+      ]);
+      const denseIndices = new Uint32Array([
+        0, 1, 0, 1, 0, 1,
+        0, 1, 0, 1, 0, 1,
+      ]);
+      const dense = rig.buildSurfaceInfluenceGraph(
+        new Float32Array([
+          0, 0, 0, 2, 0, 0, 0, 2, 0,
+          1, 0, 0, 1, 1, 0, 0, 1, 0,
+        ]),
+        new Uint32Array([
+          0, 3, 5, 3, 1, 4, 5, 4, 2, 3, 4, 5,
+        ]),
+        denseIndices, denseWeights, 2, [0, 1], 4);
+      const equalWeights = rig.buildSurfaceInfluenceGraph(
+        new Float32Array([0, 0, 0, 2, 0, 0, 0, 2, 0]),
+        new Uint32Array([0, 1, 2]),
+        new Uint32Array([0, 1, 0, 1, 0, 1]), new Float32Array([
+          .5, .5, .5, .5, .5, .5,
+        ]), 2, [0, 1], 4);
+      const continuousOverlap = rig.buildSurfaceInfluenceGraph(
+        new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        new Uint32Array([0, 1, 2]),
+        new Uint32Array([0, 1, 1, 2, 0, 2]), new Float32Array([
+          .8, .2, .7, .3, .6, .4,
+        ]), 2, [0, 1, 2], 2);
+      const summarize = graph => {
+        const relationship = graph.relationships[0];
+        const forest = rig.buildInferredRigForest(graph);
+        return {
+          nodes: graph.nodes.map(node => ({
+            boneId: node.boneId,
+            totalWeight: node.totalWeight,
+            weightedCenter: node.weightedCenter,
+            weightedRadius: node.weightedRadius,
+          })),
+          relationship: {
+            sharedVertexCount: relationship.sharedVertexCount,
+            productOverlap: relationship.productOverlap,
+            minOverlap: relationship.minOverlap,
+            jointCenter: relationship.jointCenter,
+          },
+          candidateCount: rig.candidateRelationshipEdges(graph).length,
+          components: forest.components.map(component => ({
+            rootId: component.rootId,
+            nodeIds: [...component.nodeIds].sort((a, b) => a - b),
+            parentById: component.parentById,
+          })),
+        };
+      };
+      return {
+        coarse: summarize(coarse),
+        dense: summarize(dense),
+        equal: summarize(equalWeights),
+        continuousOverlap: {
+          relationshipCount: continuousOverlap.relationships.length,
+          candidateCount: rig.candidateRelationshipEdges(continuousOverlap).length,
+        },
+      };
+    }""")
+    for coarse_node, dense_node in zip(
+            result["coarse"]["nodes"], result["dense"]["nodes"]):
+        assert coarse_node["boneId"] == dense_node["boneId"]
+        assert coarse_node["totalWeight"] == pytest.approx(
+            dense_node["totalWeight"])
+        assert coarse_node["weightedCenter"] == pytest.approx(
+            dense_node["weightedCenter"])
+        assert coarse_node["weightedRadius"] == pytest.approx(
+            dense_node["weightedRadius"])
+    assert result["coarse"]["relationship"]["productOverlap"] == pytest.approx(
+        result["dense"]["relationship"]["productOverlap"])
+    assert result["coarse"]["relationship"]["minOverlap"] == pytest.approx(
+        result["dense"]["relationship"]["minOverlap"])
+    assert result["coarse"]["relationship"]["jointCenter"] == pytest.approx(
+        result["dense"]["relationship"]["jointCenter"])
+    assert result["equal"]["relationship"]["minOverlap"] == pytest.approx(1)
+    assert result["continuousOverlap"] == {
+        "relationshipCount": 3,
+        "candidateCount": 3,
+    }
+    assert result["coarse"]["relationship"]["sharedVertexCount"] == 0
+    assert result["dense"]["relationship"]["sharedVertexCount"] == 6
+    assert result["coarse"]["candidateCount"] == 1
+    assert result["dense"]["candidateCount"] == 1
+    assert result["coarse"]["components"] == result["dense"]["components"]
+
+
 def test_surface_rig_topology_is_scale_and_input_order_invariant(module_page):
     page = module_page
     result = page.evaluate("""async () => {
