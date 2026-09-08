@@ -35,41 +35,12 @@ function componentFor(source, boneId) {
     component.nodeIds.includes(boneId)) || null;
 }
 
-function selectedOverlayId(source, snapshot) {
-  return source?.joints ? selectedBoneFor(snapshot) : null;
+function overlayNodeIds(source) {
+  return new Set((source?.joints || []).map(joint => Number(joint.jointId)));
 }
 
-function overlayNodeIds(source, snapshot) {
-  const allIds = (source?.joints || []).map(joint => Number(joint.jointId));
-  if (snapshot?.jointPickIntent || snapshot?.overlayScope !== 'selection') {
-    return new Set(allIds);
-  }
-  const selected = selectedOverlayId(source, snapshot);
-  const component = componentFor(source, selected);
-  if (!component || !Number.isInteger(selected)) return new Set(allIds);
-  const ids = new Set([selected]);
-  let current = selected;
-  while (component.parentById?.[current] !== null
-      && component.parentById?.[current] !== undefined) {
-    current = Number(component.parentById[current]);
-    if (!Number.isInteger(current)) break;
-    ids.add(current);
-  }
-  (component.childrenById?.[selected] || []).forEach(child => {
-    const id = Number(child);
-    if (Number.isInteger(id)) ids.add(id);
-  });
-  return ids;
-}
-
-function overlayPresentationKey(snapshot, source) {
-  const scope = snapshot?.jointPickIntent
-    ? 'all-pick' : snapshot?.overlayScope === 'selection' ? 'selection' : 'all';
-  const selected = scope === 'selection'
-    ? selectedOverlayId(source, snapshot) : '';
-  const intent = snapshot?.jointPickIntent
-    ? `${snapshot.jointPickIntent.type}:${snapshot.jointPickIntent.role}` : '';
-  return `${topologyKey(source)}|overlay=${scope}:${selected ?? ''}|pick=${intent}`;
+function overlayPresentationKey(source) {
+  return topologyKey(source);
 }
 
 function pivotFor(source, boneId) {
@@ -137,7 +108,7 @@ export function findNearestRigJoint({candidates = [], pointer, camera, canvas,
 }
 
 function canFkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
-  if (snapshot?.picking || snapshot?.jointPickIntent || !source
+  if (snapshot?.jointPickIntent || !source
       || boneId === null) {
     return false;
   }
@@ -146,7 +117,7 @@ function canFkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
 }
 
 function canIkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
-  if (snapshot?.picking || snapshot?.jointPickIntent || !source
+  if (snapshot?.jointPickIntent || !source
       || boneId === null) return false;
   const ik = snapshot?.ik;
   return !!ik?.enabled && !!ik.available
@@ -368,7 +339,7 @@ export function createRigOverlayController({
   }
 
   function rebuildOverlay(source) {
-    const visibleIds = overlayNodeIds(source, currentSnapshot);
+    const visibleIds = overlayNodeIds(source);
     const modelNodes = (source?.joints || []).map(joint => [
       Number(joint.jointId), joint.restCenter,
     ]).filter(([boneId]) => visibleIds.has(boneId));
@@ -876,15 +847,14 @@ export function createRigOverlayController({
     currentSource = sourceFor(currentSnapshot);
     rigJointPickingActive = !!currentSnapshot.jointPickIntent;
     selectedJointId = selectedIdFor(currentSnapshot);
-    const nextTopologyKey = overlayPresentationKey(currentSnapshot, currentSource);
+    const nextTopologyKey = overlayPresentationKey(currentSource);
     if (nextTopologyKey !== currentTopologyKey) {
       currentTopologyKey = nextTopologyKey;
       rebuildOverlay(currentSource);
     }
     updateModelFrame();
     group.visible = !!currentSource;
-    staticGroup.visible = (!!currentSnapshot.visible
-      || !!currentSnapshot.jointPickIntent) && !!currentSource;
+    staticGroup.visible = !!currentSnapshot.jointPickIntent && !!currentSource;
     if (!currentSnapshot.jointPickIntent) {
       pickCandidateCache = [];
       pickPointer = null;

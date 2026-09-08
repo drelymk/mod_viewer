@@ -12,8 +12,6 @@ function createModelRigDefaults() {
     loading: false,
     promise: null,
     error: null,
-    visible: false,
-    picking: false,
     jointPickIntent: null,
     selectedJointId: null,
     structureRevision: 0,
@@ -30,7 +28,6 @@ function createModelRigDefaults() {
     rotationSnapDegrees: 0,
     ikEnabled: false,
     activeLimbRole: 'left_arm',
-    overlayScope: 'selection',
     explicitRootSignatures: new Set(),
   };
 }

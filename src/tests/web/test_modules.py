@@ -362,7 +362,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert result["shownAgain"]["selectedJointId"] is None
 
 
-def test_rig_joint_picking_temporarily_exposes_all_overlay_joints(module_page):
+def test_rig_overlay_builds_all_joints_and_toggles_visibility(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
       const {createRigOverlayController} = await import(
@@ -373,7 +373,7 @@ def test_rig_joint_picking_temporarily_exposes_all_overlay_joints(module_page):
       const canvas = document.createElement('canvas');
       document.body.appendChild(canvas);
       let state = {
-        visible: false, overlayScope: 'selection', selectedJointId: 2,
+        selectedJointId: 2,
         jointPickIntent: null,
         model: {
           key: 'model-rig', structureRevision: 1,
@@ -404,11 +404,11 @@ def test_rig_joint_picking_temporarily_exposes_all_overlay_joints(module_page):
       canvas.remove();
       return {before, during, after};
     }""")
-    assert result["before"]["nodeCount"] == 3
+    assert result["before"]["nodeCount"] == 4
     assert result["before"]["staticVisible"] is False
     assert result["during"]["nodeCount"] == 4
     assert result["during"]["staticVisible"] is True
-    assert result["after"]["nodeCount"] == 3
+    assert result["after"]["nodeCount"] == 4
     assert result["after"]["staticVisible"] is False
 
 
@@ -437,8 +437,7 @@ def test_rig_joint_picker_owns_plain_left_and_allows_alt_orbit(module_page):
         forestEdges: [{parentId: 1, childId: 2}],
         poseRotationByJointId: {},
       };
-      let state = {visible: false, overlayScope: 'selection',
-        selectedJointId: null,
+      let state = {selectedJointId: null,
         jointPickIntent: {type: 'limb-anchor', role: 'left_arm'},
         model: source};
       const picked = [];
@@ -496,7 +495,7 @@ def test_rig_joint_picker_owns_plain_left_and_allows_alt_orbit(module_page):
     assert result["cleared"]["hoveredJointId"] is None
 
 
-def test_rig_overlay_can_scope_model_view_to_selected_chain(module_page):
+def test_rig_overlay_hides_static_geometry_until_joint_picking(module_page):
     page = module_page
     result = page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
@@ -523,31 +522,29 @@ def test_rig_overlay_can_scope_model_view_to_selected_chain(module_page):
           {jointA: 1, jointB: 2, parentId: 1, childId: 2},
         ],
       };
-      let state = {
-        visible: true, selectedJointId: 1,
-        overlayScope: 'all', model: source, sources: [source],
-      };
+      let state = {selectedJointId: 1, jointPickIntent: null, model: source};
       const controller = createRigOverlayController({
         scene, getMeshes: () => [model], getRigState: () => state,
         getRigJointPoseFrame: () => null, setRigJointRotation: () => true,
       });
       controller.refresh(state);
-      const all = controller.getDebugState();
-      state = {...state, overlayScope: 'selection'};
+      const hidden = controller.getDebugState();
+      state = {...state, jointPickIntent: {type: 'selected-joint'}};
       controller.refresh(state);
-      const chain = controller.getDebugState();
-      state = {...state, selectedJointId: 3};
+      const picking = controller.getDebugState();
+      state = {...state, jointPickIntent: null};
       controller.refresh(state);
-      const singleton = controller.getDebugState();
+      const hiddenAgain = controller.getDebugState();
       controller.dispose();
-      return {all, chain, singleton};
+      return {hidden, picking, hiddenAgain};
     }""")
-    assert result["all"]["nodeCount"] == 4
-    assert result["all"]["edgeCount"] == 2
-    assert result["chain"]["nodeCount"] == 3
-    assert result["chain"]["edgeCount"] == 2
-    assert result["singleton"]["nodeCount"] == 1
-    assert result["singleton"]["edgeCount"] == 0
+    assert result["hidden"]["nodeCount"] == 4
+    assert result["hidden"]["edgeCount"] == 2
+    assert result["hidden"]["staticVisible"] is False
+    assert result["picking"]["nodeCount"] == 4
+    assert result["picking"]["edgeCount"] == 2
+    assert result["picking"]["staticVisible"] is True
+    assert result["hiddenAgain"]["staticVisible"] is False
 
 
 def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_page):
@@ -579,8 +576,7 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
         forestEdges: [{jointA: 1, jointB: 2, parentId: 1, childId: 2}],
         poseRotationByJointId: {},
       };
-      let state = {visible: true, selectedJointId: null,
-        rotationSnapDegrees: 15, picking: false, model: source};
+      let state = {selectedJointId: null, rotationSnapDegrees: 15, model: source};
       const controller = createRigOverlayController({
         scene, camera, canvas, getRigState: () => state,
         getMeshes: () => [],
@@ -632,8 +628,7 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
         './js/scene/weight-pick-controller.js');
       const picker = createWeightPickController({
         canvas, camera, controls: arcballControls, getMeshes: () => [],
-        onStateChanged: picking => {
-          state = {...state, picking};
+        onStateChanged: () => {
           controller.refresh(state);
         },
       });
@@ -646,22 +641,18 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
       state = {...state, selectedJointId: 1};
       controller.refresh(state);
       const rootAgain = controller.getDebugState();
-      state = {...state, visible: false, selectedJointId: 2};
-      controller.refresh(state);
-      const hidden = controller.getDebugState();
-      state = {...state, visible: true};
-      controller.refresh(state);
-      const shown = controller.getDebugState();
-      state = {...state, picking: true, selectedJointId: 2};
+      state = {...state, selectedJointId: 2,
+        jointPickIntent: {type: 'selected-joint'}};
       controller.refresh(state);
       const picking = controller.getDebugState();
-      state = {...state, picking: false};
+      state = {...state, jointPickIntent: null};
       controller.refresh(state);
       const picked = controller.getDebugState();
       controller.dispose();
       return {
-        noSelection, root, nonRoot, cleared, reselected, rootAgain, hidden, shown,
-        picking, picked, dragStarted, dragFinished, duringPick, afterPick,
+        noSelection, root, nonRoot, cleared, reselected, rootAgain,
+        picking, picked,
+        dragStarted, dragFinished, duringPick, afterPick,
         pickerActions, arcballActions,
         hoverPoseCount, objectChangePoseCount, poseCalls, finishCalls,
         objectChangeLocal, interactionDuringGizmo, interactionAfterGizmo,
@@ -671,9 +662,6 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
     assert result["noSelection"]["controlsCreated"] is False
     assert result["root"]["controlsAttached"] is False
     assert result["rootAgain"]["controlsAttached"] is False
-    assert result["hidden"]["controlsAttached"] is True
-    assert result["hidden"]["proxyVisible"] is True
-    assert result["hidden"]["staticVisible"] is False
     assert result["nonRoot"]["controlsCreated"] is True
     assert result["nonRoot"]["controlsAttached"] is True
     assert result["nonRoot"]["helperInScene"] is True
@@ -698,19 +686,17 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
     assert result["dragFinished"]["arcballEnabled"] is True
     assert result["dragFinished"]["arcballWasEnabled"] is None
     assert len(result["finishCalls"]) == 1
-    assert result["duringPick"]["controlsAttached"] is False
+    assert result["duringPick"]["controlsAttached"] is True
     assert result["duringPick"]["arcballEnabled"] is True
     assert result["pickerActions"] == [["unset", 0]]
     assert result["afterPick"]["controlsAttached"] is True
     assert result["afterPick"]["arcballEnabled"] is True
     assert result["arcballActions"] == [["unset", 0], ["set", "ROTATE", 0]]
-    assert result["shown"]["controlsAttached"] is True
-    assert result["shown"]["staticVisible"] is True
-    assert result["shown"]["helperInScene"] is True
-    assert result["shown"]["controlsCreateCount"] == 1
     assert result["picking"]["controlsAttached"] is False
+    assert result["picking"]["staticVisible"] is True
     assert result["picking"]["arcballEnabled"] is True
     assert result["picked"]["controlsAttached"] is True
+    assert result["picked"]["staticVisible"] is False
     assert result["picked"]["arcballEnabled"] is True
     assert result["interactionDuringGizmo"] is True
     assert result["interactionAfterGizmo"] is False

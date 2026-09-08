@@ -112,11 +112,7 @@ const modelPickController = createWeightPickController({
   onPick: handleModelPickedIntersection,
   onStateChanged: (picking, {cancelled} = {}) => {
     modelWeightState.picking = picking;
-    modelRigState.picking = picking;
-    if (picking || cancelled) {
-      notifyModelWeightChanged();
-      notifyModelRigChanged();
-    }
+    if (picking || cancelled) notifyModelWeightChanged();
   },
   requestRender,
 });
@@ -432,8 +428,6 @@ function rigSnapshot() {
     loaded: modelRigState.loaded,
     loading: modelRigState.loading,
     error: modelRigState.error,
-    visible: modelRigState.visible,
-    picking: modelRigState.picking,
     jointPickIntent: modelRigState.jointPickIntent
       ? {...modelRigState.jointPickIntent} : null,
     structureRevision: modelRigState.structureRevision,
@@ -443,7 +437,6 @@ function rigSnapshot() {
     ik: ikSnapshot(),
     pickStatus: modelRigState.pickStatus,
     rigPresets: rigPresetSnapshotForState(),
-    overlayScope: modelRigState.overlayScope,
     model: modelRigSnapshotForState(),
   };
 }
@@ -548,7 +541,7 @@ function clearPickedPoint({notify = true} = {}) {
   return true;
 }
 
-export function sampleModelJointAtIntersection(intersection) {
+export function sampleModelSkinningAtIntersection(intersection) {
   const mesh = intersection?.object;
   const state = states.get(mesh);
   if (!state?.loaded || !state.skinningSourceKey) return null;
@@ -556,7 +549,11 @@ export function sampleModelJointAtIntersection(intersection) {
   const sampled = sampleSkinningAtIntersection(
     intersection, mesh, state, {radius: radiusWorld});
   if (!sampled) return null;
+  return sampled;
+}
 
+export function modelJointFromSkinningSample(sampled) {
+  if (!sampled?.sourceKey || !Array.isArray(sampled.influences)) return null;
   const jointScores = new Map();
   for (const influence of sampled.influences) {
     const boneId = Number(influence?.boneId);
@@ -593,17 +590,13 @@ export function sampleModelJointAtIntersection(intersection) {
 function handleModelPickedIntersection(intersection) {
   if (!intersection) {
     modelWeightState.pickStatus = 'No model surface was picked.';
-    modelRigState.pickStatus = 'No model surface was picked.';
     notifyModelWeightChanged();
-    notifyModelRigChanged();
     return null;
   }
-  const sampled = sampleModelJointAtIntersection(intersection);
+  const sampled = sampleModelSkinningAtIntersection(intersection);
   if (!sampled) {
     modelWeightState.pickStatus = 'No skin weights are available for this part.';
-    modelRigState.pickStatus = 'No skin weights are available for this part.';
     notifyModelWeightChanged();
-    notifyModelRigChanged();
     return null;
   }
   const mesh = intersection.object;
@@ -621,15 +614,11 @@ function handleModelPickedIntersection(intersection) {
   modelWeightState.pickedPoint = pickedPoint;
   modelWeightState.pickerViewMode = 'picked';
   modelWeightState.pickStatus = '';
-  modelRigState.selectedJointId = sampled.jointId;
-  modelRigState.pickStatus = '';
   notifyModelWeightChanged();
-  notifyModelRigChanged();
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('mod-viewer-model-point-picked', {
+    window.dispatchEvent(new CustomEvent('mod-viewer-weight-point-picked', {
       detail: {
         sourceKey: sampled.sourceKey,
-        jointId: modelRigState.selectedJointId,
       },
     }));
   }
@@ -644,37 +633,33 @@ function setRigSurfacePickStatus(message) {
 
 export function pickRigJointFromModelSurface(
     {clientX, clientY} = {}, intent = modelRigState.jointPickIntent) {
-  const next = validLimbPickIntent(intent);
+  const next = normalizeRigJointPickIntent(intent);
   if (!next) return false;
   const intersection = raycastModelAtClientPoint({
     clientX, clientY, canvas: renderer.domElement, camera,
     meshes: modelPickMeshes(),
   });
-  const sampled = sampleModelJointAtIntersection(intersection);
-  if (!sampled) {
+  const sampled = sampleModelSkinningAtIntersection(intersection);
+  const resolved = modelJointFromSkinningSample(sampled);
+  if (!resolved) {
     setRigSurfacePickStatus('No usable Rig joint was found at this point.');
     return false;
   }
-  return handleRigJointPicked(sampled.jointId, next);
+  return handleRigJointPicked(resolved.jointId, next);
 }
 
-export function beginModelPicking() {
+export function beginWeightModelPicking() {
   if (modelRigState.jointPickIntent) cancelRigJointPicking();
   if (!modelWeightState.loaded) {
     modelWeightState.pickStatus = 'Load model weights before picking.';
     notifyModelWeightChanged();
     return false;
   }
-  if (!modelRigState.loaded) {
-    modelRigState.pickStatus = 'Load the inferred rig before picking.';
-    notifyModelRigChanged();
-    return false;
-  }
   return modelPickController.begin();
 }
 
-export function cancelModelPicking() {
-  return modelPickController.cancel() || cancelRigJointPicking();
+export function cancelWeightModelPicking() {
+  return modelPickController.cancel();
 }
 
 export function setWeightPickerViewMode(mode) {
@@ -2312,22 +2297,6 @@ export function ensureModelRigLoaded() {
   return promise;
 }
 
-export function setRigVisible(enabled) {
-  modelRigState.visible = !!enabled;
-  notifyModelRigChanged();
-  requestRender();
-  return modelRigState.visible;
-}
-
-export function setRigOverlayScope(scope) {
-  const next = scope === 'selection' ? 'selection' : 'all';
-  if (modelRigState.overlayScope === next) return next;
-  modelRigState.overlayScope = next;
-  notifyModelRigChanged();
-  requestRender();
-  return next;
-}
-
 export function getRigRotationSnapDegrees() {
   return modelRigState.rotationSnapDegrees;
 }
@@ -2397,15 +2366,16 @@ function limbPartLabel(role, type) {
   return type;
 }
 
-function validLimbPickIntent(intent) {
+function normalizeRigJointPickIntent(intent) {
   const type = String(intent?.type || '');
+  if (type === 'selected-joint') return {type};
   const role = validLimbRole(intent?.role);
   return role && ['limb-anchor', 'limb-bend-override',
     'limb-end-override'].includes(type) ? {type, role} : null;
 }
 
 export function beginRigJointPicking(intent = {}) {
-  const next = validLimbPickIntent(intent);
+  const next = normalizeRigJointPickIntent(intent);
   if (!next || !modelRigState.loaded || !modelSkinningRig) return false;
   if (modelRigState.jointPickIntent
       && modelRigState.jointPickIntent.type === next.type
@@ -2414,8 +2384,10 @@ export function beginRigJointPicking(intent = {}) {
   }
   if (modelPickController.isEnabled()) modelPickController.cancel();
   modelRigState.jointPickIntent = next;
-  modelRigState.pickStatus = `Pick the ${limbLabel(next.role)} ${
-    limbPartLabel(next.role, next.type)} joint.`;
+  modelRigState.pickStatus = next.type === 'selected-joint'
+    ? 'Pick a Rig joint.'
+    : `Pick the ${limbLabel(next.role)} ${
+      limbPartLabel(next.role, next.type)} joint.`;
   notifyModelRigChanged();
   requestRender();
   return true;
@@ -2568,9 +2540,11 @@ export function setRigLimbOverride(role, type, jointId) {
 
 export function handleRigJointPicked(jointId,
     intent = modelRigState.jointPickIntent) {
-  const next = validLimbPickIntent(intent);
+  const next = normalizeRigJointPickIntent(intent);
   if (!next) return false;
-  const changed = next.type === 'limb-anchor'
+  const changed = next.type === 'selected-joint'
+    ? selectRigJoint(jointId)
+    : next.type === 'limb-anchor'
     ? setRigLimbAnchor(next.role, jointId)
     : setRigLimbOverride(next.role, next.type, jointId);
   if (changed) cancelRigJointPicking();
@@ -3202,12 +3176,10 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelSkinningRig = null;
   modelRigState.selectedJointId = null;
   modelRigState.structureRevision = 0;
-  modelRigState.visible = false;
   modelRigState.jointPickIntent = null;
   modelRigState.ikEnabled = false;
   modelRigState.activeLimbRole = 'left_arm';
   modelRigState.explicitRootSignatures = new Set();
-  modelRigState.overlayScope = 'selection';
   rigPresetState.lastApplyResult = null;
   resolvedLimbMappings = null;
   resolvedLimbMappingsStructureRevision = null;
