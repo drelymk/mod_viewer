@@ -100,7 +100,8 @@ function weightedMean(left, right, length) {
   return length * (left + right) / 2;
 }
 
-function edgeRecord(member, forest, triangle, edgeOffset, componentId) {
+function edgeRecord(member, forest, triangle, edgeOffset, componentId,
+    topologyKey = null) {
   const [first, second, third] = [0, 1, 2].map(index => ({
     vertex: triangle.indices[(edgeOffset + index) % 3],
     point: triangle.points[(edgeOffset + index) % 3],
@@ -131,7 +132,7 @@ function edgeRecord(member, forest, triangle, edgeOffset, componentId) {
     pointB: [...second.point],
     thirdPoint: [...third.point],
     edgeKey: exactEdgeKey(first.point, second.point),
-    topologyKey: topologyEdgeKey(first.vertex, second.vertex),
+    topologyKey: topologyKey || topologyEdgeKey(first.vertex, second.vertex),
     pointKeyA: pointKey(first.point),
     pointKeyB: pointKey(second.point),
     length: edgeLength(first.point, second.point),
@@ -169,15 +170,21 @@ function collectBoundaryRecords(member, forest) {
     pureTriangleCount += 1;
     const componentId = [...componentIds][0];
     for (let edgeOffset = 0; edgeOffset < 3; edgeOffset += 1) {
-      const record = edgeRecord(member, forest, triangle, edgeOffset, componentId);
-      const list = usage.get(`${componentId}|${record.topologyKey}`) || [];
-      list.push(record);
-      usage.set(`${componentId}|${record.topologyKey}`, list);
+      const firstVertex = triangle.indices[edgeOffset];
+      const secondVertex = triangle.indices[(edgeOffset + 1) % 3];
+      const topologyKey = topologyEdgeKey(firstVertex, secondVertex);
+      const key = `${componentId}|${topologyKey}`;
+      const list = usage.get(key) || [];
+      list.push({triangle, edgeOffset, componentId, topologyKey});
+      usage.set(key, list);
     }
   }
   const boundaries = [];
   for (const records of usage.values()) {
-    if (records.length === 1) boundaries.push(records[0]);
+    if (records.length !== 1) continue;
+    const record = records[0];
+    boundaries.push(edgeRecord(member, forest, record.triangle,
+      record.edgeOffset, record.componentId, record.topologyKey));
   }
   return {
     boundaries,

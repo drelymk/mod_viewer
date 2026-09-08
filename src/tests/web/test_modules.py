@@ -1303,6 +1303,12 @@ def test_residual_boundary_evidence_requires_exact_multi_edge_seams(module_page)
         ])}],
         influenceGraph: graph, baseForest,
       });
+      const rebasedPositions = new Float32Array(combinedPositions).map(
+        (value, index) => index % 3 === 0 ? value + 5 : value);
+      const rebased = boundary.buildResidualBoundaryEvidence({
+        members: [{...members[0], baselinePositions: rebasedPositions}],
+        influenceGraph: graph, baseForest,
+      });
       const merged = boundary.mergeResidualBoundaryBridges(
         baseForest, accepted.acceptedBridges, graph);
       return {
@@ -1317,7 +1323,8 @@ def test_residual_boundary_evidence_requires_exact_multi_edge_seams(module_page)
             finalComponents: merged.components.length,
             finalRoot: merged.components[0]?.rootId,
             singleRejected: single.boundaryRejectedCounts,
-        nearBridges: nearResult.acceptedBridges.length,
+            nearBridges: nearResult.acceptedBridges.length,
+            rebasedCenter: rebased.acceptedBridges[0]?.jointCenter,
       };
     }""")
     assert result["baseComponents"] == 2, result
@@ -1329,7 +1336,116 @@ def test_residual_boundary_evidence_requires_exact_multi_edge_seams(module_page)
     assert result["finalComponents"] == 1
     assert result["finalRoot"] == 0
     assert result["nearBridges"] == 0
+    assert result["rebasedCenter"] == [6, .5, 0], result
     assert result["singleRejected"]
+
+
+def test_residual_boundary_evidence_rejects_ambiguous_or_unsupported_seams(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildResidualBoundaryEvidence} = await import(
+        './js/mesh/weight-rig-boundary.js');
+      const forestFor = count => ({
+        components: Array.from({length: count}, (_, componentId) => ({
+          componentId,
+        })),
+        componentByBoneId: Object.fromEntries(
+          Array.from({length: count}, (_, boneId) => [boneId, boneId])),
+      });
+      const memberFor = triangles => {
+        const positions = [];
+        const triangleIndices = [];
+        const skinIndices = [];
+        const weights = [];
+        let vertex = 0;
+        triangles.forEach(({points, bone}) => {
+          points.forEach(point => positions.push(...point));
+          triangleIndices.push(vertex, vertex + 1, vertex + 2);
+          skinIndices.push(bone, bone, bone);
+          weights.push(1, 1, 1);
+          vertex += 3;
+        });
+        return {memberKey: 'seams', positions, triangleIndices,
+          skinIndices, weights, influenceCount: 1};
+      };
+      const triangle = (x, y, side, bone, thirdX = x + .5) => ({
+        points: [[x, y, 0], [x + 1, y, 0], [thirdX, y + side, 0]], bone,
+      });
+      const pair = (x, y, sideA = 1, sideB = -1, boneA = 0, boneB = 1) => [
+        triangle(x, y, sideA, boneA, x + .25),
+        triangle(x, y, sideB, boneB, x + .75),
+      ];
+      const run = (triangles, forest = forestFor(2), options = {}) =>
+        buildResidualBoundaryEvidence({
+          members: [options.member || memberFor(triangles)],
+          influenceGraph: options.influenceGraph || {evidenceMode: 'surface'},
+          baseForest: forest,
+        });
+
+      const nonManifold = run([
+        triangle(0, 0, 1, 0, .2), triangle(0, 0, -1, 0, .5),
+        triangle(0, 0, -1, 1, .8),
+      ]);
+      const sameSide = run(pair(0, 0, 1, 1));
+      const multipleSeams = run([
+        ...pair(0, 0), ...pair(10, 0),
+      ]);
+      const cycle = run([
+        ...pair(0, 0, 1, -1, 0, 1),
+        ...pair(1, 0, 1, -1, 0, 1),
+        ...pair(0, 10, 1, -1, 1, 2),
+        ...pair(1, 10, 1, -1, 1, 2),
+        ...pair(0, 20, 1, -1, 0, 2),
+        ...pair(1, 20, 1, -1, 0, 2),
+      ], forestFor(3));
+      const connected = run([], {
+        components: [{componentId: 0}], componentByBoneId: {0: 0},
+      });
+      const vertexFallback = run(pair(0, 0), forestFor(2), {
+        influenceGraph: {evidenceMode: 'vertex'},
+      });
+      const nonIndexed = run([], forestFor(2), {
+        member: {...memberFor([triangle(0, 0, 1, 0)]),
+          triangleIndices: null},
+      });
+      return {
+        nonManifold: nonManifold.boundaryRejectedCounts,
+        sameSide: sameSide.boundaryRejectedCounts,
+        multipleSeams: multipleSeams.boundaryRejectedCounts,
+        cycle: {
+          accepted: cycle.acceptedBridges.length,
+          rejected: cycle.boundaryRejectedCounts,
+        },
+        connected: {
+          enabled: connected.boundaryEvidenceEnabled,
+          bridges: connected.acceptedBridges.length,
+          boundaryEdgeCount: connected.boundaryEdgeCount,
+        },
+        vertexFallback: {
+          enabled: vertexFallback.boundaryEvidenceEnabled,
+          reason: vertexFallback.boundaryEvidenceReason,
+        },
+        nonIndexed: {
+          enabled: nonIndexed.boundaryEvidenceEnabled,
+          reason: nonIndexed.boundaryEvidenceReason,
+        },
+      };
+    }""")
+    assert result["nonManifold"] == {"non_manifold": 1}, result
+    assert result["sameSide"] == {"non_continuing_surface": 1}, result
+    assert result["multipleSeams"] == {"multiple_seams": 1}, result
+    assert result["cycle"]["accepted"] == 2, result
+    assert result["cycle"]["rejected"] == {"cycle": 1}, result
+    assert result["connected"] == {
+        "enabled": True, "bridges": 0, "boundaryEdgeCount": 0,
+    }, result
+    assert result["vertexFallback"] == {
+        "enabled": False, "reason": "source_not_surface",
+    }, result
+    assert result["nonIndexed"] == {
+        "enabled": False, "reason": "unsupported_nonindexed_boundary",
+    }, result
 
 
 def test_residual_boundary_merge_reassigns_dense_ids_and_honors_preferred_root(

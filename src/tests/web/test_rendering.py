@@ -2494,6 +2494,98 @@ def test_loaded_skinning_rebaselines_after_shape_change(
         context.close()
 
 
+def test_loaded_skinning_rebuilds_boundary_evidence_after_shape_rebaseline(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"SkinningBoundaryShape": _payload("SkinningBoundaryShape")})
+    try:
+        _open(page, "SkinningBoundaryShape")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        result = page.evaluate("""async () => {
+          const mesh = window.modViewer.activeMeshes[0];
+          const THREE = await import('three');
+          const positions = [
+            0, 0, 0, 1, 0, 0, .25, 1, 0,
+            1, 0, 0, 2, 0, 0, 1.25, 1, 0,
+            0, 0, 0, 1, 0, 0, .75, -1, 0,
+            1, 0, 0, 2, 0, 0, 1.75, -1, 0,
+          ];
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position',
+            new THREE.Float32BufferAttribute(positions, 3));
+          geometry.setIndex([...Array(12).keys()]);
+          mesh.geometry.dispose();
+          mesh.geometry = geometry;
+          const bytes = new Uint8Array(96);
+          new Uint32Array(bytes.buffer).set([
+            0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1,
+          ]);
+          new Float32Array(bytes.buffer, 48).fill(1);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__testSkinningPreview = async () => ({
+            status: 'ok', vertex_count: 12, influence_count: 1,
+            bone_ids: [0, 1], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
+            data: {
+              url, length: 96,
+              indices: {offset: 0, length: 48, type: 'u32'},
+              weights: {offset: 48, length: 48, type: 'f32'},
+            }, diagnostics: {},
+          });
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          await experiment.ensureModelWeightsLoaded();
+          await experiment.ensureModelRigLoaded();
+          const initial = experiment.getModelRigDebugState().sources[0];
+          const position = mesh.geometry.attributes.position;
+          for (let offset = 0; offset < position.array.length; offset += 3) {
+            position.array[offset] += 3;
+          }
+          position.needsUpdate = true;
+          const refreshed = experiment.refreshSkinningAfterShapeChange(mesh);
+          const invalidated = !experiment.getModelRigState().loaded;
+          await experiment.ensureModelRigLoaded();
+          const rebuilt = experiment.getModelRigDebugState().sources[0];
+          experiment.destroyModelPhysicsSession();
+          URL.revokeObjectURL(url);
+          return {
+            refreshed, invalidated,
+            initial: {
+              evidenceMode: initial.evidenceMode,
+              baseComponentCount: initial.baseComponentCount,
+              finalComponentCount: initial.finalComponentCount,
+              acceptedBoundaryBridgeCount: initial.acceptedBoundaryBridgeCount,
+              boundaryBridges: initial.boundaryBridges,
+            },
+            rebuilt: {
+              evidenceMode: rebuilt.evidenceMode,
+              baseComponentCount: rebuilt.baseComponentCount,
+              finalComponentCount: rebuilt.finalComponentCount,
+              acceptedBoundaryBridgeCount: rebuilt.acceptedBoundaryBridgeCount,
+              boundaryBridges: rebuilt.boundaryBridges,
+            },
+          };
+        }""")
+        assert result["refreshed"]
+        assert result["invalidated"]
+        assert result["initial"]["evidenceMode"] == "surface", result
+        assert result["initial"]["baseComponentCount"] == 2, result
+        assert result["initial"]["finalComponentCount"] == 1, result
+        assert result["initial"]["acceptedBoundaryBridgeCount"] == 1, result
+        assert result["initial"]["boundaryBridges"][0]["jointCenter"] == [
+            1, 0, 0]
+        assert result["rebuilt"]["evidenceMode"] == "surface", result
+        assert result["rebuilt"]["baseComponentCount"] == 2, result
+        assert result["rebuilt"]["finalComponentCount"] == 1, result
+        assert result["rebuilt"]["acceptedBoundaryBridgeCount"] == 1, result
+        assert result["rebuilt"]["boundaryBridges"][0]["jointCenter"] == [
+            4, 0, 0]
+    finally:
+        context.close()
+
+
 def _multi_mesh_skinning_shape_payload():
     payload = _payload("SkinningShapePair")
     template = next(iter(payload["meshes"].values()))
