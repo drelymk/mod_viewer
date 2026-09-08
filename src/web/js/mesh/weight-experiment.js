@@ -30,6 +30,7 @@ import {
   buildInfluenceNodes as buildRigInfluenceNodes,
   buildInfluenceRelationships as buildRigInfluenceRelationships,
   buildInferredRigForest,
+  buildVertexSurfaceMeasure,
   jointPivotMap,
 } from './weight-rig.js';
 import { createWeightPickController } from '../scene/weight-pick-controller.js';
@@ -893,11 +894,179 @@ export function withSkinningBaseMaterial(mesh, operation) {
   }
 }
 
+function memberArrayFingerprint(values) {
+  if (!values) return 'none';
+  const bytes = ArrayBuffer.isView(values)
+    ? new Uint8Array(values.buffer, values.byteOffset, values.byteLength)
+    : null;
+  if (!bytes) return `array:${values.length}:${[...values].join(',')}`;
+  let hash = 2166136261;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${values.constructor.name}:${values.length}:${hash >>> 0}`;
+}
+
+function memberArraysEqual(left, right) {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (!Object.is(left[index], right[index])) return false;
+  }
+  return true;
+}
+
+function completeMemberEvidenceEqual(left, right) {
+  return left.state.influenceCount === right.state.influenceCount
+    && memberArraysEqual(left.state.baselinePositions,
+      right.state.baselinePositions)
+    && memberArraysEqual(left.state.indices, right.state.indices)
+    && memberArraysEqual(left.state.weights, right.state.weights)
+    && memberArraysEqual(left.state.boneIds, right.state.boneIds)
+    && memberArraysEqual(left.surfaceIndices, right.surfaceIndices)
+    && memberArraysEqual(left.surfaceEvidence.vertexMeasure,
+      right.surfaceEvidence.vertexMeasure);
+}
+
+function sourceMemberFingerprint(member) {
+  const state = member.state;
+  return [
+    state.influenceCount,
+    memberArrayFingerprint(state.baselinePositions),
+    memberArrayFingerprint(state.indices),
+    memberArrayFingerprint(state.weights),
+    memberArrayFingerprint(state.boneIds),
+    memberArrayFingerprint(member.surfaceIndices),
+    memberArrayFingerprint(member.surfaceEvidence.vertexMeasure),
+  ].join('|');
+}
+
+function normalizeSourceMembers(members) {
+  const buckets = new Map();
+  const uniqueMembers = [];
+  const duplicateMemberKeys = [];
+  const duplicateMembers = new Set();
+  let duplicateMemberCount = 0;
+  for (const member of members) {
+    const fingerprint = sourceMemberFingerprint(member);
+    const bucket = buckets.get(fingerprint) || [];
+    const duplicate = bucket.find(candidate =>
+      completeMemberEvidenceEqual(candidate, member));
+    if (duplicate) {
+      duplicateMemberCount += 1;
+      duplicateMembers.add(member);
+      duplicateMemberKeys.push(
+        member.mesh.userData?.semanticKey || member.mesh.uuid || '');
+      continue;
+    }
+    bucket.push(member);
+    buckets.set(fingerprint, bucket);
+    uniqueMembers.push(member);
+  }
+  return {
+    members: uniqueMembers,
+    duplicateMemberCount,
+    duplicateMemberKeys: duplicateMemberKeys.sort(),
+    duplicateMembers,
+  };
+}
+
+function sourceMemberKey(member, index) {
+  return member.mesh.userData?.semanticKey
+    || member.mesh.uuid
+    || `member-${index}`;
+}
+
+function sourceMemberVertexTokens(member) {
+  const {baselinePositions, indices, weights, influenceCount} = member.state;
+  if (!baselinePositions || !indices || !weights
+      || !Number.isInteger(influenceCount) || influenceCount <= 0) {
+    return new Set();
+  }
+  const vertexCount = Math.floor(Math.min(
+    Math.floor(baselinePositions.length / 3),
+    Math.min(indices.length, weights.length) / influenceCount));
+  const tokens = new Set();
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const positionOffset = vertex * 3;
+    const weightOffset = vertex * influenceCount;
+    const position = [
+      baselinePositions[positionOffset],
+      baselinePositions[positionOffset + 1],
+      baselinePositions[positionOffset + 2],
+    ].map(value => String(value)).join(',');
+    const influences = [];
+    for (let influence = 0; influence < influenceCount; influence += 1) {
+      influences.push(
+        `${indices[weightOffset + influence]}:${weights[weightOffset + influence]}`);
+    }
+    tokens.add(`${position}|${influences.join(',')}`);
+  }
+  return tokens;
+}
+
+function sourceMemberDiagnostics(members, normalized) {
+  const records = members.map((member, index) => ({
+    memberKey: sourceMemberKey(member, index),
+    vertexCount: Math.floor((member.state.baselinePositions?.length || 0) / 3),
+    triangleCount: member.surfaceEvidence.triangleCount,
+    validTriangleCount: member.surfaceEvidence.validTriangleCount,
+    degenerateTriangleCount: member.surfaceEvidence.degenerateTriangleCount,
+    invalidTriangleCount: member.surfaceEvidence.invalidTriangleCount,
+    totalSurfaceArea: member.surfaceEvidence.totalSurfaceArea,
+    surfaceEvidenceAvailable: member.surfaceEvidence.surfaceEvidenceAvailable,
+    duplicate: normalized.duplicateMembers.has(member),
+  }));
+  const tokensByMember = members.map(sourceMemberVertexTokens);
+  const partialOverlapPairs = [];
+  for (let left = 0; left < members.length; left += 1) {
+    const leftTokens = tokensByMember[left];
+    for (let right = left + 1; right < members.length; right += 1) {
+      if (completeMemberEvidenceEqual(members[left], members[right])) continue;
+      let sharedVertexCount = 0;
+      for (const token of tokensByMember[right]) {
+        if (leftTokens.has(token)) sharedVertexCount += 1;
+      }
+      if (sharedVertexCount > 0) {
+        partialOverlapPairs.push({
+          leftMemberKey: records[left].memberKey,
+          rightMemberKey: records[right].memberKey,
+          sharedVertexCount,
+        });
+      }
+    }
+  }
+  return {records, partialOverlapPairs};
+}
+
 function aggregateSourceInfluenceGraph(members) {
-  return aggregateInfluenceGraphs(members.map(mesh => {
+  const loadedMembers = members.map(mesh => {
     const state = states.get(mesh);
-    return state?.loaded ? ensureInfluenceGraph(mesh, state) : null;
-  }).filter(Boolean));
+    return state?.loaded ? {
+      mesh, state,
+      surfaceIndices: mesh.geometry?.index?.array || null,
+      surfaceEvidence: buildVertexSurfaceMeasure(
+        state.baselinePositions, mesh.geometry?.index?.array || null),
+    } : null;
+  }).filter(Boolean);
+  const normalizedMembers = normalizeSourceMembers(loadedMembers);
+  const memberDiagnostics = sourceMemberDiagnostics(
+    loadedMembers, normalizedMembers);
+  const evidenceMode = loadedMembers.every(member =>
+    member.surfaceEvidence.surfaceEvidenceAvailable) ? 'surface' : 'vertex';
+  const graph = aggregateInfluenceGraphs(normalizedMembers.members.map(member =>
+    ensureInfluenceGraph(member.mesh, member.state, evidenceMode,
+      member.surfaceEvidence)));
+  return {
+    ...graph,
+    memberCount: loadedMembers.length,
+    uniqueMemberCount: normalizedMembers.members.length,
+    duplicateMemberCount: normalizedMembers.duplicateMemberCount,
+    duplicateMemberKeys: normalizedMembers.duplicateMemberKeys,
+    memberDiagnostics: memberDiagnostics.records,
+    partialOverlapPairs: memberDiagnostics.partialOverlapPairs,
+  };
 }
 
 function createSourceSkinningRig(sourceKey, members) {
@@ -3153,25 +3322,60 @@ function restoreNormals(mesh, state) {
   normal.needsUpdate = true;
 }
 
-function buildInfluenceGraph(mesh, state) {
+function buildInfluenceGraph(
+    mesh, state, requestedEvidenceMode = 'vertex', surfaceEvidence = null) {
   if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
   const radius = Number(mesh.geometry.boundingSphere?.radius);
-  const nodes = state.influenceNodes || buildRigInfluenceNodes(
+  const rawNodes = state.influenceNodes || buildRigInfluenceNodes(
     state.baselinePositions, state.indices, state.weights,
     state.influenceCount, state.boneIds);
-  state.influenceNodes = nodes;
+  state.influenceNodes = rawNodes;
+  const measure = surfaceEvidence || (requestedEvidenceMode === 'surface'
+    ? buildVertexSurfaceMeasure(
+      state.baselinePositions, mesh.geometry?.index?.array || null) : null);
+  const evidenceMode = requestedEvidenceMode === 'surface'
+    && measure?.surfaceEvidenceAvailable ? 'surface' : 'vertex';
+  const nodes = evidenceMode === 'surface'
+    ? buildRigInfluenceNodes(
+      state.baselinePositions, state.indices, state.weights,
+      state.influenceCount, state.boneIds, {
+        vertexMeasure: measure.vertexMeasure,
+      })
+    : rawNodes;
   const relationships = buildRigInfluenceRelationships(
     state.baselinePositions, state.indices, state.weights, state.influenceCount,
-    nodes, Number.isFinite(radius) && radius > 0 ? radius : null);
+    nodes, Number.isFinite(radius) && radius > 0 ? radius : null,
+    evidenceMode === 'surface' ? {
+      vertexMeasure: measure.vertexMeasure,
+    } : {});
   return {
     nodes,
     relationships,
     boundingSphereRadius: Number.isFinite(radius) && radius > 0 ? radius : null,
+    evidenceMode,
+    triangleCount: measure?.triangleCount || 0,
+    validTriangleCount: measure?.validTriangleCount || 0,
+    degenerateTriangleCount: measure?.degenerateTriangleCount || 0,
+    invalidTriangleCount: measure?.invalidTriangleCount || 0,
+    totalSurfaceArea: measure?.totalSurfaceArea || 0,
+    measuredVertexCount: measure?.measuredVertexCount || 0,
+    zeroMeasureVertexCount: measure?.zeroMeasureVertexCount || 0,
+    fallbackReason: requestedEvidenceMode === 'surface'
+      && evidenceMode === 'vertex'
+      ? 'surface_evidence_unavailable'
+      : requestedEvidenceMode === 'vertex'
+        && measure && !measure.surfaceEvidenceAvailable
+        ? 'surface_evidence_unavailable' : null,
   };
 }
 
-function ensureInfluenceGraph(mesh, state) {
-  if (!state.influenceGraph) state.influenceGraph = buildInfluenceGraph(mesh, state);
+function ensureInfluenceGraph(
+    mesh, state, evidenceMode = 'vertex', surfaceEvidence = null) {
+  if (!state.influenceGraph
+      || state.influenceGraph.evidenceMode !== evidenceMode) {
+    state.influenceGraph = buildInfluenceGraph(
+      mesh, state, evidenceMode, surfaceEvidence);
+  }
   return state.influenceGraph;
 }
 

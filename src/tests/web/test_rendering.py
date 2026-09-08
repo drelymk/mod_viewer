@@ -2525,6 +2525,9 @@ def test_loaded_skinning_rebaselines_all_shape_target_meshes(
           await experiment.ensureModelRigLoaded();
           const rigState = experiment.getModelRigState();
           const debug = experiment.getModelRigDebugState();
+          const initialSurfaceArea = debug.sources[0].totalSurfaceArea;
+          const weightStatsBefore = experiment.getModelWeightState().sources
+            .map(source => source.boneStats);
           const component = rigState.model.components.find(item =>
             item.nodeIds.some(id => id !== item.rootId));
           const manualRootId = component?.nodeIds.find(id =>
@@ -2542,6 +2545,8 @@ def test_loaded_skinning_rebaselines_all_shape_target_meshes(
             experiment.getSkinningState(mesh));
           await experiment.ensureModelRigLoaded();
           const rebuilt = experiment.getModelRigDebugState();
+          const weightStatsAfter = experiment.getModelWeightState().sources
+            .map(source => source.boneStats);
           const rebuiltJoint = rebuilt.joints.find(joint =>
             joint.signature === manualRoot?.signature);
           const rebuiltComponent = rebuilt.components.find(item =>
@@ -2557,6 +2562,21 @@ def test_loaded_skinning_rebaselines_all_shape_target_meshes(
             manualRootApplied,
             rootSurvived,
             explicitRootSignatures: rebuilt.explicitRootSignatures,
+            evidence: rebuilt.sources.map(source => ({
+              evidenceMode: source.evidenceMode,
+              triangleCount: source.triangleCount,
+              validTriangleCount: source.validTriangleCount,
+              totalSurfaceArea: source.totalSurfaceArea,
+              fallbackReason: source.fallbackReason,
+              memberCount: source.memberCount,
+              uniqueMemberCount: source.uniqueMemberCount,
+              duplicateMemberCount: source.duplicateMemberCount,
+              memberDiagnostics: source.memberDiagnostics,
+              partialOverlapPairs: source.partialOverlapPairs,
+            })),
+            initialSurfaceArea,
+            weightStatsUnchanged: JSON.stringify(weightStatsBefore)
+              === JSON.stringify(weightStatsAfter),
             before, after,
           };
           experiment.destroyModelPhysicsSession();
@@ -2570,9 +2590,99 @@ def test_loaded_skinning_rebaselines_all_shape_target_meshes(
         assert result["manualRootApplied"]
         assert result["rootSurvived"], result
         assert result["explicitRootSignatures"]
+        assert result["evidence"]
+        assert result["initialSurfaceArea"] > 0
+        assert all(source["evidenceMode"] == "surface"
+                   and source["triangleCount"] == 1
+                   and source["validTriangleCount"] == 1
+                   and source["totalSurfaceArea"] > 0
+                   and source["fallbackReason"] is None
+                   and source["memberCount"] == 2
+                   and source["uniqueMemberCount"] == 1
+                   and source["duplicateMemberCount"] == 1
+                   and source["memberDiagnostics"][0]["duplicate"] is False
+                   and source["memberDiagnostics"][1]["duplicate"] is True
+                   and source["partialOverlapPairs"] == []
+                   for source in result["evidence"]), result["evidence"]
+        assert result["evidence"][0]["totalSurfaceArea"] != pytest.approx(
+            result["initialSurfaceArea"])
+        assert result["weightStatsUnchanged"]
         assert all(positions[3] == pytest.approx(1.2)
                    and positions[7] == pytest.approx(1.2)
                    for positions in result["after"])
+    finally:
+        context.close()
+
+
+def test_rig_surface_evidence_falls_back_for_source_with_unusable_member(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"SkinningShapePair": _multi_mesh_skinning_shape_payload()})
+    try:
+        _open(page, "SkinningShapePair")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
+        result = page.evaluate("""async () => {
+          const meshes = [...window.modViewer.activeMeshes];
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__testSkinningPreview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          await experiment.ensureModelWeightsLoaded();
+          const damagedIndex = meshes[1].geometry.index.array;
+          damagedIndex[2] = 99;
+          meshes[1].geometry.index.needsUpdate = true;
+          await experiment.ensureModelRigLoaded();
+          const debug = experiment.getModelRigDebugState();
+          const weight = experiment.getModelWeightState();
+          const source = debug.sources[0];
+          const weightSource = weight.sources[0];
+          experiment.destroyModelPhysicsSession();
+          URL.revokeObjectURL(url);
+          return {
+            evidenceMode: source.evidenceMode,
+            triangleCount: source.triangleCount,
+            validTriangleCount: source.validTriangleCount,
+            invalidTriangleCount: source.invalidTriangleCount,
+            totalSurfaceArea: source.totalSurfaceArea,
+            fallbackReason: source.fallbackReason,
+            affectedMeasure: source.nodes[0].affectedMeasure,
+            partialOverlapPairs: source.partialOverlapPairs,
+            duplicateMemberCount: source.duplicateMemberCount,
+            weightSourceHasEvidenceDiagnostics: [
+              'evidenceMode', 'triangleCount', 'fallbackReason',
+            ].some(key => Object.hasOwn(weightSource, key)),
+          };
+        }""")
+        assert result == {
+            "evidenceMode": "vertex",
+            "triangleCount": 2,
+            "validTriangleCount": 1,
+            "invalidTriangleCount": 1,
+            "totalSurfaceArea": pytest.approx(.5),
+            "fallbackReason": "surface_evidence_unavailable",
+            "affectedMeasure": None,
+            "partialOverlapPairs": [{
+                "leftMemberKey": "Body-SkinningShapePair-0",
+                "rightMemberKey": "Body-SkinningShapePair-1",
+                "sharedVertexCount": 3,
+            }],
+            "duplicateMemberCount": 0,
+            "weightSourceHasEvidenceDiagnostics": False,
+        }
     finally:
         context.close()
 
