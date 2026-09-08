@@ -406,6 +406,7 @@ export function buildResidualBoundaryEvidence({
       jointCenter: center,
       matchedEdgeCount: segments.length,
       matchedLength: length,
+      pivotWeight: length,
       memberKey: group.memberKey,
       componentA: group.componentA,
       componentB: group.componentB,
@@ -473,8 +474,13 @@ function componentMeasure(component, graph) {
   }, 0);
 }
 
-/** Add accepted bridges while retaining base component roots and orientation. */
-export function mergeResidualBoundaryBridges(baseForest, acceptedBridges = [], graph = null) {
+/**
+ * Add accepted bridges while retaining base component roots and orientation.
+ * Final component IDs are dense and ephemeral; base IDs stay on each merged
+ * component for diagnostics and for resolving bridge evidence.
+ */
+export function mergeResidualBoundaryBridges(
+    baseForest, acceptedBridges = [], graph = null, options = {}) {
   if (!baseForest || !acceptedBridges.length) return baseForest;
   const baseComponents = baseForest.components || [];
   const groups = new Map();
@@ -482,12 +488,17 @@ export function mergeResidualBoundaryBridges(baseForest, acceptedBridges = [], g
     Number(component.componentId), Number(component.componentId)]));
   const find = value => {
     let current = value;
-    while (parent.get(current) !== current) current = parent.get(current);
+    while (parent.has(current) && parent.get(current) !== current) {
+      current = parent.get(current);
+    }
     return current;
   };
   acceptedBridges.forEach(bridge => {
-    const left = find(Number(bridge.componentA));
-    const right = find(Number(bridge.componentB));
+    const leftId = Number(bridge.componentA);
+    const rightId = Number(bridge.componentB);
+    if (!parent.has(leftId) || !parent.has(rightId)) return;
+    const left = find(leftId);
+    const right = find(rightId);
     if (left !== right) parent.set(left, right);
   });
   baseComponents.forEach(component => {
@@ -496,14 +507,31 @@ export function mergeResidualBoundaryBridges(baseForest, acceptedBridges = [], g
     group.push(component);
     groups.set(root, group);
   });
+  const minNodeId = component => Math.min(...(component.nodeIds || [])
+    .map(Number).filter(Number.isFinite));
+  const groupSortKey = components => [
+    Math.min(...components.map(component => Number(component.componentId))),
+    Math.min(...components.map(minNodeId)),
+  ];
+  const groupedComponents = [...groups.values()].map(components =>
+    [...components].sort((left, right) =>
+      Number(left.componentId) - Number(right.componentId)));
+  groupedComponents.sort((left, right) => {
+    const leftKey = groupSortKey(left);
+    const rightKey = groupSortKey(right);
+    return leftKey[0] - rightKey[0] || leftKey[1] - rightKey[1];
+  });
+  const preferredRootId = Number(options.preferredRootId);
   const merged = [];
-  for (const components of groups.values()) {
-    const componentIds = new Set(components.map(component => Number(component.componentId)));
-    const bridges = acceptedBridges.filter(bridge => componentIds.has(Number(bridge.componentA))
+  for (const components of groupedComponents) {
+    const componentIds = new Set(components.map(component =>
+      Number(component.componentId)));
+    const bridges = acceptedBridges.filter(bridge =>
+      componentIds.has(Number(bridge.componentA))
       && componentIds.has(Number(bridge.componentB)));
-    let host = components.find(component =>
-      Number(component.componentId) === Number(baseForest.primaryComponentId));
-    if (!host) host = components.find(component => component.primary);
+    let host = Number.isInteger(preferredRootId)
+      ? components.find(component => (component.nodeIds || [])
+        .some(id => Number(id) === preferredRootId)) : null;
     if (!host) {
       host = [...components].sort((left, right) =>
         componentEvidence(right, graph) - componentEvidence(left, graph)
@@ -511,8 +539,8 @@ export function mergeResidualBoundaryBridges(baseForest, acceptedBridges = [], g
         || (right.nodeIds?.length || 0) - (left.nodeIds?.length || 0)
         || Number(left.rootId) - Number(right.rootId))[0];
     }
-    const nodeIds = components.flatMap(component => component.nodeIds || [])
-      .sort((left, right) => Number(left) - Number(right));
+    const nodeIds = [...new Set(components.flatMap(component =>
+      component.nodeIds || []))].sort((left, right) => Number(left) - Number(right));
     const edges = components.flatMap(component => {
       if (component.edges?.length) return component.edges;
       const nodeSet = new Set(component.nodeIds || []);
@@ -529,12 +557,14 @@ export function mergeResidualBoundaryBridges(baseForest, acceptedBridges = [], g
       adjacency.get(right).push(left);
     });
     adjacency.forEach(values => values.sort((left, right) => left - right));
-    const rootId = Number(host.rootId);
+    const preferredInHost = Number.isInteger(preferredRootId)
+      && host.nodeIds?.some(id => Number(id) === preferredRootId);
+    const rootId = preferredInHost ? preferredRootId : Number(host.rootId);
     const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
     const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
     const depthById = Object.fromEntries(nodeIds.map(id => [id, null]));
-    const queue = [rootId];
-    depthById[rootId] = 0;
+    const queue = nodeIds.includes(rootId) ? [rootId] : [];
+    if (queue.length) depthById[rootId] = 0;
     while (queue.length) {
       const current = queue.shift();
       for (const neighbor of adjacency.get(current) || []) {
@@ -546,7 +576,7 @@ export function mergeResidualBoundaryBridges(baseForest, acceptedBridges = [], g
       }
     }
     merged.push({
-      componentId: Math.min(...components.map(component => Number(component.componentId))),
+      baseComponentIds: components.map(component => Number(component.componentId)),
       nodeIds,
       rootId,
       parentById,
@@ -556,19 +586,20 @@ export function mergeResidualBoundaryBridges(baseForest, acceptedBridges = [], g
       edgeCount: edges.length,
       maxDepth: Math.max(0, ...Object.values(depthById)
         .filter(value => value !== null).map(Number)),
-      primary: components.some(component => component.primary),
     });
   }
-  merged.sort((left, right) => left.componentId - right.componentId);
   const componentByBoneId = {};
-  merged.forEach(component => component.nodeIds.forEach(id => {
-    componentByBoneId[id] = component.componentId;
-  }));
-  const primary = merged.find(component => component.primary);
+  merged.forEach((component, componentId) => {
+    component.componentId = componentId;
+    component.nodeIds.forEach(id => {
+      componentByBoneId[id] = componentId;
+    });
+  });
+  const result = {...baseForest};
+  delete result.primaryRootId;
+  delete result.primaryComponentId;
   return {
-    ...baseForest,
-    primaryRootId: primary?.rootId ?? baseForest.primaryRootId,
-    primaryComponentId: primary?.componentId ?? baseForest.primaryComponentId,
+    ...result,
     components: merged,
     componentByBoneId,
     edges: merged.flatMap(component => component.edges || []),

@@ -167,6 +167,7 @@ export function sourceRigSnapshot(rig, {
     normalizedDistance: edge.normalizedDistance,
     treeEdgeScore: edge.treeEdgeScore,
     jointWeightTotal: edge.jointWeightTotal,
+    pivotWeight: Number(edge.jointWeightTotal) || 0,
     jointCenter: edge.jointCenter ? [...edge.jointCenter] : null,
   }));
   source.boundaryBridges = (rig.boundaryBridges || []).map(edge => ({
@@ -176,6 +177,8 @@ export function sourceRigSnapshot(rig, {
     jointCenter: edge.jointCenter ? [...edge.jointCenter] : null,
     matchedEdgeCount: edge.matchedEdgeCount,
     matchedLength: edge.matchedLength,
+    pivotWeight: Number(edge.pivotWeight)
+      || Number(edge.matchedLength) || 0,
     memberKey: edge.memberKey,
     componentA: edge.componentA,
     componentB: edge.componentB,

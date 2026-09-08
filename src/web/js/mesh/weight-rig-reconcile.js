@@ -1283,16 +1283,20 @@ function sourceModelEdges(sourceRigs, keyToJoint) {
           return (a === parentBoneId && b === childBoneId)
             || (a === childBoneId && b === parentBoneId);
         });
-        const sourceRelationship = [
-          ...(rig.influenceGraph?.relationships || []),
-          ...(rig.boundaryBridges || []),
-        ]
-          .find(candidate => {
+        const sourceRelationship = (sourceEdge?.jointCenter
+          || sourceEdge?.evidenceType) ? sourceEdge
+          : (rig.influenceGraph?.relationships || []).find(candidate => {
             const a = Number(candidate.boneA);
             const b = Number(candidate.boneB);
             return (a === parentBoneId && b === childBoneId)
               || (a === childBoneId && b === parentBoneId);
           });
+        const evidenceType = sourceRelationship?.evidenceType
+          || 'triangle_overlap';
+        const pivotWeight = Number(sourceRelationship?.pivotWeight)
+          || (evidenceType === 'mesh_boundary'
+            ? Number(sourceRelationship?.matchedLength) || 0
+            : Number(sourceRelationship?.jointWeightTotal) || 0);
         const treeScore = edgeScore(sourceEdge);
         edge.sourceEdges.push({
           sourceKey: String(rig.sourceKey),
@@ -1302,7 +1306,8 @@ function sourceModelEdges(sourceRigs, keyToJoint) {
           jointCenter: sourceRelationship?.jointCenter
             ? [...sourceRelationship.jointCenter] : null,
           jointWeightTotal: Number(sourceRelationship?.jointWeightTotal) || 0,
-          evidenceType: sourceRelationship?.evidenceType || 'triangle_overlap',
+          pivotWeight,
+          evidenceType,
         });
         edge.combinedTreeScore += treeScore;
         edgeMap.set(key, edge);

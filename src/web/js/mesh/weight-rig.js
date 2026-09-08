@@ -1021,17 +1021,11 @@ export function buildInferredRigForest(graph, options = {}) {
       maxDepth: Math.max(0, ...depths),
     };
   });
-  const primaryComponentId = components.length ? 0 : null;
-  components.forEach((component, componentId) => {
-    component.primary = componentId === primaryComponentId;
-  });
   const componentByBoneId = {};
   components.forEach(component => component.nodeIds.forEach(id => {
     componentByBoneId[id] = component.componentId;
   }));
   return {
-    primaryRootId: components[primaryComponentId]?.rootId ?? null,
-    primaryComponentId,
     components,
     componentByBoneId,
     edges: tree.edges,

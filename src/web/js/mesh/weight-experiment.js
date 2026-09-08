@@ -1280,7 +1280,8 @@ function buildModelJointPivotByEdgeKey(rig) {
     const observations = (edge.sourceEdges || [])
       .map(sourceEdge => ({
         point: finiteVectorArray(sourceEdge.jointCenter),
-        weight: Number(sourceEdge.jointWeightTotal) || 0,
+        weight: Number(sourceEdge.pivotWeight)
+          || Number(sourceEdge.jointWeightTotal) || 0,
       }))
       .filter(observation => observation.point && observation.weight > 0);
     let pivot = observations.length
@@ -2914,7 +2915,8 @@ function setRigComponentRootForSource(sourceKey, boneId) {
     rootOverrides: overrides,
   });
   rig.inferredForest = mergeResidualBoundaryBridges(
-    rig.baseInferredForest, rig.boundaryBridges, rig.influenceGraph);
+    rig.baseInferredForest, rig.boundaryBridges, rig.influenceGraph,
+    {preferredRootId: id});
   rig.jointPivotByBoneId = jointPivotMap(
     rig.inferredForest, [...rig.influenceGraph.relationships,
       ...rig.boundaryBridges]);

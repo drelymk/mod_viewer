@@ -1332,6 +1332,119 @@ def test_residual_boundary_evidence_requires_exact_multi_edge_seams(module_page)
     assert result["singleRejected"]
 
 
+def test_residual_boundary_merge_reassigns_dense_ids_and_honors_preferred_root(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {mergeResidualBoundaryBridges} = await import(
+        './js/mesh/weight-rig-boundary.js');
+      const component = (componentId, rootId, nodeId) => ({
+        componentId, rootId, nodeIds: [nodeId], parentById: {[nodeId]: null},
+        childrenById: {[nodeId]: []}, depthById: {[nodeId]: 0}, edges: [],
+      });
+      const base = {
+        components: [component(0, 0, 0), component(1, 10, 10),
+          component(2, 20, 20)],
+        componentByBoneId: {0: 0, 10: 1, 20: 2},
+        edges: [], nodeIds: [0, 10, 20],
+      };
+      const graph = {nodes: [
+        {boneId: 0, totalWeight: 1, affectedMeasure: 1},
+        {boneId: 10, totalWeight: 10, affectedMeasure: 10},
+        {boneId: 20, totalWeight: 3, affectedMeasure: 3},
+      ]};
+      const bridge = {boneA: 0, boneB: 10, componentA: 0,
+        componentB: 1, evidenceType: 'mesh_boundary', matchedLength: 1,
+        jointCenter: [5, 0, 0]};
+      const merged = mergeResidualBoundaryBridges(base, [bridge], graph);
+      const reversed = mergeResidualBoundaryBridges({
+        ...base, components: [base.components[2], base.components[0],
+          base.components[1]],
+      }, [bridge], graph);
+      const preferred = mergeResidualBoundaryBridges(
+        base, [bridge], graph, {preferredRootId: 0});
+      const summary = forest => ({
+        ids: forest.components.map(component => component.componentId),
+        roots: forest.components.map(component => component.rootId),
+        lookup: [0, 10, 20].map(id => {
+          const componentId = forest.componentByBoneId[id];
+          return forest.components[componentId]?.nodeIds.includes(id) || false;
+        }),
+        baseIds: forest.components.map(component => component.baseComponentIds),
+        hostRoot: forest.components.find(component =>
+          component.nodeIds.includes(0))?.rootId,
+      });
+      return {
+        merged: summary(merged), reversed: summary(reversed),
+        preferred: summary(preferred),
+        hasPrimary: Object.prototype.hasOwnProperty.call(
+          merged, 'primaryComponentId'),
+      };
+    }""")
+    assert result["merged"] == {
+        "ids": [0, 1], "roots": [10, 20], "lookup": [True, True, True],
+        "baseIds": [[0, 1], [2]], "hostRoot": 10,
+    }, result
+    assert result["reversed"] == result["merged"]
+    assert result["preferred"]["hostRoot"] == 0
+    assert not result["hasPrimary"]
+
+
+def test_boundary_source_edge_preserves_mesh_provenance_and_pivot_weight(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {buildModelRigReconciliation} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const make = (boundaryOnly) => {
+        const boundary = {boneA: 0, boneB: 1, treeEdgeScore: .9,
+          evidenceType: 'mesh_boundary', jointCenter: [9, 2, 0],
+          matchedLength: 2};
+        const overlap = {boneA: 0, boneB: 1, treeEdgeScore: .01,
+          jointCenter: [1, 0, 0], jointWeightTotal: 4};
+        const nodes = [0, 1].map(boneId => ({boneId,
+          weightedCenter: [boneId, 0, 0], weightedRadius: .1,
+          totalWeight: 1, affectedVertexCount: 10}));
+        return {
+          sourceKey: boundaryOnly ? 'boundary-only' : 'weak-overlap',
+          boneIds: [0, 1], influenceGraph: {
+            nodes, relationships: boundaryOnly ? [] : [overlap],
+          },
+          centerByBoneId: new Map([[0, [0, 0, 0]], [1, [1, 0, 0]]]),
+          jointPivotByBoneId: new Map([[1, [1, 0, 0]]]),
+          restDirectionByBoneId: new Map([[0, [0, 1, 0]], [1, [0, 1, 0]]]),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(),
+          inferredForest: {
+            components: [{componentId: 0, rootId: 0, nodeIds: [0, 1],
+              parentById: {0: null, 1: 0}, childrenById: {0: [1], 1: []},
+              depthById: {0: 0, 1: 1}, edges: [boundary]}],
+            componentByBoneId: {0: 0, 1: 0},
+          },
+        };
+      };
+      const describe = value => value.edges
+        .find(edge => edge.relationshipType === 'source')?.sourceEdges?.[0]
+        || null;
+      const weak = describe(buildModelRigReconciliation([make(false)]));
+      const only = describe(buildModelRigReconciliation([make(true)]));
+      return {
+        weak: weak && {evidenceType: weak.evidenceType,
+          jointCenter: weak.jointCenter, pivotWeight: weak.pivotWeight,
+          jointWeightTotal: weak.jointWeightTotal},
+        only: only && {evidenceType: only.evidenceType,
+          jointCenter: only.jointCenter, pivotWeight: only.pivotWeight,
+          jointWeightTotal: only.jointWeightTotal},
+      };
+    }""")
+    expected = {
+        "evidenceType": "mesh_boundary", "jointCenter": [9, 2, 0],
+        "pivotWeight": 2, "jointWeightTotal": 0,
+    }
+    assert result["weak"] == expected, result
+    assert result["only"] == expected, result
+
+
 def test_triangle_surface_evidence_is_invariant_for_varying_weight_tessellation(
         module_page):
     page = module_page
