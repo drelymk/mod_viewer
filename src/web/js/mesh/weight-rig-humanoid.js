@@ -19,9 +19,11 @@ function valueFor(collection, id) {
 }
 
 function pointFor(rig, id) {
-  const value = valueFor(rig?.centerByJointId, id)
-    ?? valueFor(rig?.jointPivotByJointId, id)
-    ?? rig?.joints?.find(joint => Number(joint?.jointId) === Number(id))?.restCenter;
+  const joint = rig?.joints?.find(joint => Number(joint?.jointId) === Number(id));
+  const value = valueFor(rig?.jointPivotByJointId, id)
+    ?? joint?.restPivot
+    ?? valueFor(rig?.centerByJointId, id)
+    ?? joint?.restCenter;
   if (value?.isVector3) return value.clone();
   const values = Array.isArray(value) || ArrayBuffer.isView(value)
     ? [...value].slice(0, 3).map(Number)
@@ -50,13 +52,6 @@ function weightedValue(joint) {
   return 1;
 }
 
-function median(values) {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
 function weightedMedian(samples, selector) {
   if (!samples.length) return 0;
   const ordered = [...samples].sort((left, right) =>
@@ -70,22 +65,37 @@ function weightedMedian(samples, selector) {
   return selector(ordered.at(-1).point);
 }
 
-function quantile(values, fraction) {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = (sorted.length - 1) * Math.max(0, Math.min(1, fraction));
-  const lower = Math.floor(index);
-  const upper = Math.ceil(index);
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
+function weightedQuantile(samples, selector, fraction) {
+  if (!samples.length) return 0;
+  const ordered = [...samples].sort((left, right) =>
+    selector(left.point) - selector(right.point));
+  const total = ordered.reduce((sum, sample) => sum + sample.weight, 0);
+  const target = total * Math.max(0, Math.min(1, fraction));
+  let accumulated = 0;
+  for (const sample of ordered) {
+    accumulated += sample.weight;
+    if (accumulated >= target) return selector(sample.point);
+  }
+  return selector(ordered.at(-1).point);
 }
 
 function robustFrame(rig, characterForward) {
   const samples = (rig?.joints || []).map(joint => {
     const point = pointFor(rig, joint?.jointId);
-    return point ? {point, weight: weightedValue(joint)} : null;
+    const evidence = weightedValue(joint);
+    return point ? {point, weight: 1 + Math.log1p(evidence)} : null;
   }).filter(Boolean);
   const points = samples.map(sample => sample.point);
   const up = new THREE.Vector3(0, 1, 0);
+  if (!points.length) {
+    return {
+      center: new THREE.Vector3(),
+      up,
+      forward: new THREE.Vector3(0, 0, 1),
+      right: new THREE.Vector3(1, 0, 0),
+      height: 1,
+    };
+  }
   const forward = pointFor({centerByJointId: new Map([[0, characterForward]])}, 0)
     || new THREE.Vector3(0, 0, 1);
   forward.addScaledVector(up, -forward.dot(up));
@@ -95,19 +105,23 @@ function robustFrame(rig, characterForward) {
   if (right.lengthSq() <= EPSILON) right.set(1, 0, 0);
   right.normalize();
   const ys = points.map(point => point.y);
-  let height = quantile(ys, .95) - quantile(ys, .05);
+  let height = weightedQuantile(samples, point => point.y, .95)
+    - weightedQuantile(samples, point => point.y, .05);
   if (!Number.isFinite(height) || height <= EPSILON) {
     const box = new THREE.Box3().setFromPoints(points);
     height = box.getSize(new THREE.Vector3()).length();
   }
   height = Math.max(height, EPSILON);
-  const medianZ = median(points.map(point => point.z));
+  const medianZ = weightedMedian(samples, point => point.z);
+  const depthSpread = weightedQuantile(samples, point => point.z, .75)
+    - weightedQuantile(samples, point => point.z, .25);
+  const depthThreshold = Math.max(depthSpread * 1.5, height * .08, EPSILON);
   const coreSamples = samples.filter(sample =>
-    Math.abs(sample.point.z - medianZ) <= Math.max(height * .2, EPSILON));
+    Math.abs(sample.point.z - medianZ) <= depthThreshold);
   const center = new THREE.Vector3(
     weightedMedian(coreSamples, point => point.x),
     weightedMedian(samples, point => point.y),
-    medianZ);
+    weightedMedian(samples, point => point.z));
   return {center, up, forward, right, height};
 }
 
@@ -163,7 +177,7 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
   const evidenceScore = clamp01(Math.log1p(weightedValue(anchorJoint)) / Math.log(1001));
   const sideAgreement = clamp01((side * sideSign - .04) / .35);
   const endSideAgreement = clamp01((endSide * sideSign - .02) / .4);
-  const parentCentrality = clamp01(1 - Math.max(0, parentSide - Math.abs(side) * .7) / .35);
+  const parentCentrality = clamp01(1 - parentSide / Math.max(Math.abs(side), .08));
   const lengthScore = role.endsWith('_arm') ? rangeScore(length, .12, .8, .7)
     : rangeScore(length, .2, 1.2, .8);
   const levelScore = role.endsWith('_arm') ? rangeScore(y, .12, .65, .55)
@@ -201,6 +215,16 @@ function candidateFor(rig, frame, role, anchorJointId, characterForward) {
     pairScore: 0, runnerUpMargin: 0, reasons,
     bendDirection: detected.bendDirection ? [...detected.bendDirection] : null,
     bendDirectionSource: detected.bendDirectionSource,
+    parentJointId: parentId,
+    parentCentrality,
+    pathLength: length,
+    side,
+    endSide,
+    normalizedY: y,
+    normalizedEndY: endY,
+    forwardOffset,
+    familyId: null,
+    alternatives: [],
   };
 }
 
@@ -209,7 +233,69 @@ function candidateSort(left, right) {
   if (left.pathJointIds.length !== right.pathJointIds.length) {
     return right.pathJointIds.length - left.pathJointIds.length;
   }
-  return 0;
+  return Number(left.anchorJointId) - Number(right.anchorJointId);
+}
+
+function candidatePathsAreNested(left, right) {
+  if (left.endJointId !== right.endJointId) return false;
+  const leftPath = new Set(left.pathJointIds);
+  const rightPath = new Set(right.pathJointIds);
+  return leftPath.has(right.anchorJointId) || rightPath.has(left.anchorJointId);
+}
+
+function familyRepresentativeSort(left, right) {
+  if (Math.abs(left.parentCentrality - right.parentCentrality) > .000001) {
+    return right.parentCentrality - left.parentCentrality;
+  }
+  if (left.pathJointIds.length !== right.pathJointIds.length) {
+    return right.pathJointIds.length - left.pathJointIds.length;
+  }
+  if (Math.abs(left.score - right.score) > .000001) return right.score - left.score;
+  return Number(left.anchorJointId) - Number(right.anchorJointId);
+}
+
+function collapseCandidateFamilies(candidates, role) {
+  const sideSign = role.startsWith('left_') ? -1 : 1;
+  const matching = candidates.filter(candidate => candidate.role === role
+    && candidate.side * sideSign > 0);
+  const parent = matching.map((_, index) => index);
+  const find = index => {
+    let root = index;
+    while (parent[root] !== root) root = parent[root];
+    while (parent[index] !== index) {
+      const next = parent[index];
+      parent[index] = root;
+      index = next;
+    }
+    return root;
+  };
+  const union = (left, right) => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot;
+  };
+  for (let left = 0; left < matching.length; left += 1) {
+    for (let right = left + 1; right < matching.length; right += 1) {
+      if (candidatePathsAreNested(matching[left], matching[right])) union(left, right);
+    }
+  }
+  const groups = new Map();
+  matching.forEach((candidate, index) => {
+    const root = find(index);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(candidate);
+  });
+  const families = [...groups.values()].map(members => {
+    const sorted = [...members].sort(familyRepresentativeSort);
+    const representative = {...sorted[0], alternatives: sorted.slice(1)};
+    return {representative, alternatives: sorted.slice(1)};
+  });
+  families.sort((left, right) => familyRepresentativeSort(left.representative, right.representative));
+  families.forEach((family, index) => {
+    family.familyId = `${role}:${family.representative.endJointId}:${index}`;
+    family.representative.familyId = family.familyId;
+  });
+  return families;
 }
 
 function pairCandidates(rig, frame, left, right) {
@@ -227,24 +313,24 @@ function pairCandidates(rig, frame, left, right) {
       + Math.abs(Math.abs(leftPoint.clone().sub(frame.center).dot(frame.right))
         - Math.abs(rightPoint.clone().sub(frame.center).dot(frame.right))) / frame.height;
     const pairScore = (first.score + second.score) / 2 - Math.min(.35, symmetry * .18);
-    pairs.push({first, second, pairScore, symmetry});
+    pairs.push({first, second, pairScore, symmetry,
+      familyIds: [first.familyId, second.familyId]});
   }
   return pairs.sort((a, b) => b.pairScore - a.pairScore);
 }
 
 function choosePair(rig, frame, candidates, roles) {
-  const bySide = {left: [], right: []};
-  candidates.forEach(candidate => {
-    const side = candidate.role.startsWith('left_') ? 'left' : 'right';
-    bySide[side].push(candidate);
-  });
+  const leftFamilies = collapseCandidateFamilies(candidates, roles[0]);
+  const rightFamilies = collapseCandidateFamilies(candidates, roles[1]);
   const pairs = pairCandidates(rig, frame,
-    bySide.left.filter(candidate => candidate.role === roles[0]),
-    bySide.right.filter(candidate => candidate.role === roles[1]));
-  if (!pairs.length) return {pair: null, margin: 0, pairs: []};
+    leftFamilies.map(family => family.representative),
+    rightFamilies.map(family => family.representative));
+  if (!pairs.length) {
+    return {pair: null, margin: 0, pairs: [], leftFamilies, rightFamilies};
+  }
   const best = pairs[0];
   const margin = pairs.length > 1 ? best.pairScore - pairs[1].pairScore : 1;
-  return {pair: best, margin, pairs};
+  return {pair: best, margin, pairs, leftFamilies, rightFamilies};
 }
 
 function makePairSuggestions(choice, roles) {
@@ -264,6 +350,59 @@ function makePairSuggestions(choice, roles) {
     };
   }
   return result;
+}
+
+function candidateSnapshot(candidate) {
+  return {
+    role: candidate.role,
+    anchorJointId: candidate.anchorJointId,
+    parentJointId: candidate.parentJointId,
+    bendJointId: candidate.bendJointId,
+    endJointId: candidate.endJointId,
+    pathJointIds: [...candidate.pathJointIds],
+    familyId: candidate.familyId,
+    score: candidate.score,
+    parentCentrality: candidate.parentCentrality,
+    pathLength: candidate.pathLength,
+    side: candidate.side,
+    endSide: candidate.endSide,
+    normalizedY: candidate.normalizedY,
+    normalizedEndY: candidate.normalizedEndY,
+    forwardOffset: candidate.forwardOffset,
+    reasons: [...candidate.reasons],
+  };
+}
+
+function familySnapshot(family) {
+  return {
+    familyId: family.familyId,
+    role: family.representative.role,
+    side: family.representative.role.startsWith('left_') ? 'left' : 'right',
+    representative: candidateSnapshot(family.representative),
+    alternatives: family.alternatives.map(candidateSnapshot),
+  };
+}
+
+function pairSnapshot(choice) {
+  const pair = choice.pair;
+  return {
+    best: pair ? {
+      left: candidateSnapshot(pair.first),
+      right: candidateSnapshot(pair.second),
+      pairScore: pair.pairScore,
+      symmetry: pair.symmetry,
+      familyIds: [...pair.familyIds],
+    } : null,
+    runnerUp: choice.pairs[1] ? {
+      leftAnchorJointId: choice.pairs[1].first.anchorJointId,
+      rightAnchorJointId: choice.pairs[1].second.anchorJointId,
+      pairScore: choice.pairs[1].pairScore,
+      symmetry: choice.pairs[1].symmetry,
+      familyIds: [...choice.pairs[1].familyIds],
+    } : null,
+    margin: choice.margin,
+    pairCount: choice.pairs.length,
+  };
 }
 
 /** Suggest bilateral arm and leg mappings from ModelJoint geometry. */
@@ -304,13 +443,33 @@ export function suggestHumanoidLimbMappings({rig, characterForward, debug = fals
     suggestions: ROLES.map(role => roles[role]),
     available: Object.values(roles).filter(item => item.available).length,
   };
-  if (debug) result.debug = {
-    frame: {center: frame.center.toArray(), right: frame.right.toArray(), forward: frame.forward.toArray(), height: frame.height},
-    candidates: candidates.map(candidate => ({...candidate, pathJointIds: [...candidate.pathJointIds]})),
-    rejected,
-    armPairCount: armChoice.pairs.length,
-    legPairCount: legChoice.pairs.length,
-  };
+  if (debug) {
+    const rejectionCounts = {};
+    rejected.forEach(item => {
+      const key = `${item.role}:${item.reason}`;
+      rejectionCounts[key] = (rejectionCounts[key] || 0) + 1;
+    });
+    const topCandidatesByRole = Object.fromEntries(ROLES.map(role => [role,
+      roleCandidates(role).slice(0, 10).map(candidateSnapshot)]));
+    result.debug = {
+      frame: {center: frame.center.toArray(), right: frame.right.toArray(), forward: frame.forward.toArray(), height: frame.height},
+      candidates: candidates.map(candidateSnapshot),
+      topCandidatesByRole,
+      rejected,
+      rejectionCounts,
+      validCandidateCounts: Object.fromEntries(ROLES.map(role =>
+        [role, roleCandidates(role).length])),
+      families: {
+        left_arm: armChoice.leftFamilies.map(familySnapshot),
+        right_arm: armChoice.rightFamilies.map(familySnapshot),
+        left_leg: legChoice.leftFamilies.map(familySnapshot),
+        right_leg: legChoice.rightFamilies.map(familySnapshot),
+      },
+      pairs: {arms: pairSnapshot(armChoice), legs: pairSnapshot(legChoice)},
+      armPairCount: armChoice.pairs.length,
+      legPairCount: legChoice.pairs.length,
+    };
+  }
   return result;
 }
 

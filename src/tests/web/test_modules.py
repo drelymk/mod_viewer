@@ -240,15 +240,18 @@ def test_humanoid_limb_suggestions_are_bilateral_and_ignore_wings(module_page):
       ]);
       const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 0, 5: 4, 6: 5,
         7: 0, 8: 7, 9: 8, 10: 0, 11: 10, 12: 11, 13: 0, 14: 13, 15: 14};
+      const shiftedCenters = new Map([...points].map(([id, point]) => [id,
+        [point[0] + .8, point[1] - .3, point[2] + .2]]));
       const childrenById = Object.fromEntries(Object.keys(parentById).map(id => [id, []]));
       Object.entries(parentById).forEach(([child, parent]) => {
         if (parent !== null) childrenById[parent].push(Number(child));
       });
       const component = {rootId: 0, nodeIds: [...points.keys()], parentById, childrenById};
       const rig = {
-        joints: [...points.keys()].reverse().map(jointId => ({jointId, restCenter: points.get(jointId)})),
+        joints: [...points.keys()].reverse().map(jointId => ({jointId,
+          restPivot: points.get(jointId), restCenter: shiftedCenters.get(jointId)})),
         components: [component], componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
-        centerByJointId: points, jointPivotByJointId: points,
+        centerByJointId: shiftedCenters, jointPivotByJointId: points,
         restContinuationChildByJointId: new Map([
           [1, 2], [2, 3], [4, 5], [5, 6], [7, 8], [8, 9],
           [10, 11], [11, 12], [13, 14], [14, 15],
@@ -260,8 +263,10 @@ def test_humanoid_limb_suggestions_are_bilateral_and_ignore_wings(module_page):
       const scaledPoints = new Map([...points].map(([id, point]) => [id,
         point.map(value => value * 10)]));
       const scaledRig = {...rig, joints: rig.joints.map(joint => ({...joint,
-        restCenter: scaledPoints.get(joint.jointId)})),
-        centerByJointId: scaledPoints, jointPivotByJointId: scaledPoints};
+        restPivot: scaledPoints.get(joint.jointId),
+        restCenter: scaledPoints.get(joint.jointId).map(value => value + .4)})),
+        centerByJointId: new Map([...scaledPoints].map(([id, point]) => [id,
+          point.map(value => value + .4)])), jointPivotByJointId: scaledPoints};
       const scaled = humanoid.suggestHumanoidLimbMappings({
         rig: scaledRig, characterForward: [0, 0, 1]});
       return {roles: result.roles, scaledRoles: scaled.roles,
@@ -280,6 +285,77 @@ def test_humanoid_limb_suggestions_are_bilateral_and_ignore_wings(module_page):
     assert 13 not in [roles[role]["anchorJointId"] for role in roles]
     assert result["scaledRoles"]["left_arm"]["anchorJointId"] == 1
     assert result["scaledRoles"]["right_arm"]["anchorJointId"] == 4
+
+
+def test_humanoid_detector_collapses_dense_helper_joint_families(module_page):
+    result = module_page.evaluate("""async () => {
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.55, 1.55, 0]], [2, [-.8, 1.48, 0]], [3, [-1.05, 1.35, 0]],
+        [4, [-1.25, 1.23, 0]], [5, [-1.5, 1.1, 0]], [6, [-1.65, 1.04, 0]],
+        [7, [-1.8, .98, 0]],
+        [8, [.55, 1.55, 0]], [9, [.8, 1.48, 0]], [10, [1.05, 1.35, 0]],
+        [11, [1.25, 1.23, 0]], [12, [1.5, 1.1, 0]], [13, [1.65, 1.04, 0]],
+        [14, [1.8, .98, 0]],
+        [15, [-.35, .8, 0]], [16, [-.4, .2, 0]], [17, [-.42, -.4, 0]],
+        [18, [.35, .8, 0]], [19, [.4, .2, 0]], [20, [.42, -.4, 0]],
+        [21, [-.7, 1.25, -.25]], [22, [-.85, 1.25, -.25]], [23, [-1.0, 1.25, -.25]],
+        [24, [.7, 1.25, -.25]], [25, [.85, 1.25, -.25]], [26, [1.0, 1.25, -.25]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6,
+        8: 0, 9: 8, 10: 9, 11: 10, 12: 11, 13: 12, 14: 13,
+        15: 0, 16: 15, 17: 16, 18: 0, 19: 18, 20: 19,
+        21: 0, 22: 21, 23: 22, 24: 0, 25: 24, 26: 25};
+      const childrenById = Object.fromEntries(Object.keys(parentById).map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const component = {rootId: 0, nodeIds: [...points.keys()], parentById, childrenById};
+      const centers = new Map([...points].map(([id, point]) => [id,
+        [point[0] + .9, point[1] - .4, point[2] + .1]]));
+      const continuation = new Map([
+        [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7],
+        [8, 9], [9, 10], [10, 11], [11, 12], [12, 13], [13, 14],
+        [15, 16], [16, 17], [18, 19], [19, 20], [21, 22], [22, 23],
+        [24, 25], [25, 26],
+      ]);
+      const rig = {
+        joints: [...points.keys()].reverse().map(jointId => ({jointId,
+          restPivot: points.get(jointId), restCenter: centers.get(jointId)})),
+        components: [component], componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+        centerByJointId: centers, jointPivotByJointId: points,
+        restContinuationChildByJointId: continuation,
+      };
+      const withoutWings = {...rig,
+        joints: rig.joints.filter(joint => joint.jointId < 21)};
+      const detected = suggestHumanoidLimbMappings({
+        rig: withoutWings, characterForward: [0, 0, 1], debug: true,
+      });
+      const withWings = suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      return {
+        roles: detected.roles,
+        wingRoles: withWings.roles,
+        families: withWings.debug.families,
+        top: detected.debug.topCandidatesByRole.left_arm,
+      };
+    }""")
+    assert result["roles"]["left_arm"]["available"]
+    assert result["roles"]["right_arm"]["available"]
+    assert result["roles"]["left_arm"]["anchorJointId"] == 1
+    assert result["roles"]["right_arm"]["anchorJointId"] == 8
+    assert len(result["families"]["left_arm"]) == 2
+    assert len(result["families"]["right_arm"]) == 2
+    arm_family = next(family for family in result["families"]["left_arm"]
+                      if family["representative"]["anchorJointId"] == 1)
+    assert len(arm_family["alternatives"]) >= 3
+    assert arm_family["representative"]["anchorJointId"] == 1
+    assert result["top"][0]["forwardOffset"] <= .3
+    assert result["wingRoles"]["left_arm"]["reasons"][0] == "ambiguous_pair"
+    assert result["wingRoles"]["right_arm"]["reasons"][0] == "ambiguous_pair"
 
 
 def test_humanoid_suggestions_report_missing_and_ambiguous_pairs(module_page):

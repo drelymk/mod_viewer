@@ -325,6 +325,29 @@ function humanoidAnalysis() {
   return result;
 }
 
+export function getHumanoidLimbDetection() {
+  return humanoidAnalysis();
+}
+
+function humanoidRoleStatus(result, label, roles) {
+  const suggestions = roles.map(role => result.roles?.[role]);
+  if (suggestions.every(item => item?.available)) return `${label}: detected.`;
+  if (suggestions.some(item => item?.reasons?.includes('ambiguous_pair'))) {
+    return `${label}: ambiguous.`;
+  }
+  if (suggestions.some(item => item?.reasons?.includes('no_bilateral_pair'))) {
+    return `${label}: no bilateral pair.`;
+  }
+  return `${label}: unavailable.`;
+}
+
+function humanoidDetectionStatus(result) {
+  return [
+    humanoidRoleStatus(result, 'Arms', ['left_arm', 'right_arm']),
+    humanoidRoleStatus(result, 'Legs', ['left_leg', 'right_leg']),
+  ].join(' ');
+}
+
 function setHumanoidStatus(message) {
   modelRigState.humanoidStatus = String(message || '');
   notifyModelRigChanged();
@@ -354,7 +377,7 @@ export async function autoDetectHumanoidLimbs() {
       : 'no_confident_bilateral_pairs';
     setHumanoidStatus(reason === 'all_detected_roles_already_mapped'
       ? 'All detected limbs are already mapped.'
-      : 'No confident bilateral limb pairs were found.');
+      : humanoidDetectionStatus(result));
     return {applied: false, reason, addedRoles: [], suggestions: result.roles,
       semanticDetectionMs: modelRigState.semanticDetectionMs};
   }
