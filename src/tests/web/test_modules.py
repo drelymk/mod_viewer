@@ -173,17 +173,19 @@ def test_rig_limb_detection_and_two_control_solver(module_page):
       const detected = ik.detectLimbPath({
         rig, anchorJointId: 1, role: 'left_arm',
       });
-      const initial = new Map([[5, new THREE.Quaternion()]]);
-      const solved = ik.solveLimbIk({
+      const solve = target => ik.solveLimbIk({
         forest: {components: [component]}, centers: points,
-        jointPivots: points, localRotations: initial,
+        jointPivots: points, localRotations: new Map([[5, new THREE.Quaternion()]]),
         anchorJointId: detected.anchorJointId,
         bendJointId: detected.bendJointId,
         endJointId: detected.endJointId,
         pathJointIds: detected.pathJointIds,
         bendDirection: detected.bendDirection,
-        target: [1.5, .8, 0],
+        target,
       });
+      const solved = solve([1.5, .8, 0]);
+      const reachable = solve([2, 0, 0]);
+      const unreachable = solve([10, 0, 0]);
       const finite = [...solved.rotations.values()].every(rotation =>
         [rotation.x, rotation.y, rotation.z, rotation.w].every(Number.isFinite)
         && Math.abs(rotation.length() - 1) < 1e-6);
@@ -202,6 +204,13 @@ def test_rig_limb_detection_and_two_control_solver(module_page):
           ids: [...solved.rotations.keys()],
           endDistance: solved.residual,
         },
+        reachable: {
+          iterations: reachable.iterations,
+          reached: reachable.reached,
+        },
+        unreachable: {
+          reached: unreachable.reached,
+        },
       };
     }""")
     assert result["detected"] == {
@@ -214,6 +223,76 @@ def test_rig_limb_detection_and_two_control_solver(module_page):
     assert result["solved"]["finite"]
     assert result["solved"]["ids"] == [1, 3]
     assert result["solved"]["endDistance"] < 0.1
+    assert result["reachable"] == {"iterations": 1, "reached": True}
+    assert result["unreachable"]["reached"] is False
+
+
+def test_limb_forward_conversion_inverts_non_identity_base_orientation(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {characterForwardFromOrientation} = await import(
+        './js/mesh/weight-rig-ik.js');
+      const upright = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+      const facing = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0), Math.PI / 2);
+      const base = facing.clone().multiply(upright);
+      const turns = [0, 90, 180, 270].map(degrees => {
+        const user = new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(degrees));
+        const orientation = user.clone().multiply(base);
+        const forward = characterForwardFromOrientation({
+          orientation, userRotation: user,
+        });
+        return forward?.toArray() || null;
+      });
+      return {turns, orientation: base.toArray()};
+    }""")
+    expected = [-1, 0, 0]
+    assert len(result["turns"]) == 4
+    for turn in result["turns"]:
+        assert turn == pytest.approx(expected)
+
+
+def test_compact_limb_detection_stops_at_terminal_branch(module_page):
+    result = module_page.evaluate("""async () => {
+      const ik = await import('./js/mesh/weight-rig-ik.js');
+      const component = {
+        rootId: 0, nodeIds: [0, 1, 2, 3, 4, 5, 6],
+        parentById: {0: null, 1: 0, 2: 1, 3: 2,
+          4: 3, 5: 3, 6: 3},
+        childrenById: {0: [1], 1: [2], 2: [3], 3: [4, 5, 6],
+          4: [], 5: [], 6: []},
+      };
+      const points = new Map([
+        [0, [-1, 0, 0]], [1, [0, 0, 0]], [2, [1, 0, 0]],
+        [3, [2, 0, 0]], [4, [2, .2, 0]], [5, [2, 0, .2]],
+        [6, [2, -.2, 0]],
+      ]);
+      const rig = {
+        components: [component], componentByJointId: new Map(
+          component.nodeIds.map(id => [id, 0])),
+        jointPivotByJointId: points, centerByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [0, 1], [1, 2], [2, 3], [3, 4],
+        ]),
+        restFrameByJointId: new Map(),
+      };
+      const arm = ik.detectLimbPath({
+        rig, anchorJointId: 1, role: 'left_arm',
+      });
+      const leg = ik.detectLimbPath({
+        rig, anchorJointId: 1, role: 'left_leg',
+      });
+      return {
+        arm: {path: arm.pathJointIds, bend: arm.bendJointId, end: arm.endJointId},
+        leg: {path: leg.pathJointIds, bend: leg.bendJointId, end: leg.endJointId},
+      };
+    }""")
+    assert result == {
+        "arm": {"path": [1, 2, 3], "bend": 2, "end": 3},
+        "leg": {"path": [1, 2, 3], "bend": 2, "end": 3},
+    }
 
 
 def test_limb_bend_direction_uses_scale_relative_evidence_and_role_fallback(
@@ -258,6 +337,47 @@ def test_limb_bend_direction_uses_scale_relative_evidence_and_role_fallback(
     assert result["noisyNegative"]["bendDirection"] == pytest.approx([0, 0, 1])
     assert result["leftLeg"]["bendDirection"] == pytest.approx([0, 0, -1])
     assert result["rightLeg"]["bendDirection"] == pytest.approx([0, 0, -1])
+
+
+def test_limb_bend_direction_helper_uses_final_override_controls(module_page):
+    result = module_page.evaluate("""async () => {
+      const ik = await import('./js/mesh/weight-rig-ik.js');
+      const points = new Map([
+        [1, [0, 0, 0]], [2, [1, 0, .2]], [3, [1, 0, -.3]],
+        [4, [2, 0, 0]], [5, [3, 0, 0]],
+      ]);
+      const rig = {
+        jointPivotByJointId: points, centerByJointId: points,
+        restFrameByJointId: new Map(),
+      };
+      const automatic = ik.resolveLimbBendDirection({
+        rig, pathJointIds: [1, 2, 3, 4], anchorJointId: 1,
+        bendJointId: 2, endJointId: 4, role: 'left_arm',
+      });
+      const bendOverride = ik.resolveLimbBendDirection({
+        rig, pathJointIds: [1, 2, 3, 4], anchorJointId: 1,
+        bendJointId: 3, endJointId: 4, role: 'left_arm',
+      });
+      const endOverride = ik.resolveLimbBendDirection({
+        rig, pathJointIds: [1, 2, 3, 4, 5], anchorJointId: 1,
+        bendJointId: 2, endJointId: 5, role: 'left_arm',
+      });
+      return {
+        automatic: {...automatic,
+          bendDirection: automatic.bendDirection?.toArray() || null},
+        bendOverride: {...bendOverride,
+          bendDirection: bendOverride.bendDirection?.toArray() || null},
+        endOverride: {...endOverride,
+          bendDirection: endOverride.bendDirection?.toArray() || null},
+      };
+    }""")
+    assert result["automatic"]["bendDirection"] == pytest.approx([0, 0, 1])
+    assert result["bendOverride"]["bendDirection"] == pytest.approx(
+        [0, 0, -1])
+    assert result["endOverride"]["bendDirection"] == pytest.approx(
+        [0, 0, 1])
+    assert result["automatic"]["bendDirectionSource"] == "rest-offset"
+    assert result["bendOverride"]["bendDirectionSource"] == "rest-offset"
 
 
 def test_rig_joint_picker_projects_current_pivots_and_uses_nearest_hit(

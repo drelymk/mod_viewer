@@ -128,11 +128,17 @@ function projectedDirection(vector, axis) {
   return result.lengthSq() > EPSILON ? result.normalize() : null;
 }
 
-function preferredBendDirection(rig, pathJointIds, bendJointId, role,
-    characterForward) {
-  const anchor = pointFor(rig, pathJointIds[0]);
-  const bend = pointFor(rig, bendJointId);
-  const end = pointFor(rig, pathJointIds.at(-1));
+export function resolveLimbBendDirection({
+  rig, pathJointIds = [], anchorJointId, bendJointId, endJointId, role,
+  characterForward,
+} = {}) {
+  const path = pathJointIds.map(numberId).filter(Number.isInteger);
+  const anchorId = numberId(anchorJointId ?? path[0]);
+  const endId = numberId(endJointId ?? path.at(-1));
+  const bendId = numberId(bendJointId);
+  const anchor = pointFor(rig, anchorId);
+  const bend = pointFor(rig, bendId);
+  const end = pointFor(rig, endId);
   if (!anchor || !bend || !end) return {
     bendDirection: null,
     bendDirectionSource: 'unavailable',
@@ -167,7 +173,7 @@ function preferredBendDirection(rig, pathJointIds, bendJointId, role,
       };
     }
 
-    const frame = restFrameFor(rig, bendJointId);
+    const frame = restFrameFor(rig, bendId);
     const candidates = [
       new THREE.Vector3(1, 0, 0).applyQuaternion(frame),
       new THREE.Vector3(0, 0, 1).applyQuaternion(frame),
@@ -188,7 +194,7 @@ function preferredBendDirection(rig, pathJointIds, bendJointId, role,
     };
   }
 
-  const frame = restFrameFor(rig, bendJointId);
+  const frame = restFrameFor(rig, bendId);
   const candidates = [
     new THREE.Vector3(1, 0, 0).applyQuaternion(frame),
     new THREE.Vector3(0, 0, 1).applyQuaternion(frame),
@@ -262,8 +268,10 @@ function detectionResult(role, anchorJointId, pathJointIds, reason,
     && Number(component?.rootId) !== anchorJointId;
   const finalReason = available ? null : reason || 'short_or_invalid_limb_path';
   const directionEvidence = available
-    ? preferredBendDirection(rig, pathJointIds, bendJointId, role,
-      characterForward)
+    ? resolveLimbBendDirection({
+      rig, pathJointIds, anchorJointId, bendJointId, endJointId, role,
+      characterForward,
+    })
     : {bendDirection: null, bendDirectionSource: 'unavailable',
       bendDirectionStrength: 0};
   return {
@@ -313,7 +321,7 @@ export function detectLimbPath({rig, anchorJointId, role, characterForward} = {}
     // a hand/foot hub. Do not follow one arbitrary finger or toe.
     // A single accessory child is not enough: preserve the continuation and
     // let the existing rest-frame ranking decide which child to follow.
-    if (path.length >= 4
+    if (path.length >= 3
         && (branchChildren.length >= 2
           || continuation === null && children.length >= 2)) {
       branchHub = true;
@@ -365,6 +373,18 @@ function cloneRotations(localRotations) {
     if (jointId !== null) result.set(jointId, quaternionFrom(rotation));
   });
   return result;
+}
+
+export function characterForwardFromOrientation({orientation, userRotation} = {}) {
+  if (!orientation || !userRotation) return null;
+  const baseOrientation = quaternionFrom(userRotation).invert()
+    .multiply(quaternionFrom(orientation)).normalize();
+  const forward = new THREE.Vector3(0, 0, 1)
+    .applyQuaternion(baseOrientation.clone().invert());
+  if (!Number.isFinite(forward.lengthSq()) || forward.lengthSq() <= EPSILON) {
+    return null;
+  }
+  return forward.normalize();
 }
 
 function buildEvaluation({forest, centers, pivots, rotations}) {
@@ -435,19 +455,22 @@ function solvePass({forest, centers, pivots, working, anchorJointId,
   const anchor = pointAt(anchorJointId, evaluation.transforms, centers, pivots);
   let bend = pointAt(bendJointId, evaluation.transforms, centers, pivots);
   let end = pointAt(endJointId, evaluation.transforms, centers, pivots);
-  if (!anchor || !bend || !end) return {evaluation, residual: Infinity};
+  if (!anchor || !bend || !end) {
+    return {evaluation, residual: Infinity, limbScale: 0};
+  }
 
   const upper = bend.clone().sub(anchor);
   const lower = end.clone().sub(bend);
   const l1 = upper.length();
   const l2 = lower.length();
+  const limbScale = l1 + l2;
   if (l1 <= EPSILON || l2 <= EPSILON) return {
-    evaluation, residual: end.distanceTo(targetPoint),
+    evaluation, residual: end.distanceTo(targetPoint), limbScale,
   };
   const targetVector = targetPoint.clone().sub(anchor);
   const distance = targetVector.length();
   if (distance <= EPSILON) return {
-    evaluation, residual: end.distanceTo(targetPoint),
+    evaluation, residual: end.distanceTo(targetPoint), limbScale,
   };
   const direction = targetVector.multiplyScalar(1 / distance);
   const clampedDistance = THREE.MathUtils.clamp(
@@ -473,13 +496,17 @@ function solvePass({forest, centers, pivots, working, anchorJointId,
   evaluation = buildEvaluation({forest, centers, pivots, rotations: working});
   bend = pointAt(bendJointId, evaluation.transforms, centers, pivots);
   end = pointAt(endJointId, evaluation.transforms, centers, pivots);
-  if (!bend || !end) return {evaluation, residual: Infinity};
+  if (!bend || !end) return {evaluation, residual: Infinity, limbScale};
   applyWorldDelta({jointId: bendJointId,
     delta: shortestArc(end.clone().sub(bend), targetPoint.clone().sub(bend)),
     forest, evaluation, working});
   evaluation = buildEvaluation({forest, centers, pivots, rotations: working});
   end = pointAt(endJointId, evaluation.transforms, centers, pivots);
-  return {evaluation, residual: end ? end.distanceTo(targetPoint) : Infinity};
+  return {
+    evaluation,
+    residual: end ? end.distanceTo(targetPoint) : Infinity,
+    limbScale,
+  };
 }
 
 /** Solve a detected limb while changing only its anchor and bend controls. */
@@ -506,9 +533,8 @@ export function solveLimbIk({forest, centers, jointPivots, localRotations,
   let result = solvePass({forest, centers, pivots: jointPivots,
     working, anchorJointId: anchor, bendJointId: bend, endJointId: end,
     targetPoint, bendDirection: direction});
-  const tolerance = Math.max(
-    pointAt(end, result.evaluation?.transforms, centers, jointPivots)
-      ?.distanceTo(targetPoint) || 1, 1e-6) * TOLERANCE_SCALE;
+  const tolerance = Math.max(Number(result.limbScale) || 0, 1e-6)
+    * TOLERANCE_SCALE;
   let iterations = 1;
   while (iterations < MAX_SOLVE_PASSES && result.residual > tolerance) {
     result = solvePass({forest, centers, pivots: jointPivots,

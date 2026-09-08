@@ -11,7 +11,7 @@ import {
   setPhysicsContinuousLinearResponse, setPhysicsDamping, setPhysicsFrequency,
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
   setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
-  setRigActiveLimbRole, setRigLimbAnchor, redetectRigLimb,
+  setRigActiveLimbRole,
   setRigLimbOverride, beginRigJointPicking, cancelRigJointPicking,
   clearRigLimbMapping, flipRigLimbBend, setRigIkEnabled,
   setRigJointRoot,
@@ -458,28 +458,13 @@ function buildRigSection(parent) {
 
   const mappingActions = document.createElement('div');
   mappingActions.className = 'rig-actions rig-limb-actions';
-  const setAnchor = document.createElement('button');
-  setAnchor.type = 'button';
-  setAnchor.className = 'ui-button rig-set-limb-anchor';
-  setAnchor.addEventListener('click', () => {
-    const role = latestRigState?.ik?.activeLimbRole || limb.value;
-    const selected = selectedJoint();
-    if (selected) setRigLimbAnchor(role, selected.jointId);
-  });
-  const redetect = document.createElement('button');
-  redetect.type = 'button';
-  redetect.className = 'ui-button rig-redetect-limb';
-  redetect.textContent = 'Redetect';
-  redetect.addEventListener('click', () => redetectRigLimb(limb.value));
   const clearMapping = document.createElement('button');
   clearMapping.type = 'button';
   clearMapping.className = 'ui-button rig-clear-limb';
   clearMapping.textContent = 'Clear';
   clearMapping.addEventListener('click', () => clearRigLimbMapping(limb.value));
-  mappingActions.append(setAnchor, redetect, clearMapping);
+  mappingActions.append(clearMapping);
   inverseKinematics.appendChild(mappingActions);
-  ui.setLimbAnchor = setAnchor;
-  ui.redetectLimb = redetect;
   ui.clearLimb = clearMapping;
 
   const ikLabel = document.createElement('label');
@@ -778,8 +763,6 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   const pathIds = mapping.pathJointIds || [];
   ui.pathPreview.textContent = pathIds.length
     ? pathIds.map(id => `Joint ${id}`).join(' → ') : '—';
-  ui.setLimbAnchor.textContent = `Set Selected as ${labels[0]}`;
-  ui.setLimbAnchor.disabled = !state?.loaded || !hasSelected;
   const pick = state?.jointPickIntent;
   const pickButton = (button, type, enabled, idleText) => {
     const active = pick?.type === type && pick?.role === role;
@@ -790,7 +773,6 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   pickButton(ui.limbAnchorPick, 'limb-anchor', true, 'Pick');
   pickButton(ui.limbBendPick, 'limb-bend-override', hasLimb, 'Override');
   pickButton(ui.limbEndPick, 'limb-end-override', hasLimb, 'Override');
-  ui.redetectLimb.disabled = !state?.loaded || !hasMapping;
   ui.clearLimb.disabled = !state?.loaded || !hasMapping;
   ui.ik.checked = !!ik.enabled;
   ui.ik.disabled = !state?.loaded || !hasLimb;
@@ -802,6 +784,7 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   ui.setRoot.disabled = !hasSelected;
   ui.resetJoint.disabled = !hasSelected;
   ui.resetJoint.textContent = state?.ik?.enabled && hasLimb
+      && selected?.jointId === mapping.endJointId
     ? 'Reset Limb' : 'Reset Joint';
   ui.resetPose.disabled = !state?.loaded;
   syncPresetControls(state);

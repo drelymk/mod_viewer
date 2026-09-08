@@ -56,7 +56,8 @@ import {
   RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
 import {
-  detectLimbPath, RIG_LIMB_ROLES, RIG_LIMB_ROLE_INFO, solveLimbIk,
+  detectLimbPath, RIG_LIMB_ROLES, RIG_LIMB_ROLE_INFO,
+  characterForwardFromOrientation, resolveLimbBendDirection, solveLimbIk,
 } from './weight-rig-ik.js';
 
 const weightRuntime = createWeightRuntimeState();
@@ -281,28 +282,8 @@ function compactLimbMapping(mapping) {
   };
 }
 
-function quaternionValue(value) {
-  if (value?.isQuaternion) return value.clone().normalize();
-  const values = Array.isArray(value) || ArrayBuffer.isView(value)
-    ? [...value].slice(0, 4).map(Number)
-    : [value?.x, value?.y, value?.z, value?.w].map(Number);
-  if (values.length !== 4 || !values.every(Number.isFinite)) return null;
-  return new THREE.Quaternion(...values).normalize();
-}
-
-function characterForwardForRole(role) {
-  const transform = getModelTransformState?.();
-  const orientation = quaternionValue(transform?.orientation);
-  const userRotation = quaternionValue(transform?.userRotation);
-  if (!orientation || !userRotation) return null;
-  // The rig is expressed in the model frame. Remove only the temporary
-  // viewport turn so the fallback follows the character rather than the view.
-  const baseOrientation = userRotation.invert().multiply(orientation).normalize();
-  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(baseOrientation);
-  if (!Number.isFinite(forward.lengthSq()) || forward.lengthSq() <= 1e-8) {
-    return null;
-  }
-  return forward.normalize();
+function characterForwardForRole() {
+  return characterForwardFromOrientation(getModelTransformState?.());
 }
 
 function resolveLimbMapping(role) {
@@ -324,7 +305,7 @@ function resolveLimbMapping(role) {
   }
   const detected = detectLimbPath({
     rig: modelSkinningRig, anchorJointId, role,
-    characterForward: characterForwardForRole(role),
+    characterForward: characterForwardForRole(),
   });
   const mapping = {
     ...detected,
@@ -370,7 +351,22 @@ function resolveLimbMapping(role) {
   mapping.available = path.length >= 3
     && path.includes(mapping.bendJointId)
     && mapping.bendJointId !== mapping.endJointId;
-  if (!mapping.available) mapping.reason = 'override_path_invalid';
+  if (!mapping.available) {
+    mapping.reason = 'override_path_invalid';
+    return mapping;
+  }
+  const directionEvidence = resolveLimbBendDirection({
+    rig: modelSkinningRig,
+    pathJointIds: path,
+    anchorJointId,
+    bendJointId: mapping.bendJointId,
+    endJointId: mapping.endJointId,
+    role,
+    characterForward: characterForwardForRole(),
+  });
+  mapping.bendDirection = directionEvidence.bendDirection?.toArray() || null;
+  mapping.bendDirectionSource = directionEvidence.bendDirectionSource;
+  mapping.bendDirectionStrength = directionEvidence.bendDirectionStrength;
   return mapping;
 }
 
@@ -2443,11 +2439,12 @@ export function setRigLimbAnchor(role, jointId = modelRigState.selectedJointId) 
     return false;
   }
   const previous = rigPresetState.limbMappings?.[nextRole] || {};
+  const sameAnchor = previous.anchor_signature === signature;
   const raw = {
     anchor_signature: signature,
-    ...(typeof previous.bend_override_signature === 'string'
+    ...(sameAnchor && typeof previous.bend_override_signature === 'string'
       ? {bend_override_signature: previous.bend_override_signature} : {}),
-    ...(typeof previous.end_override_signature === 'string'
+    ...(sameAnchor && typeof previous.end_override_signature === 'string'
       ? {end_override_signature: previous.end_override_signature} : {}),
     bend_sign: previous.bend_sign === -1 ? -1 : 1,
   };
@@ -2549,16 +2546,6 @@ export function handleRigJointPicked(jointId,
     : setRigLimbOverride(next.role, next.type, jointId);
   if (changed) cancelRigJointPicking();
   return changed;
-}
-
-export function redetectRigLimb(role = modelRigState.activeLimbRole) {
-  const nextRole = validLimbRole(role);
-  if (!nextRole) return false;
-  limbMappingMetadataRevision += 1;
-  resolvedLimbMappings = null;
-  notifyModelRigChanged();
-  requestRender();
-  return !!rigPresetState.limbMappings?.[nextRole];
 }
 
 export function clearRigLimbMapping(role = modelRigState.activeLimbRole) {

@@ -1180,7 +1180,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
               present: !!document.querySelector('.rig-panel-enable-ik'),
               disabled: document.querySelector('.rig-panel-enable-ik')?.disabled,
               limbSelectorPresent: !!document.querySelector('.rig-limb-select'),
-              setAnchorPresent: !!document.querySelector('.rig-set-limb-anchor'),
+              setAnchorAbsent: !document.querySelector('.rig-set-limb-anchor'),
+              redetectAbsent: !document.querySelector('.rig-redetect-limb'),
+              limbActionLabels: [...document.querySelectorAll(
+                '.rig-limb-actions button')].map(button => button.textContent),
               chainLengthAbsent: !document.querySelector('.rig-chain-length'),
                detectedPathPresent: !!document.querySelector('.rig-chain-preview'),
              },
@@ -1269,7 +1272,8 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["rigAdvancedSummary"] == "Rig Advanced Settings"
         assert result["ikControl"] == {
             "present": True, "disabled": True,
-            "limbSelectorPresent": True, "setAnchorPresent": True,
+            "limbSelectorPresent": True, "setAnchorAbsent": True,
+            "redetectAbsent": True, "limbActionLabels": ["Clear"],
             "chainLengthAbsent": True, "detectedPathPresent": True,
         }
         assert result["obsoleteReadoutsRemoved"]
