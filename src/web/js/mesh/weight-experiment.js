@@ -3181,8 +3181,8 @@ export function refreshSkinningAfterShapeChange(mesh) {
   const position = mesh?.geometry?.attributes?.position;
   clearPickedPoint();
   if (!state?.loaded || !position) return false;
-  const preservedRootSignatures = modelSkinningRig
-    ? new Set(modelRigState.explicitRootSignatures) : new Set();
+  const preservedRootSignatures = new Set(
+    modelRigState.explicitRootSignatures);
   const sourceKey = state.skinningSourceKey;
   // Capture the authoritative shaped geometry before physics detachment or
   // pose reset can restore the previous baseline onto this mesh.

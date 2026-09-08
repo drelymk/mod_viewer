@@ -2483,6 +2483,100 @@ def test_loaded_skinning_rebaselines_after_shape_change(
         context.close()
 
 
+def _multi_mesh_skinning_shape_payload():
+    payload = _payload("SkinningShapePair")
+    template = next(iter(payload["meshes"].values()))
+    second = copy.deepcopy(template)
+    second["component"] = "Body SkinningShapePair second"
+    payload["meshes"]["Body-SkinningShapePair-1"] = second
+    return payload
+
+
+def test_loaded_skinning_rebaselines_all_shape_target_meshes(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"SkinningShapePair": _multi_mesh_skinning_shape_payload()})
+    try:
+        _open(page, "SkinningShapePair")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
+        result = page.evaluate("""async () => {
+          const meshes = [...window.modViewer.activeMeshes];
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__testSkinningPreview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+              bone_id_offset: 0,
+            },
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+          const experiment = await import('./js/mesh/weight-experiment.js');
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
+          await experiment.ensureModelWeightsLoaded();
+          await experiment.ensureModelRigLoaded();
+          const rigState = experiment.getModelRigState();
+          const debug = experiment.getModelRigDebugState();
+          const component = rigState.model.components.find(item =>
+            item.nodeIds.some(id => id !== item.rootId));
+          const manualRootId = component?.nodeIds.find(id =>
+            id !== component.rootId);
+          const manualRoot = debug.joints.find(joint =>
+            joint.jointId === manualRootId);
+          const manualRootApplied = experiment.setRigJointRoot(manualRootId);
+          const before = meshes.map(mesh =>
+            [...mesh.geometry.attributes.position.array]);
+          setControlValue('shape', '1');
+          const refresh = refreshMeshes();
+          const after = meshes.map(mesh =>
+            [...mesh.geometry.attributes.position.array]);
+          const states = meshes.map(mesh =>
+            experiment.getSkinningState(mesh));
+          await experiment.ensureModelRigLoaded();
+          const rebuilt = experiment.getModelRigDebugState();
+          const rebuiltJoint = rebuilt.joints.find(joint =>
+            joint.signature === manualRoot?.signature);
+          const rebuiltComponent = rebuilt.components.find(item =>
+            item.nodeIds.includes(rebuiltJoint?.jointId));
+          const rootSurvived = rebuiltComponent?.rootId === rebuiltJoint?.jointId
+            && rebuilt.explicitRootSignatures.includes(manualRoot?.signature);
+          const result = {
+            meshCount: meshes.length,
+            changedMeshCount: refresh.changedMeshes.length,
+            bothLoaded: states.every(state => state.loaded),
+            bothChanged: after.every((positions, index) =>
+              JSON.stringify(positions) !== JSON.stringify(before[index])),
+            manualRootApplied,
+            rootSurvived,
+            explicitRootSignatures: rebuilt.explicitRootSignatures,
+            before, after,
+          };
+          experiment.destroyModelPhysicsSession();
+          URL.revokeObjectURL(url);
+          return result;
+        }""")
+        assert result["meshCount"] == 2
+        assert result["changedMeshCount"] == 2
+        assert result["bothLoaded"]
+        assert result["bothChanged"]
+        assert result["manualRootApplied"]
+        assert result["rootSurvived"], result
+        assert result["explicitRootSignatures"]
+        assert all(positions[3] == pytest.approx(1.2)
+                   and positions[7] == pytest.approx(1.2)
+                   for positions in result["after"])
+    finally:
+        context.close()
+
+
 @pytest.mark.parametrize("stale_failure", [False, True], ids=["success", "failure"])
 def test_stale_rig_load_cannot_publish_after_model_switch(
         edge_browser, frontend_url, stale_failure):
