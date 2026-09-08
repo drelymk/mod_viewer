@@ -744,7 +744,7 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   const role = ik.activeLimbRole || 'left_arm';
   const labels = LIMB_LABELS[role] || LIMB_LABELS.left_arm;
   const mapping = ik.mappings?.[role] || {};
-  const hasMapping = !!mapping.anchorJointId;
+  const hasMapping = Number.isInteger(mapping.anchorJointId);
   const hasLimb = !!mapping.available;
   const hasSelected = !!selected;
   ui.limbAnchor.previousElementSibling.textContent = labels[0];
@@ -772,12 +772,14 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   };
   pickButton(ui.limbAnchorPick, 'limb-anchor', true, 'Pick');
   pickButton(ui.limbBendPick, 'limb-bend-override', hasLimb, 'Override');
-  pickButton(ui.limbEndPick, 'limb-end-override', hasLimb, 'Override');
+  pickButton(ui.limbEndPick, 'limb-end-override', hasMapping, 'Override');
   ui.clearLimb.disabled = !state?.loaded || !hasMapping;
   ui.ik.checked = !!ik.enabled;
   ui.ik.disabled = !state?.loaded || !hasLimb;
   ui.flipBend.disabled = !state?.loaded || !hasLimb;
-  if (!hasMapping) ui.ikHint.textContent = `Select a joint, then define the ${labels[0]}.`;
+  if (!hasMapping) {
+    ui.ikHint.textContent = `Pick the ${labels[0]} joint to configure this limb.`;
+  }
   else if (!hasLimb) ui.ikHint.textContent = `IK unavailable: ${mapping.reason || 'limb path not detected'}.`;
   else ui.ikHint.textContent = `${mapping.confidence || 'medium'} confidence · drag the ${labels[2]} target.`;
   ui.clearJoint.disabled = !hasSelected;

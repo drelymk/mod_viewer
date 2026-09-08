@@ -1001,6 +1001,9 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const experiment = await import('./js/mesh/weight-experiment.js');
+          const initialIkHint = document.querySelector('.rig-panel-enable-ik')
+            ?.closest('.rig-advanced-group')?.querySelector('.rig-hint')
+            ?.textContent;
           const source = experiment.getModelRigDebugState().sources[0];
           const component = source.components[0];
           const presetSelect = document.querySelector('.rig-preset-select');
@@ -1186,6 +1189,7 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
                 '.rig-limb-actions button')].map(button => button.textContent),
               chainLengthAbsent: !document.querySelector('.rig-chain-length'),
                detectedPathPresent: !!document.querySelector('.rig-chain-preview'),
+                hint: initialIkHint,
              },
              removedOverlayUi,
              obsoleteReadoutsRemoved: !document.querySelector(
@@ -1275,6 +1279,7 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             "limbSelectorPresent": True, "setAnchorAbsent": True,
             "redetectAbsent": True, "limbActionLabels": ["Clear"],
             "chainLengthAbsent": True, "detectedPathPresent": True,
+            "hint": "Pick the Shoulder joint to configure this limb.",
         }
         assert result["obsoleteReadoutsRemoved"]
         assert result["removedOverlayUi"]

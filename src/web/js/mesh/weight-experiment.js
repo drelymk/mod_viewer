@@ -57,7 +57,8 @@ import {
 } from './weight-runtime.js';
 import {
   detectLimbPath, RIG_LIMB_ROLES, RIG_LIMB_ROLE_INFO,
-  characterForwardFromOrientation, resolveLimbBendDirection, solveLimbIk,
+  characterForwardFromOrientation, resolveLimbBendDirection,
+  selectLimbBendJoint, solveLimbIk,
 } from './weight-rig-ik.js';
 
 const weightRuntime = createWeightRuntimeState();
@@ -315,10 +316,9 @@ function resolveLimbMapping(role) {
     bendSource: 'auto',
     endSource: 'auto',
   };
-  if (!detected.available) return mapping;
-
   const component = modelComponentForJoint(anchorJointId);
   let path = [...detected.pathJointIds];
+  let endOverrideApplied = false;
   const endOverride = raw.end_override_signature;
   if (typeof endOverride === 'string' && endOverride.trim()) {
     if (lookup.ambiguousSignatures.has(endOverride)) {
@@ -327,25 +327,38 @@ function resolveLimbMapping(role) {
     const overrideId = lookup.resolvedBySignature.get(endOverride);
     const overridePath = Number.isInteger(overrideId)
       ? descendantPath(component, anchorJointId, overrideId) : [];
-    if (!overridePath.length) {
+    if (overridePath.length < 3) {
       return {...mapping, available: false, reason: 'end_override_not_descendant'};
     }
     path = overridePath;
     mapping.endJointId = overrideId;
     mapping.endSource = 'override';
+    mapping.bendJointId = selectLimbBendJoint(modelSkinningRig, path);
+    mapping.bendSource = 'auto';
+    endOverrideApplied = true;
+  } else if (!detected.available) {
+    return mapping;
   }
   const bendOverride = raw.bend_override_signature;
   if (typeof bendOverride === 'string' && bendOverride.trim()) {
     if (lookup.ambiguousSignatures.has(bendOverride)) {
-      return {...mapping, available: false, reason: 'bend_override_ambiguous'};
+      if (!endOverrideApplied) {
+        return {...mapping, available: false, reason: 'bend_override_ambiguous'};
+      }
+    } else {
+      const overrideId = lookup.resolvedBySignature.get(bendOverride);
+      const compatible = Number.isInteger(overrideId)
+        && path.includes(overrideId)
+        && overrideId !== anchorJointId
+        && overrideId !== mapping.endJointId;
+      if (!compatible && !endOverrideApplied) {
+        return {...mapping, available: false, reason: 'bend_override_invalid'};
+      }
+      if (compatible) {
+        mapping.bendJointId = overrideId;
+        mapping.bendSource = 'override';
+      }
     }
-    const overrideId = lookup.resolvedBySignature.get(bendOverride);
-    if (!Number.isInteger(overrideId) || !path.includes(overrideId)
-        || overrideId === anchorJointId || overrideId === mapping.endJointId) {
-      return {...mapping, available: false, reason: 'bend_override_invalid'};
-    }
-    mapping.bendJointId = overrideId;
-    mapping.bendSource = 'override';
   }
   mapping.pathJointIds = path;
   mapping.available = path.length >= 3
@@ -2473,18 +2486,21 @@ export function setRigLimbOverride(role, type, jointId) {
   const kind = String(type || '');
   const mapping = nextRole ? currentLimbMappingForRole(nextRole) : null;
   const joint = modelJointForId(jointId);
-  if (!nextRole || !mapping?.available || !joint || !modelSkinningRig) {
+  const isEndOverride = kind === 'limb-end-override';
+  const hasAnchor = Number.isInteger(mapping?.anchorJointId);
+  if (!nextRole || (!isEndOverride && !mapping?.available)
+      || (isEndOverride && !hasAnchor) || !joint || !modelSkinningRig) {
     modelRigState.pickStatus = 'The selected joint is not valid for this limb.';
     notifyModelRigChanged();
     return false;
   }
   const component = modelComponentForJoint(mapping.anchorJointId);
   let candidatePath = [];
-  if (kind === 'limb-end-override') {
+  if (isEndOverride) {
     candidatePath = descendantPath(component, mapping.anchorJointId, joint.jointId);
-    if (candidatePath.length < 3
-        || !candidatePath.includes(mapping.bendJointId)) {
-      modelRigState.pickStatus = 'The foot/hand must contain the detected bend.';
+    if (candidatePath.length < 3) {
+      modelRigState.pickStatus =
+        'The foot/hand must be a descendant with a usable limb path.';
       notifyModelRigChanged();
       return false;
     }
@@ -2516,6 +2532,18 @@ export function setRigLimbOverride(role, type, jointId) {
       ? {bend_override_signature: joint.signature}
       : {end_override_signature: joint.signature}),
   };
+  if (kind === 'limb-end-override'
+      && typeof previous.bend_override_signature === 'string') {
+    const lookup = buildJointSignatureIndex(modelSkinningRig);
+    const bendId = lookup.ambiguousSignatures.has(
+      previous.bend_override_signature)
+      ? null : lookup.resolvedBySignature.get(previous.bend_override_signature);
+    const compatible = Number.isInteger(bendId)
+      && candidatePath.includes(bendId)
+      && bendId !== mapping.anchorJointId
+      && bendId !== joint.jointId;
+    if (!compatible) delete updated.bend_override_signature;
+  }
   rigPresetState.limbMappings = {
     ...(rigPresetState.limbMappings || {}), [nextRole]: updated,
   };

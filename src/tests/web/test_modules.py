@@ -295,6 +295,47 @@ def test_compact_limb_detection_stops_at_terminal_branch(module_page):
     }
 
 
+def test_end_override_can_recover_a_different_descendant_branch(module_page):
+    result = module_page.evaluate("""async () => {
+      const ik = await import('./js/mesh/weight-rig-ik.js');
+      const component = {
+        rootId: 0, nodeIds: [0, 1, 2, 3, 4, 5, 6],
+        parentById: {0: null, 1: 0, 2: 1, 3: 2, 4: 3,
+          5: 1, 6: 5},
+        childrenById: {0: [1], 1: [2, 5], 2: [3], 3: [4],
+          4: [], 5: [6], 6: []},
+      };
+      const points = new Map([
+        [0, [-1, 0, 0]], [1, [0, 0, 0]], [2, [1, 0, 0]],
+        [3, [2, 0, 0]], [4, [3, 0, 0]], [5, [1, 0, 1]],
+        [6, [2, 0, 1]],
+      ]);
+      const rig = {
+        components: [component], componentByJointId: new Map(
+          component.nodeIds.map(id => [id, 0])),
+        jointPivotByJointId: points, centerByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [0, 1], [1, 2], [2, 3], [3, 4], [5, 6],
+        ]),
+        restFrameByJointId: new Map(),
+      };
+      const automatic = ik.detectLimbPath({
+        rig, anchorJointId: 1, role: 'left_arm',
+      });
+      const recoveredPath = [1, 5, 6];
+      return {
+        automaticPath: automatic.pathJointIds,
+        recoveredBend: ik.selectLimbBendJoint(rig, recoveredPath),
+        recoveredPath,
+      };
+    }""")
+    assert result == {
+        "automaticPath": [1, 2, 3, 4],
+        "recoveredPath": [1, 5, 6],
+        "recoveredBend": 5,
+    }
+
+
 def test_limb_bend_direction_uses_scale_relative_evidence_and_role_fallback(
         module_page):
     result = module_page.evaluate("""async () => {

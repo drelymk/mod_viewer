@@ -220,7 +220,7 @@ function confidenceFor(path, reason, branchHub) {
   return 'medium';
 }
 
-function bendCandidate(rig, pathJointIds) {
+export function selectLimbBendJoint(rig, pathJointIds = []) {
   if (pathJointIds.length < 3) return null;
   const distances = [0];
   for (let index = 1; index < pathJointIds.length; index += 1) {
@@ -257,7 +257,7 @@ function bendCandidate(rig, pathJointIds) {
 
 function detectionResult(role, anchorJointId, pathJointIds, reason,
     branchHub, rig, characterForward) {
-  const bendJointId = bendCandidate(rig, pathJointIds);
+  const bendJointId = selectLimbBendJoint(rig, pathJointIds);
   const endJointId = pathJointIds.at(-1) ?? null;
   const component = componentFor(rig, anchorJointId);
   const available = pathJointIds.length >= 3
