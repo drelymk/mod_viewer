@@ -183,7 +183,8 @@ function humanoidConfidenceColor(role, confidence, source) {
 }
 
 const CONTROL_KEYS_FOR_OVERLAY = Object.freeze([
-  {key: 'chest', role: 'torso'}, {key: 'pelvis', role: 'torso'},
+  {key: 'neck', role: 'torso'}, {key: 'chest', role: 'torso'},
+  {key: 'pelvis', role: 'torso'},
   {key: 'leftShoulder', role: 'left_arm'},
   {key: 'leftElbow', role: 'left_arm'}, {key: 'leftHand', role: 'left_arm'},
   {key: 'rightShoulder', role: 'right_arm'},
@@ -435,13 +436,17 @@ export function createRigOverlayController({
     const rigAvailable = rig?.available !== false
       && !(rig?.source === 'geometry' && rig.accepted === false);
     const controls = rigAvailable ? (rig?.controls || {}) : {};
-    const controlPoint = key => controls[key]?.position || controls[key] || null;
+    const controlPoint = key => controls[key]?.position || controls[key]
+      || rig?.diagnostics?.templatePoints?.[key] || null;
     const controlMeta = key => controls[key] || {};
     const roleConfidence = role => rig?.confidenceByRegion?.[role === 'left_arm'
       ? 'leftArm' : role === 'right_arm' ? 'rightArm'
         : role === 'left_leg' ? 'leftLeg' : role === 'right_leg' ? 'rightLeg' : 'torso']
       || rig?.confidence || 'low';
     const links = [
+      ['leftShoulder', 'neck', 'torso'],
+      ['neck', 'rightShoulder', 'torso'],
+      ['neck', 'chest', 'torso'],
       ['chest', 'pelvis', 'torso'],
       ['leftShoulder', 'leftElbow', 'left_arm'],
       ['leftElbow', 'leftHand', 'left_arm'],
@@ -469,19 +474,6 @@ export function createRigOverlayController({
       lineColors.push(...color, ...color);
       humanoidLinePairs.push([firstKey, secondKey]);
     });
-    Object.entries(rig?.paths || {}).forEach(([pathRole, path]) => {
-      const role = pathRole === 'torso' ? 'torso' : pathRole
-        .replace('Arm', '_arm').replace('Leg', '_leg');
-      const color = role === 'torso' ? [.65, .65, .65]
-        : humanoidConfidenceColor(role, roleConfidence(role), 'geometry');
-      for (let index = 1; index < (path || []).length; index += 1) {
-        const first = vector(path[index - 1]);
-        const second = vector(path[index]);
-        linePositions.push(...first.toArray(), ...second.toArray());
-        lineColors.push(...color, ...color);
-        humanoidLinePairs.push([`${pathRole}:${index - 1}`, `${pathRole}:${index}`]);
-      }
-    });
     CONTROL_KEYS_FOR_OVERLAY.forEach(({key, role}) => {
       const point = controlPoint(key);
       if (!point) return;
@@ -490,47 +482,6 @@ export function createRigOverlayController({
       pointColors.push(...(role === 'torso' ? [.95, .95, .95]
         : humanoidConfidenceColor(role, meta.confidence || roleConfidence(role), meta.source)));
       humanoidLandmarks.push({key, role});
-    });
-    const diagnostics = rig?.diagnostics?.templateDiagnostic || {};
-    const diagnosticPair = (first, second, color) => {
-      if (!first || !second) return;
-      diagnosticLinePositions.push(...first, ...second);
-      diagnosticLineColors.push(...color, ...color);
-      humanoidDiagnosticSegmentCount += 1;
-    };
-    diagnosticPair(...(diagnostics.headNeckSearchBand || []), [.75, .48, .95]);
-    diagnosticPair(...(diagnostics.shoulderHeightLine || []), [1, .58, .14]);
-    diagnosticPair(...(diagnostics.pelvisHeightLine || []), [.95, .34, .72]);
-    if (diagnostics.showSearchRegions) {
-      const drawPath = (path, color) => {
-        for (let index = 1; index < (path || []).length; index += 1) {
-          diagnosticPair(path[index - 1], path[index], color);
-        }
-      };
-      (diagnostics.searchRegions?.arms || []).forEach(region => {
-        drawPath(region.preferred, [.18, .84, 1]);
-        drawPath(region.safety, [.68, .38, .9]);
-      });
-      const hipRegions = diagnostics.searchRegions?.hips;
-      [hipRegions?.preferred, hipRegions?.preferredTop].forEach(path =>
-        diagnosticPair(...(path || []), [.18, .84, 1]));
-      [hipRegions?.safety, hipRegions?.safetyTop].forEach(path =>
-        diagnosticPair(...(path || []), [.68, .38, .9]));
-    }
-    ['left', 'right'].forEach(side => {
-      const arm = diagnostics.trackedArmSamples?.[side] || [];
-      const leg = diagnostics.trackedLegSamples?.[side] || [];
-      for (let index = 1; index < arm.length; index += 1) {
-        diagnosticPair(arm[index - 1], arm[index], [.95, .68, .22]);
-      }
-      for (let index = 1; index < leg.length; index += 1) {
-        diagnosticPair(leg[index - 1], leg[index], [.96, .32, .72]);
-      }
-    });
-    (diagnostics.hipCenters || []).forEach(point => {
-      if (!point) return;
-      diagnosticPointPositions.push(...point);
-      diagnosticPointColors.push(.96, .34, .72);
     });
     setGeometry(humanoidLines, linePositions, lineColors);
     setGeometry(humanoidPoints, pointPositions, pointColors);

@@ -386,10 +386,7 @@ function humanoidControlRigStatus(result) {
     const reason = result.diagnostics?.failureReasons?.[0] || 'unavailable';
     return `Humanoid control rig unavailable (${reason}).`;
   }
-  if (!result?.diagnostics?.failureReasons?.length) {
-    return `Humanoid control rig fitted (${result.confidence} confidence).`;
-  }
-  return `Humanoid control rig fitted with diagnostics (${result.confidence} confidence).`;
+  return 'Humanoid proportional rig fitted';
 }
 
 function setHumanoidStatus(message) {

@@ -1,6 +1,6 @@
 /* Legacy ModelJoint helpers used by manual limb mapping only.
- * Automatic anatomy fitting lives in humanoid-control-rig.js and must not
- * call the suggestion API below. */
+ * The proportional control-rig experiment must not call the suggestion API
+ * below. */
 
 import * as THREE from 'three';
 import {
