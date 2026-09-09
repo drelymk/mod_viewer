@@ -4332,6 +4332,122 @@ def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(module_p
     assert result["small"]["proportions"] == result["large"]["proportions"]
 
 
+def test_estimate_skeleton_depth_uses_slice_occupancy(module_page):
+    result = module_page.evaluate("""async () => {
+      const {estimateSkeletonDepth} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const torso = (back, front, frontCopies = 1) => {
+        const points = [];
+        for (let slice = 0; slice < 10; slice += 1) {
+          const y = .45 + (slice + .5) * .37 / 10;
+          for (const x of [-.12, 0, .12]) {
+            points.push({x, y, z: back});
+            for (let copy = 0; copy < frontCopies; copy += 1) {
+              points.push({x, y, z: front});
+            }
+          }
+        }
+        return points;
+      };
+      const centered = torso(-.10, .10);
+      const offset = torso(.05, .15);
+      const denseFront = torso(-.10, .10, 200);
+      const decorated = centered.concat(
+        Array.from({length: 400}, (_, index) => ({
+          x: index % 2 ? .40 : -.40,
+          y: .46 + (index % 10) * .035,
+          z: index % 2 ? .60 : -.60,
+        })));
+      const fallback = estimateSkeletonDepth([{x: 0, y: .6, z: .2}]);
+      return {
+        centered: estimateSkeletonDepth(centered),
+        offset: estimateSkeletonDepth(offset),
+        denseFront: estimateSkeletonDepth(denseFront),
+        decorated: estimateSkeletonDepth(decorated),
+        fallback,
+      };
+    }""")
+    assert result["centered"]["depthN"] == pytest.approx(0, abs=.011)
+    assert result["centered"]["support"] == 10
+    assert result["centered"]["spread"] == pytest.approx(0)
+    assert result["centered"]["fallbackUsed"] is False
+    assert result["offset"]["depthN"] == pytest.approx(.10, abs=.011)
+    assert result["denseFront"]["depthN"] == pytest.approx(
+        result["centered"]["depthN"], abs=.001)
+    assert result["decorated"]["depthN"] == pytest.approx(
+        result["centered"]["depthN"], abs=.001)
+    assert result["fallback"] == {
+        "depthN": 0, "support": 0, "sliceCenters": [],
+        "spread": 0, "fallbackUsed": True,
+    }
+
+
+def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const makeMesh = scale => {
+        const points = [];
+        for (let index = 0; index <= 20; index += 1) {
+          const y = .30 + index * .07;
+          for (const x of [-.12, 0, .12]) {
+            points.push(x, y, -.10, x, y, .10);
+          }
+        }
+        for (const side of [-1, 1]) {
+          for (const y of [0, .04]) {
+            points.push(side * .24, y, .06, side * .20, y, .06);
+          }
+        }
+        return {userData: {humanoidRestPositions: new Float32Array(
+          points.map(value => value * scale))}};
+      };
+      const build = scale => buildHumanoidControlRig({
+        meshes: [makeMesh(scale)],
+        axes: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]},
+      });
+      const rigs = {small: build(.1), normal: build(1), large: build(10)};
+      return Object.fromEntries(Object.entries(rigs).map(([name, rig]) => [name, {
+        characterHeight: rig.diagnostics.characterHeight,
+        bodyDepth: rig.diagnostics.bodyDepth,
+        controls: rig.controls,
+        detectedFeet: rig.diagnostics.detectedFeet,
+        skeletonDepth: rig.diagnostics.skeletonDepth,
+        controlDepthN: rig.diagnostics.controlDepthN,
+      }]));
+    }""")
+    for name, rig in result.items():
+        assert rig["skeletonDepth"]["fallbackUsed"] is False
+        assert rig["skeletonDepth"]["support"] >= 3
+        assert rig["bodyDepth"] == pytest.approx(0, abs=.011)
+        assert rig["skeletonDepth"]["spread"] == pytest.approx(0)
+        assert rig["detectedFeet"]["left"][2] == pytest.approx(
+            .06 * rig["characterHeight"] / 1.7, abs=1e-6)
+        assert rig["detectedFeet"]["right"][2] == pytest.approx(
+            .06 * rig["characterHeight"] / 1.7, abs=1e-6)
+        assert rig["controls"]["leftFoot"]["position"][0] == pytest.approx(
+            rig["detectedFeet"]["left"][0], abs=1e-6)
+        assert rig["controls"]["rightFoot"]["position"][0] == pytest.approx(
+            rig["detectedFeet"]["right"][0], abs=1e-6)
+        assert rig["controls"]["leftFoot"]["position"][1] == pytest.approx(
+            rig["detectedFeet"]["left"][1] + .015 * rig["characterHeight"], abs=1e-6)
+        assert rig["controls"]["rightFoot"]["position"][1] == pytest.approx(
+            rig["detectedFeet"]["right"][1] + .015 * rig["characterHeight"], abs=1e-6)
+        assert rig["controls"]["leftFoot"]["position"][2] == pytest.approx(
+            rig["bodyDepth"], abs=.011)
+        assert rig["controls"]["rightFoot"]["position"][2] == pytest.approx(
+            rig["bodyDepth"], abs=.011)
+        assert all(depth == pytest.approx(rig["skeletonDepth"]["depthN"], abs=1e-6)
+                   for depth in rig["controlDepthN"].values())
+        assert all(control["semantic"]["depthN"] == pytest.approx(
+            rig["skeletonDepth"]["depthN"], abs=1e-6)
+                   for control in rig["controls"].values())
+    assert result["small"]["skeletonDepth"] == pytest.approx(
+        result["normal"]["skeletonDepth"], abs=.001)
+    assert result["normal"]["skeletonDepth"] == pytest.approx(
+        result["large"]["skeletonDepth"], abs=.001)
+
+
 def test_geometry_humanoid_control_rig_respects_source_orientation_and_readiness(
         module_page):
     result = module_page.evaluate("""async () => {

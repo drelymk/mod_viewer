@@ -1,8 +1,9 @@
 // Geometry-assisted inputs plus a deterministic proportional humanoid rig.
 //
-// Geometry is used only to establish orientation, model height, and the two
-// Foot anchors. Every other control is constructed by the proportional
-// template; no mesh point is consulted after those inputs are established.
+// Geometry is used only for orientation, model height, Foot side/height
+// anchors, and one central character depth plane. All anatomical proportions
+// remain deterministic; no mesh point is consulted after those inputs are
+// established.
 
 import {
   DEFAULT_HUMANOID_PROPORTIONS,
@@ -12,6 +13,12 @@ import {
 
 const EPSILON = 1e-8;
 const DEFAULT_MAX_POINT_COUNT = 160000;
+const SKELETON_DEPTH_MIN_HEIGHT = 0.45;
+const SKELETON_DEPTH_MAX_HEIGHT = 0.82;
+const SKELETON_DEPTH_SIDE_LIMIT = 0.15;
+const SKELETON_DEPTH_SLICE_COUNT = 10;
+const SKELETON_DEPTH_BIN_SIZE = 0.01;
+const SKELETON_DEPTH_MIN_SLICES = 3;
 const CONTROL_KEYS = Object.freeze([
   'chest', 'pelvis',
   'leftShoulder', 'leftElbow', 'leftHand',
@@ -182,8 +189,8 @@ function normalizedPoint(item, bounds) {
   };
 }
 
-// This is the only remaining anatomical geometry lookup. It supplies the
-// starting Foot anchors; all other controls are produced by the template.
+// This is the Foot geometry lookup. It supplies only side/height anchors;
+// Foot depth is replaced by the central skeleton plane below.
 function fitFoot(points, side) {
   const lower = points.filter(item => item.y <= 0.1 && side * item.x > 0.025);
   if (!lower.length) return null;
@@ -194,6 +201,56 @@ function fitFoot(points, side) {
     y: median(stable.map(item => item.y)),
     z: median(stable.map(item => item.z)),
     support: stable.length,
+  };
+}
+
+function fallbackSkeletonDepth(sliceCenters = []) {
+  return {
+    depthN: 0,
+    support: sliceCenters.length,
+    sliceCenters: [...sliceCenters],
+    spread: sliceCenters.length > 1
+      ? quantile(sliceCenters, 0.75) - quantile(sliceCenters, 0.25) : 0,
+    fallbackUsed: true,
+  };
+}
+
+/** Estimate one occupancy-based central torso depth plane in normalized space. */
+export function estimateSkeletonDepth(points = []) {
+  const heightSpan = SKELETON_DEPTH_MAX_HEIGHT - SKELETON_DEPTH_MIN_HEIGHT;
+  const slices = Array.from({length: SKELETON_DEPTH_SLICE_COUNT}, () => new Set());
+  for (const point of points || []) {
+    const x = Number(point?.x);
+    const y = Number(point?.y);
+    const z = Number(point?.z);
+    if (![x, y, z].every(Number.isFinite)
+        || Math.abs(x) > SKELETON_DEPTH_SIDE_LIMIT
+        || y < SKELETON_DEPTH_MIN_HEIGHT || y > SKELETON_DEPTH_MAX_HEIGHT) continue;
+    const fraction = (y - SKELETON_DEPTH_MIN_HEIGHT) / heightSpan;
+    const slice = clamp(Math.floor(fraction * SKELETON_DEPTH_SLICE_COUNT),
+      0, SKELETON_DEPTH_SLICE_COUNT - 1);
+    slices[slice].add(Math.round(z / SKELETON_DEPTH_BIN_SIZE));
+  }
+
+  const sliceCenters = [];
+  slices.forEach(occupiedBins => {
+    if (occupiedBins.size < 2) return;
+    const occupiedDepths = [...occupiedBins]
+      .sort((left, right) => left - right)
+      .map(bin => bin * SKELETON_DEPTH_BIN_SIZE);
+    const low = quantile(occupiedDepths, 0.10);
+    const high = quantile(occupiedDepths, 0.90);
+    sliceCenters.push((low + high) * 0.5);
+  });
+  if (sliceCenters.length < SKELETON_DEPTH_MIN_SLICES) {
+    return fallbackSkeletonDepth(sliceCenters);
+  }
+  return {
+    depthN: median(sliceCenters),
+    support: sliceCenters.length,
+    sliceCenters,
+    spread: quantile(sliceCenters, 0.75) - quantile(sliceCenters, 0.25),
+    fallbackUsed: false,
   };
 }
 
@@ -281,7 +338,8 @@ function buildControl(template, key, bounds, frame, supports) {
   };
 }
 
-function proportionalDiagnostics(template, bounds, frame, supports, base) {
+function proportionalDiagnostics(template, bounds, frame, supports, base,
+    detectedFeet, skeletonDepth) {
   const p = template.proportions;
   return {
     ...base,
@@ -297,9 +355,19 @@ function proportionalDiagnostics(template, bounds, frame, supports, base) {
       right: finiteNumber(supports.rightFoot, 0),
     },
     detectedFeet: {
-      left: vector3(template.detectedLeftFoot || template.leftFoot),
-      right: vector3(template.detectedRightFoot || template.rightFoot),
+      left: vector3(detectedFeet?.left || template.detectedLeftFoot || template.leftFoot),
+      right: vector3(detectedFeet?.right || template.detectedRightFoot || template.rightFoot),
     },
+    skeletonDepth: {
+      depthN: finiteNumber(skeletonDepth?.depthN),
+      support: finiteNumber(skeletonDepth?.support),
+      sliceCenters: Array.isArray(skeletonDepth?.sliceCenters)
+        ? [...skeletonDepth.sliceCenters] : [],
+      spread: finiteNumber(skeletonDepth?.spread),
+      fallbackUsed: skeletonDepth?.fallbackUsed === true,
+    },
+    controlDepthN: Object.fromEntries(CONTROL_KEYS.map(key => [key,
+      worldToSemantic(template[key], bounds, frame).depthN])),
     templatePoints: {neck: vector3(template.neck)},
     proportionalTemplate: {
       characterHeight: template.characterHeight,
@@ -322,7 +390,7 @@ function proportionalDiagnostics(template, bounds, frame, supports, base) {
   };
 }
 
-/** Fit a deterministic proportional scaffold anchored by the detected Feet. */
+/** Fit a deterministic proportional scaffold on the detected Foot plane. */
 export function buildHumanoidControlRig({meshes = [], axes, orientationState, options = {}} = {}) {
   const started = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
   const frame = semanticAxesFrame(axes);
@@ -336,6 +404,7 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
     pointCount: 0,
     sampledPointCount: 0,
     voxelCount: 0,
+    skeletonDepth: fallbackSkeletonDepth(),
   };
   if (orientationState && !orientationReady) {
     return emptyRig(frame, {...baseDiagnostics, fitRuntimeMs: 0},
@@ -364,9 +433,13 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
       fitRuntimeMs: 0}, 'feet_not_found', false);
   }
 
+  const skeletonDepth = estimateSkeletonDepth(normalized);
+  const detectedLeftFoot = pointToWorld(leftFootN, bounds, frame);
+  const detectedRightFoot = pointToWorld(rightFootN, bounds, frame);
   // From this point onward the mesh is intentionally out of the pipeline.
-  const leftFoot = pointToWorld(leftFootN, bounds, frame);
-  const rightFoot = pointToWorld(rightFootN, bounds, frame);
+  // Preserve Foot side/height while placing both Feet on the central plane.
+  const leftFoot = pointToWorld({...leftFootN, z: skeletonDepth.depthN}, bounds, frame);
+  const rightFoot = pointToWorld({...rightFootN, z: skeletonDepth.depthN}, bounds, frame);
   const template = buildProportionalHumanoidRig({
     characterHeight: bounds.height,
     leftFoot,
@@ -391,13 +464,14 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
   };
   const runtime = (typeof performance !== 'undefined' && performance.now
     ? performance.now() : Date.now()) - started;
+  const bodyDepth = bounds.depthCenter + skeletonDepth.depthN * bounds.height;
   const diagnostics = proportionalDiagnostics(template, bounds, frame, supports, {
     ...baseDiagnostics,
     characterHeight: bounds.height,
-    bodyDepth: bounds.depthCenter,
-    bodyDepthN: 0,
+    bodyDepth,
+    bodyDepthN: skeletonDepth.depthN,
     fitRuntimeMs: Math.max(0, runtime),
-  });
+  }, {left: detectedLeftFoot, right: detectedRightFoot}, skeletonDepth);
   return serializeHumanoidControlRig({
     version: 1,
     source: 'proportional_template',
@@ -413,7 +487,7 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
       up: [...frame.up], right: [...frame.right], forward: [...frame.forward],
       lowHeight: bounds.lowHeight, highHeight: bounds.highHeight, height: bounds.height,
       sideCenter: bounds.sideCenter, depthCenter: bounds.depthCenter,
-      bodyDepth: bounds.depthCenter, bodyDepthN: 0,
+      bodyDepth, bodyDepthN: skeletonDepth.depthN,
     },
     template: {...template.proportions, characterHeight: template.characterHeight},
     controls,

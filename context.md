@@ -327,18 +327,14 @@ of documentation, comments and tests; use portable fixtures instead.
   the registered meshes' post-shape, pre-pose rest positions. It does not read
   ModelJoint pivots, topology, inferred forests, IK, or Physics, and it never
   writes limb mappings back through the manual resolver. Asset-fill meshes are
-  excluded. The fitter normalizes semantic up/right/forward coordinates by
-  model height, voxelizes before evidence scoring, estimates central depth,
-  fits multiple depth slabs, selects the primary connected front silhouette,
-  thins it deterministically, and reports skeleton/path/control diagnostics.
-  It always keeps a best fit, including low-confidence fits, with bilateral
-  spread and multi-slab consensus confidence. Controls are Chest, Pelvis,
-  Shoulder/Elbow/Hand, and Hip/Knee/Foot on both sides; Knee and Elbow are
-  virtual half-arc-length controls. Its cache is keyed by model generation and
-  geometry/shape revision, not ModelJoint structure revision, so pose, Physics,
-  and viewer turns cannot refit or move the virtual rig. The overlay renders
-  only these semantic controls and medial paths; a later phase may explicitly
-  bind them to authored bones.
+  excluded. It normalizes semantic up/right/forward coordinates by model
+  height, keeps Foot side/height anchors, and estimates one occupancy-based
+  central torso depth plane from height slices rather than using Foot depth.
+  Both Feet and every proportional control share that plane. Controls are
+  Chest, Pelvis, Shoulder/Elbow/Hand, and Hip/Knee/Foot on both sides; Knee
+  and Elbow are virtual midpoint controls. Diagnostics retain the detected
+  Foot positions and central-depth support/spread. A later phase may explicitly
+  bind these semantic controls to authored bones.
 - Joint selection is independent from pose state: Clear removes the selected
   ModelJoint through the state API, leaving
   manual pose, presets, Weight selection, Physics and overlay visibility
