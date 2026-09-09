@@ -4246,6 +4246,16 @@ def test_geometry_humanoid_control_rig_is_rest_owned_and_density_invariant(modul
         assert len(rig["diagnostics"]["slabFits"]) == 3
     assert result["first"]["controls"]["leftHand"]["position"][0] < \
         result["first"]["controls"]["leftShoulder"]["position"][0]
+    assert result["first"]["controls"]["leftHand"]["position"] == pytest.approx(
+        [-.92, 1.20, 0], abs=.08)
+    assert result["first"]["controls"]["rightHand"]["position"] == pytest.approx(
+        [.92, 1.20, 0], abs=.08)
+    assert result["first"]["controls"]["leftFoot"]["position"] == pytest.approx(
+        [-.24, .02, 0], abs=.08)
+    assert result["first"]["controls"]["rightFoot"]["position"] == pytest.approx(
+        [.24, .02, 0], abs=.08)
+    assert result["first"]["diagnostics"]["limbCompletion"]["arms"]["left"]
+    assert result["first"]["diagnostics"]["limbCompletion"]["legs"]["left"]
     assert result["first"]["controls"]["leftFoot"]["position"][1] < \
         result["first"]["controls"]["leftHip"]["position"][1]
     assert result["dense"]["controls"]["leftHand"]["position"] == pytest.approx(
@@ -4440,8 +4450,88 @@ def test_geometry_humanoid_control_rig_fits_arm_angles(module_page, arm_drop):
         axes: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]},
       });
     }""", arm_drop)
-    assert result["diagnostics"]["failureReasons"] == []
+    assert result["diagnostics"]["failureReasons"] == [], repr(
+        result["diagnostics"]["limbCompletion"])
     assert result["controls"]["leftHand"]["position"][0] < \
         result["controls"]["leftShoulder"]["position"][0]
     assert result["controls"]["rightHand"]["position"][0] > \
         result["controls"]["rightShoulder"]["position"][0]
+
+
+@pytest.mark.parametrize("case", [
+    {"name": "short-arm", "hand": .41, "elbow": .30},
+    {"name": "boundary-0.27H", "hand": .45, "elbow": .31},
+    {"name": "preferred-arm", "hand": .48, "elbow": .34},
+    {"name": "boundary-0.42H", "hand": .60, "elbow": .43},
+    {"name": "long-preferred-edge", "hand": .66, "elbow": .48},
+    {"name": "overlong-decoy", "hand": .48, "elbow": .34, "decoy": True},
+    {"name": "premature-bridge", "hand": .48, "elbow": .34,
+     "centralBridge": True},
+    {"name": "wide-skirt", "hand": .48, "elbow": .34, "skirt": True},
+], ids=lambda case: case["name"])
+def test_geometry_humanoid_control_rig_uses_bounded_limb_candidates(module_page, case):
+    result = module_page.evaluate("""async config => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const points = [];
+      const addBox = (minX, maxX, minY, maxY, step = .04) => {
+        for (let y = minY; y <= maxY + .001; y += step) {
+          for (let x = minX; x <= maxX + .001; x += step) {
+            points.push(x, y, -.06, x, y, .06);
+          }
+        }
+      };
+      const addLimb = (a, b, radius = .035) => {
+        for (let t = 0; t <= 1.001; t += .035) {
+          const x = a[0] + (b[0] - a[0]) * t;
+          const y = a[1] + (b[1] - a[1]) * t;
+          points.push(x - radius, y, -.04, x + radius, y, .04,
+            x, y - radius, -.04, x, y + radius, .04);
+        }
+      };
+      addBox(-.18, .18, .38, 1.0);
+      for (const side of [-1, 1]) {
+        addLimb([side * .18, .82], [side * config.elbow, .75]);
+        addLimb([side * config.elbow, .75], [side * config.hand, .68]);
+        addLimb([side * .13, .54], [side * .16, .28], .04);
+        addLimb([side * .16, .28], [side * .18, .02], .04);
+      }
+      if (config.centralBridge) addBox(-.08, .08, .28, .40, .05);
+      if (config.skirt) addBox(-.38, .38, .44, .64, .05);
+      if (config.decoy) for (const side of [-1, 1]) {
+        addLimb([side * .64, .75], [side * .82, .73], .02);
+      }
+      const rig = buildHumanoidControlRig({
+        meshes: [{userData: {humanoidRestPositions: new Float32Array(points)}}],
+        axes: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]},
+        options: {debugSearchRegions: true},
+      });
+      return {
+        controls: Object.fromEntries(['leftShoulder', 'rightShoulder', 'leftHand',
+          'rightHand', 'leftHip', 'rightHip', 'leftFoot', 'rightFoot']
+          .map(key => [key, rig.controls[key].position])),
+        template: rig.template,
+        diagnostics: rig.diagnostics,
+      };
+    }""", case)
+    assert result["diagnostics"]["failureReasons"] == []
+    assert result["controls"]["leftHand"][0] < -.35
+    assert result["controls"]["rightHand"][0] > .35
+    assert result["controls"]["leftHand"][0] == pytest.approx(
+        -case["hand"], abs=.10)
+    assert result["controls"]["rightHand"][0] == pytest.approx(
+        case["hand"], abs=.10)
+    assert result["controls"]["leftFoot"] == pytest.approx(
+        [-.18, .02, 0], abs=.08)
+    assert result["controls"]["rightFoot"] == pytest.approx(
+        [.18, .02, 0], abs=.08)
+    assert .20 <= result["diagnostics"]["limbCompletion"]["arms"]["left"]["lengthN"] <= .52
+    assert .20 <= result["diagnostics"]["limbCompletion"]["arms"]["right"]["lengthN"] <= .52
+    assert .38 <= result["diagnostics"]["limbCompletion"]["legs"]["left"]["lengthN"] <= .67
+    assert .38 <= result["diagnostics"]["limbCompletion"]["legs"]["right"]["lengthN"] <= .67
+    assert result["diagnostics"]["templateDiagnostic"]["showSearchRegions"]
+    assert result["diagnostics"]["templateDiagnostic"]["searchRegions"]["arms"]
+    assert result["diagnostics"]["templateDiagnostic"]["searchRegions"]["hips"]
+    for side in ("left", "right"):
+        assert result["diagnostics"]["limbCompletion"]["arms"][side]
+        assert result["diagnostics"]["limbCompletion"]["legs"][side]

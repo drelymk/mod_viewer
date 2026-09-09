@@ -501,6 +501,22 @@ export function createRigOverlayController({
     diagnosticPair(...(diagnostics.headNeckSearchBand || []), [.75, .48, .95]);
     diagnosticPair(...(diagnostics.shoulderHeightLine || []), [1, .58, .14]);
     diagnosticPair(...(diagnostics.pelvisHeightLine || []), [.95, .34, .72]);
+    if (diagnostics.showSearchRegions) {
+      const drawPath = (path, color) => {
+        for (let index = 1; index < (path || []).length; index += 1) {
+          diagnosticPair(path[index - 1], path[index], color);
+        }
+      };
+      (diagnostics.searchRegions?.arms || []).forEach(region => {
+        drawPath(region.preferred, [.18, .84, 1]);
+        drawPath(region.safety, [.68, .38, .9]);
+      });
+      const hipRegions = diagnostics.searchRegions?.hips;
+      [hipRegions?.preferred, hipRegions?.preferredTop].forEach(path =>
+        diagnosticPair(...(path || []), [.18, .84, 1]));
+      [hipRegions?.safety, hipRegions?.safetyTop].forEach(path =>
+        diagnosticPair(...(path || []), [.68, .38, .9]));
+    }
     ['left', 'right'].forEach(side => {
       const arm = diagnostics.trackedArmSamples?.[side] || [];
       const leg = diagnostics.trackedLegSamples?.[side] || [];
