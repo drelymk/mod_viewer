@@ -64,7 +64,7 @@ import {
 } from './weight-rig-ik.js';
 import {
   buildHumanoidSemanticFrame, resolveHumanoidLimbMapping,
-  suggestHumanoidLimbMappings,
+  selectHumanoidKneeJoint, suggestHumanoidLimbMappings,
 } from './weight-rig-humanoid.js';
 
 const weightRuntime = createWeightRuntimeState();
@@ -456,8 +456,21 @@ function resolveLimbMapping(role) {
     }
     path = overridePath;
     mapping.endJointId = overrideId;
+    if (role.endsWith('_leg')) mapping.footJointId = overrideId;
     mapping.endSource = 'override';
-    mapping.bendJointId = selectLimbBendJoint(modelSkinningRig, path);
+    const semanticBendJointId = role.endsWith('_leg')
+      ? selectHumanoidKneeJoint({
+        rig: modelSkinningRig, role, pathJointIds: path,
+        characterForward: characterForwardForRole(),
+        axes: humanoidSemanticAxes(),
+        semanticFrame: humanoidSemanticFrame(),
+      })
+      : selectLimbBendJoint(modelSkinningRig, path);
+    if (!Number.isInteger(semanticBendJointId)) {
+      return {...mapping, available: false, reason: 'manual_topology_mismatch'};
+    }
+    mapping.bendJointId = semanticBendJointId;
+    if (role.endsWith('_leg')) mapping.kneeJointId = semanticBendJointId;
     mapping.bendSource = 'auto';
     endOverrideApplied = true;
   } else if (!detected.available) {
@@ -480,6 +493,7 @@ function resolveLimbMapping(role) {
       }
       if (compatible) {
         mapping.bendJointId = overrideId;
+        if (role.endsWith('_leg')) mapping.kneeJointId = overrideId;
         mapping.bendSource = 'override';
       }
     }

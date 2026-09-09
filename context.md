@@ -321,10 +321,13 @@ of documentation, comments and tests; use portable fixtures instead.
   contract. The humanoid detector is position-first: pivot samples are
   authoritative, influence centers remain evidence, one model-wide semantic
   frame supplies normalized height/side/absolute depth, and virtual Chest and
-  Pelvis scaffolds guide bounded landmark pools. Legs are fitted before arms;
-  full endpoint paths, bilateral triples and bounded whole-body alternatives
-  are scored by separate landmark, topology, path-geometry, support and body
-  relation evidence. Primary humanoid selection never persists or classifies
+  Pelvis scaffolds guide bounded landmark pools. Legs are fitted before arms
+  through Foot-first pools and explicit Hip/Knee/Foot triples: Knee uses pivot
+  geometry on the primary endpoint path, while a minimum bottom-reaching
+  vertical-quality gate runs before bilateral pairing. Full endpoint paths,
+  bilateral triples and bounded whole-body alternatives are scored by separate
+  landmark, topology, path-geometry, support and body relation evidence.
+  Primary humanoid selection never persists or classifies
   wings, ribbons, hair or other accessory categories. Semantic debug geometry
   is a separate S/E/H and H/K/F overlay; it is not part of the generic Rig,
   deformation, Physics or persisted schema contracts. Semantic up/forward/right

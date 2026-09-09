@@ -227,7 +227,7 @@ def test_rig_limb_detection_and_two_control_solver(module_page):
     assert result["unreachable"]["reached"] is False
 
 
-def test_humanoid_limb_suggestions_are_bilateral_and_ignore_wings(module_page):
+def test_humanoid_limb_suggestions_keep_primary_backbone_over_secondary_appendage(module_page):
     result = module_page.evaluate("""async () => {
       const humanoid = await import('./js/mesh/weight-rig-humanoid.js');
       const points = new Map([
@@ -277,7 +277,7 @@ def test_humanoid_limb_suggestions_are_bilateral_and_ignore_wings(module_page):
       return {roles: result.roles, scaledRoles: scaled.roles,
         pivotSample: {point: pivotSample.point.toArray(),
           influenceCenter: pivotSample.influenceCenter.toArray()},
-        rejectedWings: result.debug.rejected
+        rejectedSecondary: result.debug.rejected
         .filter(item => item.anchorJointId === 13).map(item => item.reason)};
     }""")
     roles = result["roles"]
@@ -337,19 +337,19 @@ def test_humanoid_detector_collapses_dense_helper_joint_families(module_page):
         centerByJointId: centers, jointPivotByJointId: points,
         restContinuationChildByJointId: continuation,
       };
-      const withoutWings = {...rig,
+      const withoutSecondary = {...rig,
         joints: rig.joints.filter(joint => joint.jointId < 21)};
       const detected = suggestHumanoidLimbMappings({
-        rig: withoutWings, characterForward: [0, 0, 1], debug: true,
+        rig: withoutSecondary, characterForward: [0, 0, 1], debug: true,
       });
-      const withWings = suggestHumanoidLimbMappings({
+      const withSecondary = suggestHumanoidLimbMappings({
         rig, characterForward: [0, 0, 1], debug: true,
       });
       return {
         roles: detected.roles,
-        wingRoles: withWings.roles,
-        families: withWings.debug.families,
-        pairs: withWings.debug.pairs.arms,
+        secondaryRoles: withSecondary.roles,
+        families: withSecondary.debug.families,
+        pairs: withSecondary.debug.pairs.arms,
         top: detected.debug.topCandidatesByRole.left_arm,
       };
     }""")
@@ -364,10 +364,10 @@ def test_humanoid_detector_collapses_dense_helper_joint_families(module_page):
     assert len(arm_family["alternatives"]) >= 3
     assert arm_family["representative"]["anchorJointId"] == 1
     assert result["top"][0]["forwardOffset"] <= .3
-    assert result["wingRoles"]["left_arm"]["available"]
-    assert result["wingRoles"]["right_arm"]["available"]
-    assert result["wingRoles"]["left_arm"]["anchorJointId"] == 1
-    assert result["wingRoles"]["right_arm"]["anchorJointId"] == 8
+    assert result["secondaryRoles"]["left_arm"]["available"]
+    assert result["secondaryRoles"]["right_arm"]["available"]
+    assert result["secondaryRoles"]["left_arm"]["anchorJointId"] == 1
+    assert result["secondaryRoles"]["right_arm"]["anchorJointId"] == 8
     assert result["pairs"]["best"]["left"]["anchorJointId"] == 1
     assert result["pairs"]["best"]["right"]["anchorJointId"] == 8
     assert result["pairs"]["runnerUp"]["leftAnchorJointId"] == 21
@@ -375,7 +375,7 @@ def test_humanoid_detector_collapses_dense_helper_joint_families(module_page):
     assert result["pairs"]["margin"] > .065
 
 
-def test_shared_limb_resolver_handles_wrong_hints_narrow_anchors_and_wings(module_page):
+def test_shared_limb_resolver_handles_wrong_hints_narrow_anchors_and_secondary_branches(module_page):
     result = module_page.evaluate("""async () => {
       const {resolveLimbPathCandidates} = await import('./js/mesh/weight-rig-ik.js');
       const {suggestHumanoidLimbMappings} = await import(
@@ -518,9 +518,127 @@ def test_humanoid_suggestions_report_missing_and_ambiguous_pairs(module_page):
     }""")
     assert result["complete"]["left_arm"]["available"]
     assert result["complete"]["right_arm"]["available"]
+    assert not result["missing"]["left_arm"]["available"]
+    assert not result["missing"]["right_arm"]["available"]
+    assert result["missing"]["left_arm"]["reasons"][0] == "no_bilateral_pair"
     assert result["missing"]["right_arm"]["reasons"][0] == "no_bilateral_pair"
     assert result["ambiguous"]["left_arm"]["reasons"][0] == "ambiguous_pair"
     assert result["ambiguous"]["right_arm"]["reasons"][0] == "ambiguous_pair"
+
+
+def test_humanoid_leg_fitter_prefers_complete_foot_reaching_paths(module_page):
+    result = module_page.evaluate("""async () => {
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.45, .8, 0]], [2, [-.48, .3, 0]], [3, [-.5, -.1, 0]],
+        [4, [-.52, -.5, 0]],
+        [5, [.45, .8, 0]], [6, [.48, .3, 0]], [7, [.5, -.1, 0]],
+        [8, [.52, -.5, 0]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 3,
+        5: 0, 6: 5, 7: 6, 8: 7};
+      const childrenById = Object.fromEntries(Object.keys(parentById)
+        .map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const component = {rootId: 0, nodeIds: [...points.keys()],
+        parentById, childrenById};
+      const rig = {
+        joints: [...points.keys()].map(jointId => ({jointId,
+          restPivot: points.get(jointId)})),
+        components: [component],
+        componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+        centerByJointId: points, jointPivotByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8],
+        ]),
+      };
+      const detection = suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      const candidates = detection.debug.candidates.filter(candidate =>
+        candidate.role === 'left_leg' && candidate.anchorJointId === 1);
+      const short = candidates.find(candidate => candidate.endJointId === 3);
+      const complete = candidates.find(candidate => candidate.endJointId === 4);
+      return {short, complete, selected: detection.roles.left_leg};
+    }""")
+    assert result["short"]["pathJointIds"] == [1, 2, 3]
+    assert result["complete"]["pathJointIds"] == [1, 2, 3, 4]
+    assert result["complete"]["score"] > result["short"]["score"]
+    assert result["complete"]["pathMetrics"]["insideCorridorFraction"] > .9
+    assert result["complete"]["footJointId"] == 4
+    assert result["complete"]["kneeJointId"] in (2, 3)
+
+
+def test_humanoid_legs_reject_symmetric_central_stomach_decoys(module_page):
+    result = module_page.evaluate("""async () => {
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1.8, 0]],
+        [100, [-.02, 1.45, 0]], [101, [-.05, 1.1, 0]],
+        [1, [-.55, .8, 0]], [2, [-.58, .15, 0]], [3, [-.6, -.5, 0]],
+        [200, [.02, 1.45, 0]], [201, [.05, 1.1, 0]],
+        [4, [.55, .8, 0]], [5, [.58, .15, 0]], [6, [.6, -.5, 0]],
+        [10, [-.1, .75, 0]], [11, [-.12, .05, 0]],
+        [12, [.1, .75, 0]], [13, [.12, .05, 0]],
+      ]);
+      const parentById = {0: null, 100: 0, 101: 100, 1: 101, 2: 1, 3: 2,
+        200: 0, 201: 200, 4: 201, 5: 4, 6: 5,
+        10: 0, 11: 10, 12: 0, 13: 12};
+      const childrenById = Object.fromEntries(Object.keys(parentById)
+        .map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const component = {rootId: 0, nodeIds: [...points.keys()],
+        parentById, childrenById};
+      const rig = {
+        joints: [...points.keys()].map(jointId => ({jointId,
+          restPivot: points.get(jointId),
+          evidence: [10, 11, 12, 13].includes(jointId)
+            ? {affectedVertexCount: 500} : {affectedVertexCount: 2}})),
+        components: [component],
+        componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+        centerByJointId: points, jointPivotByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [100, 101], [101, 1], [1, 2], [2, 3],
+          [200, 201], [201, 4], [4, 5], [5, 6], [10, 11], [12, 13],
+        ]),
+      };
+      const detection = suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      const leftAncestry = detection.debug.candidates.find(candidate =>
+        candidate.role === 'left_leg' && candidate.anchorJointId === 1);
+      return {
+        legs: {
+          left: detection.roles.left_leg,
+          right: detection.roles.right_leg,
+        },
+        leftAncestry: leftAncestry && {
+          ancestors: leftAncestry.ancestorJointIds,
+          hip: leftAncestry.hipJointId,
+          knee: leftAncestry.kneeJointId,
+          foot: leftAncestry.footJointId,
+        },
+        rejected: detection.debug.rejectionCounts,
+      };
+    }""")
+    assert result["legs"]["left"]["available"]
+    assert result["legs"]["right"]["available"]
+    assert result["legs"]["left"]["hipJointId"] == 1
+    assert result["legs"]["right"]["hipJointId"] == 4
+    assert result["legs"]["left"]["kneeJointId"] == 2
+    assert result["legs"]["right"]["kneeJointId"] == 5
+    assert result["legs"]["left"]["footJointId"] == 3
+    assert result["legs"]["right"]["footJointId"] == 6
+    assert result["leftAncestry"]["ancestors"][:3] == [101, 100, 0]
+    assert result["rejected"]["left_leg:leg_quality_too_low"] > 0
+    assert result["rejected"]["right_leg:leg_quality_too_low"] > 0
 
 
 def test_limb_forward_conversion_inverts_non_identity_base_orientation(module_page):
