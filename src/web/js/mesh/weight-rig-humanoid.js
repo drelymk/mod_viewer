@@ -1,4 +1,6 @@
-/* Geometry-only humanoid limb suggestions for the inferred Model Rig. */
+/* Legacy ModelJoint helpers used by manual limb mapping only.
+ * Automatic anatomy fitting lives in humanoid-control-rig.js and must not
+ * call the suggestion API below. */
 
 import * as THREE from 'three';
 import {

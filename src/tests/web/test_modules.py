@@ -1166,10 +1166,15 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
             {jointA: 1, jointB: 2, parentId: 1, childId: 2},
             {jointA: 2, jointB: 3, parentId: 2, childId: 3},
           ],
-          humanoidDetection: {selectedRoles: {
-            left_arm: {available: true, anchorJointId: 1,
-              bendJointId: 2, endJointId: 3, pathJointIds: [1, 2, 3]},
-          }},
+          humanoidControlRig: {confidence: 'high', controls: Object.fromEntries([
+            ['chest', [0, 2, 0]], ['pelvis', [0, 1, 0]],
+            ['leftShoulder', [-.2, 1.8, 0]], ['leftElbow', [-.5, 1.6, 0]],
+            ['leftHand', [-.9, 1.5, 0]], ['rightShoulder', [.2, 1.8, 0]],
+            ['rightElbow', [.5, 1.6, 0]], ['rightHand', [.9, 1.5, 0]],
+            ['leftHip', [-.15, 1, 0]], ['leftKnee', [-.2, .5, 0]],
+            ['leftFoot', [-.25, 0, 0]], ['rightHip', [.15, 1, 0]],
+            ['rightKnee', [.2, .5, 0]], ['rightFoot', [.25, 0, 0]],
+          ].map(([key, position]) => [key, {position}])), paths: {}},
           poseRotationByJointId: {},
         },
       };
@@ -1198,8 +1203,8 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert result["initial"]["edgeCount"] == 2
     assert result["initial"]["jointCount"] == 3
     assert result["initial"]["humanoidOverlayVisible"]
-    assert result["initial"]["humanoidSegmentCount"] == 2
-    assert result["initial"]["humanoidLandmarkCount"] == 3
+    assert result["initial"]["humanoidSegmentCount"] == 9
+    assert result["initial"]["humanoidLandmarkCount"] == 14
     assert result["initial"]["rebuildCount"] == 1
     assert result["selectedRoot"]["selectedJointId"] == 1
     assert result["selectedRoot"]["rebuildCount"] == 1
@@ -4173,3 +4178,110 @@ def test_model_bone_stats_sum_same_ids_before_averaging(module_page):
         "affectedVertexCount": 1,
         "averageInfluence": pytest.approx(.25),
     }
+
+
+def test_geometry_humanoid_control_rig_is_rest_owned_and_density_invariant(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const points = [];
+      const addBox = (minX, maxX, minY, maxY, minZ, maxZ, step = .08) => {
+        for (let y = minY; y <= maxY + .001; y += step) {
+          for (let x = minX; x <= maxX + .001; x += step) {
+            points.push(x, y, minZ, x, y, maxZ);
+          }
+        }
+      };
+      const addLimb = (a, b, radius = .06) => {
+        for (let t = 0; t <= 1.001; t += .04) {
+          const x = a[0] + (b[0] - a[0]) * t;
+          const y = a[1] + (b[1] - a[1]) * t;
+          points.push(x - radius, y, -.04, x + radius, y, .04,
+            x, y - radius, -.04, x, y + radius, .04);
+        }
+      };
+      addBox(-.22, .22, .45, 1.7, -.08, .08);
+      addLimb([-.18, 1.48], [-.52, 1.30]);
+      addLimb([-.52, 1.30], [-.92, 1.20]);
+      addLimb([.18, 1.48], [.52, 1.30]);
+      addLimb([.52, 1.30], [.92, 1.20]);
+      addLimb([-.14, .55], [-.2, .28]);
+      addLimb([-.2, .28], [-.24, .02]);
+      addLimb([.14, .55], [.2, .28]);
+      addLimb([.2, .28], [.24, .02]);
+      const makeMesh = values => ({
+        userData: {humanoidRestPositions: new Float32Array(values)},
+        geometry: {attributes: {position: {array: new Float32Array(
+          values.map(value => value * 10))}}},
+      });
+      const axes = {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]};
+      const first = buildHumanoidControlRig({meshes: [makeMesh(points)], axes});
+      const dense = buildHumanoidControlRig({
+        meshes: [makeMesh(points.concat(points, points))], axes,
+      });
+      const withAccessory = buildHumanoidControlRig({meshes: [
+        makeMesh(points), {userData: {assetFill: true,
+          humanoidRestPositions: new Float32Array([100, 100, 100, 120, 100, 100])}},
+      ], axes});
+      const sameRestWhilePosed = buildHumanoidControlRig({
+        meshes: [makeMesh(points)], axes,
+      });
+      return {first, dense, withAccessory, sameRestWhilePosed};
+    }""")
+    for name in ("first", "dense", "withAccessory", "sameRestWhilePosed"):
+        rig = result[name]
+        assert rig["source"] == "geometry"
+        assert set(rig["controls"]) == {
+            "chest", "pelvis", "leftShoulder", "leftElbow", "leftHand",
+            "rightShoulder", "rightElbow", "rightHand", "leftHip",
+            "leftKnee", "leftFoot", "rightHip", "rightKnee", "rightFoot",
+        }
+        assert all("jointId" not in control for control in rig["controls"].values())
+        assert rig["diagnostics"]["voxelCount"] > 0
+        assert len(rig["diagnostics"]["slabFits"]) == 3
+    assert result["first"]["controls"]["leftHand"]["position"][0] < \
+        result["first"]["controls"]["leftShoulder"]["position"][0]
+    assert result["first"]["controls"]["leftFoot"]["position"][1] < \
+        result["first"]["controls"]["leftHip"]["position"][1]
+    assert result["dense"]["controls"]["leftHand"]["position"] == pytest.approx(
+        result["first"]["controls"]["leftHand"]["position"], abs=.05)
+    assert result["withAccessory"]["controls"]["rightFoot"]["position"] == pytest.approx(
+        result["first"]["controls"]["rightFoot"]["position"], abs=.05)
+    assert result["sameRestWhilePosed"]["controls"]["chest"]["position"] == \
+        pytest.approx(result["first"]["controls"]["chest"]["position"], abs=.001)
+
+
+@pytest.mark.parametrize("arm_drop", [.03, .25, .5],
+                         ids=["near-horizontal", "moderate", "steep"])
+def test_geometry_humanoid_control_rig_fits_arm_angles(module_page, arm_drop):
+    result = module_page.evaluate("""async armDrop => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const points = [];
+      for (let y = .4; y <= 1.7; y += .1) {
+        for (let x = -.2; x <= .2; x += .1) {
+          points.push(x, y, -.08, x, y, .08);
+        }
+      }
+      const limb = (a, b) => {
+        for (let t = 0; t <= 1.001; t += .04) {
+          const x = a[0] + (b[0] - a[0]) * t;
+          const y = a[1] + (b[1] - a[1]) * t;
+          points.push(x - .06, y, -.04, x + .06, y, .04);
+        }
+      };
+      for (const side of [-1, 1]) {
+        limb([side * .2, 1.5], [side * .52, 1.5 - armDrop]);
+        limb([side * .52, 1.5 - armDrop], [side * .9, 1.5 - armDrop * 2]);
+        limb([side * .15, .55], [side * .25, .02]);
+      }
+      return buildHumanoidControlRig({
+        meshes: [{userData: {humanoidRestPositions: new Float32Array(points)}}],
+        axes: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]},
+      });
+    }""", arm_drop)
+    assert result["diagnostics"]["failureReasons"] == []
+    assert result["controls"]["leftHand"]["position"][0] < \
+        result["controls"]["leftShoulder"]["position"][0]
+    assert result["controls"]["rightHand"]["position"][0] > \
+        result["controls"]["rightShoulder"]["position"][0]

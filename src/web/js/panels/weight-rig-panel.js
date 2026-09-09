@@ -14,7 +14,7 @@ import {
   setRigActiveLimbRole,
   setRigLimbOverride, beginRigJointPicking, cancelRigJointPicking,
   clearRigLimbMapping, flipRigLimbBend, setRigIkEnabled,
-  autoDetectHumanoidLimbs,
+  fitHumanoidControlRig,
   setRigJointRoot,
   setRigRotationSnapDegrees, setWeightPickerViewMode,
   applyRigPosePresetById,
@@ -417,15 +417,12 @@ function buildRigSection(parent) {
   const autoDetect = document.createElement('button');
   autoDetect.type = 'button';
   autoDetect.className = 'ui-button rig-auto-detect-limbs';
-  autoDetect.textContent = 'Auto-detect missing limbs';
+  autoDetect.textContent = 'Fit humanoid control rig';
   autoDetect.addEventListener('click', () => {
     autoDetect.disabled = true;
-    void ensureModelRigLoaded().then(() => autoDetectHumanoidLimbs())
-      .catch(error => ({applied: false, reason: error?.message || 'detection_failed'}))
+    void Promise.resolve().then(() => fitHumanoidControlRig())
+      .catch(error => ({reason: error?.message || 'fitting_failed'}))
       .then(result => {
-        if (!result?.applied && result?.reason === 'rig_not_loaded') {
-          ui.humanoidStatus.textContent = 'The inferred Rig is not loaded.';
-        }
         syncRigOptions(latestRigState || getModelRigState());
       });
   });
@@ -799,7 +796,7 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   ui.ik.checked = !!ik.enabled;
   ui.ik.disabled = !state?.loaded || !hasLimb;
   ui.flipBend.disabled = !state?.loaded || !hasLimb;
-  ui.autoDetect.disabled = !state?.loaded || !joints.length;
+  ui.autoDetect.disabled = false;
   ui.humanoidStatus.textContent = ik?.humanoid?.status || '';
   if (!hasMapping) {
     ui.ikHint.textContent = `Pick the ${labels[0]} joint to configure this limb.`;

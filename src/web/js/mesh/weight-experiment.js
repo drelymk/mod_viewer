@@ -64,8 +64,11 @@ import {
 } from './weight-rig-ik.js';
 import {
   buildHumanoidSemanticFrame, resolveHumanoidLimbMapping,
-  selectHumanoidKneeJoint, suggestHumanoidLimbMappings,
+  selectHumanoidKneeJoint,
 } from './weight-rig-humanoid.js';
+import {
+  buildHumanoidControlRig, serializeHumanoidControlRig,
+} from './humanoid-control-rig.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -75,6 +78,10 @@ const sourcePhysicsRigs = new Map();
 const sourceSkinningRigs = new Map();
 let modelSkinningRig = null;
 let modelWeightGeneration = 0;
+let humanoidGeometryRevision = 0;
+let humanoidControlRigCacheKey = '';
+let humanoidControlRigCache = null;
+let humanoidControlRigSnapshotCache = null;
 // Rig analysis can outlive a model switch or shape invalidation. Keep its
 // identity separate from weight loading so a new Rig request may reuse an
 // in-flight weight request without accepting stale rig state.
@@ -90,6 +97,15 @@ let resolvedLimbMappings = null;
 let resolvedLimbMappingsStructureRevision = null;
 let resolvedLimbMappingsMetadataRevision = -1;
 let limbMappingMetadataRevision = 0;
+
+function invalidateHumanoidControlRig() {
+  humanoidGeometryRevision += 1;
+  humanoidControlRigCacheKey = '';
+  humanoidControlRigCache = null;
+  humanoidControlRigSnapshotCache = null;
+  modelRigState.humanoidGeometryRevision = humanoidGeometryRevision;
+  modelRigState.humanoidControlRig = null;
+}
 
 const physicsRuntime = createWeightPhysicsRuntime({
   states,
@@ -222,11 +238,7 @@ function modelRigSnapshotForState({debug = false} = {}) {
     modelRigState,
     quaternionIsIdentity,
   });
-  if (snapshot && modelRigState.humanoidSuggestions?.debug) {
-    snapshot.humanoidDetection = {
-      selectedRoles: modelRigState.humanoidSuggestions.debug.selectedRoles || {},
-    };
-  }
+  if (snapshot) snapshot.humanoidControlRig = humanoidControlRigSnapshot();
   return snapshot;
 }
 
@@ -277,14 +289,15 @@ function compactLimbMapping(mapping) {
 }
 
 function humanoidSnapshot() {
-  const suggestions = modelRigState.humanoidSuggestions;
+  const controlRig = humanoidControlRigSnapshot();
   return {
     status: modelRigState.humanoidStatus || '',
-    structureRevision: modelRigState.humanoidStructureRevision,
+    geometryRevision: humanoidGeometryRevision,
+    generation: modelWeightGeneration,
     semanticDetectionMs: Number(modelRigState.semanticDetectionMs) || 0,
-    availableRoles: suggestions?.roles
-      ? RIG_LIMB_ROLES.filter(role => suggestions.roles[role]?.available)
-      : [],
+    confidence: controlRig?.confidence || 'low',
+    accepted: !!controlRig?.accepted,
+    controlCount: Object.keys(controlRig?.controls || {}).length,
   };
 }
 
@@ -300,55 +313,56 @@ function humanoidSemanticAxes() {
   };
 }
 
+// Manual ModelJoint mapping retains its authored semantic frame. Automatic
+// fitting does not call this path; it consumes mesh rest geometry instead.
 function humanoidSemanticFrame() {
   return buildHumanoidSemanticFrame({rig: modelSkinningRig,
     axes: humanoidSemanticAxes(), characterForward: characterForwardForRole()});
 }
 
 function humanoidAnalysis() {
-  const rig = modelSkinningRig;
-  const revision = rig?.structureRevision ?? null;
-  if (!rig || !modelRigState.loaded) {
-    return {version: 1, roles: Object.fromEntries(RIG_LIMB_ROLES.map(role => [
-      role, {role, available: false, reasons: ['rig_not_loaded']},
-    ])), available: 0};
-  }
-  if (modelRigState.humanoidSuggestions
-      && modelRigState.humanoidStructureRevision === revision) {
-    return modelRigState.humanoidSuggestions;
+  const key = `${modelWeightGeneration}:${humanoidGeometryRevision}`;
+  if (humanoidControlRigCache && humanoidControlRigCacheKey === key) {
+    return humanoidControlRigCache;
   }
   const started = performanceNow();
-  const result = suggestHumanoidLimbMappings({
-    rig, characterForward: characterForwardForRole(),
-    axes: humanoidSemanticAxes(), debug: true,
+  const fitted = buildHumanoidControlRig({
+    meshes: modelPickMeshes(), axes: humanoidSemanticAxes(),
   });
+  const result = {
+    ...fitted,
+    modelGeneration: modelWeightGeneration,
+    geometryRevision: humanoidGeometryRevision,
+  };
   modelRigState.semanticDetectionMs = performanceNow() - started;
-  modelRigState.humanoidStructureRevision = revision;
-  modelRigState.humanoidSuggestions = result;
+  modelRigState.humanoidGeometryRevision = humanoidGeometryRevision;
+  modelRigState.humanoidControlRig = result;
+  humanoidControlRigCache = result;
+  humanoidControlRigCacheKey = key;
   return result;
 }
 
-export function getHumanoidLimbDetection() {
+function humanoidControlRigSnapshot() {
+  const result = humanoidAnalysis();
+  if (!humanoidControlRigSnapshotCache) {
+    humanoidControlRigSnapshotCache = serializeHumanoidControlRig(result);
+  }
+  return humanoidControlRigSnapshotCache;
+}
+
+export function getHumanoidControlRig() {
   return humanoidAnalysis();
 }
 
-function humanoidRoleStatus(result, label, roles) {
-  const suggestions = roles.map(role => result.roles?.[role]);
-  if (suggestions.every(item => item?.available)) return `${label}: detected.`;
-  if (suggestions.some(item => item?.reasons?.includes('ambiguous_pair'))) {
-    return `${label}: ambiguous.`;
-  }
-  if (suggestions.some(item => item?.reasons?.includes('no_bilateral_pair'))) {
-    return `${label}: no bilateral pair.`;
-  }
-  return `${label}: unavailable.`;
+export function getHumanoidLimbDetection() {
+  return getHumanoidControlRig();
 }
 
-function humanoidDetectionStatus(result) {
-  return [
-    humanoidRoleStatus(result, 'Arms', ['left_arm', 'right_arm']),
-    humanoidRoleStatus(result, 'Legs', ['left_leg', 'right_leg']),
-  ].join(' ');
+function humanoidControlRigStatus(result) {
+  if (!result?.diagnostics?.failureReasons?.length) {
+    return `Humanoid control rig fitted (${result.confidence} confidence).`;
+  }
+  return `Humanoid control rig fitted with diagnostics (${result.confidence} confidence).`;
 }
 
 function setHumanoidStatus(message) {
@@ -357,56 +371,22 @@ function setHumanoidStatus(message) {
   return modelRigState.humanoidStatus;
 }
 
-/** Run semantic detection explicitly and fill only roles without metadata. */
-export async function autoDetectHumanoidLimbs() {
-  if (!modelSkinningRig || !modelRigState.loaded) {
-    return {applied: false, reason: 'rig_not_loaded', addedRoles: []};
-  }
+/** Fit geometry controls without creating or changing any ModelJoint mapping. */
+export function fitHumanoidControlRig() {
   const result = humanoidAnalysis();
-  const existing = rigPresetState.limbMappings || {};
-  const additions = [];
-  for (const roles of [['left_arm', 'right_arm'], ['left_leg', 'right_leg']]) {
-    // Auto-apply is atomic per bilateral limb class. A weak or missing side
-    // must not create a one-sided persisted humanoid mapping.
-    if (!roles.every(role => result.roles?.[role]?.available)) continue;
-    for (const role of roles) {
-      const suggestion = result.roles[role];
-      const raw = existing[role];
-      if (raw?.anchor_signature) continue;
-      const joint = modelJointForId(suggestion.anchorJointId);
-      if (!joint?.signature) continue;
-      additions.push([role, {anchor_signature: joint.signature, bend_sign: 1}]);
-    }
-  }
-  if (!additions.length) {
-    const available = RIG_LIMB_ROLES.filter(role =>
-      result.roles?.[role]?.available && existing[role]?.anchor_signature);
-    const reason = available.length ? 'all_detected_roles_already_mapped'
-      : 'no_confident_bilateral_pairs';
-    setHumanoidStatus(reason === 'all_detected_roles_already_mapped'
-      ? 'All detected limbs are already mapped.'
-      : humanoidDetectionStatus(result));
-    return {applied: false, reason, addedRoles: [], suggestions: result.roles,
-      semanticDetectionMs: modelRigState.semanticDetectionMs};
-  }
-  const nextMappings = {...existing};
-  additions.forEach(([role, raw]) => { nextMappings[role] = raw; });
-  rigPresetState.limbMappings = nextMappings;
-  limbMappingMetadataRevision += 1;
-  resolvedLimbMappings = null;
-  notifyModelRigChanged();
-  const saves = await Promise.all(additions.map(([role, raw]) =>
-    persistLimbMapping(role, raw)));
-  const failed = saves.find(item => !item?.saved);
-  if (failed) {
-    setHumanoidStatus(failed.error || 'Some limb mappings could not be saved.');
-    return {applied: false, reason: 'persist_failed', addedRoles: [],
-      suggestions: result.roles, error: failed.error || 'persist_failed'};
-  }
-  const labels = additions.map(([role]) => RIG_LIMB_ROLE_INFO[role]?.label || role);
-  setHumanoidStatus(`Mapped ${labels.join(', ')}.`);
-  return {applied: true, reason: null, addedRoles: additions.map(([role]) => role),
-    suggestions: result.roles, semanticDetectionMs: modelRigState.semanticDetectionMs};
+  setHumanoidStatus(humanoidControlRigStatus(result));
+  return {
+    applied: false,
+    reason: 'geometry_only',
+    controlRig: result,
+    semanticDetectionMs: modelRigState.semanticDetectionMs,
+  };
+}
+
+// Compatibility name for integrations that still invoke the old button API.
+// It intentionally cannot write limb mappings.
+export async function autoDetectHumanoidLimbs() {
+  return fitHumanoidControlRig();
 }
 
 function resolveLimbMapping(role) {
@@ -585,6 +565,7 @@ function rigSnapshot() {
     ik: ikSnapshot(),
     pickStatus: modelRigState.pickStatus,
     rigPresets: rigPresetSnapshotForState(),
+    humanoidControlRig: humanoidControlRigSnapshot(),
     model: modelRigSnapshotForState(),
   };
 }
@@ -645,17 +626,18 @@ export function getModelRigDebugState(sourceKey = null) {
     rigAmbiguousCount: modelRigState.rigAmbiguousCount || 0,
     semanticDetectionMs: modelRigState.semanticDetectionMs || 0,
   };
+  const humanoidControlRig = humanoidControlRigSnapshot();
   const selectedSourceKey = sourceKey || sources[0]?.sourceKey || null;
   if (!model) return {sources, source: sources.find(item =>
     item.sourceKey === selectedSourceKey) || null, metrics,
     rigPresets: rigPresetSnapshotForState(),
-    humanoidDetection: modelRigState.humanoidSuggestions?.debug || null};
+    humanoidControlRig};
   return {
     ...model,
     sources,
     source: sources.find(item => item.sourceKey === selectedSourceKey) || null,
     metrics,
-    humanoidDetection: modelRigState.humanoidSuggestions?.debug || null,
+    humanoidControlRig,
     rigPresets: rigPresetSnapshotForState(),
   };
 }
@@ -1001,6 +983,10 @@ function setModelWeightLoadError(error) {
 
 function resetModelWeightState() {
   modelWeightGeneration += 1;
+  humanoidControlRigCacheKey = '';
+  humanoidControlRigCache = null;
+  humanoidControlRigSnapshotCache = null;
+  humanoidGeometryRevision += 1;
   modelRigLoadToken = null;
   rigPresetGeneration += 1;
   modelPickController.cancel();
@@ -1686,10 +1672,6 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     sourceRig.poseFrameCache.clear();
   });
   modelSkinningRig = rig;
-  modelRigState.humanoidStructureRevision = null;
-  modelRigState.humanoidSuggestions = null;
-  modelRigState.humanoidStatus = '';
-  modelRigState.semanticDetectionMs = 0;
   updateModelWeightHeatmap();
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId = Number.isInteger(previousSelectedJointId)
@@ -1833,7 +1815,9 @@ export function isPhysicsScheduled() {
 
 export function registerSkinningMesh(mesh) {
   if (!mesh) return;
+  const wasKnown = knownMeshes.has(mesh);
   knownMeshes.add(mesh);
+  if (!wasKnown) invalidateHumanoidControlRig();
   if (!modelPhysicsSession.getState().enabled) return;
   const state = stateFor(mesh);
   if (!eligibleSkinningMesh(mesh)) {
@@ -1849,7 +1833,8 @@ export function unregisterSkinningMesh(mesh) {
       && modelWeightState.pickedPoint.meshKey === mesh?.userData?.semanticKey) {
     clearPickedPoint();
   }
-  knownMeshes.delete(mesh);
+  const wasKnown = knownMeshes.delete(mesh);
+  if (wasKnown) invalidateHumanoidControlRig();
   const sourceKey = states.get(mesh)?.skinningSourceKey;
   if (sourceKey) {
     modelPhysicsSession.detach(sourceKey);
@@ -3548,6 +3533,7 @@ function ensureInfluenceGraph(
 export function refreshSkinningAfterShapeChange(mesh) {
   const state = states.get(mesh);
   const position = mesh?.geometry?.attributes?.position;
+  invalidateHumanoidControlRig();
   clearPickedPoint();
   if (!state?.loaded || !position) return false;
   const preservedRootSignatures = new Set(
@@ -3584,8 +3570,6 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelRigState.ikEnabled = false;
   modelRigState.activeLimbRole = 'left_arm';
   modelRigState.explicitRootSignatures = preservedRootSignatures;
-  modelRigState.humanoidStructureRevision = null;
-  modelRigState.humanoidSuggestions = null;
   modelRigState.humanoidStatus = '';
   modelRigState.semanticDetectionMs = 0;
   rigPresetState.lastApplyResult = null;

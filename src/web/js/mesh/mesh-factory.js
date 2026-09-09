@@ -512,6 +512,10 @@ export function buildMesh(name, data, materialProfile = null) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.layers.enable(CHARACTER_AO_LAYER);
   mesh.userData.basePositions = new Float32Array(geo.attributes.position.array);
+  // The humanoid control rig is fitted from the authoritative rest shape,
+  // never from a posed or Physics-deformed position attribute.
+  mesh.userData.humanoidRestPositions = new Float32Array(
+    mesh.userData.basePositions);
   mesh.userData.baseNormals = data.normal
     ? new Float32Array(geo.attributes.normal.array) : null;
   mesh.userData.hasAuthoredNormals = !!data.normal;
