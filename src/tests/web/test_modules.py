@@ -4250,9 +4250,9 @@ def test_geometry_humanoid_control_rig_is_rest_owned_and_density_invariant(modul
     height = result["first"]["diagnostics"]["characterHeight"]
     assert result["first"]["diagnostics"]["proportionalTemplate"] == {
         "characterHeight": pytest.approx(height),
-        "legLengthN": .50, "hipToNeckLengthN": .30,
-        "shoulderHalfWidthN": .105, "armLengthN": .33,
-        "armDropAngleDeg": 45, "kneeFraction": .50,
+        "footLiftN": .015, "legLengthN": .50, "hipToNeckLengthN": .285,
+        "shoulderHalfWidthN": .090, "armLengthN": .33,
+        "armDropAngleDeg": 50, "kneeFraction": .50,
         "elbowFraction": .50, "chestFraction": .50,
         "leftFoot": pytest.approx(result["first"]["controls"]["leftFoot"]["position"]),
         "rightFoot": pytest.approx(result["first"]["controls"]["rightFoot"]["position"]),
@@ -4307,11 +4307,15 @@ def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(module_p
     }""")
     rig = result["rig"]
     assert result["defaults"] == {
-        "legLength": .50, "hipToNeckLength": .30,
-        "shoulderHalfWidth": .105, "armLength": .33,
-        "armDropAngleDeg": 45, "kneeFraction": .50,
+        "footLift": .015, "legLength": .50, "hipToNeckLength": .285,
+        "shoulderHalfWidth": .090, "armLength": .33,
+        "armDropAngleDeg": 50, "kneeFraction": .50,
         "elbowFraction": .50, "chestFraction": .50,
     }
+    assert rig["detectedLeftFoot"][1] == pytest.approx(0)
+    assert rig["detectedRightFoot"][1] == pytest.approx(0)
+    assert rig["leftFoot"][1] == pytest.approx(.03)
+    assert rig["rightFoot"][1] == pytest.approx(.03)
     assert rig["leftHip"][0] == pytest.approx(rig["leftFoot"][0])
     assert rig["rightHip"][2] == pytest.approx(rig["rightFoot"][2])
     assert rig["leftKnee"] == pytest.approx([
@@ -4322,8 +4326,8 @@ def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(module_p
         (rig["leftHip"][index] + rig["rightHip"][index]) / 2 for index in range(3)])
     assert rig["neck"][1] == pytest.approx(1.6)
     assert result["lengths"] == {
-        "arm": pytest.approx(.66), "shoulderOffset": pytest.approx(.21),
-        "leg": pytest.approx(1.0), "armDropAngleDeg": pytest.approx(45),
+        "arm": pytest.approx(.66), "shoulderOffset": pytest.approx(.18),
+        "leg": pytest.approx(1.0), "armDropAngleDeg": pytest.approx(50),
     }
     assert result["small"]["proportions"] == result["large"]["proportions"]
 
@@ -4514,7 +4518,7 @@ def test_geometry_humanoid_control_rig_uses_fixed_arm_angle(module_page, arm_dro
     }""", arm_drop)
     assert result["diagnostics"]["failureReasons"] == [], repr(
         result["diagnostics"])
-    assert result["diagnostics"]["proportionalTemplate"]["armDropAngleDeg"] == 45
+    assert result["diagnostics"]["proportionalTemplate"]["armDropAngleDeg"] == 50
     height = result["diagnostics"]["characterHeight"]
     assert math.dist(result["controls"]["rightShoulder"]["position"],
                      result["controls"]["rightHand"]["position"]) == pytest.approx(
@@ -4591,7 +4595,7 @@ def test_geometry_humanoid_control_rig_ignores_extra_geometry_after_anchors(modu
                      result["controls"]["leftHand"]["position"]) == pytest.approx(.33 * height, abs=1e-6)
     assert abs(result["controls"]["rightShoulder"]["position"][0]
                - result["diagnostics"]["templatePoints"]["neck"][0]) == \
-        pytest.approx(.105 * height, abs=1e-6)
+        pytest.approx(.090 * height, abs=1e-6)
     assert result["controls"]["leftFoot"]["position"] == pytest.approx(
         [-.18, .02, 0], abs=.08)
     assert result["controls"]["rightFoot"]["position"] == pytest.approx(

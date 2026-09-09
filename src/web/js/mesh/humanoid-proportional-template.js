@@ -3,11 +3,12 @@
 const EPSILON = 1e-8;
 
 export const DEFAULT_HUMANOID_PROPORTIONS = Object.freeze({
+  footLift: 0.015,
   legLength: 0.50,
-  hipToNeckLength: 0.30,
-  shoulderHalfWidth: 0.105,
+  hipToNeckLength: 0.285,
+  shoulderHalfWidth: 0.090,
   armLength: 0.33,
-  armDropAngleDeg: 45,
+  armDropAngleDeg: 50,
   kneeFraction: 0.50,
   elbowFraction: 0.50,
   chestFraction: 0.50,
@@ -101,8 +102,11 @@ export function buildProportionalHumanoidRig({
 
   const frame = semanticAxesFrame(resolvedAxes);
   const template = {...DEFAULT_HUMANOID_PROPORTIONS, ...(proportions || {})};
-  const leftAnchor = vector3(leftFoot);
-  const rightAnchor = vector3(rightFoot);
+  const detectedLeftFoot = vector3(leftFoot);
+  const detectedRightFoot = vector3(rightFoot);
+  const footLift = resolvedHeight * finiteNumber(template.footLift);
+  const leftAnchor = add(detectedLeftFoot, scale(frame.up, footLift));
+  const rightAnchor = add(detectedRightFoot, scale(frame.up, footLift));
   const legLength = resolvedHeight * finiteNumber(template.legLength);
   const leftHip = add(leftAnchor, scale(frame.up, legLength));
   const rightHip = add(rightAnchor, scale(frame.up, legLength));
@@ -131,6 +135,8 @@ export function buildProportionalHumanoidRig({
     characterHeight: resolvedHeight,
     semanticAxes: frame,
     proportions: template,
+    detectedLeftFoot,
+    detectedRightFoot,
     chest,
     pelvis,
     neck,

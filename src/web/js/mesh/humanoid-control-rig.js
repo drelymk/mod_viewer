@@ -22,7 +22,7 @@ const CONTROL_KEYS = Object.freeze([
 const TEMPLATE_PRIORS = Object.freeze({
   ...DEFAULT_HUMANOID_PROPORTIONS,
   vertical: Object.freeze({
-    neck: 0.82, chest: 0.67, pelvis: 0.52, knee: 0.27, foot: 0.02,
+    neck: 0.82, chest: 0.6775, pelvis: 0.535, knee: 0.285, foot: 0.035,
   }),
 });
 
@@ -215,13 +215,25 @@ function worldToSemantic(point, bounds, frame) {
 }
 
 function fallbackPoint(key) {
+  const p = DEFAULT_HUMANOID_PROPORTIONS;
+  const foot = 0.02 + p.footLift;
+  const hip = foot + p.legLength;
+  const neck = hip + p.hipToNeckLength;
+  const chest = hip + p.hipToNeckLength * p.chestFraction;
+  const shoulder = p.shoulderHalfWidth;
+  const angle = p.armDropAngleDeg * Math.PI / 180;
+  const armSide = p.armLength * Math.cos(angle);
+  const armDrop = p.armLength * Math.sin(angle);
+  const elbowSide = shoulder + armSide * p.elbowFraction;
+  const elbowHeight = neck - armDrop * p.elbowFraction;
   const values = {
-    chest: [0, 0.67], pelvis: [0, 0.52],
-    leftShoulder: [-0.105, 0.82], leftElbow: [-0.221, 0.704],
-    leftHand: [-0.338, 0.587], rightShoulder: [0.105, 0.82],
-    rightElbow: [0.221, 0.704], rightHand: [0.338, 0.587],
-    leftHip: [-0.1, 0.52], leftKnee: [-0.1, 0.27], leftFoot: [-0.1, 0.02],
-    rightHip: [0.1, 0.52], rightKnee: [0.1, 0.27], rightFoot: [0.1, 0.02],
+    chest: [0, chest], pelvis: [0, hip],
+    leftShoulder: [-shoulder, neck], leftElbow: [-elbowSide, elbowHeight],
+    leftHand: [-shoulder - armSide, neck - armDrop], rightShoulder: [shoulder, neck],
+    rightElbow: [elbowSide, elbowHeight], rightHand: [shoulder + armSide, neck - armDrop],
+    leftHip: [-0.1, hip], leftKnee: [-0.1, foot + p.legLength * 0.5],
+    leftFoot: [-0.1, foot], rightHip: [0.1, hip],
+    rightKnee: [0.1, foot + p.legLength * 0.5], rightFoot: [0.1, foot],
   };
   const value = values[key] || [0, 0.5];
   return {x: value[0], y: value[1], z: 0};
@@ -284,9 +296,14 @@ function proportionalDiagnostics(template, bounds, frame, supports, base) {
       left: finiteNumber(supports.leftFoot, 0),
       right: finiteNumber(supports.rightFoot, 0),
     },
+    detectedFeet: {
+      left: vector3(template.detectedLeftFoot || template.leftFoot),
+      right: vector3(template.detectedRightFoot || template.rightFoot),
+    },
     templatePoints: {neck: vector3(template.neck)},
     proportionalTemplate: {
       characterHeight: template.characterHeight,
+      footLiftN: finiteNumber(p.footLift),
       legLengthN: finiteNumber(p.legLength),
       hipToNeckLengthN: finiteNumber(p.hipToNeckLength),
       shoulderHalfWidthN: finiteNumber(p.shoulderHalfWidth),
