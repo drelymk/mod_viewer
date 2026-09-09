@@ -4535,3 +4535,83 @@ def test_geometry_humanoid_control_rig_uses_bounded_limb_candidates(module_page,
     for side in ("left", "right"):
         assert result["diagnostics"]["limbCompletion"]["arms"][side]
         assert result["diagnostics"]["limbCompletion"]["legs"][side]
+
+
+def test_geometry_humanoid_control_rig_refines_proximal_limb_endpoints(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const makePoints = ({coat = false, transition = false} = {}) => {
+        const points = [];
+        const addBox = (minX, maxX, minY, maxY, step = .04) => {
+          for (let y = minY; y <= maxY + .001; y += step) {
+            for (let x = minX; x <= maxX + .001; x += step) {
+              points.push(x, y, -.06, x, y, .06);
+            }
+          }
+        };
+        const addLimb = (a, b, radius = .035) => {
+          for (let t = 0; t <= 1.001; t += .035) {
+            const x = a[0] + (b[0] - a[0]) * t;
+            const y = a[1] + (b[1] - a[1]) * t;
+            points.push(x - radius, y, -.04, x + radius, y, .04,
+              x, y - radius, -.04, x, y + radius, .04);
+          }
+        };
+        if (transition) addBox(-.18, .18, .60, 1.0);
+        else addBox(-.18, .18, .38, 1.0);
+        if (coat) addBox(-.28, .28, .70, .80, .05);
+        for (const side of [-1, 1]) {
+          const shoulderY = coat ? .86 : .82;
+          addLimb([side * .18, shoulderY], [side * .34, .75]);
+          addLimb([side * .34, .75], [side * .52, .68]);
+          addLimb([side * .14, transition ? .60 : .54], [side * .16, .28], .04);
+          addLimb([side * .16, .28], [side * .18, .02], .04);
+        }
+        return points;
+      };
+      const build = config => buildHumanoidControlRig({
+        meshes: [{userData: {humanoidRestPositions: new Float32Array(
+          makePoints(config))}}],
+        axes: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]},
+      });
+      const wuwa = build({coat: true});
+      const stable = build({});
+      const hip = build({transition: true});
+      const arm = rig => rig.diagnostics.limbCompletion.arms.right;
+      const leg = rig => rig.diagnostics.limbCompletion.legs.right;
+      return {
+        wuwa: {failureReasons: wuwa.diagnostics.failureReasons,
+              control: wuwa.controls.rightShoulder.position,
+              arm: arm(wuwa), runnerUp: wuwa.diagnostics.limbCompletion.arms.rightRunnerUp},
+        stable: {failureReasons: stable.diagnostics.failureReasons,
+              arm: arm(stable), leg: leg(stable)},
+        hip: {failureReasons: hip.diagnostics.failureReasons,
+          control: hip.controls.rightHip.position,
+          leg: leg(hip)},
+      };
+    }""")
+    assert result["wuwa"]["failureReasons"] == []
+    assert result["stable"]["failureReasons"] == []
+    assert result["hip"]["failureReasons"] == []
+    assert result["wuwa"]["arm"]["initialShoulder"]
+    assert result["wuwa"]["arm"]["shoulder"]["y"] > \
+        result["wuwa"]["arm"]["initialShoulder"]["y"] + .015, repr(result["wuwa"])
+    assert result["wuwa"]["control"][1] > \
+        result["wuwa"]["arm"]["initialShoulder"]["y"] + .015
+    assert result["wuwa"]["arm"]["proximalArmContinuation"] < .65
+    assert result["stable"]["arm"]["refinementDistance"] < .04
+    assert result["hip"]["leg"]["heightN"] > .56
+    assert result["hip"]["leg"]["heightN"] > \
+        result["stable"]["leg"]["heightN"] + .04, repr(result)
+    assert result["hip"]["leg"]["proximalContinuationCoverage"] >= 0
+    assert result["hip"]["leg"]["proximalContinuationStraightness"] >= 0
+    assert result["hip"]["leg"]["widthBelow"] >= 0
+    assert result["hip"]["leg"]["widthAbove"] >= 0
+    assert result["hip"]["leg"]["proximalContinuationScore"] < .65
+    assert result["wuwa"]["runnerUp"]
+    for field in ("heightN", "armLengthN", "corridorCoverage",
+                  "proximalArmContinuation", "torsoAttachmentScore",
+                  "totalScore"):
+        assert field in result["wuwa"]["arm"]
+        assert field in result["wuwa"]["runnerUp"]

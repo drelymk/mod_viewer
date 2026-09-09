@@ -493,6 +493,83 @@ function nearbyPoints(index, target, radius) {
   return nearby.sort((left, right) => left.distance - right.distance);
 }
 
+function geometryNear(points, spatialIndex, target, radius) {
+  if (spatialIndex) return nearbyPoints(spatialIndex, target, radius);
+  return points.map(item => ({item, distance: pointDistance3(item, target)}))
+    .filter(entry => entry.distance <= radius)
+    .sort((left, right) => left.distance - right.distance);
+}
+
+function localTubeSample(points, spatialIndex, target, side, radius) {
+  const nearby = geometryNear(points, spatialIndex, target, radius);
+  const sideNearby = nearby.filter(entry => side * entry.item.x > 0.025);
+  const stable = (sideNearby.length ? sideNearby : nearby)
+    .slice(0, Math.min(nearby.length, 24)).map(entry => entry.item);
+  const center = stable.length ? {x: median(stable.map(item => item.x)),
+    y: median(stable.map(item => item.y)), z: median(stable.map(item => item.z))} : null;
+  const sectionNearby = geometryNear(points, spatialIndex, target,
+    Math.max(radius * 1.8, 0.14)).filter(entry => Math.abs(entry.item.y - target.y) <= 0.035
+      && Math.abs(entry.item.z - target.z) <= 0.12
+      && Math.abs(entry.item.x - target.x) <= 0.24
+      && side * entry.item.x > 0.025);
+  const sideValues = (sectionNearby.length >= 3 ? sectionNearby : sideNearby)
+    .map(entry => entry.item.x);
+  return {
+    nearbyCount: nearby.length, sideCount: sideNearby.length, center,
+    width: sideValues.length >= 2 ? quantile(sideValues, 0.9)
+      - quantile(sideValues, 0.1) : 0,
+    sameSide: nearby.length ? sideNearby.length / nearby.length : 0,
+    nearestDistance: nearby[0]?.distance ?? 1,
+  };
+}
+
+function sampleProximalContinuation(points, proximal, distal, side, options = {}) {
+  if (!proximal || !distal) {
+    return {coverage: 0, straightness: 0, sidePersistence: 0, widthRatio: 0,
+      widthBelow: 0, widthAbove: 0, independentScore: 0};
+  }
+  const radius = finiteNumber(options.proximalCorridorRadius, 0.085);
+  const direction = {x: proximal.x - distal.x, y: proximal.y - distal.y,
+    z: proximal.z - distal.z};
+  const directionLength = Math.max(pointDistance3(proximal, distal), EPSILON);
+  direction.x /= directionLength;
+  direction.y /= directionLength;
+  direction.z /= directionLength;
+  const distances = Array.isArray(options.proximalProbeDistances)
+    && options.proximalProbeDistances.length
+    ? options.proximalProbeDistances : [0.04, 0.08];
+  const probes = distances.map(distanceAhead => ({
+    x: proximal.x + direction.x * distanceAhead,
+    y: proximal.y + direction.y * distanceAhead,
+    z: proximal.z + direction.z * distanceAhead,
+  }));
+  const samples = probes.map(target => localTubeSample(
+    points, options.spatialIndex, target, side, radius));
+  const below = localTubeSample(points, options.spatialIndex, {
+    x: proximal.x - direction.x * 0.04,
+    y: proximal.y - direction.y * 0.04,
+    z: proximal.z - direction.z * 0.04,
+  }, side, radius);
+  const supported = samples.map((sample, index) => ({sample, index}))
+    .filter(entry => entry.sample.nearbyCount >= 4);
+  const coverage = supported.length / Math.max(samples.length, 1);
+  const straightness = supported.length ? median(supported.map(({sample, index}) => {
+    const residual = sample.center ? pointDistance3(sample.center, probes[index]) : 1;
+    return 1 - clamp(residual / Math.max(radius, EPSILON), 0, 1);
+  })) : 0;
+  const sidePersistence = supported.length ? median(supported.map(({sample}) =>
+    sample.sameSide)) : 0;
+  const widthAbove = supported.length ? median(supported.map(({sample}) => sample.width)) : 0;
+  const widthBelow = below.width;
+  const widthRatio = widthAbove / Math.max(widthBelow, 0.035);
+  // A narrow, same-side continuation is limb evidence. A sudden width
+  // increase at the proximal endpoint is the expected torso/pelvis transition.
+  const widthContinuity = clamp(1 - Math.max(widthRatio - 1.1, 0) / 0.8, 0, 1);
+  const independentScore = coverage * straightness * sidePersistence * widthContinuity;
+  return {coverage, straightness, sidePersistence, widthRatio, widthBelow, widthAbove,
+    independentScore};
+}
+
 function interpolatePoint(first, second, factor) {
   return {x: first.x + (second.x - first.x) * factor,
     y: first.y + (second.y - first.y) * factor,
@@ -603,6 +680,8 @@ function buildHipCandidates(points, side, foot, options = {}) {
       support: slice.length};
     const metrics = sampleGeometryCorridor(points, hip, foot,
       finiteNumber(options.legCorridorRadius, 0.09), 11, options.spatialIndex);
+    metrics.proximalContinuation = sampleProximalContinuation(
+      points, hip, foot, side, options);
     const templateCost = softRangeCost(metrics.pathLengthN,
       TEMPLATE_PRIORS.horizontal.legLength, [0.38, 0.67]);
     const heightCost = softRangeCost(hip.y, preferred, safety);
@@ -611,7 +690,8 @@ function buildHipCandidates(points, side, foot, options = {}) {
       - 2.2 * metrics.longestGap
       - 1.7 * metrics.lateralResidual
       - 0.9 * metrics.depthResidual
-      - 0.9 * templateCost - 0.35 * heightCost;
+      - 0.9 * templateCost - 0.35 * heightCost
+      - 1.6 * metrics.proximalContinuation.independentScore;
     candidates.push({hip, foot, metrics, templateCost, heightCost, score,
       valid: metrics.occupancyCoverage >= 0.55
         && metrics.endpointSupport >= 0.1 && templateCost < 100,
@@ -628,6 +708,9 @@ function candidateDiagnostic(candidate) {
     hip: candidate.hip ? {...candidate.hip} : null,
     foot: candidate.foot ? {...candidate.foot} : null,
     endpoint: {...(candidate.hand || candidate.hip || {})},
+    heightN: candidate.hip?.y ?? candidate.shoulder?.y ?? 0,
+    armLengthN: candidate.hand ? candidate.metrics?.pathLengthN || 0 : 0,
+    legLengthN: candidate.hip ? candidate.metrics?.pathLengthN || 0 : 0,
     lengthN: candidate.metrics?.pathLengthN || 0,
     corridorCoverage: candidate.metrics?.occupancyCoverage || 0,
     longestGap: candidate.metrics?.longestGap || 0,
@@ -636,6 +719,17 @@ function candidateDiagnostic(candidate) {
     depthResidual: candidate.metrics?.depthResidual || 0,
     endpointSupport: candidate.metrics?.endpointSupport || 0,
     continuationCoverage: candidate.metrics?.continuationCoverage || 0,
+    proximalContinuationCoverage: candidate.metrics?.proximalContinuation?.coverage || 0,
+    proximalContinuationStraightness: candidate.metrics?.proximalContinuation?.straightness || 0,
+    proximalContinuationSidePersistence: candidate.metrics?.proximalContinuation?.sidePersistence || 0,
+    proximalContinuationWidthRatio: candidate.metrics?.proximalContinuation?.widthRatio || 0,
+    proximalContinuationScore: candidate.metrics?.proximalContinuation?.independentScore || 0,
+    widthBelow: candidate.metrics?.proximalContinuation?.widthBelow || 0,
+    widthAbove: candidate.metrics?.proximalContinuation?.widthAbove || 0,
+    proximalArmContinuation: candidate.proximalArmContinuation?.independentScore || 0,
+    torsoAttachmentScore: candidate.torsoAttachmentScore || 0,
+    refinementDistance: candidate.refinementDistance || 0,
+    initialShoulder: candidate.initialShoulder ? {...candidate.initialShoulder} : null,
     distalScore: candidate.distalScore || 0,
     outwardScore: candidate.outwardScore || 0,
     templateCost: candidate.templateCost || 0,
@@ -655,14 +749,21 @@ function selectLegPair(leftCandidates, rightCandidates) {
     const width = Math.abs(leftCandidate.hip.x - rightCandidate.hip.x) * 0.5;
     const widthCost = softRangeCost(width,
       TEMPLATE_PRIORS.horizontal.hipHalfWidth, [0.025, 0.18]);
-    const score = leftCandidate.score + rightCandidate.score
+    const baseScore = leftCandidate.score + rightCandidate.score
       - 1.1 * Math.abs(leftCandidate.hip.y - rightCandidate.hip.y)
       - 0.8 * Math.abs(leftCandidate.metrics.pathLengthN
         - rightCandidate.metrics.pathLengthN)
       - 0.75 * widthCost
       - 0.25 * Math.abs(leftCandidate.hip.z - rightCandidate.hip.z);
+    let score = baseScore;
+    const hipHeight = (leftCandidate.hip.y + rightCandidate.hip.y) * 0.5;
+    // Height is only a tie-breaker after the continuation evidence and
+    // corridor score have effectively tied. This avoids replacing a clean
+    // lower-leg fit with a globally forced high endpoint.
+    if (best && Math.abs(baseScore - best.baseScore) <= 0.08
+        && hipHeight > best.hipHeight) score += 0.04 * hipHeight;
     if (!best || score > best.score) {
-      best = {left: leftCandidate, right: rightCandidate, score};
+      best = {left: leftCandidate, right: rightCandidate, score, baseScore, hipHeight};
     }
   }));
   return best;
@@ -709,6 +810,106 @@ function fitPelvisAndHips(points, centerline, options = {}) {
       pairScore: pair?.score || 0,
     },
   };
+}
+
+function torsoAttachmentScore(points, side, shoulder, options = {}) {
+  const radius = finiteNumber(options.shoulderAttachmentRadius, 0.12);
+  const nearby = geometryNear(points, options.spatialIndex, shoulder, radius)
+    .filter(entry => Math.abs(entry.item.y - shoulder.y) <= 0.08
+      && Math.abs(entry.item.z - shoulder.z) <= 0.12);
+  const inward = nearby.filter(entry => side * (entry.item.x - shoulder.x) < -0.02);
+  const section = geometryNear(points, options.spatialIndex, shoulder, 0.24)
+    .filter(entry => Math.abs(entry.item.y - shoulder.y) <= 0.025
+      && Math.abs(entry.item.z - shoulder.z) <= 0.08
+      && side * entry.item.x > 0.025
+      && side * (entry.item.x - shoulder.x) <= 0.24);
+  const sectionWidth = section.length >= 2
+    ? quantile(section.map(entry => entry.item.x), 0.9)
+      - quantile(section.map(entry => entry.item.x), 0.1) : 0.24;
+  const inwardScore = clamp(Math.log1p(inward.length) / Math.log1p(12), 0, 1);
+  const narrowSectionScore = clamp((0.24 - sectionWidth) / 0.16, 0, 1);
+  return clamp(0.35 * inwardScore + 0.65 * narrowSectionScore, 0, 1);
+}
+
+function buildArmCandidate(points, side, shoulder, hand, initialShoulder, options = {}) {
+  const metrics = sampleGeometryCorridor(points, shoulder, hand,
+    finiteNumber(options.armCorridorRadius, 0.085), 11, options.spatialIndex);
+  const preferred = TEMPLATE_PRIORS.horizontal.armLength;
+  const safety = [0.20, 0.52];
+  const templateCost = softRangeCost(metrics.pathLengthN, preferred, safety);
+  const distalScore = clamp((metrics.pathLengthN - safety[0])
+    / Math.max(preferred[1] - safety[0], EPSILON), 0, 1);
+  const outward = side * (hand.x - shoulder.x);
+  const outwardScore = clamp((outward - safety[0])
+    / Math.max(preferred[1] - safety[0], EPSILON), 0, 1);
+  const angle = Math.atan2(shoulder.y - hand.y, Math.max(outward, EPSILON));
+  const angleCost = softRangeCost(angle, [0, 1.1], [-0.35, 1.35]);
+  const proximalArmContinuation = sampleProximalContinuation(
+    points, shoulder, hand, side, options);
+  const attachment = torsoAttachmentScore(points, side, shoulder, options);
+  const initialDistance = initialShoulder ? pointDistance3(shoulder, initialShoulder) : 0;
+  const score = 2.8 * metrics.occupancyCoverage
+    + 1.0 * metrics.endpointSupport
+    + 0.2 * distalScore
+    + 0.9 * outwardScore
+    - 1.3 * metrics.continuationCoverage
+    - 2.2 * metrics.longestGap
+    - 2.0 * metrics.lateralResidual
+    - 1.0 * metrics.depthResidual
+    - 0.85 * templateCost - 0.25 * angleCost
+    - 2.8 * proximalArmContinuation.independentScore
+    + 0.65 * attachment
+    - 0.25 * Math.min(initialDistance / 0.06, 1);
+  metrics.proximalContinuation = proximalArmContinuation;
+  return {shoulder, hand, metrics, templateCost, angleCost, angle, distalScore,
+    outwardScore, proximalArmContinuation, torsoAttachmentScore: attachment,
+    refinementDistance: initialDistance, initialShoulder,
+    score, valid: metrics.occupancyCoverage >= 0.55
+      && metrics.endpointSupport >= 0.1 && templateCost < 100,
+    path: centerlineFromCorridor(metrics, shoulder, hand)};
+}
+
+function buildShoulderCandidates(points, side, initialShoulder, hand, options = {}) {
+  if (!initialShoulder || !hand) return [];
+  const radius = clamp(finiteNumber(options.shoulderRefineRadius, 0.06), 0.03, 0.08);
+  const local = points.filter(item => Math.abs(item.y - initialShoulder.y) <= radius
+    && side * (item.x - initialShoulder.x) >= -0.04
+    && side * (item.x - initialShoulder.x) <= 0.035
+    && Math.abs(item.z - initialShoulder.z) <= 0.13
+    && side * item.x > 0.025);
+  const groups = new Map();
+  local.forEach(item => {
+    const heightBin = Math.floor((item.y - initialShoulder.y + radius) / 0.025);
+    const sideBin = Math.floor((side * (item.x - initialShoulder.x) + 0.04) / 0.035);
+    // Merge the depth-facing samples into one local cross-section. A surface
+    // split here can turn the same shoulder into separate front/back
+    // candidates and leave a torso edge with a better apparent corridor.
+    const key = `${heightBin},${sideBin}`;
+    const group = groups.get(key) || [];
+    group.push(item);
+    groups.set(key, group);
+  });
+  const candidates = [initialShoulder];
+  const upperLocal = local.filter(item => item.y >= initialShoulder.y + 0.02);
+  if (upperLocal.length) {
+    const topHeight = quantile(upperLocal.map(item => item.y), 0.72);
+    const top = upperLocal.filter(item => item.y >= topHeight);
+    candidates.push({
+      x: median(top.map(item => item.x)),
+      y: median(top.map(item => item.y)),
+      z: initialShoulder.z,
+      support: top.length,
+    });
+  }
+  groups.forEach(group => candidates.push({
+    x: median(group.map(item => item.x)),
+    y: median(group.map(item => item.y)),
+    z: initialShoulder.z,
+    support: group.length,
+  }));
+  return candidates.map(shoulder => buildArmCandidate(
+    points, side, shoulder, hand, initialShoulder, options))
+    .sort((left, right) => right.score - left.score);
 }
 
 function buildHandCandidates(points, side, shoulder, options = {}) {
@@ -794,9 +995,20 @@ function fitArmPair(points, upper, options = {}) {
     y: upper.shoulderHeight, z: center.z}, points);
   const leftCandidates = buildHandCandidates(points, -1, leftShoulder, options);
   const rightCandidates = buildHandCandidates(points, 1, rightShoulder, options);
-  const pair = selectArmPair(leftCandidates, rightCandidates);
-  const left = pair?.left || null;
-  const right = pair?.right || null;
+  const initialPair = selectArmPair(leftCandidates, rightCandidates);
+  const initialLeft = initialPair?.left || null;
+  const initialRight = initialPair?.right || null;
+  const refinedLeftCandidates = initialLeft
+    ? buildShoulderCandidates(points, -1, leftShoulder, initialLeft.hand, options)
+    : [];
+  const refinedRightCandidates = initialRight
+    ? buildShoulderCandidates(points, 1, rightShoulder, initialRight.hand, options)
+    : [];
+  const pair = selectArmPair(
+    refinedLeftCandidates.length ? refinedLeftCandidates : leftCandidates,
+    refinedRightCandidates.length ? refinedRightCandidates : rightCandidates);
+  const left = pair?.left || initialLeft;
+  const right = pair?.right || initialRight;
   const validLeft = !!left?.valid;
   const validRight = !!right?.valid;
   const leftPath = left?.path || [];
@@ -807,7 +1019,8 @@ function fitArmPair(points, upper, options = {}) {
       + 0.15 * Math.abs(left.angle - right.angle), 0, 1) : 0.5;
   return {
     leftTrack: {samples: leftPath}, rightTrack: {samples: rightPath},
-    leftShoulder, rightShoulder,
+    leftShoulder: validLeft ? left.shoulder : leftShoulder,
+    rightShoulder: validRight ? right.shoulder : rightShoulder,
     leftElbow: validLeft ? pointAtPathFraction(leftPath, 0.5) : null,
     rightElbow: validRight ? pointAtPathFraction(rightPath, 0.5) : null,
     leftHand: validLeft ? left.hand : null, rightHand: validRight ? right.hand : null,
@@ -816,8 +1029,10 @@ function fitArmPair(points, upper, options = {}) {
     symmetryResidual, validLeft, validRight,
     diagnostics: {
       left: candidateDiagnostic(left), right: candidateDiagnostic(right),
-      leftRunnerUp: candidateDiagnostic(leftCandidates.find(item => item !== left)),
-      rightRunnerUp: candidateDiagnostic(rightCandidates.find(item => item !== right)),
+      leftRunnerUp: candidateDiagnostic((refinedLeftCandidates.length
+        ? refinedLeftCandidates : leftCandidates).find(item => item !== left)),
+      rightRunnerUp: candidateDiagnostic((refinedRightCandidates.length
+        ? refinedRightCandidates : rightCandidates).find(item => item !== right)),
       preferredLength: [...TEMPLATE_PRIORS.horizontal.armLength], safetyLength: [0.20, 0.52],
       pairScore: pair?.score || 0,
     },
