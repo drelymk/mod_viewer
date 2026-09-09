@@ -54,6 +54,22 @@ function vector3(value, fallback = [0, 0, 0]) {
   return [...fallback];
 }
 
+function quaternion4(value) {
+  if (value?.isQuaternion) {
+    return [finiteNumber(value.x), finiteNumber(value.y),
+      finiteNumber(value.z), finiteNumber(value.w, 1)];
+  }
+  if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+    const result = [0, 1, 2, 3].map(index => Number(value[index]));
+    if (result.every(Number.isFinite)) return result;
+  }
+  if (value && typeof value === 'object') {
+    const result = [Number(value.x), Number(value.y), Number(value.z), Number(value.w)];
+    if (result.every(Number.isFinite)) return result;
+  }
+  return [0, 0, 0, 1];
+}
+
 function length(value) {
   return Math.hypot(value[0], value[1], value[2]);
 }
@@ -882,28 +898,43 @@ function consensusTemplate(bestTemplate, combined) {
   return template;
 }
 
-function emptyRig(frame, diagnostics = {}) {
+function emptyRig(frame, diagnostics = {}, reason = 'no_rest_geometry', available = true) {
   const controls = Object.fromEntries(CONTROL_KEYS.map(key => {
     const point = fallbackPoint(key);
     return [key, {position: [0, 0, 0], semantic: {sideN: point.x,
       height01: point.y, depthN: 0}, confidence: 'low', source: 'fallback', fitted: false,
       support: 0}];
   }));
-  return {version: 1, source: 'geometry', accepted: false, confidence: 'low',
+  return {version: 1, source: 'geometry', available, accepted: false, confidence: 'low',
     confidenceByRegion: {torso: 'low', arms: 'low', legs: 'low', overall: 'low'},
     frame: {...frame, lowHeight: 0, highHeight: 0, height: 0}, controls,
     paths: {torso: [], leftArm: [], rightArm: [], leftLeg: [], rightLeg: []},
-    diagnostics: {...diagnostics, failureReasons: ['no_rest_geometry'], fallbackControls: [...CONTROL_KEYS]},
+    diagnostics: {...diagnostics, failureReasons: [reason], fallbackControls: [...CONTROL_KEYS]},
   };
 }
 
 /** Fit a semantic, viewer-owned control rig from registered mesh rest geometry. */
-export function buildHumanoidControlRig({meshes = [], axes, options = {}} = {}) {
+export function buildHumanoidControlRig({meshes = [], axes, orientationState, options = {}} = {}) {
   const started = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
   const frame = coordinateFrame(axes);
+  const orientationReady = orientationState
+    ? orientationState.orientationInitialized === true : true;
+  const baseOrientation = quaternion4(orientationState?.baseOrientation);
+  const semanticDiagnostics = {
+    semanticAxes: {up: [...frame.up], right: [...frame.right], forward: [...frame.forward]},
+    orientationReady,
+    baseOrientation,
+    modelOrientationRevision: finiteNumber(orientationState?.modelOrientationRevision, 0),
+    semanticSpans: {up: 0, right: 0, forward: 0},
+  };
+  if (orientationState && !orientationReady) {
+    return emptyRig(frame, {...semanticDiagnostics, pointCount: 0, sampledPointCount: 0,
+      voxelCount: 0, fitRuntimeMs: 0}, 'orientation_not_ready', false);
+  }
   const projected = semanticPoints(meshes, frame);
   if (!projected.length) return emptyRig({up: frame.up, right: frame.right, forward: frame.forward},
-    {pointCount: 0, sampledPointCount: 0, voxelCount: 0, slabFits: [], fitRuntimeMs: 0});
+    {...semanticDiagnostics, pointCount: 0, sampledPointCount: 0, voxelCount: 0,
+      slabFits: [], fitRuntimeMs: 0});
   const workingPoints = downsamplePoints(projected,
     Math.max(1000, Math.floor(finiteNumber(options.maxPointCount, DEFAULT_MAX_POINT_COUNT))));
   const bounds = boundsFor(workingPoints);
@@ -963,6 +994,12 @@ export function buildHumanoidControlRig({meshes = [], axes, options = {}} = {}) 
     pointCount: projected.length, sampledPointCount: workingPoints.length, voxelCount: voxels.length,
     voxelSize, bodyDepth: bounds.depthCenter + depthMode.depthN * bounds.height,
     bodyDepthN: depthMode.depthN, bodyDepthSpread: depthMode.spreadN,
+    ...semanticDiagnostics,
+    semanticSpans: {
+      up: bounds.height,
+      right: bounds.maxSide - bounds.minSide,
+      forward: bounds.maxDepth - bounds.minDepth,
+    },
     slabWidths: slabWidths.map(Number), slabFits: slabDiagnostics,
     controlSpreadByRole: combined.spread, consensusSupportByControl: combined.support,
     consensusSupportByRole: Object.fromEntries(ROLE_NAMES.map(role => [role,
@@ -978,7 +1015,8 @@ export function buildHumanoidControlRig({meshes = [], axes, options = {}} = {}) 
       ? performance.now() : Date.now()) - started),
   };
   const result = {
-    version: 1, source: 'geometry', accepted: projected.length > 0 && Object.keys(combined.semantic).length > 0,
+    version: 1, source: 'geometry', available: true,
+    accepted: projected.length > 0 && Object.keys(combined.semantic).length > 0,
     confidence, confidenceByRegion,
     frame: {up: frame.up, right: frame.right, forward: frame.forward,
       lowHeight: bounds.lowHeight, highHeight: bounds.highHeight, height: bounds.height,

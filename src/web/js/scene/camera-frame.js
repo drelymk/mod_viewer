@@ -8,6 +8,7 @@ const INITIAL_CAMERA_UP = new THREE.Vector3(0, 1, 0);
 
 export function createCameraFrame({
   camera, renderer, controls, grid, cancelViewSnap, onModelFit,
+  onOrientationChanged,
 }) {
   let homeView = null;
   let clipNear = camera.near;
@@ -16,6 +17,7 @@ export function createCameraFrame({
   const uprightRotation = new THREE.Quaternion();
   const baseFacingRotation = new THREE.Quaternion();
   const modelRotation = new THREE.Quaternion();
+  let modelOrientationRevision = 0;
   let modelPivot = null;
   const modelTranslation = new THREE.Vector3();
 
@@ -114,13 +116,16 @@ export function createCameraFrame({
   }
 
   function getModelTransformState() {
+    const baseOrientation = baseFacingRotation.clone()
+      .multiply(uprightRotation).normalize();
     return {
-      orientation: modelRotation.clone()
-        .multiply(baseFacingRotation)
-        .multiply(uprightRotation),
+      orientation: modelRotation.clone().multiply(baseOrientation).normalize(),
+      baseOrientation,
       userRotation: modelRotation.clone(),
       translation: modelTranslation.clone(),
       pivot: currentModelPivot(),
+      orientationInitialized,
+      modelOrientationRevision,
     };
   }
 
@@ -270,6 +275,7 @@ export function createCameraFrame({
     preserveHomeView = false,
     initialRotationY = 0,
   } = {}) {
+    let orientationChanged = false;
     const preservedView = preserveCamera ? {
       position: camera.position.clone(),
       quaternion: camera.quaternion.clone(),
@@ -307,6 +313,8 @@ export function createCameraFrame({
       rotateMeshesAroundCenter(meshes, modelRotation, modelPivot);
       meshes.forEach(mesh => mesh.position.add(modelTranslation));
       orientationInitialized = true;
+      modelOrientationRevision += 1;
+      orientationChanged = true;
     }
     const box = computeModelBounds(meshes);
     if (box.isEmpty()) return;
@@ -360,6 +368,7 @@ export function createCameraFrame({
       camera.updateMatrixWorld();
     }
     controls.saveState();
+    if (orientationChanged) onOrientationChanged?.(getModelTransformState());
   }
 
   return {

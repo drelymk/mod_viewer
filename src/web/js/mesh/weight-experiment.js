@@ -98,8 +98,8 @@ let resolvedLimbMappingsStructureRevision = null;
 let resolvedLimbMappingsMetadataRevision = -1;
 let limbMappingMetadataRevision = 0;
 
-function invalidateHumanoidControlRig() {
-  humanoidGeometryRevision += 1;
+function invalidateHumanoidControlRig({geometryChanged = true} = {}) {
+  if (geometryChanged) humanoidGeometryRevision += 1;
   humanoidControlRigCacheKey = '';
   humanoidControlRigCache = null;
   humanoidControlRigSnapshotCache = null;
@@ -305,8 +305,13 @@ function characterForwardForRole() {
   return humanoidSemanticAxes().forward;
 }
 
-function humanoidSemanticAxes() {
-  return characterAxesFromOrientation(getModelTransformState?.()) || {
+function humanoidSemanticAxes({requireReady = false} = {}) {
+  const orientationState = getModelTransformState?.();
+  if (requireReady && orientationState?.orientationInitialized !== true) return null;
+  const axes = characterAxesFromOrientation(orientationState);
+  if (axes) return axes;
+  if (requireReady) return null;
+  return {
     up: new THREE.Vector3(0, 1, 0),
     forward: new THREE.Vector3(0, 0, 1),
     right: new THREE.Vector3(1, 0, 0),
@@ -321,13 +326,34 @@ function humanoidSemanticFrame() {
 }
 
 function humanoidAnalysis() {
-  const key = `${modelWeightGeneration}:${humanoidGeometryRevision}`;
+  const orientationState = getModelTransformState?.();
+  const axes = humanoidSemanticAxes({requireReady: true});
+  if (!axes || orientationState?.orientationInitialized !== true) {
+    // Do not let a pre-fit request publish or cache a fallback rig. The
+    // automatic fitter must use the same source-local frame as the model.
+    const unavailableState = {
+      ...(orientationState || {}), orientationInitialized: false,
+    };
+    const unavailable = buildHumanoidControlRig({
+      meshes: [], axes: undefined,
+      orientationState: unavailableState,
+    });
+    return {
+      ...unavailable,
+      modelGeneration: modelWeightGeneration,
+      geometryRevision: humanoidGeometryRevision,
+    };
+  }
+  const orientationRevision = Number.isFinite(
+    Number(orientationState.modelOrientationRevision))
+    ? Number(orientationState.modelOrientationRevision) : 0;
+  const key = `${modelWeightGeneration}:${humanoidGeometryRevision}:${orientationRevision}`;
   if (humanoidControlRigCache && humanoidControlRigCacheKey === key) {
     return humanoidControlRigCache;
   }
   const started = performanceNow();
   const fitted = buildHumanoidControlRig({
-    meshes: modelPickMeshes(), axes: humanoidSemanticAxes(),
+    meshes: modelPickMeshes(), axes, orientationState,
   });
   const result = {
     ...fitted,
@@ -344,6 +370,7 @@ function humanoidAnalysis() {
 
 function humanoidControlRigSnapshot() {
   const result = humanoidAnalysis();
+  if (result?.available === false) return serializeHumanoidControlRig(result);
   if (!humanoidControlRigSnapshotCache) {
     humanoidControlRigSnapshotCache = serializeHumanoidControlRig(result);
   }
@@ -355,6 +382,10 @@ export function getHumanoidControlRig() {
 }
 
 function humanoidControlRigStatus(result) {
+  if (result?.available === false) {
+    const reason = result.diagnostics?.failureReasons?.[0] || 'unavailable';
+    return `Humanoid control rig unavailable (${reason}).`;
+  }
   if (!result?.diagnostics?.failureReasons?.length) {
     return `Humanoid control rig fitted (${result.confidence} confidence).`;
   }
@@ -3396,6 +3427,11 @@ function handleModelTransformChanged(event) {
   });
 }
 
+function handleModelOrientationChanged() {
+  invalidateHumanoidControlRig({geometryChanged: false});
+  notifyModelRigChanged();
+}
+
 function handleVirtualModelMotion(event) {
   modelPhysicsSession.handleVirtualMotion(event.detail);
 }
@@ -3598,6 +3634,8 @@ export function refreshSkinningAfterShapeChange(mesh) {
 if (typeof window !== 'undefined') {
   window.addEventListener('mod-viewer-model-transform-changed',
     handleModelTransformChanged);
+  window.addEventListener('mod-viewer-model-orientation-changed',
+    handleModelOrientationChanged);
   window.addEventListener('mod-viewer-virtual-model-motion',
     handleVirtualModelMotion);
   window.addEventListener('mod-viewer-mesh-state-changed', event => {

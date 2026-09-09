@@ -910,11 +910,17 @@ function cloneRotations(localRotations) {
   return result;
 }
 
-export function characterAxesFromOrientation({orientation, userRotation} = {}) {
-  if (!orientation || !userRotation) return null;
-  const baseOrientation = quaternionFrom(userRotation).invert()
-    .multiply(quaternionFrom(orientation)).normalize();
-  const inverseBase = baseOrientation.clone().invert();
+export function characterAxesFromOrientation({orientation, userRotation,
+  baseOrientation, orientationInitialized} = {}) {
+  if (orientationInitialized === false) return null;
+  let sourceBaseOrientation = baseOrientation
+    ? quaternionFrom(baseOrientation) : null;
+  if (!sourceBaseOrientation) {
+    if (!orientation || !userRotation) return null;
+    sourceBaseOrientation = quaternionFrom(userRotation).invert()
+      .multiply(quaternionFrom(orientation)).normalize();
+  }
+  const inverseBase = sourceBaseOrientation.clone().invert();
   const up = new THREE.Vector3(0, 1, 0).applyQuaternion(inverseBase).normalize();
   const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(inverseBase);
   forward.addScaledVector(up, -forward.dot(up));

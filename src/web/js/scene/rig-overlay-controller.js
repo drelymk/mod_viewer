@@ -432,7 +432,9 @@ export function createRigOverlayController({
     const diagnosticPointPositions = [];
     const diagnosticPointColors = [];
     const rig = humanoidControlRigFor(source);
-    const controls = rig?.controls || {};
+    const rigAvailable = rig?.available !== false
+      && !(rig?.source === 'geometry' && rig.accepted === false);
+    const controls = rigAvailable ? (rig?.controls || {}) : {};
     const controlPoint = key => controls[key]?.position || controls[key] || null;
     const controlMeta = key => controls[key] || {};
     const roleConfidence = role => rig?.confidenceByRegion?.[role === 'left_arm'
@@ -518,7 +520,7 @@ export function createRigOverlayController({
     setGeometry(humanoidPoints, pointPositions, pointColors);
     setGeometry(humanoidDiagnosticLines, diagnosticLinePositions, diagnosticLineColors);
     setGeometry(humanoidDiagnosticPoints, diagnosticPointPositions, diagnosticPointColors);
-    humanoidGroup.visible = humanoidLinePairs.length > 0;
+    humanoidGroup.visible = rigAvailable && humanoidLinePairs.length > 0;
     humanoidDiagnosticLines.visible = humanoidDiagnosticSegmentCount > 0;
     humanoidDiagnosticPoints.visible = diagnosticPointPositions.length > 0;
   }

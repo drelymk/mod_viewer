@@ -1195,8 +1195,12 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       state = {...state, visible: true};
       controller.refresh(state);
       const shownAgain = controller.getDebugState();
+      state = {...state, model: {...state.model,
+        humanoidControlRig: {...state.model.humanoidControlRig, available: false}}};
+      controller.refresh(state);
+      const unavailable = controller.getDebugState();
       controller.dispose();
-      return {initial, selectedRoot, afterTransform, shownAgain};
+      return {initial, selectedRoot, afterTransform, shownAgain, unavailable};
     }""")
     assert result["initial"]["staticObjectCount"] == 4
     assert result["initial"]["nodeCount"] == 3
@@ -1213,6 +1217,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
         result["initial"]["modelFrameUpdateCount"] + 2
     assert result["shownAgain"]["rebuildCount"] == 1
     assert result["shownAgain"]["selectedJointId"] is None
+    assert not result["unavailable"]["humanoidOverlayVisible"]
 
 
 def test_rig_overlay_builds_all_joints_and_toggles_visibility(module_page):
@@ -4249,6 +4254,161 @@ def test_geometry_humanoid_control_rig_is_rest_owned_and_density_invariant(modul
         result["first"]["controls"]["rightFoot"]["position"], abs=.05)
     assert result["sameRestWhilePosed"]["controls"]["chest"]["position"] == \
         pytest.approx(result["first"]["controls"]["chest"]["position"], abs=.001)
+
+
+def test_geometry_humanoid_control_rig_respects_source_orientation_and_readiness(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const points = [];
+      const addBox = (minX, maxX, minY, maxY, minZ, maxZ, step = .08) => {
+        for (let y = minY; y <= maxY + .001; y += step) {
+          for (let x = minX; x <= maxX + .001; x += step) {
+            points.push(x, y, minZ, x, y, maxZ);
+          }
+        }
+      };
+      const addLimb = (a, b, radius = .06) => {
+        for (let t = 0; t <= 1.001; t += .04) {
+          const x = a[0] + (b[0] - a[0]) * t;
+          const y = a[1] + (b[1] - a[1]) * t;
+          points.push(x - radius, y, -.04, x + radius, y, .04,
+            x, y - radius, -.04, x, y + radius, .04);
+        }
+      };
+      addBox(-.22, .22, .45, 1.7, -.08, .08);
+      addLimb([-.18, 1.48], [-.52, 1.30]);
+      addLimb([-.52, 1.30], [-.92, 1.20]);
+      addLimb([.18, 1.48], [.52, 1.30]);
+      addLimb([.52, 1.30], [.92, 1.20]);
+      addLimb([-.14, .55], [-.2, .28]);
+      addLimb([-.2, .28], [-.24, .02]);
+      addLimb([.14, .55], [.2, .28]);
+      addLimb([.2, .28], [.24, .02]);
+      const makeMesh = values => ({
+        userData: {humanoidRestPositions: new Float32Array(values)},
+      });
+      // A Z-up source is what the camera's -90 degree X base orientation
+      // converts to the viewer's Y-up frame: (x, y, z) -> (x, -z, y).
+      const zUpPoints = [];
+      for (let index = 0; index < points.length; index += 3) {
+        zUpPoints.push(points[index], -points[index + 2], points[index + 1]);
+      }
+      const canonicalAxes = {
+        up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
+      };
+      const zUpAxes = {
+        up: [0, 0, 1], right: [1, 0, 0], forward: [0, -1, 0],
+      };
+      const canonical = buildHumanoidControlRig({
+        meshes: [makeMesh(points)], axes: canonicalAxes,
+        orientationState: {orientationInitialized: true,
+          baseOrientation: [0, 0, 0, 1], modelOrientationRevision: 1},
+      });
+      const zUp = buildHumanoidControlRig({
+        meshes: [makeMesh(zUpPoints)], axes: zUpAxes,
+        orientationState: {orientationInitialized: true,
+          baseOrientation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2],
+          modelOrientationRevision: 2},
+      });
+      const unavailable = buildHumanoidControlRig({
+        meshes: [makeMesh(zUpPoints)], axes: zUpAxes,
+        orientationState: {orientationInitialized: false,
+          baseOrientation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2],
+          modelOrientationRevision: 1},
+      });
+      const semantic = rig => Object.fromEntries(Object.entries(rig.controls)
+        .map(([key, control]) => [key, control.semantic]));
+      return {
+        canonical: {available: canonical.available, accepted: canonical.accepted,
+          controls: semantic(canonical), spans: canonical.diagnostics.semanticSpans,
+          axes: canonical.diagnostics.semanticAxes},
+        zUp: {available: zUp.available, accepted: zUp.accepted,
+          controls: semantic(zUp), spans: zUp.diagnostics.semanticSpans,
+          axes: zUp.diagnostics.semanticAxes,
+          baseOrientation: zUp.diagnostics.baseOrientation},
+        unavailable: {available: unavailable.available,
+          failureReasons: unavailable.diagnostics.failureReasons,
+          fitted: Object.values(unavailable.controls).some(control => control.fitted)},
+      };
+    }""")
+    assert result["canonical"]["available"]
+    assert result["canonical"]["accepted"]
+    assert result["zUp"]["available"]
+    assert result["zUp"]["accepted"]
+    for key, semantic in result["canonical"]["controls"].items():
+        assert result["zUp"]["controls"][key] == pytest.approx(semantic, abs=.001)
+    assert result["zUp"]["spans"] == pytest.approx(result["canonical"]["spans"], abs=.001)
+    assert result["zUp"]["axes"] == {
+        "up": pytest.approx([0, 0, 1]),
+        "right": pytest.approx([1, 0, 0]),
+        "forward": pytest.approx([0, -1, 0]),
+    }
+    assert result["zUp"]["baseOrientation"] == pytest.approx(
+        [-2 ** -0.5, 0, 0, 2 ** -0.5])
+    assert result["unavailable"] == {
+        "available": False,
+        "failureReasons": ["orientation_not_ready"],
+        "fitted": False,
+    }
+
+
+def test_camera_frame_exposes_stable_base_orientation_state(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {createCameraFrame} = await import('./js/scene/camera-frame.js');
+      const camera = new THREE.PerspectiveCamera(45, 4 / 3, .01, 100);
+      const controls = {
+        target: new THREE.Vector3(),
+        update() {},
+        setCamera() {},
+        saveState() {},
+      };
+      const renderer = {
+        domElement: {getBoundingClientRect: () => ({
+          width: 800, height: 600, left: 0, right: 800,
+        })},
+        setSize() {},
+      };
+      const grid = {scale: new THREE.Vector3(1, 1, 1), position: new THREE.Vector3()};
+      const events = [];
+      const frame = createCameraFrame({camera, renderer, controls, grid,
+        cancelViewSnap() {}, onOrientationChanged: state => events.push(state)});
+      const before = frame.getModelTransformState();
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1));
+      frame.fitTo([mesh], {initialRotationY: Math.PI / 2});
+      const fitted = frame.getModelTransformState();
+      frame.rotateModelQuarterTurn([mesh]);
+      const turned = frame.getModelTransformState();
+      mesh.geometry.dispose();
+      const arrays = state => ({
+        orientation: state.orientation.toArray(),
+        baseOrientation: state.baseOrientation.toArray(),
+        userRotation: state.userRotation.toArray(),
+        orientationInitialized: state.orientationInitialized,
+        modelOrientationRevision: state.modelOrientationRevision,
+      });
+      return {before: arrays(before), fitted: arrays(fitted),
+        turned: arrays(turned), eventCount: events.length};
+    }""")
+    assert result["before"] == {
+        "orientation": [0, 0, 0, 1],
+        "baseOrientation": [0, 0, 0, 1],
+        "userRotation": [0, 0, 0, 1],
+        "orientationInitialized": False,
+        "modelOrientationRevision": 0,
+    }
+    assert result["fitted"]["orientationInitialized"]
+    assert result["fitted"]["modelOrientationRevision"] == 1
+    assert result["fitted"]["baseOrientation"] == pytest.approx(
+        [0, 2 ** -0.5, 0, 2 ** -0.5])
+    assert result["turned"]["modelOrientationRevision"] == 1
+    assert result["turned"]["baseOrientation"] == pytest.approx(
+        result["fitted"]["baseOrientation"])
+    assert result["turned"]["userRotation"] != pytest.approx(
+        result["fitted"]["userRotation"])
+    assert result["eventCount"] == 1
 
 
 @pytest.mark.parametrize("arm_drop", [.03, .25, .5],
