@@ -354,10 +354,6 @@ export function getHumanoidControlRig() {
   return humanoidAnalysis();
 }
 
-export function getHumanoidLimbDetection() {
-  return getHumanoidControlRig();
-}
-
 function humanoidControlRigStatus(result) {
   if (!result?.diagnostics?.failureReasons?.length) {
     return `Humanoid control rig fitted (${result.confidence} confidence).`;
@@ -381,12 +377,6 @@ export function fitHumanoidControlRig() {
     controlRig: result,
     semanticDetectionMs: modelRigState.semanticDetectionMs,
   };
-}
-
-// Compatibility name for integrations that still invoke the old button API.
-// It intentionally cannot write limb mappings.
-export async function autoDetectHumanoidLimbs() {
-  return fitHumanoidControlRig();
 }
 
 function resolveLimbMapping(role) {

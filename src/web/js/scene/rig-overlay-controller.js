@@ -172,6 +172,16 @@ function humanoidRoleColor(role) {
   return [.54, 1, .42];
 }
 
+function humanoidConfidenceColor(role, confidence, source) {
+  if (source === 'fallback') return [.95, .24, .82];
+  if (confidence === 'low') return [.98, .56, .16];
+  if (confidence === 'medium') {
+    const base = humanoidRoleColor(role);
+    return base.map(value => value * .62 + .38);
+  }
+  return humanoidRoleColor(role);
+}
+
 const CONTROL_KEYS_FOR_OVERLAY = Object.freeze([
   {key: 'chest', role: 'torso'}, {key: 'pelvis', role: 'torso'},
   {key: 'leftShoulder', role: 'left_arm'},
@@ -263,13 +273,29 @@ export function createRigOverlayController({
     new THREE.BufferGeometry(), humanoidLineMaterial);
   const humanoidPoints = new THREE.Points(
     new THREE.BufferGeometry(), humanoidPointMaterial);
+  const humanoidDiagnosticLineMaterial = new THREE.LineBasicMaterial({
+    vertexColors: true, depthTest: false, depthWrite: false,
+  });
+  const humanoidDiagnosticPointMaterial = new THREE.PointsMaterial({
+    size: 0.032, sizeAttenuation: false, vertexColors: true,
+    depthTest: false, depthWrite: false,
+  });
+  const humanoidDiagnosticLines = new THREE.LineSegments(
+    new THREE.BufferGeometry(), humanoidDiagnosticLineMaterial);
+  const humanoidDiagnosticPoints = new THREE.Points(
+    new THREE.BufferGeometry(), humanoidDiagnosticPointMaterial);
   humanoidLines.renderOrder = 13;
   humanoidPoints.renderOrder = 14;
   humanoidLines.frustumCulled = false;
   humanoidPoints.frustumCulled = false;
+  humanoidDiagnosticLines.frustumCulled = false;
+  humanoidDiagnosticPoints.frustumCulled = false;
   humanoidLines.raycast = () => {};
   humanoidPoints.raycast = () => {};
-  humanoidGroup.add(humanoidLines, humanoidPoints);
+  humanoidDiagnosticLines.raycast = () => {};
+  humanoidDiagnosticPoints.raycast = () => {};
+  humanoidGroup.add(humanoidLines, humanoidPoints,
+    humanoidDiagnosticLines, humanoidDiagnosticPoints);
   group.add(humanoidGroup);
 
   const proxy = new THREE.Object3D();
@@ -310,6 +336,7 @@ export function createRigOverlayController({
   let jointChildBoneIds = [];
   let humanoidLinePairs = [];
   let humanoidLandmarks = [];
+  let humanoidDiagnosticSegmentCount = 0;
   let rebuildCount = 0;
   let modelFrameUpdateCount = 0;
   let posedOverlayUpdateCount = 0;
@@ -395,13 +422,23 @@ export function createRigOverlayController({
   function rebuildHumanoidOverlay(source = currentSource) {
     humanoidLinePairs = [];
     humanoidLandmarks = [];
+    humanoidDiagnosticSegmentCount = 0;
     const linePositions = [];
     const lineColors = [];
     const pointPositions = [];
     const pointColors = [];
+    const diagnosticLinePositions = [];
+    const diagnosticLineColors = [];
+    const diagnosticPointPositions = [];
+    const diagnosticPointColors = [];
     const rig = humanoidControlRigFor(source);
     const controls = rig?.controls || {};
     const controlPoint = key => controls[key]?.position || controls[key] || null;
+    const controlMeta = key => controls[key] || {};
+    const roleConfidence = role => rig?.confidenceByRegion?.[role === 'left_arm'
+      ? 'leftArm' : role === 'right_arm' ? 'rightArm'
+        : role === 'left_leg' ? 'leftLeg' : role === 'right_leg' ? 'rightLeg' : 'torso']
+      || rig?.confidence || 'low';
     const links = [
       ['chest', 'pelvis', 'torso'],
       ['leftShoulder', 'leftElbow', 'left_arm'],
@@ -417,7 +454,15 @@ export function createRigOverlayController({
       const first = controlPoint(firstKey);
       const second = controlPoint(secondKey);
       if (!first || !second) return;
-      const color = role === 'torso' ? [.9, .9, .9] : humanoidRoleColor(role);
+      const firstMeta = controlMeta(firstKey);
+      const secondMeta = controlMeta(secondKey);
+      const confidence = [firstMeta.confidence, secondMeta.confidence]
+        .includes('low') ? 'low' : [firstMeta.confidence, secondMeta.confidence]
+          .includes('medium') ? 'medium' : roleConfidence(role);
+      const color = role === 'torso' ? [.9, .9, .9]
+        : humanoidConfidenceColor(role, confidence,
+          firstMeta.source === 'fallback' || secondMeta.source === 'fallback'
+            ? 'fallback' : 'geometry');
       linePositions.push(...vector(first).toArray(), ...vector(second).toArray());
       lineColors.push(...color, ...color);
       humanoidLinePairs.push([firstKey, secondKey]);
@@ -425,7 +470,8 @@ export function createRigOverlayController({
     Object.entries(rig?.paths || {}).forEach(([pathRole, path]) => {
       const role = pathRole === 'torso' ? 'torso' : pathRole
         .replace('Arm', '_arm').replace('Leg', '_leg');
-      const color = role === 'torso' ? [.65, .65, .65] : humanoidRoleColor(role);
+      const color = role === 'torso' ? [.65, .65, .65]
+        : humanoidConfidenceColor(role, roleConfidence(role), 'geometry');
       for (let index = 1; index < (path || []).length; index += 1) {
         const first = vector(path[index - 1]);
         const second = vector(path[index]);
@@ -438,12 +484,43 @@ export function createRigOverlayController({
       const point = controlPoint(key);
       if (!point) return;
       pointPositions.push(...vector(point).toArray());
-      pointColors.push(...(role === 'torso' ? [.95, .95, .95] : humanoidRoleColor(role)));
+      const meta = controlMeta(key);
+      pointColors.push(...(role === 'torso' ? [.95, .95, .95]
+        : humanoidConfidenceColor(role, meta.confidence || roleConfidence(role), meta.source)));
       humanoidLandmarks.push({key, role});
+    });
+    const diagnostics = rig?.diagnostics?.templateDiagnostic || {};
+    const diagnosticPair = (first, second, color) => {
+      if (!first || !second) return;
+      diagnosticLinePositions.push(...first, ...second);
+      diagnosticLineColors.push(...color, ...color);
+      humanoidDiagnosticSegmentCount += 1;
+    };
+    diagnosticPair(...(diagnostics.headNeckSearchBand || []), [.75, .48, .95]);
+    diagnosticPair(...(diagnostics.shoulderHeightLine || []), [1, .58, .14]);
+    diagnosticPair(...(diagnostics.pelvisHeightLine || []), [.95, .34, .72]);
+    ['left', 'right'].forEach(side => {
+      const arm = diagnostics.trackedArmSamples?.[side] || [];
+      const leg = diagnostics.trackedLegSamples?.[side] || [];
+      for (let index = 1; index < arm.length; index += 1) {
+        diagnosticPair(arm[index - 1], arm[index], [.95, .68, .22]);
+      }
+      for (let index = 1; index < leg.length; index += 1) {
+        diagnosticPair(leg[index - 1], leg[index], [.96, .32, .72]);
+      }
+    });
+    (diagnostics.hipCenters || []).forEach(point => {
+      if (!point) return;
+      diagnosticPointPositions.push(...point);
+      diagnosticPointColors.push(.96, .34, .72);
     });
     setGeometry(humanoidLines, linePositions, lineColors);
     setGeometry(humanoidPoints, pointPositions, pointColors);
+    setGeometry(humanoidDiagnosticLines, diagnosticLinePositions, diagnosticLineColors);
+    setGeometry(humanoidDiagnosticPoints, diagnosticPointPositions, diagnosticPointColors);
     humanoidGroup.visible = humanoidLinePairs.length > 0;
+    humanoidDiagnosticLines.visible = humanoidDiagnosticSegmentCount > 0;
+    humanoidDiagnosticPoints.visible = diagnosticPointPositions.length > 0;
   }
 
   function updateHumanoidPosedOverlay(source = currentSource) {
@@ -1037,6 +1114,7 @@ export function createRigOverlayController({
         humanoidOverlayVisible: humanoidGroup.visible,
         humanoidSegmentCount: humanoidLinePairs.length,
         humanoidLandmarkCount: humanoidLandmarks.length,
+        humanoidDiagnosticSegmentCount,
         selectedJointId,
         proxyVisible: proxy.visible,
         ikTargetVisible: ikTargetProxy.visible,
@@ -1083,6 +1161,8 @@ export function createRigOverlayController({
       jointPoints.geometry.dispose();
       humanoidLines.geometry.dispose();
       humanoidPoints.geometry.dispose();
+      humanoidDiagnosticLines.geometry.dispose();
+      humanoidDiagnosticPoints.geometry.dispose();
       hoverPoint.geometry.dispose();
       proxyRing.geometry.dispose();
       centerMaterial.dispose();
@@ -1092,6 +1172,8 @@ export function createRigOverlayController({
       lineMaterial.dispose();
       humanoidLineMaterial.dispose();
       humanoidPointMaterial.dispose();
+      humanoidDiagnosticLineMaterial.dispose();
+      humanoidDiagnosticPointMaterial.dispose();
       ikTargetMarker.geometry.dispose();
       group.remove(staticGroup, humanoidGroup, proxy, ikTargetProxy);
       scene?.remove(group);
