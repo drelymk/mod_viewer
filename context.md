@@ -317,12 +317,24 @@ of documentation, comments and tests; use portable fixtures instead.
   do not change for pose, materials, textures, visibility or model turns.
 - Rig IK is ModelJoint-native semantic limb posing: users persist only stable
   anchor signatures for the four supported limb roles, and auto, manual and
-  saved mappings all resolve descendants through one bounded, role-aware path
-  search. Semantic up/forward/right axes drive path and bilateral geometry;
-  rest-frame continuation remains evidence rather than a required edge. The
-  solver rotates only the mapped anchor and bend controls. End local rotation,
-  helper local rotations, Physics composition, and pose preset schema remain
-  authoritative elsewhere.
+  saved mappings all resolve through the generic undirected ModelJoint path
+  contract. The humanoid detector is position-first: pivot samples are
+  authoritative, influence centers remain evidence, one model-wide semantic
+  frame supplies normalized height/side/absolute depth, and virtual Chest and
+  Pelvis scaffolds guide bounded landmark pools. Legs are fitted before arms;
+  full endpoint paths, bilateral triples and bounded whole-body alternatives
+  are scored by separate landmark, topology, path-geometry, support and body
+  relation evidence. Primary humanoid selection never persists or classifies
+  wings, ribbons, hair or other accessory categories. Semantic debug geometry
+  is a separate S/E/H and H/K/F overlay; it is not part of the generic Rig,
+  deformation, Physics or persisted schema contracts. Semantic up/forward/right
+  axes drive path and bilateral geometry; rest-frame continuation remains
+  evidence rather than a required edge. Automatic application is atomic per
+  bilateral arm/leg class, while manual anchor/end/bend overrides remain
+  authoritative and incompatible topology reports `manual_topology_mismatch`.
+  The solver rotates only the mapped anchor and bend controls. End local
+  rotation, helper local rotations, Physics composition, and pose preset schema
+  remain authoritative elsewhere.
   Speculative solves use private transforms and one target update commits all
   changed local quaternions through one batch manual-pose transaction. IK never
   owns a skeleton, deformation path, IK Physics state, or persisted target.

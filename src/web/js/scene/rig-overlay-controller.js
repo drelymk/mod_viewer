@@ -163,6 +163,13 @@ function centerColor(component, jointId, selectedJointId) {
   return [.49, .83, .99];
 }
 
+function humanoidRoleColor(role) {
+  if (role === 'left_arm') return [1, .42, .24];
+  if (role === 'right_arm') return [.32, .72, 1];
+  if (role === 'left_leg') return [1, .78, .18];
+  return [.54, 1, .42];
+}
+
 export function createRigOverlayController({
   scene, camera, canvas, getMeshes, getRigState,
   getRigJointPoseFrame, arcballControls, setRigJointRotation,
@@ -225,6 +232,33 @@ export function createRigOverlayController({
   staticGroup.add(lineSegments, centerPoints, jointPoints, hoverPoint);
   group.add(staticGroup);
 
+  // Semantic detection is intentionally a separate debug group. It only
+  // draws the selected S/E/H and H/K/F paths; the full inferred Rig remains
+  // available in the group above without implying anatomical categories.
+  const humanoidGroup = new THREE.Group();
+  humanoidGroup.name = 'viewer-humanoid-backbone-overlay';
+  humanoidGroup.userData.isViewerHumanoidOverlay = true;
+  humanoidGroup.visible = false;
+  const humanoidLineMaterial = new THREE.LineBasicMaterial({
+    vertexColors: true, depthTest: false, depthWrite: false,
+  });
+  const humanoidPointMaterial = new THREE.PointsMaterial({
+    size: 0.045, sizeAttenuation: false, vertexColors: true,
+    depthTest: false, depthWrite: false,
+  });
+  const humanoidLines = new THREE.LineSegments(
+    new THREE.BufferGeometry(), humanoidLineMaterial);
+  const humanoidPoints = new THREE.Points(
+    new THREE.BufferGeometry(), humanoidPointMaterial);
+  humanoidLines.renderOrder = 13;
+  humanoidPoints.renderOrder = 14;
+  humanoidLines.frustumCulled = false;
+  humanoidPoints.frustumCulled = false;
+  humanoidLines.raycast = () => {};
+  humanoidPoints.raycast = () => {};
+  humanoidGroup.add(humanoidLines, humanoidPoints);
+  group.add(humanoidGroup);
+
   const proxy = new THREE.Object3D();
   proxy.name = 'viewer-inferred-rig-pose-proxy';
   proxy.userData.isViewerRigOverlay = true;
@@ -255,11 +289,14 @@ export function createRigOverlayController({
   let currentSnapshot = null;
   let currentSource = null;
   let currentTopologyKey = '';
+  let currentHumanoidKey = '';
   let nodeBoneIds = [];
   let nodeByBoneId = new Map();
   let nodeIndexByBoneId = new Map();
   let lineBonePairs = [];
   let jointChildBoneIds = [];
+  let humanoidLinePairs = [];
+  let humanoidLandmarks = [];
   let rebuildCount = 0;
   let modelFrameUpdateCount = 0;
   let posedOverlayUpdateCount = 0;
@@ -336,6 +373,75 @@ export function createRigOverlayController({
       colors.setXYZ(index, ...color);
     });
     colors.needsUpdate = true;
+  }
+
+  function humanoidDetectionFor(source) {
+    return source?.humanoidDetection?.selectedRoles || {};
+  }
+
+  function rebuildHumanoidOverlay(source = currentSource) {
+    humanoidLinePairs = [];
+    humanoidLandmarks = [];
+    const linePositions = [];
+    const lineColors = [];
+    const pointPositions = [];
+    const pointColors = [];
+    const landmarkKeys = new Set();
+    const selectedRoles = humanoidDetectionFor(source);
+    Object.entries(selectedRoles).forEach(([role, mapping]) => {
+      const path = (mapping?.available ? mapping.pathJointIds : [])
+        .map(Number).filter(Number.isInteger);
+      const color = humanoidRoleColor(role);
+      for (let index = 1; index < path.length; index += 1) {
+        const first = pivotFor(source, path[index - 1]);
+        const second = pivotFor(source, path[index]);
+        if (!first || !second) continue;
+        linePositions.push(...first, ...second);
+        lineColors.push(...color, ...color);
+        humanoidLinePairs.push([path[index - 1], path[index]]);
+      }
+      [mapping?.anchorJointId, mapping?.bendJointId, mapping?.endJointId]
+        .map(Number).filter(Number.isInteger).forEach(jointId => {
+          const key = `${role}:${jointId}`;
+          if (landmarkKeys.has(key)) return;
+          const point = pivotFor(source, jointId);
+          if (!point) return;
+          landmarkKeys.add(key);
+          pointPositions.push(...point);
+          pointColors.push(...color);
+          humanoidLandmarks.push({jointId, role});
+        });
+    });
+    setGeometry(humanoidLines, linePositions, lineColors);
+    setGeometry(humanoidPoints, pointPositions, pointColors);
+    humanoidGroup.visible = humanoidLinePairs.length > 0;
+  }
+
+  function updateHumanoidPosedOverlay(source = currentSource) {
+    if (!source || !humanoidGroup.visible) return;
+    const lineAttribute = humanoidLines.geometry.getAttribute('position');
+    humanoidLinePairs.forEach(([firstId, secondId], index) => {
+      const firstFrame = getRigJointPoseFrame?.(firstId);
+      const secondFrame = getRigJointPoseFrame?.(secondId);
+      const first = firstFrame?.pivot || pivotFor(source, firstId);
+      const second = secondFrame?.pivot || pivotFor(source, secondId);
+      if (!lineAttribute || !first || !second) return;
+      const firstPoint = vector(first);
+      const secondPoint = vector(second);
+      lineAttribute.setXYZ(index * 2, firstPoint.x, firstPoint.y, firstPoint.z);
+      lineAttribute.setXYZ(index * 2 + 1,
+        secondPoint.x, secondPoint.y, secondPoint.z);
+    });
+    if (lineAttribute) lineAttribute.needsUpdate = true;
+    const pointAttribute = humanoidPoints.geometry.getAttribute('position');
+    humanoidLandmarks.forEach(({jointId}, index) => {
+      const frame = getRigJointPoseFrame?.(jointId);
+      const point = frame?.pivot || pivotFor(source, jointId);
+      if (!pointAttribute || !point) return;
+      const value = vector(point);
+      pointAttribute.setXYZ(index, value.x, value.y, value.z);
+    });
+    if (pointAttribute) pointAttribute.needsUpdate = true;
   }
 
   function rebuildOverlay(source) {
@@ -435,6 +541,7 @@ export function createRigOverlayController({
       jointAttribute.setXYZ(index, joint.x, joint.y, joint.z);
     });
     if (jointAttribute) jointAttribute.needsUpdate = true;
+    updateHumanoidPosedOverlay(source);
     posedOverlayUpdateCount += 1;
   }
 
@@ -852,8 +959,15 @@ export function createRigOverlayController({
       currentTopologyKey = nextTopologyKey;
       rebuildOverlay(currentSource);
     }
+    const nextHumanoidKey = JSON.stringify(
+      humanoidDetectionFor(currentSource));
+    if (nextHumanoidKey !== currentHumanoidKey) {
+      currentHumanoidKey = nextHumanoidKey;
+      rebuildHumanoidOverlay(currentSource);
+    }
     updateModelFrame();
     group.visible = !!currentSource;
+    humanoidGroup.visible = humanoidGroup.visible && !!currentSource;
     staticGroup.visible = !!currentSnapshot.jointPickIntent && !!currentSource;
     if (!currentSnapshot.jointPickIntent) {
       pickCandidateCache = [];
@@ -912,6 +1026,9 @@ export function createRigOverlayController({
         nodeCount: nodeBoneIds.length,
         jointCount: jointPoints.geometry.getAttribute('position')?.count || 0,
         edgeCount: lineSegments.geometry.getAttribute('position')?.count / 2 || 0,
+        humanoidOverlayVisible: humanoidGroup.visible,
+        humanoidSegmentCount: humanoidLinePairs.length,
+        humanoidLandmarkCount: humanoidLandmarks.length,
         selectedJointId,
         proxyVisible: proxy.visible,
         ikTargetVisible: ikTargetProxy.visible,
@@ -956,6 +1073,8 @@ export function createRigOverlayController({
       lineSegments.geometry.dispose();
       centerPoints.geometry.dispose();
       jointPoints.geometry.dispose();
+      humanoidLines.geometry.dispose();
+      humanoidPoints.geometry.dispose();
       hoverPoint.geometry.dispose();
       proxyRing.geometry.dispose();
       centerMaterial.dispose();
@@ -963,8 +1082,10 @@ export function createRigOverlayController({
       hoverMaterial.dispose();
       selectedMaterial.dispose();
       lineMaterial.dispose();
+      humanoidLineMaterial.dispose();
+      humanoidPointMaterial.dispose();
       ikTargetMarker.geometry.dispose();
-      group.remove(staticGroup, proxy, ikTargetProxy);
+      group.remove(staticGroup, humanoidGroup, proxy, ikTargetProxy);
       scene?.remove(group);
     },
   };

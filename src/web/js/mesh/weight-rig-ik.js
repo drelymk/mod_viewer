@@ -82,6 +82,61 @@ function componentFor(rig, id) {
     ? components[Number(componentId)] || null : null;
 }
 
+function graphNeighbors(component, id) {
+  const neighbors = new Set(childrenFor(component, id));
+  const parent = parentFor(component, id);
+  if (parent !== null) neighbors.add(parent);
+  // Some lightweight Rig fixtures expose only parentById. Derive the reverse
+  // adjacency here so semantic topology checks remain direction-independent.
+  (component?.nodeIds || []).forEach(nodeId => {
+    const child = numberId(nodeId);
+    if (child !== null && parentFor(component, child) === id) neighbors.add(child);
+  });
+  (component?.edges || []).forEach(edge => {
+    const left = numberId(edge?.jointA ?? edge?.boneA);
+    const right = numberId(edge?.jointB ?? edge?.boneB);
+    if (left === id && right !== null) neighbors.add(right);
+    if (right === id && left !== null) neighbors.add(left);
+  });
+  return [...neighbors].filter(neighbor => neighbor !== null)
+    .sort((left, right) => left - right);
+}
+
+/** Return the unique undirected ModelJoint path between two joints. */
+export function rigPathBetweenJointIds({rig, jointA, jointB} = {}) {
+  const start = numberId(jointA);
+  const goal = numberId(jointB);
+  const component = start === null ? null : componentFor(rig, start);
+  if (start === null || goal === null || !component
+      || componentFor(rig, goal) !== component) {
+    return {connected: false, jointIds: [], edgeCount: 0,
+      reason: 'not_connected'};
+  }
+  const previous = new Map([[start, null]]);
+  const queue = [start];
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    if (current === goal) break;
+    graphNeighbors(component, current).forEach(neighbor => {
+      if (!previous.has(neighbor)) {
+        previous.set(neighbor, current);
+        queue.push(neighbor);
+      }
+    });
+  }
+  if (!previous.has(goal)) {
+    return {connected: false, jointIds: [], edgeCount: 0,
+      reason: 'not_connected'};
+  }
+  const jointIds = [];
+  let current = goal;
+  while (current !== null) {
+    jointIds.unshift(current);
+    current = previous.get(current) ?? null;
+  }
+  return {connected: true, jointIds, edgeCount: Math.max(0, jointIds.length - 1)};
+}
+
 function jointFor(rig, id) {
   return (rig?.joints || []).find(joint => Number(joint?.jointId) === id)
     || null;

@@ -260,6 +260,11 @@ def test_humanoid_limb_suggestions_are_bilateral_and_ignore_wings(module_page):
       const result = humanoid.suggestHumanoidLimbMappings({
         rig, characterForward: [0, 0, 1], debug: true,
       });
+      const frame = humanoid.buildHumanoidSemanticFrame({
+        rig, characterForward: [0, 0, 1],
+      });
+      const pivotSample = humanoid.collectHumanoidSamples({rig, frame})
+        .find(sample => sample.jointId === 1);
       const scaledPoints = new Map([...points].map(([id, point]) => [id,
         point.map(value => value * 10)]));
       const scaledRig = {...rig, joints: rig.joints.map(joint => ({...joint,
@@ -270,6 +275,8 @@ def test_humanoid_limb_suggestions_are_bilateral_and_ignore_wings(module_page):
       const scaled = humanoid.suggestHumanoidLimbMappings({
         rig: scaledRig, characterForward: [0, 0, 1]});
       return {roles: result.roles, scaledRoles: scaled.roles,
+        pivotSample: {point: pivotSample.point.toArray(),
+          influenceCenter: pivotSample.influenceCenter.toArray()},
         rejectedWings: result.debug.rejected
         .filter(item => item.anchorJointId === 13).map(item => item.reason)};
     }""")
@@ -285,6 +292,8 @@ def test_humanoid_limb_suggestions_are_bilateral_and_ignore_wings(module_page):
     assert 13 not in [roles[role]["anchorJointId"] for role in roles]
     assert result["scaledRoles"]["left_arm"]["anchorJointId"] == 1
     assert result["scaledRoles"]["right_arm"]["anchorJointId"] == 4
+    assert result["pivotSample"]["point"] == [-0.55, 1.55, 0]
+    assert result["pivotSample"]["influenceCenter"] == [0.25, 1.25, 0.2]
 
 
 def test_humanoid_detector_collapses_dense_helper_joint_families(module_page):
@@ -718,6 +727,39 @@ def test_humanoid_scaffold_and_debug_scores_are_model_wide(module_page):
     assert result["removedPoseApi"]
 
 
+def test_rig_path_between_joint_ids_is_undirected_and_component_scoped(module_page):
+    result = module_page.evaluate("""async () => {
+      const {rigPathBetweenJointIds} = await import(
+        './js/mesh/weight-rig-ik.js');
+      const first = {
+        rootId: 0, nodeIds: [0, 1, 2, 3],
+        parentById: {0: null, 1: 0, 2: 1, 3: 2},
+      };
+      const second = {rootId: 9, nodeIds: [9, 10],
+        parentById: {9: null, 10: 9}};
+      const rig = {
+        components: [first, second],
+        componentByJointId: new Map([[0, 0], [1, 0], [2, 0], [3, 0],
+          [9, 1], [10, 1]]),
+      };
+      return {
+        forward: rigPathBetweenJointIds({rig, jointA: 1, jointB: 3}),
+        reverse: rigPathBetweenJointIds({rig, jointA: 3, jointB: 1}),
+        disconnected: rigPathBetweenJointIds({rig, jointA: 1, jointB: 10}),
+      };
+    }""")
+    assert result["forward"] == {
+        "connected": True, "jointIds": [1, 2, 3], "edgeCount": 2,
+    }
+    assert result["reverse"] == {
+        "connected": True, "jointIds": [3, 2, 1], "edgeCount": 2,
+    }
+    assert result["disconnected"] == {
+        "connected": False, "jointIds": [], "edgeCount": 0,
+        "reason": "not_connected",
+    }
+
+
 def test_limb_path_descriptors_measure_forward_backtracking_symmetrically(module_page):
     result = module_page.evaluate("""async () => {
       const {resolveLimbPathCandidates} = await import('./js/mesh/weight-rig-ik.js');
@@ -1006,6 +1048,10 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
             {jointA: 1, jointB: 2, parentId: 1, childId: 2},
             {jointA: 2, jointB: 3, parentId: 2, childId: 3},
           ],
+          humanoidDetection: {selectedRoles: {
+            left_arm: {available: true, anchorJointId: 1,
+              bendJointId: 2, endJointId: 3, pathJointIds: [1, 2, 3]},
+          }},
           poseRotationByJointId: {},
         },
       };
@@ -1033,6 +1079,9 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert result["initial"]["nodeCount"] == 3
     assert result["initial"]["edgeCount"] == 2
     assert result["initial"]["jointCount"] == 3
+    assert result["initial"]["humanoidOverlayVisible"]
+    assert result["initial"]["humanoidSegmentCount"] == 2
+    assert result["initial"]["humanoidLandmarkCount"] == 3
     assert result["initial"]["rebuildCount"] == 1
     assert result["selectedRoot"]["selectedJointId"] == 1
     assert result["selectedRoot"]["rebuildCount"] == 1

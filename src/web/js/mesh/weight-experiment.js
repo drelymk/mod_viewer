@@ -58,12 +58,13 @@ import {
   RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
 import {
-  detectLimbPath, RIG_LIMB_ROLES, RIG_LIMB_ROLE_INFO,
+  RIG_LIMB_ROLES, RIG_LIMB_ROLE_INFO,
   characterAxesFromOrientation, resolveLimbBendDirection,
-  selectLimbBendJoint, solveLimbIk,
+  rigPathBetweenJointIds, selectLimbBendJoint, solveLimbIk,
 } from './weight-rig-ik.js';
 import {
-  buildHumanoidSemanticFrame, suggestHumanoidLimbMappings,
+  buildHumanoidSemanticFrame, resolveHumanoidLimbMapping,
+  suggestHumanoidLimbMappings,
 } from './weight-rig-humanoid.js';
 
 const weightRuntime = createWeightRuntimeState();
@@ -216,11 +217,17 @@ function rebuildSourceRigRestFrames(rig) {
 }
 
 function modelRigSnapshotForState({debug = false} = {}) {
-  return modelRigSnapshot(modelSkinningRig, {
+  const snapshot = modelRigSnapshot(modelSkinningRig, {
     debug,
     modelRigState,
     quaternionIsIdentity,
   });
+  if (snapshot && modelRigState.humanoidSuggestions?.debug) {
+    snapshot.humanoidDetection = {
+      selectedRoles: modelRigState.humanoidSuggestions.debug.selectedRoles || {},
+    };
+  }
+  return snapshot;
 }
 
 function modelComponentForJoint(jointId) {
@@ -246,25 +253,6 @@ function emptyLimbMapping(role, reason = 'unmapped') {
     bendSource: 'auto',
     endSource: 'auto',
   };
-}
-
-function descendantPath(component, anchorJointId, endJointId) {
-  const path = [];
-  const visited = new Set();
-  let current = Number(endJointId);
-  while (Number.isInteger(current) && !visited.has(current)) {
-    visited.add(current);
-    path.unshift(current);
-    if (current === Number(anchorJointId)) return path;
-    current = parentForComponent(component, current);
-  }
-  return [];
-}
-
-function parentForComponent(component, jointId) {
-  const value = component?.parentById?.[jointId]
-    ?? component?.parentById?.[String(jointId)];
-  return value === null || value === undefined ? null : Number(value);
 }
 
 function compactLimbMapping(mapping) {
@@ -377,13 +365,18 @@ export async function autoDetectHumanoidLimbs() {
   const result = humanoidAnalysis();
   const existing = rigPresetState.limbMappings || {};
   const additions = [];
-  for (const role of RIG_LIMB_ROLES) {
-    const suggestion = result.roles?.[role];
-    const raw = existing[role];
-    if (raw?.anchor_signature || !suggestion?.available) continue;
-    const joint = modelJointForId(suggestion.anchorJointId);
-    if (!joint?.signature) continue;
-    additions.push([role, {anchor_signature: joint.signature, bend_sign: 1}]);
+  for (const roles of [['left_arm', 'right_arm'], ['left_leg', 'right_leg']]) {
+    // Auto-apply is atomic per bilateral limb class. A weak or missing side
+    // must not create a one-sided persisted humanoid mapping.
+    if (!roles.every(role => result.roles?.[role]?.available)) continue;
+    for (const role of roles) {
+      const suggestion = result.roles[role];
+      const raw = existing[role];
+      if (raw?.anchor_signature) continue;
+      const joint = modelJointForId(suggestion.anchorJointId);
+      if (!joint?.signature) continue;
+      additions.push([role, {anchor_signature: joint.signature, bend_sign: 1}]);
+    }
   }
   if (!additions.length) {
     const available = RIG_LIMB_ROLES.filter(role =>
@@ -433,10 +426,10 @@ function resolveLimbMapping(role) {
   if (!Number.isInteger(anchorJointId)) {
     return emptyLimbMapping(role, 'anchor_signature_not_found');
   }
-  const detected = detectLimbPath({
-    rig: modelSkinningRig, anchorJointId, role,
+  const detected = resolveHumanoidLimbMapping({
+    rig: modelSkinningRig, role, anchorJointId,
     characterForward: characterForwardForRole(),
-    characterAxes: humanoidSemanticAxes(),
+    axes: humanoidSemanticAxes(),
     semanticFrame: humanoidSemanticFrame(),
   });
   const mapping = {
@@ -447,7 +440,6 @@ function resolveLimbMapping(role) {
     bendSource: 'auto',
     endSource: 'auto',
   };
-  const component = modelComponentForJoint(anchorJointId);
   let path = [...detected.pathJointIds];
   let endOverrideApplied = false;
   const endOverride = raw.end_override_signature;
@@ -457,9 +449,10 @@ function resolveLimbMapping(role) {
     }
     const overrideId = lookup.resolvedBySignature.get(endOverride);
     const overridePath = Number.isInteger(overrideId)
-      ? descendantPath(component, anchorJointId, overrideId) : [];
+      ? rigPathBetweenJointIds({rig: modelSkinningRig,
+        jointA: anchorJointId, jointB: overrideId}).jointIds : [];
     if (overridePath.length < 3) {
-      return {...mapping, available: false, reason: 'end_override_not_descendant'};
+      return {...mapping, available: false, reason: 'manual_topology_mismatch'};
     }
     path = overridePath;
     mapping.endJointId = overrideId;
@@ -482,8 +475,8 @@ function resolveLimbMapping(role) {
         && path.includes(overrideId)
         && overrideId !== anchorJointId
         && overrideId !== mapping.endJointId;
-      if (!compatible && !endOverrideApplied) {
-        return {...mapping, available: false, reason: 'bend_override_invalid'};
+      if (!compatible) {
+        return {...mapping, available: false, reason: 'manual_topology_mismatch'};
       }
       if (compatible) {
         mapping.bendJointId = overrideId;
@@ -2843,13 +2836,13 @@ export function setRigLimbOverride(role, type, jointId) {
     notifyModelRigChanged();
     return false;
   }
-  const component = modelComponentForJoint(mapping.anchorJointId);
   let candidatePath = [];
   if (isEndOverride) {
-    candidatePath = descendantPath(component, mapping.anchorJointId, joint.jointId);
+    candidatePath = rigPathBetweenJointIds({rig: modelSkinningRig,
+      jointA: mapping.anchorJointId, jointB: joint.jointId}).jointIds;
     if (candidatePath.length < 3) {
       modelRigState.pickStatus =
-        'The foot/hand must be a descendant with a usable limb path.';
+        'The foot/hand must share a usable topology path with the anchor.';
       notifyModelRigChanged();
       return false;
     }
