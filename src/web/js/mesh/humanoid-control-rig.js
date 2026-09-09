@@ -13,13 +13,8 @@ import {
 
 const EPSILON = 1e-8;
 const DEFAULT_MAX_POINT_COUNT = 160000;
-const SKELETON_DEPTH_MIN_HEIGHT = 0.48;
-const SKELETON_DEPTH_MAX_HEIGHT = 0.78;
-const SKELETON_DEPTH_SIDE_MIN = 0.025;
-const SKELETON_DEPTH_SIDE_MAX = 0.12;
-const SKELETON_DEPTH_SLICE_COUNT = 10;
-const SKELETON_DEPTH_BIN_SIZE = 0.01;
-const SKELETON_DEPTH_MIN_SLICES = 3;
+const FOOT_SIDE_MIN = 0.025;
+const FOOT_DEPTH_BAND_MAX_HEIGHT = 0.02;
 const CONTROL_KEYS = Object.freeze([
   'chest', 'pelvis',
   'leftShoulder', 'leftElbow', 'leftHand',
@@ -191,9 +186,9 @@ function normalizedPoint(item, bounds) {
 }
 
 // This is the Foot geometry lookup. It supplies only side/height anchors;
-// Foot depth is replaced by the central skeleton plane below.
+// the separate bottom-band measurement below supplies the shared depth.
 function fitFoot(points, side) {
-  const lower = points.filter(item => item.y <= 0.1 && side * item.x > 0.025);
+  const lower = points.filter(item => item.y <= 0.1 && side * item.x > FOOT_SIDE_MIN);
   if (!lower.length) return null;
   const stableTop = quantile(lower.map(item => item.y), 0.62);
   const stable = lower.filter(item => item.y <= stableTop);
@@ -205,8 +200,8 @@ function fitFoot(points, side) {
   };
 }
 
-function fallbackSkeletonDepth(sliceCenters = [], rejectedSliceCount = 0,
-    reason = 'torso_depth_unstable', diagnostics = {}) {
+function fallbackFootDepth(sliceCenters = [], rejectedSliceCount = 0,
+    reason = 'foot_depth_unavailable', diagnostics = {}) {
   return {
     depthN: 0,
     support: 0,
@@ -220,131 +215,66 @@ function fallbackSkeletonDepth(sliceCenters = [], rejectedSliceCount = 0,
   };
 }
 
-function depthEnvelope(occupiedBins) {
-  if (occupiedBins.size < 2) return null;
-  const occupiedDepths = [...occupiedBins]
-    .sort((left, right) => left - right)
-    .map(bin => bin * SKELETON_DEPTH_BIN_SIZE);
-  const low = quantile(occupiedDepths, 0.10);
-  const high = quantile(occupiedDepths, 0.90);
+function footDepthEnvelope(depths) {
+  if (!depths.length) return null;
+  let backDepth = Infinity;
+  let frontDepth = -Infinity;
+  depths.forEach(depth => {
+    if (depth < backDepth) backDepth = depth;
+    if (depth > frontDepth) frontDepth = depth;
+  });
   return {
-    center: (low + high) * 0.5,
-    thickness: Math.max(0, high - low),
-    support: occupiedBins.size,
+    backDepth,
+    frontDepth,
+    center: (backDepth + frontDepth) * 0.5,
+    thickness: Math.max(0, frontDepth - backDepth),
+    support: depths.length,
   };
 }
 
-function robustThreshold(values, floor, multiplier = 2) {
-  if (!values.length) return floor;
-  const medianValue = median(values);
-  const spread = quantile(values, 0.75) - quantile(values, 0.25);
-  return medianValue + Math.max(floor, spread * multiplier);
-}
-
-/** Estimate one occupancy-based central torso depth plane in normalized space. */
-export function estimateSkeletonDepth(points = []) {
-  const heightSpan = SKELETON_DEPTH_MAX_HEIGHT - SKELETON_DEPTH_MIN_HEIGHT;
-  const slices = Array.from({length: SKELETON_DEPTH_SLICE_COUNT}, () => ({
-    left: new Set(), right: new Set(),
-  }));
+/** Estimate the common depth plane from the occupied sole band of both Feet. */
+export function estimateFootDepth(points = []) {
+  const depths = {left: [], right: []};
   for (const point of points || []) {
     const x = Number(point?.x);
     const y = Number(point?.y);
     const z = Number(point?.z);
     if (![x, y, z].every(Number.isFinite)
-        || Math.abs(x) < SKELETON_DEPTH_SIDE_MIN
-        || Math.abs(x) > SKELETON_DEPTH_SIDE_MAX
-        || y < SKELETON_DEPTH_MIN_HEIGHT || y > SKELETON_DEPTH_MAX_HEIGHT) continue;
-    const fraction = (y - SKELETON_DEPTH_MIN_HEIGHT) / heightSpan;
-    const slice = clamp(Math.floor(fraction * SKELETON_DEPTH_SLICE_COUNT),
-      0, SKELETON_DEPTH_SLICE_COUNT - 1);
-    slices[slice][x < 0 ? 'left' : 'right']
-      .add(Math.round(z / SKELETON_DEPTH_BIN_SIZE));
+        || y < 0 || y > FOOT_DEPTH_BAND_MAX_HEIGHT
+        || Math.abs(x) <= FOOT_SIDE_MIN) continue;
+    depths[x < 0 ? 'left' : 'right'].push(z);
   }
 
-  const sliceCenters = slices.map((slice, index) => {
-    const left = depthEnvelope(slice.left);
-    const right = depthEnvelope(slice.right);
-    const descriptor = {
-      height01: SKELETON_DEPTH_MIN_HEIGHT
-        + ((index + 0.5) / SKELETON_DEPTH_SLICE_COUNT) * heightSpan,
-      leftCenter: left?.center ?? null,
-      rightCenter: right?.center ?? null,
-      center: left && right ? (left.center + right.center) * 0.5 : null,
-      leftThickness: left?.thickness ?? null,
-      rightThickness: right?.thickness ?? null,
-      bilateralDifference: left && right ? Math.abs(left.center - right.center) : null,
-      leftSupport: left?.support || 0,
-      rightSupport: right?.support || 0,
-      accepted: false,
-      rejectionReason: null,
-      _index: index,
-    };
-    if (!left || !right) descriptor.rejectionReason = 'bilateral_support_missing';
-    return descriptor;
-  });
-
-  const candidates = sliceCenters.filter(slice => slice.center !== null);
-  const thicknesses = candidates.map(slice => Math.max(
-    slice.leftThickness, slice.rightThickness));
-  const bilateralDifferences = candidates.map(slice => slice.bilateralDifference);
-  const thicknessThreshold = robustThreshold(thicknesses, 0.02, 2);
-  const bilateralThreshold = robustThreshold(bilateralDifferences, 0.015, 2);
-  candidates.forEach(slice => {
-    if (Math.max(slice.leftThickness, slice.rightThickness) > thicknessThreshold) {
-      slice.rejectionReason = 'thickness_outlier';
-    } else if (slice.bilateralDifference > bilateralThreshold) {
-      slice.rejectionReason = 'bilateral_disagreement';
-    } else {
-      slice.accepted = true;
-    }
-  });
-
-  const preliminary = candidates.filter(slice => slice.accepted);
-  const preliminaryCenters = preliminary.map(slice => slice.center);
-  const centerMedian = median(preliminaryCenters);
-  const continuityThreshold = robustThreshold(
-    preliminaryCenters.map(center => Math.abs(center - centerMedian)), 0.025, 2);
-  preliminary.forEach(slice => {
-    const neighbors = preliminary.filter(other => Math.abs(other._index - slice._index) === 1);
-    const neighborJumps = neighbors.map(other => Math.abs(other.center - slice.center));
-    const isolatedJump = neighbors.length >= 2
-      ? neighborJumps.every(jump => jump > continuityThreshold)
-        && Math.abs(neighbors[0].center - neighbors[1].center) <= continuityThreshold
-      : neighbors.length === 1
-        && neighborJumps[0] > continuityThreshold
-        && Math.abs(slice.center - centerMedian) > continuityThreshold;
-    if (isolatedJump) {
-      slice.accepted = false;
-      slice.rejectionReason = 'vertical_discontinuity';
-    }
-  });
-
-  const stableSlices = sliceCenters.filter(slice => slice.accepted);
-  const stableCenters = stableSlices.map(slice => slice.center);
+  const left = footDepthEnvelope(depths.left);
+  const right = footDepthEnvelope(depths.right);
+  const sliceCenters = [
+    {side: 'left', heightRange: [0, FOOT_DEPTH_BAND_MAX_HEIGHT],
+      height01: FOOT_DEPTH_BAND_MAX_HEIGHT * 0.5,
+      backDepth: left?.backDepth ?? null, frontDepth: left?.frontDepth ?? null,
+      center: left?.center ?? null, thickness: left?.thickness ?? null,
+      support: left?.support || 0},
+    {side: 'right', heightRange: [0, FOOT_DEPTH_BAND_MAX_HEIGHT],
+      height01: FOOT_DEPTH_BAND_MAX_HEIGHT * 0.5,
+      backDepth: right?.backDepth ?? null, frontDepth: right?.frontDepth ?? null,
+      center: right?.center ?? null, thickness: right?.thickness ?? null,
+      support: right?.support || 0},
+  ];
   const diagnostics = {
-    heightRange: [SKELETON_DEPTH_MIN_HEIGHT, SKELETON_DEPTH_MAX_HEIGHT],
-    sideRange: [SKELETON_DEPTH_SIDE_MIN, SKELETON_DEPTH_SIDE_MAX],
-    sliceCount: SKELETON_DEPTH_SLICE_COUNT,
-    depthBinSize: SKELETON_DEPTH_BIN_SIZE,
-    thresholds: {
-      thickness: thicknessThreshold,
-      bilateralDifference: bilateralThreshold,
-      continuity: continuityThreshold,
-    },
+    method: 'bottom_foot_band',
+    heightRange: [0, FOOT_DEPTH_BAND_MAX_HEIGHT],
+    sideMinimum: FOOT_SIDE_MIN,
   };
-  const publicSliceCenters = sliceCenters.map(({_index, ...slice}) => slice);
-  if (stableCenters.length < SKELETON_DEPTH_MIN_SLICES) {
-    return fallbackSkeletonDepth(publicSliceCenters, sliceCenters.length - stableSlices.length,
-      'torso_depth_unstable', diagnostics);
+  if (!left || !right) {
+    return fallbackFootDepth(sliceCenters, 2 - [left, right].filter(Boolean).length,
+      'foot_depth_unavailable', diagnostics);
   }
   return {
-    depthN: median(stableCenters),
-    support: stableSlices.length,
-    validSliceCount: stableSlices.length,
-    rejectedSliceCount: sliceCenters.length - stableSlices.length,
-    sliceCenters: publicSliceCenters,
-    spread: quantile(stableCenters, 0.75) - quantile(stableCenters, 0.25),
+    depthN: (left.center + right.center) * 0.5,
+    support: Math.min(left.support, right.support),
+    validSliceCount: 2,
+    rejectedSliceCount: 0,
+    sliceCenters,
+    spread: Math.abs(left.center - right.center),
     fallbackUsed: false,
     reason: null,
     diagnostics,
@@ -513,7 +443,7 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
     pointCount: 0,
     sampledPointCount: 0,
     voxelCount: 0,
-    skeletonDepth: fallbackSkeletonDepth(),
+    skeletonDepth: fallbackFootDepth(),
   };
   if (orientationState && !orientationReady) {
     return emptyRig(frame, {...baseDiagnostics, fitRuntimeMs: 0},
@@ -542,11 +472,11 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
       fitRuntimeMs: 0}, 'feet_not_found', false);
   }
 
-  const skeletonDepth = estimateSkeletonDepth(normalized);
+  const skeletonDepth = estimateFootDepth(normalized);
   const detectedLeftFoot = pointToWorld(leftFootN, bounds, frame);
   const detectedRightFoot = pointToWorld(rightFootN, bounds, frame);
   // From this point onward the mesh is intentionally out of the pipeline.
-  // Preserve Foot side/height while placing both Feet on the central plane.
+  // Preserve Foot side/height while placing both Feet on the sole-derived plane.
   const leftFoot = pointToWorld({...leftFootN, z: skeletonDepth.depthN}, bounds, frame);
   const rightFoot = pointToWorld({...rightFootN, z: skeletonDepth.depthN}, bounds, frame);
   const template = buildProportionalHumanoidRig({

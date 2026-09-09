@@ -4332,83 +4332,64 @@ def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(module_p
     assert result["small"]["proportions"] == result["large"]["proportions"]
 
 
-def test_estimate_skeleton_depth_uses_slice_occupancy(module_page):
+def test_estimate_foot_depth_uses_bottom_band(module_page):
     result = module_page.evaluate("""async () => {
-      const {estimateSkeletonDepth} = await import(
+      const {estimateFootDepth} = await import(
         './js/mesh/humanoid-control-rig.js');
-      const torso = (back, front, frontCopies = 1) => {
-        const points = [];
-        for (let slice = 0; slice < 10; slice += 1) {
-          const y = .48 + (slice + .5) * .30 / 10;
-          for (const x of [-.12, 0, .12]) {
-            points.push({x, y, z: back});
-            for (let copy = 0; copy < frontCopies; copy += 1) {
-              points.push({x, y, z: front});
-            }
-          }
-        }
-        return points;
-      };
-      const centered = torso(-.08, .08);
-      const offset = torso(.03, .13);
-      const denseFront = torso(-.08, .08, 200);
-      const protruding = centered.concat([5, 6].flatMap(slice => {
-        const y = .48 + (slice + .5) * .30 / 10;
-        return [{x: -.10, y, z: .40}, {x: .10, y, z: .40}];
+      const sole = (side, center) => [
+        {x: side * .08, y: 0, z: center - .05},
+        {x: side * .12, y: .015, z: center + .05},
+        {x: side * .09, y: .02, z: center},
+      ];
+      const soles = sole(-1, .02).concat(sole(1, .04));
+      const torso = [];
+      for (let index = 0; index < 400; index += 1) {
+        torso.push({x: index % 2 ? -.1 : .1, y: .4 + index % 10 * .04,
+          z: index % 2 ? -1.2 : 1.2});
+      }
+      const rearHair = Array.from({length: 200}, (_, index) => ({
+        x: index % 2 ? -.4 : .4, y: .12 + index % 20 * .02, z: -2,
       }));
-      const oneSided = centered.map(point => {
-        const inSlice = point.x < 0 && point.y > .63 && point.y < .66;
-        return inSlice ? {...point, z: point.z + .15} : point;
-      });
-      const discontinuity = centered.map(point => {
-        const inSlice = point.y > .63 && point.y < .66;
-        return inSlice ? {...point, z: point.z + .15} : point;
-      });
-      const decorated = centered.concat(
-        Array.from({length: 400}, (_, index) => ({
-          x: index % 2 ? .40 : -.40,
-          y: .46 + (index % 10) * .035,
-          z: index % 2 ? .60 : -.60,
-        })));
-      const fallback = estimateSkeletonDepth([{x: 0, y: .6, z: .2}]);
+      const forwardFootUpper = [
+        {x: -.1, y: .04, z: 2}, {x: .1, y: .04, z: 2},
+      ];
+      const denseSoles = soles.concat(Array.from({length: 200}, (_, index) => ({
+        ...soles[index % soles.length],
+      })));
+      const fallback = estimateFootDepth([{x: 0, y: 0, z: .2}]);
       return {
-        centered: estimateSkeletonDepth(centered),
-        offset: estimateSkeletonDepth(offset),
-        denseFront: estimateSkeletonDepth(denseFront),
-        protruding: estimateSkeletonDepth(protruding),
-        oneSided: estimateSkeletonDepth(oneSided),
-        discontinuity: estimateSkeletonDepth(discontinuity),
-        decorated: estimateSkeletonDepth(decorated),
+        soles: estimateFootDepth(soles),
+        decorated: estimateFootDepth(
+          soles.concat(torso, rearHair, forwardFootUpper)),
+        dense: estimateFootDepth(denseSoles),
         fallback,
       };
     }""")
-    assert result["centered"]["depthN"] == pytest.approx(0, abs=.011)
-    assert result["centered"]["support"] == 10
-    assert result["centered"]["validSliceCount"] == 10
-    assert result["centered"]["rejectedSliceCount"] == 0
-    assert result["centered"]["spread"] == pytest.approx(0)
-    assert result["centered"]["fallbackUsed"] is False
-    assert result["offset"]["depthN"] == pytest.approx(.08, abs=.011)
-    assert result["denseFront"]["depthN"] == pytest.approx(
-        result["centered"]["depthN"], abs=.001)
-    assert result["decorated"]["depthN"] == pytest.approx(
-        result["centered"]["depthN"], abs=.001)
-    assert result["protruding"]["depthN"] == pytest.approx(0, abs=.011)
-    assert result["protruding"]["validSliceCount"] <= 8
-    assert any(slice_["rejectionReason"] == "thickness_outlier"
-               for slice_ in result["protruding"]["sliceCenters"])
-    assert result["oneSided"]["depthN"] == pytest.approx(0, abs=.011)
-    assert any(slice_["rejectionReason"] == "bilateral_disagreement"
-               for slice_ in result["oneSided"]["sliceCenters"])
-    assert result["discontinuity"]["depthN"] == pytest.approx(0, abs=.011)
-    assert any(slice_["rejectionReason"] == "vertical_discontinuity"
-               for slice_ in result["discontinuity"]["sliceCenters"])
+    assert result["soles"]["depthN"] == pytest.approx(.03)
+    assert result["soles"]["support"] == 3
+    assert result["soles"]["validSliceCount"] == 2
+    assert result["soles"]["rejectedSliceCount"] == 0
+    assert result["soles"]["spread"] == pytest.approx(.02)
+    assert result["soles"]["diagnostics"] == {
+        "method": "bottom_foot_band",
+        "heightRange": [0, .02],
+        "sideMinimum": .025,
+    }
+    assert result["soles"]["sliceCenters"][0] == {
+        "side": "left", "heightRange": [0, .02], "height01": .01,
+        "backDepth": pytest.approx(-.03), "frontDepth": pytest.approx(.07),
+        "center": pytest.approx(.02), "thickness": pytest.approx(.1),
+        "support": 3,
+    }
+    assert result["soles"]["sliceCenters"][1]["center"] == pytest.approx(.04)
+    assert result["decorated"]["depthN"] == pytest.approx(.03)
+    assert result["dense"]["depthN"] == pytest.approx(result["soles"]["depthN"])
     assert result["fallback"]["depthN"] == 0
     assert result["fallback"]["support"] == 0
     assert result["fallback"]["validSliceCount"] == 0
-    assert result["fallback"]["rejectedSliceCount"] == 10
+    assert result["fallback"]["rejectedSliceCount"] == 2
     assert result["fallback"]["fallbackUsed"] is True
-    assert result["fallback"]["reason"] == "torso_depth_unstable"
+    assert result["fallback"]["reason"] == "foot_depth_unavailable"
 
 
 def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):
@@ -4420,12 +4401,20 @@ def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):
         for (let index = 0; index <= 20; index += 1) {
           const y = .30 + index * .07;
           for (const x of [-.12, 0, .12]) {
-            points.push(x, y, -.10, x, y, .10);
+            points.push(x, y, 0, x, y, 0);
           }
         }
         for (const side of [-1, 1]) {
-          for (const y of [0, .04]) {
-            points.push(side * .24, y, .07, side * .20, y, .07);
+          const center = side < 0 ? .02 * 1.7 : .04 * 1.7;
+          for (const y of [0, .01]) {
+            points.push(side * .24, y, center - .03,
+              side * .20, y, center + .03);
+          }
+        }
+        for (const side of [-1, 1]) {
+          for (const y of [.04, .08]) {
+            points.push(side * .24, y, side < 0 ? 1.7 : -1.7,
+              side * .20, y, side < 0 ? 1.7 : -1.7);
           }
         }
         return {userData: {humanoidRestPositions: new Float32Array(
@@ -4447,13 +4436,12 @@ def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):
     }""")
     for name, rig in result.items():
         assert rig["skeletonDepth"]["fallbackUsed"] is False
-        assert rig["skeletonDepth"]["support"] >= 3
-        assert rig["bodyDepth"] == pytest.approx(0, abs=.025)
-        assert rig["skeletonDepth"]["spread"] == pytest.approx(0)
-        assert rig["detectedFeet"]["left"][2] == pytest.approx(
-            .07 * rig["characterHeight"] / 1.7, abs=1e-6)
-        assert rig["detectedFeet"]["right"][2] == pytest.approx(
-            .07 * rig["characterHeight"] / 1.7, abs=1e-6)
+        assert rig["skeletonDepth"]["support"] == 4
+        assert rig["skeletonDepth"]["depthN"] == pytest.approx(.03, abs=.011)
+        assert rig["skeletonDepth"]["diagnostics"]["method"] == "bottom_foot_band"
+        assert rig["bodyDepth"] == pytest.approx(
+            rig["skeletonDepth"]["depthN"] * rig["characterHeight"], abs=.02)
+        assert rig["skeletonDepth"]["spread"] == pytest.approx(.02, abs=.011)
         assert rig["controls"]["leftFoot"]["position"][0] == pytest.approx(
             rig["detectedFeet"]["left"][0], abs=1e-6)
         assert rig["controls"]["rightFoot"]["position"][0] == pytest.approx(

@@ -328,14 +328,15 @@ of documentation, comments and tests; use portable fixtures instead.
   ModelJoint pivots, topology, inferred forests, IK, or Physics, and it never
   writes limb mappings back through the manual resolver. Asset-fill meshes are
   excluded. It normalizes semantic up/right/forward coordinates by model
-  height, keeps Foot side/height anchors, and estimates one occupancy-based
-  central torso depth plane from narrow bilateral height slices rather than
-  using Foot depth. Robust depth envelopes reject thick, one-sided, and
-  vertically discontinuous slice outliers. Both Feet and every proportional
-  control share that plane. Controls are Chest, Pelvis, Shoulder/Elbow/Hand,
-  and Hip/Knee/Foot on both sides; Knee and Elbow are virtual midpoint
-  controls. Diagnostics retain the detected Foot positions, per-slice
-  acceptance/rejection, central-depth support/spread, and explicit fallback.
+  height, keeps Foot side/height anchors, and measures one common depth plane
+  from the occupied front/back extent of a thin normalized bottom Foot band.
+  The left and right sole centers are averaged independently of the existing
+  Foot side/height fitting; torso, clothing, hair, and Foot-upper geometry
+  outside that band do not affect the depth measurement. Both Feet and every
+  proportional control share that plane. Controls are Chest, Pelvis,
+  Shoulder/Elbow/Hand, and Hip/Knee/Foot on both sides; Knee and Elbow are
+  virtual midpoint controls. Diagnostics retain the detected Foot positions,
+  per-side bottom-band extents, depth support/spread, and explicit fallback.
   A later phase may explicitly bind these semantic controls to authored bones.
 - Joint selection is independent from pose state: Clear removes the selected
   ModelJoint through the state API, leaving
