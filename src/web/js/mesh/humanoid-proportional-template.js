@@ -4,11 +4,11 @@ const EPSILON = 1e-8;
 
 export const DEFAULT_HUMANOID_PROPORTIONS = Object.freeze({
   footLift: 0.015,
-  legLength: 0.50,
-  hipToNeckLength: 0.285,
-  shoulderHalfWidth: 0.090,
+  legLength: 0.515,
+  hipToNeckLength: 0.27,
+  shoulderHalfWidth: 0.055,
   armLength: 0.33,
-  armDropAngleDeg: 50,
+  armDropAngleDeg: 55,
   kneeFraction: 0.50,
   elbowFraction: 0.50,
   chestFraction: 0.50,

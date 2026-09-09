@@ -22,7 +22,7 @@ const CONTROL_KEYS = Object.freeze([
 const TEMPLATE_PRIORS = Object.freeze({
   ...DEFAULT_HUMANOID_PROPORTIONS,
   vertical: Object.freeze({
-    neck: 0.82, chest: 0.6775, pelvis: 0.535, knee: 0.285, foot: 0.035,
+    neck: 0.82, chest: 0.685, pelvis: 0.55, knee: 0.2925, foot: 0.035,
   }),
 });
 
