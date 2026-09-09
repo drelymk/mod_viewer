@@ -329,12 +329,14 @@ of documentation, comments and tests; use portable fixtures instead.
   writes limb mappings back through the manual resolver. Asset-fill meshes are
   excluded. It normalizes semantic up/right/forward coordinates by model
   height, keeps Foot side/height anchors, and estimates one occupancy-based
-  central torso depth plane from height slices rather than using Foot depth.
-  Both Feet and every proportional control share that plane. Controls are
-  Chest, Pelvis, Shoulder/Elbow/Hand, and Hip/Knee/Foot on both sides; Knee
-  and Elbow are virtual midpoint controls. Diagnostics retain the detected
-  Foot positions and central-depth support/spread. A later phase may explicitly
-  bind these semantic controls to authored bones.
+  central torso depth plane from narrow bilateral height slices rather than
+  using Foot depth. Robust depth envelopes reject thick, one-sided, and
+  vertically discontinuous slice outliers. Both Feet and every proportional
+  control share that plane. Controls are Chest, Pelvis, Shoulder/Elbow/Hand,
+  and Hip/Knee/Foot on both sides; Knee and Elbow are virtual midpoint
+  controls. Diagnostics retain the detected Foot positions, per-slice
+  acceptance/rejection, central-depth support/spread, and explicit fallback.
+  A later phase may explicitly bind these semantic controls to authored bones.
 - Joint selection is independent from pose state: Clear removes the selected
   ModelJoint through the state API, leaving
   manual pose, presets, Weight selection, Physics and overlay visibility

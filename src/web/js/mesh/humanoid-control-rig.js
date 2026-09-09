@@ -13,9 +13,10 @@ import {
 
 const EPSILON = 1e-8;
 const DEFAULT_MAX_POINT_COUNT = 160000;
-const SKELETON_DEPTH_MIN_HEIGHT = 0.45;
-const SKELETON_DEPTH_MAX_HEIGHT = 0.82;
-const SKELETON_DEPTH_SIDE_LIMIT = 0.15;
+const SKELETON_DEPTH_MIN_HEIGHT = 0.48;
+const SKELETON_DEPTH_MAX_HEIGHT = 0.78;
+const SKELETON_DEPTH_SIDE_MIN = 0.025;
+const SKELETON_DEPTH_SIDE_MAX = 0.12;
 const SKELETON_DEPTH_SLICE_COUNT = 10;
 const SKELETON_DEPTH_BIN_SIZE = 0.01;
 const SKELETON_DEPTH_MIN_SLICES = 3;
@@ -204,53 +205,149 @@ function fitFoot(points, side) {
   };
 }
 
-function fallbackSkeletonDepth(sliceCenters = []) {
+function fallbackSkeletonDepth(sliceCenters = [], rejectedSliceCount = 0,
+    reason = 'torso_depth_unstable', diagnostics = {}) {
   return {
     depthN: 0,
-    support: sliceCenters.length,
+    support: 0,
+    validSliceCount: 0,
+    rejectedSliceCount,
     sliceCenters: [...sliceCenters],
-    spread: sliceCenters.length > 1
-      ? quantile(sliceCenters, 0.75) - quantile(sliceCenters, 0.25) : 0,
+    spread: 0,
     fallbackUsed: true,
+    reason,
+    diagnostics,
   };
+}
+
+function depthEnvelope(occupiedBins) {
+  if (occupiedBins.size < 2) return null;
+  const occupiedDepths = [...occupiedBins]
+    .sort((left, right) => left - right)
+    .map(bin => bin * SKELETON_DEPTH_BIN_SIZE);
+  const low = quantile(occupiedDepths, 0.10);
+  const high = quantile(occupiedDepths, 0.90);
+  return {
+    center: (low + high) * 0.5,
+    thickness: Math.max(0, high - low),
+    support: occupiedBins.size,
+  };
+}
+
+function robustThreshold(values, floor, multiplier = 2) {
+  if (!values.length) return floor;
+  const medianValue = median(values);
+  const spread = quantile(values, 0.75) - quantile(values, 0.25);
+  return medianValue + Math.max(floor, spread * multiplier);
 }
 
 /** Estimate one occupancy-based central torso depth plane in normalized space. */
 export function estimateSkeletonDepth(points = []) {
   const heightSpan = SKELETON_DEPTH_MAX_HEIGHT - SKELETON_DEPTH_MIN_HEIGHT;
-  const slices = Array.from({length: SKELETON_DEPTH_SLICE_COUNT}, () => new Set());
+  const slices = Array.from({length: SKELETON_DEPTH_SLICE_COUNT}, () => ({
+    left: new Set(), right: new Set(),
+  }));
   for (const point of points || []) {
     const x = Number(point?.x);
     const y = Number(point?.y);
     const z = Number(point?.z);
     if (![x, y, z].every(Number.isFinite)
-        || Math.abs(x) > SKELETON_DEPTH_SIDE_LIMIT
+        || Math.abs(x) < SKELETON_DEPTH_SIDE_MIN
+        || Math.abs(x) > SKELETON_DEPTH_SIDE_MAX
         || y < SKELETON_DEPTH_MIN_HEIGHT || y > SKELETON_DEPTH_MAX_HEIGHT) continue;
     const fraction = (y - SKELETON_DEPTH_MIN_HEIGHT) / heightSpan;
     const slice = clamp(Math.floor(fraction * SKELETON_DEPTH_SLICE_COUNT),
       0, SKELETON_DEPTH_SLICE_COUNT - 1);
-    slices[slice].add(Math.round(z / SKELETON_DEPTH_BIN_SIZE));
+    slices[slice][x < 0 ? 'left' : 'right']
+      .add(Math.round(z / SKELETON_DEPTH_BIN_SIZE));
   }
 
-  const sliceCenters = [];
-  slices.forEach(occupiedBins => {
-    if (occupiedBins.size < 2) return;
-    const occupiedDepths = [...occupiedBins]
-      .sort((left, right) => left - right)
-      .map(bin => bin * SKELETON_DEPTH_BIN_SIZE);
-    const low = quantile(occupiedDepths, 0.10);
-    const high = quantile(occupiedDepths, 0.90);
-    sliceCenters.push((low + high) * 0.5);
+  const sliceCenters = slices.map((slice, index) => {
+    const left = depthEnvelope(slice.left);
+    const right = depthEnvelope(slice.right);
+    const descriptor = {
+      height01: SKELETON_DEPTH_MIN_HEIGHT
+        + ((index + 0.5) / SKELETON_DEPTH_SLICE_COUNT) * heightSpan,
+      leftCenter: left?.center ?? null,
+      rightCenter: right?.center ?? null,
+      center: left && right ? (left.center + right.center) * 0.5 : null,
+      leftThickness: left?.thickness ?? null,
+      rightThickness: right?.thickness ?? null,
+      bilateralDifference: left && right ? Math.abs(left.center - right.center) : null,
+      leftSupport: left?.support || 0,
+      rightSupport: right?.support || 0,
+      accepted: false,
+      rejectionReason: null,
+      _index: index,
+    };
+    if (!left || !right) descriptor.rejectionReason = 'bilateral_support_missing';
+    return descriptor;
   });
-  if (sliceCenters.length < SKELETON_DEPTH_MIN_SLICES) {
-    return fallbackSkeletonDepth(sliceCenters);
+
+  const candidates = sliceCenters.filter(slice => slice.center !== null);
+  const thicknesses = candidates.map(slice => Math.max(
+    slice.leftThickness, slice.rightThickness));
+  const bilateralDifferences = candidates.map(slice => slice.bilateralDifference);
+  const thicknessThreshold = robustThreshold(thicknesses, 0.02, 2);
+  const bilateralThreshold = robustThreshold(bilateralDifferences, 0.015, 2);
+  candidates.forEach(slice => {
+    if (Math.max(slice.leftThickness, slice.rightThickness) > thicknessThreshold) {
+      slice.rejectionReason = 'thickness_outlier';
+    } else if (slice.bilateralDifference > bilateralThreshold) {
+      slice.rejectionReason = 'bilateral_disagreement';
+    } else {
+      slice.accepted = true;
+    }
+  });
+
+  const preliminary = candidates.filter(slice => slice.accepted);
+  const preliminaryCenters = preliminary.map(slice => slice.center);
+  const centerMedian = median(preliminaryCenters);
+  const continuityThreshold = robustThreshold(
+    preliminaryCenters.map(center => Math.abs(center - centerMedian)), 0.025, 2);
+  preliminary.forEach(slice => {
+    const neighbors = preliminary.filter(other => Math.abs(other._index - slice._index) === 1);
+    const neighborJumps = neighbors.map(other => Math.abs(other.center - slice.center));
+    const isolatedJump = neighbors.length >= 2
+      ? neighborJumps.every(jump => jump > continuityThreshold)
+        && Math.abs(neighbors[0].center - neighbors[1].center) <= continuityThreshold
+      : neighbors.length === 1
+        && neighborJumps[0] > continuityThreshold
+        && Math.abs(slice.center - centerMedian) > continuityThreshold;
+    if (isolatedJump) {
+      slice.accepted = false;
+      slice.rejectionReason = 'vertical_discontinuity';
+    }
+  });
+
+  const stableSlices = sliceCenters.filter(slice => slice.accepted);
+  const stableCenters = stableSlices.map(slice => slice.center);
+  const diagnostics = {
+    heightRange: [SKELETON_DEPTH_MIN_HEIGHT, SKELETON_DEPTH_MAX_HEIGHT],
+    sideRange: [SKELETON_DEPTH_SIDE_MIN, SKELETON_DEPTH_SIDE_MAX],
+    sliceCount: SKELETON_DEPTH_SLICE_COUNT,
+    depthBinSize: SKELETON_DEPTH_BIN_SIZE,
+    thresholds: {
+      thickness: thicknessThreshold,
+      bilateralDifference: bilateralThreshold,
+      continuity: continuityThreshold,
+    },
+  };
+  const publicSliceCenters = sliceCenters.map(({_index, ...slice}) => slice);
+  if (stableCenters.length < SKELETON_DEPTH_MIN_SLICES) {
+    return fallbackSkeletonDepth(publicSliceCenters, sliceCenters.length - stableSlices.length,
+      'torso_depth_unstable', diagnostics);
   }
   return {
-    depthN: median(sliceCenters),
-    support: sliceCenters.length,
-    sliceCenters,
-    spread: quantile(sliceCenters, 0.75) - quantile(sliceCenters, 0.25),
+    depthN: median(stableCenters),
+    support: stableSlices.length,
+    validSliceCount: stableSlices.length,
+    rejectedSliceCount: sliceCenters.length - stableSlices.length,
+    sliceCenters: publicSliceCenters,
+    spread: quantile(stableCenters, 0.75) - quantile(stableCenters, 0.25),
     fallbackUsed: false,
+    reason: null,
+    diagnostics,
   };
 }
 
@@ -341,6 +438,10 @@ function buildControl(template, key, bounds, frame, supports) {
 function proportionalDiagnostics(template, bounds, frame, supports, base,
     detectedFeet, skeletonDepth) {
   const p = template.proportions;
+  const detectedLeft = vector3(
+    detectedFeet?.left || template.detectedLeftFoot || template.leftFoot);
+  const detectedRight = vector3(
+    detectedFeet?.right || template.detectedRightFoot || template.rightFoot);
   return {
     ...base,
     mode: 'proportional_template',
@@ -355,16 +456,24 @@ function proportionalDiagnostics(template, bounds, frame, supports, base,
       right: finiteNumber(supports.rightFoot, 0),
     },
     detectedFeet: {
-      left: vector3(detectedFeet?.left || template.detectedLeftFoot || template.leftFoot),
-      right: vector3(detectedFeet?.right || template.detectedRightFoot || template.rightFoot),
+      left: detectedLeft,
+      right: detectedRight,
+    },
+    detectedFeetN: {
+      left: worldToSemantic(detectedLeft, bounds, frame),
+      right: worldToSemantic(detectedRight, bounds, frame),
     },
     skeletonDepth: {
       depthN: finiteNumber(skeletonDepth?.depthN),
       support: finiteNumber(skeletonDepth?.support),
+      validSliceCount: finiteNumber(skeletonDepth?.validSliceCount),
+      rejectedSliceCount: finiteNumber(skeletonDepth?.rejectedSliceCount),
       sliceCenters: Array.isArray(skeletonDepth?.sliceCenters)
         ? [...skeletonDepth.sliceCenters] : [],
       spread: finiteNumber(skeletonDepth?.spread),
       fallbackUsed: skeletonDepth?.fallbackUsed === true,
+      reason: skeletonDepth?.reason || null,
+      diagnostics: skeletonDepth?.diagnostics || {},
     },
     controlDepthN: Object.fromEntries(CONTROL_KEYS.map(key => [key,
       worldToSemantic(template[key], bounds, frame).depthN])),
