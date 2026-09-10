@@ -61,11 +61,8 @@ import {
 import {initializeHumanoidPoseRuntime} from './humanoid-pose-runtime.js';
 import {initializeSkinningRuntime} from './skinning-runtime.js';
 import {
-  cancelRigJointPicking, getModelRigState, initializeRigModelSession,
-  initializeRigSourceSession,
+  cancelRigJointPicking, initializeRigModelSession, initializeRigSourceSession,
   modelJointFromSkinningSample,
-  ensureRigSourceSkinningRig, buildAllRigSourceSkinningRigs,
-  resetRigSourceSkinningPose,
 } from './rig-model-session.js';
 import {initializeRigPoseRuntime} from './rig-pose-runtime.js';
 import {

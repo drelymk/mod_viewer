@@ -11,7 +11,6 @@ import {
 } from './weight-rig.js';
 
 let activeSession = null;
-let activeSourceSession = null;
 
 function createSourceSession({states, knownMeshes, modelWeightState,
     sourceSkinningRigs, ensureInfluenceGraph, rebuildRestFrames,
@@ -213,25 +212,7 @@ function createSourceSession({states, knownMeshes, modelWeightState,
 }
 
 export function initializeRigSourceSession(options) {
-  activeSourceSession = createSourceSession(options);
-  return activeSourceSession;
-}
-
-function sourceSession() {
-  if (!activeSourceSession) {
-    throw new Error('Rig source session is not initialized.');
-  }
-  return activeSourceSession;
-}
-
-export function ensureRigSourceSkinningRig(sourceKey, members) {
-  return sourceSession().ensure(sourceKey, members);
-}
-export function buildAllRigSourceSkinningRigs() {
-  return sourceSession().buildAll();
-}
-export function resetRigSourceSkinningPose(rig) {
-  return sourceSession().resetPose(rig);
+  return createSourceSession(options);
 }
 
 function createSession({state, modelWeightState, getGeneration,
