@@ -4836,8 +4836,25 @@ def test_humanoid_driver_binding_preserves_rest_offsets_and_avoids_double_transf
         controls: Object.fromEntries(ids.map(key => [key,
           {position: positions[key]}])),
       };
+      const driverFor = key => key === 'chest' || key === 'pelvis'
+        ? 'torso' : key === 'leftShoulder' ? 'left_chest_shoulder'
+          : key === 'rightShoulder' ? 'right_chest_shoulder'
+            : key === 'leftElbow' ? 'left_upper_arm'
+              : key === 'leftHand' ? 'left_lower_arm'
+                : key === 'rightElbow' ? 'right_upper_arm'
+                  : key === 'rightHand' ? 'right_lower_arm'
+                    : key === 'leftHip' ? 'left_pelvis_hip'
+                      : key === 'leftKnee' || key === 'leftFoot'
+                        ? 'left_lower_leg'
+                        : key === 'rightHip' ? 'right_pelvis_hip'
+                          : 'right_lower_leg';
+      const heatBinding = {modelJointAssignments: new Map(ids.map((key, jointId) => [
+        jointId, {driverId: driverFor(key), limbRole: key.startsWith('left')
+          ? 'left_leg' : key.startsWith('right') ? 'right_leg' : null,
+          progress: .5, confidence: 'high', sourceBoneKeys: [], memberCount: 1},
+      ]))};
       const binding = bindingModule.buildHumanoidRigBinding({
-        controlRig, modelRig,
+        controlRig, modelRig, heatBinding,
       });
       const reset = bindingModule.buildHumanoidDriverBaseTransforms({
         binding, controlRig, modelRig,
@@ -4860,7 +4877,7 @@ def test_humanoid_driver_binding_preserves_rest_offsets_and_avoids_double_transf
         secondaryRoots: binding.secondaryAttachments.length,
         resetError,
         posedFoot: lowerFootTarget?.elements.slice(12, 15),
-        bindingDiagnostics: binding.diagnostics,
+            bindingDiagnostics: binding.diagnostics,
       };
     }""")
     assert result["lowerKneeDriver"] == "left_lower_leg"
@@ -4994,24 +5011,206 @@ def test_humanoid_binding_uses_semantic_domains_and_bounded_terminals(module_pag
         forward: [0, 0, 1], right: [1, 0, 0]},
         controls: Object.fromEntries(Object.entries(controls).map(
           ([key, position]) => [key, {position}]))};
-      const binding = bindingModule.buildHumanoidRigBinding({controlRig, modelRig});
+      const heatBinding = {modelJointAssignments: new Map([[1, {
+        driverId: 'left_lower_arm', limbRole: 'left_arm', progress: 1,
+        confidence: 'high', sourceBoneKeys: ['body#bone=1'], memberCount: 1,
+      }]])};
+      const binding = bindingModule.buildHumanoidRigBinding({controlRig, modelRig,
+        heatBinding});
+      const noHeatBinding = bindingModule.buildHumanoidRigBinding({controlRig,
+        modelRig});
       const diagnostic = jointId => bindingModule.getHumanoidJointBindingDiagnostics(
         binding, jointId);
       return {
         terminal: binding.jointBindings.get(1)?.driverId,
-        terminalRaw: binding.jointBindings.get(1)?.rawProjection,
-        terminalClamped: binding.jointBindings.get(1)?.projection,
+        terminalMethod: binding.jointBindings.get(1)?.bindingMethod,
+        noHeatTerminal: noHeatBinding.jointBindings.get(1)?.driverId || null,
         head: diagnostic(2), child: diagnostic(3), neighbor: diagnostic(4),
       };
     }""")
     assert result["terminal"] == "left_lower_arm"
-    assert result["terminalRaw"] > 1
-    assert result["terminalClamped"] == pytest.approx(1)
+    assert result["terminalMethod"] == "heat_connectivity"
+    assert result["noHeatTerminal"] is None
     assert result["head"]["bindingType"] == "secondary"
     assert result["head"]["driverId"] == "torso"
     assert result["head"]["secondaryRootId"] == 2
     assert result["head"]["secondarySubtreeSize"] == 2
     assert result["neighbor"]["driverId"] not in {"left_upper_arm", "left_lower_arm"}
+
+
+def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branches(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const centers = {
+        1: [-.2, 1.3, 0], 2: [-.35, 1.15, 0], 3: [-.5, 1, 0],
+        4: [-.65, .9, 0], 5: [-.9, .75, 0], 6: [0, 1.4, 0],
+        7: [-.2, .4, 0],
+      };
+      const edge = (boneA, boneB, jointCenter) => ({boneA, boneB,
+        productOverlap: 1, minOverlap: .4, containment: .2, jaccard: .1,
+        treeEdgeScore: .2, jointCenter});
+      const relationships = [
+        edge(1, 2, [-.275, 1.225, 0]), edge(2, 3, [-.425, 1.075, 0]),
+        edge(3, 4, [-.575, .95, 0]), edge(4, 5, [-.725, .85, 0]),
+        edge(1, 6, [-.1, 1.35, 0]), edge(1, 7, [-.2, .85, 0]),
+      ];
+      const sourceRig = {sourceKey: 'body', influenceGraph: {
+        evidenceMode: 'surface', nodes: Object.entries(centers).map(
+          ([boneId, weightedCenter]) => ({boneId: Number(boneId), weightedCenter,
+            weightedRadius: .01, totalWeight: 1, affectedMeasure: 1,
+          affectedVertexCount: 10})), relationships,
+      }};
+      const partialRig = {sourceKey: 'cloth', influenceGraph: {
+        evidenceMode: 'vertex',
+        nodes: [
+          {boneId: 20, weightedCenter: centers[4], weightedRadius: .01,
+            totalWeight: 1, affectedVertexCount: 10},
+          {boneId: 21, weightedCenter: centers[5], weightedRadius: .01,
+            totalWeight: 1, affectedVertexCount: 10},
+        ],
+        relationships: [edge(20, 21, [-.725, .85, 0])].map(item => ({
+          ...item, productOverlap: 0, sharedVertexCount: 3,
+        })),
+      }};
+      const sourceBoneToModelJointId = new Map(Object.keys(centers).map(
+        boneId => [`body#bone=${boneId}`, Number(boneId)]));
+      sourceBoneToModelJointId.set('cloth#bone=20', 20);
+      sourceBoneToModelJointId.set('cloth#bone=21', 21);
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig, partialRig], modelRig: {sourceBoneToModelJointId}});
+      const source = binding.sourceResults.body.left_arm;
+      const partial = binding.sourceResults.cloth.left_arm;
+      return {
+        mainPath: source.mainPathBoneIds,
+        complete: source.complete,
+        maxProgress: source.maxProgress,
+        partialPath: partial.mainPathBoneIds,
+        partialComplete: partial.complete,
+        armAssignments: source.assignments.map(item => [
+          item.boneId, item.driverId]).sort((left, right) => left[0] - right[0]),
+        assignments: [...binding.sourceBoneAssignments.values()].map(item => [
+          item.boneId, item.driverId]).sort((left, right) => left[0] - right[0]),
+        modelDrivers: [...binding.modelJointAssignments.values()].map(item => [
+          item.boneId, item.driverId]).sort((left, right) => left[0] - right[0]),
+        conflicts: binding.conflicts,
+      };
+    }""")
+    assert result["mainPath"] == [1, 2, 3, 4, 5]
+    assert result["complete"]
+    assert result["maxProgress"] >= .8
+    assert result["partialPath"] == [20, 21]
+    assert result["partialComplete"]
+    assert result["armAssignments"] == [
+        [1, "left_upper_arm"], [2, "left_upper_arm"],
+        [3, "left_lower_arm"], [4, "left_lower_arm"],
+        [5, "left_lower_arm"],
+    ]
+    assert [item for item in result["assignments"] if item[0] <= 5] == \
+        result["armAssignments"]
+    assert result["conflicts"] == []
+
+
+def test_humanoid_heat_binding_marks_cross_limb_model_joint_conflicts(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const sourceRig = {sourceKey: 'body', influenceGraph: {
+        evidenceMode: 'surface',
+        nodes: [
+          {boneId: 1, weightedCenter: controls.leftHand, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+          {boneId: 2, weightedCenter: controls.leftFoot, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+          {boneId: 3, weightedCenter: controls.leftElbow, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+          {boneId: 4, weightedCenter: controls.leftKnee, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+        ], relationships: [
+          {boneA: 1, boneB: 3, productOverlap: 1, minOverlap: .4,
+            containment: .2, jaccard: .1, treeEdgeScore: .2,
+            jointCenter: [-.65, .9, 0]},
+          {boneA: 2, boneB: 4, productOverlap: 1, minOverlap: .4,
+            containment: .2, jaccard: .1, treeEdgeScore: .2,
+            jointCenter: [-.2, .125, 0]},
+        ],
+      }};
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const sourceBoneToModelJointId = new Map([
+        ['body#bone=1', 7], ['body#bone=2', 7],
+      ]);
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig], modelRig: {sourceBoneToModelJointId}});
+      return {
+        assignment: binding.modelJointAssignments.get(7) || null,
+        conflicts: binding.conflicts,
+      };
+    }""")
+    assert result["assignment"] is None
+    assert any(conflict["reason"] == "mixed_primary_binding"
+               and conflict.get("jointId") == 7
+               for conflict in result["conflicts"])
+
+
+def test_humanoid_heat_binding_rejects_close_centers_without_edges(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const sourceRig = {sourceKey: 'body', influenceGraph: {
+        evidenceMode: 'surface',
+        nodes: [{boneId: 1, weightedCenter: controls.leftHand,
+          weightedRadius: .01, totalWeight: 1, affectedMeasure: 1}],
+        relationships: [],
+      }};
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig], modelRig: {
+          sourceBoneToModelJointId: new Map([['body#bone=1', 1]]),
+        }});
+      return {
+        sourceAssignments: binding.sourceBoneAssignments.size,
+        modelAssignments: binding.modelJointAssignments.size,
+      };
+    }""")
+    assert result == {"sourceAssignments": 0, "modelAssignments": 0}
 
 
 def test_driver_translation_counts_as_active_pose_joint(module_page):
@@ -5065,7 +5264,12 @@ def test_humanoid_ik_driver_changes_a_weighted_mesh_vertex(module_page):
           parentById: {0: null}, childrenById: {0: []}}],
         componentByJointId: new Map([[0, 0]]),
       };
-      const binding = buildHumanoidRigBinding({controlRig, modelRig});
+      const heatBinding = {modelJointAssignments: new Map([[0, {
+        driverId: 'left_lower_arm', limbRole: 'left_arm', progress: 1,
+        confidence: 'high', sourceBoneKeys: ['body#bone=0'], memberCount: 1,
+      }]])};
+      const binding = buildHumanoidRigBinding({controlRig, modelRig,
+        heatBinding});
       const solved = solveHumanoidControlIk({
         controlRig, role: 'left_arm', target: [-.55, 1, 0],
       });

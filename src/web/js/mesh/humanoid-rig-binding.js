@@ -240,7 +240,7 @@ function isExactArticulationTie(candidates, best) {
       && candidate.projection > .95);
 }
 
-function directBindingFor(modelRig, jointId, candidate, driverMap) {
+function directBindingFor(modelRig, jointId, candidate, driverMap, metadata = {}) {
   const restJointWorld = restJointWorldMatrix(modelRig, jointId);
   const driver = driverMap.get(candidate.driverId);
   if (!restJointWorld || !driver) return null;
@@ -257,7 +257,19 @@ function directBindingFor(modelRig, jointId, candidate, driverMap) {
     endpointDistanceRatio: candidate.endpointDistanceRatio,
     score: candidate.score,
     confidence: confidenceForDistance(candidate.distanceRatio),
+    ...metadata,
   };
+}
+
+function valueFor(collection, key) {
+  if (collection instanceof Map) return collection.get(key) ?? collection.get(String(key));
+  return collection?.[key];
+}
+
+function nullableNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const result = Number(value);
+  return Number.isFinite(result) ? result : null;
 }
 
 function serializeMatrix(matrix) {
@@ -271,11 +283,16 @@ function serializeBindingEntry(entry) {
     localMatrix: serializeMatrix(entry.localMatrix),
     distance: Number(entry.distance) || 0,
     distanceRatio: Number(entry.distanceRatio) || 0,
-    rawProjection: Number(entry.rawProjection) || 0,
-    projection: Number(entry.projection) || 0,
-    endpointDistanceRatio: Number(entry.endpointDistanceRatio) || 0,
-    score: Number(entry.score) || 0,
+    rawProjection: nullableNumber(entry.rawProjection),
+    projection: nullableNumber(entry.projection),
+    endpointDistanceRatio: nullableNumber(entry.endpointDistanceRatio),
+    score: nullableNumber(entry.score),
     confidence: entry.confidence || 'low',
+    bindingMethod: entry.bindingMethod || 'spatial',
+    limbRole: entry.limbRole || null,
+    progress: Number.isFinite(Number(entry.progress)) ? Number(entry.progress) : null,
+    sourceBoneKeys: [...(entry.sourceBoneKeys || [])],
+    memberCount: Number(entry.memberCount) || 0,
   };
 }
 
@@ -353,7 +370,8 @@ export function serializeHumanoidDriverFrames(controlRig, posedControls = null) 
 }
 
 /** Build deterministic direct and secondary ModelJoint bindings. */
-export function buildHumanoidRigBinding({controlRig, modelRig, options = {}} = {}) {
+export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
+    options = {}} = {}) {
   const started = typeof performance !== 'undefined' && performance.now
     ? performance.now() : Date.now();
   const height = Math.max(Number(controlRig?.frame?.height) || 0, EPSILON);
@@ -369,21 +387,55 @@ export function buildHumanoidRigBinding({controlRig, modelRig, options = {}} = {
   const candidatesByJointId = new Map();
   let ambiguousBindingCount = 0;
 
+  // Heat ownership is authoritative for all eight limb drivers. It is
+  // deliberately applied before the central-body proximity fallback.
   allJointIds(modelRig).forEach(jointId => {
+    const assignment = valueFor(heatBinding?.modelJointAssignments, jointId);
+    if (!assignment?.driverId || !drivers.has(assignment.driverId)) return;
+    const point = pointForJoint(modelRig, jointId);
+    const driver = drivers.get(assignment.driverId);
+    const restJointWorld = restJointWorldMatrix(modelRig, jointId);
+    if (!point || !driver || !restJointWorld) return;
+    const localMatrix = driver.matrix.clone().invert().multiply(restJointWorld);
+    jointBindings.set(jointId, {
+      type: 'driver',
+      driverId: assignment.driverId,
+      localMatrix,
+      restJointWorld,
+      distance: null,
+      distanceRatio: null,
+      rawProjection: null,
+      projection: null,
+      endpointDistanceRatio: null,
+      score: null,
+      confidence: assignment.confidence || 'medium',
+      bindingMethod: 'heat_connectivity',
+      limbRole: assignment.limbRole || null,
+      progress: Number(assignment.progress),
+      sourceBoneKeys: [...(assignment.sourceBoneKeys || [])],
+      memberCount: Number(assignment.memberCount) || 0,
+    });
+  });
+
+  allJointIds(modelRig).forEach(jointId => {
+    if (jointBindings.has(jointId)) return;
     const point = pointForJoint(modelRig, jointId);
     if (!point) return;
     const candidates = sortedCandidates(point, drivers, height, controlRig);
     candidatesByJointId.set(jointId, candidates);
-    const best = articulationPreferredCandidate(candidates);
+    const centralCandidates = candidates.filter(candidate =>
+      candidate.driverId === 'torso');
+    const best = articulationPreferredCandidate(centralCandidates);
     if (!best || best.distanceRatio > directLimit) return;
-    const chosenCandidates = candidates[0] === best
-      ? candidates : [best, ...candidates.filter(item => item !== best)];
+    const chosenCandidates = centralCandidates[0] === best
+      ? centralCandidates : [best, ...centralCandidates.filter(item => item !== best)];
     if (isAmbiguous(chosenCandidates, ambiguityMargin)
         && !isExactArticulationTie(candidates, best)) {
       ambiguousBindingCount += 1;
       return;
     }
-    const binding = directBindingFor(modelRig, jointId, best, drivers);
+    const binding = directBindingFor(modelRig, jointId, best, drivers,
+      {bindingMethod: 'central_proximity'});
     if (binding) jointBindings.set(jointId, binding);
   });
 
@@ -400,7 +452,8 @@ export function buildHumanoidRigBinding({controlRig, modelRig, options = {}} = {
     if (directIds.has(rootId) || secondaryJointIds.has(rootId)) return;
     const root = pointForJoint(modelRig, rootId);
     if (!root) return;
-    const candidates = secondaryCandidates(root, drivers, height, controlRig);
+    const candidates = secondaryCandidates(root, drivers, height, controlRig)
+      .filter(candidate => candidate.driverId === 'torso');
     const best = articulationPreferredCandidate(candidates);
     if (!best || best.distanceRatio > secondaryLimit
         || (isAmbiguous(candidates, ambiguityMargin)
@@ -455,6 +508,8 @@ export function buildHumanoidRigBinding({controlRig, modelRig, options = {}} = {
       secondaryDistanceRatio: secondaryLimit,
       ambiguityMarginRatio: ambiguityMargin,
       candidateCount: candidatesByJointId.size,
+      heatBinding: heatBinding?.diagnostics || null,
+      heatConflicts: [...(heatBinding?.conflicts || [])],
     },
   };
   return binding;
@@ -486,11 +541,15 @@ export function getHumanoidJointBindingDiagnostics(binding, jointId) {
       jointId: id,
       bindingType: 'direct',
       driverId: direct.driverId || null,
-      rawProjection: Number(direct.rawProjection) || 0,
-      clampedProjection: Number(direct.projection) || 0,
-      distanceRatio: Number(direct.distanceRatio) || 0,
+      rawProjection: nullableNumber(direct.rawProjection),
+      clampedProjection: nullableNumber(direct.projection),
+      distanceRatio: nullableNumber(direct.distanceRatio),
       secondaryRootId: null,
       secondarySubtreeSize: 0,
+      bindingMethod: direct.bindingMethod || 'spatial',
+      limbRole: direct.limbRole || null,
+      progress: nullableNumber(direct.progress),
+      sourceBoneKeys: [...(direct.sourceBoneKeys || [])],
     };
   }
   const attachment = (binding.secondaryAttachments || []).find(item =>
@@ -500,11 +559,15 @@ export function getHumanoidJointBindingDiagnostics(binding, jointId) {
       jointId: id,
       bindingType: 'secondary',
       driverId: attachment.driverId || null,
-      rawProjection: Number(attachment.rawProjection) || 0,
-      clampedProjection: Number(attachment.projection) || 0,
-      distanceRatio: Number(attachment.distanceRatio) || 0,
+      rawProjection: nullableNumber(attachment.rawProjection),
+      clampedProjection: nullableNumber(attachment.projection),
+      distanceRatio: nullableNumber(attachment.distanceRatio),
       secondaryRootId: numberId(attachment.rootJointId),
       secondarySubtreeSize: (attachment.jointIds || []).length,
+      bindingMethod: 'central_proximity',
+      limbRole: null,
+      progress: null,
+      sourceBoneKeys: [],
     };
   }
   return {

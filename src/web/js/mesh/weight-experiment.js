@@ -74,6 +74,9 @@ import {
 } from './humanoid-rig-binding.js';
 import {buildHumanoidControlRig} from './humanoid-control-rig.js';
 import {mergeHumanoidLimbPose, solveHumanoidControlIk} from './humanoid-rig-ik.js';
+import {
+  buildHumanoidHeatBinding, serializeHumanoidHeatBinding,
+} from './humanoid-heat-binding.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -106,6 +109,7 @@ function invalidateHumanoidDetection() {
   humanoidControlRigSnapshotCache = null;
   modelRigState.humanoidControlRig = null;
   modelRigState.humanoidBinding = null;
+  modelRigState.humanoidHeatBinding = null;
   modelRigState.humanoidPose = {};
   modelRigState.humanoidBendSigns = {};
   modelRigState.humanoidRuntimeDiagnostics = null;
@@ -312,6 +316,7 @@ function humanoidSnapshot() {
     bindingRuntimeMs: Number(modelRigState.humanoidBindingRuntimeMs) || 0,
     availableRoles: rig?.accepted ? [...RIG_LIMB_ROLES] : [],
     binding: binding?.diagnostics || null,
+    heatBinding: modelRigState.humanoidHeatBinding,
     selectedBinding: getHumanoidJointBindingDiagnostics(
       binding, modelRigState.selectedJointId),
     runtime: modelRigState.humanoidRuntimeDiagnostics
@@ -400,6 +405,7 @@ function humanoidControlRigSnapshot() {
         rightLeg: [point('rightHip'), point('rightKnee'), point('rightFoot')],
       },
       binding: modelRigState.humanoidBinding,
+      heatBinding: modelRigState.humanoidHeatBinding,
       driverFrames: serializeHumanoidDriverFrames(
         rig, modelRigState.humanoidPose),
       diagnostics: {
@@ -1791,13 +1797,19 @@ function buildPrimaryHumanoidRig(rig) {
     axes: humanoidSemanticAxes(),
     orientationState,
   });
+  const heatBinding = controlRig?.accepted
+    ? buildHumanoidHeatBinding({
+      controlRig, sourceRigs: rig.sourceRigs, modelRig: rig,
+    }) : null;
   const binding = controlRig?.accepted
-    ? buildHumanoidRigBinding({controlRig, modelRig: rig}) : null;
+    ? buildHumanoidRigBinding({controlRig, modelRig: rig, heatBinding}) : null;
   rig.humanoidControlRig = controlRig;
+  rig.humanoidHeatBinding = heatBinding;
   rig.humanoidBinding = binding;
   rig.humanoidOrientationRevision = Number(
     orientationState?.modelOrientationRevision) || 0;
   modelRigState.humanoidControlRig = controlRig;
+  modelRigState.humanoidHeatBinding = serializeHumanoidHeatBinding(heatBinding);
   modelRigState.humanoidBinding = serializeHumanoidRigBinding(binding);
   modelRigState.humanoidStructureRevision = rig.structureRevision;
   modelRigState.humanoidFitRuntimeMs = Number(

@@ -62,6 +62,7 @@ function createModelRigDefaults() {
     humanoidStructureRevision: null,
     humanoidControlRig: null,
     humanoidBinding: null,
+    humanoidHeatBinding: null,
     humanoidPose: {},
     humanoidBendSigns: {},
     humanoidRuntimeDiagnostics: null,
