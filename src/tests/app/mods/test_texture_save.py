@@ -250,6 +250,7 @@ def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatc
         }], [{"semantic_key": "Body-1", "texture_keys": _role_keys()}])
 
     assert result["status"] == "ok"
+    assert result["texture"] == {"file": "body.dds"}
     assert "patched" not in result
     assert "diagnostics" not in result
     assert cleanup == [(str(tmp_path), {"Body::one": {"hue": 30}})]
@@ -1430,6 +1431,30 @@ def test_bc7_save_pads_single_intent_block_and_preserves_unrelated_blocks(
                                                     layout.mips[0].offset + 16])
     assert [pixel[3] for pixel in candidate_pixels] == [
         pixel[3] for pixel in source_pixels]
+
+
+def test_bc7_representability_gate_keeps_error_details_private(
+        tmp_path, monkeypatch):
+    source_block = _mode6_block()
+    source = tmp_path / "body.dds"
+    source.write_bytes(_dx10_dds(source_block))
+    layout = inspect_dds_layout(source)
+    adjustment = prepare_color_adjustment({"hue": 30})
+    prepared = SimpleNamespace(
+        selected_path=str(source), info=layout.info, layout=layout,
+        mip0_claims=bytearray([1] * 16),
+        intent_adjustments=(None, adjustment),
+        mip0_affected_blocks=(0,))
+    monkeypatch.setattr(
+        bc7_recolor._bc7_codec, "recolor_block",
+        lambda *_args: SimpleNamespace(
+            block=source_block, source_error=10, candidate_error=10))
+
+    with pytest.raises(errors.TextureSaveError) as raised:
+        bc7_recolor._save_bc7_blocks(source.read_bytes(), prepared)
+
+    assert raised.value.code == "texture_color_not_representable"
+    assert raised.value.details == {}
 
 
 def test_parallel_bc7_save_matches_serial_bytes(tmp_path, monkeypatch):

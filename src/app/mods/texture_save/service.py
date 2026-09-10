@@ -10,7 +10,7 @@ from app.mods import metadata
 
 from .errors import TextureSaveError, error_result as _error
 from .progress import SaveProgressReporter
-from .request import affected_texture_keys, texture_details
+from .request import affected_texture_keys
 from .coverage import prepare_texture_save
 from .bc7_recolor import _save_bc7_blocks
 from . import transaction
@@ -173,8 +173,7 @@ def save_texture_color(
                 "tex_key": selected_texture_key,
                 "affected_tex_keys": affected,
                 "saved_meshes": saved_meshes,
-                "texture": texture_details(
-                    prepared.selected_path, prepared.info),
+                "texture": {"file": os.path.basename(prepared.selected_path)},
                 "backup": {"file": os.path.basename(backup_path)},
             }
             temporary = None

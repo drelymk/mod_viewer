@@ -87,17 +87,6 @@ def usage_texture_path(mod_dir, key, expected_role):
     return canonical_mod_path(mod_dir, relative_path)
 
 
-def texture_details(path, info):
-    return {
-        "file": os.path.basename(path),
-        "width": info.width,
-        "height": info.height,
-        "format": info.format,
-        "compressed": info.compressed,
-        "mip_count": info.mip_count,
-    }
-
-
 def inspect_save_texture(path):
     if not path.lower().endswith(".dds"):
         raise TextureSaveError(

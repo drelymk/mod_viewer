@@ -14,7 +14,6 @@ from core.textures.color_adjustment import (
 )
 
 from .errors import TextureSaveError
-from .progress import SaveProgressReporter
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -952,9 +951,5 @@ def _save_bc7_blocks(original, prepared, progress_reporter=None):
         raise TextureSaveError(
             "texture_color_not_representable",
             "The requested Color change could not be represented safely in "
-            "the source BC7 blocks.", "unsupported", {
-                "touched_blocks": totals["touched"],
-                "source_rgb_error": totals["source_error"],
-                "final_rgb_error": totals["final_error"],
-            })
+            "the source BC7 blocks.", "unsupported")
     return bytes(final)
