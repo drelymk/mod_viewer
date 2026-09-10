@@ -1109,7 +1109,11 @@ def test_texture_save_modal_opens_without_analysis_and_lists_changed_meshes(
             "emission_map": None,
         }
         assert page.evaluate(
-            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 2
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment.map("
+            "item => item[2].hue)") == [
+            0, 0]
         page.locator("#texture-bake-close").click()
         assert page.locator("#texture-bake-modal-backdrop.show").count() == 0
     finally:
@@ -1448,7 +1452,7 @@ def test_successful_texture_save_syncs_stale_mesh_after_selection_changes(
         context.close()
 
 
-def test_texture_save_resets_same_mod_replacement_mesh_after_reload(
+def test_texture_save_resets_same_mod_replacement_mesh_after_reload_without_receipt(
         edge_browser, frontend_url):
     payload, tex_key = _bake_test_payload(
         "BakeReloadReplacement", _PNG_URI)
@@ -1487,7 +1491,9 @@ def test_texture_save_resets_same_mod_replacement_mesh_after_reload(
         page.wait_for_function(
             "window.modViewer.activeMeshes[0].userData.colorAdjustment.hue === 0")
         assert page.evaluate(
-            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 0
+            "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 1
+        assert page.evaluate(
+            "window.__fakeApi.calls.saveMeshColorAdjustment[0][2].hue") == 0
     finally:
         context.close()
 

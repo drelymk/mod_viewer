@@ -3757,8 +3757,6 @@ def test_mesh_color_adjustment_updates_stable_uniforms_and_gates_assets(
         state = page.evaluate("""async assetKey => {
           const {getMeshColorAdjustment, canEditMeshColor,
             setMeshColorAdjustment} = await import('./js/mesh/mesh-color-session.js');
-          const {getGameMaterialColorAdjustment} =
-            await import('./js/mesh/material-profile.js');
           const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
           const {replaceMeshMaterial} = await import('./js/mesh/mesh-material-state.js');
           const mesh = window.modViewer.activeMeshes[0];
@@ -3774,7 +3772,9 @@ def test_mesh_color_adjustment_updates_stable_uniforms_and_gates_assets(
           setMeshColorAdjustment(mesh, {
             ...before.adjustment, hue: 55,
           }, {persist: false});
-          const live = getGameMaterialColorAdjustment(mesh.material);
+          const live = {
+            hue: mesh.material.userData.gameMaterial.colorHueNode.value,
+          };
           const sameMaterialDuringLive = mesh.material === oldMaterial;
           const sameTextureDuringLive = mesh.material.userData.gameMaterial
             .bindings.diffuse.textureNode.value === oldTexture;
@@ -3802,7 +3802,7 @@ def test_mesh_color_adjustment_updates_stable_uniforms_and_gates_assets(
             editable: canEditMeshColor(mesh),
             enabled: mesh.material.userData.gameMaterial
               .colorAdjustmentEnabledNode.value,
-            hue: getGameMaterialColorAdjustment(mesh.material).hue,
+            hue: mesh.material.userData.gameMaterial.colorHueNode.value,
           };
           replaceMeshMaterial(mesh, mesh.userData.materialProfile, {}, {
             render: false,
@@ -3815,7 +3815,7 @@ def test_mesh_color_adjustment_updates_stable_uniforms_and_gates_assets(
             sameTexture: mesh.material.userData.gameMaterial
               .bindings.diffuse.textureNode.value === oldTexture,
             afterReplacement: {
-              hue: getGameMaterialColorAdjustment(mesh.material).hue,
+              hue: mesh.material.userData.gameMaterial.colorHueNode.value,
               enabled: mesh.material.userData.gameMaterial
                 .colorAdjustmentEnabledNode.value,
             },
@@ -3891,8 +3891,7 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
         assert filled[1] > filled[2], filled
 
         tints = page.evaluate("""async () => {
-          const {setGameMaterialColorAdjustment,
-            getGameMaterialColorAdjustment} = await import(
+          const {setGameMaterialColorAdjustment} = await import(
             './js/mesh/material-profile.js');
           const mesh = window.modViewer.activeMeshes[0];
           const cases = [null, '#ffffff', '#4080c0'];
@@ -3902,14 +3901,15 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
               red: 1, green: 1, blue: 1, tint,
             }, {enabled: true});
             return {
-              state: getGameMaterialColorAdjustment(mesh.material),
+              tintEnabled: mesh.material.userData.gameMaterial
+                .colorTintEnabledNode.value,
               raw: mesh.material.userData.gameMaterial.colorTintNode.value
                 .toArray(),
             };
           });
         }""")
-        assert [item["state"]["tint"] for item in tints] == [
-            None, "#ffffff", "#4080c0"]
+        assert [item["tintEnabled"] for item in tints] == [
+            False, True, True]
         expected_raw_tints = [
             [1, 1, 1],
             [1, 1, 1],

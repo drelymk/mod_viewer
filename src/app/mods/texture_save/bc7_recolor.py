@@ -25,27 +25,8 @@ _BC7_MAX_IN_FLIGHT_FACTOR = 2
 
 
 @dataclass(frozen=True)
-class _BC7SaveStats:
-    touched_blocks: int
-    improved_blocks: int
-    unchanged_blocks: int
-    source_rgb_error: int
-    final_rgb_error: int
-    modes: dict
-    source_blocks_kept: int = 0
-    partial_blocks: int = 0
-    full_blocks: int = 0
-    single_intent_partial_blocks: int = 0
-    multi_intent_blocks: int = 0
-
-
-@dataclass(frozen=True)
 class _BC7BlockIntent:
     classes: tuple
-    partial: bool
-    full: bool
-    single_intent_partial: bool
-    multi_intent: bool
 
 
 @dataclass(frozen=True)
@@ -84,8 +65,6 @@ class _BC7BlockResult:
     block: bytes
     source_error: int
     candidate_error: int
-    mode: int
-    source_kept: bool
     error: str = None
     error_code: str = None
 
@@ -356,8 +335,6 @@ def _bc7_block_intent_info(state, mip, block_index):
     source_x, source_y, valid_width, valid_height = _unit_bounds(
         mip, block_index)
     classes = set()
-    first = None
-    all_same = True
     for row in range(valid_height):
         for column in range(valid_width):
             value = claims[(source_y + row) * width + source_x + column]
@@ -368,19 +345,8 @@ def _bc7_block_intent_info(state, mip, block_index):
                     "Mip-0 color intent contains an invalid class.")
             if value:
                 classes.add(value)
-                if first is None:
-                    first = value
-                elif value != first:
-                    all_same = False
-            else:
-                all_same = False
-    full = bool(classes) and len(classes) == 1 and all_same
     ordered_classes = tuple(sorted(classes))
-    return _BC7BlockIntent(
-        classes=ordered_classes, partial=bool(classes) and not full,
-        full=full,
-        single_intent_partial=len(ordered_classes) == 1 and not full,
-        multi_intent=len(ordered_classes) > 1)
+    return _BC7BlockIntent(ordered_classes)
 
 
 def _bc7_validate_lower_single_state(state, mip):
@@ -452,7 +418,6 @@ def _bc7_weighted_block_intent_info(state, mip, block_index):
     source_x, source_y, valid_width, valid_height = _unit_bounds(
         mip, block_index)
     classes = set()
-    full = True
     if state.get("single"):
         changed_counts, total_counts = _bc7_validate_lower_single_state(
             state, mip)
@@ -478,8 +443,6 @@ def _bc7_weighted_block_intent_info(state, mip, block_index):
                         "Changed color intent exceeds total mip weight.")
                 if changed:
                     classes.add(1)
-                if not changed or changed != total:
-                    full = False
                 continue
             base_count = counts[0][pixel]
             if (not isinstance(base_count, int) or base_count < 0):
@@ -497,16 +460,10 @@ def _bc7_weighted_block_intent_info(state, mip, block_index):
                 if count:
                     classes.add(intent_class)
                     pixel_class_count += 1
-            if (not pixel_class_count or base_count
-                    or pixel_class_count != 1):
-                full = False
     if not classes:
-        return _BC7BlockIntent((), False, False, False, False)
+        return _BC7BlockIntent(())
     ordered_classes = tuple(sorted(classes))
-    return _BC7BlockIntent(
-        classes=ordered_classes, partial=not full, full=full,
-        single_intent_partial=len(ordered_classes) == 1 and not full,
-        multi_intent=len(ordered_classes) > 1)
+    return _BC7BlockIntent(ordered_classes)
 
 
 def _bc7_single_adjustment_target_pixels(
@@ -725,12 +682,11 @@ def _prepare_bc7_parallel_job(
 
 
 def _iter_bc7_jobs(original, mip, affected, state, adjustments,
-                    record_intent, defer_single_intent=False):
-    """Yield parent-prepared BC7 jobs while recording intent diagnostics."""
+                    defer_single_intent=False):
+    """Yield parent-prepared BC7 jobs."""
     for block_index in affected:
         block_intent = _bc7_block_intent_info(
             state, mip, block_index)
-        record_intent(block_intent)
         if defer_single_intent:
             yield _prepare_bc7_parallel_job(
                 original, mip, block_index, state, adjustments, block_intent)
@@ -740,11 +696,11 @@ def _iter_bc7_jobs(original, mip, affected, state, adjustments,
 
 
 def _iter_bc7_job_chunks(original, mip, affected, state, adjustments,
-                         record_intent, chunk_size):
+                         chunk_size):
     """Group compact jobs into bounded worker submissions."""
     chunk = []
     for job in _iter_bc7_jobs(
-            original, mip, affected, state, adjustments, record_intent,
+            original, mip, affected, state, adjustments,
             defer_single_intent=True):
         chunk.append(job)
         if len(chunk) >= chunk_size:
@@ -761,7 +717,7 @@ def _recolor_bc7_single_intent(job):
     except _bc7_codec.BC7Error:
         return _BC7BlockResult(
             start=job.start, block=b"", source_error=0,
-            candidate_error=0, mode=0, source_kept=False,
+            candidate_error=0,
             error="The texture contains invalid BC7 data.",
             error_code="invalid_bc7")
     target_pixels = _bc7_single_adjustment_target_pixels(
@@ -773,13 +729,12 @@ def _recolor_bc7_single_intent(job):
     except _bc7_codec.BC7Error as error:
         return _BC7BlockResult(
             start=job.start, block=b"", source_error=0,
-            candidate_error=0, mode=0, source_kept=False,
+            candidate_error=0,
             error=str(error))
     return _BC7BlockResult(
         start=job.start, block=result.block,
         source_error=result.source_error,
-        candidate_error=result.candidate_error, mode=result.mode,
-        source_kept=result.block == job.source_block)
+        candidate_error=result.candidate_error)
 
 
 def _recolor_bc7_weighted_single_intent(job):
@@ -789,7 +744,7 @@ def _recolor_bc7_weighted_single_intent(job):
     except _bc7_codec.BC7Error:
         return _BC7BlockResult(
             start=job.start, block=b"", source_error=0,
-            candidate_error=0, mode=0, source_kept=False,
+            candidate_error=0,
             error="The texture contains invalid BC7 data.",
             error_code="invalid_bc7")
     try:
@@ -799,7 +754,7 @@ def _recolor_bc7_weighted_single_intent(job):
     except TextureSaveError as error:
         return _BC7BlockResult(
             start=job.start, block=b"", source_error=0,
-            candidate_error=0, mode=0, source_kept=False,
+            candidate_error=0,
             error=error.message, error_code=error.code)
     try:
         result = _bc7_codec.recolor_block(
@@ -808,13 +763,12 @@ def _recolor_bc7_weighted_single_intent(job):
     except _bc7_codec.BC7Error as error:
         return _BC7BlockResult(
             start=job.start, block=b"", source_error=0,
-            candidate_error=0, mode=0, source_kept=False,
+            candidate_error=0,
             error=str(error))
     return _BC7BlockResult(
         start=job.start, block=result.block,
         source_error=result.source_error,
-        candidate_error=result.candidate_error, mode=result.mode,
-        source_kept=result.block == job.source_block)
+        candidate_error=result.candidate_error)
 
 
 def _recolor_bc7_chunk(jobs):
@@ -840,54 +794,45 @@ def _recolor_bc7_chunk(jobs):
         except _bc7_codec.BC7Error as error:
             results.append(_BC7BlockResult(
                 start=job.start, block=b"", source_error=0,
-                candidate_error=0, mode=0, source_kept=False,
+                candidate_error=0,
                 error=str(error)))
             break
         results.append(_BC7BlockResult(
             start=job.start, block=result.block,
             source_error=result.source_error,
-            candidate_error=result.candidate_error, mode=result.mode,
-            source_kept=result.block == job.source_block))
+            candidate_error=result.candidate_error))
     return tuple(results)
 
 
-def _record_bc7_result(final, result, totals, modes, mip_stats):
-    """Apply one worker result and update all parent-owned diagnostics."""
+def _record_bc7_result(final, result, totals):
+    """Apply one worker result and retain only safety-gate aggregates."""
     if result.error is not None:
         raise TextureSaveError(
             getattr(result, "error_code", None)
             or "texture_validation_failed", result.error)
     final[result.start:result.start + 16] = result.block
     totals["touched"] += 1
-    totals["improved"] += result.candidate_error < result.source_error
-    totals["unchanged"] += result.candidate_error == result.source_error
-    totals["source_blocks_kept"] += result.source_kept
     totals["source_error"] += result.source_error
     totals["final_error"] += result.candidate_error
-    mip_stats["source_blocks_kept"] += result.source_kept
-    modes[result.mode] = modes.get(result.mode, 0) + 1
 
 
 def _process_bc7_serial(final, original, mip, affected, state, adjustments,
-                        record_intent, totals, modes, mip_stats,
-                        record_progress=None):
+                        totals, record_progress=None):
     """Fit BC7 jobs serially through the same job/result path."""
     for job in _iter_bc7_jobs(
-            original, mip, affected, state, adjustments, record_intent):
+            original, mip, affected, state, adjustments):
         results = _recolor_bc7_chunk((job,))
         for result in results:
-            _record_bc7_result(final, result, totals, modes, mip_stats)
+            _record_bc7_result(final, result, totals)
             if record_progress is not None:
                 record_progress()
 
 
 def _process_bc7_parallel(final, original, mip, affected, state, adjustments,
-                          record_intent, totals, modes, mip_stats, executor,
-                          worker_count, record_progress=None):
+                          totals, executor, worker_count, record_progress=None):
     """Fit BC7 jobs with bounded outstanding work on a reused process pool."""
     chunks = iter(_iter_bc7_job_chunks(
-        original, mip, affected, state, adjustments, record_intent,
-        _BC7_CHUNK_SIZE))
+        original, mip, affected, state, adjustments, _BC7_CHUNK_SIZE))
     pending = set()
     max_pending = max(1, worker_count * _BC7_MAX_IN_FLIGHT_FACTOR)
     exhausted = False
@@ -922,7 +867,7 @@ def _process_bc7_parallel(final, original, mip, affected, state, adjustments,
                     "A BC7 worker failed during texture save.") from error
             for result in results:
                 _record_bc7_result(
-                    final, result, totals, modes, mip_stats)
+                    final, result, totals)
                 if record_progress is not None:
                     record_progress()
         submit_available()
@@ -947,13 +892,7 @@ def _save_bc7_blocks(original, prepared, progress_reporter=None):
         for adjustment in raw_adjustments)
     final = bytearray(original)
     state = _bc7_intent_level(prepared)
-    totals = {
-        "touched": 0, "improved": 0, "unchanged": 0,
-        "source_blocks_kept": 0, "partial": 0, "full": 0,
-        "single_intent_partial": 0, "multi_intent": 0,
-        "source_error": 0, "final_error": 0,
-    }
-    modes = {}
+    totals = {"touched": 0, "source_error": 0, "final_error": 0}
     worker_count = _bc7_worker_count()
     executor = None
     try:
@@ -969,11 +908,6 @@ def _save_bc7_blocks(original, prepared, progress_reporter=None):
             if progress_reporter is not None:
                 progress_reporter.processing(
                     level, len(prepared.layout.mips), 0, len(affected))
-            mip_stats = {
-                "partial": 0, "full": 0,
-                "single_intent_partial": 0, "multi_intent": 0,
-                "source_blocks_kept": 0,
-            }
             mip_completed = 0
 
             def record_progress():
@@ -982,18 +916,6 @@ def _save_bc7_blocks(original, prepared, progress_reporter=None):
                 progress_reporter.processing(
                     level, len(prepared.layout.mips), mip_completed,
                     len(affected))
-
-            def record_intent(block_intent):
-                totals["partial"] += block_intent.partial
-                totals["full"] += block_intent.full
-                totals["single_intent_partial"] += (
-                    block_intent.single_intent_partial)
-                totals["multi_intent"] += block_intent.multi_intent
-                mip_stats["partial"] += block_intent.partial
-                mip_stats["full"] += block_intent.full
-                mip_stats["single_intent_partial"] += (
-                    block_intent.single_intent_partial)
-                mip_stats["multi_intent"] += block_intent.multi_intent
 
             use_parallel = (
                 len(affected) >= _BC7_PARALLEL_THRESHOLD
@@ -1011,34 +933,16 @@ def _save_bc7_blocks(original, prepared, progress_reporter=None):
                             from error
                 _process_bc7_parallel(
                     final, original, mip, affected, state, adjustments,
-                    record_intent, totals, modes, mip_stats, executor,
-                    worker_count,
+                    totals, executor, worker_count,
                     record_progress if progress_reporter is not None else None)
             else:
                 _process_bc7_serial(
                     final, original, mip, affected, state, adjustments,
-                    record_intent, totals, modes, mip_stats,
+                    totals,
                     record_progress if progress_reporter is not None else None)
-            _LOGGER.debug(
-                "texture save bc7 mip=%s %sx%s affected=%s partial=%s full=%s "
-                "single_intent_partial=%s multi_intent=%s source_kept=%s",
-                level, mip.width, mip.height, len(affected),
-                mip_stats["partial"], mip_stats["full"],
-                mip_stats["single_intent_partial"],
-                mip_stats["multi_intent"], mip_stats["source_blocks_kept"])
     finally:
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
-    stats = _BC7SaveStats(
-        touched_blocks=totals["touched"], improved_blocks=totals["improved"],
-        unchanged_blocks=totals["unchanged"],
-        source_rgb_error=totals["source_error"],
-        final_rgb_error=totals["final_error"],
-        modes=dict(sorted(modes.items())),
-        source_blocks_kept=totals["source_blocks_kept"],
-        partial_blocks=totals["partial"], full_blocks=totals["full"],
-        single_intent_partial_blocks=totals["single_intent_partial"],
-        multi_intent_blocks=totals["multi_intent"])
     if not totals["touched"]:
         raise TextureSaveError(
             "incompatible_texture_color_usage",
@@ -1050,14 +954,7 @@ def _save_bc7_blocks(original, prepared, progress_reporter=None):
             "The requested Color change could not be represented safely in "
             "the source BC7 blocks.", "unsupported", {
                 "touched_blocks": totals["touched"],
-                "improved_blocks": totals["improved"],
-                "source_blocks_kept": totals["source_blocks_kept"],
-                "partial_blocks": totals["partial"],
-                "full_blocks": totals["full"],
-                "single_intent_partial_blocks": totals[
-                    "single_intent_partial"],
-                "multi_intent_blocks": totals["multi_intent"],
                 "source_rgb_error": totals["source_error"],
                 "final_rgb_error": totals["final_error"],
             })
-    return bytes(final), stats
+    return bytes(final)

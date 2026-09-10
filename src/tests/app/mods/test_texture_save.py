@@ -209,12 +209,6 @@ def _write_prepared_save(path):
     )
 
 
-def _write_stats():
-    return bc7_recolor._BC7SaveStats(
-        touched_blocks=1, improved_blocks=1, unchanged_blocks=0,
-        source_rgb_error=10, final_rgb_error=5, modes={6: 1})
-
-
 def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatch):
     source = tmp_path / "body.dds"
     original = _dx10_dds(bytes(16))
@@ -235,15 +229,12 @@ def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatc
         intent_adjustments=(None, prepare_color_adjustment({"hue": 30})),
         mip0_affected_blocks=(0,),
     )
-    stats = bc7_recolor._BC7SaveStats(
-        touched_blocks=1, improved_blocks=1, unchanged_blocks=0,
-        source_rgb_error=10, final_rgb_error=5, modes={6: 1})
     monkeypatch.setattr(
         service, "prepare_texture_save",
         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
         service, "_save_bc7_blocks",
-        lambda *args, **kwargs: (original, stats))
+        lambda *args, **kwargs: original)
     cleanup = []
     monkeypatch.setattr(
         service.metadata, "clear_mesh_color_adjustments_if_unchanged",
@@ -280,7 +271,7 @@ def test_save_progress_reports_stages_and_ignores_callback_errors(
     def save_blocks(*args, **kwargs):
         reporter = kwargs["progress_reporter"]
         reporter.processing(0, 1, 1, 1)
-        return original, _write_stats()
+        return original
 
     monkeypatch.setattr(service, "_save_bc7_blocks", save_blocks)
     events = []
@@ -423,7 +414,7 @@ def test_save_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatc
         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
         service, "_save_bc7_blocks",
-        lambda *args, **kwargs: (original, _write_stats()))
+        lambda *args, **kwargs: original)
 
     reads = iter((original, b"changed"))
     real_read = transaction._read_source
@@ -454,7 +445,7 @@ def test_save_rejects_changed_candidate_layout_before_backup(tmp_path, monkeypat
         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
         service, "_save_bc7_blocks",
-        lambda *args, **kwargs: (candidate, _write_stats()))
+        lambda *args, **kwargs: candidate)
 
     result = service.save_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
@@ -478,7 +469,7 @@ def test_save_reports_commit_when_replace_raises_after_replacement(
         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
         service, "_save_bc7_blocks",
-        lambda *args, **kwargs: (bytes(candidate), _write_stats()))
+        lambda *args, **kwargs: bytes(candidate))
     real_replace = transaction.os.replace
 
     def replace_then_raise(source_path, target_path):
@@ -491,6 +482,41 @@ def test_save_reports_commit_when_replace_raises_after_replacement(
         "diffuse::body.dds", [], [])
 
     assert result["status"] == "ok"
+    assert source.read_bytes() == bytes(candidate)
+
+
+def test_save_marks_cleanup_uncertain_after_committed_cleanup_raises(
+        tmp_path, monkeypatch):
+    source = tmp_path / "body.dds"
+    original = _dx10_dds(bytes(16))
+    candidate = bytearray(original)
+    candidate[-1] ^= 1
+    source.write_bytes(original)
+    prepared = _write_prepared_save(source)
+    monkeypatch.setattr(
+        service, "prepare_texture_save",
+        lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(
+        service, "_save_bc7_blocks",
+        lambda *args, **kwargs: bytes(candidate))
+
+    def fail_after_commit(*_args, **_kwargs):
+        raise RuntimeError("synthetic cleanup failure")
+
+    monkeypatch.setattr(
+        service, "_clear_committed_color_adjustments", fail_after_commit)
+    result = service.save_texture_color(
+        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+        "diffuse::body.dds", [{
+            "semantic_key": "Target", "metadata_key": "Target::one",
+            "adjustment": {"hue": 30},
+        }], [])
+
+    assert result["status"] == "ok"
+    assert result["warning"] == "color_state_reset_failed"
+    assert result["metadata_reset"] == {
+        "cleared": [], "preserved": [], "failed": ["Target::one"],
+    }
     assert source.read_bytes() == bytes(candidate)
 
 
@@ -932,7 +958,6 @@ def test_weighted_single_full_weights_do_not_use_mip0_shortcut(monkeypatch):
     result = bc7_recolor._recolor_bc7_chunk((job,))[0]
 
     assert result.error is None
-    assert result.mode == 6
     assert len(decode_calls) == 1
 
 
@@ -1045,7 +1070,6 @@ def test_compact_single_intent_worker_decodes_once_and_preserves_source_pixels(
     assert len(decode_calls) == 1
     assert result.error is None
     assert result.start == 16
-    assert result.mode == 6
 
 
 @pytest.mark.parametrize(
@@ -1084,7 +1108,7 @@ def test_parallel_job_selection_chooses_compact_single_intent_paths(
         lambda *args: selected.append("legacy") or "legacy")
 
     jobs = list(bc7_recolor._iter_bc7_jobs(
-        b"", mip, (0,), state, (None, adjustment), lambda _intent: None,
+        b"", mip, (0,), state, (None, adjustment),
         defer_single_intent=True))
 
     assert jobs == [expected_kind]
@@ -1112,7 +1136,7 @@ def test_parallel_lower_mip_multi_intent_keeps_parent_prepared_job(
 
     jobs = list(bc7_recolor._iter_bc7_jobs(
         b"", mip, (0,), state,
-        (None, adjustment, adjustment), lambda _intent: None,
+        (None, adjustment, adjustment),
         defer_single_intent=True))
 
     assert jobs == ["legacy"]
@@ -1144,31 +1168,6 @@ def test_parallel_lower_mip_single_class_uses_that_weighted_adjustment(
     assert job.adjustment is adjustments[intent_class]
     assert job.changed_counts == (2,) * 16
     assert job.total_counts == (5,) * 16
-
-
-@pytest.mark.parametrize(
-    ("base_counts", "changed_counts", "expected_full"),
-    [([0] * 16, [1] * 16, True),
-     ([0] * 16, [1] * 8 + [0] * 8, False)],
-)
-def test_parallel_lower_mip_compacts_full_and_partial_single_class_blocks(
-        base_counts, changed_counts, expected_full):
-    source = bytearray(_mode6_block())
-    mip = SimpleNamespace(
-        offset=0, bytes_per_unit=16, width=4, height=4, units_x=1)
-    adjustment = prepare_color_adjustment({"brightness": 1.5})
-    state = {
-        "level": 1, "width": 4, "height": 4, "single": False,
-        "class_count": 3,
-        "counts": (base_counts, changed_counts, [0] * 16),
-    }
-    block_intent = bc7_recolor._bc7_block_intent_info(state, mip, 0)
-    job = bc7_recolor._prepare_bc7_parallel_job(
-        source, mip, 0, state, (None, adjustment, adjustment), block_intent)
-
-    assert block_intent.classes == (1,)
-    assert block_intent.full is expected_full
-    assert isinstance(job, bc7_recolor._BC7WeightedSingleIntentJob)
 
 
 @pytest.mark.parametrize(
@@ -1433,32 +1432,7 @@ def test_bc7_save_pads_single_intent_block_and_preserves_unrelated_blocks(
         pixel[3] for pixel in source_pixels]
 
 
-def test_bc7_stats_count_source_blocks_by_block_identity(tmp_path, monkeypatch):
-    source_block = _mode6_block()
-    source = tmp_path / "body.dds"
-    source.write_bytes(_dx10_dds(source_block))
-    layout = inspect_dds_layout(source)
-    adjustment = prepare_color_adjustment({"hue": 30})
-    claims = bytearray([1] * 16)
-    prepared = SimpleNamespace(
-        selected_path=str(source), info=layout.info, layout=layout,
-        mip0_claims=claims, intent_adjustments=(None, adjustment),
-        mip0_affected_blocks=(0,))
-
-    monkeypatch.setattr(
-        bc7_recolor._bc7_codec, "recolor_block",
-        lambda *_args: SimpleNamespace(
-            block=source_block, source_error=10, candidate_error=1, mode=6))
-
-    _candidate, stats = bc7_recolor._save_bc7_blocks(
-        source.read_bytes(), prepared)
-
-    assert stats.source_blocks_kept == 1
-    assert stats.improved_blocks == 1
-    assert stats.unchanged_blocks == 0
-
-
-def test_parallel_bc7_save_matches_serial_bytes_and_stats(tmp_path, monkeypatch):
+def test_parallel_bc7_save_matches_serial_bytes(tmp_path, monkeypatch):
     blocks = b"".join(_mode6_block(((20 + index, 110 + index),
                                       (40 + index, 140 + index),
                                       (60 + index, 170 + index)))
@@ -1480,18 +1454,17 @@ def test_parallel_bc7_save_matches_serial_bytes_and_stats(tmp_path, monkeypatch)
     serial_events = []
     serial_progress = progress.SaveProgressReporter(
         serial_events.append)
-    serial_bytes, serial_stats = bc7_recolor._save_bc7_blocks(
+    serial_bytes = bc7_recolor._save_bc7_blocks(
         original, prepared, progress_reporter=serial_progress)
 
     monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
     parallel_events = []
     parallel_progress = progress.SaveProgressReporter(
         parallel_events.append)
-    parallel_bytes, parallel_stats = bc7_recolor._save_bc7_blocks(
+    parallel_bytes = bc7_recolor._save_bc7_blocks(
         original, prepared, progress_reporter=parallel_progress)
 
     assert parallel_bytes == serial_bytes
-    assert parallel_stats == serial_stats
     for events in (serial_events, parallel_events):
         processing = [event for event in events
                       if event["stage"] == "processing"]
@@ -1531,20 +1504,19 @@ def test_parallel_bc7_multi_mip_weighted_jobs_match_serial_results(
         bc7_recolor, "ProcessPoolExecutor", lambda **_kwargs: InlineExecutor())
     serial_events = []
     monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
-    serial_bytes, serial_stats = bc7_recolor._save_bc7_blocks(
+    serial_bytes = bc7_recolor._save_bc7_blocks(
         original, prepared,
         progress_reporter=progress.SaveProgressReporter(
             serial_events.append))
 
     parallel_events = []
     monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
-    parallel_bytes, parallel_stats = bc7_recolor._save_bc7_blocks(
+    parallel_bytes = bc7_recolor._save_bc7_blocks(
         original, prepared,
         progress_reporter=progress.SaveProgressReporter(
             parallel_events.append))
 
     assert parallel_bytes == serial_bytes
-    assert parallel_stats == serial_stats
     for events in (serial_events, parallel_events):
         processing = [event for event in events
                       if event["stage"] == "processing"]
@@ -1592,41 +1564,33 @@ def test_parallel_bc7_multi_adjustment_lower_mips_match_serial_results(
     monkeypatch.setattr(
         bc7_recolor, "ProcessPoolExecutor", lambda **_kwargs: InlineExecutor())
     monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
-    serial_bytes, serial_stats = bc7_recolor._save_bc7_blocks(
+    serial_bytes = bc7_recolor._save_bc7_blocks(
         original, prepared)
 
     monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
-    parallel_bytes, parallel_stats = bc7_recolor._save_bc7_blocks(
+    parallel_bytes = bc7_recolor._save_bc7_blocks(
         original, prepared)
 
     assert parallel_bytes == serial_bytes
-    assert parallel_stats == serial_stats
-    assert parallel_stats.multi_intent_blocks > 0
 
 
 def test_bc7_result_application_uses_block_offsets():
     final = bytearray(32)
-    totals = {
-        "touched": 0, "improved": 0, "unchanged": 0,
-        "source_blocks_kept": 0, "source_error": 0, "final_error": 0,
-    }
-    modes = {}
-    mip_stats = {"source_blocks_kept": 0}
+    totals = {"touched": 0, "source_error": 0, "final_error": 0}
     results = (
         bc7_recolor._BC7BlockResult(
-            16, b"B" * 16, 4, 2, 6, False),
+            16, b"B" * 16, 4, 2),
         bc7_recolor._BC7BlockResult(
-            0, b"A" * 16, 3, 1, 6, False),
+            0, b"A" * 16, 3, 1),
     )
 
     for result in results:
-        bc7_recolor._record_bc7_result(
-            final, result, totals, modes, mip_stats)
+        bc7_recolor._record_bc7_result(final, result, totals)
 
     assert bytes(final) == b"A" * 16 + b"B" * 16
     assert totals["touched"] == 2
-    assert totals["improved"] == 2
-    assert modes == {6: 2}
+    assert totals["source_error"] == 7
+    assert totals["final_error"] == 3
 
 
 @pytest.mark.parametrize(

@@ -24,6 +24,37 @@ def _unique_strings(values):
                               if isinstance(value, str) and value))
 
 
+def _metadata_cleanup_failure_receipt(saved_meshes, targets=()):
+    """Mark every metadata identity as uncertain after a committed failure."""
+    metadata_keys = []
+    for collection in (saved_meshes, targets):
+        if not isinstance(collection, (list, tuple)):
+            continue
+        for item in collection:
+            if not isinstance(item, dict):
+                continue
+            metadata_key = item.get("metadata_key")
+            if isinstance(metadata_key, str) and metadata_key:
+                metadata_keys.append(metadata_key)
+    return {"cleared": [], "preserved": [],
+            "failed": _unique_strings(metadata_keys)}
+
+
+def _mark_post_commit_failure(success_result, saved_meshes, targets):
+    """Return an explicit fail-safe result after the source was replaced."""
+    if not isinstance(success_result, dict):
+        success_result = {"status": "ok"}
+    success_result["status"] = "ok"
+    success_result["warning"] = "color_state_reset_failed"
+    receipt = success_result.get("metadata_reset")
+    if not (isinstance(receipt, dict)
+            and all(isinstance(receipt.get(status), list)
+                    for status in ("cleared", "preserved", "failed"))):
+        success_result["metadata_reset"] = \
+            _metadata_cleanup_failure_receipt(saved_meshes, targets)
+    return success_result
+
+
 def _clear_committed_color_adjustments(folder_path, targets, saved_meshes):
     """Compare only committed targets before clearing their metadata."""
     captured = {}
@@ -98,6 +129,7 @@ def save_texture_color(
     """Save captured Color changes by editing authorized BC7 blocks."""
     committed = False
     success_result = None
+    saved_meshes = ()
     stage = "prepare"
     progress = (SaveProgressReporter(progress_callback)
                 if progress_callback is not None else None)
@@ -116,7 +148,7 @@ def save_texture_color(
         affected = affected_texture_keys(context, prepared)
 
         stage = "processing"
-        candidate, _stats = _save_bc7_blocks(
+        candidate = _save_bc7_blocks(
             original, prepared, progress_reporter=progress)
         stage = "write"
         if progress is not None:
@@ -128,28 +160,34 @@ def save_texture_color(
                 raise TextureSaveError(
                     "texture_validation_failed",
                     "The saved DDS changed the source texture layout.")
+            saved_meshes = [
+                {"semantic_key": target.semantic_key,
+                 "metadata_key": target.metadata_key}
+                for target in prepared.targets]
             backup_path = transaction.replace_source(
                 prepared.selected_path, temporary, original, original_hash,
                 candidate)
+            committed = True
             success_result = {
                 "status": "ok",
                 "tex_key": selected_texture_key,
                 "affected_tex_keys": affected,
-                "saved_meshes": [
-                    {"semantic_key": target.semantic_key,
-                     "metadata_key": target.metadata_key}
-                    for target in prepared.targets],
+                "saved_meshes": saved_meshes,
                 "texture": texture_details(
                     prepared.selected_path, prepared.info),
                 "backup": {"file": os.path.basename(backup_path)},
             }
-            committed = True
             temporary = None
         finally:
             if temporary and os.path.exists(temporary):
                 os.remove(temporary)
-        receipt, cleanup_failed = _clear_committed_color_adjustments(
-            context.mod_dir, targets, success_result.get("saved_meshes"))
+        try:
+            receipt, cleanup_failed = _clear_committed_color_adjustments(
+                context.mod_dir, targets, saved_meshes)
+        except Exception:
+            _LOGGER.exception("Unexpected error while resetting saved color state")
+            receipt = _metadata_cleanup_failure_receipt(saved_meshes, targets)
+            cleanup_failed = True
         success_result["metadata_reset"] = receipt
         if cleanup_failed or receipt["failed"]:
             success_result["warning"] = "color_state_reset_failed"
@@ -157,15 +195,15 @@ def save_texture_color(
             progress.stage("complete")
         return success_result
     except TextureSaveError as error:
-        if committed and success_result is not None:
-            success_result["warning"] = "post_save_cleanup_failed"
-            return success_result
+        if committed:
+            return _mark_post_commit_failure(
+                success_result, saved_meshes, targets)
         return _error(error.code, error.message, error.status,
                       **({"details": error.details} if error.details else {}))
     except Exception:
-        if committed and success_result is not None:
-            success_result["warning"] = "post_save_cleanup_failed"
-            return success_result
+        if committed:
+            return _mark_post_commit_failure(
+                success_result, saved_meshes, targets)
         _LOGGER.exception("Unexpected error while saving texture (stage=%s)",
                           stage)
         return _error(

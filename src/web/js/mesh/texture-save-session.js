@@ -49,7 +49,7 @@ function targetState(mesh) {
 }
 
 /** Return the complete model-wide role snapshot used by the backend. */
-export function buildTextureUsageSnapshot() {
+function buildTextureUsageSnapshot() {
   return activeMeshes
     .filter(mesh => mesh?.userData?.assetFill !== true)
     .map(mesh => {
@@ -111,13 +111,12 @@ export function getTextureSaveTargets(mesh) {
     .map(targetState);
 }
 
-/** Capture texture identity, all changed target identities, and role usage. */
-export function captureTextureSaveState(mesh, {includeTextureUsage = true} = {}) {
+/** Capture texture identity and all changed target identities. */
+function captureTextureSaveState(mesh) {
   return {
     modPath: viewerState.currentModPath,
     texKey: mesh?.userData?.texKey || null,
     targets: getTextureSaveTargets(mesh),
-    ...(includeTextureUsage ? {textureUsage: buildTextureUsageSnapshot()} : {}),
   };
 }
 
@@ -130,7 +129,7 @@ function publicTargets(targets) {
 }
 
 /** Convert captured targets to the snake-case bridge request schema. */
-export function textureSaveTargetsPayload(state) {
+function textureSaveTargetsPayload(state) {
   return publicTargets(state?.targets);
 }
 
@@ -143,7 +142,7 @@ function comparableState(state) {
 }
 
 /** Check that every identity and adjustment captured by the modal is current. */
-export function textureSaveStateMatches(mesh, snapshot, current = null) {
+function textureSaveStateMatches(mesh, snapshot, current = null) {
   if (!snapshot || !activeMeshes.includes(mesh)) return false;
   const actual = current || captureTextureSaveState(mesh);
   return samePath(actual.modPath, snapshot.modPath)
@@ -164,14 +163,14 @@ function textureSaveTargetIdentityMatches(mesh, snapshot, target) {
 }
 
 /** Find the current replacement for a captured committed target. */
-export function findCurrentTextureSaveTarget(snapshot, target) {
+function findCurrentTextureSaveTarget(snapshot, target) {
   if (!snapshot || !target) return null;
   return activeMeshes.find(mesh =>
     textureSaveTargetIdentityMatches(mesh, snapshot, target)) || null;
 }
 
 /** Check one committed target before clearing its live Color state. */
-export function textureSaveTargetMatches(mesh, snapshot, target) {
+function textureSaveTargetMatches(mesh, snapshot, target) {
   if (!textureSaveTargetIdentityMatches(mesh, snapshot, target)) return false;
   return JSON.stringify(publicTargets([targetState(mesh)]))
     === JSON.stringify(publicTargets([target]));
@@ -197,16 +196,16 @@ async function synchronizeCommittedSave(state, result) {
   const receipt = result.metadata_reset
     && typeof result.metadata_reset === 'object'
     ? result.metadata_reset : null;
-  const receiptKeys = name => Array.isArray(receipt?.[name])
-    ? receipt[name] : [];
-  const fallbackStatus = result.warning === 'color_state_reset_failed'
-    ? 'failed' : 'cleared';
+  const receiptValid = receipt
+    && Array.isArray(receipt.cleared)
+    && Array.isArray(receipt.preserved)
+    && Array.isArray(receipt.failed);
   const statusFor = metadataKey => {
-    if (!receipt) return fallbackStatus;
-    if (receiptKeys('cleared').includes(metadataKey)) return 'cleared';
-    if (receiptKeys('preserved').includes(metadataKey)) return 'preserved';
-    if (receiptKeys('failed').includes(metadataKey)) return 'failed';
-    return fallbackStatus;
+    if (!receiptValid) return 'failed';
+    if (receipt.failed.includes(metadataKey)) return 'failed';
+    if (receipt.preserved.includes(metadataKey)) return 'preserved';
+    if (receipt.cleared.includes(metadataKey)) return 'cleared';
+    return 'failed';
   };
   const records = saved.map(item => {
     const semanticKey = item?.semantic_key;
@@ -302,7 +301,7 @@ export function createTextureSaveSession({
 
   function open(mesh, {isCurrent} = {}) {
     activeSaveRequestId = null;
-    const state = captureTextureSaveState(mesh, {includeTextureUsage: false});
+    const state = captureTextureSaveState(mesh);
     pendingSave = {mesh, isCurrent, state};
     return state;
   }
@@ -338,8 +337,7 @@ export function createTextureSaveSession({
       });
       return null;
     }
-    const currentState = captureTextureSaveState(
-      job.mesh, {includeTextureUsage: false});
+    const currentState = captureTextureSaveState(job.mesh);
     if ((typeof job.isCurrent === 'function' && !job.isCurrent())
         || !textureSaveStateMatches(job.mesh, job.state, currentState)) {
       saving = false;

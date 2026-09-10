@@ -1059,7 +1059,7 @@ export function getMaterialDebugMode(material) {
     || 'off';
 }
 
-export function getGameMaterialColorAdjustment(material) {
+function getGameMaterialColorAdjustment(material) {
   const state = material?.userData?.gameMaterial;
   if (!state) return {...DEFAULT_COLOR_ADJUSTMENT};
   const tintEnabled = state.colorTintEnabledNode?.value === true;
