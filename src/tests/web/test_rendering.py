@@ -3083,7 +3083,7 @@ def test_texture_stays_fallback_until_png_load_completes(
         assert max(pending_pixel) - min(pending_pixel) < 30
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} = await import(
-            './js/mesh/mesh-color-state.js');
+            './js/mesh/mesh-color-session.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
             hue: 0, saturation: 1, brightness: 0, contrast: 1,
             red: 1, green: 1, blue: 1, tint: null,
@@ -3151,7 +3151,7 @@ def test_mesh_color_adjustment_does_not_recolor_flat_texture_fallback(
         fallback_pixel = _sample_mesh_pixel_at(page, -0.25, -0.25)
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} = await import(
-            './js/mesh/mesh-color-state.js');
+            './js/mesh/mesh-color-session.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
             hue: 0, saturation: 1, brightness: 0, contrast: 1,
             red: 1, green: 1, blue: 1, tint: '#4080c0',
@@ -3756,7 +3756,7 @@ def test_mesh_color_adjustment_updates_stable_uniforms_and_gates_assets(
         }""")
         state = page.evaluate("""async assetKey => {
           const {getMeshColorAdjustment, canEditMeshColor,
-            setMeshColorAdjustment} = await import('./js/mesh/mesh-color-state.js');
+            setMeshColorAdjustment} = await import('./js/mesh/mesh-color-session.js');
           const {getGameMaterialColorAdjustment} =
             await import('./js/mesh/material-profile.js');
           const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
@@ -3863,7 +3863,7 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
         before = _sample_mesh_pixel_at(page, -0.5, -0.5)
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} = await import(
-            './js/mesh/mesh-color-state.js');
+            './js/mesh/mesh-color-session.js');
           const mesh = window.modViewer.activeMeshes[0];
           setMeshColorAdjustment(mesh, {
             hue: 120, saturation: 1, brightness: 1, contrast: 1,
@@ -3879,7 +3879,7 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
 
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} = await import(
-            './js/mesh/mesh-color-state.js');
+            './js/mesh/mesh-color-session.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
             hue: 0, saturation: 1, brightness: 1, contrast: 1,
             red: 1, green: 2, blue: 1, tint: null,
@@ -3924,7 +3924,7 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
           const {setMeshTextureState} = await import(
             './js/mesh/mesh-factory.js');
           const {setMeshColorAdjustment} = await import(
-            './js/mesh/mesh-color-state.js');
+            './js/mesh/mesh-color-session.js');
           const mesh = window.modViewer.activeMeshes[0];
           setMeshTextureState(mesh, {diffuse: whiteKey});
           setMeshColorAdjustment(mesh, {
@@ -3940,7 +3940,7 @@ def test_mesh_color_adjustment_changes_diffuse_rgb_without_changing_alpha(
 
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} = await import(
-            './js/mesh/mesh-color-state.js');
+            './js/mesh/mesh-color-session.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
             hue: 0, saturation: 1, brightness: 1, contrast: 1,
             red: 1, green: 1, blue: 1, tint: '#4080c0',
@@ -3979,7 +3979,7 @@ def test_mesh_color_tint_preserves_rendered_shading(
           ?.enabledNode?.value === true""")
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} = await import(
-            './js/mesh/mesh-color-state.js');
+            './js/mesh/mesh-color-session.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
             hue: 0, saturation: 1, brightness: 1, contrast: 1,
             red: 1, green: 1, blue: 1, tint: '#4080ff',
@@ -4027,7 +4027,7 @@ def test_mesh_color_tint_keeps_adjustment_controls_active(
         for name, adjustment in adjustments.items():
             page.evaluate("""async (adjustment) => {
               const {setMeshColorAdjustment} = await import(
-                './js/mesh/mesh-color-state.js');
+                './js/mesh/mesh-color-session.js');
               setMeshColorAdjustment(window.modViewer.activeMeshes[0], {
                 hue: 0, saturation: 1, brightness: 1, contrast: 1,
                 red: 1, green: 1, blue: 1, ...adjustment,

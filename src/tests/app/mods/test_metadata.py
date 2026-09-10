@@ -219,27 +219,6 @@ def test_save_mesh_color_adjustment_rejects_malformed_values(tmp_path, invalid):
     assert not (tmp_path / metadata.METADATA_NAME).exists()
 
 
-def test_clear_mesh_color_adjustments_is_atomic_and_preserves_other_metadata(
-        tmp_path):
-    path = tmp_path / metadata.METADATA_NAME
-    path.write_text(json.dumps({
-        "mesh_names": {"mesh": "Body"},
-        "mesh_color_adjustments": {
-            "body": {"hue": 30},
-            "face": {"hue": 45},
-        },
-    }), encoding="utf-8")
-
-    result = metadata.clear_mesh_color_adjustments(
-        str(tmp_path), ["body", "missing"])
-
-    assert result["saved"] is True
-    saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["mesh_names"] == {"mesh": "Body"}
-    assert saved["mesh_color_adjustments"]["face"]["hue"] == 45
-    assert "body" not in saved["mesh_color_adjustments"]
-
-
 def test_clear_mesh_color_adjustments_if_unchanged_clears_committed_state(
         tmp_path):
     path = tmp_path / metadata.METADATA_NAME

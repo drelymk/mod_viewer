@@ -1,7 +1,6 @@
 import base64
 import copy
 import json
-import math
 
 from .support import *
 
@@ -983,37 +982,6 @@ def test_inspector_color_controls_gate_asset_textures_and_persist_on_change(
         context.close()
 
 
-def test_brightness_slider_uses_centered_nonlinear_mapping(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url,
-        {"BrightnessMapping": _payload("BrightnessMapping")})
-    try:
-        _open(page, "BrightnessMapping")
-        page.locator(".draw-item").first.wait_for()
-        page.locator("#inspector-tab").click()
-        page.locator(".draw-item").first.click()
-        mapping = page.evaluate("""async () => {
-          const {brightnessSliderPosition, brightnessFromSliderPosition} =
-            await import('./js/panels/inspector-panel.js');
-          const positions = [0, 1, 2, 4].map(brightnessSliderPosition);
-          const values = [0, 100, 150, 200].map(brightnessFromSliderPosition);
-          const roundTrips = [1.4, 2.5, 3.0].map(value => ({
-            position: brightnessSliderPosition(value),
-            value: brightnessFromSliderPosition(brightnessSliderPosition(value)),
-          }));
-          return {positions, values, roundTrips};
-        }""")
-        assert mapping["positions"] == pytest.approx([0, 100, 150, 200])
-        assert mapping["values"] == pytest.approx([0, 1, 2, 4])
-        assert [item["value"] for item in mapping["roundTrips"]] == pytest.approx(
-            [1.4, 2.5, 3.0])
-        assert mapping["roundTrips"][0]["position"] == pytest.approx(
-            100 + 100 * math.log(1.4, 4))
-    finally:
-        context.close()
-
-
 def test_color_persistence_serializes_updates_and_flushes_before_texture_save(
         edge_browser, frontend_url):
     payload = _payload("ColorQueue")
@@ -1054,7 +1022,7 @@ def test_color_persistence_serializes_updates_and_flushes_before_texture_save(
             "window.__fakeApi.calls.saveMeshColorAdjustment.length") == 1
         page.evaluate("""async () => {
           const {flushMeshColorAdjustmentPersistence} =
-            await import('./js/mesh/mesh-color-state.js');
+            await import('./js/mesh/mesh-color-session.js');
           const mesh = window.modViewer.activeMeshes[0];
           window.__colorFlushDone = false;
           flushMeshColorAdjustmentPersistence(mesh).then(() => {
@@ -1102,7 +1070,7 @@ def test_texture_save_modal_opens_without_analysis_and_lists_changed_meshes(
         assert button.get_attribute("title") == "Adjust a mesh color before saving."
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} =
-            await import('./js/mesh/mesh-color-state.js');
+            await import('./js/mesh/mesh-color-session.js');
           const meshes = window.modViewer.activeMeshes;
           setMeshColorAdjustment(meshes[0], {hue: 30});
           setMeshColorAdjustment(meshes[1], {hue: 45});
@@ -1355,7 +1323,7 @@ def test_texture_save_refreshes_targets_after_color_change(
         page.locator("#texture-bake-confirm").wait_for()
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} =
-            await import('./js/mesh/mesh-color-state.js');
+            await import('./js/mesh/mesh-color-session.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {hue: 75}, {
             persist: false,
           });
@@ -1551,7 +1519,7 @@ def test_texture_save_preserves_newer_adjustment_on_reloaded_mesh(
             "window.modViewer.activeMeshes[0] !== window.__saveMeshBeforeReload")
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} =
-            await import('./js/mesh/mesh-color-state.js');
+            await import('./js/mesh/mesh-color-session.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {hue: 75}, {
             persist: false, render: false,
           });
@@ -1600,7 +1568,7 @@ def test_texture_save_preserves_live_state_for_preserved_metadata(
         page.wait_for_function("window.__releaseTextureSave !== undefined")
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} =
-            await import('./js/mesh/mesh-color-state.js');
+            await import('./js/mesh/mesh-color-session.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {hue: 75}, {
             persist: false, render: false,
           });
@@ -1648,7 +1616,7 @@ def test_texture_save_persists_newer_adjustment_after_failed_cleanup(
         page.wait_for_function("window.__releaseTextureSave !== undefined")
         page.evaluate("""async () => {
           const {setMeshColorAdjustment} =
-            await import('./js/mesh/mesh-color-state.js');
+            await import('./js/mesh/mesh-color-session.js');
           setMeshColorAdjustment(window.modViewer.activeMeshes[0], {hue: 75}, {
             persist: false, render: false,
           });

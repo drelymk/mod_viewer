@@ -119,7 +119,7 @@ def is_neutral_color_adjustment(value):
     return normalized == COLOR_DEFAULTS
 
 
-def tint_rgb(value):
+def _tint_rgb(value):
     """Decode a canonical ``#rrggbb`` value into raw sRGB floats."""
     normalized = value.lower() if isinstance(value, str) else "#ffffff"
     if not _TINT_PATTERN.fullmatch(normalized):
@@ -133,7 +133,7 @@ def prepare_color_adjustment(adjustment):
     normalized = normalize_color_adjustment(adjustment, reject_invalid=True)
     if normalized is None:
         raise ValueError("invalid color adjustment")
-    tint_red, tint_green, tint_blue = tint_rgb(normalized["tint"])
+    tint_red, tint_green, tint_blue = _tint_rgb(normalized["tint"])
     return PreparedColorAdjustment(
         hue_offset=normalized["hue"] / 360.0,
         saturation=normalized["saturation"],
@@ -201,34 +201,6 @@ def _apply_tint(red, green, blue, tint_red, tint_green, tint_blue,
             tint_blue * intensity)
 
 
-def _apply_normalized(rgb, normalized):
-    """Apply tint, then the normal color operation order to RGB floats."""
-    try:
-        red, green, blue = (float(channel) for channel in rgb)
-    except (TypeError, ValueError):
-        raise ValueError("RGB must contain three numeric channels") from None
-    red, green, blue = _apply_tint(
-        red, green, blue, *tint_rgb(normalized["tint"]),
-        normalized["tint"] is not None)
-    hue, saturation, value = _rgb_to_hsv(red, green, blue)
-    hue = (hue + normalized["hue"] / 360.0) % 1.0
-    saturation = min(1.0, max(0.0, saturation * normalized["saturation"]))
-    value = min(1.0, max(0.0, value * normalized["brightness"]))
-    red, green, blue = _hsv_to_rgb(hue, saturation, value)
-    red = (red - 0.5) * normalized["contrast"] + 0.5
-    green = (green - 0.5) * normalized["contrast"] + 0.5
-    blue = (blue - 0.5) * normalized["contrast"] + 0.5
-    intensity = max(red, green, blue)
-    red = _adjust_channel(red, intensity, normalized["red"])
-    green = _adjust_channel(green, intensity, normalized["green"])
-    blue = _adjust_channel(blue, intensity, normalized["blue"])
-    red = min(1.0, max(0.0, red))
-    green = min(1.0, max(0.0, green))
-    blue = min(1.0, max(0.0, blue))
-    return tuple(min(1.0, max(0.0, channel))
-                 for channel in (red, green, blue))
-
-
 def _apply_prepared(rgb, prepared):
     """Apply a prepared state without validation or dictionary lookups."""
     try:
@@ -257,19 +229,6 @@ def _apply_prepared(rgb, prepared):
                  for channel in (red, green, blue))
 
 
-def apply_color_adjustment(rgb, adjustment):
-    """Apply the viewer's operation order to raw sRGB RGB floats.
-
-    The input and output are editor-sRGB values.  No color-space conversion is
-    performed here: the GPU graph converts its sampled linear value into this
-    same editor space before applying these operations.
-    """
-    normalized = normalize_color_adjustment(adjustment, reject_invalid=True)
-    if normalized is None:
-        raise ValueError("invalid color adjustment")
-    return _apply_normalized(rgb, normalized)
-
-
 def apply_prepared_color_adjustment(rgb, prepared):
     """Apply a state returned by :func:`prepare_color_adjustment`."""
     if not isinstance(prepared, PreparedColorAdjustment):
@@ -284,43 +243,9 @@ def apply_prepared_color_u8(rgb, prepared):
                  for channel in adjusted)
 
 
-def adjust_rgba_bytes(data, width, height, adjustment, pixel_mask=None):
-    """Return adjusted RGBA bytes, preserving every source alpha byte.
-
-    When *pixel_mask* is supplied it must contain one truthy entry per pixel;
-    only selected pixels receive the RGB operation. Unselected pixels are
-    copied without entering the color transform.
-    """
-    normalized = normalize_color_adjustment(adjustment, reject_invalid=True)
-    if normalized is None:
-        raise ValueError("invalid color adjustment")
-    try:
-        width, height = int(width), int(height)
-    except (TypeError, ValueError):
-        raise ValueError("image dimensions are invalid") from None
-    if width <= 0 or height <= 0 or len(data) != width * height * 4:
-        raise ValueError("RGBA data has the wrong size")
-    if pixel_mask is not None and len(pixel_mask) != width * height:
-        raise ValueError("pixel mask has the wrong size")
-    result = bytearray(len(data))
-    for index in range(0, len(data), 4):
-        pixel_index = index // 4
-        if pixel_mask is not None and not pixel_mask[pixel_index]:
-            result[index:index + 4] = data[index:index + 4]
-            continue
-        red, green, blue = (data[index + channel] / 255.0
-                            for channel in range(3))
-        adjusted = _apply_normalized((red, green, blue), normalized)
-        result[index:index + 3] = bytes(
-            min(255, max(0, round(channel * 255.0))) for channel in adjusted)
-        result[index + 3] = data[index + 3]
-    return bytes(result)
-
-
 __all__ = [
-    "COLOR_DEFAULTS", "COLOR_RANGES", "PreparedColorAdjustment",
-    "adjust_rgba_bytes", "apply_color_adjustment",
+    "PreparedColorAdjustment",
     "apply_prepared_color_adjustment", "apply_prepared_color_u8",
     "is_neutral_color_adjustment", "normalize_color_adjustment",
-    "prepare_color_adjustment", "tint_rgb",
+    "prepare_color_adjustment",
 ]

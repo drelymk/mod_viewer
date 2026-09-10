@@ -23,7 +23,7 @@ import {
   assetSecondaryLabel, assetSummaryLabel, summarizeAssetBindings,
 } from './asset-diagnostics.js';
 import { normalizeColorAdjustment } from '../mesh/color-adjustment.js';
-import { syncMeshColorAdjustment } from '../mesh/mesh-color-state.js';
+import { syncMeshColorAdjustment } from '../mesh/mesh-color-session.js';
 import { noteRecordMeshEdit } from '../editing/record-session.js';
 
 let groupsUI = [];

@@ -1,18 +1,7 @@
 // Texture-centric Save to Texture confirmation and commit flow.
 
 import { bindModalDismiss, setModalError } from './modal-shell.js';
-import {
-  captureTextureSaveState, textureSaveStateMatches,
-  findCurrentTextureSaveTarget, textureSaveTargetMatches,
-  textureSaveTargetsPayload,
-} from '../mesh/texture-save-state.js';
-import {
-  flushMeshColorAdjustmentPersistence, persistCurrentMeshColorAdjustment,
-  resetMeshColorAdjustment,
-} from '../mesh/mesh-color-state.js';
-import { reloadTextures } from '../mesh/mesh-factory.js';
-import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
-import { viewerState, samePath } from '../app/state.js';
+import { createTextureSaveSession } from '../mesh/texture-save-session.js';
 
 const $ = id => document.getElementById(id);
 const backdrop = $('texture-bake-modal-backdrop');
@@ -20,10 +9,6 @@ const body = $('texture-bake-body');
 const error = $('texture-bake-error');
 const saveButton = $('texture-bake-confirm');
 
-let pendingSave = null;
-let saving = false;
-let saveRequestSequence = 0;
-let activeSaveRequestId = null;
 let saveProgressElements = null;
 
 const saveStageLabels = {
@@ -43,11 +28,7 @@ function displayNameForTarget(target) {
 }
 
 function closeTextureSaveModal() {
-  // Keep the modal open while the destructive request and post-commit state
-  // synchronization are in flight.
-  if (saving) return;
-  activeSaveRequestId = null;
-  pendingSave = null;
+  if (!textureSaveSession.close()) return;
   backdrop?.classList.remove('show');
 }
 
@@ -111,13 +92,6 @@ function formatSaveError(result) {
   const meshes = Array.isArray(details?.meshes) ? details.meshes : [];
   if (!meshes.length) return message;
   return `${message} Conflicting meshes: ${meshes.join(', ')}.`;
-}
-
-function affectedTextureKeys(result) {
-  const reported = Array.isArray(result?.affected_tex_keys)
-    && result.affected_tex_keys.length
-    ? result.affected_tex_keys : [result?.tex_key];
-  return [...new Set(reported.filter(key => typeof key === 'string' && key))];
 }
 
 function renderSaveError(result) {
@@ -214,188 +188,19 @@ function renderSaveProgress(detail = {stage: 'preparing'}) {
   }
 }
 
-function handleTextureSaveProgress(event) {
-  const detail = event?.detail;
-  if (!saving || activeSaveRequestId === null
-      || detail?.request_id !== activeSaveRequestId) return;
-  renderSaveProgress(detail);
-}
-
-async function synchronizeCommittedSave(state, result) {
-  const sameLoadedMod = viewerState.currentSource?.kind === 'mod'
-    && samePath(viewerState.currentModPath, state.modPath);
-  if (!sameLoadedMod) return false;
-
-  const affectedKeys = affectedTextureKeys(result);
-  const saved = Array.isArray(result.saved_meshes) ? result.saved_meshes : [];
-  const capturedTargets = new Map((state.targets || []).map(target => [
-    `${target.semanticKey || ''}\u0000${target.metadataKey || ''}`, target,
-  ]));
-  const receipt = result.metadata_reset
-    && typeof result.metadata_reset === 'object'
-    ? result.metadata_reset : null;
-  const receiptKeys = name => Array.isArray(receipt?.[name])
-    ? receipt[name] : [];
-  const fallbackStatus = result.warning === 'color_state_reset_failed'
-    ? 'failed' : 'cleared';
-  const statusFor = metadataKey => {
-    if (!receipt) return fallbackStatus;
-    if (receiptKeys('cleared').includes(metadataKey)) return 'cleared';
-    if (receiptKeys('preserved').includes(metadataKey)) return 'preserved';
-    if (receiptKeys('failed').includes(metadataKey)) return 'failed';
-    return fallbackStatus;
-  };
-  const records = saved.map(item => {
-    const semanticKey = item?.semantic_key;
-    const metadataKey = item?.metadata_key;
-    const target = capturedTargets.get(
-      `${semanticKey || ''}\u0000${metadataKey || ''}`);
-    return {
-      target,
-      metadataKey,
-      status: target ? statusFor(metadataKey) : 'failed',
-    };
-  });
-  const changedMeshes = new Set();
-  let unresolvedFailedTargets = 0;
-
-  for (const record of records) {
-    if (record.status === 'preserved') continue;
-    if (record.status === 'failed' && !record.target) {
-      unresolvedFailedTargets += 1;
-      continue;
-    }
-    const mesh = findCurrentTextureSaveTarget(state, record.target);
-    if (!mesh) {
-      if (record.status === 'failed') unresolvedFailedTargets += 1;
-      continue;
-    }
-    if (record.status === 'cleared') {
-      if (textureSaveTargetMatches(mesh, state, record.target)) {
-        resetMeshColorAdjustment(mesh, {persist: false, render: false});
-        changedMeshes.add(mesh);
-      } else {
-        try {
-          persistCurrentMeshColorAdjustment(mesh);
-          await flushMeshColorAdjustmentPersistence(mesh);
-        } catch (_metadataError) {
-          unresolvedFailedTargets += 1;
-        }
-      }
-      continue;
-    }
-
-    try {
-      if (textureSaveTargetMatches(mesh, state, record.target)) {
-        resetMeshColorAdjustment(mesh, {persist: true, render: false});
-        changedMeshes.add(mesh);
-      } else {
-        persistCurrentMeshColorAdjustment(mesh);
-      }
-      await flushMeshColorAdjustmentPersistence(mesh);
-    } catch (_metadataError) {
-      unresolvedFailedTargets += 1;
-    }
-  }
-
-  if (unresolvedFailedTargets
-      && (!result.warning || result.warning === 'color_state_reset_failed')) {
-    result.warning = 'color_state_reset_failed';
-  } else if (result.warning === 'color_state_reset_failed') {
-    delete result.warning;
-  }
-  await reloadTextures(affectedKeys, {force: true});
-  if (changedMeshes.size) notifyMeshStateChanged([...changedMeshes]);
-  window.dispatchEvent(new CustomEvent('mod-viewer-texture-saved', {
-    detail: {
-      texKey: result.tex_key,
-      affectedTexKeys: affectedKeys,
-      savedMeshes: saved,
-    },
-  }));
-  return true;
-}
-
-async function runSave(job) {
-  const api = window.pywebview?.api?.save_texture_color;
-  if (typeof api !== 'function') {
-    renderSaveError({status: 'error', error: 'Texture saving is unavailable.'});
-    return null;
-  }
-  saving = true;
-  const requestId = String(++saveRequestSequence);
-  activeSaveRequestId = requestId;
-  setSaveAction({visible: true, disabled: true, label: 'Saving…'});
-  renderSaveProgress({stage: 'preparing'});
-
-  try {
-    await Promise.all((job.state.targets || []).map(target =>
-      flushMeshColorAdjustmentPersistence(target.mesh)));
-  } catch (_persistenceError) {
-    saving = false;
-    activeSaveRequestId = null;
-    renderSaveError({
-      status: 'error',
-      error: 'The pending Color metadata could not be saved. '
-        + 'Texture saving was cancelled.',
-    });
-    return null;
-  }
-  const currentState = captureTextureSaveState(job.mesh);
-  if ((typeof job.isCurrent === 'function' && !job.isCurrent())
-      || !textureSaveStateMatches(job.mesh, job.state, currentState)) {
-    saving = false;
-    activeSaveRequestId = null;
-    pendingSave = {mesh: job.mesh, isCurrent: job.isCurrent, state: currentState};
-    renderSavePrompt(currentState);
-    return null;
-  }
-  // The usage snapshot is informational for confirmation; always send the
-  // fresh role snapshot captured immediately before the destructive request.
-  job.state = currentState;
-
-  let result;
-  try {
-    result = await api(
-      job.state.modPath, job.state.texKey,
-      textureSaveTargetsPayload(job.state), job.state.textureUsage,
-      requestId);
-  } catch (_requestError) {
-    result = {status: 'error', error: 'Texture save failed.'};
-  }
-  if (result?.status !== 'ok') {
-    saving = false;
-    activeSaveRequestId = null;
-    renderSaveError(result);
-    return result;
-  }
-  renderSaveProgress({stage: 'refreshing'});
-  try {
-    await synchronizeCommittedSave(job.state, result);
-  } catch (_refreshError) {
-    renderSaveError({
-      status: 'error',
-      error: 'Texture saved, but the viewer could not refresh it.',
-    });
-    return result;
-  } finally {
-    saving = false;
-    activeSaveRequestId = null;
-  }
-  if (typeof job.isCurrent === 'function' && !job.isCurrent()) {
-    closeTextureSaveModal();
-    return result;
-  }
-  renderSaveSuccess(result, job.state.targets.length);
-  return result;
-}
+const textureSaveSession = createTextureSaveSession({
+  onError: renderSaveError,
+  onProgress: renderSaveProgress,
+  onPrompt: renderSavePrompt,
+  onRefreshing: () => renderSaveProgress({stage: 'refreshing'}),
+  onSuccess: renderSaveSuccess,
+  onClose: closeTextureSaveModal,
+});
 
 /** Open the Save to Texture modal without performing a backend preflight. */
 export function openTextureSaveModal(mesh, {isCurrent} = {}) {
   if (!backdrop || !body) return null;
-  activeSaveRequestId = null;
-  const state = captureTextureSaveState(mesh);
-  pendingSave = {mesh, isCurrent, state};
+  const state = textureSaveSession.open(mesh, {isCurrent});
   backdrop.classList.add('show');
   if (state.texKey && state.targets.length) {
     renderSavePrompt(state);
@@ -408,10 +213,8 @@ export function openTextureSaveModal(mesh, {isCurrent} = {}) {
 }
 
 saveButton?.addEventListener('click', async () => {
-  if (!pendingSave || saving) return;
-  const job = pendingSave;
-  pendingSave = null;
-  await runSave(job);
+  if (textureSaveSession.isSaving()) return;
+  await textureSaveSession.submit();
 });
 
 bindModalDismiss({
@@ -421,12 +224,12 @@ bindModalDismiss({
 });
 
 window.addEventListener('mod-viewer-mesh-selected', () => {
-  if (backdrop?.classList.contains('show') && !saving) {
+  if (backdrop?.classList.contains('show')
+      && !textureSaveSession.isSaving()) {
     closeTextureSaveModal();
   }
 });
 
 window.addEventListener(
-  'mod-viewer-texture-save-progress', handleTextureSaveProgress);
-
-export { closeTextureSaveModal };
+  'mod-viewer-texture-save-progress', event =>
+    textureSaveSession.handleProgress(event));

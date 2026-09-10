@@ -6,7 +6,7 @@ import {
   createGameMaterial, getGameMaterialSources, updateGameMaterialTextures,
   usesPackedNormal,
 } from './material-profile.js';
-import { syncMeshColorAdjustment } from './mesh-color-state.js';
+import { syncMeshColorAdjustment } from './mesh-color-session.js';
 import { getMeshView } from './mesh-view-bindings.js';
 import { loadDDSTexture, reloadDDSTexture } from '../textures/dds-loader.js';
 import { requestRender } from '../scene/render-scheduler.js';

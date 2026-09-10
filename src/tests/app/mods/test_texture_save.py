@@ -7,11 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.mods import texture_save
+from app.mods.texture_save import bc7_recolor, coverage as save_coverage, errors, progress, request, service, transaction
 from core.geometry.draw_call import DrawCall
 from core.textures import bc7
 from core.textures.color_adjustment import (
-    apply_prepared_color_adjustment, prepare_color_adjustment,
+    apply_prepared_color_adjustment, apply_prepared_color_u8, prepare_color_adjustment,
 )
 from core.textures.dds import inspect_dds_layout
 from core.textures.uv_coverage import UVCoverage
@@ -210,7 +210,7 @@ def _write_prepared_save(path):
 
 
 def _write_stats():
-    return texture_save.BC7SaveStats(
+    return bc7_recolor._BC7SaveStats(
         touched_blocks=1, improved_blocks=1, unchanged_blocks=0,
         source_rgb_error=10, final_rgb_error=5, modes={6: 1})
 
@@ -235,17 +235,23 @@ def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatc
         intent_adjustments=(None, prepare_color_adjustment({"hue": 30})),
         mip0_affected_blocks=(0,),
     )
-    stats = texture_save.BC7SaveStats(
+    stats = bc7_recolor._BC7SaveStats(
         touched_blocks=1, improved_blocks=1, unchanged_blocks=0,
         source_rgb_error=10, final_rgb_error=5, modes={6: 1})
     monkeypatch.setattr(
-        texture_save, "_prepare_texture_save",
+        service, "prepare_texture_save",
         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
-        texture_save, "_save_bc7_blocks",
+        service, "_save_bc7_blocks",
         lambda *args, **kwargs: (original, stats))
+    cleanup = []
+    monkeypatch.setattr(
+        service.metadata, "clear_mesh_color_adjustments_if_unchanged",
+        lambda folder, expected: cleanup.append((folder, expected)) or {
+            "cleared": ["Body::one"], "preserved": [], "failed": [],
+        })
 
-    result = texture_save.save_texture_color(
+    result = service.save_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"},
         "diffuse::body.dds", [{
             "semantic_key": "Body-1", "metadata_key": "Body::one",
@@ -254,7 +260,8 @@ def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatc
 
     assert result["status"] == "ok"
     assert "patched" not in result
-    assert result["diagnostics"]["bc7"]["touched_blocks"] == 1
+    assert "diagnostics" not in result
+    assert cleanup == [(str(tmp_path), {"Body::one": {"hue": 30}})]
     backups = list(tmp_path.glob("body-??????????????.dds"))
     assert len(backups) == 1
     assert backups[0].read_bytes() == original
@@ -267,7 +274,7 @@ def test_save_progress_reports_stages_and_ignores_callback_errors(
     source.write_bytes(original)
     prepared = _write_prepared_save(source)
     monkeypatch.setattr(
-        texture_save, "_prepare_texture_save",
+        service, "prepare_texture_save",
         lambda *args, **kwargs: prepared)
 
     def save_blocks(*args, **kwargs):
@@ -275,14 +282,14 @@ def test_save_progress_reports_stages_and_ignores_callback_errors(
         reporter.processing(0, 1, 1, 1)
         return original, _write_stats()
 
-    monkeypatch.setattr(texture_save, "_save_bc7_blocks", save_blocks)
+    monkeypatch.setattr(service, "_save_bc7_blocks", save_blocks)
     events = []
 
     def callback(event):
         events.append(event)
         raise RuntimeError("synthetic progress listener failure")
 
-    result = texture_save.save_texture_color(
+    result = service.save_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
         "diffuse::body.dds", [], [], progress_callback=callback)
 
@@ -293,11 +300,111 @@ def test_save_progress_reports_stages_and_ignores_callback_errors(
     assert all("request_id" not in event for event in events)
 
 
+def test_committed_cleanup_uses_only_saved_targets(monkeypatch):
+    compared = []
+    monkeypatch.setattr(
+        service.metadata, "clear_mesh_color_adjustments_if_unchanged",
+        lambda folder, expected: compared.append((folder, expected)) or {
+            "cleared": ["Body::one"], "preserved": [], "failed": [],
+        })
+
+    receipt, failed = service._clear_committed_color_adjustments(
+        "mod", [
+            {"semantic_key": "Body-1", "metadata_key": "Body::one",
+             "adjustment": {"hue": 30}},
+            {"semantic_key": "Body-2", "metadata_key": "Body::two",
+             "adjustment": {"hue": 45}},
+        ], [{"semantic_key": "Body-1", "metadata_key": "Body::one"}])
+
+    assert compared == [("mod", {"Body::one": {"hue": 30}})]
+    assert receipt == {
+        "cleared": ["Body::one"], "preserved": [], "failed": [],
+    }
+    assert failed is False
+
+
+def test_committed_cleanup_reports_structured_status(monkeypatch):
+    monkeypatch.setattr(
+        service.metadata, "clear_mesh_color_adjustments_if_unchanged",
+        lambda *_args: {
+            "cleared": ["Body::one"], "preserved": ["Body::two"],
+            "failed": [],
+        })
+
+    receipt, failed = service._clear_committed_color_adjustments(
+        "mod", [
+            {"semantic_key": "Body-1", "metadata_key": "Body::one",
+             "adjustment": {"hue": 30}},
+            {"semantic_key": "Body-2", "metadata_key": "Body::two",
+             "adjustment": {"hue": 45}},
+        ], [
+            {"semantic_key": "Body-1", "metadata_key": "Body::one"},
+            {"semantic_key": "Body-2", "metadata_key": "Body::two"},
+        ])
+
+    assert receipt == {
+        "cleared": ["Body::one"], "preserved": ["Body::two"],
+        "failed": [],
+    }
+    assert failed is False
+
+
+@pytest.mark.parametrize(
+    ("saved_meshes", "expected_failed"),
+    [
+        ([{"semantic_key": "Body-1", "metadata_key": "Body::missing"}],
+         ["Body::missing"]),
+        ([
+            {"semantic_key": "Body-1", "metadata_key": "Shared::one"},
+            {"semantic_key": "Body-2", "metadata_key": "Shared::one"},
+        ], ["Shared::one"]),
+    ],
+)
+def test_committed_cleanup_fails_safe_for_unmatched_saved_identity(
+        monkeypatch, saved_meshes, expected_failed):
+    called = []
+    monkeypatch.setattr(
+        service.metadata, "clear_mesh_color_adjustments_if_unchanged",
+        lambda *_args: called.append(True))
+
+    receipt, failed = service._clear_committed_color_adjustments(
+        "mod", [
+            {"semantic_key": "Body-1", "metadata_key": "Body::one",
+             "adjustment": {"hue": 30}},
+            {"semantic_key": "Body-2", "metadata_key": "Shared::one",
+             "adjustment": {"hue": 45}},
+        ], saved_meshes)
+
+    assert called == []
+    assert receipt == {"cleared": [], "preserved": [],
+                       "failed": expected_failed}
+    assert failed is False
+
+
+def test_committed_cleanup_preserves_save_when_metadata_write_raises(
+        monkeypatch):
+    def fail_cleanup(*_args):
+        raise RuntimeError("synthetic cleanup failure")
+
+    monkeypatch.setattr(
+        service.metadata, "clear_mesh_color_adjustments_if_unchanged",
+        fail_cleanup)
+    receipt, failed = service._clear_committed_color_adjustments(
+        "mod", [{
+            "semantic_key": "Body-1", "metadata_key": "Body::one",
+            "adjustment": {"hue": 30},
+        }], [{"semantic_key": "Body-1", "metadata_key": "Body::one"}])
+
+    assert receipt == {"cleared": [], "preserved": [],
+                       "failed": ["Body::one"]}
+    assert failed is True
+
+
 def test_save_progress_throttles_intermediate_blocks_but_keeps_final(
         monkeypatch):
     events = []
-    reporter = texture_save._SaveProgressReporter(events.append)
-    monkeypatch.setattr(texture_save, "_SAVE_PROGRESS_INTERVAL", 60.0)
+    reporter = progress.SaveProgressReporter(events.append)
+    monkeypatch.setattr(progress, "SAVE_PROGRESS_INTERVAL", 60.0)
 
     reporter.processing(0, 1, 0, 10)
     reporter.processing(0, 1, 1, 10)
@@ -312,22 +419,22 @@ def test_save_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatc
     source.write_bytes(original)
     prepared = _write_prepared_save(source)
     monkeypatch.setattr(
-        texture_save, "_prepare_texture_save",
+        service, "prepare_texture_save",
         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
-        texture_save, "_save_bc7_blocks",
+        service, "_save_bc7_blocks",
         lambda *args, **kwargs: (original, _write_stats()))
 
     reads = iter((original, b"changed"))
-    real_read = texture_save._read_source
+    real_read = transaction._read_source
 
     def read_source(path):
         if str(path) == str(source):
             return next(reads)
         return real_read(path)
 
-    monkeypatch.setattr(texture_save, "_read_source", read_source)
-    result = texture_save.save_texture_color(
+    monkeypatch.setattr(transaction, "_read_source", read_source)
+    result = service.save_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
         "diffuse::body.dds", [], [])
 
@@ -343,13 +450,13 @@ def test_save_rejects_changed_candidate_layout_before_backup(tmp_path, monkeypat
     prepared = _write_prepared_save(source)
     candidate = _dx10_dds(bytes(32), width=8, height=4)
     monkeypatch.setattr(
-        texture_save, "_prepare_texture_save",
+        service, "prepare_texture_save",
         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
-        texture_save, "_save_bc7_blocks",
+        service, "_save_bc7_blocks",
         lambda *args, **kwargs: (candidate, _write_stats()))
 
-    result = texture_save.save_texture_color(
+    result = service.save_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
         "diffuse::body.dds", [], [])
 
@@ -367,19 +474,19 @@ def test_save_reports_commit_when_replace_raises_after_replacement(
     source.write_bytes(original)
     prepared = _write_prepared_save(source)
     monkeypatch.setattr(
-        texture_save, "_prepare_texture_save",
+        service, "prepare_texture_save",
         lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
-        texture_save, "_save_bc7_blocks",
+        service, "_save_bc7_blocks",
         lambda *args, **kwargs: (bytes(candidate), _write_stats()))
-    real_replace = texture_save.os.replace
+    real_replace = transaction.os.replace
 
     def replace_then_raise(source_path, target_path):
         real_replace(source_path, target_path)
         raise OSError("reported after replacement")
 
-    monkeypatch.setattr(texture_save.os, "replace", replace_then_raise)
-    result = texture_save.save_texture_color(
+    monkeypatch.setattr(transaction.os, "replace", replace_then_raise)
+    result = service.save_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
         "diffuse::body.dds", [], [])
 
@@ -391,11 +498,11 @@ def test_backup_names_never_overwrite_previous_backup(tmp_path, monkeypatch):
     source = tmp_path / "body.dds"
     source.write_bytes(b"original")
     monkeypatch.setattr(
-        texture_save, "datetime",
+        transaction, "datetime",
         SimpleNamespace(now=lambda: datetime(2026, 9, 1, 15, 22, 30)))
 
-    first = texture_save._write_backup(str(source), b"first")
-    second = texture_save._write_backup(str(source), b"second")
+    first = transaction._write_backup(str(source), b"first")
+    second = transaction._write_backup(str(source), b"second")
 
     assert first != second
     assert (tmp_path / "body-20260901152230.dds").read_bytes() == b"first"
@@ -403,8 +510,8 @@ def test_backup_names_never_overwrite_previous_backup(tmp_path, monkeypatch):
 
 
 def test_save_request_rejects_legacy_diffuse_alias():
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._validate_usage(
+    with pytest.raises(errors.TextureSaveError) as raised:
+        request.validate_usage(
             {"Body-1"},
             [{"semantic_key": "Body-1", "tex_key": "diffuse::body.dds"}])
 
@@ -414,8 +521,8 @@ def test_save_request_rejects_legacy_diffuse_alias():
 def test_save_request_requires_all_texture_roles():
     roles = _role_keys()
     roles.pop("emission_map")
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._validate_usage(
+    with pytest.raises(errors.TextureSaveError) as raised:
+        request.validate_usage(
             {"Body-1"},
             [{"semantic_key": "Body-1", "texture_keys": roles}])
 
@@ -435,18 +542,18 @@ def test_save_preparation_keeps_only_bc7_intent_and_target_coverage(
     coverage = UVCoverage(
         4, 4, bytearray([1] + [0] * 15), 1, (0, 0, 0, 0), 1, 0)
     monkeypatch.setattr(
-        texture_save, "resolved_draws",
+        request, "resolved_draws",
         lambda *_args: (parsed, {
             "Anchor": (anchor, group), "Body-1": (draw, group),
         }))
     monkeypatch.setattr(
-        texture_save, "_prepare_uv_geometry", lambda *_args: geometry)
+        save_coverage, "prepare_uv_geometry", lambda *_args: geometry)
     monkeypatch.setattr(
-        texture_save, "_draw_metadata_key", lambda *_args: "Body::one")
+        save_coverage, "draw_metadata_key", lambda *_args: "Body::one")
     monkeypatch.setattr(
-        texture_save, "_rasterize_geometry", lambda *_args: coverage)
+        save_coverage, "rasterize_geometry", lambda *_args: coverage)
 
-    prepared = texture_save._prepare_texture_save(
+    prepared = save_coverage.prepare_texture_save(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor", "Body-1"},
         "diffuse::body.dds", [{
             "semantic_key": "Body-1", "metadata_key": "Body::one",
@@ -473,14 +580,14 @@ def test_save_rejects_target_on_different_physical_dds(tmp_path, monkeypatch):
     group = {}
     parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"), groups=())
     monkeypatch.setattr(
-        texture_save, "resolved_draws",
+        request, "resolved_draws",
         lambda *_args: (parsed, {
             "Anchor": (SimpleNamespace(label="Anchor"), group),
             "Target": (SimpleNamespace(label="Target"), group),
         }))
 
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._prepare_texture_save(
+    with pytest.raises(errors.TextureSaveError) as raised:
+        save_coverage.prepare_texture_save(
             SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor", "Target"},
             "diffuse::body.dds", [{
                 "semantic_key": "Target", "metadata_key": "Target::one",
@@ -504,7 +611,7 @@ def test_save_rejects_target_on_different_physical_dds(tmp_path, monkeypatch):
 )
 def test_save_rejects_asset_and_mod_root_escape_paths(
         tmp_path, texture_key, expected_code):
-    result = texture_save.save_texture_color(
+    result = service.save_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"}, texture_key,
         [{
             "semantic_key": "Anchor", "metadata_key": "Anchor::one",
@@ -524,7 +631,7 @@ def test_save_rejects_live_cross_role_physical_usage(
     (tmp_path / "body.dds").write_bytes(_dx10_dds(bytes(16)))
     parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"), groups=())
     monkeypatch.setattr(
-        texture_save, "resolved_draws",
+        request, "resolved_draws",
         lambda *_args: (parsed, {
             "Anchor": (SimpleNamespace(label="Anchor"), {}),
             "Other": (SimpleNamespace(label="Other"), {}),
@@ -532,8 +639,8 @@ def test_save_rejects_live_cross_role_physical_usage(
     other_keys = _role_keys(None)
     other_keys["normal_map"] = normal_key
 
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._resolve_save_request(
+    with pytest.raises(errors.TextureSaveError) as raised:
+        request.resolve_save_request(
             SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor", "Other"},
             "diffuse::body.dds", [{
                 "semantic_key": "Anchor", "texture_keys": _role_keys(),
@@ -561,14 +668,14 @@ def test_save_rejects_authored_inactive_cross_role_variant(tmp_path, monkeypatch
         groups=[selected_group, inactive_group],
     )
     monkeypatch.setattr(
-        texture_save, "resolved_draws",
+        request, "resolved_draws",
         lambda *_args: (parsed, {
             "Anchor": (selected, selected_group),
             "Inactive": (inactive, inactive_group),
         }))
 
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._resolve_save_request(
+    with pytest.raises(errors.TextureSaveError) as raised:
+        request.resolve_save_request(
             SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
             "diffuse::body.dds", [{
                 "semantic_key": "Anchor", "texture_keys": _role_keys(),
@@ -584,13 +691,13 @@ def test_save_rejects_stale_canonical_metadata_key(tmp_path, monkeypatch):
     group = {}
     parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"), groups=())
     monkeypatch.setattr(
-        texture_save, "resolved_draws",
+        request, "resolved_draws",
         lambda *_args: (parsed, {"Anchor": (draw, group)}))
     monkeypatch.setattr(
-        texture_save, "_draw_metadata_key", lambda *_args: "Anchor::actual")
+        save_coverage, "draw_metadata_key", lambda *_args: "Anchor::actual")
 
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._prepare_texture_save(
+    with pytest.raises(errors.TextureSaveError) as raised:
+        save_coverage.prepare_texture_save(
             SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
             "diffuse::body.dds", [{
                 "semantic_key": "Anchor", "metadata_key": "Anchor::stale",
@@ -620,7 +727,7 @@ def _bc7_block_state(width, height, claims, adjustments=None):
         mip0_claims=claims,
         intent_adjustments=adjustments,
     )
-    return texture_save._bc7_intent_level(prepared)
+    return bc7_recolor._bc7_intent_level(prepared)
 
 
 def _bc7_lower_single_state(
@@ -633,24 +740,6 @@ def _bc7_lower_single_state(
         "changed_counts": changed_counts,
         "total_counts": total_counts,
     }
-
-
-def test_bc7_block_intent_classes_only_report_explicit_mip0_claims():
-    claims = bytearray([0] * 16)
-    claims[5] = 1
-    claims[6] = 1
-    claims[9] = 2
-    original = claims[:]
-    state = _bc7_block_state(
-        4, 4, claims,
-        (None, prepare_color_adjustment({"hue": 30}),
-         prepare_color_adjustment({"hue": 120})))
-    mip = SimpleNamespace(
-        width=4, height=4, units_x=1)
-
-    assert texture_save._bc7_block_intent_classes(
-        state, mip, 0) == {1, 2}
-    assert claims == original
 
 
 @pytest.mark.parametrize(
@@ -676,12 +765,12 @@ def test_single_intent_partial_block_pads_valid_rgb_without_changing_alpha(
         width=width, height=height, units_x=1)
 
     _source, target, valid_width, valid_height = \
-        texture_save._bc7_target_block_pixels(
+        bc7_recolor._bc7_target_block_pixels(
             source_block, mip, 0, state, (None, adjustment))
 
     assert (valid_width, valid_height) == (width, height)
     expected_rgb = {
-        (x, y): texture_save.apply_prepared_color_u8(
+        (x, y): apply_prepared_color_u8(
             source_pixels[y * 4 + x][:3], adjustment)
         for y in range(height)
         for x in range(width)
@@ -734,9 +823,9 @@ def test_shared_single_intent_target_matches_parent_target(
         width=valid_width, height=valid_height, units_x=1)
 
     _source, expected, expected_width, expected_height = \
-        texture_save._bc7_target_block_pixels(
+        bc7_recolor._bc7_target_block_pixels(
             source_block, mip, 0, state, (None, prepared_adjustment))
-    actual = texture_save._bc7_single_adjustment_target_pixels(
+    actual = bc7_recolor._bc7_single_adjustment_target_pixels(
         source_pixels, prepared_adjustment, valid_width, valid_height)
 
     assert (expected_width, expected_height) == \
@@ -774,7 +863,7 @@ def test_weighted_single_rgb_matches_exact_reference_matrix(
     source_rgb = (37, 101, 203)
     changed_count, total_count = counts
     prepared_adjustment = prepare_color_adjustment(adjustment)
-    actual = texture_save._bc7_weighted_single_rgb(
+    actual = bc7_recolor._bc7_weighted_single_rgb(
         source_rgb, prepared_adjustment, changed_count, total_count)
 
     if not changed_count or not total_count:
@@ -795,12 +884,12 @@ def test_weighted_single_target_validates_count_parity_and_preserves_padding():
     source_pixels = bc7.decode_block(_mode6_block())
     adjustment = prepare_color_adjustment({"brightness": 1.5})
 
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._bc7_weighted_single_target_pixels(
+    with pytest.raises(errors.TextureSaveError) as raised:
+        bc7_recolor._bc7_weighted_single_target_pixels(
             source_pixels, adjustment, (1, 2), (1,), 1, 1)
     assert raised.value.code == "texture_validation_failed"
 
-    target = texture_save._bc7_weighted_single_target_pixels(
+    target = bc7_recolor._bc7_weighted_single_target_pixels(
         source_pixels, adjustment, (0, 1), (1, 1), 1, 2)
     assert target[0] == source_pixels[0]
     assert target[4][:3] != source_pixels[4][:3]
@@ -812,7 +901,7 @@ def test_weighted_single_target_validates_count_parity_and_preserves_padding():
 
 def test_weighted_single_rgb_keeps_source_for_zero_total_weight():
     adjustment = prepare_color_adjustment({"tint": "#ffdd00"})
-    assert texture_save._bc7_weighted_single_rgb(
+    assert bc7_recolor._bc7_weighted_single_rgb(
         (37, 101, 203), adjustment, 0, 0) == (37, 101, 203)
 
 
@@ -820,7 +909,7 @@ def test_weighted_single_full_weights_do_not_use_mip0_shortcut(monkeypatch):
     source_block = _mode6_block()
     source_pixels = bc7.decode_block(source_block)
     adjustment = prepare_color_adjustment({"hue": 120})
-    job = texture_save._BC7WeightedSingleIntentJob(
+    job = bc7_recolor._BC7WeightedSingleIntentJob(
         start=0, source_block=source_block, adjustment=adjustment,
         changed_counts=(1,) * 16, total_counts=(1,) * 16,
         valid_width=4, valid_height=4)
@@ -829,9 +918,9 @@ def test_weighted_single_full_weights_do_not_use_mip0_shortcut(monkeypatch):
         raise AssertionError("weighted jobs must not use the mip-0 shortcut")
 
     monkeypatch.setattr(
-        texture_save, "_bc7_single_adjustment_target_pixels",
+        bc7_recolor, "_bc7_single_adjustment_target_pixels",
         unexpected_shortcut)
-    real_decode = texture_save._bc7_codec.decode_block
+    real_decode = bc7_recolor._bc7_codec.decode_block
     decode_calls = []
 
     def counting_decode(block):
@@ -839,8 +928,8 @@ def test_weighted_single_full_weights_do_not_use_mip0_shortcut(monkeypatch):
         return real_decode(block)
 
     monkeypatch.setattr(
-        texture_save._bc7_codec, "decode_block", counting_decode)
-    result = texture_save._recolor_bc7_chunk((job,))[0]
+        bc7_recolor._bc7_codec, "decode_block", counting_decode)
+    result = bc7_recolor._recolor_bc7_chunk((job,))[0]
 
     assert result.error is None
     assert result.mode == 6
@@ -874,27 +963,27 @@ def test_weighted_single_worker_matches_parent_prepared_worker(
     area = valid_width * valid_height
     state = _bc7_lower_single_state(
         valid_width, valid_height, (1,) * area, (2,) * area)
-    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
+    block_intent = bc7_recolor._bc7_block_intent_info(state, mip, 0)
 
-    legacy_job = texture_save._prepare_bc7_block_job(
+    legacy_job = bc7_recolor._prepare_bc7_block_job(
         source, mip, 0, state, (None, adjustment), block_intent)
-    weighted_job = texture_save._prepare_bc7_weighted_single_intent_job(
+    weighted_job = bc7_recolor._prepare_bc7_weighted_single_intent_job(
         source, mip, 0, state, (None, adjustment), block_intent)
-    legacy_result = texture_save._recolor_bc7_chunk((legacy_job,))[0]
-    weighted_result = texture_save._recolor_bc7_chunk((weighted_job,))[0]
+    legacy_result = bc7_recolor._recolor_bc7_chunk((legacy_job,))[0]
+    weighted_result = bc7_recolor._recolor_bc7_chunk((weighted_job,))[0]
 
-    assert isinstance(weighted_job, texture_save._BC7WeightedSingleIntentJob)
+    assert isinstance(weighted_job, bc7_recolor._BC7WeightedSingleIntentJob)
     assert weighted_result == legacy_result
 
 
 def test_weighted_single_worker_reports_validation_errors():
-    job = texture_save._BC7WeightedSingleIntentJob(
+    job = bc7_recolor._BC7WeightedSingleIntentJob(
         start=0, source_block=_mode6_block(),
         adjustment=prepare_color_adjustment({"hue": 30}),
         changed_counts=(2,), total_counts=(1,),
         valid_width=1, valid_height=1)
 
-    result = texture_save._recolor_bc7_chunk((job,))[0]
+    result = bc7_recolor._recolor_bc7_chunk((job,))[0]
 
     assert result.error_code == "texture_validation_failed"
     assert result.error == "Changed color intent exceeds total mip weight."
@@ -922,16 +1011,16 @@ def test_compact_single_intent_worker_matches_parent_prepared_worker(
         valid_width, valid_height,
         bytearray([1] * (valid_width * valid_height)),
                              (None, adjustment))
-    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
+    block_intent = bc7_recolor._bc7_block_intent_info(state, mip, 0)
 
-    legacy_job = texture_save._prepare_bc7_block_job(
+    legacy_job = bc7_recolor._prepare_bc7_block_job(
         source, mip, 0, state, (None, adjustment), block_intent)
-    compact_job = texture_save._prepare_bc7_single_intent_job(
+    compact_job = bc7_recolor._prepare_bc7_single_intent_job(
         source, mip, 0, (None, adjustment), block_intent)
-    legacy_result = texture_save._recolor_bc7_chunk((legacy_job,))[0]
-    compact_result = texture_save._recolor_bc7_chunk((compact_job,))[0]
+    legacy_result = bc7_recolor._recolor_bc7_chunk((legacy_job,))[0]
+    compact_result = bc7_recolor._recolor_bc7_chunk((compact_job,))[0]
 
-    assert isinstance(compact_job, texture_save._BC7SingleIntentJob)
+    assert isinstance(compact_job, bc7_recolor._BC7SingleIntentJob)
     assert compact_result == legacy_result
 
 
@@ -939,10 +1028,10 @@ def test_compact_single_intent_worker_decodes_once_and_preserves_source_pixels(
         monkeypatch):
     source_block = _mode6_block()
     adjustment = prepare_color_adjustment({"brightness": 1.5})
-    job = texture_save._BC7SingleIntentJob(
+    job = bc7_recolor._BC7SingleIntentJob(
         start=16, source_block=source_block, adjustment=adjustment,
         valid_width=3, valid_height=2)
-    real_decode = texture_save._bc7_codec.decode_block
+    real_decode = bc7_recolor._bc7_codec.decode_block
     decode_calls = []
 
     def counting_decode(block):
@@ -950,8 +1039,8 @@ def test_compact_single_intent_worker_decodes_once_and_preserves_source_pixels(
         return real_decode(block)
 
     monkeypatch.setattr(
-        texture_save._bc7_codec, "decode_block", counting_decode)
-    result = texture_save._recolor_bc7_chunk((job,))[0]
+        bc7_recolor._bc7_codec, "decode_block", counting_decode)
+    result = bc7_recolor._recolor_bc7_chunk((job,))[0]
 
     assert len(decode_calls) == 1
     assert result.error is None
@@ -985,16 +1074,16 @@ def test_parallel_job_selection_chooses_compact_single_intent_paths(
         }
     selected = []
     monkeypatch.setattr(
-        texture_save, "_prepare_bc7_single_intent_job",
+        bc7_recolor, "_prepare_bc7_single_intent_job",
         lambda *args: selected.append("compact") or "compact")
     monkeypatch.setattr(
-        texture_save, "_prepare_bc7_weighted_single_intent_job",
+        bc7_recolor, "_prepare_bc7_weighted_single_intent_job",
         lambda *args: selected.append("weighted") or "weighted")
     monkeypatch.setattr(
-        texture_save, "_prepare_bc7_block_job",
+        bc7_recolor, "_prepare_bc7_block_job",
         lambda *args: selected.append("legacy") or "legacy")
 
-    jobs = list(texture_save._iter_bc7_jobs(
+    jobs = list(bc7_recolor._iter_bc7_jobs(
         b"", mip, (0,), state, (None, adjustment), lambda _intent: None,
         defer_single_intent=True))
 
@@ -1015,13 +1104,13 @@ def test_parallel_lower_mip_multi_intent_keeps_parent_prepared_job(
     }
     selected = []
     monkeypatch.setattr(
-        texture_save, "_prepare_bc7_weighted_single_intent_job",
+        bc7_recolor, "_prepare_bc7_weighted_single_intent_job",
         lambda *args: selected.append("weighted") or "weighted")
     monkeypatch.setattr(
-        texture_save, "_prepare_bc7_block_job",
+        bc7_recolor, "_prepare_bc7_block_job",
         lambda *args: selected.append("legacy") or "legacy")
 
-    jobs = list(texture_save._iter_bc7_jobs(
+    jobs = list(bc7_recolor._iter_bc7_jobs(
         b"", mip, (0,), state,
         (None, adjustment, adjustment), lambda _intent: None,
         defer_single_intent=True))
@@ -1046,12 +1135,12 @@ def test_parallel_lower_mip_single_class_uses_that_weighted_adjustment(
         "level": 1, "width": 4, "height": 4, "single": False,
         "class_count": 4, "counts": tuple(counts),
     }
-    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
+    block_intent = bc7_recolor._bc7_block_intent_info(state, mip, 0)
 
-    job = texture_save._prepare_bc7_parallel_job(
+    job = bc7_recolor._prepare_bc7_parallel_job(
         source, mip, 0, state, adjustments, block_intent)
 
-    assert isinstance(job, texture_save._BC7WeightedSingleIntentJob)
+    assert isinstance(job, bc7_recolor._BC7WeightedSingleIntentJob)
     assert job.adjustment is adjustments[intent_class]
     assert job.changed_counts == (2,) * 16
     assert job.total_counts == (5,) * 16
@@ -1073,13 +1162,13 @@ def test_parallel_lower_mip_compacts_full_and_partial_single_class_blocks(
         "class_count": 3,
         "counts": (base_counts, changed_counts, [0] * 16),
     }
-    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
-    job = texture_save._prepare_bc7_parallel_job(
+    block_intent = bc7_recolor._bc7_block_intent_info(state, mip, 0)
+    job = bc7_recolor._prepare_bc7_parallel_job(
         source, mip, 0, state, (None, adjustment, adjustment), block_intent)
 
     assert block_intent.classes == (1,)
     assert block_intent.full is expected_full
-    assert isinstance(job, texture_save._BC7WeightedSingleIntentJob)
+    assert isinstance(job, bc7_recolor._BC7WeightedSingleIntentJob)
 
 
 @pytest.mark.parametrize(
@@ -1104,10 +1193,10 @@ def test_lower_mip_single_class_weighted_rgb_matches_generic_intent(
         "class_count": 4, "counts": tuple(counts),
     }
 
-    generic = texture_save._bc7_intent_rgb(
+    generic = bc7_recolor._bc7_intent_rgb(
         source_rgb, state, 0,
         (None, prepared_adjustment, prepared_adjustment, prepared_adjustment))
-    weighted = texture_save._bc7_weighted_single_rgb(
+    weighted = bc7_recolor._bc7_weighted_single_rgb(
         source_rgb, prepared_adjustment, changed_count, total_count)
 
     assert weighted == generic
@@ -1133,14 +1222,14 @@ def test_lower_mip_weighted_multi_class_worker_matches_parent_prepared_worker(
         "single": False, "class_count": 3,
         "counts": ([0] * area, [0] * area, [1] * area),
     }
-    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
+    block_intent = bc7_recolor._bc7_block_intent_info(state, mip, 0)
 
-    legacy_job = texture_save._prepare_bc7_block_job(
+    legacy_job = bc7_recolor._prepare_bc7_block_job(
         source, mip, 0, state, adjustments, block_intent)
-    weighted_job = texture_save._prepare_bc7_weighted_single_intent_job(
+    weighted_job = bc7_recolor._prepare_bc7_weighted_single_intent_job(
         source, mip, 0, state, adjustments, block_intent)
-    legacy_result = texture_save._recolor_bc7_chunk((legacy_job,))[0]
-    weighted_result = texture_save._recolor_bc7_chunk((weighted_job,))[0]
+    legacy_result = bc7_recolor._recolor_bc7_chunk((legacy_job,))[0]
+    weighted_result = bc7_recolor._recolor_bc7_chunk((weighted_job,))[0]
 
     assert weighted_job.adjustment is adjustments[2]
     assert weighted_result == legacy_result
@@ -1154,10 +1243,10 @@ def test_lower_mip_weighted_multi_class_job_preserves_wide_counts():
         "class_count": 3,
         "counts": ([65535], [0], [1]),
     }
-    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
+    block_intent = bc7_recolor._bc7_block_intent_info(state, mip, 0)
 
     changed, total, valid_width, valid_height = \
-        texture_save._bc7_single_weighted_block_counts(
+        bc7_recolor._bc7_single_weighted_block_counts(
             state, mip, 0, block_intent)
 
     assert (changed, total, valid_width, valid_height) == ((1,), (65536,), 1, 1)
@@ -1180,8 +1269,8 @@ def test_lower_mip_malformed_multi_class_counts_are_stable(state):
     mip = SimpleNamespace(
         offset=0, bytes_per_unit=16, width=4, height=4, units_x=1)
 
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._bc7_block_intent_info(state, mip, 0)
+    with pytest.raises(errors.TextureSaveError) as raised:
+        bc7_recolor._bc7_block_intent_info(state, mip, 0)
 
     assert raised.value.code == "texture_validation_failed"
 
@@ -1196,8 +1285,8 @@ def test_lower_mip_weighted_job_rejects_invalid_adjustment_class():
     }
     block_intent = SimpleNamespace(classes=(3,))
 
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._prepare_bc7_weighted_single_intent_job(
+    with pytest.raises(errors.TextureSaveError) as raised:
+        bc7_recolor._prepare_bc7_weighted_single_intent_job(
             bytearray(_mode6_block()), mip, 0, state,
             (None, prepare_color_adjustment({"hue": 30})), block_intent)
 
@@ -1211,24 +1300,24 @@ def test_worker_chunk_accepts_compact_and_parent_prepared_jobs_in_order():
     adjustment = prepare_color_adjustment({"hue": 30})
     state = _bc7_block_state(4, 4, bytearray([1] * 16),
                              (None, adjustment))
-    block_intent = texture_save._bc7_block_intent_info(state, mip, 0)
-    compact_job = texture_save._prepare_bc7_single_intent_job(
+    block_intent = bc7_recolor._bc7_block_intent_info(state, mip, 0)
+    compact_job = bc7_recolor._prepare_bc7_single_intent_job(
         bytearray(source_block), mip, 0, (None, adjustment), block_intent)
-    weighted_job = texture_save._BC7WeightedSingleIntentJob(
+    weighted_job = bc7_recolor._BC7WeightedSingleIntentJob(
         start=16, source_block=source_block, adjustment=adjustment,
         changed_counts=(1,) * 16, total_counts=(1,) * 16,
         valid_width=4, valid_height=4)
-    legacy_job = texture_save._prepare_bc7_block_job(
+    legacy_job = bc7_recolor._prepare_bc7_block_job(
         bytearray(source_block), mip, 0, state, (None, adjustment),
         block_intent)
-    legacy_job = texture_save._BC7BlockJob(
+    legacy_job = bc7_recolor._BC7BlockJob(
         start=32, source_block=legacy_job.source_block,
         source_pixels=legacy_job.source_pixels,
         target_pixels=legacy_job.target_pixels,
         valid_width=legacy_job.valid_width,
         valid_height=legacy_job.valid_height)
 
-    results = texture_save._recolor_bc7_chunk(
+    results = bc7_recolor._recolor_bc7_chunk(
         (compact_job, weighted_job, legacy_job))
 
     assert [result.start for result in results] == [0, 16, 32]
@@ -1252,8 +1341,8 @@ def test_invalid_bc7_has_the_same_save_error_in_serial_and_parallel_paths(
         mip0_affected_blocks=(0,),
     )
 
-    with pytest.raises(texture_save.TextureSaveError) as serial:
-        texture_save._save_bc7_blocks(source.read_bytes(), prepared)
+    with pytest.raises(errors.TextureSaveError) as serial:
+        bc7_recolor._save_bc7_blocks(source.read_bytes(), prepared)
 
     class InlineExecutor:
         def submit(self, function, argument):
@@ -1265,11 +1354,11 @@ def test_invalid_bc7_has_the_same_save_error_in_serial_and_parallel_paths(
             pass
 
     monkeypatch.setattr(
-        texture_save, "ProcessPoolExecutor", lambda **_kwargs: InlineExecutor())
-    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 0)
+        bc7_recolor, "ProcessPoolExecutor", lambda **_kwargs: InlineExecutor())
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
 
-    with pytest.raises(texture_save.TextureSaveError) as parallel:
-        texture_save._save_bc7_blocks(source.read_bytes(), prepared)
+    with pytest.raises(errors.TextureSaveError) as parallel:
+        bc7_recolor._save_bc7_blocks(source.read_bytes(), prepared)
 
     assert serial.value.code == parallel.value.code == "invalid_bc7"
     assert serial.value.message == parallel.value.message == \
@@ -1291,12 +1380,12 @@ def test_multi_intent_block_keeps_per_pixel_logical_targets_and_no_padding():
     mip = SimpleNamespace(width=4, height=4, units_x=1)
 
     _source, target, valid_width, valid_height = \
-        texture_save._bc7_target_block_pixels(
+        bc7_recolor._bc7_target_block_pixels(
             source_block, mip, 0, state, adjustments)
 
     assert (valid_width, valid_height) == (4, 4)
     for pixel, claim in enumerate(claims):
-        expected = texture_save._bc7_intent_rgb(
+        expected = bc7_recolor._bc7_intent_rgb(
             source_pixels[pixel][:3], state, pixel, adjustments)
         assert target[pixel][:3] == expected
         assert target[pixel][3] == source_pixels[pixel][3]
@@ -1324,10 +1413,10 @@ def test_bc7_save_pads_single_intent_block_and_preserves_unrelated_blocks(
         mip0_claims=claims, intent_adjustments=(None, adjustment),
         mip0_affected_blocks=(0,))
     monkeypatch.setattr(
-        texture_save, "_prepare_texture_save",
+        service, "prepare_texture_save",
         lambda *args, **kwargs: prepared)
 
-    result = texture_save.save_texture_color(
+    result = service.save_texture_color(
         SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
         "diffuse::body.dds", [], [])
 
@@ -1337,13 +1426,6 @@ def test_bc7_save_pads_single_intent_block_and_preserves_unrelated_blocks(
     assert candidate[layout.mips[0].offset + 16:
                      layout.mips[0].offset + 32] == second
     assert inspect_dds_layout(source) == layout
-    stats = result["diagnostics"]["bc7"]
-    assert stats["touched_blocks"] == 1
-    assert stats["partial_blocks"] == 1
-    assert stats["full_blocks"] == 0
-    assert stats["single_intent_partial_blocks"] == 1
-    assert stats["multi_intent_blocks"] == 0
-    assert stats["source_blocks_kept"] == 0
     source_pixels = bc7.decode_block(first)
     candidate_pixels = bc7.decode_block(candidate[layout.mips[0].offset:
                                                     layout.mips[0].offset + 16])
@@ -1364,11 +1446,11 @@ def test_bc7_stats_count_source_blocks_by_block_identity(tmp_path, monkeypatch):
         mip0_affected_blocks=(0,))
 
     monkeypatch.setattr(
-        texture_save._bc7_codec, "recolor_block",
+        bc7_recolor._bc7_codec, "recolor_block",
         lambda *_args: SimpleNamespace(
             block=source_block, source_error=10, candidate_error=1, mode=6))
 
-    _candidate, stats = texture_save._save_bc7_blocks(
+    _candidate, stats = bc7_recolor._save_bc7_blocks(
         source.read_bytes(), prepared)
 
     assert stats.source_blocks_kept == 1
@@ -1391,21 +1473,21 @@ def test_parallel_bc7_save_matches_serial_bytes_and_stats(tmp_path, monkeypatch)
         intent_adjustments=(None, prepare_color_adjustment({"hue": 120})),
         mip0_affected_blocks=tuple(range(7)),
     )
-    monkeypatch.setattr(texture_save, "_bc7_worker_count", lambda: 2)
-    monkeypatch.setattr(texture_save, "_BC7_CHUNK_SIZE", 2)
-    monkeypatch.setattr(texture_save, "_SAVE_PROGRESS_INTERVAL", 0)
-    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 10000)
+    monkeypatch.setattr(bc7_recolor, "_bc7_worker_count", lambda: 2)
+    monkeypatch.setattr(bc7_recolor, "_BC7_CHUNK_SIZE", 2)
+    monkeypatch.setattr(progress, "SAVE_PROGRESS_INTERVAL", 0)
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
     serial_events = []
-    serial_progress = texture_save._SaveProgressReporter(
+    serial_progress = progress.SaveProgressReporter(
         serial_events.append)
-    serial_bytes, serial_stats = texture_save._save_bc7_blocks(
+    serial_bytes, serial_stats = bc7_recolor._save_bc7_blocks(
         original, prepared, progress_reporter=serial_progress)
 
-    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 0)
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
     parallel_events = []
-    parallel_progress = texture_save._SaveProgressReporter(
+    parallel_progress = progress.SaveProgressReporter(
         parallel_events.append)
-    parallel_bytes, parallel_stats = texture_save._save_bc7_blocks(
+    parallel_bytes, parallel_stats = bc7_recolor._save_bc7_blocks(
         original, prepared, progress_reporter=parallel_progress)
 
     assert parallel_bytes == serial_bytes
@@ -1432,9 +1514,9 @@ def test_parallel_bc7_multi_mip_weighted_jobs_match_serial_results(
         mip0_claims=bytearray([1] * 16),
         intent_adjustments=(None, prepare_color_adjustment({"hue": 120})),
         mip0_affected_blocks=(0,))
-    monkeypatch.setattr(texture_save, "_bc7_worker_count", lambda: 2)
-    monkeypatch.setattr(texture_save, "_BC7_CHUNK_SIZE", 2)
-    monkeypatch.setattr(texture_save, "_SAVE_PROGRESS_INTERVAL", 0)
+    monkeypatch.setattr(bc7_recolor, "_bc7_worker_count", lambda: 2)
+    monkeypatch.setattr(bc7_recolor, "_BC7_CHUNK_SIZE", 2)
+    monkeypatch.setattr(progress, "SAVE_PROGRESS_INTERVAL", 0)
 
     class InlineExecutor:
         def submit(self, function, argument):
@@ -1446,19 +1528,19 @@ def test_parallel_bc7_multi_mip_weighted_jobs_match_serial_results(
             pass
 
     monkeypatch.setattr(
-        texture_save, "ProcessPoolExecutor", lambda **_kwargs: InlineExecutor())
+        bc7_recolor, "ProcessPoolExecutor", lambda **_kwargs: InlineExecutor())
     serial_events = []
-    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 10000)
-    serial_bytes, serial_stats = texture_save._save_bc7_blocks(
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
+    serial_bytes, serial_stats = bc7_recolor._save_bc7_blocks(
         original, prepared,
-        progress_reporter=texture_save._SaveProgressReporter(
+        progress_reporter=progress.SaveProgressReporter(
             serial_events.append))
 
     parallel_events = []
-    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 0)
-    parallel_bytes, parallel_stats = texture_save._save_bc7_blocks(
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
+    parallel_bytes, parallel_stats = bc7_recolor._save_bc7_blocks(
         original, prepared,
-        progress_reporter=texture_save._SaveProgressReporter(
+        progress_reporter=progress.SaveProgressReporter(
             parallel_events.append))
 
     assert parallel_bytes == serial_bytes
@@ -1494,9 +1576,9 @@ def test_parallel_bc7_multi_adjustment_lower_mips_match_serial_results(
         selected_path="body.dds", info=layout.info, layout=layout,
         mip0_claims=claims, intent_adjustments=adjustments,
         mip0_affected_blocks=tuple(range(5)),)
-    monkeypatch.setattr(texture_save, "_bc7_worker_count", lambda: 2)
-    monkeypatch.setattr(texture_save, "_BC7_CHUNK_SIZE", 2)
-    monkeypatch.setattr(texture_save, "_SAVE_PROGRESS_INTERVAL", 0)
+    monkeypatch.setattr(bc7_recolor, "_bc7_worker_count", lambda: 2)
+    monkeypatch.setattr(bc7_recolor, "_BC7_CHUNK_SIZE", 2)
+    monkeypatch.setattr(progress, "SAVE_PROGRESS_INTERVAL", 0)
 
     class InlineExecutor:
         def submit(self, function, argument):
@@ -1508,13 +1590,13 @@ def test_parallel_bc7_multi_adjustment_lower_mips_match_serial_results(
             pass
 
     monkeypatch.setattr(
-        texture_save, "ProcessPoolExecutor", lambda **_kwargs: InlineExecutor())
-    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 10000)
-    serial_bytes, serial_stats = texture_save._save_bc7_blocks(
+        bc7_recolor, "ProcessPoolExecutor", lambda **_kwargs: InlineExecutor())
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
+    serial_bytes, serial_stats = bc7_recolor._save_bc7_blocks(
         original, prepared)
 
-    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 0)
-    parallel_bytes, parallel_stats = texture_save._save_bc7_blocks(
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
+    parallel_bytes, parallel_stats = bc7_recolor._save_bc7_blocks(
         original, prepared)
 
     assert parallel_bytes == serial_bytes
@@ -1531,14 +1613,14 @@ def test_bc7_result_application_uses_block_offsets():
     modes = {}
     mip_stats = {"source_blocks_kept": 0}
     results = (
-        texture_save._BC7BlockResult(
+        bc7_recolor._BC7BlockResult(
             16, b"B" * 16, 4, 2, 6, False),
-        texture_save._BC7BlockResult(
+        bc7_recolor._BC7BlockResult(
             0, b"A" * 16, 3, 1, 6, False),
     )
 
     for result in results:
-        texture_save._record_bc7_result(
+        bc7_recolor._record_bc7_result(
             final, result, totals, modes, mip_stats)
 
     assert bytes(final) == b"A" * 16 + b"B" * 16
@@ -1552,8 +1634,8 @@ def test_bc7_result_application_uses_block_offsets():
     [(None, 1), (1, 1), (2, 1), (4, 3), (32, 6)],
 )
 def test_bc7_worker_count_leaves_one_cpu(monkeypatch, cpu_count, expected):
-    monkeypatch.setattr(texture_save.os, "cpu_count", lambda: cpu_count)
-    assert texture_save._bc7_worker_count() == expected
+    monkeypatch.setattr(bc7_recolor.os, "cpu_count", lambda: cpu_count)
+    assert bc7_recolor._bc7_worker_count() == expected
 
 
 def test_parallel_bc7_worker_failure_is_reported(tmp_path, monkeypatch):
@@ -1581,12 +1663,12 @@ def test_parallel_bc7_worker_failure_is_reported(tmp_path, monkeypatch):
 
     executor = FailingExecutor()
     monkeypatch.setattr(
-        texture_save, "ProcessPoolExecutor", lambda **_kwargs: executor)
-    monkeypatch.setattr(texture_save, "_BC7_PARALLEL_THRESHOLD", 0)
-    monkeypatch.setattr(texture_save, "_bc7_worker_count", lambda: 2)
+        bc7_recolor, "ProcessPoolExecutor", lambda **_kwargs: executor)
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
+    monkeypatch.setattr(bc7_recolor, "_bc7_worker_count", lambda: 2)
 
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._save_bc7_blocks(source.read_bytes(), prepared)
+    with pytest.raises(errors.TextureSaveError) as raised:
+        bc7_recolor._save_bc7_blocks(source.read_bytes(), prepared)
 
     assert raised.value.code == "texture_processing_failed"
     assert executor.shutdown_called
@@ -1609,7 +1691,7 @@ def test_single_intent_mip_counts_keep_exact_weighting(
         mip0_claims=_single_intent_claims(width, height, selected),
         intent_adjustments=(None, adjustment),
     )
-    state = texture_save._bc7_intent_level(prepared)
+    state = bc7_recolor._bc7_intent_level(prepared)
     base = (100, 100, 100)
     base_float = tuple(channel / 255.0 for channel in base)
     adjusted = apply_prepared_color_adjustment(
@@ -1618,7 +1700,7 @@ def test_single_intent_mip_counts_keep_exact_weighting(
     while (target_width, target_height) != (1, 1):
         target_width = max(1, target_width // 2)
         target_height = max(1, target_height // 2)
-        state = texture_save._bc7_next_intent_level(
+        state = bc7_recolor._bc7_next_intent_level(
             state, target_width, target_height, 2)
         assert all(0 <= changed <= total for changed, total in zip(
             state["changed_counts"], state["total_counts"]))
@@ -1630,7 +1712,7 @@ def test_single_intent_mip_counts_keep_exact_weighting(
         (base_float[channel] * (total - changed)
          + adjusted[channel] * changed) / total * 255.0)))
                       for channel in range(3))
-    assert texture_save._bc7_intent_rgb(
+    assert bc7_recolor._bc7_intent_rgb(
         base, state, 0, (None, adjustment)) == expected
 
 
@@ -1638,7 +1720,7 @@ def test_save_rejects_non_bc7_dds(tmp_path):
     source = tmp_path / "body.dds"
     source.write_bytes(_dx10_dds(bytes(8), dxgi_format=71))
 
-    with pytest.raises(texture_save.TextureSaveError) as raised:
-        texture_save._inspect_save_texture(str(source))
+    with pytest.raises(errors.TextureSaveError) as raised:
+        request.inspect_save_texture(str(source))
 
     assert raised.value.code == "unsupported_texture_format"
