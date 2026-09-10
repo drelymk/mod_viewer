@@ -4876,7 +4876,7 @@ def test_humanoid_driver_binding_preserves_rest_offsets_and_avoids_double_transf
         directBindings: binding.jointBindings.size,
         secondaryRoots: binding.secondaryAttachments.length,
         resetError,
-        posedFoot: lowerFootTarget?.elements.slice(12, 15),
+        posedFoot: lowerFootTarget?.elements.slice(12, 15) || null,
             bindingDiagnostics: binding.diagnostics,
       };
     }""")
@@ -4885,7 +4885,7 @@ def test_humanoid_driver_binding_preserves_rest_offsets_and_avoids_double_transf
     assert result["directBindings"] >= 10
     assert result["secondaryRoots"] == 0
     assert result["resetError"] < 1e-5
-    assert result["posedFoot"] != pytest.approx([-.1, .05, 0])
+    assert result["posedFoot"] is None
 
 
 def test_humanoid_control_ik_solves_virtual_two_bone_limb(module_page):
@@ -5070,7 +5070,8 @@ def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branc
           ([boneId, weightedCenter]) => ({boneId: Number(boneId), weightedCenter,
             weightedRadius: .01, totalWeight: 1, affectedMeasure: 1,
           affectedVertexCount: 10})), relationships,
-      }};
+      }, vertexEvidence: [{positions: controls.leftShoulder,
+        indices: [1], weights: [1], influenceCount: 1}]};
       const partialRig = {sourceKey: 'cloth', influenceGraph: {
         evidenceMode: 'vertex',
         nodes: [
@@ -5082,7 +5083,8 @@ def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branc
         relationships: [edge(20, 21, [-.725, .85, 0])].map(item => ({
           ...item, productOverlap: 0, sharedVertexCount: 3,
         })),
-      }};
+      }, vertexEvidence: [{positions: [...centers[4], ...centers[5]],
+        indices: [20, 21], weights: [1, 1], influenceCount: 1}]};
       const sourceBoneToModelJointId = new Map(Object.keys(centers).map(
         boneId => [`body#bone=${boneId}`, Number(boneId)]));
       sourceBoneToModelJointId.set('cloth#bone=20', 20);
@@ -5101,6 +5103,7 @@ def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branc
         maxProgress: source.maxProgress,
         partialPath: partial.mainPathBoneIds,
         partialComplete: partial.complete,
+        partialSeedReason: partial.seedReason,
         armAssignments: source.assignments.map(item => [
           item.boneId, item.driverId]).sort((left, right) => left[0] - right[0]),
         assignments: [...binding.sourceBoneAssignments.values()].map(item => [
@@ -5113,8 +5116,9 @@ def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branc
     assert result["mainPath"] == [1, 2, 3, 4, 5]
     assert result["complete"]
     assert result["maxProgress"] >= .8
-    assert result["partialPath"] == [20, 21]
-    assert result["partialComplete"]
+    assert result["partialPath"] == []
+    assert not result["partialComplete"]
+    assert result["partialSeedReason"] == "no_heat_seed"
     assert result["armAssignments"] == [
         [1, "left_upper_arm"], [2, "left_upper_arm"],
         [3, "left_lower_arm"], [4, "left_lower_arm"],
@@ -5149,6 +5153,10 @@ def test_humanoid_heat_binding_marks_cross_limb_model_joint_conflicts(module_pag
             totalWeight: 1, affectedMeasure: 1},
           {boneId: 4, weightedCenter: controls.leftKnee, weightedRadius: .01,
             totalWeight: 1, affectedMeasure: 1},
+          {boneId: 5, weightedCenter: controls.leftShoulder, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+          {boneId: 6, weightedCenter: controls.leftHip, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
         ], relationships: [
           {boneA: 1, boneB: 3, productOverlap: 1, minOverlap: .4,
             containment: .2, jaccard: .1, treeEdgeScore: .2,
@@ -5156,14 +5164,24 @@ def test_humanoid_heat_binding_marks_cross_limb_model_joint_conflicts(module_pag
           {boneA: 2, boneB: 4, productOverlap: 1, minOverlap: .4,
             containment: .2, jaccard: .1, treeEdgeScore: .2,
             jointCenter: [-.2, .125, 0]},
+          {boneA: 5, boneB: 3, productOverlap: 1, minOverlap: .4,
+            containment: .2, jaccard: .1, treeEdgeScore: .2,
+            jointCenter: [-.35, 1.15, 0]},
+          {boneA: 6, boneB: 4, productOverlap: 1, minOverlap: .4,
+            containment: .2, jaccard: .1, treeEdgeScore: .2,
+            jointCenter: [-.2, .375, 0]},
         ],
-      }};
+      }, vertexEvidence: [{positions: [...controls.leftShoulder,
+        ...controls.leftHip], indices: [5, 6], weights: [1, 1],
+        influenceCount: 1}]};
       const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
         right: [1, 0, 0], forward: [0, 0, 1]},
         controls: Object.fromEntries(Object.entries(controls).map(
           ([key, position]) => [key, {position}]))};
       const sourceBoneToModelJointId = new Map([
         ['body#bone=1', 7], ['body#bone=2', 7],
+        ['body#bone=3', 8], ['body#bone=4', 9],
+        ['body#bone=5', 10], ['body#bone=6', 11],
       ]);
       const binding = buildHumanoidHeatBinding({controlRig,
         sourceRigs: [sourceRig], modelRig: {sourceBoneToModelJointId}});
@@ -5213,6 +5231,50 @@ def test_humanoid_heat_binding_rejects_close_centers_without_edges(module_page):
     assert result == {"sourceAssignments": 0, "modelAssignments": 0}
 
 
+def test_humanoid_heat_driver_transforms_are_source_local(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidSourceBoneDriverTransforms} = await import(
+        './js/mesh/humanoid-rig-binding.js');
+      const {applyWeightedTransformDeformation} = await import(
+        './js/mesh/weight-deformation.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const heatBinding = {sourceBoneAssignments: new Map([
+        ['body#bone=2', {sourceKey: 'body', boneId: 2,
+          driverId: 'left_lower_arm'}],
+      ])};
+      const layers = buildHumanoidSourceBoneDriverTransforms({heatBinding,
+        controlRig, posedControls: {leftHand: [-.6, .8, 0]}});
+      const body = new Map([[2, layers.get('body').get(2).matrix]]);
+      const hair = layers.get('hair') || new Map();
+      const baseline = new Float32Array([-.8, .8, 0]);
+      const bodyOutput = applyWeightedTransformDeformation(
+        baseline, new Uint32Array([2]), new Float32Array([1]), 1, body);
+      const hairOutput = applyWeightedTransformDeformation(
+        baseline, new Uint32Array([7]), new Float32Array([1]), 1, hair);
+      return {
+        bodyBound: layers.get('body')?.has(2) || false,
+        hairBound: layers.get('hair')?.has(7) || false,
+        bodyOutput: [...bodyOutput], hairOutput: [...hairOutput],
+      };
+    }""")
+    assert result["bodyBound"]
+    assert not result["hairBound"]
+    assert result["bodyOutput"] != pytest.approx([-.8, .8, 0])
+    assert result["hairOutput"] == pytest.approx([-.8, .8, 0])
+
+
 def test_driver_translation_counts_as_active_pose_joint(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
@@ -5234,8 +5296,9 @@ def test_driver_translation_counts_as_active_pose_joint(module_page):
 def test_humanoid_ik_driver_changes_a_weighted_mesh_vertex(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
-      const {buildHumanoidRigBinding, buildHumanoidDriverBaseTransforms}
-        = await import('./js/mesh/humanoid-rig-binding.js');
+      const {buildHumanoidRigBinding,
+        buildHumanoidSourceBoneDriverTransforms} = await import(
+          './js/mesh/humanoid-rig-binding.js');
       const {solveHumanoidControlIk} = await import(
         './js/mesh/humanoid-rig-ik.js');
       const {applyWeightedTransformDeformationInto} = await import(
@@ -5264,23 +5327,30 @@ def test_humanoid_ik_driver_changes_a_weighted_mesh_vertex(module_page):
           parentById: {0: null}, childrenById: {0: []}}],
         componentByJointId: new Map([[0, 0]]),
       };
-      const heatBinding = {modelJointAssignments: new Map([[0, {
-        driverId: 'left_lower_arm', limbRole: 'left_arm', progress: 1,
-        confidence: 'high', sourceBoneKeys: ['body#bone=0'], memberCount: 1,
-      }]])};
+      const heatBinding = {
+        modelJointAssignments: new Map([[0, {
+          driverId: 'left_lower_arm', limbRole: 'left_arm', progress: 1,
+          confidence: 'high', sourceBoneKeys: ['body#bone=0'], memberCount: 1,
+        }]]),
+        sourceBoneAssignments: new Map([['body#bone=0', {
+          sourceKey: 'body', boneId: 0, driverId: 'left_lower_arm',
+        }]]),
+      };
       const binding = buildHumanoidRigBinding({controlRig, modelRig,
         heatBinding});
       const solved = solveHumanoidControlIk({
         controlRig, role: 'left_arm', target: [-.55, 1, 0],
       });
-      const driver = buildHumanoidDriverBaseTransforms({
-        binding, controlRig, modelRig, posedControls: solved.positions,
+      const sourceDrivers = buildHumanoidSourceBoneDriverTransforms({
+        heatBinding, controlRig, posedControls: solved.positions,
       });
+      const driver = new Map([[0,
+        sourceDrivers.get('body').get(0).matrix]]);
       const baseline = new Float32Array(controls.leftHand);
       const output = new Float32Array(baseline);
       const changedVertexCount = applyWeightedTransformDeformationInto(
         output, baseline, new Uint32Array([0]), new Float32Array([1]), 1,
-        driver.result, new Uint32Array([0]));
+        driver, new Uint32Array([0]));
       return {
         driverId: binding.jointBindings.get(0)?.driverId,
         solved: solved.reached,

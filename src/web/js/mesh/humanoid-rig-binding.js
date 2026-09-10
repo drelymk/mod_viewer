@@ -369,6 +369,34 @@ export function serializeHumanoidDriverFrames(controlRig, posedControls = null) 
     }));
 }
 
+/**
+ * Build humanoid deltas for the exact source bones accepted by heat binding.
+ * The result stays source-local so an unclassified member of the same
+ * ModelJoint does not inherit the classified member's humanoid motion.
+ */
+export function buildHumanoidSourceBoneDriverTransforms({heatBinding,
+    controlRig, posedControls = null} = {}) {
+  const result = new Map();
+  const restDrivers = buildHumanoidDriverFrames(controlRig);
+  const posedDrivers = buildHumanoidDriverFrames(controlRig, posedControls);
+  const entries = heatBinding?.sourceBoneAssignments instanceof Map
+    ? [...heatBinding.sourceBoneAssignments.values()]
+    : Object.values(heatBinding?.sourceBoneAssignments || {});
+  entries.forEach(assignment => {
+    const sourceKey = assignment?.sourceKey;
+    const boneId = numberId(assignment?.boneId);
+    const driverId = assignment?.driverId;
+    const rest = restDrivers.get(driverId);
+    const posed = posedDrivers.get(driverId);
+    if (sourceKey === undefined || boneId === null || !rest || !posed) return;
+    const matrix = posed.matrix.clone().multiply(rest.matrix.clone().invert());
+    const source = result.get(String(sourceKey)) || new Map();
+    source.set(boneId, {driverId, matrix});
+    result.set(String(sourceKey), source);
+  });
+  return result;
+}
+
 /** Build deterministic direct and secondary ModelJoint bindings. */
 export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
     options = {}} = {}) {
@@ -611,8 +639,14 @@ export function buildHumanoidDriverBaseTransforms({binding, controlRig,
     result.set(Number(jointId), target.multiply(rest.clone().invert()));
   };
   if (binding.jointBindings instanceof Map) {
-    binding.jointBindings.forEach((entry, jointId) => apply(
-      jointId, entry.driverId, entry.localMatrix));
+    binding.jointBindings.forEach((entry, jointId) => {
+      // Limb heat ownership is applied per source bone by
+      // buildHumanoidSourceBoneDriverTransforms. Keeping it out of this
+      // ModelJoint layer prevents reconciled accessory members from inheriting
+      // the limb driver.
+      if (entry.bindingMethod === 'heat_connectivity') return;
+      apply(jointId, entry.driverId, entry.localMatrix);
+    });
   }
   (binding.secondaryAttachments || []).forEach(attachment => {
     const rootId = numberId(attachment.rootJointId);

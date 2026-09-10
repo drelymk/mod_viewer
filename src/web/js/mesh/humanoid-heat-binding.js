@@ -25,8 +25,12 @@ const BASE_CORRIDOR_RATIO = 0.11;
 const MAX_RADIUS_RATIO = 0.07;
 const TERMINAL_EXTENSION_RATIO = 0.12;
 const CENTER_EXCLUSION_RATIO = 0.025;
+const SEED_RADIUS_RATIO = 0.09;
+const SEED_MIN_WEIGHT = 0.05;
+const SEED_RELATIVE_WEIGHT = 0.12;
 const BACKTRACK_TOLERANCE = 0.08;
 const BRANCH_PROGRESS_TOLERANCE = 0.22;
+const BRANCH_LATERAL_TOLERANCE_RATIO = 0.035;
 const MAX_SEEDS = 8;
 const MAX_SEARCH_STATES = 4096;
 
@@ -223,29 +227,65 @@ function usableHeatEdge(edge, left, right, curve, metadata, height) {
   return {accepted: true, strength: edgeStrength(edge), overlapProjection};
 }
 
-function seedCandidates(nodes, metadata, height) {
-  const candidates = [...nodes.values()].filter(node => {
-    const projection = metadata.get(node.boneId);
-    return projection?.corridor;
-  }).sort((left, right) => {
-    const a = metadata.get(left.boneId);
-    const b = metadata.get(right.boneId);
-    return (a.distance / height + a.progress * .25
-      - Math.min(1, nodeSupport(left) / Math.max(nodeSupport(right), 1)) * .01)
-      - (b.distance / height + b.progress * .25
-        - Math.min(1, nodeSupport(right) / Math.max(nodeSupport(left), 1)) * .01)
-      || left.boneId - right.boneId;
+function seedWeightsFromSurface(sourceRig, anchor, height, nodes) {
+  const totals = new Map();
+  const radiusSquared = (height * SEED_RADIUS_RATIO) ** 2;
+  (sourceRig?.vertexEvidence || []).forEach(evidence => {
+    const positions = evidence?.positions;
+    const indices = evidence?.indices;
+    const weights = evidence?.weights;
+    const influenceCount = integer(evidence?.influenceCount);
+    if (!positions || !indices || !weights || !influenceCount
+        || influenceCount <= 0) return;
+    const vertexCount = Math.min(Math.floor(positions.length / 3),
+      Math.floor(indices.length / influenceCount),
+      Math.floor(weights.length / influenceCount));
+    for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+      const position = vector([
+        positions[vertex * 3], positions[vertex * 3 + 1],
+        positions[vertex * 3 + 2],
+      ]);
+      if (position.distanceToSquared(anchor) > radiusSquared) continue;
+      const offset = vertex * influenceCount;
+      for (let influence = 0; influence < influenceCount; influence += 1) {
+        const boneId = integer(indices[offset + influence]);
+        const weight = number(weights[offset + influence]);
+        if (boneId === null || weight <= 0 || !nodes.has(boneId)) continue;
+        totals.set(boneId, (totals.get(boneId) || 0) + weight);
+      }
+    }
   });
-  const anchorSeeds = candidates.filter(node =>
-    metadata.get(node.boneId).progress <= .18
-      && metadata.get(node.boneId).distance <= height * (.15 + MAX_RADIUS_RATIO));
-  return (anchorSeeds.length ? anchorSeeds : candidates).slice(0, MAX_SEEDS);
+  return totals;
+}
+
+function seedCandidates(sourceRig, nodes, metadata, curve, height) {
+  const weights = seedWeightsFromSurface(sourceRig, curve.points[0], height, nodes);
+  const maximum = [...weights.values()].reduce((max, value) =>
+    Math.max(max, value), 0);
+  const minimum = Math.max(SEED_MIN_WEIGHT, maximum * SEED_RELATIVE_WEIGHT);
+  return [...weights.entries()].filter(([, weight]) => weight >= minimum)
+    .map(([boneId, weight]) => nodes.get(boneId))
+    .filter(node => metadata.get(node.boneId)?.corridor
+      && metadata.get(node.boneId).progress <= .3)
+    .sort((left, right) => {
+      const a = metadata.get(left.boneId);
+      const b = metadata.get(right.boneId);
+      return (weights.get(right.boneId) - weights.get(left.boneId))
+        || (a.distance / height - b.distance / height)
+        || left.boneId - right.boneId;
+    }).slice(0, MAX_SEEDS);
 }
 
 function endpointFor(node, metadata, height) {
   const projection = metadata.get(node.boneId);
   return !!projection && (projection.progress >= .8
     || projection.endpointDistance <= height * (.16 + MAX_RADIUS_RATIO));
+}
+
+function lateralDistance(node, curve) {
+  const right = frameVector(curve.controlRig, 'right', [1, 0, 0]);
+  const pelvis = pointForControl(curve.controlRig, 'pelvis');
+  return curve.info.side * node.weightedCenter.clone().sub(pelvis).dot(right);
 }
 
 function betterState(left, right) {
@@ -289,7 +329,10 @@ function searchPath(seed, nodes, metadata, adjacency, edgeByKey, curve, height) 
         curve, metadata, height);
       if (!connection.accepted) return;
       const delta = nextProjection.progress - currentProjection.progress;
-      if (delta < -BACKTRACK_TOLERANCE || delta > .55) return;
+      if (delta < -BACKTRACK_TOLERANCE || delta > .55
+          || lateralDistance(nextNode, curve)
+            < lateralDistance(currentNode, curve)
+              - height * BRANCH_LATERAL_TOLERANCE_RATIO) return;
       const backtrack = state.backtrack + Math.max(0, -delta);
       const edgeScore = state.edgeStrength + connection.strength;
       const quality = nextProjection.progress * 10 + edgeScore * 3
@@ -320,9 +363,13 @@ function absorbBranches(mainPath, nodes, metadata, adjacency, edgeByKey, curve, 
       const nextNode = nodes.get(nextId);
       const nextProjection = metadata.get(nextId);
       const edge = edgeByKey.get(edgeKey(current.boneId, nextId));
-      if (!nextNode || !nextProjection || !edge
-          || Math.abs(nextProjection.progress - currentProjection.progress)
-            > BRANCH_PROGRESS_TOLERANCE) return;
+      if (!nextNode || !nextProjection || !edge) return;
+      const progressDelta = nextProjection.progress - currentProjection.progress;
+      if (progressDelta < -BACKTRACK_TOLERANCE
+          || progressDelta > BRANCH_PROGRESS_TOLERANCE
+          || lateralDistance(nextNode, curve)
+            < lateralDistance(nodes.get(current.boneId), curve)
+              - height * BRANCH_LATERAL_TOLERANCE_RATIO) return;
       const connection = usableHeatEdge(edge, nodes.get(current.boneId), nextNode,
         curve, metadata, height);
       if (!connection.accepted) return;
@@ -351,7 +398,8 @@ function classifySource(sourceRig, controlRig) {
     curve.controlRig = controlRig;
     const metadata = new Map([...graphData.nodes.values()].map(node => [
       node.boneId, projectionMetadata(node, curve, height)]));
-    const seeds = seedCandidates(graphData.nodes, metadata, height);
+    const seeds = seedCandidates(sourceRig, graphData.nodes, metadata,
+      curve, height);
     let bestPath = null;
     seeds.forEach(seed => {
       const path = searchPath(seed, graphData.nodes, metadata,
@@ -370,9 +418,10 @@ function classifySource(sourceRig, controlRig) {
     graphData.nodes.forEach((node, boneId) => {
       if (absorbed.accepted.has(boneId)) return;
       const projection = metadata.get(boneId);
-      rejected.push({boneId, reason: projection?.corridor
-        ? (mainPath.length ? 'wrong_progress_direction' : 'endpoint_not_reached')
-        : 'outside_limb_corridor'});
+      rejected.push({boneId, reason: !seeds.length ? 'no_heat_seed'
+        : projection?.corridor
+          ? (mainPath.length ? 'wrong_progress_direction' : 'endpoint_not_reached')
+          : 'outside_limb_corridor'});
     });
     const pathSet = new Set(mainPath);
     const assignments = [];
@@ -399,6 +448,7 @@ function classifySource(sourceRig, controlRig) {
     });
     sourceResults[limbName] = {
       seedBoneIds: seeds.map(node => node.boneId),
+      seedReason: seeds.length ? null : 'no_heat_seed',
       endpointBoneIds: [...graphData.nodes.values()]
         .filter(node => endpointFor(node, metadata, height)).map(node => node.boneId),
       mainPathBoneIds: mainPath,

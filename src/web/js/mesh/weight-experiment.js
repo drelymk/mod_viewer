@@ -68,6 +68,7 @@ import {
 } from './weight-rig-humanoid.js';
 import {
   HUMANOID_DRIVER_SEGMENTS, buildHumanoidDriverBaseTransforms,
+  buildHumanoidSourceBoneDriverTransforms,
   buildHumanoidRigBinding,
   getHumanoidJointBindingDiagnostics,
   serializeHumanoidDriverFrames, serializeHumanoidRigBinding,
@@ -1712,6 +1713,8 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     poseRotationByJointId: new Map(),
     poseTransforms: new Map(),
     poseRotations: new Map(),
+    manualPoseTransforms: new Map(),
+    humanoidSourceBoneTransforms: new Map(),
     poseTransformCache: new Map(),
     poseFrameCache: new Map(),
     poseAffectedJointIds: new Set(),
@@ -1859,16 +1862,31 @@ function updateModelSourceAliases(rig) {
       || new Map();
     const rotations = rig.sourceRotationAliases.get(sourceRig.sourceKey)
       || new Map();
+    const manualTransforms = rig.manualPoseTransforms || new Map();
+    const humanoidTransforms = rig.humanoidSourceBoneTransforms?.get(
+      sourceRig.sourceKey) || new Map();
+    const jointBindings = rig.humanoidBinding?.jointBindings;
     transforms.clear();
     rotations.clear();
     for (const boneId of sourceRig.boneIds || []) {
       const jointId = rig.sourceBoneToModelJointId.get(
         sourceBoneKey(sourceRig.sourceKey, boneId));
-      if (!Number.isInteger(jointId)) continue;
-      transforms.set(Number(boneId), rig.poseTransforms.get(jointId)
-        || RIG_IDENTITY_MATRIX);
-      rotations.set(Number(boneId), rig.poseRotations.get(jointId)
-        || new THREE.Quaternion());
+      const manual = Number.isInteger(jointId)
+        ? manualTransforms.get(jointId) : null;
+      const humanoid = humanoidTransforms.get(Number(boneId))?.matrix;
+      const modelBinding = Number.isInteger(jointId)
+        ? jointBindings?.get?.(jointId) : null;
+      const modelTransform = Number.isInteger(jointId)
+        ? rig.poseTransforms.get(jointId) : null;
+      const transform = humanoid
+        ? humanoid.clone().multiply(manual || RIG_IDENTITY_MATRIX)
+        : modelBinding?.bindingMethod === 'heat_connectivity'
+          ? manual
+          : modelTransform || manual;
+      if (!transform) continue;
+      transforms.set(Number(boneId), transform);
+      rotations.set(Number(boneId),
+        new THREE.Quaternion().setFromRotationMatrix(transform).normalize());
     }
     rig.sourceTransformAliases.set(sourceRig.sourceKey, transforms);
     rig.sourceRotationAliases.set(sourceRig.sourceKey, rotations);
@@ -2239,6 +2257,13 @@ function buildModelPoseTransforms() {
     modelRig: modelSkinningRig,
     posedControls: modelRigState.humanoidPose,
   });
+  modelSkinningRig.manualPoseTransforms = manualTransforms;
+  modelSkinningRig.humanoidSourceBoneTransforms =
+    buildHumanoidSourceBoneDriverTransforms({
+      heatBinding: modelSkinningRig.humanoidHeatBinding,
+      controlRig: modelSkinningRig.humanoidControlRig,
+      posedControls: modelRigState.humanoidPose,
+    });
   modelSkinningRig.humanoidDriverTransforms = driverLayer.result;
   modelSkinningRig.humanoidDriverWorldByJointId =
     driverLayer.driverWorldByJointId;
@@ -2290,6 +2315,20 @@ function sourceBoneIdsForModelJoints(sourceRig, jointIds) {
   return affected;
 }
 
+function sourceBoneIdsForHumanoidTransforms(rig) {
+  const affected = new Map();
+  rig?.humanoidSourceBoneTransforms?.forEach((entries, sourceKey) => {
+    const boneIds = new Set();
+    entries.forEach((entry, boneId) => {
+      if (entry?.matrix?.isMatrix4 && !matrixIsIdentity(entry.matrix)) {
+        boneIds.add(Number(boneId));
+      }
+    });
+    if (boneIds.size) affected.set(sourceKey, boneIds);
+  });
+  return affected;
+}
+
 function sourceBoneKeyForSet(ids) {
   return [...ids].sort((left, right) => left - right).join(',');
 }
@@ -2309,6 +2348,14 @@ function humanoidDriverIdsForJointIds(rig, jointIds) {
       jointIds.has(Number(jointId))) && attachment.driverId) {
       result.add(attachment.driverId);
     }
+  });
+  rig?.humanoidSourceBoneTransforms?.forEach(entries => {
+    entries.forEach(entry => {
+      if (entry?.driverId && entry.matrix?.isMatrix4
+          && !matrixIsIdentity(entry.matrix)) {
+        result.add(entry.driverId);
+      }
+    });
   });
   const order = new Map(HUMANOID_DRIVER_SEGMENTS.map((segment, index) =>
     [segment.id, index]));
@@ -2338,6 +2385,7 @@ function applyModelPose({request = true, dragging = false} = {}) {
   const rig = modelSkinningRig;
   if (!rig) return false;
   const transforms = buildModelPoseTransforms();
+  const humanoidSourceBones = sourceBoneIdsForHumanoidTransforms(rig);
   rig.poseRevision = (rig.poseRevision || 0) + 1;
   const manualPoseJointIds = [...rig.poseRotationByJointId.entries()]
     .filter(([, quaternion]) => !quaternionIsIdentity(quaternion))
@@ -2367,6 +2415,8 @@ function applyModelPose({request = true, dragging = false} = {}) {
       sourceRig.sourceKey) || new Map();
     const affectedBoneIds = sourceBoneIdsForModelJoints(
       sourceRig, affectedJointIds);
+    (humanoidSourceBones.get(sourceRig.sourceKey) || []).forEach(boneId =>
+      affectedBoneIds.add(Number(boneId)));
     if (affectedBoneIds.size) {
       affectedSourceBones.push({
         sourceKey: sourceRig.sourceKey,
