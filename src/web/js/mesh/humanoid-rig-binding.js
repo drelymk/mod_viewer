@@ -22,6 +22,7 @@ const EPSILON = 1e-8;
 const DEFAULT_DIRECT_DISTANCE_RATIO = 0.105;
 const DEFAULT_SECONDARY_DISTANCE_RATIO = 0.24;
 const DEFAULT_AMBIGUITY_MARGIN_RATIO = 0.025;
+const TERMINAL_EXTENSION_RATIO = 0.15;
 
 function numberId(value) {
   const result = Number(value);
@@ -127,7 +128,12 @@ function segmentDistance(point, start, end) {
     ? point.clone().sub(start).dot(direction) / lengthSq : 0;
   const t = Math.max(0, Math.min(1, projection));
   const closest = start.clone().addScaledVector(direction, t);
-  return {distance: point.distanceTo(closest), projection: t, closest};
+  return {
+    distance: point.distanceTo(closest),
+    rawProjection: projection,
+    projection: t,
+    closest,
+  };
 }
 
 function segmentOrder(id) {
@@ -147,13 +153,62 @@ function candidateForPoint(point, driver, height) {
     driverId: driver.id,
     distance: result.distance,
     distanceRatio: result.distance / Math.max(height, EPSILON),
+    rawProjection: result.rawProjection,
     projection: result.projection,
+    endpointDistanceRatio: point.distanceTo(driver.end) / Math.max(height, EPSILON),
     score: result.distance / Math.max(height, EPSILON),
   };
 }
 
-function sortedCandidates(point, drivers, height) {
-  return drivers.map(driver => candidateForPoint(point, driver, height))
+function frameVector(controlRig, key, fallback) {
+  return vector(controlRig?.frame?.[key], fallback).normalize();
+}
+
+function centralDomain(controlRig, height) {
+  const right = frameVector(controlRig, 'right', [1, 0, 0]);
+  const pelvis = controlPoint(controlRig, 'pelvis');
+  const shoulder = controlPoint(controlRig, 'leftShoulder')
+    .clone().sub(controlPoint(controlRig, 'rightShoulder')).length() * .5;
+  return {
+    right, pelvis,
+    halfWidth: Math.max(.06 * height, shoulder * .75),
+  };
+}
+
+function semanticCandidateAllowed(point, driver, candidate, controlRig, height) {
+  const id = driver.id;
+  if (id === 'torso') {
+    const domain = centralDomain(controlRig, height);
+    const lateral = Math.abs(point.clone().sub(domain.pelvis).dot(domain.right));
+    return lateral <= domain.halfWidth;
+  }
+
+  // A limb binding must be on the limb's authored corridor. Clamping a point
+  // behind a shoulder/hip to the segment endpoint is not a semantic match.
+  if (candidate.rawProjection < -1e-5) return false;
+  const terminal = /^(left|right)_lower_(arm|leg)$/.test(id);
+  if (candidate.rawProjection > 1 + 1e-5
+      && (!terminal || candidate.endpointDistanceRatio > TERMINAL_EXTENSION_RATIO)) {
+    return false;
+  }
+
+  const side = id.startsWith('left_') ? -1 : id.startsWith('right_') ? 1 : 0;
+  if (!side) return false;
+  const domain = centralDomain(controlRig, height);
+  const lateral = point.clone().sub(domain.pelvis).dot(domain.right);
+  // Keep central torso/head geometry on the torso driver. This also prevents
+  // a secondary root from making an entire central subtree follow an arm.
+  if (Math.abs(lateral) <= domain.halfWidth) return false;
+  if (Math.sign(lateral) !== side) return false;
+  return true;
+}
+
+function sortedCandidates(point, drivers, height, controlRig) {
+  const list = Array.isArray(drivers) ? drivers : [...(drivers?.values?.() || [])];
+  return list.map(driver => candidateForPoint(point, driver, height))
+    .filter(candidate => semanticCandidateAllowed(
+      point, list.find(driver => driver.id === candidate.driverId),
+      candidate, controlRig, height))
     .sort((left, right) => left.score - right.score
       || segmentOrder(left.driverId) - segmentOrder(right.driverId));
 }
@@ -197,7 +252,9 @@ function directBindingFor(modelRig, jointId, candidate, driverMap) {
     restJointWorld,
     distance: candidate.distance,
     distanceRatio: candidate.distanceRatio,
+    rawProjection: candidate.rawProjection,
     projection: candidate.projection,
+    endpointDistanceRatio: candidate.endpointDistanceRatio,
     score: candidate.score,
     confidence: confidenceForDistance(candidate.distanceRatio),
   };
@@ -214,7 +271,9 @@ function serializeBindingEntry(entry) {
     localMatrix: serializeMatrix(entry.localMatrix),
     distance: Number(entry.distance) || 0,
     distanceRatio: Number(entry.distanceRatio) || 0,
+    rawProjection: Number(entry.rawProjection) || 0,
     projection: Number(entry.projection) || 0,
+    endpointDistanceRatio: Number(entry.endpointDistanceRatio) || 0,
     score: Number(entry.score) || 0,
     confidence: entry.confidence || 'low',
   };
@@ -229,7 +288,12 @@ function serializeAttachment(attachment) {
     confidence: attachment.confidence || 'low',
     distance: Number(attachment.distance) || 0,
     distanceRatio: Number(attachment.distanceRatio) || 0,
+    rawProjection: Number(attachment.rawProjection) || 0,
+    projection: Number(attachment.projection) || 0,
+    endpointDistanceRatio: Number(attachment.endpointDistanceRatio) || 0,
     ambiguityMargin: Number(attachment.ambiguityMargin) || 0,
+    secondaryRootId: attachment.rootJointId,
+    secondarySubtreeSize: attachment.jointIds?.length || 0,
   };
 }
 
@@ -258,8 +322,8 @@ function unboundSubtree(modelRig, rootId, directIds) {
   return result;
 }
 
-function secondaryCandidates(root, drivers, height) {
-  return sortedCandidates(root, drivers, height);
+function secondaryCandidates(root, drivers, height, controlRig) {
+  return sortedCandidates(root, drivers, height, controlRig);
 }
 
 /**
@@ -308,7 +372,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig, options = {}} = {
   allJointIds(modelRig).forEach(jointId => {
     const point = pointForJoint(modelRig, jointId);
     if (!point) return;
-    const candidates = sortedCandidates(point, driverList, height);
+    const candidates = sortedCandidates(point, drivers, height, controlRig);
     candidatesByJointId.set(jointId, candidates);
     const best = articulationPreferredCandidate(candidates);
     if (!best || best.distanceRatio > directLimit) return;
@@ -336,7 +400,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig, options = {}} = {
     if (directIds.has(rootId) || secondaryJointIds.has(rootId)) return;
     const root = pointForJoint(modelRig, rootId);
     if (!root) return;
-    const candidates = secondaryCandidates(root, driverList, height);
+    const candidates = secondaryCandidates(root, drivers, height, controlRig);
     const best = articulationPreferredCandidate(candidates);
     if (!best || best.distanceRatio > secondaryLimit
         || (isAmbiguous(candidates, ambiguityMargin)
@@ -355,6 +419,9 @@ export function buildHumanoidRigBinding({controlRig, modelRig, options = {}} = {
       confidence: confidenceForDistance(best.distanceRatio),
       distance: best.distance,
       distanceRatio: best.distanceRatio,
+      rawProjection: best.rawProjection,
+      projection: best.projection,
+      endpointDistanceRatio: best.endpointDistanceRatio,
       ambiguityMargin: candidates[1] ? candidates[1].score - best.score : 1,
     });
     jointIds.forEach(id => secondaryJointIds.add(id));
@@ -405,6 +472,50 @@ export function serializeHumanoidRigBinding(binding) {
       .map(serializeAttachment),
     unboundJointIds: [...(binding.unboundJointIds || [])],
     diagnostics: {...(binding.diagnostics || {})},
+  };
+}
+
+/** Return the stable, selected-joint-facing binding explanation. */
+export function getHumanoidJointBindingDiagnostics(binding, jointId) {
+  const id = numberId(jointId);
+  if (id === null || !binding) return null;
+  const direct = binding.jointBindings instanceof Map
+    ? binding.jointBindings.get(id) : binding.jointBindings?.[id];
+  if (direct) {
+    return {
+      jointId: id,
+      bindingType: 'direct',
+      driverId: direct.driverId || null,
+      rawProjection: Number(direct.rawProjection) || 0,
+      clampedProjection: Number(direct.projection) || 0,
+      distanceRatio: Number(direct.distanceRatio) || 0,
+      secondaryRootId: null,
+      secondarySubtreeSize: 0,
+    };
+  }
+  const attachment = (binding.secondaryAttachments || []).find(item =>
+    (item.jointIds || []).some(value => numberId(value) === id));
+  if (attachment) {
+    return {
+      jointId: id,
+      bindingType: 'secondary',
+      driverId: attachment.driverId || null,
+      rawProjection: Number(attachment.rawProjection) || 0,
+      clampedProjection: Number(attachment.projection) || 0,
+      distanceRatio: Number(attachment.distanceRatio) || 0,
+      secondaryRootId: numberId(attachment.rootJointId),
+      secondarySubtreeSize: (attachment.jointIds || []).length,
+    };
+  }
+  return {
+    jointId: id,
+    bindingType: 'unbound',
+    driverId: null,
+    rawProjection: null,
+    clampedProjection: null,
+    distanceRatio: null,
+    secondaryRootId: null,
+    secondarySubtreeSize: 0,
   };
 }
 

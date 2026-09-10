@@ -24,6 +24,7 @@ import {
   disableModelPhysics, enableModelPhysics,
   ensureModelRigLoaded, ensureModelWeightsLoaded,
   getModelPhysicsState, getModelRigDebugState, getModelRigState,
+  getHumanoidJointBindingDiagnostic,
   getModelWeightState, getRigJointPoseFrame,
   clearRigJointSelection, finishRigJointPose, resetModelPhysicsMotion,
   resetRigJoint,
@@ -413,6 +414,7 @@ rendererReady.then(ready => {
   Object.defineProperties(window.modViewer, {
     getModelRigState: {value: getModelRigState},
     getModelRigDebugState: {value: getModelRigDebugState},
+    getHumanoidJointBindingDiagnostic: {value: getHumanoidJointBindingDiagnostic},
     getRigJointPoseFrame: {value: getRigJointPoseFrame},
     ensureModelRigLoaded: {value: ensureModelRigLoaded},
     getRigRotationSnapDegrees: {value: getRigRotationSnapDegrees},

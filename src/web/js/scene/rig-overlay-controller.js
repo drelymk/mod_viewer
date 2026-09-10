@@ -511,9 +511,33 @@ export function createRigOverlayController({
   }
 
   function updateHumanoidPosedOverlay(source = currentSource) {
-    // Semantic controls are rest-frame landmarks; ModelJoint pose remains in
-    // the regular inferred-rig overlay and is not duplicated here.
-    void source;
+    const rig = humanoidControlRigFor(source);
+    if (!rig) return;
+    const controls = rig.controls || {};
+    const controlPoint = key => controls[key]?.position || controls[key]
+      || rig?.diagnostics?.templatePoints?.[key] || null;
+    const points = new Map(CONTROL_KEYS_FOR_OVERLAY.map(({key}) => [
+      key, controlPoint(key),
+    ]));
+    const pointAttribute = humanoidPoints.geometry.getAttribute('position');
+    humanoidLandmarks.forEach(({key}, index) => {
+      const value = points.get(key);
+      if (!value || !pointAttribute) return;
+      const point = vector(value);
+      pointAttribute.setXYZ(index, point.x, point.y, point.z);
+    });
+    if (pointAttribute) pointAttribute.needsUpdate = true;
+    const lineAttribute = humanoidLines.geometry.getAttribute('position');
+    humanoidLinePairs.forEach(([firstKey, secondKey], index) => {
+      const first = points.get(firstKey);
+      const second = points.get(secondKey);
+      if (!first || !second || !lineAttribute) return;
+      const start = vector(first);
+      const end = vector(second);
+      lineAttribute.setXYZ(index * 2, start.x, start.y, start.z);
+      lineAttribute.setXYZ(index * 2 + 1, end.x, end.y, end.z);
+    });
+    if (lineAttribute) lineAttribute.needsUpdate = true;
   }
 
   function rebuildOverlay(source) {
@@ -951,6 +975,10 @@ export function createRigOverlayController({
           const boneId = dragBoneId;
           if (dragMode === 'ik') {
             solveRigIkTarget?.(ikTargetProxy.position.toArray(), {dragging: true});
+            const snapshot = getRigState?.() || currentSnapshot;
+            currentSnapshot = snapshot || currentSnapshot;
+            currentSource = sourceFor(currentSnapshot);
+            updateHumanoidPosedOverlay(currentSource);
             return;
           }
           if (boneId === null) return;
@@ -1021,6 +1049,10 @@ export function createRigOverlayController({
               if (primaryIkDrag) {
                 solveRigIkTarget?.(ikTargetProxy.position.toArray(),
                   {dragging: false});
+                currentSnapshot = getRigState?.() || snapshot;
+                currentSource = sourceFor(currentSnapshot);
+                updateHumanoidPosedOverlay(currentSource);
+                updateProxy(currentSource, currentSnapshot);
               }
             }
             if (boneId !== null && !primaryIkDrag) {

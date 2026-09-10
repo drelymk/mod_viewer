@@ -7,6 +7,18 @@ export const HUMANOID_LIMB_CONTROLS = Object.freeze({
   right_leg: Object.freeze(['rightHip', 'rightKnee', 'rightFoot']),
 });
 
+/** Keep solved controls for the active limb while retaining other limb poses. */
+export function mergeHumanoidLimbPose(previousPose, solvedPositions, keys) {
+  const next = {...(previousPose || {})};
+  (keys || []).slice(1).forEach(key => {
+    if (key && solvedPositions?.[key] !== undefined) {
+      next[key] = Array.isArray(solvedPositions[key])
+        ? solvedPositions[key].slice(0, 3) : solvedPositions[key];
+    }
+  });
+  return next;
+}
+
 const EPSILON = 1e-8;
 
 function vector(value) {

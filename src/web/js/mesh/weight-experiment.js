@@ -69,10 +69,11 @@ import {
 import {
   HUMANOID_DRIVER_SEGMENTS, buildHumanoidDriverBaseTransforms,
   buildHumanoidRigBinding,
+  getHumanoidJointBindingDiagnostics,
   serializeHumanoidDriverFrames, serializeHumanoidRigBinding,
 } from './humanoid-rig-binding.js';
 import {buildHumanoidControlRig} from './humanoid-control-rig.js';
-import {solveHumanoidControlIk} from './humanoid-rig-ik.js';
+import {mergeHumanoidLimbPose, solveHumanoidControlIk} from './humanoid-rig-ik.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -311,6 +312,8 @@ function humanoidSnapshot() {
     bindingRuntimeMs: Number(modelRigState.humanoidBindingRuntimeMs) || 0,
     availableRoles: rig?.accepted ? [...RIG_LIMB_ROLES] : [],
     binding: binding?.diagnostics || null,
+    selectedBinding: getHumanoidJointBindingDiagnostics(
+      binding, modelRigState.selectedJointId),
     runtime: modelRigState.humanoidRuntimeDiagnostics
       ? {...modelRigState.humanoidRuntimeDiagnostics,
         manualPoseJointIds: [
@@ -420,6 +423,12 @@ export function getHumanoidLimbDetection() {
     version: 1, jointBindings: {}, secondaryAttachments: [],
     unboundJointIds: [], diagnostics: {reason: 'rig_not_loaded'},
   };
+}
+
+export function getHumanoidJointBindingDiagnostic(jointId) {
+  return getHumanoidJointBindingDiagnostics(
+    modelSkinningRig?.humanoidBinding || modelRigState.humanoidBinding,
+    jointId);
 }
 
 function setHumanoidStatus(message) {
@@ -3364,7 +3373,8 @@ export function solveRigIkTarget(target, options = {}) {
       bendSign: primary.bendSign,
     });
     if (!solved.positions) return solved;
-    modelRigState.humanoidPose = solved.positions;
+    modelRigState.humanoidPose = mergeHumanoidLimbPose(
+      previousPose, solved.positions, primary.keys);
     const applied = applyModelPose({dragging: options?.dragging === true});
     const changedControlKeys = primary.keys.filter(key => {
       const before = previousPose[key] || rig.humanoidControlRig.controls[key]

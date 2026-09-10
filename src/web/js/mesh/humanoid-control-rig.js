@@ -318,9 +318,11 @@ function fallbackPoint(key) {
     leftShoulder: [-shoulder, neck], leftElbow: [-elbowSide, elbowHeight],
     leftHand: [-shoulder - armSide, neck - armDrop], rightShoulder: [shoulder, neck],
     rightElbow: [elbowSide, elbowHeight], rightHand: [shoulder + armSide, neck - armDrop],
-    leftHip: [-0.1, hip], leftKnee: [-0.1, foot + p.legLength * 0.5],
+    leftHip: [-0.1, hip], leftKnee: [-0.1,
+      foot + p.legLength * finiteNumber(p.kneeFraction, 0.5)],
     leftFoot: [-0.1, foot], rightHip: [0.1, hip],
-    rightKnee: [0.1, foot + p.legLength * 0.5], rightFoot: [0.1, foot],
+    rightKnee: [0.1, foot + p.legLength * finiteNumber(p.kneeFraction, 0.5)],
+    rightFoot: [0.1, foot],
   };
   const value = values[key] || [0, 0.5];
   return {x: value[0], y: value[1], z: 0};

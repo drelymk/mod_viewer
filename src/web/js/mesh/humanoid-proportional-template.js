@@ -9,7 +9,7 @@ export const DEFAULT_HUMANOID_PROPORTIONS = Object.freeze({
   shoulderHalfWidth: 0.055,
   armLength: 0.33,
   armDropAngleDeg: 55,
-  kneeFraction: 0.50,
+  kneeFraction: 0.40,
   elbowFraction: 0.50,
   chestFraction: 0.50,
 });

@@ -4307,7 +4307,7 @@ def test_geometry_humanoid_control_rig_is_rest_owned_and_density_invariant(modul
         "characterHeight": pytest.approx(height),
         "footLiftN": .015, "legLengthN": .515, "hipToNeckLengthN": .27,
         "shoulderHalfWidthN": .055, "armLengthN": .33,
-        "armDropAngleDeg": 55, "kneeFraction": .50,
+        "armDropAngleDeg": 55, "kneeFraction": .40,
         "elbowFraction": .50, "chestFraction": .50,
         "leftFoot": pytest.approx(result["first"]["controls"]["leftFoot"]["position"]),
         "rightFoot": pytest.approx(result["first"]["controls"]["rightFoot"]["position"]),
@@ -4364,7 +4364,7 @@ def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(module_p
     assert result["defaults"] == {
         "footLift": .015, "legLength": .515, "hipToNeckLength": .27,
         "shoulderHalfWidth": .055, "armLength": .33,
-        "armDropAngleDeg": 55, "kneeFraction": .50,
+        "armDropAngleDeg": 55, "kneeFraction": .40,
         "elbowFraction": .50, "chestFraction": .50,
     }
     assert rig["detectedLeftFoot"][1] == pytest.approx(0)
@@ -4374,9 +4374,11 @@ def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(module_p
     assert rig["leftHip"][0] == pytest.approx(rig["leftFoot"][0])
     assert rig["rightHip"][2] == pytest.approx(rig["rightFoot"][2])
     assert rig["leftKnee"] == pytest.approx([
-        (rig["leftHip"][index] + rig["leftFoot"][index]) / 2 for index in range(3)])
+        rig["leftHip"][index] + (rig["leftFoot"][index]
+        - rig["leftHip"][index]) * .40 for index in range(3)])
     assert rig["rightKnee"] == pytest.approx([
-        (rig["rightHip"][index] + rig["rightFoot"][index]) / 2 for index in range(3)])
+        rig["rightHip"][index] + (rig["rightFoot"][index]
+        - rig["rightHip"][index]) * .40 for index in range(3)])
     assert rig["pelvis"] == pytest.approx([
         (rig["leftHip"][index] + rig["rightHip"][index]) / 2 for index in range(3)])
     assert rig["neck"][1] == pytest.approx(1.6)
@@ -4892,6 +4894,124 @@ def test_humanoid_control_ik_solves_virtual_two_bone_limb(module_page):
     assert result["reached"]
     assert result["residual"] < 1e-5
     assert result["distance"] < 1e-5
+
+
+def test_humanoid_ik_pose_merge_accumulates_limb_solutions(module_page):
+    result = module_page.evaluate("""async () => {
+      const {mergeHumanoidLimbPose, solveHumanoidControlIk} = await import(
+        './js/mesh/humanoid-rig-ik.js');
+      const controlRig = {
+        frame: {forward: [0, 0, 1], right: [1, 0, 0]},
+        controls: {
+          leftShoulder: {position: [-.2, 1.3, 0]},
+          leftElbow: {position: [-.5, 1.1, 0]},
+          leftHand: {position: [-.8, 1, 0]},
+          rightShoulder: {position: [.2, 1.3, 0]},
+          rightElbow: {position: [.5, 1.1, 0]},
+          rightHand: {position: [.8, 1, 0]},
+          leftHip: {position: [-.15, .55, 0]},
+          leftKnee: {position: [-.15, .3, 0]},
+          leftFoot: {position: [-.15, .05, 0]},
+          rightHip: {position: [.15, .55, 0]},
+          rightKnee: {position: [.15, .3, 0]},
+          rightFoot: {position: [.15, .05, 0]},
+        },
+      };
+      const leftArm = solveHumanoidControlIk({controlRig, role: 'left_arm',
+        target: [-.55, 1, 0]});
+      const afterLeftArm = mergeHumanoidLimbPose({}, leftArm.positions,
+        leftArm.keys);
+      const leftLeg = solveHumanoidControlIk({controlRig,
+        posedControls: afterLeftArm, role: 'left_leg', target: [-.05, .2, 0]});
+      const afterLeftLeg = mergeHumanoidLimbPose(afterLeftArm, leftLeg.positions,
+        leftLeg.keys);
+      const rightArm = solveHumanoidControlIk({controlRig,
+        posedControls: afterLeftLeg, role: 'right_arm', target: [.55, 1, 0]});
+      const finalPose = mergeHumanoidLimbPose(afterLeftLeg, rightArm.positions,
+        rightArm.keys);
+      const firstLeg = solveHumanoidControlIk({controlRig, role: 'left_leg',
+        target: [-.05, .2, 0]});
+      const legFirstPose = mergeHumanoidLimbPose({}, firstLeg.positions,
+        firstLeg.keys);
+      const secondArm = solveHumanoidControlIk({controlRig,
+        posedControls: legFirstPose, role: 'left_arm', target: [-.55, 1, 0]});
+      const reversePose = mergeHumanoidLimbPose(legFirstPose,
+        secondArm.positions, secondArm.keys);
+      return {
+        leftElbow: finalPose.leftElbow,
+        leftHand: finalPose.leftHand,
+        leftKnee: finalPose.leftKnee,
+        leftFoot: finalPose.leftFoot,
+        rightElbow: finalPose.rightElbow,
+        rightHand: finalPose.rightHand,
+        reverseLeftHand: reversePose.leftHand,
+        reverseLeftFoot: reversePose.leftFoot,
+      };
+    }""")
+    assert result["leftElbow"] != pytest.approx([-.5, 1.1, 0])
+    assert result["leftHand"] == pytest.approx([-.55, 1, 0], abs=1e-5)
+    assert result["leftKnee"] != pytest.approx([-.15, .3, 0])
+    assert result["leftFoot"] == pytest.approx([-.05, .2, 0], abs=1e-5)
+    assert result["rightElbow"] != pytest.approx([.5, 1.1, 0])
+    assert result["rightHand"] == pytest.approx([.55, 1, 0], abs=1e-5)
+    assert result["reverseLeftHand"] == pytest.approx([-.55, 1, 0], abs=1e-5)
+    assert result["reverseLeftFoot"] == pytest.approx([-.05, .2, 0], abs=1e-5)
+
+
+def test_humanoid_binding_uses_semantic_domains_and_bounded_terminals(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const bindingModule = await import('./js/mesh/humanoid-rig-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .55, 0],
+        leftShoulder: [-.1, 1.35, 0], leftElbow: [-.35, 1.18, 0],
+        leftHand: [-.58, 1.08, 0], rightShoulder: [.1, 1.35, 0],
+        rightElbow: [.35, 1.18, 0], rightHand: [.58, 1.08, 0],
+        leftHip: [-.1, .55, 0], leftKnee: [-.1, .3, 0],
+        leftFoot: [-.1, .05, 0], rightHip: [.1, .55, 0],
+        rightKnee: [.1, .3, 0], rightFoot: [.1, .05, 0],
+      };
+      const beyondHand = [-.69, 1.04, 0];
+      const positions = [
+        controls.chest, beyondHand, [0, 1.58, 0], [0, 1.63, 0],
+        [0, 1.35, .01],
+      ];
+      const joints = positions.map((restPivot, jointId) => ({jointId,
+        restPivot, restCenter: restPivot, restFrame: [0, 0, 0, 1]}));
+      const parentById = {0: null, 1: null, 2: null, 3: 2, 4: null};
+      const childrenById = {0: [], 1: [], 2: [3], 3: [], 4: []};
+      const modelRig = {
+        joints,
+        jointPivotByJointId: new Map(joints.map(joint =>
+          [joint.jointId, joint.restPivot])),
+        restFrameByJointId: new Map(joints.map(joint =>
+          [joint.jointId, new THREE.Quaternion()])),
+        components: [{componentId: 0, rootId: 0, nodeIds: joints.map(joint =>
+          joint.jointId), parentById, childrenById}],
+        componentByJointId: new Map(joints.map(joint => [joint.jointId, 0])),
+      };
+      const controlRig = {frame: {height: 1.5, up: [0, 1, 0],
+        forward: [0, 0, 1], right: [1, 0, 0]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const binding = bindingModule.buildHumanoidRigBinding({controlRig, modelRig});
+      const diagnostic = jointId => bindingModule.getHumanoidJointBindingDiagnostics(
+        binding, jointId);
+      return {
+        terminal: binding.jointBindings.get(1)?.driverId,
+        terminalRaw: binding.jointBindings.get(1)?.rawProjection,
+        terminalClamped: binding.jointBindings.get(1)?.projection,
+        head: diagnostic(2), child: diagnostic(3), neighbor: diagnostic(4),
+      };
+    }""")
+    assert result["terminal"] == "left_lower_arm"
+    assert result["terminalRaw"] > 1
+    assert result["terminalClamped"] == pytest.approx(1)
+    assert result["head"]["bindingType"] == "secondary"
+    assert result["head"]["driverId"] == "torso"
+    assert result["head"]["secondaryRootId"] == 2
+    assert result["head"]["secondarySubtreeSize"] == 2
+    assert result["neighbor"]["driverId"] not in {"left_upper_arm", "left_lower_arm"}
 
 
 def test_driver_translation_counts_as_active_pose_joint(module_page):
