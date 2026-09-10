@@ -183,8 +183,6 @@ function humanoidConfidenceColor(role, confidence, source) {
 }
 
 const CONTROL_KEYS_FOR_OVERLAY = Object.freeze([
-  {key: 'neck', role: 'torso'}, {key: 'chest', role: 'torso'},
-  {key: 'pelvis', role: 'torso'},
   {key: 'leftShoulder', role: 'left_arm'},
   {key: 'leftElbow', role: 'left_arm'}, {key: 'leftHand', role: 'left_arm'},
   {key: 'rightShoulder', role: 'right_arm'},
@@ -439,15 +437,9 @@ export function createRigOverlayController({
     const controlPoint = key => controls[key]?.position || controls[key]
       || rig?.diagnostics?.templatePoints?.[key] || null;
     const controlMeta = key => controls[key] || {};
-    const roleConfidence = role => rig?.confidenceByRegion?.[role === 'left_arm'
-      ? 'leftArm' : role === 'right_arm' ? 'rightArm'
-        : role === 'left_leg' ? 'leftLeg' : role === 'right_leg' ? 'rightLeg' : 'torso']
+    const roleConfidence = role => rig?.confidenceByRegion?.[role]
       || rig?.confidence || 'low';
     const links = [
-      ['leftShoulder', 'neck', 'torso'],
-      ['neck', 'rightShoulder', 'torso'],
-      ['neck', 'chest', 'torso'],
-      ['chest', 'pelvis', 'torso'],
       ['leftShoulder', 'leftElbow', 'left_arm'],
       ['leftElbow', 'leftHand', 'left_arm'],
       ['rightShoulder', 'rightElbow', 'right_arm'],
@@ -466,10 +458,9 @@ export function createRigOverlayController({
       const confidence = [firstMeta.confidence, secondMeta.confidence]
         .includes('low') ? 'low' : [firstMeta.confidence, secondMeta.confidence]
           .includes('medium') ? 'medium' : roleConfidence(role);
-      const color = role === 'torso' ? [.9, .9, .9]
-        : humanoidConfidenceColor(role, confidence,
+      const color = humanoidConfidenceColor(role, confidence,
           firstMeta.source === 'fallback' || secondMeta.source === 'fallback'
-            ? 'fallback' : 'geometry');
+            ? 'fallback' : 'semantic');
       linePositions.push(...vector(first).toArray(), ...vector(second).toArray());
       lineColors.push(...color, ...color);
       humanoidLinePairs.push([firstKey, secondKey]);
@@ -479,8 +470,8 @@ export function createRigOverlayController({
       if (!point) return;
       pointPositions.push(...vector(point).toArray());
       const meta = controlMeta(key);
-      pointColors.push(...(role === 'torso' ? [.95, .95, .95]
-        : humanoidConfidenceColor(role, meta.confidence || roleConfidence(role), meta.source)));
+      pointColors.push(...humanoidConfidenceColor(
+        role, meta.confidence || roleConfidence(role), meta.source));
       humanoidLandmarks.push({key, role});
     });
     setGeometry(humanoidLines, linePositions, lineColors);
@@ -493,8 +484,8 @@ export function createRigOverlayController({
   }
 
   function updateHumanoidPosedOverlay(source = currentSource) {
-    // Virtual controls are fitted from rest geometry and intentionally do not
-    // follow ModelJoint pose or Physics events.
+    // Semantic controls are rest-frame landmarks; ModelJoint pose remains in
+    // the regular inferred-rig overlay and is not duplicated here.
     void source;
   }
 

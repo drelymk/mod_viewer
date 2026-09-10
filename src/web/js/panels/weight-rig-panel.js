@@ -14,7 +14,7 @@ import {
   setRigActiveLimbRole,
   setRigLimbOverride, beginRigJointPicking, cancelRigJointPicking,
   clearRigLimbMapping, flipRigLimbBend, setRigIkEnabled,
-  fitHumanoidControlRig,
+  autoDetectHumanoidLimbs,
   setRigJointRoot,
   setRigRotationSnapDegrees, setWeightPickerViewMode,
   applyRigPosePresetById,
@@ -417,11 +417,11 @@ function buildRigSection(parent) {
   const autoDetect = document.createElement('button');
   autoDetect.type = 'button';
   autoDetect.className = 'ui-button rig-auto-detect-limbs';
-  autoDetect.textContent = 'Fit humanoid control rig';
+  autoDetect.textContent = 'Auto-detect humanoid limbs';
   autoDetect.addEventListener('click', () => {
     autoDetect.disabled = true;
-    void Promise.resolve().then(() => fitHumanoidControlRig())
-      .catch(error => ({reason: error?.message || 'fitting_failed'}))
+    void Promise.resolve().then(() => autoDetectHumanoidLimbs())
+      .catch(error => ({reason: error?.message || 'detection_failed'}))
       .then(result => {
         syncRigOptions(latestRigState || getModelRigState());
       });

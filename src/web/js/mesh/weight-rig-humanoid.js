@@ -1,6 +1,5 @@
-/* Legacy ModelJoint helpers used by manual limb mapping only.
- * The proportional control-rig experiment must not call the suggestion API
- * below. */
+/* Position-first primary humanoid detection over the registered ModelJoint
+ * graph. Manual mapping and automatic detection share these semantic helpers. */
 
 import * as THREE from 'three';
 import {
@@ -918,7 +917,7 @@ function buildLimbHypotheses({rig, frame, scaffold, role, samples, pools,
       item.geometryScore, frame))};
 }
 
-function boundedPool(entries, isRequired, limit = 16) {
+function boundedPool(entries, isRequired, limit = 12) {
   const selected = entries.slice(0, Math.min(10, limit));
   for (const item of entries.filter(isRequired)) {
     if (selected.some(selectedItem => selectedItem.sample.jointId

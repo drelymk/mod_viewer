@@ -1167,7 +1167,6 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
             {jointA: 2, jointB: 3, parentId: 2, childId: 3},
           ],
           humanoidControlRig: {confidence: 'high', controls: Object.fromEntries([
-            ['chest', [0, 2, 0]], ['pelvis', [0, 1, 0]],
             ['leftShoulder', [-.2, 1.8, 0]], ['leftElbow', [-.5, 1.6, 0]],
             ['leftHand', [-.9, 1.5, 0]], ['rightShoulder', [.2, 1.8, 0]],
             ['rightElbow', [.5, 1.6, 0]], ['rightHand', [.9, 1.5, 0]],
@@ -1207,8 +1206,8 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert result["initial"]["edgeCount"] == 2
     assert result["initial"]["jointCount"] == 3
     assert result["initial"]["humanoidOverlayVisible"]
-    assert result["initial"]["humanoidSegmentCount"] == 9
-    assert result["initial"]["humanoidLandmarkCount"] == 14
+    assert result["initial"]["humanoidSegmentCount"] == 8
+    assert result["initial"]["humanoidLandmarkCount"] == 12
     assert result["initial"]["rebuildCount"] == 1
     assert result["selectedRoot"]["selectedJointId"] == 1
     assert result["selectedRoot"]["rebuildCount"] == 1

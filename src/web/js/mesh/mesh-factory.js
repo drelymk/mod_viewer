@@ -512,8 +512,8 @@ export function buildMesh(name, data, materialProfile = null) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.layers.enable(CHARACTER_AO_LAYER);
   mesh.userData.basePositions = new Float32Array(geo.attributes.position.array);
-  // The humanoid control rig is fitted from the authoritative rest shape,
-  // never from a posed or Physics-deformed position attribute.
+  // Keep immutable rest positions for geometry diagnostics; the production
+  // humanoid backbone is selected from ModelJoint rest data.
   mesh.userData.humanoidRestPositions = new Float32Array(
     mesh.userData.basePositions);
   mesh.userData.baseNormals = data.normal

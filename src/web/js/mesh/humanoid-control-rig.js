@@ -1,4 +1,5 @@
-// Geometry-assisted inputs plus a deterministic proportional humanoid rig.
+// Standalone proportional geometry scaffold retained for compatibility tests.
+// Production humanoid detection uses the position-first ModelJoint detector.
 //
 // Geometry is used only for orientation, model height, Foot side/height
 // anchors, and one central character depth plane. All anatomical proportions

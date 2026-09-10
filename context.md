@@ -323,21 +323,20 @@ of documentation, comments and tests; use portable fixtures instead.
   Speculative solves use private transforms and one target update commits all
   changed local quaternions through one batch manual-pose transaction. IK never
   owns a skeleton, deformation path, IK Physics state, or persisted target.
-- Automatic humanoid anatomy is a viewer-owned `HumanoidControlRig` fitted from
-  the registered meshes' post-shape, pre-pose rest positions. It does not read
-  ModelJoint pivots, topology, inferred forests, IK, or Physics, and it never
-  writes limb mappings back through the manual resolver. Asset-fill meshes are
-  excluded. It normalizes semantic up/right/forward coordinates by model
-  height, keeps Foot side/height anchors, and measures one common depth plane
-  from the occupied front/back extent of a thin normalized bottom Foot band.
-  The left and right sole centers are averaged independently of the existing
-  Foot side/height fitting; torso, clothing, hair, and Foot-upper geometry
-  outside that band do not affect the depth measurement. Both Feet and every
-  proportional control share that plane. Controls are Chest, Pelvis,
-  Shoulder/Elbow/Hand, and Hip/Knee/Foot on both sides; Knee and Elbow are
-  virtual midpoint controls. Diagnostics retain the detected Foot positions,
-  per-side bottom-band extents, depth support/spread, and explicit fallback.
-  A later phase may explicitly bind these semantic controls to authored bones.
+- Automatic humanoid anatomy is a viewer-owned position-first semantic
+  backbone built from the registered `ModelJoint` rest pivots, with influence
+  centers retained as separate evidence. It uses one model-wide semantic frame,
+  virtual chest and pelvis references, bounded landmark candidate pools, and
+  complete undirected ModelJoint paths to validate primary Shoulder/Elbow/Hand
+  and Hip/Knee/Foot roles. Bilateral and whole-body selection is atomic;
+  ambiguous or low-confidence pairs remain unavailable. Every joint not chosen
+  for those four primary limb pairs remains an ordinary `ModelJoint`; there are
+  no production accessory categories or special mesh classifications. Debug
+  snapshots expose candidate geometry/topology/support/body-relation scores,
+  selected paths, and generic secondary-branch reasons. Manual anchor and bend
+  overrides remain authoritative, while automatic persistence writes only
+  stable anchor signatures with the default bend sign. IK consumes the same
+  selected paths and never owns a separate skeleton or deformation model.
 - Joint selection is independent from pose state: Clear removes the selected
   ModelJoint through the state API, leaving
   manual pose, presets, Weight selection, Physics and overlay visibility
