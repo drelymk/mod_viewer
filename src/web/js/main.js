@@ -21,30 +21,15 @@ import { initLeftDock, setLeftDockTab } from './panels/left-dock.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-profile.js';
 import { requestRender } from './scene/render-scheduler.js';
 import {
-  disableModelPhysics, enableModelPhysics,
-  ensureModelRigLoaded, ensureModelWeightsLoaded,
-  getModelPhysicsState, getModelRigDebugState, getModelRigState,
-  getHumanoidJointBindingDiagnostic,
-  getModelWeightState, getRigJointPoseFrame,
-  clearRigJointSelection, finishRigJointPose, resetModelPhysicsMotion,
-  resetRigJoint,
-  resetRigPose,
-  selectRigJoint, setRigActiveLimbRole,
-  setRigLimbOverride, beginRigJointPicking, cancelRigJointPicking,
-  handleRigJointPicked, clearRigLimbMapping,
-  flipRigLimbBend, setRigIkEnabled,
+  getModelRigState,
+  getRigJointPoseFrame,
+  finishRigJointPose,
+  cancelRigJointPicking,
+  handleRigJointPicked,
   pickRigJointFromModelSurface,
-  setRigJointRotation, setRigJointRoot, solveRigIkTarget,
-  setHumanoidControlPositions,
-  getRigRotationSnapDegrees, setRigRotationSnapDegrees,
-  setRigPoseControlStatus, deleteRigPosePreset,
-  applyRigPosePresetById,
-  getRigPresetState, renameRigPosePreset, saveRigPosePreset,
-  beginWeightModelPicking, cancelWeightModelPicking, setModelWeightHeatmap,
-} from './mesh/weight-experiment.js';
-import {
-  getWeightPhysicsPerformanceStats, resetWeightPhysicsPerformanceStats,
-} from './mesh/weight-physics-performance.js';
+  setRigJointRotation, solveRigIkTarget,
+  setRigPoseControlStatus,
+} from './mesh/weight-rig-runtime.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
 import { initWeightRigPanel } from './panels/weight-rig-panel.js';
@@ -77,6 +62,9 @@ import {
   initEnvironmentControl, initToolPopovers, initToolbarOverflow,
 } from './ui/toolbar.js';
 import { initPanelCollapse } from './ui/panel-utils.js';
+// Initialize the Weight/Rig composition root. Product actions remain exposed
+// through the narrow runtime facade imported above.
+import './mesh/weight-rig-core.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -388,15 +376,6 @@ rendererReady.then(ready => {
       return changed;
     },
     getMaterialState,
-    getModelPhysicsState,
-    enableModelPhysics,
-    disableModelPhysics,
-    resetModelPhysicsMotion,
-    getModelWeightState,
-    getWeightPhysicsPerformanceStats,
-    resetWeightPhysicsPerformanceStats,
-    ensureModelWeightsLoaded,
-    setModelWeightHeatmap,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,
     setOutlineEnabled: value => {
@@ -411,39 +390,6 @@ rendererReady.then(ready => {
     getCurrentSource: () => viewerState.currentSource
       ? { ...viewerState.currentSource } : null,
   };
-  Object.defineProperties(window.modViewer, {
-    getModelRigState: {value: getModelRigState},
-    getModelRigDebugState: {value: getModelRigDebugState},
-    getHumanoidJointBindingDiagnostic: {value: getHumanoidJointBindingDiagnostic},
-    getRigJointPoseFrame: {value: getRigJointPoseFrame},
-    ensureModelRigLoaded: {value: ensureModelRigLoaded},
-    getRigRotationSnapDegrees: {value: getRigRotationSnapDegrees},
-    setRigRotationSnapDegrees: {value: setRigRotationSnapDegrees},
-    beginWeightModelPicking: {value: beginWeightModelPicking},
-    cancelWeightModelPicking: {value: cancelWeightModelPicking},
-    selectRigJoint: {value: selectRigJoint},
-    clearRigJointSelection: {value: clearRigJointSelection},
-    setRigJointRoot: {value: setRigJointRoot},
-    setRigActiveLimbRole: {value: setRigActiveLimbRole},
-    setRigLimbOverride: {value: setRigLimbOverride},
-    beginRigJointPicking: {value: beginRigJointPicking},
-    cancelRigJointPicking: {value: cancelRigJointPicking},
-    clearRigLimbMapping: {value: clearRigLimbMapping},
-    flipRigLimbBend: {value: flipRigLimbBend},
-    setRigIkEnabled: {value: setRigIkEnabled},
-    setRigJointRotation: {value: setRigJointRotation},
-    setHumanoidControlPositions: {value: setHumanoidControlPositions},
-    solveRigIkTarget: {value: solveRigIkTarget},
-    finishRigJointPose: {value: finishRigJointPose},
-    resetRigJoint: {value: resetRigJoint},
-    resetRigPose: {value: resetRigPose},
-    getRigPresetState: {value: getRigPresetState},
-    applyRigPosePresetById: {value: applyRigPosePresetById},
-    saveRigPosePreset: {value: saveRigPosePreset},
-    renameRigPosePreset: {value: renameRigPosePreset},
-    deleteRigPosePreset: {value: deleteRigPosePreset},
-  });
-
   void openStartupMod().then(apiReady => {
     if (!apiReady) {
       window.addEventListener(

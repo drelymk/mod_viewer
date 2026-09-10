@@ -1,9 +1,5 @@
 // Character-wide ownership for the opt-in secondary-motion simulation.
 
-import {
-  addWeightPhysicsPerformance, performanceNow,
-} from './weight-physics-performance.js';
-
 export const MODEL_PHYSICS_STEP = 1 / 120;
 export const MODEL_PHYSICS_MAX_FRAME_DELTA = 0.05;
 export const MODEL_PHYSICS_MAX_SUBSTEPS = 6;
@@ -188,7 +184,6 @@ export function createModelPhysicsSession({
   }
 
   function notify() {
-    addWeightPhysicsPerformance('physicsUiNotifyCount');
     onStateChanged?.(getState());
   }
 
@@ -510,17 +505,12 @@ export function createModelPhysicsSession({
     lastTimestamp = currentTimestamp;
     accumulator += elapsed;
     let steps = 0;
-    const stepStarted = performanceNow();
     while (accumulator >= MODEL_PHYSICS_STEP
         && steps < MODEL_PHYSICS_MAX_SUBSTEPS) {
       participants.forEach(participant =>
         participant.step?.(MODEL_PHYSICS_STEP, settings));
       accumulator -= MODEL_PHYSICS_STEP;
       steps += 1;
-    }
-    if (steps) {
-      addWeightPhysicsPerformance('physicsStepCount', steps);
-      addWeightPhysicsPerformance('physicsStepMs', performanceNow() - stepStarted);
     }
     if (steps === MODEL_PHYSICS_MAX_SUBSTEPS
         && accumulator >= MODEL_PHYSICS_STEP) {
@@ -552,7 +542,6 @@ export function createModelPhysicsSession({
       lastTimestamp = null;
       cancelScheduledFrame();
     }
-    addWeightPhysicsPerformance('physicsFrameCount');
   }
 
   return {

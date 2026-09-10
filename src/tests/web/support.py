@@ -663,6 +663,12 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
     page = context.new_page()
     page.goto(frontend_url)
     page.wait_for_function("window.modViewer !== undefined")
+    # Weight/Rig integration tests import their module directly. The app's
+    # public browser object intentionally contains no Weight/Rig internals.
+    page.evaluate("""async () => {
+      window.__testWeightRigRuntime = await import(
+        './js/mesh/weight-rig-runtime.js');
+    }""")
     return context, page
 
 

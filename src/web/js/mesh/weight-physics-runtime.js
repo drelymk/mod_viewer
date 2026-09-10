@@ -18,14 +18,11 @@ import {
   applyReferenceFrameLinearVelocityDelta,
   applyReferenceFrameTranslationDelta,
   applyPhysicsJointLimits, initializePhysicsState,
-  buildGravityAngularAccelerations, buildPhysicsConstraintDiagnostics,
+  buildGravityAngularAccelerations,
   buildPhysicsEquilibriumRotations, buildPhysicsJointLimits,
   buildPhysicsTargetRotations,
   isPhysicsSettled, resetPhysicsState, stepSpringPhysics,
 } from './weight-physics.js';
-import {
-  addWeightPhysicsPerformance, performanceNow,
-} from './weight-physics-performance.js';
 import {
   buildMaximumSpanningTree,
   candidateRelationshipEdges,
@@ -122,7 +119,6 @@ export function createWeightPhysicsRuntime({
     onFrame: ({visibleParticipants}) => {
       if (!visibleParticipants?.length) return;
       invalidateCharacterShadowMap({request: false});
-      addWeightPhysicsPerformance('dynamicShadowUpdateCount');
       requestRender();
     },
     onStateChanged: detail => {
@@ -268,7 +264,6 @@ export function createWeightPhysicsRuntime({
   }
 
   function buildComposedSourceTransforms(rig) {
-    const started = performanceNow();
     const modelSkinningRig = getModelSkinningRig();
     const baseTransforms = modelSkinningRig?.sourceTransformAliases
       ?.get(rig.sourceKey) || rig.skinRig?.modelTransformAliasByBoneId || null;
@@ -287,9 +282,6 @@ export function createWeightPhysicsRuntime({
     });
     rig.basePoseRevision = modelSkinningRig?.poseRevision ?? -1;
     rig.composedTransformsDirty = false;
-    addWeightPhysicsPerformance('composedTransformBuildCount');
-    addWeightPhysicsPerformance(
-      'composedTransformMs', performanceNow() - started);
     return rig.composedTransforms;
   }
 
@@ -321,7 +313,6 @@ export function createWeightPhysicsRuntime({
         request: false, invalidateShadow: false, skipHidden: false,
         composedTransforms: transforms, composedRotations: rig.composedRotations,
       }) || changed;
-      addWeightPhysicsPerformance('participatingPhysicsMeshCount');
     });
     return changed;
   }
@@ -437,33 +428,6 @@ function averageSelectedCenter(centerByBoneId, ids) {
     centers,
   };
 }
-
-  function getPhysicsConstraintDiagnostics(meshOrState) {
-    const meshState = states.get(meshOrState);
-    const state = meshState
-      ? sourcePhysicsRigs.get(meshState.skinningSourceKey) : meshOrState;
-    const settings = modelPhysicsSession.getSettings();
-    const enabled = !!settings.constraintsEnabled
-      && state?.physicsJointLimits instanceof Map;
-    const dynamic = buildPhysicsConstraintDiagnostics(
-      state?.physicsState, enabled ? state.physicsJointLimits : null,
-      enabled ? state.physicsConstraintDiagnostics : null);
-    return {
-      enabled,
-      maxComponentBend: Number(settings.maxBendDegrees) || 0,
-      limitedJointCount: dynamic.limitedJointCount,
-      atLimitCount: dynamic.atLimitCount,
-      maxUsage: dynamic.maxUsage,
-      components: dynamic.components.map(component => ({
-        componentId: component.componentId,
-        rootId: component.rootId,
-        maxDepth: component.maxDepth,
-        jointCount: component.jointCount,
-        localLimitDegrees: THREE.MathUtils.radToDeg(
-          component.localLimitRadians),
-      })),
-    };
-  }
 
   function physicsReferenceRadius(mesh, state) {
     const graphRadius = Number(state.influenceGraph?.boundingSphereRadius);
@@ -633,7 +597,6 @@ function averageSelectedCenter(centerByBoneId, ids) {
             maxDt: MODEL_PHYSICS_STEP,
           });
         rig.composedTransformsDirty = true;
-        addWeightPhysicsPerformance('sourcePhysicsStepCount');
       },
       updateSettled(settings) {
         if (!rig.physicsState || !rig.physicsForest) return;
@@ -691,8 +654,6 @@ function averageSelectedCenter(centerByBoneId, ids) {
     modelPhysicsSession,
     buildSelectedPhysicsForest,
     syncMeshPhysicsState,
-    gravityDirectionLocal,
-    getPhysicsConstraintDiagnostics,
     forEachRigMesh,
     refreshParticipantDerivedState,
     applySourceDeformation,

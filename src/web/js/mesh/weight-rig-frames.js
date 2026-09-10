@@ -245,6 +245,114 @@ export function buildInferredRigRestFrames(
   return result;
 }
 
+function modelJointPairKey(left, right) {
+  const a = Number(left);
+  const b = Number(right);
+  return `${Math.min(a, b)}:${Math.max(a, b)}`;
+}
+
+function finiteVectorArray(value) {
+  const values = value?.toArray ? value.toArray()
+    : Array.isArray(value) || ArrayBuffer.isView(value) ? [...value] : null;
+  return values?.length >= 3 && values.slice(0, 3).every(Number.isFinite)
+    ? values.slice(0, 3) : null;
+}
+
+function buildModelJointPivotByEdgeKey(rig) {
+  const pivots = new Map();
+  for (const edge of rig.edges || []) {
+    const jointA = Number(edge.jointA);
+    const jointB = Number(edge.jointB);
+    if (!Number.isInteger(jointA) || !Number.isInteger(jointB)
+        || jointA === jointB) continue;
+    const observations = (edge.sourceEdges || [])
+      .map(sourceEdge => ({
+        point: finiteVectorArray(sourceEdge.jointCenter),
+        weight: Number(sourceEdge.jointWeightTotal) || 0,
+      }))
+      .filter(observation => observation.point && observation.weight > 0);
+    let pivot = observations.length
+      ? observations.reduce((sum, observation) => {
+        const weight = observation.weight;
+        sum.weight += weight;
+        sum.point[0] += observation.point[0] * weight;
+        sum.point[1] += observation.point[1] * weight;
+        sum.point[2] += observation.point[2] * weight;
+        return sum;
+      }, {point: [0, 0, 0], weight: 0}) : null;
+    pivot = pivot?.weight > 0
+      ? pivot.point.map(value => value / pivot.weight)
+      : finiteVectorArray(edge.jointCenter);
+    if (!pivot) {
+      for (const component of rig.components || []) {
+        const parentOfA = component.parentById?.[jointA];
+        const parentOfB = component.parentById?.[jointB];
+        const childId = parentOfA !== null && parentOfA !== undefined
+          && Number(parentOfA) === jointB ? jointA
+          : parentOfB !== null && parentOfB !== undefined
+            && Number(parentOfB) === jointA ? jointB : null;
+        if (childId === null) continue;
+        pivot = finiteVectorArray(rig.jointPivotByJointId.get(childId)
+          || rig.joints[childId]?.restPivot);
+        if (pivot) break;
+      }
+    }
+    if (!pivot) {
+      pivot = finiteVectorArray(rig.joints[jointB]?.restPivot)
+        || finiteVectorArray(rig.joints[jointA]?.restPivot);
+    }
+    if (pivot) pivots.set(modelJointPairKey(jointA, jointB), pivot);
+  }
+  return pivots;
+}
+
+export function rebuildModelRestFrames(rig, forest) {
+  const edgePivots = rig.jointPivotByEdgeKey
+    || buildModelJointPivotByEdgeKey(rig);
+  rig.jointPivotByEdgeKey = edgePivots;
+  const pivots = new Map();
+  const rootIds = new Set((forest?.components || []).map(component =>
+    Number(component.rootId)).filter(Number.isInteger));
+  (forest?.components || []).forEach(component => {
+    Object.entries(component.parentById || {}).forEach(([childValue, parentValue]) => {
+      if (parentValue === null || parentValue === undefined) return;
+      const childId = Number(childValue);
+      const parentId = Number(parentValue);
+      if (!Number.isInteger(childId) || !Number.isInteger(parentId)) return;
+      const pivot = edgePivots.get(modelJointPairKey(childId, parentId));
+      if (pivot) pivots.set(childId, [...pivot]);
+    });
+  });
+  (rig.joints || []).forEach(joint => {
+    const jointId = Number(joint.jointId);
+    if (rootIds.has(jointId)) {
+      pivots.set(jointId, finiteVectorArray(joint.restCenter)
+        || [0, 0, 0]);
+      return;
+    }
+    if (!pivots.has(jointId)) {
+      pivots.set(jointId, finiteVectorArray(joint.restPivot)
+        || finiteVectorArray(joint.restCenter) || [0, 0, 0]);
+    }
+  });
+  rig.jointPivotByJointId = pivots;
+  const frames = buildInferredRigRestFrames(
+    forest, rig.centerByJointId, rig.jointPivotByJointId);
+  rig.restFrameByJointId = frames.frameByBoneId;
+  rig.restDirectionByJointId = frames.directionByBoneId;
+  rig.restFrameEvidenceByJointId = frames.evidenceByBoneId;
+  rig.restContinuationChildByJointId = frames.continuationChildByBoneId;
+  (rig.joints || []).forEach(joint => {
+    const jointId = Number(joint.jointId);
+    const pivot = rig.jointPivotByJointId.get(jointId);
+    const frame = frames.frameByBoneId.get(jointId);
+    const direction = frames.directionByBoneId.get(jointId);
+    if (pivot) joint.restPivot = [...pivot];
+    if (frame) joint.restFrame = frame.toArray();
+    if (direction) joint.restDirection = direction.toArray();
+  });
+}
+
 function quaternionFrom(value) {
   if (value?.isQuaternion) return value.clone().normalize();
   const values = Array.isArray(value) || ArrayBuffer.isView(value)

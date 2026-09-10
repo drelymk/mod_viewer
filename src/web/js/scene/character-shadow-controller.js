@@ -2,7 +2,6 @@
 
 import * as THREE from 'three/webgpu';
 import { computeModelBounds } from './model-bounds.js';
-import { addWeightPhysicsPerformance } from '../mesh/weight-physics-performance.js';
 
 const FIT_MARGIN = 0.12;
 const MAX_GROUND_REACH = 2.5;
@@ -131,7 +130,6 @@ export function createCharacterShadowController({ renderer, scene, light }) {
       ground.visible = false;
       shadowFitDirty = false;
       fitCount += 1;
-      addWeightPhysicsPerformance('shadowFitCount');
       return false;
     }
 
@@ -188,7 +186,6 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     ground.visible = light.intensity > 0;
     shadowFitDirty = false;
     fitCount += 1;
-    addWeightPhysicsPerformance('shadowFitCount');
     return true;
   }
 

@@ -18,7 +18,7 @@ import {
   applyRigPosePresetById,
   deleteRigPosePreset, renameRigPosePreset,
   saveRigPosePreset,
-} from '../mesh/weight-experiment.js';
+} from '../mesh/weight-rig-runtime.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 
 let panel = null;

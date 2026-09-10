@@ -140,7 +140,6 @@ function projectionForNode(node, curve) {
       .distanceTo(curve.points[curve.points.length - 1]),
   };
 }
-
 function normalizedNodeMetadata(graph) {
   return new Map((graph?.nodes || []).map(node => {
     const boneId = nodeId(node);
@@ -174,7 +173,6 @@ function projectionMetadata(node, curve, height) {
     corridor: corridorFor(node, projection, curve, height),
   };
 }
-
 function edgeKey(left, right) {
   const a = Number(left);
   const b = Number(right);
@@ -575,31 +573,5 @@ export function buildHumanoidHeatBinding({controlRig, sourceRigs = [], modelRig}
       conflictCount: conflicts.length,
       runtimeMs: Math.max(0, runtimeMs),
     },
-  };
-}
-
-function serializeAssignment(value) {
-  if (!value) return null;
-  return {...value};
-}
-
-/** Return a detached diagnostic snapshot for model/debug state. */
-export function serializeHumanoidHeatBinding(binding) {
-  if (!binding) return null;
-  return {
-    version: Number(binding.version) || 1,
-    sourceResults: {...(binding.sourceResults || {})},
-    sourceBoneAssignments: Object.fromEntries([...(
-      binding.sourceBoneAssignments instanceof Map
-        ? binding.sourceBoneAssignments.entries() : [])]
-      .map(([key, value]) => [key, serializeAssignment(value)])),
-    modelJointAssignments: Object.fromEntries([...(
-      binding.modelJointAssignments instanceof Map
-        ? binding.modelJointAssignments.entries() : [])]
-      .map(([key, value]) => [key, serializeAssignment(value)])),
-    conflicts: (binding.conflicts || []).map(conflict => ({...conflict,
-      limbRoles: [...(conflict.limbRoles || [])],
-      sourceBoneKeys: [...(conflict.sourceBoneKeys || [])]})),
-    diagnostics: {...(binding.diagnostics || {})},
   };
 }
