@@ -1163,7 +1163,7 @@ def test_model_rest_frames_use_oriented_edge_pivots(
           const THREE = await import('three');
           const deformation = await import('./js/mesh/weight-deformation.js');
           const {rebuildModelRestFrames} = await import(
-            './js/mesh/weight-rig-core.js');
+            './js/mesh/weight-rig-frames.js');
           const joints = [0, 1, 2].map((jointId, index) => ({
             jointId,
             restCenter: [index * 5, 0, 0],

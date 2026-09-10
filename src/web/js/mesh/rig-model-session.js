@@ -407,7 +407,6 @@ function createSession({state, modelWeightState, getGeneration,
       requestRender();
       return true;
     },
-    getRotationSnapDegrees: () => state.rotationSnapDegrees,
     setRotationSnapDegrees,
   };
 }
@@ -439,9 +438,6 @@ export function modelJointFromSkinningSample(sampled) {
 }
 export function selectRigJoint(jointId) { return session().selectJoint(jointId); }
 export function clearRigJointSelection() { return session().clearJointSelection(); }
-export function getRigRotationSnapDegrees() {
-  return session().getRotationSnapDegrees();
-}
 export function setRigRotationSnapDegrees(value) {
   return session().setRotationSnapDegrees(value);
 }

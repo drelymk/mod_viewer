@@ -53,27 +53,7 @@ function createSession({modelRigState, getModelRig, getPrimaryLimb,
     return {...solved, applied, controlRig: 'humanoid'};
   }
 
-  function setControlPositions(positionsByKey, options = {}) {
-    const rig = getModelRig()?.humanoidControlRig;
-    if (!rig?.accepted || !positionsByKey
-        || typeof positionsByKey !== 'object') return false;
-    const nextPose = {...(modelRigState.humanoidPose || {})};
-    for (const [key, value] of Object.entries(positionsByKey)) {
-      if (!rig.controls?.[key]) return false;
-      const values = value?.position ?? value;
-      if (!Array.isArray(values) || values.length < 3
-          || values.slice(0, 3).some(item => !Number.isFinite(Number(item)))) {
-        return false;
-      }
-      nextPose[key] = values.slice(0, 3).map(Number);
-    }
-    modelRigState.humanoidPose = nextPose;
-    applyPose({dragging: options?.dragging === true});
-    notifyChanged();
-    return true;
-  }
-
-  return {setActiveLimbRole, setIkEnabled, solveTarget, setControlPositions};
+  return {setActiveLimbRole, setIkEnabled, solveTarget};
 }
 
 export function initializeHumanoidPoseRuntime(options) {
@@ -91,7 +71,4 @@ export function setRigActiveLimbRole(role) {
 export function setRigIkEnabled(enabled) { return session().setIkEnabled(enabled); }
 export function solveRigIkTarget(target, options = {}) {
   return session().solveTarget(target, options);
-}
-export function setHumanoidControlPositions(positionsByKey, options = {}) {
-  return session().setControlPositions(positionsByKey, options);
 }

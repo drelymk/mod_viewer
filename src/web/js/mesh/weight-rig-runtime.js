@@ -21,7 +21,6 @@ export {
   clearRigJointSelection,
   ensureModelRigLoaded,
   getModelRigState,
-  getRigRotationSnapDegrees,
   handleRigJointPicked,
   pickRigJointFromModelSurface,
   selectRigJoint,
