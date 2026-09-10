@@ -28,6 +28,9 @@ const CENTER_EXCLUSION_RATIO = 0.025;
 const SEED_RADIUS_RATIO = 0.09;
 const SEED_MIN_WEIGHT = 0.05;
 const SEED_RELATIVE_WEIGHT = 0.12;
+const SEED_BACKTRACK_TOLERANCE = 0.08;
+const SEED_LATERAL_TOLERANCE_RATIO = 0.02;
+const SEED_MAX_PROGRESS = 0.45;
 const BACKTRACK_TOLERANCE = 0.08;
 const BRANCH_PROGRESS_TOLERANCE = 0.22;
 const BRANCH_LATERAL_TOLERANCE_RATIO = 0.035;
@@ -258,15 +261,33 @@ function seedWeightsFromSurface(sourceRig, anchor, height, nodes) {
   return totals;
 }
 
+function rawAnchorProjection(pointValue, curve) {
+  const start = curve.points[0];
+  const end = curve.points[1];
+  const direction = end.clone().sub(start);
+  const lengthSquared = direction.lengthSq();
+  return lengthSquared > EPSILON
+    ? vector(pointValue).clone().sub(start).dot(direction) / lengthSquared
+    : 0;
+}
+
 function seedCandidates(sourceRig, nodes, metadata, curve, height) {
   const weights = seedWeightsFromSurface(sourceRig, curve.points[0], height, nodes);
   const maximum = [...weights.values()].reduce((max, value) =>
     Math.max(max, value), 0);
   const minimum = Math.max(SEED_MIN_WEIGHT, maximum * SEED_RELATIVE_WEIGHT);
+  const anchorOutward = lateralDistance({weightedCenter: curve.points[0]}, curve);
   return [...weights.entries()].filter(([, weight]) => weight >= minimum)
     .map(([boneId, weight]) => nodes.get(boneId))
-    .filter(node => metadata.get(node.boneId)?.corridor
-      && metadata.get(node.boneId).progress <= .3)
+    .filter(node => {
+      const projection = metadata.get(node.boneId);
+      return projection?.corridor
+        && projection.progress <= SEED_MAX_PROGRESS
+        && rawAnchorProjection(node.weightedCenter, curve)
+          >= -SEED_BACKTRACK_TOLERANCE
+        && lateralDistance(node, curve)
+          >= anchorOutward - height * SEED_LATERAL_TOLERANCE_RATIO;
+    })
     .sort((left, right) => {
       const a = metadata.get(left.boneId);
       const b = metadata.get(right.boneId);

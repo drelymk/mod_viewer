@@ -5231,6 +5231,63 @@ def test_humanoid_heat_binding_rejects_close_centers_without_edges(module_page):
     assert result == {"sourceAssignments": 0, "modelAssignments": 0}
 
 
+def test_humanoid_heat_binding_rejects_head_chest_seed_contamination(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const centers = {
+        1: [0, 1.62, 0], 2: [0, 1.5, 0], 3: [0, 1.4, 0],
+        4: [-.2, 1.3, 0], 5: [-.5, 1, 0], 6: [-.7, .9, 0],
+        7: [-.85, .8, 0],
+      };
+      const edge = (boneA, boneB, jointCenter) => ({boneA, boneB,
+        productOverlap: 1, minOverlap: .4, containment: .2, jaccard: .1,
+        treeEdgeScore: .2, jointCenter});
+      const relationships = [
+        edge(1, 2, [0, 1.56, 0]), edge(2, 3, [0, 1.45, 0]),
+        edge(3, 4, [-.1, 1.35, 0]), edge(4, 5, [-.35, 1.15, 0]),
+        edge(5, 6, [-.6, .95, 0]), edge(6, 7, [-.78, .85, 0]),
+      ];
+      const sourceRig = {sourceKey: 'beidou', influenceGraph: {
+        evidenceMode: 'surface',
+        nodes: Object.entries(centers).map(([boneId, weightedCenter]) => ({
+          boneId: Number(boneId), weightedCenter, weightedRadius: .01,
+          totalWeight: 1, affectedMeasure: 1,
+        })), relationships,
+      }, vertexEvidence: [{
+        positions: controls.leftShoulder,
+        indices: [1, 2, 3, 4, 5], weights: [1, 1, 1, 1, .8],
+        influenceCount: 5,
+      }]};
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig], modelRig: {
+          sourceBoneToModelJointId: new Map(),
+        }});
+      const arm = binding.sourceResults.beidou.left_arm;
+      return {
+        seeds: arm.seedBoneIds,
+        path: arm.mainPathBoneIds,
+        assignments: arm.assignments.map(item => item.boneId),
+      };
+    }""")
+    assert result["seeds"] == [4]
+    assert result["path"] == [4, 5, 6, 7]
+    assert not set(result["assignments"]) & {1, 2, 3}
+
+
 def test_humanoid_heat_driver_transforms_are_source_local(module_page):
     result = module_page.evaluate("""async () => {
       const {buildHumanoidSourceBoneDriverTransforms} = await import(
