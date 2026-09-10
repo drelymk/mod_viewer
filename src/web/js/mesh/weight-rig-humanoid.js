@@ -1647,6 +1647,17 @@ function chooseWholeBody(rig, frame, scaffold, armChoice, legChoice) {
   return {best: combinations[0] || null, combinations};
 }
 
+function selectPairChoice(choice, pair) {
+  if (!pair) return {...choice, pair: null, margin: 0};
+  const pairs = [pair, ...choice.pairs.filter(candidate => candidate !== pair)];
+  return {
+    ...choice,
+    pair,
+    pairs,
+    margin: pairs.length > 1 ? pair.pairScore - pairs[1].pairScore : 1,
+  };
+}
+
 /** Suggest bilateral arm and leg mappings from ModelJoint geometry. */
 export function suggestHumanoidLimbMappings({
   rig, characterForward, axes, debug = false,
@@ -1686,9 +1697,9 @@ export function suggestHumanoidLimbMappings({
   const wholeBody = armChoice.pairs.length && legChoice.pairs.length
     ? chooseWholeBody(rig, frame, scaffold, armChoice, legChoice) : {best: null, combinations: []};
   const selectedArmChoice = wholeBody.best
-    ? {...armChoice, pair: wholeBody.best.armPair} : armChoice;
+    ? selectPairChoice(armChoice, wholeBody.best.armPair) : armChoice;
   const selectedLegChoice = wholeBody.best
-    ? {...legChoice, pair: wholeBody.best.legPair} : legChoice;
+    ? selectPairChoice(legChoice, wholeBody.best.legPair) : legChoice;
   let roles = {...makePairSuggestions(selectedArmChoice, ARM_ROLES),
     ...makePairSuggestions(selectedLegChoice, LEG_ROLES)};
   const arms = [roles.left_arm, roles.right_arm];

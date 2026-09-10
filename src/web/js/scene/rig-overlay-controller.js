@@ -118,12 +118,18 @@ function canFkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
   return !!component && component.rootId !== boneId;
 }
 
+function humanoidRigAvailable(source) {
+  const rig = source?.humanoidControlRig;
+  return !!rig && rig.available !== false
+    && !(rig.source === 'geometry' && rig.accepted === false);
+}
+
 function canIkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
   if (snapshot?.jointPickIntent || !source) return false;
   const ik = snapshot?.ik;
   if (Array.isArray(ik?.controlKeys) && ik.controlKeys.length === 3) {
     return !!ik?.enabled && !!ik.available
-      && !!source.humanoidControlRig;
+      && humanoidRigAvailable(source);
   }
   if (boneId === null) return false;
   return !!ik?.enabled && !!ik.available
@@ -133,7 +139,7 @@ function canIkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
 function isPrimaryHumanoidIk(snapshot, source) {
   return Array.isArray(snapshot?.ik?.controlKeys)
     && snapshot.ik.controlKeys.length === 3
-    && !!source?.humanoidControlRig;
+    && humanoidRigAvailable(source);
 }
 
 function manipulationMode(snapshot, source, boneId = selectedBoneFor(snapshot)) {
@@ -294,29 +300,13 @@ export function createRigOverlayController({
     new THREE.BufferGeometry(), humanoidLineMaterial);
   const humanoidPoints = new THREE.Points(
     new THREE.BufferGeometry(), humanoidPointMaterial);
-  const humanoidDiagnosticLineMaterial = new THREE.LineBasicMaterial({
-    vertexColors: true, depthTest: false, depthWrite: false,
-  });
-  const humanoidDiagnosticPointMaterial = new THREE.PointsMaterial({
-    size: 0.032, sizeAttenuation: false, vertexColors: true,
-    depthTest: false, depthWrite: false,
-  });
-  const humanoidDiagnosticLines = new THREE.LineSegments(
-    new THREE.BufferGeometry(), humanoidDiagnosticLineMaterial);
-  const humanoidDiagnosticPoints = new THREE.Points(
-    new THREE.BufferGeometry(), humanoidDiagnosticPointMaterial);
   humanoidLines.renderOrder = 13;
   humanoidPoints.renderOrder = 14;
   humanoidLines.frustumCulled = false;
   humanoidPoints.frustumCulled = false;
-  humanoidDiagnosticLines.frustumCulled = false;
-  humanoidDiagnosticPoints.frustumCulled = false;
   humanoidLines.raycast = () => {};
   humanoidPoints.raycast = () => {};
-  humanoidDiagnosticLines.raycast = () => {};
-  humanoidDiagnosticPoints.raycast = () => {};
-  humanoidGroup.add(humanoidLines, humanoidPoints,
-    humanoidDiagnosticLines, humanoidDiagnosticPoints);
+  humanoidGroup.add(humanoidLines, humanoidPoints);
   group.add(humanoidGroup);
 
   const proxy = new THREE.Object3D();
@@ -357,7 +347,6 @@ export function createRigOverlayController({
   let jointChildBoneIds = [];
   let humanoidLinePairs = [];
   let humanoidLandmarks = [];
-  let humanoidDiagnosticSegmentCount = 0;
   let rebuildCount = 0;
   let modelFrameUpdateCount = 0;
   let posedOverlayUpdateCount = 0;
@@ -440,21 +429,34 @@ export function createRigOverlayController({
     return source?.humanoidControlRig || null;
   }
 
+  function humanoidOverlayKey(source) {
+    const rig = humanoidControlRigFor(source);
+    if (!rig) return '';
+    const structureRevision = rig.structureRevision
+      ?? rig.diagnostics?.structureRevision
+      ?? source?.structureRevision ?? '';
+    const orientationRevision = rig.orientationRevision
+      ?? rig.modelOrientationRevision
+      ?? rig.diagnostics?.modelOrientationRevision
+      ?? source?.humanoidOrientationRevision ?? 0;
+    return `${source?.sourceKey ?? source?.key ?? ''}:${structureRevision}:${orientationRevision}`;
+  }
+
+  function updateHumanoidVisibility() {
+    humanoidGroup.visible = currentSnapshot?.ik?.enabled === true
+      && humanoidRigAvailable(currentSource)
+      && humanoidLinePairs.length > 0;
+  }
+
   function rebuildHumanoidOverlay(source = currentSource) {
     humanoidLinePairs = [];
     humanoidLandmarks = [];
-    humanoidDiagnosticSegmentCount = 0;
     const linePositions = [];
     const lineColors = [];
     const pointPositions = [];
     const pointColors = [];
-    const diagnosticLinePositions = [];
-    const diagnosticLineColors = [];
-    const diagnosticPointPositions = [];
-    const diagnosticPointColors = [];
     const rig = humanoidControlRigFor(source);
-    const rigAvailable = rig?.available !== false
-      && !(rig?.source === 'geometry' && rig.accepted === false);
+    const rigAvailable = humanoidRigAvailable(source);
     const controls = rigAvailable ? (rig?.controls || {}) : {};
     const controlPoint = key => controls[key]?.position || controls[key]
       || rig?.diagnostics?.templatePoints?.[key] || null;
@@ -503,11 +505,6 @@ export function createRigOverlayController({
     });
     setGeometry(humanoidLines, linePositions, lineColors);
     setGeometry(humanoidPoints, pointPositions, pointColors);
-    setGeometry(humanoidDiagnosticLines, diagnosticLinePositions, diagnosticLineColors);
-    setGeometry(humanoidDiagnosticPoints, diagnosticPointPositions, diagnosticPointColors);
-    humanoidGroup.visible = rigAvailable && humanoidLinePairs.length > 0;
-    humanoidDiagnosticLines.visible = humanoidDiagnosticSegmentCount > 0;
-    humanoidDiagnosticPoints.visible = diagnosticPointPositions.length > 0;
   }
 
   function updateHumanoidPosedOverlay(source = currentSource) {
@@ -1088,15 +1085,14 @@ export function createRigOverlayController({
       currentTopologyKey = nextTopologyKey;
       rebuildOverlay(currentSource);
     }
-    const nextHumanoidKey = JSON.stringify(
-      humanoidControlRigFor(currentSource));
+    const nextHumanoidKey = humanoidOverlayKey(currentSource);
     if (nextHumanoidKey !== currentHumanoidKey) {
       currentHumanoidKey = nextHumanoidKey;
       rebuildHumanoidOverlay(currentSource);
     }
     updateModelFrame();
     group.visible = !!currentSource;
-    humanoidGroup.visible = humanoidGroup.visible && !!currentSource;
+    updateHumanoidVisibility();
     staticGroup.visible = !!currentSnapshot.jointPickIntent && !!currentSource;
     if (!currentSnapshot.jointPickIntent) {
       pickCandidateCache = [];
@@ -1158,7 +1154,6 @@ export function createRigOverlayController({
         humanoidOverlayVisible: humanoidGroup.visible,
         humanoidSegmentCount: humanoidLinePairs.length,
         humanoidLandmarkCount: humanoidLandmarks.length,
-        humanoidDiagnosticSegmentCount,
         selectedJointId,
         proxyVisible: proxy.visible,
         ikTargetVisible: ikTargetProxy.visible,
@@ -1205,8 +1200,6 @@ export function createRigOverlayController({
       jointPoints.geometry.dispose();
       humanoidLines.geometry.dispose();
       humanoidPoints.geometry.dispose();
-      humanoidDiagnosticLines.geometry.dispose();
-      humanoidDiagnosticPoints.geometry.dispose();
       hoverPoint.geometry.dispose();
       proxyRing.geometry.dispose();
       centerMaterial.dispose();
@@ -1216,8 +1209,6 @@ export function createRigOverlayController({
       lineMaterial.dispose();
       humanoidLineMaterial.dispose();
       humanoidPointMaterial.dispose();
-      humanoidDiagnosticLineMaterial.dispose();
-      humanoidDiagnosticPointMaterial.dispose();
       ikTargetMarker.geometry.dispose();
       group.remove(staticGroup, humanoidGroup, proxy, ikTargetProxy);
       scene?.remove(group);

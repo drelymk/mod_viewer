@@ -447,6 +447,7 @@ function classifySource(sourceRig, controlRig) {
     const pathSet = new Set(mainPath);
     const assignments = [];
     absorbed.accepted.forEach(boneId => {
+      if (!complete) return;
       const node = graphData.nodes.get(boneId);
       const projection = metadata.get(boneId);
       if (!node || !projection) return;

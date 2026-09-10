@@ -319,6 +319,11 @@ of documentation, comments and tests; use portable fixtures instead.
   fixed 14-control topology (Chest/Pelvis plus bilateral Shoulder/Elbow/Hand
   and Hip/Knee/Foot) from immutable A-pose geometry and semantic orientation.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
+- `humanoid-heat-binding.js` first classifies each exact source's heat-
+  connectivity graph against the shared control paths. Only complete,
+  conservative limb traversals publish source-Bone ownership for deformation;
+  incomplete paths remain diagnostics. `ModelJoint` mappings are a secondary
+  manual/compatibility layer, not the primary automatic detector.
 - `humanoid-rig-binding.js` binds clear body-corridor ModelJoints to explicit
   humanoid driver segments with `inverse(restDriverWorld) * restJointWorld`
   offsets. Posed absolute driver targets are converted to authored-rest

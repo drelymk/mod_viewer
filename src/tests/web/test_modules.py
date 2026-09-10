@@ -1155,6 +1155,8 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       scene.add(model);
       let state = {
         visible: true, selectedJointId: null,
+        ik: {enabled: true, available: true,
+          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']},
         model: {
           key: 'model-rig', structureRevision: 1,
           joints: [1, 2, 3].map((jointId, index) => ({
@@ -1186,6 +1188,12 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       state = {...state, selectedJointId: 1};
       controller.refresh(state);
       const selectedRoot = controller.getDebugState();
+      state = {...state, model: {...state.model,
+        humanoidControlRig: {...state.model.humanoidControlRig,
+          controls: {...state.model.humanoidControlRig.controls,
+            leftHand: {position: [-1, 1.5, 0]}}}}};
+      controller.refresh(state);
+      const posedRig = controller.getDebugState();
       model.position.x = 4;
       window.dispatchEvent(new CustomEvent(
         'mod-viewer-model-transform-changed', {detail: {}}));
@@ -1195,29 +1203,43 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       state = {...state, visible: true};
       controller.refresh(state);
       const shownAgain = controller.getDebugState();
+      state = {...state, ik: {...state.ik, enabled: false}};
+      controller.refresh(state);
+      const ikOff = controller.getDebugState();
+      state = {...state, ik: {...state.ik, enabled: true}};
+      controller.refresh(state);
       state = {...state, model: {...state.model,
+        structureRevision: 2,
         humanoidControlRig: {...state.model.humanoidControlRig, available: false}}};
       controller.refresh(state);
       const unavailable = controller.getDebugState();
       controller.dispose();
-      return {initial, selectedRoot, afterTransform, shownAgain, unavailable};
+      return {initial, selectedRoot, posedRig, afterTransform, shownAgain,
+        ikOff, unavailable};
     }""")
     assert result["initial"]["staticObjectCount"] == 4
     assert result["initial"]["nodeCount"] == 3
     assert result["initial"]["edgeCount"] == 2
     assert result["initial"]["jointCount"] == 3
     assert result["initial"]["humanoidOverlayVisible"]
+    assert result["initial"]["ikTargetVisible"]
     assert result["initial"]["humanoidSegmentCount"] == 13
     assert result["initial"]["humanoidLandmarkCount"] == 14
     assert result["initial"]["rebuildCount"] == 1
     assert result["selectedRoot"]["selectedJointId"] == 1
     assert result["selectedRoot"]["rebuildCount"] == 1
+    assert result["posedRig"]["rebuildCount"] == 1
     assert result["afterTransform"]["rebuildCount"] == 1
     assert result["afterTransform"]["modelFrameUpdateCount"] == \
-        result["initial"]["modelFrameUpdateCount"] + 2
+        result["initial"]["modelFrameUpdateCount"] + 3
     assert result["shownAgain"]["rebuildCount"] == 1
     assert result["shownAgain"]["selectedJointId"] is None
+    assert not result["ikOff"]["humanoidOverlayVisible"]
+    assert not result["ikOff"]["ikTargetVisible"]
+    assert result["shownAgain"]["ikTargetVisible"]
     assert not result["unavailable"]["humanoidOverlayVisible"]
+    assert not result["unavailable"]["ikTargetVisible"]
+    assert result["unavailable"]["rebuildCount"] == 2
 
 
 def test_rig_overlay_builds_all_joints_and_toggles_visibility(module_page):
@@ -5194,6 +5216,65 @@ def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branc
     assert [item for item in result["assignments"] if item[0] <= 5] == \
         result["armAssignments"]
     assert result["conflicts"] == []
+
+
+def test_humanoid_heat_binding_keeps_incomplete_paths_diagnostic_only(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const edge = (boneA, boneB, jointCenter) => ({boneA, boneB,
+        productOverlap: 1, minOverlap: .4, containment: .2, jaccard: .1,
+        treeEdgeScore: .2, jointCenter});
+      const sourceRig = {sourceKey: 'partial', influenceGraph: {
+        evidenceMode: 'surface',
+        nodes: [
+          {boneId: 1, weightedCenter: controls.leftShoulder,
+            weightedRadius: .01, totalWeight: 1, affectedMeasure: 1},
+          {boneId: 2, weightedCenter: controls.leftElbow,
+            weightedRadius: .01, totalWeight: 1, affectedMeasure: 1},
+          {boneId: 3, weightedCenter: [-.65, .9, 0],
+            weightedRadius: .01, totalWeight: 1, affectedMeasure: 1},
+        ],
+        relationships: [
+          edge(1, 2, [-.35, 1.15, 0]),
+          edge(2, 3, [-.575, .95, 0]),
+        ],
+      }, vertexEvidence: [{positions: controls.leftShoulder,
+        indices: [1], weights: [1], influenceCount: 1}]};
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig], modelRig: {
+          sourceBoneToModelJointId: new Map([
+            ['partial#bone=1', 1], ['partial#bone=2', 2],
+            ['partial#bone=3', 3],
+          ]),
+        }});
+      const arm = binding.sourceResults.partial.left_arm;
+      return {
+        path: arm.mainPathBoneIds,
+        complete: arm.complete,
+        assignments: arm.assignments,
+        sourceAssignmentCount: binding.sourceBoneAssignments.size,
+        modelAssignmentCount: binding.modelJointAssignments.size,
+      };
+    }""")
+    assert result["path"] == [1, 2, 3]
+    assert not result["complete"]
+    assert result["assignments"] == []
+    assert result["sourceAssignmentCount"] == 0
+    assert result["modelAssignmentCount"] == 0
 
 
 def test_humanoid_heat_binding_marks_cross_limb_model_joint_conflicts(module_page):
