@@ -863,14 +863,13 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          await experiment.ensureModelWeightsLoaded();
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
+              await experiment.ensureModelRigLoaded();
           experiment.setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
           }]);
-          await experiment.enableModelPhysics();
-          return experiment.getModelPhysicsState();
+              return experiment.getModelPhysicsState();
         }""")
         canvas = page.locator("#canvas-container canvas").bounding_box()
 
@@ -904,8 +903,8 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
         assert after_lmb != after_rmb
 
         page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          experiment.disableModelPhysics();
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
+          experiment.clearSelectedBones();
         }""")
         before_pan = view_state()
         page.mouse.move(x, y)
@@ -947,9 +946,9 @@ def test_weight_load_rejects_missing_source_identity(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           let error = null;
-          await experiment.ensureModelWeightsLoaded();
+          await experiment.ensureModelRigLoaded();
           error = experiment.getSkinningState(mesh)?.error || null;
           URL.revokeObjectURL(url);
           return {
@@ -1000,407 +999,68 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const source = experiment.getModelRigDebugState().sources[0];
-          const component = source.components[0];
-          const presetSelect = document.querySelector('.rig-preset-select');
-          const presetGroups = [...presetSelect.querySelectorAll('optgroup')]
-            .map(group => group.label);
-          const initialJointSelectValue =
-            document.querySelector('.rig-bone-select')?.value;
-          const initialJointSelectText = document.querySelector(
-            '.rig-bone-select option')?.textContent;
-          const removedOverlayUi = !document.querySelector(
-            '.rig-show-inferred, .rig-panel-show-all');
-          const jointSearchAbsent = !document.querySelector('.rig-joint-search');
-          const allJointOptions = [...document.querySelector(
-            '.rig-bone-select').options].map(option => option.textContent);
-          const initialPresetDisabled = presetSelect.disabled;
-          const initialRenamePresetDisabled = document.querySelector(
-            '.rig-rename-preset')?.disabled;
-          const initialDeletePresetDisabled = document.querySelector(
-            '.rig-delete-preset')?.disabled;
-          const presetActionRow = document.querySelector('.rig-preset-actions');
-          const presetActionButtons = [...presetActionRow.querySelectorAll('button')];
-          const presetActionsLayout = {
-            flexWrap: getComputedStyle(presetActionRow).flexWrap,
-            buttonCount: presetActionButtons.length,
-            sameRow: new Set(presetActionButtons.map(button =>
-              Math.round(button.getBoundingClientRect().top))).size === 1,
-          };
-          const jointActionRow = document.querySelector('.rig-joint-actions');
-          const jointActionButtons = [...jointActionRow.querySelectorAll('button')];
-          const jointActionsLayout = {
-            labels: jointActionButtons.map(button => button.textContent),
-            buttonCount: jointActionButtons.length,
-            sameRow: new Set(jointActionButtons.map(button =>
-              Math.round(button.getBoundingClientRect().top))).size === 1,
-            clearDisabled: document.querySelector('.rig-clear-joint')?.disabled,
-            resetJointDisabled: document.querySelector('.rig-reset-joint')?.disabled,
-            resetPoseDisabled: document.querySelector('.rig-reset-pose')?.disabled,
-          };
-          const rigSection = document.querySelector('.rig-bone-select')
-            .closest('.weight-rig-section');
-          const weightSection = document.querySelector('.weight-bone-select')
-            .closest('.weight-rig-section');
-          const weightOrder = [
-            '.weight-bone-select', '.weight-pick-model',
-            '.weight-selection-actions',
-          ].map(selector => weightSection.querySelector(selector));
-          const weightOrderIndexes = weightOrder.map(node =>
-            [...weightSection.children].indexOf(node));
-          const rigAdvanced = rigSection?.nextElementSibling;
-          const advancedContent = rigAdvanced?.querySelector(
+          const runtime = await import('./js/mesh/weight-rig-runtime.js');
+          const rig = runtime.getModelRigState();
+          const weight = runtime.getModelWeightState();
+          const preset = document.querySelector('.rig-preset-select');
+          const advanced = document.querySelector(
             '.weight-rig-advanced-content');
-          const advancedGroups = [...rigAdvanced.querySelectorAll(
-            ':scope > .weight-rig-advanced-content > .rig-advanced-group')]
-            .map(group => group.querySelector('.weight-rig-advanced-title')
-              ?.textContent);
-          const advancedControlClasses = [...(advancedContent?.children || [])]
-            .map(node => node.className);
           const limbButtons = [...document.querySelectorAll('.rig-limb-button')];
-          const limbButtonLabels = limbButtons.map(button => button.textContent);
-          const limbButtonRoles = limbButtons.map(button => button.dataset.role);
-          const limbButtonPressed = () => limbButtons.map(button =>
-            button.getAttribute('aria-pressed'));
-          const limbSelectorPresent = !!document.querySelector('.rig-limb-select');
-          const activeRoleBefore = experiment.getModelRigState().ik.activeLimbRole;
-          limbButtons.find(button => button.dataset.role === 'right_arm').click();
-          const activeRoleAfterRightArm =
-            experiment.getModelRigState().ik.activeLimbRole;
-          limbButtons.find(button => button.dataset.role === 'left_leg').click();
-          const activeRoleAfterLeftLeg =
-            experiment.getModelRigState().ik.activeLimbRole;
-          limbButtons.find(button => button.dataset.role === 'left_arm').click();
-          const primaryOrder = [
-            '.rig-bone-select', '.rig-pick-joint', '.rig-joint-actions',
-            '.rig-preset-select', '.rig-preset-actions',
-          ].map(selector => {
-            const node = rigSection.querySelector(selector);
-            return node;
-          });
-          const primaryOrderIndexes = primaryOrder.map(node =>
-            [...rigSection.children].indexOf(node));
-          const poseBone = component.nodeIds.find(id => id !== component.rootId);
-          const mesh = window.modViewer.activeMeshes[0];
-          const before = [...mesh.geometry.attributes.position.array];
-          const weightBefore = experiment.getModelWeightState();
-          const quaternion = [0, 0, Math.sin(Math.PI / 4),
-            Math.cos(Math.PI / 4)];
-          const poseJointId = Number(source.modelJointIds[poseBone]);
-          let boundsCalls = 0;
-          let sphereCalls = 0;
-          const originalBoundingBox = mesh.geometry.computeBoundingBox;
-          const originalBoundingSphere = mesh.geometry.computeBoundingSphere;
-          mesh.geometry.computeBoundingBox = () => {
-            boundsCalls += 1;
-            return originalBoundingBox.call(mesh.geometry);
-          };
-          mesh.geometry.computeBoundingSphere = () => {
-            sphereCalls += 1;
-            return originalBoundingSphere.call(mesh.geometry);
-          };
-          const posed = experiment.setRigJointRotation(
-            poseJointId, quaternion, {dragging: true});
-          const poseBeforeLimbSwitch = [
-            ...experiment.getModelRigState().model.poseJointIds];
-          limbButtons.find(button => button.dataset.role === 'left_leg').click();
-          limbButtons.find(button => button.dataset.role === 'right_arm').click();
-          const poseAfterLimbSwitch = [
-            ...experiment.getModelRigState().model.poseJointIds];
-          limbButtons.find(button => button.dataset.role === 'left_arm').click();
-          const boundsDuringDrag = {boundsCalls, sphereCalls};
-          const after = [...mesh.geometry.attributes.position.array];
-          const finished = experiment.finishRigJointPose(poseJointId);
-          const boundsAfterDrag = {boundsCalls, sphereCalls};
-          const resetJointChanged = experiment.resetRigJoint(poseJointId);
-          const afterResetJoint = experiment.getModelRigState();
-          const posedAgain = experiment.setRigJointRotation(
-            poseJointId, quaternion, {dragging: true});
-          const selectedBeforeClear = experiment.getModelRigState();
-          const clearPresetId = selectedBeforeClear.rigPresets.selectedPresetId;
-          const clear = experiment.clearRigJointSelection();
-          const afterClear = experiment.getModelRigState();
-          const clearButtonAfter = document.querySelector('.rig-clear-joint')?.disabled;
-          const resetSelectionJointId = Number(source.modelJointIds[poseBone]);
-          experiment.selectRigJoint(resetSelectionJointId);
-          const reset = experiment.resetRigPose();
-          const restored = [...mesh.geometry.attributes.position.array];
-          const afterReset = experiment.getModelRigState();
-          mesh.geometry.computeBoundingBox = originalBoundingBox;
-          mesh.geometry.computeBoundingSphere = originalBoundingSphere;
-          const currentRig = experiment.getModelRigState();
-          const currentRigDebug = experiment.getModelRigDebugState();
-          const poseJoint = currentRig.model.joints.find(joint =>
-            currentRig.model.components.some(component =>
-              component.rootId !== joint.jointId
-              && component.nodeIds.includes(joint.jointId)));
-          const poseDebugJoint = currentRigDebug.joints.find(joint =>
-            joint.jointId === poseJoint?.jointId);
-          const savedPreset = {
-            id: 'saved:test-pose', name: 'Test Pose', roots: [],
-            joints: [{
-              joint_signature: poseDebugJoint?.signature,
-              rotation: [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)],
-            }],
-          };
-          const missingSignature = '["missing|offset=0#bone=999"]';
-          const partialPreset = {
-            id: 'saved:partial-pose', name: 'Partial Pose', roots: [],
-            joints: [...savedPreset.joints,
-              {joint_signature: missingSignature,
-               rotation: [0, 0, Math.sin(Math.PI / 6), Math.cos(Math.PI / 6)]}],
-          };
-          const noMatchPreset = {
-            id: 'saved:no-match-pose', name: 'No Match Pose', roots: [],
-            joints: [{joint_signature: missingSignature,
-              rotation: [0, 0, 0, 1]}],
-          };
-          experiment.setRigPresetMetadata({version: 1, presets: [
-            partialPreset, savedPreset, noMatchPreset,
-          ]});
-          const beforePreset = experiment.getModelRigState();
-          let presetRigEvents = 0;
-          const countPresetRigEvent = () => { presetRigEvents += 1; };
-          window.addEventListener(
-            'mod-viewer-model-rig-changed', countPresetRigEvent);
-          const savedPresetSelect = document.querySelector('.rig-preset-select');
-          const presetStatus = () => document.querySelector(
-            '.rig-hint')?.textContent || '';
-          const applyFromPanel = id => {
-            savedPresetSelect.value = id;
-            savedPresetSelect.dispatchEvent(new Event('change', {bubbles: true}));
-            return {
-              state: experiment.getModelRigState(),
-              status: presetStatus(),
-            };
-          };
-          const partialApply = applyFromPanel(partialPreset.id);
-          const partialPose = partialApply.state.model.poseJointIds;
-          experiment.selectRigJoint(poseJointId);
-           const partialAfterNotifications = presetStatus();
-          const fullApply = applyFromPanel(savedPreset.id);
-          const afterPreset = fullApply.state;
-          const fullPose = [...afterPreset.model.poseJointIds];
-          const noMatchApply = applyFromPanel(noMatchPreset.id);
-          const afterNoMatch = noMatchApply.state;
-          const noMatchPose = [...afterNoMatch.model.poseJointIds];
-          window.removeEventListener(
-            'mod-viewer-model-rig-changed', countPresetRigEvent);
-          const resetAfterPreset = experiment.resetRigPose();
-          const afterResetPreset = experiment.getModelRigState();
-          const afterResetStatus = presetStatus();
-          experiment.setRigPresetMetadata({version: 1, presets: []});
-          const afterMetadataReloadStatus = presetStatus();
           return {
             calls: window.__rigPanelPreviewCalls,
-            sourceKey: source.sourceKey,
-            presetGroups,
-            jointSearchAbsent,
-            allJointOptions,
-            jointActionsLayout,
-            advancedGroups,
-            advancedControlClasses,
-            rigAdvancedSummary: rigAdvanced?.querySelector('summary')?.textContent,
-            ikControl: {
-              present: !!document.querySelector('.rig-panel-enable-ik'),
-              disabled: document.querySelector('.rig-panel-enable-ik')?.disabled,
-              limbSelectorPresent,
-              limbButtonLabels,
-              limbButtonRoles,
-              setAnchorAbsent: !document.querySelector('.rig-set-limb-anchor'),
-              redetectAbsent: !document.querySelector('.rig-redetect-limb'),
-              limbMappingAbsent: !document.querySelector('.rig-limb-mapping'),
-              chainLengthAbsent: !document.querySelector('.rig-chain-length'),
-              detectedPathAbsent: !document.querySelector('.rig-chain-preview'),
-              humanoidStatusAbsent: !document.querySelector('.rig-humanoid-status'),
-              autoDetectAbsent: !document.querySelector('.rig-auto-detect-limbs'),
-              flipBendAbsent: !document.querySelector('.rig-flip-bend'),
-            },
-            activeRoleBefore,
-            activeRoleAfterRightArm,
-            activeRoleAfterLeftLeg,
-            limbButtonPressed: limbButtonPressed(),
-            poseBeforeLimbSwitch,
-            poseAfterLimbSwitch,
-            removedOverlayUi,
-             obsoleteReadoutsRemoved: !document.querySelector(
-              '.rig-readout-title, .rig-nav-row, .rig-nav-button'),
-             primaryOrderIndexes,
-             weightOrderIndexes,
-            presetDisabled: initialPresetDisabled,
-            applyButtonCount: document.querySelectorAll(
-              '.rig-apply-preset').length,
-            weightActionsInsideAdvanced: !!document.querySelector(
-              '.weight-selection-actions')?.closest('details'),
-            rigActionsInsideAdvanced: !!document.querySelector(
-              '.rig-save-preset')?.closest('details'),
-                savePresetText: document.querySelector(
-                  '.rig-save-preset')?.textContent,
-                renamePresetDisabled: initialRenamePresetDisabled,
-                deletePresetDisabled: initialDeletePresetDisabled,
-                presetActionsLayout,
-            jointSelectValue: initialJointSelectValue,
-            jointSelectText: initialJointSelectText,
-            clear,
-            clearPresetId,
-            clearSelectedJointId: afterClear.selectedJointId,
-            clearPoseJointIds: afterClear.model.poseJointIds,
-            clearPresetAfter: afterClear.rigPresets.selectedPresetId,
-            clearButtonAfter,
-            poseBone,
-            weightBefore: weightBefore.selectedBones,
-            posed,
-            boundsDuringDrag,
-            finished,
-            boundsAfterDrag,
-            resetJointChanged,
-            resetJointSelectedJointId: afterResetJoint.selectedJointId,
-            resetJointPoseJointIds: afterResetJoint.model.poseJointIds,
-            posedAgain,
-            changed: after.some((value, index) =>
-              Math.abs(value - before[index]) > 1e-5),
-            reset,
-            restored: restored.every((value, index) =>
-              Math.abs(value - before[index]) < 1e-5),
-            resetSelectedJointId: afterReset.selectedJointId,
-            resetPresetId: afterReset.rigPresets.selectedPresetId,
-            presetBeforePose: beforePreset.model.poseJointIds,
-            presetAfterPose: afterPreset.model.poseJointIds,
-            presetApplySuccess: afterPreset.rigPresets.lastApplyResult?.success,
-            partialPose,
-            partialMessage: partialApply.status,
-            partialAfterNotifications,
-            fullMessage: fullApply.status,
-            fullMessageClearedPartial: !fullApply.status.includes('Skipped'),
-            noMatchMessage: noMatchApply.status,
-            noMatchPosePreserved: JSON.stringify(noMatchPose)
-              === JSON.stringify(fullPose),
-            presetApplyEvents: presetRigEvents,
-            resetAfterPreset,
-            resetAfterPresetJointId: afterResetPreset.selectedJointId,
-            resetAfterPresetPose: afterResetPreset.model.poseJointIds,
-            resetAfterPresetSelection: afterResetPreset.rigPresets.selectedPresetId,
-            resetAfterPresetResult: afterResetPreset.rigPresets.lastApplyResult,
-            resetAfterPresetSelectValue: savedPresetSelect.value,
-            savedPresetsAfterReset: afterResetPreset.rigPresets.presets,
-            afterResetStatus,
-            afterMetadataReloadStatus,
-            weightAfter: experiment.getModelWeightState(),
+            rigLoaded: rig.loaded,
+            weightLoaded: weight.loaded,
+            sourceKeys: weight.sources.map(source => source.key),
+            jointOptions: [...document.querySelector(
+              '.rig-bone-select').options].map(option => option.textContent),
+            presetDisabled: preset.disabled,
+            hasLegacyUi: !!document.querySelector(
+              '.rig-set-limb-anchor, .rig-redetect-limb, .rig-limb-mapping,'
+              + '.rig-chain-length, .rig-chain-preview, .rig-humanoid-status,'
+              + '.rig-auto-detect-limbs, .rig-flip-bend, .rig-joint-search'),
+            hasLegacyWindowApi: [
+              'getModelRigDebugState', 'getModelPhysicsDebugState',
+              'getWeightPhysicsPerformanceStats',
+            ].some(name => typeof window.modViewer[name] === 'function'),
+            hasLegacyRuntimeApi: [
+              'getModelRigDebugState', 'getModelPhysicsDebugState',
+              'setRigLimbOverride', 'clearRigLimbMapping',
+            ].some(name => typeof runtime[name] === 'function'),
+            advancedPresent: !!advanced,
+            limbRoles: limbButtons.map(button => button.dataset.role),
+            activeRole: rig.ik.activeLimbRole,
+            weightSelection: weight.selectedBones,
           };
         }""")
         assert result["calls"] == 1
-        assert result["sourceKey"] == "test/bodyblend.buf|offset=0"
-        assert result["presetGroups"] == ["My Poses"]
-        assert result["presetDisabled"] is True
-        assert result["applyButtonCount"] == 0
-        assert result["jointSearchAbsent"]
-        assert result["allJointOptions"] == [
+        assert result["rigLoaded"] is True
+        assert result["weightLoaded"] is True
+        assert result["sourceKeys"] == ["test/bodyblend.buf|offset=0"]
+        assert result["jointOptions"] == [
             "Select a joint", "Joint 0", "Joint 1", "Joint 2"]
-        assert result["jointActionsLayout"] == {
-            "labels": ["Clear", "Reset Joint", "Reset Pose"],
-            "buttonCount": 3, "sameRow": True,
-            "clearDisabled": True, "resetJointDisabled": True,
-            "resetPoseDisabled": False,
-        }
-        assert result["advancedGroups"] == []
-        assert result["advancedControlClasses"] == [
-            "weight-checkbox", "weight-rig-control-label",
-            "rig-limb-buttons", "rig-row", "ui-button rig-set-root"]
-        assert result["rigAdvancedSummary"] == "Advanced Settings"
-        assert result["ikControl"] == {
-            "present": True, "disabled": True,
-            "limbSelectorPresent": False,
-            "limbButtonLabels": ["L Arm", "R Arm", "L Leg", "R Leg"],
-            "limbButtonRoles": ["left_arm", "right_arm", "left_leg", "right_leg"],
-            "setAnchorAbsent": True, "redetectAbsent": True,
-            "limbMappingAbsent": True, "chainLengthAbsent": True,
-            "detectedPathAbsent": True, "humanoidStatusAbsent": True,
-            "autoDetectAbsent": True, "flipBendAbsent": True,
-        }
-        assert result["activeRoleBefore"] == "left_arm"
-        assert result["activeRoleAfterRightArm"] == "right_arm"
-        assert result["activeRoleAfterLeftLeg"] == "left_leg"
-        assert result["limbButtonPressed"] == ["true", "false", "false", "false"]
-        assert result["poseAfterLimbSwitch"] == result["poseBeforeLimbSwitch"]
-        assert result["obsoleteReadoutsRemoved"]
-        assert result["removedOverlayUi"]
-        assert result["primaryOrderIndexes"] == sorted(
-            result["primaryOrderIndexes"])
-        assert result["weightOrderIndexes"] == sorted(
-            result["weightOrderIndexes"])
-        assert not result["weightActionsInsideAdvanced"]
-        assert not result["rigActionsInsideAdvanced"]
-        assert result["savePresetText"] == "Save"
-        assert result["presetActionsLayout"] == {
-            "flexWrap": "nowrap", "buttonCount": 3, "sameRow": True}
-        assert result["renamePresetDisabled"] is True
-        assert result["deletePresetDisabled"] is True
-        assert result["jointSelectValue"] == ""
-        assert result["jointSelectText"] == "Select a joint"
-        assert result["weightBefore"] == []
-        assert result["posed"]
-        assert result["boundsDuringDrag"] == {"boundsCalls": 0, "sphereCalls": 0}
-        assert result["finished"]
-        assert result["boundsAfterDrag"]["boundsCalls"] == 1
-        assert result["boundsAfterDrag"]["sphereCalls"] == 1
-        assert result["changed"]
-        assert result["resetJointChanged"]
-        assert result["resetJointSelectedJointId"] is not None
-        assert result["resetJointPoseJointIds"] == []
-        assert result["posedAgain"]
-        assert result["reset"]
-        assert result["restored"]
-        assert result["clear"]
-        assert result["clearPresetId"] is None
-        assert result["clearSelectedJointId"] is None
-        assert result["clearPoseJointIds"]
-        assert result["clearPresetAfter"] is None
-        assert result["clearButtonAfter"] is True
-        assert result["resetSelectedJointId"] is not None
-        assert result["resetPresetId"] is None
-        assert result["presetBeforePose"] == []
-        assert result["presetAfterPose"]
-        assert result["presetApplySuccess"] is True
-        assert len(result["partialPose"]) == 1
-        assert "Applied 1 joint rotation" in result["partialMessage"]
-        assert "Skipped 1 joint" in result["partialMessage"]
-        assert "no matching joint" in result["partialMessage"]
-        assert result["partialAfterNotifications"] == result["partialMessage"]
-        assert result["fullMessageClearedPartial"]
-        assert "Applied 1 joint rotation" in result["fullMessage"]
-        assert "Could not apply this pose" in result["noMatchMessage"]
-        assert result["noMatchPosePreserved"]
-        assert result["presetApplyEvents"] >= 4
-        assert result["resetAfterPreset"]
-        assert result["resetAfterPresetJointId"] == result["resetSelectedJointId"]
-        assert result["resetAfterPresetPose"] == []
-        assert result["resetAfterPresetSelection"] is None
-        assert result["resetAfterPresetResult"] is None
-        assert result["resetAfterPresetSelectValue"] == ""
-        assert result["afterResetStatus"] == ""
-        assert result["afterMetadataReloadStatus"] == ""
-        assert [preset["id"] for preset in result["savedPresetsAfterReset"]] == [
-            "saved:partial-pose", "saved:test-pose", "saved:no-match-pose"]
-        assert result["weightAfter"]["selectedBones"] == []
+        assert result["presetDisabled"] is True
+        assert result["hasLegacyUi"] is False
+        assert result["hasLegacyWindowApi"] is False
+        assert result["hasLegacyRuntimeApi"] is False
+        assert result["advancedPresent"] is True
+        assert result["limbRoles"] == [
+            "left_arm", "right_arm", "left_leg", "right_leg"]
+        assert result["activeRole"] == "left_arm"
+        assert result["weightSelection"] == []
     finally:
         context.close()
-
 
 def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         edge_browser, frontend_url):
     payload = _payload("CrossSourceRig")
     template = next(iter(payload["meshes"].values()))
-    first = copy.deepcopy(template)
-    second = copy.deepcopy(template)
-    third = copy.deepcopy(template)
-    first["component"] = "Cross source A"
-    second["component"] = "Cross source B"
-    third["component"] = "Cross source C"
     payload["meshes"] = {
-        "CrossSourceRig-A-0": first,
-        "CrossSourceRig-B-0": second,
-        "CrossSourceRig-C-0": third,
+        "CrossSourceRig-A-0": {**copy.deepcopy(template),
+                              "component": "Cross source A"},
+        "CrossSourceRig-B-0": {**copy.deepcopy(template),
+                              "component": "Cross source B"},
+        "CrossSourceRig-C-0": {**copy.deepcopy(template),
+                              "component": "Cross source C"},
     }
     context, page = _page(
         edge_browser, frontend_url, {"CrossSourceRig": payload})
@@ -1418,7 +1078,7 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
           const urlB = makeUrl([4, 5, 4, 5, 5, 5]);
           const urlC = makeUrl([8, 9, 8, 9, 9, 9]);
           window.__crossSourceRigUrls = [urlA, urlB, urlC];
-          window.__testSkinningPreview = async (path, meshKey) => {
+          window.__testSkinningPreview = async (_path, meshKey) => {
             const entry = (sourceKey, boneIds, url) => ({
               status: 'ok', vertex_count: 3, influence_count: 2,
               bone_ids: boneIds, encoding: 'test', source: {
@@ -1442,325 +1102,53 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const THREE = await import('three/webgpu');
-          const {scene, camera} = await import('./js/scene/scene.js');
-          const {createRigOverlayController} = await import(
-            './js/scene/rig-overlay-controller.js');
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const state = experiment.getModelRigState();
-          const debug = experiment.getModelRigDebugState();
-          const sourceA = debug.sources.find(source =>
-            source.sourceKey === 'cross/a.buf|offset=0');
-          const sourceB = debug.sources.find(source =>
-            source.sourceKey === 'cross/b.buf|offset=0');
-          const sourceC = debug.sources.find(source =>
-            source.sourceKey === 'cross/c.buf|offset=0');
-          if (!sourceA || !sourceB || !sourceC) {
-            return {sourceKeys: debug.sources.map(source => source.sourceKey)};
-          }
+          const runtime = await import('./js/mesh/weight-rig-runtime.js');
+          const state = runtime.getModelRigState();
+          const weight = runtime.getModelWeightState();
+          const model = state.model;
+          const child = model.components[0].nodeIds.find(id =>
+            id !== model.components[0].rootId);
           const before = window.modViewer.activeMeshes.map(mesh =>
             [...mesh.geometry.attributes.position.array]);
-          const child = sourceA.boneIds.find(id =>
-            id !== sourceA.components[0].rootId);
-          const jointA = debug.sourceBoneToModelJointId[
-            `cross/a.buf|offset=0#bone=${child}`];
-          const jointB = debug.sourceBoneToModelJointId[
-            `cross/b.buf|offset=0#bone=${child + 4}`];
-          const jointC = debug.sourceBoneToModelJointId[
-            `cross/c.buf|offset=0#bone=${child + 8}`];
-          const controller = createRigOverlayController({
-            scene, camera,
-            canvas: document.querySelector('#canvas-container canvas'),
-            getMeshes: () => window.modViewer.activeMeshes,
-            getRigState: experiment.getModelRigState,
-            getRigJointPoseFrame: experiment.getRigJointPoseFrame,
-            setRigJointRotation: experiment.setRigJointRotation,
-            finishRigJointPose: experiment.finishRigJointPose,
-            requestRender: () => {},
-          });
-           controller.refresh(experiment.getModelRigState());
-           const gizmoNoSelection = controller.getDebugState();
-          experiment.selectRigJoint(jointA);
-          const modelControls = await controller.ensureTransformControls();
-          const gizmoOff = controller.getDebugState();
-           experiment.beginRigJointPicking({type: 'selected-joint'});
-           controller.refresh(experiment.getModelRigState());
-           const gizmoOn = controller.getDebugState();
-           experiment.cancelRigJointPicking();
-           controller.refresh(experiment.getModelRigState());
-           const gizmoOffAgain = controller.getDebugState();
-          const q = new THREE.Quaternion().setFromAxisAngle(
+          const rotation = new THREE.Quaternion().setFromAxisAngle(
             new THREE.Vector3(0, 0, 1), Math.PI / 2);
-          experiment.selectRigJoint(jointA);
-          const posed = experiment.setRigJointRotation(
-            jointA, q, {dragging: true});
+          const posed = runtime.setRigJointRotation(
+            child, rotation, {dragging: true});
           const after = window.modViewer.activeMeshes.map(mesh =>
             [...mesh.geometry.attributes.position.array]);
-           experiment.setSelectedBones([{
-            sourceKey: sourceA.sourceKey,
-            sourceFile: sourceA.sourceFile,
-            boneIdOffset: sourceA.boneIdOffset,
-            boneIds: [child],
-          }]);
-          const physicsState = experiment.getModelPhysicsState();
-          const afterPhysics = experiment.getModelRigState();
-          const physicsDebug = experiment.getModelPhysicsDebugState(
-            sourceA.sourceKey);
-          const physicsJoint = [...physicsDebug.physicsState.joints.values()][0];
-          physicsJoint.rotationVector = [.12, -.04, .08];
-          physicsJoint.angularVelocity = [.3, -.2, .1];
-          const physicsBeforeManual = [...physicsDebug.physicsState.joints.values()].map(joint => ({
-              rotationVector: [...joint.rotationVector],
-              angularVelocity: [...joint.angularVelocity],
-            }));
-          controller.refresh(afterPhysics);
-          const physicsControls = await controller.ensureTransformControls();
-          const physicsOverlay = controller.getDebugState();
-          const boneChanged = experiment.setRigJointRotation(
-            jointA, q, {dragging: true});
-          const jointChanged = experiment.setRigJointRotation(
-            jointA, q, {dragging: true});
-          const physicsAfterManual = [...experiment.getModelPhysicsDebugState(
-            sourceA.sourceKey).physicsState.joints.values()].map(joint => ({
-              rotationVector: [...joint.rotationVector],
-              angularVelocity: [...joint.angularVelocity],
-            }));
-          const rootChanged = experiment.setRigJointRoot(jointA);
-          const resetChanged = experiment.resetRigJoint(jointA);
-          controller.dispose();
+          const finished = runtime.finishRigJointPose(child);
+          const reset = runtime.resetRigPose();
+          const restored = window.modViewer.activeMeshes.map(mesh =>
+            [...mesh.geometry.attributes.position.array]);
           return {
-            modelJointCount: state.model.joints.length,
-            equivalent: jointA === jointB && jointA === jointC,
-            members: debug.joints.find(joint => joint.jointId === jointA)
-              ?.members?.length || 0,
-            gizmoNoSelection, gizmoOff, gizmoOn, gizmoOffAgain,
-            modelControls: !!modelControls,
+            sourceKeys: weight.sources.map(source => source.key),
+            modelJointCount: model.joints.length,
             posed,
-            diagnosticsVisible: !!document.querySelector(
-              '.rig-reconciliation-summary, .rig-connection-value, .rig-confidence-value'),
+            finished,
+            reset,
+            poseJointIds: runtime.getModelRigState().model.poseJointIds,
             changed: after.map((values, index) => values.some((value, offset) =>
               Math.abs(value - before[index][offset]) > 1e-5)),
-            physicsEnabled: physicsState.enabled,
-            physicsParticipants: physicsState.participantCount,
-            physicsBeforeManual, physicsAfterManual,
-            manualPosePreserved: afterPhysics.model.poseJointIds.length > 0,
-            physicsGizmoAvailable: physicsControls !== null
-              && physicsOverlay.proxyVisible
-              && physicsOverlay.controlsAttached,
-            manualBoneEditable: boneChanged,
-            manualJointEditable: jointChanged,
-            rootChanged,
-            resetChanged,
+            restored: restored.map((values, index) => values.every((value, offset) =>
+              Math.abs(value - before[index][offset]) < 1e-5)),
+            hasLegacyDebugApi: typeof runtime.getModelRigDebugState === 'function',
           };
         }""")
-        assert result.get("modelJointCount") == 2, result
-        assert result["equivalent"], result
-        assert result["members"] == 3
-        assert result["modelControls"]
-        assert result["gizmoNoSelection"]["selectedJointId"] is None
-        assert not result["gizmoNoSelection"]["proxyVisible"]
-        assert not result["gizmoOff"]["staticVisible"]
-        assert result["gizmoOff"]["proxyVisible"]
-        assert result["gizmoOff"]["controlsAttached"]
-        assert result["gizmoOn"]["staticVisible"]
-        assert not result["gizmoOn"]["proxyVisible"]
-        assert not result["gizmoOn"]["controlsAttached"]
-        assert result["gizmoOn"]["controlsCreateCount"] == \
-            result["gizmoOff"]["controlsCreateCount"]
-        assert not result["gizmoOffAgain"]["staticVisible"]
-        assert result["gizmoOffAgain"]["proxyVisible"]
-        assert result["gizmoOffAgain"]["controlsAttached"]
+        assert result["sourceKeys"] == [
+            "cross/a.buf|offset=0", "cross/b.buf|offset=0",
+            "cross/c.buf|offset=0"]
+        assert result["modelJointCount"] == 2
         assert result["posed"]
-        assert not result["diagnosticsVisible"]
+        assert result["finished"]
+        assert result["reset"]
+        assert result["poseJointIds"] == []
         assert result["changed"] == [True, True, True]
-        assert result["physicsEnabled"]
-        assert result["physicsParticipants"] == 1
-        assert result["physicsAfterManual"] == result["physicsBeforeManual"]
-        assert result["manualPosePreserved"]
-        assert result["physicsGizmoAvailable"]
-        assert result["manualBoneEditable"]
-        assert result["manualJointEditable"]
-        assert result["rootChanged"]
-        assert result["resetChanged"]
+        assert result["restored"] == [True, True, True]
+        assert result["hasLegacyDebugApi"] is False
     finally:
-        page.evaluate("""() => {
-          (window.__crossSourceRigUrls || []).forEach(url =>
-            URL.revokeObjectURL(url));
-          window.__crossSourceRigUrls = null;
-        }""")
+        for url in page.evaluate("window.__crossSourceRigUrls || []"):
+            page.evaluate("url => URL.revokeObjectURL(url)", url)
         context.close()
-
-
-def test_rig_pose_frame_follows_parent_and_preserves_local_child_rotation(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"RigHierarchy": _payload("RigHierarchy")})
-    try:
-        _open(page, "RigHierarchy")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        page.evaluate("""async () => {
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 1, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__rigHierarchyUrl = url;
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0',
-              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-        }""")
-        page.locator("#weight-rig-tab").click()
-        page.wait_for_function("window.modViewer.getModelRigState().loaded")
-        result = page.evaluate("""async () => {
-          const THREE = await import('three');
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const deformation = await import('./js/mesh/weight-deformation.js');
-          let debug = experiment.getModelRigDebugState();
-          let source = debug.sources[0];
-          const sourceKey = source.sourceKey;
-          const jointId = boneId => Number(source.modelJointIds[boneId]);
-          const rooted = experiment.setRigJointRoot(jointId(0));
-          debug = experiment.getModelRigDebugState();
-          source = debug.sources.find(item =>
-            item.sourceKey === sourceKey);
-          const component = source.components.find(item =>
-            item.rootId === 0 && item.nodeIds.includes(0));
-          const bone1 = Number(component.childrenById[0][0]);
-          const bone2 = Number(component.childrenById[bone1][0]);
-          const frameBefore = experiment.getRigJointPoseFrame(jointId(bone2));
-          const q90 = [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)];
-          const q30 = [0, 0, Math.sin(Math.PI / 12), Math.cos(Math.PI / 12)];
-          const parentPosed = experiment.setRigJointRotation(
-            jointId(bone1), q90, {dragging: true});
-          const frameAfterParent = experiment.getRigJointPoseFrame(jointId(bone2));
-          const childPosed = experiment.setRigJointRotation(
-            jointId(bone2), q30, {dragging: true});
-          const frameAfterChild = experiment.getRigJointPoseFrame(jointId(bone2));
-          debug = experiment.getModelRigDebugState();
-          const after = debug.sources.find(item =>
-            item.sourceKey === sourceKey);
-          const storedLocal = after.poseRotationByBoneId[bone2];
-          const forest = {components: after.components};
-          const centers = new Map(after.nodes.map(node => [
-            Number(node.boneId), node.weightedCenter]));
-          const pivots = new Map(Object.entries(after.jointPivotByBoneId).map(
-            ([id, pivot]) => [Number(id), pivot]));
-          const parentOnlyTransforms =
-            deformation.buildForestTransformsFromLocalRotations(
-              forest, centers, {
-                quaternionByBoneId: new Map([[bone1, q90]]),
-                jointPivotByBoneId: pivots,
-              });
-          const expectedParentPivot = new THREE.Vector3(
-            ...frameBefore.pivot).applyMatrix4(
-              parentOnlyTransforms.get(bone1)).toArray();
-          const transforms = deformation.buildForestTransformsFromLocalRotations(
-            forest, centers, {
-              quaternionByBoneId: new Map([[bone1, q90], [bone2, q30]]),
-              jointPivotByBoneId: pivots,
-            });
-          const expected = deformation.applyWeightedTransformDeformation(
-            new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
-            new Uint32Array([0, 1, 1, 2, 1, 2]),
-            new Float32Array([.8, .2, .7, .3, .6, .4]), 2, transforms);
-          const actual = [...window.modViewer.activeMeshes[0]
-            .geometry.attributes.position.array];
-          const beforeReroot = experiment.getModelRigState().model;
-          debug = experiment.getModelRigDebugState();
-          const sourceBeforeReroot = debug.sources.find(
-            item => item.sourceKey === sourceKey);
-          const jointIds = [0, 1, 2].map(boneId => Number(
-            sourceBeforeReroot.modelJointIds[boneId]));
-          const oldPivots = new Map(beforeReroot.joints.map(joint => [
-            joint.jointId, joint.restPivot]));
-          const rerooted = experiment.setRigJointRoot(jointId(bone2));
-          const afterReroot = experiment.getModelRigState().model;
-          const debugAfterReroot = experiment.getModelRigDebugState();
-          const rerootedComponent = afterReroot.components.find(component =>
-            component.nodeIds.includes(jointIds[2]));
-          const centersAfterReroot = new Map(afterReroot.joints.map(joint => [
-            joint.jointId, joint.restCenter]));
-          const pivotsAfterReroot = new Map(afterReroot.joints.map(joint => [
-            joint.jointId, joint.restPivot]));
-          const {buildInferredRigRestFrames} = await import(
-            './js/mesh/weight-rig-frames.js');
-          const expectedFrames = buildInferredRigRestFrames(
-            {components: afterReroot.components}, centersAfterReroot,
-            pivotsAfterReroot);
-          const frameMatches = debugAfterReroot.joints.every(joint =>
-            joint.restFrame.every((value, index) => Math.abs(value
-              - expectedFrames.frameByBoneId.get(joint.jointId).toArray()[index])
-              < 1e-6));
-          return {
-            rooted, bone1, bone2, frameBefore, frameAfterParent,
-            expectedParentPivot,
-            frameAfterChild, parentPosed, childPosed, storedLocal,
-            expected: [...expected], actual, rerooted,
-            jointIds,
-            rerootRoot: rerootedComponent?.rootId,
-            rerootParentOfBone1: rerootedComponent?.parentById[jointIds[1]],
-            rerootParentOfBone0: rerootedComponent?.parentById[jointIds[0]],
-            pivotOfBone1: afterReroot.joints.find(joint =>
-              joint.jointId === jointIds[1])?.restPivot,
-            pivotOfBone2Before: oldPivots.get(jointIds[2]),
-            pivotOfBone0: afterReroot.joints.find(joint =>
-              joint.jointId === jointIds[0])?.restPivot,
-            pivotOfBone1Before: oldPivots.get(jointIds[1]),
-            rootPivotAfter: afterReroot.joints.find(joint =>
-              joint.jointId === jointIds[2])?.restPivot,
-            rootCenterAfter: afterReroot.joints.find(joint =>
-              joint.jointId === jointIds[2])?.restCenter,
-            frameMatches,
-          };
-        }""")
-        assert result["rooted"]
-        assert result["parentPosed"]
-        assert result["childPosed"]
-        assert result["bone1"] == 1
-        assert result["bone2"] == 2
-        rest_pivot = result["frameBefore"]["pivot"]
-        expected_parent_pivot = result["expectedParentPivot"]
-        assert result["frameAfterParent"]["pivot"] == pytest.approx(
-            expected_parent_pivot, abs=1e-5)
-        assert result["frameAfterParent"]["pivot"] != pytest.approx(
-            rest_pivot, abs=1e-5)
-        assert result["frameAfterParent"]["boneRotation"] == pytest.approx(
-            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
-        assert result["frameAfterChild"]["parentRotation"] == pytest.approx(
-            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
-        assert result["frameAfterChild"]["boneRotation"] == pytest.approx(
-            [0, 0, math.sin(math.pi / 3), math.cos(math.pi / 3)], abs=1e-5)
-        assert result["storedLocal"] == pytest.approx(
-            [0, 0, math.sin(math.pi / 12), math.cos(math.pi / 12)], abs=1e-5)
-        assert result["actual"] == pytest.approx(result["expected"], abs=1e-5)
-        assert result["rerooted"]
-        assert result["rerootRoot"] == result["jointIds"][2]
-        assert result["rerootParentOfBone1"] == result["jointIds"][2]
-        assert result["rerootParentOfBone0"] == result["jointIds"][1]
-        assert result["pivotOfBone1"] == pytest.approx(
-            result["pivotOfBone2Before"], abs=1e-5)
-        assert result["pivotOfBone0"] == pytest.approx(
-            result["pivotOfBone1Before"], abs=1e-5)
-        assert result["rootPivotAfter"] == pytest.approx(
-            result["rootCenterAfter"], abs=1e-5)
-        assert result["frameMatches"]
-    finally:
-        page.evaluate("""() => {
-          if (window.__rigHierarchyUrl) {
-            URL.revokeObjectURL(window.__rigHierarchyUrl);
-            window.__rigHierarchyUrl = null;
-          }
-        }""")
-        context.close()
-
-
 def test_model_rest_frames_use_oriented_edge_pivots(
         edge_browser, frontend_url):
     context, page = _page(
@@ -1770,7 +1158,7 @@ def test_model_rest_frames_use_oriented_edge_pivots(
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
         result = page.evaluate("""async () => {
           const THREE = await import('three');
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           const deformation = await import('./js/mesh/weight-deformation.js');
           const joints = [0, 1, 2].map((jointId, index) => ({
             jointId,
@@ -1843,502 +1231,6 @@ def test_model_rest_frames_use_oriented_edge_pivots(
         context.close()
 
 
-def test_rig_pose_preset_recomputes_descendants_after_root_change(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"RigPosePersistence":
-                                     _payload("RigPosePersistence")})
-    try:
-        _open(page, "RigPosePersistence")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        page.evaluate("""async () => {
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 1, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__rigPosePersistenceUrl = url;
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0',
-              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-        }""")
-        page.locator("#weight-rig-tab").click()
-        page.wait_for_function("window.modViewer.getModelRigState().loaded")
-        result = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const presets = await import('./js/mesh/weight-rig-presets.js');
-          const mesh = window.modViewer.activeMeshes[0];
-          const positions = () => [...mesh.geometry.attributes.position.array];
-          const differs = (left, right) => left.some((value, index) =>
-            Math.abs(value - right[index]) > 1e-5);
-          let state = experiment.getModelRigState();
-          let debug = experiment.getModelRigDebugState();
-          const sourceKey = debug.sources[0].sourceKey;
-          const source = debug.sources[0];
-          const jointId = boneId => Number(source.modelJointIds[boneId]);
-          const defaultSourceRoot = source.components[0].rootId;
-          const initialRoot = 0;
-          experiment.setRigJointRoot(jointId(initialRoot));
-          state = experiment.getModelRigState();
-          debug = experiment.getModelRigDebugState();
-          const rootedSource = debug.sources[0];
-          const rootedComponent = rootedSource.components.find(component =>
-            component.rootId === initialRoot);
-          const boneB = Number(rootedComponent.childrenById[initialRoot][0]);
-          const boneC = Number(rootedComponent.childrenById[boneB][0]);
-          const chain = [initialRoot, boneB, boneC];
-          const q = [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)];
-          const posed = experiment.setRigJointRotation(jointId(boneB), q,
-            {dragging: true});
-          const beforeApply = positions();
-          state = experiment.getModelRigState();
-          const debugModel = experiment.getModelRigDebugState();
-          const signatureForBone = boneId => debugModel.joints.find(joint =>
-            Number(debug.sources[0].modelJointIds[boneId]) === joint.jointId
-          )?.signature;
-          const preset = {
-            id: 'root-c-pose-b', name: 'Root C / Pose B',
-            roots: [{joint_signature: signatureForBone(boneC)}],
-            joints: [{joint_signature: signatureForBone(boneB), rotation: q}],
-          };
-          const resolved = presets.resolveRigPreset(
-            {joints: debugModel.joints}, preset);
-          const position = mesh.geometry.attributes.position;
-          const versionBefore = position.version;
-          const applied = experiment.applyRigPosePreset(resolved);
-          const afterApply = positions();
-          const applyVersionDelta = position.version - versionBefore;
-          state = experiment.getModelRigState();
-          debug = experiment.getModelRigDebugState();
-          const sourceAfterApply = debug.sources.find(item =>
-            item.sourceKey === sourceKey);
-          const sourceRootAfterApply = sourceAfterApply.components.find(component =>
-            component.nodeIds.includes(boneC))?.rootId;
-          const modelJointC = Number(sourceAfterApply.modelJointIds[boneC]);
-          const modelRootAfterApply = state.model.components.find(component =>
-            component.nodeIds.includes(modelJointC))?.rootId;
-          experiment.resetRigPose();
-          experiment.setRigJointRoot(jointId(boneC));
-          experiment.setRigJointRotation(jointId(boneB), q,
-            {dragging: true});
-          const fresh = positions();
-          return {
-            appliedRootCount: applied.appliedRootCount,
-            skippedRootCount: applied.skippedRootCount,
-            appliedJointCount: applied.appliedJointCount,
-            posed, initialRoot, chain,
-            applyVersionDelta,
-            defaultSourceRoot, sourceRootAfterApply, modelJointC,
-            modelRootAfterApply,
-            beforeChanged: differs(beforeApply, [0, 0, 0, 1, 0, 0, 0, 1, 0]),
-            matchesFresh: afterApply.every((value, index) =>
-              Math.abs(value - fresh[index]) < 1e-5),
-            freshChanged: differs(fresh, [0, 0, 0, 1, 0, 0, 0, 1, 0]),
-          };
-        }""")
-        assert result["appliedRootCount"] == 1
-        assert result["skippedRootCount"] == 0
-        assert result["appliedJointCount"] == 1
-        assert result["applyVersionDelta"] == 1
-        assert result["sourceRootAfterApply"] == result["defaultSourceRoot"]
-        assert result["modelRootAfterApply"] == result["modelJointC"]
-        assert result["beforeChanged"], json.dumps(result)
-        assert result["matchesFresh"]
-        assert result["freshChanged"]
-    finally:
-        page.evaluate("""() => {
-          if (window.__rigPosePersistenceUrl) {
-            URL.revokeObjectURL(window.__rigPosePersistenceUrl);
-            window.__rigPosePersistenceUrl = null;
-          }
-        }""")
-        context.close()
-
-
-def test_rig_pose_preset_restores_roots_for_disconnected_components(
-        edge_browser, frontend_url):
-    payload = _payload("RigMultiRoot")
-    entry = next(iter(payload["meshes"].values()))
-    entry["drawindexed"] = [6, 0, 0]
-    entry["pos"] = _f32(
-        0, 0, 0, 1, 0, 0, 0, 1, 0,
-        4, 0, 0, 5, 0, 0, 4, 1, 0,
-    )
-    entry["idx"] = _u32(0, 1, 2, 3, 4, 5)
-    context, page = _page(
-        edge_browser, frontend_url, {"RigMultiRoot": payload})
-    try:
-        _open(page, "RigMultiRoot")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        page.evaluate("""async () => {
-          const bytes = new Uint8Array(96);
-          new Uint32Array(bytes.buffer).set([
-            0, 1, 0, 1, 0, 1, 6, 7, 6, 7, 6, 7,
-          ]);
-          new Float32Array(bytes.buffer, 48).set([
-            .8, .2, .7, .3, .8, .2, .7, .3,
-            .8, .2, .7, .3,
-          ]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__rigMultiRootUrl = url;
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 6, influence_count: 2,
-            bone_ids: [0, 1, 6, 7], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0',
-              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
-            },
-            data: {
-              url, length: 96,
-              indices: {offset: 0, length: 48, type: 'u32'},
-              weights: {offset: 48, length: 48, type: 'f32'},
-            }, diagnostics: {},
-          });
-        }""")
-        page.locator("#weight-rig-tab").click()
-        page.wait_for_function("window.modViewer.getModelRigState().loaded")
-        result = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const presets = await import('./js/mesh/weight-rig-presets.js');
-          let state = experiment.getModelRigState();
-          let debug = experiment.getModelRigDebugState();
-          const sourceKey = debug.sources[0].sourceKey;
-          const source = debug.sources[0];
-          const jointId = boneId => Number(source.modelJointIds[boneId]);
-          const components = source.components.filter(component =>
-            component.nodeIds.includes(0) || component.nodeIds.includes(6));
-          const roots = components.map(component =>
-            component.nodeIds.includes(0) ? 1 : 7);
-          if (components.length !== 2) {
-            return {componentCount: components.length};
-          }
-          roots.forEach(root => experiment.setRigJointRoot(jointId(root)));
-          state = experiment.getModelRigState();
-          debug = experiment.getModelRigDebugState();
-          const rootsBeforeApply = debug.explicitRootSignatures;
-          const debugModel = experiment.getModelRigDebugState();
-          const jointIdForBone = boneId => jointId(boneId);
-          const signatureForBone = boneId => debugModel.joints.find(joint =>
-            joint.jointId === jointIdForBone(boneId))?.signature;
-          const q = [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)];
-          experiment.setRigJointRotation(jointId(0), q, {dragging: true});
-          const preset = {
-            id: 'two-roots', name: 'Two roots',
-            roots: roots.map(root => ({joint_signature: signatureForBone(root)})),
-            joints: [{joint_signature: signatureForBone(0), rotation: q}],
-          };
-          const resolved = presets.resolveRigPreset({joints: debugModel.joints}, preset);
-          experiment.resetRigPose();
-          const position = window.modViewer.activeMeshes[0]
-            .geometry.attributes.position;
-          const versionBefore = position.version;
-          const applied = experiment.applyRigPosePreset(resolved);
-          state = experiment.getModelRigState();
-          debug = experiment.getModelRigDebugState();
-          return {
-            componentCount: state.model.components.length,
-            explicitRootCount: debug.explicitRootSignatures.length,
-            rootsBeforeApply,
-            appliedRootCount: applied.appliedRootCount,
-            skippedRootCount: applied.skippedRootCount,
-            appliedJointCount: applied.appliedJointCount,
-            applyVersionDelta: position.version - versionBefore,
-          };
-        }""")
-        assert result["componentCount"] == 2, result
-        assert len(result["rootsBeforeApply"]) == 2, result
-        assert result["explicitRootCount"] == 2, result
-        assert result["appliedRootCount"] == 2, result
-        assert result["skippedRootCount"] == 0, result
-        assert result["appliedJointCount"] == 1, result
-        assert result["applyVersionDelta"] == 1, result
-    finally:
-        page.evaluate("""() => {
-          if (window.__rigMultiRootUrl) {
-            URL.revokeObjectURL(window.__rigMultiRootUrl);
-            window.__rigMultiRootUrl = null;
-          }
-        }""")
-        context.close()
-
-
-def test_rig_overlay_real_controls_deform_without_proxy_feedback(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"RigControls": _payload("RigControls")})
-    try:
-        _open(page, "RigControls")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        page.evaluate("""async () => {
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 1, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__rigControlsUrl = url;
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0',
-              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-        }""")
-        page.locator("#weight-rig-tab").click()
-        page.wait_for_function("window.modViewer.getModelRigState().loaded")
-        result = page.evaluate("""async () => {
-          const THREE = await import('three/webgpu');
-          const {scene, camera} = await import('./js/scene/scene.js');
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const {createRigOverlayController} = await import(
-            './js/scene/rig-overlay-controller.js');
-          let debug = experiment.getModelRigDebugState();
-          let source = debug.sources[0];
-          const sourceKey = source.sourceKey;
-           const jointId = boneId => Number(source.modelJointIds[boneId]);
-           experiment.setRigJointRoot(jointId(0));
-          debug = experiment.getModelRigDebugState();
-          source = debug.sources.find(item =>
-            item.sourceKey === sourceKey);
-          const component = source.components.find(item =>
-            item.rootId === 0 && item.nodeIds.includes(0));
-          const bone1 = Number(component.childrenById[0][0]);
-          const bone2 = Number(component.childrenById[bone1][0]);
-          const canvas = document.querySelector('#canvas-container canvas');
-          const controller = createRigOverlayController({
-            scene, camera, canvas,
-            getMeshes: () => window.modViewer.activeMeshes,
-            getRigState: experiment.getModelRigState,
-            getRigJointPoseFrame: experiment.getRigJointPoseFrame,
-            setRigJointRotation: experiment.setRigJointRotation,
-            finishRigJointPose: experiment.finishRigJointPose,
-            requestRender: () => {},
-          });
-          const select = boneId => {
-            experiment.selectRigJoint(jointId(boneId));
-            controller.refresh(experiment.getModelRigState());
-          };
-          const mesh = window.modViewer.activeMeshes[0];
-          const positions = () => [...mesh.geometry.attributes.position.array];
-          const changed = (before, after) => after.some((value, index) =>
-            Math.abs(value - before[index]) > 1e-5);
-          const q90 = new THREE.Quaternion().setFromAxisAngle(
-            new THREE.Vector3(0, 0, 1), Math.PI / 2);
-          const q120 = new THREE.Quaternion().setFromAxisAngle(
-            new THREE.Vector3(0, 0, 1), Math.PI * 2 / 3);
-
-          select(bone1);
-          const controls = await controller.ensureTransformControls();
-          const beforeParent = positions();
-          controls.dispatchEvent({type: 'dragging-changed', value: true});
-          const parentDragStarted = controller.getDebugState();
-          controls.object.quaternion.copy(q90);
-          controls.dispatchEvent({type: 'objectChange'});
-          const afterParent = positions();
-          const parentProxyDuringDrag = controls.object.quaternion.toArray();
-          controls.dispatchEvent({type: 'dragging-changed', value: false});
-          await Promise.resolve();
-
-          select(bone2);
-          const childFrame = experiment.getRigJointPoseFrame(jointId(bone2));
-          const childProxyAtSelect = controls.object.quaternion.toArray();
-          const expectedChildLocal = new THREE.Quaternion(
-            ...childFrame.parentRotation).invert().multiply(q120)
-            .multiply(new THREE.Quaternion(...childFrame.restRotation)
-              .invert()).normalize().toArray();
-          const beforeChild = positions();
-          controls.dispatchEvent({type: 'dragging-changed', value: true});
-          controls.object.quaternion.copy(q120);
-          controls.dispatchEvent({type: 'objectChange'});
-          const afterChild = positions();
-          const childProxyDuringDrag = controls.object.quaternion.toArray();
-          const stateAfterChild = experiment.getModelRigDebugState().sources.find(
-            item => item.sourceKey === sourceKey);
-          const childLocal = stateAfterChild.poseRotationByBoneId[bone2];
-          const childDragStarted = controller.getDebugState();
-          controls.dispatchEvent({type: 'dragging-changed', value: false});
-          await Promise.resolve();
-          controller.dispose();
-          return {
-            bone1, bone2, parentDragStarted, childDragStarted,
-            parentProxyDuringDrag, childProxyAtSelect, childProxyDuringDrag,
-            childFrame, childLocal, expectedChildLocal,
-            parentChanged: changed(beforeParent, afterParent),
-            childChanged: changed(beforeChild, afterChild),
-          };
-        }""")
-        assert result["bone1"] == 1
-        assert result["bone2"] == 2
-        assert result["parentDragStarted"]["poseDragActive"] is True
-        assert result["childDragStarted"]["poseDragActive"] is True
-        assert result["parentChanged"]
-        assert result["childChanged"]
-        assert result["parentProxyDuringDrag"] == pytest.approx(
-            [0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], abs=1e-5)
-        assert result["childProxyAtSelect"] == pytest.approx(
-            result["childFrame"]["gizmoRotation"], abs=1e-5)
-        assert result["childProxyDuringDrag"] == pytest.approx(
-            [0, 0, math.sin(math.pi / 3), math.cos(math.pi / 3)], abs=1e-5)
-        assert len(result["childFrame"]["parentRotation"]) == 4
-        assert len(result["childFrame"]["restRotation"]) == 4
-        assert result["childLocal"] == pytest.approx(
-            result["expectedChildLocal"], abs=1e-5)
-    finally:
-        page.evaluate("""() => {
-          if (window.__rigControlsUrl) {
-            URL.revokeObjectURL(window.__rigControlsUrl);
-            window.__rigControlsUrl = null;
-          }
-        }""")
-        context.close()
-
-
-def test_skinning_physics_lifecycle_sleeps_and_resets_vectors(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url,
-        {"PhysicsLifecycle3D": _payload("PhysicsLifecycle3D")})
-    try:
-        _open(page, "PhysicsLifecycle3D")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        result = page.evaluate("""async () => {
-          const mesh = window.modViewer.activeMeshes[0];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-              bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          await experiment.ensureModelWeightsLoaded();
-          experiment.setSelectedBones([{
-            sourceKey: 'test/bodyblend.buf|offset=0',
-            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
-          }]);
-          experiment.disableModelPhysics();
-          const performance = await import(
-            './js/mesh/weight-physics-performance.js');
-          const queuedFrames = [];
-          const originalRequestAnimationFrame = window.requestAnimationFrame;
-          const originalCancelAnimationFrame = window.cancelAnimationFrame;
-          window.requestAnimationFrame = callback => {
-            queuedFrames.push(callback);
-            return callback;
-          };
-          window.cancelAnimationFrame = callback => {
-            const index = queuedFrames.indexOf(callback);
-            if (index >= 0) queuedFrames.splice(index, 1);
-          };
-          const runFrame = timestamp => {
-            const callback = queuedFrames.shift();
-            if (!callback) throw new Error('Expected a queued physics frame.');
-            callback(timestamp);
-          };
-          await experiment.enableModelPhysics();
-          const enabled = experiment.getSkinningState(mesh);
-          const enabledPhysics = experiment.getModelPhysicsDebugState();
-          const enabledState = {
-            enabled: enabled.physicsEnabled,
-            jointShape: [...enabledPhysics.physicsState.joints.values()]
-              .every(joint => Array.isArray(joint.rotationVector)
-                && Array.isArray(joint.angularVelocity)),
-            scheduled: experiment.isPhysicsScheduled(mesh),
-          };
-          performance.resetWeightPhysicsPerformanceStats();
-          runFrame(0);
-          runFrame(16.7);
-          const sleeping = experiment.getSkinningState(mesh);
-          const sleepingPhysics = experiment.getModelPhysicsDebugState();
-          const framePerformance = performance.getWeightPhysicsPerformanceStats();
-          performance.resetWeightPhysicsPerformanceStats();
-          window.dispatchEvent(new CustomEvent(
-            'mod-viewer-virtual-model-motion', {detail: {
-              normalizedLinearVelocityWorld: [.3, .1, .2],
-              active: true, source: 'rmb-drag',
-            }}));
-          runFrame(33.4);
-          for (let index = 0; index < 10; index += 1) {
-            runFrame(50.1 + index * 16.7);
-          }
-          const movingFramePerformance =
-            performance.getWeightPhysicsPerformanceStats();
-          const beforeVirtual = [...sleepingPhysics.physicsState.joints.values()]
-            .map(joint => [...joint.angularVelocity]);
-          const moving = experiment.getSkinningState(mesh);
-          const movingPhysics = experiment.getModelPhysicsDebugState();
-          const movingVelocity = [...movingPhysics.physicsState.joints.values()]
-            .map(joint => [...joint.angularVelocity]);
-          window.dispatchEvent(new CustomEvent(
-            'mod-viewer-virtual-model-motion', {detail: {
-              normalizedLinearVelocityWorld: [0, 0, 0],
-              active: false, source: 'rmb-drag',
-          }}));
-          const released = experiment.getSkinningState(mesh);
-          const virtualVelocity = experiment.getModelPhysicsDebugState()
-            .physicsVirtualLinearVelocityLocal;
-          experiment.resetModelPhysicsMotion();
-          const reset = experiment.getSkinningState(mesh);
-          const resetPhysics = experiment.getModelPhysicsDebugState();
-          window.requestAnimationFrame = originalRequestAnimationFrame;
-          window.cancelAnimationFrame = originalCancelAnimationFrame;
-          URL.revokeObjectURL(url);
-          return {
-            enabledState, framePerformance,
-            movingFramePerformance,
-            activeVertices: sleeping.physicsActiveVertices.length,
-            sleeping: sleepingPhysics.physicsSettled,
-            beforeVirtual, movingVelocity, virtualVelocity,
-            reset: [...resetPhysics.physicsState.joints.values()],
-            enabledAfterReset: reset.physicsEnabled,
-            scheduledAfterReset: experiment.isPhysicsScheduled(mesh),
-          };
-        }""")
-        assert result["enabledState"] == {
-            "enabled": True, "jointShape": True, "scheduled": True}
-        assert result["activeVertices"] == 2
-        assert result["framePerformance"]["physicsDeformedVertexCount"] == 2
-        assert result["framePerformance"]["physicsBoundsUpdateCount"] == 1
-        assert result["framePerformance"]["physicsUiNotifyCount"] == 0
-        assert result["movingFramePerformance"]["physicsFrameCount"] == 10
-        assert result["movingFramePerformance"]["dynamicShadowUpdateCount"] == 10
-        assert result["movingFramePerformance"]["shadowFitCount"] == 0
-        assert result["movingFramePerformance"]["physicsBoundsUpdateCount"] == 0
-        assert result["movingFramePerformance"]["composedTransformBuildCount"] == 10
-        assert result["sleeping"]
-        assert any(
-            any(abs(value) > 1e-6 for value in vector)
-            for vector in result["movingVelocity"])
-        assert result["virtualVelocity"] == [0, 0, 0]
-        assert all(
-            joint["rotationVector"] == [0, 0, 0]
-            and joint["angularVelocity"] == [0, 0, 0]
-            for joint in result["reset"])
-        assert result["enabledAfterReset"]
-        assert not result["scheduledAfterReset"]
-    finally:
-        context.close()
-
 def test_skinning_load_is_invalidated_by_shape_change(
         edge_browser, frontend_url):
     context, page = _page(
@@ -2357,10 +1249,10 @@ def test_skinning_load_is_invalidated_by_shape_change(
             releasePreview = resolve;
           });
           window.__testSkinningPreview = async () => previewPending;
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           const {setControlValue} = await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
-          const loadPromise = experiment.ensureModelWeightsLoaded();
+          const loadPromise = experiment.ensureModelRigLoaded();
           const loading = experiment.getModelWeightState().loading;
           setControlValue('shape', '1');
           refreshMeshes();
@@ -2393,356 +1285,8 @@ def test_skinning_load_is_invalidated_by_shape_change(
         context.close()
 
 
-def test_loaded_skinning_rebaselines_after_shape_change(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"SkinningShape": _payload("SkinningShape")})
-    try:
-        _open(page, "SkinningShape")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        result = page.evaluate("""async () => {
-          const mesh = window.modViewer.activeMeshes[0];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-              bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const {setControlValue} = await import('./js/editing/control-state.js');
-          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
-          await experiment.ensureModelWeightsLoaded();
-          await experiment.ensureModelRigLoaded();
-          let rigState = experiment.getModelRigState();
-          let debug = experiment.getModelRigDebugState();
-          const rootComponent = rigState.model.components.find(component =>
-            component.nodeIds.some(id => id !== component.rootId));
-          const manualRootId = rootComponent?.nodeIds.find(id =>
-            id !== rootComponent.rootId);
-          const manualRootJoint = debug.joints.find(joint =>
-            joint.jointId === manualRootId);
-          const manualRootSignature = manualRootJoint?.signature;
-          const manualRootApplied = experiment.setRigJointRoot(manualRootId);
-          rigState = experiment.getModelRigState();
-          const posedJoint = debug.joints.find(joint =>
-            rigState.model.components.some(component =>
-              component.nodeIds.includes(joint.jointId)
-              && component.rootId !== joint.jointId));
-          const posedJointSignature = posedJoint?.signature;
-          const THREE = await import('three');
-          if (posedJoint) {
-            experiment.setRigJointRotation(posedJoint.jointId,
-              new THREE.Quaternion().setFromAxisAngle(
-                new THREE.Vector3(0, 0, 1), Math.PI / 12));
-          }
-          const before = [...mesh.geometry.attributes.position.array];
-          setControlValue('shape', '1');
-          refreshMeshes();
-          const state = experiment.getSkinningState(mesh);
-          const influenceGraph = state.influenceGraph;
-          await experiment.ensureModelRigLoaded();
-          const rebuiltDebug = experiment.getModelRigDebugState();
-          const rebuiltJoint = rebuiltDebug.joints.find(joint =>
-            joint.signature === manualRootSignature);
-          const rebuiltComponent = rebuiltDebug.components.find(component =>
-            component.nodeIds.includes(rebuiltJoint?.jointId));
-          const rebuiltPoseJoint = rebuiltDebug.joints.find(joint =>
-            joint.signature === posedJointSignature);
-          const rootSurvived = rebuiltComponent?.rootId === rebuiltJoint?.jointId
-            && rebuiltDebug.explicitRootSignatures.includes(manualRootSignature);
-          const poseAfterRebuild = experiment.setRigJointRotation(
-            rebuiltPoseJoint?.jointId,
-            new THREE.Quaternion().setFromAxisAngle(
-              new THREE.Vector3(0, 0, 1), Math.PI / 12),
-            {dragging: true});
-          const resetAfterRebuild = experiment.resetRigPose();
-          const resetDebug = experiment.getModelRigDebugState();
-          const resetComponent = resetDebug.components.find(component =>
-            component.nodeIds.includes(rebuiltJoint?.jointId));
-          const resetWorked = resetAfterRebuild
-            && resetDebug.poseJointIds.length === 0
-            && resetDebug.explicitRootSignatures.length === 0
-            && resetComponent
-            && resetComponent.rootId !== rebuiltJoint?.jointId;
-          experiment.setRigJointRoot(rebuiltJoint?.jointId);
-          experiment.unregisterSkinningMesh(mesh);
-          const unresolvedDebug = experiment.getModelRigDebugState();
-          const unresolvedDropped = Array.isArray(
-            unresolvedDebug.explicitRootSignatures)
-            && unresolvedDebug.explicitRootSignatures.length === 0;
-          experiment.destroyModelPhysicsSession();
-          const resetState = experiment.getModelRigState();
-          const after = [...mesh.geometry.attributes.position.array];
-          const box = mesh.geometry.boundingBox;
-          const sphere = mesh.geometry.boundingSphere;
-          URL.revokeObjectURL(url);
-          return {
-            loaded: state.loaded,
-            manualRootApplied,
-            manualRootSignature,
-            rootSurvived,
-            poseAfterRebuild,
-            resetWorked,
-            unresolvedDropped,
-            fullResetCleared: !resetState.loaded,
-            baseline: [...state.baselinePositions],
-            before, after,
-            bounds: {
-              min: box.min.toArray(), max: box.max.toArray(),
-            },
-            sphere: {
-              center: sphere.center.toArray(), radius: sphere.radius,
-            },
-            graph: influenceGraph,
-          };
-        }""")
-        assert result["loaded"]
-        assert result["before"] != result["after"]
-        assert result["after"][3] == pytest.approx(1.2)
-        assert result["after"][7] == pytest.approx(1.2)
-        assert result["baseline"] == pytest.approx(result["after"])
-        assert result["bounds"]["min"] == pytest.approx([0, 0, 0])
-        assert result["bounds"]["max"] == pytest.approx([1.2, 1.2, 0])
-        assert result["sphere"]["center"] == pytest.approx([.6, .6, 0])
-        assert result["sphere"]["radius"] == pytest.approx(math.sqrt(.72))
-        assert result["manualRootApplied"]
-        assert result["manualRootSignature"]
-        assert result["rootSurvived"]
-        assert result["poseAfterRebuild"]
-        assert result["resetWorked"]
-        assert result["unresolvedDropped"]
-        assert result["fullResetCleared"]
-        for offset in range(0, len(result["after"]), 3):
-            point = result["after"][offset:offset + 3]
-            assert all(result["bounds"]["min"][axis] - 1e-6 <= point[axis]
-                       <= result["bounds"]["max"][axis] + 1e-6
-                       for axis in range(3))
-            distance = math.sqrt(sum((point[axis]
-                                      - result["sphere"]["center"][axis]) ** 2
-                                     for axis in range(3)))
-            assert distance <= result["sphere"]["radius"] + 1e-6
-        assert result["graph"] is None
-    finally:
-        context.close()
-
-
-def _multi_mesh_skinning_shape_payload():
-    payload = _payload("SkinningShapePair")
-    template = next(iter(payload["meshes"].values()))
-    second = copy.deepcopy(template)
-    second["component"] = "Body SkinningShapePair second"
-    payload["meshes"]["Body-SkinningShapePair-1"] = second
-    return payload
-
-
-def test_loaded_skinning_rebaselines_all_shape_target_meshes(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url,
-        {"SkinningShapePair": _multi_mesh_skinning_shape_payload()})
-    try:
-        _open(page, "SkinningShapePair")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
-        result = page.evaluate("""async () => {
-          const meshes = [...window.modViewer.activeMeshes];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-              bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const {setControlValue} = await import('./js/editing/control-state.js');
-          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
-          await experiment.ensureModelWeightsLoaded();
-          await experiment.ensureModelRigLoaded();
-          const rigState = experiment.getModelRigState();
-          const debug = experiment.getModelRigDebugState();
-          const initialSurfaceArea = debug.sources[0].totalSurfaceArea;
-          const weightStatsBefore = experiment.getModelWeightState().sources
-            .map(source => source.boneStats);
-          const component = rigState.model.components.find(item =>
-            item.nodeIds.some(id => id !== item.rootId));
-          const manualRootId = component?.nodeIds.find(id =>
-            id !== component.rootId);
-          const manualRoot = debug.joints.find(joint =>
-            joint.jointId === manualRootId);
-          const manualRootApplied = experiment.setRigJointRoot(manualRootId);
-          const before = meshes.map(mesh =>
-            [...mesh.geometry.attributes.position.array]);
-          setControlValue('shape', '1');
-          const refresh = refreshMeshes();
-          const after = meshes.map(mesh =>
-            [...mesh.geometry.attributes.position.array]);
-          const states = meshes.map(mesh =>
-            experiment.getSkinningState(mesh));
-          await experiment.ensureModelRigLoaded();
-          const rebuilt = experiment.getModelRigDebugState();
-          const weightStatsAfter = experiment.getModelWeightState().sources
-            .map(source => source.boneStats);
-          const rebuiltJoint = rebuilt.joints.find(joint =>
-            joint.signature === manualRoot?.signature);
-          const rebuiltComponent = rebuilt.components.find(item =>
-            item.nodeIds.includes(rebuiltJoint?.jointId));
-          const rootSurvived = rebuiltComponent?.rootId === rebuiltJoint?.jointId
-            && rebuilt.explicitRootSignatures.includes(manualRoot?.signature);
-          const result = {
-            meshCount: meshes.length,
-            changedMeshCount: refresh.changedMeshes.length,
-            bothLoaded: states.every(state => state.loaded),
-            bothChanged: after.every((positions, index) =>
-              JSON.stringify(positions) !== JSON.stringify(before[index])),
-            manualRootApplied,
-            rootSurvived,
-            explicitRootSignatures: rebuilt.explicitRootSignatures,
-            evidence: rebuilt.sources.map(source => ({
-              evidenceMode: source.evidenceMode,
-              triangleCount: source.triangleCount,
-              validTriangleCount: source.validTriangleCount,
-              totalSurfaceArea: source.totalSurfaceArea,
-              fallbackReason: source.fallbackReason,
-              memberCount: source.memberCount,
-              uniqueMemberCount: source.uniqueMemberCount,
-              duplicateMemberCount: source.duplicateMemberCount,
-              memberDiagnostics: source.memberDiagnostics,
-              partialOverlapPairs: source.partialOverlapPairs,
-            })),
-            initialSurfaceArea,
-            weightStatsUnchanged: JSON.stringify(weightStatsBefore)
-              === JSON.stringify(weightStatsAfter),
-            before, after,
-          };
-          experiment.destroyModelPhysicsSession();
-          URL.revokeObjectURL(url);
-          return result;
-        }""")
-        assert result["meshCount"] == 2
-        assert result["changedMeshCount"] == 2
-        assert result["bothLoaded"]
-        assert result["bothChanged"]
-        assert result["manualRootApplied"]
-        assert result["rootSurvived"], result
-        assert result["explicitRootSignatures"]
-        assert result["evidence"]
-        assert result["initialSurfaceArea"] > 0
-        assert all(source["evidenceMode"] == "surface"
-                   and source["triangleCount"] == 1
-                   and source["validTriangleCount"] == 1
-                   and source["totalSurfaceArea"] > 0
-                   and source["fallbackReason"] is None
-                   and source["memberCount"] == 2
-                   and source["uniqueMemberCount"] == 1
-                   and source["duplicateMemberCount"] == 1
-                   and source["memberDiagnostics"][0]["duplicate"] is False
-                   and source["memberDiagnostics"][1]["duplicate"] is True
-                   and source["partialOverlapPairs"] == []
-                   for source in result["evidence"]), result["evidence"]
-        assert result["evidence"][0]["totalSurfaceArea"] != pytest.approx(
-            result["initialSurfaceArea"])
-        assert result["weightStatsUnchanged"]
-        assert all(positions[3] == pytest.approx(1.2)
-                   and positions[7] == pytest.approx(1.2)
-                   for positions in result["after"])
-    finally:
-        context.close()
-
-
-def test_rig_surface_evidence_falls_back_for_source_with_unusable_member(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url,
-        {"SkinningShapePair": _multi_mesh_skinning_shape_payload()})
-    try:
-        _open(page, "SkinningShapePair")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
-        result = page.evaluate("""async () => {
-          const meshes = [...window.modViewer.activeMeshes];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-              bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          await experiment.ensureModelWeightsLoaded();
-          const damagedIndex = meshes[1].geometry.index.array;
-          damagedIndex[2] = 99;
-          meshes[1].geometry.index.needsUpdate = true;
-          await experiment.ensureModelRigLoaded();
-          const debug = experiment.getModelRigDebugState();
-          const weight = experiment.getModelWeightState();
-          const source = debug.sources[0];
-          const weightSource = weight.sources[0];
-          experiment.destroyModelPhysicsSession();
-          URL.revokeObjectURL(url);
-          return {
-            evidenceMode: source.evidenceMode,
-            triangleCount: source.triangleCount,
-            validTriangleCount: source.validTriangleCount,
-            invalidTriangleCount: source.invalidTriangleCount,
-            totalSurfaceArea: source.totalSurfaceArea,
-            fallbackReason: source.fallbackReason,
-            affectedMeasure: source.nodes[0].affectedMeasure,
-            partialOverlapPairs: source.partialOverlapPairs,
-            duplicateMemberCount: source.duplicateMemberCount,
-            weightSourceHasEvidenceDiagnostics: [
-              'evidenceMode', 'triangleCount', 'fallbackReason',
-            ].some(key => Object.hasOwn(weightSource, key)),
-          };
-        }""")
-        assert result == {
-            "evidenceMode": "vertex",
-            "triangleCount": 2,
-            "validTriangleCount": 1,
-            "invalidTriangleCount": 1,
-            "totalSurfaceArea": pytest.approx(.5),
-            "fallbackReason": "surface_evidence_unavailable",
-            "affectedMeasure": None,
-            "partialOverlapPairs": [{
-                "leftMemberKey": "Body-SkinningShapePair-0",
-                "rightMemberKey": "Body-SkinningShapePair-1",
-                "sharedVertexCount": 3,
-            }],
-            "duplicateMemberCount": 0,
-            "weightSourceHasEvidenceDiagnostics": False,
-        }
-    finally:
-        context.close()
-
-
-@pytest.mark.parametrize("stale_failure", [False, True], ids=["success", "failure"])
 def test_stale_rig_load_cannot_publish_after_model_switch(
-        edge_browser, frontend_url, stale_failure):
+        edge_browser, frontend_url):
     context, page = _page(
         edge_browser, frontend_url,
         {"RigRaceA": _payload("RigRaceA"), "RigRaceB": _payload("RigRaceB")})
@@ -2773,14 +1317,13 @@ def test_stale_rig_load_cannot_publish_after_model_switch(
           window.__testSkinningPreview = async path =>
             path === 'RigRaceA' ? pendingA : entry(
               'test/race-b-bodyblend.buf|offset=0', 'RaceB/BodyBlend.buf');
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           const loadA = experiment.ensureModelRigLoaded();
           await window.modViewer.switchMod('RigRaceB');
           await new Promise(resolve => setTimeout(resolve, 0));
           const loadB = experiment.ensureModelRigLoaded();
           const duringB = experiment.getModelRigState();
-          if (staleFailure) rejectA(new Error('stale request failed'));
-          else releaseA(entry(
+          releaseA(entry(
               'test/race-a-bodyblend.buf|offset=0', 'RaceA/BodyBlend.buf'));
           const stale = await loadA;
           const current = await loadB;
@@ -2790,12 +1333,12 @@ def test_stale_rig_load_cannot_publish_after_model_switch(
             staleLoaded: stale.loaded,
             duringBLoading: duringB.loading,
             currentLoaded: current.loaded,
-                currentSource: experiment.getModelRigDebugState().sources.map(
-                  source => source.sourceKey),
+                currentSource: experiment.getModelWeightState().sources.map(
+                      source => source.key),
             currentModelJoints: state.model?.joints?.length || 0,
             currentError: state.error,
           };
-        }""", stale_failure)
+        }""")
         assert result["duringBLoading"]
         assert result["staleLoaded"] is False
         assert result["currentLoaded"]
@@ -2803,80 +1346,6 @@ def test_stale_rig_load_cannot_publish_after_model_switch(
             "test/race-b-bodyblend.buf|offset=0"]
         assert result["currentModelJoints"] > 0
         assert result["currentError"] is None
-    finally:
-        context.close()
-
-
-def test_model_physics_loads_eligible_meshes_with_partial_failures(
-        edge_browser, frontend_url):
-    payload = _payload("PartialPhysics")
-    second = copy.deepcopy(next(iter(payload["meshes"].values())))
-    second["component"] = "Hair PartialPhysics"
-    payload["meshes"]["Hair-PartialPhysics-0"] = second
-    context, page = _page(
-        edge_browser, frontend_url, {"PartialPhysics": payload})
-    try:
-        _open(page, "PartialPhysics")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 2")
-        result = page.evaluate("""async () => {
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__testSkinningPreview = async (
-            _path, semanticKey) => {
-            if (semanticKey.startsWith('Hair-')) {
-              return {status: 'error', code: 'unsupported_skinning_layout'};
-            }
-            return {
-              status: 'ok', vertex_count: 3, influence_count: 2,
-              bone_ids: [0, 1, 2], encoding: 'test', source: {
-                key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-                bone_id_offset: 0,
-              },
-              data: {
-                url, length: 48,
-                indices: {offset: 0, length: 24, type: 'u32'},
-                weights: {offset: 24, length: 24, type: 'f32'},
-              }, diagnostics: {},
-            };
-          };
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          for (const mesh of window.modViewer.activeMeshes) {
-            await experiment.ensureModelWeightsLoaded();
-          }
-          experiment.setSelectedBones([{
-            sourceKey: 'test/bodyblend.buf|offset=0',
-            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
-          }]);
-          const finalState = await experiment.enableModelPhysics();
-          const states = window.modViewer.activeMeshes.map(mesh => {
-            const state = experiment.getSkinningState(mesh);
-            return {
-              status: state.physicsParticipantStatus,
-              enabled: state.physicsEnabled,
-              error: state.physicsParticipantError,
-            };
-          });
-          const disabled = experiment.disableModelPhysics();
-          return {
-            state: finalState,
-            states,
-            disabledResult: disabled,
-            disabled: experiment.getModelPhysicsState(),
-            disabledStates: window.modViewer.activeMeshes.map(mesh =>
-              experiment.getSkinningState(mesh).physicsEnabled),
-          };
-        }""")
-        assert result["state"]["enabled"]
-        assert result["state"]["participantCount"] == 1
-        assert result["state"]["failedCount"] == 1
-        assert sorted(item["status"] for item in result["states"]) == [
-            "failed", "participating"]
-        assert result["disabledResult"]
-        assert all(result["disabledStates"]) is False
-        assert not result["disabled"]["enabled"]
-        assert result["disabled"]["participantCount"] == 0
     finally:
         context.close()
 
@@ -2915,8 +1384,9 @@ def _invalidation_payload():
     })
     return payload
 
-
 def test_control_dependency_and_snapshot_helpers(edge_browser, frontend_url):
+
+
     context, page = _page(edge_browser, frontend_url, {"Deps": _payload("Deps")})
     try:
         result = page.evaluate("""async () => {
@@ -3127,358 +1597,6 @@ def test_noop_control_refresh_does_not_request_render(edge_browser, frontend_url
         context.close()
 
 
-def test_skinning_angular_motion_uses_full_quaternion_delta(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"AngularLifecycle3D": _payload("AngularLifecycle3D")})
-    try:
-        _open(page, "AngularLifecycle3D")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        result = page.evaluate("""async () => {
-          const THREE = await import('three');
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const mesh = window.modViewer.activeMeshes[0];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-              bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          await experiment.ensureModelWeightsLoaded();
-          experiment.setSelectedBones([{
-            sourceKey: 'test/bodyblend.buf|offset=0',
-            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
-          }]);
-          const originalRequestAnimationFrame = window.requestAnimationFrame;
-          const originalCancelAnimationFrame = window.cancelAnimationFrame;
-          const queuedFrames = [];
-          window.requestAnimationFrame = callback => {
-            queuedFrames.push(callback);
-            return callback;
-          };
-          window.cancelAnimationFrame = callback => {
-            const index = queuedFrames.indexOf(callback);
-            if (index >= 0) queuedFrames.splice(index, 1);
-          };
-          const runFrames = timestamp => {
-            queuedFrames.splice(0).forEach(callback => callback(timestamp));
-          };
-          await experiment.enableModelPhysics();
-          runFrames(0);
-          runFrames(16.7);
-          const before = [...mesh.geometry.attributes.position.array];
-          mesh.quaternion.copy(new THREE.Quaternion().setFromEuler(
-            new THREE.Euler(.2, .3, .4, 'XYZ')));
-              window.dispatchEvent(new CustomEvent(
-                'mod-viewer-model-transform-changed', {
-                  detail: {meshes: [mesh], reason: 'test-rotation'},
-                }));
-              const physicsDebug = experiment.getModelPhysicsDebugState();
-              const delta = physicsDebug.lastRootAngularDeltaVector;
-          const jointVectors = [...experiment.getModelPhysicsDebugState()
-            .physicsState.joints.values()]
-            .map(joint => joint.rotationVector);
-          runFrames(33.4);
-          const after = experiment.getSkinningState(mesh);
-          const afterPhysics = experiment.getModelPhysicsDebugState();
-          window.requestAnimationFrame = originalRequestAnimationFrame;
-          window.cancelAnimationFrame = originalCancelAnimationFrame;
-          URL.revokeObjectURL(url);
-          return {
-                delta,
-                deltaMagnitude: physicsDebug.lastRootAngularDeltaMagnitude,
-            jointVectors,
-            geometryChanged: mesh.geometry.attributes.position.array.some(
-              (value, index) => Math.abs(value - before[index]) > 1e-6),
-            scheduled: experiment.isPhysicsScheduled(mesh),
-            settled: afterPhysics.physicsSettled,
-          };
-        }""")
-        assert all(abs(value) > 1e-5 for value in result["delta"])
-        assert result["deltaMagnitude"] > .1
-        assert any(
-            sum(abs(value) for value in vector) > 1e-5
-            for vector in result["jointVectors"])
-        assert result["geometryChanged"]
-        assert result["scheduled"]
-    finally:
-        context.close()
-
-
-def test_skinning_translation_gravity_limits_and_cleanup_use_vector_state(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"MotionLifecycle3D": _payload("MotionLifecycle3D")})
-    try:
-        _open(page, "MotionLifecycle3D")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        result = page.evaluate("""async () => {
-          const THREE = await import('three');
-          const scene = await import('./js/scene/scene.js');
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const mesh = window.modViewer.activeMeshes[0];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-              bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          await experiment.ensureModelWeightsLoaded();
-          experiment.setSelectedBones([{
-            sourceKey: 'test/bodyblend.buf|offset=0',
-            sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
-          }]);
-          const originalRequestAnimationFrame = window.requestAnimationFrame;
-          const originalCancelAnimationFrame = window.cancelAnimationFrame;
-          const queuedFrames = [];
-          window.requestAnimationFrame = callback => {
-            queuedFrames.push(callback);
-            return callback;
-          };
-          window.cancelAnimationFrame = callback => {
-            const index = queuedFrames.indexOf(callback);
-            if (index >= 0) queuedFrames.splice(index, 1);
-          };
-          const runFrames = timestamp => {
-            queuedFrames.splice(0).forEach(callback => callback(timestamp));
-          };
-          await experiment.enableModelPhysics();
-          runFrames(0);
-          runFrames(16.7);
-          const cameraBefore = scene.camera.position.clone();
-          const positionBefore = mesh.position.clone();
-          scene.translateModel([mesh], [0, 0, .25]);
-          const translated = experiment.getModelPhysicsDebugState();
-          const translationVector = [...translated.lastTranslationLagRotationVector];
-          const translationMagnitude = translated.lastTranslationLagRotationMagnitude;
-          experiment.setPhysicsGravityEnabled(true);
-          const gravity = experiment.getModelPhysicsDebugState();
-          const gravityVector = [...gravity.physicsGravityAccelerations.get(1)];
-          const gravityMax = gravity.physicsGravityDiagnostics
-            .maxTotalAccelerationMagnitude;
-          experiment.setPhysicsConstraintsEnabled(true);
-          experiment.setPhysicsMaxBendDegrees(10);
-          const constrained = experiment.getSkinningState(mesh);
-          const constrainedPhysics = experiment.getModelPhysicsDebugState();
-          const limits = constrainedPhysics.physicsJointLimits instanceof Map;
-          const beforeReset = [...constrainedPhysics.physicsState.joints.values()]
-            .map(joint => ({
-              rotationVector: joint.rotationVector,
-              angularVelocity: joint.angularVelocity,
-            }));
-          experiment.resetModelPhysics();
-          const reset = experiment.getSkinningState(mesh);
-          const resetPhysics = experiment.getModelPhysicsDebugState();
-          const resetSettings = experiment.getModelPhysicsState();
-          const resetJoints = [...resetPhysics.physicsState.joints.values()];
-          const resetKeepsEnabled = reset.physicsEnabled;
-          experiment.disableModelPhysics();
-          const disabled = experiment.getSkinningState(mesh);
-          window.requestAnimationFrame = originalRequestAnimationFrame;
-          window.cancelAnimationFrame = originalCancelAnimationFrame;
-          URL.revokeObjectURL(url);
-          return {
-            moved: !mesh.position.equals(positionBefore),
-            cameraUnchanged: scene.camera.position.equals(cameraBefore),
-            translationVector,
-            translationMagnitude,
-            gravityVector,
-            gravityMax,
-            limits,
-            beforeReset,
-            reset: resetJoints,
-            resetGravityEnabled: resetSettings.gravityEnabled,
-            resetGravityScale: resetSettings.gravityScale,
-            resetConstraintsEnabled: resetSettings.constraintsEnabled,
-            resetMaxBendDegrees: resetSettings.maxBendDegrees,
-            resetKeepsEnabled,
-            disabled: {
-              enabled: disabled.physicsEnabled,
-              reference: disabled.physicsReferenceQuaternion,
-            },
-          };
-        }""")
-        assert result["moved"]
-        assert result["cameraUnchanged"]
-        assert result["translationMagnitude"] > 1e-5
-        assert any(abs(value) > 1e-5 for value in result["translationVector"])
-        assert result["gravityVector"]
-        assert result["gravityMax"] > 0
-        assert result["limits"]
-        assert any(
-            sum(abs(value) for value in joint["rotationVector"]) > 1e-5
-            for joint in result["beforeReset"])
-        assert all(
-            joint["rotationVector"] == [0, 0, 0]
-            and joint["angularVelocity"] == [0, 0, 0]
-            for joint in result["reset"])
-        assert result["resetKeepsEnabled"]
-        assert not result["resetGravityEnabled"]
-        assert result["resetGravityScale"] == 1
-        assert not result["resetConstraintsEnabled"]
-        assert result["resetMaxBendDegrees"] == 45
-        assert result["disabled"] == {"enabled": False, "reference": None}
-    finally:
-        context.close()
-
-
-
-
-
-def test_weight_panel_loads_model_weights_and_controls_selected_bones(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"WeightPanel": _payload("WeightPanel")})
-    try:
-        _open(page, "WeightPanel")
-        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
-        page.evaluate("""async () => {
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          const key = window.modViewer.activeMeshes[0].userData.semanticKey;
-          window.__weightPreviewCalls = 0;
-          window.pywebview.api.get_model_skinning_preview = async () => {
-            window.__weightPreviewCalls += 1;
-            return {
-              status: 'ok', format_version: 1,
-              data: {url, length: 48},
-              meshes: {[key]: {
-                status: 'ok', vertex_count: 3, influence_count: 2,
-                bone_ids: [0, 1, 2], encoding: 'test', source: {
-                  key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-                  bone_id_offset: 0,
-                },
-                data: {
-                  indices: {offset: 0, length: 24, type: 'u32'},
-                  weights: {offset: 24, length: 24, type: 'f32'},
-                }, diagnostics: {},
-              }},
-            };
-          };
-        }""")
-        assert page.evaluate("window.modViewer.getModelWeightState().selectedBoneCount") == 0
-        page.locator("#weight-rig-tab").click()
-        page.wait_for_function("window.__weightPreviewCalls === 1")
-        page.wait_for_function("window.modViewer.getModelWeightState().loaded")
-        mask_count_before = page.evaluate("""async () =>
-          (await import('./js/mesh/weight-experiment.js'))
-            .getSelectedWeightMaskBuildCount()""")
-        assert page.locator("#inspector-panel .weight-section").count() == 0
-        assert page.locator(".weight-bone-select").inner_text() == "Select bones"
-
-        page.locator(".weight-bone-select").click()
-        assert page.locator(".weight-bone-option").evaluate_all("""
-          nodes => nodes.map(node => [
-            node.querySelector('.weight-bone-id').textContent,
-            node.querySelector('.weight-bone-meta').textContent,
-          ])
-        """) == [
-            ["0", "2 verts · 70%"],
-            ["1", "2 verts · 45%"],
-            ["2", "2 verts · 35%"],
-        ]
-        assert page.locator("#weight-rig-panel .inspector-label").count() == 0
-        assert page.locator("#weight-rig-panel .inspector-value").count() == 0
-        assert page.locator("#weight-rig-panel .inspector-section-title").count() == 0
-        stats_build_count = page.evaluate("""async () =>
-          (await import('./js/mesh/weight-experiment.js'))
-            .getModelBoneStatsBuildCount()""")
-        page.locator('.weight-bone-option input[value="1"]').check()
-        page.wait_for_function("""() =>
-          window.modViewer.getModelWeightState().selectedBoneCount === 1""")
-        mask_count_after = page.evaluate("""async () =>
-          (await import('./js/mesh/weight-experiment.js'))
-            .getSelectedWeightMaskBuildCount()""")
-        assert mask_count_after - mask_count_before == 1
-        mask = page.evaluate("""async () => {
-          const mesh = window.modViewer.activeMeshes[0];
-          const {getSkinningState} = await import('./js/mesh/weight-experiment.js');
-          return [...getSkinningState(mesh).selectedWeightMask];
-        }""")
-        assert mask == pytest.approx([.2, .7, 0])
-
-        page.locator(".draw-item").click()
-        if page.locator("#weight-rig-tab").get_attribute("aria-selected") != "true":
-            page.locator("#weight-rig-tab").click()
-        assert page.locator("#weight-rig-tab").get_attribute("aria-selected") == "true"
-        page.locator(".weight-heatmap-enable").check()
-        assert page.evaluate("window.modViewer.getModelWeightState().heatmapEnabled")
-        mask_count_before = page.evaluate("""async () =>
-          (await import('./js/mesh/weight-experiment.js'))
-            .getSelectedWeightMaskBuildCount()""")
-        page.locator("#weight-rig-tab").click()
-        page.locator("#weight-rig-tab").click()
-        page.wait_for_function("window.modViewer.getModelWeightState().heatmapEnabled")
-        page.locator(".weight-bone-select").click()
-        page.locator('.weight-bone-option input[value="2"]').check()
-        page.wait_for_function("""() =>
-          window.modViewer.getModelWeightState().selectedBoneCount === 2""")
-        mask_count_after = page.evaluate("""async () =>
-          (await import('./js/mesh/weight-experiment.js'))
-            .getSelectedWeightMaskBuildCount()""")
-        assert mask_count_after - mask_count_before == 1
-        page.locator(".weight-bone-select").click()
-        assert page.evaluate("window.__weightPreviewCalls") == 1
-        assert page.evaluate("""async () =>
-          (await import('./js/mesh/weight-experiment.js'))
-            .getModelBoneStatsBuildCount()""") == stats_build_count
-        assert page.locator(".weight-scope-option").count() == 0
-        assert page.locator(".weight-model-joint-option").count() == 0
-        assert page.locator(".weight-rig-advanced").count() == 2
-        assert page.locator(".weight-selection-actions").evaluate(
-            "node => node.closest('details') === null")
-        assert page.locator(".rig-save-preset").evaluate(
-            "node => node.closest('details') === null")
-        assert page.locator(".rig-apply-preset").count() == 0
-        assert page.locator(".weight-rig-advanced").evaluate_all(
-            "nodes => nodes.every(node => !node.open)")
-        page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
-        physics = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          const state = experiment.getSkinningState(
-            window.modViewer.activeMeshes[0]);
-          const debug = experiment.getModelPhysicsDebugState();
-          return {enabled: state.physicsEnabled,
-            dynamic: (debug?.physicsForest?.components || [])
-              .flatMap(component => component.dynamicNodeIds || [])
-              .sort((left, right) => left - right)};
-        }""")
-        assert physics["enabled"]
-        assert physics["dynamic"] == [1, 2]
-        page.locator(".weight-rig-advanced").first.locator("summary").click()
-        page.locator(".weight-clear-selection").click()
-        page.wait_for_function("!window.modViewer.getModelPhysicsState().enabled")
-        assert page.evaluate("window.__weightPreviewCalls") == 1
-        assert page.evaluate("window.modViewer.getModelWeightState().selectedBoneCount") == 0
-    finally:
-        page.evaluate("""() => {
-          if (window.__weightPreviewCalls) window.__weightPreviewCalls = 0;
-        }""")
-        context.close()
-
-
 def test_weight_picker_discovers_influences_without_mutating_selection(
         edge_browser, frontend_url):
     context, page = _page(
@@ -3512,7 +1630,7 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         page.wait_for_function("window.modViewer.getModelWeightState().loaded")
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         selected_joint_before = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           const id = experiment.getModelRigState().model.joints[0].jointId;
           experiment.selectRigJoint(id);
           return experiment.getModelRigState().selectedJointId;
@@ -3544,7 +1662,7 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
           const {camera, renderer} = await import('./js/scene/scene.js');
           const {raycastModelAtClientPoint} = await import(
             './js/scene/model-picking.js');
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           const before = experiment.getModelWeightState().pickedPoint;
           const intersection = raycastModelAtClientPoint({
             clientX: point.x, clientY: point.y,
@@ -3986,7 +2104,7 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
         page.locator('.weight-bone-option[data-source-key="hair/hairblend.buf|offset=0"] input[value="1"]').check()
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
         result = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           const {getSkinningState} = experiment;
           const [hair, coat] = window.modViewer.activeMeshes.map(getSkinningState);
           return {
@@ -4008,12 +2126,12 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
         page.locator(".weight-bone-select").click()
         page.locator(".weight-heatmap-enable").check()
         assert page.evaluate("""async () => {
-          const {getSkinningState} = await import('./js/mesh/weight-experiment.js');
+          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
           return window.modViewer.activeMeshes.map(mesh =>
             getSkinningState(mesh).heatmapMode);
         }""") == ["bone", None]
         distinct = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           experiment.setSelectedBones([
             {sourceKey: 'hair/hairblend.buf|offset=0',
              sourceFile: 'Hair/HairBlend.buf', boneIdOffset: 0, boneIds: [1]},
@@ -4022,21 +2140,15 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
           ]);
           const [hair, coat] = window.modViewer.activeMeshes.map(
             experiment.getSkinningState);
-          const hairPhysics = experiment.getModelPhysicsDebugState(
-            hair.skinningSourceKey);
-          const coatPhysics = experiment.getModelPhysicsDebugState(
-            coat.skinningSourceKey);
           return {
             physics: experiment.getModelPhysicsState(),
-            independentState: hairPhysics.physicsState !== coatPhysics.physicsState,
-            independentTransforms: hairPhysics.composedTransforms
-              !== coatPhysics.composedTransforms,
+            independentSources: hair.skinningSourceKey
+              !== coat.skinningSourceKey,
           };
         }""")
         assert distinct["physics"]["participantCount"] == 2
         assert distinct["physics"]["participatingMeshCount"] == 2
-        assert distinct["independentState"]
-        assert distinct["independentTransforms"]
+        assert distinct["independentSources"]
     finally:
         context.close()
 
@@ -4088,7 +2200,7 @@ def test_weight_selection_shared_source_participates_per_mesh(
         page.locator('.weight-bone-option[data-source-key="shared/sharedblend.buf|offset=0"] input[value="1"]').check()
         page.wait_for_function("window.modViewer.getModelPhysicsState().enabled")
         result = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           const {getSkinningState} = experiment;
           const meshes = window.modViewer.activeMeshes;
           const [body, hair] = meshes.map(getSkinningState);
@@ -4111,10 +2223,6 @@ def test_weight_selection_shared_source_participates_per_mesh(
           const maxRevealError = revealedPositions.reduce((max, value, index) =>
             Math.max(max, Math.abs(value -
               meshes[0].geometry.attributes.position.array[index])), 0);
-          const bodyPhysics = experiment.getModelPhysicsDebugState(
-            body.skinningSourceKey);
-          const hairPhysics = experiment.getModelPhysicsDebugState(
-            hair.skinningSourceKey);
           return {
             sources: window.modViewer.getModelWeightState().sources,
             masks: meshes.map(mesh =>
@@ -4123,11 +2231,7 @@ def test_weight_selection_shared_source_participates_per_mesh(
             hiddenPhysics: hiddenState,
             participants: meshes.map(mesh =>
               getSkinningState(mesh).physicsEnabled),
-            sharedState: bodyPhysics.physicsState === hairPhysics.physicsState,
-            sharedTransforms: bodyPhysics.composedTransforms
-              === hairPhysics.composedTransforms,
-            sharedRotation: bodyPhysics.composedRotations
-              === hairPhysics.composedRotations,
+            sharedSource: body.skinningSourceKey === hair.skinningSourceKey,
             maxSeamError,
             maxRevealError,
           };
@@ -4138,9 +2242,7 @@ def test_weight_selection_shared_source_participates_per_mesh(
         assert result["physics"]["participantCount"] == 1
         assert result["physics"]["participatingMeshCount"] == 2
         assert result["hiddenPhysics"]["participantCount"] == 1
-        assert result["sharedState"]
-        assert result["sharedTransforms"]
-        assert result["sharedRotation"]
+        assert result["sharedSource"]
         assert result["maxSeamError"] == pytest.approx(0)
         assert result["maxRevealError"] == pytest.approx(0)
     finally:
@@ -6187,11 +4289,11 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          const experiment = await import('./js/mesh/weight-experiment.js');
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
           const {setControlValue} =
             await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
-          await experiment.ensureModelWeightsLoaded();
+          await experiment.ensureModelRigLoaded();
           const oldMaterial = mesh.material;
           let oldMaterialDisposals = 0;
           oldMaterial.addEventListener('dispose',
@@ -6257,8 +4359,8 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          const experiment = await import('./js/mesh/weight-experiment.js');
-          await experiment.ensureModelWeightsLoaded();
+          const experiment = await import('./js/mesh/weight-rig-runtime.js');
+          await experiment.ensureModelRigLoaded();
           experiment.setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],

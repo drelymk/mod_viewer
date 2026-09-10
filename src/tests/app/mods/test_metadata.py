@@ -136,68 +136,6 @@ def test_rig_pose_preset_metadata_preserves_malformed_entries_for_frontend():
     assert result["presets"] == stored["rig"]["presets"]
 
 
-def test_rig_limb_mapping_lifecycle_preserves_presets_and_unrelated_metadata(
-        tmp_path):
-    preset = {
-        "id": "pose-1", "name": "Pose", "roots": [],
-        "joints": [],
-    }
-    metadata.save_rig_pose_preset(str(tmp_path), preset)
-    path = tmp_path / metadata.METADATA_NAME
-    saved = json.loads(path.read_text(encoding="utf-8"))
-    saved["future"] = {"keep": True}
-    path.write_text(json.dumps(saved), encoding="utf-8")
-
-    left = metadata.save_rig_limb_mapping(str(tmp_path), "left_arm", {
-        "anchor_signature": '["body#bone=84"]', "bend_sign": -1,
-    })
-    assert left["saved"] is True
-    stored = json.loads(path.read_text(encoding="utf-8"))
-    assert stored["rig"]["presets"] == [preset]
-    assert stored["rig"]["limb_mappings"]["left_arm"] == {
-        "anchor_signature": '["body#bone=84"]', "bend_sign": -1,
-    }
-    assert stored["future"] == {"keep": True}
-
-    right = metadata.save_rig_limb_mapping(str(tmp_path), "right_arm", {
-        "anchor_signature": '["body#bone=42"]',
-        "bend_override_signature": '["body#bone=43"]',
-        "end_override_signature": '["body#bone=44"]',
-        "bend_sign": 1,
-    })
-    assert right["saved"] is True
-    deleted = metadata.delete_rig_limb_mapping(str(tmp_path), "left_arm")
-    assert deleted["saved"] is True
-    final = json.loads(path.read_text(encoding="utf-8"))
-    assert final["rig"]["presets"] == [preset]
-    assert final["rig"]["limb_mappings"] == {
-        "right_arm": {
-            "anchor_signature": '["body#bone=42"]',
-            "bend_override_signature": '["body#bone=43"]',
-            "end_override_signature": '["body#bone=44"]',
-            "bend_sign": 1,
-        },
-    }
-
-
-def test_malformed_limb_mapping_does_not_hide_valid_mapping():
-    result = metadata.rig_pose_presets(data={
-        "rig": {
-            "version": 1, "presets": [], "limb_mappings": {
-                "left_arm": {"anchor_signature": ""},
-                "right_arm": {"anchor_signature": '["body#bone=2"]',
-                               "bend_sign": 1},
-                "spine": {"anchor_signature": '["body#bone=3"]'},
-            },
-        },
-    })
-    assert result["limb_mappings"] == {
-        "right_arm": {"anchor_signature": '["body#bone=2"]',
-                       "bend_sign": 1},
-    }
-    assert result["limb_mapping_error"]
-
-
 @pytest.mark.parametrize("operation", [
     lambda path: metadata.save_rig_pose_preset(path, {
         "id": "pose-2", "name": "New", "roots": [], "joints": [],

@@ -436,14 +436,6 @@ class ModPreview:
         folder_path = self._access.mod_folder(folder_path)
         return metadata.delete_rig_pose_preset(folder_path, preset_id)
 
-    def save_rig_limb_mapping(self, folder_path, role, mapping):
-        folder_path = self._access.mod_folder(folder_path)
-        return metadata.save_rig_limb_mapping(folder_path, role, mapping)
-
-    def delete_rig_limb_mapping(self, folder_path, role):
-        folder_path = self._access.mod_folder(folder_path)
-        return metadata.delete_rig_limb_mapping(folder_path, role)
-
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):
         folder_path = self._access.mod_folder(folder_path)

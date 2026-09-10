@@ -25,7 +25,6 @@ MESH_COLOR_ADJUSTMENTS_KEY = "mesh_color_adjustments"
 RIG_METADATA_KEY = "rig"
 RIG_METADATA_VERSION = 1
 RIG_PRESET_NAME_MAX_LENGTH = 80
-RIG_LIMB_ROLES = ("left_arm", "right_arm", "left_leg", "right_leg")
 RIG_SIGNATURE_MAX_LENGTH = 1024
 
 
@@ -373,57 +372,13 @@ def _normalized_rig_preset(value):
     }
 
 
-def _normalized_rig_limb_mapping(value):
-    if not isinstance(value, dict):
-        return None
-    anchor = value.get("anchor_signature")
-    if (not isinstance(anchor, str) or not anchor.strip()
-            or len(anchor) > RIG_SIGNATURE_MAX_LENGTH):
-        return None
-    normalized = {"anchor_signature": anchor.strip(),
-                   "bend_sign": -1 if value.get("bend_sign") == -1 else 1}
-    for key in ("bend_override_signature", "end_override_signature"):
-        override = value.get(key)
-        if override is None:
-            continue
-        if (not isinstance(override, str) or not override.strip()
-                or len(override) > RIG_SIGNATURE_MAX_LENGTH):
-            return None
-        normalized[key] = override.strip()
-    bend_sign = value.get("bend_sign")
-    if bend_sign is not None and (
-            isinstance(bend_sign, bool) or bend_sign not in (1, -1)):
-        return None
-    return normalized
-
-
-def _normalized_rig_limb_mappings(value):
-    if value is None:
-        return {}, False
-    if not isinstance(value, dict):
-        return {}, True
-    result = {}
-    malformed = False
-    for role, mapping in value.items():
-        if role not in RIG_LIMB_ROLES:
-            malformed = True
-            continue
-        normalized = _normalized_rig_limb_mapping(mapping)
-        if normalized is None:
-            malformed = True
-            continue
-        result[role] = normalized
-    return result, malformed
-
-
 def rig_pose_presets(folder_path=None, data=None):
     """Return the versioned saved Rig presets without exposing runtime IDs."""
     data = (load(folder_path) if data is None and folder_path is not None
             else ({} if data is None else data))
     rig = data.get(RIG_METADATA_KEY) if isinstance(data, dict) else None
     if rig is None:
-        return {"version": RIG_METADATA_VERSION, "presets": [],
-                "limb_mappings": {}, "error": None}
+        return {"version": RIG_METADATA_VERSION, "presets": [], "error": None}
     if (not isinstance(rig, dict)
             or rig.get("version") != RIG_METADATA_VERSION
             or not isinstance(rig.get("presets"), list)):
@@ -439,17 +394,11 @@ def rig_pose_presets(folder_path=None, data=None):
             continue
         seen_ids.add(preset["id"])
         presets.append(preset)
-    limb_mappings, malformed_mappings = _normalized_rig_limb_mappings(
-        rig.get("limb_mappings"))
     result = {
         "version": RIG_METADATA_VERSION, "presets": presets,
         "error": "Pose presets could not be loaded."
         if malformed else None,
     }
-    if "limb_mappings" in rig:
-        result["limb_mappings"] = limb_mappings
-    if malformed_mappings:
-        result["limb_mapping_error"] = "Some limb mappings could not be loaded."
     return result
 
 
@@ -471,10 +420,9 @@ def _rig_data_for_update(data):
         "version": RIG_METADATA_VERSION,
         "presets": deepcopy(current["presets"]),
     })
-    if current.get("limb_mappings"):
-        rig["limb_mappings"] = deepcopy(current["limb_mappings"])
-    else:
-        rig.pop("limb_mappings", None)
+    # Limb mappings belonged to the removed manual IK bridge. Do not preserve
+    # or migrate them when the current preset metadata is rewritten.
+    rig.pop("limb_mappings", None)
     return current, rig, None
 
 
@@ -543,48 +491,6 @@ def delete_rig_pose_preset(folder_path, preset_id):
         data[RIG_METADATA_KEY] = rig
         return {**_save(folder_path, data), "deleted": True,
                 "presets": rig["presets"]}
-
-
-def save_rig_limb_mapping(folder_path, role, mapping):
-    """Persist one semantic limb mapping without touching pose presets."""
-    if role not in RIG_LIMB_ROLES:
-        return {"saved": False, "error": "Invalid Rig limb role."}
-    normalized = _normalized_rig_limb_mapping(mapping)
-    if normalized is None:
-        return {"saved": False, "error": "Invalid Rig limb mapping."}
-    with _LOCK:
-        data = load(folder_path)
-        current, rig, error = _rig_data_for_update(data)
-        if error:
-            return {"saved": False, "error": error}
-        mappings = deepcopy(current.get("limb_mappings", {}))
-        mappings[role] = normalized
-        rig["limb_mappings"] = mappings
-        data[RIG_METADATA_KEY] = rig
-        return {**_save(folder_path, data), "mapping": normalized,
-                "limb_mappings": mappings}
-
-
-def delete_rig_limb_mapping(folder_path, role):
-    """Remove one semantic limb mapping while preserving all Rig presets."""
-    if role not in RIG_LIMB_ROLES:
-        return {"saved": False, "error": "Invalid Rig limb role."}
-    with _LOCK:
-        data = load(folder_path)
-        current, rig, error = _rig_data_for_update(data)
-        if error:
-            return {"saved": False, "error": error}
-        mappings = deepcopy(current.get("limb_mappings", {}))
-        if role not in mappings:
-            return {"saved": False, "limb_mappings": mappings}
-        mappings.pop(role, None)
-        if mappings:
-            rig["limb_mappings"] = mappings
-        else:
-            rig.pop("limb_mappings", None)
-        data[RIG_METADATA_KEY] = rig
-        return {**_save(folder_path, data), "deleted": True,
-                "limb_mappings": mappings}
 
 
 def hydrate_mesh_names(payload, data=None):

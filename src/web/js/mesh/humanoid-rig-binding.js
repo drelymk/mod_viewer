@@ -266,54 +266,6 @@ function valueFor(collection, key) {
   return collection?.[key];
 }
 
-function nullableNumber(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const result = Number(value);
-  return Number.isFinite(result) ? result : null;
-}
-
-function serializeMatrix(matrix) {
-  return matrix?.isMatrix4 ? matrix.toArray() : new THREE.Matrix4().toArray();
-}
-
-function serializeBindingEntry(entry) {
-  return {
-    type: entry.type,
-    driverId: entry.driverId,
-    localMatrix: serializeMatrix(entry.localMatrix),
-    distance: Number(entry.distance) || 0,
-    distanceRatio: Number(entry.distanceRatio) || 0,
-    rawProjection: nullableNumber(entry.rawProjection),
-    projection: nullableNumber(entry.projection),
-    endpointDistanceRatio: nullableNumber(entry.endpointDistanceRatio),
-    score: nullableNumber(entry.score),
-    confidence: entry.confidence || 'low',
-    bindingMethod: entry.bindingMethod || 'spatial',
-    limbRole: entry.limbRole || null,
-    progress: Number.isFinite(Number(entry.progress)) ? Number(entry.progress) : null,
-    sourceBoneKeys: [...(entry.sourceBoneKeys || [])],
-    memberCount: Number(entry.memberCount) || 0,
-  };
-}
-
-function serializeAttachment(attachment) {
-  return {
-    rootJointId: attachment.rootJointId,
-    driverId: attachment.driverId,
-    localMatrix: serializeMatrix(attachment.localMatrix),
-    jointIds: [...attachment.jointIds],
-    confidence: attachment.confidence || 'low',
-    distance: Number(attachment.distance) || 0,
-    distanceRatio: Number(attachment.distanceRatio) || 0,
-    rawProjection: Number(attachment.rawProjection) || 0,
-    projection: Number(attachment.projection) || 0,
-    endpointDistanceRatio: Number(attachment.endpointDistanceRatio) || 0,
-    ambiguityMargin: Number(attachment.ambiguityMargin) || 0,
-    secondaryRootId: attachment.rootJointId,
-    secondarySubtreeSize: attachment.jointIds?.length || 0,
-  };
-}
-
 function allJointIds(modelRig) {
   return (modelRig?.joints || []).map(joint => numberId(joint?.jointId))
     .filter(Number.isInteger).sort((left, right) => left - right);
@@ -359,14 +311,6 @@ export function buildHumanoidDriverFrames(controlRig, posedControls = null) {
     if (frame) result.set(segment.id, {...segment, ...frame});
   });
   return result;
-}
-
-export function serializeHumanoidDriverFrames(controlRig, posedControls = null) {
-  return [...buildHumanoidDriverFrames(controlRig, posedControls).values()]
-    .map(frame => ({
-      id: frame.id, start: frame.start.toArray(), end: frame.end.toArray(),
-      length: frame.length, matrix: frame.matrix.toArray(),
-    }));
 }
 
 /**
@@ -541,73 +485,6 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
     },
   };
   return binding;
-}
-
-/** Return a JSON-safe binding diagnostic snapshot. */
-export function serializeHumanoidRigBinding(binding) {
-  if (!binding) return null;
-  return {
-    version: Number(binding.version) || 1,
-    jointBindings: Object.fromEntries([...(
-      binding.jointBindings instanceof Map ? binding.jointBindings.entries() : [])]
-      .map(([id, entry]) => [id, serializeBindingEntry(entry)])),
-    secondaryAttachments: (binding.secondaryAttachments || [])
-      .map(serializeAttachment),
-    unboundJointIds: [...(binding.unboundJointIds || [])],
-    diagnostics: {...(binding.diagnostics || {})},
-  };
-}
-
-/** Return the stable, selected-joint-facing binding explanation. */
-export function getHumanoidJointBindingDiagnostics(binding, jointId) {
-  const id = numberId(jointId);
-  if (id === null || !binding) return null;
-  const direct = binding.jointBindings instanceof Map
-    ? binding.jointBindings.get(id) : binding.jointBindings?.[id];
-  if (direct) {
-    return {
-      jointId: id,
-      bindingType: 'direct',
-      driverId: direct.driverId || null,
-      rawProjection: nullableNumber(direct.rawProjection),
-      clampedProjection: nullableNumber(direct.projection),
-      distanceRatio: nullableNumber(direct.distanceRatio),
-      secondaryRootId: null,
-      secondarySubtreeSize: 0,
-      bindingMethod: direct.bindingMethod || 'spatial',
-      limbRole: direct.limbRole || null,
-      progress: nullableNumber(direct.progress),
-      sourceBoneKeys: [...(direct.sourceBoneKeys || [])],
-    };
-  }
-  const attachment = (binding.secondaryAttachments || []).find(item =>
-    (item.jointIds || []).some(value => numberId(value) === id));
-  if (attachment) {
-    return {
-      jointId: id,
-      bindingType: 'secondary',
-      driverId: attachment.driverId || null,
-      rawProjection: nullableNumber(attachment.rawProjection),
-      clampedProjection: nullableNumber(attachment.projection),
-      distanceRatio: nullableNumber(attachment.distanceRatio),
-      secondaryRootId: numberId(attachment.rootJointId),
-      secondarySubtreeSize: (attachment.jointIds || []).length,
-      bindingMethod: 'central_proximity',
-      limbRole: null,
-      progress: null,
-      sourceBoneKeys: [],
-    };
-  }
-  return {
-    jointId: id,
-    bindingType: 'unbound',
-    driverId: null,
-    rawProjection: null,
-    clampedProjection: null,
-    distanceRatio: null,
-    secondaryRootId: null,
-    secondarySubtreeSize: 0,
-  };
 }
 
 function matrixFrom(value) {

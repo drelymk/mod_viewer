@@ -23,7 +23,7 @@ import {
   refreshHealthReport, setAssetResolution, setHealthLoader,
   setHealthReport,
 } from '../panels/health-report.js';
-import { setRigMetadata } from '../mesh/weight-experiment.js';
+import { setRigMetadata } from '../mesh/rig-preset-session.js';
 import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
 import {

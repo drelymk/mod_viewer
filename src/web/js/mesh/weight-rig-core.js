@@ -42,45 +42,52 @@ import {
   createWeightPhysicsRuntime,
 } from './weight-physics-runtime.js';
 import {
-  addWeightPhysicsPerformance, performanceNow,
-} from './weight-physics-performance.js';
-import {physicsDebugSnapshot} from './weight-physics-debug.js';
-import {
-  modelRigSnapshot, rigPresetSnapshot, sourceRigSnapshot,
+  modelRigSnapshot,
 } from './weight-rig-snapshots.js';
 import {
-  buildJointSignatureIndex, createRigPreset, normalizeRigPreset,
-  resolveRigPreset, serializeRigPose, validateRigPresetName,
+  buildJointSignatureIndex, resolveRigPreset,
 } from './weight-rig-presets.js';
+import {
+  getRigPresetSnapshot, initializeRigPresetSession,
+  resetRigPresetSession,
+} from './rig-preset-session.js';
+import {
+  initializeWeightModelSession,
+  resetWeightModelSession,
+  setSelectedBones as setWeightModelSelectedBones,
+} from './weight-model-session.js';
+import {initializeWeightPhysicsController} from './weight-physics-controller.js';
+import {initializeHumanoidPoseRuntime} from './humanoid-pose-runtime.js';
 import {
   activePoseJointIds, aggregateModelBoneStats, EMPTY_ACTIVE_VERTICES,
   createRigRuntimeState, createWeightRuntimeState, matrixIsIdentity,
-  RIG_ROTATION_SNAP_DEGREES,
+  RIG_LIMB_ROLES, RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
+import {characterAxesFromOrientation} from './humanoid-orientation.js';
 import {
-  RIG_LIMB_ROLES, RIG_LIMB_ROLE_INFO,
-  characterAxesFromOrientation, resolveLimbBendDirection,
-  rigPathBetweenJointIds, selectLimbBendJoint, solveLimbIk,
-} from './weight-rig-ik.js';
-import {
-  buildHumanoidSemanticFrame, resolveHumanoidLimbMapping,
-  selectHumanoidKneeJoint,
-} from './weight-rig-humanoid.js';
-import {
-  HUMANOID_DRIVER_SEGMENTS, buildHumanoidDriverBaseTransforms,
+  buildHumanoidDriverBaseTransforms,
   buildHumanoidSourceBoneDriverTransforms,
   buildHumanoidRigBinding,
-  getHumanoidJointBindingDiagnostics,
-  serializeHumanoidDriverFrames, serializeHumanoidRigBinding,
 } from './humanoid-rig-binding.js';
 import {buildHumanoidControlRig} from './humanoid-control-rig.js';
 import {mergeHumanoidLimbPose, solveHumanoidControlIk} from './humanoid-rig-ik.js';
-import {
-  buildHumanoidHeatBinding, serializeHumanoidHeatBinding,
-} from './humanoid-heat-binding.js';
+import {buildHumanoidHeatBinding} from './humanoid-heat-binding.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
+
+function humanoidSemanticAxes({requireReady = false} = {}) {
+  const orientationState = getModelTransformState?.();
+  if (requireReady && orientationState?.orientationInitialized !== true) return null;
+  const axes = characterAxesFromOrientation(orientationState);
+  if (axes) return axes;
+  if (requireReady) return null;
+  return {
+    up: new THREE.Vector3(0, 1, 0),
+    forward: new THREE.Vector3(0, 0, 1),
+    right: new THREE.Vector3(1, 0, 0),
+  };
+}
 const rigRuntime = createRigRuntimeState();
 const {modelRigState, rigPresetState} = rigRuntime;
 const sourcePhysicsRigs = new Map();
@@ -93,27 +100,14 @@ let humanoidControlRigSnapshotCache = null;
 // identity separate from weight loading so a new Rig request may reuse an
 // in-flight weight request without accepting stale rig state.
 let modelRigLoadToken = null;
-let rigPresetGeneration = 0;
-let selectedWeightMaskBuildCount = 0;
-let modelBoneStatsBuildCount = 0;
-let selectionSavePromise = null;
-let rigPresetWriteQueue = Promise.resolve();
-let rigPresetWriteToken = 0;
 const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
-let resolvedLimbMappings = null;
-let resolvedLimbMappingsStructureRevision = null;
-let resolvedLimbMappingsMetadataRevision = -1;
-let limbMappingMetadataRevision = 0;
 
 function invalidateHumanoidDetection() {
   humanoidControlRigCacheKey = '';
   humanoidControlRigSnapshotCache = null;
   modelRigState.humanoidControlRig = null;
-  modelRigState.humanoidBinding = null;
-  modelRigState.humanoidHeatBinding = null;
   modelRigState.humanoidPose = {};
   modelRigState.humanoidBendSigns = {};
-  modelRigState.humanoidRuntimeDiagnostics = null;
   modelRigState.humanoidStructureRevision = null;
 }
 
@@ -134,9 +128,11 @@ const {
   applySourceDeformation,
   syncRigParticipantState,
 } = physicsRuntime;
-export const gravityDirectionLocal = physicsRuntime.gravityDirectionLocal;
-export const getPhysicsConstraintDiagnostics =
-  physicsRuntime.getPhysicsConstraintDiagnostics;
+
+initializeWeightPhysicsController({
+  modelPhysicsSession,
+  reset: () => resetModelPhysicsInternal(),
+});
 
 const modelPickController = createWeightPickController({
   canvas: renderer.domElement,
@@ -151,9 +147,50 @@ const modelPickController = createWeightPickController({
   requestRender,
 });
 
-export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
-export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
-export const WEIGHT_PICK_RADIUS_RATIO = 0.02;
+initializeRigPresetSession({
+  state: rigPresetState,
+  getModelRig: () => modelSkinningRig,
+  getModelRigState: () => modelRigState,
+  getKnownMeshes: () => knownMeshes,
+  resolveRigPreset,
+  applyResolvedPreset: (resolved, options) =>
+    applyRigPosePreset(resolved, options),
+  notifyChanged: () => notifyModelRigChanged(),
+});
+
+initializeWeightModelSession({
+  modelWeightState,
+  states,
+  knownMeshes,
+  modelWeightSnapshot,
+  selectionMapFromEntries,
+  sourceSelectionEntries,
+  refreshModelWeightSummary,
+  refreshSelectedWeightMask,
+  updateModelWeightHeatmap,
+  syncPhysicsToSelection,
+  sameBoneSelection,
+  serializeBoneSelection,
+  eligibleSkinningMesh,
+  notifyChanged: () => notifyModelWeightChanged(),
+  requestRender,
+  getGeneration: () => modelWeightGeneration,
+});
+
+initializeHumanoidPoseRuntime({
+  modelRigState,
+  getModelRig: () => modelSkinningRig,
+  getPrimaryLimb: () => primaryHumanoidLimb(),
+  solveControlIk: solveHumanoidControlIk,
+  mergeLimbPose: mergeHumanoidLimbPose,
+  applyPose: options => applyModelPose(options),
+  notifyChanged: () => notifyModelRigChanged(),
+  requestRender,
+});
+
+const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
+const CANDIDATE_JACCARD_THRESHOLD = 0.01;
+const WEIGHT_PICK_RADIUS_RATIO = 0.02;
 
 const ERROR_MESSAGES = Object.freeze({
   skinning_source_identity_unavailable:
@@ -224,11 +261,6 @@ function quaternionIsIdentity(value) {
     && Math.abs(Math.abs(w) - 1) < 1e-8;
 }
 
-function entriesForCollection(collection) {
-  if (collection instanceof Map) return [...collection.entries()];
-  return Object.entries(collection || {});
-}
-
 function rigComponentForBone(rig, boneId) {
   const componentId = rig?.inferredForest?.componentByBoneId?.[boneId];
   return Number.isInteger(Number(componentId))
@@ -247,10 +279,8 @@ function rebuildSourceRigRestFrames(rig) {
   return frames;
 }
 
-function modelRigSnapshotForState({debug = false} = {}) {
+function modelRigSnapshotForState() {
   const snapshot = modelRigSnapshot(modelSkinningRig, {
-    debug,
-    modelRigState,
     quaternionIsIdentity,
     matrixIsIdentity,
   });
@@ -263,108 +293,6 @@ function modelComponentForJoint(jointId) {
   const componentId = modelSkinningRig?.componentByJointId?.get(id);
   return Number.isInteger(Number(componentId))
     ? modelSkinningRig?.components?.[Number(componentId)] || null : null;
-}
-
-function emptyLimbMapping(role, reason = 'unmapped') {
-  return {
-    role,
-    available: false,
-    anchorJointId: null,
-    bendJointId: null,
-    endJointId: null,
-    pathJointIds: [],
-    confidence: 'low',
-    reason,
-    bendSign: 1,
-    bendDirection: null,
-    anchorSource: 'unmapped',
-    bendSource: 'auto',
-    endSource: 'auto',
-  };
-}
-
-function compactLimbMapping(mapping) {
-  return {
-    role: mapping.role,
-    available: !!mapping.available,
-    anchorJointId: mapping.anchorJointId,
-    bendJointId: mapping.bendJointId,
-    endJointId: mapping.endJointId,
-    pathJointIds: [...(mapping.pathJointIds || [])],
-    confidence: mapping.confidence,
-    reason: mapping.reason,
-    bendSign: mapping.bendSign === -1 ? -1 : 1,
-    anchorSource: mapping.anchorSource,
-    bendSource: mapping.bendSource,
-    endSource: mapping.endSource,
-    bendDirection: mapping.bendDirection
-      ? [...mapping.bendDirection] : null,
-    controlKeys: Array.isArray(mapping.controlKeys)
-      ? [...mapping.controlKeys] : null,
-    bendDirectionSource: mapping.bendDirectionSource,
-    bendDirectionStrength: Number(mapping.bendDirectionStrength) || 0,
-  };
-}
-
-function humanoidSnapshot() {
-  const rig = modelRigState.humanoidControlRig;
-  const binding = modelRigState.humanoidBinding;
-  return {
-    status: modelRigState.humanoidStatus || '',
-    structureRevision: modelRigState.humanoidStructureRevision,
-    generation: modelWeightGeneration,
-    fitRuntimeMs: Number(modelRigState.humanoidFitRuntimeMs) || 0,
-    bindingRuntimeMs: Number(modelRigState.humanoidBindingRuntimeMs) || 0,
-    availableRoles: rig?.accepted ? [...RIG_LIMB_ROLES] : [],
-    binding: binding?.diagnostics || null,
-    heatBinding: modelRigState.humanoidHeatBinding,
-    selectedBinding: getHumanoidJointBindingDiagnostics(
-      binding, modelRigState.selectedJointId),
-    runtime: modelRigState.humanoidRuntimeDiagnostics
-      ? {...modelRigState.humanoidRuntimeDiagnostics,
-        manualPoseJointIds: [
-          ...(modelRigState.humanoidRuntimeDiagnostics.manualPoseJointIds || []),
-        ],
-        humanoidDrivenJointIds: [
-          ...(modelRigState.humanoidRuntimeDiagnostics.humanoidDrivenJointIds
-            || []),
-        ],
-        nonIdentityDriverSegments: [
-          ...(modelRigState.humanoidRuntimeDiagnostics
-            .nonIdentityDriverSegments || []),
-        ],
-        affectedModelJointIds: [
-          ...(modelRigState.humanoidRuntimeDiagnostics.affectedModelJointIds
-            || []),
-        ],
-        affectedSourceBones: (
-          modelRigState.humanoidRuntimeDiagnostics.affectedSourceBones || [])
-          .map(item => ({...item, boneIds: [...(item.boneIds || [])]})),
-      } : null,
-  };
-}
-
-function characterForwardForRole() {
-  return humanoidSemanticAxes().forward;
-}
-
-function humanoidSemanticAxes({requireReady = false} = {}) {
-  const orientationState = getModelTransformState?.();
-  if (requireReady && orientationState?.orientationInitialized !== true) return null;
-  const axes = characterAxesFromOrientation(orientationState);
-  if (axes) return axes;
-  if (requireReady) return null;
-  return {
-    up: new THREE.Vector3(0, 1, 0),
-    forward: new THREE.Vector3(0, 0, 1),
-    right: new THREE.Vector3(1, 0, 0),
-  };
-}
-
-// Manual and automatic ModelJoint mappings share one authored semantic frame.
-function humanoidSemanticFrame() {
-  return buildHumanoidSemanticFrame({rig: modelSkinningRig,
-    axes: humanoidSemanticAxes(), characterForward: characterForwardForRole()});
 }
 
 function humanoidControlRigSnapshot() {
@@ -383,7 +311,7 @@ function humanoidControlRigSnapshot() {
     humanoidControlRigSnapshotCache = {
       version: 1, source: 'humanoid_control_rig', mode: 'primary_driver',
       available: false, accepted: false, confidence: 'low', controls: {},
-      paths: {}, diagnostics: {reason: 'rig_not_loaded'}, binding: null,
+      diagnostics: {reason: 'rig_not_loaded'},
     };
   } else {
     const controls = Object.fromEntries(Object.entries(rig.controls || {})
@@ -392,203 +320,26 @@ function humanoidControlRigSnapshot() {
         position: Array.isArray(modelRigState.humanoidPose?.[key])
           ? [...modelRigState.humanoidPose[key]] : [...(control.position || [0, 0, 0])],
       }]));
-    const point = key => controls[key]?.position || null;
     humanoidControlRigSnapshotCache = {
-      ...rig,
+      version: Number(rig.version) || 1,
       source: 'humanoid_control_rig',
       mode: 'primary_driver',
+      available: rig.available !== false,
+      accepted: rig.accepted === true,
+      confidence: rig.confidence || 'low',
+      confidenceByRegion: {...(rig.confidenceByRegion || {})},
       controls,
-      paths: {
-        torso: [point('chest'), point('pelvis')].filter(Boolean),
-        leftArm: [point('leftShoulder'), point('leftElbow'), point('leftHand')],
-        rightArm: [point('rightShoulder'), point('rightElbow'), point('rightHand')],
-        leftLeg: [point('leftHip'), point('leftKnee'), point('leftFoot')],
-        rightLeg: [point('rightHip'), point('rightKnee'), point('rightFoot')],
-      },
-      binding: modelRigState.humanoidBinding,
-      heatBinding: modelRigState.humanoidHeatBinding,
-      driverFrames: serializeHumanoidDriverFrames(
-        rig, modelRigState.humanoidPose),
       diagnostics: {
-        ...(rig.diagnostics || {}),
+        reason: rig.diagnostics?.reason || null,
+        templatePoints: {...(rig.diagnostics?.templatePoints || {})},
         structureRevision: modelRigState.humanoidStructureRevision,
-        binding: modelRigState.humanoidBinding?.diagnostics || null,
+        modelOrientationRevision: orientationRevision,
       },
     };
   }
   humanoidControlRigCacheKey = cacheKey;
   modelRigState.humanoidControlRig = humanoidControlRigSnapshotCache;
   return humanoidControlRigSnapshotCache;
-}
-
-export function getHumanoidControlRig() {
-  return humanoidControlRigSnapshot();
-}
-
-export function getHumanoidLimbDetection() {
-  return modelRigState.humanoidBinding || {
-    version: 1, jointBindings: {}, secondaryAttachments: [],
-    unboundJointIds: [], diagnostics: {reason: 'rig_not_loaded'},
-  };
-}
-
-export function getHumanoidJointBindingDiagnostic(jointId) {
-  return getHumanoidJointBindingDiagnostics(
-    modelSkinningRig?.humanoidBinding || modelRigState.humanoidBinding,
-    jointId);
-}
-
-function setHumanoidStatus(message) {
-  modelRigState.humanoidStatus = String(message || '');
-  notifyModelRigChanged();
-  return modelRigState.humanoidStatus;
-}
-
-/** Keep the legacy action as an explicit compatibility no-op. */
-export async function autoDetectHumanoidLimbs() {
-  if (!modelSkinningRig || !modelRigState.loaded) {
-    return {applied: false, reason: 'rig_not_loaded', addedRoles: []};
-  }
-  const diagnostics = modelRigState.humanoidBinding?.diagnostics || {};
-  setHumanoidStatus('Primary humanoid control rig is ready; ModelJoint mapping is compatibility-only.');
-  return {applied: false, reason: 'primary_driver_rig_active', addedRoles: [],
-    diagnostics};
-}
-
-function resolveLimbMapping(role) {
-  const raw = rigPresetState.limbMappings?.[role];
-  if (!raw || typeof raw !== 'object' || !modelSkinningRig) {
-    return emptyLimbMapping(role);
-  }
-  const lookup = buildJointSignatureIndex(modelSkinningRig);
-  const anchorSignature = raw.anchor_signature;
-  if (typeof anchorSignature !== 'string' || !anchorSignature.trim()) {
-    return emptyLimbMapping(role, 'anchor_signature_invalid');
-  }
-  if (lookup.ambiguousSignatures.has(anchorSignature)) {
-    return emptyLimbMapping(role, 'anchor_signature_ambiguous');
-  }
-  const anchorJointId = lookup.resolvedBySignature.get(anchorSignature);
-  if (!Number.isInteger(anchorJointId)) {
-    return emptyLimbMapping(role, 'anchor_signature_not_found');
-  }
-  const detected = resolveHumanoidLimbMapping({
-    rig: modelSkinningRig, role, anchorJointId,
-    characterForward: characterForwardForRole(),
-    axes: humanoidSemanticAxes(),
-    semanticFrame: humanoidSemanticFrame(),
-  });
-  const mapping = {
-    ...detected,
-    role,
-    bendSign: raw.bend_sign === -1 ? -1 : 1,
-    anchorSource: 'manual',
-    bendSource: 'auto',
-    endSource: 'auto',
-  };
-  let path = [...detected.pathJointIds];
-  let endOverrideApplied = false;
-  const endOverride = raw.end_override_signature;
-  if (typeof endOverride === 'string' && endOverride.trim()) {
-    if (lookup.ambiguousSignatures.has(endOverride)) {
-      return {...mapping, available: false, reason: 'end_override_ambiguous'};
-    }
-    const overrideId = lookup.resolvedBySignature.get(endOverride);
-    const overridePath = Number.isInteger(overrideId)
-      ? rigPathBetweenJointIds({rig: modelSkinningRig,
-        jointA: anchorJointId, jointB: overrideId}).jointIds : [];
-    if (overridePath.length < 3) {
-      return {...mapping, available: false, reason: 'manual_topology_mismatch'};
-    }
-    path = overridePath;
-    mapping.endJointId = overrideId;
-    if (role.endsWith('_leg')) mapping.footJointId = overrideId;
-    mapping.endSource = 'override';
-    const semanticBendJointId = role.endsWith('_leg')
-      ? selectHumanoidKneeJoint({
-        rig: modelSkinningRig, role, pathJointIds: path,
-        characterForward: characterForwardForRole(),
-        axes: humanoidSemanticAxes(),
-        semanticFrame: humanoidSemanticFrame(),
-      })
-      : selectLimbBendJoint(modelSkinningRig, path);
-    if (!Number.isInteger(semanticBendJointId)) {
-      return {...mapping, available: false, reason: 'manual_topology_mismatch'};
-    }
-    mapping.bendJointId = semanticBendJointId;
-    if (role.endsWith('_leg')) mapping.kneeJointId = semanticBendJointId;
-    mapping.bendSource = 'auto';
-    endOverrideApplied = true;
-  } else if (!detected.available) {
-    return mapping;
-  }
-  const bendOverride = raw.bend_override_signature;
-  if (typeof bendOverride === 'string' && bendOverride.trim()) {
-    if (lookup.ambiguousSignatures.has(bendOverride)) {
-      if (!endOverrideApplied) {
-        return {...mapping, available: false, reason: 'bend_override_ambiguous'};
-      }
-    } else {
-      const overrideId = lookup.resolvedBySignature.get(bendOverride);
-      const compatible = Number.isInteger(overrideId)
-        && path.includes(overrideId)
-        && overrideId !== anchorJointId
-        && overrideId !== mapping.endJointId;
-      if (!compatible) {
-        return {...mapping, available: false, reason: 'manual_topology_mismatch'};
-      }
-      if (compatible) {
-        mapping.bendJointId = overrideId;
-        if (role.endsWith('_leg')) mapping.kneeJointId = overrideId;
-        mapping.bendSource = 'override';
-      }
-    }
-  }
-  mapping.pathJointIds = path;
-  mapping.available = path.length >= 3
-    && path.includes(mapping.bendJointId)
-    && mapping.bendJointId !== mapping.endJointId;
-  if (!mapping.available) {
-    mapping.reason = 'override_path_invalid';
-    return mapping;
-  }
-  const directionEvidence = resolveLimbBendDirection({
-    rig: modelSkinningRig,
-    pathJointIds: path,
-    anchorJointId,
-    bendJointId: mapping.bendJointId,
-    endJointId: mapping.endJointId,
-    role,
-    characterForward: characterForwardForRole(),
-  });
-  mapping.bendDirection = directionEvidence.bendDirection?.toArray() || null;
-  mapping.bendDirectionSource = directionEvidence.bendDirectionSource;
-  mapping.bendDirectionStrength = directionEvidence.bendDirectionStrength;
-  return mapping;
-}
-
-function resolvedLimbMappingState() {
-  const structureRevision = modelSkinningRig?.structureRevision ?? null;
-  if (resolvedLimbMappings
-      && resolvedLimbMappingsStructureRevision === structureRevision
-      && resolvedLimbMappingsMetadataRevision === limbMappingMetadataRevision) {
-    return resolvedLimbMappings;
-  }
-  resolvedLimbMappings = Object.fromEntries(RIG_LIMB_ROLES.map(role => [
-    role, resolveLimbMapping(role),
-  ]));
-  if (modelRigState.ikEnabled
-      && !resolvedLimbMappings[modelRigState.activeLimbRole]?.available) {
-    modelRigState.ikEnabled = false;
-  }
-  resolvedLimbMappingsStructureRevision = structureRevision;
-  resolvedLimbMappingsMetadataRevision = limbMappingMetadataRevision;
-  return resolvedLimbMappings;
-}
-
-function currentLimbMapping() {
-  return resolvedLimbMappingState()[modelRigState.activeLimbRole]
-    || emptyLimbMapping(modelRigState.activeLimbRole);
 }
 
 function primaryHumanoidLimb(role = modelRigState.activeLimbRole) {
@@ -608,41 +359,28 @@ function primaryHumanoidLimb(role = modelRigState.activeLimbRole) {
 }
 
 function ikSnapshot() {
-  const primary = primaryHumanoidLimb();
-  const mappings = primary.available
-    ? Object.fromEntries(RIG_LIMB_ROLES.map(role => {
-      const limb = primaryHumanoidLimb(role);
-      return [role, {
-        role, available: limb.available, confidence: limb.available ? 'high' : 'low',
-        bendSign: limb.bendSign, controlKeys: [...limb.keys], pathJointIds: [],
-        anchorJointId: null, bendJointId: null, endJointId: null,
-        reason: limb.available ? null : 'control_unavailable',
-      }];
-    })) : resolvedLimbMappingState();
-  const active = mappings[modelRigState.activeLimbRole]
-    || emptyLimbMapping(modelRigState.activeLimbRole);
-  const available = primary.available || !!active.available;
+  const active = primaryHumanoidLimb();
+  const mappings = Object.fromEntries(RIG_LIMB_ROLES.map(role => {
+    const limb = primaryHumanoidLimb(role);
+    return [role, {
+      role,
+      available: limb.available,
+      confidence: limb.available ? 'high' : 'low',
+      bendSign: limb.bendSign,
+      controlKeys: [...limb.keys],
+      reason: limb.available ? null : 'control_unavailable',
+    }];
+  }));
   return {
     enabled: !!modelRigState.ikEnabled,
     activeLimbRole: modelRigState.activeLimbRole,
-    available,
-    anchorJointId: primary.available ? null : active.anchorJointId,
-    bendJointId: primary.available ? null : active.bendJointId,
-    endJointId: primary.available ? null : active.endJointId,
-    pathJointIds: primary.available ? [] : [...(active.pathJointIds || [])],
-    controlKeys: [...primary.keys],
-    confidence: primary.available ? 'high' : active.confidence,
-    reason: primary.available ? null : active.reason,
-    bendSign: primary.available ? primary.bendSign : active.bendSign,
-    mappings: Object.fromEntries(RIG_LIMB_ROLES.map(role => [
-      role, compactLimbMapping(mappings[role] || emptyLimbMapping(role)),
-    ])),
-    humanoid: humanoidSnapshot(),
+    available: active.available,
+    controlKeys: [...active.keys],
+    confidence: active.available ? 'high' : 'low',
+    reason: active.available ? null : 'control_unavailable',
+    bendSign: active.bendSign,
+    mappings,
   };
-}
-
-function rigPresetSnapshotForState() {
-  return rigPresetSnapshot(rigPresetState);
 }
 
 function rigSnapshot() {
@@ -658,7 +396,7 @@ function rigSnapshot() {
     rotationSnapDegrees: modelRigState.rotationSnapDegrees,
     ik: ikSnapshot(),
     pickStatus: modelRigState.pickStatus,
-    rigPresets: rigPresetSnapshotForState(),
+    rigPresets: getRigPresetSnapshot(),
     humanoidControlRig: humanoidControlRigSnapshot(),
     model: modelRigSnapshotForState(),
   };
@@ -696,59 +434,12 @@ export function getModelRigState() {
   return rigSnapshot();
 }
 
-export function getModelRigDebugState(sourceKey = null) {
-  const model = modelRigSnapshotForState({debug: true});
-  const sources = [...sourceSkinningRigs.values()]
-    .map(rig => {
-      const diagnostics = sourceRigDiagnostics(rig);
-      return sourceRigSnapshot(rig, {
-        modelRigState, modelJointIdForSourceBone,
-        quaternionIsIdentity,
-        memberDiagnostics: diagnostics.records,
-        partialOverlapPairs: diagnostics.partialOverlapPairs,
-      });
-    });
-  const metrics = {
-    rigAnalysisMs: modelRigState.rigAnalysisMs || 0,
-    rigTransformMs: modelRigState.rigTransformMs || 0,
-    rigDeformMs: modelRigState.rigDeformMs || 0,
-    rigDeformedVertexCount: modelRigState.rigDeformedVertexCount || 0,
-    rigReconcileMs: modelRigState.rigReconcileMs || 0,
-    rigCandidateCount: modelRigState.rigCandidateCount || 0,
-    rigEquivalentClusterCount: modelRigState.rigEquivalentClusterCount || 0,
-    rigAttachmentCount: modelRigState.rigAttachmentCount || 0,
-    rigAmbiguousCount: modelRigState.rigAmbiguousCount || 0,
-    humanoidFitRuntimeMs: modelRigState.humanoidFitRuntimeMs || 0,
-    humanoidBindingRuntimeMs: modelRigState.humanoidBindingRuntimeMs || 0,
-    humanoidRuntimeDiagnostics: modelRigState.humanoidRuntimeDiagnostics
-      ? {...modelRigState.humanoidRuntimeDiagnostics} : null,
-  };
-  const humanoidControlRig = humanoidControlRigSnapshot();
-  const selectedSourceKey = sourceKey || sources[0]?.sourceKey || null;
-  if (!model) return {sources, source: sources.find(item =>
-    item.sourceKey === selectedSourceKey) || null, metrics,
-    rigPresets: rigPresetSnapshotForState(),
-    humanoidControlRig};
-  return {
-    ...model,
-    sources,
-    source: sources.find(item => item.sourceKey === selectedSourceKey) || null,
-    metrics,
-    humanoidControlRig,
-    rigPresets: rigPresetSnapshotForState(),
-  };
-}
-
 function notifyModelWeightChanged() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('mod-viewer-model-weight-changed', {
       detail: modelWeightSnapshot(),
     }));
   }
-}
-
-export function getModelWeightState() {
-  return modelWeightSnapshot();
 }
 
 function modelPickMeshes() {
@@ -868,7 +559,8 @@ function setRigSurfacePickStatus(message) {
 
 export function pickRigJointFromModelSurface(
     {clientX, clientY} = {}, intent = modelRigState.jointPickIntent) {
-  const next = normalizeRigJointPickIntent(intent);
+  const next = String(intent?.type || '') === 'selected-joint'
+    ? {type: 'selected-joint'} : null;
   if (!next) return false;
   const intersection = raycastModelAtClientPoint({
     clientX, clientY, canvas: renderer.domElement, camera,
@@ -973,7 +665,6 @@ function eligibleSkinningMesh(mesh) {
 }
 
 function refreshModelBoneStats() {
-  modelBoneStatsBuildCount += 1;
   const nodesBySource = new Map();
   for (const mesh of knownMeshes) {
     const state = states.get(mesh);
@@ -987,10 +678,6 @@ function refreshModelBoneStats() {
     ...source,
     boneStats: aggregateModelBoneStats(nodesBySource.get(source.key) || []),
   }));
-}
-
-export function getModelBoneStatsBuildCount() {
-  return modelBoneStatsBuildCount;
 }
 
 function refreshModelWeightSummary({refreshStats = false} = {}) {
@@ -1053,7 +740,6 @@ function refreshModelWeightSummary({refreshStats = false} = {}) {
 
 function refreshSelectedWeightMask(mesh, state) {
   if (!state?.loaded) return null;
-  selectedWeightMaskBuildCount += 1;
   const selected = modelWeightState.selectedBonesBySource.get(
     state.skinningSourceKey) || new Set();
   state.selectedWeightMask = buildSelectedWeightMask(
@@ -1065,10 +751,6 @@ function refreshSelectedWeightMask(mesh, state) {
   });
   state.physicsActiveVertices = Uint32Array.from(activeVertices);
   return state.selectedWeightMask;
-}
-
-export function getSelectedWeightMaskBuildCount() {
-  return selectedWeightMaskBuildCount;
 }
 
 function setModelWeightLoadError(error) {
@@ -1083,13 +765,13 @@ function resetModelWeightState() {
   humanoidControlRigCacheKey = '';
   humanoidControlRigSnapshotCache = null;
   modelRigLoadToken = null;
-  rigPresetGeneration += 1;
+  resetRigPresetSession();
   modelPickController.cancel();
   sourcePhysicsRigs.clear();
   sourceSkinningRigs.clear();
   modelSkinningRig = null;
   weightRuntime.resetModelWeightState();
-  selectionSavePromise = null;
+  resetWeightModelSession();
   rigRuntime.resetModelRigState();
   rigRuntime.resetRigPresetState();
   notifyModelWeightChanged();
@@ -1242,48 +924,6 @@ function sourceMemberRecords(members, normalized) {
     surfaceEvidenceAvailable: member.surfaceEvidence.surfaceEvidenceAvailable,
     duplicate: normalized.duplicateMembers.has(member),
   }));
-}
-
-function sourceMemberDiagnostics(members, normalized) {
-  const records = sourceMemberRecords(members, normalized);
-  const tokensByMember = members.map(sourceMemberVertexTokens);
-  const partialOverlapPairs = [];
-  for (let left = 0; left < members.length; left += 1) {
-    const leftTokens = tokensByMember[left];
-    for (let right = left + 1; right < members.length; right += 1) {
-      if (completeMemberEvidenceEqual(members[left], members[right])) continue;
-      let sharedVertexCount = 0;
-      for (const token of tokensByMember[right]) {
-        if (leftTokens.has(token)) sharedVertexCount += 1;
-      }
-      if (sharedVertexCount > 0) {
-        partialOverlapPairs.push({
-          leftMemberKey: records[left].memberKey,
-          rightMemberKey: records[right].memberKey,
-          sharedVertexCount,
-        });
-      }
-    }
-  }
-  return {records, partialOverlapPairs};
-}
-
-function sourceRigMembers(rig) {
-  return [...(rig.meshes || [])].map(mesh => {
-    const state = states.get(mesh);
-    return state?.loaded ? {
-      mesh, state,
-      surfaceIndices: mesh.geometry?.index?.array || null,
-      surfaceEvidence: inspectSurfaceTopology(
-        state.baselinePositions, mesh.geometry?.index?.array || null),
-    } : null;
-  }).filter(Boolean);
-}
-
-function sourceRigDiagnostics(rig) {
-  const members = sourceRigMembers(rig);
-  const normalized = normalizeSourceMembers(members);
-  return sourceMemberDiagnostics(members, normalized);
 }
 
 function aggregateSourceInfluenceGraph(members) {
@@ -1676,7 +1316,6 @@ function restoreDefaultModelRigOrientation(rig) {
 }
 
 function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
-  const started = performanceNow();
   const previousSelectedJointId = modelRigState.selectedJointId;
   const previousRootSignatures = new Set(
     modelRigState.explicitRootSignatures);
@@ -1774,21 +1413,6 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId = Number.isInteger(previousSelectedJointId)
     && joints[previousSelectedJointId] ? previousSelectedJointId : null;
-  modelRigState.rigReconcileMs = performanceNow() - started;
-  modelRigState.rigCandidateCount = reconciliation.reconciliation
-    ?.candidateCount || 0;
-  modelRigState.rigEquivalentClusterCount = reconciliation.reconciliation
-    ?.equivalenceClusterCount || 0;
-  modelRigState.rigAttachmentCount = reconciliation.reconciliation
-    ?.attachmentCount || 0;
-  modelRigState.rigAmbiguousCount = reconciliation.reconciliation
-    ?.ambiguousCount || 0;
-  addWeightPhysicsPerformance('rigReconcileMs', modelRigState.rigReconcileMs);
-  addWeightPhysicsPerformance('rigCandidateCount', modelRigState.rigCandidateCount);
-  addWeightPhysicsPerformance(
-    'rigEquivalentClusterCount', modelRigState.rigEquivalentClusterCount);
-  addWeightPhysicsPerformance('rigAttachmentCount', modelRigState.rigAttachmentCount);
-  addWeightPhysicsPerformance('rigAmbiguousCount', modelRigState.rigAmbiguousCount);
   updateModelPoseFrameCache(rig, rig.poseTransforms);
   return rig;
 }
@@ -1812,13 +1436,7 @@ function buildPrimaryHumanoidRig(rig) {
   rig.humanoidOrientationRevision = Number(
     orientationState?.modelOrientationRevision) || 0;
   modelRigState.humanoidControlRig = controlRig;
-  modelRigState.humanoidHeatBinding = serializeHumanoidHeatBinding(heatBinding);
-  modelRigState.humanoidBinding = serializeHumanoidRigBinding(binding);
   modelRigState.humanoidStructureRevision = rig.structureRevision;
-  modelRigState.humanoidFitRuntimeMs = Number(
-    controlRig?.diagnostics?.fitRuntimeMs) || 0;
-  modelRigState.humanoidBindingRuntimeMs = Number(
-    binding?.diagnostics?.bindingRuntimeMs) || 0;
 }
 
 function modelParentForJoint(jointId, rig = modelSkinningRig) {
@@ -1927,7 +1545,6 @@ function createSourcePhysicsRig(sourceKey, members) {
   };
   skinRig.physicsRig = rig;
   refreshSourcePhysicsRig(rig, members);
-  addWeightPhysicsPerformance('sourcePhysicsRigCount');
   return rig;
 }
 
@@ -1948,10 +1565,6 @@ function refreshSourcePhysicsRig(rig, members) {
   rig.selectionKey = selectedIds.join(',');
   rig.physicsCenterByBoneId = rig.physicsForest?.centers || rig.centerByBoneId;
   return rig;
-}
-
-export function isPhysicsScheduled() {
-  return modelPhysicsSession.isScheduled();
 }
 
 export function registerSkinningMesh(mesh) {
@@ -1995,21 +1608,6 @@ export function unregisterSkinningMesh(mesh) {
   notifyModelWeightChanged();
 }
 
-export function getModelPhysicsState() {
-  return modelPhysicsSession.getState();
-}
-
-/**
- * Return source-scoped Physics internals for diagnostics and tests.
- * Mesh state intentionally exposes participation only; the owning source rig
- * is the single authority for solver state and composed transforms.
- */
-export function getModelPhysicsDebugState(sourceKey = null) {
-  const rig = (sourceKey ? sourcePhysicsRigs.get(sourceKey) : null)
-    || [...sourcePhysicsRigs.values()][0];
-  return physicsDebugSnapshot(rig);
-}
-
 export function destroyModelPhysicsSession() {
   modelPickController.cancel();
   modelPhysicsSession.destroy();
@@ -2017,7 +1615,7 @@ export function destroyModelPhysicsSession() {
   resetModelWeightState();
 }
 
-export function disableModelPhysics() {
+function disablePhysicsSession() {
   if (!modelPhysicsSession.getState().enabled) return false;
   modelPhysicsSession.disable();
   notifyModelRigChanged();
@@ -2064,7 +1662,7 @@ function installSkinningEntry(mesh, entry, buffer) {
 }
 
 /** Load all active model weights through one backend request and one blob. */
-export function ensureModelWeightsLoaded() {
+function ensureModelWeightsLoaded() {
   if (modelWeightState.loaded) return Promise.resolve(modelWeightSnapshot());
   if (modelWeightState.promise) return modelWeightState.promise;
   const meshes = [...knownMeshes].filter(eligibleSkinningMesh);
@@ -2122,7 +1720,7 @@ export function ensureModelWeightsLoaded() {
     refreshModelWeightSummary({refreshStats: true});
     if (!modelWeightState.savedSelectionApplied) {
       modelWeightState.savedSelectionApplied = true;
-      setSelectedBones(sourceSelectionEntries(
+      setWeightModelSelectedBones(sourceSelectionEntries(
         modelWeightState.savedBonesBySource));
     } else {
       syncPhysicsToSelection();
@@ -2243,7 +1841,6 @@ function finalizeDeformationGeometry(mesh, state) {
 
 function buildModelPoseTransforms() {
   if (!modelSkinningRig) return new Map();
-  const started = performanceNow();
   const manualTransforms = buildForestTransformsFromLocalRotations(
     modelSkinningRig.inferredForest, modelSkinningRig.centerByJointId, {
       getQuaternion: jointId => modelSkinningRig.poseRotationByJointId.get(
@@ -2282,8 +1879,6 @@ function buildModelPoseTransforms() {
   updateModelPoseFrameCache(modelSkinningRig,
     modelSkinningRig.poseTransforms);
   updateModelSourceAliases(modelSkinningRig);
-  modelRigState.rigTransformMs = performanceNow() - started;
-  addWeightPhysicsPerformance('rigTransformMs', modelRigState.rigTransformMs);
   return modelSkinningRig.poseTransforms;
 }
 
@@ -2333,38 +1928,6 @@ function sourceBoneKeyForSet(ids) {
   return [...ids].sort((left, right) => left - right).join(',');
 }
 
-function humanoidDriverIdsForJointIds(rig, jointIds) {
-  const result = new Set();
-  const binding = rig?.humanoidBinding;
-  if (binding?.jointBindings instanceof Map) {
-    binding.jointBindings.forEach((entry, jointId) => {
-      if (jointIds.has(Number(jointId)) && entry?.driverId) {
-        result.add(entry.driverId);
-      }
-    });
-  }
-  (binding?.secondaryAttachments || []).forEach(attachment => {
-    if ((attachment.jointIds || []).some(jointId =>
-      jointIds.has(Number(jointId))) && attachment.driverId) {
-      result.add(attachment.driverId);
-    }
-  });
-  rig?.humanoidSourceBoneTransforms?.forEach(entries => {
-    entries.forEach(entry => {
-      if (entry?.driverId && entry.matrix?.isMatrix4
-          && !matrixIsIdentity(entry.matrix)) {
-        result.add(entry.driverId);
-      }
-    });
-  });
-  const order = new Map(HUMANOID_DRIVER_SEGMENTS.map((segment, index) =>
-    [segment.id, index]));
-  return [...result].sort((left, right) =>
-    (order.get(left) ?? Number.MAX_SAFE_INTEGER)
-    - (order.get(right) ?? Number.MAX_SAFE_INTEGER)
-    || left.localeCompare(right));
-}
-
 function syncDerivedSourcePose(sourceRig, modelRig) {
   sourceRig.poseRotationByBoneId.clear();
   for (const boneId of sourceRig.boneIds || []) {
@@ -2387,13 +1950,6 @@ function applyModelPose({request = true, dragging = false} = {}) {
   const transforms = buildModelPoseTransforms();
   const humanoidSourceBones = sourceBoneIdsForHumanoidTransforms(rig);
   rig.poseRevision = (rig.poseRevision || 0) + 1;
-  const manualPoseJointIds = [...rig.poseRotationByJointId.entries()]
-    .filter(([, quaternion]) => !quaternionIsIdentity(quaternion))
-    .map(([jointId]) => Number(jointId));
-  const humanoidPoseJointIds = entriesForCollection(
-    rig.humanoidDriverTransforms)
-    .filter(([, matrix]) => !matrixIsIdentity(matrix))
-    .map(([jointId]) => Number(jointId));
   const posedJointIds = activePoseJointIds({
     manualRotations: rig.poseRotationByJointId,
     driverTransforms: rig.humanoidDriverTransforms,
@@ -2403,10 +1959,7 @@ function applyModelPose({request = true, dragging = false} = {}) {
   const affectedJointIds = rig.poseActiveJointKey === poseJointKey
     ? rig.poseAffectedJointIds : modelPoseDescendantIds(rig, posedJointIds);
   const affectedSetChanged = rig.poseActiveJointKey !== poseJointKey;
-  const deformStarted = performanceNow();
   let changed = false;
-  let deformedVertexCount = 0;
-  const affectedSourceBones = [];
   for (const sourceRig of rig.sourceRigs || []) {
     syncDerivedSourcePose(sourceRig, rig);
     const transformsByBoneId = rig.sourceTransformAliases.get(
@@ -2417,12 +1970,6 @@ function applyModelPose({request = true, dragging = false} = {}) {
       sourceRig, affectedJointIds);
     (humanoidSourceBones.get(sourceRig.sourceKey) || []).forEach(boneId =>
       affectedBoneIds.add(Number(boneId)));
-    if (affectedBoneIds.size) {
-      affectedSourceBones.push({
-        sourceKey: sourceRig.sourceKey,
-        boneIds: [...affectedBoneIds].sort((left, right) => left - right),
-      });
-    }
     forEachRigMesh(sourceRig, (mesh, state) => {
       const previousBoneKey = rig.poseSourceBoneIdsByMesh.get(mesh) || '';
       const boneKey = sourceBoneKeyForSet(affectedBoneIds);
@@ -2439,7 +1986,6 @@ function applyModelPose({request = true, dragging = false} = {}) {
       state.poseRotations = rotationsByBoneId;
       rig.poseActiveVerticesByMesh.set(mesh, activeVertices);
       rig.poseSourceBoneIdsByMesh.set(mesh, boneKey);
-      deformedVertexCount += activeVertices.length;
     });
     const physicsRig = sourceRig.physicsRig;
     if (physicsRig?.physicsState) {
@@ -2458,26 +2004,6 @@ function applyModelPose({request = true, dragging = false} = {}) {
   }
   rig.poseAffectedJointIds = affectedJointIds;
   rig.poseActiveJointKey = poseJointKey;
-  const nonIdentityDriverJointIds = [...new Set(humanoidPoseJointIds)]
-    .sort((left, right) => left - right);
-  const humanoidDiagnostics = {
-    manualPoseJointIds: [...manualPoseJointIds].sort((left, right) =>
-      left - right),
-    humanoidDrivenJointIds: nonIdentityDriverJointIds,
-    nonIdentityDriverSegments: humanoidDriverIdsForJointIds(
-      rig, new Set(nonIdentityDriverJointIds)),
-    affectedModelJointIds: [...affectedJointIds].sort((left, right) =>
-      left - right),
-    affectedSourceBones,
-    activeVertexCount: deformedVertexCount,
-    changed,
-  };
-  rig.humanoidRuntimeDiagnostics = humanoidDiagnostics;
-  modelRigState.humanoidRuntimeDiagnostics = humanoidDiagnostics;
-  modelRigState.rigDeformMs = performanceNow() - deformStarted;
-  modelRigState.rigDeformedVertexCount = deformedVertexCount;
-  addWeightPhysicsPerformance('rigDeformMs', modelRigState.rigDeformMs);
-  addWeightPhysicsPerformance('rigDeformedVertexCount', deformedVertexCount);
   if (changed) invalidateCharacterShadowGeometry({request: false});
   if (!dragging && !modelRigHasActivePhysics()) {
     for (const sourceRig of rig.sourceRigs || []) finalizeSourcePoseBounds(sourceRig);
@@ -2530,7 +2056,7 @@ function unavailableRigPresetResult(reason, preset = null) {
 }
 
 /** Apply a resolved preset in one hierarchy/deformation transaction. */
-export function applyRigPosePreset(resolvedPreset, options = {}) {
+function applyRigPosePreset(resolvedPreset, options = {}) {
   const rig = modelSkinningRig;
   if (!rig || !modelRigState.loaded) {
     const result = unavailableRigPresetResult('rig_not_loaded');
@@ -2655,206 +2181,6 @@ export function getRigJointPoseFrame(jointId) {
   return modelJointPoseFrame(jointId);
 }
 
-function setRigPresetList(presets, error = null) {
-  const normalized = [];
-  const seenIds = new Set();
-  for (const raw of presets || []) {
-    const preset = normalizeRigPreset(raw);
-    if (!preset || seenIds.has(preset.id)) continue;
-    seenIds.add(preset.id);
-    normalized.push(preset);
-  }
-  rigPresetState.presets = normalized;
-  rigPresetState.error = error || null;
-  if (!normalized.some(preset => preset.id === rigPresetState.selectedPresetId)) {
-    rigPresetState.selectedPresetId = null;
-  }
-}
-
-function normalizeHydratedLimbMappings(metadata) {
-  const raw = metadata?.limb_mappings || metadata?.limbMappings;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  return Object.fromEntries(RIG_LIMB_ROLES.flatMap(role => {
-    const value = raw[role];
-    if (!value || typeof value !== 'object' || Array.isArray(value)
-        || typeof value.anchor_signature !== 'string'
-        || !value.anchor_signature.trim()) return [];
-    return [[role, {
-      anchor_signature: value.anchor_signature,
-      ...(typeof value.bend_override_signature === 'string'
-        && value.bend_override_signature.trim()
-        ? {bend_override_signature: value.bend_override_signature} : {}),
-      ...(typeof value.end_override_signature === 'string'
-        && value.end_override_signature.trim()
-        ? {end_override_signature: value.end_override_signature} : {}),
-      bend_sign: value.bend_sign === -1 ? -1 : 1,
-    }]];
-  }));
-}
-
-/** Install backend-hydrated Rig metadata without applying a pose. */
-export function setRigMetadata(metadata) {
-  rigPresetGeneration += 1;
-  rigPresetState.selectedPresetId = null;
-  rigPresetState.limbMappings = normalizeHydratedLimbMappings(metadata);
-  limbMappingMetadataRevision += 1;
-  resolvedLimbMappings = null;
-  if (!metadata || typeof metadata !== 'object') {
-    rigPresetState.loaded = true;
-    rigPresetState.loading = false;
-    rigPresetState.lastApplyResult = null;
-    setRigPresetList([]);
-    notifyModelRigChanged();
-    return rigPresetSnapshotForState();
-  }
-  const validVersion = Number(metadata.version) === 1;
-  setRigPresetList(metadata.presets, validVersion
-    ? metadata.error || null : 'Pose presets could not be loaded.');
-  rigPresetState.loaded = true;
-  rigPresetState.loading = false;
-  rigPresetState.lastApplyResult = null;
-  notifyModelRigChanged();
-  return rigPresetSnapshotForState();
-}
-
-// Kept as a compatibility alias for integrations that used PR #90's narrow
-// hydration entry point.
-export function setRigPresetMetadata(metadata) {
-  return setRigMetadata(metadata);
-}
-
-export function getRigPresetState() {
-  return rigPresetSnapshotForState();
-}
-
-function currentRigModPath() {
-  return [...knownMeshes].find(mesh => mesh.userData?.modPath)
-    ?.userData?.modPath || null;
-}
-
-function queueRigPresetWrite(operation) {
-  const token = ++rigPresetWriteToken;
-  rigPresetState.loading = true;
-  rigPresetState.error = null;
-  notifyModelRigChanged();
-  const queued = rigPresetWriteQueue.then(operation, operation);
-  rigPresetWriteQueue = queued.catch(() => {});
-  return queued.catch(error => ({saved: false,
-    error: error instanceof Error ? error.message : String(error)}))
-    .finally(() => {
-      if (token === rigPresetWriteToken) {
-        rigPresetState.loading = false;
-        notifyModelRigChanged();
-      }
-    });
-}
-
-export function applyRigPosePresetById(
-    presetId = rigPresetState.selectedPresetId) {
-  const preset = rigPresetState.presets.find(item => item.id === presetId);
-  if (!preset) {
-    const result = unavailableRigPresetResult('invalid_preset');
-    rigPresetState.lastApplyResult = result;
-    notifyModelRigChanged();
-    return result;
-  }
-  rigPresetState.selectedPresetId = preset.id;
-  const result = applyRigPosePreset(resolveRigPreset(modelSkinningRig, preset), {
-    presetId: preset.id,
-  });
-  return result;
-}
-
-export function saveRigPosePreset(name) {
-  if (!modelSkinningRig || !modelRigState.loaded) {
-    return Promise.resolve({saved: false, error: 'The inferred Rig is not loaded.'});
-  }
-  const pose = serializeRigPose(modelSkinningRig, {
-    explicitRootSignatures: modelRigState.explicitRootSignatures,
-  });
-  if (!pose.joints.length && !pose.roots.length) {
-    return Promise.resolve({saved: false,
-      error: 'There is no manual pose to save.'});
-  }
-  let preset;
-  try {
-    preset = createRigPreset({name, modelRig: modelSkinningRig,
-      explicitRootSignatures: modelRigState.explicitRootSignatures});
-  } catch (error) {
-    return Promise.resolve({saved: false,
-      error: error instanceof Error ? error.message : String(error)});
-  }
-  if (rigPresetState.presets.some(item =>
-      item.name.trim().toLocaleLowerCase() === preset.name.toLocaleLowerCase())) {
-    return Promise.resolve({saved: false,
-      error: 'A pose with this name already exists.'});
-  }
-  const api = window.pywebview?.api?.save_rig_pose_preset;
-  const path = currentRigModPath();
-  if (typeof api !== 'function' || !path) {
-    return Promise.resolve({saved: false, error: 'Pose presets are unavailable.'});
-  }
-  const generation = rigPresetGeneration;
-  return queueRigPresetWrite(async () => {
-    const result = await api(path, preset);
-    if (!result?.saved) throw new Error(result?.error || 'The pose was not saved.');
-    if (generation !== rigPresetGeneration) return {saved: true, preset, stale: true};
-    setRigPresetList(result.presets || [...rigPresetState.presets, preset]);
-    rigPresetState.selectedPresetId = preset.id;
-    return {saved: true, preset, presets: rigPresetState.presets};
-  });
-}
-
-export function renameRigPosePreset(presetId, name) {
-  const id = String(presetId || '');
-  const preset = rigPresetState.presets.find(item => item.id === id);
-  const checked = validateRigPresetName(name);
-  if (!preset) return Promise.resolve({saved: false, error: 'Pose preset was not found.'});
-  if (!checked.valid) return Promise.resolve({saved: false, error: checked.error});
-  if (rigPresetState.presets.some(item => item.id !== preset.id
-      && item.name.toLocaleLowerCase() === checked.value.toLocaleLowerCase())) {
-    return Promise.resolve({saved: false,
-      error: 'A pose with this name already exists.'});
-  }
-  const api = window.pywebview?.api?.rename_rig_pose_preset;
-  const path = currentRigModPath();
-  if (typeof api !== 'function' || !path) {
-    return Promise.resolve({saved: false, error: 'Pose presets are unavailable.'});
-  }
-  const generation = rigPresetGeneration;
-  return queueRigPresetWrite(async () => {
-    const result = await api(path, preset.id, checked.value);
-    if (!result?.saved) throw new Error(result?.error || 'The pose was not renamed.');
-    if (generation !== rigPresetGeneration) return {saved: true, stale: true};
-    setRigPresetList(result.presets || rigPresetState.presets);
-    rigPresetState.selectedPresetId = preset.id;
-    return {saved: true, presets: rigPresetState.presets};
-  });
-}
-
-export function deleteRigPosePreset(presetId) {
-  const id = String(presetId || '');
-  const preset = rigPresetState.presets.find(item => item.id === id);
-  if (!preset) return Promise.resolve({saved: false, error: 'Pose preset was not found.'});
-  const api = window.pywebview?.api?.delete_rig_pose_preset;
-  const path = currentRigModPath();
-  if (typeof api !== 'function' || !path) {
-    return Promise.resolve({saved: false, error: 'Pose presets are unavailable.'});
-  }
-  const generation = rigPresetGeneration;
-  return queueRigPresetWrite(async () => {
-    const result = await api(path, preset.id);
-    if (!result?.saved) throw new Error(result?.error || 'The pose was not deleted.');
-    if (generation !== rigPresetGeneration) return {saved: true, stale: true};
-    setRigPresetList(result.presets || rigPresetState.presets.filter(item =>
-      item.id !== preset.id));
-    if (rigPresetState.selectedPresetId === preset.id) {
-      rigPresetState.selectedPresetId = null;
-    }
-    return {saved: true, presets: rigPresetState.presets};
-  });
-}
-
 export function ensureModelRigLoaded() {
   if (modelRigState.loaded) return Promise.resolve(rigSnapshot());
   if (modelRigState.promise) return modelRigState.promise;
@@ -2870,12 +2196,9 @@ export function ensureModelRigLoaded() {
       if (generation !== modelWeightGeneration
           || modelRigLoadToken !== token) return rigSnapshot();
       if (modelWeightState.error) throw new Error(modelWeightState.error);
-      const analysisStarted = performanceNow();
       const rigs = buildAllSourceSkinningRigs();
       buildModelSkinningRig(rigs);
       modelRigState.loaded = true;
-      modelRigState.rigAnalysisMs = performanceNow() - analysisStarted;
-      addWeightPhysicsPerformance('rigAnalysisMs', modelRigState.rigAnalysisMs);
       return rigSnapshot();
     })
     .catch(error => {
@@ -2911,87 +2234,17 @@ export function setRigRotationSnapDegrees(value) {
   return next;
 }
 
-function validLimbRole(role) {
-  return RIG_LIMB_ROLES.includes(role) ? role : null;
-}
-
-function currentLimbMappingForRole(role) {
-  return resolvedLimbMappingState()[role] || emptyLimbMapping(role);
-}
-
-export function setRigActiveLimbRole(role) {
-  const next = validLimbRole(role);
-  if (!next || modelRigState.activeLimbRole === next) return next || false;
-  if (modelRigState.ikEnabled) {
-    const primary = primaryHumanoidLimb(next);
-    const mapping = primary.available ? emptyLimbMapping(next)
-      : currentLimbMappingForRole(next);
-    if (!primary.available && !mapping.available) {
-      modelRigState.ikEnabled = false;
-    } else if (!primary.available) {
-      modelRigState.selectedJointId = mapping.endJointId;
-    }
-  }
-  modelRigState.activeLimbRole = next;
-  notifyModelRigChanged();
-  requestRender();
-  return next;
-}
-
-export function setRigIkEnabled(enabled) {
-  const primary = primaryHumanoidLimb();
-  const mapping = primary.available ? emptyLimbMapping(primary.role)
-    : currentLimbMapping();
-  if (enabled && !primary.available && !mapping.available) {
-    modelRigState.ikEnabled = false;
-    notifyModelRigChanged();
-    requestRender();
-    return false;
-  }
-  const next = !!enabled && (primary.available || !!mapping.available);
-  if (modelRigState.ikEnabled === next) return next;
-  modelRigState.ikEnabled = next;
-  if (next && !primary.available) modelRigState.selectedJointId = mapping.endJointId;
-  notifyModelRigChanged();
-  requestRender();
-  return next;
-}
-
-function limbLabel(role) {
-  return RIG_LIMB_ROLE_INFO[role]?.label || role;
-}
-
-function limbPartLabel(role, type) {
-  const info = RIG_LIMB_ROLE_INFO[role];
-  if (!info) return type;
-  if (type === 'limb-anchor') return info.anchor;
-  if (type === 'limb-bend-override') return info.bend;
-  if (type === 'limb-end-override') return info.end;
-  return type;
-}
-
-function normalizeRigJointPickIntent(intent) {
-  const type = String(intent?.type || '');
-  if (type === 'selected-joint') return {type};
-  const role = validLimbRole(intent?.role);
-  return role && ['limb-anchor', 'limb-bend-override',
-    'limb-end-override'].includes(type) ? {type, role} : null;
-}
-
 export function beginRigJointPicking(intent = {}) {
-  const next = normalizeRigJointPickIntent(intent);
+  const next = String(intent?.type || '') === 'selected-joint'
+    ? {type: 'selected-joint'} : null;
   if (!next || !modelRigState.loaded || !modelSkinningRig) return false;
   if (modelRigState.jointPickIntent
-      && modelRigState.jointPickIntent.type === next.type
-      && modelRigState.jointPickIntent.role === next.role) {
+      && modelRigState.jointPickIntent.type === next.type) {
     return cancelRigJointPicking();
   }
   if (modelPickController.isEnabled()) modelPickController.cancel();
   modelRigState.jointPickIntent = next;
-  modelRigState.pickStatus = next.type === 'selected-joint'
-    ? 'Pick a Rig joint.'
-    : `Pick the ${limbLabel(next.role)} ${
-      limbPartLabel(next.role, next.type)} joint.`;
+  modelRigState.pickStatus = 'Pick a Rig joint.';
   notifyModelRigChanged();
   requestRender();
   return true;
@@ -3006,221 +2259,12 @@ export function cancelRigJointPicking() {
   return true;
 }
 
-function mappingToMetadata(mapping, bendSign = 1) {
-  return {
-    anchor_signature: mapping.anchor_signature,
-    ...(mapping.bend_override_signature
-      ? {bend_override_signature: mapping.bend_override_signature} : {}),
-    ...(mapping.end_override_signature
-      ? {end_override_signature: mapping.end_override_signature} : {}),
-    bend_sign: bendSign === -1 ? -1 : 1,
-  };
-}
-
-function persistLimbMapping(role, mapping) {
-  const api = window.pywebview?.api;
-  const path = currentRigModPath();
-  if (!path || typeof api?.save_rig_limb_mapping !== 'function') {
-    return Promise.resolve({saved: false, error: 'Limb mappings are unavailable.'});
-  }
-  return queueRigPresetWrite(() => api.save_rig_limb_mapping(
-    path, role, mappingToMetadata(mapping, mapping.bend_sign)));
-}
-
-function persistDeletedLimbMapping(role) {
-  const api = window.pywebview?.api;
-  const path = currentRigModPath();
-  if (!path || typeof api?.delete_rig_limb_mapping !== 'function') {
-    return Promise.resolve({saved: false, error: 'Limb mappings are unavailable.'});
-  }
-  return queueRigPresetWrite(() => api.delete_rig_limb_mapping(path, role));
-}
-
-export function setRigLimbAnchor(role, jointId = modelRigState.selectedJointId) {
-  const nextRole = validLimbRole(role);
-  const joint = modelJointForId(jointId);
-  if (!nextRole || !joint || !modelSkinningRig) return false;
-  const signature = joint.signature;
-  if (typeof signature !== 'string' || !signature.trim()) {
-    modelRigState.pickStatus = 'The selected joint has no stable identity.';
-    notifyModelRigChanged();
-    return false;
-  }
-  const previous = rigPresetState.limbMappings?.[nextRole] || {};
-  const sameAnchor = previous.anchor_signature === signature;
-  const raw = {
-    anchor_signature: signature,
-    ...(sameAnchor && typeof previous.bend_override_signature === 'string'
-      ? {bend_override_signature: previous.bend_override_signature} : {}),
-    ...(sameAnchor && typeof previous.end_override_signature === 'string'
-      ? {end_override_signature: previous.end_override_signature} : {}),
-    bend_sign: previous.bend_sign === -1 ? -1 : 1,
-  };
-  rigPresetState.limbMappings = {
-    ...(rigPresetState.limbMappings || {}), [nextRole]: raw,
-  };
-  limbMappingMetadataRevision += 1;
-  resolvedLimbMappings = null;
-  modelRigState.activeLimbRole = nextRole;
-  modelRigState.selectedJointId = joint.jointId;
-  modelRigState.ikEnabled = false;
-  modelRigState.pickStatus = '';
-  notifyModelRigChanged();
-  requestRender();
-  void persistLimbMapping(nextRole, raw).then(result => {
-    if (result?.saved === false && result?.error) {
-      modelRigState.pickStatus = result.error;
-      notifyModelRigChanged();
-    }
-  });
-  return true;
-}
-
-export function setRigLimbOverride(role, type, jointId) {
-  const nextRole = validLimbRole(role);
-  const kind = String(type || '');
-  const mapping = nextRole ? currentLimbMappingForRole(nextRole) : null;
-  const joint = modelJointForId(jointId);
-  const isEndOverride = kind === 'limb-end-override';
-  const hasAnchor = Number.isInteger(mapping?.anchorJointId);
-  if (!nextRole || (!isEndOverride && !mapping?.available)
-      || (isEndOverride && !hasAnchor) || !joint || !modelSkinningRig) {
-    modelRigState.pickStatus = 'The selected joint is not valid for this limb.';
-    notifyModelRigChanged();
-    return false;
-  }
-  let candidatePath = [];
-  if (isEndOverride) {
-    candidatePath = rigPathBetweenJointIds({rig: modelSkinningRig,
-      jointA: mapping.anchorJointId, jointB: joint.jointId}).jointIds;
-    if (candidatePath.length < 3) {
-      modelRigState.pickStatus =
-        'The foot/hand must share a usable topology path with the anchor.';
-      notifyModelRigChanged();
-      return false;
-    }
-  } else if (kind === 'limb-bend-override') {
-    candidatePath = mapping.pathJointIds || [];
-    if (!candidatePath.includes(joint.jointId)
-        || joint.jointId === mapping.anchorJointId
-        || joint.jointId === mapping.endJointId) {
-      modelRigState.pickStatus = 'The bend must be between the anchor and end.';
-      notifyModelRigChanged();
-      return false;
-    }
-  } else {
-    modelRigState.pickStatus = 'Unknown limb mapping action.';
-    notifyModelRigChanged();
-    return false;
-  }
-  if (typeof joint.signature !== 'string' || !joint.signature.trim()) {
-    modelRigState.pickStatus = 'The selected joint has no stable identity.';
-    notifyModelRigChanged();
-    return false;
-  }
-  const previous = rigPresetState.limbMappings?.[nextRole] || {};
-  const updated = {
-    ...previous,
-    anchor_signature: previous.anchor_signature
-      || modelJointForId(mapping.anchorJointId)?.signature,
-    ...(kind === 'limb-bend-override'
-      ? {bend_override_signature: joint.signature}
-      : {end_override_signature: joint.signature}),
-  };
-  if (kind === 'limb-end-override'
-      && typeof previous.bend_override_signature === 'string') {
-    const lookup = buildJointSignatureIndex(modelSkinningRig);
-    const bendId = lookup.ambiguousSignatures.has(
-      previous.bend_override_signature)
-      ? null : lookup.resolvedBySignature.get(previous.bend_override_signature);
-    const compatible = Number.isInteger(bendId)
-      && candidatePath.includes(bendId)
-      && bendId !== mapping.anchorJointId
-      && bendId !== joint.jointId;
-    if (!compatible) delete updated.bend_override_signature;
-  }
-  rigPresetState.limbMappings = {
-    ...(rigPresetState.limbMappings || {}), [nextRole]: updated,
-  };
-  limbMappingMetadataRevision += 1;
-  resolvedLimbMappings = null;
-  modelRigState.activeLimbRole = nextRole;
-  modelRigState.ikEnabled = false;
-  modelRigState.pickStatus = '';
-  notifyModelRigChanged();
-  requestRender();
-  void persistLimbMapping(nextRole, updated).then(result => {
-    if (result?.saved === false && result?.error) {
-      modelRigState.pickStatus = result.error;
-      notifyModelRigChanged();
-    }
-  });
-  return true;
-}
-
 export function handleRigJointPicked(jointId,
     intent = modelRigState.jointPickIntent) {
-  const next = normalizeRigJointPickIntent(intent);
-  if (!next) return false;
-  const changed = next.type === 'selected-joint'
-    ? selectRigJoint(jointId)
-    : next.type === 'limb-anchor'
-    ? setRigLimbAnchor(next.role, jointId)
-    : setRigLimbOverride(next.role, next.type, jointId);
+  if (String(intent?.type || '') !== 'selected-joint') return false;
+  const changed = selectRigJoint(jointId);
   if (changed) cancelRigJointPicking();
   return changed;
-}
-
-export function clearRigLimbMapping(role = modelRigState.activeLimbRole) {
-  const nextRole = validLimbRole(role);
-  if (!nextRole || !rigPresetState.limbMappings?.[nextRole]) return false;
-  const nextMappings = {...rigPresetState.limbMappings};
-  delete nextMappings[nextRole];
-  rigPresetState.limbMappings = nextMappings;
-  limbMappingMetadataRevision += 1;
-  resolvedLimbMappings = null;
-  if (modelRigState.activeLimbRole === nextRole) modelRigState.ikEnabled = false;
-  modelRigState.pickStatus = '';
-  notifyModelRigChanged();
-  requestRender();
-  void persistDeletedLimbMapping(nextRole).then(result => {
-    if (result?.saved === false && result?.error) {
-      modelRigState.pickStatus = result.error;
-      notifyModelRigChanged();
-    }
-  });
-  return true;
-}
-
-export function flipRigLimbBend(role = modelRigState.activeLimbRole) {
-  const nextRole = validLimbRole(role);
-  const primary = primaryHumanoidLimb(nextRole);
-  if (primary.available) {
-    const nextSign = primary.bendSign === -1 ? 1 : -1;
-    modelRigState.humanoidBendSigns = {
-      ...(modelRigState.humanoidBendSigns || {}), [nextRole]: nextSign,
-    };
-    notifyModelRigChanged();
-    requestRender();
-    return nextSign;
-  }
-  const current = nextRole && rigPresetState.limbMappings?.[nextRole];
-  if (!nextRole || !current) return false;
-  const updated = {...current, bend_sign: current.bend_sign === -1 ? 1 : -1};
-  rigPresetState.limbMappings = {
-    ...rigPresetState.limbMappings, [nextRole]: updated,
-  };
-  limbMappingMetadataRevision += 1;
-  resolvedLimbMappings = null;
-  notifyModelRigChanged();
-  requestRender();
-  void persistLimbMapping(nextRole, updated).then(result => {
-    if (result?.saved === false && result?.error) {
-      modelRigState.pickStatus = result.error;
-      notifyModelRigChanged();
-    }
-  });
-  return updated.bend_sign;
 }
 
 function selectRigBoneInternal(sourceKey, boneId) {
@@ -3339,7 +2383,7 @@ function rotationEntries(rotationsByJointId) {
 }
 
 /** Apply several model-local rotations in one authoritative pose transaction. */
-export function setRigJointRotations(rotationsByJointId, options = {}) {
+function setRigJointRotations(rotationsByJointId, options = {}) {
   if (!modelSkinningRig || !modelRigState.loaded) return false;
   const updates = [];
   const seen = new Set();
@@ -3421,90 +2465,6 @@ export function setRigJointRotation(jointId, quaternion, options = {}) {
     member.sourceKey, member.boneId, quaternion, options) : false;
 }
 
-export function solveRigIkTarget(target, options = {}) {
-  const rig = modelSkinningRig;
-  const primary = primaryHumanoidLimb();
-  if (rig?.humanoidControlRig?.accepted && modelRigState.ikEnabled
-      && primary.available) {
-    const previousPose = modelRigState.humanoidPose || {};
-    const solved = solveHumanoidControlIk({
-      controlRig: rig.humanoidControlRig,
-      posedControls: previousPose,
-      role: primary.role,
-      target,
-      bendSign: primary.bendSign,
-    });
-    if (!solved.positions) return solved;
-    modelRigState.humanoidPose = mergeHumanoidLimbPose(
-      previousPose, solved.positions, primary.keys);
-    const applied = applyModelPose({dragging: options?.dragging === true});
-    const changedControlKeys = primary.keys.filter(key => {
-      const before = previousPose[key] || rig.humanoidControlRig.controls[key]
-        ?.position;
-      const after = solved.positions[key];
-      return Array.isArray(before) && Array.isArray(after)
-        && before.slice(0, 3).some((value, index) =>
-          Math.abs(Number(value) - Number(after[index])) > 1e-6);
-    });
-    modelRigState.humanoidRuntimeDiagnostics = {
-      ...(modelRigState.humanoidRuntimeDiagnostics || {}),
-      lastIk: {
-        role: primary.role,
-        target: Array.isArray(target) ? target.slice(0, 3)
-          : target?.toArray?.() || null,
-        changedControlKeys,
-        reached: !!solved.reached,
-        residual: Number(solved.residual) || 0,
-        applied,
-      },
-    };
-    if (!options?.dragging) notifyModelRigChanged();
-    return {...solved, applied, controlRig: 'humanoid'};
-  }
-  const mapping = currentLimbMapping();
-  if (!rig || !modelRigState.ikEnabled || !mapping.available) return false;
-  const solved = solveLimbIk({
-    forest: rig.inferredForest,
-    centers: rig.centerByJointId,
-    jointPivots: rig.jointPivotByJointId,
-    localRotations: rig.poseRotationByJointId,
-    anchorJointId: mapping.anchorJointId,
-    bendJointId: mapping.bendJointId,
-    endJointId: mapping.endJointId,
-    pathJointIds: mapping.pathJointIds,
-    bendDirection: mapping.bendDirection,
-    bendSign: mapping.bendSign,
-    target,
-  });
-  if (!solved.rotations.size) return solved;
-  const applied = setRigJointRotations(solved.rotations, {
-    dragging: options?.dragging === true,
-    selectedJointId: mapping.endJointId,
-  });
-  return {...solved, applied};
-}
-
-export function setHumanoidControlPositions(positionsByKey, options = {}) {
-  const rig = modelSkinningRig?.humanoidControlRig;
-  if (!rig?.accepted || !positionsByKey || typeof positionsByKey !== 'object') {
-    return false;
-  }
-  const nextPose = {...(modelRigState.humanoidPose || {})};
-  for (const [key, value] of Object.entries(positionsByKey)) {
-    if (!rig.controls?.[key]) return false;
-    const values = value?.position ?? value;
-    if (!Array.isArray(values) || values.length < 3
-        || values.slice(0, 3).some(item => !Number.isFinite(Number(item)))) {
-      return false;
-    }
-    nextPose[key] = values.slice(0, 3).map(Number);
-  }
-  modelRigState.humanoidPose = nextPose;
-  applyModelPose({dragging: options?.dragging === true});
-  notifyModelRigChanged();
-  return true;
-}
-
 function finishRigPoseForSource(sourceKey, boneId) {
   const rig = rigSourceFor(sourceKey);
   const id = Number(boneId);
@@ -3537,37 +2497,6 @@ function resetRigBoneForSource(sourceKey, boneId) {
   return true;
 }
 
-function resetRigLimb() {
-  const primary = primaryHumanoidLimb();
-  if (primary.available && modelSkinningRig) {
-    const hadPose = primary.keys.slice(1).some(key =>
-      Object.prototype.hasOwnProperty.call(modelRigState.humanoidPose || {}, key));
-    if (!hadPose) return false;
-    const nextPose = {...(modelRigState.humanoidPose || {})};
-    primary.keys.slice(1).forEach(key => delete nextPose[key]);
-    modelRigState.humanoidPose = nextPose;
-    applyModelPose();
-    modelRigState.pickStatus = '';
-    notifyModelRigChanged();
-    requestRender();
-    return true;
-  }
-  const mapping = currentLimbMapping();
-  if (!mapping.available || !modelSkinningRig) return false;
-  const controlIds = [mapping.anchorJointId, mapping.bendJointId];
-  const hadPose = controlIds.some(jointId =>
-    modelSkinningRig.poseRotationByJointId.has(jointId));
-  controlIds.forEach(jointId => {
-    modelSkinningRig.poseRotationByJointId.delete(jointId);
-  });
-  if (!hadPose) return false;
-  applyModelPose();
-  modelRigState.pickStatus = '';
-  notifyModelRigChanged();
-  requestRender();
-  return true;
-}
-
 export function setRigJointRoot(jointId) {
   const joint = modelJointForId(jointId);
   const member = joint?.representativeMember || joint?.members?.[0];
@@ -3583,10 +2512,6 @@ export function finishRigJointPose(jointId) {
 }
 
 export function resetRigJoint(jointId) {
-  const selectedId = Number(jointId);
-  const mapping = currentLimbMapping();
-  if (modelRigState.ikEnabled && mapping.available
-      && mapping.endJointId === selectedId) return resetRigLimb();
   const joint = modelJointForId(jointId);
   const member = joint?.representativeMember || joint?.members?.[0];
   return member ? resetRigBoneForSource(member.sourceKey, member.boneId)
@@ -3608,7 +2533,7 @@ export function resetRigPose() {
 function syncPhysicsParticipants(changedSourceKeys = null) {
   if (!modelPhysicsSession.getState().enabled) return;
   if (!selectedBoneCount(modelWeightState.selectedBonesBySource)) {
-    disableModelPhysics();
+    disablePhysicsSession();
     return;
   }
   const groups = new Map();
@@ -3686,7 +2611,7 @@ function syncPhysicsToSelection(changedSourceKeys = null) {
     && selectedBoneCount(modelWeightState.selectedBonesBySource) > 0;
   const enabled = modelPhysicsSession.getState().enabled;
   if (!shouldEnable) {
-    if (enabled) disableModelPhysics();
+    if (enabled) disablePhysicsSession();
     return false;
   }
   if (!enabled) {
@@ -3696,23 +2621,7 @@ function syncPhysicsToSelection(changedSourceKeys = null) {
   return true;
 }
 
-export function enableModelPhysics() {
-  if (modelPhysicsSession.getState().enabled) {
-    return Promise.resolve(getModelPhysicsState());
-  }
-  if (!selectedBoneCount(modelWeightState.selectedBonesBySource)) {
-    return Promise.resolve(getModelPhysicsState());
-  }
-  const generation = modelPhysicsSession.enable(getModelTransformState());
-  syncPhysicsParticipants();
-  return Promise.resolve({...getModelPhysicsState(), generation});
-}
-
-export function resetModelPhysicsMotion() {
-  return modelPhysicsSession.reset(getModelTransformState());
-}
-
-export function resetModelPhysics() {
+function resetModelPhysicsInternal() {
   const defaults = DEFAULT_MODEL_PHYSICS_SETTINGS;
   return modelPhysicsSession.reset(getModelTransformState(), {
     settingsPatch: {
@@ -3758,7 +2667,7 @@ function handleVirtualModelMotion(event) {
   modelPhysicsSession.handleVirtualMotion(event.detail);
 }
 
-export function weightForBone(indices, weights, influenceCount,
+function weightForBone(indices, weights, influenceCount,
                               vertexIndex, boneId) {
   if (!indices || !weights || influenceCount <= 0) return 0;
   const start = vertexIndex * influenceCount;
@@ -3772,7 +2681,7 @@ export function weightForBone(indices, weights, influenceCount,
   return total;
 }
 
-export function buildBoneIds(indices, weights, influenceCount) {
+function buildBoneIds(indices, weights, influenceCount) {
   const result = new Set();
   if (!indices || !weights || influenceCount <= 0) return [];
   const count = Math.min(indices.length, weights.length);
@@ -3918,12 +2827,7 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelRigState.ikEnabled = false;
   modelRigState.activeLimbRole = 'left_arm';
   modelRigState.explicitRootSignatures = preservedRootSignatures;
-  modelRigState.humanoidStatus = '';
-  modelRigState.humanoidFitRuntimeMs = 0;
-  modelRigState.humanoidBindingRuntimeMs = 0;
   rigPresetState.lastApplyResult = null;
-  resolvedLimbMappings = null;
-  resolvedLimbMappingsStructureRevision = null;
   modelRigState.pickStatus = '';
   notifyModelRigChanged();
   position.array.set(shapedPositions);
@@ -3990,30 +2894,17 @@ function applyDeformation(mesh, state, {
   if (removedVertices.length) restorePoseVertices(mesh, state, removedVertices);
   let deformedVertices = 0;
   if (activeVertices.length && finalTransforms) {
-    const deformStarted = performanceNow();
     deformedVertices = applyWeightedTransformDeformationInto(
       position.array, state.baselinePositions, state.indices, state.weights,
       state.influenceCount, finalTransforms, activeVertices);
-    if (physicsActive) {
-      addWeightPhysicsPerformance('physicsDeformCount');
-      addWeightPhysicsPerformance('physicsDeformedVertexCount', deformedVertices);
-      addWeightPhysicsPerformance(
-        'physicsDeformMs', performanceNow() - deformStarted);
-    }
     const normal = mesh.geometry.attributes.normal;
     if (normal && state.baselineNormals
         && normal.array.length === state.baselineNormals.length
         && finalRotations) {
-      const normalStarted = performanceNow();
       applyWeightedNormalDeformationInto(
         normal.array, state.baselineNormals, state.indices, state.weights,
         state.influenceCount, finalRotations, activeVertices);
       normal.needsUpdate = true;
-      if (physicsActive) {
-        addWeightPhysicsPerformance('physicsNormalUpdateCount');
-        addWeightPhysicsPerformance(
-          'physicsNormalMs', performanceNow() - normalStarted);
-      }
     }
   }
   const changed = removedVertices.length > 0 || deformedVertices > 0;
@@ -4026,12 +2917,7 @@ function applyDeformation(mesh, state, {
 }
 
 function finalizePhysicsGeometry(mesh, state) {
-  const started = performanceNow();
-  const finalized = finalizeDeformationGeometry(mesh, state);
-  if (finalized) {
-    addWeightPhysicsPerformance('physicsBoundsUpdateCount');
-    addWeightPhysicsPerformance('physicsBoundsMs', performanceNow() - started);
-  }
+  finalizeDeformationGeometry(mesh, state);
 }
 
 function updateHeatmap(mesh, state, selectedMask = state.selectedWeightMask) {
@@ -4086,206 +2972,6 @@ function disableHeatmap(mesh, state) {
     state.debugMaterial.dispose();
     state.debugMaterial = null;
   }
-}
-
-export function setSelectedBones(selection) {
-  refreshModelWeightSummary();
-  const next = selectionMapFromEntries(selection);
-  if (modelWeightState.loaded) {
-    const available = new Map(modelWeightState.sources.map(source => [
-      source.key, new Set(source.availableBoneIds),
-    ]));
-    for (const [sourceKey, ids] of next) {
-      const valid = available.get(sourceKey);
-      if (!valid) {
-        next.delete(sourceKey);
-        continue;
-      }
-      const filtered = new Set([...ids].filter(id => valid.has(id)));
-      if (filtered.size) next.set(sourceKey, filtered);
-      else next.delete(sourceKey);
-    }
-  }
-  const previousEntries = sourceSelectionEntries(
-    modelWeightState.selectedBonesBySource);
-  const nextEntries = sourceSelectionEntries(next);
-  if (sameBoneSelection(previousEntries, nextEntries)) {
-    syncPhysicsToSelection();
-    return modelWeightSnapshot();
-  }
-  const changedSourceKeys = new Set([
-    ...modelWeightState.selectedBonesBySource.keys(), ...next.keys(),
-  ].filter(sourceKey => !sameBoneSelection(
-    sourceSelectionEntries(new Map([
-      [sourceKey, modelWeightState.selectedBonesBySource.get(sourceKey)
-        || new Set()],
-    ])),
-    sourceSelectionEntries(new Map([
-      [sourceKey, next.get(sourceKey) || new Set()],
-    ])),
-  )));
-  modelWeightState.selectedBonesBySource = next;
-  knownMeshes.forEach(mesh => {
-    const state = states.get(mesh);
-    if (changedSourceKeys.has(state?.skinningSourceKey)) {
-      refreshSelectedWeightMask(mesh, state);
-    }
-  });
-  if (modelWeightState.heatmapEnabled) {
-    updateModelWeightHeatmap(changedSourceKeys);
-  }
-  syncPhysicsToSelection(changedSourceKeys);
-  notifyModelWeightChanged();
-  requestRender();
-  return modelWeightSnapshot();
-}
-
-export function setBoneSelected(sourceKey, boneId, selected) {
-  const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
-  const id = Number(boneId);
-  if (!descriptor || !Number.isInteger(id) || id < 0) {
-    return modelWeightSnapshot();
-  }
-  const entries = sourceSelectionEntries(modelWeightState.selectedBonesBySource)
-    .filter(entry => entry.sourceKey !== sourceKey);
-  const ids = new Set(modelWeightState.selectedBonesBySource.get(sourceKey));
-  if (selected) ids.add(id);
-  else ids.delete(id);
-  if (ids.size) entries.push({...descriptor, boneIds: [...ids]});
-  return setSelectedBones(entries);
-}
-
-export function clearSelectedBones() {
-  return setSelectedBones([]);
-}
-
-export function loadSavedBoneSelection() {
-  return setSelectedBones(sourceSelectionEntries(
-    modelWeightState.savedBonesBySource));
-}
-
-export function saveModelWeightSelection() {
-  if (selectionSavePromise) return selectionSavePromise;
-  const selectedBones = serializeBoneSelection(sourceSelectionEntries(
-    modelWeightState.selectedBonesBySource));
-  const mesh = [...knownMeshes].find(eligibleSkinningMesh);
-  const api = window.pywebview?.api?.save_weight_selection;
-  if (!selectedBones.length || !mesh || typeof api !== 'function') {
-    return Promise.resolve(modelWeightSnapshot());
-  }
-  const generation = modelWeightGeneration;
-  modelWeightState.savingSelection = true;
-  modelWeightState.selectionSaveError = null;
-  notifyModelWeightChanged();
-  selectionSavePromise = Promise.resolve(
-    api(mesh.userData.modPath, selectedBones))
-    .then(result => {
-      if (generation !== modelWeightGeneration) return modelWeightSnapshot();
-      if (!result?.saved) throw new Error('The bone selection was not saved.');
-      modelWeightState.savedBonesBySource = selectionMapFromEntries(
-        result.selected_bones ?? selectedBones);
-      return modelWeightSnapshot();
-    })
-    .catch(error => {
-      if (generation === modelWeightGeneration) {
-        modelWeightState.selectionSaveError = error instanceof Error
-          ? error.message : String(error);
-      }
-      return modelWeightSnapshot();
-    })
-    .finally(() => {
-      if (generation === modelWeightGeneration) {
-        modelWeightState.savingSelection = false;
-        selectionSavePromise = null;
-        notifyModelWeightChanged();
-      }
-    });
-  return selectionSavePromise;
-}
-
-export function setPhysicsFrequency(frequencyHz) {
-  const value = Number(frequencyHz);
-  if (!Number.isFinite(value)) return false;
-  modelPhysicsSession.setSettings({frequencyHz: value});
-  return true;
-}
-
-export function setPhysicsDamping(dampingRatio) {
-  const value = Number(dampingRatio);
-  if (!Number.isFinite(value)) return false;
-  modelPhysicsSession.setSettings({dampingRatio: value});
-  return true;
-}
-
-export function setPhysicsMotionStrength(strength) {
-  const value = Number(strength);
-  if (!Number.isFinite(value)) return false;
-  modelPhysicsSession.setSettings({angularResponse: value});
-  return true;
-}
-
-export function setPhysicsLinearMotionStrength(strength) {
-  const value = Number(strength);
-  if (!Number.isFinite(value)) return false;
-  modelPhysicsSession.setSettings({translationResponse: value});
-  return true;
-}
-
-export function setPhysicsContinuousLinearResponse(strength) {
-  const value = Number(strength);
-  if (!Number.isFinite(value)) return false;
-  modelPhysicsSession.setSettings({velocityResponse: value});
-  return true;
-}
-
-export function setPhysicsGravityEnabled(enabled) {
-  modelPhysicsSession.setSettings({gravityEnabled: !!enabled});
-  return !!enabled;
-}
-
-export function setPhysicsGravityScale(scale) {
-  const value = Number(scale);
-  if (!Number.isFinite(value)) return false;
-  modelPhysicsSession.setSettings({gravityScale: value});
-  return true;
-}
-
-export function setPhysicsConstraintsEnabled(enabled) {
-  modelPhysicsSession.setSettings({constraintsEnabled: !!enabled});
-  return !!enabled;
-}
-
-export function setPhysicsMaxBendDegrees(degrees) {
-  const value = Number(degrees);
-  if (!Number.isFinite(value)) return false;
-  modelPhysicsSession.setSettings({maxBendDegrees: value});
-  return true;
-}
-
-export function setModelWeightHeatmap(enabled) {
-  modelWeightState.heatmapEnabled = !!enabled;
-  updateModelWeightHeatmap();
-  notifyModelWeightChanged();
-  requestRender();
-  return modelWeightState.heatmapEnabled;
-}
-
-export function resetSkinningExperiment(mesh) {
-  const state = stateFor(mesh);
-  if (!state?.loaded) return;
-  if (state.physicsEnabled) {
-    resetModelPhysicsMotion();
-    if (state.heatmapMode || state.debugMaterial) disableHeatmap(mesh, state);
-    requestRender();
-    return;
-  }
-  state.deformationMode = null;
-  applyDeformation(mesh, state);
-  if (state.heatmapMode || state.debugMaterial) disableHeatmap(mesh, state);
-  mesh.geometry.computeBoundingBox();
-  mesh.geometry.computeBoundingSphere();
-  invalidateCharacterShadowGeometry();
-  requestRender();
 }
 
 export function disposeSkinningExperiment(mesh, {preserveRegistration = false} = {}) {
