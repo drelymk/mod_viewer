@@ -6,23 +6,41 @@
 
 export {
   clearSelectedBones,
+  beginWeightModelPicking,
+  cancelWeightModelPicking,
   getModelWeightState,
   loadSavedBoneSelection,
   saveModelWeightSelection,
   setBoneSelected,
   setModelWeightHeatmap,
-  setSelectedBones,
+  setWeightPickerViewMode,
 } from './weight-model-session.js';
 export {
-  beginWeightModelPicking,
-  cancelWeightModelPicking,
-  modelJointFromSkinningSample,
-  sampleModelSkinningAtIntersection,
-  setWeightPickerViewMode,
-} from './weight-rig-core.js';
-export * from './rig-model-session.js';
-export * from './rig-pose-runtime.js';
-export * from './humanoid-pose-runtime.js';
+  beginRigJointPicking,
+  cancelRigJointPicking,
+  clearRigJointSelection,
+  ensureModelRigLoaded,
+  getModelRigState,
+  getRigRotationSnapDegrees,
+  handleRigJointPicked,
+  pickRigJointFromModelSurface,
+  selectRigJoint,
+  setRigRotationSnapDegrees,
+} from './rig-model-session.js';
+export {
+  finishRigJointPose,
+  getRigJointPoseFrame,
+  resetRigJoint,
+  resetRigPose,
+  setRigJointRoot,
+  setRigJointRotation,
+  setRigPoseControlStatus,
+} from './rig-pose-runtime.js';
+export {
+  setRigActiveLimbRole,
+  setRigIkEnabled,
+  solveRigIkTarget,
+} from './humanoid-pose-runtime.js';
 export {
   applyRigPosePresetById,
   deleteRigPosePreset,
@@ -43,7 +61,3 @@ export {
   setPhysicsMaxBendDegrees,
   setPhysicsMotionStrength,
 } from './weight-physics-controller.js';
-
-// Skinning state is exposed here for the shared viewport integration while
-// mesh registration and disposal remain owned by skinning-runtime.js.
-export {getSkinningState} from './skinning-runtime.js';

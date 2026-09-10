@@ -21,14 +21,14 @@ import { initLeftDock, setLeftDockTab } from './panels/left-dock.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-profile.js';
 import { requestRender } from './scene/render-scheduler.js';
 import {
-  getModelPhysicsState, getModelRigState, getModelWeightState,
+  getModelRigState,
   getRigJointPoseFrame,
   finishRigJointPose,
   cancelRigJointPicking,
   handleRigJointPicked,
   pickRigJointFromModelSurface,
   setRigJointRotation, solveRigIkTarget,
-  setRigPoseControlStatus, setModelWeightHeatmap,
+  setRigPoseControlStatus,
 } from './mesh/weight-rig-runtime.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
@@ -62,6 +62,9 @@ import {
   initEnvironmentControl, initToolPopovers, initToolbarOverflow,
 } from './ui/toolbar.js';
 import { initPanelCollapse } from './ui/panel-utils.js';
+// Initialize the Weight/Rig composition root. Product actions remain exposed
+// through the narrow runtime facade imported above.
+import './mesh/weight-rig-core.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -373,10 +376,6 @@ rendererReady.then(ready => {
       return changed;
     },
     getMaterialState,
-    getModelPhysicsState,
-    getModelRigState,
-    getModelWeightState,
-    setModelWeightHeatmap,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,
     setOutlineEnabled: value => {

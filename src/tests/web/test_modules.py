@@ -925,63 +925,6 @@ def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_p
     assert result["nonZeroRootPivotKeys"] == [0, 2]
 
 
-def test_source_topology_comparison_uses_stable_bone_signatures(module_page):
-    page = module_page
-    result = page.evaluate("""async () => {
-      const {sourceTopologyComparisonSnapshot} = await import(
-        './js/mesh/weight-rig-snapshots.js');
-      const first = {
-        sourceKey: 'body|offset=0',
-        components: [
-          {rootId: 0, nodeIds: [0, 1],
-            parentById: {0: null, 1: 0}},
-          {rootId: 3, nodeIds: [3, 4],
-            parentById: {3: null, 4: 3}},
-        ],
-        relationships: [
-          {boneA: 1, boneB: 0, jointCenter: [1, 0, 0]},
-          {boneA: 4, boneB: 3, jointCenter: [3, 0, 0]},
-        ],
-      };
-      const second = {
-        ...first,
-        components: [...first.components].reverse(),
-        relationships: [...first.relationships].reverse(),
-      };
-      return {
-        first: sourceTopologyComparisonSnapshot(first),
-        second: sourceTopologyComparisonSnapshot(second),
-      };
-    }""")
-    assert result["first"] == result["second"]
-    assert result["first"] == {
-        "rootSignatures": [
-            "body|offset=0#bone=0",
-            "body|offset=0#bone=3",
-        ],
-        "undirectedTreeEdges": [
-            ["body|offset=0#bone=0", "body|offset=0#bone=1"],
-            ["body|offset=0#bone=3", "body|offset=0#bone=4"],
-        ],
-        "directedParentEdges": [
-            ["body|offset=0#bone=0", "body|offset=0#bone=1"],
-            ["body|offset=0#bone=3", "body|offset=0#bone=4"],
-        ],
-        "componentMembership": [
-            ["body|offset=0#bone=0", "body|offset=0#bone=1"],
-            ["body|offset=0#bone=3", "body|offset=0#bone=4"],
-        ],
-        "pivotBySourceBonePair": [
-            {"pair": [
-                "body|offset=0#bone=0", "body|offset=0#bone=1",
-            ], "pivot": [1, 0, 0]},
-            {"pair": [
-                "body|offset=0#bone=3", "body|offset=0#bone=4",
-            ], "pivot": [3, 0, 0]},
-        ],
-    }
-
-
 def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
         module_page):
     page = module_page

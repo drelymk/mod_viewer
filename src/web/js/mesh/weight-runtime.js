@@ -52,7 +52,6 @@ function createModelRigDefaults() {
     humanoidStructureRevision: null,
     humanoidControlRig: null,
     humanoidPose: {},
-    humanoidBendSigns: {},
     rotationSnapDegrees: 0,
     ikEnabled: false,
     activeLimbRole: 'left_arm',
