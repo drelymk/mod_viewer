@@ -229,12 +229,15 @@ export async function displayMeshPayload(payload, {
   setMeshesAvailable(true);
   viewerState.rightDockEnabled = true;
   syncViewportControlPlacement();
+  const gameId = payload.metadata?.game?.id || null;
   measureLoadStage('fit_to', () => fitTo(activeMeshes, {
     preserveCamera,
+    gameId,
     // WWMI models use the opposite horizontal facing convention from the
     // viewer's default front view. Keep this as a model base transform so
     // camera controls and viewer-only orientation state remain independent.
-    initialRotationY: payload.metadata?.game?.id === 'wuwa' ? Math.PI : 0,
+    initialRotationY: String(gameId || '').toLowerCase() === 'wuwa'
+      ? Math.PI : 0,
   }));
 
   updateAssetFillButton();

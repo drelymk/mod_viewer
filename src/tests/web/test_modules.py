@@ -4623,6 +4623,73 @@ def test_geometry_humanoid_control_rig_respects_source_orientation_and_readiness
     }
 
 
+def test_camera_frame_known_game_orientation_policy(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {createCameraFrame, shouldApplyUprightRotation} = await import(
+        './js/scene/camera-frame.js');
+      const rawSize = {x: 4, y: .8, z: 2};
+      const decisions = {
+        zzz: shouldApplyUprightRotation({gameId: 'zzz', rawSize}),
+        wuwa: shouldApplyUprightRotation({gameId: 'WuWa', rawSize}),
+        recognizedOther: shouldApplyUprightRotation({
+          gameId: 'genshin', rawSize}),
+        unknown: shouldApplyUprightRotation({gameId: null, rawSize}),
+        unknownId: shouldApplyUprightRotation({
+          gameId: 'unknown', rawSize}),
+        ordinaryUnknown: shouldApplyUprightRotation({gameId: null,
+          rawSize: {x: 1, y: 2, z: 1}}),
+      };
+      const createFrame = () => {
+        const camera = new THREE.PerspectiveCamera(45, 4 / 3, .01, 100);
+        const controls = {
+          target: new THREE.Vector3(), update() {}, setCamera() {},
+          saveState() {},
+        };
+        const renderer = {
+          domElement: {getBoundingClientRect: () => ({
+            width: 800, height: 600, left: 0, right: 800,
+          })}, setSize() {},
+        };
+        const grid = {scale: new THREE.Vector3(1, 1, 1),
+          position: new THREE.Vector3()};
+        return createCameraFrame({camera, renderer, controls, grid,
+          cancelViewSnap() {}});
+      };
+      const zzzFrame = createFrame();
+      const zzzMesh = new THREE.Mesh(new THREE.BoxGeometry(4, .8, 2));
+      zzzFrame.fitTo([zzzMesh], {gameId: 'zzz'});
+      const zzzSize = new THREE.Box3().setFromObject(zzzMesh)
+        .getSize(new THREE.Vector3());
+      const wuwaFrame = createFrame();
+      const wuwaMesh = new THREE.Mesh(new THREE.BoxGeometry(4, .8, 2));
+      wuwaFrame.fitTo([wuwaMesh], {
+        gameId: 'wuwa', initialRotationY: Math.PI,
+      });
+      return {
+        decisions,
+        zzzHeight: zzzSize.y,
+        zzzOrientation: zzzFrame.getModelTransformState()
+          .baseOrientation.toArray(),
+        wuwaOrientation: wuwaFrame.getModelTransformState()
+          .baseOrientation.toArray(),
+      };
+    }""")
+    assert result["decisions"] == {
+        "zzz": True,
+        "wuwa": True,
+        "recognizedOther": False,
+        "unknown": False,
+        "unknownId": False,
+        "ordinaryUnknown": False,
+    }
+    assert result["zzzHeight"] == pytest.approx(2)
+    assert result["zzzOrientation"] == pytest.approx(
+        [-2 ** -0.5, 0, 0, 2 ** -0.5])
+    assert result["wuwaOrientation"] == pytest.approx(
+        [0, 2 ** -0.5, 2 ** -0.5, 0])
+
+
 def test_camera_frame_exposes_stable_base_orientation_state(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');

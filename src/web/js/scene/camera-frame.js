@@ -6,6 +6,14 @@ import { computeModelBounds } from './model-bounds.js';
 const INITIAL_CAMERA_DIRECTION = new THREE.Vector3(0, 0, 1);
 const INITIAL_CAMERA_UP = new THREE.Vector3(0, 1, 0);
 
+export function shouldApplyUprightRotation({gameId, rawSize} = {}) {
+  const id = String(gameId || '').trim().toLowerCase();
+  if (id === 'zzz' || id === 'wuwa') return true;
+  if (id && id !== 'unknown') return false;
+  return Number(rawSize?.z) > Number(rawSize?.y) * 1.5
+    && Number(rawSize?.z) > Number(rawSize?.x) * 1.15;
+}
+
 export function createCameraFrame({
   camera, renderer, controls, grid, cancelViewSnap, onModelFit,
   onOrientationChanged,
@@ -273,6 +281,7 @@ export function createCameraFrame({
   function fitTo(meshes, {
     preserveCamera = false,
     preserveHomeView = false,
+    gameId = null,
     initialRotationY = 0,
   } = {}) {
     let orientationChanged = false;
@@ -288,7 +297,7 @@ export function createCameraFrame({
       const rawBox = computeModelBounds(meshes);
       const rawSize = rawBox.getSize(new THREE.Vector3());
       uprightRotation.identity();
-      if (rawSize.z > rawSize.y * 1.5 && rawSize.z > rawSize.x * 1.15) {
+      if (shouldApplyUprightRotation({gameId, rawSize})) {
         uprightRotation.setFromAxisAngle(
           new THREE.Vector3(1, 0, 0), -Math.PI / 2);
       }

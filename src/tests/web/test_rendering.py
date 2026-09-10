@@ -1001,9 +1001,6 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         page.wait_for_function("window.modViewer.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const experiment = await import('./js/mesh/weight-experiment.js');
-          const initialIkHint = document.querySelector('.rig-panel-enable-ik')
-            ?.closest('.rig-advanced-group')?.querySelector('.rig-hint')
-            ?.textContent;
           const source = experiment.getModelRigDebugState().sources[0];
           const component = source.components[0];
           const presetSelect = document.querySelector('.rig-preset-select');
@@ -1053,10 +1050,28 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           const weightOrderIndexes = weightOrder.map(node =>
             [...weightSection.children].indexOf(node));
           const rigAdvanced = rigSection?.nextElementSibling;
+          const advancedContent = rigAdvanced?.querySelector(
+            '.weight-rig-advanced-content');
           const advancedGroups = [...rigAdvanced.querySelectorAll(
             ':scope > .weight-rig-advanced-content > .rig-advanced-group')]
             .map(group => group.querySelector('.weight-rig-advanced-title')
               ?.textContent);
+          const advancedControlClasses = [...(advancedContent?.children || [])]
+            .map(node => node.className);
+          const limbButtons = [...document.querySelectorAll('.rig-limb-button')];
+          const limbButtonLabels = limbButtons.map(button => button.textContent);
+          const limbButtonRoles = limbButtons.map(button => button.dataset.role);
+          const limbButtonPressed = () => limbButtons.map(button =>
+            button.getAttribute('aria-pressed'));
+          const limbSelectorPresent = !!document.querySelector('.rig-limb-select');
+          const activeRoleBefore = experiment.getModelRigState().ik.activeLimbRole;
+          limbButtons.find(button => button.dataset.role === 'right_arm').click();
+          const activeRoleAfterRightArm =
+            experiment.getModelRigState().ik.activeLimbRole;
+          limbButtons.find(button => button.dataset.role === 'left_leg').click();
+          const activeRoleAfterLeftLeg =
+            experiment.getModelRigState().ik.activeLimbRole;
+          limbButtons.find(button => button.dataset.role === 'left_arm').click();
           const primaryOrder = [
             '.rig-bone-select', '.rig-pick-joint', '.rig-joint-actions',
             '.rig-preset-select', '.rig-preset-actions',
@@ -1087,6 +1102,13 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           };
           const posed = experiment.setRigJointRotation(
             poseJointId, quaternion, {dragging: true});
+          const poseBeforeLimbSwitch = [
+            ...experiment.getModelRigState().model.poseJointIds];
+          limbButtons.find(button => button.dataset.role === 'left_leg').click();
+          limbButtons.find(button => button.dataset.role === 'right_arm').click();
+          const poseAfterLimbSwitch = [
+            ...experiment.getModelRigState().model.poseJointIds];
+          limbButtons.find(button => button.dataset.role === 'left_arm').click();
           const boundsDuringDrag = {boundsCalls, sphereCalls};
           const after = [...mesh.geometry.attributes.position.array];
           const finished = experiment.finishRigJointPose(poseJointId);
@@ -1177,21 +1199,31 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             jointSearchAbsent,
             allJointOptions,
             jointActionsLayout,
-             advancedGroups,
-             rigAdvancedSummary: rigAdvanced?.querySelector('summary')?.textContent,
+            advancedGroups,
+            advancedControlClasses,
+            rigAdvancedSummary: rigAdvanced?.querySelector('summary')?.textContent,
             ikControl: {
               present: !!document.querySelector('.rig-panel-enable-ik'),
               disabled: document.querySelector('.rig-panel-enable-ik')?.disabled,
-              limbSelectorPresent: !!document.querySelector('.rig-limb-select'),
+              limbSelectorPresent,
+              limbButtonLabels,
+              limbButtonRoles,
               setAnchorAbsent: !document.querySelector('.rig-set-limb-anchor'),
               redetectAbsent: !document.querySelector('.rig-redetect-limb'),
-              limbActionLabels: [...document.querySelectorAll(
-                '.rig-limb-actions button')].map(button => button.textContent),
+              limbMappingAbsent: !document.querySelector('.rig-limb-mapping'),
               chainLengthAbsent: !document.querySelector('.rig-chain-length'),
-               detectedPathPresent: !!document.querySelector('.rig-chain-preview'),
-                hint: initialIkHint,
-             },
-             removedOverlayUi,
+              detectedPathAbsent: !document.querySelector('.rig-chain-preview'),
+              humanoidStatusAbsent: !document.querySelector('.rig-humanoid-status'),
+              autoDetectAbsent: !document.querySelector('.rig-auto-detect-limbs'),
+              flipBendAbsent: !document.querySelector('.rig-flip-bend'),
+            },
+            activeRoleBefore,
+            activeRoleAfterRightArm,
+            activeRoleAfterLeftLeg,
+            limbButtonPressed: limbButtonPressed(),
+            poseBeforeLimbSwitch,
+            poseAfterLimbSwitch,
+            removedOverlayUi,
              obsoleteReadoutsRemoved: !document.querySelector(
               '.rig-readout-title, .rig-nav-row, .rig-nav-button'),
              primaryOrderIndexes,
@@ -1271,16 +1303,26 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             "clearDisabled": True, "resetJointDisabled": True,
             "resetPoseDisabled": False,
         }
-        assert result["advancedGroups"] == [
-            "Limb IK", "Manual Rotation", "Rig Structure"]
-        assert result["rigAdvancedSummary"] == "Rig Advanced Settings"
+        assert result["advancedGroups"] == []
+        assert result["advancedControlClasses"] == [
+            "weight-checkbox", "weight-rig-control-label",
+            "rig-limb-buttons", "rig-row", "ui-button rig-set-root"]
+        assert result["rigAdvancedSummary"] == "Advanced Settings"
         assert result["ikControl"] == {
             "present": True, "disabled": True,
-            "limbSelectorPresent": True, "setAnchorAbsent": True,
-            "redetectAbsent": True, "limbActionLabels": ["Clear"],
-            "chainLengthAbsent": True, "detectedPathPresent": True,
-            "hint": "Pick the Shoulder joint to configure this limb.",
+            "limbSelectorPresent": False,
+            "limbButtonLabels": ["L Arm", "R Arm", "L Leg", "R Leg"],
+            "limbButtonRoles": ["left_arm", "right_arm", "left_leg", "right_leg"],
+            "setAnchorAbsent": True, "redetectAbsent": True,
+            "limbMappingAbsent": True, "chainLengthAbsent": True,
+            "detectedPathAbsent": True, "humanoidStatusAbsent": True,
+            "autoDetectAbsent": True, "flipBendAbsent": True,
         }
+        assert result["activeRoleBefore"] == "left_arm"
+        assert result["activeRoleAfterRightArm"] == "right_arm"
+        assert result["activeRoleAfterLeftLeg"] == "left_leg"
+        assert result["limbButtonPressed"] == ["true", "false", "false", "false"]
+        assert result["poseAfterLimbSwitch"] == result["poseBeforeLimbSwitch"]
         assert result["obsoleteReadoutsRemoved"]
         assert result["removedOverlayUi"]
         assert result["primaryOrderIndexes"] == sorted(
@@ -7927,7 +7969,8 @@ def test_wuwa_models_start_with_a_180_degree_base_turn(
           position: window.modViewer.activeMeshes[0].position.toArray(),
           quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
         })""")
-        assert initial["quaternion"] == pytest.approx([0, 1, 0, 0])
+        assert initial["quaternion"] == pytest.approx(
+            [0, 2 ** -0.5, 2 ** -0.5, 0])
 
         page.locator("#camera-reset-view-btn").click()
         reset = page.evaluate("""() => ({
@@ -7941,7 +7984,8 @@ def test_wuwa_models_start_with_a_180_degree_base_turn(
           await window.modViewer.reloadCurrentMod();
           return window.modViewer.activeMeshes[0].quaternion.toArray();
         }""")
-        assert reloaded == pytest.approx([0, 1, 0, 0])
+        assert reloaded == pytest.approx(
+            [0, 2 ** -0.5, 2 ** -0.5, 0])
     finally:
         context.close()
 
