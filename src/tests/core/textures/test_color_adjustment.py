@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from core.textures import color_adjustment
 from core.textures.color_adjustment import (
-    COLOR_DEFAULTS, adjust_rgba_bytes, apply_color_adjustment,
+    COLOR_DEFAULTS,
     apply_prepared_color_adjustment, apply_prepared_color_u8,
     is_neutral_color_adjustment, normalize_color_adjustment,
     prepare_color_adjustment,
@@ -44,13 +43,18 @@ def test_brightness_range_allows_light_recolors_and_clamps_above_four():
 
 def test_neutral_state_is_identity():
     assert is_neutral_color_adjustment(COLOR_DEFAULTS)
-    assert apply_color_adjustment((0.23, 0.45, 0.91), COLOR_DEFAULTS) == \
+    assert _apply((0.23, 0.45, 0.91), COLOR_DEFAULTS) == \
         pytest.approx((0.23, 0.45, 0.91))
+
+
+def _apply(rgb, adjustment):
+    return apply_prepared_color_adjustment(
+        rgb, prepare_color_adjustment(adjustment))
 
 
 def test_color_entry_points_match_shader_order_vectors(vectors):
     for vector in vectors:
-        actual = apply_color_adjustment(vector["rgb"], vector["adjustment"])
+        actual = _apply(vector["rgb"], vector["adjustment"])
         assert actual == pytest.approx(vector["expected"], abs=1e-7), vector["name"]
         prepared = prepare_color_adjustment(vector["adjustment"])
         actual = apply_prepared_color_adjustment(vector["rgb"], prepared)
@@ -61,7 +65,7 @@ def test_color_entry_points_match_shader_order_vectors(vectors):
         source_bytes = tuple(round(channel * 255)
                              for channel in vector["rgb"])
         expected_bytes = tuple(round(channel * 255) for channel in
-                               apply_color_adjustment(
+                               _apply(
                                    tuple(channel / 255 for channel in source_bytes),
                                    vector["adjustment"]))
         assert bytes_result == expected_bytes
@@ -93,7 +97,7 @@ def test_color_entry_points_match_shader_order_vectors(vectors):
 )
 def test_rgb_channel_adjustments_fill_missing_channels_and_preserve_shading(
         rgb, adjustment, expected):
-    actual = apply_color_adjustment(rgb, adjustment)
+    actual = _apply(rgb, adjustment)
     prepared = apply_prepared_color_adjustment(
         rgb, prepare_color_adjustment(adjustment))
 
@@ -102,11 +106,11 @@ def test_rgb_channel_adjustments_fill_missing_channels_and_preserve_shading(
 
 
 def test_brightness_and_rgb_adjustments_are_applied_with_tint():
-    assert apply_color_adjustment(
+    assert _apply(
         (0.4, 0.0, 0.0),
         {"brightness": 1.5, "green": 2.0},
     ) == pytest.approx((0.6, 0.6, 0.0), abs=1e-7)
-    assert apply_color_adjustment(
+    assert _apply(
         (0.2, 0.0, 0.0),
         {"brightness": 3.0, "tint": "#ff9999"},
     ) == pytest.approx((0.6, 0.36, 0.36), abs=1e-7)
@@ -129,7 +133,7 @@ def test_brightness_and_rgb_adjustments_are_applied_with_tint():
 )
 def test_tint_recolors_toward_target_while_preserving_intensity(
         rgb, adjustment, expected):
-    actual = apply_color_adjustment(rgb, adjustment)
+    actual = _apply(rgb, adjustment)
     prepared = apply_prepared_color_adjustment(
         rgb, prepare_color_adjustment(adjustment))
 
@@ -152,36 +156,10 @@ def test_tint_keeps_color_controls_active(field, value):
     base_adjustment = {"tint": "#4080c0"}
     changed_adjustment = {**base_adjustment, field: value}
 
-    base = apply_color_adjustment(rgb, base_adjustment)
-    changed = apply_color_adjustment(rgb, changed_adjustment)
+    base = _apply(rgb, base_adjustment)
+    changed = _apply(rgb, changed_adjustment)
     prepared = apply_prepared_color_adjustment(
         rgb, prepare_color_adjustment(changed_adjustment))
 
     assert changed != pytest.approx(base, abs=1e-7)
     assert prepared == pytest.approx(changed, abs=1e-7)
-
-
-def test_adjust_rgba_preserves_alpha_and_only_changes_selected_pixels():
-    source = bytes([255, 0, 0, 7, 0, 255, 0, 129])
-
-    result = adjust_rgba_bytes(
-        source, 2, 1, {"hue": 120}, pixel_mask=[True, False])
-
-    assert result == bytes([0, 255, 0, 7, 0, 255, 0, 129])
-
-
-def test_adjust_rgba_skips_transform_for_unselected_pixels(monkeypatch):
-    calls = []
-    real_apply = color_adjustment._apply_normalized
-
-    def counting_apply(rgb, normalized):
-        calls.append(rgb)
-        return real_apply(rgb, normalized)
-
-    monkeypatch.setattr(color_adjustment, "_apply_normalized", counting_apply)
-
-    color_adjustment.adjust_rgba_bytes(
-        bytes([10, 20, 30, 7, 40, 50, 60, 8, 70, 80, 90, 9]),
-        3, 1, {"hue": 30}, pixel_mask=[True, False, False])
-
-    assert len(calls) == 1

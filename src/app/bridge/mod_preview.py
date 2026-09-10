@@ -16,7 +16,7 @@ from core.textures import encode_texture_file
 from core.mod_discovery import discover_ini_paths
 from core.ini.health import analyze_mod
 from app.mods.analysis import resolved_draws
-from app.mods.texture_save import save_texture_color
+from app.mods.texture_save.service import save_texture_color
 from core.textures.profiles import texture_profile_for
 
 from app.assets import folders as asset_folders
@@ -24,79 +24,6 @@ from app.mods import loader as mod_loader
 from app.mods import metadata
 from app.runtime import server
 from app.session import edit as edit_session
-
-
-def _unique_strings(values):
-    return list(dict.fromkeys(value for value in values
-                              if isinstance(value, str) and value))
-
-
-def _clear_committed_color_adjustments(folder_path, targets, saved_meshes):
-    """Compare only committed targets before clearing their metadata."""
-    captured = {}
-    for target in targets if isinstance(targets, list) else []:
-        if not isinstance(target, dict):
-            continue
-        semantic_key = target.get("semantic_key")
-        metadata_key = target.get("metadata_key")
-        if (isinstance(semantic_key, str) and semantic_key
-                and isinstance(metadata_key, str) and metadata_key):
-            captured.setdefault((semantic_key, metadata_key), []).append(target)
-
-    expected = {}
-    failed = []
-    invalid_saved_identity = False
-    for saved in saved_meshes if isinstance(saved_meshes, list) else []:
-        if not isinstance(saved, dict):
-            invalid_saved_identity = True
-            continue
-        semantic_key = saved.get("semantic_key")
-        metadata_key = saved.get("metadata_key")
-        if not (isinstance(semantic_key, str) and semantic_key
-                and isinstance(metadata_key, str) and metadata_key):
-            invalid_saved_identity = True
-            if isinstance(metadata_key, str) and metadata_key:
-                failed.append(metadata_key)
-            continue
-        if metadata_key in failed:
-            continue
-        candidates = captured.get((semantic_key, metadata_key), [])
-        if len(candidates) != 1:
-            failed.append(metadata_key)
-            continue
-        if metadata_key in expected:
-            expected.pop(metadata_key, None)
-            failed.append(metadata_key)
-            continue
-        expected[metadata_key] = candidates[0].get("adjustment")
-
-    receipt = {"cleared": [], "preserved": [], "failed": failed}
-    helper_failed = False
-    if expected:
-        try:
-            reset = metadata.clear_mesh_color_adjustments_if_unchanged(
-                folder_path, expected)
-        except Exception:
-            reset = None
-            helper_failed = True
-        if not isinstance(reset, dict):
-            helper_failed = True
-        else:
-            for status in ("cleared", "preserved", "failed"):
-                receipt[status].extend(reset.get(status, []))
-            if reset.get("error") and not reset.get("failed"):
-                helper_failed = True
-
-        if helper_failed:
-            receipt["cleared"] = [
-                key for key in receipt["cleared"] if key not in expected]
-            receipt["preserved"] = [
-                key for key in receipt["preserved"] if key not in expected]
-            receipt["failed"].extend(expected)
-
-    for status in receipt:
-        receipt[status] = _unique_strings(receipt[status])
-    return receipt, invalid_saved_identity or helper_failed
 
 
 class ModPreview:
@@ -239,12 +166,6 @@ class ModPreview:
             result = save_texture_color(
                 context, overrides, self._active_mesh_keys.get(folder_path),
                 tex_key, targets, texture_usage, **save_kwargs)
-            if result.get("status") == "ok":
-                receipt, cleanup_failed = _clear_committed_color_adjustments(
-                    folder_path, targets, result.get("saved_meshes"))
-                result["metadata_reset"] = receipt
-                if cleanup_failed or receipt["failed"]:
-                    result["warning"] = "color_state_reset_failed"
             return result
         except Exception:
             return self._semantic_read_error()

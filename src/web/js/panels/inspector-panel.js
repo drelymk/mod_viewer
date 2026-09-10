@@ -6,10 +6,10 @@ import { clearSelection } from '../scene/selection.js';
 import {
   canEditMeshColor, getMeshColorAdjustment, resetMeshColorAdjustment,
   setMeshColorAdjustment,
-} from '../mesh/mesh-color-state.js';
+} from '../mesh/mesh-color-session.js';
 import {
   canSaveTexture, getTextureSaveTargets,
-} from '../mesh/texture-save-state.js';
+} from '../mesh/texture-save-session.js';
 import { openTextureSaveModal } from '../ui/texture-save-modal.js';
 
 const meshRecords = new WeakMap();
@@ -234,7 +234,7 @@ const BRIGHTNESS_SLIDER_NEUTRAL = 100;
 const BRIGHTNESS_SLIDER_MAX = 200;
 const BRIGHTNESS_MAX = 4;
 
-export function brightnessSliderPosition(brightness) {
+function brightnessSliderPosition(brightness) {
   const numeric = Number(brightness);
   const value = Math.min(BRIGHTNESS_MAX,
     Math.max(0, Number.isFinite(numeric) ? numeric : 1));
@@ -243,7 +243,7 @@ export function brightnessSliderPosition(brightness) {
     + BRIGHTNESS_SLIDER_NEUTRAL * Math.log(value) / Math.log(BRIGHTNESS_MAX);
 }
 
-export function brightnessFromSliderPosition(position) {
+function brightnessFromSliderPosition(position) {
   const numeric = Number(position);
   const value = Math.min(BRIGHTNESS_SLIDER_MAX,
     Math.max(0, Number.isFinite(numeric) ? numeric : 100));
