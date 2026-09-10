@@ -1,5 +1,6 @@
-/* Position-first primary humanoid detection over the registered ModelJoint
- * graph. Manual mapping and automatic detection share these semantic helpers. */
+/* Legacy ModelJoint semantic helpers for manual/compatibility mapping. The
+ * automatic primary humanoid path lives in humanoid-control-rig.js and
+ * humanoid-rig-binding.js. */
 
 import * as THREE from 'three';
 import {

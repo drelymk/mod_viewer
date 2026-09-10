@@ -315,28 +315,21 @@ of documentation, comments and tests; use portable fixtures instead.
   attachment edges with O(1) Three.js objects. Reconciliation rebuilds on
   source membership/shape changes and resets pose; model structure revisions
   do not change for pose, materials, textures, visibility or model turns.
-- Rig IK remains ModelJoint-native manual semantic limb posing: users persist
-  only stable anchor signatures for the four supported limb roles, and manual
-  anchor/end/bend overrides remain authoritative. The solver rotates only the
-  mapped anchor and bend controls; end local rotation, helper local rotations,
-  Physics composition, and pose preset schema remain authoritative elsewhere.
-  Speculative solves use private transforms and one target update commits all
-  changed local quaternions through one batch manual-pose transaction. IK never
-  owns a skeleton, deformation path, IK Physics state, or persisted target.
-- Automatic humanoid anatomy is a viewer-owned position-first semantic
-  backbone built from the registered `ModelJoint` rest pivots, with influence
-  centers retained as separate evidence. It uses one model-wide semantic frame,
-  virtual chest and pelvis references, bounded landmark candidate pools, and
-  complete undirected ModelJoint paths to validate primary Shoulder/Elbow/Hand
-  and Hip/Knee/Foot roles. Bilateral and whole-body selection is atomic;
-  ambiguous or low-confidence pairs remain unavailable. Every joint not chosen
-  for those four primary limb pairs remains an ordinary `ModelJoint`; there are
-  no production accessory categories or special mesh classifications. Debug
-  snapshots expose candidate geometry/topology/support/body-relation scores,
-  selected paths, and generic secondary-branch reasons. Manual anchor and bend
-  overrides remain authoritative, while automatic persistence writes only
-  stable anchor signatures with the default bend sign. IK consumes the same
-  selected paths and never owns a separate skeleton or deformation model.
+- The `HumanoidControlRig` is the primary automatic pose skeleton. It fits the
+  fixed 14-control topology (Chest/Pelvis plus bilateral Shoulder/Elbow/Hand
+  and Hip/Knee/Foot) from immutable A-pose geometry and semantic orientation.
+  `ModelJoint` topology no longer defines human anatomy or IK paths.
+- `humanoid-rig-binding.js` binds clear body-corridor ModelJoints to explicit
+  humanoid driver segments with `inverse(restDriverWorld) * restJointWorld`
+  offsets. Posed absolute driver targets are converted to authored-rest
+  deltas before source-bone publication, so directly bound parent/child joints
+  are not double-transformed. Conservative secondary attachment roots may
+  follow a driver while retaining their internal hierarchy; ambiguous or
+  distant components remain unbound. No accessory categories are inferred.
+- Humanoid IK uses guaranteed virtual two-bone controls. Existing stable-ID
+  ModelJoint mappings, manual rotations, presets, and Physics remain available
+  as compatibility/advanced features and compose after the humanoid driver
+  base. Reset clears both virtual pose and manual deltas exactly.
 - Joint selection is independent from pose state: Clear removes the selected
   ModelJoint through the state API, leaving
   manual pose, presets, Weight selection, Physics and overlay visibility

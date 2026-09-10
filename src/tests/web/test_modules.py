@@ -1167,6 +1167,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
             {jointA: 2, jointB: 3, parentId: 2, childId: 3},
           ],
           humanoidControlRig: {confidence: 'high', controls: Object.fromEntries([
+            ['chest', [0, 2, 0]], ['pelvis', [0, 1, 0]],
             ['leftShoulder', [-.2, 1.8, 0]], ['leftElbow', [-.5, 1.6, 0]],
             ['leftHand', [-.9, 1.5, 0]], ['rightShoulder', [.2, 1.8, 0]],
             ['rightElbow', [.5, 1.6, 0]], ['rightHand', [.9, 1.5, 0]],
@@ -1206,8 +1207,8 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert result["initial"]["edgeCount"] == 2
     assert result["initial"]["jointCount"] == 3
     assert result["initial"]["humanoidOverlayVisible"]
-    assert result["initial"]["humanoidSegmentCount"] == 8
-    assert result["initial"]["humanoidLandmarkCount"] == 12
+    assert result["initial"]["humanoidSegmentCount"] == 13
+    assert result["initial"]["humanoidLandmarkCount"] == 14
     assert result["initial"]["rebuildCount"] == 1
     assert result["selectedRoot"]["selectedJointId"] == 1
     assert result["selectedRoot"]["rebuildCount"] == 1
@@ -1631,6 +1632,53 @@ def test_rig_overlay_switches_between_fk_and_ik_target_modes(module_page):
     assert result["fkSpace"] == "local"
     assert not result["fk"]["ikTargetVisible"]
     assert result["fk"]["controlsAttachedTo"] == "fk-proxy"
+
+
+def test_rig_overlay_exposes_primary_humanoid_ik_target_without_joint_selection(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera();
+      const canvas = document.createElement('canvas');
+      const model = new THREE.Object3D();
+      scene.add(model);
+      const source = {
+        key: 'model-rig', structureRevision: 7, joints: [],
+        humanoidControlRig: {controls: {
+          leftShoulder: {position: [0, 1, 0]},
+          leftElbow: {position: [.4, .8, 0]},
+          leftHand: {position: [.8, .7, 0]},
+        }},
+      };
+      const state = {visible: true, selectedJointId: null, model: source,
+        ik: {enabled: true, available: true, activeLimbRole: 'left_arm',
+          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']}};
+      const solveCalls = [];
+      const controller = createRigOverlayController({
+        scene, camera, canvas, getMeshes: () => [model],
+        getRigState: () => state,
+        solveRigIkTarget: (...args) => solveCalls.push(args),
+      });
+      controller.refresh(state);
+      const controls = await controller.ensureTransformControls();
+      const before = controller.getDebugState();
+      const mode = controls.getMode?.();
+      controls.dispatchEvent({type: 'dragging-changed', value: true});
+      controls.object.position.x += .2;
+      controls.dispatchEvent({type: 'objectChange'});
+      controls.dispatchEvent({type: 'dragging-changed', value: false});
+      controller.dispose();
+      return {before, mode, solveCalls: solveCalls.length,
+        target: solveCalls[0]?.[0]};
+    }""")
+    assert result["before"]["ikTargetVisible"]
+    assert result["before"]["controlsAttachedTo"] == "ik-target"
+    assert result["mode"] == "translate"
+    assert result["solveCalls"] == 1
+    assert result["target"] == pytest.approx([1.0, .7, 0])
 
 
 def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
@@ -4739,3 +4787,100 @@ def test_geometry_humanoid_control_rig_ignores_extra_geometry_after_anchors(modu
         result["controls"]["leftFoot"]["semantic"]["sideN"])
     assert result["controls"]["rightHip"]["semantic"]["sideN"] == pytest.approx(
         result["controls"]["rightFoot"]["semantic"]["sideN"])
+
+
+def test_humanoid_driver_binding_preserves_rest_offsets_and_avoids_double_transform(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const bindingModule = await import('./js/mesh/humanoid-rig-binding.js');
+      const positions = {
+        chest: [0, 1.4, 0], pelvis: [0, .55, 0],
+        leftShoulder: [-.1, 1.35, 0], leftElbow: [-.35, 1.18, 0],
+        leftHand: [-.58, 1.08, 0], rightShoulder: [.1, 1.35, 0],
+        rightElbow: [.35, 1.18, 0], rightHand: [.58, 1.08, 0],
+        leftHip: [-.1, .55, 0], leftKnee: [-.1, .30, 0],
+        leftFoot: [-.1, .05, 0], rightHip: [.1, .55, 0],
+        rightKnee: [.1, .30, 0], rightFoot: [.1, .05, 0],
+      };
+      const ids = Object.keys(positions);
+      const joints = ids.map((key, jointId) => ({
+        jointId, restPivot: positions[key], restCenter: positions[key],
+        restFrame: [0, 0, 0, 1],
+      }));
+      const parentById = Object.fromEntries(ids.map((key, id) => [
+        id, id === 0 ? null : id - 1]));
+      const childrenById = Object.fromEntries(ids.map((key, id) => [
+        id, id + 1 < ids.length ? [id + 1] : []]));
+      const modelRig = {
+        joints, jointPivotByJointId: new Map(joints.map(joint =>
+          [joint.jointId, joint.restPivot])),
+        restFrameByJointId: new Map(joints.map(joint =>
+          [joint.jointId, new THREE.Quaternion()])),
+        components: [{componentId: 0, rootId: 0, nodeIds: joints.map(joint =>
+          joint.jointId), parentById, childrenById}],
+        componentByJointId: new Map(joints.map(joint => [joint.jointId, 0])),
+      };
+      const controlRig = {
+        frame: {height: 1, forward: [0, 0, 1], right: [1, 0, 0]},
+        controls: Object.fromEntries(ids.map(key => [key,
+          {position: positions[key]}])),
+      };
+      const binding = bindingModule.buildHumanoidRigBinding({
+        controlRig, modelRig,
+      });
+      const reset = bindingModule.buildHumanoidDriverBaseTransforms({
+        binding, controlRig, modelRig,
+      });
+      const posedControls = {...positions,
+        leftKnee: [-.16, .30, 0], leftFoot: [-.38, .12, 0]};
+      const posed = bindingModule.buildHumanoidDriverBaseTransforms({
+        binding, controlRig, modelRig, posedControls,
+      });
+      const lowerKnee = binding.jointBindings.get(ids.indexOf('leftKnee'));
+      const lowerFoot = binding.jointBindings.get(ids.indexOf('leftFoot'));
+      const resetError = [...reset.result.values()].reduce((max, matrix) =>
+        Math.max(max, matrix.elements.reduce((sum, value, index) =>
+          sum + Math.abs(value - new THREE.Matrix4().elements[index]), 0)), 0);
+      const lowerFootTarget = posed.driverWorldByJointId.get(ids.indexOf('leftFoot'));
+      return {
+        lowerKneeDriver: lowerKnee?.driverId,
+        lowerFootDriver: lowerFoot?.driverId,
+        directBindings: binding.jointBindings.size,
+        secondaryRoots: binding.secondaryAttachments.length,
+        resetError,
+        posedFoot: lowerFootTarget?.elements.slice(12, 15),
+        bindingDiagnostics: binding.diagnostics,
+      };
+    }""")
+    assert result["lowerKneeDriver"] == "left_lower_leg"
+    assert result["lowerFootDriver"] == "left_lower_leg"
+    assert result["directBindings"] >= 10
+    assert result["secondaryRoots"] == 0
+    assert result["resetError"] < 1e-5
+    assert result["posedFoot"] != pytest.approx([-.1, .05, 0])
+
+
+def test_humanoid_control_ik_solves_virtual_two_bone_limb(module_page):
+    result = module_page.evaluate("""async () => {
+      const {solveHumanoidControlIk} = await import(
+        './js/mesh/humanoid-rig-ik.js');
+      const controlRig = {
+        frame: {forward: [0, 0, 1], right: [1, 0, 0]},
+        controls: {
+          leftShoulder: {position: [0, 1, 0]},
+          leftElbow: {position: [.5, .7, 0]},
+          leftHand: {position: [1, .7, 0]},
+        },
+      };
+      const solved = solveHumanoidControlIk({
+        controlRig, role: 'left_arm', target: [.2, .7, 0],
+      });
+      const hand = solved.positions.leftHand;
+      return {reached: solved.reached, residual: solved.residual,
+        hand, elbow: solved.positions.leftElbow,
+        distance: Math.hypot(hand[0] - .2, hand[1] - .7)};
+    }""")
+    assert result["reached"]
+    assert result["residual"] < 1e-5
+    assert result["distance"] < 1e-5

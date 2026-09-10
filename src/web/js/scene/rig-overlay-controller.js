@@ -119,9 +119,13 @@ function canFkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
 }
 
 function canIkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
-  if (snapshot?.jointPickIntent || !source
-      || boneId === null) return false;
+  if (snapshot?.jointPickIntent || !source) return false;
   const ik = snapshot?.ik;
+  if (Array.isArray(ik?.controlKeys) && ik.controlKeys.length === 3) {
+    return !!ik?.enabled && !!ik.available
+      && !!source.humanoidControlRig;
+  }
+  if (boneId === null) return false;
   return !!ik?.enabled && !!ik.available
     && Number(ik.endJointId) === Number(boneId);
 }
@@ -130,6 +134,16 @@ function manipulationMode(snapshot, source, boneId = selectedBoneFor(snapshot)) 
   if (canIkPose(snapshot, source, boneId)) return 'ik';
   if (snapshot?.ik?.enabled) return null;
   return canFkPose(snapshot, source, boneId) ? 'fk' : null;
+}
+
+function humanoidControlPoint(source, key) {
+  const value = source?.humanoidControlRig?.controls?.[key];
+  return value?.position || value || null;
+}
+
+function ikTargetPoint(snapshot, source) {
+  const key = snapshot?.ik?.controlKeys?.[2];
+  return key ? humanoidControlPoint(source, key) : null;
 }
 
 let rigTransformInteractionActive = false;
@@ -166,6 +180,7 @@ function centerColor(component, jointId, selectedJointId) {
 }
 
 function humanoidRoleColor(role) {
+  if (role === 'torso') return [.92, .48, .2];
   if (role === 'left_arm') return [1, .42, .24];
   if (role === 'right_arm') return [.32, .72, 1];
   if (role === 'left_leg') return [1, .78, .18];
@@ -183,6 +198,7 @@ function humanoidConfidenceColor(role, confidence, source) {
 }
 
 const CONTROL_KEYS_FOR_OVERLAY = Object.freeze([
+  {key: 'chest', role: 'torso'}, {key: 'pelvis', role: 'torso'},
   {key: 'leftShoulder', role: 'left_arm'},
   {key: 'leftElbow', role: 'left_arm'}, {key: 'leftHand', role: 'left_arm'},
   {key: 'rightShoulder', role: 'right_arm'},
@@ -440,10 +456,15 @@ export function createRigOverlayController({
     const roleConfidence = role => rig?.confidenceByRegion?.[role]
       || rig?.confidence || 'low';
     const links = [
+      ['chest', 'pelvis', 'torso'],
+      ['chest', 'leftShoulder', 'left_arm'],
+      ['chest', 'rightShoulder', 'right_arm'],
       ['leftShoulder', 'leftElbow', 'left_arm'],
       ['leftElbow', 'leftHand', 'left_arm'],
       ['rightShoulder', 'rightElbow', 'right_arm'],
       ['rightElbow', 'rightHand', 'right_arm'],
+      ['pelvis', 'leftHip', 'left_leg'],
+      ['pelvis', 'rightHip', 'right_leg'],
       ['leftHip', 'leftKnee', 'left_leg'],
       ['leftKnee', 'leftFoot', 'left_leg'],
       ['rightHip', 'rightKnee', 'right_leg'],
@@ -808,7 +829,8 @@ export function createRigOverlayController({
       return;
     }
     const poseFrame = getRigJointPoseFrame?.(boneId);
-    const pivot = poseFrame?.pivot || pivotFor(source, boneId);
+    const pivot = poseFrame?.pivot || pivotFor(source, boneId)
+      || ikTargetPoint(snapshot, source);
     if (mode === 'ik') {
       if (pivot) ikTargetProxy.position.copy(vector(pivot));
       proxy.visible = false;
@@ -857,7 +879,9 @@ export function createRigOverlayController({
     const poseFrame = getRigJointPoseFrame?.(id);
     const mode = manipulationMode(currentSnapshot, currentSource, id);
     if (mode === 'ik') {
-      if (poseFrame?.pivot) ikTargetProxy.position.copy(vector(poseFrame.pivot));
+      const pivot = poseFrame?.pivot || pivotFor(currentSource, id)
+        || ikTargetPoint(currentSnapshot, currentSource);
+      if (pivot) ikTargetProxy.position.copy(vector(pivot));
       proxy.visible = false;
       ikTargetProxy.visible = true;
       transformControls?.setMode?.('translate');
@@ -914,11 +938,11 @@ export function createRigOverlayController({
         transformControls.addEventListener?.('objectChange', () => {
           if (!poseDragActive) return;
           const boneId = dragBoneId;
-          if (boneId === null) return;
           if (dragMode === 'ik') {
             solveRigIkTarget?.(ikTargetProxy.position.toArray(), {dragging: true});
             return;
           }
+          if (boneId === null) return;
           let localRotation = proxy.quaternion.clone();
           if (dragParentRotation) {
             localRotation = dragParentRotation.clone().invert()

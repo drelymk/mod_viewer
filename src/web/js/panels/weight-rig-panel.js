@@ -417,7 +417,7 @@ function buildRigSection(parent) {
   const autoDetect = document.createElement('button');
   autoDetect.type = 'button';
   autoDetect.className = 'ui-button rig-auto-detect-limbs';
-  autoDetect.textContent = 'Auto-detect humanoid limbs';
+  autoDetect.textContent = 'Refresh humanoid rig diagnostics';
   autoDetect.addEventListener('click', () => {
     autoDetect.disabled = true;
     void Promise.resolve().then(() => autoDetectHumanoidLimbs())
