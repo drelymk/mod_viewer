@@ -174,6 +174,12 @@ const cameraFrame = createCameraFrame({
   grid,
   cancelViewSnap: viewGizmoController.cancelSnap,
   onModelFit: keyLightController.rebase,
+  onOrientationChanged: detail => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('mod-viewer-model-orientation-changed', {
+      detail,
+    }));
+  },
 });
 
 new ResizeObserver(() => {

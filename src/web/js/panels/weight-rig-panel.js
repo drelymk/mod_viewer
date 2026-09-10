@@ -12,8 +12,7 @@ import {
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
   setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
   setRigActiveLimbRole,
-  setRigLimbOverride, beginRigJointPicking, cancelRigJointPicking,
-  clearRigLimbMapping, flipRigLimbBend, setRigIkEnabled,
+  beginRigJointPicking, cancelRigJointPicking, setRigIkEnabled,
   setRigJointRoot,
   setRigRotationSnapDegrees, setWeightPickerViewMode,
   applyRigPosePresetById,
@@ -33,12 +32,6 @@ const LIMB_ROLES = Object.freeze([
   ['left_arm', 'Left Arm'], ['right_arm', 'Right Arm'],
   ['left_leg', 'Left Leg'], ['right_leg', 'Right Leg'],
 ]);
-const LIMB_LABELS = Object.freeze({
-  left_arm: ['Shoulder', 'Elbow', 'Hand'],
-  right_arm: ['Shoulder', 'Elbow', 'Hand'],
-  left_leg: ['Hip', 'Knee', 'Foot'],
-  right_leg: ['Hip', 'Knee', 'Foot'],
-});
 
 function addText(parent, className, value = '') {
   const node = document.createElement('span');
@@ -67,14 +60,6 @@ function addAdvanced(parent, title = 'Advanced Settings') {
   details.appendChild(content);
   parent.appendChild(details);
   return {details, content};
-}
-
-function addRigAdvancedGroup(parent, title) {
-  const group = document.createElement('div');
-  group.className = 'rig-advanced-group';
-  addText(group, 'weight-rig-advanced-title', title);
-  parent.appendChild(group);
-  return group;
 }
 
 function selectedLabel(state) {
@@ -393,80 +378,7 @@ function buildRigSection(parent) {
   ui.presetStatus = addText(section, 'rig-hint');
   ui.presetStatus.setAttribute('aria-live', 'polite');
 
-  const advanced = addAdvanced(parent, 'Rig Advanced Settings');
-  const inverseKinematics = addRigAdvancedGroup(
-    advanced.content, 'Limb IK');
-  const limbRow = document.createElement('label');
-  limbRow.className = 'rig-row';
-  addText(limbRow, 'rig-label', 'Limb');
-  const limb = document.createElement('select');
-  limb.className = 'rig-limb-select';
-  limb.setAttribute('aria-label', 'Active limb');
-  LIMB_ROLES.forEach(([role, label]) => {
-    const option = document.createElement('option');
-    option.value = role;
-    option.textContent = label;
-    limb.appendChild(option);
-  });
-  limb.addEventListener('change', () => setRigActiveLimbRole(limb.value));
-  limbRow.appendChild(limb);
-  inverseKinematics.appendChild(limbRow);
-  ui.limb = limb;
-
-  const mapping = document.createElement('div');
-  mapping.className = 'rig-limb-mapping';
-  const makeMappingRow = (kind, label, actionText, actionClass) => {
-    const row = document.createElement('div');
-    row.className = `rig-limb-mapping-row ${kind}`;
-    addText(row, 'rig-label', label);
-    const value = addText(row, 'rig-limb-value');
-    const action = document.createElement('button');
-    action.type = 'button';
-    action.className = `ui-button rig-limb-pick ${actionClass}`;
-    action.textContent = actionText;
-    action.addEventListener('click', () => {
-      const role = latestRigState?.ik?.activeLimbRole || limb.value;
-      const intent = {type: kind, role};
-      const current = latestRigState?.jointPickIntent;
-      if (current?.type === intent.type && current?.role === intent.role) {
-        cancelRigJointPicking();
-      } else {
-        beginRigJointPicking(intent);
-      }
-    });
-    row.appendChild(action);
-    mapping.appendChild(row);
-    return {value, action};
-  };
-  const anchorRow = makeMappingRow(
-    'limb-anchor', 'Shoulder', 'Pick', 'rig-limb-anchor-pick');
-  const bendRow = makeMappingRow(
-    'limb-bend-override', 'Elbow', 'Override', 'rig-limb-bend-pick');
-  const endRow = makeMappingRow(
-    'limb-end-override', 'Hand', 'Override', 'rig-limb-end-pick');
-  inverseKinematics.appendChild(mapping);
-  ui.limbMapping = mapping;
-  ui.limbAnchor = anchorRow.value;
-  ui.limbBend = bendRow.value;
-  ui.limbEnd = endRow.value;
-  ui.limbAnchorPick = anchorRow.action;
-  ui.limbBendPick = bendRow.action;
-  ui.limbEndPick = endRow.action;
-
-  addText(inverseKinematics, 'rig-label', 'Detected path');
-  ui.pathPreview = addText(inverseKinematics, 'rig-chain-preview', '—');
-
-  const mappingActions = document.createElement('div');
-  mappingActions.className = 'rig-actions rig-limb-actions';
-  const clearMapping = document.createElement('button');
-  clearMapping.type = 'button';
-  clearMapping.className = 'ui-button rig-clear-limb';
-  clearMapping.textContent = 'Clear';
-  clearMapping.addEventListener('click', () => clearRigLimbMapping(limb.value));
-  mappingActions.append(clearMapping);
-  inverseKinematics.appendChild(mappingActions);
-  ui.clearLimb = clearMapping;
-
+  const advanced = addAdvanced(parent);
   const ikLabel = document.createElement('label');
   ikLabel.className = 'weight-checkbox';
   const ik = document.createElement('input');
@@ -475,20 +387,28 @@ function buildRigSection(parent) {
   ik.addEventListener('change', () => setRigIkEnabled(ik.checked));
   ikLabel.appendChild(ik);
   addText(ikLabel, 'weight-label', 'Enable IK');
-  inverseKinematics.appendChild(ikLabel);
+  advanced.content.appendChild(ikLabel);
   ui.ik = ik;
 
-  const flip = document.createElement('button');
-  flip.type = 'button';
-  flip.className = 'ui-button rig-flip-bend';
-  flip.textContent = 'Flip Bend';
-  flip.addEventListener('click', () => flipRigLimbBend(limb.value));
-  inverseKinematics.appendChild(flip);
-  ui.flipBend = flip;
-  ui.ikHint = addText(inverseKinematics, 'rig-hint');
+  addText(advanced.content, 'weight-rig-control-label', 'Limb');
+  const limbButtons = document.createElement('div');
+  limbButtons.className = 'rig-limb-buttons';
+  const buttonsByRole = new Map();
+  LIMB_ROLES.forEach(([role, label]) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ui-button rig-limb-button';
+    button.textContent = label.replace('Left', 'L').replace('Right', 'R');
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-pressed', 'false');
+    button.dataset.role = role;
+    button.addEventListener('click', () => setRigActiveLimbRole(role));
+    limbButtons.appendChild(button);
+    buttonsByRole.set(role, button);
+  });
+  advanced.content.appendChild(limbButtons);
+  ui.limbButtons = buttonsByRole;
 
-  const manualRotation = addRigAdvancedGroup(
-    advanced.content, 'Manual Rotation');
   const snapRow = document.createElement('label');
   snapRow.className = 'rig-row';
   addText(snapRow, 'rig-label', 'Rotation snap');
@@ -502,10 +422,9 @@ function buildRigSection(parent) {
   });
   snap.addEventListener('change', () => setRigRotationSnapDegrees(Number(snap.value)));
   snapRow.appendChild(snap);
-  manualRotation.appendChild(snapRow);
+  advanced.content.appendChild(snapRow);
   ui.snap = snap;
 
-  const hierarchy = addRigAdvancedGroup(advanced.content, 'Rig Structure');
   const setRoot = document.createElement('button');
   setRoot.type = 'button';
   setRoot.className = 'ui-button rig-set-root';
@@ -514,9 +433,8 @@ function buildRigSection(parent) {
     const selected = selectedJoint();
     if (selected) setRigJointRoot(selected.jointId);
   });
-  hierarchy.appendChild(setRoot);
+  advanced.content.appendChild(setRoot);
   ui.setRoot = setRoot;
-
 }
 
 function buildPanel() {
@@ -742,52 +660,18 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   ui.snap.disabled = !state?.loaded || !joints.length || !!state?.ik?.enabled;
   const ik = state?.ik || {};
   const role = ik.activeLimbRole || 'left_arm';
-  const labels = LIMB_LABELS[role] || LIMB_LABELS.left_arm;
-  const mapping = ik.mappings?.[role] || {};
-  const hasMapping = Number.isInteger(mapping.anchorJointId);
-  const hasLimb = !!mapping.available;
   const hasSelected = !!selected;
-  ui.limbAnchor.previousElementSibling.textContent = labels[0];
-  ui.limbBend.previousElementSibling.textContent = labels[1];
-  ui.limbEnd.previousElementSibling.textContent = labels[2];
-  ui.limb.value = role;
-  ui.limb.disabled = !state?.loaded || !joints.length;
-  ui.limbAnchor.textContent = mapping.anchorJointId
-    ? `Joint ${mapping.anchorJointId} · Manual` : 'Unassigned';
-  ui.limbBend.textContent = mapping.bendJointId
-    ? `Joint ${mapping.bendJointId} · ${mapping.bendSource === 'override'
-      ? 'Override' : 'Auto'}` : '—';
-  ui.limbEnd.textContent = mapping.endJointId
-    ? `Joint ${mapping.endJointId} · ${mapping.endSource === 'override'
-      ? 'Override' : 'Auto'}` : '—';
-  const pathIds = mapping.pathJointIds || [];
-  ui.pathPreview.textContent = pathIds.length
-    ? pathIds.map(id => `Joint ${id}`).join(' → ') : '—';
-  const pick = state?.jointPickIntent;
-  const pickButton = (button, type, enabled, idleText) => {
-    const active = pick?.type === type && pick?.role === role;
-    button.textContent = active ? 'Cancel' : idleText;
+  ui.limbButtons.forEach((button, buttonRole) => {
+    const active = buttonRole === role;
     button.classList.toggle('active', active);
-    button.disabled = !state?.loaded || !enabled;
-  };
-  pickButton(ui.limbAnchorPick, 'limb-anchor', true, 'Pick');
-  pickButton(ui.limbBendPick, 'limb-bend-override', hasLimb, 'Override');
-  pickButton(ui.limbEndPick, 'limb-end-override', hasMapping, 'Override');
-  ui.clearLimb.disabled = !state?.loaded || !hasMapping;
+    button.setAttribute('aria-pressed', String(active));
+    button.disabled = !state?.loaded;
+  });
   ui.ik.checked = !!ik.enabled;
-  ui.ik.disabled = !state?.loaded || !hasLimb;
-  ui.flipBend.disabled = !state?.loaded || !hasLimb;
-  if (!hasMapping) {
-    ui.ikHint.textContent = `Pick the ${labels[0]} joint to configure this limb.`;
-  }
-  else if (!hasLimb) ui.ikHint.textContent = `IK unavailable: ${mapping.reason || 'limb path not detected'}.`;
-  else ui.ikHint.textContent = `${mapping.confidence || 'medium'} confidence · drag the ${labels[2]} target.`;
+  ui.ik.disabled = !state?.loaded || !ik.available;
   ui.clearJoint.disabled = !hasSelected;
   ui.setRoot.disabled = !hasSelected;
   ui.resetJoint.disabled = !hasSelected;
-  ui.resetJoint.textContent = state?.ik?.enabled && hasLimb
-      && selected?.jointId === mapping.endJointId
-    ? 'Reset Limb' : 'Reset Joint';
   ui.resetPose.disabled = !state?.loaded;
   syncPresetControls(state);
 }

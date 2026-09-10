@@ -591,7 +591,8 @@ def test_missing_asset_parts_inherit_auto_upright_and_wuwa_facing(
             " && window.modViewer.activeMeshes.length === 1")
         wuwa_initial = page.evaluate(
             "window.modViewer.activeMeshes[0].quaternion.toArray()")
-        assert wuwa_initial == pytest.approx([0, 1, 0, 0])
+        assert wuwa_initial == pytest.approx(
+            [0, 2 ** -0.5, 2 ** -0.5, 0])
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='remove']").wait_for()
         wuwa_states = page.evaluate("""() => window.modViewer.activeMeshes.map(

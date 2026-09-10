@@ -512,6 +512,10 @@ export function buildMesh(name, data, materialProfile = null) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.layers.enable(CHARACTER_AO_LAYER);
   mesh.userData.basePositions = new Float32Array(geo.attributes.position.array);
+  // Keep immutable rest positions for the primary geometry-fitted humanoid
+  // control rig and its binding diagnostics.
+  mesh.userData.humanoidRestPositions = new Float32Array(
+    mesh.userData.basePositions);
   mesh.userData.baseNormals = data.normal
     ? new Float32Array(geo.attributes.normal.array) : null;
   mesh.userData.hasAuthoredNormals = !!data.normal;

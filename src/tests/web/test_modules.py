@@ -227,6 +227,420 @@ def test_rig_limb_detection_and_two_control_solver(module_page):
     assert result["unreachable"]["reached"] is False
 
 
+def test_humanoid_limb_suggestions_keep_primary_backbone_over_secondary_appendage(module_page):
+    result = module_page.evaluate("""async () => {
+      const humanoid = await import('./js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.55, 1.55, 0]], [2, [-1.05, 1.35, 0]], [3, [-1.5, 1.1, 0]],
+        [4, [.55, 1.55, 0]], [5, [1.05, 1.35, 0]], [6, [1.5, 1.1, 0]],
+        [7, [-.35, .8, 0]], [8, [-.4, .2, 0]], [9, [-.42, -.4, 0]],
+        [10, [.35, .8, 0]], [11, [.4, .2, 0]], [12, [.42, -.4, 0]],
+        [13, [-.8, 1.8, -1]], [14, [-1.6, 1.8, -1.5]], [15, [-2.4, 1.8, -1.8]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 0, 5: 4, 6: 5,
+        7: 0, 8: 7, 9: 8, 10: 0, 11: 10, 12: 11, 13: 0, 14: 13, 15: 14};
+      const shiftedCenters = new Map([...points].map(([id, point]) => [id,
+        [point[0] + .8, point[1] - .3, point[2] + .2]]));
+      const childrenById = Object.fromEntries(Object.keys(parentById).map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const component = {rootId: 0, nodeIds: [...points.keys()], parentById, childrenById};
+      const rig = {
+        joints: [...points.keys()].reverse().map(jointId => ({jointId,
+          restPivot: points.get(jointId), restCenter: shiftedCenters.get(jointId)})),
+        components: [component], componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+        centerByJointId: shiftedCenters, jointPivotByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [1, 2], [2, 3], [4, 5], [5, 6], [7, 8], [8, 9],
+          [10, 11], [11, 12], [13, 14], [14, 15],
+        ]),
+      };
+      const result = humanoid.suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      const frame = humanoid.buildHumanoidSemanticFrame({
+        rig, characterForward: [0, 0, 1],
+      });
+      const pivotSample = humanoid.collectHumanoidSamples({rig, frame})
+        .find(sample => sample.jointId === 1);
+      const scaledPoints = new Map([...points].map(([id, point]) => [id,
+        point.map(value => value * 10)]));
+      const scaledRig = {...rig, joints: rig.joints.map(joint => ({...joint,
+        restPivot: scaledPoints.get(joint.jointId),
+        restCenter: scaledPoints.get(joint.jointId).map(value => value + .4)})),
+        centerByJointId: new Map([...scaledPoints].map(([id, point]) => [id,
+          point.map(value => value + .4)])), jointPivotByJointId: scaledPoints};
+      const scaled = humanoid.suggestHumanoidLimbMappings({
+        rig: scaledRig, characterForward: [0, 0, 1]});
+      return {roles: result.roles, scaledRoles: scaled.roles,
+        pivotSample: {point: pivotSample.point.toArray(),
+          influenceCenter: pivotSample.influenceCenter.toArray()},
+        rejectedSecondary: result.debug.rejected
+        .filter(item => item.anchorJointId === 13).map(item => item.reason)};
+    }""")
+    roles = result["roles"]
+    assert roles["left_arm"]["available"]
+    assert roles["right_arm"]["available"]
+    assert roles["left_leg"]["available"]
+    assert roles["right_leg"]["available"]
+    assert roles["left_arm"]["anchorJointId"] == 1
+    assert roles["right_arm"]["anchorJointId"] == 4
+    assert roles["left_leg"]["anchorJointId"] == 7
+    assert roles["right_leg"]["anchorJointId"] == 10
+    assert 13 not in [roles[role]["anchorJointId"] for role in roles]
+    assert result["scaledRoles"]["left_arm"]["anchorJointId"] == 1
+    assert result["scaledRoles"]["right_arm"]["anchorJointId"] == 4
+    assert result["pivotSample"]["point"] == [-0.55, 1.55, 0]
+    assert result["pivotSample"]["influenceCenter"] == [0.25, 1.25, 0.2]
+
+
+def test_humanoid_detector_collapses_dense_helper_joint_families(module_page):
+    result = module_page.evaluate("""async () => {
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.55, 1.55, 0]], [2, [-.8, 1.48, 0]], [3, [-1.05, 1.35, 0]],
+        [4, [-1.25, 1.23, 0]], [5, [-1.5, 1.1, 0]], [6, [-1.65, 1.04, 0]],
+        [7, [-1.8, .98, 0]],
+        [8, [.55, 1.55, 0]], [9, [.8, 1.48, 0]], [10, [1.05, 1.35, 0]],
+        [11, [1.25, 1.23, 0]], [12, [1.5, 1.1, 0]], [13, [1.65, 1.04, 0]],
+        [14, [1.8, .98, 0]],
+        [15, [-.35, .8, 0]], [16, [-.4, .2, 0]], [17, [-.42, -.4, 0]],
+        [18, [.35, .8, 0]], [19, [.4, .2, 0]], [20, [.42, -.4, 0]],
+        [21, [-.7, 1.25, -.25]], [22, [-.85, 1.25, -.25]], [23, [-1.0, 1.25, -.25]],
+        [24, [.7, 1.25, -.25]], [25, [.85, 1.25, -.25]], [26, [1.0, 1.25, -.25]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6,
+        8: 0, 9: 8, 10: 9, 11: 10, 12: 11, 13: 12, 14: 13,
+        15: 0, 16: 15, 17: 16, 18: 0, 19: 18, 20: 19,
+        21: 0, 22: 21, 23: 22, 24: 0, 25: 24, 26: 25};
+      const childrenById = Object.fromEntries(Object.keys(parentById).map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const component = {rootId: 0, nodeIds: [...points.keys()], parentById, childrenById};
+      const centers = new Map([...points].map(([id, point]) => [id,
+        [point[0] + .9, point[1] - .4, point[2] + .1]]));
+      const continuation = new Map([
+        [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7],
+        [8, 9], [9, 10], [10, 11], [11, 12], [12, 13], [13, 14],
+        [15, 16], [16, 17], [18, 19], [19, 20], [21, 22], [22, 23],
+        [24, 25], [25, 26],
+      ]);
+      const rig = {
+        joints: [...points.keys()].reverse().map(jointId => ({jointId,
+          restPivot: points.get(jointId), restCenter: centers.get(jointId)})),
+        components: [component], componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+        centerByJointId: centers, jointPivotByJointId: points,
+        restContinuationChildByJointId: continuation,
+      };
+      const withoutSecondary = {...rig,
+        joints: rig.joints.filter(joint => joint.jointId < 21)};
+      const detected = suggestHumanoidLimbMappings({
+        rig: withoutSecondary, characterForward: [0, 0, 1], debug: true,
+      });
+      const withSecondary = suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      return {
+        roles: detected.roles,
+        secondaryRoles: withSecondary.roles,
+        families: withSecondary.debug.families,
+        pairs: withSecondary.debug.pairs.arms,
+        top: detected.debug.topCandidatesByRole.left_arm,
+      };
+    }""")
+    assert result["roles"]["left_arm"]["available"]
+    assert result["roles"]["right_arm"]["available"]
+    assert result["roles"]["left_arm"]["anchorJointId"] == 1
+    assert result["roles"]["right_arm"]["anchorJointId"] == 8
+    assert len(result["families"]["left_arm"]) == 2
+    assert len(result["families"]["right_arm"]) == 2
+    arm_family = next(family for family in result["families"]["left_arm"]
+                      if family["representative"]["anchorJointId"] == 1)
+    assert len(arm_family["alternatives"]) >= 3
+    assert arm_family["representative"]["anchorJointId"] == 1
+    assert result["top"][0]["forwardOffset"] <= .3
+    assert result["secondaryRoles"]["left_arm"]["available"]
+    assert result["secondaryRoles"]["right_arm"]["available"]
+    assert result["secondaryRoles"]["left_arm"]["anchorJointId"] == 1
+    assert result["secondaryRoles"]["right_arm"]["anchorJointId"] == 8
+    assert result["pairs"]["best"]["left"]["anchorJointId"] == 1
+    assert result["pairs"]["best"]["right"]["anchorJointId"] == 8
+    assert result["pairs"]["runnerUp"]["leftAnchorJointId"] == 21
+    assert result["pairs"]["runnerUp"]["rightAnchorJointId"] == 24
+    assert result["pairs"]["margin"] > .065
+
+
+def test_shared_limb_resolver_handles_wrong_hints_narrow_anchors_and_secondary_branches(module_page):
+    result = module_page.evaluate("""async () => {
+      const {resolveLimbPathCandidates} = await import('./js/mesh/weight-rig-ik.js');
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.07, 1.45, 0]], [2, [-.3, 1.4, 0]], [3, [-.55, 1.3, 0]],
+        [4, [-.8, 1.1, 0]], [5, [-1.0, 1.0, 0]], [6, [-1.15, .95, 0]],
+        [7, [-1.2, .95, 0]], [8, [-1.1, .95, 0]],
+        [10, [.07, 1.45, 0]], [11, [.3, 1.4, 0]], [12, [.55, 1.3, 0]],
+        [13, [.8, 1.1, 0]], [14, [1.0, 1.0, 0]], [15, [1.15, .95, 0]],
+        [16, [1.2, .95, 0]], [17, [1.1, .95, 0]],
+        [20, [-.32, 1.42, .35]], [21, [-.6, 1.28, .3]], [22, [-.9, 1.18, .25]],
+        [30, [-.04, .8, 0]], [31, [-.1, .55, 0]], [32, [-.12, .2, 0]],
+        [33, [-.14, -.25, 0]], [34, [-.15, -.45, 0]], [35, [-.2, -.48, 0]],
+        [40, [.04, .8, 0]], [41, [.1, .55, 0]], [42, [.12, .2, 0]],
+        [43, [.14, -.25, 0]], [44, [.15, -.45, 0]], [45, [.2, -.48, 0]],
+        [50, [-.7, 1.4, -.8]], [51, [-1.4, 1.45, -1.3]], [52, [-2.1, 1.5, -1.6]],
+        [60, [.7, 1.4, -.8]], [61, [1.4, 1.45, -1.3]], [62, [2.1, 1.5, -1.6]],
+      ]);
+      const parentById = {
+        0: null, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 6,
+        10: 0, 11: 10, 12: 11, 13: 12, 14: 13, 15: 14, 16: 15, 17: 15,
+        20: 2, 21: 3, 22: 21,
+        30: 0, 31: 30, 32: 31, 33: 32, 34: 33, 35: 34,
+        40: 0, 41: 40, 42: 41, 43: 42, 44: 43, 45: 44,
+        50: 0, 51: 50, 52: 51, 60: 0, 61: 60, 62: 61,
+      };
+      const continuation = new Map([
+        [1, 2], [2, 20], [3, 21], [4, 5], [5, 6], [10, 11], [11, 12],
+        [12, 13], [13, 14], [14, 15], [30, 31], [31, 32], [32, 33],
+        [33, 34], [34, 35], [40, 41], [41, 42], [42, 43], [43, 44],
+        [44, 45], [50, 51], [51, 52], [60, 61], [61, 62],
+      ]);
+      const correctedContinuation = new Map([
+        ...continuation, [2, 3], [3, 4],
+      ]);
+      const makeRig = (shuffled, wrongHint = true) => {
+        const ids = [...points.keys()];
+        const ordered = shuffled ? ids.reverse() : ids;
+        const childrenById = Object.fromEntries(ids.map(id => [id, []]));
+        Object.entries(parentById).forEach(([child, parent]) => {
+          if (parent !== null) childrenById[parent].push(Number(child));
+        });
+        if (shuffled) Object.values(childrenById).forEach(children => children.reverse());
+        const component = {
+          rootId: 0, nodeIds: ordered, parentById, childrenById,
+        };
+        return {
+          joints: ordered.map(jointId => ({jointId, restPivot: points.get(jointId)})),
+          components: [component],
+          componentByJointId: new Map(ids.map(id => [id, 0])),
+          centerByJointId: points, jointPivotByJointId: points,
+          restContinuationChildByJointId: wrongHint
+            ? continuation : correctedContinuation,
+        };
+      };
+      const baseline = suggestHumanoidLimbMappings({rig: makeRig(false),
+        characterForward: [0, 0, 1], debug: true});
+      const shuffled = suggestHumanoidLimbMappings({rig: makeRig(true),
+        characterForward: [0, 0, 1], debug: true});
+      const corrected = suggestHumanoidLimbMappings({rig: makeRig(false, false),
+        characterForward: [0, 0, 1], debug: true});
+      const wrongHint = resolveLimbPathCandidates({rig: makeRig(false),
+        anchorJointId: 1, role: 'left_arm', characterForward: [0, 0, 1]});
+      return {
+        baseline: baseline.roles,
+        shuffled: shuffled.roles,
+        corrected: corrected.roles,
+        paths: wrongHint.candidates.slice(0, 3).map(candidate => ({
+          path: candidate.pathJointIds, end: candidate.endJointId,
+          metrics: candidate.pathMetrics,
+        })),
+        pairs: baseline.debug.pairs,
+      };
+    }""")
+    expected = {
+        "left_arm": 1, "right_arm": 10, "left_leg": 30, "right_leg": 40,
+    }
+    for result_name in ("baseline", "shuffled"):
+        roles = result[result_name]
+        assert all(roles[role]["available"] for role in expected)
+        assert {role: roles[role]["anchorJointId"] for role in expected} == expected
+    assert result["baseline"]["left_arm"]["pathJointIds"] == [1, 2, 3, 4, 5, 6]
+    assert result["baseline"]["left_leg"]["pathJointIds"] == [30, 31, 32, 33, 34, 35]
+    assert result["shuffled"]["left_arm"]["pathJointIds"] == result["baseline"]["left_arm"]["pathJointIds"]
+    assert result["shuffled"]["left_leg"]["pathJointIds"] == result["baseline"]["left_leg"]["pathJointIds"]
+    assert result["corrected"]["left_arm"]["pathJointIds"] == result["baseline"]["left_arm"]["pathJointIds"]
+    assert result["corrected"]["left_leg"]["pathJointIds"] == result["baseline"]["left_leg"]["pathJointIds"]
+    assert result["paths"][0]["end"] == 6
+    assert result["pairs"]["arms"]["best"]["left"]["anchorJointId"] == 1
+    assert result["pairs"]["arms"]["best"]["right"]["anchorJointId"] == 10
+    assert result["pairs"]["arms"]["runnerUp"]["leftAnchorJointId"] == 50
+    assert result["pairs"]["arms"]["runnerUp"]["rightAnchorJointId"] == 60
+    assert (result["pairs"]["legs"]["best"]["left"]["anchorJointId"],
+            result["pairs"]["legs"]["best"]["right"]["anchorJointId"]) == (30, 40)
+
+
+def test_humanoid_suggestions_report_missing_and_ambiguous_pairs(module_page):
+    result = module_page.evaluate("""async () => {
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const makeRig = items => {
+        const points = new Map(items.map(item => [item.id, item.point]));
+        const parentById = Object.fromEntries(items.map(item => [item.id, item.parent]));
+        const childrenById = Object.fromEntries(items.map(item => [item.id, []]));
+        items.forEach(item => { if (item.parent !== null) childrenById[item.parent].push(item.id); });
+        const component = {rootId: 0, nodeIds: items.map(item => item.id), parentById, childrenById};
+        return {joints: items.map(item => ({jointId: item.id, restCenter: item.point})),
+          components: [component], componentByJointId: new Map(items.map(item => [item.id, 0])),
+          centerByJointId: points, jointPivotByJointId: points,
+          restContinuationChildByJointId: new Map(items.filter(item => item.child !== null)
+            .map(item => [item.id, item.child]))};
+      };
+      const arm = [
+        {id: 0, parent: null, child: 1, point: [0, 1, 0]},
+        {id: 1, parent: 0, child: 2, point: [-.6, 1.5, 0]},
+        {id: 2, parent: 1, child: 3, point: [-1.1, 1.3, 0]},
+        {id: 3, parent: 2, child: null, point: [-1.5, 1.1, 0]},
+        {id: 4, parent: 0, child: 5, point: [.6, 1.5, 0]},
+        {id: 5, parent: 4, child: 6, point: [1.1, 1.3, 0]},
+        {id: 6, parent: 5, child: null, point: [1.5, 1.1, 0]},
+      ];
+      const complete = suggestHumanoidLimbMappings({rig: makeRig(arm),
+        characterForward: [0, 0, 1]});
+      const missing = suggestHumanoidLimbMappings({
+        rig: makeRig(arm.filter(item => item.id < 4)), characterForward: [0, 0, 1]});
+      const duplicate = arm.concat([
+        {id: 7, parent: 0, child: 8, point: [-.6, 1.5, 0]},
+        {id: 8, parent: 7, child: 9, point: [-1.1, 1.3, 0]},
+        {id: 9, parent: 8, child: null, point: [-1.5, 1.1, 0]},
+        {id: 10, parent: 0, child: 11, point: [0, .7, 0]},
+        {id: 11, parent: 10, child: 12, point: [0, .1, 0]},
+        {id: 12, parent: 11, child: null, point: [0, -.5, 0]},
+      ]);
+      const ambiguous = suggestHumanoidLimbMappings({
+        rig: makeRig(duplicate), characterForward: [0, 0, 1]});
+      return {complete: complete.roles, missing: missing.roles,
+        ambiguous: ambiguous.roles};
+    }""")
+    assert result["complete"]["left_arm"]["available"]
+    assert result["complete"]["right_arm"]["available"]
+    assert not result["missing"]["left_arm"]["available"]
+    assert not result["missing"]["right_arm"]["available"]
+    assert result["missing"]["left_arm"]["reasons"][0] == "no_bilateral_pair"
+    assert result["missing"]["right_arm"]["reasons"][0] == "no_bilateral_pair"
+    assert result["ambiguous"]["left_arm"]["reasons"][0] == "ambiguous_pair"
+    assert result["ambiguous"]["right_arm"]["reasons"][0] == "ambiguous_pair"
+
+
+def test_humanoid_leg_fitter_prefers_complete_foot_reaching_paths(module_page):
+    result = module_page.evaluate("""async () => {
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.45, .8, 0]], [2, [-.48, .3, 0]], [3, [-.5, -.1, 0]],
+        [4, [-.52, -.5, 0]],
+        [5, [.45, .8, 0]], [6, [.48, .3, 0]], [7, [.5, -.1, 0]],
+        [8, [.52, -.5, 0]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 3,
+        5: 0, 6: 5, 7: 6, 8: 7};
+      const childrenById = Object.fromEntries(Object.keys(parentById)
+        .map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const component = {rootId: 0, nodeIds: [...points.keys()],
+        parentById, childrenById};
+      const rig = {
+        joints: [...points.keys()].map(jointId => ({jointId,
+          restPivot: points.get(jointId)})),
+        components: [component],
+        componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+        centerByJointId: points, jointPivotByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8],
+        ]),
+      };
+      const detection = suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      const candidates = detection.debug.candidates.filter(candidate =>
+        candidate.role === 'left_leg' && candidate.anchorJointId === 1);
+      const short = candidates.find(candidate => candidate.endJointId === 3);
+      const complete = candidates.find(candidate => candidate.endJointId === 4);
+      return {short, complete, selected: detection.roles.left_leg};
+    }""")
+    assert result["short"]["pathJointIds"] == [1, 2, 3]
+    assert result["complete"]["pathJointIds"] == [1, 2, 3, 4]
+    assert result["complete"]["score"] > result["short"]["score"]
+    assert result["complete"]["pathMetrics"]["insideCorridorFraction"] > .9
+    assert result["complete"]["footJointId"] == 4
+    assert result["complete"]["kneeJointId"] in (2, 3)
+
+
+def test_humanoid_legs_reject_symmetric_central_stomach_decoys(module_page):
+    result = module_page.evaluate("""async () => {
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1.8, 0]],
+        [100, [-.02, 1.45, 0]], [101, [-.05, 1.1, 0]],
+        [1, [-.55, .8, 0]], [2, [-.58, .15, 0]], [3, [-.6, -.5, 0]],
+        [200, [.02, 1.45, 0]], [201, [.05, 1.1, 0]],
+        [4, [.55, .8, 0]], [5, [.58, .15, 0]], [6, [.6, -.5, 0]],
+        [10, [-.1, .75, 0]], [11, [-.12, .05, 0]],
+        [12, [.1, .75, 0]], [13, [.12, .05, 0]],
+      ]);
+      const parentById = {0: null, 100: 0, 101: 100, 1: 101, 2: 1, 3: 2,
+        200: 0, 201: 200, 4: 201, 5: 4, 6: 5,
+        10: 0, 11: 10, 12: 0, 13: 12};
+      const childrenById = Object.fromEntries(Object.keys(parentById)
+        .map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const component = {rootId: 0, nodeIds: [...points.keys()],
+        parentById, childrenById};
+      const rig = {
+        joints: [...points.keys()].map(jointId => ({jointId,
+          restPivot: points.get(jointId),
+          evidence: [10, 11, 12, 13].includes(jointId)
+            ? {affectedVertexCount: 500} : {affectedVertexCount: 2}})),
+        components: [component],
+        componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+        centerByJointId: points, jointPivotByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [100, 101], [101, 1], [1, 2], [2, 3],
+          [200, 201], [201, 4], [4, 5], [5, 6], [10, 11], [12, 13],
+        ]),
+      };
+      const detection = suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      const leftAncestry = detection.debug.candidates.find(candidate =>
+        candidate.role === 'left_leg' && candidate.anchorJointId === 1);
+      return {
+        legs: {
+          left: detection.roles.left_leg,
+          right: detection.roles.right_leg,
+        },
+        leftAncestry: leftAncestry && {
+          ancestors: leftAncestry.ancestorJointIds,
+          hip: leftAncestry.hipJointId,
+          knee: leftAncestry.kneeJointId,
+          foot: leftAncestry.footJointId,
+        },
+        rejected: detection.debug.rejectionCounts,
+      };
+    }""")
+    assert result["legs"]["left"]["available"]
+    assert result["legs"]["right"]["available"]
+    assert result["legs"]["left"]["hipJointId"] == 1
+    assert result["legs"]["right"]["hipJointId"] == 4
+    assert result["legs"]["left"]["kneeJointId"] == 2
+    assert result["legs"]["right"]["kneeJointId"] == 5
+    assert result["legs"]["left"]["footJointId"] == 3
+    assert result["legs"]["right"]["footJointId"] == 6
+    assert result["leftAncestry"]["ancestors"][:3] == [101, 100, 0]
+    assert result["rejected"]["left_leg:leg_quality_too_low"] > 0
+    assert result["rejected"]["right_leg:leg_quality_too_low"] > 0
+
+
 def test_limb_forward_conversion_inverts_non_identity_base_orientation(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
@@ -252,6 +666,272 @@ def test_limb_forward_conversion_inverts_non_identity_base_orientation(module_pa
     assert len(result["turns"]) == 4
     for turn in result["turns"]:
         assert turn == pytest.approx(expected)
+
+
+def test_humanoid_detection_is_coordinate_invariant(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {characterAxesFromOrientation} = await import('./js/mesh/weight-rig-ik.js');
+      const {suggestHumanoidLimbMappings} = await import(
+        './js/mesh/weight-rig-humanoid.js');
+      const canonical = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.55, 1.55, 0]], [2, [-1.05, 1.35, 0]], [3, [-1.5, 1.1, 0]],
+        [4, [.55, 1.55, 0]], [5, [1.05, 1.35, 0]], [6, [1.5, 1.1, 0]],
+        [7, [-.35, .8, 0]], [8, [-.4, .2, 0]], [9, [-.42, -.4, 0]],
+        [10, [.35, .8, 0]], [11, [.4, .2, 0]], [12, [.42, -.4, 0]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 0, 5: 4, 6: 5,
+        7: 0, 8: 7, 9: 8, 10: 0, 11: 10, 12: 11};
+      const continuation = new Map([
+        [1, 2], [2, 3], [4, 5], [5, 6], [7, 8], [8, 9], [10, 11], [11, 12],
+      ]);
+      const makeRig = rotation => {
+        const points = new Map([...canonical].map(([id, point]) => [id,
+          new THREE.Vector3(...point).applyQuaternion(rotation).toArray()]));
+        const centers = new Map([...points].map(([id, point]) => [id,
+          point.map((value, index) => value + [.4, -.2, .15][index])]));
+        const childrenById = Object.fromEntries(Object.keys(parentById).map(id => [id, []]));
+        Object.entries(parentById).forEach(([child, parent]) => {
+          if (parent !== null) childrenById[parent].push(Number(child));
+        });
+        const component = {rootId: 0, nodeIds: [...points.keys()], parentById, childrenById};
+        return {
+          joints: [...points.keys()].reverse().map(jointId => ({jointId,
+            restPivot: points.get(jointId), restCenter: centers.get(jointId)})),
+          components: [component], componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+          centerByJointId: centers, jointPivotByJointId: points,
+          restContinuationChildByJointId: continuation,
+        };
+      };
+      const identity = new THREE.Quaternion();
+      const sourceRotation = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      const upright = sourceRotation.clone().invert();
+      const userTurn = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0), Math.PI / 2);
+      const canonicalAxes = characterAxesFromOrientation({
+        orientation: identity, userRotation: identity,
+      });
+      const sourceAxes = characterAxesFromOrientation({
+        orientation: upright, userRotation: identity,
+      });
+      const turnedAxes = characterAxesFromOrientation({
+        orientation: userTurn, userRotation: userTurn,
+      });
+      const detect = (rig, axes) => suggestHumanoidLimbMappings({
+        rig, axes, characterForward: axes.forward, debug: true,
+      });
+      const first = detect(makeRig(identity), canonicalAxes);
+      const second = detect(makeRig(sourceRotation), sourceAxes);
+      const third = detect(makeRig(identity), turnedAxes);
+      const structure = item => ({
+        families: Object.fromEntries(['left_arm', 'right_arm', 'left_leg', 'right_leg']
+          .map(role => [role, item.debug.families[role].map(family => ({
+            representative: family.representative.anchorJointId,
+            alternatives: family.alternatives.map(candidate => candidate.anchorJointId),
+          }))])),
+        pairs: Object.fromEntries(['arms', 'legs'].map(kind => {
+          const pair = item.debug.pairs[kind];
+          return [kind, {
+            best: pair.best && [pair.best.left.anchorJointId, pair.best.right.anchorJointId],
+            runnerUp: pair.runnerUp && [pair.runnerUp.leftAnchorJointId,
+              pair.runnerUp.rightAnchorJointId],
+          }];
+        })),
+      });
+      return {
+        axes: {
+          canonical: {up: canonicalAxes.up.toArray(), forward: canonicalAxes.forward.toArray(),
+            right: canonicalAxes.right.toArray()},
+          source: {up: sourceAxes.up.toArray(), forward: sourceAxes.forward.toArray(),
+            right: sourceAxes.right.toArray()},
+        },
+        roles: [first, second, third].map(item => item.roles),
+        confidences: [first, second, third].map(item =>
+          ['left_arm', 'right_arm', 'left_leg', 'right_leg']
+            .map(role => item.roles[role].confidence)),
+        structures: [first, second, third].map(structure),
+      };
+    }""")
+    assert result["axes"]["source"]["up"] == pytest.approx([0, 0, 1])
+    assert result["axes"]["source"]["forward"] == pytest.approx([0, -1, 0])
+    assert result["axes"]["source"]["right"] == pytest.approx([1, 0, 0])
+    expected_anchors = {
+        "left_arm": 1, "right_arm": 4, "left_leg": 7, "right_leg": 10,
+    }
+    for roles in result["roles"]:
+        assert all(roles[role]["available"] for role in expected_anchors)
+        assert {role: roles[role]["anchorJointId"] for role in expected_anchors} == expected_anchors
+    assert result["confidences"][0] == result["confidences"][1] == result["confidences"][2]
+    assert result["structures"][0] == result["structures"][1] == result["structures"][2]
+
+
+def test_humanoid_scaffold_and_debug_scores_are_model_wide(module_page):
+    result = module_page.evaluate("""async () => {
+      const humanoid = await import('./js/mesh/weight-rig-humanoid.js');
+      const points = new Map([
+        [0, [0, 1, 0]],
+        [1, [-.6, 1.5, 0]], [2, [-1.1, 1.3, 0]], [3, [-1.5, 1.1, 0]],
+        [4, [.6, 1.5, 0]], [5, [1.1, 1.3, 0]], [6, [1.5, 1.1, 0]],
+        [7, [-.35, .8, 0]], [8, [-.4, .2, 0]], [9, [-.42, -.4, 0]],
+        [10, [.35, .8, 0]], [11, [.4, .2, 0]], [12, [.42, -.4, 0]],
+        [20, [0, .9, .4]], [21, [0, .7, .4]],
+      ]);
+      const parentById = {0: null, 1: 0, 2: 1, 3: 2, 4: 0, 5: 4, 6: 5,
+        7: 0, 8: 7, 9: 8, 10: 0, 11: 10, 12: 11,
+        20: null, 21: 20};
+      const childrenById = Object.fromEntries(Object.keys(parentById).map(id => [id, []]));
+      Object.entries(parentById).forEach(([child, parent]) => {
+        if (parent !== null) childrenById[parent].push(Number(child));
+      });
+      const components = [
+        {rootId: 0, nodeIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          parentById, childrenById},
+        {rootId: 20, nodeIds: [20, 21], parentById: {20: null, 21: 20},
+          childrenById: {20: [21], 21: []}},
+      ];
+      const rig = {
+        joints: [...points.keys()].map(jointId => ({jointId,
+          restPivot: points.get(jointId)})),
+        components,
+        componentByJointId: new Map([
+          ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(id => [id, 0]),
+          [20, 1], [21, 1],
+        ]),
+        jointPivotByJointId: points,
+        centerByJointId: points,
+        restContinuationChildByJointId: new Map([
+          [1, 2], [2, 3], [4, 5], [5, 6], [7, 8], [8, 9],
+          [10, 11], [11, 12], [20, 21],
+        ]),
+      };
+      const frame = humanoid.buildHumanoidSemanticFrame({
+        rig, characterForward: [0, 0, 1],
+      });
+      const scaffold = humanoid.buildHumanoidScaffold({rig, frame});
+      const suggestion = humanoid.suggestHumanoidLimbMappings({
+        rig, characterForward: [0, 0, 1], debug: true,
+      });
+      const candidate = suggestion.debug.topCandidatesByRole.left_arm[0];
+      return {
+        frame: {low: frame.lowHeight, high: frame.highHeight, height: frame.height},
+        scaffold: {
+          centerline: scaffold.centerline,
+          shoulderBand: scaffold.shoulderBand,
+          hipBand: scaffold.hipBand,
+          bodyDepth: scaffold.bodyDepth,
+        },
+          debug: {
+            hasWholeBody: suggestion.debug.wholeBody.combinationCount > 0,
+            candidateKeys: ['ancestryScore', 'componentBodyScore', 'corridorScore',
+              'poseAngleScore', 'pathSupportScore', 'proximalSupport',
+              'branchDominanceScore']
+            .every(key => Number.isFinite(candidate[key])),
+        },
+        removedPoseApi: typeof humanoid.aPoseDirectionFromAxes === 'undefined',
+      };
+    }""")
+    assert result["frame"]["height"] > 1.5
+    assert result["frame"]["low"] < 1
+    assert result["frame"]["high"] > 1.4
+    assert result["scaffold"]["shoulderBand"]["minHeight01"] < \
+        result["scaffold"]["shoulderBand"]["expectedHeight01"] < \
+        result["scaffold"]["shoulderBand"]["maxHeight01"]
+    assert result["scaffold"]["hipBand"]["minHeight01"] < \
+        result["scaffold"]["hipBand"]["expectedHeight01"] < \
+        result["scaffold"]["hipBand"]["maxHeight01"]
+    assert result["debug"] == {"hasWholeBody": True, "candidateKeys": True}
+    assert result["removedPoseApi"]
+
+
+def test_rig_path_between_joint_ids_is_undirected_and_component_scoped(module_page):
+    result = module_page.evaluate("""async () => {
+      const {rigPathBetweenJointIds} = await import(
+        './js/mesh/weight-rig-ik.js');
+      const first = {
+        rootId: 0, nodeIds: [0, 1, 2, 3],
+        parentById: {0: null, 1: 0, 2: 1, 3: 2},
+      };
+      const second = {rootId: 9, nodeIds: [9, 10],
+        parentById: {9: null, 10: 9}};
+      const rig = {
+        components: [first, second],
+        componentByJointId: new Map([[0, 0], [1, 0], [2, 0], [3, 0],
+          [9, 1], [10, 1]]),
+      };
+      return {
+        forward: rigPathBetweenJointIds({rig, jointA: 1, jointB: 3}),
+        reverse: rigPathBetweenJointIds({rig, jointA: 3, jointB: 1}),
+        disconnected: rigPathBetweenJointIds({rig, jointA: 1, jointB: 10}),
+      };
+    }""")
+    assert result["forward"] == {
+        "connected": True, "jointIds": [1, 2, 3], "edgeCount": 2,
+    }
+    assert result["reverse"] == {
+        "connected": True, "jointIds": [3, 2, 1], "edgeCount": 2,
+    }
+    assert result["disconnected"] == {
+        "connected": False, "jointIds": [], "edgeCount": 0,
+        "reason": "not_connected",
+    }
+
+
+def test_limb_path_descriptors_measure_forward_backtracking_symmetrically(module_page):
+    result = module_page.evaluate("""async () => {
+      const {resolveLimbPathCandidates} = await import('./js/mesh/weight-rig-ik.js');
+      const makeRig = depthSign => {
+        const points = new Map([
+          [0, [0, 1, 0]], [1, [-.55, 1.5, 0]],
+          [2, [-.9, 1.4, .3 * depthSign]],
+          [3, [-1.25, 1.25, 0]], [4, [-1.5, 1.1, 0]],
+        ]);
+        const component = {
+          rootId: 0, nodeIds: [...points.keys()],
+          parentById: {0: null, 1: 0, 2: 1, 3: 2, 4: 3},
+          childrenById: {0: [1], 1: [2], 2: [3], 3: [4], 4: []},
+        };
+        return {
+          joints: [...points.keys()].map(jointId => ({jointId,
+            restPivot: points.get(jointId)})),
+          components: [component],
+          componentByJointId: new Map([...points.keys()].map(id => [id, 0])),
+          jointPivotByJointId: points, centerByJointId: points,
+          restContinuationChildByJointId: new Map([[1, 2], [2, 3], [3, 4]]),
+        };
+      };
+      const inspect = depthSign => {
+        const resolved = resolveLimbPathCandidates({
+          rig: makeRig(depthSign), anchorJointId: 1, role: 'left_arm',
+          characterForward: [0, 0, 1],
+        });
+        const metrics = resolved.candidates[0].pathMetrics;
+        return {
+          path: resolved.candidates[0].pathJointIds,
+          score: resolved.candidates[0].score,
+          netForward: metrics.netForward,
+          absoluteForwardTravel: metrics.absoluteForwardTravel,
+          forwardBacktracking: metrics.forwardBacktracking,
+          endpointDepth: metrics.endpointDepth,
+          corridorScore: metrics.corridorScore,
+        };
+      };
+      return {positive: inspect(1), negative: inspect(-1)};
+    }""")
+    positive = result["positive"]
+    negative = result["negative"]
+    assert positive["path"] == negative["path"] == [1, 2, 3, 4]
+    assert positive["netForward"] == pytest.approx(0)
+    assert negative["netForward"] == pytest.approx(0)
+    assert positive["absoluteForwardTravel"] > 0
+    assert positive["forwardBacktracking"] == pytest.approx(
+        positive["absoluteForwardTravel"])
+    assert negative["forwardBacktracking"] == pytest.approx(
+        negative["absoluteForwardTravel"])
+    assert positive["absoluteForwardTravel"] == pytest.approx(
+        negative["absoluteForwardTravel"])
+    assert positive["corridorScore"] == pytest.approx(negative["corridorScore"])
 
 
 def test_compact_limb_detection_stops_at_terminal_branch(module_page):
@@ -475,6 +1155,8 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       scene.add(model);
       let state = {
         visible: true, selectedJointId: null,
+        ik: {enabled: true, available: true,
+          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']},
         model: {
           key: 'model-rig', structureRevision: 1,
           joints: [1, 2, 3].map((jointId, index) => ({
@@ -486,6 +1168,15 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
             {jointA: 1, jointB: 2, parentId: 1, childId: 2},
             {jointA: 2, jointB: 3, parentId: 2, childId: 3},
           ],
+          humanoidControlRig: {confidence: 'high', controls: Object.fromEntries([
+            ['chest', [0, 2, 0]], ['pelvis', [0, 1, 0]],
+            ['leftShoulder', [-.2, 1.8, 0]], ['leftElbow', [-.5, 1.6, 0]],
+            ['leftHand', [-.9, 1.5, 0]], ['rightShoulder', [.2, 1.8, 0]],
+            ['rightElbow', [.5, 1.6, 0]], ['rightHand', [.9, 1.5, 0]],
+            ['leftHip', [-.15, 1, 0]], ['leftKnee', [-.2, .5, 0]],
+            ['leftFoot', [-.25, 0, 0]], ['rightHip', [.15, 1, 0]],
+            ['rightKnee', [.2, .5, 0]], ['rightFoot', [.25, 0, 0]],
+          ].map(([key, position]) => [key, {position}])), paths: {}},
           poseRotationByJointId: {},
         },
       };
@@ -497,6 +1188,12 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       state = {...state, selectedJointId: 1};
       controller.refresh(state);
       const selectedRoot = controller.getDebugState();
+      state = {...state, model: {...state.model,
+        humanoidControlRig: {...state.model.humanoidControlRig,
+          controls: {...state.model.humanoidControlRig.controls,
+            leftHand: {position: [-1, 1.5, 0]}}}}};
+      controller.refresh(state);
+      const posedRig = controller.getDebugState();
       model.position.x = 4;
       window.dispatchEvent(new CustomEvent(
         'mod-viewer-model-transform-changed', {detail: {}}));
@@ -506,21 +1203,43 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       state = {...state, visible: true};
       controller.refresh(state);
       const shownAgain = controller.getDebugState();
+      state = {...state, ik: {...state.ik, enabled: false}};
+      controller.refresh(state);
+      const ikOff = controller.getDebugState();
+      state = {...state, ik: {...state.ik, enabled: true}};
+      controller.refresh(state);
+      state = {...state, model: {...state.model,
+        structureRevision: 2,
+        humanoidControlRig: {...state.model.humanoidControlRig, available: false}}};
+      controller.refresh(state);
+      const unavailable = controller.getDebugState();
       controller.dispose();
-      return {initial, selectedRoot, afterTransform, shownAgain};
+      return {initial, selectedRoot, posedRig, afterTransform, shownAgain,
+        ikOff, unavailable};
     }""")
     assert result["initial"]["staticObjectCount"] == 4
     assert result["initial"]["nodeCount"] == 3
     assert result["initial"]["edgeCount"] == 2
     assert result["initial"]["jointCount"] == 3
+    assert result["initial"]["humanoidOverlayVisible"]
+    assert result["initial"]["ikTargetVisible"]
+    assert result["initial"]["humanoidSegmentCount"] == 13
+    assert result["initial"]["humanoidLandmarkCount"] == 14
     assert result["initial"]["rebuildCount"] == 1
     assert result["selectedRoot"]["selectedJointId"] == 1
     assert result["selectedRoot"]["rebuildCount"] == 1
+    assert result["posedRig"]["rebuildCount"] == 1
     assert result["afterTransform"]["rebuildCount"] == 1
     assert result["afterTransform"]["modelFrameUpdateCount"] == \
-        result["initial"]["modelFrameUpdateCount"] + 2
+        result["initial"]["modelFrameUpdateCount"] + 3
     assert result["shownAgain"]["rebuildCount"] == 1
     assert result["shownAgain"]["selectedJointId"] is None
+    assert not result["ikOff"]["humanoidOverlayVisible"]
+    assert not result["ikOff"]["ikTargetVisible"]
+    assert result["shownAgain"]["ikTargetVisible"]
+    assert not result["unavailable"]["humanoidOverlayVisible"]
+    assert not result["unavailable"]["ikTargetVisible"]
+    assert result["unavailable"]["rebuildCount"] == 2
 
 
 def test_rig_overlay_builds_all_joints_and_toggles_visibility(module_page):
@@ -935,6 +1654,61 @@ def test_rig_overlay_switches_between_fk_and_ik_target_modes(module_page):
     assert result["fkSpace"] == "local"
     assert not result["fk"]["ikTargetVisible"]
     assert result["fk"]["controlsAttachedTo"] == "fk-proxy"
+
+
+def test_rig_overlay_exposes_primary_humanoid_ik_target_without_joint_selection(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera();
+      const canvas = document.createElement('canvas');
+      const model = new THREE.Object3D();
+      scene.add(model);
+      const source = {
+        key: 'model-rig', structureRevision: 7,
+        joints: [{jointId: 42, restPivot: [0, 2, 0]}],
+        humanoidControlRig: {controls: {
+          leftShoulder: {position: [0, 1, 0]},
+          leftElbow: {position: [.4, .8, 0]},
+          leftHand: {position: [.8, .7, 0]},
+        }},
+      };
+      const state = {visible: true, selectedJointId: 42, model: source,
+        ik: {enabled: true, available: true, activeLimbRole: 'left_arm',
+          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']}};
+      const solveCalls = [];
+      const finishCalls = [];
+      const controller = createRigOverlayController({
+        scene, camera, canvas, getMeshes: () => [model],
+        getRigState: () => state,
+        getRigJointPoseFrame: () => ({pivot: [0, 2, 0]}),
+        solveRigIkTarget: (...args) => solveCalls.push(args),
+        finishRigJointPose: (...args) => finishCalls.push(args),
+      });
+      controller.refresh(state);
+      const controls = await controller.ensureTransformControls();
+      const before = controller.getDebugState();
+      const attachedPosition = controls.object.position.toArray();
+      const mode = controls.getMode?.();
+      controls.dispatchEvent({type: 'dragging-changed', value: true});
+      controls.object.position.x += .2;
+      controls.dispatchEvent({type: 'objectChange'});
+      controls.dispatchEvent({type: 'dragging-changed', value: false});
+      controller.dispose();
+      return {before, mode, solveCalls: solveCalls.length,
+        finishCalls: finishCalls.length,
+        attachedPosition, target: solveCalls[0]?.[0]};
+    }""")
+    assert result["before"]["ikTargetVisible"]
+    assert result["before"]["controlsAttachedTo"] == "ik-target"
+    assert result["attachedPosition"] == pytest.approx([.8, .7, 0])
+    assert result["mode"] == "translate"
+    assert result["solveCalls"] == 2
+    assert result["finishCalls"] == 0
+    assert result["target"] == pytest.approx([1.0, .7, 0])
 
 
 def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
@@ -3486,3 +4260,1311 @@ def test_model_bone_stats_sum_same_ids_before_averaging(module_page):
         "affectedVertexCount": 1,
         "averageInfluence": pytest.approx(.25),
     }
+
+
+def test_geometry_humanoid_control_rig_is_rest_owned_and_density_invariant(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const points = [];
+      const addBox = (minX, maxX, minY, maxY, minZ, maxZ, step = .08) => {
+        for (let y = minY; y <= maxY + .001; y += step) {
+          for (let x = minX; x <= maxX + .001; x += step) {
+            points.push(x, y, minZ, x, y, maxZ);
+          }
+        }
+      };
+      const addLimb = (a, b, radius = .06) => {
+        for (let t = 0; t <= 1.001; t += .04) {
+          const x = a[0] + (b[0] - a[0]) * t;
+          const y = a[1] + (b[1] - a[1]) * t;
+          points.push(x - radius, y, -.04, x + radius, y, .04,
+            x, y - radius, -.04, x, y + radius, .04);
+        }
+      };
+      addBox(-.22, .22, .45, 1.7, -.08, .08);
+      addLimb([-.18, 1.48], [-.52, 1.30]);
+      addLimb([-.52, 1.30], [-.92, 1.20]);
+      addLimb([.18, 1.48], [.52, 1.30]);
+      addLimb([.52, 1.30], [.92, 1.20]);
+      addLimb([-.14, .55], [-.2, .28]);
+      addLimb([-.2, .28], [-.24, .02]);
+      addLimb([.14, .55], [.2, .28]);
+      addLimb([.2, .28], [.24, .02]);
+      const makeMesh = values => ({
+        userData: {humanoidRestPositions: new Float32Array(values)},
+        geometry: {attributes: {position: {array: new Float32Array(
+          values.map(value => value * 10))}}},
+      });
+      const axes = {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]};
+      const first = buildHumanoidControlRig({meshes: [makeMesh(points)], axes});
+      const dense = buildHumanoidControlRig({
+        meshes: [makeMesh(points.concat(points, points))], axes,
+      });
+      const withAccessory = buildHumanoidControlRig({meshes: [
+        makeMesh(points), {userData: {assetFill: true,
+          humanoidRestPositions: new Float32Array([100, 100, 100, 120, 100, 100])}},
+      ], axes});
+      const sameRestWhilePosed = buildHumanoidControlRig({
+        meshes: [makeMesh(points)], axes,
+      });
+      return {first, dense, withAccessory, sameRestWhilePosed};
+    }""")
+    for name in ("first", "dense", "withAccessory", "sameRestWhilePosed"):
+        rig = result[name]
+        assert rig["source"] == "proportional_template"
+        assert rig["mode"] == "proportional_template"
+        assert set(rig["controls"]) == {
+            "chest", "pelvis", "leftShoulder", "leftElbow", "leftHand",
+            "rightShoulder", "rightElbow", "rightHand", "leftHip",
+            "leftKnee", "leftFoot", "rightHip", "rightKnee", "rightFoot",
+        }
+        assert all("jointId" not in control for control in rig["controls"].values())
+        assert rig["diagnostics"]["voxelCount"] == 0
+        assert rig["diagnostics"]["failureReasons"] == []
+    assert result["first"]["controls"]["leftHand"]["position"][0] < \
+        result["first"]["controls"]["leftShoulder"]["position"][0]
+    height = result["first"]["diagnostics"]["characterHeight"]
+    assert result["first"]["diagnostics"]["proportionalTemplate"] == {
+        "characterHeight": pytest.approx(height),
+        "footLiftN": .015, "legLengthN": .515, "hipToNeckLengthN": .27,
+        "shoulderHalfWidthN": .055, "armLengthN": .33,
+        "armDropAngleDeg": 55, "kneeFraction": .40,
+        "elbowFraction": .50, "chestFraction": .50,
+        "leftFoot": pytest.approx(result["first"]["controls"]["leftFoot"]["position"]),
+        "rightFoot": pytest.approx(result["first"]["controls"]["rightFoot"]["position"]),
+        "neck": pytest.approx(result["first"]["diagnostics"]["templatePoints"]["neck"]),
+    }
+    assert result["first"]["controls"]["leftHand"]["position"][0] < \
+        result["first"]["controls"]["leftShoulder"]["position"][0]
+    assert result["first"]["controls"]["rightHand"]["position"][0] > \
+        result["first"]["controls"]["rightShoulder"]["position"][0]
+    assert result["first"]["controls"]["leftFoot"]["position"] == pytest.approx(
+        [-.24, .02, 0], abs=.08)
+    assert result["first"]["controls"]["rightFoot"]["position"] == pytest.approx(
+        [.24, .02, 0], abs=.08)
+    assert result["first"]["controls"]["leftHip"]["semantic"]["sideN"] == \
+        pytest.approx(result["first"]["controls"]["leftFoot"]["semantic"]["sideN"])
+    assert result["first"]["controls"]["rightHip"]["semantic"]["sideN"] == \
+        pytest.approx(result["first"]["controls"]["rightFoot"]["semantic"]["sideN"])
+    assert result["first"]["controls"]["leftFoot"]["position"][1] < \
+        result["first"]["controls"]["leftHip"]["position"][1]
+    assert result["dense"]["controls"]["leftHand"]["position"] == pytest.approx(
+        result["first"]["controls"]["leftHand"]["position"], abs=.05)
+    assert result["withAccessory"]["controls"]["rightFoot"]["position"] == pytest.approx(
+        result["first"]["controls"]["rightFoot"]["position"], abs=.05)
+    assert result["sameRestWhilePosed"]["controls"]["chest"]["position"] == \
+        pytest.approx(result["first"]["controls"]["chest"]["position"], abs=.001)
+
+
+def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildProportionalHumanoidRig,
+        DEFAULT_HUMANOID_PROPORTIONS} = await import(
+          './js/mesh/humanoid-proportional-template.js');
+      const axes = {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]};
+      const build = height => buildProportionalHumanoidRig({
+        characterHeight: height, leftFoot: [-.1 * height / 2, 0, -.02],
+        rightFoot: [.1 * height / 2, 0, .03], semanticAxes: axes,
+      });
+      const rig = build(2);
+      const small = build(.2);
+      const large = build(20);
+      const distance = (a, b) => Math.hypot(...a.map((value, index) =>
+        value - b[index]));
+      return {rig, small, large, defaults: DEFAULT_HUMANOID_PROPORTIONS,
+        lengths: {
+          arm: distance(rig.rightShoulder, rig.rightHand),
+          shoulderOffset: distance(rig.neck, rig.rightShoulder),
+          leg: distance(rig.rightHip, rig.rightFoot),
+          armDropAngleDeg: Math.atan2(
+            Math.abs(rig.rightHand[1] - rig.rightShoulder[1]),
+            Math.abs(rig.rightHand[0] - rig.rightShoulder[0])) * 180 / Math.PI,
+        }};
+    }""")
+    rig = result["rig"]
+    assert result["defaults"] == {
+        "footLift": .015, "legLength": .515, "hipToNeckLength": .27,
+        "shoulderHalfWidth": .055, "armLength": .33,
+        "armDropAngleDeg": 55, "kneeFraction": .40,
+        "elbowFraction": .50, "chestFraction": .50,
+    }
+    assert rig["detectedLeftFoot"][1] == pytest.approx(0)
+    assert rig["detectedRightFoot"][1] == pytest.approx(0)
+    assert rig["leftFoot"][1] == pytest.approx(.03)
+    assert rig["rightFoot"][1] == pytest.approx(.03)
+    assert rig["leftHip"][0] == pytest.approx(rig["leftFoot"][0])
+    assert rig["rightHip"][2] == pytest.approx(rig["rightFoot"][2])
+    assert rig["leftKnee"] == pytest.approx([
+        rig["leftHip"][index] + (rig["leftFoot"][index]
+        - rig["leftHip"][index]) * .40 for index in range(3)])
+    assert rig["rightKnee"] == pytest.approx([
+        rig["rightHip"][index] + (rig["rightFoot"][index]
+        - rig["rightHip"][index]) * .40 for index in range(3)])
+    assert rig["pelvis"] == pytest.approx([
+        (rig["leftHip"][index] + rig["rightHip"][index]) / 2 for index in range(3)])
+    assert rig["neck"][1] == pytest.approx(1.6)
+    assert result["lengths"] == {
+        "arm": pytest.approx(.66), "shoulderOffset": pytest.approx(.11),
+        "leg": pytest.approx(1.03), "armDropAngleDeg": pytest.approx(55),
+    }
+    assert result["small"]["proportions"] == result["large"]["proportions"]
+
+
+def test_estimate_foot_depth_uses_bottom_band(module_page):
+    result = module_page.evaluate("""async () => {
+      const {estimateFootDepth} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const sole = (side, center) => [
+        {x: side * .08, y: 0, z: center - .05},
+        {x: side * .12, y: .015, z: center + .05},
+        {x: side * .09, y: .02, z: center},
+      ];
+      const soles = sole(-1, .02).concat(sole(1, .04));
+      const torso = [];
+      for (let index = 0; index < 400; index += 1) {
+        torso.push({x: index % 2 ? -.1 : .1, y: .4 + index % 10 * .04,
+          z: index % 2 ? -1.2 : 1.2});
+      }
+      const rearHair = Array.from({length: 200}, (_, index) => ({
+        x: index % 2 ? -.4 : .4, y: .12 + index % 20 * .02, z: -2,
+      }));
+      const forwardFootUpper = [
+        {x: -.1, y: .04, z: 2}, {x: .1, y: .04, z: 2},
+      ];
+      const denseSoles = soles.concat(Array.from({length: 200}, (_, index) => ({
+        ...soles[index % soles.length],
+      })));
+      const fallback = estimateFootDepth([{x: 0, y: 0, z: .2}]);
+      return {
+        soles: estimateFootDepth(soles),
+        decorated: estimateFootDepth(
+          soles.concat(torso, rearHair, forwardFootUpper)),
+        dense: estimateFootDepth(denseSoles),
+        fallback,
+      };
+    }""")
+    assert result["soles"]["depthN"] == pytest.approx(.03)
+    assert result["soles"]["support"] == 3
+    assert result["soles"]["validSliceCount"] == 2
+    assert result["soles"]["rejectedSliceCount"] == 0
+    assert result["soles"]["spread"] == pytest.approx(.02)
+    assert result["soles"]["diagnostics"] == {
+        "method": "bottom_foot_band",
+        "heightRange": [0, .02],
+        "sideMinimum": .025,
+    }
+    assert result["soles"]["sliceCenters"][0] == {
+        "side": "left", "heightRange": [0, .02], "height01": .01,
+        "backDepth": pytest.approx(-.03), "frontDepth": pytest.approx(.07),
+        "center": pytest.approx(.02), "thickness": pytest.approx(.1),
+        "support": 3,
+    }
+    assert result["soles"]["sliceCenters"][1]["center"] == pytest.approx(.04)
+    assert result["decorated"]["depthN"] == pytest.approx(.03)
+    assert result["dense"]["depthN"] == pytest.approx(result["soles"]["depthN"])
+    assert result["fallback"]["depthN"] == 0
+    assert result["fallback"]["support"] == 0
+    assert result["fallback"]["validSliceCount"] == 0
+    assert result["fallback"]["rejectedSliceCount"] == 2
+    assert result["fallback"]["fallbackUsed"] is True
+    assert result["fallback"]["reason"] == "foot_depth_unavailable"
+
+
+def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const makeMesh = scale => {
+        const points = [];
+        for (let index = 0; index <= 20; index += 1) {
+          const y = .30 + index * .07;
+          for (const x of [-.12, 0, .12]) {
+            points.push(x, y, 0, x, y, 0);
+          }
+        }
+        for (const side of [-1, 1]) {
+          const center = side < 0 ? .02 * 1.7 : .04 * 1.7;
+          for (const y of [0, .01]) {
+            points.push(side * .24, y, center - .03,
+              side * .20, y, center + .03);
+          }
+        }
+        for (const side of [-1, 1]) {
+          for (const y of [.04, .08]) {
+            points.push(side * .24, y, side < 0 ? 1.7 : -1.7,
+              side * .20, y, side < 0 ? 1.7 : -1.7);
+          }
+        }
+        return {userData: {humanoidRestPositions: new Float32Array(
+          points.map(value => value * scale))}};
+      };
+      const build = scale => buildHumanoidControlRig({
+        meshes: [makeMesh(scale)],
+        axes: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]},
+      });
+      const rigs = {small: build(.1), normal: build(1), large: build(10)};
+      return Object.fromEntries(Object.entries(rigs).map(([name, rig]) => [name, {
+        characterHeight: rig.diagnostics.characterHeight,
+        bodyDepth: rig.diagnostics.bodyDepth,
+        controls: rig.controls,
+        detectedFeet: rig.diagnostics.detectedFeet,
+        skeletonDepth: rig.diagnostics.skeletonDepth,
+        controlDepthN: rig.diagnostics.controlDepthN,
+      }]));
+    }""")
+    for name, rig in result.items():
+        assert rig["skeletonDepth"]["fallbackUsed"] is False
+        assert rig["skeletonDepth"]["support"] == 4
+        assert rig["skeletonDepth"]["depthN"] == pytest.approx(.03, abs=.011)
+        assert rig["skeletonDepth"]["diagnostics"]["method"] == "bottom_foot_band"
+        assert rig["bodyDepth"] == pytest.approx(
+            rig["skeletonDepth"]["depthN"] * rig["characterHeight"], abs=.02)
+        assert rig["skeletonDepth"]["spread"] == pytest.approx(.02, abs=.011)
+        assert rig["controls"]["leftFoot"]["position"][0] == pytest.approx(
+            rig["detectedFeet"]["left"][0], abs=1e-6)
+        assert rig["controls"]["rightFoot"]["position"][0] == pytest.approx(
+            rig["detectedFeet"]["right"][0], abs=1e-6)
+        assert rig["controls"]["leftFoot"]["position"][1] == pytest.approx(
+            rig["detectedFeet"]["left"][1] + .015 * rig["characterHeight"], abs=1e-6)
+        assert rig["controls"]["rightFoot"]["position"][1] == pytest.approx(
+            rig["detectedFeet"]["right"][1] + .015 * rig["characterHeight"], abs=1e-6)
+        assert rig["controls"]["leftFoot"]["position"][2] == pytest.approx(
+            rig["bodyDepth"], abs=.011)
+        assert rig["controls"]["rightFoot"]["position"][2] == pytest.approx(
+            rig["bodyDepth"], abs=.011)
+        assert all(depth == pytest.approx(rig["skeletonDepth"]["depthN"], abs=1e-6)
+                   for depth in rig["controlDepthN"].values())
+        assert all(control["semantic"]["depthN"] == pytest.approx(
+            rig["skeletonDepth"]["depthN"], abs=1e-6)
+                   for control in rig["controls"].values())
+    for name in ("small", "large"):
+        assert result[name]["skeletonDepth"]["depthN"] == pytest.approx(
+            result["normal"]["skeletonDepth"]["depthN"], abs=.001)
+        assert result[name]["skeletonDepth"]["validSliceCount"] == \
+            result["normal"]["skeletonDepth"]["validSliceCount"]
+        assert result[name]["skeletonDepth"]["rejectedSliceCount"] == \
+            result["normal"]["skeletonDepth"]["rejectedSliceCount"]
+
+
+def test_geometry_humanoid_control_rig_respects_source_orientation_and_readiness(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const points = [];
+      const addBox = (minX, maxX, minY, maxY, minZ, maxZ, step = .08) => {
+        for (let y = minY; y <= maxY + .001; y += step) {
+          for (let x = minX; x <= maxX + .001; x += step) {
+            points.push(x, y, minZ, x, y, maxZ);
+          }
+        }
+      };
+      const addLimb = (a, b, radius = .06) => {
+        for (let t = 0; t <= 1.001; t += .04) {
+          const x = a[0] + (b[0] - a[0]) * t;
+          const y = a[1] + (b[1] - a[1]) * t;
+          points.push(x - radius, y, -.04, x + radius, y, .04,
+            x, y - radius, -.04, x, y + radius, .04);
+        }
+      };
+      addBox(-.22, .22, .45, 1.7, -.08, .08);
+      addLimb([-.18, 1.48], [-.52, 1.30]);
+      addLimb([-.52, 1.30], [-.92, 1.20]);
+      addLimb([.18, 1.48], [.52, 1.30]);
+      addLimb([.52, 1.30], [.92, 1.20]);
+      addLimb([-.14, .55], [-.2, .28]);
+      addLimb([-.2, .28], [-.24, .02]);
+      addLimb([.14, .55], [.2, .28]);
+      addLimb([.2, .28], [.24, .02]);
+      const makeMesh = values => ({
+        userData: {humanoidRestPositions: new Float32Array(values)},
+      });
+      // A Z-up source is what the camera's -90 degree X base orientation
+      // converts to the viewer's Y-up frame: (x, y, z) -> (x, -z, y).
+      const zUpPoints = [];
+      for (let index = 0; index < points.length; index += 3) {
+        zUpPoints.push(points[index], -points[index + 2], points[index + 1]);
+      }
+      const canonicalAxes = {
+        up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
+      };
+      const zUpAxes = {
+        up: [0, 0, 1], right: [1, 0, 0], forward: [0, -1, 0],
+      };
+      const canonical = buildHumanoidControlRig({
+        meshes: [makeMesh(points)], axes: canonicalAxes,
+        orientationState: {orientationInitialized: true,
+          baseOrientation: [0, 0, 0, 1], modelOrientationRevision: 1},
+      });
+      const zUp = buildHumanoidControlRig({
+        meshes: [makeMesh(zUpPoints)], axes: zUpAxes,
+        orientationState: {orientationInitialized: true,
+          baseOrientation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2],
+          modelOrientationRevision: 2},
+      });
+      const unavailable = buildHumanoidControlRig({
+        meshes: [makeMesh(zUpPoints)], axes: zUpAxes,
+        orientationState: {orientationInitialized: false,
+          baseOrientation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2],
+          modelOrientationRevision: 1},
+      });
+      const semantic = rig => Object.fromEntries(Object.entries(rig.controls)
+        .map(([key, control]) => [key, control.semantic]));
+      return {
+        canonical: {available: canonical.available, accepted: canonical.accepted,
+          controls: semantic(canonical), spans: canonical.diagnostics.semanticSpans,
+          axes: canonical.diagnostics.semanticAxes},
+        zUp: {available: zUp.available, accepted: zUp.accepted,
+          controls: semantic(zUp), spans: zUp.diagnostics.semanticSpans,
+          axes: zUp.diagnostics.semanticAxes,
+          baseOrientation: zUp.diagnostics.baseOrientation},
+        unavailable: {available: unavailable.available,
+          failureReasons: unavailable.diagnostics.failureReasons,
+          fitted: Object.values(unavailable.controls).some(control => control.fitted)},
+      };
+    }""")
+    assert result["canonical"]["available"]
+    assert result["canonical"]["accepted"]
+    assert result["zUp"]["available"]
+    assert result["zUp"]["accepted"]
+    for key, semantic in result["canonical"]["controls"].items():
+        assert result["zUp"]["controls"][key] == pytest.approx(semantic, abs=.001)
+    assert result["zUp"]["spans"] == pytest.approx(result["canonical"]["spans"], abs=.001)
+    assert result["zUp"]["axes"] == {
+        "up": pytest.approx([0, 0, 1]),
+        "right": pytest.approx([1, 0, 0]),
+        "forward": pytest.approx([0, -1, 0]),
+    }
+    assert result["zUp"]["baseOrientation"] == pytest.approx(
+        [-2 ** -0.5, 0, 0, 2 ** -0.5])
+    assert result["unavailable"] == {
+        "available": False,
+        "failureReasons": ["orientation_not_ready"],
+        "fitted": False,
+    }
+
+
+def test_camera_frame_known_game_orientation_policy(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {createCameraFrame, shouldApplyUprightRotation} = await import(
+        './js/scene/camera-frame.js');
+      const rawSize = {x: 4, y: .8, z: 2};
+      const decisions = {
+        zzz: shouldApplyUprightRotation({gameId: 'zzz', rawSize}),
+        wuwa: shouldApplyUprightRotation({gameId: 'WuWa', rawSize}),
+        recognizedOther: shouldApplyUprightRotation({
+          gameId: 'genshin', rawSize}),
+        unknown: shouldApplyUprightRotation({gameId: null, rawSize}),
+        unknownId: shouldApplyUprightRotation({
+          gameId: 'unknown', rawSize}),
+        ordinaryUnknown: shouldApplyUprightRotation({gameId: null,
+          rawSize: {x: 1, y: 2, z: 1}}),
+      };
+      const createFrame = () => {
+        const camera = new THREE.PerspectiveCamera(45, 4 / 3, .01, 100);
+        const controls = {
+          target: new THREE.Vector3(), update() {}, setCamera() {},
+          saveState() {},
+        };
+        const renderer = {
+          domElement: {getBoundingClientRect: () => ({
+            width: 800, height: 600, left: 0, right: 800,
+          })}, setSize() {},
+        };
+        const grid = {scale: new THREE.Vector3(1, 1, 1),
+          position: new THREE.Vector3()};
+        return createCameraFrame({camera, renderer, controls, grid,
+          cancelViewSnap() {}});
+      };
+      const zzzFrame = createFrame();
+      const zzzMesh = new THREE.Mesh(new THREE.BoxGeometry(4, .8, 2));
+      zzzFrame.fitTo([zzzMesh], {gameId: 'zzz'});
+      const zzzSize = new THREE.Box3().setFromObject(zzzMesh)
+        .getSize(new THREE.Vector3());
+      const wuwaFrame = createFrame();
+      const wuwaMesh = new THREE.Mesh(new THREE.BoxGeometry(4, .8, 2));
+      wuwaFrame.fitTo([wuwaMesh], {
+        gameId: 'wuwa', initialRotationY: Math.PI,
+      });
+      return {
+        decisions,
+        zzzHeight: zzzSize.y,
+        zzzOrientation: zzzFrame.getModelTransformState()
+          .baseOrientation.toArray(),
+        wuwaOrientation: wuwaFrame.getModelTransformState()
+          .baseOrientation.toArray(),
+      };
+    }""")
+    assert result["decisions"] == {
+        "zzz": True,
+        "wuwa": True,
+        "recognizedOther": False,
+        "unknown": False,
+        "unknownId": False,
+        "ordinaryUnknown": False,
+    }
+    assert result["zzzHeight"] == pytest.approx(2)
+    assert result["zzzOrientation"] == pytest.approx(
+        [-2 ** -0.5, 0, 0, 2 ** -0.5])
+    assert result["wuwaOrientation"] == pytest.approx(
+        [0, 2 ** -0.5, 2 ** -0.5, 0])
+
+
+def test_camera_frame_exposes_stable_base_orientation_state(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {createCameraFrame} = await import('./js/scene/camera-frame.js');
+      const camera = new THREE.PerspectiveCamera(45, 4 / 3, .01, 100);
+      const controls = {
+        target: new THREE.Vector3(),
+        update() {},
+        setCamera() {},
+        saveState() {},
+      };
+      const renderer = {
+        domElement: {getBoundingClientRect: () => ({
+          width: 800, height: 600, left: 0, right: 800,
+        })},
+        setSize() {},
+      };
+      const grid = {scale: new THREE.Vector3(1, 1, 1), position: new THREE.Vector3()};
+      const events = [];
+      const frame = createCameraFrame({camera, renderer, controls, grid,
+        cancelViewSnap() {}, onOrientationChanged: state => events.push(state)});
+      const before = frame.getModelTransformState();
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1));
+      frame.fitTo([mesh], {initialRotationY: Math.PI / 2});
+      const fitted = frame.getModelTransformState();
+      frame.rotateModelQuarterTurn([mesh]);
+      const turned = frame.getModelTransformState();
+      mesh.geometry.dispose();
+      const arrays = state => ({
+        orientation: state.orientation.toArray(),
+        baseOrientation: state.baseOrientation.toArray(),
+        userRotation: state.userRotation.toArray(),
+        orientationInitialized: state.orientationInitialized,
+        modelOrientationRevision: state.modelOrientationRevision,
+      });
+      return {before: arrays(before), fitted: arrays(fitted),
+        turned: arrays(turned), eventCount: events.length};
+    }""")
+    assert result["before"] == {
+        "orientation": [0, 0, 0, 1],
+        "baseOrientation": [0, 0, 0, 1],
+        "userRotation": [0, 0, 0, 1],
+        "orientationInitialized": False,
+        "modelOrientationRevision": 0,
+    }
+    assert result["fitted"]["orientationInitialized"]
+    assert result["fitted"]["modelOrientationRevision"] == 1
+    assert result["fitted"]["baseOrientation"] == pytest.approx(
+        [0, 2 ** -0.5, 0, 2 ** -0.5])
+    assert result["turned"]["modelOrientationRevision"] == 1
+    assert result["turned"]["baseOrientation"] == pytest.approx(
+        result["fitted"]["baseOrientation"])
+    assert result["turned"]["userRotation"] != pytest.approx(
+        result["fitted"]["userRotation"])
+    assert result["eventCount"] == 1
+
+
+@pytest.mark.parametrize("arm_drop", [.03, .25, .5],
+                         ids=["near-horizontal", "moderate", "steep"])
+def test_geometry_humanoid_control_rig_uses_fixed_arm_angle(module_page, arm_drop):
+    result = module_page.evaluate("""async armDrop => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const points = [];
+      for (let y = .4; y <= 1.7; y += .1) {
+        for (let x = -.2; x <= .2; x += .1) {
+          points.push(x, y, -.08, x, y, .08);
+        }
+      }
+      const limb = (a, b) => {
+        for (let t = 0; t <= 1.001; t += .04) {
+          const x = a[0] + (b[0] - a[0]) * t;
+          const y = a[1] + (b[1] - a[1]) * t;
+          points.push(x - .06, y, -.04, x + .06, y, .04);
+        }
+      };
+      for (const side of [-1, 1]) {
+        limb([side * .2, 1.5], [side * .52, 1.5 - armDrop]);
+        limb([side * .52, 1.5 - armDrop], [side * .9, 1.5 - armDrop * 2]);
+        limb([side * .15, .55], [side * .25, .02]);
+      }
+      return buildHumanoidControlRig({
+        meshes: [{userData: {humanoidRestPositions: new Float32Array(points)}}],
+        axes: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]},
+      });
+    }""", arm_drop)
+    assert result["diagnostics"]["failureReasons"] == [], repr(
+        result["diagnostics"])
+    assert result["diagnostics"]["proportionalTemplate"]["armDropAngleDeg"] == 55
+    height = result["diagnostics"]["characterHeight"]
+    assert math.dist(result["controls"]["rightShoulder"]["position"],
+                     result["controls"]["rightHand"]["position"]) == pytest.approx(
+                         .33 * height, abs=1e-6)
+    assert result["controls"]["leftHand"]["position"][0] < \
+        result["controls"]["leftShoulder"]["position"][0]
+    assert result["controls"]["rightHand"]["position"][0] > \
+        result["controls"]["rightShoulder"]["position"][0]
+
+
+@pytest.mark.parametrize("case", [
+    {"name": "short-arm", "hand": .41, "elbow": .30},
+    {"name": "boundary-0.27H", "hand": .45, "elbow": .31},
+    {"name": "preferred-arm", "hand": .48, "elbow": .34},
+    {"name": "boundary-0.42H", "hand": .60, "elbow": .43},
+    {"name": "long-preferred-edge", "hand": .66, "elbow": .48},
+    {"name": "overlong-decoy", "hand": .48, "elbow": .34, "decoy": True},
+    {"name": "premature-bridge", "hand": .48, "elbow": .34,
+     "centralBridge": True},
+    {"name": "wide-skirt", "hand": .48, "elbow": .34, "skirt": True},
+], ids=lambda case: case["name"])
+def test_geometry_humanoid_control_rig_ignores_extra_geometry_after_anchors(module_page, case):
+    result = module_page.evaluate("""async config => {
+      const {buildHumanoidControlRig} = await import(
+        './js/mesh/humanoid-control-rig.js');
+      const points = [];
+      const addBox = (minX, maxX, minY, maxY, step = .04) => {
+        for (let y = minY; y <= maxY + .001; y += step) {
+          for (let x = minX; x <= maxX + .001; x += step) {
+            points.push(x, y, -.06, x, y, .06);
+          }
+        }
+      };
+      const addLimb = (a, b, radius = .035) => {
+        for (let t = 0; t <= 1.001; t += .035) {
+          const x = a[0] + (b[0] - a[0]) * t;
+          const y = a[1] + (b[1] - a[1]) * t;
+          points.push(x - radius, y, -.04, x + radius, y, .04,
+            x, y - radius, -.04, x, y + radius, .04);
+        }
+      };
+      addBox(-.18, .18, .38, 1.0);
+      for (const side of [-1, 1]) {
+        addLimb([side * .18, .82], [side * config.elbow, .75]);
+        addLimb([side * config.elbow, .75], [side * config.hand, .68]);
+        addLimb([side * .13, .54], [side * .16, .28], .04);
+        addLimb([side * .16, .28], [side * .18, .02], .04);
+      }
+      if (config.centralBridge) addBox(-.08, .08, .28, .40, .05);
+      if (config.skirt) addBox(-.38, .38, .44, .64, .05);
+      if (config.decoy) for (const side of [-1, 1]) {
+        addLimb([side * .64, .75], [side * .82, .73], .02);
+      }
+      const rig = buildHumanoidControlRig({
+        meshes: [{userData: {humanoidRestPositions: new Float32Array(points)}}],
+        axes: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]},
+        options: {debugSearchRegions: true},
+      });
+      return {
+        controls: Object.fromEntries(['leftShoulder', 'rightShoulder', 'leftHand',
+          'rightHand', 'leftHip', 'rightHip', 'leftFoot', 'rightFoot']
+          .map(key => [key, rig.controls[key]])),
+        template: rig.template,
+        diagnostics: rig.diagnostics,
+      };
+    }""", case)
+    assert result["diagnostics"]["failureReasons"] == []
+    height = result["diagnostics"]["characterHeight"]
+    shoulder = result["controls"]["rightShoulder"]["position"]
+    hand = result["controls"]["rightHand"]["position"]
+    assert result["diagnostics"]["mode"] == "proportional_template"
+    assert math.dist(shoulder, hand) == pytest.approx(.33 * height, abs=1e-6)
+    assert math.dist(result["controls"]["leftShoulder"]["position"],
+                     result["controls"]["leftHand"]["position"]) == pytest.approx(.33 * height, abs=1e-6)
+    assert abs(result["controls"]["rightShoulder"]["position"][0]
+               - result["diagnostics"]["templatePoints"]["neck"][0]) == \
+        pytest.approx(.055 * height, abs=1e-6)
+    assert result["controls"]["leftFoot"]["position"] == pytest.approx(
+        [-.18, .02, 0], abs=.08)
+    assert result["controls"]["rightFoot"]["position"] == pytest.approx(
+        [.18, .02, 0], abs=.08)
+    assert result["controls"]["leftHip"]["semantic"]["sideN"] == pytest.approx(
+        result["controls"]["leftFoot"]["semantic"]["sideN"])
+    assert result["controls"]["rightHip"]["semantic"]["sideN"] == pytest.approx(
+        result["controls"]["rightFoot"]["semantic"]["sideN"])
+
+
+def test_humanoid_driver_binding_preserves_rest_offsets_and_avoids_double_transform(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const bindingModule = await import('./js/mesh/humanoid-rig-binding.js');
+      const positions = {
+        chest: [0, 1.4, 0], pelvis: [0, .55, 0],
+        leftShoulder: [-.1, 1.35, 0], leftElbow: [-.35, 1.18, 0],
+        leftHand: [-.58, 1.08, 0], rightShoulder: [.1, 1.35, 0],
+        rightElbow: [.35, 1.18, 0], rightHand: [.58, 1.08, 0],
+        leftHip: [-.1, .55, 0], leftKnee: [-.1, .30, 0],
+        leftFoot: [-.1, .05, 0], rightHip: [.1, .55, 0],
+        rightKnee: [.1, .30, 0], rightFoot: [.1, .05, 0],
+      };
+      const ids = Object.keys(positions);
+      const joints = ids.map((key, jointId) => ({
+        jointId, restPivot: positions[key], restCenter: positions[key],
+        restFrame: [0, 0, 0, 1],
+      }));
+      const parentById = Object.fromEntries(ids.map((key, id) => [
+        id, id === 0 ? null : id - 1]));
+      const childrenById = Object.fromEntries(ids.map((key, id) => [
+        id, id + 1 < ids.length ? [id + 1] : []]));
+      const modelRig = {
+        joints, jointPivotByJointId: new Map(joints.map(joint =>
+          [joint.jointId, joint.restPivot])),
+        restFrameByJointId: new Map(joints.map(joint =>
+          [joint.jointId, new THREE.Quaternion()])),
+        components: [{componentId: 0, rootId: 0, nodeIds: joints.map(joint =>
+          joint.jointId), parentById, childrenById}],
+        componentByJointId: new Map(joints.map(joint => [joint.jointId, 0])),
+      };
+      const controlRig = {
+        frame: {height: 1, forward: [0, 0, 1], right: [1, 0, 0]},
+        controls: Object.fromEntries(ids.map(key => [key,
+          {position: positions[key]}])),
+      };
+      const driverFor = key => key === 'chest' || key === 'pelvis'
+        ? 'torso' : key === 'leftShoulder' ? 'left_chest_shoulder'
+          : key === 'rightShoulder' ? 'right_chest_shoulder'
+            : key === 'leftElbow' ? 'left_upper_arm'
+              : key === 'leftHand' ? 'left_lower_arm'
+                : key === 'rightElbow' ? 'right_upper_arm'
+                  : key === 'rightHand' ? 'right_lower_arm'
+                    : key === 'leftHip' ? 'left_pelvis_hip'
+                      : key === 'leftKnee' || key === 'leftFoot'
+                        ? 'left_lower_leg'
+                        : key === 'rightHip' ? 'right_pelvis_hip'
+                          : 'right_lower_leg';
+      const heatBinding = {modelJointAssignments: new Map(ids.map((key, jointId) => [
+        jointId, {driverId: driverFor(key), limbRole: key.startsWith('left')
+          ? 'left_leg' : key.startsWith('right') ? 'right_leg' : null,
+          progress: .5, confidence: 'high', sourceBoneKeys: [], memberCount: 1},
+      ]))};
+      const binding = bindingModule.buildHumanoidRigBinding({
+        controlRig, modelRig, heatBinding,
+      });
+      const reset = bindingModule.buildHumanoidDriverBaseTransforms({
+        binding, controlRig, modelRig,
+      });
+      const posedControls = {...positions,
+        leftKnee: [-.16, .30, 0], leftFoot: [-.38, .12, 0]};
+      const posed = bindingModule.buildHumanoidDriverBaseTransforms({
+        binding, controlRig, modelRig, posedControls,
+      });
+      const lowerKnee = binding.jointBindings.get(ids.indexOf('leftKnee'));
+      const lowerFoot = binding.jointBindings.get(ids.indexOf('leftFoot'));
+      const resetError = [...reset.result.values()].reduce((max, matrix) =>
+        Math.max(max, matrix.elements.reduce((sum, value, index) =>
+          sum + Math.abs(value - new THREE.Matrix4().elements[index]), 0)), 0);
+      const lowerFootTarget = posed.driverWorldByJointId.get(ids.indexOf('leftFoot'));
+      return {
+        lowerKneeDriver: lowerKnee?.driverId,
+        lowerFootDriver: lowerFoot?.driverId,
+        directBindings: binding.jointBindings.size,
+        secondaryRoots: binding.secondaryAttachments.length,
+        resetError,
+        posedFoot: lowerFootTarget?.elements.slice(12, 15) || null,
+            bindingDiagnostics: binding.diagnostics,
+      };
+    }""")
+    assert result["lowerKneeDriver"] == "left_lower_leg"
+    assert result["lowerFootDriver"] == "left_lower_leg"
+    assert result["directBindings"] >= 10
+    assert result["secondaryRoots"] == 0
+    assert result["resetError"] < 1e-5
+    assert result["posedFoot"] is None
+
+
+def test_humanoid_control_ik_solves_virtual_two_bone_limb(module_page):
+    result = module_page.evaluate("""async () => {
+      const {solveHumanoidControlIk} = await import(
+        './js/mesh/humanoid-rig-ik.js');
+      const controlRig = {
+        frame: {forward: [0, 0, 1], right: [1, 0, 0]},
+        controls: {
+          leftShoulder: {position: [0, 1, 0]},
+          leftElbow: {position: [.5, .7, 0]},
+          leftHand: {position: [1, .7, 0]},
+        },
+      };
+      const solved = solveHumanoidControlIk({
+        controlRig, role: 'left_arm', target: [.2, .7, 0],
+      });
+      const hand = solved.positions.leftHand;
+      return {reached: solved.reached, residual: solved.residual,
+        hand, elbow: solved.positions.leftElbow,
+        distance: Math.hypot(hand[0] - .2, hand[1] - .7)};
+    }""")
+    assert result["reached"]
+    assert result["residual"] < 1e-5
+    assert result["distance"] < 1e-5
+
+
+def test_humanoid_ik_pose_merge_accumulates_limb_solutions(module_page):
+    result = module_page.evaluate("""async () => {
+      const {mergeHumanoidLimbPose, solveHumanoidControlIk} = await import(
+        './js/mesh/humanoid-rig-ik.js');
+      const controlRig = {
+        frame: {forward: [0, 0, 1], right: [1, 0, 0]},
+        controls: {
+          leftShoulder: {position: [-.2, 1.3, 0]},
+          leftElbow: {position: [-.5, 1.1, 0]},
+          leftHand: {position: [-.8, 1, 0]},
+          rightShoulder: {position: [.2, 1.3, 0]},
+          rightElbow: {position: [.5, 1.1, 0]},
+          rightHand: {position: [.8, 1, 0]},
+          leftHip: {position: [-.15, .55, 0]},
+          leftKnee: {position: [-.15, .3, 0]},
+          leftFoot: {position: [-.15, .05, 0]},
+          rightHip: {position: [.15, .55, 0]},
+          rightKnee: {position: [.15, .3, 0]},
+          rightFoot: {position: [.15, .05, 0]},
+        },
+      };
+      const leftArm = solveHumanoidControlIk({controlRig, role: 'left_arm',
+        target: [-.55, 1, 0]});
+      const afterLeftArm = mergeHumanoidLimbPose({}, leftArm.positions,
+        leftArm.keys);
+      const leftLeg = solveHumanoidControlIk({controlRig,
+        posedControls: afterLeftArm, role: 'left_leg', target: [-.05, .2, 0]});
+      const afterLeftLeg = mergeHumanoidLimbPose(afterLeftArm, leftLeg.positions,
+        leftLeg.keys);
+      const rightArm = solveHumanoidControlIk({controlRig,
+        posedControls: afterLeftLeg, role: 'right_arm', target: [.55, 1, 0]});
+      const finalPose = mergeHumanoidLimbPose(afterLeftLeg, rightArm.positions,
+        rightArm.keys);
+      const firstLeg = solveHumanoidControlIk({controlRig, role: 'left_leg',
+        target: [-.05, .2, 0]});
+      const legFirstPose = mergeHumanoidLimbPose({}, firstLeg.positions,
+        firstLeg.keys);
+      const secondArm = solveHumanoidControlIk({controlRig,
+        posedControls: legFirstPose, role: 'left_arm', target: [-.55, 1, 0]});
+      const reversePose = mergeHumanoidLimbPose(legFirstPose,
+        secondArm.positions, secondArm.keys);
+      return {
+        leftElbow: finalPose.leftElbow,
+        leftHand: finalPose.leftHand,
+        leftKnee: finalPose.leftKnee,
+        leftFoot: finalPose.leftFoot,
+        rightElbow: finalPose.rightElbow,
+        rightHand: finalPose.rightHand,
+        reverseLeftHand: reversePose.leftHand,
+        reverseLeftFoot: reversePose.leftFoot,
+      };
+    }""")
+    assert result["leftElbow"] != pytest.approx([-.5, 1.1, 0])
+    assert result["leftHand"] == pytest.approx([-.55, 1, 0], abs=1e-5)
+    assert result["leftKnee"] != pytest.approx([-.15, .3, 0])
+    assert result["leftFoot"] == pytest.approx([-.05, .2, 0], abs=1e-5)
+    assert result["rightElbow"] != pytest.approx([.5, 1.1, 0])
+    assert result["rightHand"] == pytest.approx([.55, 1, 0], abs=1e-5)
+    assert result["reverseLeftHand"] == pytest.approx([-.55, 1, 0], abs=1e-5)
+    assert result["reverseLeftFoot"] == pytest.approx([-.05, .2, 0], abs=1e-5)
+
+
+def test_humanoid_binding_uses_semantic_domains_and_bounded_terminals(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const bindingModule = await import('./js/mesh/humanoid-rig-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .55, 0],
+        leftShoulder: [-.1, 1.35, 0], leftElbow: [-.35, 1.18, 0],
+        leftHand: [-.58, 1.08, 0], rightShoulder: [.1, 1.35, 0],
+        rightElbow: [.35, 1.18, 0], rightHand: [.58, 1.08, 0],
+        leftHip: [-.1, .55, 0], leftKnee: [-.1, .3, 0],
+        leftFoot: [-.1, .05, 0], rightHip: [.1, .55, 0],
+        rightKnee: [.1, .3, 0], rightFoot: [.1, .05, 0],
+      };
+      const beyondHand = [-.69, 1.04, 0];
+      const positions = [
+        controls.chest, beyondHand, [0, 1.58, 0], [0, 1.63, 0],
+        [0, 1.35, .01],
+      ];
+      const joints = positions.map((restPivot, jointId) => ({jointId,
+        restPivot, restCenter: restPivot, restFrame: [0, 0, 0, 1]}));
+      const parentById = {0: null, 1: null, 2: null, 3: 2, 4: null};
+      const childrenById = {0: [], 1: [], 2: [3], 3: [], 4: []};
+      const modelRig = {
+        joints,
+        jointPivotByJointId: new Map(joints.map(joint =>
+          [joint.jointId, joint.restPivot])),
+        restFrameByJointId: new Map(joints.map(joint =>
+          [joint.jointId, new THREE.Quaternion()])),
+        components: [{componentId: 0, rootId: 0, nodeIds: joints.map(joint =>
+          joint.jointId), parentById, childrenById}],
+        componentByJointId: new Map(joints.map(joint => [joint.jointId, 0])),
+      };
+      const controlRig = {frame: {height: 1.5, up: [0, 1, 0],
+        forward: [0, 0, 1], right: [1, 0, 0]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const heatBinding = {modelJointAssignments: new Map([[1, {
+        driverId: 'left_lower_arm', limbRole: 'left_arm', progress: 1,
+        confidence: 'high', sourceBoneKeys: ['body#bone=1'], memberCount: 1,
+      }]])};
+      const binding = bindingModule.buildHumanoidRigBinding({controlRig, modelRig,
+        heatBinding});
+      const noHeatBinding = bindingModule.buildHumanoidRigBinding({controlRig,
+        modelRig});
+      const diagnostic = jointId => bindingModule.getHumanoidJointBindingDiagnostics(
+        binding, jointId);
+      return {
+        terminal: binding.jointBindings.get(1)?.driverId,
+        terminalMethod: binding.jointBindings.get(1)?.bindingMethod,
+        noHeatTerminal: noHeatBinding.jointBindings.get(1)?.driverId || null,
+        head: diagnostic(2), child: diagnostic(3), neighbor: diagnostic(4),
+      };
+    }""")
+    assert result["terminal"] == "left_lower_arm"
+    assert result["terminalMethod"] == "heat_connectivity"
+    assert result["noHeatTerminal"] is None
+    assert result["head"]["bindingType"] == "secondary"
+    assert result["head"]["driverId"] == "torso"
+    assert result["head"]["secondaryRootId"] == 2
+    assert result["head"]["secondarySubtreeSize"] == 2
+    assert result["neighbor"]["driverId"] not in {"left_upper_arm", "left_lower_arm"}
+
+
+def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branches(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const centers = {
+        1: [-.2, 1.3, 0], 2: [-.35, 1.15, 0], 3: [-.5, 1, 0],
+        4: [-.65, .9, 0], 5: [-.9, .75, 0], 6: [0, 1.4, 0],
+        7: [-.2, .4, 0],
+      };
+      const edge = (boneA, boneB, jointCenter) => ({boneA, boneB,
+        productOverlap: 1, minOverlap: .4, containment: .2, jaccard: .1,
+        treeEdgeScore: .2, jointCenter});
+      const relationships = [
+        edge(1, 2, [-.275, 1.225, 0]), edge(2, 3, [-.425, 1.075, 0]),
+        edge(3, 4, [-.575, .95, 0]), edge(4, 5, [-.725, .85, 0]),
+        edge(1, 6, [-.1, 1.35, 0]), edge(1, 7, [-.2, .85, 0]),
+      ];
+      const sourceRig = {sourceKey: 'body', influenceGraph: {
+        evidenceMode: 'surface', nodes: Object.entries(centers).map(
+          ([boneId, weightedCenter]) => ({boneId: Number(boneId), weightedCenter,
+            weightedRadius: .01, totalWeight: 1, affectedMeasure: 1,
+          affectedVertexCount: 10})), relationships,
+      }, vertexEvidence: [{positions: controls.leftShoulder,
+        indices: [1], weights: [1], influenceCount: 1}]};
+      const partialRig = {sourceKey: 'cloth', influenceGraph: {
+        evidenceMode: 'vertex',
+        nodes: [
+          {boneId: 20, weightedCenter: centers[4], weightedRadius: .01,
+            totalWeight: 1, affectedVertexCount: 10},
+          {boneId: 21, weightedCenter: centers[5], weightedRadius: .01,
+            totalWeight: 1, affectedVertexCount: 10},
+        ],
+        relationships: [edge(20, 21, [-.725, .85, 0])].map(item => ({
+          ...item, productOverlap: 0, sharedVertexCount: 3,
+        })),
+      }, vertexEvidence: [{positions: [...centers[4], ...centers[5]],
+        indices: [20, 21], weights: [1, 1], influenceCount: 1}]};
+      const sourceBoneToModelJointId = new Map(Object.keys(centers).map(
+        boneId => [`body#bone=${boneId}`, Number(boneId)]));
+      sourceBoneToModelJointId.set('cloth#bone=20', 20);
+      sourceBoneToModelJointId.set('cloth#bone=21', 21);
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig, partialRig], modelRig: {sourceBoneToModelJointId}});
+      const source = binding.sourceResults.body.left_arm;
+      const partial = binding.sourceResults.cloth.left_arm;
+      return {
+        mainPath: source.mainPathBoneIds,
+        complete: source.complete,
+        maxProgress: source.maxProgress,
+        partialPath: partial.mainPathBoneIds,
+        partialComplete: partial.complete,
+        partialSeedReason: partial.seedReason,
+        armAssignments: source.assignments.map(item => [
+          item.boneId, item.driverId]).sort((left, right) => left[0] - right[0]),
+        assignments: [...binding.sourceBoneAssignments.values()].map(item => [
+          item.boneId, item.driverId]).sort((left, right) => left[0] - right[0]),
+        modelDrivers: [...binding.modelJointAssignments.values()].map(item => [
+          item.boneId, item.driverId]).sort((left, right) => left[0] - right[0]),
+        conflicts: binding.conflicts,
+      };
+    }""")
+    assert result["mainPath"] == [1, 2, 3, 4, 5]
+    assert result["complete"]
+    assert result["maxProgress"] >= .8
+    assert result["partialPath"] == []
+    assert not result["partialComplete"]
+    assert result["partialSeedReason"] == "no_heat_seed"
+    assert result["armAssignments"] == [
+        [1, "left_upper_arm"], [2, "left_upper_arm"],
+        [3, "left_lower_arm"], [4, "left_lower_arm"],
+        [5, "left_lower_arm"],
+    ]
+    assert [item for item in result["assignments"] if item[0] <= 5] == \
+        result["armAssignments"]
+    assert result["conflicts"] == []
+
+
+def test_humanoid_heat_binding_keeps_incomplete_paths_diagnostic_only(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const edge = (boneA, boneB, jointCenter) => ({boneA, boneB,
+        productOverlap: 1, minOverlap: .4, containment: .2, jaccard: .1,
+        treeEdgeScore: .2, jointCenter});
+      const sourceRig = {sourceKey: 'partial', influenceGraph: {
+        evidenceMode: 'surface',
+        nodes: [
+          {boneId: 1, weightedCenter: controls.leftShoulder,
+            weightedRadius: .01, totalWeight: 1, affectedMeasure: 1},
+          {boneId: 2, weightedCenter: controls.leftElbow,
+            weightedRadius: .01, totalWeight: 1, affectedMeasure: 1},
+          {boneId: 3, weightedCenter: [-.65, .9, 0],
+            weightedRadius: .01, totalWeight: 1, affectedMeasure: 1},
+        ],
+        relationships: [
+          edge(1, 2, [-.35, 1.15, 0]),
+          edge(2, 3, [-.575, .95, 0]),
+        ],
+      }, vertexEvidence: [{positions: controls.leftShoulder,
+        indices: [1], weights: [1], influenceCount: 1}]};
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig], modelRig: {
+          sourceBoneToModelJointId: new Map([
+            ['partial#bone=1', 1], ['partial#bone=2', 2],
+            ['partial#bone=3', 3],
+          ]),
+        }});
+      const arm = binding.sourceResults.partial.left_arm;
+      return {
+        path: arm.mainPathBoneIds,
+        complete: arm.complete,
+        assignments: arm.assignments,
+        sourceAssignmentCount: binding.sourceBoneAssignments.size,
+        modelAssignmentCount: binding.modelJointAssignments.size,
+      };
+    }""")
+    assert result["path"] == [1, 2, 3]
+    assert not result["complete"]
+    assert result["assignments"] == []
+    assert result["sourceAssignmentCount"] == 0
+    assert result["modelAssignmentCount"] == 0
+
+
+def test_humanoid_heat_binding_marks_cross_limb_model_joint_conflicts(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const sourceRig = {sourceKey: 'body', influenceGraph: {
+        evidenceMode: 'surface',
+        nodes: [
+          {boneId: 1, weightedCenter: controls.leftHand, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+          {boneId: 2, weightedCenter: controls.leftFoot, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+          {boneId: 3, weightedCenter: controls.leftElbow, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+          {boneId: 4, weightedCenter: controls.leftKnee, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+          {boneId: 5, weightedCenter: controls.leftShoulder, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+          {boneId: 6, weightedCenter: controls.leftHip, weightedRadius: .01,
+            totalWeight: 1, affectedMeasure: 1},
+        ], relationships: [
+          {boneA: 1, boneB: 3, productOverlap: 1, minOverlap: .4,
+            containment: .2, jaccard: .1, treeEdgeScore: .2,
+            jointCenter: [-.65, .9, 0]},
+          {boneA: 2, boneB: 4, productOverlap: 1, minOverlap: .4,
+            containment: .2, jaccard: .1, treeEdgeScore: .2,
+            jointCenter: [-.2, .125, 0]},
+          {boneA: 5, boneB: 3, productOverlap: 1, minOverlap: .4,
+            containment: .2, jaccard: .1, treeEdgeScore: .2,
+            jointCenter: [-.35, 1.15, 0]},
+          {boneA: 6, boneB: 4, productOverlap: 1, minOverlap: .4,
+            containment: .2, jaccard: .1, treeEdgeScore: .2,
+            jointCenter: [-.2, .375, 0]},
+        ],
+      }, vertexEvidence: [{positions: [...controls.leftShoulder,
+        ...controls.leftHip], indices: [5, 6], weights: [1, 1],
+        influenceCount: 1}]};
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const sourceBoneToModelJointId = new Map([
+        ['body#bone=1', 7], ['body#bone=2', 7],
+        ['body#bone=3', 8], ['body#bone=4', 9],
+        ['body#bone=5', 10], ['body#bone=6', 11],
+      ]);
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig], modelRig: {sourceBoneToModelJointId}});
+      return {
+        assignment: binding.modelJointAssignments.get(7) || null,
+        conflicts: binding.conflicts,
+      };
+    }""")
+    assert result["assignment"] is None
+    assert any(conflict["reason"] == "mixed_primary_binding"
+               and conflict.get("jointId") == 7
+               for conflict in result["conflicts"])
+
+
+def test_humanoid_heat_binding_rejects_close_centers_without_edges(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const sourceRig = {sourceKey: 'body', influenceGraph: {
+        evidenceMode: 'surface',
+        nodes: [{boneId: 1, weightedCenter: controls.leftHand,
+          weightedRadius: .01, totalWeight: 1, affectedMeasure: 1}],
+        relationships: [],
+      }};
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig], modelRig: {
+          sourceBoneToModelJointId: new Map([['body#bone=1', 1]]),
+        }});
+      return {
+        sourceAssignments: binding.sourceBoneAssignments.size,
+        modelAssignments: binding.modelJointAssignments.size,
+      };
+    }""")
+    assert result == {"sourceAssignments": 0, "modelAssignments": 0}
+
+
+def test_humanoid_heat_binding_rejects_head_chest_seed_contamination(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidHeatBinding} = await import(
+        './js/mesh/humanoid-heat-binding.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const centers = {
+        1: [0, 1.62, 0], 2: [0, 1.5, 0], 3: [0, 1.4, 0],
+        4: [-.2, 1.3, 0], 5: [-.5, 1, 0], 6: [-.7, .9, 0],
+        7: [-.85, .8, 0],
+      };
+      const edge = (boneA, boneB, jointCenter) => ({boneA, boneB,
+        productOverlap: 1, minOverlap: .4, containment: .2, jaccard: .1,
+        treeEdgeScore: .2, jointCenter});
+      const relationships = [
+        edge(1, 2, [0, 1.56, 0]), edge(2, 3, [0, 1.45, 0]),
+        edge(3, 4, [-.1, 1.35, 0]), edge(4, 5, [-.35, 1.15, 0]),
+        edge(5, 6, [-.6, .95, 0]), edge(6, 7, [-.78, .85, 0]),
+      ];
+      const sourceRig = {sourceKey: 'beidou', influenceGraph: {
+        evidenceMode: 'surface',
+        nodes: Object.entries(centers).map(([boneId, weightedCenter]) => ({
+          boneId: Number(boneId), weightedCenter, weightedRadius: .01,
+          totalWeight: 1, affectedMeasure: 1,
+        })), relationships,
+      }, vertexEvidence: [{
+        positions: controls.leftShoulder,
+        indices: [1, 2, 3, 4, 5], weights: [1, 1, 1, 1, .8],
+        influenceCount: 5,
+      }]};
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const binding = buildHumanoidHeatBinding({controlRig,
+        sourceRigs: [sourceRig], modelRig: {
+          sourceBoneToModelJointId: new Map(),
+        }});
+      const arm = binding.sourceResults.beidou.left_arm;
+      return {
+        seeds: arm.seedBoneIds,
+        path: arm.mainPathBoneIds,
+        assignments: arm.assignments.map(item => item.boneId),
+      };
+    }""")
+    assert result["seeds"] == [4]
+    assert result["path"] == [4, 5, 6, 7]
+    assert not set(result["assignments"]) & {1, 2, 3}
+
+
+def test_humanoid_heat_driver_transforms_are_source_local(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidSourceBoneDriverTransforms} = await import(
+        './js/mesh/humanoid-rig-binding.js');
+      const {applyWeightedTransformDeformation} = await import(
+        './js/mesh/weight-deformation.js');
+      const controls = {
+        chest: [0, 1.4, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1, 0],
+        leftHand: [-.8, .8, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1, 0], rightHand: [.8, .8, 0],
+        leftHip: [-.2, .5, 0], leftKnee: [-.2, .25, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.2, .5, 0],
+        rightKnee: [.2, .25, 0], rightFoot: [.2, 0, 0],
+      };
+      const controlRig = {frame: {height: 1.4, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const heatBinding = {sourceBoneAssignments: new Map([
+        ['body#bone=2', {sourceKey: 'body', boneId: 2,
+          driverId: 'left_lower_arm'}],
+      ])};
+      const layers = buildHumanoidSourceBoneDriverTransforms({heatBinding,
+        controlRig, posedControls: {leftHand: [-.6, .8, 0]}});
+      const body = new Map([[2, layers.get('body').get(2).matrix]]);
+      const hair = layers.get('hair') || new Map();
+      const baseline = new Float32Array([-.8, .8, 0]);
+      const bodyOutput = applyWeightedTransformDeformation(
+        baseline, new Uint32Array([2]), new Float32Array([1]), 1, body);
+      const hairOutput = applyWeightedTransformDeformation(
+        baseline, new Uint32Array([7]), new Float32Array([1]), 1, hair);
+      return {
+        bodyBound: layers.get('body')?.has(2) || false,
+        hairBound: layers.get('hair')?.has(7) || false,
+        bodyOutput: [...bodyOutput], hairOutput: [...hairOutput],
+      };
+    }""")
+    assert result["bodyBound"]
+    assert not result["hairBound"]
+    assert result["bodyOutput"] != pytest.approx([-.8, .8, 0])
+    assert result["hairOutput"] == pytest.approx([-.8, .8, 0])
+
+
+def test_driver_translation_counts_as_active_pose_joint(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {activePoseJointIds} = await import('./js/mesh/weight-runtime.js');
+      const ids = activePoseJointIds({
+        manualRotations: new Map([[1, {x: 0, y: 0, z: 0, w: 1}]]),
+        driverTransforms: new Map([
+          [1, new THREE.Matrix4()],
+          [2, new THREE.Matrix4().makeTranslation(.2, 0, 0)],
+        ]),
+        quaternionIsIdentity: value => Math.abs(value.w) === 1
+          && value.x === 0 && value.y === 0 && value.z === 0,
+      });
+      return ids;
+    }""")
+    assert result == [2]
+
+
+def test_humanoid_ik_driver_changes_a_weighted_mesh_vertex(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {buildHumanoidRigBinding,
+        buildHumanoidSourceBoneDriverTransforms} = await import(
+          './js/mesh/humanoid-rig-binding.js');
+      const {solveHumanoidControlIk} = await import(
+        './js/mesh/humanoid-rig-ik.js');
+      const {applyWeightedTransformDeformationInto} = await import(
+        './js/mesh/weight-deformation.js');
+      const controls = {
+        chest: [0, 1.5, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1.1, 0],
+        leftHand: [-.8, 1, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1.1, 0], rightHand: [.8, 1, 0],
+        leftHip: [-.15, .5, 0], leftKnee: [-.15, .25, 0],
+        leftFoot: [-.15, 0, 0], rightHip: [.15, .5, 0],
+        rightKnee: [.15, .25, 0], rightFoot: [.15, 0, 0],
+      };
+      const controlRig = {
+        accepted: true, frame: {height: 1.5, forward: [0, 0, 1],
+          right: [1, 0, 0]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}])),
+      };
+      const modelRig = {
+        joints: [{jointId: 0, restPivot: controls.leftHand,
+          restCenter: controls.leftHand, restFrame: [0, 0, 0, 1]}],
+        jointPivotByJointId: new Map([[0, controls.leftHand]]),
+        restFrameByJointId: new Map([[0, new THREE.Quaternion()]]),
+        components: [{componentId: 0, rootId: 0, nodeIds: [0],
+          parentById: {0: null}, childrenById: {0: []}}],
+        componentByJointId: new Map([[0, 0]]),
+      };
+      const heatBinding = {
+        modelJointAssignments: new Map([[0, {
+          driverId: 'left_lower_arm', limbRole: 'left_arm', progress: 1,
+          confidence: 'high', sourceBoneKeys: ['body#bone=0'], memberCount: 1,
+        }]]),
+        sourceBoneAssignments: new Map([['body#bone=0', {
+          sourceKey: 'body', boneId: 0, driverId: 'left_lower_arm',
+        }]]),
+      };
+      const binding = buildHumanoidRigBinding({controlRig, modelRig,
+        heatBinding});
+      const solved = solveHumanoidControlIk({
+        controlRig, role: 'left_arm', target: [-.55, 1, 0],
+      });
+      const sourceDrivers = buildHumanoidSourceBoneDriverTransforms({
+        heatBinding, controlRig, posedControls: solved.positions,
+      });
+      const driver = new Map([[0,
+        sourceDrivers.get('body').get(0).matrix]]);
+      const baseline = new Float32Array(controls.leftHand);
+      const output = new Float32Array(baseline);
+      const changedVertexCount = applyWeightedTransformDeformationInto(
+        output, baseline, new Uint32Array([0]), new Float32Array([1]), 1,
+        driver, new Uint32Array([0]));
+      return {
+        driverId: binding.jointBindings.get(0)?.driverId,
+        solved: solved.reached,
+        changedVertexCount,
+        output: [...output],
+        baseline: [...baseline],
+      };
+    }""")
+    assert result["driverId"] == "left_lower_arm"
+    assert result["solved"]
+    assert result["changedVertexCount"] == 1
+    assert result["output"] != pytest.approx(result["baseline"])

@@ -53,15 +53,31 @@ import {
   resolveRigPreset, serializeRigPose, validateRigPresetName,
 } from './weight-rig-presets.js';
 import {
-  aggregateModelBoneStats, EMPTY_ACTIVE_VERTICES, createRigRuntimeState,
-  createWeightRuntimeState,
+  activePoseJointIds, aggregateModelBoneStats, EMPTY_ACTIVE_VERTICES,
+  createRigRuntimeState, createWeightRuntimeState, matrixIsIdentity,
   RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
 import {
-  detectLimbPath, RIG_LIMB_ROLES, RIG_LIMB_ROLE_INFO,
-  characterForwardFromOrientation, resolveLimbBendDirection,
-  selectLimbBendJoint, solveLimbIk,
+  RIG_LIMB_ROLES, RIG_LIMB_ROLE_INFO,
+  characterAxesFromOrientation, resolveLimbBendDirection,
+  rigPathBetweenJointIds, selectLimbBendJoint, solveLimbIk,
 } from './weight-rig-ik.js';
+import {
+  buildHumanoidSemanticFrame, resolveHumanoidLimbMapping,
+  selectHumanoidKneeJoint,
+} from './weight-rig-humanoid.js';
+import {
+  HUMANOID_DRIVER_SEGMENTS, buildHumanoidDriverBaseTransforms,
+  buildHumanoidSourceBoneDriverTransforms,
+  buildHumanoidRigBinding,
+  getHumanoidJointBindingDiagnostics,
+  serializeHumanoidDriverFrames, serializeHumanoidRigBinding,
+} from './humanoid-rig-binding.js';
+import {buildHumanoidControlRig} from './humanoid-control-rig.js';
+import {mergeHumanoidLimbPose, solveHumanoidControlIk} from './humanoid-rig-ik.js';
+import {
+  buildHumanoidHeatBinding, serializeHumanoidHeatBinding,
+} from './humanoid-heat-binding.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -71,6 +87,8 @@ const sourcePhysicsRigs = new Map();
 const sourceSkinningRigs = new Map();
 let modelSkinningRig = null;
 let modelWeightGeneration = 0;
+let humanoidControlRigCacheKey = '';
+let humanoidControlRigSnapshotCache = null;
 // Rig analysis can outlive a model switch or shape invalidation. Keep its
 // identity separate from weight loading so a new Rig request may reuse an
 // in-flight weight request without accepting stale rig state.
@@ -86,6 +104,18 @@ let resolvedLimbMappings = null;
 let resolvedLimbMappingsStructureRevision = null;
 let resolvedLimbMappingsMetadataRevision = -1;
 let limbMappingMetadataRevision = 0;
+
+function invalidateHumanoidDetection() {
+  humanoidControlRigCacheKey = '';
+  humanoidControlRigSnapshotCache = null;
+  modelRigState.humanoidControlRig = null;
+  modelRigState.humanoidBinding = null;
+  modelRigState.humanoidHeatBinding = null;
+  modelRigState.humanoidPose = {};
+  modelRigState.humanoidBendSigns = {};
+  modelRigState.humanoidRuntimeDiagnostics = null;
+  modelRigState.humanoidStructureRevision = null;
+}
 
 const physicsRuntime = createWeightPhysicsRuntime({
   states,
@@ -194,6 +224,11 @@ function quaternionIsIdentity(value) {
     && Math.abs(Math.abs(w) - 1) < 1e-8;
 }
 
+function entriesForCollection(collection) {
+  if (collection instanceof Map) return [...collection.entries()];
+  return Object.entries(collection || {});
+}
+
 function rigComponentForBone(rig, boneId) {
   const componentId = rig?.inferredForest?.componentByBoneId?.[boneId];
   return Number.isInteger(Number(componentId))
@@ -213,11 +248,14 @@ function rebuildSourceRigRestFrames(rig) {
 }
 
 function modelRigSnapshotForState({debug = false} = {}) {
-  return modelRigSnapshot(modelSkinningRig, {
+  const snapshot = modelRigSnapshot(modelSkinningRig, {
     debug,
     modelRigState,
     quaternionIsIdentity,
+    matrixIsIdentity,
   });
+  if (snapshot) snapshot.humanoidControlRig = humanoidControlRigSnapshot();
+  return snapshot;
 }
 
 function modelComponentForJoint(jointId) {
@@ -245,25 +283,6 @@ function emptyLimbMapping(role, reason = 'unmapped') {
   };
 }
 
-function descendantPath(component, anchorJointId, endJointId) {
-  const path = [];
-  const visited = new Set();
-  let current = Number(endJointId);
-  while (Number.isInteger(current) && !visited.has(current)) {
-    visited.add(current);
-    path.unshift(current);
-    if (current === Number(anchorJointId)) return path;
-    current = parentForComponent(component, current);
-  }
-  return [];
-}
-
-function parentForComponent(component, jointId) {
-  const value = component?.parentById?.[jointId]
-    ?? component?.parentById?.[String(jointId)];
-  return value === null || value === undefined ? null : Number(value);
-}
-
 function compactLimbMapping(mapping) {
   return {
     role: mapping.role,
@@ -280,13 +299,160 @@ function compactLimbMapping(mapping) {
     endSource: mapping.endSource,
     bendDirection: mapping.bendDirection
       ? [...mapping.bendDirection] : null,
+    controlKeys: Array.isArray(mapping.controlKeys)
+      ? [...mapping.controlKeys] : null,
     bendDirectionSource: mapping.bendDirectionSource,
     bendDirectionStrength: Number(mapping.bendDirectionStrength) || 0,
   };
 }
 
+function humanoidSnapshot() {
+  const rig = modelRigState.humanoidControlRig;
+  const binding = modelRigState.humanoidBinding;
+  return {
+    status: modelRigState.humanoidStatus || '',
+    structureRevision: modelRigState.humanoidStructureRevision,
+    generation: modelWeightGeneration,
+    fitRuntimeMs: Number(modelRigState.humanoidFitRuntimeMs) || 0,
+    bindingRuntimeMs: Number(modelRigState.humanoidBindingRuntimeMs) || 0,
+    availableRoles: rig?.accepted ? [...RIG_LIMB_ROLES] : [],
+    binding: binding?.diagnostics || null,
+    heatBinding: modelRigState.humanoidHeatBinding,
+    selectedBinding: getHumanoidJointBindingDiagnostics(
+      binding, modelRigState.selectedJointId),
+    runtime: modelRigState.humanoidRuntimeDiagnostics
+      ? {...modelRigState.humanoidRuntimeDiagnostics,
+        manualPoseJointIds: [
+          ...(modelRigState.humanoidRuntimeDiagnostics.manualPoseJointIds || []),
+        ],
+        humanoidDrivenJointIds: [
+          ...(modelRigState.humanoidRuntimeDiagnostics.humanoidDrivenJointIds
+            || []),
+        ],
+        nonIdentityDriverSegments: [
+          ...(modelRigState.humanoidRuntimeDiagnostics
+            .nonIdentityDriverSegments || []),
+        ],
+        affectedModelJointIds: [
+          ...(modelRigState.humanoidRuntimeDiagnostics.affectedModelJointIds
+            || []),
+        ],
+        affectedSourceBones: (
+          modelRigState.humanoidRuntimeDiagnostics.affectedSourceBones || [])
+          .map(item => ({...item, boneIds: [...(item.boneIds || [])]})),
+      } : null,
+  };
+}
+
 function characterForwardForRole() {
-  return characterForwardFromOrientation(getModelTransformState?.());
+  return humanoidSemanticAxes().forward;
+}
+
+function humanoidSemanticAxes({requireReady = false} = {}) {
+  const orientationState = getModelTransformState?.();
+  if (requireReady && orientationState?.orientationInitialized !== true) return null;
+  const axes = characterAxesFromOrientation(orientationState);
+  if (axes) return axes;
+  if (requireReady) return null;
+  return {
+    up: new THREE.Vector3(0, 1, 0),
+    forward: new THREE.Vector3(0, 0, 1),
+    right: new THREE.Vector3(1, 0, 0),
+  };
+}
+
+// Manual and automatic ModelJoint mappings share one authored semantic frame.
+function humanoidSemanticFrame() {
+  return buildHumanoidSemanticFrame({rig: modelSkinningRig,
+    axes: humanoidSemanticAxes(), characterForward: characterForwardForRole()});
+}
+
+function humanoidControlRigSnapshot() {
+  const rig = modelSkinningRig?.humanoidControlRig
+    || modelRigState.humanoidControlRig;
+  const orientationState = getModelTransformState?.();
+  const orientationRevision = Number.isFinite(
+    Number(orientationState?.modelOrientationRevision))
+    ? Number(orientationState.modelOrientationRevision) : 0;
+  const cacheKey = `${modelRigState.humanoidStructureRevision ?? 'none'}:${orientationRevision}:${
+    modelSkinningRig?.poseRevision || 0}`;
+  if (humanoidControlRigSnapshotCache && humanoidControlRigCacheKey === cacheKey) {
+    return humanoidControlRigSnapshotCache;
+  }
+  if (!rig) {
+    humanoidControlRigSnapshotCache = {
+      version: 1, source: 'humanoid_control_rig', mode: 'primary_driver',
+      available: false, accepted: false, confidence: 'low', controls: {},
+      paths: {}, diagnostics: {reason: 'rig_not_loaded'}, binding: null,
+    };
+  } else {
+    const controls = Object.fromEntries(Object.entries(rig.controls || {})
+      .map(([key, control]) => [key, {
+        ...control,
+        position: Array.isArray(modelRigState.humanoidPose?.[key])
+          ? [...modelRigState.humanoidPose[key]] : [...(control.position || [0, 0, 0])],
+      }]));
+    const point = key => controls[key]?.position || null;
+    humanoidControlRigSnapshotCache = {
+      ...rig,
+      source: 'humanoid_control_rig',
+      mode: 'primary_driver',
+      controls,
+      paths: {
+        torso: [point('chest'), point('pelvis')].filter(Boolean),
+        leftArm: [point('leftShoulder'), point('leftElbow'), point('leftHand')],
+        rightArm: [point('rightShoulder'), point('rightElbow'), point('rightHand')],
+        leftLeg: [point('leftHip'), point('leftKnee'), point('leftFoot')],
+        rightLeg: [point('rightHip'), point('rightKnee'), point('rightFoot')],
+      },
+      binding: modelRigState.humanoidBinding,
+      heatBinding: modelRigState.humanoidHeatBinding,
+      driverFrames: serializeHumanoidDriverFrames(
+        rig, modelRigState.humanoidPose),
+      diagnostics: {
+        ...(rig.diagnostics || {}),
+        structureRevision: modelRigState.humanoidStructureRevision,
+        binding: modelRigState.humanoidBinding?.diagnostics || null,
+      },
+    };
+  }
+  humanoidControlRigCacheKey = cacheKey;
+  modelRigState.humanoidControlRig = humanoidControlRigSnapshotCache;
+  return humanoidControlRigSnapshotCache;
+}
+
+export function getHumanoidControlRig() {
+  return humanoidControlRigSnapshot();
+}
+
+export function getHumanoidLimbDetection() {
+  return modelRigState.humanoidBinding || {
+    version: 1, jointBindings: {}, secondaryAttachments: [],
+    unboundJointIds: [], diagnostics: {reason: 'rig_not_loaded'},
+  };
+}
+
+export function getHumanoidJointBindingDiagnostic(jointId) {
+  return getHumanoidJointBindingDiagnostics(
+    modelSkinningRig?.humanoidBinding || modelRigState.humanoidBinding,
+    jointId);
+}
+
+function setHumanoidStatus(message) {
+  modelRigState.humanoidStatus = String(message || '');
+  notifyModelRigChanged();
+  return modelRigState.humanoidStatus;
+}
+
+/** Keep the legacy action as an explicit compatibility no-op. */
+export async function autoDetectHumanoidLimbs() {
+  if (!modelSkinningRig || !modelRigState.loaded) {
+    return {applied: false, reason: 'rig_not_loaded', addedRoles: []};
+  }
+  const diagnostics = modelRigState.humanoidBinding?.diagnostics || {};
+  setHumanoidStatus('Primary humanoid control rig is ready; ModelJoint mapping is compatibility-only.');
+  return {applied: false, reason: 'primary_driver_rig_active', addedRoles: [],
+    diagnostics};
 }
 
 function resolveLimbMapping(role) {
@@ -306,9 +472,11 @@ function resolveLimbMapping(role) {
   if (!Number.isInteger(anchorJointId)) {
     return emptyLimbMapping(role, 'anchor_signature_not_found');
   }
-  const detected = detectLimbPath({
-    rig: modelSkinningRig, anchorJointId, role,
+  const detected = resolveHumanoidLimbMapping({
+    rig: modelSkinningRig, role, anchorJointId,
     characterForward: characterForwardForRole(),
+    axes: humanoidSemanticAxes(),
+    semanticFrame: humanoidSemanticFrame(),
   });
   const mapping = {
     ...detected,
@@ -318,7 +486,6 @@ function resolveLimbMapping(role) {
     bendSource: 'auto',
     endSource: 'auto',
   };
-  const component = modelComponentForJoint(anchorJointId);
   let path = [...detected.pathJointIds];
   let endOverrideApplied = false;
   const endOverride = raw.end_override_signature;
@@ -328,14 +495,28 @@ function resolveLimbMapping(role) {
     }
     const overrideId = lookup.resolvedBySignature.get(endOverride);
     const overridePath = Number.isInteger(overrideId)
-      ? descendantPath(component, anchorJointId, overrideId) : [];
+      ? rigPathBetweenJointIds({rig: modelSkinningRig,
+        jointA: anchorJointId, jointB: overrideId}).jointIds : [];
     if (overridePath.length < 3) {
-      return {...mapping, available: false, reason: 'end_override_not_descendant'};
+      return {...mapping, available: false, reason: 'manual_topology_mismatch'};
     }
     path = overridePath;
     mapping.endJointId = overrideId;
+    if (role.endsWith('_leg')) mapping.footJointId = overrideId;
     mapping.endSource = 'override';
-    mapping.bendJointId = selectLimbBendJoint(modelSkinningRig, path);
+    const semanticBendJointId = role.endsWith('_leg')
+      ? selectHumanoidKneeJoint({
+        rig: modelSkinningRig, role, pathJointIds: path,
+        characterForward: characterForwardForRole(),
+        axes: humanoidSemanticAxes(),
+        semanticFrame: humanoidSemanticFrame(),
+      })
+      : selectLimbBendJoint(modelSkinningRig, path);
+    if (!Number.isInteger(semanticBendJointId)) {
+      return {...mapping, available: false, reason: 'manual_topology_mismatch'};
+    }
+    mapping.bendJointId = semanticBendJointId;
+    if (role.endsWith('_leg')) mapping.kneeJointId = semanticBendJointId;
     mapping.bendSource = 'auto';
     endOverrideApplied = true;
   } else if (!detected.available) {
@@ -353,11 +534,12 @@ function resolveLimbMapping(role) {
         && path.includes(overrideId)
         && overrideId !== anchorJointId
         && overrideId !== mapping.endJointId;
-      if (!compatible && !endOverrideApplied) {
-        return {...mapping, available: false, reason: 'bend_override_invalid'};
+      if (!compatible) {
+        return {...mapping, available: false, reason: 'manual_topology_mismatch'};
       }
       if (compatible) {
         mapping.bendJointId = overrideId;
+        if (role.endsWith('_leg')) mapping.kneeJointId = overrideId;
         mapping.bendSource = 'override';
       }
     }
@@ -409,24 +591,53 @@ function currentLimbMapping() {
     || emptyLimbMapping(modelRigState.activeLimbRole);
 }
 
+function primaryHumanoidLimb(role = modelRigState.activeLimbRole) {
+  const keys = {
+    left_arm: ['leftShoulder', 'leftElbow', 'leftHand'],
+    right_arm: ['rightShoulder', 'rightElbow', 'rightHand'],
+    left_leg: ['leftHip', 'leftKnee', 'leftFoot'],
+    right_leg: ['rightHip', 'rightKnee', 'rightFoot'],
+  }[role];
+  const rig = modelSkinningRig?.humanoidControlRig;
+  const available = !!(keys && rig?.accepted && keys.every(key =>
+    rig.controls?.[key]?.position));
+  return {
+    role, keys: keys || [], available,
+    bendSign: modelRigState.humanoidBendSigns?.[role] === -1 ? -1 : 1,
+  };
+}
+
 function ikSnapshot() {
-  const mappings = resolvedLimbMappingState();
+  const primary = primaryHumanoidLimb();
+  const mappings = primary.available
+    ? Object.fromEntries(RIG_LIMB_ROLES.map(role => {
+      const limb = primaryHumanoidLimb(role);
+      return [role, {
+        role, available: limb.available, confidence: limb.available ? 'high' : 'low',
+        bendSign: limb.bendSign, controlKeys: [...limb.keys], pathJointIds: [],
+        anchorJointId: null, bendJointId: null, endJointId: null,
+        reason: limb.available ? null : 'control_unavailable',
+      }];
+    })) : resolvedLimbMappingState();
   const active = mappings[modelRigState.activeLimbRole]
     || emptyLimbMapping(modelRigState.activeLimbRole);
+  const available = primary.available || !!active.available;
   return {
     enabled: !!modelRigState.ikEnabled,
     activeLimbRole: modelRigState.activeLimbRole,
-    available: !!active.available,
-    anchorJointId: active.anchorJointId,
-    bendJointId: active.bendJointId,
-    endJointId: active.endJointId,
-    pathJointIds: [...(active.pathJointIds || [])],
-    confidence: active.confidence,
-    reason: active.reason,
-    bendSign: active.bendSign,
+    available,
+    anchorJointId: primary.available ? null : active.anchorJointId,
+    bendJointId: primary.available ? null : active.bendJointId,
+    endJointId: primary.available ? null : active.endJointId,
+    pathJointIds: primary.available ? [] : [...(active.pathJointIds || [])],
+    controlKeys: [...primary.keys],
+    confidence: primary.available ? 'high' : active.confidence,
+    reason: primary.available ? null : active.reason,
+    bendSign: primary.available ? primary.bendSign : active.bendSign,
     mappings: Object.fromEntries(RIG_LIMB_ROLES.map(role => [
       role, compactLimbMapping(mappings[role] || emptyLimbMapping(role)),
     ])),
+    humanoid: humanoidSnapshot(),
   };
 }
 
@@ -448,6 +659,7 @@ function rigSnapshot() {
     ik: ikSnapshot(),
     pickStatus: modelRigState.pickStatus,
     rigPresets: rigPresetSnapshotForState(),
+    humanoidControlRig: humanoidControlRigSnapshot(),
     model: modelRigSnapshotForState(),
   };
 }
@@ -506,16 +718,23 @@ export function getModelRigDebugState(sourceKey = null) {
     rigEquivalentClusterCount: modelRigState.rigEquivalentClusterCount || 0,
     rigAttachmentCount: modelRigState.rigAttachmentCount || 0,
     rigAmbiguousCount: modelRigState.rigAmbiguousCount || 0,
+    humanoidFitRuntimeMs: modelRigState.humanoidFitRuntimeMs || 0,
+    humanoidBindingRuntimeMs: modelRigState.humanoidBindingRuntimeMs || 0,
+    humanoidRuntimeDiagnostics: modelRigState.humanoidRuntimeDiagnostics
+      ? {...modelRigState.humanoidRuntimeDiagnostics} : null,
   };
+  const humanoidControlRig = humanoidControlRigSnapshot();
   const selectedSourceKey = sourceKey || sources[0]?.sourceKey || null;
   if (!model) return {sources, source: sources.find(item =>
     item.sourceKey === selectedSourceKey) || null, metrics,
-    rigPresets: rigPresetSnapshotForState()};
+    rigPresets: rigPresetSnapshotForState(),
+    humanoidControlRig};
   return {
     ...model,
     sources,
     source: sources.find(item => item.sourceKey === selectedSourceKey) || null,
     metrics,
+    humanoidControlRig,
     rigPresets: rigPresetSnapshotForState(),
   };
 }
@@ -861,6 +1080,8 @@ function setModelWeightLoadError(error) {
 
 function resetModelWeightState() {
   modelWeightGeneration += 1;
+  humanoidControlRigCacheKey = '';
+  humanoidControlRigSnapshotCache = null;
   modelRigLoadToken = null;
   rigPresetGeneration += 1;
   modelPickController.cancel();
@@ -1492,6 +1713,8 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     poseRotationByJointId: new Map(),
     poseTransforms: new Map(),
     poseRotations: new Map(),
+    manualPoseTransforms: new Map(),
+    humanoidSourceBoneTransforms: new Map(),
     poseTransformCache: new Map(),
     poseFrameCache: new Map(),
     poseAffectedJointIds: new Set(),
@@ -1546,6 +1769,7 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     sourceRig.poseFrameCache.clear();
   });
   modelSkinningRig = rig;
+  buildPrimaryHumanoidRig(rig);
   updateModelWeightHeatmap();
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId = Number.isInteger(previousSelectedJointId)
@@ -1567,6 +1791,34 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   addWeightPhysicsPerformance('rigAmbiguousCount', modelRigState.rigAmbiguousCount);
   updateModelPoseFrameCache(rig, rig.poseTransforms);
   return rig;
+}
+
+function buildPrimaryHumanoidRig(rig) {
+  const orientationState = getModelTransformState?.();
+  const controlRig = buildHumanoidControlRig({
+    meshes: [...knownMeshes],
+    axes: humanoidSemanticAxes(),
+    orientationState,
+  });
+  const heatBinding = controlRig?.accepted
+    ? buildHumanoidHeatBinding({
+      controlRig, sourceRigs: rig.sourceRigs, modelRig: rig,
+    }) : null;
+  const binding = controlRig?.accepted
+    ? buildHumanoidRigBinding({controlRig, modelRig: rig, heatBinding}) : null;
+  rig.humanoidControlRig = controlRig;
+  rig.humanoidHeatBinding = heatBinding;
+  rig.humanoidBinding = binding;
+  rig.humanoidOrientationRevision = Number(
+    orientationState?.modelOrientationRevision) || 0;
+  modelRigState.humanoidControlRig = controlRig;
+  modelRigState.humanoidHeatBinding = serializeHumanoidHeatBinding(heatBinding);
+  modelRigState.humanoidBinding = serializeHumanoidRigBinding(binding);
+  modelRigState.humanoidStructureRevision = rig.structureRevision;
+  modelRigState.humanoidFitRuntimeMs = Number(
+    controlRig?.diagnostics?.fitRuntimeMs) || 0;
+  modelRigState.humanoidBindingRuntimeMs = Number(
+    binding?.diagnostics?.bindingRuntimeMs) || 0;
 }
 
 function modelParentForJoint(jointId, rig = modelSkinningRig) {
@@ -1610,16 +1862,31 @@ function updateModelSourceAliases(rig) {
       || new Map();
     const rotations = rig.sourceRotationAliases.get(sourceRig.sourceKey)
       || new Map();
+    const manualTransforms = rig.manualPoseTransforms || new Map();
+    const humanoidTransforms = rig.humanoidSourceBoneTransforms?.get(
+      sourceRig.sourceKey) || new Map();
+    const jointBindings = rig.humanoidBinding?.jointBindings;
     transforms.clear();
     rotations.clear();
     for (const boneId of sourceRig.boneIds || []) {
       const jointId = rig.sourceBoneToModelJointId.get(
         sourceBoneKey(sourceRig.sourceKey, boneId));
-      if (!Number.isInteger(jointId)) continue;
-      transforms.set(Number(boneId), rig.poseTransforms.get(jointId)
-        || RIG_IDENTITY_MATRIX);
-      rotations.set(Number(boneId), rig.poseRotations.get(jointId)
-        || new THREE.Quaternion());
+      const manual = Number.isInteger(jointId)
+        ? manualTransforms.get(jointId) : null;
+      const humanoid = humanoidTransforms.get(Number(boneId))?.matrix;
+      const modelBinding = Number.isInteger(jointId)
+        ? jointBindings?.get?.(jointId) : null;
+      const modelTransform = Number.isInteger(jointId)
+        ? rig.poseTransforms.get(jointId) : null;
+      const transform = humanoid
+        ? humanoid.clone().multiply(manual || RIG_IDENTITY_MATRIX)
+        : modelBinding?.bindingMethod === 'heat_connectivity'
+          ? manual
+          : modelTransform || manual;
+      if (!transform) continue;
+      transforms.set(Number(boneId), transform);
+      rotations.set(Number(boneId),
+        new THREE.Quaternion().setFromRotationMatrix(transform).normalize());
     }
     rig.sourceTransformAliases.set(sourceRig.sourceKey, transforms);
     rig.sourceRotationAliases.set(sourceRig.sourceKey, rotations);
@@ -1689,7 +1956,9 @@ export function isPhysicsScheduled() {
 
 export function registerSkinningMesh(mesh) {
   if (!mesh) return;
+  const wasKnown = knownMeshes.has(mesh);
   knownMeshes.add(mesh);
+  if (!wasKnown) invalidateHumanoidDetection();
   if (!modelPhysicsSession.getState().enabled) return;
   const state = stateFor(mesh);
   if (!eligibleSkinningMesh(mesh)) {
@@ -1705,7 +1974,8 @@ export function unregisterSkinningMesh(mesh) {
       && modelWeightState.pickedPoint.meshKey === mesh?.userData?.semanticKey) {
     clearPickedPoint();
   }
-  knownMeshes.delete(mesh);
+  const wasKnown = knownMeshes.delete(mesh);
+  if (wasKnown) invalidateHumanoidDetection();
   const sourceKey = states.get(mesh)?.skinningSourceKey;
   if (sourceKey) {
     modelPhysicsSession.detach(sourceKey);
@@ -1974,14 +2244,41 @@ function finalizeDeformationGeometry(mesh, state) {
 function buildModelPoseTransforms() {
   if (!modelSkinningRig) return new Map();
   const started = performanceNow();
-  modelSkinningRig.poseTransforms = buildForestTransformsFromLocalRotations(
+  const manualTransforms = buildForestTransformsFromLocalRotations(
     modelSkinningRig.inferredForest, modelSkinningRig.centerByJointId, {
       getQuaternion: jointId => modelSkinningRig.poseRotationByJointId.get(
         jointId) || new THREE.Quaternion(),
       jointPivotByBoneId: modelSkinningRig.jointPivotByJointId,
-      rotationOutput: modelSkinningRig.poseRotations,
       transformCache: modelSkinningRig.poseTransformCache,
     });
+  const driverLayer = buildHumanoidDriverBaseTransforms({
+    binding: modelSkinningRig.humanoidBinding,
+    controlRig: modelSkinningRig.humanoidControlRig,
+    modelRig: modelSkinningRig,
+    posedControls: modelRigState.humanoidPose,
+  });
+  modelSkinningRig.manualPoseTransforms = manualTransforms;
+  modelSkinningRig.humanoidSourceBoneTransforms =
+    buildHumanoidSourceBoneDriverTransforms({
+      heatBinding: modelSkinningRig.humanoidHeatBinding,
+      controlRig: modelSkinningRig.humanoidControlRig,
+      posedControls: modelRigState.humanoidPose,
+    });
+  modelSkinningRig.humanoidDriverTransforms = driverLayer.result;
+  modelSkinningRig.humanoidDriverWorldByJointId =
+    driverLayer.driverWorldByJointId;
+  const composed = new Map();
+  manualTransforms.forEach((matrix, jointId) => composed.set(jointId, matrix));
+  driverLayer.result.forEach((driverDelta, jointId) => {
+    const manual = manualTransforms.get(jointId) || RIG_IDENTITY_MATRIX;
+    composed.set(jointId, driverDelta.clone().multiply(manual));
+  });
+  modelSkinningRig.poseTransforms = composed;
+  modelSkinningRig.poseRotations.clear();
+  composed.forEach((matrix, jointId) => {
+    modelSkinningRig.poseRotations.set(jointId,
+      new THREE.Quaternion().setFromRotationMatrix(matrix).normalize());
+  });
   updateModelPoseFrameCache(modelSkinningRig,
     modelSkinningRig.poseTransforms);
   updateModelSourceAliases(modelSkinningRig);
@@ -2018,8 +2315,54 @@ function sourceBoneIdsForModelJoints(sourceRig, jointIds) {
   return affected;
 }
 
+function sourceBoneIdsForHumanoidTransforms(rig) {
+  const affected = new Map();
+  rig?.humanoidSourceBoneTransforms?.forEach((entries, sourceKey) => {
+    const boneIds = new Set();
+    entries.forEach((entry, boneId) => {
+      if (entry?.matrix?.isMatrix4 && !matrixIsIdentity(entry.matrix)) {
+        boneIds.add(Number(boneId));
+      }
+    });
+    if (boneIds.size) affected.set(sourceKey, boneIds);
+  });
+  return affected;
+}
+
 function sourceBoneKeyForSet(ids) {
   return [...ids].sort((left, right) => left - right).join(',');
+}
+
+function humanoidDriverIdsForJointIds(rig, jointIds) {
+  const result = new Set();
+  const binding = rig?.humanoidBinding;
+  if (binding?.jointBindings instanceof Map) {
+    binding.jointBindings.forEach((entry, jointId) => {
+      if (jointIds.has(Number(jointId)) && entry?.driverId) {
+        result.add(entry.driverId);
+      }
+    });
+  }
+  (binding?.secondaryAttachments || []).forEach(attachment => {
+    if ((attachment.jointIds || []).some(jointId =>
+      jointIds.has(Number(jointId))) && attachment.driverId) {
+      result.add(attachment.driverId);
+    }
+  });
+  rig?.humanoidSourceBoneTransforms?.forEach(entries => {
+    entries.forEach(entry => {
+      if (entry?.driverId && entry.matrix?.isMatrix4
+          && !matrixIsIdentity(entry.matrix)) {
+        result.add(entry.driverId);
+      }
+    });
+  });
+  const order = new Map(HUMANOID_DRIVER_SEGMENTS.map((segment, index) =>
+    [segment.id, index]));
+  return [...result].sort((left, right) =>
+    (order.get(left) ?? Number.MAX_SAFE_INTEGER)
+    - (order.get(right) ?? Number.MAX_SAFE_INTEGER)
+    || left.localeCompare(right));
 }
 
 function syncDerivedSourcePose(sourceRig, modelRig) {
@@ -2042,10 +2385,20 @@ function applyModelPose({request = true, dragging = false} = {}) {
   const rig = modelSkinningRig;
   if (!rig) return false;
   const transforms = buildModelPoseTransforms();
+  const humanoidSourceBones = sourceBoneIdsForHumanoidTransforms(rig);
   rig.poseRevision = (rig.poseRevision || 0) + 1;
-  const posedJointIds = [...rig.poseRotationByJointId.entries()]
+  const manualPoseJointIds = [...rig.poseRotationByJointId.entries()]
     .filter(([, quaternion]) => !quaternionIsIdentity(quaternion))
     .map(([jointId]) => Number(jointId));
+  const humanoidPoseJointIds = entriesForCollection(
+    rig.humanoidDriverTransforms)
+    .filter(([, matrix]) => !matrixIsIdentity(matrix))
+    .map(([jointId]) => Number(jointId));
+  const posedJointIds = activePoseJointIds({
+    manualRotations: rig.poseRotationByJointId,
+    driverTransforms: rig.humanoidDriverTransforms,
+    quaternionIsIdentity,
+  });
   const poseJointKey = posedJointIds.sort((left, right) => left - right).join(',');
   const affectedJointIds = rig.poseActiveJointKey === poseJointKey
     ? rig.poseAffectedJointIds : modelPoseDescendantIds(rig, posedJointIds);
@@ -2053,6 +2406,7 @@ function applyModelPose({request = true, dragging = false} = {}) {
   const deformStarted = performanceNow();
   let changed = false;
   let deformedVertexCount = 0;
+  const affectedSourceBones = [];
   for (const sourceRig of rig.sourceRigs || []) {
     syncDerivedSourcePose(sourceRig, rig);
     const transformsByBoneId = rig.sourceTransformAliases.get(
@@ -2061,6 +2415,14 @@ function applyModelPose({request = true, dragging = false} = {}) {
       sourceRig.sourceKey) || new Map();
     const affectedBoneIds = sourceBoneIdsForModelJoints(
       sourceRig, affectedJointIds);
+    (humanoidSourceBones.get(sourceRig.sourceKey) || []).forEach(boneId =>
+      affectedBoneIds.add(Number(boneId)));
+    if (affectedBoneIds.size) {
+      affectedSourceBones.push({
+        sourceKey: sourceRig.sourceKey,
+        boneIds: [...affectedBoneIds].sort((left, right) => left - right),
+      });
+    }
     forEachRigMesh(sourceRig, (mesh, state) => {
       const previousBoneKey = rig.poseSourceBoneIdsByMesh.get(mesh) || '';
       const boneKey = sourceBoneKeyForSet(affectedBoneIds);
@@ -2096,6 +2458,22 @@ function applyModelPose({request = true, dragging = false} = {}) {
   }
   rig.poseAffectedJointIds = affectedJointIds;
   rig.poseActiveJointKey = poseJointKey;
+  const nonIdentityDriverJointIds = [...new Set(humanoidPoseJointIds)]
+    .sort((left, right) => left - right);
+  const humanoidDiagnostics = {
+    manualPoseJointIds: [...manualPoseJointIds].sort((left, right) =>
+      left - right),
+    humanoidDrivenJointIds: nonIdentityDriverJointIds,
+    nonIdentityDriverSegments: humanoidDriverIdsForJointIds(
+      rig, new Set(nonIdentityDriverJointIds)),
+    affectedModelJointIds: [...affectedJointIds].sort((left, right) =>
+      left - right),
+    affectedSourceBones,
+    activeVertexCount: deformedVertexCount,
+    changed,
+  };
+  rig.humanoidRuntimeDiagnostics = humanoidDiagnostics;
+  modelRigState.humanoidRuntimeDiagnostics = humanoidDiagnostics;
   modelRigState.rigDeformMs = performanceNow() - deformStarted;
   modelRigState.rigDeformedVertexCount = deformedVertexCount;
   addWeightPhysicsPerformance('rigDeformMs', modelRigState.rigDeformMs);
@@ -2113,6 +2491,7 @@ function resetModelPose({request = true} = {}) {
   if (!modelSkinningRig) return false;
   const hadRootOverrides = modelRigState.explicitRootSignatures.size > 0;
   modelSkinningRig.poseRotationByJointId.clear();
+  modelRigState.humanoidPose = {};
   restoreDefaultSourceRigOrientations();
   restoreDefaultModelRigOrientation(modelSkinningRig);
   modelRigState.explicitRootSignatures.clear();
@@ -2544,10 +2923,12 @@ export function setRigActiveLimbRole(role) {
   const next = validLimbRole(role);
   if (!next || modelRigState.activeLimbRole === next) return next || false;
   if (modelRigState.ikEnabled) {
-    const mapping = currentLimbMappingForRole(next);
-    if (!mapping.available) {
+    const primary = primaryHumanoidLimb(next);
+    const mapping = primary.available ? emptyLimbMapping(next)
+      : currentLimbMappingForRole(next);
+    if (!primary.available && !mapping.available) {
       modelRigState.ikEnabled = false;
-    } else {
+    } else if (!primary.available) {
       modelRigState.selectedJointId = mapping.endJointId;
     }
   }
@@ -2558,17 +2939,19 @@ export function setRigActiveLimbRole(role) {
 }
 
 export function setRigIkEnabled(enabled) {
-  const mapping = currentLimbMapping();
-  if (enabled && !mapping.available) {
+  const primary = primaryHumanoidLimb();
+  const mapping = primary.available ? emptyLimbMapping(primary.role)
+    : currentLimbMapping();
+  if (enabled && !primary.available && !mapping.available) {
     modelRigState.ikEnabled = false;
     notifyModelRigChanged();
     requestRender();
     return false;
   }
-  const next = !!enabled && !!mapping.available;
+  const next = !!enabled && (primary.available || !!mapping.available);
   if (modelRigState.ikEnabled === next) return next;
   modelRigState.ikEnabled = next;
-  if (next) modelRigState.selectedJointId = mapping.endJointId;
+  if (next && !primary.available) modelRigState.selectedJointId = mapping.endJointId;
   notifyModelRigChanged();
   requestRender();
   return next;
@@ -2706,13 +3089,13 @@ export function setRigLimbOverride(role, type, jointId) {
     notifyModelRigChanged();
     return false;
   }
-  const component = modelComponentForJoint(mapping.anchorJointId);
   let candidatePath = [];
   if (isEndOverride) {
-    candidatePath = descendantPath(component, mapping.anchorJointId, joint.jointId);
+    candidatePath = rigPathBetweenJointIds({rig: modelSkinningRig,
+      jointA: mapping.anchorJointId, jointB: joint.jointId}).jointIds;
     if (candidatePath.length < 3) {
       modelRigState.pickStatus =
-        'The foot/hand must be a descendant with a usable limb path.';
+        'The foot/hand must share a usable topology path with the anchor.';
       notifyModelRigChanged();
       return false;
     }
@@ -2811,6 +3194,16 @@ export function clearRigLimbMapping(role = modelRigState.activeLimbRole) {
 
 export function flipRigLimbBend(role = modelRigState.activeLimbRole) {
   const nextRole = validLimbRole(role);
+  const primary = primaryHumanoidLimb(nextRole);
+  if (primary.available) {
+    const nextSign = primary.bendSign === -1 ? 1 : -1;
+    modelRigState.humanoidBendSigns = {
+      ...(modelRigState.humanoidBendSigns || {}), [nextRole]: nextSign,
+    };
+    notifyModelRigChanged();
+    requestRender();
+    return nextSign;
+  }
   const current = nextRole && rigPresetState.limbMappings?.[nextRole];
   if (!nextRole || !current) return false;
   const updated = {...current, bend_sign: current.bend_sign === -1 ? 1 : -1};
@@ -3030,6 +3423,44 @@ export function setRigJointRotation(jointId, quaternion, options = {}) {
 
 export function solveRigIkTarget(target, options = {}) {
   const rig = modelSkinningRig;
+  const primary = primaryHumanoidLimb();
+  if (rig?.humanoidControlRig?.accepted && modelRigState.ikEnabled
+      && primary.available) {
+    const previousPose = modelRigState.humanoidPose || {};
+    const solved = solveHumanoidControlIk({
+      controlRig: rig.humanoidControlRig,
+      posedControls: previousPose,
+      role: primary.role,
+      target,
+      bendSign: primary.bendSign,
+    });
+    if (!solved.positions) return solved;
+    modelRigState.humanoidPose = mergeHumanoidLimbPose(
+      previousPose, solved.positions, primary.keys);
+    const applied = applyModelPose({dragging: options?.dragging === true});
+    const changedControlKeys = primary.keys.filter(key => {
+      const before = previousPose[key] || rig.humanoidControlRig.controls[key]
+        ?.position;
+      const after = solved.positions[key];
+      return Array.isArray(before) && Array.isArray(after)
+        && before.slice(0, 3).some((value, index) =>
+          Math.abs(Number(value) - Number(after[index])) > 1e-6);
+    });
+    modelRigState.humanoidRuntimeDiagnostics = {
+      ...(modelRigState.humanoidRuntimeDiagnostics || {}),
+      lastIk: {
+        role: primary.role,
+        target: Array.isArray(target) ? target.slice(0, 3)
+          : target?.toArray?.() || null,
+        changedControlKeys,
+        reached: !!solved.reached,
+        residual: Number(solved.residual) || 0,
+        applied,
+      },
+    };
+    if (!options?.dragging) notifyModelRigChanged();
+    return {...solved, applied, controlRig: 'humanoid'};
+  }
   const mapping = currentLimbMapping();
   if (!rig || !modelRigState.ikEnabled || !mapping.available) return false;
   const solved = solveLimbIk({
@@ -3051,6 +3482,27 @@ export function solveRigIkTarget(target, options = {}) {
     selectedJointId: mapping.endJointId,
   });
   return {...solved, applied};
+}
+
+export function setHumanoidControlPositions(positionsByKey, options = {}) {
+  const rig = modelSkinningRig?.humanoidControlRig;
+  if (!rig?.accepted || !positionsByKey || typeof positionsByKey !== 'object') {
+    return false;
+  }
+  const nextPose = {...(modelRigState.humanoidPose || {})};
+  for (const [key, value] of Object.entries(positionsByKey)) {
+    if (!rig.controls?.[key]) return false;
+    const values = value?.position ?? value;
+    if (!Array.isArray(values) || values.length < 3
+        || values.slice(0, 3).some(item => !Number.isFinite(Number(item)))) {
+      return false;
+    }
+    nextPose[key] = values.slice(0, 3).map(Number);
+  }
+  modelRigState.humanoidPose = nextPose;
+  applyModelPose({dragging: options?.dragging === true});
+  notifyModelRigChanged();
+  return true;
 }
 
 function finishRigPoseForSource(sourceKey, boneId) {
@@ -3086,6 +3538,20 @@ function resetRigBoneForSource(sourceKey, boneId) {
 }
 
 function resetRigLimb() {
+  const primary = primaryHumanoidLimb();
+  if (primary.available && modelSkinningRig) {
+    const hadPose = primary.keys.slice(1).some(key =>
+      Object.prototype.hasOwnProperty.call(modelRigState.humanoidPose || {}, key));
+    if (!hadPose) return false;
+    const nextPose = {...(modelRigState.humanoidPose || {})};
+    primary.keys.slice(1).forEach(key => delete nextPose[key]);
+    modelRigState.humanoidPose = nextPose;
+    applyModelPose();
+    modelRigState.pickStatus = '';
+    notifyModelRigChanged();
+    requestRender();
+    return true;
+  }
   const mapping = currentLimbMapping();
   if (!mapping.available || !modelSkinningRig) return false;
   const controlIds = [mapping.anchorJointId, mapping.bendJointId];
@@ -3277,6 +3743,17 @@ function handleModelTransformChanged(event) {
   });
 }
 
+function handleModelOrientationChanged() {
+  const pose = {...(modelRigState.humanoidPose || {})};
+  invalidateHumanoidDetection();
+  modelRigState.humanoidPose = pose;
+  if (modelSkinningRig && modelRigState.loaded) {
+    buildPrimaryHumanoidRig(modelSkinningRig);
+    applyModelPose({request: false});
+  }
+  notifyModelRigChanged();
+}
+
 function handleVirtualModelMotion(event) {
   modelPhysicsSession.handleVirtualMotion(event.detail);
 }
@@ -3404,6 +3881,7 @@ function ensureInfluenceGraph(
 export function refreshSkinningAfterShapeChange(mesh) {
   const state = states.get(mesh);
   const position = mesh?.geometry?.attributes?.position;
+  invalidateHumanoidDetection();
   clearPickedPoint();
   if (!state?.loaded || !position) return false;
   const preservedRootSignatures = new Set(
@@ -3440,6 +3918,9 @@ export function refreshSkinningAfterShapeChange(mesh) {
   modelRigState.ikEnabled = false;
   modelRigState.activeLimbRole = 'left_arm';
   modelRigState.explicitRootSignatures = preservedRootSignatures;
+  modelRigState.humanoidStatus = '';
+  modelRigState.humanoidFitRuntimeMs = 0;
+  modelRigState.humanoidBindingRuntimeMs = 0;
   rigPresetState.lastApplyResult = null;
   resolvedLimbMappings = null;
   resolvedLimbMappingsStructureRevision = null;
@@ -3476,6 +3957,8 @@ export function refreshSkinningAfterShapeChange(mesh) {
 if (typeof window !== 'undefined') {
   window.addEventListener('mod-viewer-model-transform-changed',
     handleModelTransformChanged);
+  window.addEventListener('mod-viewer-model-orientation-changed',
+    handleModelOrientationChanged);
   window.addEventListener('mod-viewer-virtual-model-motion',
     handleVirtualModelMotion);
   window.addEventListener('mod-viewer-mesh-state-changed', event => {

@@ -315,14 +315,26 @@ of documentation, comments and tests; use portable fixtures instead.
   attachment edges with O(1) Three.js objects. Reconciliation rebuilds on
   source membership/shape changes and resets pose; model structure revisions
   do not change for pose, materials, textures, visibility or model turns.
-- Rig IK is ModelJoint-native semantic limb posing: users persist only stable
-  anchor signatures for the four supported limb roles, rest-frame continuation
-  evidence re-detects helper-inclusive paths, and the solver rotates only the
-  mapped anchor and bend controls. End local rotation, helper local rotations,
-  Physics composition, and pose preset schema remain authoritative elsewhere.
-  Speculative solves use private transforms and one target update commits all
-  changed local quaternions through one batch manual-pose transaction. IK never
-  owns a skeleton, deformation path, IK Physics state, or persisted target.
+- The `HumanoidControlRig` is the primary automatic pose skeleton. It fits the
+  fixed 14-control topology (Chest/Pelvis plus bilateral Shoulder/Elbow/Hand
+  and Hip/Knee/Foot) from immutable A-pose geometry and semantic orientation.
+  `ModelJoint` topology no longer defines human anatomy or IK paths.
+- `humanoid-heat-binding.js` first classifies each exact source's heat-
+  connectivity graph against the shared control paths. Only complete,
+  conservative limb traversals publish source-Bone ownership for deformation;
+  incomplete paths remain diagnostics. `ModelJoint` mappings are a secondary
+  manual/compatibility layer, not the primary automatic detector.
+- `humanoid-rig-binding.js` binds clear body-corridor ModelJoints to explicit
+  humanoid driver segments with `inverse(restDriverWorld) * restJointWorld`
+  offsets. Posed absolute driver targets are converted to authored-rest
+  deltas before source-bone publication, so directly bound parent/child joints
+  are not double-transformed. Conservative secondary attachment roots may
+  follow a driver while retaining their internal hierarchy; ambiguous or
+  distant components remain unbound. No accessory categories are inferred.
+- Humanoid IK uses guaranteed virtual two-bone controls. Existing stable-ID
+  ModelJoint mappings, manual rotations, presets, and Physics remain available
+  as compatibility/advanced features and compose after the humanoid driver
+  base. Reset clears both virtual pose and manual deltas exactly.
 - Joint selection is independent from pose state: Clear removes the selected
   ModelJoint through the state API, leaving
   manual pose, presets, Weight selection, Physics and overlay visibility

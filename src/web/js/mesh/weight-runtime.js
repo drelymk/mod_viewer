@@ -6,6 +6,39 @@ export const RIG_LIMB_ROLES = Object.freeze([
   'left_arm', 'right_arm', 'left_leg', 'right_leg',
 ]);
 
+function collectionEntries(collection) {
+  if (collection instanceof Map) return [...collection.entries()];
+  return Object.entries(collection || {});
+}
+
+export function matrixIsIdentity(value, tolerance = 1e-5) {
+  const elements = value?.elements || value;
+  if (!elements || elements.length < 16) return false;
+  const identity = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+  ];
+  return identity.every((expected, index) =>
+    Math.abs(Number(elements[index]) - expected) <= tolerance);
+}
+
+export function activePoseJointIds({manualRotations, driverTransforms,
+    quaternionIsIdentity} = {}) {
+  const ids = new Set();
+  collectionEntries(manualRotations).forEach(([jointId, quaternion]) => {
+    if (typeof quaternionIsIdentity !== 'function'
+        || !quaternionIsIdentity(quaternion)) {
+      ids.add(Number(jointId));
+    }
+  });
+  collectionEntries(driverTransforms).forEach(([jointId, matrix]) => {
+    if (!matrixIsIdentity(matrix)) ids.add(Number(jointId));
+  });
+  return [...ids].filter(Number.isFinite).sort((left, right) => left - right);
+}
+
 function createModelRigDefaults() {
   return {
     loaded: false,
@@ -25,6 +58,16 @@ function createModelRigDefaults() {
     rigEquivalentClusterCount: 0,
     rigAttachmentCount: 0,
     rigAmbiguousCount: 0,
+    humanoidStatus: '',
+    humanoidStructureRevision: null,
+    humanoidControlRig: null,
+    humanoidBinding: null,
+    humanoidHeatBinding: null,
+    humanoidPose: {},
+    humanoidBendSigns: {},
+    humanoidRuntimeDiagnostics: null,
+    humanoidFitRuntimeMs: 0,
+    humanoidBindingRuntimeMs: 0,
     rotationSnapDegrees: 0,
     ikEnabled: false,
     activeLimbRole: 'left_arm',

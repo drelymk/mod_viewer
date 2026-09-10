@@ -6,8 +6,17 @@ import { computeModelBounds } from './model-bounds.js';
 const INITIAL_CAMERA_DIRECTION = new THREE.Vector3(0, 0, 1);
 const INITIAL_CAMERA_UP = new THREE.Vector3(0, 1, 0);
 
+export function shouldApplyUprightRotation({gameId, rawSize} = {}) {
+  const id = String(gameId || '').trim().toLowerCase();
+  if (id === 'zzz' || id === 'wuwa') return true;
+  if (id && id !== 'unknown') return false;
+  return Number(rawSize?.z) > Number(rawSize?.y) * 1.5
+    && Number(rawSize?.z) > Number(rawSize?.x) * 1.15;
+}
+
 export function createCameraFrame({
   camera, renderer, controls, grid, cancelViewSnap, onModelFit,
+  onOrientationChanged,
 }) {
   let homeView = null;
   let clipNear = camera.near;
@@ -16,6 +25,7 @@ export function createCameraFrame({
   const uprightRotation = new THREE.Quaternion();
   const baseFacingRotation = new THREE.Quaternion();
   const modelRotation = new THREE.Quaternion();
+  let modelOrientationRevision = 0;
   let modelPivot = null;
   const modelTranslation = new THREE.Vector3();
 
@@ -114,13 +124,16 @@ export function createCameraFrame({
   }
 
   function getModelTransformState() {
+    const baseOrientation = baseFacingRotation.clone()
+      .multiply(uprightRotation).normalize();
     return {
-      orientation: modelRotation.clone()
-        .multiply(baseFacingRotation)
-        .multiply(uprightRotation),
+      orientation: modelRotation.clone().multiply(baseOrientation).normalize(),
+      baseOrientation,
       userRotation: modelRotation.clone(),
       translation: modelTranslation.clone(),
       pivot: currentModelPivot(),
+      orientationInitialized,
+      modelOrientationRevision,
     };
   }
 
@@ -268,8 +281,10 @@ export function createCameraFrame({
   function fitTo(meshes, {
     preserveCamera = false,
     preserveHomeView = false,
+    gameId = null,
     initialRotationY = 0,
   } = {}) {
+    let orientationChanged = false;
     const preservedView = preserveCamera ? {
       position: camera.position.clone(),
       quaternion: camera.quaternion.clone(),
@@ -282,7 +297,7 @@ export function createCameraFrame({
       const rawBox = computeModelBounds(meshes);
       const rawSize = rawBox.getSize(new THREE.Vector3());
       uprightRotation.identity();
-      if (rawSize.z > rawSize.y * 1.5 && rawSize.z > rawSize.x * 1.15) {
+      if (shouldApplyUprightRotation({gameId, rawSize})) {
         uprightRotation.setFromAxisAngle(
           new THREE.Vector3(1, 0, 0), -Math.PI / 2);
       }
@@ -307,6 +322,8 @@ export function createCameraFrame({
       rotateMeshesAroundCenter(meshes, modelRotation, modelPivot);
       meshes.forEach(mesh => mesh.position.add(modelTranslation));
       orientationInitialized = true;
+      modelOrientationRevision += 1;
+      orientationChanged = true;
     }
     const box = computeModelBounds(meshes);
     if (box.isEmpty()) return;
@@ -360,6 +377,7 @@ export function createCameraFrame({
       camera.updateMatrixWorld();
     }
     controls.saveState();
+    if (orientationChanged) onOrientationChanged?.(getModelTransformState());
   }
 
   return {

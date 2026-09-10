@@ -1092,13 +1092,9 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-influence-id { color: var(--text); font-family: ui-monospace, monospace; }
 .rig-influence-weight { margin-left: auto; color: var(--accent-soft); font-variant-numeric: tabular-nums; }
 .rig-snap-select { min-height: 26px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.rig-chain-preview { color: var(--text); font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
-.rig-limb-mapping { display: flex; flex-direction: column; gap: 3px; }
-.rig-limb-mapping-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-height: 27px; }
-.rig-limb-value { color: var(--text); font-size: 11px; }
-.rig-limb-pick { min-width: 64px !important; padding: 3px 7px; font-size: 10px; }
-.rig-limb-pick.active { color: #111827; background: #facc15; border-color: #facc15; }
-.rig-limb-select { min-height: 26px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.rig-limb-buttons { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.rig-limb-button { min-width: 0 !important; padding: 4px 3px; font-size: 10px; }
+.rig-limb-button.active { color: var(--text); background: var(--accent); border-color: var(--accent-soft); }
 .rig-preset-select { width: 100%; min-height: 30px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .rig-preset-title { margin-top: 3px; }
 .rig-actions { display: flex; flex-wrap: wrap; gap: 5px; }
@@ -1107,7 +1103,6 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-joint-actions .ui-button { min-width: 0; }
 .rig-preset-actions { flex-wrap: nowrap; }
 .rig-preset-actions .ui-button { min-width: 0; }
-.rig-advanced-group { display: flex; flex-direction: column; gap: 7px; }
 .rig-hint { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
 .rig-joint-pick-label { position: absolute; z-index: 20; pointer-events: none; padding: 2px 5px; color: #111827; background: #facc15; border-radius: 3px; font: 11px/1.2 ui-monospace, monospace; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
 .rig-joint-pick-label[hidden] { display: none; }
