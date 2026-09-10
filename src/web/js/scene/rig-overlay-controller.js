@@ -130,6 +130,12 @@ function canIkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
     && Number(ik.endJointId) === Number(boneId);
 }
 
+function isPrimaryHumanoidIk(snapshot, source) {
+  return Array.isArray(snapshot?.ik?.controlKeys)
+    && snapshot.ik.controlKeys.length === 3
+    && !!source?.humanoidControlRig;
+}
+
 function manipulationMode(snapshot, source, boneId = selectedBoneFor(snapshot)) {
   if (canIkPose(snapshot, source, boneId)) return 'ik';
   if (snapshot?.ik?.enabled) return null;
@@ -829,8 +835,10 @@ export function createRigOverlayController({
       return;
     }
     const poseFrame = getRigJointPoseFrame?.(boneId);
-    const pivot = poseFrame?.pivot || pivotFor(source, boneId)
-      || ikTargetPoint(snapshot, source);
+    const pivot = mode === 'ik' && isPrimaryHumanoidIk(snapshot, source)
+      ? ikTargetPoint(snapshot, source)
+      : poseFrame?.pivot || pivotFor(source, boneId)
+        || ikTargetPoint(snapshot, source);
     if (mode === 'ik') {
       if (pivot) ikTargetProxy.position.copy(vector(pivot));
       proxy.visible = false;
@@ -869,6 +877,7 @@ export function createRigOverlayController({
     if (!Number.isInteger(id)) return;
     updatePosedOverlay(currentSource);
     if (currentSnapshot?.jointPickIntent) refreshPickCandidates();
+    if (poseDragActive && dragMode === 'ik') return;
     if (poseDragActive && id === dragBoneId) {
       // TransformControls owns the proxy until the gesture ends. The model
       // still updates from every pose event, but its canonical state must not
@@ -879,8 +888,10 @@ export function createRigOverlayController({
     const poseFrame = getRigJointPoseFrame?.(id);
     const mode = manipulationMode(currentSnapshot, currentSource, id);
     if (mode === 'ik') {
-      const pivot = poseFrame?.pivot || pivotFor(currentSource, id)
-        || ikTargetPoint(currentSnapshot, currentSource);
+      const pivot = isPrimaryHumanoidIk(currentSnapshot, currentSource)
+        ? ikTargetPoint(currentSnapshot, currentSource)
+        : poseFrame?.pivot || pivotFor(currentSource, id)
+          || ikTargetPoint(currentSnapshot, currentSource);
       if (pivot) ikTargetProxy.position.copy(vector(pivot));
       proxy.visible = false;
       ikTargetProxy.visible = true;
@@ -965,9 +976,15 @@ export function createRigOverlayController({
             const mode = manipulationMode(currentSnapshot, source, boneId);
             if (!mode) return;
             poseDragActive = true;
-            dragBoneId = boneId;
-            dragJointId = boneId;
             dragMode = mode;
+            if (mode === 'ik' && isPrimaryHumanoidIk(
+              currentSnapshot, source)) {
+              dragBoneId = null;
+              dragJointId = null;
+            } else {
+              dragBoneId = boneId;
+              dragJointId = boneId;
+            }
             if (mode === 'fk') {
               const modelPoseFrame = getRigJointPoseFrame?.(dragJointId);
               dragParentRotation = modelPoseFrame?.parentRotation?.length === 4
@@ -987,6 +1004,7 @@ export function createRigOverlayController({
           } else if (event.value === false) {
             setArcballDragState(false);
             const boneId = dragBoneId;
+            const endedMode = dragMode;
             poseDragActive = false;
             dragBoneId = null;
             dragParentRotation = null;
@@ -995,7 +1013,17 @@ export function createRigOverlayController({
             queueMicrotask(() => {
               rigTransformInteractionActive = false;
             });
-            if (boneId !== null) {
+            let primaryIkDrag = false;
+            if (endedMode === 'ik') {
+              const snapshot = getRigState?.() || currentSnapshot;
+              const source = sourceFor(snapshot);
+              primaryIkDrag = isPrimaryHumanoidIk(snapshot, source);
+              if (primaryIkDrag) {
+                solveRigIkTarget?.(ikTargetProxy.position.toArray(),
+                  {dragging: false});
+              }
+            }
+            if (boneId !== null && !primaryIkDrag) {
               if (dragJointId !== null) finishRigJointPose?.(dragJointId);
               const snapshot = getRigState?.();
               currentSnapshot = snapshot || currentSnapshot;

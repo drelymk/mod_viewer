@@ -1646,25 +1646,30 @@ def test_rig_overlay_exposes_primary_humanoid_ik_target_without_joint_selection(
       const model = new THREE.Object3D();
       scene.add(model);
       const source = {
-        key: 'model-rig', structureRevision: 7, joints: [],
+        key: 'model-rig', structureRevision: 7,
+        joints: [{jointId: 42, restPivot: [0, 2, 0]}],
         humanoidControlRig: {controls: {
           leftShoulder: {position: [0, 1, 0]},
           leftElbow: {position: [.4, .8, 0]},
           leftHand: {position: [.8, .7, 0]},
         }},
       };
-      const state = {visible: true, selectedJointId: null, model: source,
+      const state = {visible: true, selectedJointId: 42, model: source,
         ik: {enabled: true, available: true, activeLimbRole: 'left_arm',
           controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']}};
       const solveCalls = [];
+      const finishCalls = [];
       const controller = createRigOverlayController({
         scene, camera, canvas, getMeshes: () => [model],
         getRigState: () => state,
+        getRigJointPoseFrame: () => ({pivot: [0, 2, 0]}),
         solveRigIkTarget: (...args) => solveCalls.push(args),
+        finishRigJointPose: (...args) => finishCalls.push(args),
       });
       controller.refresh(state);
       const controls = await controller.ensureTransformControls();
       const before = controller.getDebugState();
+      const attachedPosition = controls.object.position.toArray();
       const mode = controls.getMode?.();
       controls.dispatchEvent({type: 'dragging-changed', value: true});
       controls.object.position.x += .2;
@@ -1672,12 +1677,15 @@ def test_rig_overlay_exposes_primary_humanoid_ik_target_without_joint_selection(
       controls.dispatchEvent({type: 'dragging-changed', value: false});
       controller.dispose();
       return {before, mode, solveCalls: solveCalls.length,
-        target: solveCalls[0]?.[0]};
+        finishCalls: finishCalls.length,
+        attachedPosition, target: solveCalls[0]?.[0]};
     }""")
     assert result["before"]["ikTargetVisible"]
     assert result["before"]["controlsAttachedTo"] == "ik-target"
+    assert result["attachedPosition"] == pytest.approx([.8, .7, 0])
     assert result["mode"] == "translate"
-    assert result["solveCalls"] == 1
+    assert result["solveCalls"] == 2
+    assert result["finishCalls"] == 0
     assert result["target"] == pytest.approx([1.0, .7, 0])
 
 
@@ -4884,3 +4892,80 @@ def test_humanoid_control_ik_solves_virtual_two_bone_limb(module_page):
     assert result["reached"]
     assert result["residual"] < 1e-5
     assert result["distance"] < 1e-5
+
+
+def test_driver_translation_counts_as_active_pose_joint(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {activePoseJointIds} = await import('./js/mesh/weight-runtime.js');
+      const ids = activePoseJointIds({
+        manualRotations: new Map([[1, {x: 0, y: 0, z: 0, w: 1}]]),
+        driverTransforms: new Map([
+          [1, new THREE.Matrix4()],
+          [2, new THREE.Matrix4().makeTranslation(.2, 0, 0)],
+        ]),
+        quaternionIsIdentity: value => Math.abs(value.w) === 1
+          && value.x === 0 && value.y === 0 && value.z === 0,
+      });
+      return ids;
+    }""")
+    assert result == [2]
+
+
+def test_humanoid_ik_driver_changes_a_weighted_mesh_vertex(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {buildHumanoidRigBinding, buildHumanoidDriverBaseTransforms}
+        = await import('./js/mesh/humanoid-rig-binding.js');
+      const {solveHumanoidControlIk} = await import(
+        './js/mesh/humanoid-rig-ik.js');
+      const {applyWeightedTransformDeformationInto} = await import(
+        './js/mesh/weight-deformation.js');
+      const controls = {
+        chest: [0, 1.5, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.3, 0], leftElbow: [-.5, 1.1, 0],
+        leftHand: [-.8, 1, 0], rightShoulder: [.2, 1.3, 0],
+        rightElbow: [.5, 1.1, 0], rightHand: [.8, 1, 0],
+        leftHip: [-.15, .5, 0], leftKnee: [-.15, .25, 0],
+        leftFoot: [-.15, 0, 0], rightHip: [.15, .5, 0],
+        rightKnee: [.15, .25, 0], rightFoot: [.15, 0, 0],
+      };
+      const controlRig = {
+        accepted: true, frame: {height: 1.5, forward: [0, 0, 1],
+          right: [1, 0, 0]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}])),
+      };
+      const modelRig = {
+        joints: [{jointId: 0, restPivot: controls.leftHand,
+          restCenter: controls.leftHand, restFrame: [0, 0, 0, 1]}],
+        jointPivotByJointId: new Map([[0, controls.leftHand]]),
+        restFrameByJointId: new Map([[0, new THREE.Quaternion()]]),
+        components: [{componentId: 0, rootId: 0, nodeIds: [0],
+          parentById: {0: null}, childrenById: {0: []}}],
+        componentByJointId: new Map([[0, 0]]),
+      };
+      const binding = buildHumanoidRigBinding({controlRig, modelRig});
+      const solved = solveHumanoidControlIk({
+        controlRig, role: 'left_arm', target: [-.55, 1, 0],
+      });
+      const driver = buildHumanoidDriverBaseTransforms({
+        binding, controlRig, modelRig, posedControls: solved.positions,
+      });
+      const baseline = new Float32Array(controls.leftHand);
+      const output = new Float32Array(baseline);
+      const changedVertexCount = applyWeightedTransformDeformationInto(
+        output, baseline, new Uint32Array([0]), new Float32Array([1]), 1,
+        driver.result, new Uint32Array([0]));
+      return {
+        driverId: binding.jointBindings.get(0)?.driverId,
+        solved: solved.reached,
+        changedVertexCount,
+        output: [...output],
+        baseline: [...baseline],
+      };
+    }""")
+    assert result["driverId"] == "left_lower_arm"
+    assert result["solved"]
+    assert result["changedVertexCount"] == 1
+    assert result["output"] != pytest.approx(result["baseline"])

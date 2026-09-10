@@ -160,6 +160,7 @@ export function modelRigSnapshot(modelSkinningRig, {
   debug = false,
   modelRigState,
   quaternionIsIdentity,
+  matrixIsIdentity,
 } = {}) {
   if (!modelSkinningRig) return null;
   const components = (modelSkinningRig.components || []).map(componentSnapshot);
@@ -199,6 +200,16 @@ export function modelRigSnapshot(modelSkinningRig, {
       relationshipType: edge.relationshipType,
     };
   });
+  const manualPoseJointIds = [...modelSkinningRig.poseRotationByJointId.entries()]
+    .filter(([, quaternion]) => !quaternionIsIdentity(quaternion))
+    .map(([jointId]) => Number(jointId));
+  const humanoidPoseJointIds = [...(
+    modelSkinningRig.humanoidDriverTransforms instanceof Map
+      ? modelSkinningRig.humanoidDriverTransforms.entries()
+      : Object.entries(modelSkinningRig.humanoidDriverTransforms || {}))]
+    .filter(([, matrix]) => typeof matrixIsIdentity === 'function'
+      ? !matrixIsIdentity(matrix) : false)
+    .map(([jointId]) => Number(jointId));
   const snapshot = {
     key: modelSkinningRig.key || 'model-rig',
     structureRevision: modelSkinningRig.structureRevision,
@@ -208,9 +219,11 @@ export function modelRigSnapshot(modelSkinningRig, {
     poseRotationByJointId: Object.fromEntries(
       [...modelSkinningRig.poseRotationByJointId.entries()].map(
         ([jointId, quaternion]) => [jointId, quaternion.toArray()])),
-    poseJointIds: [...modelSkinningRig.poseRotationByJointId.entries()]
-      .filter(([, quaternion]) => !quaternionIsIdentity(quaternion))
-      .map(([jointId]) => jointId),
+    poseJointIds: [...new Set([
+      ...manualPoseJointIds, ...humanoidPoseJointIds,
+    ])].sort((left, right) => left - right),
+    humanoidPoseJointIds: humanoidPoseJointIds.sort(
+      (left, right) => left - right),
   };
   if (debug) {
     snapshot.defaultComponents = (modelSkinningRig.defaultComponents || [])
