@@ -76,7 +76,7 @@ function currentModPath(getKnownMeshes) {
 }
 
 function createSession({modelRigState, getModelRig, getAutomaticRig,
-    resetModelPose, setPhysicsSuspended,
+    resetCurrentPoseForHumanoidRigEdit, setPhysicsSuspended,
     resolveMappings, rebuildActiveRig, getKnownMeshes, persist, clearPersist,
     cancelWeightPicking, cancelRigPicking, notifyChanged, requestRender} = {}) {
   let savedOverrides = null;
@@ -139,7 +139,7 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
     cancelWeightPicking?.();
     cancelRigPicking?.();
     setPhysicsSuspended?.(true);
-    resetModelPose?.({request: false});
+    resetCurrentPoseForHumanoidRigEdit?.({request: false});
     const rig = getModelRig?.();
     if (!rig?.humanoidControlRig) {
       setPhysicsSuspended?.(false);

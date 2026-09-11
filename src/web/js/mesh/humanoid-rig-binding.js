@@ -5,21 +5,31 @@ import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 // only when two explicitly mapped controls can claim the corresponding model
 // graph path; automatic heat/geometric inference remains the fallback.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
-  {id: 'torso', start: 'pelvis', end: 'chest'},
-  {id: 'neck', start: 'chest', end: 'neck'},
-  {id: 'head', start: 'neck', end: 'head'},
-  {id: 'left_chest_shoulder', start: 'chest', end: 'leftShoulder'},
-  {id: 'right_chest_shoulder', start: 'chest', end: 'rightShoulder'},
-  {id: 'left_upper_arm', start: 'leftShoulder', end: 'leftElbow'},
-  {id: 'left_lower_arm', start: 'leftElbow', end: 'leftHand'},
-  {id: 'right_upper_arm', start: 'rightShoulder', end: 'rightElbow'},
-  {id: 'right_lower_arm', start: 'rightElbow', end: 'rightHand'},
-  {id: 'left_pelvis_hip', start: 'pelvis', end: 'leftHip'},
-  {id: 'right_pelvis_hip', start: 'pelvis', end: 'rightHip'},
-  {id: 'left_upper_leg', start: 'leftHip', end: 'leftKnee'},
-  {id: 'left_lower_leg', start: 'leftKnee', end: 'leftFoot'},
-  {id: 'right_upper_leg', start: 'rightHip', end: 'rightKnee'},
-  {id: 'right_lower_leg', start: 'rightKnee', end: 'rightFoot'},
+  {id: 'torso', role: 'torso', start: 'pelvis', end: 'chest'},
+  {id: 'neck', role: 'torso', start: 'chest', end: 'neck'},
+  {id: 'head', role: 'torso', start: 'neck', end: 'head'},
+  {id: 'left_chest_shoulder', role: 'left_arm', start: 'chest',
+    end: 'leftShoulder'},
+  {id: 'right_chest_shoulder', role: 'right_arm', start: 'chest',
+    end: 'rightShoulder'},
+  {id: 'left_upper_arm', role: 'left_arm', start: 'leftShoulder',
+    end: 'leftElbow'},
+  {id: 'left_lower_arm', role: 'left_arm', start: 'leftElbow',
+    end: 'leftHand'},
+  {id: 'right_upper_arm', role: 'right_arm', start: 'rightShoulder',
+    end: 'rightElbow'},
+  {id: 'right_lower_arm', role: 'right_arm', start: 'rightElbow',
+    end: 'rightHand'},
+  {id: 'left_pelvis_hip', role: 'left_leg', start: 'pelvis', end: 'leftHip'},
+  {id: 'right_pelvis_hip', role: 'right_leg', start: 'pelvis',
+    end: 'rightHip'},
+  {id: 'left_upper_leg', role: 'left_leg', start: 'leftHip', end: 'leftKnee'},
+  {id: 'left_lower_leg', role: 'left_leg', start: 'leftKnee',
+    end: 'leftFoot'},
+  {id: 'right_upper_leg', role: 'right_leg', start: 'rightHip',
+    end: 'rightKnee'},
+  {id: 'right_lower_leg', role: 'right_leg', start: 'rightKnee',
+    end: 'rightFoot'},
 ]);
 
 const EPSILON = 1e-8;
@@ -96,8 +106,10 @@ function frameForSegment(start, end, controlRig) {
 
 function restJointWorldMatrix(modelRig, jointId) {
   const id = numberId(jointId);
-  const joint = id === null ? null : (modelRig?.joints?.[id]
-    || modelRig?.joints?.find?.(item => Number(item?.jointId) === id));
+  const indexedJoint = id === null ? null : modelRig?.joints?.[id];
+  const joint = indexedJoint && Number(indexedJoint.jointId) === id
+    ? indexedJoint : modelRig?.joints?.find?.(item =>
+      Number(item?.jointId) === id);
   if (id === null || !joint) return null;
   const pivot = vectorFromCollection(modelRig?.jointPivotByJointId, id)
     || vector(joint.restPivot ?? joint.restCenter);
@@ -120,8 +132,10 @@ function parentFor(modelRig, jointId) {
 function pointForJoint(modelRig, jointId) {
   const id = numberId(jointId);
   if (id === null) return null;
-  const joint = modelRig?.joints?.[id]
-    || modelRig?.joints?.find?.(item => Number(item?.jointId) === id);
+  const indexedJoint = modelRig?.joints?.[id];
+  const joint = indexedJoint && Number(indexedJoint.jointId) === id
+    ? indexedJoint : modelRig?.joints?.find?.(item =>
+      Number(item?.jointId) === id);
   return vectorFromCollection(modelRig?.jointPivotByJointId, id)
     || vector(joint?.restPivot ?? joint?.restCenter, [0, 0, 0]);
 }
@@ -364,8 +378,11 @@ function mappedPathCandidates(modelRig, controlMappings) {
 
 function jointForId(modelRig, jointId) {
   const id = numberId(jointId);
-  return id === null ? null : (modelRig?.joints?.[id]
-    || modelRig?.joints?.find?.(joint => Number(joint?.jointId) === id));
+  if (id === null) return null;
+  const indexedJoint = modelRig?.joints?.[id];
+  return indexedJoint && Number(indexedJoint.jointId) === id
+    ? indexedJoint : modelRig?.joints?.find?.(joint =>
+      Number(joint?.jointId) === id);
 }
 
 function sourceMembersForJoint(modelRig, jointId, mapping = null) {
@@ -389,12 +406,16 @@ function sourceMembersForJoint(modelRig, jointId, mapping = null) {
   }));
 }
 
-function sourceLimbRole(controlKey) {
-  if (['chest', 'pelvis', 'neck', 'head', 'torso'].includes(controlKey)) {
-    return 'torso';
-  }
-  const side = controlKey?.startsWith('left') ? 'left' : 'right';
-  return /Hip|Knee|Foot/.test(controlKey || '') ? `${side}_leg` : `${side}_arm`;
+const HUMANOID_CONTROL_SOURCE_ROLES = Object.freeze({
+  chest: 'torso', pelvis: 'torso', neck: 'torso', head: 'torso',
+  leftShoulder: 'left_arm', leftElbow: 'left_arm', leftHand: 'left_arm',
+  rightShoulder: 'right_arm', rightElbow: 'right_arm', rightHand: 'right_arm',
+  leftHip: 'left_leg', leftKnee: 'left_leg', leftFoot: 'left_leg',
+  rightHip: 'right_leg', rightKnee: 'right_leg', rightFoot: 'right_leg',
+});
+
+function sourceRoleForControl(controlKey) {
+  return HUMANOID_CONTROL_SOURCE_ROLES[controlKey] || null;
 }
 
 function sourceProgress(controlKey) {
@@ -537,7 +558,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
       });
       sourceMembers.forEach(member => sourceBoneAssignments.set(
         member.sourceBoneKey, sourceAssignmentForMember(member, driverId, {
-          limbRole: sourceLimbRole(controlKey),
+          limbRole: sourceRoleForControl(controlKey),
           progress: sourceProgress(controlKey),
           segmentIndex: /Elbow|Knee|Hand|Foot/.test(controlKey) ? 1 : 0,
           bindingMethod: 'manual_control_mapping',
@@ -567,7 +588,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
       sourceMembersForJoint(modelRig, jointId).forEach(member =>
         sourceBoneAssignments.set(member.sourceBoneKey,
           sourceAssignmentForMember(member, segment.id, {
-            limbRole: sourceLimbRole(segment.id),
+            limbRole: segment.role,
             segmentStartControl: segment.start,
             segmentEndControl: segment.end,
             bindingMethod: 'mapped_joint_path',

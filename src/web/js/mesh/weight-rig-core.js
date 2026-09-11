@@ -270,7 +270,7 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
   modelRigState,
   getModelRig: () => modelSkinningRig,
   getAutomaticRig: () => modelSkinningRig?.humanoidAutomaticControlRig,
-  resetModelPose,
+  resetCurrentPoseForHumanoidRigEdit,
   setPhysicsSuspended: setHumanoidEditPhysicsSuspended,
   getKnownMeshes: () => knownMeshes,
   resolveMappings: resolveHumanoidControlMappings,
@@ -1322,6 +1322,26 @@ function resetModelPose({request = true} = {}) {
   modelSkinningRig.poseActiveVerticesByMesh.clear();
   modelSkinningRig.poseSourceBoneIdsByMesh.clear();
   return changed;
+}
+
+// Edit Rig starts from the current ModelJoint rest configuration. Clear only
+// active manual/humanoid pose state; Set Root and its structure revision are
+// intentionally preserved until the user explicitly changes or resets them.
+function resetCurrentPoseForHumanoidRigEdit({request = false} = {}) {
+  if (!modelSkinningRig) return false;
+  const hadPose = modelSkinningRig.poseRotationByJointId.size > 0
+    || Object.keys(modelRigState.humanoidPose || {}).length > 0
+    || modelSkinningRig.poseActiveJointKey !== '';
+  modelSkinningRig.poseRotationByJointId.clear();
+  modelRigState.humanoidPose = {};
+  const changed = applyModelPose({request});
+  modelSkinningRig.poseActiveVerticesByMesh.clear();
+  modelSkinningRig.poseSourceBoneIdsByMesh.clear();
+  modelSkinningRig.poseTransformCache.clear();
+  modelSkinningRig.poseFrameCache.clear();
+  modelSkinningRig.poseActiveJointKey = '';
+  modelSkinningRig.poseAffectedJointIds = new Set();
+  return changed || hadPose;
 }
 
 function clearModelManualPose({request = false} = {}) {

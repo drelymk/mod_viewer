@@ -3933,13 +3933,22 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
           sideCenter: 0, depthCenter: 0}, controls, paths: {},
       }, joints: [{jointId: 9, signature: '["body#bone=9"]',
         restPivot: [.4, .5, .6], members: []}]};
+      const modelRigState = {
+        explicitRootSignatures: new Set(['custom-root']),
+        humanoidPose: {head: [1, 0, 0]},
+      };
       let notifications = 0;
       let persisted = null;
       let resets = 0;
       const session = edit.initializeHumanoidRigEditSession({
+        modelRigState,
         getModelRig: () => rig,
         getAutomaticRig: () => rig.humanoidControlRig,
-        resetModelPose: () => { resets += 1; },
+        resetCurrentPoseForHumanoidRigEdit: () => {
+          resets += 1;
+          modelRigState.humanoidPose = {};
+          return true;
+        },
         getKnownMeshes: () => [{userData: {modPath: 'mod'}}],
         resolveMappings: control.resolveHumanoidControlMappings,
         persist: async (_path, value) => {
@@ -3951,6 +3960,18 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
       });
       session.begin();
       const initial = session.snapshot();
+      const rootsAfterBegin = [...modelRigState.explicitRootSignatures];
+      const poseAfterBegin = {...modelRigState.humanoidPose};
+      const allCarryResults = control.HUMANOID_CONTROL_KEYS.map((key, index) => {
+        const target = [.1 * (index + 1), .2 * (index + 1),
+          .03 * (index + 1)];
+        const began = session.beginCarry(key);
+        const updated = session.updateDraft(key, target, {
+          candidateJointId: null, candidateDistance: Infinity});
+        const position = session.snapshot().controls[key].position;
+        const finished = session.finishCarry();
+        return {key, began, updated, finished, position};
+      });
       session.beginCarry('leftShoulder');
       session.updateDraft('leftShoulder', [1, 1, 1], {
         candidateJointId: 9, candidateDistance: 10});
@@ -3965,10 +3986,17 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
       const saved = await session.save();
       const expectedSemantic = control.humanoidControlPositionToSemantic(
         [1, 1, 1], rig.humanoidControlRig);
-      return {initial, snapped, sticky, free, saved, persisted,
-        expectedSemantic, notifications, resets};
+      return {initial, rootsAfterBegin, poseAfterBegin, allCarryResults,
+        snapped, sticky, free, saved, persisted, expectedSemantic,
+        notifications, resets};
     }""")
     assert result["initial"]["controls"]["leftShoulder"]["position"] == [0, 0, 0]
+    assert result["rootsAfterBegin"] == ["custom-root"]
+    assert result["poseAfterBegin"] == {}
+    assert len(result["allCarryResults"]) == 16
+    assert all(item["began"] and item["updated"] and item["finished"]
+               and item["position"] != [0, 0, 0]
+               for item in result["allCarryResults"])
     assert result["snapped"]["mappedJointIdByControl"] == {"leftShoulder": 9}
     assert result["snapped"]["controls"]["leftShoulder"]["position"] == [.4, .5, .6]
     assert result["sticky"]["mappedJointIdByControl"] == {"leftShoulder": 9}
@@ -4724,6 +4752,8 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
         [10, [-.8, 1.2, 0]], [11, [-1.2, 1.2, 0]],
         [12, [-1.5, 1.2, 0]], [13, [-1.8, 1.2, 0]],
         [14, [-2, 1.2, 0]], [20, [-1.5, .6, 0]],
+        [40, [.45, .4, 0]], [41, [.45, -.4, 0]],
+        [42, [.45, -.8, 0]], [43, [.45, -1.2, 0]],
         [30, [0, 1.5, 0]], [31, [0, 1.65, 0]], [32, [0, 1.8, 0]],
       ];
       const makeModel = splitArmComponent => {
@@ -4732,18 +4762,21 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
           members: [member(jointId)],
         }));
         const armParent = splitArmComponent
-          ? {10: null, 11: 10, 12: 11}
-          : {10: null, 11: 10, 12: 11, 13: 12, 14: 13, 20: 12};
+          ? {10: null, 11: 10, 12: 11, 40: null, 41: 40, 42: 41, 43: 42}
+          : {10: null, 11: 10, 12: 11, 13: 12, 14: 13, 20: 12,
+            40: null, 41: 40, 42: 41, 43: 42};
         const armChildren = splitArmComponent
-          ? {10: [11], 11: [12], 12: []}
-          : {10: [11], 11: [12], 12: [13, 20], 13: [14], 14: [], 20: []};
+          ? {10: [11], 11: [12], 12: [], 40: [41], 41: [42], 42: [43], 43: []}
+          : {10: [11], 11: [12], 12: [13, 20], 13: [14], 14: [], 20: [],
+            40: [41], 41: [42], 42: [43], 43: []};
         const tailParent = splitArmComponent ? {13: null, 14: 13} : {};
         const tailChildren = splitArmComponent ? {13: [14], 14: []} : {};
         const centralParent = {30: null, 31: 30, 32: 31};
         const centralChildren = {30: [31], 31: [32], 32: []};
         const components = [
           {componentId: 0, rootId: 10,
-            nodeIds: splitArmComponent ? [10, 11, 12] : [10, 11, 12, 13, 14, 20],
+            nodeIds: splitArmComponent ? [10, 11, 12, 40, 41, 42, 43]
+              : [10, 11, 12, 13, 14, 20, 40, 41, 42, 43],
             parentById: armParent, childrenById: armChildren},
           ...(splitArmComponent ? [{componentId: 1, rootId: 13,
             nodeIds: [13, 14], parentById: tailParent,
@@ -4790,6 +4823,7 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
       const model = makeModel(false);
       const mapped = mappingsFor([
         ['leftShoulder', 10], ['leftElbow', 14], ['neck', 30], ['head', 32],
+        ['rightKnee', 41], ['rightFoot', 43],
       ]);
       const authoritative = buildHumanoidRigBinding({controlRig, modelRig: model,
         heatBinding: heatFor(model), controlMappings: mapped});
@@ -4818,8 +4852,11 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
           interior: [11, 12, 13].map(jointId => entry(authoritative, jointId)),
           elbow: entry(authoritative, 14),
           branch: entry(authoritative, 20),
+          rightLegInterior: entry(authoritative, 42),
           neckHeadInterior: entry(authoritative, 31),
-          sourceDrivers: [10, 11, 12, 13, 14, 31].map(jointId =>
+          sourceRoles: [42, 31].map(jointId =>
+            authoritative.sourceBoneAssignments.get(`body#bone=${jointId}`)?.limbRole),
+          sourceDrivers: [10, 11, 12, 13, 14, 31, 42].map(jointId =>
             authoritative.sourceBoneAssignments.get(`body#bone=${jointId}`)?.driverId),
           pathCount: authoritative.diagnostics.mappedPathCount,
         },
@@ -4854,13 +4891,17 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
     assert result["authoritative"]["branch"]["bindingMethod"] == \
         "heat_connectivity"
     assert result["authoritative"]["branch"]["driverId"] == "right_upper_arm"
+    assert result["authoritative"]["rightLegInterior"] == {
+        "driverId": "right_lower_leg", "bindingMethod": "mapped_joint_path",
+        "segmentStartControl": "rightKnee", "segmentEndControl": "rightFoot"}
     assert result["authoritative"]["neckHeadInterior"] == {
         "driverId": "head", "bindingMethod": "mapped_joint_path",
         "segmentStartControl": "neck", "segmentEndControl": "head"}
     assert result["authoritative"]["sourceDrivers"] == [
         "left_upper_arm", "left_upper_arm", "left_upper_arm",
-        "left_upper_arm", "left_lower_arm", "head"]
-    assert result["authoritative"]["pathCount"] == 2
+        "left_upper_arm", "left_lower_arm", "head", "right_lower_leg"]
+    assert result["authoritative"]["sourceRoles"] == ["right_leg", "torso"]
+    assert result["authoritative"]["pathCount"] == 3
     assert result["onlyStart"]["bindingMethod"] == "heat_connectivity"
     assert result["differentComponents"]["interior"]["bindingMethod"] == \
         "heat_connectivity"
