@@ -539,6 +539,7 @@ export function createSkinningRuntime({
     modelRigState.jointPickIntent = null;
     modelRigState.ikEnabled = false;
     modelRigState.activeLimbRole = 'left_arm';
+    modelRigState.selectedHumanoidControlKey = null;
     modelRigState.explicitRootSignatures = preservedRootSignatures;
     rigPresetState.lastApplyResult = null;
     modelRigState.pickStatus = '';

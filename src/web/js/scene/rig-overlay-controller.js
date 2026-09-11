@@ -7,6 +7,9 @@ import {
   HUMANOID_CONTROL_PICK_RADIUS,
   JOINT_ATTRACTION_RADIUS_PX,
 } from '../mesh/humanoid-rig-edit-session.js';
+import {
+  HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES,
+} from '../mesh/humanoid-control-rig.js';
 
 const PICK_ACQUIRE_RADIUS = 9;
 const PICK_RELEASE_RADIUS = 13;
@@ -263,16 +266,13 @@ function humanoidConfidenceColor(role, confidence, source) {
   return humanoidRoleColor(role);
 }
 
-const CONTROL_KEYS_FOR_OVERLAY = Object.freeze([
-  {key: 'chest', role: 'torso'}, {key: 'pelvis', role: 'torso'},
-  {key: 'leftShoulder', role: 'left_arm'},
-  {key: 'leftElbow', role: 'left_arm'}, {key: 'leftHand', role: 'left_arm'},
-  {key: 'rightShoulder', role: 'right_arm'},
-  {key: 'rightElbow', role: 'right_arm'}, {key: 'rightHand', role: 'right_arm'},
-  {key: 'leftHip', role: 'left_leg'}, {key: 'leftKnee', role: 'left_leg'},
-  {key: 'leftFoot', role: 'left_leg'}, {key: 'rightHip', role: 'right_leg'},
-  {key: 'rightKnee', role: 'right_leg'}, {key: 'rightFoot', role: 'right_leg'},
-]);
+const CONTROL_ROLE_BY_KEY = Object.freeze({
+  chest: 'torso', pelvis: 'torso', neck: 'torso', head: 'torso',
+  ...HUMANOID_CONTROL_LIMB_ROLES,
+});
+const CONTROL_KEYS_FOR_OVERLAY = Object.freeze(HUMANOID_CONTROL_KEYS.map(key => ({
+  key, role: CONTROL_ROLE_BY_KEY[key] || 'torso',
+})));
 
 export function createRigOverlayController({
   scene, camera, canvas, getMeshes, getRigState,
@@ -281,6 +281,7 @@ export function createRigOverlayController({
   onRigJointPicked, onRigSurfacePickRequested, onRigJointPickCancelled,
   beginHumanoidControlCarry, updateHumanoidControlDraft,
   finishHumanoidControlCarry, cancelHumanoidControlCarry,
+  onHumanoidControlSelected,
   requestRender,
 } = {}) {
   const selectedIdFor = snapshot => selectedBoneFor(snapshot);
@@ -557,7 +558,7 @@ export function createRigOverlayController({
         ...(source?.humanoidControlRig
           || currentSnapshot?.humanoidControlRig || {}),
         available: true,
-        controls: edit.displayControls || edit.controls,
+        controls: edit.controls,
       };
     }
     return source?.humanoidControlRig || null;
@@ -579,18 +580,11 @@ export function createRigOverlayController({
   function humanoidDisplayPoint(source, key) {
     const edit = currentSnapshot?.humanoidRigEdit;
     if (edit?.editing) {
-      const displayed = edit.displayControls?.[key]
-        || edit.controls?.[key];
+      const displayed = edit.controls?.[key];
       if (displayed) return displayed.position || displayed;
-      const mappedJointId = Number(edit.mappedJointIdByControl?.[key]);
-      if (Number.isInteger(mappedJointId)) {
-        const frame = getRigJointPoseFrame?.(mappedJointId);
-        if (frame?.pivot) return frame.pivot;
-      }
     }
     const rig = humanoidControlRigFor(source);
-    const value = rig?.displayControls?.[key]
-      || rig?.controls?.[key];
+    const value = rig?.controls?.[key];
     return value?.position || value
       || rig?.diagnostics?.templatePoints?.[key]
       || null;
@@ -769,7 +763,10 @@ export function createRigOverlayController({
   function editControlColor(role, key) {
     const edit = currentSnapshot?.humanoidRigEdit;
     const base = humanoidRoleColor(role);
-    if (!edit?.editing) return base;
+    if (!edit?.editing) {
+      return currentSnapshot?.ik?.selectedHumanoidControlKey === key
+        ? [1, .78, .08] : base;
+    }
     if (edit.carryingControlKey === key) return [1, .96, .28];
     if (edit.selectedControlKey === key) return [1, .78, .08];
     if (hoveredControlKey === key) return [1, .9, .35];
@@ -824,6 +821,8 @@ export function createRigOverlayController({
       || rig?.confidence || 'low';
     const links = [
       ['chest', 'pelvis', 'torso'],
+      ['chest', 'neck', 'torso'],
+      ['neck', 'head', 'torso'],
       ['chest', 'leftShoulder', 'left_arm'],
       ['chest', 'rightShoulder', 'right_arm'],
       ['leftShoulder', 'leftElbow', 'left_arm'],
@@ -943,9 +942,8 @@ export function createRigOverlayController({
     const edit = currentSnapshot?.humanoidRigEdit;
     if (edit?.editing && edit.controls) {
       return Object.fromEntries(Object.keys(edit.controls).map(key => [key, {
-        ...edit.displayControls?.[key],
+        ...edit.controls[key],
         position: humanoidDisplayPoint(currentSource, key)
-          || edit.displayControls?.[key]?.position
           || edit.controls[key]?.position,
       }]));
     }
@@ -1354,6 +1352,15 @@ export function createRigOverlayController({
       }
       return;
     }
+    if (!currentSnapshot?.jointPickIntent
+        && currentSnapshot?.ik?.enabled === true) {
+      const nearest = nearestHumanoidControl(event.clientX, event.clientY);
+      hoveredControlKey = nearest?.key || null;
+      setPickCursor(nearest ? 'pointer' : '');
+      updateHumanoidPosedOverlay(currentSource);
+      requestRender?.();
+      return;
+    }
     if (!currentSnapshot?.jointPickIntent) return;
     if (event.altKey) {
       clearPickHover();
@@ -1382,6 +1389,21 @@ export function createRigOverlayController({
           canvas?.setPointerCapture?.(event.pointerId);
         } catch { /* best effort */ }
       }
+      return;
+    }
+    if (!currentSnapshot?.jointPickIntent
+        && currentSnapshot?.ik?.enabled === true) {
+      if (event.button !== 0 || event.altKey) return;
+      const nearest = nearestHumanoidControl(event.clientX, event.clientY);
+      if (!nearest) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      hoveredControlKey = nearest.key;
+      onHumanoidControlSelected?.(nearest.key);
+      currentSnapshot = getRigState?.() || currentSnapshot;
+      currentSource = sourceFor(currentSnapshot);
+      updateHumanoidPosedOverlay(currentSource);
+      requestRender?.();
       return;
     }
     if (!currentSnapshot?.jointPickIntent) return;

@@ -1092,9 +1092,6 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-influence-id { color: var(--text); font-family: ui-monospace, monospace; }
 .rig-influence-weight { margin-left: auto; color: var(--accent-soft); font-variant-numeric: tabular-nums; }
 .rig-snap-select { min-height: 26px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.rig-limb-buttons { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
-.rig-limb-button { min-width: 0 !important; padding: 4px 3px; font-size: 10px; }
-.rig-limb-button.active { color: var(--text); background: var(--accent); border-color: var(--accent-soft); }
 .rig-preset-select { width: 100%; min-height: 30px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .rig-preset-title { margin-top: 3px; }
 .rig-actions { display: flex; flex-wrap: wrap; gap: 5px; }

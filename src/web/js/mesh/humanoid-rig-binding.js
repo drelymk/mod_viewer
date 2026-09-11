@@ -5,6 +5,8 @@ import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 // consulted when these segments are built or when a limb is posed.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
   {id: 'torso', start: 'pelvis', end: 'chest'},
+  {id: 'neck', start: 'chest', end: 'neck'},
+  {id: 'head', start: 'neck', end: 'head'},
   {id: 'left_chest_shoulder', start: 'chest', end: 'leftShoulder'},
   {id: 'right_chest_shoulder', start: 'chest', end: 'rightShoulder'},
   {id: 'left_upper_arm', start: 'leftShoulder', end: 'leftElbow'},
@@ -24,6 +26,7 @@ const DEFAULT_DIRECT_DISTANCE_RATIO = 0.105;
 const DEFAULT_SECONDARY_DISTANCE_RATIO = 0.24;
 const DEFAULT_AMBIGUITY_MARGIN_RATIO = 0.025;
 const TERMINAL_EXTENSION_RATIO = 0.15;
+const CENTRAL_DRIVER_IDS = new Set(['torso', 'neck', 'head']);
 
 function numberId(value) {
   const result = Number(value);
@@ -178,7 +181,7 @@ function centralDomain(controlRig, height) {
 
 function semanticCandidateAllowed(point, driver, candidate, controlRig, height) {
   const id = driver.id;
-  if (id === 'torso') {
+  if (CENTRAL_DRIVER_IDS.has(id)) {
     const domain = centralDomain(controlRig, height);
     const lateral = Math.abs(point.clone().sub(domain.pelvis).dot(domain.right));
     return lateral <= domain.halfWidth;
@@ -421,7 +424,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
     const candidates = sortedCandidates(point, drivers, height, controlRig);
     candidatesByJointId.set(jointId, candidates);
     const centralCandidates = candidates.filter(candidate =>
-      candidate.driverId === 'torso');
+      CENTRAL_DRIVER_IDS.has(candidate.driverId));
     const best = articulationPreferredCandidate(centralCandidates);
     if (!best || best.distanceRatio > directLimit) return;
     const chosenCandidates = centralCandidates[0] === best
@@ -450,7 +453,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
     const root = pointForJoint(modelRig, rootId);
     if (!root) return;
     const candidates = secondaryCandidates(root, drivers, height, controlRig)
-      .filter(candidate => candidate.driverId === 'torso');
+      .filter(candidate => CENTRAL_DRIVER_IDS.has(candidate.driverId));
     const best = articulationPreferredCandidate(candidates);
     if (!best || best.distanceRatio > secondaryLimit
         || (isAmbiguous(candidates, ambiguityMargin)

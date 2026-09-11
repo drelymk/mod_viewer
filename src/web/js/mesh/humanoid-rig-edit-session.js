@@ -28,26 +28,6 @@ function finitePosition(value) {
     ? position : null;
 }
 
-function transformPosition(matrix, position) {
-  if (!Array.isArray(matrix) && !ArrayBuffer.isView(matrix)) {
-    return finitePosition(position);
-  }
-  const values = [...matrix].slice(0, 16).map(Number);
-  if (values.length < 16 || !values.every(Number.isFinite)) {
-    return finitePosition(position);
-  }
-  const x = Number(position[0]);
-  const y = Number(position[1]);
-  const z = Number(position[2]);
-  const w = values[3] * x + values[7] * y + values[11] * z + values[15];
-  const divisor = Math.abs(w) > 1e-8 ? w : 1;
-  return finitePosition([
-    (values[0] * x + values[4] * y + values[8] * z + values[12]) / divisor,
-    (values[1] * x + values[5] * y + values[9] * z + values[13]) / divisor,
-    (values[2] * x + values[6] * y + values[10] * z + values[14]) / divisor,
-  ]);
-}
-
 function normalizeOverrides(value) {
   const raw = value?.humanoid_control_rig || value;
   if (!raw || typeof raw !== 'object' || Number(raw.version) !== 1
@@ -96,7 +76,7 @@ function currentModPath(getKnownMeshes) {
 }
 
 function createSession({modelRigState, getModelRig, getAutomaticRig,
-    getHumanoidRigEditPose, getModelJointPosePosition,
+    resetModelPose, setPhysicsSuspended,
     resolveMappings, rebuildActiveRig, getKnownMeshes, persist, clearPersist,
     cancelWeightPicking, cancelRigPicking, notifyChanged, requestRender} = {}) {
   let savedOverrides = null;
@@ -107,52 +87,14 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
     selectedControlKey: null, carryingControlKey: null,
     draftRig: null, baseRig: null, mappedJointIdByControl: new Map(),
     baseMappedJointIdByControl: new Map(),
-    poseProjectionByControl: new Map(),
     carryBefore: null,
   };
 
   function notify() { notifyChanged?.(); }
 
-  function poseProjectionFor(controlKey) {
-    return state.poseProjectionByControl.get(controlKey) || {};
-  }
-
-  function jointPosePosition(jointId) {
-    return finitePosition(getModelJointPosePosition?.(jointId));
-  }
-
-  function displayPositionFor(controlKey) {
-    const control = state.draftRig?.controls?.[controlKey];
-    const rest = finitePosition(control?.position);
-    if (!rest) return null;
-    const mapping = state.mappedJointIdByControl.get(controlKey);
-    const projection = poseProjectionFor(controlKey);
-    if (mapping && Number(projection.anchorJointId)
-        === Number(mapping.jointId)) {
-      const captured = finitePosition(projection.displayPosition);
-      if (captured) return captured;
-    }
-    const posedJoint = mapping ? jointPosePosition(mapping.jointId) : null;
-    if (posedJoint) return posedJoint;
-    return transformPosition(projection.restToDisplay, rest) || rest;
-  }
-
-  function restPositionForDisplay(controlKey, displayPosition) {
-    return transformPosition(
-      poseProjectionFor(controlKey).displayToRest, displayPosition)
-      || displayPosition;
-  }
-
   function editSnapshot() {
     const controls = state.editing && state.draftRig
       ? clone(state.draftRig.controls || {}) : {};
-    const displayControls = state.editing && state.draftRig
-      ? Object.fromEntries(HUMANOID_CONTROL_KEYS.map(key => {
-        const control = clone(state.draftRig.controls?.[key] || {});
-        const position = displayPositionFor(key);
-        if (position) control.position = position;
-        return [key, control];
-      })) : {};
     return {
       editing: state.editing,
       saving: state.saving,
@@ -161,7 +103,6 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       selectedControlKey: state.selectedControlKey,
       carryingControlKey: state.carryingControlKey,
       controls,
-      displayControls,
       mappedJointIdByControl: Object.fromEntries(
         [...state.mappedJointIdByControl.entries()]
           .map(([key, mapping]) => [key, Number(mapping?.jointId)])),
@@ -195,14 +136,17 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
   function getSavedOverrides() { return clone(savedOverrides); }
 
   function begin() {
+    cancelWeightPicking?.();
+    cancelRigPicking?.();
+    setPhysicsSuspended?.(true);
+    resetModelPose?.({request: false});
     const rig = getModelRig?.();
     if (!rig?.humanoidControlRig) {
+      setPhysicsSuspended?.(false);
       state.error = 'The inferred Humanoid Rig is not loaded.';
       notify();
       return {started: false, error: state.error};
     }
-    cancelWeightPicking?.();
-    cancelRigPicking?.();
     const mappings = resolveMappings?.({savedOverrides, modelRig: rig})
       || new Map();
     state = {
@@ -212,9 +156,6 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       baseRig: clone(rig.humanoidControlRig),
       mappedJointIdByControl: mappings,
       baseMappedJointIdByControl: new Map(mappings),
-      poseProjectionByControl: new Map(Object.entries(
-        getHumanoidRigEditPose?.({modelRig: rig, mappedJointIdByControl: mappings})
-          || {})),
       carryBefore: null,
     };
     notify();
@@ -289,8 +230,7 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
         candidate.restPivot || candidate.restCenter);
       state.candidateJointId = Number(candidateJointId);
     } else {
-      state.draftRig.controls[controlKey].position = restPositionForDisplay(
-        controlKey, freePosition);
+      state.draftRig.controls[controlKey].position = freePosition;
       state.candidateJointId = candidate && Number.isFinite(distance)
         && distance <= JOINT_ATTRACTION_RADIUS_PX ? Number(candidateJointId) : null;
     }
@@ -401,9 +341,9 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
         selectedControlKey: null, carryingControlKey: null,
         draftRig: null, baseRig: null, mappedJointIdByControl: new Map(),
         baseMappedJointIdByControl: new Map(),
-        poseProjectionByControl: new Map(),
         carryBefore: null,
       };
+      setPhysicsSuspended?.(false);
       notify();
       requestRender?.();
       return {saved: true, humanoid_control_rig: value};
@@ -452,9 +392,9 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       selectedControlKey: null, carryingControlKey: null,
       draftRig: null, baseRig: null, mappedJointIdByControl: new Map(),
       baseMappedJointIdByControl: new Map(),
-      poseProjectionByControl: new Map(),
       carryBefore: null,
     };
+    setPhysicsSuspended?.(false);
     notify();
     requestRender?.();
     return true;
@@ -469,9 +409,9 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       selectedControlKey: null, carryingControlKey: null,
       draftRig: null, baseRig: null, mappedJointIdByControl: new Map(),
       baseMappedJointIdByControl: new Map(),
-      poseProjectionByControl: new Map(),
       carryBefore: null,
     };
+    setPhysicsSuspended?.(false);
   }
 
   return {

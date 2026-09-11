@@ -11,7 +11,6 @@ import {
   setPhysicsContinuousLinearResponse, setPhysicsDamping, setPhysicsFrequency,
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
   setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
-  setRigActiveLimbRole,
   beginRigJointPicking, cancelRigJointPicking, setRigIkEnabled,
   setRigJointRoot,
   setRigRotationSnapDegrees, setWeightPickerViewMode,
@@ -21,6 +20,7 @@ import {
   deleteRigPosePreset, renameRigPosePreset,
   saveRigPosePreset,
 } from '../mesh/weight-rig-runtime.js';
+import {HUMANOID_CONTROL_KEYS} from '../mesh/humanoid-control-rig.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 
 let panel = null;
@@ -30,12 +30,9 @@ let latestWeightState = null;
 let latestRigState = null;
 
 const $ = id => document.getElementById(id);
-const LIMB_ROLES = Object.freeze([
-  ['left_arm', 'Left Arm'], ['right_arm', 'Right Arm'],
-  ['left_leg', 'Left Leg'], ['right_leg', 'Right Leg'],
-]);
 const HUMANOID_CONTROL_LABELS = Object.freeze({
-  chest: 'Chest', pelvis: 'Pelvis', leftShoulder: 'Left Shoulder',
+  chest: 'Chest', pelvis: 'Pelvis', neck: 'Neck', head: 'Head',
+  leftShoulder: 'Left Shoulder',
   leftElbow: 'Left Elbow', leftHand: 'Left Hand',
   rightShoulder: 'Right Shoulder', rightElbow: 'Right Elbow',
   rightHand: 'Right Hand', leftHip: 'Left Hip', leftKnee: 'Left Knee',
@@ -458,28 +455,10 @@ function buildRigSection(parent) {
   ik.className = 'rig-panel-enable-ik';
   ik.addEventListener('change', () => setRigIkEnabled(ik.checked));
   ikLabel.appendChild(ik);
-  addText(ikLabel, 'weight-label', 'Enable IK');
+  addText(ikLabel, 'weight-label', 'Enable Inverse Kinematics');
   advanced.content.appendChild(ikLabel);
   ui.ik = ik;
-
-  addText(advanced.content, 'weight-rig-control-label', 'Limb');
-  const limbButtons = document.createElement('div');
-  limbButtons.className = 'rig-limb-buttons';
-  const buttonsByRole = new Map();
-  LIMB_ROLES.forEach(([role, label]) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'ui-button rig-limb-button';
-    button.textContent = label.replace('Left', 'L').replace('Right', 'R');
-    button.setAttribute('aria-label', label);
-    button.setAttribute('aria-pressed', 'false');
-    button.dataset.role = role;
-    button.addEventListener('click', () => setRigActiveLimbRole(role));
-    limbButtons.appendChild(button);
-    buttonsByRole.set(role, button);
-  });
-  advanced.content.appendChild(limbButtons);
-  ui.limbButtons = buttonsByRole;
+  ui.ikSelection = addText(advanced.content, 'rig-hint');
 
   buildMainRigControls(advanced.content);
 
@@ -709,8 +688,9 @@ function syncHumanoidEditControls(state) {
   ui.cancelEdit.disabled = edit.saving;
   ui.saveEdit.disabled = edit.saving || !state?.loaded;
   const controlCount = Object.keys(edit.controls || {}).length;
+  const controlTotal = HUMANOID_CONTROL_KEYS.length;
   ui.editCount.textContent = editing
-    ? `${controlCount} / 14 control points visible` : '';
+    ? `${controlCount} / ${controlTotal} control points visible` : '';
   const key = edit.selectedControlKey;
   ui.editControl.textContent = key
     ? HUMANOID_CONTROL_LABELS[key] || key : 'Click a rig point to move it.';
@@ -763,14 +743,11 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   ui.snap.value = String(state?.rotationSnapDegrees ?? 0);
   ui.snap.disabled = editing || !state?.loaded || !joints.length || !!state?.ik?.enabled;
   const ik = state?.ik || {};
-  const role = ik.activeLimbRole || 'left_arm';
   const hasSelected = !!selected;
-  ui.limbButtons.forEach((button, buttonRole) => {
-    const active = buttonRole === role;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-pressed', String(active));
-    button.disabled = editing || !state?.loaded;
-  });
+  const selectedControl = ik.selectedHumanoidControlKey;
+  ui.ikSelection.textContent = selectedControl
+    ? `Selected point: ${HUMANOID_CONTROL_LABELS[selectedControl] || selectedControl}`
+    : 'Click a rig point to select it.';
   ui.ik.checked = !!ik.enabled;
   ui.ik.disabled = editing || !state?.loaded || !ik.available;
   ui.clearJoint.disabled = editing || !hasSelected;

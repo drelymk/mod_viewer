@@ -38,6 +38,7 @@ export {
 export {
   setRigActiveLimbRole,
   setRigIkEnabled,
+  selectHumanoidControl,
   solveRigIkTarget,
 } from './humanoid-pose-runtime.js';
 export {

@@ -52,9 +52,11 @@ function createModelRigDefaults() {
     humanoidStructureRevision: null,
     humanoidControlRig: null,
     humanoidPose: {},
+    humanoidRigEditPhysicsSuspended: false,
     rotationSnapDegrees: 0,
     ikEnabled: false,
     activeLimbRole: 'left_arm',
+    selectedHumanoidControlKey: null,
     explicitRootSignatures: new Set(),
   };
 }

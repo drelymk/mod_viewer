@@ -21,7 +21,7 @@ const FOOT_SIDE_MIN = 0.025;
 const FOOT_DEPTH_BAND_MAX_HEIGHT = 0.02;
 const FOOT_DEPTH_FROM_BACK_FRACTION = 0.30;
 const CONTROL_KEYS = Object.freeze([
-  'chest', 'pelvis',
+  'chest', 'pelvis', 'neck', 'head',
   'leftShoulder', 'leftElbow', 'leftHand',
   'rightShoulder', 'rightElbow', 'rightHand',
   'leftHip', 'leftKnee', 'leftFoot',
@@ -29,6 +29,7 @@ const CONTROL_KEYS = Object.freeze([
 ]);
 const CONTROL_DRIVER_IDS = Object.freeze({
   chest: 'torso', pelvis: 'torso',
+  neck: 'neck', head: 'head',
   leftShoulder: 'left_upper_arm', leftElbow: 'left_lower_arm',
   leftHand: 'left_lower_arm', rightShoulder: 'right_upper_arm',
   rightElbow: 'right_lower_arm', rightHand: 'right_lower_arm',
@@ -39,8 +40,16 @@ const CONTROL_DRIVER_IDS = Object.freeze({
 const TEMPLATE_PRIORS = Object.freeze({
   ...DEFAULT_HUMANOID_PROPORTIONS,
   vertical: Object.freeze({
-    neck: 0.82, chest: 0.685, pelvis: 0.55, knee: 0.2925, foot: 0.035,
+    neck: 0.82, head: 0.91, chest: 0.685, pelvis: 0.55, knee: 0.2925,
+    foot: 0.035,
   }),
+});
+
+const CONTROL_LIMB_ROLES = Object.freeze({
+  leftShoulder: 'left_arm', leftElbow: 'left_arm', leftHand: 'left_arm',
+  rightShoulder: 'right_arm', rightElbow: 'right_arm', rightHand: 'right_arm',
+  leftHip: 'left_leg', leftKnee: 'left_leg', leftFoot: 'left_leg',
+  rightHip: 'right_leg', rightKnee: 'right_leg', rightFoot: 'right_leg',
 });
 
 function finiteNumber(value, fallback = 0) {
@@ -362,7 +371,7 @@ export function rebuildHumanoidControlPaths(rig) {
   const controls = rig.controls || {};
   const point = key => vector3(controls[key]?.position || controls[key]);
   rig.paths = {
-    torso: [point('chest'), point('pelvis')],
+    torso: ['pelvis', 'chest', 'neck', 'head'].map(point),
     leftArm: ['leftShoulder', 'leftElbow', 'leftHand'].map(point),
     rightArm: ['rightShoulder', 'rightElbow', 'rightHand'].map(point),
     leftLeg: ['leftHip', 'leftKnee', 'leftFoot'].map(point),
@@ -482,6 +491,7 @@ function fallbackPoint(key) {
   const foot = 0.02 + p.footLift;
   const hip = foot + p.legLength;
   const neck = hip + p.hipToNeckLength;
+  const head = neck + .10;
   const chest = hip + p.hipToNeckLength * p.chestFraction;
   const shoulder = p.shoulderHalfWidth;
   const angle = p.armDropAngleDeg * Math.PI / 180;
@@ -490,7 +500,7 @@ function fallbackPoint(key) {
   const elbowSide = shoulder + armSide * p.elbowFraction;
   const elbowHeight = neck - armDrop * p.elbowFraction;
   const values = {
-    chest: [0, chest], pelvis: [0, hip],
+    chest: [0, chest], pelvis: [0, hip], neck: [0, neck], head: [0, head],
     leftShoulder: [-shoulder, neck], leftElbow: [-elbowSide, elbowHeight],
     leftHand: [-shoulder - armSide, neck - armDrop], rightShoulder: [shoulder, neck],
     rightElbow: [elbowSide, elbowHeight], rightHand: [shoulder + armSide, neck - armDrop],
@@ -588,7 +598,9 @@ function proportionalDiagnostics(template, bounds, frame, supports, base,
     },
     controlDepthN: Object.fromEntries(CONTROL_KEYS.map(key => [key,
       worldToSemantic(template[key], bounds, frame).depthN])),
-    templatePoints: {neck: vector3(template.neck)},
+    templatePoints: {
+      neck: vector3(template.neck), head: vector3(template.head),
+    },
     proportionalTemplate: {
       characterHeight: template.characterHeight,
       footLiftN: finiteNumber(p.footLift),
@@ -603,6 +615,7 @@ function proportionalDiagnostics(template, bounds, frame, supports, base,
       leftFoot: vector3(template.leftFoot),
       rightFoot: vector3(template.rightFoot),
       neck: vector3(template.neck),
+      head: vector3(template.head),
     },
     failureReasons: [],
     fallbackControls: [],
@@ -665,6 +678,7 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
     leftFoot,
     rightFoot,
     semanticAxes: frame,
+    headHeight: bounds.highHeight,
     proportions: options.proportions || DEFAULT_HUMANOID_PROPORTIONS,
   });
   if (!template) {
@@ -676,7 +690,7 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
   const controls = Object.fromEntries(CONTROL_KEYS.map(key => [key,
     buildControl(template, key, bounds, frame, supports)]));
   const paths = {
-    torso: [controls.chest.position, controls.pelvis.position],
+    torso: ['pelvis', 'chest', 'neck', 'head'].map(key => controls[key].position),
     leftArm: pathFor(template, 'leftShoulder', 'leftElbow', 'leftHand'),
     rightArm: pathFor(template, 'rightShoulder', 'rightElbow', 'rightHand'),
     leftLeg: pathFor(template, 'leftHip', 'leftKnee', 'leftFoot'),
@@ -700,7 +714,8 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
     accepted: true,
     confidence: 'deterministic',
     confidenceByRegion: {
-      torso: 'deterministic', arms: 'deterministic', legs: 'deterministic',
+      torso: 'deterministic', head: 'deterministic', arms: 'deterministic',
+      legs: 'deterministic',
       overall: 'deterministic',
     },
     frame: {
@@ -737,4 +752,5 @@ export function serializeHumanoidControlRig(rig) {
 export const HUMANOID_CONTROL_KEYS = CONTROL_KEYS;
 export const HUMANOID_CONTROL_DRIVER_IDS = CONTROL_DRIVER_IDS;
 export const HUMANOID_TEMPLATE_PRIORS = TEMPLATE_PRIORS;
+export const HUMANOID_CONTROL_LIMB_ROLES = CONTROL_LIMB_ROLES;
 export {DEFAULT_HUMANOID_PROPORTIONS, buildProportionalHumanoidRig};

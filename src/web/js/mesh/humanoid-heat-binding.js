@@ -556,7 +556,7 @@ function applyExplicitControlMappings(sourceBoneAssignments, controlMappings) {
         || sourceBoneKey(sourceKey, boneId);
       sourceBoneAssignments.set(sourceBoneKeyValue, {
         sourceKey: String(sourceKey), boneId, sourceBoneKey: sourceBoneKeyValue,
-        limbRole: controlKey === 'chest' || controlKey === 'pelvis'
+        limbRole: ['chest', 'pelvis', 'neck', 'head'].includes(controlKey)
           ? 'torso' : controlKey.startsWith('left')
             ? controlKey.includes('Hip') || controlKey.includes('Knee')
               || controlKey.includes('Foot') ? 'left_leg' : 'left_arm'

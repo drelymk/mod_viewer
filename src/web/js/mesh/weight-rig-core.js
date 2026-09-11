@@ -80,7 +80,6 @@ import {
   applyHumanoidControlRigOverrides, buildHumanoidControlRig,
   resolveHumanoidControlMappings,
 } from './humanoid-control-rig.js';
-import {captureHumanoidRigEditPose} from './humanoid-rig-edit-pose.js';
 import {mergeHumanoidLimbPose, solveHumanoidControlIk} from './humanoid-rig-ik.js';
 import {buildHumanoidHeatBinding} from './humanoid-heat-binding.js';
 import {
@@ -259,7 +258,7 @@ initializeWeightModelSession({
 initializeHumanoidPoseRuntime({
   modelRigState,
   getModelRig: () => modelSkinningRig,
-  getPrimaryLimb: () => primaryHumanoidLimb(),
+  getPrimaryLimb: role => primaryHumanoidLimb(role),
   solveControlIk: solveHumanoidControlIk,
   mergeLimbPose: mergeHumanoidLimbPose,
   applyPose: options => applyModelPose(options),
@@ -271,9 +270,8 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
   modelRigState,
   getModelRig: () => modelSkinningRig,
   getAutomaticRig: () => modelSkinningRig?.humanoidAutomaticControlRig,
-  getHumanoidRigEditPose: captureHumanoidRigEditPose,
-  getModelJointPosePosition: jointId => modelSkinningRig?.poseFrameCache
-    ?.get(Number(jointId))?.pivot?.toArray?.() || null,
+  resetModelPose,
+  setPhysicsSuspended: setHumanoidEditPhysicsSuspended,
   getKnownMeshes: () => knownMeshes,
   resolveMappings: resolveHumanoidControlMappings,
   persist: (path, value) => window.pywebview?.api
@@ -285,8 +283,8 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
   rebuildActiveRig: async () => {
     if (!modelSkinningRig) return;
     buildPrimaryHumanoidRig(modelSkinningRig);
-    // The old IK targets are authored against the previous control rig. Keep
-    // manual ModelJoint pose intact and clear only the virtual humanoid pose.
+    // Edit mode starts from rest and does not carry a virtual pose into the
+    // rebuilt control rig.
     modelRigState.humanoidPose = {};
     applyModelPose({request: false});
   },
@@ -462,21 +460,6 @@ function humanoidControlRigSnapshot() {
         position: Array.isArray(modelRigState.humanoidPose?.[key])
           ? [...modelRigState.humanoidPose[key]] : [...(control.position || [0, 0, 0])],
       }]));
-    const mappings = resolveHumanoidControlMappings({
-      savedOverrides: humanoidRigEditSession?.getSavedOverrides?.(),
-      modelRig: modelSkinningRig,
-    });
-    const projections = captureHumanoidRigEditPose({
-      modelRig: modelSkinningRig,
-      mappedJointIdByControl: mappings,
-    });
-    const displayControls = Object.fromEntries(Object.entries(controls)
-      .map(([key, control]) => [key, {
-        ...control,
-        position: Array.isArray(modelRigState.humanoidPose?.[key])
-          ? [...modelRigState.humanoidPose[key]]
-          : projections[key]?.displayPosition || control.position,
-      }]));
     humanoidControlRigSnapshotCache = {
       version: Number(rig.version) || 1,
       source: 'humanoid_control_rig',
@@ -486,7 +469,6 @@ function humanoidControlRigSnapshot() {
       confidence: rig.confidence || 'low',
       confidenceByRegion: {...(rig.confidenceByRegion || {})},
       controls,
-      displayControls,
       diagnostics: {
         reason: rig.diagnostics?.reason || null,
         templatePoints: {...(rig.diagnostics?.templatePoints || {})},
@@ -532,6 +514,7 @@ function ikSnapshot() {
   return {
     enabled: !!modelRigState.ikEnabled,
     activeLimbRole: modelRigState.activeLimbRole,
+    selectedHumanoidControlKey: modelRigState.selectedHumanoidControlKey || null,
     available: active.available,
     controlKeys: [...active.keys],
     confidence: active.available ? 'high' : 'low',
@@ -550,6 +533,7 @@ function rigSnapshot() {
       ? {...modelRigState.jointPickIntent} : null,
     structureRevision: modelRigState.structureRevision,
     selectedJointId: modelRigState.selectedJointId,
+    selectedHumanoidControlKey: modelRigState.selectedHumanoidControlKey || null,
     physicsActive: modelRigHasActivePhysics(),
     rotationSnapDegrees: modelRigState.rotationSnapDegrees,
     ik: ikSnapshot(),
@@ -1281,9 +1265,45 @@ function applyModelPose({request = true, dragging = false} = {}) {
   if (!dragging && !modelRigHasActivePhysics()) {
     for (const sourceRig of rig.sourceRigs || []) finalizeSourcePoseBounds(sourceRig);
   }
-  if (modelRigHasActivePhysics()) modelPhysicsSession.wake();
+  if (modelRigHasActivePhysics()
+      && !modelRigState.humanoidRigEditPhysicsSuspended) {
+    modelPhysicsSession.wake();
+  }
   if (request) requestRender();
   return changed;
+}
+
+function setHumanoidEditPhysicsSuspended(value) {
+  const suspended = !!value;
+  modelRigState.humanoidRigEditPhysicsSuspended = suspended;
+  modelPhysicsSession.setSuspended?.(suspended);
+  if (suspended && modelPhysicsSession.getState().enabled) {
+    // Clear pre-edit spring offsets while the session is already suspended;
+    // otherwise resuming could briefly reapply stale posed deformation.
+    modelPhysicsSession.reset(getModelTransformState());
+  }
+  if (!modelSkinningRig) return suspended;
+  for (const sourceRig of modelSkinningRig.sourceRigs || []) {
+    const physicsRig = sourceRig.physicsRig;
+    if (!physicsRig?.physicsState) continue;
+    if (suspended) {
+      forEachRigMesh(sourceRig, (mesh, state) => {
+        state.physicsEnabled = false;
+        state.deformationMode = null;
+        state.combinedActiveVerticesRef = null;
+        state.combinedPoseVerticesRef = null;
+        state.combinedPhysicsVerticesRef = null;
+        skinningRuntime.applyDeformation(mesh, state, {
+          request: false, invalidateShadow: false, skipHidden: false,
+        });
+      });
+    } else {
+      syncRigParticipantState(physicsRig);
+      applySourceDeformation(physicsRig, {visibleOnly: false});
+    }
+  }
+  if (!suspended && modelRigHasActivePhysics()) modelPhysicsSession.wake();
+  return suspended;
 }
 
 function resetModelPose({request = true} = {}) {

@@ -314,8 +314,10 @@ of documentation, comments and tests; use portable fixtures instead.
   membership/shape changes and resets pose; model structure revisions do not
   change for pose, materials, textures, visibility or model turns.
 - The `HumanoidControlRig` is the primary automatic pose skeleton. It fits the
-  fixed 14-control topology (Chest/Pelvis plus bilateral Shoulder/Elbow/Hand
-  and Hip/Knee/Foot) from immutable A-pose geometry and semantic orientation.
+  fixed 16-control topology (Chest/Pelvis/Neck/Head plus bilateral
+  Shoulder/Elbow/Hand and Hip/Knee/Foot) from immutable A-pose geometry and
+  semantic orientation. Edit Rig always starts from the model's rest pose;
+  saved control overrides and pose presets remain separate state.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
 - `humanoid-heat-binding.js` first classifies each exact source's heat-
   connectivity graph against the shared control paths. Only complete,

@@ -94,6 +94,7 @@ export function buildProportionalHumanoidRig({
   up,
   right,
   forward,
+  headHeight,
   proportions = DEFAULT_HUMANOID_PROPORTIONS,
 } = {}) {
   const resolvedHeight = finiteNumber(characterHeight ?? height);
@@ -116,6 +117,13 @@ export function buildProportionalHumanoidRig({
   const neck = add(pelvis, scale(frame.up,
     resolvedHeight * finiteNumber(template.hipToNeckLength)));
   const chest = lerp(pelvis, neck, finiteNumber(template.chestFraction, 0.5));
+  const neckHeight = dot(neck, frame.up);
+  const detectedHeadHeight = Number(headHeight);
+  const headRise = Number.isFinite(detectedHeadHeight)
+    ? Math.max(resolvedHeight * .05,
+      (detectedHeadHeight - neckHeight) * .5)
+    : resolvedHeight * .10;
+  const head = add(neck, scale(frame.up, headRise));
 
   const shoulderOffset = resolvedHeight * finiteNumber(template.shoulderHalfWidth);
   const leftShoulder = add(neck, scale(frame.right, -shoulderOffset));
@@ -140,6 +148,7 @@ export function buildProportionalHumanoidRig({
     chest,
     pelvis,
     neck,
+    head,
     leftShoulder,
     leftElbow,
     leftHand,
