@@ -80,6 +80,7 @@ import {
   applyHumanoidControlRigOverrides, buildHumanoidControlRig,
   resolveHumanoidControlMappings,
 } from './humanoid-control-rig.js';
+import {captureHumanoidRigEditPose} from './humanoid-rig-edit-pose.js';
 import {mergeHumanoidLimbPose, solveHumanoidControlIk} from './humanoid-rig-ik.js';
 import {buildHumanoidHeatBinding} from './humanoid-heat-binding.js';
 import {
@@ -270,7 +271,7 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
   modelRigState,
   getModelRig: () => modelSkinningRig,
   getAutomaticRig: () => modelSkinningRig?.humanoidAutomaticControlRig,
-  getCurrentHumanoidControlRig: () => humanoidControlRigSnapshot(),
+  getHumanoidRigEditPose: captureHumanoidRigEditPose,
   getModelJointPosePosition: jointId => modelSkinningRig?.poseFrameCache
     ?.get(Number(jointId))?.pivot?.toArray?.() || null,
   getKnownMeshes: () => knownMeshes,
@@ -461,6 +462,21 @@ function humanoidControlRigSnapshot() {
         position: Array.isArray(modelRigState.humanoidPose?.[key])
           ? [...modelRigState.humanoidPose[key]] : [...(control.position || [0, 0, 0])],
       }]));
+    const mappings = resolveHumanoidControlMappings({
+      savedOverrides: humanoidRigEditSession?.getSavedOverrides?.(),
+      modelRig: modelSkinningRig,
+    });
+    const projections = captureHumanoidRigEditPose({
+      modelRig: modelSkinningRig,
+      mappedJointIdByControl: mappings,
+    });
+    const displayControls = Object.fromEntries(Object.entries(controls)
+      .map(([key, control]) => [key, {
+        ...control,
+        position: Array.isArray(modelRigState.humanoidPose?.[key])
+          ? [...modelRigState.humanoidPose[key]]
+          : projections[key]?.displayPosition || control.position,
+      }]));
     humanoidControlRigSnapshotCache = {
       version: Number(rig.version) || 1,
       source: 'humanoid_control_rig',
@@ -470,6 +486,7 @@ function humanoidControlRigSnapshot() {
       confidence: rig.confidence || 'low',
       confidenceByRegion: {...(rig.confidenceByRegion || {})},
       controls,
+      displayControls,
       diagnostics: {
         reason: rig.diagnostics?.reason || null,
         templatePoints: {...(rig.diagnostics?.templatePoints || {})},
@@ -908,6 +925,8 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
 }
 
 function buildPrimaryHumanoidRig(rig) {
+  humanoidControlRigCacheKey = '';
+  humanoidControlRigSnapshotCache = null;
   const orientationState = getModelTransformState?.();
   const automaticRig = buildHumanoidControlRig({
     meshes: [...knownMeshes],

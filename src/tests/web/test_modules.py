@@ -237,6 +237,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
         'viewer-inferred-rig-static-geometry');
       const linePositions = [...staticGroup.children[0].geometry
         .getAttribute('position').array.slice(0, 6)];
+      const centerPointsVisible = staticGroup.children[1].visible;
       state = {...state, selectedJointId: 1};
       controller.refresh(state);
       const selectedRoot = controller.getDebugState();
@@ -267,7 +268,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       const unavailable = controller.getDebugState();
       controller.dispose();
       return {initial, selectedRoot, posedRig, afterTransform, shownAgain,
-        ikOff, unavailable, linePositions};
+        ikOff, unavailable, linePositions, centerPointsVisible};
     }""")
     assert result["initial"]["staticObjectCount"] == 5
     assert result["initial"]["nodeCount"] == 3
@@ -277,6 +278,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert result["initial"]["modelJointMarkerInstanced"] is True
     assert result["initial"]["modelJointMarkerSizePx"] == 5
     assert result["linePositions"] == pytest.approx([.1, 0, 0, .2, 0, 0])
+    assert result["centerPointsVisible"] is False
     assert result["initial"]["humanoidOverlayVisible"]
     assert result["initial"]["ikTargetVisible"]
     assert result["initial"]["humanoidSegmentCount"] == 13
@@ -1008,6 +1010,55 @@ def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
     assert result["line"] == pytest.approx([0, 0, 0, .5, 1, 0])
     assert result["joint"] == pytest.approx([0, 0, 0, .5, 1, 0])
     assert result["dynamicUsage"]
+
+
+def test_rig_overlay_uses_projected_humanoid_display_controls(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const controls = Object.fromEntries([
+        ['chest', [0, 1.8, 0]], ['pelvis', [0, 1, 0]],
+        ['leftShoulder', [-.2, 1.6, 0]],
+        ['leftElbow', [-.5, 1.4, 0]], ['leftHand', [-.8, 1.2, 0]],
+        ['rightShoulder', [.2, 1.6, 0]],
+        ['rightElbow', [.5, 1.4, 0]], ['rightHand', [.8, 1.2, 0]],
+        ['leftHip', [-.15, 1, 0]], ['leftKnee', [-.2, .5, 0]],
+        ['leftFoot', [-.2, 0, 0]], ['rightHip', [.15, 1, 0]],
+        ['rightKnee', [.2, .5, 0]], ['rightFoot', [.2, 0, 0]],
+      ].map(([key, position]) => [key, {position}]));
+      const displayControls = Object.fromEntries(
+        Object.entries(controls).map(([key, control]) => [key, {
+          ...control, position: [...control.position],
+        }]));
+      displayControls.leftElbow.position = [-.1, 1.5, .25];
+      const source = {
+        key: 'model-rig', structureRevision: 1, joints: [],
+        components: [], forestEdges: [], poseRotationByJointId: {},
+        humanoidControlRig: {
+          available: true, controls, displayControls,
+        },
+      };
+      const state = {
+        model: source, ik: {enabled: true, available: true,
+          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']},
+        humanoidRigEdit: {editing: false},
+      };
+      const model = new THREE.Object3D();
+      scene.add(model);
+      const controller = createRigOverlayController({
+        scene, getMeshes: () => [model], getRigState: () => state,
+      });
+      controller.refresh(state);
+      const sprite = scene.getObjectByName('viewer-humanoid-point-leftElbow');
+      const debug = controller.getDebugState();
+      controller.dispose();
+      return {position: sprite?.position.toArray(),
+        visible: debug.humanoidOverlayVisible};
+    }""")
+    assert result["position"] == pytest.approx([-.1, 1.5, .25])
+    assert result["visible"] is True
 
 
 def test_model_picker_blocks_view_selection_before_bubble_listener(module_page):
@@ -3705,8 +3756,6 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
       const controls = Object.fromEntries(control.HUMANOID_CONTROL_KEYS.map(key =>
         [key, {position: [0, 0, 0], semantic: {sideN: 0, height01: 0,
           depthN: 0}}]));
-      const currentControls = {...controls,
-        leftShoulder: {...controls.leftShoulder, position: [.2, .3, .4]}};
       const rig = {humanoidControlRig: {
         version: 1, accepted: true, available: true,
         frame: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
@@ -3719,7 +3768,13 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
       const session = edit.initializeHumanoidRigEditSession({
         getModelRig: () => rig,
         getAutomaticRig: () => rig.humanoidControlRig,
-        getCurrentHumanoidControlRig: () => ({controls: currentControls}),
+        getHumanoidRigEditPose: () => ({leftShoulder: {
+          restToDisplay: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+            .2, .3, .4, 1],
+          displayToRest: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+            -.2, -.3, -.4, 1],
+          displayPosition: [.2, .3, .4],
+        }}),
         getModelJointPosePosition: () => [2, 3, 4],
         getKnownMeshes: () => [{userData: {modPath: 'mod'}}],
         resolveMappings: control.resolveHumanoidControlMappings,
@@ -3763,6 +3818,106 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
     assert result["persisted"]["controls"]["leftShoulder"]["semantic"] == \
         result["expectedSemantic"]
     assert result["notifications"] >= 5
+
+
+def test_humanoid_edit_projection_uses_composed_model_pose_and_inverse(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const control = await import('./js/mesh/humanoid-control-rig.js');
+      const pose = await import('./js/mesh/humanoid-rig-edit-pose.js');
+      const edit = await import('./js/mesh/humanoid-rig-edit-session.js');
+      const controls = Object.fromEntries(control.HUMANOID_CONTROL_KEYS.map(
+        key => [key, {position: [0, 0, 0], semantic: {sideN: 0,
+          height01: 0, depthN: 0}}]));
+      controls.leftShoulder.position = [-1, 2, 0];
+      controls.leftElbow.position = [-2, 2, 0];
+      controls.leftHand.position = [-3, 2, 0];
+      controls.leftShoulder.semantic = {sideN: -1, height01: 2, depthN: 0};
+      controls.leftElbow.semantic = {sideN: -2, height01: 2, depthN: 0};
+      controls.leftHand.semantic = {sideN: -3, height01: 2, depthN: 0};
+      const rotateAroundShoulder = new THREE.Matrix4()
+        .makeTranslation(-1, 2, 0)
+        .multiply(new THREE.Matrix4().makeRotationZ(Math.PI / 2))
+        .multiply(new THREE.Matrix4().makeTranslation(1, -2, 0));
+      const joints = [10, 11, 12].map((jointId, index) => ({
+        jointId, restPivot: [-1 - index, 2, 0], restCenter: [-1 - index, 2, 0],
+      }));
+      const rig = {
+        joints,
+        componentByJointId: new Map([[10, 0], [11, 0], [12, 0]]),
+        components: [{componentId: 0, rootId: 10,
+          parentById: {10: null, 11: 10, 12: 11},
+          childrenById: {10: [11], 11: [12], 12: []}}],
+        jointPivotByJointId: new Map(joints.map(joint => [joint.jointId,
+          joint.restPivot])),
+        poseTransforms: new Map([[10, rotateAroundShoulder],
+          [11, rotateAroundShoulder], [12, rotateAroundShoulder]]),
+        poseFrameCache: new Map([
+          [10, {pivot: new THREE.Vector3(-1, 2, 0)}],
+          [11, {pivot: new THREE.Vector3(-1, 1, 0)}],
+          [12, {pivot: new THREE.Vector3(-1, 0, 0)}],
+        ]),
+        humanoidControlRig: {controls,
+          frame: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
+            lowHeight: 0, highHeight: 1, height: 1,
+            sideCenter: 0, depthCenter: 0}},
+        humanoidBinding: {jointBindings: new Map([
+          [10, {driverId: 'left_upper_arm'}],
+          [11, {driverId: 'left_lower_arm'}],
+          [12, {driverId: 'left_lower_arm'}],
+        ])},
+      };
+      const projection = pose.captureHumanoidRigEditPose({
+        modelRig: rig, mappedJointIdByControl: new Map(),
+      });
+      let persisted = null;
+      let rebuilds = 0;
+      const session = edit.initializeHumanoidRigEditSession({
+        getModelRig: () => rig,
+        getAutomaticRig: () => rig.humanoidControlRig,
+        getHumanoidRigEditPose: () => projection,
+        getModelJointPosePosition: jointId => rig.poseFrameCache.get(
+          Number(jointId))?.pivot,
+        getKnownMeshes: () => [{userData: {modPath: 'mod'}}],
+        persist: async (_path, value) => {
+          persisted = value;
+          return {saved: true};
+        },
+        rebuildActiveRig: async () => { rebuilds += 1; },
+        notifyChanged: () => {},
+      });
+      session.begin();
+      const initial = session.snapshot();
+      session.beginCarry('leftElbow');
+      session.updateDraft('leftElbow', [-1, 0, 0]);
+      const dragged = session.snapshot();
+      session.cancelCarry();
+      const cancelled = session.snapshot();
+      const saved = await session.save();
+      return {projection, initial, dragged, cancelled, saved, persisted,
+        rebuilds, cancelledDirty: cancelled.dirty};
+    }""")
+    assert result["projection"]["leftShoulder"]["displayPosition"] == \
+        pytest.approx([-1, 2, 0])
+    assert result["projection"]["leftElbow"]["displayPosition"] == \
+        pytest.approx([-1, 1, 0])
+    assert result["projection"]["leftHand"]["displayPosition"] == \
+        pytest.approx([-1, 0, 0])
+    assert result["initial"]["controls"]["leftElbow"]["position"] == \
+        [-2, 2, 0]
+    assert result["initial"]["displayControls"]["leftElbow"]["position"] == \
+        pytest.approx([-1, 1, 0])
+    assert result["dragged"]["controls"]["leftElbow"]["position"] == \
+        pytest.approx([-3, 2, 0])
+    assert result["dragged"]["displayControls"]["leftElbow"]["position"] == \
+        pytest.approx([-1, 0, 0])
+    assert result["cancelled"]["controls"]["leftElbow"]["position"] == \
+        [-2, 2, 0]
+    assert result["saved"]["saved"] is True
+    assert result["persisted"] is None
+    assert result["cancelledDirty"] is False
+    assert result["rebuilds"] == 0
 
 
 def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):

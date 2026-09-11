@@ -306,8 +306,8 @@ export function createRigOverlayController({
     color: 0xfacc15, depthTest: false, depthWrite: false,
   });
   const lineMaterial = new THREE.LineBasicMaterial({
-    color: 0x60a5fa, vertexColors: true,
-    depthTest: false, depthWrite: false,
+    color: 0x526574, vertexColors: true,
+    depthTest: false, depthWrite: false, transparent: true, opacity: .58,
   });
   const lineSegments = new THREE.LineSegments(
     new THREE.BufferGeometry(), lineMaterial);
@@ -317,7 +317,7 @@ export function createRigOverlayController({
     new THREE.BufferGeometry(), jointMaterial);
   const modelJointMarkerMaterial = new THREE.MeshBasicMaterial({
     color: 0xffffff, map: modelJointMarkerTexture, vertexColors: true,
-    depthTest: false, depthWrite: false, transparent: true, opacity: .72,
+    depthTest: false, depthWrite: false, transparent: true, opacity: .58,
     alphaTest: .1,
   });
   let modelJointMarkerMesh = new THREE.InstancedMesh(
@@ -349,6 +349,11 @@ export function createRigOverlayController({
   jointPoints.raycast = () => {};
   hoverPoint.raycast = () => {};
   jointPoints.visible = false;
+  // Influence centers are not articulation points. Showing them alongside
+  // pivot-to-pivot edges makes the inferred skeleton appear offset from its
+  // own joints, especially on dense meshes. ModelJoint markers below are the
+  // authoritative visible point layer.
+  centerPoints.visible = false;
   staticGroup.add(lineSegments, centerPoints, jointPoints,
     modelJointMarkerMesh, hoverPoint);
   group.add(staticGroup);
@@ -574,18 +579,20 @@ export function createRigOverlayController({
   function humanoidDisplayPoint(source, key) {
     const edit = currentSnapshot?.humanoidRigEdit;
     if (edit?.editing) {
+      const displayed = edit.displayControls?.[key]
+        || edit.controls?.[key];
+      if (displayed) return displayed.position || displayed;
       const mappedJointId = Number(edit.mappedJointIdByControl?.[key]);
       if (Number.isInteger(mappedJointId)) {
         const frame = getRigJointPoseFrame?.(mappedJointId);
         if (frame?.pivot) return frame.pivot;
       }
-      const displayed = edit.displayControls?.[key]
-        || edit.controls?.[key];
-      if (displayed) return displayed.position || displayed;
     }
-    const value = source?.humanoidControlRig?.controls?.[key];
+    const rig = humanoidControlRigFor(source);
+    const value = rig?.displayControls?.[key]
+      || rig?.controls?.[key];
     return value?.position || value
-      || source?.humanoidControlRig?.diagnostics?.templatePoints?.[key]
+      || rig?.diagnostics?.templatePoints?.[key]
       || null;
   }
 
@@ -737,7 +744,7 @@ export function createRigOverlayController({
       modelJointMarkerMesh.setMatrixAt(index, matrix);
       if (Number(jointId) === candidateId) color.setRGB(1, .78, .08);
       else if (Number(jointId) === selectedJointId) color.setRGB(.48, .82, .93);
-      else color.setRGB(.32, .57, .69);
+      else color.setRGB(.29, .42, .50);
       modelJointMarkerMesh.setColorAt(index, color);
     });
     modelJointMarkerMesh.instanceMatrix.needsUpdate = true;
@@ -1142,7 +1149,7 @@ export function createRigOverlayController({
       if (first && second && firstPivot && secondPivot) {
         linePositions.push(...firstPivot, ...secondPivot);
         const color = edge.relationshipType === 'attachment'
-          ? [1, .48, .15] : [.38, .65, 1];
+          ? [1, .48, .15] : [.31, .43, .51];
         lineColors.push(...color, ...color);
       }
       if (first && second && firstPivot && secondPivot) {
