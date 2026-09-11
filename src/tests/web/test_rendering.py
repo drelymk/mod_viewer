@@ -1008,7 +1008,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           const preset = document.querySelector('.rig-preset-select');
           const advanced = document.querySelector(
             '.weight-rig-advanced-content');
-          const limbButtons = [...document.querySelectorAll('.rig-limb-button')];
+          const ikLabel = document.querySelector(
+            '.rig-panel-enable-ik')?.parentElement?.textContent.trim();
+          const mainRig = document.querySelector('.rig-main-edit');
+          const mainRigAdvanced = mainRig?.closest('.weight-rig-advanced');
           return {
             calls: window.__rigPanelPreviewCalls,
             rigLoaded: rig.loaded,
@@ -1030,7 +1033,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
               'setRigLimbOverride', 'clearRigLimbMapping',
             ].some(name => typeof runtime[name] === 'function'),
             advancedPresent: !!advanced,
-            limbRoles: limbButtons.map(button => button.dataset.role),
+            ikLabel,
+            hasLimbLabel: advanced?.textContent.includes('Limb') === true,
+            limbUiCount: document.querySelectorAll('.rig-limb-button').length,
+            mainRigInAdvanced: mainRigAdvanced?.contains(mainRig) === true,
             activeRole: rig.ik.activeLimbRole,
             weightSelection: weight.selectedBones,
           };
@@ -1046,8 +1052,10 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["hasLegacyWindowApi"] is False
         assert result["hasLegacyRuntimeApi"] is False
         assert result["advancedPresent"] is True
-        assert result["limbRoles"] == [
-            "left_arm", "right_arm", "left_leg", "right_leg"]
+        assert result["ikLabel"] == "Enable Inverse Kinematics"
+        assert result["hasLimbLabel"] is False
+        assert result["limbUiCount"] == 0
+        assert result["mainRigInAdvanced"] is True
         assert result["activeRole"] == "left_arm"
         assert result["weightSelection"] == []
     finally:

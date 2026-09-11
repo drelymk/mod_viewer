@@ -11,14 +11,16 @@ import {
   setPhysicsContinuousLinearResponse, setPhysicsDamping, setPhysicsFrequency,
   setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
   setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
-  setRigActiveLimbRole,
   beginRigJointPicking, cancelRigJointPicking, setRigIkEnabled,
   setRigJointRoot,
   setRigRotationSnapDegrees, setWeightPickerViewMode,
+  beginHumanoidRigEdit, cancelHumanoidRigEdit, saveHumanoidRigEdit,
+  resetHumanoidRig,
   applyRigPosePresetById,
   deleteRigPosePreset, renameRigPosePreset,
   saveRigPosePreset,
 } from '../mesh/weight-rig-runtime.js';
+import {HUMANOID_CONTROL_KEYS} from '../mesh/humanoid-control-rig.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 
 let panel = null;
@@ -28,10 +30,15 @@ let latestWeightState = null;
 let latestRigState = null;
 
 const $ = id => document.getElementById(id);
-const LIMB_ROLES = Object.freeze([
-  ['left_arm', 'Left Arm'], ['right_arm', 'Right Arm'],
-  ['left_leg', 'Left Leg'], ['right_leg', 'Right Leg'],
-]);
+const HUMANOID_CONTROL_LABELS = Object.freeze({
+  chest: 'Chest', pelvis: 'Pelvis', neck: 'Neck', head: 'Head',
+  leftShoulder: 'Left Shoulder',
+  leftElbow: 'Left Elbow', leftHand: 'Left Hand',
+  rightShoulder: 'Right Shoulder', rightElbow: 'Right Elbow',
+  rightHand: 'Right Hand', leftHip: 'Left Hip', leftKnee: 'Left Knee',
+  leftFoot: 'Left Foot', rightHip: 'Right Hip', rightKnee: 'Right Knee',
+  rightFoot: 'Right Foot',
+});
 
 function addText(parent, className, value = '') {
   const node = document.createElement('span');
@@ -290,8 +297,70 @@ function selectedJoint(state = latestRigState) {
     Number(joint.jointId) === id) || null;
 }
 
+function buildMainRigControls(parent) {
+  const mainRig = document.createElement('div');
+  mainRig.className = 'rig-main-edit';
+  const mainTitle = addText(mainRig, 'weight-rig-control-label', 'Main Rig');
+  const normalActions = document.createElement('div');
+  normalActions.className = 'rig-actions rig-main-actions';
+  const editRig = document.createElement('button');
+  editRig.type = 'button';
+  editRig.className = 'ui-button weight-rig-primary-action rig-edit-main';
+  editRig.textContent = 'Edit Rig';
+  editRig.addEventListener('click', () => {
+    closePopover();
+    if (latestRigState?.humanoidRigEdit?.editing) cancelHumanoidRigEdit();
+    else beginHumanoidRigEdit();
+  });
+  const resetRig = document.createElement('button');
+  resetRig.type = 'button';
+  resetRig.className = 'ui-button rig-reset-main';
+  resetRig.textContent = 'Reset Rig';
+  resetRig.addEventListener('click', async () => {
+    if (!await confirmDialog('Reset the saved Main Rig corrections?')) return;
+    await resetHumanoidRig();
+  });
+  normalActions.append(editRig, resetRig);
+  mainRig.appendChild(normalActions);
+  const editStatus = document.createElement('div');
+  editStatus.className = 'rig-edit-status';
+  editStatus.setAttribute('aria-live', 'polite');
+  const editCount = addText(editStatus, 'rig-edit-count');
+  const editControl = addText(editStatus, 'rig-edit-control');
+  const editConnection = addText(editStatus, 'rig-edit-connection');
+  const editHint = addText(editStatus, 'rig-edit-hint',
+    'Click a rig point to move it.');
+  const editActions = document.createElement('div');
+  editActions.className = 'rig-actions rig-edit-actions';
+  const cancelEdit = document.createElement('button');
+  cancelEdit.type = 'button';
+  cancelEdit.className = 'ui-button rig-cancel-edit';
+  cancelEdit.textContent = 'Cancel';
+  cancelEdit.addEventListener('click', () => cancelHumanoidRigEdit());
+  const saveEdit = document.createElement('button');
+  saveEdit.type = 'button';
+  saveEdit.className = 'ui-button weight-rig-primary-action rig-save-edit';
+  saveEdit.textContent = 'Save';
+  saveEdit.addEventListener('click', () => { void saveHumanoidRigEdit(); });
+  editActions.append(cancelEdit, saveEdit);
+  editStatus.appendChild(editActions);
+  mainRig.appendChild(editStatus);
+  parent.appendChild(mainRig);
+  ui.editRig = editRig;
+  ui.resetRig = resetRig;
+  ui.mainTitle = mainTitle;
+  ui.editStatus = editStatus;
+  ui.editCount = editCount;
+  ui.editControl = editControl;
+  ui.editConnection = editConnection;
+  ui.editHint = editHint;
+  ui.cancelEdit = cancelEdit;
+  ui.saveEdit = saveEdit;
+}
+
 function buildRigSection(parent) {
   const section = addSection(parent, 'RIG');
+
   addText(section, 'weight-rig-control-label', 'Selected Joint');
   const joint = document.createElement('select');
   joint.className = 'rig-bone-select';
@@ -386,28 +455,12 @@ function buildRigSection(parent) {
   ik.className = 'rig-panel-enable-ik';
   ik.addEventListener('change', () => setRigIkEnabled(ik.checked));
   ikLabel.appendChild(ik);
-  addText(ikLabel, 'weight-label', 'Enable IK');
+  addText(ikLabel, 'weight-label', 'Enable Inverse Kinematics');
   advanced.content.appendChild(ikLabel);
   ui.ik = ik;
+  ui.ikSelection = addText(advanced.content, 'rig-hint');
 
-  addText(advanced.content, 'weight-rig-control-label', 'Limb');
-  const limbButtons = document.createElement('div');
-  limbButtons.className = 'rig-limb-buttons';
-  const buttonsByRole = new Map();
-  LIMB_ROLES.forEach(([role, label]) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'ui-button rig-limb-button';
-    button.textContent = label.replace('Left', 'L').replace('Right', 'R');
-    button.setAttribute('aria-label', label);
-    button.setAttribute('aria-pressed', 'false');
-    button.dataset.role = role;
-    button.addEventListener('click', () => setRigActiveLimbRole(role));
-    limbButtons.appendChild(button);
-    buttonsByRole.set(role, button);
-  });
-  advanced.content.appendChild(limbButtons);
-  ui.limbButtons = buttonsByRole;
+  buildMainRigControls(advanced.content);
 
   const snapRow = document.createElement('label');
   snapRow.className = 'rig-row';
@@ -623,12 +676,42 @@ function syncPhysicsControls(state = getModelPhysicsState()) {
   syncRange(ui.ranges.maxBend, state.maxBendDegrees);
 }
 
+function syncHumanoidEditControls(state) {
+  const edit = state?.humanoidRigEdit || {};
+  const editing = edit.editing === true;
+  ui.mainTitle.textContent = editing ? 'EDIT RIG' : 'Main Rig';
+  ui.editStatus.hidden = !editing;
+  ui.editRig.hidden = editing;
+  ui.resetRig.hidden = editing;
+  ui.editRig.disabled = !state?.loaded || editing;
+  ui.resetRig.disabled = !edit.hasSavedOverrides || edit.saving;
+  ui.cancelEdit.disabled = edit.saving;
+  ui.saveEdit.disabled = edit.saving || !state?.loaded;
+  const controlCount = Object.keys(edit.controls || {}).length;
+  const controlTotal = HUMANOID_CONTROL_KEYS.length;
+  ui.editCount.textContent = editing
+    ? `${controlCount} / ${controlTotal} control points visible` : '';
+  const key = edit.selectedControlKey;
+  ui.editControl.textContent = key
+    ? HUMANOID_CONTROL_LABELS[key] || key : 'Click a rig point to move it.';
+  const mapped = key ? edit.mappedJointIdByControl?.[key] : null;
+  ui.editConnection.textContent = key
+    ? mapped === undefined || mapped === null
+      ? 'Not connected' : `Connected: Joint ${mapped}` : '';
+  ui.editHint.textContent = edit.error || (key
+    ? 'Move the point and click again to release it.'
+    : 'Click a rig point to move it.');
+  ui.editHint.hidden = !edit.error && !!key;
+  ui.editStatus.classList.toggle('is-saving', !!edit.saving);
+}
+
 function syncRigOptions(state = latestRigState || getModelRigState()) {
   if (!ui?.joint) return;
   latestRigState = state;
   const model = state?.model;
   const joints = model?.joints || [];
   const selected = selectedJoint(state);
+  syncHumanoidEditControls(state);
   const optionKey = JSON.stringify([
     model?.structureRevision ?? state?.structureRevision ?? null,
     joints.map(joint => joint.jointId),
@@ -650,29 +733,27 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
     ui.joint.dataset.optionKey = optionKey;
   }
   ui.joint.value = selected ? String(selected.jointId) : '';
-  ui.joint.disabled = !state?.loaded || !joints.length;
+  const editing = state?.humanoidRigEdit?.editing === true;
+  ui.joint.disabled = editing || !state?.loaded || !joints.length;
   const jointPickActive = state?.jointPickIntent?.type === 'selected-joint';
   ui.rigPickJoint.textContent = jointPickActive ? 'Cancel picking' : 'Pick from model';
   ui.rigPickJoint.classList.toggle('active', jointPickActive);
   ui.rigPickJoint.setAttribute('aria-pressed', String(jointPickActive));
-  ui.rigPickJoint.disabled = !state?.loaded || !joints.length;
+  ui.rigPickJoint.disabled = editing || !state?.loaded || !joints.length;
   ui.snap.value = String(state?.rotationSnapDegrees ?? 0);
-  ui.snap.disabled = !state?.loaded || !joints.length || !!state?.ik?.enabled;
+  ui.snap.disabled = editing || !state?.loaded || !joints.length || !!state?.ik?.enabled;
   const ik = state?.ik || {};
-  const role = ik.activeLimbRole || 'left_arm';
   const hasSelected = !!selected;
-  ui.limbButtons.forEach((button, buttonRole) => {
-    const active = buttonRole === role;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-pressed', String(active));
-    button.disabled = !state?.loaded;
-  });
+  const selectedControl = ik.selectedHumanoidControlKey;
+  ui.ikSelection.textContent = selectedControl
+    ? `Selected point: ${HUMANOID_CONTROL_LABELS[selectedControl] || selectedControl}`
+    : 'Click a rig point to select it.';
   ui.ik.checked = !!ik.enabled;
-  ui.ik.disabled = !state?.loaded || !ik.available;
-  ui.clearJoint.disabled = !hasSelected;
-  ui.setRoot.disabled = !hasSelected;
-  ui.resetJoint.disabled = !hasSelected;
-  ui.resetPose.disabled = !state?.loaded;
+  ui.ik.disabled = editing || !state?.loaded || !ik.available;
+  ui.clearJoint.disabled = editing || !hasSelected;
+  ui.setRoot.disabled = editing || !hasSelected;
+  ui.resetJoint.disabled = editing || !hasSelected;
+  ui.resetPose.disabled = editing || !state?.loaded;
   syncPresetControls(state);
 }
 
@@ -823,6 +904,7 @@ function syncStatus() {
   if (weight.loading || rig.loading) status = 'Loading weights and rig…';
   else if (weight.error) status = weight.error;
   else if (rig.error) status = rig.error;
+  else if (rig.humanoidRigEdit?.error) status = rig.humanoidRigEdit.error;
   else if (weight.loaded && (!weight.sources?.length || weight.noWeights)) {
     status = 'No skin weights available for this model.';
   } else if (weight.selectionSaveError) {

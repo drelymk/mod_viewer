@@ -38,8 +38,21 @@ export {
 export {
   setRigActiveLimbRole,
   setRigIkEnabled,
+  selectHumanoidControl,
   solveRigIkTarget,
 } from './humanoid-pose-runtime.js';
+export {
+  beginHumanoidRigEdit,
+  cancelHumanoidRigEdit,
+  saveHumanoidRigEdit,
+  resetHumanoidRig,
+  getHumanoidRigEditSnapshot,
+  setHumanoidRigMetadata,
+  beginHumanoidControlCarry,
+  updateHumanoidControlDraft,
+  finishHumanoidControlCarry,
+  cancelHumanoidControlCarry,
+} from './humanoid-rig-edit-session.js';
 export {
   applyRigPosePresetById,
   deleteRigPosePreset,

@@ -13,6 +13,7 @@ import {
   buildProportionalHumanoidRig,
   semanticAxesFrame,
 } from './humanoid-proportional-template.js';
+import {buildJointSignatureIndex} from './weight-rig-presets.js';
 
 const EPSILON = 1e-8;
 const DEFAULT_MAX_POINT_COUNT = 160000;
@@ -20,17 +21,35 @@ const FOOT_SIDE_MIN = 0.025;
 const FOOT_DEPTH_BAND_MAX_HEIGHT = 0.02;
 const FOOT_DEPTH_FROM_BACK_FRACTION = 0.30;
 const CONTROL_KEYS = Object.freeze([
-  'chest', 'pelvis',
+  'chest', 'pelvis', 'neck', 'head',
   'leftShoulder', 'leftElbow', 'leftHand',
   'rightShoulder', 'rightElbow', 'rightHand',
   'leftHip', 'leftKnee', 'leftFoot',
   'rightHip', 'rightKnee', 'rightFoot',
 ]);
+const CONTROL_DRIVER_IDS = Object.freeze({
+  chest: 'torso', pelvis: 'torso',
+  neck: 'neck', head: 'head',
+  leftShoulder: 'left_upper_arm', leftElbow: 'left_lower_arm',
+  leftHand: 'left_lower_arm', rightShoulder: 'right_upper_arm',
+  rightElbow: 'right_lower_arm', rightHand: 'right_lower_arm',
+  leftHip: 'left_upper_leg', leftKnee: 'left_lower_leg',
+  leftFoot: 'left_lower_leg', rightHip: 'right_upper_leg',
+  rightKnee: 'right_lower_leg', rightFoot: 'right_lower_leg',
+});
 const TEMPLATE_PRIORS = Object.freeze({
   ...DEFAULT_HUMANOID_PROPORTIONS,
   vertical: Object.freeze({
-    neck: 0.82, chest: 0.685, pelvis: 0.55, knee: 0.2925, foot: 0.035,
+    neck: 0.82, head: 0.91, chest: 0.685, pelvis: 0.55, knee: 0.2925,
+    foot: 0.035,
   }),
+});
+
+const CONTROL_LIMB_ROLES = Object.freeze({
+  leftShoulder: 'left_arm', leftElbow: 'left_arm', leftHand: 'left_arm',
+  rightShoulder: 'right_arm', rightElbow: 'right_arm', rightHand: 'right_arm',
+  leftHip: 'left_leg', leftKnee: 'left_leg', leftFoot: 'left_leg',
+  rightHip: 'right_leg', rightKnee: 'right_leg', rightFoot: 'right_leg',
 });
 
 function finiteNumber(value, fallback = 0) {
@@ -304,11 +323,175 @@ function worldToSemantic(point, bounds, frame) {
   };
 }
 
+function rigBounds(rig) {
+  const frame = rig?.frame || {};
+  const height = Number(frame.height);
+  if (!Number.isFinite(height) || height <= EPSILON) return null;
+  return {
+    sideCenter: finiteNumber(frame.sideCenter),
+    lowHeight: finiteNumber(frame.lowHeight),
+    depthCenter: finiteNumber(frame.depthCenter),
+    height,
+  };
+}
+
+/** Convert a normalized semantic coordinate into the current rig frame. */
+export function semanticToHumanoidControlPosition(semantic, rig) {
+  const bounds = rigBounds(rig);
+  if (!bounds || !semantic || typeof semantic !== 'object') return null;
+  const values = [semantic.sideN, semantic.height01, semantic.depthN]
+    .map(Number);
+  if (!values.every(Number.isFinite)) return null;
+  const frame = semanticAxesFrame({
+    up: rig.frame?.up,
+    right: rig.frame?.right,
+    forward: rig.frame?.forward,
+  });
+  return pointToWorld({x: values[0], y: values[1], z: values[2]}, bounds, frame);
+}
+
+/** Convert a model-space control position into normalized semantic data. */
+export function humanoidControlPositionToSemantic(position, rig) {
+  const bounds = rigBounds(rig);
+  if (!bounds || !position) return null;
+  const frame = semanticAxesFrame({
+    up: rig.frame?.up,
+    right: rig.frame?.right,
+    forward: rig.frame?.forward,
+  });
+  const result = worldToSemantic(position, bounds, frame);
+  return Object.fromEntries(Object.entries(result).map(([key, value]) => [
+    key, finiteNumber(value),
+  ]));
+}
+
+/** Rebuild the fixed humanoid paths after a control position changes. */
+export function rebuildHumanoidControlPaths(rig) {
+  if (!rig) return rig;
+  const controls = rig.controls || {};
+  const point = key => vector3(controls[key]?.position || controls[key]);
+  rig.paths = {
+    torso: ['pelvis', 'chest', 'neck', 'head'].map(point),
+    leftArm: ['leftShoulder', 'leftElbow', 'leftHand'].map(point),
+    rightArm: ['rightShoulder', 'rightElbow', 'rightHand'].map(point),
+    leftLeg: ['leftHip', 'leftKnee', 'leftFoot'].map(point),
+    rightLeg: ['rightHip', 'rightKnee', 'rightFoot'].map(point),
+  };
+  return rig;
+}
+
+function validSemantic(value) {
+  return value && typeof value === 'object'
+    && ['sideN', 'height01', 'depthN'].every(key =>
+      typeof value[key] === 'number' && Number.isFinite(value[key]));
+}
+
+function cloneControlRig(rig) {
+  return serializeHumanoidControlRig(rig);
+}
+
+/** Resolve saved stable ModelJoint signatures without guessing replacements. */
+export function resolveHumanoidControlMappings({savedOverrides, modelRig} = {}) {
+  const result = new Map();
+  const controls = savedOverrides?.controls;
+  if (!controls || typeof controls !== 'object') return result;
+  const lookup = buildJointSignatureIndex(modelRig);
+  const usedJoints = new Set();
+  CONTROL_KEYS.forEach(controlKey => {
+    const raw = controls[controlKey];
+    const signature = typeof raw?.joint_signature === 'string'
+      ? raw.joint_signature : null;
+    if (!signature || lookup.ambiguousSignatures.has(signature)) return;
+    const jointId = lookup.resolvedBySignature.get(signature);
+    if (!Number.isInteger(jointId) || usedJoints.has(jointId)) return;
+    const joint = (modelRig?.joints || []).find(item =>
+      Number(item?.jointId) === jointId);
+    if (!joint) return;
+    usedJoints.add(jointId);
+    result.set(controlKey, {
+      controlKey,
+      jointId,
+      jointSignature: signature,
+      sourceMembers: [...(joint.members || joint.sourceMembers || [])]
+        .map(member => ({...member})),
+    });
+  });
+  return result;
+}
+
+/** Apply semantic manual overrides while retaining the automatic rig. */
+export function applyHumanoidControlRigOverrides({automaticRig,
+    savedOverrides, modelRig, resolvedMappings = null} = {}) {
+  const result = cloneControlRig(automaticRig);
+  if (!result) return result;
+  const mappings = resolvedMappings || resolveHumanoidControlMappings({
+    savedOverrides, modelRig,
+  });
+  const overrides = savedOverrides?.controls;
+  if (overrides && typeof overrides === 'object') {
+    CONTROL_KEYS.forEach(controlKey => {
+      const override = overrides[controlKey];
+      if (!override || typeof override !== 'object') return;
+      const control = result.controls[controlKey];
+      if (!control) return;
+      const semantic = override.semantic;
+      const position = semanticToHumanoidControlPosition(semantic, result);
+      if (validSemantic(semantic) && position) {
+        control.position = position;
+        control.semantic = {...semantic};
+        control.source = 'manual_override';
+        control.fitted = true;
+      }
+    });
+  }
+  mappings.forEach((mapping, controlKey) => {
+    const joint = (modelRig?.joints || []).find(item =>
+      Number(item?.jointId) === mapping.jointId);
+    const pivot = joint?.restPivot || joint?.restCenter;
+    if (!pivot || !result.controls[controlKey]) return;
+    result.controls[controlKey].position = vector3(pivot);
+    const semantic = humanoidControlPositionToSemantic(pivot, result);
+    if (semantic) result.controls[controlKey].semantic = semantic;
+    result.controls[controlKey].source = 'manual_model_joint';
+  });
+  rebuildHumanoidControlPaths(result);
+  return result;
+}
+
+export function applyHumanoidControlOverrides(options = {}) {
+  return applyHumanoidControlRigOverrides(options);
+}
+
+export function validateHumanoidControlOverrides(value) {
+  const raw = value?.humanoid_control_rig || value;
+  if (!raw || typeof raw !== 'object' || Number(raw.version) !== 1
+      || !raw.controls || typeof raw.controls !== 'object') {
+    return {valid: false, error: 'Invalid humanoid control-rig metadata.'};
+  }
+  const unknown = Object.keys(raw.controls)
+    .filter(key => !CONTROL_KEYS.includes(key));
+  if (unknown.length) {
+    return {valid: false, error: 'Unknown humanoid control key.'};
+  }
+  for (const entry of Object.values(raw.controls)) {
+    if (!validSemantic(entry?.semantic)) {
+      return {valid: false, error: 'Invalid humanoid semantic coordinates.'};
+    }
+    if (entry.joint_signature !== undefined
+        && (typeof entry.joint_signature !== 'string'
+          || !entry.joint_signature.length)) {
+      return {valid: false, error: 'Invalid humanoid joint signature.'};
+    }
+  }
+  return {valid: true, error: null};
+}
+
 function fallbackPoint(key) {
   const p = DEFAULT_HUMANOID_PROPORTIONS;
   const foot = 0.02 + p.footLift;
   const hip = foot + p.legLength;
   const neck = hip + p.hipToNeckLength;
+  const head = neck + .10;
   const chest = hip + p.hipToNeckLength * p.chestFraction;
   const shoulder = p.shoulderHalfWidth;
   const angle = p.armDropAngleDeg * Math.PI / 180;
@@ -317,7 +500,7 @@ function fallbackPoint(key) {
   const elbowSide = shoulder + armSide * p.elbowFraction;
   const elbowHeight = neck - armDrop * p.elbowFraction;
   const values = {
-    chest: [0, chest], pelvis: [0, hip],
+    chest: [0, chest], pelvis: [0, hip], neck: [0, neck], head: [0, head],
     leftShoulder: [-shoulder, neck], leftElbow: [-elbowSide, elbowHeight],
     leftHand: [-shoulder - armSide, neck - armDrop], rightShoulder: [shoulder, neck],
     rightElbow: [elbowSide, elbowHeight], rightHand: [shoulder + armSide, neck - armDrop],
@@ -415,7 +598,9 @@ function proportionalDiagnostics(template, bounds, frame, supports, base,
     },
     controlDepthN: Object.fromEntries(CONTROL_KEYS.map(key => [key,
       worldToSemantic(template[key], bounds, frame).depthN])),
-    templatePoints: {neck: vector3(template.neck)},
+    templatePoints: {
+      neck: vector3(template.neck), head: vector3(template.head),
+    },
     proportionalTemplate: {
       characterHeight: template.characterHeight,
       footLiftN: finiteNumber(p.footLift),
@@ -430,6 +615,7 @@ function proportionalDiagnostics(template, bounds, frame, supports, base,
       leftFoot: vector3(template.leftFoot),
       rightFoot: vector3(template.rightFoot),
       neck: vector3(template.neck),
+      head: vector3(template.head),
     },
     failureReasons: [],
     fallbackControls: [],
@@ -492,6 +678,7 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
     leftFoot,
     rightFoot,
     semanticAxes: frame,
+    headHeight: bounds.highHeight,
     proportions: options.proportions || DEFAULT_HUMANOID_PROPORTIONS,
   });
   if (!template) {
@@ -503,7 +690,7 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
   const controls = Object.fromEntries(CONTROL_KEYS.map(key => [key,
     buildControl(template, key, bounds, frame, supports)]));
   const paths = {
-    torso: [controls.chest.position, controls.pelvis.position],
+    torso: ['pelvis', 'chest', 'neck', 'head'].map(key => controls[key].position),
     leftArm: pathFor(template, 'leftShoulder', 'leftElbow', 'leftHand'),
     rightArm: pathFor(template, 'rightShoulder', 'rightElbow', 'rightHand'),
     leftLeg: pathFor(template, 'leftHip', 'leftKnee', 'leftFoot'),
@@ -527,7 +714,8 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
     accepted: true,
     confidence: 'deterministic',
     confidenceByRegion: {
-      torso: 'deterministic', arms: 'deterministic', legs: 'deterministic',
+      torso: 'deterministic', head: 'deterministic', arms: 'deterministic',
+      legs: 'deterministic',
       overall: 'deterministic',
     },
     frame: {
@@ -562,5 +750,7 @@ export function serializeHumanoidControlRig(rig) {
 }
 
 export const HUMANOID_CONTROL_KEYS = CONTROL_KEYS;
+export const HUMANOID_CONTROL_DRIVER_IDS = CONTROL_DRIVER_IDS;
 export const HUMANOID_TEMPLATE_PRIORS = TEMPLATE_PRIORS;
+export const HUMANOID_CONTROL_LIMB_ROLES = CONTROL_LIMB_ROLES;
 export {DEFAULT_HUMANOID_PROPORTIONS, buildProportionalHumanoidRig};

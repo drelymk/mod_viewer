@@ -76,9 +76,15 @@ import {
   buildHumanoidSourceBoneDriverTransforms,
   buildHumanoidRigBinding,
 } from './humanoid-rig-binding.js';
-import {buildHumanoidControlRig} from './humanoid-control-rig.js';
+import {
+  applyHumanoidControlRigOverrides, buildHumanoidControlRig,
+  resolveHumanoidControlMappings,
+} from './humanoid-control-rig.js';
 import {mergeHumanoidLimbPose, solveHumanoidControlIk} from './humanoid-rig-ik.js';
 import {buildHumanoidHeatBinding} from './humanoid-heat-binding.js';
+import {
+  initializeHumanoidRigEditSession, resetHumanoidRigEditSession,
+} from './humanoid-rig-edit-session.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -109,6 +115,7 @@ let modelWeightGeneration = 0;
 let humanoidControlRigCacheKey = '';
 let humanoidControlRigSnapshotCache = null;
 const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
+let humanoidRigEditSession = null;
 
 function invalidateHumanoidDetection() {
   humanoidControlRigCacheKey = '';
@@ -251,11 +258,37 @@ initializeWeightModelSession({
 initializeHumanoidPoseRuntime({
   modelRigState,
   getModelRig: () => modelSkinningRig,
-  getPrimaryLimb: () => primaryHumanoidLimb(),
+  getPrimaryLimb: role => primaryHumanoidLimb(role),
   solveControlIk: solveHumanoidControlIk,
   mergeLimbPose: mergeHumanoidLimbPose,
   applyPose: options => applyModelPose(options),
   notifyChanged: () => notifyModelRigChanged(),
+  requestRender,
+});
+
+humanoidRigEditSession = initializeHumanoidRigEditSession({
+  modelRigState,
+  getModelRig: () => modelSkinningRig,
+  getAutomaticRig: () => modelSkinningRig?.humanoidAutomaticControlRig,
+  resetCurrentPoseForHumanoidRigEdit,
+  setPhysicsSuspended: setHumanoidEditPhysicsSuspended,
+  getKnownMeshes: () => knownMeshes,
+  resolveMappings: resolveHumanoidControlMappings,
+  persist: (path, value) => window.pywebview?.api
+    ?.save_humanoid_control_rig?.(path, value),
+  clearPersist: path => window.pywebview?.api
+    ?.clear_humanoid_control_rig?.(path),
+  cancelWeightPicking: cancelWeightModelPicking,
+  cancelRigPicking: cancelRigJointPicking,
+  rebuildActiveRig: async () => {
+    if (!modelSkinningRig) return;
+    buildPrimaryHumanoidRig(modelSkinningRig);
+    // Edit mode starts from rest and does not carry a virtual pose into the
+    // rebuilt control rig.
+    modelRigState.humanoidPose = {};
+    applyModelPose({request: false});
+  },
+  notifyChanged: notifyModelRigChanged,
   requestRender,
 });
 
@@ -481,6 +514,7 @@ function ikSnapshot() {
   return {
     enabled: !!modelRigState.ikEnabled,
     activeLimbRole: modelRigState.activeLimbRole,
+    selectedHumanoidControlKey: modelRigState.selectedHumanoidControlKey || null,
     available: active.available,
     controlKeys: [...active.keys],
     confidence: active.available ? 'high' : 'low',
@@ -499,11 +533,13 @@ function rigSnapshot() {
       ? {...modelRigState.jointPickIntent} : null,
     structureRevision: modelRigState.structureRevision,
     selectedJointId: modelRigState.selectedJointId,
+    selectedHumanoidControlKey: modelRigState.selectedHumanoidControlKey || null,
     physicsActive: modelRigHasActivePhysics(),
     rotationSnapDegrees: modelRigState.rotationSnapDegrees,
     ik: ikSnapshot(),
     pickStatus: modelRigState.pickStatus,
     rigPresets: getRigPresetSnapshot(),
+    humanoidRigEdit: humanoidRigEditSession?.snapshot(),
     humanoidControlRig: humanoidControlRigSnapshot(),
     model: modelRigSnapshotForState(),
   };
@@ -612,6 +648,7 @@ function resetModelWeightState() {
   humanoidControlRigCacheKey = '';
   humanoidControlRigSnapshotCache = null;
   resetRigPresetSession();
+  resetHumanoidRigEditSession();
   resetWeightPickingSession();
   sourcePhysicsRigs.clear();
   sourceSkinningRigs.clear();
@@ -872,18 +909,31 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
 }
 
 function buildPrimaryHumanoidRig(rig) {
+  humanoidControlRigCacheKey = '';
+  humanoidControlRigSnapshotCache = null;
   const orientationState = getModelTransformState?.();
-  const controlRig = buildHumanoidControlRig({
+  const automaticRig = buildHumanoidControlRig({
     meshes: [...knownMeshes],
     axes: humanoidSemanticAxes(),
     orientationState,
   });
+  const savedOverrides = humanoidRigEditSession?.getSavedOverrides?.();
+  const resolvedMappings = automaticRig?.accepted
+    ? resolveHumanoidControlMappings({
+      savedOverrides, modelRig: rig,
+    }) : new Map();
+  const controlRig = automaticRig?.accepted
+    ? applyHumanoidControlRigOverrides({
+      automaticRig, savedOverrides, modelRig: rig, resolvedMappings,
+    }) : automaticRig;
   const heatBinding = controlRig?.accepted
     ? buildHumanoidHeatBinding({
       controlRig, sourceRigs: rig.sourceRigs, modelRig: rig,
     }) : null;
   const binding = controlRig?.accepted
-    ? buildHumanoidRigBinding({controlRig, modelRig: rig, heatBinding}) : null;
+    ? buildHumanoidRigBinding({controlRig, modelRig: rig, heatBinding,
+      controlMappings: resolvedMappings}) : null;
+  rig.humanoidAutomaticControlRig = automaticRig;
   rig.humanoidControlRig = controlRig;
   rig.humanoidHeatBinding = heatBinding;
   rig.humanoidBinding = binding;
@@ -1063,7 +1113,8 @@ function buildModelPoseTransforms() {
   modelSkinningRig.manualPoseTransforms = manualTransforms;
   modelSkinningRig.humanoidSourceBoneTransforms =
     buildHumanoidSourceBoneDriverTransforms({
-      heatBinding: modelSkinningRig.humanoidHeatBinding,
+      heatBinding: modelSkinningRig.humanoidBinding ||
+        modelSkinningRig.humanoidHeatBinding,
       controlRig: modelSkinningRig.humanoidControlRig,
       posedControls: modelRigState.humanoidPose,
     });
@@ -1214,9 +1265,45 @@ function applyModelPose({request = true, dragging = false} = {}) {
   if (!dragging && !modelRigHasActivePhysics()) {
     for (const sourceRig of rig.sourceRigs || []) finalizeSourcePoseBounds(sourceRig);
   }
-  if (modelRigHasActivePhysics()) modelPhysicsSession.wake();
+  if (modelRigHasActivePhysics()
+      && !modelRigState.humanoidRigEditPhysicsSuspended) {
+    modelPhysicsSession.wake();
+  }
   if (request) requestRender();
   return changed;
+}
+
+function setHumanoidEditPhysicsSuspended(value) {
+  const suspended = !!value;
+  modelRigState.humanoidRigEditPhysicsSuspended = suspended;
+  modelPhysicsSession.setSuspended?.(suspended);
+  if (suspended && modelPhysicsSession.getState().enabled) {
+    // Clear pre-edit spring offsets while the session is already suspended;
+    // otherwise resuming could briefly reapply stale posed deformation.
+    modelPhysicsSession.reset(getModelTransformState());
+  }
+  if (!modelSkinningRig) return suspended;
+  for (const sourceRig of modelSkinningRig.sourceRigs || []) {
+    const physicsRig = sourceRig.physicsRig;
+    if (!physicsRig?.physicsState) continue;
+    if (suspended) {
+      forEachRigMesh(sourceRig, (mesh, state) => {
+        state.physicsEnabled = false;
+        state.deformationMode = null;
+        state.combinedActiveVerticesRef = null;
+        state.combinedPoseVerticesRef = null;
+        state.combinedPhysicsVerticesRef = null;
+        skinningRuntime.applyDeformation(mesh, state, {
+          request: false, invalidateShadow: false, skipHidden: false,
+        });
+      });
+    } else {
+      syncRigParticipantState(physicsRig);
+      applySourceDeformation(physicsRig, {visibleOnly: false});
+    }
+  }
+  if (!suspended && modelRigHasActivePhysics()) modelPhysicsSession.wake();
+  return suspended;
 }
 
 function resetModelPose({request = true} = {}) {
@@ -1235,6 +1322,26 @@ function resetModelPose({request = true} = {}) {
   modelSkinningRig.poseActiveVerticesByMesh.clear();
   modelSkinningRig.poseSourceBoneIdsByMesh.clear();
   return changed;
+}
+
+// Edit Rig starts from the current ModelJoint rest configuration. Clear only
+// active manual/humanoid pose state; Set Root and its structure revision are
+// intentionally preserved until the user explicitly changes or resets them.
+function resetCurrentPoseForHumanoidRigEdit({request = false} = {}) {
+  if (!modelSkinningRig) return false;
+  const hadPose = modelSkinningRig.poseRotationByJointId.size > 0
+    || Object.keys(modelRigState.humanoidPose || {}).length > 0
+    || modelSkinningRig.poseActiveJointKey !== '';
+  modelSkinningRig.poseRotationByJointId.clear();
+  modelRigState.humanoidPose = {};
+  const changed = applyModelPose({request});
+  modelSkinningRig.poseActiveVerticesByMesh.clear();
+  modelSkinningRig.poseSourceBoneIdsByMesh.clear();
+  modelSkinningRig.poseTransformCache.clear();
+  modelSkinningRig.poseFrameCache.clear();
+  modelSkinningRig.poseActiveJointKey = '';
+  modelSkinningRig.poseAffectedJointIds = new Set();
+  return changed || hadPose;
 }
 
 function clearModelManualPose({request = false} = {}) {

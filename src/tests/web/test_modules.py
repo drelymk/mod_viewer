@@ -158,7 +158,7 @@ def test_rig_joint_picker_projects_current_pivots_and_uses_nearest_hit(
       camera.updateMatrixWorld(true);
       const canvas = {
         clientWidth: 200, clientHeight: 200,
-        getBoundingClientRect: () => ({left: 10, top: 20, width: 200, height: 200}),
+        getBoundingClientRect: () => new DOMRect(10, 20, 200, 200),
       };
       const center = projectRigPointToClient({
         point: [0, 0, 0], camera, canvas,
@@ -214,6 +214,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
           ],
           humanoidControlRig: {confidence: 'high', controls: Object.fromEntries([
             ['chest', [0, 2, 0]], ['pelvis', [0, 1, 0]],
+            ['neck', [0, 2.4, 0]], ['head', [0, 2.7, 0]],
             ['leftShoulder', [-.2, 1.8, 0]], ['leftElbow', [-.5, 1.6, 0]],
             ['leftHand', [-.9, 1.5, 0]], ['rightShoulder', [.2, 1.8, 0]],
             ['rightElbow', [.5, 1.6, 0]], ['rightHand', [.9, 1.5, 0]],
@@ -226,9 +227,18 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       };
       const controller = createRigOverlayController({
         scene, getMeshes: () => [model], getRigState: () => state,
+        getRigJointPoseFrame: jointId => ({
+          center: [Number(jointId), 0, 0],
+          pivot: [Number(jointId) / 10, 0, 0],
+        }),
       });
       controller.refresh(state);
       const initial = controller.getDebugState();
+      const staticGroup = controller.group.getObjectByName(
+        'viewer-inferred-rig-static-geometry');
+      const linePositions = [...staticGroup.children[0].geometry
+        .getAttribute('position').array.slice(0, 6)];
+      const centerPointsVisible = staticGroup.children[1].visible;
       state = {...state, selectedJointId: 1};
       controller.refresh(state);
       const selectedRoot = controller.getDebugState();
@@ -259,16 +269,24 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       const unavailable = controller.getDebugState();
       controller.dispose();
       return {initial, selectedRoot, posedRig, afterTransform, shownAgain,
-        ikOff, unavailable};
+        ikOff, unavailable, linePositions, centerPointsVisible};
     }""")
-    assert result["initial"]["staticObjectCount"] == 4
+    assert result["initial"]["staticObjectCount"] == 5
     assert result["initial"]["nodeCount"] == 3
     assert result["initial"]["edgeCount"] == 2
     assert result["initial"]["jointCount"] == 3
+    assert result["initial"]["modelJointMarkerCount"] == 3
+    assert result["initial"]["modelJointMarkerInstanced"] is True
+    assert result["initial"]["modelJointMarkerSizePx"] == 5
+    assert result["linePositions"] == pytest.approx([.1, 0, 0, .2, 0, 0])
+    assert result["centerPointsVisible"] is False
     assert result["initial"]["humanoidOverlayVisible"]
     assert result["initial"]["ikTargetVisible"]
-    assert result["initial"]["humanoidSegmentCount"] == 13
-    assert result["initial"]["humanoidLandmarkCount"] == 14
+    assert result["initial"]["humanoidSegmentCount"] == 15
+    assert result["initial"]["humanoidLandmarkCount"] == 16
+    assert result["initial"]["humanoidPointSpriteCount"] == 16
+    assert result["initial"]["humanoidHaloSpriteCount"] == 16
+    assert result["initial"]["humanoidMarkerTextureReady"] is True
     assert result["initial"]["rebuildCount"] == 1
     assert result["selectedRoot"]["selectedJointId"] == 1
     assert result["selectedRoot"]["rebuildCount"] == 1
@@ -419,6 +437,87 @@ def test_rig_joint_picker_owns_plain_left_and_allows_alt_orbit(module_page):
     assert result["cleared"]["hoveredJointId"] is None
 
 
+def test_rig_overlay_selects_humanoid_controls_and_keeps_orbit_available(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController, projectRigPointToClient} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(90, 1, .1, 100);
+      camera.position.set(0, 0, 5);
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+      const canvas = document.createElement('canvas');
+      canvas.getBoundingClientRect = () => new DOMRect(10, 20, 200, 200);
+      document.body.appendChild(canvas);
+      const positions = {
+        chest: [0, 1.8, 0], pelvis: [0, 1, 0],
+        neck: [0, 2.1, 0], head: [0, 2.4, 0],
+        leftShoulder: [-.2, 1.6, 0], leftElbow: [-.5, 1.4, 0],
+        leftHand: [-.8, 1.2, 0], rightShoulder: [.2, 1.6, 0],
+        rightElbow: [.5, 1.4, 0], rightHand: [.8, 1.2, 0],
+        leftHip: [-.15, 1, 0], leftKnee: [-.2, .5, 0],
+        leftFoot: [-.2, 0, 0], rightHip: [.15, 1, 0],
+        rightKnee: [.2, .5, 0], rightFoot: [.2, 0, 0],
+      };
+      const source = {key: 'model-rig', structureRevision: 1,
+        joints: [], components: [], forestEdges: [],
+        humanoidControlRig: {available: true,
+          controls: Object.fromEntries(Object.entries(positions).map(
+            ([key, position]) => [key, {position}]))}};
+      let state = {model: source, jointPickIntent: null,
+        humanoidRigEdit: {editing: false},
+        ik: {enabled: true, available: true, activeLimbRole: 'left_arm',
+          selectedHumanoidControlKey: null,
+          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']}};
+      const selected = [];
+      let leftDown = 0;
+      let rightDown = 0;
+      canvas.addEventListener('pointerdown', event => {
+        if (event.button === 0) leftDown += 1;
+        if (event.button === 2) rightDown += 1;
+      });
+      const controller = createRigOverlayController({
+        scene, camera, canvas, getMeshes: () => [],
+        getRigState: () => state,
+        onHumanoidControlSelected: key => {
+          selected.push(key);
+          const role = key.startsWith('right') ? 'right_leg' : 'left_arm';
+          state = {...state, ik: {...state.ik,
+            activeLimbRole: key === 'head' ? state.ik.activeLimbRole : role,
+            selectedHumanoidControlKey: key}};
+        },
+      });
+      controller.refresh(state);
+      const head = projectRigPointToClient({point: positions.head,
+        camera, canvas});
+      const rightFoot = projectRigPointToClient({point: positions.rightFoot,
+        camera, canvas});
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: head.x, clientY: head.y,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: rightFoot.x, clientY: rightFoot.y,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: 20, clientY: 30,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 2, clientX: head.x, clientY: head.y,
+      }));
+      const result = {selected, state, leftDown, rightDown};
+      controller.dispose();
+      canvas.remove();
+      return result;
+    }""")
+    assert result["selected"] == ["head", "rightFoot"]
+    assert result["state"]["ik"]["selectedHumanoidControlKey"] == "rightFoot"
+    assert result["leftDown"] == 1
+    assert result["rightDown"] == 1
+
+
 def test_rig_overlay_hides_static_geometry_until_joint_picking(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -469,6 +568,174 @@ def test_rig_overlay_hides_static_geometry_until_joint_picking(module_page):
     assert result["picking"]["edgeCount"] == 2
     assert result["picking"]["staticVisible"] is True
     assert result["hiddenAgain"]["staticVisible"] is False
+
+
+def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController, projectRigPointToClient} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(90, 1, .1, 100);
+      camera.position.set(0, 0, 5);
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+      const canvas = document.createElement('canvas');
+      canvas.getBoundingClientRect = () => new DOMRect(10, 20, 200, 200);
+      document.body.appendChild(canvas);
+      const positions = {
+        chest: [0, 1.8, 0], pelvis: [0, 1, 0],
+        neck: [0, 2.1, 0], head: [0, 2.4, 0],
+        leftShoulder: [-.2, 1.6, 0], leftElbow: [-.5, 1.4, 0],
+        leftHand: [-.8, 1.2, 0], rightShoulder: [.2, 1.6, 0],
+        rightElbow: [.5, 1.4, 0], rightHand: [.8, 1.2, 0],
+        leftHip: [-.15, 1, 0], leftKnee: [-.2, .5, 0], leftFoot: [-.2, 0, 0],
+        rightHip: [.15, 1, 0], rightKnee: [.2, .5, 0], rightFoot: [.2, 0, 0],
+      };
+      const controls = Object.fromEntries(Object.entries(positions).map(
+        ([key, position]) => [key, {position}]));
+      const source = {key: 'model-rig', structureRevision: 1,
+        joints: [{jointId: 7, restCenter: [-.2, 1.6, 0],
+          restPivot: [-.2, 1.6, 0]}], components: [], forestEdges: []};
+      let state = {
+        selectedJointId: null, jointPickIntent: {type: 'selected-joint'},
+        ik: {enabled: true, available: true,
+          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']},
+        model: source,
+        humanoidRigEdit: {editing: true, saving: false, dirty: false,
+          selectedControlKey: null, carryingControlKey: null,
+          candidateJointId: null, controls, mappedJointIdByControl: {}},
+      };
+      const arcball = {
+        enabled: true, actions: {0: 'ROTATE', 2: 'PAN'}, calls: [],
+        unsetMouseAction: button => {
+          arcball.calls.push(['unset', button]);
+          delete arcball.actions[button];
+        },
+        setMouseAction: (action, button) => {
+          arcball.calls.push(['set', action, button]);
+          arcball.actions[button] = action;
+        },
+      };
+      const events = {began: [], updates: [], finished: 0, cancelled: 0,
+        picked: 0, emptyPointerdowns: 0};
+      canvas.addEventListener('pointerdown', event => {
+        if (event.button === 0) events.emptyPointerdowns += 1;
+      });
+      const controller = createRigOverlayController({
+        scene, camera, canvas, arcballControls: arcball,
+        getMeshes: () => [], getRigState: () => state,
+        getRigJointPoseFrame: jointId => Number(jointId) === 7
+          ? {center: [-.2, 1.3, 0], pivot: [-.2, 1.2, 0]} : null,
+        beginHumanoidControlCarry: key => {
+          events.began.push(key);
+          state.humanoidRigEdit = {...state.humanoidRigEdit,
+            selectedControlKey: key, carryingControlKey: key};
+          return true;
+        },
+        updateHumanoidControlDraft: (key, position) => {
+          events.updates.push({key, position});
+          state.humanoidRigEdit = {...state.humanoidRigEdit,
+            controls: {...state.humanoidRigEdit.controls,
+              [key]: {position}}, candidateJointId: 7};
+        },
+        finishHumanoidControlCarry: () => {
+          events.finished += 1;
+          state.humanoidRigEdit = {...state.humanoidRigEdit,
+            carryingControlKey: null};
+        },
+        cancelHumanoidControlCarry: () => {
+          events.cancelled += 1;
+          state.humanoidRigEdit = {...state.humanoidRigEdit,
+            carryingControlKey: null};
+        },
+        onRigJointPicked: () => { events.picked += 1; },
+      });
+      controller.refresh(state);
+      const initial = controller.getDebugState();
+      const screen = projectRigPointToClient({point: positions.leftShoulder,
+        camera, canvas});
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: 20, clientY: 30,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: screen.x, clientY: screen.y,
+      }));
+      const carrying = controller.getDebugState();
+      canvas.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: screen.x, clientY: screen.y, buttons: 1,
+      }));
+      const beforePan = events.updates.length;
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 2, clientX: screen.x, clientY: screen.y, buttons: 2,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: screen.x + 20, clientY: screen.y + 10, buttons: 2,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerup', {
+        button: 2, clientX: screen.x + 20, clientY: screen.y + 10,
+      }));
+      const afterPan = events.updates.length;
+      canvas.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: screen.x + 10, clientY: screen.y, buttons: 1,
+      }));
+      const afterPanMove = events.updates.length;
+      document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}));
+      const cancelled = controller.getDebugState();
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: screen.x, clientY: screen.y,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: screen.x, clientY: screen.y,
+      }));
+      const released = controller.getDebugState();
+      const pointSprite = controller.group.getObjectByName(
+        'viewer-humanoid-point-leftShoulder');
+      const haloSprite = controller.group.getObjectByName(
+        'viewer-humanoid-halo-leftShoulder');
+      const modelJointMarker = controller.group.getObjectByName(
+        'viewer-inferred-rig-model-joint-markers');
+      const markerMatrix = new THREE.Matrix4();
+      modelJointMarker?.getMatrixAt(0, markerMatrix);
+      const markerPosition = new THREE.Vector3()
+        .setFromMatrixPosition(markerMatrix).toArray();
+      controller.dispose();
+      return {initial, carrying, cancelled, released, events, arcball: arcball.enabled,
+        arcballActions: arcball.actions, arcballCalls: arcball.calls,
+        beforePan, afterPan, afterPanMove,
+        pointType: pointSprite?.type, haloType: haloSprite?.type,
+        pointScale: pointSprite?.scale?.x || 0,
+        haloScale: haloSprite?.scale?.x || 0, markerPosition};
+    }""")
+    assert result["initial"]["staticVisible"] is True
+    assert result["initial"]["humanoidOverlayVisible"] is True
+    assert result["initial"]["humanoidHaloCount"] == 16
+    assert result["initial"]["humanoidPointSpriteCount"] == 16
+    assert result["initial"]["humanoidHaloSpriteCount"] == 16
+    assert result["initial"]["humanoidMarkerTextureReady"] is True
+    assert result["pointType"] == "Sprite"
+    assert result["haloType"] == "Sprite"
+    assert result["pointScale"] > 0
+    assert result["haloScale"] > result["pointScale"]
+    assert result["markerPosition"] == pytest.approx([-.2, 1.2, 0])
+    assert result["initial"]["controlsAttached"] is False
+    assert result["carrying"]["carryingControlKey"] == "leftShoulder"
+    assert result["carrying"]["arcballEnabled"] is True
+    assert result["events"]["emptyPointerdowns"] == 1
+    assert result["arcballActions"].get("2") == "PAN"
+    assert result["arcballActions"].get("0") == "ROTATE"
+    assert result["beforePan"] == result["afterPan"]
+    assert result["afterPanMove"] > result["afterPan"]
+    assert result["cancelled"]["carryingControlKey"] is None
+    assert result["events"]["cancelled"] == 1
+    assert len(result["events"]["began"]) == 2
+    assert result["events"]["began"][0] == "leftShoulder"
+    assert result["events"]["updates"]
+    assert result["events"]["picked"] == 0
+    assert result["released"]["carryingControlKey"] is None
+    assert result["events"]["finished"] == 1
+    assert result["arcball"] is True
 
 
 def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_page):
@@ -823,9 +1090,53 @@ def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
     assert result["sameLineAttribute"]
     assert result["sameJointAttribute"]
     assert result["center"] == pytest.approx([0, 0, 0, 1, 2, 0])
-    assert result["line"] == pytest.approx([0, 0, 0, 1, 2, 0])
+    assert result["line"] == pytest.approx([0, 0, 0, .5, 1, 0])
     assert result["joint"] == pytest.approx([0, 0, 0, .5, 1, 0])
     assert result["dynamicUsage"]
+
+
+def test_rig_overlay_uses_authored_humanoid_controls(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const controls = Object.fromEntries([
+        ['chest', [0, 1.8, 0]], ['pelvis', [0, 1, 0]],
+        ['leftShoulder', [-.2, 1.6, 0]],
+        ['leftElbow', [-.5, 1.4, 0]], ['leftHand', [-.8, 1.2, 0]],
+        ['rightShoulder', [.2, 1.6, 0]],
+        ['rightElbow', [.5, 1.4, 0]], ['rightHand', [.8, 1.2, 0]],
+        ['leftHip', [-.15, 1, 0]], ['leftKnee', [-.2, .5, 0]],
+        ['leftFoot', [-.2, 0, 0]], ['rightHip', [.15, 1, 0]],
+        ['rightKnee', [.2, .5, 0]], ['rightFoot', [.2, 0, 0]],
+      ].map(([key, position]) => [key, {position}]));
+      const source = {
+        key: 'model-rig', structureRevision: 1, joints: [],
+        components: [], forestEdges: [], poseRotationByJointId: {},
+        humanoidControlRig: {
+          available: true, controls,
+        },
+      };
+      const state = {
+        model: source, ik: {enabled: true, available: true,
+          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']},
+        humanoidRigEdit: {editing: false},
+      };
+      const model = new THREE.Object3D();
+      scene.add(model);
+      const controller = createRigOverlayController({
+        scene, getMeshes: () => [model], getRigState: () => state,
+      });
+      controller.refresh(state);
+      const sprite = scene.getObjectByName('viewer-humanoid-point-leftElbow');
+      const debug = controller.getDebugState();
+      controller.dispose();
+      return {position: sprite?.position.toArray(),
+        visible: debug.humanoidOverlayVisible};
+    }""")
+    assert result["position"] == pytest.approx([-.5, 1.4, 0])
+    assert result["visible"] is True
 
 
 def test_model_picker_blocks_view_selection_before_bubble_listener(module_page):
@@ -3039,6 +3350,68 @@ def test_model_physics_session_owns_fixed_clock_and_generation(module_page):
     assert result["inputEvents"] == [["input", True], ["input", False]]
 
 
+def test_model_physics_session_suspension_pauses_without_resetting_settings(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {createModelPhysicsSession} = await import(
+        './js/mesh/model-physics-session.js');
+      const callbacks = [];
+      const canceled = [];
+      const session = createModelPhysicsSession({
+        requestAnimationFrame: callback => {
+          callbacks.push(callback);
+          return callback;
+        },
+        cancelAnimationFrame: callback => {
+          canceled.push(callback);
+          const index = callbacks.indexOf(callback);
+          if (index >= 0) callbacks.splice(index, 1);
+        },
+      });
+      let steps = 0;
+      let motions = 0;
+      let resets = 0;
+      const transform = {
+        orientation: [0, 0, 0, 1], translation: [0, 0, 0],
+      };
+      session.enable(transform);
+      session.attach({
+        mesh: {},
+        onModelMotion: () => { motions += 1; return true; },
+        step: () => { steps += 1; },
+        reset: () => { resets += 1; },
+        isSettled: () => false,
+        isVisible: () => false,
+      });
+      callbacks.shift()(0);
+      session.setSettings({frequencyHz: 7});
+      session.setSuspended(true);
+      const suspended = session.getState();
+      session.handleModelTransform({modelTransform: {
+        orientation: [0, .2, 0, .98], translation: [.1, 0, 0],
+      }});
+      session.advance(1000);
+      const paused = session.getState();
+      session.reset(transform);
+      session.setSuspended(false);
+      const resumed = session.getState();
+      callbacks.shift()(1000);
+      callbacks.shift()(2000);
+      return {suspended, paused, resumed, final: session.getState(),
+        canceled: canceled.length, steps, motions, resets};
+    }""")
+    assert result["suspended"]["suspended"] is True
+    assert result["suspended"]["frequencyHz"] == 7
+    assert result["paused"]["scheduled"] is False
+    assert result["resumed"]["suspended"] is False
+    assert result["resumed"]["frequencyHz"] == 7
+    assert result["final"]["scheduled"] is True
+    assert result["steps"] == 6
+    assert result["motions"] == 0
+    assert result["resets"] == 1
+    assert result["canceled"] >= 1
+
+
 def test_model_physics_reset_updates_numeric_defaults_once_and_keeps_toggles(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -3302,7 +3675,7 @@ def test_geometry_humanoid_control_rig_is_rest_owned_and_density_invariant(modul
         assert rig["source"] == "proportional_template"
         assert rig["mode"] == "proportional_template"
         assert set(rig["controls"]) == {
-            "chest", "pelvis", "leftShoulder", "leftElbow", "leftHand",
+            "chest", "pelvis", "neck", "head", "leftShoulder", "leftElbow", "leftHand",
             "rightShoulder", "rightElbow", "rightHand", "leftHip",
             "leftKnee", "leftFoot", "rightHip", "rightKnee", "rightFoot",
         }
@@ -3321,6 +3694,7 @@ def test_geometry_humanoid_control_rig_is_rest_owned_and_density_invariant(modul
         "leftFoot": pytest.approx(result["first"]["controls"]["leftFoot"]["position"]),
         "rightFoot": pytest.approx(result["first"]["controls"]["rightFoot"]["position"]),
         "neck": pytest.approx(result["first"]["diagnostics"]["templatePoints"]["neck"]),
+        "head": pytest.approx(result["first"]["diagnostics"]["templatePoints"]["head"]),
     }
     assert result["first"]["controls"]["leftHand"]["position"][0] < \
         result["first"]["controls"]["leftShoulder"]["position"][0]
@@ -3457,6 +3831,232 @@ def test_estimate_foot_depth_uses_bottom_band(module_page):
     assert result["fallback"]["rejectedSliceCount"] == 2
     assert result["fallback"]["fallbackUsed"] is True
     assert result["fallback"]["reason"] == "foot_depth_unavailable"
+
+
+def test_humanoid_overrides_resolve_semantics_and_manual_binding(module_page):
+    result = module_page.evaluate("""async () => {
+      const control = await import('./js/mesh/humanoid-control-rig.js');
+      const binding = await import('./js/mesh/humanoid-rig-binding.js');
+      const heat = await import('./js/mesh/humanoid-heat-binding.js');
+      const keys = control.HUMANOID_CONTROL_KEYS;
+      const controls = Object.fromEntries(keys.map((key, index) => [key, {
+        position: [index * .1, index * .2, 0],
+        semantic: {sideN: index / 10, height01: index / 20, depthN: 0},
+      }]));
+      const automatic = {version: 1, available: true, accepted: true,
+        frame: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
+          lowHeight: 0, highHeight: 10, height: 10,
+          sideCenter: 0, depthCenter: 0}, controls, paths: {}};
+      const signature = '["body#bone=7"]';
+      const neckSignature = '["body#bone=8"]';
+      const headSignature = '["body#bone=9"]';
+      const model = {joints: [
+        {jointId: 17, signature, restPivot: [2, 3, 4],
+          members: [{sourceKey: 'body', boneId: 7,
+            sourceBoneKey: 'body#bone=7'}]},
+        {jointId: 18, signature: neckSignature, restPivot: [0, 5, 0],
+          members: [{sourceKey: 'body', boneId: 8,
+            sourceBoneKey: 'body#bone=8'}]},
+        {jointId: 19, signature: headSignature, restPivot: [0, 6, 0],
+          members: [{sourceKey: 'body', boneId: 9,
+            sourceBoneKey: 'body#bone=9'}]},
+      ], sourceBoneToModelJointId: new Map([
+        ['body#bone=7', 17], ['body#bone=8', 18], ['body#bone=9', 19],
+      ])};
+      const overrides = {version: 1, controls: {
+        leftShoulder: {semantic: {sideN: -.2, height01: .7, depthN: .1},
+          joint_signature: signature},
+        neck: {semantic: {sideN: 0, height01: .8, depthN: 0},
+          joint_signature: neckSignature},
+        head: {semantic: {sideN: 0, height01: .9, depthN: 0},
+          joint_signature: headSignature},
+      }};
+      const resolved = control.resolveHumanoidControlMappings({
+        savedOverrides: overrides, modelRig: model});
+      const applied = control.applyHumanoidControlRigOverrides({
+        automaticRig: automatic, savedOverrides: overrides,
+        modelRig: model, resolvedMappings: resolved});
+      const heatBinding = heat.buildHumanoidHeatBinding({
+        controlRig: applied, sourceRigs: [], modelRig: model,
+        controlMappings: resolved});
+      const rigBinding = binding.buildHumanoidRigBinding({
+        controlRig: applied, modelRig: model, heatBinding,
+        controlMappings: resolved});
+      const untouched = control.applyHumanoidControlRigOverrides({
+        automaticRig: automatic, savedOverrides: null, modelRig: model});
+      const entry = rigBinding.jointBindings.get(17);
+      const neckEntry = rigBinding.jointBindings.get(18);
+      const headEntry = rigBinding.jointBindings.get(19);
+      return {
+        untouched: keys.every(key => JSON.stringify(
+          untouched.controls[key].position) === JSON.stringify(controls[key].position)),
+        resolvedJoint: resolved.get('leftShoulder')?.jointId || null,
+        exactPivot: applied.controls.leftShoulder.position,
+        heatDriver: heatBinding.sourceBoneAssignments.get('body#bone=7')?.driverId,
+        bindingDriver: entry?.driverId,
+        bindingMethod: entry?.bindingMethod,
+        controlKey: entry?.controlKey,
+        neckBinding: {driverId: neckEntry?.driverId,
+          bindingMethod: neckEntry?.bindingMethod,
+          controlKey: neckEntry?.controlKey},
+        headBinding: {driverId: headEntry?.driverId,
+          bindingMethod: headEntry?.bindingMethod,
+          controlKey: headEntry?.controlKey},
+      };
+    }""")
+    assert result["untouched"] is True
+    assert result["resolvedJoint"] == 17
+    assert result["exactPivot"] == [2, 3, 4]
+    assert result["heatDriver"] is None
+    assert result["bindingDriver"] == "left_upper_arm"
+    assert result["bindingMethod"] == "manual_control_mapping"
+    assert result["controlKey"] == "leftShoulder"
+    assert result["neckBinding"] == {
+        "driverId": "neck", "bindingMethod": "manual_control_mapping",
+        "controlKey": "neck"}
+    assert result["headBinding"] == {
+        "driverId": "head", "bindingMethod": "manual_control_mapping",
+        "controlKey": "head"}
+
+
+def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page):
+    result = module_page.evaluate("""async () => {
+      const control = await import('./js/mesh/humanoid-control-rig.js');
+      const edit = await import('./js/mesh/humanoid-rig-edit-session.js');
+      const controls = Object.fromEntries(control.HUMANOID_CONTROL_KEYS.map(key =>
+        [key, {position: [0, 0, 0], semantic: {sideN: 0, height01: 0,
+          depthN: 0}}]));
+      const rig = {humanoidControlRig: {
+        version: 1, accepted: true, available: true,
+        frame: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
+          lowHeight: 0, highHeight: 1, height: 1,
+          sideCenter: 0, depthCenter: 0}, controls, paths: {},
+      }, joints: [{jointId: 9, signature: '["body#bone=9"]',
+        restPivot: [.4, .5, .6], members: []}]};
+      const modelRigState = {
+        explicitRootSignatures: new Set(['custom-root']),
+        humanoidPose: {head: [1, 0, 0]},
+      };
+      let notifications = 0;
+      let persisted = null;
+      let resets = 0;
+      const session = edit.initializeHumanoidRigEditSession({
+        modelRigState,
+        getModelRig: () => rig,
+        getAutomaticRig: () => rig.humanoidControlRig,
+        resetCurrentPoseForHumanoidRigEdit: () => {
+          resets += 1;
+          modelRigState.humanoidPose = {};
+          return true;
+        },
+        getKnownMeshes: () => [{userData: {modPath: 'mod'}}],
+        resolveMappings: control.resolveHumanoidControlMappings,
+        persist: async (_path, value) => {
+          persisted = value;
+          return {saved: true};
+        },
+        clearPersist: async () => ({saved: true}),
+        notifyChanged: () => { notifications += 1; },
+      });
+      session.begin();
+      const initial = session.snapshot();
+      const rootsAfterBegin = [...modelRigState.explicitRootSignatures];
+      const poseAfterBegin = {...modelRigState.humanoidPose};
+      const allCarryResults = control.HUMANOID_CONTROL_KEYS.map((key, index) => {
+        const target = [.1 * (index + 1), .2 * (index + 1),
+          .03 * (index + 1)];
+        const began = session.beginCarry(key);
+        const updated = session.updateDraft(key, target, {
+          candidateJointId: null, candidateDistance: Infinity});
+        const position = session.snapshot().controls[key].position;
+        const finished = session.finishCarry();
+        return {key, began, updated, finished, position};
+      });
+      session.beginCarry('leftShoulder');
+      session.updateDraft('leftShoulder', [1, 1, 1], {
+        candidateJointId: 9, candidateDistance: 10});
+      const snapped = session.snapshot();
+      session.updateDraft('leftShoulder', [1, 1, 1], {
+        candidateJointId: 9, candidateDistance: 19, mappedDistance: 19});
+      const sticky = session.snapshot();
+      session.updateDraft('leftShoulder', [1, 1, 1], {
+        candidateJointId: null, candidateDistance: Infinity});
+      const free = session.snapshot();
+      session.finishCarry();
+      const saved = await session.save();
+      const expectedSemantic = control.humanoidControlPositionToSemantic(
+        [1, 1, 1], rig.humanoidControlRig);
+      return {initial, rootsAfterBegin, poseAfterBegin, allCarryResults,
+        snapped, sticky, free, saved, persisted, expectedSemantic,
+        notifications, resets};
+    }""")
+    assert result["initial"]["controls"]["leftShoulder"]["position"] == [0, 0, 0]
+    assert result["rootsAfterBegin"] == ["custom-root"]
+    assert result["poseAfterBegin"] == {}
+    assert len(result["allCarryResults"]) == 16
+    assert all(item["began"] and item["updated"] and item["finished"]
+               and item["position"] != [0, 0, 0]
+               for item in result["allCarryResults"])
+    assert result["snapped"]["mappedJointIdByControl"] == {"leftShoulder": 9}
+    assert result["snapped"]["controls"]["leftShoulder"]["position"] == [.4, .5, .6]
+    assert result["sticky"]["mappedJointIdByControl"] == {"leftShoulder": 9}
+    assert result["sticky"]["controls"]["leftShoulder"]["position"] == [.4, .5, .6]
+    assert result["free"]["mappedJointIdByControl"] == {}
+    assert result["free"]["controls"]["leftShoulder"]["position"] == [1, 1, 1]
+    assert result["saved"]["saved"] is True
+    assert result["persisted"]["controls"]["leftShoulder"]["semantic"] == \
+        result["expectedSemantic"]
+    assert result["notifications"] >= 5
+    assert result["resets"] == 1
+
+
+def test_humanoid_ik_selection_uses_control_keys_and_resets_default(module_page):
+    result = module_page.evaluate("""async () => {
+      const pose = await import('./js/mesh/humanoid-pose-runtime.js');
+      const controls = Object.fromEntries([
+        'chest', 'pelvis', 'neck', 'head',
+        'leftShoulder', 'leftElbow', 'leftHand',
+        'rightShoulder', 'rightElbow', 'rightHand',
+        'leftHip', 'leftKnee', 'leftFoot',
+        'rightHip', 'rightKnee', 'rightFoot',
+      ].map(key => [key, {position: [0, 0, 0]}]));
+      const state = {
+        ikEnabled: false, activeLimbRole: 'right_leg',
+        selectedHumanoidControlKey: null, humanoidPose: {},
+      };
+      const notifications = [];
+      pose.initializeHumanoidPoseRuntime({
+        modelRigState: state,
+        getModelRig: () => ({humanoidControlRig: {accepted: true, controls}}),
+        getPrimaryLimb: role => ({role, available: role === 'left_arm', keys: []}),
+        solveControlIk: () => ({positions: {}}),
+        mergeLimbPose: value => value,
+        applyPose: () => false,
+        notifyChanged: () => notifications.push('changed'),
+        requestRender: () => notifications.push('render'),
+      });
+      const enabled = pose.setRigIkEnabled(true);
+      const afterEnable = {...state};
+      const selectedArm = pose.selectHumanoidControl('rightElbow');
+      const afterArm = {...state};
+      const selectedCentral = pose.selectHumanoidControl('neck');
+      const afterCentral = {...state};
+      pose.setRigIkEnabled(false);
+      pose.setRigIkEnabled(true);
+      return {enabled, afterEnable, selectedArm, afterArm,
+        selectedCentral, afterCentral, final: {...state}, notifications};
+    }""")
+    assert result["enabled"] is True
+    assert result["afterEnable"]["activeLimbRole"] == "left_arm"
+    assert result["afterEnable"]["selectedHumanoidControlKey"] == "leftHand"
+    assert result["selectedArm"] is True
+    assert result["afterArm"]["activeLimbRole"] == "right_arm"
+    assert result["afterArm"]["selectedHumanoidControlKey"] == "rightElbow"
+    assert result["selectedCentral"] is True
+    assert result["afterCentral"]["activeLimbRole"] == "right_arm"
+    assert result["afterCentral"]["selectedHumanoidControlKey"] == "neck"
+    assert result["final"]["activeLimbRole"] == "left_arm"
+    assert result["final"]["selectedHumanoidControlKey"] == "leftHand"
 
 
 def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):
@@ -4119,10 +4719,204 @@ def test_humanoid_binding_uses_semantic_domains_and_bounded_terminals(module_pag
     assert result["terminalMethod"] == "heat_connectivity"
     assert result["noHeatTerminal"] is None
     assert result["head"]["bindingType"] == "secondary"
-    assert result["head"]["driverId"] == "torso"
+    assert result["head"]["driverId"] == "neck"
     assert result["head"]["secondaryRootId"] == 2
     assert result["head"]["secondarySubtreeSize"] == 2
     assert result["neighborDriverId"] not in {"left_upper_arm", "left_lower_arm"}
+
+
+def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_boundaries(
+    module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {buildHumanoidRigBinding} = await import(
+        './js/mesh/humanoid-rig-binding.js');
+      const controls = {
+        pelvis: [0, .4, 0], chest: [0, 1.2, 0], neck: [0, 1.5, 0],
+        head: [0, 1.8, 0], leftShoulder: [-.8, 1.2, 0],
+        leftElbow: [-2, 1.2, 0], leftHand: [-2.8, 1.2, 0],
+        rightShoulder: [.8, 1.2, 0], rightElbow: [2, 1.2, 0],
+        rightHand: [2.8, 1.2, 0], leftHip: [-.45, .4, 0],
+        leftKnee: [-.45, -.4, 0], leftFoot: [-.45, -1.2, 0],
+        rightHip: [.45, .4, 0], rightKnee: [.45, -.4, 0],
+        rightFoot: [.45, -1.2, 0],
+      };
+      const controlRig = {
+        frame: {height: 3, up: [0, 1, 0], right: [1, 0, 0],
+          forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const member = id => ({sourceKey: 'body', boneId: id,
+        sourceBoneKey: `body#bone=${id}`});
+      const jointDefinitions = [
+        [10, [-.8, 1.2, 0]], [11, [-1.2, 1.2, 0]],
+        [12, [-1.5, 1.2, 0]], [13, [-1.8, 1.2, 0]],
+        [14, [-2, 1.2, 0]], [20, [-1.5, .6, 0]],
+        [40, [.45, .4, 0]], [41, [.45, -.4, 0]],
+        [42, [.45, -.8, 0]], [43, [.45, -1.2, 0]],
+        [30, [0, 1.5, 0]], [31, [0, 1.65, 0]], [32, [0, 1.8, 0]],
+      ];
+      const makeModel = splitArmComponent => {
+        const joints = jointDefinitions.map(([jointId, restPivot]) => ({
+          jointId, restPivot, restCenter: restPivot, restFrame: [0, 0, 0, 1],
+          members: [member(jointId)],
+        }));
+        const armParent = splitArmComponent
+          ? {10: null, 11: 10, 12: 11, 40: null, 41: 40, 42: 41, 43: 42}
+          : {10: null, 11: 10, 12: 11, 13: 12, 14: 13, 20: 12,
+            40: null, 41: 40, 42: 41, 43: 42};
+        const armChildren = splitArmComponent
+          ? {10: [11], 11: [12], 12: [], 40: [41], 41: [42], 42: [43], 43: []}
+          : {10: [11], 11: [12], 12: [13, 20], 13: [14], 14: [], 20: [],
+            40: [41], 41: [42], 42: [43], 43: []};
+        const tailParent = splitArmComponent ? {13: null, 14: 13} : {};
+        const tailChildren = splitArmComponent ? {13: [14], 14: []} : {};
+        const centralParent = {30: null, 31: 30, 32: 31};
+        const centralChildren = {30: [31], 31: [32], 32: []};
+        const components = [
+          {componentId: 0, rootId: 10,
+            nodeIds: splitArmComponent ? [10, 11, 12, 40, 41, 42, 43]
+              : [10, 11, 12, 13, 14, 20, 40, 41, 42, 43],
+            parentById: armParent, childrenById: armChildren},
+          ...(splitArmComponent ? [{componentId: 1, rootId: 13,
+            nodeIds: [13, 14], parentById: tailParent,
+            childrenById: tailChildren}] : []),
+          {componentId: splitArmComponent ? 2 : 1, rootId: 30,
+            nodeIds: [30, 31, 32], parentById: centralParent,
+            childrenById: centralChildren},
+        ];
+        const componentByJointId = new Map();
+        components.forEach((component, index) => component.nodeIds.forEach(id =>
+          componentByJointId.set(id, index)));
+        return {
+          joints,
+          jointPivotByJointId: new Map(joints.map(joint =>
+            [joint.jointId, joint.restPivot])),
+          restFrameByJointId: new Map(joints.map(joint =>
+            [joint.jointId, new THREE.Quaternion()])),
+          components, componentByJointId,
+          sourceBoneToModelJointId: new Map(joints.map(joint =>
+            [`body#bone=${joint.jointId}`, joint.jointId])),
+        };
+      };
+      const heatFor = model => ({
+        modelJointAssignments: new Map(model.joints.map(joint => [
+          joint.jointId, {driverId: 'right_upper_arm', confidence: 'high',
+            sourceBoneKeys: [member(joint.jointId).sourceBoneKey], memberCount: 1},
+        ])),
+        sourceBoneAssignments: new Map(model.joints.map(joint => {
+          const source = member(joint.jointId);
+          return [source.sourceBoneKey, {...source,
+            driverId: 'right_upper_arm', bindingMethod: 'heat_connectivity'}];
+        })),
+        conflicts: [],
+      });
+      const mappingsFor = pairs => new Map(pairs.map(([controlKey, jointId]) =>
+        [controlKey, {controlKey, jointId, sourceMembers: [member(jointId)]}]));
+      const entry = (binding, jointId) => {
+        const value = binding.jointBindings.get(jointId);
+        return value ? {driverId: value.driverId,
+          bindingMethod: value.bindingMethod,
+          segmentStartControl: value.segmentStartControl || null,
+          segmentEndControl: value.segmentEndControl || null} : null;
+      };
+      const model = makeModel(false);
+      const mapped = mappingsFor([
+        ['leftShoulder', 10], ['leftElbow', 14], ['neck', 30], ['head', 32],
+        ['rightKnee', 41], ['rightFoot', 43],
+      ]);
+      const authoritative = buildHumanoidRigBinding({controlRig, modelRig: model,
+        heatBinding: heatFor(model), controlMappings: mapped});
+      const onlyStart = buildHumanoidRigBinding({controlRig, modelRig: model,
+        heatBinding: heatFor(model),
+        controlMappings: mappingsFor([['leftShoulder', 10]])});
+      const split = makeModel(true);
+      const differentComponents = buildHumanoidRigBinding({controlRig,
+        modelRig: split, heatBinding: heatFor(split),
+        controlMappings: mappingsFor([
+          ['leftShoulder', 10], ['leftElbow', 14],
+        ])});
+      const mappedInteriorControl = buildHumanoidRigBinding({controlRig,
+        modelRig: model, heatBinding: heatFor(model),
+        controlMappings: mappingsFor([
+          ['leftShoulder', 10], ['leftElbow', 14], ['leftHand', 12],
+        ])});
+      const duplicateControl = buildHumanoidRigBinding({controlRig,
+        modelRig: model, heatBinding: heatFor(model),
+        controlMappings: mappingsFor([
+          ['leftShoulder', 10], ['leftElbow', 10],
+        ])});
+      return {
+        authoritative: {
+          shoulder: entry(authoritative, 10),
+          interior: [11, 12, 13].map(jointId => entry(authoritative, jointId)),
+          elbow: entry(authoritative, 14),
+          branch: entry(authoritative, 20),
+          rightLegInterior: entry(authoritative, 42),
+          neckHeadInterior: entry(authoritative, 31),
+          sourceRoles: [42, 31].map(jointId =>
+            authoritative.sourceBoneAssignments.get(`body#bone=${jointId}`)?.limbRole),
+          sourceDrivers: [10, 11, 12, 13, 14, 31, 42].map(jointId =>
+            authoritative.sourceBoneAssignments.get(`body#bone=${jointId}`)?.driverId),
+          pathCount: authoritative.diagnostics.mappedPathCount,
+        },
+        onlyStart: entry(onlyStart, 11),
+        differentComponents: {
+          interior: entry(differentComponents, 11),
+          pathCount: differentComponents.diagnostics.mappedPathCount,
+        },
+        mappedInteriorControl: {
+          beforeInterior: entry(mappedInteriorControl, 11),
+          afterInterior: entry(mappedInteriorControl, 13),
+          conflictTypes: mappedInteriorControl.diagnostics.mappedPathConflicts
+            .map(conflict => conflict.type),
+        },
+        duplicateControl: {
+          joint: entry(duplicateControl, 10),
+          conflictTypes: duplicateControl.diagnostics.mappedPathConflicts
+            .map(conflict => conflict.type),
+        },
+      };
+    }""")
+    assert result["authoritative"]["shoulder"] == {
+        "driverId": "left_upper_arm",
+        "bindingMethod": "manual_control_mapping",
+        "segmentStartControl": None, "segmentEndControl": None}
+    assert result["authoritative"]["interior"] == [
+        {"driverId": "left_upper_arm", "bindingMethod": "mapped_joint_path",
+         "segmentStartControl": "leftShoulder", "segmentEndControl": "leftElbow"},
+    ] * 3
+    assert result["authoritative"]["elbow"]["bindingMethod"] == \
+        "manual_control_mapping"
+    assert result["authoritative"]["branch"]["bindingMethod"] == \
+        "heat_connectivity"
+    assert result["authoritative"]["branch"]["driverId"] == "right_upper_arm"
+    assert result["authoritative"]["rightLegInterior"] == {
+        "driverId": "right_lower_leg", "bindingMethod": "mapped_joint_path",
+        "segmentStartControl": "rightKnee", "segmentEndControl": "rightFoot"}
+    assert result["authoritative"]["neckHeadInterior"] == {
+        "driverId": "head", "bindingMethod": "mapped_joint_path",
+        "segmentStartControl": "neck", "segmentEndControl": "head"}
+    assert result["authoritative"]["sourceDrivers"] == [
+        "left_upper_arm", "left_upper_arm", "left_upper_arm",
+        "left_upper_arm", "left_lower_arm", "head", "right_lower_leg"]
+    assert result["authoritative"]["sourceRoles"] == ["right_leg", "torso"]
+    assert result["authoritative"]["pathCount"] == 3
+    assert result["onlyStart"]["bindingMethod"] == "heat_connectivity"
+    assert result["differentComponents"]["interior"]["bindingMethod"] == \
+        "heat_connectivity"
+    assert result["differentComponents"]["pathCount"] == 0
+    assert result["mappedInteriorControl"]["beforeInterior"]["bindingMethod"] == \
+        "heat_connectivity"
+    assert result["mappedInteriorControl"]["afterInterior"] == {
+        "driverId": "left_lower_arm", "bindingMethod": "mapped_joint_path",
+        "segmentStartControl": "leftElbow", "segmentEndControl": "leftHand"}
+    assert "mapped_control_inside_path" in \
+        result["mappedInteriorControl"]["conflictTypes"]
+    assert result["duplicateControl"]["joint"]["bindingMethod"] == \
+        "heat_connectivity"
+    assert "conflicting_control_mappings" in \
+        result["duplicateControl"]["conflictTypes"]
 
 
 def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branches(

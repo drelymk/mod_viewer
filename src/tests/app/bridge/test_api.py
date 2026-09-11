@@ -18,6 +18,7 @@ EXPECTED_API_METHODS = {
     "delete_present",
     "delete_present_position",
     "delete_rig_pose_preset",
+    "clear_humanoid_control_rig",
     "delete_toggle",
     "discard_changes",
     "edit_asset_folder",
@@ -56,6 +57,7 @@ EXPECTED_API_METHODS = {
     "save_mesh_names",
     "save_mesh_textures",
     "save_rig_pose_preset",
+    "save_humanoid_control_rig",
     "save_weight_selection",
     "select_asset_folder",
     "select_folder",
@@ -195,6 +197,22 @@ def test_texture_save_forwards_targets_and_usage(monkeypatch):
     assert result == {"status": "ok"}
     assert calls[0][0] == ("mod", "diffuse::body.dds", targets, usage)
     assert callable(calls[0][1]["progress_callback"])
+
+
+def test_humanoid_control_rig_methods_forward_through_preview(monkeypatch):
+    api = ModViewerAPI()
+    calls = []
+    monkeypatch.setattr(
+        api._mod_preview, "save_humanoid_control_rig",
+        lambda *args: calls.append(("save", args)) or {"saved": True})
+    monkeypatch.setattr(
+        api._mod_preview, "clear_humanoid_control_rig",
+        lambda *args: calls.append(("clear", args)) or {"saved": True})
+
+    value = {"version": 1, "controls": {}}
+    assert api.save_humanoid_control_rig("mod", value) == {"saved": True}
+    assert api.clear_humanoid_control_rig("mod") == {"saved": True}
+    assert calls == [("save", ("mod", value)), ("clear", ("mod",))]
 
 
 def test_texture_save_progress_event_includes_request_id_and_is_best_effort():

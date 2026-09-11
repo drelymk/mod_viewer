@@ -216,6 +216,13 @@ class ModViewerAPI:
     def delete_rig_pose_preset(self, folder_path, preset_id):
         return self._mod_preview.delete_rig_pose_preset(folder_path, preset_id)
 
+    def save_humanoid_control_rig(self, folder_path, control_rig):
+        return self._mod_preview.save_humanoid_control_rig(
+            folder_path, control_rig)
+
+    def clear_humanoid_control_rig(self, folder_path):
+        return self._mod_preview.clear_humanoid_control_rig(folder_path)
+
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):
         return self._mod_preview.save_component_material_kind(

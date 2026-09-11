@@ -144,6 +144,7 @@ export function createModelPhysicsSession({
   cancelAnimationFrame: cancelFrame,
 } = {}) {
   let enabled = false;
+  let suspended = false;
   let generation = 0;
   let settings = {...DEFAULT_MODEL_PHYSICS_SETTINGS};
   let previousModelOrientation = null;
@@ -201,7 +202,8 @@ export function createModelPhysicsSession({
   }
 
   function needsSimulation() {
-    return enabled && participants.size > 0 && (!settled || virtualActive);
+    return enabled && !suspended && participants.size > 0
+      && (!settled || virtualActive);
   }
 
   function schedule() {
@@ -214,7 +216,7 @@ export function createModelPhysicsSession({
   }
 
   function wake() {
-    if (!enabled || participants.size === 0) return false;
+    if (!enabled || suspended || participants.size === 0) return false;
     settled = false;
     schedule();
     return true;
@@ -237,6 +239,7 @@ export function createModelPhysicsSession({
     });
     return {
       enabled,
+      suspended,
       generation,
       participantCount: participants.size,
       participatingMeshCount: [...participants.values()].reduce(
@@ -290,6 +293,7 @@ export function createModelPhysicsSession({
     participants.clear();
     statuses.clear();
     enabled = false;
+    suspended = false;
     previousModelOrientation = null;
     previousModelTranslation = [...ZERO_VECTOR];
     rootLinearVelocityWorld = [...ZERO_VECTOR];
@@ -378,6 +382,19 @@ export function createModelPhysicsSession({
     return {...settings};
   }
 
+  function setSuspended(value) {
+    const next = !!value;
+    if (suspended === next) return suspended;
+    suspended = next;
+    if (suspended) cancelScheduledFrame();
+    else if (participants.size) {
+      settled = false;
+      schedule();
+    }
+    notify();
+    return suspended;
+  }
+
   function handleModelTransform(detail) {
     const current = transform(detail?.modelTransform);
     if (!current) return false;
@@ -399,7 +416,7 @@ export function createModelPhysicsSession({
     previousModelOrientation = [...current.orientation];
     previousModelTranslation = [...current.translation];
     if (hasVelocity) rootLinearVelocityWorld = velocity;
-    if (!enabled || participants.size === 0) return false;
+    if (!enabled || suspended || participants.size === 0) return false;
     let changedParticipant = false;
     participants.forEach(participant => {
       const changedByParticipant = participant.onModelMotion?.({
@@ -420,7 +437,7 @@ export function createModelPhysicsSession({
   }
 
   function handleVirtualMotion(detail) {
-    if (!enabled) return false;
+    if (!enabled || suspended) return false;
     const current = vector(detail?.normalizedLinearVelocityWorld);
     const deltaVelocityWorld = vectorSubtract(
       current, virtualLinearVelocityWorld);
@@ -448,7 +465,7 @@ export function createModelPhysicsSession({
   }
 
   function handleMeshStateChanged(meshes = []) {
-    if (!enabled) return false;
+    if (!enabled || suspended) return false;
     const changedMeshes = Array.isArray(meshes) ? meshes : [meshes];
     const visibleParticipants = [];
     participants.forEach(participant => {
@@ -492,7 +509,7 @@ export function createModelPhysicsSession({
   }
 
   function advance(timestamp) {
-    if (!enabled || participants.size === 0) return;
+    if (!enabled || suspended || participants.size === 0) return;
     const currentTimestamp = Number(timestamp);
     if (!Number.isFinite(currentTimestamp)) return;
     if (lastTimestamp === null) {
@@ -547,6 +564,7 @@ export function createModelPhysicsSession({
   return {
     enable,
     disable,
+    setSuspended,
     destroy,
     attach,
     detach,

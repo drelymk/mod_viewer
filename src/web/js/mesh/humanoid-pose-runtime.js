@@ -2,6 +2,9 @@
 // ModelJoint rotations remain a separate manual pose layer.
 
 import {RIG_LIMB_ROLES} from './weight-runtime.js';
+import {
+  HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES,
+} from './humanoid-control-rig.js';
 
 let activeSession = null;
 
@@ -17,7 +20,10 @@ function createSession({modelRigState, getModelRig, getPrimaryLimb,
   }
 
   function setIkEnabled(enabled) {
-    const primary = getPrimaryLimb();
+    const wasEnabled = modelRigState.ikEnabled === true;
+    const validationRole = enabled && !wasEnabled
+      ? 'left_arm' : modelRigState.activeLimbRole;
+    const primary = getPrimaryLimb(validationRole);
     if (enabled && !primary.available) {
       modelRigState.ikEnabled = false;
       notifyChanged();
@@ -27,9 +33,28 @@ function createSession({modelRigState, getModelRig, getPrimaryLimb,
     const next = !!enabled && primary.available;
     if (modelRigState.ikEnabled === next) return next;
     modelRigState.ikEnabled = next;
+    if (next && !wasEnabled) {
+      modelRigState.activeLimbRole = 'left_arm';
+      modelRigState.selectedHumanoidControlKey = 'leftHand';
+    }
     notifyChanged();
     requestRender();
     return next;
+  }
+
+  function selectControl(controlKey) {
+    if (!modelRigState.ikEnabled
+        || !HUMANOID_CONTROL_KEYS.includes(controlKey)) return false;
+    const role = HUMANOID_CONTROL_LIMB_ROLES[controlKey] || null;
+    const changed = modelRigState.selectedHumanoidControlKey !== controlKey
+      || (role && modelRigState.activeLimbRole !== role);
+    modelRigState.selectedHumanoidControlKey = controlKey;
+    if (role) modelRigState.activeLimbRole = role;
+    if (changed) {
+      notifyChanged();
+      requestRender();
+    }
+    return true;
   }
 
   function solveTarget(target, options = {}) {
@@ -53,7 +78,7 @@ function createSession({modelRigState, getModelRig, getPrimaryLimb,
     return {...solved, applied, controlRig: 'humanoid'};
   }
 
-  return {setActiveLimbRole, setIkEnabled, solveTarget};
+  return {setActiveLimbRole, setIkEnabled, selectControl, solveTarget};
 }
 
 export function initializeHumanoidPoseRuntime(options) {
@@ -69,6 +94,9 @@ export function setRigActiveLimbRole(role) {
   return session().setActiveLimbRole(role);
 }
 export function setRigIkEnabled(enabled) { return session().setIkEnabled(enabled); }
+export function selectHumanoidControl(controlKey) {
+  return session().selectControl(controlKey);
+}
 export function solveRigIkTarget(target, options = {}) {
   return session().solveTarget(target, options);
 }
