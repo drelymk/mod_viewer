@@ -111,6 +111,69 @@ def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
     assert final["rig"] == {"version": 1, "presets": []}
 
 
+def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path):
+    signature = '["body#bone=7"]'
+    value = {
+        "version": 1,
+        "controls": {
+            "leftShoulder": {
+                "semantic": {"sideN": -0.18, "height01": 0.7,
+                              "depthN": 0.01},
+                "joint_signature": signature,
+            },
+        },
+    }
+    metadata.save_rig_pose_preset(str(tmp_path), {
+        "id": "pose-1", "name": "Pose", "roots": [], "joints": [],
+    })
+    path = tmp_path / metadata.METADATA_NAME
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["future"] = {"keep": True}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
+
+    assert result["saved"] is True
+    assert metadata.humanoid_control_rig(str(tmp_path)) == value
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["rig"]["presets"] == data["rig"]["presets"]
+    assert saved["future"] == {"keep": True}
+
+    cleared = metadata.clear_humanoid_control_rig(str(tmp_path))
+    assert cleared["saved"] is True
+    final = json.loads(path.read_text(encoding="utf-8"))
+    assert "humanoid_control_rig" not in final["rig"]
+    assert final["rig"]["presets"] == data["rig"]["presets"]
+
+
+@pytest.mark.parametrize("invalid", [
+    {"version": 2, "controls": {}},
+    {"version": 1, "controls": {"unknown": {
+        "semantic": {"sideN": 0, "height01": 0, "depthN": 0}}}},
+    {"version": 1, "controls": {"chest": {
+        "semantic": {"sideN": True, "height01": 0, "depthN": 0}}}},
+    {"version": 1, "controls": {"chest": {
+        "semantic": {"sideN": 0, "height01": 0, "depthN": 0},
+        "joint_signature": "not-json"}}},
+])
+def test_save_humanoid_control_rig_rejects_malformed_values(tmp_path, invalid):
+    result = metadata.save_humanoid_control_rig(str(tmp_path), invalid)
+    assert result["saved"] is False
+    assert not (tmp_path / metadata.METADATA_NAME).exists()
+
+
+def test_malformed_humanoid_rig_does_not_hide_valid_pose_presets():
+    result = metadata.rig_pose_presets(data={
+        "rig": {
+            "version": 1,
+            "presets": [{"id": "pose-1", "name": "Pose",
+                         "roots": [], "joints": []}],
+            "humanoid_control_rig": {"version": 9, "controls": {}},
+        },
+    })
+    assert result["presets"][0]["id"] == "pose-1"
+
+
 def test_rig_pose_preset_metadata_reports_malformed_section_without_load_failure():
     result = metadata.rig_pose_presets(data={
         "rig": {"version": 2, "presets": []},

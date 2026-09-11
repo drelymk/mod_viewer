@@ -1,6 +1,7 @@
 """Viewer-only mesh labels and texture choices stored beside a mod."""
 from collections import Counter
 import json
+import math
 import os
 import threading
 from copy import deepcopy
@@ -26,6 +27,13 @@ RIG_METADATA_KEY = "rig"
 RIG_METADATA_VERSION = 1
 RIG_PRESET_NAME_MAX_LENGTH = 80
 RIG_SIGNATURE_MAX_LENGTH = 1024
+HUMANOID_CONTROL_RIG_VERSION = 1
+HUMANOID_CONTROL_KEYS = (
+    "chest", "pelvis", "leftShoulder", "leftElbow", "leftHand",
+    "rightShoulder", "rightElbow", "rightHand", "leftHip", "leftKnee",
+    "leftFoot", "rightHip", "rightKnee", "rightFoot",
+)
+HUMANOID_SEMANTIC_KEYS = ("sideN", "height01", "depthN")
 
 
 def _legacy_mesh_key(name, entry):
@@ -344,6 +352,124 @@ def _normalized_rig_preset(value):
         "id": preset_id.strip(), "name": name,
         "roots": normalized_roots, "joints": normalized_joints,
     }
+
+
+def _valid_rig_signature(value):
+    if (not isinstance(value, str) or not value.strip()
+            or len(value) > RIG_SIGNATURE_MAX_LENGTH):
+        return False
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return False
+    return (isinstance(parsed, list) and bool(parsed)
+            and all(isinstance(item, str) and item for item in parsed))
+
+
+def _normalized_humanoid_entry(value, *, strict=False):
+    if not isinstance(value, dict):
+        return None
+    semantic = value.get("semantic")
+    if not isinstance(semantic, dict):
+        return None
+    normalized_semantic = {}
+    for key in HUMANOID_SEMANTIC_KEYS:
+        number = semantic.get(key)
+        if (isinstance(number, bool) or not isinstance(number, (int, float))
+                or not math.isfinite(number)):
+            return None
+        normalized_semantic[key] = float(number)
+    signature = value.get("joint_signature")
+    if signature is not None and not _valid_rig_signature(signature):
+        return None
+    result = {"semantic": normalized_semantic}
+    if signature is not None:
+        result["joint_signature"] = signature
+    return result
+
+
+def _normalized_humanoid_control_rig(value, *, strict=False):
+    if value is None:
+        return None
+    if (not isinstance(value, dict)
+            or value.get("version") != HUMANOID_CONTROL_RIG_VERSION
+            or not isinstance(value.get("controls"), dict)):
+        if strict:
+            return None
+        return {"version": HUMANOID_CONTROL_RIG_VERSION, "controls": {},
+                "error": "Humanoid control-rig metadata could not be loaded."}
+    controls = {}
+    malformed = False
+    for key, raw in value["controls"].items():
+        if key not in HUMANOID_CONTROL_KEYS:
+            malformed = True
+            continue
+        entry = _normalized_humanoid_entry(raw, strict=strict)
+        if entry is None:
+            malformed = True
+            continue
+        controls[key] = entry
+    if strict and malformed:
+        return None
+    result = {"version": HUMANOID_CONTROL_RIG_VERSION, "controls": controls}
+    if malformed:
+        result["error"] = "Some humanoid control-rig overrides were ignored."
+    return result
+
+
+def humanoid_control_rig(folder_path=None, data=None):
+    """Return normalized semantic HumanoidControlRig overrides."""
+    data = (load(folder_path) if data is None and folder_path is not None
+            else ({} if data is None else data))
+    rig = data.get(RIG_METADATA_KEY) if isinstance(data, dict) else None
+    raw = rig.get("humanoid_control_rig") if isinstance(rig, dict) else None
+    return _normalized_humanoid_control_rig(raw)
+
+
+def _rig_data_for_humanoid_update(data):
+    raw_rig = data.get(RIG_METADATA_KEY) if isinstance(data, dict) else None
+    if raw_rig is not None and not isinstance(raw_rig, dict):
+        return None, "Rig metadata uses an unsupported version."
+    current = rig_pose_presets(data=data)
+    if current["error"]:
+        return None, "Pose preset metadata could not be updated."
+    rig = deepcopy(raw_rig) if isinstance(raw_rig, dict) else {}
+    rig.update({"version": RIG_METADATA_VERSION,
+                "presets": deepcopy(current["presets"])})
+    rig.pop("limb_mappings", None)
+    return rig, None
+
+
+def save_humanoid_control_rig(folder_path, value):
+    """Atomically save semantic humanoid overrides beside a mod."""
+    normalized = _normalized_humanoid_control_rig(value, strict=True)
+    if normalized is None:
+        return {"saved": False, "error": "Invalid humanoid control rig."}
+    with _LOCK:
+        data = load(folder_path)
+        rig, error = _rig_data_for_humanoid_update(data)
+        if error:
+            return {"saved": False, "error": error}
+        rig["humanoid_control_rig"] = normalized
+        data[RIG_METADATA_KEY] = rig
+        return {**_save(folder_path, data),
+                "humanoid_control_rig": normalized}
+
+
+def clear_humanoid_control_rig(folder_path):
+    """Remove only HumanoidControlRig overrides and preserve other metadata."""
+    with _LOCK:
+        data = load(folder_path)
+        raw_rig = data.get(RIG_METADATA_KEY)
+        if not isinstance(raw_rig, dict) or "humanoid_control_rig" not in raw_rig:
+            return {"saved": False}
+        rig = deepcopy(raw_rig)
+        rig.pop("humanoid_control_rig", None)
+        if rig.get("presets") is not None or len(rig) > 0:
+            data[RIG_METADATA_KEY] = rig
+        else:
+            data.pop(RIG_METADATA_KEY, None)
+        return _save(folder_path, data)
 
 
 def rig_pose_presets(folder_path=None, data=None):

@@ -1009,6 +1009,8 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
           const advanced = document.querySelector(
             '.weight-rig-advanced-content');
           const limbButtons = [...document.querySelectorAll('.rig-limb-button')];
+          const mainRig = document.querySelector('.rig-main-edit');
+          const mainRigAdvanced = mainRig?.closest('.weight-rig-advanced');
           return {
             calls: window.__rigPanelPreviewCalls,
             rigLoaded: rig.loaded,
@@ -1031,6 +1033,13 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
             ].some(name => typeof runtime[name] === 'function'),
             advancedPresent: !!advanced,
             limbRoles: limbButtons.map(button => button.dataset.role),
+            mainRigInAdvanced: mainRigAdvanced?.contains(mainRig) === true,
+            mainRigBelowLimb: mainRig && mainRigAdvanced
+              ? [...mainRigAdvanced.querySelector('.weight-rig-advanced-content')
+                .children].indexOf(mainRig)
+                > [...mainRigAdvanced.querySelector('.weight-rig-advanced-content')
+                  .children].indexOf(limbButtons[0]?.parentElement)
+              : false,
             activeRole: rig.ik.activeLimbRole,
             weightSelection: weight.selectedBones,
           };
@@ -1048,6 +1057,8 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         assert result["advancedPresent"] is True
         assert result["limbRoles"] == [
             "left_arm", "right_arm", "left_leg", "right_leg"]
+        assert result["mainRigInAdvanced"] is True
+        assert result["mainRigBelowLimb"] is True
         assert result["activeRole"] == "left_arm"
         assert result["weightSelection"] == []
     finally:

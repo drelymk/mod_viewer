@@ -98,8 +98,11 @@ class ModPreview:
                 metadata.hydrate_mesh_names(result, saved_metadata)
             result["metadata"]["mesh_color_adjustments"] = \
                 metadata.hydrate_mesh_color_adjustments(result, saved_metadata)
-            result["metadata"]["rig"] = metadata.rig_pose_presets(
-                data=saved_metadata)
+            rig_metadata = metadata.rig_pose_presets(data=saved_metadata)
+            humanoid_rig = metadata.humanoid_control_rig(data=saved_metadata)
+            if humanoid_rig is not None:
+                rig_metadata["humanoid_control_rig"] = humanoid_rig
+            result["metadata"]["rig"] = rig_metadata
             game_metadata = result.get("metadata", {}).get("game", {})
             publication.set_game_profile(game_metadata.get("id"))
             metadata.hydrate_textures(
@@ -356,6 +359,14 @@ class ModPreview:
     def delete_rig_pose_preset(self, folder_path, preset_id):
         folder_path = self._access.mod_folder(folder_path)
         return metadata.delete_rig_pose_preset(folder_path, preset_id)
+
+    def save_humanoid_control_rig(self, folder_path, control_rig):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.save_humanoid_control_rig(folder_path, control_rig)
+
+    def clear_humanoid_control_rig(self, folder_path):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.clear_humanoid_control_rig(folder_path)
 
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):

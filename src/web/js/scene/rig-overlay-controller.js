@@ -3,12 +3,19 @@
 // geometry owned entirely by the Rig panel.
 
 import * as THREE from 'three/webgpu';
+import {
+  HUMANOID_CONTROL_PICK_RADIUS,
+  JOINT_ATTRACTION_RADIUS_PX,
+} from '../mesh/humanoid-rig-edit-session.js';
 
 const PICK_ACQUIRE_RADIUS = 9;
 const PICK_RELEASE_RADIUS = 13;
 const PICK_SWITCH_MARGIN = 3;
 const PICK_CLICK_RADIUS = 15;
 const PICK_CLICK_THRESHOLD = 4;
+const HUMANOID_MARKER_SIZE_PX = 10;
+const HUMANOID_HALO_SIZE_PX = 26;
+const HUMANOID_CANDIDATE_SIZE_PX = 30;
 
 function vector(value) {
   if (value?.isVector3) return value.clone();
@@ -19,7 +26,13 @@ function vector(value) {
 }
 
 function sourceFor(snapshot) {
-  if (snapshot?.model) return snapshot.model;
+  if (snapshot?.model) {
+    if (snapshot.model.humanoidControlRig) return snapshot.model;
+    if (snapshot.humanoidControlRig) {
+      return {...snapshot.model, humanoidControlRig: snapshot.humanoidControlRig};
+    }
+    return snapshot.model;
+  }
   return snapshot?.humanoidControlRig
     ? {humanoidControlRig: snapshot.humanoidControlRig} : null;
 }
@@ -69,7 +82,14 @@ function canvasRect(canvas) {
   if (!rect) return null;
   const width = Number(rect.width) || Number(canvas.clientWidth) || 0;
   const height = Number(rect.height) || Number(canvas.clientHeight) || 0;
-  return {...rect, width, height};
+  return {
+    left: Number(rect.left) || 0,
+    top: Number(rect.top) || 0,
+    right: Number(rect.right) || 0,
+    bottom: Number(rect.bottom) || 0,
+    width,
+    height,
+  };
 }
 
 export function projectRigPointToClient({point, camera, canvas, worldMatrix} = {}) {
@@ -107,6 +127,38 @@ export function findNearestRigJoint({candidates = [], pointer, camera, canvas,
   if (!found.length) return null;
   return {jointId: found[0].jointId, distance: found[0].distance,
     screen: found[0].screen, candidates: found};
+}
+
+function circularMarkerTexture() {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  context.fillStyle = '#ffffff';
+  context.beginPath();
+  context.arc(16, 16, 15, 0, Math.PI * 2);
+  context.fill();
+  return new THREE.CanvasTexture(canvas);
+}
+
+export function findNearestHumanoidControl({controls = {}, pointer, camera,
+    canvas, worldMatrix, hitRadius = HUMANOID_CONTROL_PICK_RADIUS} = {}) {
+  const x = Number(pointer?.x ?? pointer?.clientX);
+  const y = Number(pointer?.y ?? pointer?.clientY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const found = Object.entries(controls).flatMap(([key, control]) => {
+    const point = control?.position || control;
+    const screen = projectRigPointToClient({
+      point, camera, canvas, worldMatrix,
+    });
+    if (!screen) return [];
+    const distance = Math.hypot(screen.x - x, screen.y - y);
+    return distance <= hitRadius ? [{key, point, screen, distance}] : [];
+  }).sort((left, right) => left.distance - right.distance
+    || left.key.localeCompare(right.key));
+  return found[0] || null;
 }
 
 function canFkPose(snapshot, source, boneId = selectedBoneFor(snapshot)) {
@@ -225,6 +277,8 @@ export function createRigOverlayController({
   getRigJointPoseFrame, arcballControls, setRigJointRotation,
   solveRigIkTarget, finishRigJointPose, onTransformControlsUnavailable,
   onRigJointPicked, onRigSurfacePickRequested, onRigJointPickCancelled,
+  beginHumanoidControlCarry, updateHumanoidControlDraft,
+  finishHumanoidControlCarry, cancelHumanoidControlCarry,
   requestRender,
 } = {}) {
   const selectedIdFor = snapshot => selectedBoneFor(snapshot);
@@ -239,11 +293,11 @@ export function createRigOverlayController({
   staticGroup.name = 'viewer-inferred-rig-static-geometry';
   const centerMaterial = new THREE.PointsMaterial({
     size: 0.025, sizeAttenuation: false, vertexColors: true,
-    depthTest: false, depthWrite: false,
+    depthTest: false, depthWrite: false, transparent: true, opacity: .45,
   });
   const jointMaterial = new THREE.PointsMaterial({
     color: 0x34d399, size: 0.018, sizeAttenuation: false,
-    depthTest: false, depthWrite: false,
+    depthTest: false, depthWrite: false, transparent: true, opacity: .5,
   });
   const selectedMaterial = new THREE.MeshBasicMaterial({
     color: 0xfacc15, depthTest: false, depthWrite: false,
@@ -292,21 +346,60 @@ export function createRigOverlayController({
   const humanoidLineMaterial = new THREE.LineBasicMaterial({
     vertexColors: true, depthTest: false, depthWrite: false,
   });
+  const humanoidMarkerTexture = circularMarkerTexture();
   const humanoidPointMaterial = new THREE.PointsMaterial({
-    size: 0.045, sizeAttenuation: false, vertexColors: true,
-    depthTest: false, depthWrite: false,
+    size: 12, sizeAttenuation: false, vertexColors: true,
+    depthTest: false, depthWrite: false, map: humanoidMarkerTexture,
+    alphaTest: .1, transparent: true,
+  });
+  const humanoidHaloMaterial = new THREE.PointsMaterial({
+    size: 21, sizeAttenuation: false, vertexColors: true,
+    depthTest: false, depthWrite: false, map: humanoidMarkerTexture,
+    alphaTest: .1, transparent: true, opacity: .48,
   });
   const humanoidLines = new THREE.LineSegments(
     new THREE.BufferGeometry(), humanoidLineMaterial);
   const humanoidPoints = new THREE.Points(
     new THREE.BufferGeometry(), humanoidPointMaterial);
+  const humanoidHalos = new THREE.Points(
+    new THREE.BufferGeometry(), humanoidHaloMaterial);
+  const humanoidCandidateMaterial = new THREE.PointsMaterial({
+      color: 0xfacc15, size: 24, sizeAttenuation: false,
+      depthTest: false, depthWrite: false, map: humanoidMarkerTexture,
+      alphaTest: .1, transparent: true, opacity: .8,
+    });
+  const humanoidCandidate = new THREE.Points(
+    new THREE.BufferGeometry(), humanoidCandidateMaterial);
+  // WebGPU renders THREE.Points as one-pixel point primitives. Keep these
+  // buffers for the overlay's lightweight position/update bookkeeping, but
+  // use sprites for the visible controls so their circular size is honored.
+  humanoidPoints.visible = false;
+  humanoidHalos.visible = false;
+  humanoidCandidate.visible = false;
+  const humanoidPointSprites = [];
+  const humanoidHaloSprites = [];
+  const humanoidCandidateSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    color: 0xfacc15, map: humanoidMarkerTexture, transparent: true,
+    opacity: .92, depthTest: false, depthWrite: false, alphaTest: .1,
+  }));
+  humanoidCandidateSprite.name = 'viewer-humanoid-candidate-marker';
+  humanoidCandidateSprite.renderOrder = 15;
+  humanoidCandidateSprite.frustumCulled = false;
+  humanoidCandidateSprite.visible = false;
   humanoidLines.renderOrder = 13;
   humanoidPoints.renderOrder = 14;
+  humanoidHalos.renderOrder = 13;
+  humanoidCandidate.renderOrder = 15;
   humanoidLines.frustumCulled = false;
   humanoidPoints.frustumCulled = false;
+  humanoidHalos.frustumCulled = false;
+  humanoidCandidate.frustumCulled = false;
   humanoidLines.raycast = () => {};
   humanoidPoints.raycast = () => {};
-  humanoidGroup.add(humanoidLines, humanoidPoints);
+  humanoidHalos.raycast = () => {};
+  humanoidCandidate.raycast = () => {};
+  humanoidGroup.add(humanoidLines, humanoidHalos, humanoidPoints,
+    humanoidCandidate, humanoidCandidateSprite);
   group.add(humanoidGroup);
 
   const proxy = new THREE.Object3D();
@@ -358,6 +451,11 @@ export function createRigOverlayController({
   let dragMode = null;
   let hoveredJointId = null;
   let hoveredScreen = null;
+  let hoveredControlKey = null;
+  let humanoidCarryPlane = null;
+  let humanoidCarryControlKey = null;
+  let humanoidCandidateJointId = null;
+  let humanoidCandidateScreen = null;
   let pickPointer = null;
   let pickCandidateCache = [];
   let pickCandidateCount = 0;
@@ -426,6 +524,15 @@ export function createRigOverlayController({
   }
 
   function humanoidControlRigFor(source) {
+    const edit = currentSnapshot?.humanoidRigEdit;
+    if (edit?.editing && edit.controls) {
+      return {
+        ...(source?.humanoidControlRig
+          || currentSnapshot?.humanoidControlRig || {}),
+        available: true,
+        controls: edit.controls,
+      };
+    }
     return source?.humanoidControlRig || null;
   }
 
@@ -443,9 +550,111 @@ export function createRigOverlayController({
   }
 
   function updateHumanoidVisibility() {
-    humanoidGroup.visible = currentSnapshot?.ik?.enabled === true
-      && humanoidRigAvailable(currentSource)
+    const editing = currentSnapshot?.humanoidRigEdit?.editing === true;
+    const rig = humanoidControlRigFor(currentSource);
+    const available = editing
+      ? Object.keys(rig?.controls || {}).length > 0
+      : humanoidRigAvailable(currentSource);
+    humanoidGroup.visible = (editing || currentSnapshot?.ik?.enabled === true)
+      && available
       && humanoidLinePairs.length > 0;
+  }
+
+  function setHumanoidSpriteColor(sprite, color) {
+    sprite.material.color.setRGB(...color);
+  }
+
+  function setHumanoidSpritePosition(sprite, point) {
+    const value = vector(point);
+    sprite.position.set(value.x, value.y, value.z);
+  }
+
+  function updateHumanoidSpriteSizes() {
+    const rect = canvasRect(canvas);
+    const height = Number(rect?.height) || 0;
+    const cameraHeight = height || 1;
+    camera?.updateMatrixWorld?.();
+    humanoidGroup.updateMatrixWorld?.(true);
+    const worldPerPixelFor = point => {
+      if (!camera) return .05;
+      const worldPoint = vector(point).applyMatrix4(humanoidGroup.matrixWorld);
+      const viewPoint = worldPoint.applyMatrix4(camera.matrixWorldInverse);
+      if (camera.isPerspectiveCamera) {
+        const depth = -viewPoint.z;
+        if (!(depth > 0)) return .05;
+        const fov = THREE.MathUtils.degToRad(camera.fov || 50);
+        return (2 * depth * Math.tan(fov / 2))
+          / (cameraHeight * (Number(camera.zoom) || 1));
+      }
+      if (camera.isOrthographicCamera) {
+        return (camera.top - camera.bottom)
+          / (cameraHeight * (Number(camera.zoom) || 1));
+      }
+      return .05;
+    };
+    const resize = (sprite, pixels) => {
+      if (!sprite) return;
+      const size = Math.max(.001, worldPerPixelFor(sprite.position) * pixels);
+      sprite.scale.set(size, size, 1);
+    };
+    humanoidLandmarks.forEach((_, index) => {
+      resize(humanoidHaloSprites[index], HUMANOID_HALO_SIZE_PX);
+      resize(humanoidPointSprites[index], HUMANOID_MARKER_SIZE_PX);
+    });
+    resize(humanoidCandidateSprite, HUMANOID_CANDIDATE_SIZE_PX);
+  }
+
+  function clearHumanoidSprites(sprites) {
+    sprites.splice(0).forEach(sprite => {
+      sprite.removeFromParent();
+      sprite.material.dispose();
+    });
+  }
+
+  function createHumanoidSprite({name, color, opacity, renderOrder}) {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      color: 0xffffff, map: humanoidMarkerTexture, transparent: true,
+      opacity, depthTest: false, depthWrite: false, alphaTest: .1,
+    }));
+    sprite.name = name;
+    sprite.renderOrder = renderOrder;
+    sprite.frustumCulled = false;
+    setHumanoidSpriteColor(sprite, color);
+    humanoidGroup.add(sprite);
+    return sprite;
+  }
+
+  function editControlColor(role, key) {
+    const edit = currentSnapshot?.humanoidRigEdit;
+    const base = humanoidRoleColor(role);
+    if (!edit?.editing) return base;
+    if (edit.carryingControlKey === key) return [1, .96, .28];
+    if (edit.selectedControlKey === key) return [1, .78, .08];
+    if (hoveredControlKey === key) return [1, .9, .35];
+    return base.map(value => value * .72 + .28);
+  }
+
+  function updateHumanoidCandidateMarker() {
+    const edit = currentSnapshot?.humanoidRigEdit;
+    const joint = edit?.editing && Number.isInteger(Number(
+      edit.candidateJointId))
+      ? currentSource?.joints?.find(item => Number(item.jointId)
+        === Number(edit.candidateJointId)) : null;
+    const point = joint?.restPivot || joint?.restCenter;
+    humanoidCandidate.visible = false;
+    humanoidCandidateSprite.visible = !!point;
+    if (!point) return;
+    setHumanoidSpritePosition(humanoidCandidateSprite, point);
+    setHumanoidSpriteColor(humanoidCandidateSprite, [1, .78, .08]);
+    const attribute = humanoidCandidate.geometry.getAttribute('position');
+    if (!attribute || attribute.count !== 1) {
+      setGeometry(humanoidCandidate, vector(point).toArray());
+      return;
+    }
+    const value = vector(point);
+    attribute.setXYZ(0, value.x, value.y, value.z);
+    attribute.needsUpdate = true;
+    updateHumanoidSpriteSizes();
   }
 
   function rebuildHumanoidOverlay(source = currentSource) {
@@ -455,8 +664,14 @@ export function createRigOverlayController({
     const lineColors = [];
     const pointPositions = [];
     const pointColors = [];
+    const haloPositions = [];
+    const haloColors = [];
+    clearHumanoidSprites(humanoidPointSprites);
+    clearHumanoidSprites(humanoidHaloSprites);
     const rig = humanoidControlRigFor(source);
-    const rigAvailable = humanoidRigAvailable(source);
+    const rigAvailable = humanoidEditActive()
+      ? Object.keys(rig?.controls || {}).length > 0
+      : humanoidRigAvailable(source);
     const controls = rigAvailable ? (rig?.controls || {}) : {};
     const controlPoint = key => controls[key]?.position || controls[key]
       || rig?.diagnostics?.templatePoints?.[key] || null;
@@ -499,12 +714,26 @@ export function createRigOverlayController({
       if (!point) return;
       pointPositions.push(...vector(point).toArray());
       const meta = controlMeta(key);
-      pointColors.push(...humanoidConfidenceColor(
-        role, meta.confidence || roleConfidence(role), meta.source));
+      pointColors.push(...editControlColor(role, key));
+      haloPositions.push(...vector(point).toArray());
+      haloColors.push(...editControlColor(role, key));
       humanoidLandmarks.push({key, role});
+      humanoidHaloSprites.push(createHumanoidSprite({
+        name: `viewer-humanoid-halo-${key}`,
+        color: editControlColor(role, key), opacity: .48, renderOrder: 13,
+      }));
+      humanoidPointSprites.push(createHumanoidSprite({
+        name: `viewer-humanoid-point-${key}`,
+        color: editControlColor(role, key), opacity: 1, renderOrder: 14,
+      }));
+      setHumanoidSpritePosition(humanoidHaloSprites.at(-1), point);
+      setHumanoidSpritePosition(humanoidPointSprites.at(-1), point);
     });
     setGeometry(humanoidLines, linePositions, lineColors);
+    setGeometry(humanoidHalos, haloPositions, haloColors);
     setGeometry(humanoidPoints, pointPositions, pointColors);
+    updateHumanoidCandidateMarker();
+    updateHumanoidSpriteSizes();
   }
 
   function updateHumanoidPosedOverlay(source = currentSource) {
@@ -517,13 +746,35 @@ export function createRigOverlayController({
       key, controlPoint(key),
     ]));
     const pointAttribute = humanoidPoints.geometry.getAttribute('position');
+    const pointColors = humanoidPoints.geometry.getAttribute('color');
+    const haloAttribute = humanoidHalos.geometry.getAttribute('position');
+    const haloColors = humanoidHalos.geometry.getAttribute('color');
     humanoidLandmarks.forEach(({key}, index) => {
       const value = points.get(key);
       if (!value || !pointAttribute) return;
       const point = vector(value);
       pointAttribute.setXYZ(index, point.x, point.y, point.z);
+      haloAttribute?.setXYZ(index, point.x, point.y, point.z);
+      if (haloColors) haloColors.setXYZ(index, ...editControlColor(
+        CONTROL_KEYS_FOR_OVERLAY.find(item => item.key === key)?.role || 'torso',
+        key));
+      if (pointColors) pointColors.setXYZ(index, ...editControlColor(
+        CONTROL_KEYS_FOR_OVERLAY.find(item => item.key === key)?.role || 'torso',
+        key));
+      const role = CONTROL_KEYS_FOR_OVERLAY.find(item => item.key === key)?.role
+        || 'torso';
+      const color = editControlColor(role, key);
+      const haloSprite = humanoidHaloSprites[index];
+      const pointSprite = humanoidPointSprites[index];
+      setHumanoidSpritePosition(haloSprite, point);
+      setHumanoidSpritePosition(pointSprite, point);
+      setHumanoidSpriteColor(haloSprite, color);
+      setHumanoidSpriteColor(pointSprite, color);
     });
     if (pointAttribute) pointAttribute.needsUpdate = true;
+    if (haloAttribute) haloAttribute.needsUpdate = true;
+    if (haloColors) haloColors.needsUpdate = true;
+    if (pointColors) pointColors.needsUpdate = true;
     const lineAttribute = humanoidLines.geometry.getAttribute('position');
     humanoidLinePairs.forEach(([firstKey, secondKey], index) => {
       const first = points.get(firstKey);
@@ -535,6 +786,154 @@ export function createRigOverlayController({
       lineAttribute.setXYZ(index * 2 + 1, end.x, end.y, end.z);
     });
     if (lineAttribute) lineAttribute.needsUpdate = true;
+    updateHumanoidCandidateMarker();
+    updateHumanoidSpriteSizes();
+  }
+
+  function humanoidEditActive() {
+    return currentSnapshot?.humanoidRigEdit?.editing === true;
+  }
+
+  function humanoidEditControls() {
+    const edit = currentSnapshot?.humanoidRigEdit;
+    if (edit?.editing && edit.controls) return edit.controls;
+    return humanoidControlRigFor(currentSource)?.controls || {};
+  }
+
+  function nearestHumanoidControl(clientX, clientY) {
+    group.updateMatrixWorld?.(true);
+    return findNearestHumanoidControl({
+      controls: humanoidEditControls(),
+      pointer: {x: clientX, y: clientY}, camera, canvas,
+      worldMatrix: group.matrixWorld,
+      hitRadius: HUMANOID_CONTROL_PICK_RADIUS,
+    });
+  }
+
+  function mappedJointIdsExcept(controlKey) {
+    const mappings = currentSnapshot?.humanoidRigEdit
+      ?.mappedJointIdByControl || {};
+    return new Set(Object.entries(mappings)
+      .filter(([key]) => key !== controlKey)
+      .map(([, jointId]) => Number(jointId)));
+  }
+
+  function nearestMagneticJoint(clientX, clientY, controlKey) {
+    const excluded = mappedJointIdsExcept(controlKey);
+    const mappedJointId = Number(currentSnapshot?.humanoidRigEdit
+      ?.mappedJointIdByControl?.[controlKey]);
+    let mappedDistance = Infinity;
+    const candidates = (currentSource?.joints || []).flatMap(joint => {
+      const jointId = Number(joint.jointId);
+      if (!Number.isInteger(jointId) || excluded.has(jointId)) return [];
+      const pivot = joint.restPivot || joint.restCenter;
+      const screen = projectRigPointToClient({
+        point: pivot, camera, canvas, worldMatrix: group.matrixWorld,
+      });
+      if (!screen) return [];
+      const distance = Math.hypot(screen.x - clientX, screen.y - clientY);
+      if (jointId === mappedJointId) mappedDistance = distance;
+      return [{jointId, pivot, screen, distance}];
+    }).sort((left, right) => left.distance - right.distance
+      || left.jointId - right.jointId);
+    return candidates[0] ? {...candidates[0], mappedDistance} : null;
+  }
+
+  function rayForClientPoint(clientX, clientY) {
+    const rect = canvasRect(canvas);
+    if (!rect || !camera) return null;
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      1 - ((clientY - rect.top) / rect.height) * 2);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, camera);
+    return raycaster.ray;
+  }
+
+  function freeHumanoidPointAt(clientX, clientY) {
+    const ray = rayForClientPoint(clientX, clientY);
+    if (!ray || !humanoidCarryPlane) return null;
+    const world = new THREE.Vector3();
+    if (!ray.intersectPlane(humanoidCarryPlane, world)) return null;
+    group.updateMatrixWorld?.(true);
+    return world.applyMatrix4(group.matrixWorld.clone().invert()).toArray();
+  }
+
+  function syncAfterEditCallback() {
+    const snapshot = getRigState?.();
+    if (snapshot) {
+      currentSnapshot = snapshot;
+      currentSource = sourceFor(snapshot);
+      updateHumanoidPosedOverlay(currentSource);
+      updateHumanoidCandidateMarker();
+      updateHumanoidVisibility();
+    }
+    requestRender?.();
+  }
+
+  function beginHumanoidCarryAt(clientX, clientY) {
+    if (!humanoidEditActive() || humanoidCarryControlKey) return false;
+    const nearest = nearestHumanoidControl(clientX, clientY);
+    if (!nearest) return false;
+    const point = vector(nearest.point);
+    group.updateMatrixWorld?.(true);
+    const worldPoint = point.applyMatrix4(group.matrixWorld);
+    const normal = new THREE.Vector3();
+    camera?.getWorldDirection?.(normal);
+    if (normal.lengthSq() <= 1e-8) normal.set(0, 0, 1);
+    humanoidCarryPlane = new THREE.Plane()
+      .setFromNormalAndCoplanarPoint(normal, worldPoint);
+    if (!beginHumanoidControlCarry?.(nearest.key)) return false;
+    humanoidCarryControlKey = nearest.key;
+    hoveredControlKey = nearest.key;
+    setArcballDragState(true);
+    syncAfterEditCallback();
+    return true;
+  }
+
+  function updateHumanoidCarryAt(clientX, clientY) {
+    if (!humanoidEditActive() || !humanoidCarryControlKey) return false;
+    const position = freeHumanoidPointAt(clientX, clientY);
+    if (!position) return false;
+    group.updateMatrixWorld?.(true);
+    const candidate = nearestMagneticJoint(
+      clientX, clientY, humanoidCarryControlKey);
+    updateHumanoidControlDraft?.(humanoidCarryControlKey, position, {
+      candidateJointId: candidate?.jointId ?? null,
+      candidateDistance: candidate?.distance ?? Infinity,
+      mappedDistance: candidate?.mappedDistance ?? Infinity,
+    });
+    humanoidCandidateJointId = candidate && candidate.distance
+      <= JOINT_ATTRACTION_RADIUS_PX ? candidate.jointId : null;
+    humanoidCandidateScreen = candidate?.screen || null;
+    syncAfterEditCallback();
+    return true;
+  }
+
+  function finishHumanoidCarry() {
+    if (!humanoidCarryControlKey) return false;
+    finishHumanoidControlCarry?.();
+    humanoidCarryControlKey = null;
+    humanoidCarryPlane = null;
+    humanoidCandidateJointId = null;
+    humanoidCandidateScreen = null;
+    setArcballDragState(false);
+    setPickCursor('');
+    syncAfterEditCallback();
+    return true;
+  }
+
+  function cancelHumanoidCarry() {
+    if (!humanoidCarryControlKey) return false;
+    cancelHumanoidControlCarry?.();
+    humanoidCarryControlKey = null;
+    humanoidCarryPlane = null;
+    humanoidCandidateJointId = null;
+    humanoidCandidateScreen = null;
+    setArcballDragState(false);
+    setPickCursor('');
+    syncAfterEditCallback();
+    return true;
   }
 
   function rebuildOverlay(source) {
@@ -605,7 +1004,8 @@ export function createRigOverlayController({
     nodeBoneIds.forEach(boneId => {
       const index = nodeIndexByBoneId.get(boneId);
       if (!Number.isInteger(index)) return;
-      const frame = getRigJointPoseFrame?.(boneId);
+      const frame = currentSnapshot?.humanoidRigEdit?.editing
+        ? null : getRigJointPoseFrame?.(boneId);
       const center = frame?.center || nodeByBoneId.get(boneId);
       if (!center || !centerAttribute) return;
       const value = vector(center);
@@ -627,7 +1027,8 @@ export function createRigOverlayController({
     const jointAttribute = jointPoints.geometry.getAttribute('position');
     jointChildBoneIds.forEach((childId, index) => {
       if (!jointAttribute) return;
-      const frame = getRigJointPoseFrame?.(childId);
+      const frame = currentSnapshot?.humanoidRigEdit?.editing
+        ? null : getRigJointPoseFrame?.(childId);
       const value = frame?.pivot || pivotFor(source, childId);
       if (!value) return;
       const joint = vector(value);
@@ -755,6 +1156,18 @@ export function createRigOverlayController({
   }
 
   function onPickPointerMove(event) {
+    if (humanoidEditActive()) {
+      if (humanoidCarryControlKey) {
+        updateHumanoidCarryAt(event.clientX, event.clientY);
+      } else {
+        const nearest = nearestHumanoidControl(event.clientX, event.clientY);
+        hoveredControlKey = nearest?.key || null;
+        setPickCursor(nearest ? 'pointer' : '');
+        updateHumanoidPosedOverlay(currentSource);
+        requestRender?.();
+      }
+      return;
+    }
     if (!currentSnapshot?.jointPickIntent) return;
     if (event.altKey) {
       clearPickHover();
@@ -765,6 +1178,25 @@ export function createRigOverlayController({
   }
 
   function onPickPointerDown(event) {
+    if (humanoidEditActive()) {
+      if (event.button === 2) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cancelHumanoidCarry();
+        return;
+      }
+      if (event.button !== 0 || event.altKey) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (humanoidCarryControlKey) {
+        finishHumanoidCarry();
+      } else if (beginHumanoidCarryAt(event.clientX, event.clientY)) {
+        try {
+          canvas?.setPointerCapture?.(event.pointerId);
+        } catch { /* best effort */ }
+      }
+      return;
+    }
     if (!currentSnapshot?.jointPickIntent) return;
     if (event.button === 2) {
       event.preventDefault();
@@ -781,6 +1213,7 @@ export function createRigOverlayController({
   }
 
   function onPickPointerUp(event) {
+    if (humanoidEditActive()) return;
     if (!currentSnapshot?.jointPickIntent || event.button !== 0 || !pickPointer) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -803,6 +1236,10 @@ export function createRigOverlayController({
   }
 
   function onPickPointerCancel(event) {
+    if (humanoidEditActive()) {
+      cancelHumanoidCarry();
+      return;
+    }
     if (pickPointer && event?.pointerId !== undefined
         && event.pointerId !== pickPointer.id) return;
     pickPointer = null;
@@ -810,6 +1247,11 @@ export function createRigOverlayController({
   }
 
   function onPickContextMenu(event) {
+    if (humanoidEditActive()) {
+      event.preventDefault();
+      cancelHumanoidCarry();
+      return;
+    }
     if (suppressContextMenu) {
       suppressContextMenu = false;
       event.preventDefault();
@@ -821,6 +1263,11 @@ export function createRigOverlayController({
   }
 
   function onPickKeyDown(event) {
+    if (humanoidEditActive() && event.key === 'Escape') {
+      event.preventDefault();
+      cancelHumanoidCarry();
+      return;
+    }
     if (currentSnapshot?.jointPickIntent && event.key === 'Alt') {
       clearPickHover();
       setPickCursor('grab');
@@ -841,6 +1288,17 @@ export function createRigOverlayController({
   }
 
   function updateProxy(source = currentSource, snapshot = currentSnapshot) {
+    if (snapshot?.humanoidRigEdit?.editing) {
+      transformControls?.detach?.();
+      poseDragActive = false;
+      dragBoneId = null;
+      dragJointId = null;
+      dragMode = null;
+      rigTransformInteractionActive = false;
+      proxy.visible = false;
+      ikTargetProxy.visible = false;
+      return;
+    }
     const boneId = selectedIdFor(snapshot);
     selectedJointId = boneId;
     const mode = manipulationMode(snapshot, source, boneId);
@@ -1076,16 +1534,44 @@ export function createRigOverlayController({
   function refresh(snapshot = getRigState?.()) {
     if (disposed) return;
     const wasJointPicking = rigJointPickingActive;
+    const wasHumanoidEditing = currentSnapshot?.humanoidRigEdit?.editing === true;
     currentSnapshot = snapshot || {};
     currentSource = sourceFor(currentSnapshot);
     rigJointPickingActive = !!currentSnapshot.jointPickIntent;
+    const humanoidEditing = currentSnapshot?.humanoidRigEdit?.editing === true;
+    if (humanoidEditing
+        && !currentSnapshot?.humanoidRigEdit?.carryingControlKey
+        && humanoidCarryControlKey) {
+      humanoidCarryControlKey = null;
+      humanoidCarryPlane = null;
+      humanoidCandidateJointId = null;
+      humanoidCandidateScreen = null;
+      setArcballDragState(false);
+      setPickCursor('');
+    }
+    if (wasHumanoidEditing && !humanoidEditing) {
+      if (humanoidCarryControlKey) cancelHumanoidCarry();
+      hoveredControlKey = null;
+      humanoidCandidateJointId = null;
+      humanoidCandidateScreen = null;
+      setPickCursor('');
+    }
+    if (humanoidEditing && !humanoidCarryControlKey) {
+      transformControls?.detach?.();
+      poseDragActive = false;
+      dragBoneId = null;
+      dragJointId = null;
+      dragMode = null;
+      rigTransformInteractionActive = false;
+    }
     selectedJointId = selectedIdFor(currentSnapshot);
     const nextTopologyKey = overlayPresentationKey(currentSource);
     if (nextTopologyKey !== currentTopologyKey) {
       currentTopologyKey = nextTopologyKey;
       rebuildOverlay(currentSource);
     }
-    const nextHumanoidKey = humanoidOverlayKey(currentSource);
+    const editKey = humanoidEditing ? 'editing' : '';
+    const nextHumanoidKey = `${humanoidOverlayKey(currentSource)}:${editKey}`;
     if (nextHumanoidKey !== currentHumanoidKey) {
       currentHumanoidKey = nextHumanoidKey;
       rebuildHumanoidOverlay(currentSource);
@@ -1093,7 +1579,8 @@ export function createRigOverlayController({
     updateModelFrame();
     group.visible = !!currentSource;
     updateHumanoidVisibility();
-    staticGroup.visible = !!currentSnapshot.jointPickIntent && !!currentSource;
+    staticGroup.visible = (humanoidEditing || !!currentSnapshot.jointPickIntent)
+      && !!currentSource;
     if (!currentSnapshot.jointPickIntent) {
       pickCandidateCache = [];
       pickPointer = null;
@@ -1102,14 +1589,14 @@ export function createRigOverlayController({
       if (wasJointPicking) setPickCursor('');
     }
     updatePosedOverlay(currentSource);
-    if (currentSnapshot.jointPickIntent) {
+    if (currentSnapshot.jointPickIntent && !humanoidEditing) {
       refreshPickCandidates();
       if (hoveredJointId === null) setPickCursor('crosshair');
     }
     updateCenterColors();
     updateProxy(currentSource, currentSnapshot);
     syncRotationSnap(currentSnapshot);
-    if (manipulationMode(currentSnapshot, currentSource,
+    if (!humanoidEditing && manipulationMode(currentSnapshot, currentSource,
       selectedIdFor(currentSnapshot))) {
       void ensureTransformControls();
     }
@@ -1118,6 +1605,10 @@ export function createRigOverlayController({
 
   const onRigChanged = event => refresh(event.detail || getRigState?.());
   const onPoseChanged = event => updatePoseFromEvent(event.detail);
+  const onArcballChanged = () => {
+    updateHumanoidSpriteSizes();
+    requestRender?.();
+  };
   const onModelTransformChanged = () => {
     updateModelFrame();
     if (currentSnapshot?.jointPickIntent && lastPickClientPoint) {
@@ -1128,6 +1619,7 @@ export function createRigOverlayController({
   window.addEventListener('mod-viewer-model-rig-changed', onRigChanged);
   window.addEventListener('mod-viewer-model-rig-pose-changed', onPoseChanged);
   window.addEventListener('mod-viewer-model-transform-changed', onModelTransformChanged);
+  arcballControls?.addEventListener?.('change', onArcballChanged);
   canvas?.addEventListener('pointermove', onPickPointerMove, true);
   canvas?.addEventListener('pointerdown', onPickPointerDown, true);
   canvas?.addEventListener('pointerup', onPickPointerUp, true);
@@ -1154,6 +1646,15 @@ export function createRigOverlayController({
         humanoidOverlayVisible: humanoidGroup.visible,
         humanoidSegmentCount: humanoidLinePairs.length,
         humanoidLandmarkCount: humanoidLandmarks.length,
+        humanoidHaloCount: humanoidHalos.geometry.getAttribute('position')?.count || 0,
+        humanoidPointSpriteCount: humanoidPointSprites.length,
+        humanoidHaloSpriteCount: humanoidHaloSprites.length,
+        humanoidMarkerTextureReady: !!humanoidMarkerTexture,
+        humanoidEditActive: humanoidEditActive(),
+        hoveredControlKey,
+        carryingControlKey: humanoidCarryControlKey,
+        candidateJointId: currentSnapshot?.humanoidRigEdit?.candidateJointId
+          ?? null,
         selectedJointId,
         proxyVisible: proxy.visible,
         ikTargetVisible: ikTargetProxy.visible,
@@ -1178,6 +1679,7 @@ export function createRigOverlayController({
       window.removeEventListener('mod-viewer-model-rig-changed', onRigChanged);
       window.removeEventListener('mod-viewer-model-rig-pose-changed', onPoseChanged);
       window.removeEventListener('mod-viewer-model-transform-changed', onModelTransformChanged);
+      arcballControls?.removeEventListener?.('change', onArcballChanged);
       canvas?.removeEventListener('pointermove', onPickPointerMove, true);
       canvas?.removeEventListener('pointerdown', onPickPointerDown, true);
       canvas?.removeEventListener('pointerup', onPickPointerUp, true);
@@ -1199,7 +1701,9 @@ export function createRigOverlayController({
       centerPoints.geometry.dispose();
       jointPoints.geometry.dispose();
       humanoidLines.geometry.dispose();
+      humanoidHalos.geometry.dispose();
       humanoidPoints.geometry.dispose();
+      humanoidCandidate.geometry.dispose();
       hoverPoint.geometry.dispose();
       proxyRing.geometry.dispose();
       centerMaterial.dispose();
@@ -1208,7 +1712,13 @@ export function createRigOverlayController({
       selectedMaterial.dispose();
       lineMaterial.dispose();
       humanoidLineMaterial.dispose();
+      humanoidHaloMaterial.dispose();
       humanoidPointMaterial.dispose();
+      humanoidCandidateMaterial.dispose();
+      humanoidCandidateSprite.material.dispose();
+      clearHumanoidSprites(humanoidPointSprites);
+      clearHumanoidSprites(humanoidHaloSprites);
+      humanoidMarkerTexture?.dispose?.();
       ikTargetMarker.geometry.dispose();
       group.remove(staticGroup, humanoidGroup, proxy, ikTargetProxy);
       scene?.remove(group);

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 
 // The control rig owns this topology.  ModelJoint edges are deliberately not
 // consulted when these segments are built or when a limb is posed.
@@ -343,7 +344,7 @@ export function buildHumanoidSourceBoneDriverTransforms({heatBinding,
 
 /** Build deterministic direct and secondary ModelJoint bindings. */
 export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
-    options = {}} = {}) {
+    controlMappings = null, options = {}} = {}) {
   const started = typeof performance !== 'undefined' && performance.now
     ? performance.now() : Date.now();
   const height = Math.max(Number(controlRig?.frame?.height) || 0, EPSILON);
@@ -359,9 +360,33 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
   const candidatesByJointId = new Map();
   let ambiguousBindingCount = 0;
 
+  // A manually snapped control owns its resolved ModelJoint before either
+  // heat connectivity or geometric corridor scoring is considered.
+  if (controlMappings instanceof Map) {
+    controlMappings.forEach(mapping => {
+      const jointId = numberId(mapping?.jointId);
+      const driverId = HUMANOID_CONTROL_DRIVER_IDS[mapping?.controlKey];
+      const driver = drivers.get(driverId);
+      const restJointWorld = jointId === null
+        ? null : restJointWorldMatrix(modelRig, jointId);
+      if (jointId === null || !driver || !restJointWorld) return;
+      const localMatrix = driver.matrix.clone().invert().multiply(restJointWorld);
+      jointBindings.set(jointId, {
+        type: 'driver', driverId, localMatrix, restJointWorld,
+        distance: 0, distanceRatio: 0, rawProjection: 0, projection: 0,
+        endpointDistanceRatio: 0, score: 0, confidence: 'high',
+        bindingMethod: 'manual_control_mapping',
+        controlKey: mapping.controlKey,
+        sourceBoneKeys: (mapping.sourceMembers || [])
+          .map(member => member?.sourceBoneKey).filter(Boolean).sort(),
+      });
+    });
+  }
+
   // Heat ownership is authoritative for all eight limb drivers. It is
   // deliberately applied before the central-body proximity fallback.
   allJointIds(modelRig).forEach(jointId => {
+    if (jointBindings.has(jointId)) return;
     const assignment = valueFor(heatBinding?.modelJointAssignments, jointId);
     if (!assignment?.driverId || !drivers.has(assignment.driverId)) return;
     const point = pointForJoint(modelRig, jointId);

@@ -158,7 +158,7 @@ def test_rig_joint_picker_projects_current_pivots_and_uses_nearest_hit(
       camera.updateMatrixWorld(true);
       const canvas = {
         clientWidth: 200, clientHeight: 200,
-        getBoundingClientRect: () => ({left: 10, top: 20, width: 200, height: 200}),
+        getBoundingClientRect: () => new DOMRect(10, 20, 200, 200),
       };
       const center = projectRigPointToClient({
         point: [0, 0, 0], camera, canvas,
@@ -269,6 +269,9 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert result["initial"]["ikTargetVisible"]
     assert result["initial"]["humanoidSegmentCount"] == 13
     assert result["initial"]["humanoidLandmarkCount"] == 14
+    assert result["initial"]["humanoidPointSpriteCount"] == 14
+    assert result["initial"]["humanoidHaloSpriteCount"] == 14
+    assert result["initial"]["humanoidMarkerTextureReady"] is True
     assert result["initial"]["rebuildCount"] == 1
     assert result["selectedRoot"]["selectedJointId"] == 1
     assert result["selectedRoot"]["rebuildCount"] == 1
@@ -469,6 +472,111 @@ def test_rig_overlay_hides_static_geometry_until_joint_picking(module_page):
     assert result["picking"]["edgeCount"] == 2
     assert result["picking"]["staticVisible"] is True
     assert result["hiddenAgain"]["staticVisible"] is False
+
+
+def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createRigOverlayController, projectRigPointToClient} = await import(
+        './js/scene/rig-overlay-controller.js');
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(90, 1, .1, 100);
+      camera.position.set(0, 0, 5);
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+      const canvas = document.createElement('canvas');
+      canvas.getBoundingClientRect = () => new DOMRect(10, 20, 200, 200);
+      document.body.appendChild(canvas);
+      const positions = {
+        chest: [0, 1.8, 0], pelvis: [0, 1, 0],
+        leftShoulder: [-.2, 1.6, 0], leftElbow: [-.5, 1.4, 0],
+        leftHand: [-.8, 1.2, 0], rightShoulder: [.2, 1.6, 0],
+        rightElbow: [.5, 1.4, 0], rightHand: [.8, 1.2, 0],
+        leftHip: [-.15, 1, 0], leftKnee: [-.2, .5, 0], leftFoot: [-.2, 0, 0],
+        rightHip: [.15, 1, 0], rightKnee: [.2, .5, 0], rightFoot: [.2, 0, 0],
+      };
+      const controls = Object.fromEntries(Object.entries(positions).map(
+        ([key, position]) => [key, {position}]));
+      const source = {key: 'model-rig', structureRevision: 1,
+        joints: [{jointId: 7, restCenter: [-.2, 1.6, 0],
+          restPivot: [-.2, 1.6, 0]}], components: [], forestEdges: []};
+      let state = {
+        selectedJointId: null, jointPickIntent: {type: 'selected-joint'},
+        ik: {enabled: true, available: true,
+          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']},
+        model: source,
+        humanoidRigEdit: {editing: true, saving: false, dirty: false,
+          selectedControlKey: null, carryingControlKey: null,
+          candidateJointId: null, controls, mappedJointIdByControl: {}},
+      };
+      const arcball = {enabled: true};
+      const events = {began: [], updates: [], finished: 0, picked: 0};
+      const controller = createRigOverlayController({
+        scene, camera, canvas, arcballControls: arcball,
+        getMeshes: () => [], getRigState: () => state,
+        beginHumanoidControlCarry: key => {
+          events.began.push(key);
+          state.humanoidRigEdit = {...state.humanoidRigEdit,
+            selectedControlKey: key, carryingControlKey: key};
+          return true;
+        },
+        updateHumanoidControlDraft: (key, position) => {
+          events.updates.push({key, position});
+          state.humanoidRigEdit = {...state.humanoidRigEdit,
+            controls: {...state.humanoidRigEdit.controls,
+              [key]: {position}}, candidateJointId: 7};
+        },
+        finishHumanoidControlCarry: () => {
+          events.finished += 1;
+          state.humanoidRigEdit = {...state.humanoidRigEdit,
+            carryingControlKey: null};
+        },
+        onRigJointPicked: () => { events.picked += 1; },
+      });
+      controller.refresh(state);
+      const initial = controller.getDebugState();
+      const screen = projectRigPointToClient({point: positions.leftShoulder,
+        camera, canvas});
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: screen.x, clientY: screen.y,
+      }));
+      const carrying = controller.getDebugState();
+      canvas.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: screen.x, clientY: screen.y,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: screen.x, clientY: screen.y,
+      }));
+      const released = controller.getDebugState();
+      const pointSprite = controller.group.getObjectByName(
+        'viewer-humanoid-point-leftShoulder');
+      const haloSprite = controller.group.getObjectByName(
+        'viewer-humanoid-halo-leftShoulder');
+      controller.dispose();
+      return {initial, carrying, released, events, arcball: arcball.enabled,
+        pointType: pointSprite?.type, haloType: haloSprite?.type,
+        pointScale: pointSprite?.scale?.x || 0,
+        haloScale: haloSprite?.scale?.x || 0};
+    }""")
+    assert result["initial"]["staticVisible"] is True
+    assert result["initial"]["humanoidOverlayVisible"] is True
+    assert result["initial"]["humanoidHaloCount"] == 14
+    assert result["initial"]["humanoidPointSpriteCount"] == 14
+    assert result["initial"]["humanoidHaloSpriteCount"] == 14
+    assert result["initial"]["humanoidMarkerTextureReady"] is True
+    assert result["pointType"] == "Sprite"
+    assert result["haloType"] == "Sprite"
+    assert result["pointScale"] > 0
+    assert result["haloScale"] > result["pointScale"]
+    assert result["initial"]["controlsAttached"] is False
+    assert result["carrying"]["carryingControlKey"] == "leftShoulder"
+    assert result["events"]["began"] == ["leftShoulder"]
+    assert result["events"]["updates"]
+    assert result["events"]["picked"] == 0
+    assert result["released"]["carryingControlKey"] is None
+    assert result["events"]["finished"] == 1
+    assert result["arcball"] is True
 
 
 def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_page):
@@ -3457,6 +3565,110 @@ def test_estimate_foot_depth_uses_bottom_band(module_page):
     assert result["fallback"]["rejectedSliceCount"] == 2
     assert result["fallback"]["fallbackUsed"] is True
     assert result["fallback"]["reason"] == "foot_depth_unavailable"
+
+
+def test_humanoid_overrides_resolve_semantics_and_manual_binding(module_page):
+    result = module_page.evaluate("""async () => {
+      const control = await import('./js/mesh/humanoid-control-rig.js');
+      const binding = await import('./js/mesh/humanoid-rig-binding.js');
+      const heat = await import('./js/mesh/humanoid-heat-binding.js');
+      const keys = control.HUMANOID_CONTROL_KEYS;
+      const controls = Object.fromEntries(keys.map((key, index) => [key, {
+        position: [index * .1, index * .2, 0],
+        semantic: {sideN: index / 10, height01: index / 20, depthN: 0},
+      }]));
+      const automatic = {version: 1, available: true, accepted: true,
+        frame: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
+          lowHeight: 0, highHeight: 10, height: 10,
+          sideCenter: 0, depthCenter: 0}, controls, paths: {}};
+      const signature = '["body#bone=7"]';
+      const model = {joints: [{jointId: 17, signature,
+        restPivot: [2, 3, 4], members: [{sourceKey: 'body', boneId: 7,
+          sourceBoneKey: 'body#bone=7'}]}],
+        sourceBoneToModelJointId: new Map([['body#bone=7', 17]])};
+      const overrides = {version: 1, controls: {
+        leftShoulder: {semantic: {sideN: -.2, height01: .7, depthN: .1},
+          joint_signature: signature},
+      }};
+      const resolved = control.resolveHumanoidControlMappings({
+        savedOverrides: overrides, modelRig: model});
+      const applied = control.applyHumanoidControlRigOverrides({
+        automaticRig: automatic, savedOverrides: overrides,
+        modelRig: model, resolvedMappings: resolved});
+      const heatBinding = heat.buildHumanoidHeatBinding({
+        controlRig: applied, sourceRigs: [], modelRig: model,
+        controlMappings: resolved});
+      const rigBinding = binding.buildHumanoidRigBinding({
+        controlRig: applied, modelRig: model, heatBinding,
+        controlMappings: resolved});
+      const untouched = control.applyHumanoidControlRigOverrides({
+        automaticRig: automatic, savedOverrides: null, modelRig: model});
+      const entry = rigBinding.jointBindings.get(17);
+      return {
+        untouched: keys.every(key => JSON.stringify(
+          untouched.controls[key].position) === JSON.stringify(controls[key].position)),
+        resolvedJoint: resolved.get('leftShoulder')?.jointId || null,
+        exactPivot: applied.controls.leftShoulder.position,
+        heatDriver: heatBinding.sourceBoneAssignments.get('body#bone=7')?.driverId,
+        bindingDriver: entry?.driverId,
+        bindingMethod: entry?.bindingMethod,
+        controlKey: entry?.controlKey,
+      };
+    }""")
+    assert result["untouched"] is True
+    assert result["resolvedJoint"] == 17
+    assert result["exactPivot"] == [2, 3, 4]
+    assert result["heatDriver"] == "left_upper_arm"
+    assert result["bindingDriver"] == "left_upper_arm"
+    assert result["bindingMethod"] == "manual_control_mapping"
+    assert result["controlKey"] == "leftShoulder"
+
+
+def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page):
+    result = module_page.evaluate("""async () => {
+      const control = await import('./js/mesh/humanoid-control-rig.js');
+      const edit = await import('./js/mesh/humanoid-rig-edit-session.js');
+      const controls = Object.fromEntries(control.HUMANOID_CONTROL_KEYS.map(key =>
+        [key, {position: [0, 0, 0], semantic: {sideN: 0, height01: 0,
+          depthN: 0}}]));
+      const rig = {humanoidControlRig: {
+        version: 1, accepted: true, available: true,
+        frame: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
+          lowHeight: 0, highHeight: 1, height: 1,
+          sideCenter: 0, depthCenter: 0}, controls, paths: {},
+      }, joints: [{jointId: 9, signature: '["body#bone=9"]',
+        restPivot: [.4, .5, .6], members: []}]};
+      let notifications = 0;
+      const session = edit.initializeHumanoidRigEditSession({
+        getModelRig: () => rig,
+        getAutomaticRig: () => rig.humanoidControlRig,
+        getKnownMeshes: () => [{userData: {modPath: 'mod'}}],
+        resolveMappings: control.resolveHumanoidControlMappings,
+        persist: async () => ({saved: true}),
+        clearPersist: async () => ({saved: true}),
+        notifyChanged: () => { notifications += 1; },
+      });
+      session.begin();
+      session.beginCarry('leftShoulder');
+      session.updateDraft('leftShoulder', [1, 1, 1], {
+        candidateJointId: 9, candidateDistance: 10});
+      const snapped = session.snapshot();
+      session.updateDraft('leftShoulder', [1, 1, 1], {
+        candidateJointId: 9, candidateDistance: 19, mappedDistance: 19});
+      const sticky = session.snapshot();
+      session.updateDraft('leftShoulder', [1, 1, 1], {
+        candidateJointId: null, candidateDistance: Infinity});
+      const free = session.snapshot();
+      session.finishCarry();
+      return {snapped, sticky, free, notifications};
+    }""")
+    assert result["snapped"]["mappedJointIdByControl"] == {"leftShoulder": 9}
+    assert result["snapped"]["controls"]["leftShoulder"]["position"] == [.4, .5, .6]
+    assert result["sticky"]["mappedJointIdByControl"] == {"leftShoulder": 9}
+    assert result["sticky"]["controls"]["leftShoulder"]["position"] == [.4, .5, .6]
+    assert result["free"]["mappedJointIdByControl"] == {}
+    assert result["free"]["controls"]["leftShoulder"]["position"] == [1, 1, 1]
+    assert result["notifications"] >= 5
 
 
 def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):

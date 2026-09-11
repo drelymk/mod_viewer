@@ -29,6 +29,8 @@ import {
   pickRigJointFromModelSurface,
   setRigJointRotation, solveRigIkTarget,
   setRigPoseControlStatus,
+  beginHumanoidControlCarry, updateHumanoidControlDraft,
+  finishHumanoidControlCarry, cancelHumanoidControlCarry,
 } from './mesh/weight-rig-runtime.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
@@ -263,6 +265,10 @@ rendererReady.then(ready => {
     onRigJointPicked: handleRigJointPicked,
     onRigSurfacePickRequested: pickRigJointFromModelSurface,
     onRigJointPickCancelled: cancelRigJointPicking,
+    beginHumanoidControlCarry,
+    updateHumanoidControlDraft,
+    finishHumanoidControlCarry,
+    cancelHumanoidControlCarry,
     onTransformControlsUnavailable: () => setRigPoseControlStatus(
       'Pose gizmo is unavailable in this build.'),
     requestRender,
