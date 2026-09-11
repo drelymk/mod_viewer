@@ -4956,13 +4956,178 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
         result["duplicateControl"]["conflictTypes"]
     assert result["mappedHandDescendants"] == {
         "bindings": [
+            {"driverId": "right_upper_arm",
+             "bindingMethod": "heat_connectivity",
+             "segmentStartControl": None, "segmentEndControl": None},
+            {"driverId": "right_upper_arm",
+             "bindingMethod": "heat_connectivity",
+             "segmentStartControl": None, "segmentEndControl": None},
             {"driverId": "left_lower_arm",
              "bindingMethod": "mapped_control_descendant",
              "segmentStartControl": None, "segmentEndControl": None},
-        ] * 3,
-        "sourceDrivers": ["left_lower_arm"] * 3,
-        "sourceMethods": ["mapped_control_descendant"] * 3,
-        "descendantCount": 3,
+        ],
+        "sourceDrivers": ["right_upper_arm", "right_upper_arm",
+                          "left_lower_arm"],
+        "sourceMethods": ["heat_connectivity", "heat_connectivity",
+                          "mapped_control_descendant"],
+        "descendantCount": 1,
+    }
+
+
+def test_complete_mapped_limb_uses_connected_descendants_before_heat(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const bindingModule = await import('./js/mesh/humanoid-rig-binding.js');
+      const {buildHumanoidRigBinding} = bindingModule;
+      const controls = {
+        pelvis: [0, .4, 0], chest: [0, 1.2, 0], neck: [0, 1.5, 0],
+        head: [0, 1.8, 0], leftShoulder: [-.8, 1.2, 0],
+        leftElbow: [-1.6, 1.2, 0], leftHand: [-2.4, 1.2, 0],
+        rightShoulder: [.8, 1.2, 0], rightElbow: [1.6, 1.2, 0],
+        rightHand: [2.4, 1.2, 0], leftHip: [-.45, .4, 0],
+        leftKnee: [-.45, -.4, 0], leftFoot: [-.45, -1.2, 0],
+        rightHip: [.45, .4, 0], rightKnee: [.45, -.4, 0],
+        rightFoot: [.45, -1.2, 0],
+      };
+      const positions = [[-.8, 1.2, 0], [-1.6, 1.2, 0],
+        [-2.4, 1.2, 0], [-2.8, 1.2, 0], [-1.2, .9, 0],
+        [-.7, 0, 0]];
+      const member = id => ({sourceKey: 'body', boneId: id,
+        sourceBoneKey: `body#bone=${id}`});
+      const joints = positions.map((restPivot, jointId) => ({jointId,
+        restPivot, restCenter: restPivot, restFrame: [0, 0, 0, 1],
+        members: [member(jointId)]}));
+      const modelRig = {
+        joints,
+        jointPivotByJointId: new Map(joints.map(joint =>
+          [joint.jointId, joint.restPivot])),
+        restFrameByJointId: new Map(joints.map(joint =>
+          [joint.jointId, new THREE.Quaternion()])),
+        components: [{componentId: 0, rootId: 0,
+          nodeIds: [0, 1, 2, 3, 4, 5],
+          parentById: {0: null, 1: 0, 2: 1, 3: 2, 4: null, 5: 0},
+          childrenById: {0: [1, 5], 1: [2], 2: [3], 3: [], 4: [], 5: []}}],
+        componentByJointId: new Map(joints.map(joint =>
+          [joint.jointId, 0])),
+      };
+      const controlRig = {frame: {height: 3, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]}, controls:
+        Object.fromEntries(Object.entries(controls).map(([key, position]) =>
+          [key, {position}]))};
+      const heatAssignment = id => ({...member(id),
+        driverId: 'left_upper_arm', bindingMethod: 'heat_connectivity'});
+      const heatBinding = {
+        modelJointAssignments: new Map(joints.map(joint => [joint.jointId,
+          {...heatAssignment(joint.jointId), confidence: 'high'}])),
+        sourceBoneAssignments: new Map(joints.map(joint => [
+          `body#bone=${joint.jointId}`, heatAssignment(joint.jointId)])),
+      };
+      const mappings = new Map([
+        ['leftShoulder', {controlKey: 'leftShoulder', jointId: 0}],
+        ['leftElbow', {controlKey: 'leftElbow', jointId: 1}],
+        ['leftHand', {controlKey: 'leftHand', jointId: 2}],
+      ]);
+      const binding = buildHumanoidRigBinding({controlRig, modelRig,
+        heatBinding, controlMappings: mappings});
+      const descendant = binding.jointBindings.get(3);
+      return {
+        completeMappedHeatRoles: binding.diagnostics.completeMappedHeatRoles,
+        descendant: {
+          driverId: descendant?.driverId || null,
+          bindingMethod: descendant?.bindingMethod || null,
+        },
+        unclassifiedHelper: {
+          driverId: binding.jointBindings.get(5)?.driverId || null,
+          bindingMethod: binding.jointBindings.get(5)?.bindingMethod || null,
+        },
+        unrelatedBinding: binding.jointBindings.get(4)?.bindingMethod || null,
+        descendantSourceMethod: binding.sourceBoneAssignments.get(
+          'body#bone=3')?.bindingMethod || null,
+        unrelatedSourceAssignment: binding.sourceBoneAssignments.get(
+          'body#bone=4') || null,
+      };
+    }""")
+    assert result == {
+        "completeMappedHeatRoles": ["left_arm"],
+        "descendant": {"driverId": "left_lower_arm",
+                        "bindingMethod": "mapped_control_descendant"},
+        "unclassifiedHelper": {"driverId": "left_upper_arm",
+                                "bindingMethod": "mapped_control_descendant"},
+        "unrelatedBinding": None,
+        "descendantSourceMethod": "mapped_control_descendant",
+        "unrelatedSourceAssignment": None,
+    }
+
+
+def test_mapped_hip_claims_unknown_indirect_branch_before_heat(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {buildHumanoidRigBinding} = await import(
+        './js/mesh/humanoid-rig-binding.js');
+      const controls = {
+        pelvis: [0, .4, 0], chest: [0, 1.2, 0], neck: [0, 1.5, 0],
+        head: [0, 1.8, 0], leftShoulder: [-.8, 1.2, 0],
+        leftElbow: [-1.6, 1.2, 0], leftHand: [-2.4, 1.2, 0],
+        rightShoulder: [.8, 1.2, 0], rightElbow: [1.6, 1.2, 0],
+        rightHand: [2.4, 1.2, 0], leftHip: [-.45, .4, 0],
+        leftKnee: [-.45, -.4, 0], leftFoot: [-.45, -1.2, 0],
+        rightHip: [.45, .4, 0], rightKnee: [.45, -.4, 0],
+        rightFoot: [.45, -1.2, 0],
+      };
+      const positions = [
+        [-.45, .4, 0], [-.45, .1, 0], [-.45, -.2, 0],
+        [-.45, -.4, 0], [-.45, -1.2, 0], [0, -.2, 0],
+      ];
+      const member = id => ({sourceKey: 'body', boneId: id,
+        sourceBoneKey: `body#bone=${id}`});
+      const joints = positions.map((restPivot, jointId) => ({jointId,
+        restPivot, restCenter: restPivot, restFrame: [0, 0, 0, 1],
+        members: [member(jointId)]}));
+      const modelRig = {
+        joints,
+        jointPivotByJointId: new Map(joints.map(joint =>
+          [joint.jointId, joint.restPivot])),
+        restFrameByJointId: new Map(joints.map(joint =>
+          [joint.jointId, new THREE.Quaternion()])),
+        components: [{componentId: 0, rootId: 0, nodeIds: [0, 1, 2, 3, 4, 5],
+          parentById: {0: null, 1: 0, 2: 1, 3: 2, 4: 3, 5: 2},
+          childrenById: {0: [1], 1: [2], 2: [3, 5], 3: [4], 4: [], 5: []}}],
+        componentByJointId: new Map(joints.map(joint =>
+          [joint.jointId, 0])),
+      };
+      const controlRig = {frame: {height: 3, up: [0, 1, 0],
+        right: [1, 0, 0], forward: [0, 0, 1]}, controls:
+        Object.fromEntries(Object.entries(controls).map(([key, position]) =>
+          [key, {position}]))};
+      const heatAssignment = id => ({...member(id),
+        driverId: 'right_upper_leg', bindingMethod: 'heat_connectivity'});
+      const heatBinding = {
+        modelJointAssignments: new Map(joints.map(joint => [joint.jointId,
+          {...heatAssignment(joint.jointId), confidence: 'high'}])),
+        sourceBoneAssignments: new Map(joints.map(joint => [
+          `body#bone=${joint.jointId}`, heatAssignment(joint.jointId)])),
+      };
+      const mappings = new Map([
+        ['leftHip', {controlKey: 'leftHip', jointId: 0}],
+        ['leftKnee', {controlKey: 'leftKnee', jointId: 3}],
+        ['leftFoot', {controlKey: 'leftFoot', jointId: 4}],
+      ]);
+      const binding = buildHumanoidRigBinding({controlRig, modelRig,
+        heatBinding, controlMappings: mappings});
+      const branch = binding.jointBindings.get(5);
+      return {
+        completeMappedHeatRoles: binding.diagnostics.completeMappedHeatRoles,
+        branch: {driverId: branch?.driverId || null,
+          bindingMethod: branch?.bindingMethod || null},
+        branchSourceMethod: binding.sourceBoneAssignments.get(
+          'body#bone=5')?.bindingMethod || null,
+      };
+    }""")
+    assert result == {
+        "completeMappedHeatRoles": ["left_leg"],
+        "branch": {"driverId": "left_upper_leg",
+                   "bindingMethod": "mapped_control_descendant"},
+        "branchSourceMethod": "mapped_control_descendant",
     }
 
 

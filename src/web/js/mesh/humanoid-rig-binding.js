@@ -39,6 +39,18 @@ const DEFAULT_SECONDARY_DISTANCE_RATIO = 0.24;
 const DEFAULT_AMBIGUITY_MARGIN_RATIO = 0.025;
 const TERMINAL_EXTENSION_RATIO = 0.15;
 const CENTRAL_DRIVER_IDS = new Set(['torso', 'neck', 'head']);
+const COMPLETE_MAPPED_HEAT_CONTROLS = Object.freeze({
+  left_arm: Object.freeze(['leftShoulder', 'leftElbow', 'leftHand']),
+  right_arm: Object.freeze(['rightShoulder', 'rightElbow', 'rightHand']),
+  left_leg: Object.freeze(['leftHip', 'leftKnee', 'leftFoot']),
+  right_leg: Object.freeze(['rightHip', 'rightKnee', 'rightFoot']),
+});
+const HEAT_DRIVER_ROLES = Object.freeze({
+  left_upper_arm: 'left_arm', left_lower_arm: 'left_arm',
+  right_upper_arm: 'right_arm', right_lower_arm: 'right_arm',
+  left_upper_leg: 'left_leg', left_lower_leg: 'left_leg',
+  right_upper_leg: 'right_leg', right_lower_leg: 'right_leg',
+});
 
 function numberId(value) {
   const result = Number(value);
@@ -370,6 +382,23 @@ function mappedControlEntries(controlMappings) {
   };
 }
 
+function completeMappedHeatRoles(entries) {
+  const mappedControls = new Set(entries.map(entry => entry.controlKey));
+  return new Set(Object.entries(COMPLETE_MAPPED_HEAT_CONTROLS)
+    .filter(([, controls]) => controls.every(controlKey =>
+      mappedControls.has(controlKey)))
+    .map(([role]) => role));
+}
+
+function heatRoleForAssignment(assignment) {
+  return assignment?.limbRole || HEAT_DRIVER_ROLES[assignment?.driverId]
+    || null;
+}
+
+function heatAssignmentSuppressed(assignment, suppressedRoles) {
+  return suppressedRoles.has(heatRoleForAssignment(assignment));
+}
+
 function mappedPathCandidates(modelRig, controlMappings) {
   const mapped = mappedControlEntries(controlMappings);
   const byControl = new Map(mapped.entries.map(entry =>
@@ -511,8 +540,35 @@ function sourceChildIds(modelRig, jointId) {
     `${Math.min(Number(jointId), child)}:${Math.max(Number(jointId), child)}`));
 }
 
+function mappedDescendantOwnership(modelRig, jointId, driverId, drivers,
+    controlRig, height, secondaryLimit, ambiguityMargin) {
+  const point = pointForJoint(modelRig, jointId);
+  const driver = drivers.get(driverId);
+  if (!point || !driver) return 'unknown';
+
+  // A mapped ancestor must retain unclassified helper/cloth descendants. Only
+  // stop when another driver is a clear, unambiguous semantic owner.
+  const candidates = sortedCandidates(point, drivers, height, controlRig);
+  const best = articulationPreferredCandidate(candidates);
+  const ambiguous = isAmbiguous(candidates, ambiguityMargin)
+    && !isExactArticulationTie(candidates, best);
+  const confidentlyDifferent = !ambiguous
+    && best && best.driverId !== driverId
+    && best.distanceRatio <= secondaryLimit
+    && confidenceForDistance(best.distanceRatio) !== 'low';
+  if (confidentlyDifferent) return 'different';
+
+  const ownCandidate = candidateForPoint(point, driver, height);
+  if (semanticCandidateAllowed(point, driver, ownCandidate, controlRig, height)
+      && ownCandidate.distanceRatio <= secondaryLimit) {
+    return 'same';
+  }
+  return 'unknown';
+}
+
 function mappedDescendantJointIds(modelRig, rootId, mappedJointIds,
-    jointBindings, driverId) {
+    jointBindings, driverId, drivers, controlRig, height, secondaryLimit,
+    ambiguityMargin) {
   const descendants = [];
   const visited = new Set([Number(rootId)]);
   const queue = sourceChildIds(modelRig, rootId);
@@ -525,6 +581,9 @@ function mappedDescendantJointIds(modelRig, rootId, mappedJointIds,
     if (mappedJointIds.has(jointId)) continue;
     const existing = jointBindings.get(jointId);
     if (existing?.driverId && existing.driverId !== driverId) continue;
+    const ownership = mappedDescendantOwnership(modelRig, jointId, driverId,
+      drivers, controlRig, height, secondaryLimit, ambiguityMargin);
+    if (ownership === 'different') continue;
     if (!existing) descendants.push(jointId);
     sourceChildIds(modelRig, jointId).forEach(child => {
       if (!visited.has(child)) queue.push(child);
@@ -614,16 +673,24 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
   const candidatesByJointId = new Map();
   let ambiguousBindingCount = 0;
   const mapped = mappedControlEntries(controlMappings);
+  const completeMappedRoles = completeMappedHeatRoles(mapped.entries);
   const mappedPaths = mappedPathCandidates(modelRig, controlMappings);
   const mappedJointIds = new Set(mapped.entries.map(entry => entry.jointId));
   const sourceBoneAssignments = new Map();
   let mappedDescendantJointCount = 0;
   if (heatBinding?.sourceBoneAssignments instanceof Map) {
-    heatBinding.sourceBoneAssignments.forEach((assignment, sourceKey) =>
-      sourceBoneAssignments.set(sourceKey, assignment));
+    heatBinding.sourceBoneAssignments.forEach((assignment, sourceKey) => {
+      if (!heatAssignmentSuppressed(assignment, completeMappedRoles)) {
+        sourceBoneAssignments.set(sourceKey, assignment);
+      }
+    });
   } else {
     Object.entries(heatBinding?.sourceBoneAssignments || {}).forEach(
-      ([sourceKey, assignment]) => sourceBoneAssignments.set(sourceKey, assignment));
+      ([sourceKey, assignment]) => {
+        if (!heatAssignmentSuppressed(assignment, completeMappedRoles)) {
+          sourceBoneAssignments.set(sourceKey, assignment);
+        }
+      });
   }
 
   // A manually snapped control owns its resolved ModelJoint before either
@@ -694,7 +761,8 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
     const driver = drivers.get(driverId);
     if (!driver || jointId === null) return;
     const descendants = mappedDescendantJointIds(modelRig, jointId,
-      mappedJointIds, jointBindings, driverId);
+      mappedJointIds, jointBindings, driverId, drivers, controlRig, height,
+      secondaryLimit, ambiguityMargin);
     descendants.forEach(descendantId => {
       if (jointBindings.has(descendantId)) return;
       const restJointWorld = restJointWorldMatrix(modelRig, descendantId);
@@ -725,13 +793,16 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
     });
   });
 
-  // Heat ownership is authoritative for all eight limb drivers. It is
-  // automatic inference only; explicit mappings and mapped graph paths have
-  // already claimed their endpoints/interiors above.
+  // Heat ownership is the fallback for limb drivers that do not have a
+  // complete mapped control chain. Explicit mappings and mapped graph paths
+  // have already claimed their endpoints/interiors; a complete mapped chain
+  // also disables heat for that limb so unrelated nearby source bones cannot
+  // pull the mapped limb into the torso.
   allJointIds(modelRig).forEach(jointId => {
     if (jointBindings.has(jointId)) return;
     const assignment = valueFor(heatBinding?.modelJointAssignments, jointId);
     if (!assignment?.driverId || !drivers.has(assignment.driverId)) return;
+    if (heatAssignmentSuppressed(assignment, completeMappedRoles)) return;
     const point = pointForJoint(modelRig, jointId);
     const driver = drivers.get(assignment.driverId);
     const restJointWorld = restJointWorldMatrix(modelRig, jointId);
@@ -847,6 +918,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
       directDistanceRatio: directLimit,
       secondaryDistanceRatio: secondaryLimit,
       ambiguityMarginRatio: ambiguityMargin,
+      completeMappedHeatRoles: [...completeMappedRoles].sort(),
       candidateCount: candidatesByJointId.size,
       mappedPathCount: mappedPaths.candidates.length,
       mappedPathJointCount: mappedPaths.candidates.reduce((sum, candidate) =>
