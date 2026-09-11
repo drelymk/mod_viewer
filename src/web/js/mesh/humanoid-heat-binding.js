@@ -1,6 +1,5 @@
 import {Vector3} from 'three';
 import {candidateRelationshipEdges} from './weight-rig.js';
-import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 
 export const HUMANOID_HEAT_LIMBS = Object.freeze({
   left_arm: Object.freeze({
@@ -542,44 +541,8 @@ function aggregateModelJointAssignments(sourceAssignments, modelRig) {
   return {assignments, conflicts};
 }
 
-function applyExplicitControlMappings(sourceBoneAssignments, controlMappings) {
-  if (!(controlMappings instanceof Map)) return;
-  controlMappings.forEach(mapping => {
-    const controlKey = mapping?.controlKey;
-    const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
-    if (!driverId) return;
-    (mapping.sourceMembers || []).forEach(member => {
-      const sourceKey = member?.sourceKey;
-      const boneId = integer(member?.boneId);
-      if (sourceKey === undefined || boneId === null) return;
-      const sourceBoneKeyValue = member.sourceBoneKey
-        || sourceBoneKey(sourceKey, boneId);
-      sourceBoneAssignments.set(sourceBoneKeyValue, {
-        sourceKey: String(sourceKey), boneId, sourceBoneKey: sourceBoneKeyValue,
-        limbRole: ['chest', 'pelvis', 'neck', 'head'].includes(controlKey)
-          ? 'torso' : controlKey.startsWith('left')
-            ? controlKey.includes('Hip') || controlKey.includes('Knee')
-              || controlKey.includes('Foot') ? 'left_leg' : 'left_arm'
-            : controlKey.includes('Hip') || controlKey.includes('Knee')
-              || controlKey.includes('Foot') ? 'right_leg' : 'right_arm',
-        driverId,
-        progress: controlKey === 'chest' || controlKey === 'pelvis' ? 0 :
-          /Elbow|Knee|Hand|Foot/.test(controlKey) ? 1 : 0,
-        segmentIndex: /Elbow|Knee|Hand|Foot/.test(controlKey) ? 1 : 0,
-        totalWeight: nodeSupport(member),
-        confidence: 'high',
-        pathMember: true,
-        branchMember: false,
-        bindingMethod: 'manual_control_mapping',
-        controlKey,
-      });
-    });
-  });
-}
-
 /** Classify each source's heat graph against the shared humanoid rest rig. */
-export function buildHumanoidHeatBinding({controlRig, sourceRigs = [], modelRig,
-    controlMappings = null} = {}) {
+export function buildHumanoidHeatBinding({controlRig, sourceRigs = [], modelRig} = {}) {
   const started = typeof performance !== 'undefined' && performance.now
     ? performance.now() : Date.now();
   const sourceResults = {};
@@ -593,10 +556,6 @@ export function buildHumanoidHeatBinding({controlRig, sourceRigs = [], modelRig,
       sourceBoneAssignments.set(key, value));
     conflicts.push(...result.conflicts);
   });
-  // Explicit mappings are authoritative for the represented source members.
-  // They replace only those exact source keys and leave the conservative heat
-  // traversal in charge of every other member.
-  applyExplicitControlMappings(sourceBoneAssignments, controlMappings);
   const model = aggregateModelJointAssignments(sourceBoneAssignments, modelRig);
   conflicts.push(...model.conflicts);
   const runtimeMs = (typeof performance !== 'undefined' && performance.now

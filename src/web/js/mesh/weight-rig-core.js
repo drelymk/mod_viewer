@@ -929,7 +929,6 @@ function buildPrimaryHumanoidRig(rig) {
   const heatBinding = controlRig?.accepted
     ? buildHumanoidHeatBinding({
       controlRig, sourceRigs: rig.sourceRigs, modelRig: rig,
-      controlMappings: resolvedMappings,
     }) : null;
   const binding = controlRig?.accepted
     ? buildHumanoidRigBinding({controlRig, modelRig: rig, heatBinding,
@@ -1114,7 +1113,8 @@ function buildModelPoseTransforms() {
   modelSkinningRig.manualPoseTransforms = manualTransforms;
   modelSkinningRig.humanoidSourceBoneTransforms =
     buildHumanoidSourceBoneDriverTransforms({
-      heatBinding: modelSkinningRig.humanoidHeatBinding,
+      heatBinding: modelSkinningRig.humanoidBinding ||
+        modelSkinningRig.humanoidHeatBinding,
       controlRig: modelSkinningRig.humanoidControlRig,
       posedControls: modelRigState.humanoidPose,
     });

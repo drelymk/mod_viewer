@@ -3907,7 +3907,7 @@ def test_humanoid_overrides_resolve_semantics_and_manual_binding(module_page):
     assert result["untouched"] is True
     assert result["resolvedJoint"] == 17
     assert result["exactPivot"] == [2, 3, 4]
-    assert result["heatDriver"] == "left_upper_arm"
+    assert result["heatDriver"] is None
     assert result["bindingDriver"] == "left_upper_arm"
     assert result["bindingMethod"] == "manual_control_mapping"
     assert result["controlKey"] == "leftShoulder"
@@ -4695,6 +4695,187 @@ def test_humanoid_binding_uses_semantic_domains_and_bounded_terminals(module_pag
     assert result["head"]["secondaryRootId"] == 2
     assert result["head"]["secondarySubtreeSize"] == 2
     assert result["neighborDriverId"] not in {"left_upper_arm", "left_lower_arm"}
+
+
+def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_boundaries(
+    module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {buildHumanoidRigBinding} = await import(
+        './js/mesh/humanoid-rig-binding.js');
+      const controls = {
+        pelvis: [0, .4, 0], chest: [0, 1.2, 0], neck: [0, 1.5, 0],
+        head: [0, 1.8, 0], leftShoulder: [-.8, 1.2, 0],
+        leftElbow: [-2, 1.2, 0], leftHand: [-2.8, 1.2, 0],
+        rightShoulder: [.8, 1.2, 0], rightElbow: [2, 1.2, 0],
+        rightHand: [2.8, 1.2, 0], leftHip: [-.45, .4, 0],
+        leftKnee: [-.45, -.4, 0], leftFoot: [-.45, -1.2, 0],
+        rightHip: [.45, .4, 0], rightKnee: [.45, -.4, 0],
+        rightFoot: [.45, -1.2, 0],
+      };
+      const controlRig = {
+        frame: {height: 3, up: [0, 1, 0], right: [1, 0, 0],
+          forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))};
+      const member = id => ({sourceKey: 'body', boneId: id,
+        sourceBoneKey: `body#bone=${id}`});
+      const jointDefinitions = [
+        [10, [-.8, 1.2, 0]], [11, [-1.2, 1.2, 0]],
+        [12, [-1.5, 1.2, 0]], [13, [-1.8, 1.2, 0]],
+        [14, [-2, 1.2, 0]], [20, [-1.5, .6, 0]],
+        [30, [0, 1.5, 0]], [31, [0, 1.65, 0]], [32, [0, 1.8, 0]],
+      ];
+      const makeModel = splitArmComponent => {
+        const joints = jointDefinitions.map(([jointId, restPivot]) => ({
+          jointId, restPivot, restCenter: restPivot, restFrame: [0, 0, 0, 1],
+          members: [member(jointId)],
+        }));
+        const armParent = splitArmComponent
+          ? {10: null, 11: 10, 12: 11}
+          : {10: null, 11: 10, 12: 11, 13: 12, 14: 13, 20: 12};
+        const armChildren = splitArmComponent
+          ? {10: [11], 11: [12], 12: []}
+          : {10: [11], 11: [12], 12: [13, 20], 13: [14], 14: [], 20: []};
+        const tailParent = splitArmComponent ? {13: null, 14: 13} : {};
+        const tailChildren = splitArmComponent ? {13: [14], 14: []} : {};
+        const centralParent = {30: null, 31: 30, 32: 31};
+        const centralChildren = {30: [31], 31: [32], 32: []};
+        const components = [
+          {componentId: 0, rootId: 10,
+            nodeIds: splitArmComponent ? [10, 11, 12] : [10, 11, 12, 13, 14, 20],
+            parentById: armParent, childrenById: armChildren},
+          ...(splitArmComponent ? [{componentId: 1, rootId: 13,
+            nodeIds: [13, 14], parentById: tailParent,
+            childrenById: tailChildren}] : []),
+          {componentId: splitArmComponent ? 2 : 1, rootId: 30,
+            nodeIds: [30, 31, 32], parentById: centralParent,
+            childrenById: centralChildren},
+        ];
+        const componentByJointId = new Map();
+        components.forEach((component, index) => component.nodeIds.forEach(id =>
+          componentByJointId.set(id, index)));
+        return {
+          joints,
+          jointPivotByJointId: new Map(joints.map(joint =>
+            [joint.jointId, joint.restPivot])),
+          restFrameByJointId: new Map(joints.map(joint =>
+            [joint.jointId, new THREE.Quaternion()])),
+          components, componentByJointId,
+          sourceBoneToModelJointId: new Map(joints.map(joint =>
+            [`body#bone=${joint.jointId}`, joint.jointId])),
+        };
+      };
+      const heatFor = model => ({
+        modelJointAssignments: new Map(model.joints.map(joint => [
+          joint.jointId, {driverId: 'right_upper_arm', confidence: 'high',
+            sourceBoneKeys: [member(joint.jointId).sourceBoneKey], memberCount: 1},
+        ])),
+        sourceBoneAssignments: new Map(model.joints.map(joint => {
+          const source = member(joint.jointId);
+          return [source.sourceBoneKey, {...source,
+            driverId: 'right_upper_arm', bindingMethod: 'heat_connectivity'}];
+        })),
+        conflicts: [],
+      });
+      const mappingsFor = pairs => new Map(pairs.map(([controlKey, jointId]) =>
+        [controlKey, {controlKey, jointId, sourceMembers: [member(jointId)]}]));
+      const entry = (binding, jointId) => {
+        const value = binding.jointBindings.get(jointId);
+        return value ? {driverId: value.driverId,
+          bindingMethod: value.bindingMethod,
+          segmentStartControl: value.segmentStartControl || null,
+          segmentEndControl: value.segmentEndControl || null} : null;
+      };
+      const model = makeModel(false);
+      const mapped = mappingsFor([
+        ['leftShoulder', 10], ['leftElbow', 14], ['neck', 30], ['head', 32],
+      ]);
+      const authoritative = buildHumanoidRigBinding({controlRig, modelRig: model,
+        heatBinding: heatFor(model), controlMappings: mapped});
+      const onlyStart = buildHumanoidRigBinding({controlRig, modelRig: model,
+        heatBinding: heatFor(model),
+        controlMappings: mappingsFor([['leftShoulder', 10]])});
+      const split = makeModel(true);
+      const differentComponents = buildHumanoidRigBinding({controlRig,
+        modelRig: split, heatBinding: heatFor(split),
+        controlMappings: mappingsFor([
+          ['leftShoulder', 10], ['leftElbow', 14],
+        ])});
+      const mappedInteriorControl = buildHumanoidRigBinding({controlRig,
+        modelRig: model, heatBinding: heatFor(model),
+        controlMappings: mappingsFor([
+          ['leftShoulder', 10], ['leftElbow', 14], ['leftHand', 12],
+        ])});
+      const duplicateControl = buildHumanoidRigBinding({controlRig,
+        modelRig: model, heatBinding: heatFor(model),
+        controlMappings: mappingsFor([
+          ['leftShoulder', 10], ['leftElbow', 10],
+        ])});
+      return {
+        authoritative: {
+          shoulder: entry(authoritative, 10),
+          interior: [11, 12, 13].map(jointId => entry(authoritative, jointId)),
+          elbow: entry(authoritative, 14),
+          branch: entry(authoritative, 20),
+          neckHeadInterior: entry(authoritative, 31),
+          sourceDrivers: [10, 11, 12, 13, 14, 31].map(jointId =>
+            authoritative.sourceBoneAssignments.get(`body#bone=${jointId}`)?.driverId),
+          pathCount: authoritative.diagnostics.mappedPathCount,
+        },
+        onlyStart: entry(onlyStart, 11),
+        differentComponents: {
+          interior: entry(differentComponents, 11),
+          pathCount: differentComponents.diagnostics.mappedPathCount,
+        },
+        mappedInteriorControl: {
+          beforeInterior: entry(mappedInteriorControl, 11),
+          afterInterior: entry(mappedInteriorControl, 13),
+          conflictTypes: mappedInteriorControl.diagnostics.mappedPathConflicts
+            .map(conflict => conflict.type),
+        },
+        duplicateControl: {
+          joint: entry(duplicateControl, 10),
+          conflictTypes: duplicateControl.diagnostics.mappedPathConflicts
+            .map(conflict => conflict.type),
+        },
+      };
+    }""")
+    assert result["authoritative"]["shoulder"] == {
+        "driverId": "left_upper_arm",
+        "bindingMethod": "manual_control_mapping",
+        "segmentStartControl": None, "segmentEndControl": None}
+    assert result["authoritative"]["interior"] == [
+        {"driverId": "left_upper_arm", "bindingMethod": "mapped_joint_path",
+         "segmentStartControl": "leftShoulder", "segmentEndControl": "leftElbow"},
+    ] * 3
+    assert result["authoritative"]["elbow"]["bindingMethod"] == \
+        "manual_control_mapping"
+    assert result["authoritative"]["branch"]["bindingMethod"] == \
+        "heat_connectivity"
+    assert result["authoritative"]["branch"]["driverId"] == "right_upper_arm"
+    assert result["authoritative"]["neckHeadInterior"] == {
+        "driverId": "head", "bindingMethod": "mapped_joint_path",
+        "segmentStartControl": "neck", "segmentEndControl": "head"}
+    assert result["authoritative"]["sourceDrivers"] == [
+        "left_upper_arm", "left_upper_arm", "left_upper_arm",
+        "left_upper_arm", "left_lower_arm", "head"]
+    assert result["authoritative"]["pathCount"] == 2
+    assert result["onlyStart"]["bindingMethod"] == "heat_connectivity"
+    assert result["differentComponents"]["interior"]["bindingMethod"] == \
+        "heat_connectivity"
+    assert result["differentComponents"]["pathCount"] == 0
+    assert result["mappedInteriorControl"]["beforeInterior"]["bindingMethod"] == \
+        "heat_connectivity"
+    assert result["mappedInteriorControl"]["afterInterior"] == {
+        "driverId": "left_lower_arm", "bindingMethod": "mapped_joint_path",
+        "segmentStartControl": "leftElbow", "segmentEndControl": "leftHand"}
+    assert "mapped_control_inside_path" in \
+        result["mappedInteriorControl"]["conflictTypes"]
+    assert result["duplicateControl"]["joint"]["bindingMethod"] == \
+        "heat_connectivity"
+    assert "conflicting_control_mappings" in \
+        result["duplicateControl"]["conflictTypes"]
 
 
 def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branches(
