@@ -259,6 +259,50 @@ function isExactArticulationTie(candidates, best) {
       && candidate.projection > .95);
 }
 
+/**
+ * Classify a rest-space point against the fitted humanoid driver corridors.
+ *
+ * The binding path intentionally keeps this classifier private because it
+ * also applies binding-specific distance gates.  The optional guided ModelRig
+ * builder uses the same spatial semantics, but does not need a ModelJoint or
+ * a heat-binding result yet.  Returning the candidate list makes ambiguity a
+ * visible, conservative outcome instead of silently forcing a classification.
+ */
+export function classifyHumanoidPoint(pointValue, controlRig, options = {}) {
+  const point = vector(pointValue);
+  const height = Math.max(Number(controlRig?.frame?.height) || 0, EPSILON);
+  const drivers = buildHumanoidDriverFrames(controlRig);
+  const candidates = sortedCandidates(point, drivers, height, controlRig);
+  const best = articulationPreferredCandidate(candidates);
+  const maximumDistanceRatio = Number.isFinite(
+    Number(options.maximumDistanceRatio))
+    ? Number(options.maximumDistanceRatio) : DEFAULT_SECONDARY_DISTANCE_RATIO;
+  const ambiguityMargin = Number.isFinite(Number(options.ambiguityMarginRatio))
+    ? Number(options.ambiguityMarginRatio) : DEFAULT_AMBIGUITY_MARGIN_RATIO;
+  if (!best) {
+    return {
+      classified: false, confident: false, confidence: 'low',
+      reason: 'no_semantic_candidate', candidates: [],
+    };
+  }
+  const ambiguous = isAmbiguous(candidates, ambiguityMargin)
+    && !isExactArticulationTie(candidates, best);
+  const withinDistance = best.distanceRatio <= maximumDistanceRatio;
+  const confidence = confidenceForDistance(best.distanceRatio);
+  const classified = withinDistance && !ambiguous;
+  return {
+    ...best,
+    role: HUMANOID_DRIVER_SEGMENTS.find(segment =>
+      segment.id === best.driverId)?.role || null,
+    confidence,
+    classified,
+    confident: classified && confidence !== 'low',
+    reason: !withinDistance ? 'outside_semantic_corridor'
+      : ambiguous ? 'ambiguous_semantic_candidate' : null,
+    candidates: candidates.slice(0, 4).map(candidate => ({...candidate})),
+  };
+}
+
 function directBindingFor(modelRig, jointId, candidate, driverMap, metadata = {}) {
   const restJointWorld = restJointWorldMatrix(modelRig, jointId);
   const driver = driverMap.get(candidate.driverId);

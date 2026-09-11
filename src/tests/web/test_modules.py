@@ -5360,3 +5360,69 @@ def test_humanoid_ik_driver_changes_a_weighted_mesh_vertex(module_page):
     assert result["solved"]
     assert result["changedVertexCount"] == 1
     assert result["output"] != pytest.approx(result["baseline"])
+
+
+def test_saved_humanoid_guide_reuses_spatial_semantics_for_source_forests(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {classifyHumanoidPoint} = await import(
+        './js/mesh/humanoid-rig-binding.js');
+      const {buildHumanoidGuidedSourceForest} = await import(
+        './js/mesh/humanoid-guided-rig.js');
+      const controls = {
+        pelvis: [0, 0, 0], chest: [0, 4, 0], neck: [0, 6, 0], head: [0, 8, 0],
+        leftShoulder: [-2, 5.5, 0], leftElbow: [-3.5, 5, 0],
+        leftHand: [-5, 4.5, 0], rightShoulder: [2, 5.5, 0],
+        rightElbow: [3.5, 5, 0], rightHand: [5, 4.5, 0],
+        leftHip: [-1, 0, 0], leftKnee: [-1, -3, 0], leftFoot: [-1, -6, 0],
+        rightHip: [1, 0, 0], rightKnee: [1, -3, 0], rightFoot: [1, -6, 0],
+      };
+      const controlRig = {
+        accepted: true, frame: {height: 8, right: [1, 0, 0],
+          forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}])),
+      };
+      const graph = {
+        evidenceMode: 'vertex',
+        nodes: [
+          {boneId: 0, weightedCenter: [-1.8, 5.35, 0]},
+          {boneId: 1, weightedCenter: [-2.2, 5.43, 0]},
+          {boneId: 2, weightedCenter: [2, 5.5, 0]},
+        ],
+        relationships: [
+          {boneA: 0, boneB: 1, sharedVertexCount: 4,
+            containment: .4, jaccard: .2},
+          {boneA: 1, boneB: 2, sharedVertexCount: 4,
+            containment: .4, jaccard: .2},
+        ],
+      };
+      const classified = classifyHumanoidPoint([-2.75, 5.25, 0], controlRig);
+      const result = buildHumanoidGuidedSourceForest(
+        {sourceKey: 'body', influenceGraph: graph}, controlRig);
+      return {
+        classification: {
+          driverId: classified.driverId,
+          confidence: classified.confidence,
+          classified: classified.classified,
+        },
+        diagnostics: result.diagnostics,
+        roots: result.forest.components.map(component => ({
+          rootId: component.rootId, nodeIds: component.nodeIds,
+        })),
+      };
+    }""")
+    assert result["classification"] == {
+        "driverId": "left_upper_arm",
+        "confidence": "high",
+        "classified": True,
+    }
+    assert result["diagnostics"]["candidateEdges"] == 2
+    assert result["diagnostics"]["guidedEdges"] == 1
+    assert result["diagnostics"]["rejectedEdges"] == 1
+    assert result["diagnostics"]["adjacentArticulationEdges"] == 1
+    assert {tuple(item["nodeIds"]) for item in result["roots"]} == {
+        (0, 1), (2,),
+    }
+    assert next(item["rootId"] for item in result["roots"]
+                if item["nodeIds"] == [0, 1]) == 0
