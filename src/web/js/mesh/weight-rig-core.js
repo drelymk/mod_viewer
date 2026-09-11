@@ -85,6 +85,7 @@ import {buildHumanoidHeatBinding} from './humanoid-heat-binding.js';
 import {
   initializeHumanoidRigEditSession, resetHumanoidRigEditSession,
 } from './humanoid-rig-edit-session.js';
+import {buildHumanoidJointGuide} from './humanoid-guided-rig.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -282,7 +283,8 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
   cancelRigPicking: cancelRigJointPicking,
   rebuildActiveRig: async () => {
     if (!modelSkinningRig) return;
-    buildPrimaryHumanoidRig(modelSkinningRig);
+    const sourceRigs = buildAllSourceSkinningRigs();
+    buildModelSkinningRig(sourceRigs);
     // Edit mode starts from rest and does not carry a virtual pose into the
     // rebuilt control rig.
     modelRigState.humanoidPose = {};
@@ -424,7 +426,11 @@ function modelRigSnapshotForState() {
     quaternionIsIdentity,
     matrixIsIdentity,
   });
-  if (snapshot) snapshot.humanoidControlRig = humanoidControlRigSnapshot();
+  if (snapshot) {
+    snapshot.humanoidControlRig = humanoidControlRigSnapshot();
+    snapshot.jointBuild = modelSkinningRig?.jointBuildDiagnostics
+      ? {...modelSkinningRig.jointBuildDiagnostics} : null;
+  }
   return snapshot;
 }
 
@@ -727,6 +733,73 @@ function restoreDefaultSourceRigOrientations() {
     .map(restoreDefaultSourceRigOrientation).some(Boolean);
 }
 
+function hasSavedHumanoidMainRig(savedOverrides) {
+  return !!(savedOverrides?.controls
+    && Object.keys(savedOverrides.controls).length);
+}
+
+function buildSavedHumanoidJointGuide(savedOverrides) {
+  if (!hasSavedHumanoidMainRig(savedOverrides)) return null;
+  try {
+    const orientationState = getModelTransformState?.();
+    const automaticRig = buildHumanoidControlRig({
+      meshes: [...knownMeshes],
+      axes: humanoidSemanticAxes(),
+      orientationState,
+    });
+    if (!automaticRig?.accepted) {
+      return {automaticRig, controlRig: null,
+        fallbackReason: automaticRig?.diagnostics?.reason
+          || 'automatic_humanoid_rig_unavailable'};
+    }
+    // The saved metadata is a geometry guide at this stage.  ModelJoint
+    // signatures are resolved only after the guided ModelRig exists.
+    const controlRig = applyHumanoidControlRigOverrides({
+      automaticRig,
+      savedOverrides,
+      modelRig: null,
+      resolvedMappings: new Map(),
+    });
+    if (!controlRig?.accepted) {
+      return {automaticRig, controlRig: null,
+        fallbackReason: 'guided_humanoid_rig_unavailable'};
+    }
+    return {automaticRig, controlRig, fallbackReason: null};
+  } catch (error) {
+    return {
+      automaticRig: null,
+      controlRig: null,
+      fallbackReason: error instanceof Error ? error.message
+        : 'guided_humanoid_rig_failed',
+    };
+  }
+}
+
+function applyHumanoidJointGuide(sourceRigs, guide) {
+  const guided = !!guide?.sourceResults;
+  sourceRigs.forEach(sourceRig => {
+    if (!guided && sourceRig.humanoidJointGuideMode !== 'humanoid_guided') {
+      sourceRig.humanoidJointGuideMode = 'legacy';
+      return;
+    }
+    const result = guided
+      ? guide.sourceResults.get(String(sourceRig.sourceKey)) : null;
+    if (result) {
+      sourceRig.inferredForest = cloneSourceForest(result.forest);
+      // Pivots belong to the selected undirected parent/child relationship.
+      // Guidance can replace that relationship, so the legacy pivot map is
+      // stale whenever the guided forest changes an edge.
+      sourceRig.jointPivotByBoneId = jointPivotMap(
+        sourceRig.inferredForest, sourceRig.influenceGraph?.relationships);
+      sourceRig.humanoidJointGuideMode = 'humanoid_guided';
+      rebuildSourceRigRestFrames(sourceRig);
+      return;
+    }
+    restoreDefaultSourceRigOrientation(sourceRig);
+    sourceRig.humanoidJointGuideMode = 'legacy';
+  });
+}
+
 function defaultRootOverrides(rig) {
   return new Map((rig.defaultComponents || []).map(component => [
     Number(component.componentId), Number(component.rootId),
@@ -812,7 +885,26 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   const previousRootSignatures = new Set(
     modelRigState.explicitRootSignatures);
   if (modelSkinningRig) resetModelPose({request: false});
-  const reconciliation = buildModelRigReconciliation(sourceRigs);
+  const savedOverrides = humanoidRigEditSession?.getSavedOverrides?.();
+  const savedMainRig = hasSavedHumanoidMainRig(savedOverrides);
+  const savedGuide = buildSavedHumanoidJointGuide(savedOverrides);
+  let humanoidGuide = null;
+  let guideFallbackReason = savedGuide?.fallbackReason || null;
+  if (savedGuide?.controlRig) {
+    try {
+      humanoidGuide = buildHumanoidJointGuide(
+        sourceRigs, savedGuide.controlRig);
+    } catch (error) {
+      guideFallbackReason = error instanceof Error ? error.message
+        : 'guided_humanoid_rig_failed';
+    }
+  }
+  applyHumanoidJointGuide(sourceRigs, humanoidGuide);
+  const reconciliation = buildModelRigReconciliation(sourceRigs,
+    humanoidGuide ? {
+      semanticBySourceBoneKey: humanoidGuide.sourceBoneClassifications,
+      humanoidGuidanceDiagnostics: humanoidGuide.diagnostics,
+    } : undefined);
   const joints = reconciliation.joints || [];
   const rig = {
     key: 'model-rig',
@@ -854,6 +946,29 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     poseSourceBoneIdsByMesh: new Map(),
     poseRevision: 0,
     structureRevision: ++rigRuntime.structureRevision,
+    humanoidGuidedAutomaticRig: humanoidGuide
+      ? savedGuide.automaticRig : null,
+    jointBuildDiagnostics: {
+      mode: humanoidGuide ? 'humanoid_guided' : 'legacy',
+      savedMainRig,
+      classifiedCount: humanoidGuide?.diagnostics?.classified || 0,
+      unclassifiedCount: humanoidGuide?.diagnostics?.unclassified
+        || (reconciliation.reconciliation?.sourceBoneCount
+          || reconciliation.sourceBoneEvidence?.length || 0)
+          - (humanoidGuide?.diagnostics?.classified || 0),
+      guidedEdgeCount: humanoidGuide?.diagnostics?.guidedEdges || 0,
+      rejectedEdgeCount: humanoidGuide?.diagnostics?.rejectedEdges || 0,
+      sameSegmentEdgeCount: humanoidGuide?.diagnostics?.sameSegmentEdges || 0,
+      adjacentArticulationEdgeCount:
+        humanoidGuide?.diagnostics?.adjacentArticulationEdges || 0,
+      rootOverrideCount: humanoidGuide?.diagnostics?.rootOverrideCount || 0,
+      mergeCount: reconciliation.reconciliation?.equivalenceClusterCount || 0,
+      semanticMergeCount: (reconciliation.reconciliation?.acceptedEquivalences
+        || []).filter(item => ['same_segment', 'same_region'].includes(
+          item.semanticKind)).length,
+      fallbackReason: savedMainRig && !humanoidGuide
+        ? guideFallbackReason || 'guided_humanoid_rig_failed' : null,
+    },
   };
   // Install provenance-derived edge pivots before capturing the default
   // orientation. Reset Pose must restore the same pivots used on first load.
@@ -912,11 +1027,12 @@ function buildPrimaryHumanoidRig(rig) {
   humanoidControlRigCacheKey = '';
   humanoidControlRigSnapshotCache = null;
   const orientationState = getModelTransformState?.();
-  const automaticRig = buildHumanoidControlRig({
-    meshes: [...knownMeshes],
-    axes: humanoidSemanticAxes(),
-    orientationState,
-  });
+  const automaticRig = rig.humanoidGuidedAutomaticRig
+    || buildHumanoidControlRig({
+      meshes: [...knownMeshes],
+      axes: humanoidSemanticAxes(),
+      orientationState,
+    });
   const savedOverrides = humanoidRigEditSession?.getSavedOverrides?.();
   const resolvedMappings = automaticRig?.accepted
     ? resolveHumanoidControlMappings({
@@ -934,6 +1050,7 @@ function buildPrimaryHumanoidRig(rig) {
     ? buildHumanoidRigBinding({controlRig, modelRig: rig, heatBinding,
       controlMappings: resolvedMappings}) : null;
   rig.humanoidAutomaticControlRig = automaticRig;
+  delete rig.humanoidGuidedAutomaticRig;
   rig.humanoidControlRig = controlRig;
   rig.humanoidHeatBinding = heatBinding;
   rig.humanoidBinding = binding;

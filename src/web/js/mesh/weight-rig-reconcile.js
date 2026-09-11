@@ -397,6 +397,22 @@ export function crossSourceWeightEvidence(
   return evidence;
 }
 
+function semanticRelationshipFor(left, right, semanticBySourceBoneKey) {
+  if (!(semanticBySourceBoneKey instanceof Map)) return null;
+  const leftSemantic = semanticBySourceBoneKey.get(left.sourceBoneKey);
+  const rightSemantic = semanticBySourceBoneKey.get(right.sourceBoneKey);
+  if (!leftSemantic?.confident || !rightSemantic?.confident) {
+    return {kind: 'unclassified', score: 0};
+  }
+  if (leftSemantic.driverId === rightSemantic.driverId) {
+    return {kind: 'same_segment', score: 0.08};
+  }
+  if (leftSemantic.role && leftSemantic.role === rightSemantic.role) {
+    return {kind: 'same_region', score: 0.04};
+  }
+  return {kind: 'semantic_mismatch', score: -0.12};
+}
+
 function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
   // Equivalence compares like-for-like neutral regions. The parent joint pivot
   // is a structural anchor, not a replacement for a source bone's region.
@@ -442,6 +458,11 @@ function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
   // and a one-vertex coincidence cannot become a seed by itself.
   const combinedConfidence = 1 - (1 - geometryConfidence)
     * (1 - crossConfidence);
+  const semantic = semanticRelationshipFor(left, right,
+    gate.semanticBySourceBoneKey);
+  const semanticScore = semantic?.score || 0;
+  const semanticallyAdjustedConfidence = clamp(
+    combinedConfidence + semanticScore);
   const strongCrossEvidence = !!crossEvidence
     && crossEvidence.matchedVertexCount >= CROSS_SOURCE_STRONG_VERTEX_COUNT
     && crossEvidence.weightedMatchStrength
@@ -474,7 +495,10 @@ function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
     weightedMatchStrength: crossEvidence?.weightedMatchStrength || 0,
     geometryConfidence,
     crossConfidence,
-    combinedConfidence,
+    combinedConfidence: semanticallyAdjustedConfidence,
+    baseCombinedConfidence: combinedConfidence,
+    semanticKind: semantic?.kind || null,
+    semanticScore,
     strongCrossEvidence,
     geometrySeed,
     confidenceClass,
@@ -671,6 +695,10 @@ function diagnosticCandidate(candidate, decision, rejectionReason = null) {
     crossJaccard: candidate.crossEvidence?.crossJaccard ?? null,
     strongCrossEvidence: !!candidate.strongCrossEvidence,
     geometrySeed: !!candidate.geometrySeed,
+    ...(candidate.semanticKind ? {
+      semanticKind: candidate.semanticKind,
+      semanticScore: candidate.semanticScore || 0,
+    } : {}),
     confidenceClass: candidate.confidenceClass || 0,
     rootConflict: !!candidate.topology?.rootConflict,
     score: candidate.combinedConfidence ?? candidate.score,
@@ -699,7 +727,8 @@ function buildCrossSourceWeightEvidence(sourceRigs, referenceRadius) {
   return evidence;
 }
 
-function buildCandidates(evidenceByKey, referenceRadius, sourceRigs = []) {
+function buildCandidates(evidenceByKey, referenceRadius, sourceRigs = [],
+    options = {}) {
   const crossEvidenceByPair = buildCrossSourceWeightEvidence(
     sourceRigs, referenceRadius);
   const bySource = new Map();
@@ -719,6 +748,7 @@ function buildCandidates(evidenceByKey, referenceRadius, sourceRigs = []) {
           const candidate = candidateFor(left, right, evidenceByKey,
             crossEvidenceByPair, {
             referenceRadius,
+            semanticBySourceBoneKey: options.semanticBySourceBoneKey,
           });
           if (candidate) candidates.push(candidate);
         }
@@ -2047,7 +2077,7 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
   const referenceRadius = Math.max(EPSILON, number(options.modelReferenceRadius,
     modelReferenceRadius(evidenceByKey)));
   const candidateBuild = buildCandidates(
-    evidenceByKey, referenceRadius, rigs);
+    evidenceByKey, referenceRadius, rigs, options);
   const candidates = candidateBuild.candidates;
   const unionFind = new GuardedUnionFind([...evidenceByKey.keys()]);
   const equivalence = runEquivalencePasses(
@@ -2115,6 +2145,9 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
       sum + component.nodeIds.length, 0),
     unresolvedSourceKeys,
     modelReferenceRadius: referenceRadius,
+    ...(options.humanoidGuidanceDiagnostics ? {
+      semanticGuidance: {...options.humanoidGuidanceDiagnostics},
+    } : {}),
     joints: model.joints,
     acceptedEquivalences,
     acceptedAttachments: survivingAttachments,

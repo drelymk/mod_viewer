@@ -17,6 +17,12 @@ class SkinningSource:
     influence_count: int
     encoding: str
     bone_id_offset: int = 0
+    # WWMI can bind a per-vertex full VertexVG table to the compute remapper.
+    # When present, these IDs are authoritative and already use the model
+    # namespace; the ordinary Blend byte offset must not be applied.
+    vertex_vg_file: str | None = None
+    vertex_vg_stride: int = 16
+    bone_id_namespace: str = "model"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +66,8 @@ def normalize_skinning_source_file(value):
     return normalized
 
 
-def skinning_source_key(source_file, bone_id_offset=0):
+def skinning_source_key(source_file, bone_id_offset=0, vertex_vg_file=None,
+                        bone_id_namespace="model"):
     """Build the case-insensitive identity for one decoded skin namespace."""
     normalized = normalize_skinning_source_file(source_file)
     if normalized is None:
@@ -73,7 +80,12 @@ def skinning_source_key(source_file, bone_id_offset=0):
         return None
     if offset < 0:
         return None
-    return f"{normalized.casefold()}|offset={offset}"
+    key = f"{normalized.casefold()}|offset={offset}"
+    remap = normalize_skinning_source_file(vertex_vg_file)
+    namespace = str(bone_id_namespace or "model")
+    if remap and namespace != "model":
+        key += f"|namespace={namespace}|vertex-vg={remap.casefold()}"
+    return key
 
 
 def skinning_source_descriptor(source):
@@ -87,10 +99,18 @@ def skinning_source_descriptor(source):
         offset = int(source.bone_id_offset)
     except (TypeError, ValueError):
         return None
-    key = skinning_source_key(file, offset)
+    key = skinning_source_key(
+        file, offset, source.vertex_vg_file, source.bone_id_namespace)
     if key is None:
         return None
-    return {"key": key, "file": file, "bone_id_offset": offset}
+    descriptor = {"key": key, "file": file, "bone_id_offset": offset}
+    if source.vertex_vg_file and source.bone_id_namespace != "model":
+        descriptor.update({
+            "bone_id_namespace": source.bone_id_namespace,
+            "vertex_vg_source": normalize_skinning_source_file(
+                source.vertex_vg_file),
+        })
+    return descriptor
 
 
 def _format_supports_packed_weights(value):
@@ -99,8 +119,31 @@ def _format_supports_packed_weights(value):
             or "R8G8B8A8_UINT" in text)
 
 
+def _resolve_vertex_vg_resource(resource_name, resolve_vertex_info,
+                                influence_count):
+    """Resolve and validate the WWMI full VertexVG resource binding."""
+    if not resource_name:
+        return None, None
+    info = resolve_vertex_info(resource_name) or {}
+    filename = normalize_skinning_source_file(info.get("filename"))
+    expected_stride = influence_count * 2
+    try:
+        stride = int(info.get("stride", expected_stride))
+    except (TypeError, ValueError):
+        stride = 0
+    format_name = str(info.get("format") or "").upper()
+    valid_format = "R16_UINT" in format_name
+    if not filename or stride != expected_stride or not valid_format:
+        return None, "invalid_vertex_vg_remap"
+    return {
+        "filename": filename,
+        "stride": stride,
+        "format": info.get("format"),
+    }, None
+
+
 def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
-                            bone_id_offset=0):
+                            bone_id_offset=0, remap_resources=None):
     """Resolve one conservative Blend candidate from active ``vbN`` state.
 
     The caller supplies the resolver already used by draw-group assembly, so
@@ -145,17 +188,38 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
             unsupported.append(stride)
         if encoding is None:
             continue
+        remap_info, remap_error = (None, None)
+        if encoding.startswith("wwmi_"):
+            remap_name = (remap_resources or {}).get(35)
+            if not remap_name:
+                unsupported.append("missing_vertex_vg_remap")
+                continue
+            remap_info, remap_error = _resolve_vertex_vg_resource(
+                remap_name, resolve_vertex_info,
+                influence_count)
+            if remap_error:
+                unsupported.append(remap_error)
+                continue
         source = SkinningSource(
             file=filename, stride=stride,
             influence_count=influence_count, encoding=encoding,
-            bone_id_offset=bone_id_offset)
+            bone_id_offset=bone_id_offset,
+            vertex_vg_file=remap_info["filename"] if remap_info else None,
+            vertex_vg_stride=remap_info["stride"] if remap_info else 16,
+            bone_id_namespace=("wwmi_vertex_vg" if remap_info
+                               else "model"))
         candidates[(source.file, source.stride, source.encoding,
-                    source.bone_id_offset)] = source
+                    source.bone_id_offset, source.vertex_vg_file,
+                    source.vertex_vg_stride, source.bone_id_namespace)] = source
 
     if len(candidates) > 1:
         return None, "ambiguous_skinning_source"
     if candidates:
         return next(iter(candidates.values())), None
+    if "missing_vertex_vg_remap" in unsupported:
+        return None, "missing_vertex_vg_remap"
+    if "invalid_vertex_vg_remap" in unsupported:
+        return None, "invalid_vertex_vg_remap"
     if unsupported:
         return None, "unsupported_skinning_layout"
     return None, None
@@ -167,7 +231,7 @@ def _zero_record(indices, weights, offset, influence_count):
         struct.pack_into("<f", weights, offset + influence * 4, 0.0)
 
 
-def decode_skinning(source, raw_data, used_vertices):
+def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
     """Decode and compact one supported Blend stream.
 
     Malformed records are represented as safe zero-influence records and are
@@ -187,6 +251,12 @@ def decode_skinning(source, raw_data, used_vertices):
         raise ValueError(f"Unsupported skinning encoding: {source.encoding}")
 
     raw_data = bytes(raw_data)
+    if source.vertex_vg_file:
+        expected_stride = source.influence_count * 2
+        if (source.bone_id_namespace != "wwmi_vertex_vg"
+                or source.vertex_vg_stride != expected_stride):
+            raise ValueError("Invalid VertexVG remap descriptor.")
+        vertex_vg_data = bytes(vertex_vg_data or b"")
     used_vertices = tuple(used_vertices)
     count = len(used_vertices)
     item_bytes = source.influence_count * 4
@@ -196,6 +266,7 @@ def decode_skinning(source, raw_data, used_vertices):
     zero_weight = 0
     truncated = 0
     out_of_range = 0
+    vertex_vg_truncated = 0
     sums = []
     bone_ids = set()
 
@@ -233,6 +304,20 @@ def decode_skinning(source, raw_data, used_vertices):
                 "<I", raw_data, record_offset)[0],)
             values = (1.0,)
 
+        remapped_indices = None
+        if source.vertex_vg_file:
+            remap_offset = source_index * source.vertex_vg_stride
+            if (remap_offset < 0
+                    or remap_offset + source.vertex_vg_stride
+                    > len(vertex_vg_data)):
+                vertex_vg_truncated += 1
+                _zero_record(index_bytes, weight_bytes, output_offset,
+                             source.influence_count)
+                continue
+            remapped_indices = struct.unpack_from(
+                f"<{source.influence_count}H", vertex_vg_data,
+                remap_offset)
+
         if (not all(math.isfinite(value) and value >= 0 for value in values)
                 or any(value < 0 for value in decoded_indices)):
             invalid += 1
@@ -246,7 +331,9 @@ def decode_skinning(source, raw_data, used_vertices):
             zero_weight += 1
         for influence, (raw_bone, weight) in enumerate(
                 zip(decoded_indices, values)):
-            bone = int(raw_bone) + int(source.bone_id_offset)
+            bone = (int(remapped_indices[influence])
+                    if remapped_indices is not None
+                    else int(raw_bone) + int(source.bone_id_offset))
             struct.pack_into("<I", index_bytes,
                              output_offset + influence * 4, bone)
             struct.pack_into("<f", weight_bytes,
@@ -264,9 +351,15 @@ def decode_skinning(source, raw_data, used_vertices):
         "invalid_weight_vertices": invalid,
         "truncated_vertices": truncated,
         "out_of_range_vertices": out_of_range,
+        "vertex_vg_remap": bool(source.vertex_vg_file),
+        "vertex_vg_source": (normalize_skinning_source_file(
+            source.vertex_vg_file) if source.vertex_vg_file else None),
+        "vertex_vg_truncated_vertices": vertex_vg_truncated,
         "bone_id_namespace": "model",
         "bone_id_offset": int(source.bone_id_offset),
     }
+    if source.vertex_vg_file:
+        diagnostics["bone_id_namespace"] = source.bone_id_namespace
     return DecodedSkinning(
         vertex_count=count, influence_count=source.influence_count,
         indices=bytes(index_bytes), weights=bytes(weight_bytes),
@@ -282,6 +375,14 @@ def _error_for_draw(draw):
         return SkinningPreviewError(
             "unsupported_skinning_layout",
             "This Blend format is not supported by the experiment.")
+    if draw.skinning_error == "invalid_vertex_vg_remap":
+        return SkinningPreviewError(
+            "invalid_vertex_vg_remap",
+            "The WWMI VertexVG remap resource is invalid.")
+    if draw.skinning_error == "missing_vertex_vg_remap":
+        return SkinningPreviewError(
+            "skinning_remap_unavailable",
+            "The WWMI VertexVG remap binding is unavailable.")
     if draw.skinning_source is None:
         return SkinningPreviewError(
             "skinning_not_available",
@@ -304,6 +405,14 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
         raise SkinningPreviewError(
             "skinning_not_available",
             "The skin-weight buffer could not be found.")
+    remap_path = None
+    if draw.skinning_source.vertex_vg_file:
+        remap_path = safe_resource_path(
+            mod_dir, draw.skinning_source.vertex_vg_file)
+        if not remap_path or not os.path.exists(remap_path):
+            raise SkinningPreviewError(
+                "skinning_remap_unavailable",
+                "The WWMI VertexVG remap buffer could not be found.")
     prepared = _prepare_draw_vertices(
         draw, group, mod_dir=mod_dir, default_streams=default_streams,
         default_index_size=default_index_size, buffers=buffers,
@@ -314,11 +423,17 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
             "The rendered draw geometry could not be prepared.")
     decoded = decode_skinning(
         draw.skinning_source, buffers.raw(source_path),
-        prepared.used_vertices)
+        prepared.used_vertices,
+        (buffers.raw(remap_path) if draw.skinning_source.vertex_vg_file
+         else None))
     if decoded.diagnostics["truncated_vertices"]:
         raise SkinningPreviewError(
             "skinning_buffer_truncated",
             "The skin-weight buffer is truncated.")
+    if decoded.diagnostics["vertex_vg_truncated_vertices"]:
+        raise SkinningPreviewError(
+            "skinning_remap_truncated",
+            "The WWMI VertexVG remap buffer is truncated.")
     return decoded
 
 

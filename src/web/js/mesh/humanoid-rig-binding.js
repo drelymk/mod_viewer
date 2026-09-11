@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 
-// The control rig owns the semantic topology. ModelJoint edges are consulted
-// only when two explicitly mapped controls can claim the corresponding model
-// graph path; automatic heat/geometric inference remains the fallback.
+// The control rig owns the semantic topology. Explicitly mapped ModelJoints
+// own their source-connected descendants until another mapped control or a
+// mapped path takes ownership; automatic heat/geometric inference remains the
+// fallback for everything else.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
   {id: 'torso', role: 'torso', start: 'pelvis', end: 'chest'},
   {id: 'neck', role: 'torso', start: 'chest', end: 'neck'},
@@ -38,6 +39,18 @@ const DEFAULT_SECONDARY_DISTANCE_RATIO = 0.24;
 const DEFAULT_AMBIGUITY_MARGIN_RATIO = 0.025;
 const TERMINAL_EXTENSION_RATIO = 0.15;
 const CENTRAL_DRIVER_IDS = new Set(['torso', 'neck', 'head']);
+const COMPLETE_MAPPED_HEAT_CONTROLS = Object.freeze({
+  left_arm: Object.freeze(['leftShoulder', 'leftElbow', 'leftHand']),
+  right_arm: Object.freeze(['rightShoulder', 'rightElbow', 'rightHand']),
+  left_leg: Object.freeze(['leftHip', 'leftKnee', 'leftFoot']),
+  right_leg: Object.freeze(['rightHip', 'rightKnee', 'rightFoot']),
+});
+const HEAT_DRIVER_ROLES = Object.freeze({
+  left_upper_arm: 'left_arm', left_lower_arm: 'left_arm',
+  right_upper_arm: 'right_arm', right_lower_arm: 'right_arm',
+  left_upper_leg: 'left_leg', left_lower_leg: 'left_leg',
+  right_upper_leg: 'right_leg', right_lower_leg: 'right_leg',
+});
 
 function numberId(value) {
   const result = Number(value);
@@ -259,6 +272,50 @@ function isExactArticulationTie(candidates, best) {
       && candidate.projection > .95);
 }
 
+/**
+ * Classify a rest-space point against the fitted humanoid driver corridors.
+ *
+ * The binding path intentionally keeps this classifier private because it
+ * also applies binding-specific distance gates.  The optional guided ModelRig
+ * builder uses the same spatial semantics, but does not need a ModelJoint or
+ * a heat-binding result yet.  Returning the candidate list makes ambiguity a
+ * visible, conservative outcome instead of silently forcing a classification.
+ */
+export function classifyHumanoidPoint(pointValue, controlRig, options = {}) {
+  const point = vector(pointValue);
+  const height = Math.max(Number(controlRig?.frame?.height) || 0, EPSILON);
+  const drivers = buildHumanoidDriverFrames(controlRig);
+  const candidates = sortedCandidates(point, drivers, height, controlRig);
+  const best = articulationPreferredCandidate(candidates);
+  const maximumDistanceRatio = Number.isFinite(
+    Number(options.maximumDistanceRatio))
+    ? Number(options.maximumDistanceRatio) : DEFAULT_SECONDARY_DISTANCE_RATIO;
+  const ambiguityMargin = Number.isFinite(Number(options.ambiguityMarginRatio))
+    ? Number(options.ambiguityMarginRatio) : DEFAULT_AMBIGUITY_MARGIN_RATIO;
+  if (!best) {
+    return {
+      classified: false, confident: false, confidence: 'low',
+      reason: 'no_semantic_candidate', candidates: [],
+    };
+  }
+  const ambiguous = isAmbiguous(candidates, ambiguityMargin)
+    && !isExactArticulationTie(candidates, best);
+  const withinDistance = best.distanceRatio <= maximumDistanceRatio;
+  const confidence = confidenceForDistance(best.distanceRatio);
+  const classified = withinDistance && !ambiguous;
+  return {
+    ...best,
+    role: HUMANOID_DRIVER_SEGMENTS.find(segment =>
+      segment.id === best.driverId)?.role || null,
+    confidence,
+    classified,
+    confident: classified && confidence !== 'low',
+    reason: !withinDistance ? 'outside_semantic_corridor'
+      : ambiguous ? 'ambiguous_semantic_candidate' : null,
+    candidates: candidates.slice(0, 4).map(candidate => ({...candidate})),
+  };
+}
+
 function directBindingFor(modelRig, jointId, candidate, driverMap, metadata = {}) {
   const restJointWorld = restJointWorldMatrix(modelRig, jointId);
   const driver = driverMap.get(candidate.driverId);
@@ -323,6 +380,23 @@ function mappedControlEntries(controlMappings) {
     invalidJointIds,
     conflicts,
   };
+}
+
+function completeMappedHeatRoles(entries) {
+  const mappedControls = new Set(entries.map(entry => entry.controlKey));
+  return new Set(Object.entries(COMPLETE_MAPPED_HEAT_CONTROLS)
+    .filter(([, controls]) => controls.every(controlKey =>
+      mappedControls.has(controlKey)))
+    .map(([role]) => role));
+}
+
+function heatRoleForAssignment(assignment) {
+  return assignment?.limbRole || HEAT_DRIVER_ROLES[assignment?.driverId]
+    || null;
+}
+
+function heatAssignmentSuppressed(assignment, suppressedRoles) {
+  return suppressedRoles.has(heatRoleForAssignment(assignment));
 }
 
 function mappedPathCandidates(modelRig, controlMappings) {
@@ -447,6 +521,77 @@ function componentChildren(modelRig, jointId) {
     .map(numberId).filter(Number.isInteger).sort((left, right) => left - right);
 }
 
+function sourceChildIds(modelRig, jointId) {
+  const children = componentChildren(modelRig, jointId);
+  const componentId = modelRig?.componentByJointId?.get?.(Number(jointId));
+  const component = Number.isInteger(Number(componentId))
+    ? modelRig?.components?.[Number(componentId)] : null;
+  const edges = component?.edges;
+  if (!Array.isArray(edges) || !edges.length) return children;
+  const sourcePairs = new Set(edges.filter(edge =>
+    String(edge?.relationshipType || '').toLowerCase() !== 'attachment')
+    .map(edge => {
+    const left = numberId(edge?.jointA ?? edge?.boneA);
+    const right = numberId(edge?.jointB ?? edge?.boneB);
+    return left === null || right === null ? null
+      : `${Math.min(left, right)}:${Math.max(left, right)}`;
+  }).filter(Boolean));
+  return children.filter(child => sourcePairs.has(
+    `${Math.min(Number(jointId), child)}:${Math.max(Number(jointId), child)}`));
+}
+
+function mappedDescendantOwnership(modelRig, jointId, driverId, drivers,
+    controlRig, height, secondaryLimit, ambiguityMargin) {
+  const point = pointForJoint(modelRig, jointId);
+  const driver = drivers.get(driverId);
+  if (!point || !driver) return 'unknown';
+
+  // A mapped ancestor must retain unclassified helper/cloth descendants. Only
+  // stop when another driver is a clear, unambiguous semantic owner.
+  const candidates = sortedCandidates(point, drivers, height, controlRig);
+  const best = articulationPreferredCandidate(candidates);
+  const ambiguous = isAmbiguous(candidates, ambiguityMargin)
+    && !isExactArticulationTie(candidates, best);
+  const confidentlyDifferent = !ambiguous
+    && best && best.driverId !== driverId
+    && best.distanceRatio <= secondaryLimit
+    && confidenceForDistance(best.distanceRatio) !== 'low';
+  if (confidentlyDifferent) return 'different';
+
+  const ownCandidate = candidateForPoint(point, driver, height);
+  if (semanticCandidateAllowed(point, driver, ownCandidate, controlRig, height)
+      && ownCandidate.distanceRatio <= secondaryLimit) {
+    return 'same';
+  }
+  return 'unknown';
+}
+
+function mappedDescendantJointIds(modelRig, rootId, mappedJointIds,
+    jointBindings, driverId, drivers, controlRig, height, secondaryLimit,
+    ambiguityMargin) {
+  const descendants = [];
+  const visited = new Set([Number(rootId)]);
+  const queue = sourceChildIds(modelRig, rootId);
+  while (queue.length) {
+    const jointId = queue.shift();
+    if (visited.has(jointId)) continue;
+    visited.add(jointId);
+    // An explicitly mapped control is a boundary. Its own mapping will walk
+    // its descendants with the correct, more specific driver.
+    if (mappedJointIds.has(jointId)) continue;
+    const existing = jointBindings.get(jointId);
+    if (existing?.driverId && existing.driverId !== driverId) continue;
+    const ownership = mappedDescendantOwnership(modelRig, jointId, driverId,
+      drivers, controlRig, height, secondaryLimit, ambiguityMargin);
+    if (ownership === 'different') continue;
+    if (!existing) descendants.push(jointId);
+    sourceChildIds(modelRig, jointId).forEach(child => {
+      if (!visited.has(child)) queue.push(child);
+    });
+  }
+  return descendants;
+}
+
 function unboundSubtree(modelRig, rootId, directIds) {
   const result = [];
   const queue = [rootId];
@@ -528,14 +673,24 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
   const candidatesByJointId = new Map();
   let ambiguousBindingCount = 0;
   const mapped = mappedControlEntries(controlMappings);
+  const completeMappedRoles = completeMappedHeatRoles(mapped.entries);
   const mappedPaths = mappedPathCandidates(modelRig, controlMappings);
+  const mappedJointIds = new Set(mapped.entries.map(entry => entry.jointId));
   const sourceBoneAssignments = new Map();
+  let mappedDescendantJointCount = 0;
   if (heatBinding?.sourceBoneAssignments instanceof Map) {
-    heatBinding.sourceBoneAssignments.forEach((assignment, sourceKey) =>
-      sourceBoneAssignments.set(sourceKey, assignment));
+    heatBinding.sourceBoneAssignments.forEach((assignment, sourceKey) => {
+      if (!heatAssignmentSuppressed(assignment, completeMappedRoles)) {
+        sourceBoneAssignments.set(sourceKey, assignment);
+      }
+    });
   } else {
     Object.entries(heatBinding?.sourceBoneAssignments || {}).forEach(
-      ([sourceKey, assignment]) => sourceBoneAssignments.set(sourceKey, assignment));
+      ([sourceKey, assignment]) => {
+        if (!heatAssignmentSuppressed(assignment, completeMappedRoles)) {
+          sourceBoneAssignments.set(sourceKey, assignment);
+        }
+      });
   }
 
   // A manually snapped control owns its resolved ModelJoint before either
@@ -596,13 +751,58 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
     });
   });
 
-  // Heat ownership is authoritative for all eight limb drivers. It is
-  // automatic inference only; explicit mappings and mapped graph paths have
-  // already claimed their endpoints/interiors above.
+  // A mapped control is an authoritative anchor for its source-connected
+  // descendants. Walk through same-driver mapped path joints, but stop at a
+  // different mapped control so each explicit control remains a boundary.
+  // Attachment edges are excluded by sourceChildIds; accessories retain the
+  // existing conservative binding behavior.
+  mapped.entries.forEach(({controlKey, jointId}) => {
+    const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
+    const driver = drivers.get(driverId);
+    if (!driver || jointId === null) return;
+    const descendants = mappedDescendantJointIds(modelRig, jointId,
+      mappedJointIds, jointBindings, driverId, drivers, controlRig, height,
+      secondaryLimit, ambiguityMargin);
+    descendants.forEach(descendantId => {
+      if (jointBindings.has(descendantId)) return;
+      const restJointWorld = restJointWorldMatrix(modelRig, descendantId);
+      if (!restJointWorld) return;
+      const sourceMembers = sourceMembersForJoint(modelRig, descendantId);
+      const localMatrix = driver.matrix.clone().invert().multiply(restJointWorld);
+      jointBindings.set(descendantId, {
+        type: 'driver', driverId, localMatrix, restJointWorld,
+        distance: 0, distanceRatio: 0, rawProjection: 0, projection: 0,
+        endpointDistanceRatio: 0, score: 0, confidence: 'high',
+        bindingMethod: 'mapped_control_descendant',
+        controlKey,
+        mappedRootJointId: jointId,
+        sourceBoneKeys: sourceMembers.map(member => member.sourceBoneKey).sort(),
+      });
+      sourceMembers.forEach(member => sourceBoneAssignments.set(
+        member.sourceBoneKey, sourceAssignmentForMember(member, driverId, {
+          limbRole: sourceRoleForControl(controlKey),
+          progress: sourceProgress(controlKey),
+          segmentIndex: /Elbow|Knee|Hand|Foot/.test(controlKey) ? 1 : 0,
+          bindingMethod: 'mapped_control_descendant',
+          controlKey,
+          mappedRootJointId: jointId,
+          pathMember: false,
+          branchMember: true,
+        })));
+      mappedDescendantJointCount += 1;
+    });
+  });
+
+  // Heat ownership is the fallback for limb drivers that do not have a
+  // complete mapped control chain. Explicit mappings and mapped graph paths
+  // have already claimed their endpoints/interiors; a complete mapped chain
+  // also disables heat for that limb so unrelated nearby source bones cannot
+  // pull the mapped limb into the torso.
   allJointIds(modelRig).forEach(jointId => {
     if (jointBindings.has(jointId)) return;
     const assignment = valueFor(heatBinding?.modelJointAssignments, jointId);
     if (!assignment?.driverId || !drivers.has(assignment.driverId)) return;
+    if (heatAssignmentSuppressed(assignment, completeMappedRoles)) return;
     const point = pointForJoint(modelRig, jointId);
     const driver = drivers.get(assignment.driverId);
     const restJointWorld = restJointWorldMatrix(modelRig, jointId);
@@ -718,10 +918,12 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
       directDistanceRatio: directLimit,
       secondaryDistanceRatio: secondaryLimit,
       ambiguityMarginRatio: ambiguityMargin,
+      completeMappedHeatRoles: [...completeMappedRoles].sort(),
       candidateCount: candidatesByJointId.size,
       mappedPathCount: mappedPaths.candidates.length,
       mappedPathJointCount: mappedPaths.candidates.reduce((sum, candidate) =>
         sum + Math.max(0, candidate.path.length - 2), 0),
+      mappedDescendantJointCount,
       mappedPathConflicts: mappedPaths.conflicts,
       heatBinding: heatBinding?.diagnostics || null,
       heatConflicts: [...(heatBinding?.conflicts || [])],

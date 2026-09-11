@@ -32,6 +32,7 @@ class _ScannedSections(dict):
     def __init__(self, *args, texture_override_index=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.texture_override_index = texture_override_index
+        self.global_compute_resources = {}
 
 
 def _run_target_name(line, section_lookup):
@@ -334,6 +335,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                             info, role, resource, cond_stack,
                             source=("slot" if structural_role
                                     else "legacy_slot"))
+            match = re.match(
+                r"cs-t(\d+)\s*=\s*(?:(?:ref|copy)\s+)?(\S+)",
+                line, re.I)
+            if match:
+                slot = int(match.group(1))
+                resource = match.group(2)
+                info["_cur_compute_resources"][slot] = (
+                    None if resource.lower() == "null" else resource)
             match = re.match(r"vb(\d+)\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if match:
                 slot = int(match.group(1))
@@ -382,6 +391,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     geometry_match=geometry_match(info),
                     skinning_bone_offset=info.get(
                         "_cur_skinning_bone_offset", 0),
+                    skinning_remap_resources=dict(
+                        info.get("_cur_compute_resources") or {}),
                     slot_textures=slot_snapshot(info),
                 ))
             semantic = re.match(
@@ -422,6 +433,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},
+            "_cur_compute_resources": {},
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,
             "_cur_skinning_bone_offset": 0,
@@ -445,6 +457,19 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 "_diffuse_history", "_aux_maps", "_texture_provenance"):
             info.pop(key, None)
         scanned[name] = info
+    global_compute_candidates = {}
+    for name, info in scanned.items():
+        if not name.lower().startswith("commandlist"):
+            continue
+        for slot, resource in (info.get("_cur_compute_resources") or {}).items():
+            if resource is None:
+                continue
+            global_compute_candidates.setdefault(slot, set()).add(resource)
+    scanned.global_compute_resources = {
+        slot: next(iter(candidates))
+        for slot, candidates in global_compute_candidates.items()
+        if len(candidates) == 1
+    }
     return scanned
 
 

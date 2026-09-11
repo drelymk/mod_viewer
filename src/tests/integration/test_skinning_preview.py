@@ -60,6 +60,57 @@ stride = 20
     return ini
 
 
+def _write_wwmi_remap_mod(tmp_path):
+    ini = tmp_path / "wwmi.ini"
+    ini.write_text(
+        """[TextureOverrideBodyBlend]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyBlend
+vb2 = ResourceBodyTexcoord
+run = CommandListRemap
+drawindexed = 3, 0, 0
+
+[CommandListRemap]
+cs-t35 = ref ResourceBlendRemapVertexVGBuffer
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body.pos
+stride = 12
+
+[ResourceBodyBlend]
+filename = body.blend
+format = DXGI_FORMAT_R8_UINT
+stride = 16
+
+[ResourceBodyTexcoord]
+filename = body.tc
+stride = 20
+
+[ResourceBlendRemapVertexVGBuffer]
+filename = body.vertex_vg
+format = DXGI_FORMAT_R16_UINT
+stride = 16
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
+    (tmp_path / "body.pos").write_bytes(b"".join(
+        struct.pack("<3f", float(i), 0., 0.) for i in range(3)))
+    (tmp_path / "body.tc").write_bytes(b"\0" * 20 * 3)
+    (tmp_path / "body.blend").write_bytes(b"".join(
+        bytes([3] * 8 + [255, 128, 0, 0, 0, 0, 0, 0])
+        for _ in range(3)))
+    (tmp_path / "body.vertex_vg").write_bytes(b"".join(
+        struct.pack("<8H", 3, 259, 0, 0, 0, 0, 0, 0)
+        for _ in range(3)))
+    return ini
+
+
 def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch):
     ini = _write_mod(tmp_path)
     sections = merge_sections([str(ini)])
@@ -105,6 +156,47 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
     assert struct.unpack_from("<4I", published["blob"], 0) == (7, 8, 9, 0)
     assert struct.unpack_from("<4f", published["blob"], 4 * 4 * 4) == pytest.approx(
         (.6, .3, .1, 0.))
+
+
+def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
+        tmp_path, monkeypatch):
+    ini = _write_wwmi_remap_mod(tmp_path)
+    sections = merge_sections([str(ini)])
+    groups = build_draw_groups(sections, extract_resources(sections))
+    geometry = GeometryBlob()
+    rendered = build_mesh_result(groups, str(tmp_path), geometry=geometry)
+    assert rendered.meshes["BodyBlend-1"]["skinning_available"] is True
+    published = {}
+
+    def publish(blob, *, replace=True):
+        published["blob"] = bytes(blob)
+        published["replace"] = replace
+        return "/geometry/wwmi-skin-test"
+
+    context = SimpleNamespace(
+        mod_dir=str(tmp_path), ini_paths=[str(ini)], docs={}, metadata={},
+        asset_folders=[])
+    preview = ModPreview(_Access())
+    monkeypatch.setattr(
+        preview, "authoritative_context",
+        lambda _path: (str(tmp_path), {}, {}, context))
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.publish_geometry", publish)
+
+    result = preview.get_model_skinning_preview(str(tmp_path))
+    entry = result["meshes"]["BodyBlend-1"]
+
+    assert result["status"] == "ok"
+    assert entry["bone_ids"] == [3, 259]
+    assert entry["diagnostics"]["bone_id_namespace"] == "wwmi_vertex_vg"
+    assert entry["diagnostics"]["vertex_vg_remap"] is True
+    assert entry["diagnostics"]["vertex_vg_source"] == "body.vertex_vg"
+    assert entry["diagnostics"]["vertex_vg_truncated_vertices"] == 0
+    assert entry["source"]["bone_id_namespace"] == "wwmi_vertex_vg"
+    assert struct.unpack_from("<8I", published["blob"], 0) == (
+        3, 259, 0, 0, 0, 0, 0, 0)
+    assert struct.unpack_from("<8f", published["blob"], 3 * 8 * 4) == pytest.approx(
+        (1., 128 / 255, 0., 0., 0., 0., 0., 0.))
 
 
 def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
