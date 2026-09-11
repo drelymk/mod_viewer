@@ -852,13 +852,19 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
     }""")
     assert result["noSelection"]["controlsCreated"] is False
     assert result["root"]["controlsAttached"] is False
+    assert result["root"]["selectedJointIndicatorVisible"] is True
+    assert result["root"]["selectedJointIndicatorPosition"] == pytest.approx(
+        [.5, .5, 0])
     assert result["rootAgain"]["controlsAttached"] is False
+    assert result["rootAgain"]["selectedJointIndicatorVisible"] is True
     assert result["nonRoot"]["controlsCreated"] is True
     assert result["nonRoot"]["controlsAttached"] is True
+    assert result["nonRoot"]["selectedJointIndicatorVisible"] is True
     assert result["nonRoot"]["helperInScene"] is True
     assert result["nonRoot"]["controlsCreateCount"] == 1
     assert result["cleared"]["proxyVisible"] is False
     assert result["cleared"]["controlsAttached"] is False
+    assert result["cleared"]["selectedJointIndicatorVisible"] is False
     assert result["cleared"]["controlsCreateCount"] == 1
     assert result["reselected"]["proxyVisible"] is True
     assert result["reselected"]["controlsAttached"] is True
@@ -885,9 +891,11 @@ def test_rig_overlay_controls_detach_for_root_but_survive_hidden_overlay(module_
     assert result["arcballActions"] == [["unset", 0], ["set", "ROTATE", 0]]
     assert result["picking"]["controlsAttached"] is False
     assert result["picking"]["staticVisible"] is True
+    assert result["picking"]["selectedJointIndicatorVisible"] is False
     assert result["picking"]["arcballEnabled"] is True
     assert result["picked"]["controlsAttached"] is True
     assert result["picked"]["staticVisible"] is False
+    assert result["picked"]["selectedJointIndicatorVisible"] is True
     assert result["picked"]["arcballEnabled"] is True
     assert result["interactionDuringGizmo"] is True
     assert result["interactionAfterGizmo"] is False
@@ -3600,6 +3608,137 @@ def test_selected_weight_topology_filters_weak_edges_and_pivots_synthetic_roots(
     }
 
 
+def test_structural_locality_filters_remote_tail_bridges_and_preserves_edges(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const relationship = (boneA, boneB, jointCenter, options = {}) => ({
+        boneA, boneB, sharedVertexCount: 4, productOverlap: 1,
+        minOverlap: 4, containment: .4, jaccard: .2, treeEdgeScore: .4,
+        jointCenter,
+        aDominantSharedSupport: options.aDominantSharedSupport ?? 1,
+        bDominantSharedSupport: options.bDominantSharedSupport ?? 1,
+        dominanceEvidenceAvailable: true,
+      });
+      const nodesFor = (centers, radius = 1) => centers.map(([boneId, x]) => ({
+        boneId, totalWeight: 10, affectedVertexCount: 10,
+        weightedCenter: [x, 0, 0], weightedRadius: radius,
+      }));
+      const decision = (nodes, edge, options = {}) =>
+        rig.candidateRelationshipDiagnostics({
+          nodes, relationships: [edge], boundingSphereRadius: 10,
+        }, options)[0];
+      const remoteNodes = nodesFor([[1, 0], [2, 10]]);
+      const remote = decision(remoteNodes,
+        relationship(1, 2, [9, 0, 0]));
+      const longNodes = nodesFor([[1, 0], [2, 10]], 4);
+      const long = decision(longNodes,
+        relationship(1, 2, [5, 0, 0]));
+      const helperNodes = nodesFor([[1, 0], [2, .2]], 0);
+      const helper = decision(helperNodes,
+        relationship(1, 2, [.1, 0, 0]));
+
+      const chainNodes = nodesFor([
+        [396, 0], [143, 1], [145, 2], [187, 3], [294, 4],
+      ]);
+      const chainMember = (a, b, center, aSupport, bSupport) => ({
+        nodes: chainNodes,
+        boundingSphereRadius: 10,
+        relationships: [relationship(a, b, center, {
+          aDominantSharedSupport: aSupport,
+          bDominantSharedSupport: bSupport,
+        })],
+      });
+      const chainGraphs = [
+        chainMember(396, 143, [.5, 0, 0], 1, 1),
+        chainMember(143, 145, [1.5, 0, 0], 1, 1),
+        chainMember(187, 294, [3.5, 0, 0], 1, 1),
+        chainMember(145, 187, [2.5, 0, 0], 1, 1),
+        chainMember(145, 187, [2.5, 0, 0], 1, 1),
+        chainMember(145, 187, [2.5, 0, 0], 0, 1),
+        chainMember(145, 187, [2.5, 0, 0], 0, 1),
+        chainMember(145, 187, [2.5, 0, 0], 0, 1),
+      ];
+      const aggregate = rig.aggregateInfluenceGraphs(chainGraphs);
+      const decisions = rig.candidateRelationshipDiagnostics(aggregate);
+      const pair = (left, right) => {
+        const a = Math.min(left, right), b = Math.max(left, right);
+        return decisions.find(item => item.relationship.boneA === a
+          && item.relationship.boneB === b);
+      };
+      const forest = rig.buildInferredRigForest(aggregate, {
+        rootOverrides: new Map([[0, 396], [1, 294]]),
+      });
+      const selectedPairs = forest.edges.map(edge =>
+        `${Math.min(edge.boneA, edge.boneB)}:${Math.max(edge.boneA, edge.boneB)}`)
+        .sort();
+
+      const strongMemberGraphs = [
+        chainMember(396, 143, [.5, 0, 0], 10, 10),
+        chainMember(396, 143, [.5, 0, 0], 0, 1),
+        chainMember(396, 143, [.5, 0, 0], 0, 1),
+      ];
+      const strongAggregate = rig.aggregateInfluenceGraphs(strongMemberGraphs);
+      const strongDecision = rig.candidateRelationshipDiagnostics(
+        strongAggregate)[0];
+      return {
+        constants: {
+          maxJointReach: rig.MAX_JOINT_REACH,
+          maxSupportSeparation: rig.MAX_SUPPORT_SEPARATION,
+        },
+        remote: {
+          accepted: remote.accepted, reason: remote.reason,
+          maxJointReach: remote.relationship.maxJointReach,
+          supportSeparation: remote.relationship.supportSeparation,
+        },
+        long: {accepted: long.accepted, reason: long.reason,
+          structuralLocality: long.relationship.structuralLocality},
+        helper: {accepted: helper.accepted, reason: helper.reason,
+          maxJointReach: helper.relationship.maxJointReach},
+        chain: {
+          pair145187: {accepted: pair(145, 187).accepted,
+            reason: pair(145, 187).reason,
+            memberDominanceRatio: pair(145, 187).memberDominanceRatio},
+          pair396143: pair(396, 143).accepted,
+          pair143145: pair(143, 145).accepted,
+          pair187294: pair(187, 294).accepted,
+          selectedPairs,
+        },
+        strongMemberRelationship: {
+          accepted: strongDecision.accepted,
+          reason: strongDecision.reason,
+        },
+      };
+    }""")
+    assert result["remote"]["accepted"] is False
+    assert result["remote"]["reason"] == "remote_tail_bridge"
+    assert result["remote"]["maxJointReach"] > result["constants"]["maxJointReach"]
+    assert result["remote"]["supportSeparation"] > result["constants"]["maxSupportSeparation"]
+    assert result["long"] == {
+        "accepted": True,
+        "reason": None,
+        "structuralLocality": pytest.approx(4 / 9),
+    }
+    assert result["helper"]["accepted"] is True
+    assert result["helper"]["reason"] is None
+    assert result["chain"] == {
+        "pair145187": {
+            "accepted": False,
+            "reason": "weak_transition",
+            "memberDominanceRatio": pytest.approx(.4),
+        },
+        "pair396143": True,
+        "pair143145": True,
+        "pair187294": True,
+        "selectedPairs": ["143:145", "143:396", "187:294"],
+    }
+    assert result["strongMemberRelationship"] == {
+        "accepted": True,
+        "reason": None,
+    }
+
+
 def test_model_bone_stats_sum_same_ids_before_averaging(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -4841,6 +4980,9 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
         controlMappings: mappingsFor([
           ['leftShoulder', 10], ['leftElbow', 14], ['leftHand', 12],
         ])});
+      const mappedHandDescendants = buildHumanoidRigBinding({
+        controlRig, modelRig: model, heatBinding: heatFor(model),
+        controlMappings: mappingsFor([['leftHand', 12]])});
       const duplicateControl = buildHumanoidRigBinding({controlRig,
         modelRig: model, heatBinding: heatFor(model),
         controlMappings: mappingsFor([
@@ -4861,6 +5003,18 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
           pathCount: authoritative.diagnostics.mappedPathCount,
         },
         onlyStart: entry(onlyStart, 11),
+        mappedHandDescendants: {
+          bindings: [13, 14, 20].map(jointId => entry(
+            mappedHandDescendants, jointId)),
+          sourceDrivers: [13, 14, 20].map(jointId =>
+            mappedHandDescendants.sourceBoneAssignments.get(
+              `body#bone=${jointId}`)?.driverId),
+          sourceMethods: [13, 14, 20].map(jointId =>
+            mappedHandDescendants.sourceBoneAssignments.get(
+              `body#bone=${jointId}`)?.bindingMethod),
+          descendantCount: mappedHandDescendants.diagnostics
+            .mappedDescendantJointCount,
+        },
         differentComponents: {
           interior: entry(differentComponents, 11),
           pathCount: differentComponents.diagnostics.mappedPathCount,
@@ -4888,9 +5042,10 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
     ] * 3
     assert result["authoritative"]["elbow"]["bindingMethod"] == \
         "manual_control_mapping"
-    assert result["authoritative"]["branch"]["bindingMethod"] == \
-        "heat_connectivity"
-    assert result["authoritative"]["branch"]["driverId"] == "right_upper_arm"
+    assert result["authoritative"]["branch"] == {
+        "driverId": "left_upper_arm",
+        "bindingMethod": "mapped_control_descendant",
+        "segmentStartControl": None, "segmentEndControl": None}
     assert result["authoritative"]["rightLegInterior"] == {
         "driverId": "right_lower_leg", "bindingMethod": "mapped_joint_path",
         "segmentStartControl": "rightKnee", "segmentEndControl": "rightFoot"}
@@ -4902,12 +5057,13 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
         "left_upper_arm", "left_lower_arm", "head", "right_lower_leg"]
     assert result["authoritative"]["sourceRoles"] == ["right_leg", "torso"]
     assert result["authoritative"]["pathCount"] == 3
-    assert result["onlyStart"]["bindingMethod"] == "heat_connectivity"
+    assert result["onlyStart"]["bindingMethod"] == \
+        "mapped_control_descendant"
     assert result["differentComponents"]["interior"]["bindingMethod"] == \
-        "heat_connectivity"
+        "mapped_control_descendant"
     assert result["differentComponents"]["pathCount"] == 0
     assert result["mappedInteriorControl"]["beforeInterior"]["bindingMethod"] == \
-        "heat_connectivity"
+        "mapped_control_descendant"
     assert result["mappedInteriorControl"]["afterInterior"] == {
         "driverId": "left_lower_arm", "bindingMethod": "mapped_joint_path",
         "segmentStartControl": "leftElbow", "segmentEndControl": "leftHand"}
@@ -4917,6 +5073,16 @@ def test_humanoid_mapped_model_joint_paths_override_heat_and_respect_graph_bound
         "heat_connectivity"
     assert "conflicting_control_mappings" in \
         result["duplicateControl"]["conflictTypes"]
+    assert result["mappedHandDescendants"] == {
+        "bindings": [
+            {"driverId": "left_lower_arm",
+             "bindingMethod": "mapped_control_descendant",
+             "segmentStartControl": None, "segmentEndControl": None},
+        ] * 3,
+        "sourceDrivers": ["left_lower_arm"] * 3,
+        "sourceMethods": ["mapped_control_descendant"] * 3,
+        "descendantCount": 3,
+    }
 
 
 def test_humanoid_heat_binding_follows_overlap_chain_and_rejects_torso_leg_branches(

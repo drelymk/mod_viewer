@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 
-// The control rig owns the semantic topology. ModelJoint edges are consulted
-// only when two explicitly mapped controls can claim the corresponding model
-// graph path; automatic heat/geometric inference remains the fallback.
+// The control rig owns the semantic topology. Explicitly mapped ModelJoints
+// own their source-connected descendants until another mapped control or a
+// mapped path takes ownership; automatic heat/geometric inference remains the
+// fallback for everything else.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
   {id: 'torso', role: 'torso', start: 'pelvis', end: 'chest'},
   {id: 'neck', role: 'torso', start: 'chest', end: 'neck'},
@@ -491,6 +492,46 @@ function componentChildren(modelRig, jointId) {
     .map(numberId).filter(Number.isInteger).sort((left, right) => left - right);
 }
 
+function sourceChildIds(modelRig, jointId) {
+  const children = componentChildren(modelRig, jointId);
+  const componentId = modelRig?.componentByJointId?.get?.(Number(jointId));
+  const component = Number.isInteger(Number(componentId))
+    ? modelRig?.components?.[Number(componentId)] : null;
+  const edges = component?.edges;
+  if (!Array.isArray(edges) || !edges.length) return children;
+  const sourcePairs = new Set(edges.filter(edge =>
+    edge?.relationshipType !== 'attachment').map(edge => {
+    const left = numberId(edge?.jointA ?? edge?.boneA);
+    const right = numberId(edge?.jointB ?? edge?.boneB);
+    return left === null || right === null ? null
+      : `${Math.min(left, right)}:${Math.max(left, right)}`;
+  }).filter(Boolean));
+  return children.filter(child => sourcePairs.has(
+    `${Math.min(Number(jointId), child)}:${Math.max(Number(jointId), child)}`));
+}
+
+function mappedDescendantJointIds(modelRig, rootId, mappedJointIds,
+    jointBindings, driverId) {
+  const descendants = [];
+  const visited = new Set([Number(rootId)]);
+  const queue = sourceChildIds(modelRig, rootId);
+  while (queue.length) {
+    const jointId = queue.shift();
+    if (visited.has(jointId)) continue;
+    visited.add(jointId);
+    // An explicitly mapped control is a boundary. Its own mapping will walk
+    // its descendants with the correct, more specific driver.
+    if (mappedJointIds.has(jointId)) continue;
+    const existing = jointBindings.get(jointId);
+    if (existing?.driverId && existing.driverId !== driverId) continue;
+    if (!existing) descendants.push(jointId);
+    sourceChildIds(modelRig, jointId).forEach(child => {
+      if (!visited.has(child)) queue.push(child);
+    });
+  }
+  return descendants;
+}
+
 function unboundSubtree(modelRig, rootId, directIds) {
   const result = [];
   const queue = [rootId];
@@ -573,7 +614,9 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
   let ambiguousBindingCount = 0;
   const mapped = mappedControlEntries(controlMappings);
   const mappedPaths = mappedPathCandidates(modelRig, controlMappings);
+  const mappedJointIds = new Set(mapped.entries.map(entry => entry.jointId));
   const sourceBoneAssignments = new Map();
+  let mappedDescendantJointCount = 0;
   if (heatBinding?.sourceBoneAssignments instanceof Map) {
     heatBinding.sourceBoneAssignments.forEach((assignment, sourceKey) =>
       sourceBoneAssignments.set(sourceKey, assignment));
@@ -637,6 +680,47 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
             segmentEndControl: segment.end,
             bindingMethod: 'mapped_joint_path',
           })));
+    });
+  });
+
+  // A mapped control is an authoritative anchor for its source-connected
+  // descendants. Walk through same-driver mapped path joints, but stop at a
+  // different mapped control so each explicit control remains a boundary.
+  // Attachment edges are excluded by sourceChildIds; accessories retain the
+  // existing conservative binding behavior.
+  mapped.entries.forEach(({controlKey, jointId}) => {
+    const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
+    const driver = drivers.get(driverId);
+    if (!driver || jointId === null) return;
+    const descendants = mappedDescendantJointIds(modelRig, jointId,
+      mappedJointIds, jointBindings, driverId);
+    descendants.forEach(descendantId => {
+      if (jointBindings.has(descendantId)) return;
+      const restJointWorld = restJointWorldMatrix(modelRig, descendantId);
+      if (!restJointWorld) return;
+      const sourceMembers = sourceMembersForJoint(modelRig, descendantId);
+      const localMatrix = driver.matrix.clone().invert().multiply(restJointWorld);
+      jointBindings.set(descendantId, {
+        type: 'driver', driverId, localMatrix, restJointWorld,
+        distance: 0, distanceRatio: 0, rawProjection: 0, projection: 0,
+        endpointDistanceRatio: 0, score: 0, confidence: 'high',
+        bindingMethod: 'mapped_control_descendant',
+        controlKey,
+        mappedRootJointId: jointId,
+        sourceBoneKeys: sourceMembers.map(member => member.sourceBoneKey).sort(),
+      });
+      sourceMembers.forEach(member => sourceBoneAssignments.set(
+        member.sourceBoneKey, sourceAssignmentForMember(member, driverId, {
+          limbRole: sourceRoleForControl(controlKey),
+          progress: sourceProgress(controlKey),
+          segmentIndex: /Elbow|Knee|Hand|Foot/.test(controlKey) ? 1 : 0,
+          bindingMethod: 'mapped_control_descendant',
+          controlKey,
+          mappedRootJointId: jointId,
+          pathMember: false,
+          branchMember: true,
+        })));
+      mappedDescendantJointCount += 1;
     });
   });
 
@@ -766,6 +850,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
       mappedPathCount: mappedPaths.candidates.length,
       mappedPathJointCount: mappedPaths.candidates.reduce((sum, candidate) =>
         sum + Math.max(0, candidate.path.length - 2), 0),
+      mappedDescendantJointCount,
       mappedPathConflicts: mappedPaths.conflicts,
       heatBinding: heatBinding?.diagnostics || null,
       heatConflicts: [...(heatBinding?.conflicts || [])],

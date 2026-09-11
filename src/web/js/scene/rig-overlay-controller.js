@@ -21,6 +21,7 @@ const HUMANOID_HALO_SIZE_PX = 26;
 const HUMANOID_CANDIDATE_SIZE_PX = 30;
 const MODEL_JOINT_MARKER_SIZE_PX = 5;
 const MODEL_JOINT_CANDIDATE_SIZE_PX = 9;
+const SELECTED_JOINT_INDICATOR_SIZE_PX = 16;
 
 function vector(value) {
   if (value?.isVector3) return value.clone();
@@ -328,6 +329,18 @@ export function createRigOverlayController({
   modelJointMarkerMesh.frustumCulled = false;
   modelJointMarkerMesh.raycast = () => {};
   modelJointMarkerMesh.instanceMatrix.setUsage?.(THREE.DynamicDrawUsage);
+  const selectedJointIndicatorMaterial = new THREE.SpriteMaterial({
+    color: 0xfacc15, map: modelJointMarkerTexture,
+    depthTest: false, depthWrite: false, transparent: true,
+    opacity: .95, alphaTest: .1,
+  });
+  const selectedJointIndicator = new THREE.Sprite(
+    selectedJointIndicatorMaterial);
+  selectedJointIndicator.name = 'viewer-inferred-rig-selected-joint-indicator';
+  selectedJointIndicator.renderOrder = 13;
+  selectedJointIndicator.frustumCulled = false;
+  selectedJointIndicator.raycast = () => {};
+  selectedJointIndicator.visible = false;
   const hoverMaterial = new THREE.PointsMaterial({
     color: 0xfacc15, size: 0.06, sizeAttenuation: false,
     depthTest: false, depthWrite: false,
@@ -358,6 +371,7 @@ export function createRigOverlayController({
   staticGroup.add(lineSegments, centerPoints, jointPoints,
     modelJointMarkerMesh, hoverPoint);
   group.add(staticGroup);
+  group.add(selectedJointIndicator);
 
   // Geometry fitting is intentionally a separate semantic group. It draws
   // virtual controls and medial paths; the inferred ModelJoint Rig remains
@@ -745,6 +759,55 @@ export function createRigOverlayController({
     if (modelJointMarkerMesh.instanceColor) {
       modelJointMarkerMesh.instanceColor.needsUpdate = true;
     }
+  }
+
+  function updateSelectedJointIndicator(source = currentSource) {
+    if (!selectedJointIndicator) return;
+    const jointId = selectedJointId;
+    const hiddenByEditing = currentSnapshot?.humanoidRigEdit?.editing === true;
+    const hiddenByPicking = !!currentSnapshot?.jointPickIntent;
+    if (!source || !Number.isInteger(jointId)
+        || hiddenByEditing || hiddenByPicking) {
+      selectedJointIndicator.visible = false;
+      return;
+    }
+    const frame = getRigJointPoseFrame?.(jointId);
+    const point = frame?.pivot || pivotFor(source, jointId);
+    if (!point) {
+      selectedJointIndicator.visible = false;
+      return;
+    }
+
+    const localPoint = vector(point);
+    selectedJointIndicator.position.copy(localPoint);
+    group.updateMatrixWorld?.(true);
+    camera?.updateMatrixWorld?.();
+    const rect = canvasRect(canvas);
+    const canvasHeight = Number(rect?.height) || 1;
+    const worldScale = new THREE.Vector3();
+    group.getWorldScale?.(worldScale);
+    const localScale = Math.max(.0001,
+      (Math.abs(worldScale.x) + Math.abs(worldScale.y)
+        + Math.abs(worldScale.z)) / 3 || 1);
+    const worldPoint = localPoint.clone().applyMatrix4(group.matrixWorld);
+    const viewPoint = worldPoint.applyMatrix4(camera?.matrixWorldInverse
+      || new THREE.Matrix4());
+    let worldPerPixel = .05;
+    if (camera?.isPerspectiveCamera) {
+      const depth = -viewPoint.z;
+      if (depth > 0) {
+        const fov = THREE.MathUtils.degToRad(camera.fov || 50);
+        worldPerPixel = (2 * depth * Math.tan(fov / 2))
+          / (canvasHeight * (Number(camera.zoom) || 1));
+      }
+    } else if (camera?.isOrthographicCamera) {
+      worldPerPixel = (camera.top - camera.bottom)
+        / (canvasHeight * (Number(camera.zoom) || 1));
+    }
+    const size = Math.max(.001,
+      worldPerPixel * SELECTED_JOINT_INDICATOR_SIZE_PX / localScale);
+    selectedJointIndicator.scale.set(size, size, 1);
+    selectedJointIndicator.visible = true;
   }
 
   function createHumanoidSprite({name, color, opacity, renderOrder}) {
@@ -1179,7 +1242,10 @@ export function createRigOverlayController({
   }
 
   function updatePosedOverlay(source = currentSource) {
-    if (!source) return;
+    if (!source) {
+      updateSelectedJointIndicator(source);
+      return;
+    }
     const centers = new Map();
     const pivots = new Map();
     const centerAttribute = centerPoints.geometry.getAttribute('position');
@@ -1218,6 +1284,7 @@ export function createRigOverlayController({
     });
     if (jointAttribute) jointAttribute.needsUpdate = true;
     updateModelJointMarkers(source);
+    updateSelectedJointIndicator(source);
     updateHumanoidPosedOverlay(source);
     posedOverlayUpdateCount += 1;
   }
@@ -1631,6 +1698,7 @@ export function createRigOverlayController({
       proxy.visible = false;
       ikTargetProxy.visible = false;
     }
+    updateSelectedJointIndicator(currentSource);
   }
 
   async function ensureTransformControls() {
@@ -1843,11 +1911,13 @@ export function createRigOverlayController({
   const onArcballChanged = () => {
     updateHumanoidSpriteSizes();
     updateModelJointMarkers(currentSource);
+    updateSelectedJointIndicator(currentSource);
     requestRender?.();
   };
   const onModelTransformChanged = () => {
     updateModelFrame();
     updateModelJointMarkers(currentSource);
+    updateSelectedJointIndicator(currentSource);
     if (currentSnapshot?.jointPickIntent && lastPickClientPoint) {
       updatePickHoverAt(lastPickClientPoint.x, lastPickClientPoint.y);
     }
@@ -1884,6 +1954,9 @@ export function createRigOverlayController({
         modelJointMarkerInstanced: modelJointMarkerMesh.isInstancedMesh === true,
         modelJointMarkerSizePx: MODEL_JOINT_MARKER_SIZE_PX,
         modelJointCandidateSizePx: MODEL_JOINT_CANDIDATE_SIZE_PX,
+        selectedJointIndicatorVisible: selectedJointIndicator.visible,
+        selectedJointIndicatorPosition: selectedJointIndicator.position.toArray(),
+        selectedJointIndicatorSizePx: SELECTED_JOINT_INDICATOR_SIZE_PX,
         edgeCount: lineSegments.geometry.getAttribute('position')?.count / 2 || 0,
         humanoidOverlayVisible: humanoidGroup.visible,
         humanoidSegmentCount: humanoidLinePairs.length,
@@ -1960,6 +2033,7 @@ export function createRigOverlayController({
       humanoidPointMaterial.dispose();
       humanoidCandidateMaterial.dispose();
       humanoidCandidateSprite.material.dispose();
+      selectedJointIndicatorMaterial.dispose();
       clearHumanoidSprites(humanoidPointSprites);
       clearHumanoidSprites(humanoidHaloSprites);
       humanoidMarkerTexture?.dispose?.();
