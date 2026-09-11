@@ -18,7 +18,6 @@ config.json
 
 # AI
 .codex/
-graphify-out/
 mod-analysis/
 
 __pycache__/

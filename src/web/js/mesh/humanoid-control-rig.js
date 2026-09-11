@@ -18,6 +18,7 @@ const EPSILON = 1e-8;
 const DEFAULT_MAX_POINT_COUNT = 160000;
 const FOOT_SIDE_MIN = 0.025;
 const FOOT_DEPTH_BAND_MAX_HEIGHT = 0.02;
+const FOOT_DEPTH_FROM_BACK_FRACTION = 0.30;
 const CONTROL_KEYS = Object.freeze([
   'chest', 'pelvis',
   'leftShoulder', 'leftElbow', 'leftHand',
@@ -229,7 +230,8 @@ function footDepthEnvelope(depths) {
   return {
     backDepth,
     frontDepth,
-    center: (backDepth + frontDepth) * 0.5,
+    center: backDepth + (frontDepth - backDepth)
+      * FOOT_DEPTH_FROM_BACK_FRACTION,
     thickness: Math.max(0, frontDepth - backDepth),
     support: depths.length,
   };
@@ -266,6 +268,7 @@ export function estimateFootDepth(points = []) {
     method: 'bottom_foot_band',
     heightRange: [0, FOOT_DEPTH_BAND_MAX_HEIGHT],
     sideMinimum: FOOT_SIDE_MIN,
+    fromBackFraction: FOOT_DEPTH_FROM_BACK_FRACTION,
   };
   if (!left || !right) {
     return fallbackFootDepth(sliceCenters, 2 - [left, right].filter(Boolean).length,

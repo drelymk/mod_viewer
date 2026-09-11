@@ -3431,7 +3431,7 @@ def test_estimate_foot_depth_uses_bottom_band(module_page):
         fallback,
       };
     }""")
-    assert result["soles"]["depthN"] == pytest.approx(.03)
+    assert result["soles"]["depthN"] == pytest.approx(.01)
     assert result["soles"]["support"] == 3
     assert result["soles"]["validSliceCount"] == 2
     assert result["soles"]["rejectedSliceCount"] == 0
@@ -3440,15 +3440,16 @@ def test_estimate_foot_depth_uses_bottom_band(module_page):
         "method": "bottom_foot_band",
         "heightRange": [0, .02],
         "sideMinimum": .025,
+        "fromBackFraction": .30,
     }
     assert result["soles"]["sliceCenters"][0] == {
         "side": "left", "heightRange": [0, .02], "height01": .01,
         "backDepth": pytest.approx(-.03), "frontDepth": pytest.approx(.07),
-        "center": pytest.approx(.02), "thickness": pytest.approx(.1),
+        "center": pytest.approx(0), "thickness": pytest.approx(.1),
         "support": 3,
     }
-    assert result["soles"]["sliceCenters"][1]["center"] == pytest.approx(.04)
-    assert result["decorated"]["depthN"] == pytest.approx(.03)
+    assert result["soles"]["sliceCenters"][1]["center"] == pytest.approx(.02)
+    assert result["decorated"]["depthN"] == pytest.approx(.01)
     assert result["dense"]["depthN"] == pytest.approx(result["soles"]["depthN"])
     assert result["fallback"]["depthN"] == 0
     assert result["fallback"]["support"] == 0
@@ -3503,7 +3504,7 @@ def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):
     for name, rig in result.items():
         assert rig["skeletonDepth"]["fallbackUsed"] is False
         assert rig["skeletonDepth"]["support"] == 4
-        assert rig["skeletonDepth"]["depthN"] == pytest.approx(.03, abs=.011)
+        assert rig["skeletonDepth"]["depthN"] == pytest.approx(.02294, abs=.001)
         assert rig["skeletonDepth"]["diagnostics"]["method"] == "bottom_foot_band"
         assert rig["bodyDepth"] == pytest.approx(
             rig["skeletonDepth"]["depthN"] * rig["characterHeight"], abs=.02)
