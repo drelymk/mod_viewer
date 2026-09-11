@@ -261,10 +261,13 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       return {initial, selectedRoot, posedRig, afterTransform, shownAgain,
         ikOff, unavailable};
     }""")
-    assert result["initial"]["staticObjectCount"] == 4
+    assert result["initial"]["staticObjectCount"] == 5
     assert result["initial"]["nodeCount"] == 3
     assert result["initial"]["edgeCount"] == 2
     assert result["initial"]["jointCount"] == 3
+    assert result["initial"]["modelJointMarkerCount"] == 3
+    assert result["initial"]["modelJointMarkerInstanced"] is True
+    assert result["initial"]["modelJointMarkerSizePx"] == 5
     assert result["initial"]["humanoidOverlayVisible"]
     assert result["initial"]["ikTargetVisible"]
     assert result["initial"]["humanoidSegmentCount"] == 13
@@ -510,11 +513,27 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
           selectedControlKey: null, carryingControlKey: null,
           candidateJointId: null, controls, mappedJointIdByControl: {}},
       };
-      const arcball = {enabled: true};
-      const events = {began: [], updates: [], finished: 0, picked: 0};
+      const arcball = {
+        enabled: true, actions: {0: 'ROTATE', 2: 'PAN'}, calls: [],
+        unsetMouseAction: button => {
+          arcball.calls.push(['unset', button]);
+          delete arcball.actions[button];
+        },
+        setMouseAction: (action, button) => {
+          arcball.calls.push(['set', action, button]);
+          arcball.actions[button] = action;
+        },
+      };
+      const events = {began: [], updates: [], finished: 0, cancelled: 0,
+        picked: 0, emptyPointerdowns: 0};
+      canvas.addEventListener('pointerdown', event => {
+        if (event.button === 0) events.emptyPointerdowns += 1;
+      });
       const controller = createRigOverlayController({
         scene, camera, canvas, arcballControls: arcball,
         getMeshes: () => [], getRigState: () => state,
+        getRigJointPoseFrame: jointId => Number(jointId) === 7
+          ? {center: [-.2, 1.3, 0], pivot: [-.2, 1.2, 0]} : null,
         beginHumanoidControlCarry: key => {
           events.began.push(key);
           state.humanoidRigEdit = {...state.humanoidRigEdit,
@@ -532,6 +551,11 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
           state.humanoidRigEdit = {...state.humanoidRigEdit,
             carryingControlKey: null};
         },
+        cancelHumanoidControlCarry: () => {
+          events.cancelled += 1;
+          state.humanoidRigEdit = {...state.humanoidRigEdit,
+            carryingControlKey: null};
+        },
         onRigJointPicked: () => { events.picked += 1; },
       });
       controller.refresh(state);
@@ -539,11 +563,34 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
       const screen = projectRigPointToClient({point: positions.leftShoulder,
         camera, canvas});
       canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: 20, clientY: 30,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
         button: 0, clientX: screen.x, clientY: screen.y,
       }));
       const carrying = controller.getDebugState();
       canvas.dispatchEvent(new PointerEvent('pointermove', {
-        clientX: screen.x, clientY: screen.y,
+        clientX: screen.x, clientY: screen.y, buttons: 1,
+      }));
+      const beforePan = events.updates.length;
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 2, clientX: screen.x, clientY: screen.y, buttons: 2,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: screen.x + 20, clientY: screen.y + 10, buttons: 2,
+      }));
+      canvas.dispatchEvent(new PointerEvent('pointerup', {
+        button: 2, clientX: screen.x + 20, clientY: screen.y + 10,
+      }));
+      const afterPan = events.updates.length;
+      canvas.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: screen.x + 10, clientY: screen.y, buttons: 1,
+      }));
+      const afterPanMove = events.updates.length;
+      document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}));
+      const cancelled = controller.getDebugState();
+      canvas.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, clientX: screen.x, clientY: screen.y,
       }));
       canvas.dispatchEvent(new PointerEvent('pointerdown', {
         button: 0, clientX: screen.x, clientY: screen.y,
@@ -553,11 +600,19 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
         'viewer-humanoid-point-leftShoulder');
       const haloSprite = controller.group.getObjectByName(
         'viewer-humanoid-halo-leftShoulder');
+      const modelJointMarker = controller.group.getObjectByName(
+        'viewer-inferred-rig-model-joint-markers');
+      const markerMatrix = new THREE.Matrix4();
+      modelJointMarker?.getMatrixAt(0, markerMatrix);
+      const markerPosition = new THREE.Vector3()
+        .setFromMatrixPosition(markerMatrix).toArray();
       controller.dispose();
-      return {initial, carrying, released, events, arcball: arcball.enabled,
+      return {initial, carrying, cancelled, released, events, arcball: arcball.enabled,
+        arcballActions: arcball.actions, arcballCalls: arcball.calls,
+        beforePan, afterPan, afterPanMove,
         pointType: pointSprite?.type, haloType: haloSprite?.type,
         pointScale: pointSprite?.scale?.x || 0,
-        haloScale: haloSprite?.scale?.x || 0};
+        haloScale: haloSprite?.scale?.x || 0, markerPosition};
     }""")
     assert result["initial"]["staticVisible"] is True
     assert result["initial"]["humanoidOverlayVisible"] is True
@@ -569,9 +624,19 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
     assert result["haloType"] == "Sprite"
     assert result["pointScale"] > 0
     assert result["haloScale"] > result["pointScale"]
+    assert result["markerPosition"] == pytest.approx([-.2, 1.2, 0])
     assert result["initial"]["controlsAttached"] is False
     assert result["carrying"]["carryingControlKey"] == "leftShoulder"
-    assert result["events"]["began"] == ["leftShoulder"]
+    assert result["carrying"]["arcballEnabled"] is True
+    assert result["events"]["emptyPointerdowns"] == 1
+    assert result["arcballActions"].get("2") == "PAN"
+    assert result["arcballActions"].get("0") == "ROTATE"
+    assert result["beforePan"] == result["afterPan"]
+    assert result["afterPanMove"] > result["afterPan"]
+    assert result["cancelled"]["carryingControlKey"] is None
+    assert result["events"]["cancelled"] == 1
+    assert len(result["events"]["began"]) == 2
+    assert result["events"]["began"][0] == "leftShoulder"
     assert result["events"]["updates"]
     assert result["events"]["picked"] == 0
     assert result["released"]["carryingControlKey"] is None
@@ -3631,6 +3696,8 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
       const controls = Object.fromEntries(control.HUMANOID_CONTROL_KEYS.map(key =>
         [key, {position: [0, 0, 0], semantic: {sideN: 0, height01: 0,
           depthN: 0}}]));
+      const currentControls = {...controls,
+        leftShoulder: {...controls.leftShoulder, position: [.2, .3, .4]}};
       const rig = {humanoidControlRig: {
         version: 1, accepted: true, available: true,
         frame: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
@@ -3639,16 +3706,23 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
       }, joints: [{jointId: 9, signature: '["body#bone=9"]',
         restPivot: [.4, .5, .6], members: []}]};
       let notifications = 0;
+      let persisted = null;
       const session = edit.initializeHumanoidRigEditSession({
         getModelRig: () => rig,
         getAutomaticRig: () => rig.humanoidControlRig,
+        getCurrentHumanoidControlRig: () => ({controls: currentControls}),
+        getModelJointPosePosition: () => [2, 3, 4],
         getKnownMeshes: () => [{userData: {modPath: 'mod'}}],
         resolveMappings: control.resolveHumanoidControlMappings,
-        persist: async () => ({saved: true}),
+        persist: async (_path, value) => {
+          persisted = value;
+          return {saved: true};
+        },
         clearPersist: async () => ({saved: true}),
         notifyChanged: () => { notifications += 1; },
       });
       session.begin();
+      const initial = session.snapshot();
       session.beginCarry('leftShoulder');
       session.updateDraft('leftShoulder', [1, 1, 1], {
         candidateJointId: 9, candidateDistance: 10});
@@ -3660,14 +3734,25 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
         candidateJointId: null, candidateDistance: Infinity});
       const free = session.snapshot();
       session.finishCarry();
-      return {snapped, sticky, free, notifications};
+      const saved = await session.save();
+      const expectedSemantic = control.humanoidControlPositionToSemantic(
+        [.8, .7, .6], rig.humanoidControlRig);
+      return {initial, snapped, sticky, free, saved, persisted,
+        expectedSemantic, notifications};
     }""")
+    assert result["initial"]["controls"]["leftShoulder"]["position"] == [0, 0, 0]
+    assert result["initial"]["displayControls"]["leftShoulder"]["position"] == [.2, .3, .4]
     assert result["snapped"]["mappedJointIdByControl"] == {"leftShoulder": 9}
     assert result["snapped"]["controls"]["leftShoulder"]["position"] == [.4, .5, .6]
+    assert result["snapped"]["displayControls"]["leftShoulder"]["position"] == [2, 3, 4]
     assert result["sticky"]["mappedJointIdByControl"] == {"leftShoulder": 9}
     assert result["sticky"]["controls"]["leftShoulder"]["position"] == [.4, .5, .6]
     assert result["free"]["mappedJointIdByControl"] == {}
-    assert result["free"]["controls"]["leftShoulder"]["position"] == [1, 1, 1]
+    assert result["free"]["controls"]["leftShoulder"]["position"] == [.8, .7, .6]
+    assert result["free"]["displayControls"]["leftShoulder"]["position"] == [1, 1, 1]
+    assert result["saved"]["saved"] is True
+    assert result["persisted"]["controls"]["leftShoulder"]["semantic"] == \
+        result["expectedSemantic"]
     assert result["notifications"] >= 5
 
 

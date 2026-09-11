@@ -270,6 +270,9 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
   modelRigState,
   getModelRig: () => modelSkinningRig,
   getAutomaticRig: () => modelSkinningRig?.humanoidAutomaticControlRig,
+  getCurrentHumanoidControlRig: () => humanoidControlRigSnapshot(),
+  getModelJointPosePosition: jointId => modelSkinningRig?.poseFrameCache
+    ?.get(Number(jointId))?.pivot?.toArray?.() || null,
   getKnownMeshes: () => knownMeshes,
   resolveMappings: resolveHumanoidControlMappings,
   persist: (path, value) => window.pywebview?.api
